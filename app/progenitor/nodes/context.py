@@ -43,3 +43,4 @@ class HeartbeatContext:
     # document from Postgres for each invocation; it is deliberately not a
     # registry of compiled routines.
     routine_runner: RoutineRunner | None = None
+    routine_resumer: Callable[..., Awaitable[dict[str, Any]]] | None = None

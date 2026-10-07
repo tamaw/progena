@@ -17,21 +17,28 @@ implemented in `app/progenitor/routines/graph.py` and
 ## Operating rules
 
 1. Work on exactly one routine file at a time.
-2. For an existing routine, read it first and preserve `id`, `name`,
+2. Resolve the user's intent before choosing a routine file. An explicit request
+   to create a new routine (for example, "create a new routine" or "add a
+   routine") always means create a separate file with a fresh routine ID. A
+   selected routine ID supplied as page context is only context in this case;
+   do not read or edit that routine as the creation target. Use the selected
+   routine as the target only when the user asks to modify, update, or otherwise
+   change the current/selected routine.
+3. For an existing routine, read it first and preserve `id`, `name`,
    `description`, and `version` unless the user asks to change them.
-3. The document `id` must match the filename's routine id. Never silently
+4. The document `id` must match the filename's routine id. Never silently
    rename a routine or overwrite another routine while creating one.
-4. Use `edit_file` for focused field changes. Use `structured_output` followed
+5. Use `edit_file` for focused field changes. Use `structured_output` followed
    by `write_file` when adding, removing, or reshaping nodes or edges.
-5. For a new routine, call `generate_id` with `prefix=routine` and `count=1`.
+6. For a new routine, call `generate_id` with `prefix=routine` and `count=1`.
    Use that returned id in the filename and document. Before adding nodes, call
    `generate_id` with `prefix=node` and a count equal to the number of new ids.
    Never invent ids or use `__seed__`,
    `__project_output__`, `__start__`, or `__end__`.
-6. Validate the complete document against the routine schema before writing it.
+7. Validate the complete document against the routine schema before writing it.
    Also check topology: valid entry, existing endpoints, no duplicate outgoing
    flow declarations, valid condition branches, foreach wiring, and loop guards.
-7. Do not claim success until the file write succeeds.
+8. Do not claim success until the file write succeeds.
 
 ## Create, inspect, edit, and delete
 
@@ -52,7 +59,7 @@ schema, validate it, then write exactly one routine file.
 ## Node kinds
 
 The current schema supports: `prompt`, `eval`, `condition`, `switch`, `split`,
-`classify`, `agent`, `a2a`, `noop`, `human`, `foreach`, and `routine`.
+`classify`, `agent`, `a2a`, `noop`, `human`, `foreach`, `reduce`, and `routine`.
 
 - `prompt` invokes the model using exactly one of `prompt_template` or
   `prompt_file`.
@@ -68,6 +75,11 @@ The current schema supports: `prompt`, `eval`, `condition`, `switch`, `split`,
 - `human` pauses for a user response and is suitable for approval/review.
 - `foreach` supports parallel item fan-out (`mode: "send"`) or per-item agent
   execution (`mode: "agent"`).
+- `reduce` collects the output from every execution of `source_node` and applies
+  `collect`, `sum`, `product`, `count`, `min`, or `max`. For map/reduce, put the
+  reduce node after the Send foreach body's join marker and set `source_node` to
+  the body node whose output should be aggregated. Empty input returns `[]` for
+  collect, `0` for sum/count, `1` for product, and `null` for min/max.
 - `routine` invokes another routine by name with optional input/output maps.
 
 ### Prompt template placeholders

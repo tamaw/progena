@@ -87,4 +87,8 @@ def parse_routine_graph_document(content: str) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise ValueError("routine graph document must be a JSON object")
     validated: RoutineGraph = validate_routine_graph_payload(payload)
-    return validated.model_dump(mode="json", by_alias=True, exclude_none=True)
+    serialized = validated.model_dump(mode="json", by_alias=True, exclude_none=True)
+    # Validate the representation that will actually be committed, as well
+    # as the caller's input: model defaults must never corrupt the contract.
+    validate_routine_graph_payload(serialized)
+    return serialized

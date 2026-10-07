@@ -610,6 +610,30 @@ describe('agent reducers', () => {
     expect(s.agents.active.detail.enabled).toBe(true);
   });
 
+  it('agents.snapshot does not clear a loaded active routine graph omitted from the roster', () => {
+    const graph = {
+      status: 'Draft',
+      entry: 'prompt-1',
+      nodes: [{ id: 'prompt-1', kind: 'prompt' }],
+      edges: [],
+    };
+    let s = reducer(undefined, agentsSnapshot(['routine-alpha']));
+    s = reducer(s, applyUiEvent({
+      type: 'agent.selected',
+      payload: { agent: { id: 'routine-alpha', kind: 'routine', graph } },
+    }));
+
+    // On a cold page load the selected-detail reply can be followed by the
+    // roster snapshot. The roster's graph:null must not replace the detail.
+    s = reducer(s, applyUiEvent({
+      type: 'agents.snapshot',
+      payload: { agents: [{ id: 'routine-alpha', kind: 'routine', name: 'Alpha', graph: null }] },
+    }));
+
+    expect(s.agents.byId['routine-alpha'].graph).toBeNull();
+    expect(s.agents.active.detail.graph).toEqual(graph);
+  });
+
   it('agent.upserted merges into an existing agent and appends new ones', () => {
     let s = reducer(undefined, agentsSnapshot(['alpha']));
     s = reducer(s, applyUiEvent({ type: 'agent.upserted', payload: { agent: { id: 'alpha', role: 'changed' } } }));

@@ -42,7 +42,7 @@ COPY data/skills/ ./data/skills/
 # preferences, workflow nodes, MCP entries, ...), unlike prompts/skills --
 # it's read from disk on every load_schema() call, not seeded once.
 COPY data/schemas/ ./data/schemas/
-# Native manifests are a one-time Postgres seed; discovery and edits use PG.
+# Native manifests are read-only runtime files, never imported into Postgres.
 COPY data/agents/ ./data/agents/
 COPY data/shims/ ./data/shims/
 COPY scripts/ ./scripts/
@@ -50,6 +50,7 @@ RUN pip install --no-cache-dir . \
     && chown -R root:root /app/data/shims \
     && chmod 0755 /app/data/shims/bin/* \
     && chmod -R a-w /app/data/shims \
+    && chmod -R a-w /app/data/agents \
     && mkdir -p /app/agent-home /app/repos /app/logs /app/tmp \
     && chown -R agent:agent /app/agent-home /app/repos /app/logs /app/tmp
 

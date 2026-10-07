@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Annotated, Any, Literal, TypedDict
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, SerializerFunctionWrapHandler, model_serializer
 
 from ..schemas import load_schema
 from ..structured import validate_against_schema
@@ -35,6 +35,7 @@ VALID_ROUTINE_NODE_KINDS = {
     "human",
     "foreach",
     "routine",
+    "reduce",
 }
 
 # A `condition` node is a two-way gate: its expression is coerced to a bool, so
@@ -197,6 +198,15 @@ class AgentNodeConfig(BaseModel):
     timeout: float | None = Field(default=None, ge=0)
     cache: bool | CachePolicyConfig | None = None
 
+    @model_serializer(mode="wrap")
+    def serialize_input_source(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        data = handler(self)
+        # The schema selects input sources by field presence. An internal
+        # empty-map default must not create a second source in a saved graph.
+        if (self.prompt_template is not None or self.prompt_file is not None) and not self.inputs:
+            data.pop("inputs", None)
+        return data
+
 
 class A2ANodeConfig(BaseModel):
     """One-shot delegation to a registered Agent2Agent-protocol peer."""
@@ -263,6 +273,15 @@ class RoutineNodeConfig(BaseModel):
     retry: RetryPolicyConfig | None = None
     timeout: float | None = Field(default=None, ge=0)
     cache: bool | CachePolicyConfig | None = None
+
+
+class ReduceNodeConfig(BaseModel):
+    """Aggregate values emitted by repeated executions of one map/body node."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    source_node: str = Field(min_length=1)
+    operation: Literal["collect", "sum", "count", "min", "max", "product"] = "collect"
 
 
 class RoutineNodePrompt(BaseModel):
@@ -426,6 +445,21 @@ class RoutineNodeRoutine(BaseModel):
     y: float | None = None
 
 
+class RoutineNodeReduce(BaseModel):
+    """Reduce outputs captured from repeated executions of a source node."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    kind: Literal["reduce"] = "reduce"
+    description: str = ""
+    output_key: str | None = None
+    config: ReduceNodeConfig
+    label: str | None = None
+    x: float | None = None
+    y: float | None = None
+
+
 class RoutineNodeNoop(BaseModel):
     """Pass through without changing state."""
 
@@ -453,7 +487,8 @@ RoutineNode = Annotated[
     | RoutineNodeNoop
     | RoutineNodeHuman
     | RoutineNodeForeach
-    | RoutineNodeRoutine,
+    | RoutineNodeRoutine
+    | RoutineNodeReduce,
     Field(discriminator="kind"),
 ]
 
@@ -468,13 +503,13 @@ class RoutineSettings(BaseModel):
 
 
 class RoutineEdge(BaseModel):
-    """A normal, barrier fan-in, conditional router, or error edge."""
+    """A normal edge, barrier fan-in, router, foreach empty route, or error edge."""
 
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     from_: str | list[str] = Field(alias="from")
     to: str | list[str] | None = None
-    level: Literal["normal", "fan_in", "route", "error"]
+    level: Literal["normal", "fan_in", "route", "foreach_empty", "error"]
     router: Literal["state_equals"] | None = None
     state_key: str | None = None
     branches: dict[str, str] | None = None
@@ -489,13 +524,11 @@ class RoutineEdge(BaseModel):
     def is_flow(self) -> bool:
         """Whether this edge carries ordinary execution.
 
-        An error edge names where a failure goes, not where the work goes
-        next, so it stays out of every successor walk and out of the one
-        outgoing edge declaration each node is allowed. This property is the
-        only place that distinction is made -- read it rather than comparing
-        `level` by hand.
+        Error edges name recovery paths, while foreach-empty edges are fallback
+        routes compiled alongside the Send router. Neither is an ordinary
+        successor edge or part of the one-outgoing-edge rule.
         """
-        return self.level != "error"
+        return self.level not in {"error", "foreach_empty"}
 
     @property
     def source_ids(self) -> list[str]:
@@ -591,15 +624,16 @@ def validate_routine_graph(nodes: list[dict[str, Any]], edges: list[dict[str, An
         for source in sources:
             if source not in ids:
                 raise ValueError(f"edge references unknown source node: {source}")
-        # An error edge says where a failure goes, not where the work goes
-        # next, so it is deliberately exempt from the one-outgoing-declaration
-        # rule -- a node names its successor and its error destination at once.
-        if level == "error":
+        # These edges are additional routing metadata, not ordinary graph
+        # successors: an error edge names recovery; foreach_empty is evaluated
+        # by the Send router only when it has no work items.
+        if level in {"error", "foreach_empty"}:
             if len(sources) != 1 or not isinstance(edge.get("from"), str):
-                raise ValueError("error edge from must be one node id")
-            if sources[0] in failing:
-                raise ValueError(f"node has more than one error edge: {sources[0]}")
-            failing.add(sources[0])
+                raise ValueError(f"{level} edge from must be one node id")
+            if level == "error":
+                if sources[0] in failing:
+                    raise ValueError(f"node has more than one error edge: {sources[0]}")
+                failing.add(sources[0])
         else:
             for source in sources:
                 if source in outgoing:
@@ -629,7 +663,7 @@ def validate_routine_graph(nodes: list[dict[str, Any]], edges: list[dict[str, An
                     raise ValueError("error edge requires one source and one target")
                 if targets[0] == sources[0]:
                     raise ValueError(f"node cannot route its own errors to itself: {sources[0]}")
-            if level not in {"normal", "fan_in", "error"}:
+            if level not in {"normal", "fan_in", "error", "foreach_empty"}:
                 raise ValueError(f"unsupported edge level: {level}")
             if level != "normal" and edge.get("loop_guard") is not None:
                 raise ValueError(f"{level} edge cannot have a loop_guard")
@@ -646,6 +680,27 @@ def validate_routine_graph(nodes: list[dict[str, Any]], edges: list[dict[str, An
 
     for node_id, node in nodes_by_id.items():
         config = node.get("config")
+        if node.get("kind") == "reduce":
+            source_id = (config or {}).get("source_node") if isinstance(config, dict) else None
+            if source_id not in nodes_by_id:
+                raise ValueError(
+                    f"reduce node {node_id} references unknown source node: {source_id}"
+                )
+            if source_id == node_id:
+                raise ValueError(f"reduce node {node_id} cannot reduce its own output")
+        empty_edges = [
+            edge
+            for edge in edges
+            if edge.get("level") == "foreach_empty" and edge.get("from") == node_id
+        ]
+        if empty_edges and not (
+            node.get("kind") == "foreach"
+            and isinstance(config, dict)
+            and config.get("mode") == "send"
+        ):
+            raise ValueError(f"foreach_empty edge source must be a Send foreach node: {node_id}")
+        if len(empty_edges) > 1:
+            raise ValueError(f"foreach Send node {node_id} has more than one empty route")
         if (
             node.get("kind") == "foreach"
             and isinstance(config, dict)

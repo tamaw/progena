@@ -32,6 +32,17 @@ def _merge_run_meta(
     return merged
 
 
+def _merge_node_outputs(
+    existing: dict[str, list[Any]] | None,
+    update: dict[str, list[Any]] | None,
+) -> dict[str, list[Any]]:
+    """Append each successful node execution's raw output for map/reduce."""
+    merged = {node_id: list(values) for node_id, values in (existing or {}).items()}
+    for node_id, values in (update or {}).items():
+        merged.setdefault(node_id, []).extend(values)
+    return merged
+
+
 class RoutineState(TypedDict):
     messages: Annotated[list[BaseMessage], add_messages]
     data: Annotated[dict[str, Any], _merge_data]
@@ -41,6 +52,10 @@ class RoutineState(TypedDict):
     # skipped by omission the way a per-kind opt-in would be. Keyed by
     # node_id, one entry appended per execution (see _merge_run_meta).
     run_meta: Annotated[dict[str, list[dict[str, Any]]], _merge_run_meta]
+    # Separate reducer-backed execution output channel: unlike `data`, which
+    # intentionally keeps only the latest value per key, this preserves every
+    # successful Send-body output for downstream Reduce nodes.
+    node_outputs: Annotated[dict[str, list[Any]], _merge_node_outputs]
 
 
 def _node_config(node: RoutineNode) -> dict[str, Any]:

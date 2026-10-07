@@ -79,5 +79,5 @@ class TestSubagentWiring:
                     m for m in call_kwargs["middleware"] if isinstance(m, LiveSubagentMiddleware)
                 )
                 assert [spec["name"] for spec in live._registry.descriptors] == ["repo-manager"]
-                assert "native/repo-manager/SYSTEM.md" in state_manager._docs["agent"]
+                assert "native/repo-manager/SYSTEM.md" not in state_manager._docs.get("agent", {})
                 mock_subagents.assert_called_once()

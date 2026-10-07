@@ -697,7 +697,7 @@ export function AgentWorkspace({ page }) {
           {effectiveDetailTab !== 'Graph' ? (
             <DetailHeader
               title={selectedAgent.name}
-              actions={selectedAgent.kind === 'object' ? (
+              actions={selectedAgent.kind === 'object' && selectedAgent.card?.source !== 'native' ? (
                 <DetailHeaderActions menuLabel="Agent actions">
                   <DetailHeaderAction
                     icon={<EditActionIcon />}

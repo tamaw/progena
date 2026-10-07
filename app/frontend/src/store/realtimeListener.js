@@ -12,6 +12,8 @@ import {
 } from './realtimeSlice';
 import { applyUiEvent } from './uiDataSlice';
 import { publishUiEvent } from './realtimeEvents';
+import { realtimeClientId, setRealtimeClientReady } from './realtimeClient';
+import { withQuery } from './http';
 export const startRealtimeStream = createAction('realtime/startStream');
 export const stopRealtimeStream = createAction('realtime/stopStream');
 
@@ -74,6 +76,7 @@ function failPendingOperations(listenerApi, error) {
 }
 
 function closeCurrentStream(dispatch) {
+  setRealtimeClientReady(false);
   if (eventSource) {
     eventSource.close();
     eventSource = null;
@@ -93,7 +96,7 @@ realtimeListenerMiddleware.startListening({
     closeCurrentStream(listenerApi.dispatch);
     listenerApi.dispatch(realtimeConnecting());
 
-    const source = new EventSource(streamUrl);
+    const source = new EventSource(withQuery(streamUrl, { client_id: realtimeClientId }));
     eventSource = source;
     activeStreamUrl = streamUrl;
     let lastEventAt = Date.now();
@@ -109,6 +112,7 @@ realtimeListenerMiddleware.startListening({
       // Deaf stream: tear it down and reconnect from scratch.
       clearInterval(watchdog);
       source.close();
+      setRealtimeClientReady(false);
       eventSource = null;
       activeStreamUrl = null;
       const error = 'Realtime stream stale — reconnecting';
@@ -130,6 +134,7 @@ realtimeListenerMiddleware.startListening({
         return;
       }
       const error = 'Realtime stream disconnected';
+      setRealtimeClientReady(false);
       listenerApi.dispatch(realtimeErrored(error));
       // EventSource retries automatically after an error. Requests waiting for
       // an event from the failed connection must not remain pending forever.
@@ -153,6 +158,7 @@ realtimeListenerMiddleware.startListening({
         // by the time it lands the backend has our subscriber queue and a
         // broadcast can no longer be published into the void.
         if (event.type === 'connection.ready') {
+          setRealtimeClientReady(true);
           listenerApi.dispatch(realtimeStreamReady());
         }
         listenerApi.dispatch(applyUiEvent(event));

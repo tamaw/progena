@@ -13,6 +13,7 @@ import {
   selectGeneratingChatIds,
   selectInboxUnreadCount,
   selectLastReceivedAlert,
+  selectLastRoutineRunNotification,
   selectPreferences,
   selectPreferencesSaveRequest,
   selectRequestIdByThreadId,
@@ -2272,6 +2273,16 @@ function AppRuntimeShell() {
   // when preferences.notificationSounds is on (Account > Notification
   // sounds), matching /config/preferences.json.
   const { show } = useNotifications();
+  const lastRoutineRun = useSelector(selectLastRoutineRunNotification);
+  const lastHandledRoutineRef = useRef(null);
+  useEffect(() => {
+    if (!lastRoutineRun || lastHandledRoutineRef.current === lastRoutineRun.request_id) return;
+    lastHandledRoutineRef.current = lastRoutineRun.request_id;
+    const failed = lastRoutineRun.status === 'failed';
+    show(failed ? 'error' : 'success', failed ? 'Routine failed' : 'Routine completed',
+      lastRoutineRun.error || lastRoutineRun.name || 'Routine finished successfully');
+    if (preferences.notificationSounds) playNotificationSound();
+  }, [lastRoutineRun, preferences.notificationSounds, show]);
   const lastReceivedAlert = useSelector(selectLastReceivedAlert);
   const lastHandledAlertSeqRef = useRef(0);
   useEffect(() => {

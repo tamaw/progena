@@ -17,10 +17,12 @@ it. No chat message, no narration risk.
 from __future__ import annotations
 
 import logging
+import uuid
 from typing import Any
 
 from langgraph.runtime import Runtime
 
+from ..routines.events import persist_run_event
 from ..state.models import ProgenitorState
 from .context import HeartbeatContext
 
@@ -48,12 +50,42 @@ async def routine_run_node(
     """
     metadata = state.get("current_input_metadata") or {}
     routine_id = str(metadata.get("routine_id") or "").strip()
+
+    async def failed(message: str, exc: Exception | None = None) -> dict[str, Any]:
+        if not getattr(exc, "routine_lifecycle_reported", False):
+            await persist_run_event(
+                getattr(runtime.context, "state_manager", None),
+                {
+                    "agent_id": routine_id,
+                    "session_id": metadata.get("session_id"),
+                    "request_id": metadata.get("request_id") or str(uuid.uuid4()),
+                    "error": message,
+                },
+                "failed",
+            )
+        return {"cycle_error": message}
+
     if not routine_id:
-        return {"cycle_error": "routine_run: missing routine_id in task metadata"}
+        return await failed("routine_run: missing routine_id in task metadata")
+
+    if metadata.get("operation") == "resume":
+        resumer = getattr(runtime.context, "routine_resumer", None)
+        if resumer is None:
+            return await failed("routine_run: routine resume unavailable")
+        try:
+            await resumer(
+                metadata["thread_id"],
+                metadata["answer"],
+                interrupt_id=metadata["interrupt_id"],
+                request_id=metadata["request_id"],
+            )
+        except Exception as exc:
+            return await failed(str(exc), exc)
+        return {}
 
     routine_runner = runtime.context.routine_runner
     if routine_runner is None:
-        return {"cycle_error": "routine_run: routine runner unavailable"}
+        return await failed("routine_run: routine runner unavailable")
 
     session_id = str(metadata.get("session_id") or "").strip() or None
     target_node = str(metadata.get("target_node") or "").strip() or None
@@ -64,13 +96,14 @@ async def routine_run_node(
             "messages": [],
             "_interactive_session_id": session_id,
             "_interactive_target_node": target_node,
+            "_routine_request_id": metadata.get("request_id"),
         }
         if isinstance(parameters, dict) and parameters:
             invoke_input["parameters"] = parameters
         result = await routine_runner(routine_id, invoke_input)
     except Exception as exc:  # noqa: BLE001 - convert to cycle_error like cycle_node does
         logger.warning("routine_run node failed for %r: %s", routine_id, exc)
-        return {"cycle_error": f"routine '{routine_id}' failed: {exc}"}
+        return await failed(f"routine '{routine_id}' failed: {exc}", exc)
 
     messages = result.get("messages") if isinstance(result, dict) else None
     if messages:

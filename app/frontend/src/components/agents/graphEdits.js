@@ -29,10 +29,18 @@ export function makeNode(kind) {
     a2a: { agent_name: '', prompt_template: '' },
     human: { message: '', allowed_responses: [] },
     foreach: { mode: 'send', items_from: '', item_key: 'item' },
+    reduce: { source_node: '', operation: 'collect' },
     routine: { routine_name: '', input_map: {}, output_map: {} },
     noop: {},
   }[kind] || {};
   return { id: '', kind, label: GRAPH_KIND_LABELS[kind] || titleCase(kind), description: '', config };
+}
+
+// The editor's graph contract does not allow a separate output key: runtime
+// writes are indexed by node id. Normalize on ingestion as well as when
+// serializing so live inspector state matches the persisted graph immediately.
+export function normalizeGraphNodes(nodes) {
+  return (nodes || []).map((node) => ({ ...node, output_key: node.id }));
 }
 
 // Drop every trace of `removed`: edges into them go, edges out of them go, and
@@ -122,7 +130,7 @@ export function serializeGraph(nodes, edges, meta) {
     version: meta.version || '2.0.0',
     summary: meta.summary || '',
     entry: meta.entry || nodes[0]?.id || null,
-    nodes: nodes.map((node) => ({
+    nodes: normalizeGraphNodes(nodes).map((node) => ({
       id: node.id,
       kind: node.kind,
       label: node.label,
@@ -136,4 +144,21 @@ export function serializeGraph(nodes, edges, meta) {
     output_schema: meta.output_schema || null,
     $defs: meta.$defs || {},
   };
+}
+
+// Persisted JSON documents come back from Postgres JSONB with object keys in a
+// database-defined order. Canonicalize object keys before comparing graph
+// signatures; array order remains significant for nodes, edges, and schema
+// lists.
+export function stableStringify(value) {
+  const canonicalize = (item) => {
+    if (Array.isArray(item)) return item.map(canonicalize);
+    if (item && typeof item === 'object') {
+      return Object.fromEntries(
+        Object.keys(item).sort().map((key) => [key, canonicalize(item[key])]),
+      );
+    }
+    return item;
+  };
+  return JSON.stringify(canonicalize(value));
 }

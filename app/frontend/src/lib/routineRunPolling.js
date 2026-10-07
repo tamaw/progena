@@ -1,28 +1,4 @@
-// Pure helpers behind the routine canvas's live run feedback (the sub-header
-// under each StepCard once Run is clicked -- see RoutineGraphEditor.jsx's
-// useRoutineRunPolling / StepCard). LangGraph's Postgres checkpointer only
-// ever writes a node's checkpoint AFTER it completes -- there is no "node X
-// started, still running" signal to subscribe to -- so the live view has to
-// poll rather than react to a push event, and has to *infer* which node is
-// currently executing from static graph shape (see graphRunState.js's
-// deriveActiveNodeIds) rather than read it off a real backend signal.
-//
-// Discovery is two-phase because the run's exact `thread_id` isn't knowable
-// client-side up front: `routine:<routine_id>:<revision_id>:<session_id>` --
-// the trailing `session_id` segment is generated here and sent to the `/run`
-// POST (the same `_interactive_session_id` mechanism the backend already
-// threads through for step-to-node runs), but the middle `revision_id`
-// segment is resolved server-side, inside the runtime process, at execution
-// time. So phase 1 polls the existing `/runs` list (which already discovers
-// real thread_ids by scanning the checkpoints table) filtering by the known
-// trailing segment, until the exact thread_id turns up; phase 2 then polls
-// `/run-state?thread_id=<exact>` for the live run_meta.
-
-export const DISCOVERY_POLL_INTERVAL_MS = 900;
-export const DISCOVERY_TIMEOUT_MS = 20_000;
-export const STATE_POLL_INTERVAL_MS = 1200;
-export const SETTLE_STABLE_POLLS = 2;
-export const STATE_POLL_TIMEOUT_MS = 5 * 60 * 1000;
+// Routine run identity and timing helpers. Live state arrives through SSE.
 
 /** A short unique id for one Run click -- becomes the trailing segment of
  * the run's thread_id. Not a security token, just a discovery key, so a
@@ -42,7 +18,7 @@ export function randomSessionId() {
  * against the current draft graph for staleness (see
  * lib/routineGraphDiff.js's diffRoutineGraphs). Returns `null` for
  * anything that doesn't parse, rather than throwing -- called on
- * whatever's in `runState.thread_id` at any point in the poll lifecycle. */
+ * whatever's in `runState.thread_id` at any point in the run lifecycle. */
 export function parseRunThreadId(threadId) {
   if (typeof threadId !== 'string') return null;
   const parts = threadId.split(':');
@@ -62,8 +38,7 @@ export function findRunBySessionId(runs, sessionId) {
 
 /** Total executions recorded so far, across every node -- a loop node
  * contributes one entry per iteration (see factory.py's run_meta reducer).
- * Compared across consecutive polls to infer "nothing new happened" i.e.
- * the run has settled (finished, or paused on a human node). */
+ * Useful for summaries; lifecycle events determine completion and pauses. */
 export function totalRunMetaEntries(runMeta) {
   return Object.values(runMeta || {}).reduce((sum, entries) => sum + (entries?.length || 0), 0);
 }

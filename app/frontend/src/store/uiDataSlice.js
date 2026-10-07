@@ -61,6 +61,9 @@ const NAV_ACTIVITY_EVENT_ROUTES = {
   'task.activity.updated': '/tasks',
   'agents.snapshot': '/agents',
   'agent.upserted': '/agents',
+  'agent.routine.run.started': '/routines',
+  'agent.routine.run.completed': '/routines',
+  'agent.routine.run.failed': '/routines',
   'plugins.snapshot': '/plugins',
   'mcp.snapshot': '/tools',
   'knowledge.snapshot': '/knowledge',
@@ -184,6 +187,8 @@ export {
   fetchRoutineRevisions,
   fetchRoutineRevision,
   fetchRunState,
+  startRoutineRun,
+  answerRoutineApproval,
   selectAgentProfiles,
   selectAgentProfilesState,
   selectActiveAgentProfile,
@@ -194,6 +199,9 @@ export {
   selectAgentRoutineRevisions,
   selectAgentRoutineRevisionContent,
   selectAgentRunState,
+  selectRoutineRunLifecycle,
+  selectLatestRoutineRunLifecycle,
+  selectLastRoutineRunNotification,
 } from './uiData/agents';
 
 export {

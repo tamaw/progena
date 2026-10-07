@@ -4,6 +4,10 @@ import React, { useState, useRef, useEffect, useCallback, useMemo, useLayoutEffe
 import {
   selectAgentRoutineRuns,
   selectAgentRunState,
+  selectRoutineRunLifecycle,
+  selectLatestRoutineRunLifecycle,
+  startRoutineRun,
+  answerRoutineApproval,
   fetchRoutineRuns,
   fetchRunState,
   selectAgentRoutineRevisionContent,
@@ -12,17 +16,12 @@ import {
   selectAgentRoutineRunsHasMore,
 } from '../../store/uiDataSlice';
 import {
-  findRunBySessionId,
-  DISCOVERY_TIMEOUT_MS,
-  DISCOVERY_POLL_INTERVAL_MS,
-  totalRunMetaEntries,
-  SETTLE_STABLE_POLLS,
-  STATE_POLL_TIMEOUT_MS,
-  STATE_POLL_INTERVAL_MS,
   randomSessionId,
   parseRunThreadId,
   latestCompletionMs,
 } from '../../lib/routineRunPolling';
+import { watchRoutineRuns } from '../../store/routineSubscriptions';
+import { createOperationRequestId } from '../../store/http';
 import { formatAge } from './agentFormat';
 import { diffRoutineGraphs } from '../../lib/routineGraphDiff';
 import {
@@ -36,10 +35,12 @@ import { isFlowEdge, edgeSourceIds, joinTerminals, buildLoopMembership } from '.
 import {
   uniqueNodeId,
   makeNode,
+  normalizeGraphNodes,
   addForkLane,
   removeForkBranch,
   removeForkDefault,
   serializeGraph,
+  stableStringify,
 } from './graphEdits';
 import { titleCase, CONDITION_BRANCHES } from './graphNodeKinds';
 import { deriveActiveNodeIds } from './graphRunState';
@@ -69,193 +70,122 @@ const ZOOM_MIN = 0.5;
 const ZOOM_MAX = 2;
 const ZOOM_STEP = 0.1;
 
-const EMPTY_RUN_STATE = { run_meta: {}, data: {}, found: false };
+const EMPTY_RUN_STATE = { run_meta: {}, data: {}, pending_approvals: [], found: false };
 
-// Drives the poll loop behind the routine canvas's live run feedback --
-// see lib/routineRunPolling.js's module doc for the two-phase discovery
-// design and why this has to poll rather than react to a push event.
-// `agentId` scopes everything: switching routines drops any in-flight poll
-// for the previous one immediately, so a stale sub-header never keeps
-// ticking for a routine the author has navigated away from.
-function useRoutineRunPolling(agentId, parameters, inputSchema) {
+// The page watches checkpoint detail; lifecycle events arrive globally.
+function useRoutineRunEvents(agentId, parameters, inputSchema) {
   const dispatch = useDispatch();
   const { getApiUrl } = useConfig();
   const agentsUrl = getApiUrl('agentProfiles');
   const [sessionId, setSessionId] = useState(null);
-  const [threadId, setThreadId] = useState(null);
-  // idle -> discovering (found the run's thread_id yet?) -> running (live
-  // run_meta polling) -> settled (stopped polling, last state stays shown).
-  const [status, setStatus] = useState('idle');
-  const startedAtMsRef = useRef(null);
-  // Mirrors `startedAtMsRef` for render -- refs can't be read during render
-  // (React rule), so the value the hook actually returns to callers comes
-  // from this state instead; the ref stays for the effects' own timeout
-  // math above, where reading a ref is fine.
+  const [requestId, setRequestId] = useState(null);
+  const [requestError, setRequestError] = useState(null);
   const [runStartedAtMs, setRunStartedAtMs] = useState(null);
-  // Set the instant discovery resolves (the thread_id turns up in the
-  // checkpoints table) -- a real signal the graph is now actually live,
-  // not just a click-time guess. Anchors the entry node's own ticking
-  // timer once warm-up (see ChainCap's pulse, gated on 'discovering'
-  // alone) ends, well before that node's own completion exists.
-  const [threadFoundAtMs, setThreadFoundAtMs] = useState(null);
-  const runs = useSelector((state) => selectAgentRoutineRuns(state, agentId));
-  const runState = useSelector((state) => (threadId ? selectAgentRunState(state, threadId) : undefined)) || EMPTY_RUN_STATE;
-
   const interactiveSessionIdRef = useRef(null);
-  // Mirrors `interactiveSessionIdRef` for render -- whether a "Reset run"
-  // affordance has anything to reset. Set true the first time startRun()
-  // mints/reuses an interactive session (see below); cleared by an
-  // explicit reset or by switching routines.
+  const watchRef = useRef(null);
   const [hasInteractiveSession, setHasInteractiveSession] = useState(false);
+  const requestedLifecycle = useSelector((state) => selectRoutineRunLifecycle(state, requestId));
+  const latestLifecycle = useSelector((state) => selectLatestRoutineRunLifecycle(state, agentId));
+  const lifecycle = !requestId ? latestLifecycle
+    : requestedLifecycle && latestLifecycle?.session_id === sessionId && latestLifecycle.timestamp > requestedLifecycle.timestamp
+      ? latestLifecycle : requestedLifecycle;
+  const runs = useSelector((state) => selectAgentRoutineRuns(state, agentId));
+  const threadId = lifecycle?.thread_id
+    || (sessionId ? runs?.find((run) => run.run_id === sessionId)?.thread_id : null);
+  const runState = useSelector((state) => threadId ? selectAgentRunState(state, threadId) : undefined) || EMPTY_RUN_STATE;
+  const status = !requestId && !lifecycle ? 'idle'
+    : requestError || ['completed', 'failed', 'paused'].includes(lifecycle?.status) ? 'settled'
+      : lifecycle?.status === 'started' ? 'running' : 'discovering';
+
   useEffect(() => {
     setSessionId(null);
-    setThreadId(null);
-    setStatus('idle');
-    setThreadFoundAtMs(null);
+    setRequestId(null);
+    setRequestError(null);
     interactiveSessionIdRef.current = null;
     setHasInteractiveSession(false);
-  }, [agentId]);
+    const watch = watchRoutineRuns(agentsUrl, agentId);
+    watchRef.current = watch;
+    return () => {
+      watchRef.current = null;
+      watch.close();
+    };
+  }, [agentId, agentsUrl]);
 
-  // Phase 1: poll /runs, watch for the thread_id this session's Run click
-  // minted -- see findRunBySessionId.
-  useEffect(() => {
-    if (status !== 'discovering' || !sessionId) return undefined;
-    const found = findRunBySessionId(runs, sessionId);
-    if (found) {
-      setThreadId(found.thread_id);
-      setThreadFoundAtMs(Date.now());
-      setStatus('running');
-      return undefined;
-    }
-    if (Date.now() - startedAtMsRef.current > DISCOVERY_TIMEOUT_MS) {
-      setStatus('settled');
-      return undefined;
-    }
-    const timer = setTimeout(() => dispatch(fetchRoutineRuns({ agentsUrl, agentId })), DISCOVERY_POLL_INTERVAL_MS);
-    return () => clearTimeout(timer);
-    // Re-runs on every `runs` change too, so a fetch already in flight from
-    // the previous tick's dispatch gets checked the moment it lands instead
-    // of waiting for the next timer tick.
-  }, [status, sessionId, runs, agentsUrl, agentId, dispatch]);
+  const watchThread = useCallback((historicalThreadId) => {
+    void watchRef.current?.select(historicalThreadId
+      ? { thread_id: historicalThreadId }
+      : sessionId ? { session_id: sessionId } : {}).catch(() => {});
+  }, [sessionId]);
 
-  // Phase 2: poll /run-state on the now-known thread_id; settle once the
-  // total executed-node count stops growing for SETTLE_STABLE_POLLS polls
-  // in a row (the only "is it done" signal available -- see module doc).
-  const stablePollsRef = useRef(0);
-  const lastTotalRef = useRef(-1);
-  useEffect(() => {
-    if (status !== 'running' || !threadId) return undefined;
-    const total = totalRunMetaEntries(runState.run_meta);
-    if (total === lastTotalRef.current) {
-      stablePollsRef.current += 1;
-    } else {
-      stablePollsRef.current = 0;
-      lastTotalRef.current = total;
-    }
-    if (stablePollsRef.current >= SETTLE_STABLE_POLLS && total > 0) {
-      setStatus('settled');
-      return undefined;
-    }
-    if (Date.now() - startedAtMsRef.current > STATE_POLL_TIMEOUT_MS) {
-      setStatus('settled');
-      return undefined;
-    }
-    const timer = setTimeout(() => dispatch(fetchRunState({ agentsUrl, agentId, threadId })), STATE_POLL_INTERVAL_MS);
-    return () => clearTimeout(timer);
-  }, [status, threadId, runState.run_meta, agentsUrl, agentId, dispatch]);
-
-  // `targetNode` set means "run through this node (inclusive)", reusing a
-  // STABLE session_id across repeated clicks within this editor session --
-  // the backend's `_interactive_session_id` resume mechanism (see
-  // subagent.py's `_run`) needs the same session_id back on every call to
-  // continue the SAME checkpointed thread rather than restarting. Omitted
-  // (the top-level Run button) always mints a fresh session -- a full run
-  // is a distinct, complete execution every time, never a resume.
   const startRun = useCallback((targetNode) => {
     const newSessionId = targetNode
       ? (interactiveSessionIdRef.current ??= randomSessionId())
       : randomSessionId();
+    const newRequestId = createOperationRequestId();
     if (targetNode) setHasInteractiveSession(true);
-    stablePollsRef.current = 0;
-    lastTotalRef.current = -1;
-    startedAtMsRef.current = Date.now();
-    setRunStartedAtMs(startedAtMsRef.current);
-    setThreadFoundAtMs(null);
-    setThreadId(null);
+    setRunStartedAtMs(Date.now());
     setSessionId(newSessionId);
-    setStatus('discovering');
-    // A required boolean the user never touched has no key in `parameters`
-    // at all (see ParameterControl's toggle -- there's no third "unset"
-    // state to write), but the routine's own compiled graph (condition/
-    // state_equals expressions) expects the field to exist. Fill it in as
-    // `false` here, at the wire boundary, rather than writing a synthetic
-    // value into `parameterValues` -- that would make the toggle UI lie
-    // about ever having been touched.
+    setRequestId(newRequestId);
+    setRequestError(null);
     const effectiveParameters = { ...parameters };
     for (const name of inputSchema?.required || []) {
       if (inputSchema.properties?.[name]?.type === 'boolean' && effectiveParameters[name] === undefined) {
         effectiveParameters[name] = false;
       }
     }
-    fetch(`${agentsUrl}/${encodeURIComponent(agentId)}/run`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        session_id: newSessionId,
-        ...(targetNode ? { target_node: targetNode } : {}),
-        ...(Object.keys(effectiveParameters).length ? { parameters: effectiveParameters } : {}),
-      }),
-    }).catch(() => {});
-    dispatch(fetchRoutineRuns({ agentsUrl, agentId }));
+    const watch = watchRef.current;
+    void (async () => {
+      try {
+        // Register first: even a millisecond-long graph cannot outrun its listener.
+        await watch.select({ session_id: newSessionId });
+        if (watchRef.current !== watch) return;
+        await dispatch(startRoutineRun({ agentsUrl, agentId, sessionId: newSessionId,
+          targetNode, parameters: effectiveParameters, requestId: newRequestId })).unwrap();
+      } catch (error) {
+        if (watchRef.current === watch) setRequestError(error.message);
+      }
+    })();
     return newSessionId;
   }, [agentsUrl, agentId, dispatch, parameters, inputSchema]);
 
-  // Abandons the current interactive ("Run to here") session -- the next
-  // "Run to here" click mints a brand new session_id/thread_id instead of
-  // resuming the abandoned one. Does not touch the top-level Run button's
-  // own (always-fresh) sessions, and is not itself a side effect -- it
-  // only forgets a client-side pointer, the old thread's checkpoints stay
-  // exactly where they are (still visible in the Runs panel).
   const resetInteractiveSession = useCallback(() => {
     interactiveSessionIdRef.current = null;
     setHasInteractiveSession(false);
   }, []);
-
-  // The revision this run's cached data was executed against -- null for a
-  // run against the live/unpinned document, or before the thread_id is
-  // even known yet. Used by GraphCanvas to fetch that revision's content
-  // and diff it against the current draft graph (see diffRoutineGraphs),
-  // so an edit made after this run doesn't leave its stale timing/tokens/
-  // output looking current.
+  const answerApproval = useCallback(async (approvalThreadId, approval, answer) => {
+    const newRequestId = createOperationRequestId();
+    setSessionId(approvalThreadId.split(':').at(-1));
+    setRequestId(newRequestId);
+    setRequestError(null);
+    try {
+      await watchRef.current?.select({ thread_id: approvalThreadId });
+      await dispatch(answerRoutineApproval({ agentsUrl, agentId, threadId: approvalThreadId,
+        interruptId: approval.interrupt_id, answer, requestId: newRequestId })).unwrap();
+    } catch (error) {
+      setRequestError(error.message || 'Could not submit the response');
+      void watchRef.current?.select({ thread_id: approvalThreadId }).catch(() => {});
+      throw error;
+    }
+  }, [agentsUrl, agentId, dispatch]);
   const runRevisionId = useMemo(() => parseRunThreadId(threadId)?.revisionId ?? null, [threadId]);
-
   return {
-    status,
-    threadId,
-    runMeta: runState.run_meta,
-    runData: runState.data,
-    // Once nothing has completed yet, the best estimate for "when did the
-    // active node start" is the moment the thread was actually found
-    // (real signal the graph is live), or the run's own click time before
-    // even that -- after the first completion, the latest known finish
-    // across every node (see latestCompletionMs) is exact, not estimated.
-    estimatedActiveStartMs: latestCompletionMs(runState.run_meta) ?? threadFoundAtMs ?? runStartedAtMs,
-    runRevisionId,
-    startRun,
-    hasInteractiveSession,
-    resetInteractiveSession,
+    status, threadId, runMeta: runState.run_meta, runData: runState.data, pendingApprovals: runState.pending_approvals || EMPTY_RUN_STATE.pending_approvals, answerApproval,
+    estimatedActiveStartMs: latestCompletionMs(runState.run_meta)
+      ?? (lifecycle?.status === 'started' ? Date.parse(lifecycle.timestamp) : runStartedAtMs),
+    runRevisionId, startRun, hasInteractiveSession, resetInteractiveSession, watchThread,
+    error: requestError || lifecycle?.error,
   };
 }
 
 // Drives the canvas's top-right run-history pill: back/forward paging
 // through every past execution of this routine (see agent_store's
 // `list_routine_runs`, newest-first). Position 0 ("the front") always
-// tracks whatever is most current -- the live in-session poll straight
-// from useRoutineRunPolling while one is in flight or has ever run this
+// tracks whatever is most current -- the live in-session event state straight
+// from useRoutineRunEvents while one is in flight or has ever run this
 // session (ticking updates, no extra fetch), falling back to the newest
 // list entry on a fresh mount that has not run anything yet. Any other
-// position is purely historical: fetched once (never polled -- it already
-// finished) into the same runStateByThreadId cache the live poll itself
+// position is purely historical: fetched once (it already
+// finished) into the same runStateByThreadId cache the live events
 // uses, so re-visiting a position already fetched this session is free.
 function useRunHistoryNav(agentId, live) {
   const dispatch = useDispatch();
@@ -278,6 +208,10 @@ function useRunHistoryNav(agentId, live) {
   const usesLive = atFront && (isLiveActive || Boolean(live.threadId));
 
   const historicalThreadId = usesLive ? null : (runsList[viewedIndex]?.thread_id ?? null);
+  const { watchThread } = live;
+  useEffect(() => {
+    watchThread(historicalThreadId);
+  }, [historicalThreadId, watchThread]);
   const historicalState = useSelector((state) => (
     historicalThreadId ? selectAgentRunState(state, historicalThreadId) : undefined
   ));
@@ -323,6 +257,8 @@ function useRunHistoryNav(agentId, live) {
     viewedIndex,
     runMeta: usesLive ? live.runMeta : (historicalState?.run_meta || {}),
     runData: usesLive ? live.runData : (historicalState?.data || {}),
+    threadId: usesLive ? live.threadId : historicalThreadId,
+    pendingApprovals: usesLive ? live.pendingApprovals : (historicalState?.pending_approvals || EMPTY_RUN_STATE.pending_approvals),
     runRevisionId: usesLive ? live.runRevisionId : (displayEntry?.revision_id || null),
     hasRuns: runsList.length > 0 || isLiveActive,
     canGoBack: runsList.length > 0 && viewedIndex < runsList.length - 1,
@@ -374,6 +310,7 @@ function useRunStaleness(agentId, runRevisionId, currentGraph) {
 function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, onDelete, jsonOpen, onOpenJson, onCloseJson, runsOpen, onOpenRuns, onCloseRuns }) {
   const persistRef = useRef(onPersist);
   const lastSavedRef = useRef(null);
+  const inFlightSavesRef = useRef(new Map());
   // Values the user fills in for the routine's declared input_schema.properties
   // (see RunParametersModal) -- session-local only, never persisted to the
   // graph document; startRun sends the current snapshot with every POST.
@@ -399,18 +336,28 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, o
     startRun,
     hasInteractiveSession,
     resetInteractiveSession,
-  } = useRoutineRunPolling(agent.id, parameterValues, meta.input_schema);
+    watchThread,
+    pendingApprovals: livePendingApprovals,
+    answerApproval,
+  } = useRoutineRunEvents(agent.id, parameterValues, meta.input_schema);
   const runNav = useRunHistoryNav(agent.id, {
     status: runStatus,
     threadId: liveThreadId,
     runMeta: liveRunMeta,
     runData: liveRunData,
     runRevisionId: liveRunRevisionId,
+    pendingApprovals: livePendingApprovals,
+    watchThread,
   });
   const runMeta = runNav.runMeta;
   const runData = runNav.runData;
   const runRevisionId = runNav.runRevisionId;
   const { resetToLatest: resetRunNavToLatest } = runNav;
+  const submitApproval = useCallback(async (approval, answer) => {
+    const approvalThreadId = runNav.threadId;
+    resetRunNavToLatest();
+    await answerApproval(approvalThreadId, approval, answer);
+  }, [runNav.threadId, resetRunNavToLatest, answerApproval]);
   const startRunAndTrackLatest = useCallback((targetNode) => {
     resetRunNavToLatest();
     return startRun(targetNode);
@@ -482,6 +429,28 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, o
   useEffect(() => { selectedNodeIdRef.current = selectedNodeId; }, [selectedNodeId]);
 
   useEffect(() => { persistRef.current = onPersist; }, [onPersist]);
+
+  // JSON Apply and the autosave effect can observe the same state update. Share
+  // one request for an identical graph signature so a direct Apply doesn't
+  // race its own debounced autosave into issuing a second PATCH.
+  const persistGraph = useCallback((payload) => {
+    const signature = stableStringify(payload);
+    const existing = inFlightSavesRef.current.get(signature);
+    if (existing) return existing;
+
+    const request = Promise.resolve()
+      .then(() => persistRef.current(payload))
+      .then((result) => {
+        lastSavedRef.current = signature;
+        return result;
+      });
+    inFlightSavesRef.current.set(signature, request);
+    request.then(
+      () => { if (inFlightSavesRef.current.get(signature) === request) inFlightSavesRef.current.delete(signature); },
+      () => { if (inFlightSavesRef.current.get(signature) === request) inFlightSavesRef.current.delete(signature); },
+    );
+    return request;
+  }, []);
 
   // Refs mirror the latest state synchronously so insertAt and friends
   // can compute a consistent next state without nesting setState calls
@@ -653,6 +622,14 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, o
         // This loop's own guard edge never survives either boundary node
         // going -- see the comment above `guardEdge`.
         if (edge.loop_guard && (edge.to === id || edge.from === id)) return;
+        // The empty-list fallback belongs to the foreach and its companion
+        // "Join each" marker. Deleting either endpoint drops this hidden
+        // routing edge; it must not be spliced onto the body node instead.
+        if (edge.level === 'foreach_empty') {
+          if (edge.from === id || edge.to === id) return;
+          next.push(edge);
+          return;
+        }
         // The deleted node's own outgoing edge -- plain, fan_in-target, or
         // (a router node deleted outright) its own route edge -- never
         // survives it. What was built inside its branches isn't cascade-
@@ -850,6 +827,7 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, o
     } else if (kind === 'foreach') {
       const stopId = uniqueNodeId('noop', [...nodesRef.current, ...added]);
       added.push({ ...makeNode('noop'), id: stopId, label: 'Join each' });
+      nextEdges.push({ from: id, to: stopId, level: 'foreach_empty' });
       nextEdges.push({ from: id, to: stopId, level: 'normal' });
       if (targetId) nextEdges.push({ from: stopId, to: targetId, level: 'normal' });
       terminalIds = [stopId];
@@ -1032,13 +1010,12 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, o
     setNodes(nextNodes);
     setEdges(nextEdges);
     const payload = serializeGraph(nextNodes, nextEdges, nextMeta);
-    await persistRef.current(payload);
-    lastSavedRef.current = JSON.stringify(payload);
+    await persistGraph(payload);
     setSaveError(null);
     setSaveState('saved');
     runNav.resetToLatest();
     setRestoreConfirmOpen(false);
-  }, [runNav]);
+  }, [runNav, persistGraph]);
 
   const displayNodes = useMemo(
     () => (runNav.isBrowsingHistory ? (runNav.browsedGraph?.nodes || []) : nodes),
@@ -1053,7 +1030,7 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, o
   // Which node ids have at least one recorded execution this run, and --
   // derived from that -- which node(s) are probably executing right now
   // (see deriveActiveNodeIds). Recomputed off `runMeta` itself, not
-  // `runStatus`, so the sub-headers keep updating on every poll tick while
+  // `runStatus`, so the sub-headers keep updating on every checkpoint event while
   // `status` stays 'running'.
   const completedNodeIds = useMemo(
     () => new Set(Object.keys(runMeta || {}).filter((id) => (runMeta[id] || []).length > 0)),
@@ -1071,11 +1048,11 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, o
   );
   const rawStaleNodeIds = useRunStaleness(agent.id, runRevisionId, currentGraphForStaleness);
   const staleNodeIds = runNav.isBrowsingHistory ? EMPTY_MISSING : rawStaleNodeIds;
-  // True only during the client discovery poll (finding this run's real
+  // True only during the queued run discovery (finding this run's real
   // thread_id) -- the one window with no reliable timestamp to count from
   // at all. Once the thread turns up, `estimatedActiveStartMs` anchors on
   // that real moment instead of the run's click time (see
-  // useRoutineRunPolling), so counting can start honestly even before the
+  // useRoutineRunEvents), so counting can start honestly even before the
   // entry node's own completion exists (see ChainCap/StepRunSummary).
   const warmingUp = !runNav.isBrowsingHistory && runStatus === 'discovering';
   // Drives the top-left Run button's icon (Play -> Stop) and disables it
@@ -1122,7 +1099,9 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, o
     startRun: startRunAndTrackLatest,
     hasInteractiveSession,
     resetInteractiveSession,
-  }), [updateNode, deleteNode, insertAt, onChangeStateKey, updateLoopGuard, removeBranching, onAddBranch, onJoinBranches, selectNode, selectedNodeId, onAddDefault, onRemoveBranch, onRemoveDefault, onRenameBranch, meta.settings, displayEdges, displayNodes, meta.input_schema, meta.output_schema, runNav.isBrowsingHistory, runMeta, runData, activeNodeIds, estimatedActiveStartMs, staleNodeIds, runStatus, warmingUp, isRunInProgress, loopMembership, loopIterations, setLoopIteration, startRunAndTrackLatest, hasInteractiveSession, resetInteractiveSession]);
+    pendingApprovals: runNav.pendingApprovals,
+    answerApproval: submitApproval,
+  }), [updateNode, deleteNode, insertAt, onChangeStateKey, updateLoopGuard, removeBranching, onAddBranch, onJoinBranches, selectNode, selectedNodeId, onAddDefault, onRemoveBranch, onRemoveDefault, onRenameBranch, meta.settings, displayEdges, displayNodes, meta.input_schema, meta.output_schema, runNav.isBrowsingHistory, runNav.pendingApprovals, submitApproval, runMeta, runData, activeNodeIds, estimatedActiveStartMs, staleNodeIds, runStatus, warmingUp, isRunInProgress, loopMembership, loopIterations, setLoopIteration, startRunAndTrackLatest, hasInteractiveSession, resetInteractiveSession]);
 
   // Debounced autosave: serialize the working graph and PATCH it. The first
   // run records the baseline so simply opening the tab does not trigger a save.
@@ -1157,7 +1136,7 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, o
   const hasDeclaredParams = Object.keys(meta.input_schema?.properties || {}).length > 0;
   useEffect(() => {
     const payload = serializeGraph(nodes, edges, meta);
-    const signature = JSON.stringify(payload);
+    const signature = stableStringify(payload);
     if (lastSavedRef.current === null) {
       lastSavedRef.current = signature;
       return undefined;
@@ -1174,10 +1153,17 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, o
       return undefined;
     }
     const timer = setTimeout(async () => {
+      // An explicit JSON Apply may have persisted this exact payload while
+      // this debounce was waiting. Re-check at fire time, because that save
+      // may have finished and been removed from inFlightSavesRef already.
+      if (signature === lastSavedRef.current) {
+        setSaveError(null);
+        setSaveState(saveStatusWhenInSync);
+        return;
+      }
       setSaveState('saving');
       try {
-        await persistRef.current(payload);
-        lastSavedRef.current = signature;
+        await persistGraph(payload);
         setSaveError(null);
         setSaveState('saved');
       } catch (error) {
@@ -1186,7 +1172,7 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, o
       }
     }, 700);
     return () => clearTimeout(timer);
-  }, [nodes, edges, meta, incomplete]);
+  }, [nodes, edges, meta, incomplete, persistGraph]);
 
   const workingGraph = useMemo(() => serializeGraph(nodes, edges, meta), [nodes, edges, meta]);
   // `nodes`/`edges`/`meta` above are seeded from `graph` only once, at
@@ -1203,14 +1189,14 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, o
   // signature already reflected locally (by mount or a prior adoption) so
   // this doesn't refire for e.g. this tab's own save simply echoing back.
   const confirmedSignature = useMemo(
-    () => JSON.stringify(serializeGraph(confirmedGraph?.nodes || [], confirmedGraph?.edges || [], confirmedGraph || {})),
+    () => stableStringify(serializeGraph(confirmedGraph?.nodes || [], confirmedGraph?.edges || [], confirmedGraph || {})),
     [confirmedGraph],
   );
   const adoptedSignatureRef = useRef(confirmedSignature);
   useEffect(() => {
     if (confirmedSignature === adoptedSignatureRef.current) return;
     adoptedSignatureRef.current = confirmedSignature;
-    const localSignature = JSON.stringify(workingGraph);
+    const localSignature = stableStringify(workingGraph);
     if (confirmedSignature === localSignature) return;
     if (localSignature !== lastSavedRef.current) return;
     const nextNodes = (confirmedGraph.nodes || []).map((node) => ({ ...node }));
@@ -1242,8 +1228,8 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, o
   // signature to the working copy's is the same "did the save round-trip
   // land" check the autosave chip already implies, made explicit for Run.
   const isServerConfirmed = useMemo(
-    () => JSON.stringify(workingGraph)
-      === JSON.stringify(serializeGraph(confirmedGraph?.nodes || [], confirmedGraph?.edges || [], confirmedGraph || {})),
+    () => stableStringify(workingGraph)
+      === stableStringify(serializeGraph(confirmedGraph?.nodes || [], confirmedGraph?.edges || [], confirmedGraph || {})),
     [workingGraph, confirmedGraph],
   );
   const selectedNode = nodes.find((node) => node.id === selectedNodeId) || null;
@@ -1275,15 +1261,15 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, o
       output_schema: parsed.output_schema || null,
       $defs: parsed.$defs || {},
     };
+    const nextNodes = normalizeGraphNodes(parsed.nodes || []);
     setMeta(nextMeta);
-    setNodes((parsed.nodes || []).map((node) => ({ ...node })));
+    setNodes(nextNodes);
     setEdges((parsed.edges || []).map((edge) => ({ ...edge })));
-    const payload = serializeGraph(parsed.nodes || [], parsed.edges || [], nextMeta);
-    await persistRef.current(payload);
-    lastSavedRef.current = JSON.stringify(payload);
+    const payload = serializeGraph(nextNodes, parsed.edges || [], nextMeta);
+    await persistGraph(payload);
     setSaveError(null);
     setSaveState('saved');
-  }, []);
+  }, [persistGraph]);
 
   return (
     <>
