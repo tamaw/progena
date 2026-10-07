@@ -251,6 +251,7 @@ def _build_node_callable(
     agent_registry: dict[str, Any],
     routine_registry: dict[str, Any],
     routine_runner: Callable[..., Awaitable[dict[str, Any]]] | None = None,
+    agent_background_runner: Callable[..., Awaitable[dict[str, Any]]] | None = None,
     tool_registry: Any = None,
     defs: dict[str, dict[str, Any]] | None = None,
 ) -> Any:
@@ -271,7 +272,12 @@ def _build_node_callable(
     if node.kind == "classify":
         return _build_classify_node(node, model=model, defs=defs)
     if node.kind == "agent":
-        return _build_object_agent_node(node, object_agent_registry=agent_registry, defs=defs)
+        return _build_object_agent_node(
+            node,
+            object_agent_registry=agent_registry,
+            defs=defs,
+            background_runner=agent_background_runner,
+        )
     if node.kind == "a2a":
         return _build_a2a_node(node, tool_registry=tool_registry)
     if node.kind == "foreach":
@@ -437,6 +443,7 @@ def compile_routine_graph(
     agent_registry: dict[str, Any] | None = None,
     routine_registry: dict[str, Any] | None = None,
     routine_runner: Callable[..., Awaitable[dict[str, Any]]] | None = None,
+    agent_background_runner: Callable[..., Awaitable[dict[str, Any]]] | None = None,
     tool_registry: Any = None,
     base_system_prompt: str | None = None,
     checkpointer: Any | None = None,
@@ -567,6 +574,7 @@ def compile_routine_graph(
                     agent_registry=agent_registry,
                     routine_registry=routine_registry,
                     routine_runner=routine_runner,
+                    agent_background_runner=agent_background_runner,
                     tool_registry=tool_registry,
                     defs=graph.defs,
                 ),

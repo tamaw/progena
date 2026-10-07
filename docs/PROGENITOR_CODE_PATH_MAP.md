@@ -210,9 +210,9 @@ Status: minimal -- regular (synchronous) subagent delegation is no longer
 code-defined here. `create_progenitor_agent()` (`agent/agent.py`) now builds
 its full subagent menu from persisted object definitions
 (`agent/object_agent_manifest.py`) plus routine-graph subagents. Async descriptors
-go to `create_deep_agent(subagents=...)`; `LiveSubagentMiddleware` supplies
-object/routine task descriptors and refreshes object registration after Postgres
-notifications. The only thing `agent/async_subagents.py`
+are supplied by `LiveAsyncSubagentMiddleware`, using the SDK's native background
+tools. `LiveSubagentMiddleware` supplies object/routine task descriptors;
+both see object registration refreshes after Postgres notifications. The only thing `agent/async_subagents.py`
 still defines is `create_hello_world_async_subagent()`, the deterministic
 `AsyncSubAgent` used for background-delegation smoke tests.
 
@@ -221,8 +221,15 @@ Object definitions are parsed/discovered separately from their runtime in
 scoped tools, mounts and permissions; the awaited proxy reloads the manifest
 from Postgres on each invocation. Native manifests are read-only bundled files,
 loaded at startup without importing them into Postgres; restart after dev edits.
-This prepares reuse by a future background adapter, but
-does not yet make object-agent execution selectable as async by a routine.
+The runtime's `async_subagents/protocol.py` exposes these same object agents
+through Agent Protocol: SDK `runs.wait` awaits completion, while `runs.create`
+starts background execution and returns its identity. Neither needs an async
+manifest flag. Thread/run results persist in Postgres runtime documents, and
+object agents use separate checkpoint threads. Background chat delegation
+reuses task tracking and completion notifications. Routine nodes default to
+waiting; `execution: "background"` returns a tracked task reference instead of
+awaiting the child result. Shutdown records cancellation, and startup marks abandoned
+running tasks as errors rather than automatically replaying tool side effects.
 
 | Subagent | Current use | Notes |
 | --- | --- | --- |

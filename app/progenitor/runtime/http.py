@@ -10,7 +10,9 @@ from typing import Any, cast
 from aiohttp import web
 
 from ..a2a import build_task_response, is_task_payload, upsert_tracked_task_from_payload
-from ..async_subagents.hello_world import HelloWorldAsyncAgentProtocol
+from ..async_subagents.hello_world import hello_world_runnable
+from ..async_subagents.protocol import ObjectAgentProtocol
+from ..async_subagents.tasks import HELLO_WORLD_ASYNC_ASSISTANT_ID
 from ..state.models import A2ATaskRecord
 from ..utils import utcnow_isoformat
 from .http_chat import RuntimeChatService
@@ -42,13 +44,26 @@ class ProgenitorHTTPServer:
         self._runner: web.AppRunner | None = None
         self._site: web.TCPSite | None = None
         self._bound_port: int | None = None
-        self._hello_world_async_agent = HelloWorldAsyncAgentProtocol()
+        store = getattr(state_manager, "_runtime_store", None)
+        self._agent_protocol = (
+            ObjectAgentProtocol(store=store, resolve_agent=self._resolve_object_agent)
+            if store is not None else None
+        )
         self._chat_service = RuntimeChatService(loop_runner) if loop_runner is not None else None
 
     @property
     def bound_port(self) -> int | None:
         """Return the actual bound port, useful when configured with port 0."""
         return self._bound_port
+
+    def _resolve_object_agent(self, name: str) -> Any | None:
+        if name == HELLO_WORLD_ASYNC_ASSISTANT_ID:
+            return hello_world_runnable()
+        graph = getattr(self.loop_runner, "graph", None)
+        registry = getattr(graph, "object_agent_registry", None)
+        if registry is None:
+            registry = getattr(getattr(graph, "agent", None), "object_agent_registry", None)
+        return registry.callables.get(name) if registry is not None else None
 
     @property
     def base_url(self) -> str:
@@ -69,11 +84,13 @@ class ProgenitorHTTPServer:
                 web.get("/health", self._handle_health),
                 web.get("/.well-known/agent-card.json", self._handle_agent_card),
                 web.post("/a2a/tasks/callback", self._handle_a2a_task_callback),
-                *self._hello_world_async_agent.routes(),
+                *(self._agent_protocol.routes() if self._agent_protocol is not None else []),
                 *(self._chat_service.routes() if self._chat_service is not None else []),
             ]
         )
         self._app = app
+        if self._agent_protocol is not None:
+            await self._agent_protocol.start()
         self._runner = web.AppRunner(app)
         await self._runner.setup()
         self._site = web.TCPSite(self._runner, self.host, self.port, reuse_address=True)
@@ -93,7 +110,8 @@ class ProgenitorHTTPServer:
         """Stop the HTTP server."""
         if self._runner is None:
             return
-        await self._hello_world_async_agent.stop()
+        if self._agent_protocol is not None:
+            await self._agent_protocol.stop()
         if self._chat_service is not None:
             await self._chat_service.stop()
         await self._runner.cleanup()

@@ -831,6 +831,19 @@ describe('predecessorsOf', () => {
 });
 
 describe('buildStatePathSuggestions', () => {
+  it('offers background task references under the output key rather than eventual response fields', () => {
+    const nodes = [
+      { id: 'delegate', output_key: 'task', kind: 'agent', config: {
+        execution: 'background', response_schema: { properties: { answer: { type: 'string' } } },
+      } },
+      { id: 'after', kind: 'eval', config: {} },
+    ];
+    const paths = buildStatePathSuggestions('after', nodes, [{ from: 'delegate', to: 'after' }], null).map((entry) => entry.path);
+    expect(paths).toContain('task.run_id');
+    expect(paths).toContain('task.task_id');
+    expect(paths).not.toContain('task.answer');
+    expect(paths).not.toContain('delegate.run_id');
+  });
   const nodes = [
     { id: 'classify_intent', kind: 'classify', label: 'Classify intent', config: { response_schema: { properties: { label: { type: 'string' }, confidence: { type: 'number' } } } } },
     { id: 'compute_score', kind: 'eval', label: 'Compute score', config: {} },

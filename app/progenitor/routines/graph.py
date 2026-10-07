@@ -190,6 +190,7 @@ class AgentNodeConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     agent_name: str = Field(min_length=1)
+    execution: Literal["wait", "background"] = "wait"
     prompt_template: str | None = None
     prompt_file: str | None = None
     inputs: dict[str, str] = Field(default_factory=dict)

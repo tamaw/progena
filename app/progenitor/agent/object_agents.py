@@ -33,7 +33,7 @@ from langchain.agents.middleware import (
     InterruptOnConfig,
     SummarizationMiddleware,
 )
-from langchain_core.runnables import RunnableLambda
+from langchain_core.runnables import RunnableConfig, RunnableLambda
 
 from ..config import LLMConfig
 from .adapters import create_langchain_model
@@ -397,7 +397,7 @@ def create_object_agent_proxy(
             raise ValueError(f"object agent {source.name!r} is no longer installed")
         return parse_object_agent_manifest(content, source=f"agent:{source.relative_path}")
 
-    async def run(state: dict[str, Any]) -> dict[str, Any]:
+    async def run(state: Any, config: RunnableConfig) -> dict[str, Any]:
         manifest = await load_manifest()
         agent = build_object_agent(
             manifest,
@@ -410,6 +410,12 @@ def create_object_agent_proxy(
             worktree_dir=worktree_dir,
             shell_paths=shell_paths,
         )
+        thread_id = config.get("configurable", {}).get("object_agent_thread_id")
+        if thread_id:
+            # Agent Protocol requests run on their own durable checkpoint thread.
+            return await agent.ainvoke(
+                state, config={"configurable": {"thread_id": thread_id}},
+            )
         return await agent.ainvoke({"messages": state.get("messages") or []})
 
     return {

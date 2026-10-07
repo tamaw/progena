@@ -238,6 +238,7 @@
         "inputs": { "$ref": "#/$defs/inputMap" },
         "response_schema": { "$ref": "#/$defs/responseSchema" },
         "continue_thread": { "type": "boolean" },
+        "execution": { "enum": ["wait", "background"], "default": "wait", "description": "Wait returns the agent response. Background continues after launch and returns a task reference; response_schema validates the eventual task result." },
         "retry": { "$ref": "#/$defs/retryPolicy" },
         "timeout": { "type": "number", "minimum": 0, "description": "Seconds before this node is abandoned, overriding settings.timeout. 0 disables the limit." },
         "cache": { "$ref": "#/$defs/cachePolicy" }
