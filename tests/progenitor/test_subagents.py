@@ -8,6 +8,7 @@ from app.progenitor.agent.async_subagents import (
     create_hello_world_async_subagent,
     create_progenitor_async_subagents,
 )
+from app.progenitor.agent.live_async_subagents import LiveAsyncSubagentMiddleware
 from app.progenitor.agent.object_agent_registry import LiveSubagentMiddleware
 from tests.progenitor.conftest import _FakeRuntimeStore
 
@@ -37,7 +38,10 @@ class TestSubagentWiring:
             patch("app.progenitor.agent.agent.create_progenitor_backend") as mock_backend,
         ):
             mock_create.return_value = MagicMock()
-            mock_subagents.return_value = [{"name": "researcher"}]
+            mock_subagents.return_value = [{
+                "name": "researcher", "description": "Researches in the background.",
+                "graph_id": "researcher", "url": "http://unused.test/agent-protocol",
+            }]
             mock_backend.return_value = MagicMock()
             with patch("app.progenitor.agent.agent.create_langchain_model") as mock_model:
                 mock_model.return_value = MagicMock()
@@ -72,8 +76,12 @@ class TestSubagentWiring:
                 await create_progenitor_agent(state_manager=state_manager)
                 call_kwargs = mock_create.call_args.kwargs
                 assert "subagents" in call_kwargs
-                assert [agent["name"] for agent in call_kwargs["subagents"]] == [
-                    "researcher",
+                assert call_kwargs["subagents"] == []
+                live_async = next(
+                    m for m in call_kwargs["middleware"] if isinstance(m, LiveAsyncSubagentMiddleware)
+                )
+                assert [spec["name"] for spec in live_async.descriptors()] == [
+                    "researcher", "repo-manager",
                 ]
                 live = next(
                     m for m in call_kwargs["middleware"] if isinstance(m, LiveSubagentMiddleware)

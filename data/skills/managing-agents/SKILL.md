@@ -18,6 +18,17 @@ calls it an agent.md. Native agents under `/agents/native/` (also exposed at
 Remote A2A registrations belong to `/config/agents.json`; use `managing-a2a`.
 Routine graphs belong to `/routines/`; use `managing-routines`.
 
+The same object agent can be called through `task` when its answer is needed
+before continuing, or through `start_async_task` to run in the background.
+No `async` front-matter flag or duplicate definition is needed. Both modes use
+the manifest's tools, skills, mounts, permissions, and model configuration.
+Use the background tools to check, update, or cancel an existing task; creation
+and deletion refresh both delegation menus automatically. Routine `agent`
+nodes default to `execution: "wait"`. Set `execution: "background"` to launch a
+new conversation and advance with a task reference (task_id, thread_id, run_id,
+agent_name, status), rather than the agent response. Its response_schema validates
+the eventual task result; task failures are reported separately from the parent run.
+
 ## Create an agent
 
 1. Inspect `/agents/` and `/agents/user/` for existing names. When creating a

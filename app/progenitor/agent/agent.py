@@ -20,6 +20,7 @@ from deepagents.middleware.subagents import CompiledSubAgent
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph.state import CompiledStateGraph
 
+from ..async_subagents.tasks import create_agent_background_runner
 from ..config import ProgenitorConfig, get_config
 from ..content_documents import ensure_content_documents_seeded
 from ..routines.approvals import approval_lock
@@ -41,6 +42,7 @@ from .adapters import (
 )
 from .async_subagents import create_progenitor_async_subagents
 from .backends import create_progenitor_backend
+from .live_async_subagents import LiveAsyncSubagentMiddleware
 from .middleware import (
     AsyncSubagentTrackingMiddleware,
     AuditLoggingMiddleware,
@@ -360,6 +362,10 @@ async def create_progenitor_agent(
         native_root=data_dir / "agents" / "objects",
     )
     await live_objects.refresh()
+    live_async = LiveAsyncSubagentMiddleware(
+        live_objects, base_url=http_base_url, static_subagents=async_subagents
+    )
+    background_runner = create_agent_background_runner(state_manager, http_base_url)
     object_agent_registry = live_objects.callables
     reserved_names.update(object_agent_registry)
 
@@ -389,6 +395,7 @@ async def create_progenitor_agent(
             # routine-to-routine calls use routine_runner below.
             routine_registry={},
             routine_runner=_run_routine,
+            agent_background_runner=background_runner,
             tool_registry=tool_registry,
             checkpointer=checkpointer,
             context=dict(getattr(runtime, "context", None) or {}),
@@ -427,6 +434,7 @@ async def create_progenitor_agent(
             agent_registry=object_agent_registry,
             routine_registry={},
             routine_runner=_run_routine,
+            agent_background_runner=background_runner,
             tool_registry=tool_registry,
             checkpointer=checkpointer,
         )
@@ -444,6 +452,7 @@ async def create_progenitor_agent(
             agent_registry=object_agent_registry,
             routine_registry={},
             routine_runner=_run_routine,
+            agent_background_runner=background_runner,
             tool_registry=tool_registry,
             checkpointer=checkpointer,
             **kwargs,
@@ -465,6 +474,8 @@ async def create_progenitor_agent(
         )
     )
 
+    custom_middleware.append(live_async)
+
     # Deep Agents' `memory=` parameter injects runtime memory from the
     # Postgres-backed memory documents (see backends.py's /memories/ mount).
     custom_middleware.insert(
@@ -472,6 +483,7 @@ async def create_progenitor_agent(
         AsyncSubagentTrackingMiddleware(
             state_manager=state_manager,
             async_subagents=async_subagents,
+            specs_provider=live_async.descriptors,
         ),
     )
     agent = create_deep_agent(
@@ -483,7 +495,7 @@ async def create_progenitor_agent(
         store=store,
         skills=skills_dirs,
         memory=memory_paths or None,
-        subagents=async_subagents,
+        subagents=[],
         middleware=custom_middleware,
         checkpointer=checkpointer,
         state_schema=ProgenitorAgentState,

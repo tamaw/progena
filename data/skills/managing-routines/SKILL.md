@@ -71,6 +71,11 @@ The current schema supports: `prompt`, `eval`, `condition`, `switch`, `split`,
 - `split` is a structural parallel gateway that runs every branch.
 - `classify` uses a model rubric and required response schema.
 - `agent` invokes a local object agent; `a2a` invokes a registered A2A peer.
+  Agent nodes default to `execution: "wait"`, which waits for the response. Use
+  `execution: "background"` only when later steps can proceed without that answer.
+  Background output is a task reference (`task_id`, `thread_id`, `run_id`,
+  `agent_name`, `status`), not the final response. Each launch creates a separate
+  conversation; `response_schema` validates the eventual task result.
 - `noop` passes state through unchanged.
 - `human` pauses for a user response and is suitable for approval/review.
 - `foreach` supports parallel item fan-out (`mode: "send"`) or per-item agent

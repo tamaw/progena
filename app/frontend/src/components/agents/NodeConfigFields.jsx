@@ -457,6 +457,20 @@ export function NodeConfigBody({ id, kind, config, updateNodeConfig, replaceNode
     return (
       <>
         <AgentSelectField id={id} config={config} label="Agent" agentKind="object" updateNodeConfig={updateNodeConfig} />
+        <label className="agents-graph-node__field">
+          <span className="agents-graph-node__field-label">Execution</span>
+          <select className="agents-graph-node__toolinput" aria-label="Execution"
+            value={config?.execution || 'wait'}
+            onChange={(event) => updateNodeConfig(id, { execution: event.target.value })}>
+            <option value="wait">Wait for response</option>
+            <option value="background">Run in background</option>
+          </select>
+        </label>
+        <p className="agents-graph-node__field-label">
+          {config?.execution === 'background'
+            ? 'Continue after launch. Output contains the task reference; its result arrives separately. Each launch starts a separate conversation.'
+            : 'Continue after the agent responds.'}
+        </p>
         <ConfigField id={id} config={config} field="prompt_template" label="Prompt" placeholder="Template sent to the agent…" multiline updateNodeConfig={updateNodeConfig} />
         <InputsField id={id} config={config} updateNodeConfig={updateNodeConfig} />
       </>

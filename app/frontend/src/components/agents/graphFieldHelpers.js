@@ -181,10 +181,17 @@ export function buildStatePathSuggestions(nodeId, nodes, edges, inputSchema) {
     const node = nodesById.get(id);
     if (!node) return;
     const source = node.label || node.id;
-    add(node.id, { source, kind: node.kind });
+    const outputKey = node.output_key || node.id;
+    add(outputKey, { source, kind: node.kind });
+    if (node.kind === 'agent' && node.config?.execution === 'background') {
+      ['task_id', 'thread_id', 'run_id', 'agent_name', 'status'].forEach((property) => {
+        add(`${outputKey}.${property}`, { source, kind: node.kind, hint: 'string' });
+      });
+      return;
+    }
     const properties = node.config?.response_schema?.properties;
     if (properties && typeof properties === 'object') {
-      Object.keys(properties).forEach((prop) => add(`${node.id}.${prop}`, { source, kind: node.kind, hint: properties[prop]?.type }));
+      Object.keys(properties).forEach((prop) => add(`${outputKey}.${prop}`, { source, kind: node.kind, hint: properties[prop]?.type }));
     }
   });
   return suggestions;

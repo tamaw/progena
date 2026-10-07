@@ -1,9 +1,4 @@
-"""Awaited object-agent, A2A peer, and nested-routine delegation builders.
-
-Object-agent invocation is kept here as the seam for a future background adapter.
-Current nodes await their results; execution selection and task lifecycle are not
-part of this module.
-"""
+"""Object-agent wait/background, A2A peer, and nested-routine delegation builders."""
 
 from __future__ import annotations
 
@@ -36,6 +31,7 @@ def _build_object_agent_node(
     *,
     object_agent_registry: dict[str, Any],
     defs: dict[str, dict[str, Any]] | None = None,
+    background_runner: Callable[..., Awaitable[dict[str, Any]]] | None = None,
 ) -> Any:
     """Conversational delegation to a local object agent, keyed to stay on the
     same checkpointer thread across repeat invocations of this node within one
@@ -67,6 +63,19 @@ def _build_object_agent_node(
                 raise KeyError(
                     f"agent node {node.id}: template references missing state key: {exc}"
                 ) from exc
+
+        if config.get("execution", "wait") == "background":
+            if background_runner is None:
+                raise ValueError(f"agent node {node.id}: background execution is unavailable")
+            context = getattr(runtime, "context", None) if runtime is not None else None
+            reference = await background_runner(
+                agent_name,
+                rendered,
+                parent_thread_id=(context or {}).get("request_id"),
+                node_id=node.id,
+                response_schema=response_schema,
+            )
+            return {"data": {output_key: reference}}
 
         target = object_agent_registry[agent_name]
         invoke_kwargs: dict[str, Any] = {}
