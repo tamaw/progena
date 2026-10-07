@@ -74,7 +74,7 @@ export function NodeInspector({ node, routerEdge, guardEdge, onClose, onDismiss,
   const lastRunEntry = pickEntryForIteration(runEntries, inspectorSelectedIteration, inspectorGuardEntries);
   const isRunStale = !isNodeRunValid(node.id, staleNodeIds || EMPTY_MISSING);
   const outputKey = node.output_key || node.id;
-  const approval = node.kind === 'human' ? pendingApprovals?.find((item) => item.node_id === node.id) : null;
+  const approval = pendingApprovals?.find((item) => item.node_id === node.id);
   // Prefers this execution's own recorded write (see factory.py's
   // `entry.output`) over the cumulative `data` channel, which only ever
   // holds the latest write per key -- falls back to `runData` for older

@@ -29,7 +29,15 @@ from langgraph.errors import NodeTimeoutError
 from langgraph.types import Command
 
 from ..utils import utcnow
-from .approvals import approval_lock, pending_approvals, validate_answer
+from .approvals import (
+    approval_decision_id,
+    approval_identity,
+    approval_lock,
+    approval_resume_value,
+    nested_approval_context,
+    pending_approvals,
+    validate_answer,
+)
 from .events import persist_run_event
 from .factory import compile_routine_graph
 from .graph import RoutineContext, validate_routine_graph_payload
@@ -205,9 +213,34 @@ def create_routine_executor(
             # of existing history, which would silently discard everything
             # already checkpointed under this thread_id.
             resume_existing = False
+            run_input: Any = None
+            run_context = nested_approval_context(
+                [], {**(context or {}), "request_id": run_thread_id}
+            )
             if session_id and checkpointer is not None:
                 existing_state = await compiled.aget_state(run_config)
                 resume_existing = bool(existing_state and existing_state.values)
+                run_context = nested_approval_context(existing_state.interrupts, run_context)
+                resume = state.get("_routine_resume")
+                if resume and any(
+                    approval_decision_id(item) == resume["interrupt_id"]
+                    and approval_identity(item.value) == approval_identity(resume["approval"])
+                    for item in existing_state.interrupts
+                ):
+                    approval = validate_answer(
+                        pending_approvals(existing_state.interrupts),
+                        resume["answer"],
+                        resume["interrupt_id"],
+                    )
+                    run_input = Command(
+                        resume={
+                            approval["resume_interrupt_id"]: approval_resume_value(
+                                existing_state.interrupts,
+                                approval["resume_interrupt_id"],
+                                resume["answer"],
+                            )
+                        }
+                    )
             parameters = state.get("parameters")
             seed_input: dict[str, Any] = {
                 "messages": state.get("messages") or [],
@@ -228,9 +261,9 @@ def create_routine_executor(
                 # declares them (see _input_schema_type).
                 seed_input.update(parameters)
             result = await compiled.ainvoke(
-                None if resume_existing else seed_input,
+                run_input if resume_existing else seed_input,
                 config=run_config,
-                context={**(context or {}), "request_id": run_thread_id},
+                context=run_context,
                 interrupt_after=[target_node] if target_node else None,
             )
         except Exception as exc:
@@ -466,9 +499,20 @@ async def _resume_routine_thread(
     await persist_run_event(state_manager, execution, "started")
     try:
         result = await compiled.ainvoke(
-            Command(resume={approval["interrupt_id"]: answer}),
+            Command(
+                resume={
+                    approval["resume_interrupt_id"]: approval_resume_value(
+                        checkpoint.interrupts, approval["resume_interrupt_id"], answer
+                    )
+                }
+            ),
             config=run_config,
-            context=cast(RoutineContext, {**saved_context, "request_id": thread_id}),
+            context=cast(
+                RoutineContext,
+                nested_approval_context(
+                    checkpoint.interrupts, {**saved_context, "request_id": thread_id}
+                ),
+            ),
         )
     except Exception as exc:
         await persist_run_event(state_manager, {**execution, "error": str(exc)}, "failed")

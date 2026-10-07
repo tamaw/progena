@@ -14,8 +14,10 @@ from typing import Any
 
 from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.runtime import Runtime
+from langgraph.types import interrupt
 
 from ..structured import validate_against_schema
+from .approvals import approval_decision_id
 from .control_nodes import _foreach_items
 from .graph import RoutineNode
 from .messages import _message_with_usage, extract_json_object, normalize_message_content
@@ -245,16 +247,61 @@ def _build_routine_node(
                 "node_id": node.id,
             },
         }
-        if routine_runner is not None:
-            result = await routine_runner(name, child_state, runtime)
-        else:
-            target = routine_registry.get(name)
+        pending = (context or {}).get("_routine_pending_children", {}).get(node.id)
+        child_name = name
+
+        async def invoke() -> dict[str, Any]:
+            if routine_runner is not None:
+                return await routine_runner(child_name, child_state, runtime)
+            target = routine_registry.get(child_name)
             if target is None:
                 raise KeyError(f"node {node.id}: unknown routine '{name}'")
             if runtime is None:
-                result = await target.ainvoke(child_state)
-            else:
-                result = await target.ainvoke(child_state, context=runtime.context)
+                return await target.ainvoke(child_state)
+            return await target.ainvoke(child_state, context=runtime.context)
+
+        result = None if pending else await invoke()
+        while pending or (
+            result is not None and (result.get("_routine_paused") or result.get("__interrupt__"))
+        ):
+            if pending:
+                # LangGraph replays ALL prior interrupt answers in this node.
+                # Each answer carries its original child approval so an old
+                # approve cannot accidentally answer a later approval.
+                decision = interrupt(pending)
+                approval = decision["approval"]
+                invocation = approval["child_invocation"]
+                child_name = invocation["agent_id"]
+                child_state.update(
+                    _interactive_session_id=invocation["session_id"],
+                    routine_revisions={invocation["agent_id"]: invocation["revision_id"]},
+                    _routine_resume={
+                        "thread_id": invocation["thread_id"],
+                        "interrupt_id": approval["child_interrupt_id"],
+                        "answer": decision["_routine_nested_answer"],
+                        "approval": approval["child_approval"],
+                    },
+                )
+                result = await invoke()
+                pending = None
+                if not (result.get("_routine_paused") or result.get("__interrupt__")):
+                    break
+            assert result is not None
+            invocation = result.get("_routine_invocation")
+            interrupts = result.get("__interrupt__") or []
+            if not invocation or not interrupts:
+                raise ValueError(f"node {node.id}: paused child requires a resumable approval")
+            child_interrupt = interrupts[0]
+            payload = child_interrupt.value
+            pending = {
+                "node": node.id,
+                "message": payload.get("message", "Child routine is awaiting approval"),
+                "allowed_responses": payload.get("allowed_responses"),
+                "child_invocation": invocation,
+                "child_interrupt_id": approval_decision_id(child_interrupt),
+                "child_approval": payload,
+            }
+        assert result is not None
         messages = result.get("messages") or []
         text = normalize_message_content(messages[-1].content) if messages else ""
         result_data = result.get("data") or {}

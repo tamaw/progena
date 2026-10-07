@@ -22,6 +22,7 @@ from langgraph.graph.state import CompiledStateGraph
 
 from ..config import ProgenitorConfig, get_config
 from ..content_documents import ensure_content_documents_seeded
+from ..routines.approvals import approval_lock
 from ..routines.graph import validate_routine_graph_payload
 from ..routines.revisions import (
     NullRoutineRevisionReader,
@@ -391,6 +392,12 @@ async def create_progenitor_agent(
             checkpointer=checkpointer,
             context=dict(getattr(runtime, "context", None) or {}),
         )
+        resume = state.get("_routine_resume")
+        if resume:
+            # Share the UI/chat approval lock so answering a child directly
+            # cannot race with answering its approval through the parent.
+            async with approval_lock(resume["thread_id"], database_url, wait=True):
+                return await executor.ainvoke(state)
         return await executor.ainvoke(state)
 
     routine_subagents: list[CompiledSubAgent] = []

@@ -67,6 +67,7 @@ class RoutineContext(TypedDict, total=False):
     workspace_id: str
     request_id: str
     metadata: dict[str, Any]
+    _routine_pending_children: dict[str, Any]
 
 
 class RetryPolicyConfig(BaseModel):

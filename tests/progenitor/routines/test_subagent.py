@@ -117,7 +117,7 @@ def _spec(reader, state_manager=None, model=None, agent_registry=None):
     )
 
 
-def _ephemeral_runner(state_manager, reader, model):
+def _ephemeral_runner(state_manager, reader, model, checkpointer=None):
     async def run(routine_id_or_name, state, runtime=None):
         resolved = await resolve_routine_document(state_manager, routine_id_or_name)
         assert resolved is not None
@@ -130,11 +130,151 @@ def _ephemeral_runner(state_manager, reader, model):
             agent_registry={},
             routine_registry={},
             routine_runner=run,
+            checkpointer=checkpointer,
             context=dict(getattr(runtime, "context", None) or {}),
         )
         return await executor.ainvoke(state)
 
     return run
+
+
+@pytest.mark.asyncio
+async def test_nested_approvals_resume_original_children_across_multiple_levels():
+    from langgraph.checkpoint.memory import MemorySaver
+
+    child = {
+        "id": "routine-approval-child",
+        "name": "Approval child",
+        "description": "test",
+        "version": "2.0.0",
+        "entry": "prepare",
+        "nodes": [
+            {
+                "id": "prepare",
+                "kind": "eval",
+                "output_key": "value",
+                "config": {"expression": "41"},
+            },
+            {
+                "id": "first",
+                "kind": "human",
+                "output_key": "first",
+                "config": {"message": "First?", "allowed_responses": ["approve", "decline"]},
+            },
+            {
+                "id": "second",
+                "kind": "human",
+                "output_key": "second",
+                "config": {"message": "Second?", "allowed_responses": ["approve", "decline"]},
+            },
+            {
+                "id": "finish",
+                "kind": "eval",
+                "output_key": "value",
+                "config": {"expression": "value + 1"},
+            },
+        ],
+        "edges": [
+            {"from": "prepare", "to": "first", "level": "normal"},
+            {"from": "first", "to": "second", "level": "normal"},
+            {"from": "second", "to": "finish", "level": "normal"},
+        ],
+    }
+
+    def wrapper(id, child_id):
+        return {
+            "id": id,
+            "name": id,
+            "description": "test",
+            "version": "2.0.0",
+            "entry": "call",
+            "nodes": [
+                {
+                    "id": "call",
+                    "kind": "routine",
+                    "output_key": "call",
+                    "config": {
+                        "routine_name": child_id,
+                        "input_map": {},
+                        "output_map": {"value": "value"},
+                    },
+                },
+                {
+                    "id": "after",
+                    "kind": "eval",
+                    "output_key": "value",
+                    "config": {"expression": "value + 1"},
+                },
+            ],
+            "edges": [{"from": "call", "to": "after", "level": "normal"}],
+        }
+
+    middle = wrapper("routine-approval-middle", child["id"])
+    parent = wrapper("routine-approval-parent", middle["id"])
+    manager = _MultiRoutineStateManager({g["id"]: g for g in [child, middle, parent]})
+    reader = _FakeRevisionReader({g["id"] + "-rev": g for g in [child, middle, parent]})
+    saver = MemorySaver()
+    model = _EchoModel()
+    runner = _ephemeral_runner(manager, reader, model, saver)
+    paused = await runner(parent["id"], {})
+    thread = paused["_routine_thread_id"]
+    assert paused["_routine_paused"]
+    assert "after" not in paused.get("run_meta", {})
+    first_child = paused["__interrupt__"][0].value["child_invocation"]["thread_id"]
+
+    # Editing the live child while paused must not change this invocation.
+    manager.graphs[child["id"]] = {
+        **child,
+        "nodes": [
+            *child["nodes"][:-1],
+            {**child["nodes"][-1], "config": {"expression": "999"}},
+        ],
+    }
+    for answer, expected in [("approve", "interrupted"), ("decline", "completed")]:
+        resumed = await resume_routine_thread(
+            thread_id=thread,
+            answer=answer,
+            model=model,
+            state_manager=manager,
+            revision_reader=reader,
+            agent_registry={},
+            routine_runner=runner,
+            checkpointer=saver,
+        )
+        assert resumed["status"] == expected
+        checkpoint = await saver.aget_tuple({"configurable": {"thread_id": thread}})
+        values = checkpoint.checkpoint["channel_values"]
+        if expected == "interrupted":
+            assert "after" not in values.get("run_meta", {})
+            # Native interrupt IDs identify a task, so consecutive approvals
+            # inside this routine node need distinct public decision IDs.
+            from app.progenitor.routines.approvals import pending_approvals
+
+            current_interrupts = [
+                item
+                for _, channel, items in checkpoint.pending_writes
+                if channel == "__interrupt__"
+                for item in items
+            ]
+            assert (
+                pending_approvals(current_interrupts)[0]["interrupt_id"]
+                != pending_approvals(paused["__interrupt__"])[0]["interrupt_id"]
+            )
+        else:
+            assert values["data"]["value"] == 44
+            assert len(values["run_meta"]["call"]) == 1
+            assert len(values["run_meta"]["after"]) == 1
+            assert values["run_meta"]["call"][0]["routine"]["thread_id"] == first_child
+    child_checkpoints = [
+        c
+        async for c in saver.alist(None)
+        if c.config["configurable"]["thread_id"].startswith("routine:routine-approval-child:")
+    ]
+    assert len({c.config["configurable"]["thread_id"] for c in child_checkpoints}) == 1
+    history = child_checkpoints[0].checkpoint["channel_values"]["run_meta"]
+    assert all(len(history[node]) == 1 for node in ["prepare", "first", "second", "finish"])
+    assert history["first"][0]["output"]["first"] == "approve"
+    assert history["second"][0]["output"]["second"] == "decline"
 
 
 @pytest.mark.asyncio
