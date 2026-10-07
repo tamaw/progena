@@ -12,11 +12,12 @@ import { test, expect } from '@playwright/test';
  * target, and the edge-splicing is the only thing keeping it honest when the
  * body's first step comes and goes.
  *
- * These drive the real `+` menu on a gallery routine. Gallery routines are not
- * persisted — `handleSaveGraph` returns early for them — so the edits are
- * local to the page and reset on reload.
+ * These drive the real `+` menu on the existing seeded test routine. The tests
+ * inspect edits in the JSON editor without applying or persisting them.
  *
  * Requires the running stack (see playwright.config.js).
+ * Seed its fixture first: activate the root .venv, then run
+ * `python scripts/seed_e2e_fixtures.py` from the project root.
  */
 
 // A plain linear chain, so anything the fan-out swallows is obvious.
@@ -59,11 +60,12 @@ async function serialized(page) {
 
 /**
  * Where a Send fan-out goes. The target is not a field on the node: it is the
- * fan-out's single outgoing edge, so there must be exactly one to be handed on.
+ * fan-out's normal outgoing edge. Its separate foreach_empty edge preserves
+ * the continuation when the collection is empty.
  */
 function sendEdge(doc) {
   const fanout = doc.nodes.find((node) => node.kind === 'foreach');
-  const outgoing = doc.edges.filter((edge) => edge.from === fanout.id);
+  const outgoing = doc.edges.filter((edge) => edge.from === fanout.id && edge.level === 'normal');
   expect(outgoing).toHaveLength(1);
   return outgoing[0];
 }
@@ -75,7 +77,7 @@ test.describe('routine graph editing', () => {
     expect(before.slice(1)).toEqual(CHAIN_AFTER);
 
     // The connector between the first and second step.
-    await insert(canvas(page).locator('> .routine-connector').nth(1), 'Send fan-out');
+    await insert(canvas(page).locator('> .routine-connector').nth(1), 'Each');
 
     await expect(page.locator('.routine-foreach')).toHaveCount(1);
     // An empty scope: a box holding nothing but the `+` that fills it.
@@ -85,26 +87,27 @@ test.describe('routine graph editing', () => {
     // Every step that followed is still outside the box, in order.
     const after = await labels(canvas(page));
     expect(after.slice(-CHAIN_AFTER.length)).toEqual(CHAIN_AFTER);
-    expect(after).toContain('Join fan-out');
+    expect(after).toContain('Join each');
     await expect(status(page)).toHaveAttribute('aria-label', 'Graph is valid');
 
     // The Send needs a real target even while the body is empty; the
     // terminator stands in until a step is added.
     const doc = await serialized(page);
     const fanout = doc.nodes.find((node) => node.kind === 'foreach');
-    const stop = doc.nodes.find((node) => node.label === 'Join fan-out');
+    const stop = doc.nodes.find((node) => node.label === 'Join each');
     expect(sendEdge(doc)).toEqual({ from: fanout.id, to: stop.id, level: 'normal' });
+    expect(doc.edges).toContainEqual({ from: fanout.id, to: stop.id, level: 'foreach_empty' });
   });
 
   test("the body's first step becomes the Send target, and giving it up restores the terminator", async ({ page }) => {
     await openRoutine(page);
-    await insert(canvas(page).locator('> .routine-connector').nth(1), 'Send fan-out');
+    await insert(canvas(page).locator('> .routine-connector').nth(1), 'Each');
     await insert(foreachBody(page).locator('> .routine-connector').first(), 'Eval');
 
     // The step landed inside the scope, not after it.
     await expect(foreachBody(page).locator('.canvas-node')).toHaveCount(1);
     expect(await labels(canvas(page))).toEqual([
-      'Inject context', 'Foreach', 'Eval', 'Join fan-out', ...CHAIN_AFTER,
+      'Inject context', 'Each', 'Eval', 'Join each', ...CHAIN_AFTER,
     ]);
     await expect(status(page)).toHaveAttribute('aria-label', 'Graph is valid');
 
@@ -113,13 +116,16 @@ test.describe('routine graph editing', () => {
     expect(sendEdge(withBody).to).toBe(bodyId);
 
     // Removing it must hand the target back rather than leave it dangling.
-    await foreachBody(page).locator('.canvas-node').first().click();
+    // Insertion already selects the draft Eval and opens its inspector.
+    // Closing the draft inspector discards this incomplete node.
+    await expect(page.getByRole('complementary', { name: 'Eval details' })).toBeVisible();
     await page.getByRole('button', { name: 'Delete step' }).click();
     await expect(foreachBody(page).locator('.canvas-node')).toHaveCount(0);
 
     const emptied = await serialized(page);
-    const stopId = emptied.nodes.find((node) => node.label === 'Join fan-out').id;
+    const stopId = emptied.nodes.find((node) => node.label === 'Join each').id;
     expect(sendEdge(emptied).to).toBe(stopId);
+    expect(emptied.edges).toContainEqual({ from: emptied.nodes.find((node) => node.kind === 'foreach').id, to: stopId, level: 'foreach_empty' });
     expect(emptied.nodes.some((node) => node.id === bodyId)).toBe(false);
   });
 });
