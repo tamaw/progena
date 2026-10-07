@@ -386,8 +386,9 @@ def _instrument_node_callable(
                 "step": step,
                 "error": str(exc) or type(exc).__name__,
             }
-            if getattr(exc, "routine_invocation", None):
-                entry["routine"] = dict(exc.routine_invocation)
+            invocation = getattr(exc, "routine_invocation", None)
+            if invocation:
+                entry["routine"] = dict(invocation)
             exc.routine_run_meta = (node_id, entry)  # type: ignore[attr-defined]
             raise
         duration_ms = (time.monotonic() - started) * 1000

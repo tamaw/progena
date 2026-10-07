@@ -1,6 +1,7 @@
 """Persisted routine lifecycle and commit-time checkpoint notifications."""
 
-from typing import Any
+from collections.abc import Awaitable, Callable
+from typing import Any, cast
 
 from ..utils import utcnow_isoformat
 
@@ -31,4 +32,5 @@ async def persist_run_event(state_manager: Any, payload: dict[str, Any], status:
     """Write an immutable transition, so fast runs cannot erase 'started'."""
     writer = getattr(state_manager, "save_routine_run_event", None)
     if callable(writer):
-        await writer({**payload, "status": status, "timestamp": utcnow_isoformat()})
+        save_event = cast(Callable[[dict[str, Any]], Awaitable[None]], writer)
+        await save_event({**payload, "status": status, "timestamp": utcnow_isoformat()})
