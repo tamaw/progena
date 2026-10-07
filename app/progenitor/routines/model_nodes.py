@@ -45,7 +45,10 @@ def _build_prompt_node(
     response_schema = _resolve_response_schema(node.id, "prompt", config, defs)
     structured_model = (
         model.with_structured_output(
-            response_schema, method="json_schema", strict=True, include_raw=True
+            {"title": "RoutineResponse", **response_schema},
+            method="json_schema",
+            strict=True,
+            include_raw=True,
         )
         if response_schema
         else None
@@ -106,7 +109,10 @@ def _build_classify_node(
     if response_schema is None:
         raise ValueError(f"classify node {node.id}: config needs 'response_schema'")
     structured_model = model.with_structured_output(
-        response_schema, method="json_schema", strict=True, include_raw=True
+        {"title": "RoutineResponse", **response_schema},
+        method="json_schema",
+        strict=True,
+        include_raw=True,
     )
 
     async def run(state: RoutineState) -> dict[str, Any]:

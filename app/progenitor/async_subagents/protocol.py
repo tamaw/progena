@@ -171,6 +171,11 @@ class ObjectAgentProtocol:
         configurable = config.get("configurable") or {}
         if not isinstance(configurable, dict):
             raise web.HTTPBadRequest(text="configurable must be an object")
+        model_profile = configurable.get("model_profile")
+        if model_profile is not None and (
+            not isinstance(model_profile, str) or not model_profile.strip()
+        ):
+            raise web.HTTPBadRequest(text="model_profile must be a non-empty name")
         response_schema = configurable.get("response_schema")
         if response_schema is not None and not isinstance(response_schema, dict):
             raise web.HTTPBadRequest(text="response_schema must be a JSON Schema object")
@@ -193,6 +198,7 @@ class ObjectAgentProtocol:
                 "thread_id": thread_id,
                 "run_id": run_id,
                 "assistant_id": assistant_id,
+                "model_profile": model_profile,
                 "status": "running",
                 "created_at": now,
                 "updated_at": now,
@@ -264,6 +270,7 @@ class ObjectAgentProtocol:
                     "configurable": {
                         "thread_id": checkpoint_thread,
                         "object_agent_thread_id": checkpoint_thread,
+                        "model_profile": run.get("model_profile"),
                     }
                 },
             )

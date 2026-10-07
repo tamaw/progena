@@ -244,7 +244,9 @@ def _build_shell_backend(
             f"object agent {manifest.name!r} enables shell but the runtime has no "
             "PROGENITOR_WORKTREE_DIR configured"
         )
-    workspace_root = shell_paths.workspace_root or shell_paths.agent_home.parent / "shell-workspaces"
+    workspace_root = (
+        shell_paths.workspace_root or shell_paths.agent_home.parent / "shell-workspaces"
+    )
     workspace = workspace_root / agent_home_slug(manifest.name)
 
     return (
@@ -399,9 +401,16 @@ def create_object_agent_proxy(
 
     async def run(state: Any, config: RunnableConfig) -> dict[str, Any]:
         manifest = await load_manifest()
+        profile = config.get("configurable", {}).get("model_profile")
+        selected_model = model
+        if profile:
+            from ..state.model_profiles import resolve_model_profile
+
+            selected_model = await resolve_model_profile(state_manager, profile)
+            manifest = replace(manifest, model=None)
         agent = build_object_agent(
             manifest,
-            model=model,
+            model=selected_model,
             tools=tools,
             backend=backend,
             checkpointer=checkpointer,
@@ -414,7 +423,8 @@ def create_object_agent_proxy(
         if thread_id:
             # Agent Protocol requests run on their own durable checkpoint thread.
             return await agent.ainvoke(
-                state, config={"configurable": {"thread_id": thread_id}},
+                state,
+                config={"configurable": {"thread_id": thread_id}},
             )
         return await agent.ainvoke({"messages": state.get("messages") or []})
 

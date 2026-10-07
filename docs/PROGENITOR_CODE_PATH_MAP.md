@@ -221,6 +221,13 @@ Object definitions are parsed/discovered separately from their runtime in
 scoped tools, mounts and permissions; the awaited proxy reloads the manifest
 from Postgres on each invocation. Native manifests are read-only bundled files,
 loaded at startup without importing them into Postgres; restart after dev edits.
+Routine Prompt, Classify, and Agent nodes can select `config.model_profile`
+from `/config/profile.json`. The profile resolver reads the current document
+at execution time, builds the Azure model adapter with its deployment and
+optional reasoning settings, and reports unknown profiles as execution errors.
+Agent-node overrides take precedence over the manifest model for that invocation,
+including background calls; definitions and unrelated calls retain their defaults.
+The inspector reads public profile names/deployments through `/api/ui/model-profiles`.
 The runtime's `async_subagents/protocol.py` exposes these same object agents
 through Agent Protocol: SDK `runs.wait` awaits completion, while `runs.create`
 starts background execution and returns its identity. Neither needs an async

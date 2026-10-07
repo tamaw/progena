@@ -100,6 +100,8 @@ class LoopGuardConfig(BaseModel):
 class PromptNodeConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    model_profile: str | None = Field(default=None, min_length=1)
+
     prompt_template: str | None = None
     prompt_file: str | None = None
     system_prompt: str | None = None
@@ -176,6 +178,8 @@ class ClassifyNodeConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
+    model_profile: str | None = Field(default=None, min_length=1)
+
     rubric_prompt: str = Field(min_length=1)
     response_schema: dict[str, Any] = Field(...)
     inputs: dict[str, str] = Field(default_factory=dict)
@@ -188,6 +192,8 @@ class AgentNodeConfig(BaseModel):
     """Conversational delegation to a local object agent."""
 
     model_config = ConfigDict(extra="forbid")
+
+    model_profile: str | None = Field(default=None, min_length=1)
 
     agent_name: str = Field(min_length=1)
     execution: Literal["wait", "background"] = "wait"

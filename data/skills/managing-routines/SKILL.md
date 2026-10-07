@@ -70,6 +70,11 @@ The current schema supports: `prompt`, `eval`, `condition`, `switch`, `split`,
 - `switch` routes an expression through author-defined branches.
 - `split` is a structural parallel gateway that runs every branch.
 - `classify` uses a model rubric and required response schema.
+- `prompt`, `classify`, and `agent` accept optional `model_profile`, a named
+  entry in `/config/profile.json`. Omit it or use null for existing defaults.
+  Resolve profile names from that document; do not put deployment names in this
+  field. Agent overrides apply to both wait and background execution without
+  editing the agent manifest. Other node kinds do not accept this setting.
 - `agent` invokes a local object agent; `a2a` invokes a registered A2A peer.
   Agent nodes default to `execution: "wait"`, which waits for the response. Use
   `execution: "background"` only when later steps can proceed without that answer.

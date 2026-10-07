@@ -117,6 +117,31 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/ui", tags=["ui"])
 
+
+@router.get("/model-profiles")
+async def get_model_profiles() -> dict[str, Any]:
+    """Return public selector metadata, never credentials or arbitrary config."""
+    from app.progenitor.state.model_profiles import (
+        default_model_profiles_payload,
+        validate_model_profiles_payload,
+    )
+
+    default = default_model_profiles_payload()
+    document = await asyncio.to_thread(
+        get_default_document_store().get_document, PROGENITOR_STATE_PREFIX, "profile", default
+    )
+    try:
+        profiles = validate_model_profiles_payload(document.payload if document else default)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {
+        "profiles": [
+            {"name": name, "deployment": profile["deployment"]}
+            for name, profile in profiles.items()
+        ]
+    }
+
+
 KANBAN_EVENT_TYPE_LABELS = {
     "kanban.card.created": "Card created",
     "kanban.card.updated": "Card updated",
@@ -4655,7 +4680,9 @@ async def _generate_ui_stream(
                     )
                     break
                 envelope = event["envelope"]
-                if "interest" in event and event["interest"] is not routine_events.interests.get(client_id):
+                if "interest" in event and event["interest"] is not routine_events.interests.get(
+                    client_id
+                ):
                     continue
                 yield ServerSentEvent(event="ui.event", data=envelope.model_dump(), id=envelope.id)
             except TimeoutError:
