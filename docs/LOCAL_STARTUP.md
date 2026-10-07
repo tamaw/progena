@@ -142,11 +142,23 @@ filesystem. The backend then surfaces it on the Agents page under the
 
 ## Quick checks
 
-These should all return `200`:
+Liveness checks should return `200`:
 
 ```bash
-curl http://127.0.0.1:5173/v1/session
+curl http://127.0.0.1:9501/health
+curl http://127.0.0.1:8000/healthz
+curl http://127.0.0.1:5173/
 ```
+
+Check the Vite-to-backend proxy with
+`curl http://127.0.0.1:5173/api/ui/agent-profiles` (HTTP `202` acknowledgement),
+and `curl -N http://127.0.0.1:5173/api/ui/stream` (`connection.ready` event).
+The old `/v1/session` endpoint is not a current startup probe.
+
+Bundled object agents are read-only files under `data/agents/objects/`, not
+Postgres seeds. Restart progenitor and backend after editing these files in
+development; file changes do not emit Postgres notifications. User/plugin
+agents remain Postgres-backed and refresh through notifications.
 
 Expected wiring:
 

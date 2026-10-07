@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   addForkLane,
+  makeNode,
   removeForkBranch,
   removeForkDefault,
 } from './graphEdits';
@@ -11,6 +12,7 @@ import {
   forkLaneEdgePosition,
   isFlowEdge,
   joinTerminals,
+  nodeSuccessors,
   predecessorsOf,
   reachableFrom,
 } from './graphTopology';
@@ -168,6 +170,15 @@ describe('validateWorkingGraph', () => {
   it('accepts a router fork whose branches converge on a fan_in join', () => {
     const { nodes, edges, entry } = routerJoinGraph;
     expect(validateWorkingGraph(nodes, edges, entry)).toEqual([]);
+  });
+
+  it('flags a Reduce node whose source is missing', () => {
+    const nodes = [
+      { id: 'reduce', kind: 'reduce', config: { source_node: 'gone' } },
+    ];
+    expect(validateWorkingGraph(nodes, [], 'reduce')).toContain(
+      'Reduce step "reduce" references unknown source node "gone".',
+    );
   });
 
   it('still flags a fan_in edge naming a genuinely missing source', () => {
@@ -357,6 +368,12 @@ describe('saveStatusWhenInSync', () => {
 // alternative is the round trip that produced "prompt_template is not valid
 // under any of the given schemas" on every single insert.
 describe('missingRequiredConfig', () => {
+  it('recognizes Reduce configuration', () => {
+    expect(makeNode('reduce').config).toEqual({ source_node: '', operation: 'collect' });
+    expect(missingRequiredConfig({ kind: 'reduce', config: {} })).toEqual(['source_node']);
+    expect(missingRequiredConfig({ kind: 'reduce', config: { source_node: 'mapped' } })).toEqual([]);
+  });
+
   it('reports a freshly inserted prompt as missing its template', () => {
     expect(missingRequiredConfig({ kind: 'prompt', config: { prompt_template: '' } }))
       .toEqual(['prompt_template', 'prompt_file']);
@@ -530,10 +547,19 @@ describe('isFlowEdge', () => {
     expect(isFlowEdge({ from: 'a', level: 'route', router: 'state_equals', branches: {} })).toBe(true);
   });
 
-  it('returns false for error edges and nothing else', () => {
+  it('returns false for error and hidden foreach-empty edges', () => {
     expect(isFlowEdge({ from: 'a', to: 'b', level: 'error' })).toBe(false);
+    expect(isFlowEdge({ from: 'fan', to: 'join', level: 'foreach_empty' })).toBe(false);
     expect(isFlowEdge(null)).toBe(true);
     expect(isFlowEdge(undefined)).toBe(true);
+  });
+
+  it('includes hidden foreach-empty destinations in the possible run frontier', () => {
+    const edges = [
+      { from: 'fan', to: 'body', level: 'normal' },
+      { from: 'fan', to: 'join', level: 'foreach_empty' },
+    ];
+    expect(nodeSuccessors('fan', edges)).toEqual(new Set(['body', 'join']));
   });
 });
 

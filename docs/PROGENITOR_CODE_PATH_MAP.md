@@ -219,8 +219,9 @@ still defines is `create_hello_world_async_subagent()`, the deterministic
 Object definitions are parsed/discovered separately from their runtime in
 `agent/object_agents.py`. Its reusable construction entry point preserves
 scoped tools, mounts and permissions; the awaited proxy reloads the manifest
-from Postgres on each invocation. Native manifests are seeded once from bundled
-files; catalog edits do not rewrite those files. This prepares reuse by a future background adapter, but
+from Postgres on each invocation. Native manifests are read-only bundled files,
+loaded at startup without importing them into Postgres; restart after dev edits.
+This prepares reuse by a future background adapter, but
 does not yet make object-agent execution selectable as async by a routine.
 
 | Subagent | Current use | Notes |
@@ -670,7 +671,7 @@ Evidence:
 | --- | --- | --- |
 | Scheduler | `runtime/scheduler.py` | Scheduler enabled and due entries exist. |
 | A2A task polling | `runtime/a2a_tasks.py` | Tracked tasks exist. |
-| Object-agent/routine-graph subagents | `agent/object_agents.py`, `routines/subagent.py` | Postgres agent/routine documents; native agent files are a one-time seed, and object registration refreshes through LISTEN/NOTIFY. |
+| Object-agent/routine-graph subagents | `agent/object_agents.py`, `routines/subagent.py` | Postgres agent/routine documents refresh through LISTEN/NOTIFY; native agents are read-only bundled files loaded at startup. |
 | Reasoning config | `agent/langchain_adapter.py`, `streaming_utils.py`, `stream_events.py` | `config.llm.reasoning_enabled`. |
 | Skills | `agent/agent.py` | Postgres `skill:` content documents under `progenitor/` exist. |
 | Runtime memories | `agent/agent.py` | Postgres `memory:` content documents; default `AGENTS.md` is seeded. |

@@ -18,6 +18,7 @@ export const REQUIRED_CONFIG = {
   a2a: ['agent_name', ['prompt_template', 'prompt_file', 'inputs']],
   human: ['message'],
   routine: ['routine_name'],
+  reduce: ['source_node'],
   noop: [],
 };
 
@@ -123,6 +124,28 @@ export function validateWorkingGraph(nodes, edges, entry, runtimeProfiles = null
       if (edge.to === source) {
         errors.push(`"${source}" cannot route its own errors to itself.`);
       }
+    }
+  });
+  const nodesById = new Map(nodes.map((node) => [node.id, node]));
+  nodes.filter((node) => node.kind === 'reduce').forEach((node) => {
+    const source = node.config?.source_node;
+    if (!nodesById.has(source)) {
+      errors.push(`Reduce step "${node.id}" references unknown source node "${source || ''}".`);
+    } else if (source === node.id) {
+      errors.push(`Reduce step "${node.id}" cannot reduce its own output.`);
+    }
+  });
+  const emptyRoutesBySource = new Map();
+  edges.filter((edge) => edge.level === 'foreach_empty').forEach((edge) => {
+    const source = edge.from;
+    const sourceNode = nodesById.get(source);
+    if (sourceNode?.kind !== 'foreach' || sourceNode.config?.mode !== 'send') {
+      errors.push(`"${source}" empty route must come from a Send foreach step.`);
+    }
+    if (emptyRoutesBySource.has(source)) {
+      errors.push(`"${source}" has more than one empty route.`);
+    } else {
+      emptyRoutesBySource.set(source, edge);
     }
   });
   const reachable = reachableFrom(entry, edges);

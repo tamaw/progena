@@ -247,10 +247,8 @@ export function ACPDetailBody({ agent }) {
 // Markdown body of the underlying SYSTEM.md (identity, system prompt, tools,
 // skills, permissions, interrupt_on) -- no invented metrics/repositories/
 // knowledge/activity sections, since object agents have no backing data for
-// those. Editable regardless of source: native (repo-checked-out) manifests
-// are rewritten on disk, user/marketplace manifests in the document store;
-// AgentStore.update_object_agent only refuses a rename of a native agent
-// (its slug is tied to a directory path).
+// those. Bundled native manifests are read-only files; user/marketplace
+// manifests are editable Postgres documents.
 //
 // Editing works on the literal SYSTEM.md text (front matter + body), not a
 // fixed set of known fields, so an author can add, rename, or remove any
@@ -385,7 +383,7 @@ export function ObjectAgentDetailBody({
   saving = false,
   error = '',
 }) {
-  if (editing) {
+  if (editing && agent.card?.source !== 'native') {
     return (
       <div className="detail-pane__body agents-draft">
         {error ? <p className="agents-draft__note agents-draft__note--error">{error}</p> : null}
@@ -426,7 +424,9 @@ export function ObjectAgentDetailBody({
         <section className="agents-section">
           <header className="agents-section__head">
             <h2>Manifest</h2>
-            <button type="button" className="repo-btn repo-btn--ghost" onClick={onStartEdit}>Edit</button>
+            {agent.card?.source !== 'native' ? (
+              <button type="button" className="repo-btn repo-btn--ghost" onClick={onStartEdit}>Edit</button>
+            ) : <span>Read-only · bundled file</span>}
           </header>
           <div className="agents-card-facts">
             {frontMatterEntries

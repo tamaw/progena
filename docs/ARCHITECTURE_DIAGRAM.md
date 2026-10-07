@@ -166,13 +166,19 @@ workflow JSON files under `/workflows/`); these are database-backed views, not
 local files. State changes relevant to the browser are represented as typed
 canonical stream events after persistence.
 
-Object-agent definitions use `agent:` content documents in the runtime's
-Postgres state namespace, including bundled `native/<name>/SYSTEM.md` manifests.
-Bundled files are a one-time seed in the runtime image, not a second editable
-catalog. A durable seed marker prevents restart from overwriting edits or
-recreating deleted definitions. The composite agent filesystem exposes these
-documents through `/agents/`; the backend reads the same documents and needs no
-native-manifest disk mount.
+User and marketplace object-agent definitions use `agent:` content documents
+in the runtime's Postgres state namespace. Bundled native agents stay in
+`data/agents/objects/`, included in both runtime and backend images; they are
+never imported into Postgres and cannot be edited or deleted through the app.
+The composite filesystem exposes read-only native files through
+`/agents/objects/` and `/agents/native/`, alongside Postgres-backed `/agents/`.
+User manifests at `/agents/user/<name>/SYSTEM.md` support validated reads,
+writes, and edits through the `managing-agents` skill. Front matter conforms
+to `agent-manifest.schema.v1.json`; `structured_output` and `json_to_yaml`
+provide the authoring path. Installed plugin manifests remain read-only in
+this shared filesystem. Remote A2A registrations use `managing-a2a` and
+`/config/agents.json` instead.
+Restart after editing bundled files in development; disk edits have no NOTIFY.
 
 Committed document changes flow through the shared store trigger and Postgres
 LISTEN/NOTIFY. The runtime refreshes object-agent callable/task descriptors;
@@ -183,6 +189,42 @@ checkpoint history. Reconnect reconciliation recovers missed changes.
 Routine execution keeps structured child inputs/outputs separate from its
 conversational task adapter. Each run has its own correlation/checkpoint scope;
 delegated conversations continue only within that run, including human resume.
+Each nested routine invocation resolves the live child document and records its
+exact revision, child thread/session/request IDs, and parent thread/node in that
+node's checkpointed `run_meta` entry. These records are execution history, not
+dependency pins: a later invocation after a pause may use an edited child, while
+earlier entries keep referencing their original immutable graph snapshots.
+Recording a call does not edit the parent graph or create a parent revision.
+The existing run-state SSE payload carries these records to the node inspector.
+Routine run feedback uses the canonical UI stream, without discovery or state
+polling. The stream's per-tab `client_id` identifies a page subscription set by
+`PUT /api/ui/agent-profiles/{id}/run-subscription`. Subscribe before posting a
+run; leaving the editor removes detail interest, while execution continues.
+Committed root routine checkpoints notify on `routine_checkpoints`; the backend
+reconstructs native checkpoint channels only for watched runs and sends detail
+to those connections. Detail frames never enter global replay, and a changed
+subscription also drops already-queued detail for the old selection.
+
+Immutable `routine_run_event:` documents record enqueued, started, paused,
+completed, and failed transitions. Their store notifications publish small
+global lifecycle events independently of page subscriptions, supporting
+background indicators and completion/error notifications. `session_id` scopes
+the checkpoint thread; `request_id` identifies each attempt, including resumes
+of the same interactive thread. Explicit pause/terminal events determine UI
+status. SSE reconnect restores compact lifecycle state and re-registers the
+viewed run's detail subscription with an initial snapshot; history remains an
+on-demand finite request. No conversation stream is needed for routine runs.
+
+Human-node detail includes native interrupt IDs, questions, configured responses,
+and any submitted answer claim. The existing inspector renders those responses.
+An approval POST accepts the exact thread and interrupt, returns 202, and queues
+a direct runtime resume rather than a chat turn. UI and chat share the same
+resume primitive and a per-thread Postgres advisory lock; submitted UI claims
+prevent duplicate answers while queued. Resuming retains the original graph
+revision/session and uses a new request ID. Responses follow explicit graph
+routes; declining does not implicitly cancel the run. Reload/reconnect restores
+pending controls from the checkpoint through the same scoped SSE subscription.
+
 Streaming chat content is transient transport data unless it is persisted into
 the underlying conversation state and later surfaced again via canonical
 snapshots/detail loads.

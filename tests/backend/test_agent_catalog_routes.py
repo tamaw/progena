@@ -148,12 +148,14 @@ def harness(monkeypatch):
     monkeypatch.setattr(routes, "a2a_profiles_from_registry", lambda: [])
     monkeypatch.setattr(routes, "acp_profiles_from_registry", lambda: [])
 
+    doc_store = InMemoryDocumentStore()
     app = FastAPI()
+    app.state.doc_store = doc_store
     _install_request_id_middleware(app)
     app.include_router(
         create_agent_profile_router(
             get_agent_store=lambda: store,
-            get_document_store=lambda: InMemoryDocumentStore(),
+            get_document_store=lambda: doc_store,
             broadcast_ui_event=broadcast,
         ),
         prefix="/api/ui",
@@ -560,6 +562,7 @@ def test_run_state_no_database_url_returns_not_found_gracefully(harness):
         "found": False,
         "run_meta": {},
         "data": {},
+        "pending_approvals": [],
     }
 
 
@@ -757,3 +760,88 @@ class TestValidateAgentGraph:
                     {"from": "a", "to": "c", "level": "normal"},
                 ],
             )
+
+
+@pytest.mark.parametrize("answer", ["approve", "decline"])
+def test_approval_queues_native_answer_and_rejects_duplicate(harness, monkeypatch, answer):
+    from unittest.mock import AsyncMock
+
+    import app.backend.routine_events as events_module
+    from app.backend.document_store import PROGENITOR_STATE_PREFIX
+    from app.progenitor.routines.approvals import decision_key
+
+    client, events = harness
+    store = client.app.state.doc_store
+    monkeypatch.setattr(
+        events_module,
+        "read_run_state",
+        AsyncMock(
+            return_value={
+                "pending_approvals": [
+                    {
+                        "interrupt_id": "approval-id",
+                        "node_id": "human",
+                        "allowed_responses": ["approve", "decline"],
+                    }
+                ]
+            }
+        ),
+    )
+    monkeypatch.setattr(events_module.routine_events, "schedule", lambda _: None)
+    body = {
+        "thread_id": "routine:alpha:revision:session",
+        "interrupt_id": "approval-id",
+        "answer": answer,
+    }
+    response = client.post("/api/ui/agent-profiles/alpha/approval", json=body)
+    assert response.status_code == 202
+    queued = store.get_document(PROGENITOR_STATE_PREFIX, "background_tasks").payload
+    assert len(queued) == 1
+    assert queued[0]["metadata"]["operation"] == "resume"
+    assert queued[0]["metadata"]["thread_id"] == body["thread_id"]
+    assert queued[0]["metadata"]["answer"] == answer
+    assert store.get_document(
+        PROGENITOR_STATE_PREFIX, decision_key(body["thread_id"], "approval-id")
+    )
+    assert client.post("/api/ui/agent-profiles/alpha/approval", json=body).status_code == 409
+    assert len(store.get_document(PROGENITOR_STATE_PREFIX, "background_tasks").payload) == 1
+
+
+@pytest.mark.parametrize(
+    "thread, interrupt, answer, status",
+    [
+        ("routine:beta:revision:session", "pending", "approve", 400),
+        ("routine:alpha:revision:session", "stale", "approve", 409),
+        ("routine:alpha:revision:session", "pending", "cancel", 409),
+    ],
+)
+def test_invalid_approval_does_not_enqueue(harness, monkeypatch, thread, interrupt, answer, status):
+    from unittest.mock import AsyncMock
+
+    import app.backend.routine_events as events_module
+    from app.backend.document_store import PROGENITOR_STATE_PREFIX
+
+    client, _ = harness
+    monkeypatch.setattr(
+        events_module,
+        "read_run_state",
+        AsyncMock(
+            return_value={
+                "pending_approvals": [
+                    {
+                        "interrupt_id": "pending",
+                        "node_id": "human",
+                        "allowed_responses": ["approve", "decline"],
+                    }
+                ]
+            }
+        ),
+    )
+    response = client.post(
+        "/api/ui/agent-profiles/alpha/approval",
+        json={"thread_id": thread, "interrupt_id": interrupt, "answer": answer},
+    )
+    assert response.status_code == status
+    assert (
+        client.app.state.doc_store.get_document(PROGENITOR_STATE_PREFIX, "background_tasks") is None
+    )

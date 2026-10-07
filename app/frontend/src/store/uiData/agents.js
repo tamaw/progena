@@ -42,11 +42,11 @@ export const initialState = {
     // `<agentId>:<revisionId>` (see `fetchRoutineRevision` /
     // `agent.routine.revision.loaded`).
     revisionContentByKey: {},
-    // A run's live per-node timing/token/output state, polled while a run
-    // is in flight and cached by thread_id (see `fetchRunState` /
-    // `agent.routine.run_state.loaded`, and lib/routineRunPolling.js which
-    // drives the poll loop).
+    // Checkpoint detail pushed to the viewed routine, cached by thread_id.
+    // Historical snapshots are fetched once on demand.
     runStateByThreadId: {},
+    runLifecycleByRequestId: {},
+    lastRunNotification: null,
   },
 };
 
@@ -64,7 +64,17 @@ function replaceAgentList(agents, items) {
   }
   const activeId = agents.active.agentId;
   if (activeId && agents.active.detail && agents.byId[activeId]) {
-    agents.active.detail = { ...agents.active.detail, ...agents.byId[activeId] };
+    const detail = agents.active.detail;
+    const listed = agents.byId[activeId];
+    agents.active.detail = { ...detail, ...listed };
+    // Roster snapshots intentionally omit routine graphs (they arrive on the
+    // per-agent `agent.selected` detail event). A snapshot can race just after
+    // that event on initial page load; don't let its `graph: null` erase the
+    // graph already loaded for the active detail. Otherwise GraphCanvas stays
+    // mounted with an empty fallback until the routine is selected again.
+    if (listed.graph == null && detail.graph != null) {
+      agents.active.detail.graph = detail.graph;
+    }
   } else if (activeId && !agents.byId[activeId]) {
     agents.deletedIds[activeId] = true;
     agents.active = { agentId: null, detail: null, loading: false, error: null, requestId: null };
@@ -129,6 +139,19 @@ export const fetchRoutineRuns = createAcknowledgedThunk('uiData/fetchRoutineRuns
   { requestId },
 ));
 
+export const startRoutineRun = createAcknowledgedThunk('uiData/startRoutineRun', ({ agentsUrl, agentId, sessionId, targetNode, parameters }, { requestId }) => requestAcknowledged(
+  `${agentsUrl}/${encodeURIComponent(agentId)}/run`, {
+    method: 'POST', requestId,
+    body: { session_id: sessionId, ...(targetNode ? { target_node: targetNode } : {}), parameters },
+  },
+));
+
+export const answerRoutineApproval = createAcknowledgedThunk('uiData/answerRoutineApproval', ({ agentsUrl, agentId, threadId, interruptId, answer }, { requestId }) => requestAcknowledged(
+  `${agentsUrl}/${encodeURIComponent(agentId)}/approval`, {
+    method: 'POST', requestId, body: { thread_id: threadId, interrupt_id: interruptId, answer },
+  },
+));
+
 export const fetchRoutineRevisions = createAcknowledgedThunk('uiData/fetchRoutineRevisions', ({ agentsUrl, agentId }, { requestId }) => requestAcknowledged(
   `${agentsUrl}/${encodeURIComponent(agentId)}/revisions`,
   { requestId },
@@ -153,7 +176,26 @@ export const updateAgentSkillContent = createAcknowledgedThunk('uiData/updateAge
   },
 ));
 
+function applyRunLifecycle(state, payload) {
+  if (!payload?.request_id || !payload?.agent_id) return;
+  const previous = state.agents.runLifecycleByRequestId[payload.request_id];
+  if (previous && previous.timestamp > payload.timestamp) return false;
+  state.agents.runLifecycleByRequestId[payload.request_id] = payload;
+  return previous?.status !== payload.status;
+}
+
 export const eventHandlers = {
+  ...Object.fromEntries(['enqueued', 'started', 'paused', 'completed', 'failed'].map((status) => [
+    `agent.routine.run.${status}`, (state, payload, event) => {
+      const changed = applyRunLifecycle(state, { ...payload, status });
+      if (changed && ['completed', 'failed'].includes(status)) {
+        state.agents.lastRunNotification = { ...payload, status, seq: event.seq };
+      }
+    },
+  ])),
+  'agent.routine.lifecycle.snapshot': (state, payload) => {
+    for (const run of payload.runs || []) applyRunLifecycle(state, run);
+  },
   'agents.snapshot': (state, payload) => {
     replaceAgentList(state.agents, payload.agents);
     state.agents.loaded = true;
@@ -273,3 +315,10 @@ export const selectAgentRoutineRunsHasMore = (state, agentId) => Boolean(state.u
 export const selectAgentRoutineRevisions = (state, agentId) => state.uiData.agents.revisionsByAgentId[agentId];
 export const selectAgentRoutineRevisionContent = (state, agentId, revisionId) => state.uiData.agents.revisionContentByKey[`${agentId}:${revisionId}`];
 export const selectAgentRunState = (state, threadId) => (threadId ? state.uiData.agents.runStateByThreadId[threadId] : undefined);
+export const selectRoutineRunLifecycle = (state, requestId) => state.uiData.agents.runLifecycleByRequestId[requestId];
+export const selectLatestRoutineRunLifecycle = createSelector(
+  [(state) => state.uiData.agents.runLifecycleByRequestId, (_, agentId) => agentId],
+  (runs, agentId) => Object.values(runs).filter((run) => run.agent_id === agentId)
+    .reduce((latest, run) => !latest || run.timestamp > latest.timestamp ? run : latest, null),
+);
+export const selectLastRoutineRunNotification = (state) => state.uiData.agents.lastRunNotification;

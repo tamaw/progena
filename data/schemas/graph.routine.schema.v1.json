@@ -41,7 +41,8 @@
         { "$ref": "#/$defs/nodeNoop" },
         { "$ref": "#/$defs/nodeHuman" },
         { "$ref": "#/$defs/nodeForeach" },
-        { "$ref": "#/$defs/nodeRoutine" }
+        { "$ref": "#/$defs/nodeRoutine" },
+        { "$ref": "#/$defs/nodeReduce" }
       ]
     },
     "nodeBase": {
@@ -136,6 +137,13 @@
       "allOf": [
         { "$ref": "#/$defs/nodeBase" },
         { "required": ["id", "kind", "output_key", "config"], "properties": { "kind": { "const": "routine" }, "config": { "$ref": "#/$defs/routineConfig" } } }
+      ],
+      "unevaluatedProperties": false
+    },
+    "nodeReduce": {
+      "allOf": [
+        { "$ref": "#/$defs/nodeBase" },
+        { "required": ["id", "kind", "output_key", "config"], "properties": { "kind": { "const": "reduce" }, "config": { "$ref": "#/$defs/reduceConfig" } } }
       ],
       "unevaluatedProperties": false
     },
@@ -275,6 +283,15 @@
         { "$ref": "#/$defs/foreachAgentConfig" }
       ]
     },
+    "reduceConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source_node"],
+      "properties": {
+        "source_node": { "$ref": "#/$defs/nodeId", "description": "Node whose output is collected from each execution, commonly the last node in a Send foreach body." },
+        "operation": { "type": "string", "enum": ["collect", "sum", "count", "min", "max", "product"], "default": "collect" }
+      }
+    },
     "foreachSendConfig": {
       "type": "object",
       "additionalProperties": false,
@@ -350,6 +367,7 @@
         { "$ref": "#/$defs/normalEdge" },
         { "$ref": "#/$defs/fanInEdge" },
         { "$ref": "#/$defs/routerEdge" },
+        { "$ref": "#/$defs/foreachEmptyEdge" },
         { "$ref": "#/$defs/errorEdge" }
       ]
     },
@@ -385,6 +403,17 @@
         "state_key": { "type": "string", "minLength": 1 },
         "branches": { "type": "object", "minProperties": 1, "additionalProperties": { "$ref": "#/$defs/nodeId" } },
         "default": { "$ref": "#/$defs/nodeId" }
+      }
+    },
+    "foreachEmptyEdge": {
+      "description": "Fallback continuation for a Send foreach with no items. Compiled as a destination of the foreach conditional route and hidden by the routine canvas.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["from", "to", "level"],
+      "properties": {
+        "from": { "$ref": "#/$defs/nodeId" },
+        "to": { "$ref": "#/$defs/nodeId" },
+        "level": { "const": "foreach_empty" }
       }
     },
     "errorEdge": {

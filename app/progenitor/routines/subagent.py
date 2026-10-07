@@ -18,14 +18,19 @@ from __future__ import annotations
 import logging
 import uuid
 from collections.abc import Awaitable, Callable
+from datetime import timedelta
 from typing import Any, cast
 
 from deepagents.middleware.subagents import CompiledSubAgent
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage
 from langchain_core.runnables import RunnableConfig, RunnableLambda
+from langgraph.errors import NodeTimeoutError
 from langgraph.types import Command
 
+from ..utils import utcnow
+from .approvals import approval_lock, pending_approvals, validate_answer
+from .events import persist_run_event
 from .factory import compile_routine_graph
 from .graph import RoutineContext, validate_routine_graph_payload
 from .revisions import RoutineRevisionReader
@@ -190,13 +195,17 @@ def create_routine_executor(
                 else f"routine:{routine_id}:{revision_id or 'unpinned'}:{uuid.uuid4().hex}"
             )
             run_config = {"configurable": {"thread_id": run_thread_id}}
+            execution = state["_routine_execution"]
+            execution.update(thread_id=run_thread_id, revision_id=revision_id)
+            execution["name"] = graph_doc.get("name", routine_id) if graph_doc else routine_id
+            await persist_run_event(state_manager, execution, "started")
             # A stable thread already carrying checkpoint history must be
             # resumed (input=None) rather than re-invoked with fresh input --
             # LangGraph treats non-None input as a brand-new run regardless
             # of existing history, which would silently discard everything
             # already checkpointed under this thread_id.
             resume_existing = False
-            if session_id:
+            if session_id and checkpointer is not None:
                 existing_state = await compiled.aget_state(run_config)
                 resume_existing = bool(existing_state and existing_state.values)
             parameters = state.get("parameters")
@@ -224,7 +233,7 @@ def create_routine_executor(
                 context={**(context or {}), "request_id": run_thread_id},
                 interrupt_after=[target_node] if target_node else None,
             )
-        except (ValueError, KeyError, NotImplementedError) as exc:
+        except Exception as exc:
             # See factory.py's _instrument_node_callable: a node that raises
             # never gets to *return* its own run_meta entry, so LangGraph
             # never checkpoints one for it. Stash it onto the checkpoint
@@ -234,9 +243,34 @@ def create_routine_executor(
             # this entry is logged and swallowed rather than replacing the
             # real failure message below.
             node_meta = getattr(exc, "routine_run_meta", None)
-            if node_meta is not None and compiled is not None and run_config is not None:
-                failed_node_id, entry = node_meta
+            timed_out = isinstance(exc, NodeTimeoutError) and checkpointer is not None
+            if (
+                (node_meta is not None or timed_out)
+                and compiled is not None
+                and run_config is not None
+            ):
+                if node_meta is not None:
+                    failed_node_id = node_meta[0]
+                else:
+                    assert isinstance(exc, NodeTimeoutError)
+                    failed_node_id = exc.node
                 try:
+                    if node_meta is not None:
+                        _, entry = node_meta
+                    else:
+                        assert isinstance(exc, NodeTimeoutError)
+                        # LangGraph's watchdog cancels the node and raises this
+                        # outside our wrapper, so it has no routine_run_meta.
+                        # Its elapsed time describes the final attempt only.
+                        started_at = (utcnow() - timedelta(seconds=exc.elapsed)).isoformat()
+                        snapshot = await compiled.aget_state(run_config)
+                        history = snapshot.values.get("run_meta") or {}
+                        entry = {
+                            "started_at": started_at,
+                            "duration_ms": round(exc.elapsed * 1000, 2),
+                            "step": sum(len(records) for records in history.values()) + 1,
+                            "error": str(exc),
+                        }
                     await compiled.aupdate_state(
                         run_config, {"run_meta": {failed_node_id: [entry]}}
                     )
@@ -250,11 +284,41 @@ def create_routine_executor(
 
         update: dict[str, Any] = dict(result)
         update["_routine_thread_id"] = run_thread_id
+        if checkpointer is not None:
+            snapshot = await compiled.aget_state(run_config)
+            update["_routine_paused"] = bool(snapshot.next or snapshot.interrupts)
+        else:
+            update["_routine_paused"] = bool(result.get("__interrupt__"))
         if revision_id is not None:
             update[ROUTINE_REVISIONS_STATE_KEY] = {routine_id: revision_id}
         return update
 
-    return RunnableLambda(_run)
+    async def _execute(state: dict) -> dict:
+        session_id = state.get("_interactive_session_id") or uuid.uuid4().hex
+        execution = {
+            "agent_id": routine_id,
+            "session_id": session_id,
+            "request_id": state.get("_routine_request_id") or str(uuid.uuid4()),
+        }
+        if state.get("_routine_parent"):
+            execution["parent"] = dict(state["_routine_parent"])
+        state = {**state, "_interactive_session_id": session_id, "_routine_execution": execution}
+        try:
+            result = await _run(state)
+        except Exception as exc:
+            cast(Any, exc).routine_invocation = dict(execution)
+            await persist_run_event(state_manager, {**execution, "error": str(exc)}, "failed")
+            cast(Any, exc).routine_lifecycle_reported = True
+            raise
+        await persist_run_event(
+            state_manager, execution, "paused" if result.get("_routine_paused") else "completed"
+        )
+        # Execution provenance, not a dependency pin. The caller checkpoints
+        # this alongside that node's output; the next call still resolves live.
+        result["_routine_invocation"] = dict(execution)
+        return result
+
+    return RunnableLambda(_execute)
 
 
 def create_routine_subagent(
@@ -332,6 +396,14 @@ def _parse_routine_thread_id(thread_id: str) -> tuple[str, str | None]:
 
 
 async def resume_routine_thread(
+    *, thread_id: str, answer: Any, database_url: str | None = None, **kwargs: Any
+) -> dict[str, Any]:
+    """Answer one still-pending interrupt, shared by UI and Progenitor chat."""
+    async with approval_lock(thread_id, database_url, wait=True):
+        return await _resume_routine_thread(thread_id=thread_id, answer=answer, **kwargs)
+
+
+async def _resume_routine_thread(
     *,
     thread_id: str,
     answer: Any,
@@ -343,6 +415,8 @@ async def resume_routine_thread(
     routine_runner: Callable[..., Awaitable[dict[str, Any]]] | None = None,
     tool_registry: Any = None,
     checkpointer: Any | None = None,
+    interrupt_id: str | None = None,
+    request_id: str | None = None,
 ) -> dict[str, Any]:
     """Resume a routine run paused at a human node, given its exact thread_id.
 
@@ -374,13 +448,33 @@ async def resume_routine_thread(
     )
     run_config: RunnableConfig = {"configurable": {"thread_id": thread_id}}
     checkpoint = await compiled.aget_state(run_config)
+    approval = validate_answer(pending_approvals(checkpoint.interrupts), answer, interrupt_id)
+    get_decision = getattr(state_manager, "get_routine_approval_decision", None)
+    if callable(get_decision):
+        decision = await get_decision(thread_id, approval["interrupt_id"])
+        if decision and decision.get("request_id") != request_id:
+            raise ValueError("An answer for this approval has already been submitted")
     saved_context = (checkpoint.values.get("data") or {}).get("context") or {}
-    result = await compiled.ainvoke(
-        Command(resume=answer),
-        config=run_config,
-        context=cast(RoutineContext, {**saved_context, "request_id": thread_id}),
-    )
+    execution = {
+        "agent_id": routine_id,
+        "revision_id": revision_id,
+        "thread_id": thread_id,
+        "session_id": thread_id.split(":")[-1],
+        "request_id": request_id or str(uuid.uuid4()),
+    }
+    await persist_run_event(state_manager, execution, "started")
+    try:
+        result = await compiled.ainvoke(
+            Command(resume={approval["interrupt_id"]: answer}),
+            config=run_config,
+            context=cast(RoutineContext, {**saved_context, "request_id": thread_id}),
+        )
+    except Exception as exc:
+        await persist_run_event(state_manager, {**execution, "error": str(exc)}, "failed")
+        exc.routine_lifecycle_reported = True
+        raise
     interrupts = result.get("__interrupt__") if isinstance(result, dict) else None
+    await persist_run_event(state_manager, execution, "paused" if interrupts else "completed")
     if interrupts:
         payload = interrupts[0].value if hasattr(interrupts[0], "value") else interrupts[0]
         question = payload.get("message") if isinstance(payload, dict) else str(payload)

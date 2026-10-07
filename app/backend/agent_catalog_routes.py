@@ -142,6 +142,19 @@ class RunRoutineRequest(BaseModel):
     parameters: dict[str, Any] | None = None
 
 
+class RoutineSubscriptionRequest(BaseModel):
+    client_id: str = Field(min_length=1, max_length=64)
+    thread_id: str | None = None
+    session_id: str | None = None
+    subscribed: bool = True
+
+
+class RoutineApprovalRequest(BaseModel):
+    thread_id: str = Field(min_length=1)
+    interrupt_id: str = Field(min_length=1)
+    answer: str = Field(min_length=1)
+
+
 # JSON schema for a full routine graph document (id/name/description/version/entry/
 # nodes/edges). Published so the Agents page can offer schema-aware JSON editing.
 # The PATCH endpoint derives id/name/description/version from the owning agent
@@ -502,6 +515,49 @@ def create_agent_profile_router(
         )
         return acknowledgement_response(request_id, ["agent.graph.updated"])
 
+    @router.put(
+        "/agent-profiles/{agent_id}/run-subscription",
+        status_code=202,
+        response_model=UiRequestAcknowledgement,
+    )
+    async def subscribe_routine_runs(
+        agent_id: str,
+        body: RoutineSubscriptionRequest,
+        request: Request,
+        x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+    ):
+        from .routine_events import routine_events
+
+        request_id = _request_correlation_id(request, x_request_id)
+        if body.subscribed:
+            if body.client_id not in routine_events.connections:
+                raise HTTPException(status_code=409, detail="UI event stream is not connected")
+            if body.thread_id and not body.thread_id.startswith(f"routine:{agent_id}:"):
+                raise HTTPException(
+                    status_code=400, detail="thread_id does not belong to this routine"
+                )
+            if await asyncio.to_thread(_require_store().get_agent, agent_id) is None:
+                raise HTTPException(status_code=404, detail="Agent not found")
+            routine_events.interests[body.client_id] = {
+                "agent_id": agent_id,
+                "thread_id": body.thread_id,
+                "session_id": body.session_id,
+            }
+        elif routine_events.interests.get(body.client_id, {}).get("agent_id") == agent_id:
+            routine_events.interests.pop(body.client_id, None)
+        broadcast_ui_event(
+            "agent.routine.subscription.updated",
+            {
+                "agent_id": agent_id,
+                "subscribed": body.subscribed,
+            },
+            request_id=request_id,
+            client_id=body.client_id,
+        )
+        if body.subscribed:
+            routine_events.schedule(agent_id)
+        return acknowledgement_response(request_id, ["agent.routine.subscription.updated"])
+
     @router.post(
         "/agent-profiles/{agent_id}/run", status_code=202, response_model=UiRequestAcknowledgement
     )
@@ -546,28 +602,120 @@ def create_agent_profile_router(
         # left the real document empty and the runtime never saw the task).
         existing = doc_store.get_document(PROGENITOR_STATE_PREFIX, "background_tasks", [])
         tasks = list(existing.payload) if existing is not None else []
-        metadata: dict[str, Any] = {"kind": "routine_run", "routine_id": agent_id}
-        if body.session_id:
-            metadata["session_id"] = body.session_id
+        session_id = body.session_id or uuid.uuid4().hex
+        metadata: dict[str, Any] = {
+            "kind": "routine_run",
+            "routine_id": agent_id,
+            "session_id": session_id,
+            "request_id": request_id,
+        }
         if body.target_node:
             metadata["target_node"] = body.target_node
         if body.parameters:
             metadata["parameters"] = body.parameters
+        queued_at = utcnow_isoformat()
         tasks.append(
             {
                 "id": f"routine-run-{uuid.uuid4().hex}",
                 "content": f'Run the "{agent_id}" routine graph.',
                 "metadata": metadata,
-                "created_at": utcnow_isoformat(),
+                "created_at": queued_at,
             }
         )
         doc_store.save_document(PROGENITOR_STATE_PREFIX, "background_tasks", tasks)
+        from app.progenitor.routines.events import RUN_EVENT_PREFIX
 
-        broadcast_ui_event(
-            "agent.routine.run.enqueued",
-            {"agent_id": agent_id},
-            request_id=request_id,
+        lifecycle = {
+            "agent_id": agent_id,
+            "session_id": session_id,
+            "request_id": request_id,
+            "status": "enqueued",
+            "timestamp": queued_at,
+        }
+        doc_store.save_document(
+            PROGENITOR_STATE_PREFIX, f"{RUN_EVENT_PREFIX}{request_id}:enqueued", lifecycle
         )
+        from .routine_events import routine_events
+
+        if routine_events.claim_lifecycle(lifecycle):
+            broadcast_ui_event("agent.routine.run.enqueued", lifecycle, request_id=request_id)
+        return acknowledgement_response(request_id, ["agent.routine.run.enqueued"])
+
+    @router.post(
+        "/agent-profiles/{agent_id}/approval",
+        status_code=202,
+        response_model=UiRequestAcknowledgement,
+    )
+    async def answer_routine_approval(
+        agent_id: str,
+        body: RoutineApprovalRequest,
+        request: Request,
+        x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+    ):
+        from app.progenitor.routines.approvals import approval_lock, decision_key, validate_answer
+        from app.progenitor.routines.events import RUN_EVENT_PREFIX
+
+        from .routine_events import read_run_state, routine_events
+
+        if (
+            not body.thread_id.startswith(f"routine:{agent_id}:")
+            or len(body.thread_id.split(":")) != 4
+        ):
+            raise HTTPException(status_code=400, detail="thread_id does not belong to this routine")
+        request_id = _request_correlation_id(request, x_request_id)
+        doc_store = get_document_store()
+        try:
+            async with approval_lock(body.thread_id, store_database_url(doc_store)):
+                state = await read_run_state(agent_id, body.thread_id, doc_store)
+                approval = validate_answer(
+                    state["pending_approvals"], body.answer, body.interrupt_id
+                )
+                claim_key = decision_key(body.thread_id, body.interrupt_id)
+                if doc_store.get_document(PROGENITOR_STATE_PREFIX, claim_key) is not None:
+                    raise ValueError("An answer for this approval has already been submitted")
+                metadata = {
+                    "kind": "routine_run",
+                    "operation": "resume",
+                    "routine_id": agent_id,
+                    "thread_id": body.thread_id,
+                    "session_id": body.thread_id.split(":")[-1],
+                    "interrupt_id": approval["interrupt_id"],
+                    "answer": body.answer,
+                    "request_id": request_id,
+                }
+                existing = doc_store.get_document(PROGENITOR_STATE_PREFIX, "background_tasks", [])
+                tasks = list(existing.payload) if existing is not None else []
+                queued_at = utcnow_isoformat()
+                tasks.append(
+                    {
+                        "id": f"routine-answer-{uuid.uuid4().hex}",
+                        "content": "Answer a routine approval.",
+                        "metadata": metadata,
+                        "created_at": queued_at,
+                    }
+                )
+                doc_store.save_document(PROGENITOR_STATE_PREFIX, claim_key, metadata)
+                try:
+                    doc_store.save_document(PROGENITOR_STATE_PREFIX, "background_tasks", tasks)
+                except Exception:
+                    doc_store.delete_document(PROGENITOR_STATE_PREFIX, claim_key)
+                    raise
+                lifecycle = {
+                    "agent_id": agent_id,
+                    "thread_id": body.thread_id,
+                    "session_id": metadata["session_id"],
+                    "request_id": request_id,
+                    "status": "enqueued",
+                    "timestamp": queued_at,
+                }
+                doc_store.save_document(
+                    PROGENITOR_STATE_PREFIX, f"{RUN_EVENT_PREFIX}{request_id}:enqueued", lifecycle
+                )
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        if routine_events.claim_lifecycle(lifecycle):
+            broadcast_ui_event("agent.routine.run.enqueued", lifecycle, request_id=request_id)
+        routine_events.schedule(agent_id)
         return acknowledgement_response(request_id, ["agent.routine.run.enqueued"])
 
     @router.get(
@@ -596,24 +744,9 @@ def create_agent_profile_router(
         if not thread_id.startswith(f"routine:{agent_id}:"):
             raise HTTPException(status_code=400, detail="thread_id does not belong to this routine")
 
-        database_url = store_database_url(get_document_store())
-        payload: dict[str, Any] = {
-            "agent_id": agent_id,
-            "thread_id": thread_id,
-            "found": False,
-            "run_meta": {},
-            "data": {},
-        }
-        if database_url:
-            from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+        from .routine_events import read_run_state
 
-            async with AsyncPostgresSaver.from_conn_string(database_url) as checkpointer:
-                tup = await checkpointer.aget_tuple({"configurable": {"thread_id": thread_id}})
-                if tup is not None:
-                    channel_values = tup.checkpoint.get("channel_values", {})
-                    payload["found"] = True
-                    payload["run_meta"] = channel_values.get("run_meta") or {}
-                    payload["data"] = channel_values.get("data") or {}
+        payload = await read_run_state(agent_id, thread_id, get_document_store())
 
         broadcast_ui_event(
             "agent.routine.run_state.loaded",

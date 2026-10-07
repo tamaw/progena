@@ -7,6 +7,7 @@ import { GRAPH_KIND_COLORS, GRAPH_KIND_LABELS } from './graphNodeKinds';
 import { KindIcon, ChevronLeftSmall, ChevronRightPointSmall } from './RoutineGraphIcons';
 import { ExpressionField, NodeConfigBody } from './NodeConfigFields';
 import PopupModal from '../common/PopupModal';
+import { HumanApprovalControls } from './HumanApprovalControls';
 
 // Routing controls belong to the inspected node; fixed condition/split lanes
 // have no state key to author. New branching is chosen at insertion time.
@@ -31,7 +32,7 @@ function RoutingFooter({ id, kind, routerEdge }) {
 // Full configuration for the selected node. It floats inside the canvas and
 // is deliberately separate from the chain so large prompts never resize it.
 export function NodeInspector({ node, routerEdge, guardEdge, onClose, onDismiss, isNew, style, panelRef }) {
-  const { updateNode, deleteNode, updateLoopGuard, runMeta, runData, staleNodeIds, edges: graphEdges, nodes: graphNodes, readOnly, runStatus, startRun, hasInteractiveSession, resetInteractiveSession, loopMembership, loopIterations, setLoopIteration } = useContext(GraphEditContext);
+  const { updateNode, deleteNode, updateLoopGuard, runMeta, runData, staleNodeIds, edges: graphEdges, nodes: graphNodes, readOnly, runStatus, startRun, hasInteractiveSession, resetInteractiveSession, loopMembership, loopIterations, setLoopIteration, pendingApprovals, answerApproval } = useContext(GraphEditContext);
   const [isEditingLabel, setIsEditingLabel] = useState(false);
   const [confirmRunOpen, setConfirmRunOpen] = useState(false);
   const [labelDraft, setLabelDraft] = useState('');
@@ -73,6 +74,7 @@ export function NodeInspector({ node, routerEdge, guardEdge, onClose, onDismiss,
   const lastRunEntry = pickEntryForIteration(runEntries, inspectorSelectedIteration, inspectorGuardEntries);
   const isRunStale = !isNodeRunValid(node.id, staleNodeIds || EMPTY_MISSING);
   const outputKey = node.output_key || node.id;
+  const approval = node.kind === 'human' ? pendingApprovals?.find((item) => item.node_id === node.id) : null;
   // Prefers this execution's own recorded write (see factory.py's
   // `entry.output`) over the cumulative `data` channel, which only ever
   // holds the latest write per key -- falls back to `runData` for older
@@ -182,6 +184,7 @@ export function NodeInspector({ node, routerEdge, guardEdge, onClose, onDismiss,
       </header>
       <MissingFieldsContext.Provider value={missingSet}>
       <div className="routine-node-inspector__body">
+        {approval ? <HumanApprovalControls key={approval.interrupt_id} approval={approval} onAnswer={answerApproval} disabled={runStatus === 'discovering' || runStatus === 'running'} /> : null}
         {missingCount ? (
           <p className="routine-node-inspector__required-hint" role="status">
             {missingCount === 1
@@ -253,6 +256,14 @@ export function NodeInspector({ node, routerEdge, guardEdge, onClose, onDismiss,
                 <div>
                   <dt>Step</dt>
                   <dd>{lastRunEntry.step}</dd>
+                </div>
+              ) : null}
+              {lastRunEntry.routine ? (
+                <div className="routine-node-inspector__run-revision">
+                  <dt>Child revision</dt>
+                  <dd title={lastRunEntry.routine.revision_id || undefined}>
+                    {lastRunEntry.routine.revision_id || 'Unavailable'}
+                  </dd>
                 </div>
               ) : null}
               {lastRunEntry.tokens ? (

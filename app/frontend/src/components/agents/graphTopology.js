@@ -12,7 +12,7 @@ export function edgeSourceIds(edge) {
 // Flow edges are the ones that shape the chain tree; error edges route
 // retries on exhaustion and must NOT participate in chain layout.
 export function isFlowEdge(edge) {
-  return edge?.level !== 'error';
+  return edge?.level !== 'error' && edge?.level !== 'foreach_empty';
 }
 
 function edgeTargetIds(edge) {
@@ -208,7 +208,7 @@ export function predecessorsOf(nodeId, edges) {
 // from).
 export function nodeSuccessors(nodeId, edges) {
   const targets = new Set();
-  (edges || []).filter(isFlowEdge).forEach((edge) => {
+  (edges || []).filter((edge) => isFlowEdge(edge) || edge?.level === 'foreach_empty').forEach((edge) => {
     if (!edgeSourceIds(edge).includes(nodeId)) return;
     if (edge.router) {
       routerTargets(edge).forEach((target) => target && targets.add(target));

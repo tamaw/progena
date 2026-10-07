@@ -519,5 +519,28 @@ export function NodeConfigBody({ id, kind, config, updateNodeConfig, replaceNode
       </>
     );
   }
+  if (kind === 'reduce') {
+    return (
+      <>
+        <ConfigField id={id} config={config} field="source_node" label="Map output node ID" placeholder="e.g. transform" updateNodeConfig={updateNodeConfig} />
+        <label className="agents-graph-node__field">
+          <span className="agents-graph-node__field-label">Operation</span>
+          <select
+            className="agents-graph-node__toolinput"
+            value={config?.operation || 'collect'}
+            onChange={(event) => updateNodeConfig(id, { operation: event.target.value })}
+          >
+            <option value="collect">Collect values</option>
+            <option value="sum">Sum</option>
+            <option value="product">Product</option>
+            <option value="count">Count</option>
+            <option value="min">Minimum</option>
+            <option value="max">Maximum</option>
+          </select>
+        </label>
+        <p className="routine-node-inspector__hint">Collects each execution of that node, such as the final step in a Send foreach body. Empty input reduces to an empty list, zero for sum/count, one for product, and null for min/max.</p>
+      </>
+    );
+  }
   return null;
 }

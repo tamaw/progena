@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from math import prod
 from typing import Any
 
 from langgraph.errors import NodeError
@@ -61,6 +62,34 @@ def _build_eval_node(node: RoutineNode) -> Any:
         # value win on a shared key, never masking something real.
         namespace = {**defaults, **data}
         result = evaluate_expression(expression, namespace)
+        return {"data": {output_key: result}}
+
+    return run
+
+
+def _build_reduce_node(node: RoutineNode) -> Any:
+    """Aggregate outputs recorded for each execution of a map/body node."""
+    config = _node_config(node)
+    operation = config["operation"]
+    source_node = config["source_node"]
+    output_key = node.output_key or node.id
+
+    async def run(state: RoutineState) -> dict[str, Any]:
+        values = list((state.get("node_outputs") or {}).get(source_node, []))
+        if operation == "collect":
+            result: Any = values
+        elif operation == "count":
+            result = len(values)
+        elif operation == "sum":
+            result = sum(values)
+        elif operation == "product":
+            result = prod(values)
+        elif operation == "min":
+            result = min(values) if values else None
+        elif operation == "max":
+            result = max(values) if values else None
+        else:  # guarded by ReduceNodeConfig; keeps direct compiler use explicit
+            raise ValueError(f"reduce node {node.id}: unsupported operation {operation!r}")
         return {"data": {output_key: result}}
 
     return run
@@ -160,13 +189,17 @@ def _foreach_items(node: RoutineNode, state: RoutineState) -> list[Any]:
     return items[:max_items] if max_items is not None else items
 
 
-def _build_send_router(node: RoutineNode, target: str) -> Callable[[RoutineState], list[Send]]:
+def _build_send_router(
+    node: RoutineNode, target: str, empty_target: str | None = None
+) -> Callable[[RoutineState], list[Send] | str]:
     config = _node_config(node)
     item_key = config["item_key"]
 
-    def route(state: RoutineState) -> list[Send]:
+    def route(state: RoutineState) -> list[Send] | str:
         items = _foreach_items(node, state)
         data = state.get("data", {})
+        if not items and empty_target:
+            return empty_target
         return [
             Send(
                 target, {"messages": state.get("messages") or [], "data": {**data, item_key: item}}

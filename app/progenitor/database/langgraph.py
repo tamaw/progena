@@ -39,6 +39,9 @@ async def _open_saver(
         saver = AsyncPostgresSaver(conn=conn)
         if setup:
             await saver.setup()
+            from ..routines.events import CHECKPOINT_TRIGGER_SQL
+
+            await conn.execute(CHECKPOINT_TRIGGER_SQL, prepare=False)
         return saver, conn
     except BaseException:
         await conn.close()

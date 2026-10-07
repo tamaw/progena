@@ -184,6 +184,18 @@ class StateManager:
         self._state_cache[name] = payload
         await self._runtime_store.save_document(name, payload)
 
+    async def save_routine_run_event(self, payload: dict[str, Any]) -> None:
+        """Persist lifecycle transitions without retaining them in the state cache."""
+        from ..routines.events import RUN_EVENT_PREFIX
+
+        key = f"{RUN_EVENT_PREFIX}{payload['request_id']}:{payload['status']}"
+        await self._runtime_store.save_document(key, payload)
+
+    async def get_routine_approval_decision(self, thread_id: str, interrupt_id: str) -> Any:
+        from ..routines.approvals import decision_key
+
+        return await self._runtime_store.peek_document(decision_key(thread_id, interrupt_id))
+
     async def _mutate_runtime_current_state(
         self,
         mutate: Callable[[dict[str, Any]], None],

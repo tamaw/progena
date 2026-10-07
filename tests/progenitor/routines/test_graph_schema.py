@@ -23,6 +23,26 @@ def example_payload() -> dict:
 
 
 class TestValidateRoutineGraphPayload:
+    def test_accepts_reduce_node_and_rejects_unknown_reduce_source(self):
+        payload = {
+            "id": "reduce-test",
+            "name": "Reduce test",
+            "description": "schema test",
+            "version": "2.0.0",
+            "entry": "mapped",
+            "nodes": [
+                {"id": "mapped", "kind": "eval", "output_key": "mapped", "config": {"expression": "1"}},
+                {"id": "reduced", "kind": "reduce", "output_key": "reduced", "config": {"source_node": "mapped", "operation": "sum"}},
+            ],
+            "edges": [{"from": "mapped", "to": "reduced", "level": "normal"}],
+        }
+        graph = validate_routine_graph_payload(payload)
+        assert graph.nodes[1].kind == "reduce"
+
+        payload["nodes"][1]["config"]["source_node"] = "missing"
+        with pytest.raises(ValueError, match="reduce node reduced references unknown source node"):
+            validate_routine_graph_payload(payload)
+
     def test_accepts_the_reference_example(self, example_payload):
         graph = validate_routine_graph_payload(example_payload)
         assert isinstance(graph, RoutineGraph)
@@ -364,6 +384,34 @@ def test_rejects_unknown_foreach_send_config_field() -> None:
 
     with pytest.raises(ValueError, match="schema validation failed"):
         validate_routine_graph_payload(payload)
+
+
+def test_accepts_hidden_foreach_empty_edge() -> None:
+    payload = {
+        "id": "foreach-empty",
+        "name": "Foreach empty route",
+        "description": "",
+        "version": "2.0.0",
+        "entry": "fan",
+        "nodes": [
+            {
+                "id": "fan",
+                "kind": "foreach",
+                "output_key": "items_out",
+                "config": {"mode": "send", "items_from": "items"},
+            },
+            {"id": "body", "kind": "noop", "output_key": "body", "config": {}},
+            {"id": "join_each", "kind": "noop", "output_key": "join_each", "config": {}},
+        ],
+        "edges": [
+            {"from": "fan", "to": "body", "level": "normal"},
+            {"from": "body", "to": "join_each", "level": "normal"},
+            {"from": "fan", "to": "join_each", "level": "foreach_empty"},
+        ],
+    }
+
+    graph = validate_routine_graph_payload(payload)
+    assert any(edge.level == "foreach_empty" for edge in graph.edges)
 
 
 def test_rejects_loop_guard_on_barrier_fanin() -> None:

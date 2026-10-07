@@ -102,3 +102,43 @@ def test_parse_routine_graph_document_rejects_additional_properties():
     graph["unexpected"] = True
     with pytest.raises(ValueError, match="schema validation failed"):
         parse_routine_graph_document(json.dumps(graph))
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        {"prompt_template": "Summarize {request}"},
+        {"prompt_file": "/prompts/summary.md"},
+        {"inputs": {"request": "request"}},
+    ],
+)
+def test_agent_input_source_survives_save_read_round_trip(source):
+    from app.progenitor.routines.graph import validate_routine_graph_payload
+
+    graph = default_routine_graph("agent-roundtrip")
+    graph["nodes"][0].update(kind="agent", config={"agent_name": "reviewer", **source})
+    model = validate_routine_graph_payload(graph)
+    serialized = model.model_dump(mode="json", by_alias=True, exclude_none=True)
+    validate_routine_graph_payload(serialized)
+    saved = parse_routine_graph_document(json.dumps(graph))
+    reread = parse_routine_graph_document(json.dumps(saved))
+    assert reread == saved
+    config = saved["nodes"][0]["config"]
+    assert config["continue_thread"] is True
+    assert {
+        key: config[key] for key in ("prompt_template", "prompt_file", "inputs") if key in config
+    } == source
+
+
+def test_agent_save_still_rejects_two_explicit_input_sources():
+    graph = default_routine_graph("conflicting-agent")
+    graph["nodes"][0].update(
+        kind="agent",
+        config={
+            "agent_name": "reviewer",
+            "prompt_template": "Summarize {request}",
+            "inputs": {},
+        },
+    )
+    with pytest.raises(ValueError, match="schema validation failed"):
+        parse_routine_graph_document(json.dumps(graph))

@@ -611,6 +611,138 @@ async def test_send_fanout_and_native_subgraph() -> None:
 
 
 @pytest.mark.asyncio
+async def test_send_fanout_empty_routes_through_join_marker() -> None:
+    routine = graph(
+        {
+            "id": "fan",
+            "kind": "foreach",
+            "output_key": "items_out",
+            "config": {"mode": "send", "items_from": "items", "item_key": "item"},
+        },
+        {
+            "id": "body",
+            "kind": "eval",
+            "output_key": "doubled",
+            "config": {"expression": "item * 2"},
+        },
+        {"id": "join_each", "kind": "noop", "output_key": "join_each"},
+        {
+            "id": "summary",
+            "kind": "eval",
+            "output_key": "summary",
+            "config": {"expression": "items"},
+        },
+        edges=[
+            {"from": "fan", "to": "body", "level": "normal"},
+            {"from": "body", "to": "join_each", "level": "normal"},
+            {"from": "join_each", "to": "summary", "level": "normal"},
+            {"from": "fan", "to": "join_each", "level": "foreach_empty"},
+        ],
+    )
+    compiled = compile_routine_graph(routine, model=FakeModel())
+
+    empty = await compiled.ainvoke({"messages": [HumanMessage("go")], "data": {"items": []}})
+    assert empty["data"]["summary"] == []
+    assert len(empty["run_meta"]["join_each"]) == 1
+
+    nonempty = await compiled.ainvoke(
+        {"messages": [HumanMessage("go")], "data": {"items": [2, 3, 4]}}
+    )
+    assert nonempty["data"]["summary"] == [2, 3, 4]
+    assert len(nonempty["run_meta"]["body"]) == 3
+    assert len(nonempty["run_meta"]["join_each"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_reduce_collects_send_body_outputs_and_handles_empty_input() -> None:
+    routine = graph(
+        {
+            "id": "fan",
+            "kind": "foreach",
+            "output_key": "fan",
+            "config": {"mode": "send", "items_from": "items", "item_key": "item"},
+        },
+        {
+            "id": "mapped",
+            "kind": "eval",
+            "output_key": "mapped",
+            "config": {"expression": "item * 2"},
+        },
+        {"id": "join_each", "kind": "noop", "output_key": "join_each"},
+        {
+            "id": "sum",
+            "kind": "reduce",
+            "output_key": "sum",
+            "config": {"source_node": "mapped", "operation": "sum"},
+        },
+        {
+            "id": "collected",
+            "kind": "reduce",
+            "output_key": "collected",
+            "config": {"source_node": "mapped", "operation": "collect"},
+        },
+        {
+            "id": "product",
+            "kind": "reduce",
+            "output_key": "product",
+            "config": {"source_node": "mapped", "operation": "product"},
+        },
+        {
+            "id": "count",
+            "kind": "reduce",
+            "output_key": "count",
+            "config": {"source_node": "mapped", "operation": "count"},
+        },
+        {
+            "id": "minimum",
+            "kind": "reduce",
+            "output_key": "minimum",
+            "config": {"source_node": "mapped", "operation": "min"},
+        },
+        {
+            "id": "maximum",
+            "kind": "reduce",
+            "output_key": "maximum",
+            "config": {"source_node": "mapped", "operation": "max"},
+        },
+        edges=[
+            {"from": "fan", "to": "mapped", "level": "normal"},
+            {"from": "mapped", "to": "join_each", "level": "normal"},
+            {"from": "join_each", "to": "sum", "level": "normal"},
+            {"from": "fan", "to": "join_each", "level": "foreach_empty"},
+            {"from": "sum", "to": "product", "level": "normal"},
+            {"from": "product", "to": "count", "level": "normal"},
+            {"from": "count", "to": "minimum", "level": "normal"},
+            {"from": "minimum", "to": "maximum", "level": "normal"},
+            {"from": "maximum", "to": "collected", "level": "normal"},
+        ],
+    )
+    compiled = compile_routine_graph(routine, model=FakeModel())
+
+    mapped = await compiled.ainvoke(
+        {"messages": [HumanMessage("go")], "data": {"items": [2, 3, 4]}}
+    )
+    assert mapped["data"]["sum"] == 18
+    assert mapped["data"]["collected"] == [4, 6, 8]
+    assert mapped["data"]["product"] == 192
+    assert mapped["data"]["count"] == 3
+    assert mapped["data"]["minimum"] == 4
+    assert mapped["data"]["maximum"] == 8
+    assert mapped["node_outputs"]["mapped"] == [4, 6, 8]
+    assert len(mapped["run_meta"]["mapped"]) == 3
+    assert len(mapped["run_meta"]["sum"]) == 1
+
+    empty = await compiled.ainvoke({"messages": [HumanMessage("go")], "data": {"items": []}})
+    assert empty["data"]["sum"] == 0
+    assert empty["data"]["collected"] == []
+    assert empty["data"]["product"] == 1
+    assert empty["data"]["count"] == 0
+    assert empty["data"]["minimum"] is None
+    assert empty["data"]["maximum"] is None
+    assert "mapped" not in empty["run_meta"]
+
+
+@pytest.mark.asyncio
 async def test_node_cache_is_enabled_by_graph_config() -> None:
     model = FakeModel()
     routine = graph(
@@ -704,3 +836,75 @@ async def test_nested_routine_runner_receives_runtime_and_mapped_state() -> None
     assert child_context == context
     assert result["data"]["mapped_answer"] == 42
     assert result["data"]["child"] == "child done"
+
+
+@pytest.mark.asyncio
+async def test_nested_history_preserves_each_call_revision_and_location() -> None:
+    records = []
+
+    async def runner(name, state, runtime):
+        invocation = {
+            "agent_id": name,
+            "revision_id": f"revision-{len(records)}",
+            "request_id": f"invocation-{len(records)}",
+            "parent": state["_routine_parent"],
+            "thread_id": f"child-thread-{len(records)}",
+        }
+        records.append(invocation)
+        return {"data": {}, "_routine_invocation": invocation}
+
+    routine = graph(
+        {
+            "id": "first",
+            "output_key": "first",
+            "kind": "routine",
+            "config": {"routine_name": "child"},
+        },
+        {
+            "id": "second",
+            "output_key": "second",
+            "kind": "routine",
+            "config": {"routine_name": "child"},
+        },
+        edges=[{"from": "first", "to": "second", "level": "normal"}],
+    )
+    saver = MemorySaver()
+    compiled = compile_routine_graph(
+        routine, model=FakeModel(), routine_runner=runner, checkpointer=saver
+    )
+    config = {"configurable": {"thread_id": "parent"}}
+    await compiled.ainvoke({"messages": []}, config=config, context={"request_id": "parent"})
+    snapshot = await compiled.aget_state(config)
+    for index, node_id in enumerate(("first", "second")):
+        assert snapshot.values["run_meta"][node_id][0]["routine"] == records[index]
+        assert records[index]["parent"] == {"thread_id": "parent", "node_id": node_id}
+    assert "_routine_invocation" not in snapshot.values
+
+
+@pytest.mark.asyncio
+async def test_failed_nested_call_retains_resolved_revision_metadata() -> None:
+    invocation = {"agent_id": "child", "revision_id": "failed-revision"}
+
+    async def runner(name, state, runtime):
+        error = ValueError("child failed")
+        error.routine_invocation = invocation
+        raise error
+
+    compiled = compile_routine_graph(
+        graph(
+            {
+                "id": "call",
+                "output_key": "call",
+                "kind": "routine",
+                "config": {"routine_name": "child"},
+            }
+        ),
+        model=FakeModel(),
+        routine_runner=runner,
+    )
+    with pytest.raises(ValueError) as caught:
+        await compiled.ainvoke({"messages": []})
+    node_id, record = caught.value.routine_run_meta
+    assert node_id == "call"
+    assert record["routine"] == invocation
+    assert record["error"] == "child failed"

@@ -236,7 +236,15 @@ def _build_routine_node(
         child_data = (
             _resolve_inputs(node.id, input_map, parent_data) if input_map else dict(parent_data)
         )
-        child_state = {"messages": state.get("messages") or [], "data": child_data}
+        context = getattr(runtime, "context", None) if runtime is not None else None
+        child_state = {
+            "messages": state.get("messages") or [],
+            "data": child_data,
+            "_routine_parent": {
+                "thread_id": (context or {}).get("request_id"),
+                "node_id": node.id,
+            },
+        }
         if routine_runner is not None:
             result = await routine_runner(name, child_state, runtime)
         else:
@@ -251,6 +259,12 @@ def _build_routine_node(
         text = normalize_message_content(messages[-1].content) if messages else ""
         result_data = result.get("data") or {}
         mapped_output = _resolve_inputs(node.id, output_map, result_data) if output_map else {}
-        return {"messages": [AIMessage(content=text)], "data": {**mapped_output, output_key: text}}
+        update = {
+            "messages": [AIMessage(content=text)],
+            "data": {**mapped_output, output_key: text},
+        }
+        if result.get("_routine_invocation"):
+            update["_routine_invocation"] = result["_routine_invocation"]
+        return update
 
     return run

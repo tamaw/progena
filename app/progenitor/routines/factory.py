@@ -37,6 +37,7 @@ from .control_nodes import (
     _build_loop_guard,
     _build_noop_node,
     _build_output_projector,
+    _build_reduce_node,
     _build_retry_exhausted_handler,
     _build_router,
     _build_send_router,
@@ -259,6 +260,8 @@ def _build_node_callable(
         )
     if node.kind == "eval":
         return _build_eval_node(node)
+    if node.kind == "reduce":
+        return _build_reduce_node(node)
     if node.kind == "condition":
         return _build_condition_node(node)
     if node.kind == "switch":
@@ -292,7 +295,7 @@ def _extract_token_usage(result: dict[str, Any] | None) -> dict[str, int] | None
     kind has to opt in individually. Every model-calling node builder
     already threads its raw response through ``messages`` (prompt/classify/
     agent/a2a/routine); kinds with no LLM call (eval/condition/switch/split/
-    noop/human/foreach-send) correctly report no tokens by having no
+    reduce/noop/human/foreach-send) correctly report no tokens by having no
     messages at all. Returns ``None`` -- not a zeroed dict -- when nothing
     carried usage data, so a display layer can tell "no LLM call" apart
     from "LLM call, provider didn't report usage".
@@ -322,7 +325,10 @@ def _extract_token_usage(result: dict[str, Any] | None) -> dict[str, int] | None
 
 
 def _instrument_node_callable(
-    node_id: str, fn: Any, route_fn: Callable[[RoutineState], Any] | None = None
+    node_id: str,
+    fn: Any,
+    route_fn: Callable[[RoutineState], Any] | None = None,
+    capture_output_key: str | None = None,
 ) -> Any:
     """Wrap a node's runnable to record wall-clock duration (and, when the
     node made a real LLM call, token usage, or wrote to `data`, that too)
@@ -380,6 +386,8 @@ def _instrument_node_callable(
                 "step": step,
                 "error": str(exc) or type(exc).__name__,
             }
+            if getattr(exc, "routine_invocation", None):
+                entry["routine"] = dict(exc.routine_invocation)
             exc.routine_run_meta = (node_id, entry)  # type: ignore[attr-defined]
             raise
         duration_ms = (time.monotonic() - started) * 1000
@@ -389,6 +397,9 @@ def _instrument_node_callable(
             "duration_ms": round(duration_ms, 2),
             "step": step,
         }
+        invocation = update.pop("_routine_invocation", None)
+        if invocation:
+            entry["routine"] = invocation
         # This execution's own written fields (not the whole accumulated
         # `data` dict) -- `data` itself only ever holds the latest write per
         # key, so a node run multiple times (a loop body) would otherwise
@@ -396,6 +407,8 @@ def _instrument_node_callable(
         new_data = update.get("data")
         if isinstance(new_data, dict) and new_data:
             entry["output"] = new_data
+            if capture_output_key is not None and capture_output_key in new_data:
+                update["node_outputs"] = {node_id: [new_data[capture_output_key]]}
         tokens = _extract_token_usage(result)
         if tokens is not None:
             entry["tokens"] = tokens
@@ -450,6 +463,16 @@ def compile_routine_graph(
 
     input_fields = _schema_field_names(graph.input_schema)
     output_fields = _schema_field_names(graph.output_schema)
+    nodes_by_id = {node.id: node for node in graph.nodes}
+    capture_output_keys: dict[str, str] = {}
+    for reduce_node in (node for node in graph.nodes if node.kind == "reduce"):
+        source_id = _node_config(reduce_node)["source_node"]
+        source_node = nodes_by_id.get(source_id)
+        if source_node is None:
+            raise ValueError(
+                f"reduce node {reduce_node.id} references unknown source node: {source_id}"
+            )
+        capture_output_keys[source_id] = source_node.output_key or source_node.id
 
     builder = StateGraph(
         _extended_state_type(_extra_state_fields(input_fields, output_fields)),
@@ -486,6 +509,11 @@ def compile_routine_graph(
     # are not successors, so they neither occupy a node's outgoing slot nor
     # stop an otherwise-terminal node from reaching the end of the graph.
     flow_edges = [edge for edge in graph.edges if edge.is_flow]
+    foreach_empty_targets = {
+        edge.source_ids[0]: edge.target_ids[0]
+        for edge in graph.edges
+        if edge.level == "foreach_empty"
+    }
     outgoing: dict[str, RoutineEdge] = {}
     for edge in flow_edges:
         for source in edge.source_ids:
@@ -542,6 +570,7 @@ def compile_routine_graph(
                     defs=graph.defs,
                 ),
                 route_fn=route_fns.get(node.id),
+                capture_output_key=capture_output_keys.get(node.id),
             ),
             **node_options,
         )
@@ -590,9 +619,15 @@ def compile_routine_graph(
             builder.add_conditional_edges(
                 source,
                 _build_send_router(
-                    next(node for node in graph.nodes if node.id == source), targets[0]
+                    next(node for node in graph.nodes if node.id == source),
+                    targets[0],
+                    foreach_empty_targets.get(source),
                 ),
-                path_map={targets[0]: targets[0]},
+                path_map={
+                    target: target
+                    for target in {targets[0], foreach_empty_targets.get(source)}
+                    if target is not None
+                },
             )
             continue
 
