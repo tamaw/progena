@@ -143,6 +143,7 @@ class TestSkillsWiring:
                 prompts_dir=Path("data/prompts"),
                 shim_bin_dir=Path("data/shims/bin"),
                 shell_home_dir=Path("data/shell-home"),
+                shell_workspace_dir=Path("data/shell-workspaces"),
             ),
             runtime=SimpleNamespace(shell_timeout_seconds=120),
         )
@@ -177,6 +178,7 @@ class TestSkillsWiring:
                 prompts_dir=Path("data/prompts"),
                 shim_bin_dir=Path("data/shims/bin"),
                 shell_home_dir=Path("data/shell-home"),
+                shell_workspace_dir=Path("data/shell-workspaces"),
             ),
             runtime=SimpleNamespace(shell_timeout_seconds=120),
         )
@@ -213,6 +215,7 @@ class TestSkillsWiring:
                 prompts_dir=Path("data/prompts"),
                 shim_bin_dir=Path("data/shims/bin"),
                 shell_home_dir=Path("data/shell-home"),
+                shell_workspace_dir=Path("data/shell-workspaces"),
             ),
             runtime=SimpleNamespace(shell_timeout_seconds=120),
         )
@@ -259,6 +262,7 @@ class TestSkillsWiring:
                 prompts_dir=Path("data/prompts"),
                 shim_bin_dir=Path("data/shims/bin"),
                 shell_home_dir=Path("data/shell-home"),
+                shell_workspace_dir=Path("data/shell-workspaces"),
             ),
             runtime=SimpleNamespace(shell_timeout_seconds=120),
         )
