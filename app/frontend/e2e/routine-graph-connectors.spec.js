@@ -16,6 +16,8 @@ import { test, expect } from '@playwright/test';
  * only ever overflows rightward.
  *
  * Requires the running stack (see playwright.config.js).
+ * Seed its fixtures first: activate the root .venv, then run
+ * `python scripts/seed_e2e_fixtures.py` from the project root.
  */
 
 // Sub-1/64px. Anything larger is a real offset, not LayoutUnit rounding.
@@ -302,10 +304,7 @@ test.describe('routine graph connectors', () => {
     await page.goto('/routines/repo-setup-worker');
     // `waitFor`, not `isVisible`: the latter samples immediately, so it would
     // skip or run depending on whether the graph had loaded yet.
-    const rendered = await page.locator('.routine-fork').first()
-      .waitFor({ state: 'visible', timeout: 15_000 })
-      .then(() => true, () => false);
-    test.skip(!rendered, 'repo-setup-worker is not provisioned in this environment');
+    await expect(page.locator('.routine-fork').first()).toBeVisible({ timeout: 30_000 });
 
     await settled(page);
     const { scopes } = await page.evaluate(readGraph);
@@ -414,10 +413,7 @@ test.describe('routine graph connectors', () => {
     // branches -- that would pull it off the axis everything above and
     // below the fork shares.
     await page.goto('/routines/feedback-categoriser');
-    const rendered = await page.locator('.routine-fork--joined').first()
-      .waitFor({ state: 'visible', timeout: 15_000 })
-      .then(() => true, () => false);
-    test.skip(!rendered, 'feedback-categoriser is not provisioned in this environment');
+    await expect(page.locator('.routine-fork--joined').first()).toBeVisible({ timeout: 30_000 });
     await settled(page);
     const geometry = await page.evaluate(() => {
       const fork = document.querySelector('.routine-fork--joined');
@@ -450,10 +446,7 @@ test.describe('routine graph connectors', () => {
     // against the unclipped base rule (right/left: -11px on every lane) can
     // silently reinstate the overhang the clip was meant to remove.
     await page.goto('/routines/feedback-categoriser');
-    const rendered = await page.locator('.routine-fork--joined').first()
-      .waitFor({ state: 'visible', timeout: 15_000 })
-      .then(() => true, () => false);
-    test.skip(!rendered, 'feedback-categoriser is not provisioned in this environment');
+    await expect(page.locator('.routine-fork--joined').first()).toBeVisible({ timeout: 30_000 });
     await settled(page);
     const geometry = await page.evaluate(() => {
       const first = document.querySelector('.routine-fork__lane--fanout-first');
@@ -484,10 +477,7 @@ test.describe('routine graph connectors', () => {
     // the real last lane (rather than suppressing the add-slot's own bar)
     // strands the join's stem short of the bar.
     await page.goto('/routines/feedback-categoriser');
-    const rendered = await page.locator('.routine-fork--joined').first()
-      .waitFor({ state: 'visible', timeout: 15_000 })
-      .then(() => true, () => false);
-    test.skip(!rendered, 'feedback-categoriser is not provisioned in this environment');
+    await expect(page.locator('.routine-fork--joined').first()).toBeVisible({ timeout: 30_000 });
     await settled(page);
     const result = await page.evaluate(() => {
       const fork = document.querySelector('.routine-fork--joined');

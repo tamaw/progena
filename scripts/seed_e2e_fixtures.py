@@ -1,15 +1,14 @@
 #!/usr/bin/env python3
 """Seed the routine fixtures the Playwright suite navigates to directly.
 
-`app/frontend/e2e/*.spec.js` opens these by id. The three `routine-*` graphs
-plus `routine-private-context` are fixtures rather than demo content, and the
-specs that use them do not skip-guard, so a database without them fails the
-suite outright rather than skipping.
+`app/frontend/e2e/*.spec.js` opens these by id. The routine gallery graphs,
+private-context graph, nested repo-setup-worker, and feedback-categoriser are
+fixtures rather than demo content. Their specs fail when prerequisites are
+missing instead of silently skipping.
 
 Seeding goes through `AgentStore.ensure_routine_agent` -- the same path the
 runtime uses when a chat delegation authors a routine graph -- so a fixture is
-stored exactly the way a real one would be. Re-running is safe: `ensure_` only
-creates what is missing.
+stored exactly the way a real one would be. Re-running is safe: existing graph documents are preserved.
 
     python scripts/seed_e2e_fixtures.py
 """
@@ -18,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from copy import deepcopy
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -216,7 +216,7 @@ condition_gate_graph = {
             "id": "gate",
             "kind": "condition",
             "label": "Long Enough",
-            "config": {"inputs": {"score": "score"}, "expression": "score > 20"},
+            "config": {"expression": "score > 20"},
             "output_key": "gate",
             "description": "Two-way gate: the fork below is fixed to true/false.",
         },
@@ -310,11 +310,47 @@ private_context_graph = {
     ],
 }
 
+# Persisted examples for connector coverage. These are routine JSON documents,
+# not object-agent Markdown: the canvas requires graph topology.
+feedback_graph = deepcopy(branch_join_graph)
+feedback_graph.update(id="feedback-categoriser", name="Feedback Categoriser E2E")
+nested_graph = deepcopy(branch_join_graph)
+nested_graph.update(id="repo-setup-worker", name="Repo Setup Worker E2E")
+urgent = next(node for node in nested_graph["nodes"] if node["id"] == "handle_urgent")
+urgent.update(kind="condition", config={"expression": "True"})
+for node_id in ("nested_a", "nested_b", "nested_join"):
+    nested_graph["nodes"].append(
+        {
+            "id": node_id,
+            "kind": "noop",
+            "label": node_id,
+            "config": {},
+            "output_key": node_id,
+            "description": "Nested connector fixture",
+        }
+    )
+nested_graph["edges"] = [edge for edge in nested_graph["edges"] if edge.get("to") != "combine"]
+nested_graph["edges"].extend(
+    [
+        {
+            "from": "handle_urgent",
+            "level": "route",
+            "router": "state_equals",
+            "state_key": "urgent_reply",
+            "branches": {"true": "nested_a", "false": "nested_b"},
+        },
+        {"from": ["nested_a", "nested_b"], "to": "nested_join", "level": "fan_in"},
+        {"from": ["nested_join", "handle_routine"], "to": "combine", "level": "fan_in"},
+    ]
+)
+
 FIXTURES = (
     branch_join_graph,
     all_controls_graph,
     condition_gate_graph,
     private_context_graph,
+    feedback_graph,
+    nested_graph,
 )
 
 
@@ -339,11 +375,13 @@ def main() -> int:
         store = AgentStore(args.database_url, doc_store)
         store.open()
         for graph in FIXTURES:
-            # The graph document is rewritten either way; the flag only says
-            # whether the agent roster gained an entry it did not have.
+            if store.get_routine_document(graph["id"]) is not None:
+                print(f"{graph['id']}: existing graph preserved")
+                continue
             listed = store.ensure_routine_agent(graph["id"], graph)
             print(f"{graph['id']}: graph written{', agent registered' if listed else ''}")
     finally:
+        store.close()
         doc_store.close()
     return 0
 
