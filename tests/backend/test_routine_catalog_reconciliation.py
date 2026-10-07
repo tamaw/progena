@@ -244,7 +244,8 @@ def test_deleted_routine_history_routes_remain_available(harness, monkeypatch):
     saver.aget_tuple.return_value = SimpleNamespace(
         checkpoint={
             "channel_values": {"run_meta": {"status": "completed"}, "data": {"result": "done"}}
-        }
+        },
+        pending_writes=[],
     )
     connection = AsyncMock()
     connection.__aenter__.return_value = saver

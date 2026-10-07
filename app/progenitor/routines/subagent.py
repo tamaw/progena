@@ -451,7 +451,8 @@ async def _resume_routine_thread(
     approval = validate_answer(pending_approvals(checkpoint.interrupts), answer, interrupt_id)
     get_decision = getattr(state_manager, "get_routine_approval_decision", None)
     if callable(get_decision):
-        decision = await get_decision(thread_id, approval["interrupt_id"])
+        read_decision = cast(Callable[..., Awaitable[Any]], get_decision)
+        decision = await read_decision(thread_id, approval["interrupt_id"])
         if decision and decision.get("request_id") != request_id:
             raise ValueError("An answer for this approval has already been submitted")
     saved_context = (checkpoint.values.get("data") or {}).get("context") or {}
@@ -471,7 +472,7 @@ async def _resume_routine_thread(
         )
     except Exception as exc:
         await persist_run_event(state_manager, {**execution, "error": str(exc)}, "failed")
-        exc.routine_lifecycle_reported = True
+        cast(Any, exc).routine_lifecycle_reported = True
         raise
     interrupts = result.get("__interrupt__") if isinstance(result, dict) else None
     await persist_run_event(state_manager, execution, "paused" if interrupts else "completed")

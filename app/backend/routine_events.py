@@ -101,9 +101,12 @@ class RoutineEvents:
                 database_url,
                 channel=CHECKPOINT_CHANNEL,
                 on_change=self.checkpoint_changed,
-                on_resync=lambda: self.spawn(self.reconcile()),
+                on_resync=self._schedule_reconcile,
             )
             await self.listener.start()
+
+    def _schedule_reconcile(self) -> None:
+        self.spawn(self.reconcile())
 
     async def stop(self) -> None:
         if self.listener:
