@@ -53,7 +53,9 @@ export const GRAPH_KIND_COLORS = {
 // CONDITION_BRANCH_VALUES; order here is the left-to-right lane order.
 export const CONDITION_BRANCHES = ['true', 'false'];
 
-export const GRAPH_KIND_ICONS = Object.fromEntries(GRAPH_NODE_KINDS.map((item) => [item.kind, item.icon]));
+export const GRAPH_KIND_ICONS = Object.fromEntries(
+  GRAPH_NODE_KINDS.filter((item) => item.icon).map((item) => [item.kind, item.icon]),
+);
 // The picker's display name for a kind, everywhere a kind needs to read as
 // text: a fresh node's default label, the inspector's kind badge, a step
 // card's aria-label. Deriving these from the raw `kind` string instead
