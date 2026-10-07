@@ -25,6 +25,7 @@ from deepagents.middleware.subagents import CompiledSubAgent
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage
 from langchain_core.runnables import RunnableConfig, RunnableLambda
+from langchain_core.runnables.config import var_child_runnable_config
 from langgraph.errors import NodeTimeoutError
 from langgraph.types import Command
 
@@ -336,6 +337,25 @@ def create_routine_executor(
         if state.get("_routine_parent"):
             execution["parent"] = dict(state["_routine_parent"])
         state = {**state, "_interactive_session_id": session_id, "_routine_execution": execution}
+        # These invocations own independent checkpoint threads. Older
+        # LangGraph releases merge the caller's task/namespace into an
+        # explicitly supplied thread_id, making child interrupts bubble out
+        # before we can record invocation provenance and pause the parent.
+        # Preserve tracing and user configuration, but detach graph controls.
+        inherited = var_child_runnable_config.get() or {}
+        detached = cast(
+            RunnableConfig,
+            {
+                **inherited,
+                "configurable": {
+                    key: value
+                    for key, value in inherited.get("configurable", {}).items()
+                    if not key.startswith("__pregel_")
+                    and key not in {"checkpoint_ns", "checkpoint_id", "checkpoint_map"}
+                },
+            },
+        )
+        token = var_child_runnable_config.set(detached)
         try:
             result = await _run(state)
         except Exception as exc:
@@ -343,6 +363,8 @@ def create_routine_executor(
             await persist_run_event(state_manager, {**execution, "error": str(exc)}, "failed")
             cast(Any, exc).routine_lifecycle_reported = True
             raise
+        finally:
+            var_child_runnable_config.reset(token)
         await persist_run_event(
             state_manager, execution, "paused" if result.get("_routine_paused") else "completed"
         )
