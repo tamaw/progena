@@ -1,4 +1,4 @@
-import React, { useContext, useRef, useState, useMemo, useLayoutEffect } from 'react';
+import React, { useContext, useRef, useState, useMemo, useLayoutEffect, useEffect } from 'react';
 import { MissingFieldsContext, GraphEditContext } from './graphEditorContext';
 import hljs from 'highlight.js/lib/common';
 import { checkExpressionSyntax } from '../../lib/restrictedExpression';
@@ -17,6 +17,42 @@ import Select from '../common/Select';
 import { createPortal } from 'react-dom';
 import { useBufferedFieldText } from './useBufferedFieldText';
 
+
+function ModelProfileField({ id, config, updateNodeConfig }) {
+  const [profiles, setProfiles] = useState([]);
+  const [error, setError] = useState('');
+  const refresh = async () => {
+    try {
+      const response = await fetch('/api/ui/model-profiles');
+      if (!response.ok) throw new Error('Unable to load model profiles');
+      const data = await response.json();
+      setProfiles(data.profiles || []);
+      setError('');
+    } catch (cause) { setError(cause.message); }
+  };
+  useEffect(() => {
+    let active = true;
+    fetch('/api/ui/model-profiles').then(async (response) => {
+      if (!response.ok) throw new Error('Unable to load model profiles');
+      const data = await response.json();
+      if (active) setProfiles(data.profiles || []);
+    }).catch((cause) => { if (active) setError(cause.message); });
+    return () => { active = false; };
+  }, []);
+  const value = config?.model_profile || '';
+  return (
+    <label className="agents-graph-node__field">
+      <span className="agents-graph-node__field-label">Model profile</span>
+      <select className="agents-graph-node__toolinput" aria-label="Model profile" value={value}
+        onFocus={refresh} onChange={(event) => updateNodeConfig(id, { model_profile: event.target.value || null })}>
+        <option value="">Use default</option>
+        {value && !profiles.some((profile) => profile.name === value) ? <option value={value}>{value} (unavailable)</option> : null}
+        {profiles.map((profile) => <option key={profile.name} value={profile.name}>{profile.name} — {profile.deployment}</option>)}
+      </select>
+      {error ? <span role="alert">{error}</span> : null}
+    </label>
+  );
+}
 
 // Escapes `text` for use inside a `dangerouslySetInnerHTML` layer -- only the
 // three characters that change HTML parsing matter here (this never lands in
@@ -435,6 +471,7 @@ export function NodeConfigBody({ id, kind, config, updateNodeConfig, replaceNode
   if (kind === 'prompt') {
     return (
       <>
+        <ModelProfileField id={id} config={config} updateNodeConfig={updateNodeConfig} />
         <ConfigField id={id} config={config} field="prompt_template" label="Prompt" placeholder="Template… use {request} / {other_node} to reference state" multiline updateNodeConfig={updateNodeConfig} />
         <ConfigField id={id} config={config} field="system_prompt" label="System prompt (optional)" placeholder="Node-specific system prompt…" multiline updateNodeConfig={updateNodeConfig} />
       </>
@@ -448,6 +485,7 @@ export function NodeConfigBody({ id, kind, config, updateNodeConfig, replaceNode
   if (kind === 'classify') {
     return (
       <>
+        <ModelProfileField id={id} config={config} updateNodeConfig={updateNodeConfig} />
         <ConfigField id={id} config={config} field="rubric_prompt" label="Prompt" placeholder="e.g. Categorize this request: {request}" multiline updateNodeConfig={updateNodeConfig} />
         <ResponseSchemaField id={id} config={config} field="response_schema" label="Response fields (required)" updateNodeConfig={updateNodeConfig} />
       </>
@@ -456,6 +494,7 @@ export function NodeConfigBody({ id, kind, config, updateNodeConfig, replaceNode
   if (kind === 'agent') {
     return (
       <>
+        <ModelProfileField id={id} config={config} updateNodeConfig={updateNodeConfig} />
         <AgentSelectField id={id} config={config} label="Agent" agentKind="object" updateNodeConfig={updateNodeConfig} />
         <label className="agents-graph-node__field">
           <span className="agents-graph-node__field-label">Execution</span>

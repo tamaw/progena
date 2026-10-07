@@ -74,6 +74,7 @@ def _build_object_agent_node(
                 parent_thread_id=(context or {}).get("request_id"),
                 node_id=node.id,
                 response_schema=response_schema,
+                model_profile=config.get("model_profile"),
             )
             return {"data": {output_key: reference}}
 
@@ -85,6 +86,10 @@ def _build_object_agent_node(
             invoke_kwargs["config"] = {
                 "configurable": {"thread_id": f"routine-agent:{correlation}:{node.id}"}
             }
+        if config.get("model_profile"):
+            invoke_kwargs.setdefault("config", {}).setdefault("configurable", {})[
+                "model_profile"
+            ] = config["model_profile"]
         result = await target.ainvoke(
             {"messages": [HumanMessage(content=rendered)]}, **invoke_kwargs
         )

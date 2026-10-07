@@ -392,3 +392,59 @@ async def test_routine_background_continues_before_agent_and_validates_eventual_
     finally:
         release.set()
         await server.stop()
+
+
+@pytest.mark.parametrize("mode", ["wait", "background"])
+async def test_actual_object_agent_uses_profile_override_for_both_modes(
+    tmp_path, monkeypatch, mode
+):
+    state, registry, _ = await setup_registry(tmp_path)
+    await state.save_model_profiles_config(
+        {"selected": {"provider": "azure_openai", "deployment": "profile-greeter"}}
+    )
+    configs = []
+
+    def selected_model(config):
+        configs.append(config.model_default)
+        return Model(responses=[AIMessage(content="profile greeting")])
+
+    monkeypatch.setattr("app.progenitor.agent.adapters.create_langchain_model", selected_model)
+    server = server_for(state, registry)
+    await server.start()
+    try:
+        client = get_client(url=f"{server.base_url}/agent-protocol")
+        thread = await client.threads.create()
+        kwargs = {
+            "input": {"messages": [{"role": "user", "content": "hello"}]},
+            "config": {"configurable": {"model_profile": "selected"}},
+        }
+        if mode == "wait":
+            result = await client.runs.wait(thread["thread_id"], "greeter", **kwargs)
+        else:
+            run = await client.runs.create(thread["thread_id"], "greeter", **kwargs)
+            assert run["model_profile"] == "selected"
+            result = await client.runs.join(thread["thread_id"], run["run_id"])
+        assert result["messages"][-1]["content"] == "profile greeting"
+        assert configs == ["profile-greeter"]
+        default_thread = await client.threads.create()
+        default = await client.runs.wait(
+            default_thread["thread_id"],
+            "greeter",
+            input={"messages": [{"role": "user", "content": "hello"}]},
+        )
+        assert default["messages"][-1]["content"] == "hello from the real agent"
+        assert configs == ["profile-greeter"]
+        await state.save_content_document(
+            "agent",
+            "user/greeter/SYSTEM.md",
+            manifest("greeter").replace(
+                "version: 1.0.0", "version: 1.0.0\nmodel: manifest-deployment"
+            ),
+        )
+        overridden_thread = await client.threads.create()
+        overridden = await client.runs.wait(overridden_thread["thread_id"], "greeter", **kwargs)
+        assert overridden["messages"][-1]["content"] == "profile greeting"
+        assert configs == ["profile-greeter", "profile-greeter"]
+
+    finally:
+        await server.stop()

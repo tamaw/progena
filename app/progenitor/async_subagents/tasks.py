@@ -31,14 +31,21 @@ def create_agent_background_runner(
         parent_thread_id: str | None,
         node_id: str,
         response_schema: dict[str, Any] | None = None,
+        model_profile: str | None = None,
     ) -> dict[str, Any]:
+        if model_profile:
+            from ..state.model_profiles import resolve_model_profile
+
+            await resolve_model_profile(state_manager, model_profile)
         client = get_client(url=url)
         thread = await client.threads.create()
         run = await client.runs.create(
             thread["thread_id"],
             name,
             input={"messages": [{"role": "user", "content": prompt}]},
-            config={"configurable": {"response_schema": response_schema}},
+            config={
+                "configurable": {"response_schema": response_schema, "model_profile": model_profile}
+            },
         )
         task = {
             "task_id": thread["thread_id"],

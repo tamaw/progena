@@ -151,6 +151,7 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
+        "model_profile": { "type": ["string", "null"], "minLength": 1 },
         "prompt_template": { "type": "string", "minLength": 1 },
         "prompt_file": { "type": "string", "minLength": 1 },
         "system_prompt": { "type": "string" },
@@ -219,6 +220,7 @@
       "additionalProperties": false,
       "required": ["rubric_prompt", "response_schema"],
       "properties": {
+        "model_profile": { "type": ["string", "null"], "minLength": 1 },
         "rubric_prompt": { "type": "string", "minLength": 1 },
         "response_schema": { "$ref": "#/$defs/responseSchema" },
         "inputs": { "$ref": "#/$defs/inputMap" },
@@ -232,6 +234,7 @@
       "additionalProperties": false,
       "required": ["agent_name"],
       "properties": {
+        "model_profile": { "type": ["string", "null"], "minLength": 1 },
         "agent_name": { "type": "string", "minLength": 1 },
         "prompt_template": { "type": "string", "minLength": 1 },
         "prompt_file": { "type": "string", "minLength": 1 },

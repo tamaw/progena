@@ -554,12 +554,20 @@ class TestResponseSchema:
         assert "step_json" not in result["data"]
         assert model.bind_calls == [
             {
-                "schema": _COMPLETION_SCHEMA,
+                "schema": {"title": "RoutineResponse", **_COMPLETION_SCHEMA},
                 "method": "json_schema",
                 "strict": True,
                 "include_raw": True,
             }
         ]
+
+    async def test_structured_response_preserves_authored_schema_title(self):
+        schema = {"title": "AuthorResponse", **_COMPLETION_SCHEMA}
+        graph = validate_routine_graph_payload(_single_prompt_step_payload_with_schema(schema))
+        model = FakeStructuredModel([{"completion_pct": 1.0}])
+        await compile_routine_graph(graph, model=model).ainvoke({"data": {}})
+        assert model.bind_calls[0]["schema"]["title"] == "AuthorResponse"
+        assert "title" not in _COMPLETION_SCHEMA
 
     async def test_prompt_node_with_response_schema_raises_on_validation_failure(self):
         payload = _single_prompt_step_payload_with_schema(_COMPLETION_SCHEMA)
@@ -607,7 +615,7 @@ class TestResponseSchemaRef:
         result = await runnable.ainvoke({"messages": [HumanMessage(content="go")]})
 
         assert result["data"]["step"] == {"completion_pct": 0.5}
-        assert model.bind_calls[0]["schema"] == _COMPLETION_SCHEMA
+        assert model.bind_calls[0]["schema"] == {"title": "RoutineResponse", **_COMPLETION_SCHEMA}
 
     async def test_ref_to_an_undefined_name_raises_valueerror(self):
         payload = _single_prompt_step_payload_with_ref(

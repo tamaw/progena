@@ -35,6 +35,7 @@ from ..routines.subagent import (
     resolve_routine_document,
     resume_routine_thread,
 )
+from ..state.model_profiles import resolve_model_profile
 from .adapters import (
     create_deepagent_tools,
     create_dynamic_mcp_tools,
@@ -366,6 +367,10 @@ async def create_progenitor_agent(
         live_objects, base_url=http_base_url, static_subagents=async_subagents
     )
     background_runner = create_agent_background_runner(state_manager, http_base_url)
+
+    async def profile_resolver(name):
+        return await resolve_model_profile(state_manager, name)
+
     object_agent_registry = live_objects.callables
     reserved_names.update(object_agent_registry)
 
@@ -396,6 +401,7 @@ async def create_progenitor_agent(
             routine_registry={},
             routine_runner=_run_routine,
             agent_background_runner=background_runner,
+            model_profile_resolver=profile_resolver,
             tool_registry=tool_registry,
             checkpointer=checkpointer,
             context=dict(getattr(runtime, "context", None) or {}),
@@ -435,6 +441,7 @@ async def create_progenitor_agent(
             routine_registry={},
             routine_runner=_run_routine,
             agent_background_runner=background_runner,
+            model_profile_resolver=profile_resolver,
             tool_registry=tool_registry,
             checkpointer=checkpointer,
         )
@@ -453,6 +460,7 @@ async def create_progenitor_agent(
             routine_registry={},
             routine_runner=_run_routine,
             agent_background_runner=background_runner,
+            model_profile_resolver=profile_resolver,
             tool_registry=tool_registry,
             checkpointer=checkpointer,
             **kwargs,

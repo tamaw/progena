@@ -25,6 +25,7 @@ from langchain_core.messages import BaseMessage
 from langgraph.cache.memory import InMemoryCache
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
+from langgraph.runtime import Runtime
 from langgraph.types import CachePolicy, RetryPolicy
 
 from ..utils import utcnow_isoformat
@@ -252,9 +253,26 @@ def _build_node_callable(
     routine_registry: dict[str, Any],
     routine_runner: Callable[..., Awaitable[dict[str, Any]]] | None = None,
     agent_background_runner: Callable[..., Awaitable[dict[str, Any]]] | None = None,
+    model_profile_resolver: Callable[[str], Awaitable[Any]] | None = None,
     tool_registry: Any = None,
     defs: dict[str, dict[str, Any]] | None = None,
 ) -> Any:
+    profile = _node_config(node).get("model_profile")
+    if profile and node.kind in {"prompt", "classify"}:
+        if model_profile_resolver is None:
+            raise ValueError(f"node {node.id}: model profiles are unavailable")
+
+        async def with_profile(state: RoutineState, runtime: Runtime | None = None):
+            selected = await model_profile_resolver(profile)
+            if node.kind == "prompt":
+                call = _build_prompt_node(
+                    node, model=selected, base_system_prompt=base_system_prompt, defs=defs
+                )
+                return await call(state, runtime)
+            call = _build_classify_node(node, model=selected, defs=defs)
+            return await call(state)
+
+        return with_profile
     if node.kind == "prompt":
         return _build_prompt_node(
             node, model=model, base_system_prompt=base_system_prompt, defs=defs
@@ -444,6 +462,7 @@ def compile_routine_graph(
     routine_registry: dict[str, Any] | None = None,
     routine_runner: Callable[..., Awaitable[dict[str, Any]]] | None = None,
     agent_background_runner: Callable[..., Awaitable[dict[str, Any]]] | None = None,
+    model_profile_resolver: Callable[[str], Awaitable[Any]] | None = None,
     tool_registry: Any = None,
     base_system_prompt: str | None = None,
     checkpointer: Any | None = None,
@@ -575,6 +594,7 @@ def compile_routine_graph(
                     routine_registry=routine_registry,
                     routine_runner=routine_runner,
                     agent_background_runner=agent_background_runner,
+                    model_profile_resolver=model_profile_resolver,
                     tool_registry=tool_registry,
                     defs=graph.defs,
                 ),
