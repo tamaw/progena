@@ -53,6 +53,33 @@ def test_git_shim_allows_read_only_status(tmp_path: Path):
     assert result.stdout == ""
 
 
+@pytest.mark.parametrize("options", [(), ("--short",), ("-q",), ("--no-recurse",)])
+def test_git_shim_allows_symbolic_ref_reads(tmp_path: Path, options: tuple[str, ...]):
+    _seed_repository(tmp_path)
+    result = _run(GIT_SHIM, "-C", str(tmp_path), "symbolic-ref", *options, "HEAD")
+    assert result.returncode == 0
+    assert result.stdout.strip()
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        ("HEAD", "refs/heads/changed"),
+        ("--delete", "HEAD"),
+        ("-d", "HEAD"),
+        ("-m", "message", "HEAD", "refs/heads/changed"),
+        ("--short", "HEAD", "refs/heads/changed"),
+    ],
+)
+def test_git_shim_refuses_symbolic_ref_writes(tmp_path: Path, arguments: tuple[str, ...]):
+    _seed_repository(tmp_path)
+    head_before = (tmp_path / ".git" / "HEAD").read_bytes()
+    result = _run(GIT_SHIM, "-C", str(tmp_path), "symbolic-ref", *arguments)
+    assert result.returncode == 2
+    assert "progenitor-shim: refused:" in result.stderr
+    assert (tmp_path / ".git" / "HEAD").read_bytes() == head_before
+
+
 @pytest.mark.parametrize(
     "arguments",
     [
