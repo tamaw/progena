@@ -67,6 +67,7 @@ class RoutineContext(TypedDict, total=False):
     workspace_id: str
     request_id: str
     metadata: dict[str, Any]
+    execution_policy: dict[str, Any]
     _routine_pending_children: dict[str, Any]
 
 
@@ -78,6 +79,7 @@ class RetryPolicyConfig(BaseModel):
     backoff_factor: float | None = Field(default=None, ge=1)
     max_interval: float | None = Field(default=None, ge=0)
     jitter: bool | None = None
+    retry_on: Literal["transient", "model_response", "all"] | None = None
 
 
 class CachePolicyConfig(BaseModel):
@@ -501,15 +503,6 @@ RoutineNode = Annotated[
 ]
 
 
-class RoutineSettings(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    retry: RetryPolicyConfig | None = None
-    timeout: float | None = Field(default=None, ge=0)
-    recursion_limit: int | None = Field(default=None, ge=1)
-    cache: bool | None = None
-
-
 class RoutineEdge(BaseModel):
     """A normal edge, barrier fan-in, router, foreach empty route, or error edge."""
 
@@ -561,7 +554,7 @@ class RoutineGraph(BaseModel):
     entry: str
     nodes: list[RoutineNode]
     edges: list[RoutineEdge] = Field(default_factory=list)
-    settings: RoutineSettings = Field(default_factory=RoutineSettings)
+    policy_id: str = Field(default="default", min_length=1)
     input_schema: dict[str, Any] | None = None
     output_schema: dict[str, Any] | None = None
     defs: dict[str, dict[str, Any]] | None = Field(default=None, alias="$defs")
@@ -739,6 +732,11 @@ def validate_routine_graph_payload(payload: dict[str, Any]) -> RoutineGraph:
     if schema_error:
         raise ValueError(f"schema validation failed: {schema_error}")
 
+    for schema_name in ("input_schema", "output_schema"):
+        if "_execution_policy" in ((payload.get(schema_name) or {}).get("properties") or {}):
+            raise ValueError("_execution_policy is reserved execution metadata")
+    if any(node.get("output_key") == "_execution_policy" for node in payload.get("nodes", [])):
+        raise ValueError("_execution_policy is reserved execution metadata")
     nodes = payload.get("nodes", [])
     edges = payload.get("edges", [])
     validate_routine_graph(nodes, edges)

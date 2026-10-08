@@ -17,6 +17,13 @@ from app.progenitor.routines.subagent import (
 
 
 class Documents:
+    async def get_model_profiles_config(self):
+        return {}
+
+    async def get_execution_policy(self, policy_id):
+        from app.progenitor.policies import ExecutionPolicy
+        return ExecutionPolicy(id=policy_id, name="Default").model_dump(mode="json")
+
     def __init__(self, *graphs):
         self.graphs = {graph["id"]: graph for graph in graphs}
 
@@ -348,6 +355,10 @@ async def test_actual_agent_factory_runner_preserves_nested_data(monkeypatch):
     )
 
     class Store(FakeContentStateManager):
+        async def get_execution_policy(self, policy_id):
+            from app.progenitor.policies import ExecutionPolicy
+            return ExecutionPolicy(id=policy_id, name="Default").model_dump(mode="json")
+
         async def get_routine_graph(self, routine_id):
             return {"parent": parent, "child": child}.get(routine_id)
 

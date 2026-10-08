@@ -158,13 +158,14 @@ def test_document_store_open_preserves_documents_and_installs_revision_history()
     )
     # Existing graphs still get immutable snapshots without rewriting the source
     # documents. Subsequent writes continue to capture revisions via the trigger.
-    backfill = statements[-1]
+    backfill = next(statement for statement in statements if statement.startswith("INSERT INTO routine_graph_revisions"))
     assert backfill.startswith("INSERT INTO routine_graph_revisions")
     assert "FROM store" in backfill
     assert "value -> 'payload'" in backfill
     assert "ON CONFLICT (routine_id, revision_id) DO NOTHING" in backfill
     assert "RAISE EXCEPTION 'routine_graph_revisions rows are immutable" in emitted
-    # Setup only installs schema/triggers and backfills the history table, whether
+    assert "CREATE TABLE IF NOT EXISTS policy_revisions" in emitted
+    # Setup installs schema/triggers, captures history and seeds the default policy, whether
     # the database is fresh or already contains documents/checkpoints.
     assert all(
         statement.startswith(
@@ -175,6 +176,7 @@ def test_document_store_open_preserves_documents_and_installs_revision_history()
                 "DROP TRIGGER",
                 "CREATE TRIGGER",
                 "INSERT INTO routine_graph_revisions",
+                "INSERT INTO store",
             )
         )
         for statement in statements

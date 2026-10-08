@@ -557,7 +557,7 @@ export function AgentWorkspace({ page }) {
       edges: parsed.edges,
       status: parsed.status,
       summary: parsed.summary,
-      settings: parsed.settings,
+      policy_id: parsed.policy_id,
       input_schema: parsed.input_schema,
       output_schema: parsed.output_schema,
       $defs: parsed.$defs,

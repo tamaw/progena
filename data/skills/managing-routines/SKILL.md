@@ -156,3 +156,10 @@ the routine and resumes the same thread after the user's response.
 7. Write exactly the intended routine file.
 8. Report the routine id and changes; do not imply UI navigation or execution
    unless it actually occurred.
+
+## Execution policy
+
+Select one existing execution policy with `policy_id` (default `default`).
+Read `/policies/` and use the managing-policies skill to create or change policies.
+Graph-level inline `settings` are not part of the contract. Node-specific
+settings override policy defaults; graph concurrency and step limits still apply.

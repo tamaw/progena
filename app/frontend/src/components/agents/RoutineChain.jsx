@@ -461,9 +461,9 @@ function renderRun(tree, initialSlot, suppressJoinChip = false) {
 // produce. Either way there's no separate "back to X" line -- the box's
 // own closing edge already says that.
 function LoopBlock({ edge, targetLabel, body }) {
-  const { settings } = useContext(GraphEditContext);
-  const recursionLimit = settings?.recursion_limit;
-  const maxRetries = settings?.retry?.max_retries;
+  const { executionPolicy } = useContext(GraphEditContext);
+  const recursionLimit = executionPolicy?.graph_step_limit;
+  const maxRetries = executionPolicy?.retry?.max_retries;
   const guard = edge?.loop_guard;
   return (
     <div className="routine-loop-frame">

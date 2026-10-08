@@ -18,7 +18,7 @@ from typing import Any
 
 import yaml
 from fastapi import APIRouter, Header, HTTPException, Query, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.progenitor.routines.graph import (
     ROUTINE_GRAPH_VERSION,
@@ -42,7 +42,7 @@ class AgentGraphModel(BaseModel):
     entry: str | None = None
     nodes: list[dict[str, Any]] = []
     edges: list[dict[str, Any]] = []
-    settings: dict[str, Any] = {}
+    policy_id: str = "default"
     input_schema: dict[str, Any] | None = None
     output_schema: dict[str, Any] | None = None
     defs: dict[str, dict[str, Any]] | None = Field(default=None, alias="$defs")
@@ -116,12 +116,13 @@ class AgentSkillUpdateRequest(BaseModel):
 
 
 class AgentGraphUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     nodes: list[dict[str, Any]]
     edges: list[dict[str, Any]]
     entry: str | None = None
     status: str | None = None
     summary: str | None = None
-    settings: dict[str, Any] = {}
+    policy_id: str = "default"
     input_schema: dict[str, Any] | None = None
     output_schema: dict[str, Any] | None = None
     defs: dict[str, dict[str, Any]] | None = Field(default=None, alias="$defs")
@@ -184,7 +185,7 @@ def validate_agent_graph_document(
     agent_id: str,
     name: str,
     description: str,
-    settings: dict[str, Any] | None = None,
+    policy_id: str = "default",
     input_schema: dict[str, Any] | None = None,
     output_schema: dict[str, Any] | None = None,
     defs: dict[str, dict[str, Any]] | None = None,
@@ -198,7 +199,7 @@ def validate_agent_graph_document(
         "entry": entry,
         "nodes": nodes,
         "edges": edges,
-        "settings": settings or {},
+        "policy_id": policy_id,
     }
     for key, value in (
         ("input_schema", input_schema),
@@ -482,7 +483,7 @@ def create_agent_profile_router(
                 agent_id=agent_id,
                 name=str(agent.get("name") or agent_id),
                 description=str(agent.get("summary") or ""),
-                settings=body.settings,
+                policy_id=body.policy_id,
                 input_schema=body.input_schema,
                 output_schema=body.output_schema,
                 defs=body.defs,
@@ -490,13 +491,19 @@ def create_agent_profile_router(
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
+        policy_document = await asyncio.to_thread(
+            get_document_store().get_document, PROGENITOR_STATE_PREFIX, f"policy:{body.policy_id}", None
+        )
+        if policy_document is None:
+            raise HTTPException(status_code=422, detail=f"Unknown execution policy '{body.policy_id}'")
+
         updated = store.update_graph(
             agent_id,
             {
                 "entry": body.entry,
                 "nodes": body.nodes,
                 "edges": body.edges,
-                "settings": body.settings,
+                "policy_id": body.policy_id,
                 "input_schema": body.input_schema,
                 "output_schema": body.output_schema,
                 "$defs": body.defs,

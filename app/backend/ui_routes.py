@@ -92,6 +92,7 @@ from .inbox_routes import (
 )
 from .knowledge_service import snapshot_bases as snapshot_knowledge_bases
 from .marketplace_service import load_marketplaces
+from .policy_routes import create_policy_router
 from .preferences_service import load_preferences
 from .prompt_service import PromptService
 from .repo_service import merged_repo_detail, merged_repo_rows, workspace_signal
@@ -4373,6 +4374,14 @@ def _queue_routine_agent_reconciliation(_snapshot, changed_key: str | None = Non
     ``state_reader._emit_if_changed``'s bypass list so no write here is
     silently dropped by the coarse snapshot diff.
     """
+    if changed_key is None or changed_key.startswith("policy:"):
+        async def push_policies():
+            from .policy_routes import policy_catalog
+            items = await asyncio.to_thread(policy_catalog, get_default_document_store())
+            broadcast_ui_event("policies.snapshot", {"items": items})
+        policy_task = asyncio.create_task(push_policies())
+        _active_routine_agent_tasks.add(policy_task)
+        policy_task.add_done_callback(_active_routine_agent_tasks.discard)
     task = asyncio.create_task(_reconcile_routine_agent(changed_key))
     _active_routine_agent_tasks.add(task)
     task.add_done_callback(_active_routine_agent_tasks.discard)
@@ -5085,3 +5094,7 @@ def broadcast_status_change(status: str, details: dict | None = None):
 def broadcast_alerts_state(*, request_id: str | None = None) -> None:
     """Broadcast full alert payload updates to subscribers."""
     broadcast_ui_event("alerts.updated", _alerts_payload(), request_id=request_id)
+
+
+
+router.include_router(create_policy_router(get_default_document_store, broadcast_ui_event))

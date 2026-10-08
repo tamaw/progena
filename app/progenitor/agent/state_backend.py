@@ -1158,6 +1158,8 @@ class RoutineDirectoryBackend(_AsyncOnlyFileBackendMixin):
             return WriteResult(error=f"Invalid routine {name}: {exc}")
         if graph.get("id") != agent_id:
             return WriteResult(error=f"Routine id must match filename '{agent_id}'")
+        if await self._sm.get_execution_policy(graph["policy_id"]) is None:
+            return WriteResult(error=f"Unknown execution policy '{graph['policy_id']}'")
         await self._sm.save_routine_graph(agent_id, graph)
         return WriteResult(path=file_path)
 
@@ -1208,6 +1210,49 @@ class RoutineDirectoryBackend(_AsyncOnlyFileBackendMixin):
         self, pattern: str, path: str | None = None, glob: str | None = None
     ) -> GrepResult:
         return GrepResult(matches=[])
+
+
+class PolicyDirectoryBackend(RoutineDirectoryBackend):
+    """Validated policy JSON files backed by the shared Postgres document store."""
+
+    _ASYNC_ONLY = "PolicyDirectoryBackend is async-only; use the async file tools."
+
+    @staticmethod
+    def _name(file_path: str) -> str:
+        return file_path.lstrip("/").removeprefix("policies/")
+
+    async def _resolve_routine(self, name: str) -> tuple[str, dict[str, Any]] | None:
+        policy_id = self._parse_routine_name(name)
+        if policy_id is None:
+            return None
+        document = await self._sm.get_execution_policy(policy_id)
+        return (policy_id, document) if document is not None else None
+
+    async def awrite(self, file_path: str, content: str) -> WriteResult:
+        from ..policies import parse_policy_document
+        policy_id = self._parse_routine_name(self._name(file_path))
+        if policy_id is None:
+            return WriteResult(error="Expected /policies/<id>.json")
+        try:
+            document = parse_policy_document(content)
+            if document["id"] != policy_id:
+                raise ValueError("Policy id must match filename")
+            await self._sm.save_execution_policy(policy_id, document)
+        except ValueError as exc:
+            return WriteResult(error=str(exc))
+        return WriteResult(path=file_path)
+
+    async def adelete(self, file_path: str) -> WriteResult:
+        resolved = await self._resolve_routine(self._name(file_path))
+        if resolved is None:
+            return WriteResult(error=f"File '{file_path}' not found")
+        await self._sm.delete_execution_policy(resolved[0])
+        return WriteResult(path=file_path)
+
+    async def als(self, path: str) -> LsResult:
+        documents = await self._sm.list_execution_policies()
+        return LsResult(entries=[FileInfo(path=f"/{doc['id']}.json", is_dir=False)
+                                for doc in sorted(documents, key=lambda doc: doc["id"])])
 
 
 def validate_schedule_document(content: str) -> JsonDoc:

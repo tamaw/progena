@@ -4,9 +4,8 @@ The backend (``app/backend/document_store.py``) owns the DDL for the
 ``routine_graph_revisions`` table and the trigger that populates it. This
 module only reads: it opens a short-lived ``psycopg.AsyncConnection`` per
 fetch and closes it in ``finally``, because fetches are rare in steady state
-(the routine subagent proxy in :mod:`app.progenitor.routines.subagent` caches
-compiled graphs by ``revision_id``, so a pinned invocation issues no SQL at
-all once cached).
+(the routine executor caches compilation separately from resolving live
+policy documents and their exact captured revisions).
 """
 
 from __future__ import annotations
@@ -26,6 +25,8 @@ _missing_table_logged = False
 class RoutineRevisionReader(Protocol):
     """Resolves routine graph revisions for the runtime's subagent proxy."""
 
+    async def fetch_policy_revision_id(self, policy_id: str, document: dict[str, Any]) -> str: ...
+
     async def fetch_latest(self, routine_id: str) -> tuple[str, dict[str, Any]] | None: ...
 
     async def fetch(self, routine_id: str, revision_id: str) -> dict[str, Any] | None: ...
@@ -40,6 +41,20 @@ class PostgresRoutineRevisionReader:
 
     def __init__(self, database_url: str) -> None:
         self._database_url = database_url
+
+    async def fetch_policy_revision_id(self, policy_id: str, document: dict[str, Any]) -> str:
+        async with (
+            await psycopg.AsyncConnection.connect(self._database_url, autocommit=True) as conn,
+            conn.cursor() as cur,
+        ):
+            await cur.execute(
+                "SELECT revision_id FROM policy_revisions WHERE policy_id=%s AND document=%s::jsonb",
+                (policy_id, Jsonb(document)),
+            )
+            row = await cur.fetchone()
+        if row is None:
+            raise ValueError(f"No captured revision for policy '{policy_id}'")
+        return row[0]
 
     async def fetch_latest(self, routine_id: str) -> tuple[str, dict[str, Any]] | None:
         conn = await psycopg.AsyncConnection[DictRow].connect(
@@ -128,6 +143,11 @@ class PostgresRoutineRevisionReader:
 
 class NullRoutineRevisionReader:
     """No-op reader used when no ``database_url`` is configured (dev/SQLite runs)."""
+
+    async def fetch_policy_revision_id(self, policy_id: str, document: dict[str, Any]) -> str:
+        from ..policies import policy_revision_id
+
+        return policy_revision_id(document)
 
     async def fetch_latest(self, routine_id: str) -> tuple[str, dict[str, Any]] | None:
         return None

@@ -1,7 +1,6 @@
 """Compiles a validated :class:`RoutineGraph` into a runnable LangGraph ``StateGraph``.
 
-Retry (per-node ``config.retry``, or a graph-wide default from ``settings.retry`` via
-``StateGraph.set_node_defaults``), node caching, and a ``settings.recursion_limit``
+Retry (per-node ``config.retry`` or execution-policy defaults), node caching, and a graph-step
 backstop are all wired here; a router edge's own branches are how a graph author
 expresses a *conditional* loop (see :func:`_build_router`) -- there is no separate
 "loop" node kind or setting, since LangGraph's conditional-edge mechanism already
@@ -14,6 +13,7 @@ discovery is wired separately by the agent factory.
 
 from __future__ import annotations
 
+import hashlib
 import inspect
 import json
 import time
@@ -26,8 +26,9 @@ from langgraph.cache.memory import InMemoryCache
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 from langgraph.runtime import Runtime
-from langgraph.types import CachePolicy, RetryPolicy
+from langgraph.types import CachePolicy, RetryPolicy, TimeoutPolicy
 
+from ..policies import CACHE_NODE_KINDS, PolicyValues
 from ..utils import utcnow_isoformat
 
 # Re-export the existing helper imports for compiler callers.
@@ -84,13 +85,16 @@ from .state import (
 _SEED_NODE_ID = ROUTINE_SEED_NODE_ID
 
 
+def _retry_model_response(exc: Exception) -> bool:
+    predicate = RetryPolicy().retry_on
+    return isinstance(exc, ValueError) or bool(callable(predicate) and predicate(exc))
+
+
 def _retry_policy(config: dict[str, Any]) -> RetryPolicy | None:
     """Build a RetryPolicy from a ``retry`` sub-dict.
 
-    ``config`` is either a node's own ``config`` or the graph's ``settings`` --
-    both hold their retry tuning under the same ``retry`` key, so this one
-    function builds both a per-node override and the graph-wide default passed
-    to ``StateGraph.set_node_defaults``.
+    The compiler merges execution-policy defaults with explicit node values
+    before building the native LangGraph retry policy.
     """
     retry = config.get("retry")
     if not retry:
@@ -107,22 +111,28 @@ def _retry_policy(config: dict[str, Any]) -> RetryPolicy | None:
         # LangGraph's default declines to retry ValueError/TypeError/OSError and
         # friends as unfixable bugs. A routine node raising those is usually a
         # bad parse of a nondeterministic model response, which a retry does fix.
-        "retry_on": Exception,
+        "retry_on": (
+            Exception
+            if retry.get("retry_on", "transient") == "all"
+            else _retry_model_response
+            if retry.get("retry_on") == "model_response"
+            else RetryPolicy().retry_on
+        ),
     }
     return RetryPolicy(**values)
 
 
-def _cache_policy(config: dict[str, Any]) -> CachePolicy | None:
+def _cache_policy(config: dict[str, Any], namespace: str = "") -> CachePolicy | None:
     cache = config.get("cache")
     if cache is None or cache is False:
         return None
     return CachePolicy(
-        key_func=_cache_key,
+        key_func=lambda value: namespace + _cache_key(value),
         ttl=int(cache["ttl"]) if isinstance(cache, dict) and cache.get("ttl") is not None else None,
     )
 
 
-def _node_timeout(config: dict[str, Any], settings: dict[str, Any]) -> float | None:
+def _node_timeout(config: dict[str, Any], policy_defaults: dict[str, Any]) -> float | None:
     """Seconds a node may run for, resolved node-first then graph-wide.
 
     Mirrors how `retry` resolves: the node's own value wins if it declares one,
@@ -130,7 +140,7 @@ def _node_timeout(config: dict[str, Any], settings: dict[str, Any]) -> float | N
     common failure of an agent step is not raising but hanging. An explicit 0
     is the way to say a step is allowed to take as long as it takes.
     """
-    for source in (config, settings):
+    for source in (config, policy_defaults):
         if "timeout" in source:
             timeout = float(source["timeout"])
             return timeout or None
@@ -468,6 +478,8 @@ def compile_routine_graph(
     checkpointer: Any | None = None,
     cache: Any | None = None,
     preserve_data: bool = False,
+    execution_policy: PolicyValues | None = None,
+    model_profiles: dict[str, Any] | None = None,
 ):
     """Compile a routine with LangGraph persistence, retries, context and fan-out.
 
@@ -507,7 +519,53 @@ def compile_routine_graph(
         input_schema=_input_schema_type(input_fields),
         output_schema=_output_schema_type(output_fields, preserve_data=preserve_data),
     )
-    settings = graph.settings.model_dump(exclude_none=True)
+    policy = execution_policy or PolicyValues()
+    policy_defaults = {"retry": policy.retry.model_dump(), "timeout": policy.attempt_timeout}
+    cache_namespace = hashlib.sha256(
+        json.dumps(
+            [
+                graph.model_dump(mode="json", by_alias=True),
+                policy.model_dump(mode="json"),
+                model_profiles,
+            ],
+            sort_keys=True,
+            default=str,
+        ).encode()
+    ).hexdigest()
+
+    effective_nodes = []
+    for node in graph.nodes:
+        config = _node_config(node)
+        if (
+            node.kind in {"prompt", "classify", "agent"}
+            and not config.get("model_profile")
+            and policy.default_model_profile
+        ):
+            config["model_profile"] = policy.default_model_profile
+        if node.kind == "foreach":
+            if config.get("max_items") is None and policy.default_fan_out_limit is not None:
+                config["max_items"] = policy.default_fan_out_limit
+            if config.get("mode") == "agent":
+                config["max_concurrency"] = min(
+                    config.get("max_concurrency") or policy.concurrency_limit,
+                    policy.concurrency_limit,
+                )
+        if node.kind in CACHE_NODE_KINDS:
+            node_cache = config.get("cache")
+            if (
+                (node_cache is None and policy.cache_enabled)
+                or node_cache is True
+                or node_cache == {}
+            ):
+                config["cache"] = (
+                    {"ttl": policy.cache_ttl} if policy.cache_ttl is not None else True
+                )
+        if node.kind not in CACHE_NODE_KINDS and config.get("cache"):
+            raise ValueError(f"node {node.id}: {node.kind} is not eligible for caching")
+        effective_nodes.append(
+            node.model_copy(update={"config": type(node.config).model_validate(config)})
+        )
+    graph = graph.model_copy(update={"nodes": effective_nodes})
     # A fan_in join's declared sources are almost always mutually-exclusive
     # router branches -- at most one of them runs per invocation. Deferring
     # the join node makes it fire once every source that *did* run this
@@ -571,13 +629,17 @@ def compile_routine_graph(
 
     for node in graph.nodes:
         config = _node_config(node)
-        retry_config = config if "retry" in config else settings
+        retry_config = {"retry": {**policy_defaults["retry"], **config.get("retry", {})}}
         recovery_target = error_routes.get(node.id)
         node_options: dict[str, Any] = {
             "retry_policy": _retry_policy(retry_config),
-            "cache_policy": _cache_policy(config),
+            "cache_policy": _cache_policy(config, cache_namespace),
             "defer": node.id in fan_in_targets,
-            "timeout": _node_timeout(config, settings),
+            "timeout": TimeoutPolicy(
+                run_timeout=_node_timeout(config, policy_defaults), idle_timeout=policy.idle_timeout
+            )
+            if policy.idle_timeout is not None
+            else _node_timeout(config, policy_defaults),
         }
         if recovery_target is not None:
             node_options["error_handler"] = _build_retry_exhausted_handler(node.id, recovery_target)
@@ -672,10 +734,12 @@ def compile_routine_graph(
         for target in targets:
             builder.add_edge(source, target)
 
-    if settings.get("cache") and cache is None:
+    if cache is None and any(
+        _node_config(node).get("cache") not in (None, False) for node in graph.nodes
+    ):
         cache = InMemoryCache()
     compiled = builder.compile(checkpointer=checkpointer, cache=cache)
-    limit = settings.get("recursion_limit")
-    if limit is not None:
-        compiled = compiled.with_config({"recursion_limit": int(limit)})
+    compiled = compiled.with_config(
+        {"recursion_limit": policy.graph_step_limit, "max_concurrency": policy.concurrency_limit}
+    )
     return compiled

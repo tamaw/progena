@@ -13,6 +13,8 @@ import {
   selectAgentRoutineRevisionContent,
   fetchRoutineRevision,
   selectAgentProfiles,
+  selectPolicies,
+  fetchPolicies,
   selectAgentRoutineRunsHasMore,
 } from '../../store/uiDataSlice';
 import {
@@ -55,6 +57,7 @@ import {
 } from '../layout/DetailHeader';
 import { ChevronLeftSmall, ChevronRightPointSmall, ChevronRightSmall } from './RoutineGraphIcons';
 import { RoutineChain } from './RoutineChain';
+import { RoutinePolicyPanel } from './RoutinePolicyPanel';
 import { NodeInspector } from './NodeInspector';
 import PopupModal from '../common/PopupModal';
 import hljs from 'highlight.js/lib/common';
@@ -308,6 +311,8 @@ function useRunStaleness(agentId, runRevisionId, currentGraph) {
 }
 
 function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, onDelete, jsonOpen, onOpenJson, onCloseJson, runsOpen, onOpenRuns, onCloseRuns }) {
+  const dispatch = useDispatch();
+  const { getApiUrl } = useConfig();
   const persistRef = useRef(onPersist);
   const lastSavedRef = useRef(null);
   const inFlightSavesRef = useRef(new Map());
@@ -319,13 +324,16 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, o
     version: graph.version || '2.0.0',
     summary: graph.summary || '',
     entry: graph.entry || (graph.nodes || [])[0]?.id || null,
-    settings: graph.settings || {},
+    policy_id: graph.policy_id || 'default',
     input_schema: graph.input_schema || null,
     output_schema: graph.output_schema || null,
     $defs: graph.$defs || {},
   });
   const [parameterValues, setParameterValues] = useState({});
   const runtimeProfiles = useSelector(selectAgentProfiles);
+  const policies = useSelector(selectPolicies);
+  const policiesUrl = getApiUrl('policies');
+  useEffect(() => { if (!policies.loaded) dispatch(fetchPolicies({ url: policiesUrl })); }, [dispatch, policies.loaded, policiesUrl]);
   const {
     status: runStatus,
     threadId: liveThreadId,
@@ -351,6 +359,7 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, o
   });
   const runMeta = runNav.runMeta;
   const runData = runNav.runData;
+  const executionPolicy = runNav.isBrowsingHistory ? runData?._execution_policy?.values : policies.items.find((item) => item.id === meta.policy_id)?.values;
   const runRevisionId = runNav.runRevisionId;
   const { resetToLatest: resetRunNavToLatest } = runNav;
   const submitApproval = useCallback(async (approval, answer) => {
@@ -391,6 +400,7 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, o
   // reports its real post-zoom screen position, and that function reads
   // real rects off the DOM rather than any canvas-model coordinates --
   // it keeps working unmodified at any zoom level.
+  const [policyOpen, setPolicyOpen] = useState(false);
   const [zoom, setZoom] = useState(1);
   useEffect(() => setZoom(1), [agent.id]);
   const zoomOut = useCallback(() => setZoom((z) => Math.max(ZOOM_MIN, Math.round((z - ZOOM_STEP) * 100) / 100)), []);
@@ -999,7 +1009,7 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, o
       version: browsed.version || '2.0.0',
       summary: browsed.summary || '',
       entry: browsed.entry || (browsed.nodes || [])[0]?.id || null,
-      settings: browsed.settings || {},
+      policy_id: browsed.policy_id || 'default',
       input_schema: browsed.input_schema || null,
       output_schema: browsed.output_schema || null,
       $defs: browsed.$defs || {},
@@ -1077,7 +1087,7 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, o
     onRemoveBranch,
     onRemoveDefault,
     onRenameBranch,
-    settings: meta.settings,
+    executionPolicy,
     edges: displayEdges,
     nodes: displayNodes,
     inputSchema: meta.input_schema,
@@ -1101,7 +1111,7 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, o
     resetInteractiveSession,
     pendingApprovals: runNav.pendingApprovals,
     answerApproval: submitApproval,
-  }), [updateNode, deleteNode, insertAt, onChangeStateKey, updateLoopGuard, removeBranching, onAddBranch, onJoinBranches, selectNode, selectedNodeId, onAddDefault, onRemoveBranch, onRemoveDefault, onRenameBranch, meta.settings, displayEdges, displayNodes, meta.input_schema, meta.output_schema, runNav.isBrowsingHistory, runNav.pendingApprovals, submitApproval, runMeta, runData, activeNodeIds, estimatedActiveStartMs, staleNodeIds, runStatus, warmingUp, isRunInProgress, loopMembership, loopIterations, setLoopIteration, startRunAndTrackLatest, hasInteractiveSession, resetInteractiveSession]);
+  }), [updateNode, deleteNode, insertAt, onChangeStateKey, updateLoopGuard, removeBranching, onAddBranch, onJoinBranches, selectNode, selectedNodeId, onAddDefault, onRemoveBranch, onRemoveDefault, onRenameBranch, executionPolicy, displayEdges, displayNodes, meta.input_schema, meta.output_schema, runNav.isBrowsingHistory, runNav.pendingApprovals, submitApproval, runMeta, runData, activeNodeIds, estimatedActiveStartMs, staleNodeIds, runStatus, warmingUp, isRunInProgress, loopMembership, loopIterations, setLoopIteration, startRunAndTrackLatest, hasInteractiveSession, resetInteractiveSession]);
 
   // Debounced autosave: serialize the working graph and PATCH it. The first
   // run records the baseline so simply opening the tab does not trigger a save.
@@ -1208,7 +1218,7 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, o
       version: confirmedGraph.version || '2.0.0',
       summary: confirmedGraph.summary || '',
       entry: confirmedGraph.entry || nextNodes[0]?.id || null,
-      settings: confirmedGraph.settings || {},
+      policy_id: confirmedGraph.policy_id || 'default',
       input_schema: confirmedGraph.input_schema || null,
       output_schema: confirmedGraph.output_schema || null,
       $defs: confirmedGraph.$defs || {},
@@ -1256,7 +1266,7 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, o
       version: parsed.version || '2.0.0',
       summary: parsed.summary || '',
       entry: parsed.entry || (parsed.nodes || [])[0]?.id || null,
-      settings: parsed.settings || {},
+      policy_id: parsed.policy_id || 'default',
       input_schema: parsed.input_schema || null,
       output_schema: parsed.output_schema || null,
       $defs: parsed.$defs || {},
@@ -1477,7 +1487,11 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, o
           {saveError ? <div className="agents-graph-save-error">{saveError}</div> : null}
         </div>
       </section>
-      {jsonOpen ? (
+      {policyOpen ? (
+        <RoutinePolicyPanel policyId={meta.policy_id} onSelect={(policy_id) => setMeta((current) => ({ ...current, policy_id }))}
+          onClose={() => setPolicyOpen(false)} historical={runNav.isBrowsingHistory}
+          recordedPolicy={runNav.runData?._execution_policy} />
+      ) : jsonOpen ? (
         <RoutineJsonEditor
           key={agent.id}
           graph={workingGraph}
@@ -1496,7 +1510,7 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, o
       ) : (
         <GraphSideDock
           disabledIds={runNav.isBrowsingHistory ? EDIT_SIDE_ITEM_IDS : EMPTY_MISSING}
-          onSelect={(id) => { if (id === 'json') onOpenJson(); if (id === 'runs') onOpenRuns(); }}
+          onSelect={(id) => { if (id === 'json') onOpenJson(); if (id === 'runs') onOpenRuns(); if (id === 'policy') setPolicyOpen(true); }}
         />
       )}
       {restoreConfirmOpen ? (
@@ -1591,6 +1605,7 @@ function ZoomFitIcon() {
 
 const GRAPH_SIDE_ITEMS = [
   { id: 'json', label: 'JSON', title: 'Edit as JSON' },
+  { id: 'policy', label: 'Policy', title: 'Routine execution policy' },
   { id: 'runs', label: 'Runs', title: 'Routine run history' },
 ];
 
@@ -1650,7 +1665,7 @@ function graphToJson(graph) {
       entry: graph.entry ?? null,
       nodes: graph.nodes || [],
       edges: graph.edges || [],
-      settings: graph.settings || {},
+      policy_id: graph.policy_id || 'default',
       input_schema: graph.input_schema || null,
       output_schema: graph.output_schema || null,
       $defs: graph.$defs || {},
