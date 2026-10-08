@@ -77,9 +77,10 @@ services:
       - ${PROGENITOR_HOST_REPOS_DIR:-../repos}:/app/repos
       # A fresh named volume inherits UID 10001 ownership from the image directory.
       - progenitor-shell-workspaces:/app/shell-workspaces
+    # tmpfs mounts are root-owned unless uid/gid are set; the runtime runs as 10001.
     tmpfs:
-      - /app/tmp:rw,noexec,nosuid,size=1g
-      - /app/agent-home:rw,nosuid,size=64m
+      - /app/tmp:rw,noexec,nosuid,size=1g,uid=10001,gid=10001,mode=0755
+      - /app/agent-home:rw,nosuid,size=64m,uid=10001,gid=10001,mode=0700
     stdin_open: true
     tty: true
     networks:
