@@ -28,6 +28,7 @@ from dataclasses import dataclass
 # otherwise reason about as "a kind of document". Excludes internal-plumbing
 # prefixes (workflow queues/invoke-requests, the agent self-edit touch
 # marker) that are implementation details, not document kinds.
+POLICY_KEY_PREFIX = "policy:"
 ROUTINE_GRAPH_KEY_PREFIX = "routine:"
 AGENT_DOCUMENT_KEY_PREFIX = "agent:"
 SKILL_DOCUMENT_KEY_PREFIX = "skill:"
@@ -55,6 +56,7 @@ class DocumentKind:
 
 
 DOCUMENT_KINDS: tuple[DocumentKind, ...] = (
+    DocumentKind("Policy", POLICY_KEY_PREFIX),
     DocumentKind("Routine", ROUTINE_GRAPH_KEY_PREFIX),
     DocumentKind("Agent", AGENT_DOCUMENT_KEY_PREFIX),
     DocumentKind("Skill", SKILL_DOCUMENT_KEY_PREFIX),

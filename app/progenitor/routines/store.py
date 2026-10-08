@@ -65,6 +65,7 @@ def default_routine_graph(
         "description": description,
         "version": ROUTINE_GRAPH_VERSION,
         "entry": "prompt",
+        "policy_id": "default",
         "nodes": [
             {
                 "id": "prompt",

@@ -31,7 +31,7 @@ function graphFor(name, id, nodes, edges, inputSchema, outputSchema) {
     edges,
     input_schema: inputSchema,
     output_schema: outputSchema,
-    settings: { recursion_limit: 50 },
+    policy_id: 'default',
   };
 }
 

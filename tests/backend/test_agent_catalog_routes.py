@@ -17,7 +17,8 @@ from app.backend.agent_catalog_routes import (
     create_agent_profile_router,
     validate_agent_graph,
 )
-from app.backend.document_store import InMemoryDocumentStore
+from app.backend.document_store import InMemoryDocumentStore, PROGENITOR_STATE_PREFIX
+from app.progenitor.policies import ExecutionPolicy
 
 _DEFAULT_GRAPH = {
     "status": "Draft",
@@ -149,6 +150,7 @@ def harness(monkeypatch):
     monkeypatch.setattr(routes, "acp_profiles_from_registry", lambda: [])
 
     doc_store = InMemoryDocumentStore()
+    doc_store.save_document(PROGENITOR_STATE_PREFIX, "policy:default", ExecutionPolicy(id="default", name="Default").model_dump(mode="json"))
     app = FastAPI()
     app.state.doc_store = doc_store
     _install_request_id_middleware(app)
@@ -359,6 +361,7 @@ def test_runs_route_publishes_run_summaries():
     from app.backend.document_store import CheckpointThreadSnapshot
 
     doc_store = InMemoryDocumentStore()
+    doc_store.save_document(PROGENITOR_STATE_PREFIX, "policy:default", ExecutionPolicy(id="default", name="Default").model_dump(mode="json"))
     doc_store.upsert_checkpoint_thread_snapshot(
         CheckpointThreadSnapshot(
             thread_id="routine:alpha:rev-older:run-a",
@@ -421,6 +424,7 @@ def test_runs_route_pages_backward_with_before_cursor():
     from app.backend.document_store import CheckpointThreadSnapshot
 
     doc_store = InMemoryDocumentStore()
+    doc_store.save_document(PROGENITOR_STATE_PREFIX, "policy:default", ExecutionPolicy(id="default", name="Default").model_dump(mode="json"))
     for index in range(3):
         doc_store.upsert_checkpoint_thread_snapshot(
             CheckpointThreadSnapshot(
@@ -468,6 +472,7 @@ def test_runs_route_pages_backward_with_before_cursor():
 def test_revisions_route_publishes_revision_summaries():
     """Two revisions of one routine surface newest first, scoped to that routine."""
     doc_store = InMemoryDocumentStore()
+    doc_store.save_document(PROGENITOR_STATE_PREFIX, "policy:default", ExecutionPolicy(id="default", name="Default").model_dump(mode="json"))
     doc_store.upsert_routine_revision(
         "alpha", "rev-older", {"id": "alpha", "nodes": []}, captured_at="2026-01-01T00:00:00+00:00"
     )
@@ -510,6 +515,7 @@ def test_revisions_route_publishes_revision_summaries():
 
 def test_get_routine_revision_publishes_full_graph():
     doc_store = InMemoryDocumentStore()
+    doc_store.save_document(PROGENITOR_STATE_PREFIX, "policy:default", ExecutionPolicy(id="default", name="Default").model_dump(mode="json"))
     doc_store.upsert_routine_revision(
         "alpha",
         "rev-older",

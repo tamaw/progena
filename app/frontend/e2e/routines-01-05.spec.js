@@ -182,13 +182,13 @@ test('02 Progenitor-authored routine appears in the live roster and accepts a us
   // separate from assertions on save, reload, and persisted prompt text.
   test.setTimeout(600_000);
   const name = routineName('02');
-  await createRoutine(page, name, 'Create a short greeting routine that formats a greeting for the supplied name');
+  await createRoutine(page, name, 'Create a short greeting routine with exactly one native prompt node using config.prompt_template to greet the supplied name. Include a required string name input. Do not use an eval node or another node kind in place of the prompt node.');
   const graph = await readGraph(page);
   expect(graph.nodes.length).toBeGreaterThan(0);
   // UI-authoring itself is asserted by createRoutine waiting for the persisted
   // roster row; the user-authored edit below is an explicit saved graph edit.
   const promptNode = graph.nodes.find((node) => node.kind === 'prompt');
-  test.skip(!promptNode, 'Agent did not create a prompt-based greeting routine; this journey requires successful model-driven routine authoring.');
+  expect(promptNode, 'Authoring must persist the requested native prompt node').toBeTruthy();
   promptNode.config.prompt_template = 'Say exactly: Hello, {name}!';
   await applyGraph(page, graph);
   await page.reload();

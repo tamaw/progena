@@ -13,7 +13,7 @@
     "entry": { "$ref": "#/$defs/nodeId" },
     "nodes": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/node" } },
     "edges": { "type": "array", "items": { "$ref": "#/$defs/edge" } },
-    "settings": { "$ref": "#/$defs/settings" },
+    "policy_id": { "type": "string", "minLength": 1, "default": "default" },
     "input_schema": { "$ref": "#/$defs/routineSchemaObject" },
     "output_schema": { "$ref": "#/$defs/routineSchemaObject" },
     "$defs": {
@@ -157,7 +157,7 @@
         "system_prompt": { "type": "string" },
         "response_schema": { "$ref": "#/$defs/responseSchema" },
         "retry": { "$ref": "#/$defs/retryPolicy" },
-        "timeout": { "type": "number", "minimum": 0, "description": "Seconds before this node is abandoned, overriding settings.timeout. 0 disables the limit." },
+        "timeout": { "type": "number", "minimum": 0, "description": "Seconds before this node is abandoned, overriding the execution policy attempt timeout. 0 disables the limit." },
         "cache": { "$ref": "#/$defs/cachePolicy" }
       },
       "oneOf": [
@@ -174,7 +174,7 @@
         "expression_file": { "type": "string", "minLength": 1 },
         "defaults": { "type": "object", "description": "Per-name fallback used when that top-level state key referenced in `expression` is missing -- lets an expression work seedless on its first visit, e.g. an iteration counter reading its own not-yet-written prior output." },
         "retry": { "$ref": "#/$defs/retryPolicy" },
-        "timeout": { "type": "number", "minimum": 0, "description": "Seconds before this node is abandoned, overriding settings.timeout. 0 disables the limit." },
+        "timeout": { "type": "number", "minimum": 0, "description": "Seconds before this node is abandoned, overriding the execution policy attempt timeout. 0 disables the limit." },
         "cache": { "$ref": "#/$defs/cachePolicy" }
       },
       "oneOf": [
@@ -190,8 +190,7 @@
         "expression": { "type": "string", "minLength": 1 },
         "expression_file": { "type": "string", "minLength": 1 },
         "retry": { "$ref": "#/$defs/retryPolicy" },
-        "timeout": { "type": "number", "minimum": 0, "description": "Seconds before this node is abandoned, overriding settings.timeout. 0 disables the limit." },
-        "cache": { "$ref": "#/$defs/cachePolicy" }
+        "timeout": { "type": "number", "minimum": 0, "description": "Seconds before this node is abandoned, overriding the execution policy attempt timeout. 0 disables the limit." }
       },
       "oneOf": [
         { "required": ["expression"], "not": { "required": ["expression_file"] } },
@@ -206,8 +205,7 @@
         "expression": { "type": "string", "minLength": 1 },
         "expression_file": { "type": "string", "minLength": 1 },
         "retry": { "$ref": "#/$defs/retryPolicy" },
-        "timeout": { "type": "number", "minimum": 0, "description": "Seconds before this node is abandoned, overriding settings.timeout. 0 disables the limit." },
-        "cache": { "$ref": "#/$defs/cachePolicy" }
+        "timeout": { "type": "number", "minimum": 0, "description": "Seconds before this node is abandoned, overriding the execution policy attempt timeout. 0 disables the limit." }
       },
       "oneOf": [
         { "required": ["expression"], "not": { "required": ["expression_file"] } },
@@ -225,7 +223,7 @@
         "response_schema": { "$ref": "#/$defs/responseSchema" },
         "inputs": { "$ref": "#/$defs/inputMap" },
         "retry": { "$ref": "#/$defs/retryPolicy" },
-        "timeout": { "type": "number", "minimum": 0, "description": "Seconds before this node is abandoned, overriding settings.timeout. 0 disables the limit." },
+        "timeout": { "type": "number", "minimum": 0, "description": "Seconds before this node is abandoned, overriding the execution policy attempt timeout. 0 disables the limit." },
         "cache": { "$ref": "#/$defs/cachePolicy" }
       }
     },
@@ -243,8 +241,7 @@
         "continue_thread": { "type": "boolean" },
         "execution": { "enum": ["wait", "background"], "default": "wait", "description": "Wait returns the agent response. Background continues after launch and returns a task reference; response_schema validates the eventual task result." },
         "retry": { "$ref": "#/$defs/retryPolicy" },
-        "timeout": { "type": "number", "minimum": 0, "description": "Seconds before this node is abandoned, overriding settings.timeout. 0 disables the limit." },
-        "cache": { "$ref": "#/$defs/cachePolicy" }
+        "timeout": { "type": "number", "minimum": 0, "description": "Seconds before this node is abandoned, overriding the execution policy attempt timeout. 0 disables the limit." }
       },
       "oneOf": [
         { "required": ["prompt_template"], "not": { "anyOf": [{ "required": ["prompt_file"] }, { "required": ["inputs"] }] } },
@@ -261,8 +258,7 @@
         "prompt_template": { "type": "string", "minLength": 1 },
         "prompt_file": { "type": "string", "minLength": 1 },
         "retry": { "$ref": "#/$defs/retryPolicy" },
-        "timeout": { "type": "number", "minimum": 0, "description": "Seconds before this node is abandoned, overriding settings.timeout. 0 disables the limit." },
-        "cache": { "$ref": "#/$defs/cachePolicy" }
+        "timeout": { "type": "number", "minimum": 0, "description": "Seconds before this node is abandoned, overriding the execution policy attempt timeout. 0 disables the limit." }
       },
       "oneOf": [
         { "required": ["prompt_template"], "not": { "required": ["prompt_file"] } },
@@ -278,7 +274,7 @@
         "message": { "type": "string", "minLength": 1 },
         "allowed_responses": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "string", "minLength": 1 } },
         "retry": { "$ref": "#/$defs/retryPolicy" },
-        "timeout": { "type": "number", "minimum": 0, "description": "Seconds before this node is abandoned, overriding settings.timeout. 0 disables the limit." }
+        "timeout": { "type": "number", "minimum": 0, "description": "Seconds before this node is abandoned, overriding the execution policy attempt timeout. 0 disables the limit." }
       }
     },
     "foreachConfig": {
@@ -320,8 +316,7 @@
         "max_items": { "type": "integer", "minimum": 1 },
         "max_concurrency": { "type": "integer", "minimum": 1 },
         "retry": { "$ref": "#/$defs/retryPolicy" },
-        "timeout": { "type": "number", "minimum": 0, "description": "Seconds before this node is abandoned, overriding settings.timeout. 0 disables the limit." },
-        "cache": { "$ref": "#/$defs/cachePolicy" }
+        "timeout": { "type": "number", "minimum": 0, "description": "Seconds before this node is abandoned, overriding the execution policy attempt timeout. 0 disables the limit." }
       }
     },
     "routineConfig": {
@@ -333,8 +328,7 @@
         "input_map": { "$ref": "#/$defs/inputMap" },
         "output_map": { "$ref": "#/$defs/inputMap" },
         "retry": { "$ref": "#/$defs/retryPolicy" },
-        "timeout": { "type": "number", "minimum": 0, "description": "Seconds before this node is abandoned, overriding settings.timeout. 0 disables the limit." },
-        "cache": { "$ref": "#/$defs/cachePolicy" }
+        "timeout": { "type": "number", "minimum": 0, "description": "Seconds before this node is abandoned, overriding the execution policy attempt timeout. 0 disables the limit." }
       }
     },
     "inputMap": { "type": "object", "additionalProperties": { "type": "string", "minLength": 1 } },
@@ -354,7 +348,8 @@
         "initial_interval": { "type": "number", "minimum": 0 },
         "backoff_factor": { "type": "number", "minimum": 1 },
         "max_interval": { "type": "number", "minimum": 0 },
-        "jitter": { "type": "boolean" }
+        "jitter": { "type": "boolean" },
+        "retry_on": { "enum": ["transient", "model_response", "all"] }
       }
     },
     "loopGuard": {
@@ -431,16 +426,7 @@
         "level": { "const": "error" }
       }
     },
-    "settings": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "retry": { "$ref": "#/$defs/retryPolicy" },
-        "timeout": { "type": "number", "minimum": 0, "description": "Default seconds before a node is abandoned, overridable per node. 0 disables the limit." },
-        "recursion_limit": { "type": "integer", "minimum": 1 },
-        "cache": { "type": "boolean" }
-      }
-    },
+
     "routineSchemaObject": {
       "type": ["object", "null"],
       "description": "A real JSON Schema object (type/properties/required/etc.) -- input_schema describes values a caller supplies before Run, output_schema describes the routine's declared final result fields (projected out of the internal data channel by the compiler). Same convention node-level response_schema uses, validated at invocation time via jsonschema rather than shape-checked here."

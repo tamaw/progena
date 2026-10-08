@@ -1895,7 +1895,8 @@ class StateReader:
             key_bypasses_state_diff = bool(
                 changed_key
                 and (
-                    changed_key.startswith(WORKFLOW_DEFINITION_KEY_PREFIX)
+                    changed_key.startswith("policy:")
+                    or changed_key.startswith(WORKFLOW_DEFINITION_KEY_PREFIX)
                     or changed_key.startswith(WORKFLOW_RUN_KEY_PREFIX)
                     or changed_key.startswith(WORKFLOW_QUEUE_KEY_PREFIX)
                     or changed_key.startswith(WORKFLOW_INVOKE_REQUEST_KEY_PREFIX)

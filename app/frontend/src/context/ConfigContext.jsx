@@ -12,6 +12,7 @@ const defaultConfig = {
       stream: '/api/ui/stream',
       chats: '/api/ui/chats',
       inbox: '/api/ui/inbox',
+      policies: '/api/ui/policies',
       agentProfiles: '/api/ui/agent-profiles',
       workflows: '/api/ui/workflows',
       workflowRuns: '/api/ui/workflow-runs',

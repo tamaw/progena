@@ -665,6 +665,9 @@ async def test_workflow_aedit_and_adelete_round_trip():
 
 
 class _FakeRoutineStateManager:
+    async def get_execution_policy(self, policy_id):
+        return {"id": policy_id}
+
     def __init__(self, graphs: list[dict[str, Any]] | None = None) -> None:
         self.graphs: dict[str, dict[str, Any]] = {
             graph["id"]: copy.deepcopy(graph) for graph in graphs or []

@@ -627,6 +627,27 @@ class StateManager:
     # ==========================================================================
     # Routine graphs
     # ==========================================================================
+    async def get_execution_policy(self, policy_id: str) -> dict[str, Any] | None:
+        from ..policies import POLICY_KEY_PREFIX
+        payload = await self._runtime_store.peek_document(f"{POLICY_KEY_PREFIX}{policy_id}")
+        return payload if isinstance(payload, dict) else None
+
+    async def save_execution_policy(self, policy_id: str, payload: dict[str, Any]) -> None:
+        from ..policies import POLICY_KEY_PREFIX, validate_policy
+        policy = validate_policy(payload)
+        if policy.id != policy_id:
+            raise ValueError("Policy id must match filename")
+        await self._save_runtime_document(f"{POLICY_KEY_PREFIX}{policy_id}", policy.model_dump(mode="json"))
+
+    async def delete_execution_policy(self, policy_id: str) -> None:
+        from ..policies import POLICY_KEY_PREFIX
+        await self._runtime_store.delete_document(f"{POLICY_KEY_PREFIX}{policy_id}")
+
+    async def list_execution_policies(self) -> list[dict[str, Any]]:
+        from ..policies import POLICY_KEY_PREFIX
+        rows = await self._runtime_store.list_documents(POLICY_KEY_PREFIX)
+        return [payload for _, payload in rows if isinstance(payload, dict)]
+
     async def get_routine_graph(self, agent_id: str) -> dict[str, Any] | None:
         """Return one agent's routine graph document, or ``None`` if missing."""
         key = routine_graph_key(agent_id)

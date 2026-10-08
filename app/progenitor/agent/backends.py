@@ -51,6 +51,7 @@ from .state_backend import (
     ContentDocumentDirectoryBackend,
     InboxDirectoryBackend,
     KanbanTaskDirectoryBackend,
+    PolicyDirectoryBackend,
     RoutineDirectoryBackend,
     StateDocumentBackend,
     StateFile,
@@ -260,6 +261,7 @@ def create_progenitor_backend(
         routes["/tasks/"] = KanbanTaskDirectoryBackend(state_manager)
         routes["/workflows/"] = WorkflowDirectoryBackend(state_manager)
         routes["/routines/"] = RoutineDirectoryBackend(state_manager)
+        routes["/policies/"] = PolicyDirectoryBackend(state_manager)
         # User inbox: a directory of per-message files (/inbox/<id>.md) the
         # agent writes to send the user rich markdown messages.
         routes["/inbox/"] = InboxDirectoryBackend(state_manager)

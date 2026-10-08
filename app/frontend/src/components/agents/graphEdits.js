@@ -139,7 +139,7 @@ export function serializeGraph(nodes, edges, meta) {
       config: node.config || {},
     })),
     edges,
-    settings: meta.settings || {},
+    policy_id: meta.policy_id || 'default',
     input_schema: meta.input_schema || null,
     output_schema: meta.output_schema || null,
     $defs: meta.$defs || {},

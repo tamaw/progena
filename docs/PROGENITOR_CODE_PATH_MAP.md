@@ -712,3 +712,37 @@ The active system-tool registry was moved to `tools/system_registry.py`; old
 node tests, builder/backlog state tests, app-level mock LLM tests, response
 model tests, and register/chat/intake tests were removed or rewritten around the
 active DeepAgent path.
+
+
+### Routine execution policies
+
+`app/progenitor/policies.py` owns the validated execution-policy contract.
+Policies are JSONB documents at `policy:<id>` in the state namespace, exposed
+as `/policies/<id>.json` by `PolicyDirectoryBackend`. The schema is
+`/schemas/policy.schema.v1.json`; `managing-policies` teaches the agent to use
+structured_output and validated virtual-file writes. Graphs select one document
+with `policy_id`; inline graph `settings` are not accepted.
+
+The Policy dock uses Redux acknowledged requests and the existing global SSE
+stream. Both API writes and agent writes persist first; Postgres notifications
+refresh the catalog. The graph reference saves through the normal graph editor.
+The default policy is an ordinary persisted document seeded once during store
+setup. Each policy edit captures immutable content in `policy_revisions`.
+
+`routines/subagent.py` resolves the live policy at new-run admission, records its
+id, exact revision and effective values in lifecycle events and checkpoints,
+and uses recorded values for interactive/approval continuation. Compiler cache
+identity includes the graph, policy snapshot and relevant model configuration.
+Prompt, Classify and Eval use native LangGraph caching with a process-local,
+shared cache backend. Keys isolate graph/policy/model configuration while
+allowing matching inputs to be reused across runs; restart clears that cache.
+TTL null does not expire entries; zero expires immediately. Node cache false
+opts out. Other node types are ineligible. Retried side-effecting nodes are
+never made idempotent by caching or checkpointing.
+
+Policy values configure retries/backoff/error categories, attempt/idle timeouts,
+default model profiles, graph steps, concurrency and default fan-out max_items.
+Node settings override defaults; explicit error routes still handle exhausted
+retries. Fan-out max_items retains its existing truncation semantics. Background
+agent completion/failure remains independent of parent completion. Arbitrary
+invocation overrides, budgets, approval expiry and durability controls are absent.

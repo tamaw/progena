@@ -9,6 +9,7 @@ from deepagents import create_deep_agent
 from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
 from langchain_core.messages import AIMessage, HumanMessage
 
+from app.progenitor.policies import ExecutionPolicy, policy_revision_id
 from app.progenitor.agent.state import ProgenitorAgentState
 from app.progenitor.routines.subagent import (
     ROUTINE_REVISIONS_STATE_KEY,
@@ -62,6 +63,9 @@ class _FakeRevisionReader:
         self.fetch_latest_calls: list[str] = []
         self.fetch_revision_id_for_content_calls: list[str] = []
 
+    async def fetch_policy_revision_id(self, policy_id, document):
+        return policy_revision_id(document)
+
     async def fetch_latest(self, routine_id: str) -> tuple[str, dict[str, Any]] | None:
         self.fetch_latest_calls.append(routine_id)
         if self._latest is None:
@@ -87,6 +91,12 @@ class _FakeStateManager:
         self._graph_doc = graph_doc
         self.calls = 0
 
+    async def get_model_profiles_config(self):
+        return {}
+
+    async def get_execution_policy(self, policy_id):
+        return ExecutionPolicy(id=policy_id, name="Default").model_dump(mode="json")
+
     async def get_routine_graph(self, routine_id: str) -> dict[str, Any] | None:
         self.calls += 1
         return self._graph_doc
@@ -96,6 +106,12 @@ class _MultiRoutineStateManager:
     def __init__(self, graphs: dict[str, dict[str, Any]]):
         self.graphs = graphs
         self.get_calls: list[str] = []
+
+    async def get_model_profiles_config(self):
+        return {}
+
+    async def get_execution_policy(self, policy_id):
+        return ExecutionPolicy(id=policy_id, name="Default").model_dump(mode="json")
 
     async def get_routine_graph(self, routine_id: str) -> dict[str, Any] | None:
         self.get_calls.append(routine_id)
@@ -446,7 +462,8 @@ async def test_second_invocation_hits_cache():
     )
 
     assert reader.fetch_revision_id_for_content_calls == [ROUTINE_ID]
-    assert not reader.fetch_calls and not reader.fetch_latest_calls
+    assert reader.fetch_calls == [(ROUTINE_ID, "rev-a")]
+    assert not reader.fetch_latest_calls
 
 
 @pytest.mark.asyncio

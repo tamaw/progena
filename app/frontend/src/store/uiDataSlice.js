@@ -28,9 +28,10 @@ import * as logs from './uiData/logs';
 import * as preferences from './uiData/preferences';
 import * as marketplaces from './uiData/marketplaces';
 import * as repos from './uiData/repos';
+import * as policies from './uiData/policies';
 import * as documentKinds from './uiData/documentKinds';
 
-const domains = [runtime, mcp, knowledge, prompts, tasks, workflows, agents, chats, inbox, logs, preferences, marketplaces, repos, documentKinds];
+const domains = [runtime, mcp, knowledge, prompts, tasks, workflows, agents, chats, inbox, logs, preferences, marketplaces, repos, documentKinds, policies];
 
 const initialState = domains.reduce(
   (acc, domain) => ({ ...acc, ...domain.initialState }),
@@ -326,3 +327,5 @@ export {
 } from './uiData/repos';
 
 export default uiDataSlice.reducer;
+
+export { fetchPolicies, savePolicy, selectPolicies } from './uiData/policies';

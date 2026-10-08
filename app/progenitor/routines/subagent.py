@@ -9,12 +9,14 @@ revision, then the live document, if that pin no longer exists); otherwise
 -- the common case -- the live document from the state manager, tagged
 (not sourced) with whatever revision_id in
 :mod:`app.progenitor.routines.revisions` matches its exact content, if
-any. Compiled graphs are cached by ``revision_id`` so a pinned thread never
-recompiles or re-queries after its first call.
+any. Compiled graph identity includes the graph document, its execution-policy
+snapshot and model configuration used by caching. New runs resolve live policy
+documents; continuations use the policy snapshot in their checkpoint.
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import uuid
 from collections.abc import Awaitable, Callable
@@ -26,9 +28,11 @@ from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage
 from langchain_core.runnables import RunnableConfig, RunnableLambda
 from langchain_core.runnables.config import var_child_runnable_config
+from langgraph.cache.memory import InMemoryCache
 from langgraph.errors import NodeTimeoutError
 from langgraph.types import Command
 
+from ..policies import PolicyValues, resolve_execution_policy
 from ..utils import utcnow
 from .approvals import (
     approval_decision_id,
@@ -47,6 +51,7 @@ from .revisions import RoutineRevisionReader
 logger = logging.getLogger(__name__)
 
 ROUTINE_REVISIONS_STATE_KEY = "routine_revisions"
+_RUNTIME_NODE_CACHE = InMemoryCache()
 
 
 async def resolve_routine_document(
@@ -108,9 +113,7 @@ def create_routine_executor(
         revision_id: str | None = None
         graph_doc: dict[str, Any] | None = None
 
-        if pinned and pinned in cache:
-            revision_id = pinned
-        elif pinned:
+        if pinned:
             fetched = await revision_reader.fetch(routine_id, pinned)
             if fetched is not None:
                 revision_id = pinned
@@ -155,11 +158,52 @@ def create_routine_executor(
         if revision_id is None and graph_doc is None:
             raise KeyError(f"Routine '{routine_id}' has no stored graph.")
 
+        assert graph_doc is not None
+        selected_graph = validate_routine_graph_payload(graph_doc)
+        execution_policy = None
+        # An interactive continuation belongs to the same execution and policy snapshot.
+        interactive_id = state.get("_interactive_session_id")
+        if interactive_id and checkpointer is not None:
+            previous = await checkpointer.aget_tuple(
+                {
+                    "configurable": {
+                        "thread_id": f"routine:{routine_id}:{revision_id or 'unpinned'}:{interactive_id}"
+                    }
+                }
+            )
+            recorded = (
+                (previous.checkpoint.get("channel_values", {}).get("data") or {}).get(
+                    "_execution_policy"
+                )
+                if previous is not None
+                else None
+            )
+            if recorded:
+                execution_policy = recorded
+        if execution_policy is None:
+            execution_policy = await resolve_execution_policy(
+                state_manager, selected_graph.policy_id, revision_reader
+            )
+        policy_values = PolicyValues.model_validate(execution_policy["values"])
+        model_profiles = (
+            await state_manager.get_model_profiles_config()
+            if (
+                policy_values.cache_enabled
+                or any(
+                    node.config.model_dump().get("cache") not in (None, False)
+                    for node in selected_graph.nodes
+                )
+            )
+            else None
+        )
+        compile_key = json.dumps(
+            [revision_id, graph_doc, execution_policy, model_profiles], sort_keys=True
+        )
         compiled: Any = None
         run_config: RunnableConfig | None = None
         try:
-            if revision_id is not None and revision_id in cache:
-                compiled = cache[revision_id]
+            if compile_key in cache:
+                compiled = cache[compile_key]
             else:
                 assert graph_doc is not None  # guaranteed by the resolution above
                 graph = validate_routine_graph_payload(graph_doc)
@@ -175,9 +219,11 @@ def create_routine_executor(
                     base_system_prompt=None,
                     checkpointer=checkpointer,
                     preserve_data=True,
+                    execution_policy=policy_values,
+                    cache=_RUNTIME_NODE_CACHE,
+                    model_profiles=model_profiles,
                 )
-                if revision_id is not None:
-                    cache[revision_id] = compiled
+                cache[compile_key] = compiled
             # One thread_id per top-level run, not per node/call -- lets
             # "every checkpoint row for this run" be found later by a plain
             # `thread_id LIKE 'routine:<routine_id>:%'` scan (see the Runs
@@ -209,7 +255,9 @@ def create_routine_executor(
             )
             run_config = {"configurable": {"thread_id": run_thread_id}}
             execution = state["_routine_execution"]
-            execution.update(thread_id=run_thread_id, revision_id=revision_id)
+            execution.update(
+                thread_id=run_thread_id, revision_id=revision_id, policy=execution_policy
+            )
             execution["name"] = graph_doc.get("name", routine_id) if graph_doc else routine_id
             await persist_run_event(state_manager, execution, "started")
             # A stable thread already carrying checkpoint history must be
@@ -251,6 +299,7 @@ def create_routine_executor(
                 "messages": state.get("messages") or [],
                 "data": dict(state.get("data") or {}),
             }
+            seed_input["data"]["_execution_policy"] = execution_policy
             seed_input.update(
                 {
                     key: value
@@ -515,6 +564,23 @@ async def _resume_routine_thread(
     )
     run_config: RunnableConfig = {"configurable": {"thread_id": thread_id}}
     checkpoint = await compiled.aget_state(run_config)
+    execution_policy = (checkpoint.values.get("data") or {}).get("_execution_policy")
+    if not isinstance(execution_policy, dict):
+        raise ValueError("Run has no recorded execution policy")
+    compiled = compile_routine_graph(
+        graph,
+        model=model,
+        agent_registry=agent_registry,
+        routine_registry=routine_registry,
+        routine_runner=routine_runner,
+        agent_background_runner=agent_background_runner,
+        model_profile_resolver=model_profile_resolver,
+        tool_registry=tool_registry,
+        checkpointer=checkpointer,
+        execution_policy=PolicyValues.model_validate(execution_policy["values"]),
+        cache=_RUNTIME_NODE_CACHE,
+        model_profiles=await state_manager.get_model_profiles_config(),
+    )
     approval = validate_answer(pending_approvals(checkpoint.interrupts), answer, interrupt_id)
     get_decision = getattr(state_manager, "get_routine_approval_decision", None)
     if callable(get_decision):
@@ -529,6 +595,7 @@ async def _resume_routine_thread(
         "thread_id": thread_id,
         "session_id": thread_id.split(":")[-1],
         "request_id": request_id or str(uuid.uuid4()),
+        "policy": execution_policy,
     }
     await persist_run_event(state_manager, execution, "started")
     try:

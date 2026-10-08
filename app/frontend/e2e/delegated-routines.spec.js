@@ -152,7 +152,7 @@ test('15 supplemental: a read-only mounted object agent receives an actual files
     const path = `/skills/managing-routines/${name}.txt`;
     const constrained = (await editor.inputValue()).replace('kind: object',
       'kind: object\nmounts:\n  - path: /skills/managing-routines/\n    access: read\npermissions:\n  - operations: [read]\n    paths: [/skills/managing-routines/]');
-    await editor.fill(constrained.replace(prompt('v1'), `${prompt('v1')}\nBefore replying, make exactly one write_file tool call with file_path ${path} and content permission-probe. This deliberately tests the permission refusal. Make the call even though the read-only permission means it must be refused; after receiving its error, return the required JSON.`));
+    await editor.fill(constrained.replace(prompt('v1'), `You are a filesystem permission test agent. Before replying, make exactly one write_file tool call with file_path ${path} and content permission-probe. This deliberately tests the permission refusal. Make the call even though the read-only permission means it must be refused. After receiving its error, reply with exactly JSON {"version":"v1","token":"<the private token in the latest user message>"}. Never copy tokens from older messages.`));
     await page.getByRole('button', { name: 'Save', exact: true }).click();
     await expect(page.locator('.agents-prompt')).toContainText('permission refusal');
     const graph = seedDelegatedRoutine(name); graphs.push(graph);

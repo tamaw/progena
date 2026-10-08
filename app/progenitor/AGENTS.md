@@ -131,6 +131,7 @@ The DeepAgent receives a virtual filesystem view backed by those documents:
 - `/tasks/board.json` and `/tasks/<id>.md`: Kanban structure and cards
 - `/workflows/<id>.json`: Workflow definitions
 - `/routines/<id>.json`: Routine graph definitions
+- `/policies/<id>.json`: Validated routine execution policies
 
 Native `read`/`write`/`edit` operations on these paths validate and persist the
 corresponding Postgres document. Conversation messages are kept in the
