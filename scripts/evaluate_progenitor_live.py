@@ -355,12 +355,12 @@ async def eval_microsoft_learn_mcp(client: httpx.AsyncClient, timeout: float) ->
 async def eval_subagent_delegation(client: httpx.AsyncClient, timeout: float) -> EvaluationResult:
     name = "subagent_delegation_via_chat"
     expectation = (
-        "A streaming chat request can delegate to the hello-world subagent, emit subagent_start and "
-        "subagent_result events, and return HELLO_FROM_SUBAGENT to the user."
+        "A streaming chat request can delegate to the repo-manager subagent, emit subagent_start and "
+        "subagent_result events, and return a non-empty answer to the user."
     )
     prompt = (
-        "Use the hello-world subagent for this request. "
-        "Reply with exactly HELLO_FROM_SUBAGENT and nothing else."
+        "Use the repo-manager subagent for this request. "
+        "Ask it to run git rev-parse --show-toplevel and report the result concisely."
     )
     try:
         items = await http_stream_items(
@@ -374,7 +374,7 @@ async def eval_subagent_delegation(client: httpx.AsyncClient, timeout: float) ->
             name,
             expectation,
             f"subagent delegation request failed: {exc}",
-            root_cause_area="agent/agent.py, agent/subagents.py, or sse/deepagent_stream.py",
+            root_cause_area="agent/agent.py, agent/object_agent_registry.py, or sse/deepagent_stream.py",
         )
 
     event_types = [
@@ -383,15 +383,11 @@ async def eval_subagent_delegation(client: httpx.AsyncClient, timeout: float) ->
     final_text = "".join(
         str(item.get("content") or "") for item in items if item.get("type") == "stream_chunk"
     )
-    if (
-        "subagent_start" in event_types
-        and "subagent_result" in event_types
-        and "HELLO_FROM_SUBAGENT" in final_text
-    ):
+    if "subagent_start" in event_types and "subagent_result" in event_types and final_text.strip():
         return _pass(
             name,
             expectation,
-            "hello-world subagent delegated and returned HELLO_FROM_SUBAGENT",
+            "repo-manager subagent delegated and returned a non-empty answer",
             stream_events=event_types,
             final_text=final_text,
         )
@@ -399,7 +395,7 @@ async def eval_subagent_delegation(client: httpx.AsyncClient, timeout: float) ->
         name,
         expectation,
         "subagent delegation did not surface the expected events and final answer",
-        root_cause_area="agent/subagents.py, agent/agent.py, or sse/stream_events.py",
+        root_cause_area="agent/object_agent_registry.py, agent/agent.py, or sse/stream_events.py",
         stream_events=event_types,
         final_text=final_text[:500],
     )

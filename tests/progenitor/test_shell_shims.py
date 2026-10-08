@@ -109,3 +109,10 @@ def test_gh_shim_refuses_mutating_or_sensitive_commands(arguments: tuple[str, ..
 
     assert result.returncode == 2
     assert "progenitor-shim: refused:" in result.stderr
+
+
+@pytest.mark.parametrize("flag", ["--hostname=evil.com", "--method=POST", "--template={{.}}"])
+def test_gh_shim_refuses_equals_form(flag: str) -> None:
+    result = _run(GH_SHIM, "auth", "status", flag)
+    assert result.returncode == 2
+    assert "progenitor-shim: refused:" in result.stderr

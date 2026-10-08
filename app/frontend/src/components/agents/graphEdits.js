@@ -27,7 +27,7 @@ export function makeNode(kind) {
     classify: { rubric_prompt: '', response_schema: {} },
     agent: { agent_name: '', prompt_template: '' },
     a2a: { agent_name: '', prompt_template: '' },
-    human: { message: '', allowed_responses: [] },
+    human: { message: '' },
     foreach: { mode: 'send', items_from: '', item_key: 'item' },
     reduce: { source_node: '', operation: 'collect' },
     routine: { routine_name: '', input_map: {}, output_map: {} },

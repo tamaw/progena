@@ -1,5 +1,5 @@
 import { Component, createElement, Suspense, lazy } from 'react';
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate, useParams } from 'react-router-dom';
 import { ConfigProvider } from './context/ConfigContext';
 import { NotificationProvider } from './context/NotificationContext';
 import { WorkspaceProvider, useWorkspace } from './context/WorkspaceContext';
@@ -59,6 +59,11 @@ class RouteErrorBoundary extends Component {
   }
 }
 
+function SequencesRedirect() {
+  const { agentId } = useParams();
+  return <Navigate to={`/routines/${agentId ?? ''}`} replace />;
+}
+
 function DeferredRoute({ Page, fallback, ...pageProps }) {
   return (
     <Suspense fallback={<div className="chrome-route-loading">{fallback}</div>}>
@@ -101,6 +106,7 @@ function WorkspaceScopedApp() {
                     <Route path="/channels" element={<DeferredRoute Page={ChannelsPage} fallback="Loading channels..." />} />
                     <Route path="/agents/:agentId?/:tab?" element={<DeferredRoute Page={AgentsPage} fallback="Loading agents..." />} />
                     <Route path="/routines/:agentId?" element={<DeferredRoute Page={RoutinesPage} fallback="Loading routines..." />} />
+                    <Route path="/sequences/:agentId?" element={<SequencesRedirect />} />
                     <Route path="/tools/:serverId?/:titleSlug?" element={<DeferredRoute Page={ToolsPage} fallback="Loading tools..." />} />
                     <Route path="/tasks/:cardId?/:titleSlug?" element={<DeferredRoute Page={TasksPage} fallback="Loading tasks..." />} />
                     <Route path="/projects" element={<Navigate to="/solutions/main/projects/backend-runtime" replace />} />

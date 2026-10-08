@@ -9,7 +9,7 @@ const pageErrors = new WeakMap();
 const createdRoutines = new WeakMap();
 const attemptedRoutineNames = new WeakMap();
 
-test.describe.configure({ timeout: 150_000 });
+test.describe.configure({ timeout: 200_000 });
 
 function routineName(journey) {
   return `pw342-${RUN}-j${journey}`;

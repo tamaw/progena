@@ -437,9 +437,10 @@ function StringListField({ id, config, field, label, placeholder, updateNodeConf
         className="agents-graph-node__toolinput"
         value={(config?.[field] || []).join(', ')}
         placeholder={placeholder}
-        onChange={(event) => updateNodeConfig(id, {
-          [field]: event.target.value.split(',').map((value) => value.trim()).filter(Boolean),
-        })}
+        onChange={(event) => {
+          const parsed = event.target.value.split(',').map((value) => value.trim()).filter(Boolean);
+          updateNodeConfig(id, parsed.length ? { [field]: parsed } : { [field]: undefined });
+        }}
       />
     </label>
   );

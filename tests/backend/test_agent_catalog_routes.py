@@ -150,7 +150,11 @@ def harness(monkeypatch):
     monkeypatch.setattr(routes, "acp_profiles_from_registry", lambda: [])
 
     doc_store = InMemoryDocumentStore()
-    doc_store.save_document(PROGENITOR_STATE_PREFIX, "policy:default", ExecutionPolicy(id="default", name="Default").model_dump(mode="json"))
+    doc_store.save_document(
+        PROGENITOR_STATE_PREFIX,
+        "policy:default",
+        ExecutionPolicy(id="default", name="Default").model_dump(mode="json"),
+    )
     app = FastAPI()
     app.state.doc_store = doc_store
     _install_request_id_middleware(app)
@@ -316,7 +320,7 @@ def _a2a_profile(agent_id: str = "a2a-observe") -> dict[str, Any]:
     }
 
 
-def test_list_excludes_protocol_agents_from_internal_catalog(harness, monkeypatch):
+def test_list_includes_protocol_agents_from_registry(harness, monkeypatch):
     client, events = harness
     import app.backend.agent_catalog_routes as routes
 
@@ -330,7 +334,7 @@ def test_list_excludes_protocol_agents_from_internal_catalog(harness, monkeypatc
     ]
     assert len(snapshot_events) == 1
     snapshot = snapshot_events[0][1]
-    assert {agent["id"] for agent in snapshot["agents"]} == {"alpha", "beta"}
+    assert {agent["id"] for agent in snapshot["agents"]} == {"alpha", "beta", "a2a-observe"}
 
 
 def test_detail_a2a_reads_through_registry(harness, monkeypatch):
@@ -361,7 +365,11 @@ def test_runs_route_publishes_run_summaries():
     from app.backend.document_store import CheckpointThreadSnapshot
 
     doc_store = InMemoryDocumentStore()
-    doc_store.save_document(PROGENITOR_STATE_PREFIX, "policy:default", ExecutionPolicy(id="default", name="Default").model_dump(mode="json"))
+    doc_store.save_document(
+        PROGENITOR_STATE_PREFIX,
+        "policy:default",
+        ExecutionPolicy(id="default", name="Default").model_dump(mode="json"),
+    )
     doc_store.upsert_checkpoint_thread_snapshot(
         CheckpointThreadSnapshot(
             thread_id="routine:alpha:rev-older:run-a",
@@ -424,7 +432,11 @@ def test_runs_route_pages_backward_with_before_cursor():
     from app.backend.document_store import CheckpointThreadSnapshot
 
     doc_store = InMemoryDocumentStore()
-    doc_store.save_document(PROGENITOR_STATE_PREFIX, "policy:default", ExecutionPolicy(id="default", name="Default").model_dump(mode="json"))
+    doc_store.save_document(
+        PROGENITOR_STATE_PREFIX,
+        "policy:default",
+        ExecutionPolicy(id="default", name="Default").model_dump(mode="json"),
+    )
     for index in range(3):
         doc_store.upsert_checkpoint_thread_snapshot(
             CheckpointThreadSnapshot(
@@ -472,7 +484,11 @@ def test_runs_route_pages_backward_with_before_cursor():
 def test_revisions_route_publishes_revision_summaries():
     """Two revisions of one routine surface newest first, scoped to that routine."""
     doc_store = InMemoryDocumentStore()
-    doc_store.save_document(PROGENITOR_STATE_PREFIX, "policy:default", ExecutionPolicy(id="default", name="Default").model_dump(mode="json"))
+    doc_store.save_document(
+        PROGENITOR_STATE_PREFIX,
+        "policy:default",
+        ExecutionPolicy(id="default", name="Default").model_dump(mode="json"),
+    )
     doc_store.upsert_routine_revision(
         "alpha", "rev-older", {"id": "alpha", "nodes": []}, captured_at="2026-01-01T00:00:00+00:00"
     )
@@ -515,7 +531,11 @@ def test_revisions_route_publishes_revision_summaries():
 
 def test_get_routine_revision_publishes_full_graph():
     doc_store = InMemoryDocumentStore()
-    doc_store.save_document(PROGENITOR_STATE_PREFIX, "policy:default", ExecutionPolicy(id="default", name="Default").model_dump(mode="json"))
+    doc_store.save_document(
+        PROGENITOR_STATE_PREFIX,
+        "policy:default",
+        ExecutionPolicy(id="default", name="Default").model_dump(mode="json"),
+    )
     doc_store.upsert_routine_revision(
         "alpha",
         "rev-older",

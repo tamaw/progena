@@ -46,7 +46,7 @@ for (const [kind, execution] of [['prompt', 'wait'], ['classify', 'wait'], ['age
     if (execution === 'background') {
       const task = JSON.parse(await output.textContent());
       expect(readAgentRun(task).model_profile).toBe(fixture.profile);
-      await expect.poll(() => readAgentRun(task)?.status, { timeout: 90_000 }).toBe('success');
+      await expect.poll(() => readAgentRun(task)?.status, { timeout: 90_000, intervals: [1_000] }).toBe('success');
       background = readAgentRun(task);
       expect(JSON.stringify(background.values.messages.at(-1).content)).toContain('PROFILE_DONE');
     }

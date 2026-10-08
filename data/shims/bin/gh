@@ -8,7 +8,7 @@ deny() { printf 'progenitor-shim: refused: %s\n' "$*" >&2; exit 2; }
 args=("$@")
 for arg in "${args[@]}"; do
   case "$arg" in
-    -X|--method|--hostname|--template)
+    -X|--method|--hostname|--template|--method=*|--hostname=*|--template=*)
       deny "option: $arg"
       ;;
   esac

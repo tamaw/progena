@@ -27,7 +27,10 @@ class AsyncSubagentTrackingMiddleware(AgentMiddleware):
     }
 
     def __init__(
-        self, *, state_manager: Any = None, async_subagents: list[AsyncSubAgent] | None = None,
+        self,
+        *,
+        state_manager: Any = None,
+        async_subagents: list[AsyncSubAgent] | None = None,
         specs_provider: Callable[[], list[AsyncSubAgent]] | None = None,
     ):
         self._state_manager = state_manager
@@ -79,7 +82,8 @@ class AsyncSubagentTrackingMiddleware(AgentMiddleware):
             subagent_name = str(raw_args.get("subagent_type") or "")
             specs = (
                 {spec["name"]: spec for spec in self._specs_provider()}
-                if self._specs_provider else self._async_subagents
+                if self._specs_provider
+                else self._async_subagents
             )
             spec = specs.get(subagent_name)
             if spec is None:
@@ -203,6 +207,7 @@ def _async_tasks_result_payload(tasks: dict[str, dict[str, Any]]) -> dict[str, A
         "success": sum(1 for task in rows if str(task.get("status")) == "success"),
         "error": sum(1 for task in rows if str(task.get("status")) == "error"),
         "cancelled": sum(1 for task in rows if str(task.get("status")) == "cancelled"),
+        "interrupted": sum(1 for task in rows if str(task.get("status")) == "interrupted"),
     }
     return {
         "tasks": rows,
@@ -211,6 +216,7 @@ def _async_tasks_result_payload(tasks: dict[str, dict[str, Any]]) -> dict[str, A
         "success": counts["success"],
         "error": counts["error"],
         "cancelled": counts["cancelled"],
+        "interrupted": counts["interrupted"],
     }
 
 
@@ -273,6 +279,7 @@ def _emit_async_subagent_events(
             "success",
             "error",
             "cancelled",
+            "interrupted",
         }:
             emit_stream_event(
                 {"event_type": "async_subagent_result", "content": agent_name, "metadata": metadata}

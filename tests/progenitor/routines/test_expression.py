@@ -144,3 +144,34 @@ class TestRejectedConstructs:
     def test_rejects_fstring_and_other_constants(self):
         with pytest.raises(UnsafeExpressionError):
             evaluate_expression("...", {})
+
+
+class TestDoSBounds:
+    def test_rejects_huge_exponent(self):
+        with pytest.raises(UnsafeExpressionError, match="exponent too large"):
+            evaluate_expression("9 ** 9 ** 9", {})
+
+    def test_rejects_large_power_directly(self):
+        with pytest.raises(UnsafeExpressionError, match="exponent too large"):
+            evaluate_expression("2 ** 1001", {})
+
+    def test_allows_small_power(self):
+        assert evaluate_expression("2 ** 10", {}) == 1024
+
+    def test_rejects_string_repetition_overflow(self):
+        with pytest.raises(UnsafeExpressionError, match="sequence repetition result too long"):
+            evaluate_expression("'x' * 10001", {})
+
+    def test_rejects_large_power_then_mult(self):
+        with pytest.raises(UnsafeExpressionError, match="sequence repetition result too long"):
+            evaluate_expression("'x' * 10 ** 9", {})
+
+    def test_allows_small_sequence_repetition(self):
+        assert evaluate_expression("'x' * 5", {}) == "xxxxx"
+
+    def test_rejects_string_mod_formatting(self):
+        with pytest.raises(UnsafeExpressionError, match="string formatting"):
+            evaluate_expression("'hello %s' % 'world'", {})
+
+    def test_allows_numeric_mod(self):
+        assert evaluate_expression("10 % 3", {}) == 1

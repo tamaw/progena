@@ -46,6 +46,9 @@ views backed by those documents:
 - `/config/health.json` — read-only heartbeat status.
 - `/tasks/board.json` and `/tasks/<id>.md` — kanban structure and cards.
 - `/workflows/<id>.json` — workflow definitions.
+- `/routines/<id>.json` — routine graph definitions.
+- `/policies/<id>.json` — validated routine execution policies.
+- `/agents/` (read-only) and `/agents/user/<name>/SYSTEM.md` (writable) — object-agent manifests.
 
 Use the native `read_file`, `write_file`, and `edit_file` tools on those virtual
 paths. The state backend validates the resulting document and persists it

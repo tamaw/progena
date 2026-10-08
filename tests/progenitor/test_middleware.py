@@ -406,9 +406,6 @@ class TestMiddlewareIntegration:
 
                 class _FakeStateManager:
                     def __init__(self):
-                        from tests.progenitor.conftest import _FakeRuntimeStore
-
-                        self._runtime_store = _FakeRuntimeStore()
                         self._docs = {
                             "prompt": {"progenitor/genesis.md": "Genesis"},
                             "skill": {},

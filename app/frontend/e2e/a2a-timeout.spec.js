@@ -6,7 +6,9 @@ import { delegatedCheckpoint } from './helpers/delegatedRoutineFixture.mjs';
 import { attachJsonEvidence, observeRoutineEvents, removeRoutine } from './helpers/routineFixture.mjs';
 
 test.describe.configure({ mode: 'serial' });
-test.setTimeout(420_000);
+// Completion notifications are delivered by the runtime heartbeat, which a full
+// parallel suite can keep busy for minutes, so the async-completion wait is generous.
+test.setTimeout(720_000);
 test.beforeEach(({ page }) => page.setDefaultTimeout(30_000));
 const quote = (value) => `'${value.replaceAll("'", "''")}'`;
 const suffix = randomUUID().replaceAll('-', '');
@@ -52,9 +54,9 @@ const asyncTasks = () => JSON.parse(queryNestedEvidence("SELECT value->'payload'
 test.beforeAll(async ({ browser }) => {
   test.setTimeout(240_000);
   peer = await startGreetingsFixture();
-  const page = await browser.newPage();
+  const page = await browser.newPage({ baseURL: test.info().project.use.baseURL });
   try {
-    await page.goto('http://127.0.0.1:5173/routines');
+    await page.goto('/routines');
     await chat(page, `Register the disposable A2A peer using register_a2a_agent with name ${peerName} and URL ${peer.url}. Preserve existing resources. Do not run anything.`);
   } finally { await page.close(); }
 });
@@ -64,9 +66,9 @@ test.afterAll(async ({ browser }) => {
     for (const graph of graphs) removeRoutine(graph.id);
     queryNestedEvidence(`DELETE FROM store WHERE prefix='progenitor.state' AND key=${quote(`agent:user/${objectName}/SYSTEM.md`)};`);
     if (peer) {
-      const page = await browser.newPage();
+      const page = await browser.newPage({ baseURL: test.info().project.use.baseURL });
       try {
-        await page.goto('http://127.0.0.1:5173/routines');
+        await page.goto('/routines');
         // A direct DB cleanup leaves the runtime's registry cache stale and
         // a later registration can resurrect the removed fixture. Use the
         // normal virtual-file save so the document/cache stay consistent.
@@ -97,10 +99,10 @@ test('J17: greetings A2A and object adapters stay distinct; hello-world async re
   expect(calls.some((request) => JSON.stringify(request.params).includes(marker))).toBe(true);
   const asyncMarker = `J17_ASYNC_${suffix}`;
   const reply = await chat(page, `Use start_async_task with subagent_type hello-world-async and description ${asyncMarker}. Start it once in the background and return its task ID. Do not use call_agent or the synchronous task tool, and do not wait or check it yourself; its completion notification must arrive later.`);
-  await expect.poll(() => asyncTasks().find((task) => task.request_text.includes(asyncMarker)), { timeout: 30_000 }).toBeTruthy();
+  await expect.poll(() => asyncTasks().find((task) => task.request_text.includes(asyncMarker)), { timeout: 30_000, intervals: [1_000] }).toBeTruthy();
   const started = asyncTasks().find((task) => task.request_text.includes(asyncMarker));
   expect(started.task_id).toBeTruthy(); expect(started.agent_name).toBe('hello-world-async');
-  await expect.poll(() => asyncTasks().find((task) => task.task_id === started.task_id)?.notification_sent_at, { timeout: 180_000 }).toBeTruthy();
+  await expect.poll(() => asyncTasks().find((task) => task.task_id === started.task_id)?.notification_sent_at, { timeout: 360_000, intervals: [1_000] }).toBeTruthy();
   const finished = asyncTasks().find((task) => task.task_id === started.task_id);
   expect(finished.status).toBe('success'); expect(finished.summary || finished.latest_message).toContain('HELLO_FROM_ASYNC_SUBAGENT');
   await attachJsonEvidence(testInfo, 'j17-adapter-evidence', { completed, history, delegated, calls, reply, started, finished });

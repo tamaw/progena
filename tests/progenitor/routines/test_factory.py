@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage
@@ -389,11 +390,16 @@ class TestGraphWideRetryDefault:
     """settings.retry applies via StateGraph.set_node_defaults to nodes without their own config.retry."""
 
     async def test_settings_retry_covers_a_node_with_no_retry_of_its_own(self):
-        payload = _single_prompt_step_payload(
-        )
+        payload = _single_prompt_step_payload()
         graph = validate_routine_graph_payload(payload)
         model = FlakyModel(fail_times=2, response="ok")
-        runnable = compile_routine_graph(graph, model=model, execution_policy=PolicyValues(retry={"max_retries": 2, "initial_interval": 0, "retry_on": "all"}))
+        runnable = compile_routine_graph(
+            graph,
+            model=model,
+            execution_policy=PolicyValues(
+                retry={"max_retries": 2, "initial_interval": 0, "retry_on": "all"}
+            ),
+        )
         result = await runnable.ainvoke({"messages": [HumanMessage(content="hi")]})
         assert result["data"]["step"] == "ok"
         assert model.attempts == 3
@@ -415,7 +421,11 @@ class TestGraphWideRetryDefault:
         )
         graph = validate_routine_graph_payload(payload)
         model = FlakyModel(fail_times=2, response="ok")
-        runnable = compile_routine_graph(graph, model=model, execution_policy=PolicyValues(retry={"max_retries": 2, "retry_on": "all"}))
+        runnable = compile_routine_graph(
+            graph,
+            model=model,
+            execution_policy=PolicyValues(retry={"max_retries": 2, "retry_on": "all"}),
+        )
         with pytest.raises(RuntimeError, match="simulated transient failure"):
             await runnable.ainvoke({"messages": [HumanMessage(content="hi")]})
         assert model.attempts == 1
@@ -486,7 +496,9 @@ class TestRecursionLimitSetting:
             ],
         }
         graph = validate_routine_graph_payload(payload)
-        runnable = compile_routine_graph(graph, model=FakeModel([]), execution_policy=PolicyValues(graph_step_limit=6))
+        runnable = compile_routine_graph(
+            graph, model=FakeModel([]), execution_policy=PolicyValues(graph_step_limit=6)
+        )
         with pytest.raises(GraphRecursionError):
             await runnable.ainvoke({"messages": [HumanMessage(content="go")]})
 
@@ -974,3 +986,236 @@ class TestRunMetaInstrumentation:
             "output_tokens": 8,
             "total_tokens": 28,
         }
+
+
+class TestSchemaStateChannels:
+    """Declaring input_schema/output_schema fields must keep the run_meta and
+    node_outputs channels (contributed by the node callables' RoutineState
+    annotations) so per-node instrumentation and reduce nodes keep working."""
+
+    async def test_run_meta_channel_exists_with_input_and_output_schema(self):
+        payload = {
+            "id": "schema-timed",
+            "name": "schema-timed",
+            "description": "",
+            "version": "2.0.0",
+            "entry": "a",
+            "nodes": [
+                {"id": "a", "kind": "eval", "output_key": "a", "config": {"expression": "1"}},
+                {"id": "b", "kind": "eval", "output_key": "b", "config": {"expression": "2"}},
+            ],
+            "edges": [{"from": "a", "to": "b", "level": "normal"}],
+            "input_schema": {"type": "object", "properties": {"candidate": {"type": "string"}}},
+            "output_schema": {"type": "object", "properties": {"b": {"type": "integer"}}},
+        }
+        graph = validate_routine_graph_payload(payload)
+        compiled = compile_routine_graph(graph, model=FakeModel([]))
+        # The channels dict proves LangGraph sees run_meta and node_outputs
+        # even when the state type is extended for declared schema fields.
+        assert "run_meta" in compiled.channels
+        assert "node_outputs" in compiled.channels
+        # run_meta is a state channel, so it survives even though the
+        # projected output only returns messages + declared output fields.
+        result = await compiled.ainvoke(
+            {"messages": [HumanMessage(content="go")], "candidate": "hello"}
+        )
+        assert "b" in result
+
+    async def test_node_outputs_channel_exists_with_schema_for_reduce(self):
+        payload = {
+            "id": "schema-reduce",
+            "name": "schema-reduce",
+            "description": "",
+            "version": "2.0.0",
+            "entry": "a",
+            "nodes": [
+                {"id": "a", "kind": "eval", "output_key": "a", "config": {"expression": "1"}},
+                {"id": "b", "kind": "eval", "output_key": "b", "config": {"expression": "2"}},
+                {
+                    "id": "collect",
+                    "kind": "reduce",
+                    "output_key": "sum",
+                    "config": {"source_node": "a", "operation": "sum"},
+                },
+            ],
+            "edges": [
+                {"from": "a", "to": "b", "level": "normal"},
+                {"from": "b", "to": "collect", "level": "normal"},
+            ],
+            "input_schema": {"type": "object", "properties": {}},
+            "output_schema": {"type": "object", "properties": {"sum": {"type": "integer"}}},
+        }
+        graph = validate_routine_graph_payload(payload)
+        compiled = compile_routine_graph(graph, model=FakeModel([]))
+        assert "node_outputs" in compiled.channels
+        result = await compiled.ainvoke({"messages": [HumanMessage(content="go")]})
+        assert result["sum"] == 1
+
+
+class TestNestedRoutineRecursionGuard:
+    """Self-referencing or deeply nested routines must fail fast instead of
+    recursing unbounded."""
+
+    async def test_self_referencing_routine_raises_cycle_error(self):
+        payload = {
+            "id": "self-ref",
+            "name": "self-ref",
+            "description": "",
+            "version": "2.0.0",
+            "entry": "call",
+            "nodes": [
+                {
+                    "id": "call",
+                    "kind": "routine",
+                    "output_key": "result",
+                    "config": {"routine_name": "self-ref"},
+                }
+            ],
+            "edges": [],
+        }
+        graph = validate_routine_graph_payload(payload)
+        reg: dict[str, Any] = {}
+        runnable = compile_routine_graph(graph, model=FakeModel([]), routine_registry=reg)
+        reg["self-ref"] = runnable
+        with pytest.raises(ValueError, match="cycle detected"):
+            await runnable.ainvoke({"messages": [HumanMessage(content="go")]})
+
+    async def test_depth_cap_raises_error(self):
+        """A chain of N distinct routines where N exceeds the cap must fail."""
+        ids = [f"r{i}" for i in range(12)]
+        reg: dict[str, Any] = {}
+        for i, rid in enumerate(ids):
+            payload = {
+                "id": rid,
+                "name": rid,
+                "description": "",
+                "version": "2.0.0",
+                "entry": "call",
+                "nodes": [
+                    {
+                        "id": "call",
+                        "kind": "routine",
+                        "output_key": "result",
+                        "config": {"routine_name": ids[i + 1] if i + 1 < len(ids) else "r0"},
+                    }
+                ],
+                "edges": [],
+            }
+            reg[rid] = compile_routine_graph(
+                validate_routine_graph_payload(payload), model=FakeModel([]), routine_registry=reg
+            )
+        with pytest.raises(ValueError, match="depth exceeds limit"):
+            await reg["r0"].ainvoke({"messages": [HumanMessage(content="go")]})
+
+
+class TestA2ANodeTimeout:
+    """The A2A node must pass the resolved node/policy timeout to the client."""
+
+    async def test_a2a_node_passes_configured_timeout(self):
+        from unittest.mock import AsyncMock, Mock, patch
+
+        config = {
+            "agent_name": "peer",
+            "prompt_template": "{request}",
+            "timeout": 5,
+        }
+        payload = {
+            "id": "a2a-timeout",
+            "name": "a2a-timeout",
+            "description": "",
+            "version": "2.0.0",
+            "entry": "call",
+            "nodes": [{"id": "call", "kind": "a2a", "output_key": "result", "config": config}],
+            "edges": [],
+        }
+        graph = validate_routine_graph_payload(payload)
+        runnable = compile_routine_graph(
+            graph,
+            model=FakeModel([]),
+            tool_registry=Mock(
+                find_by_name=Mock(return_value={"transport": "http", "url": "http://peer"})
+            ),
+        )
+        with patch(
+            "app.progenitor.a2a.client.A2AClient.call_agent",
+            new_callable=AsyncMock,
+            return_value={
+                "success": True,
+                "result": {"status": {"message": {"parts": [{"text": "ok"}]}}},
+            },
+        ) as mock_call:
+            await runnable.ainvoke({"messages": [HumanMessage(content="go")]})
+            assert mock_call.call_count == 1
+            _, kwargs = mock_call.call_args
+            assert kwargs["timeout"] == 5.0
+
+    async def test_a2a_node_passes_policy_default_timeout(self):
+        from unittest.mock import AsyncMock, Mock, patch
+
+        config = {"agent_name": "peer", "prompt_template": "{request}"}
+        payload = {
+            "id": "a2a-policy-timeout",
+            "name": "a2a-policy-timeout",
+            "description": "",
+            "version": "2.0.0",
+            "entry": "call",
+            "nodes": [{"id": "call", "kind": "a2a", "output_key": "result", "config": config}],
+            "edges": [],
+        }
+        graph = validate_routine_graph_payload(payload)
+        runnable = compile_routine_graph(
+            graph,
+            model=FakeModel([]),
+            tool_registry=Mock(
+                find_by_name=Mock(return_value={"transport": "http", "url": "http://peer"})
+            ),
+            execution_policy=PolicyValues(attempt_timeout=42),
+        )
+        with patch(
+            "app.progenitor.a2a.client.A2AClient.call_agent",
+            new_callable=AsyncMock,
+            return_value={
+                "success": True,
+                "result": {"status": {"message": {"parts": [{"text": "ok"}]}}},
+            },
+        ) as mock_call:
+            await runnable.ainvoke({"messages": [HumanMessage(content="go")]})
+            assert mock_call.call_count == 1
+            _, kwargs = mock_call.call_args
+            assert kwargs["timeout"] == 42.0
+
+    async def test_a2a_node_zero_timeout_uses_no_limit_cap(self):
+        from unittest.mock import AsyncMock, Mock, patch
+
+        config = {"agent_name": "peer", "prompt_template": "{request}", "timeout": 0}
+        payload = {
+            "id": "a2a-unlimited",
+            "name": "a2a-unlimited",
+            "description": "",
+            "version": "2.0.0",
+            "entry": "call",
+            "nodes": [{"id": "call", "kind": "a2a", "output_key": "result", "config": config}],
+            "edges": [],
+        }
+        graph = validate_routine_graph_payload(payload)
+        runnable = compile_routine_graph(
+            graph,
+            model=FakeModel([]),
+            tool_registry=Mock(
+                find_by_name=Mock(return_value={"transport": "http", "url": "http://peer"})
+            ),
+        )
+        with patch(
+            "app.progenitor.a2a.client.A2AClient.call_agent",
+            new_callable=AsyncMock,
+            return_value={
+                "success": True,
+                "result": {"status": {"message": {"parts": [{"text": "ok"}]}}},
+            },
+        ) as mock_call:
+            await runnable.ainvoke({"messages": [HumanMessage(content="go")]})
+            assert mock_call.call_count == 1
+            _, kwargs = mock_call.call_args
+            from app.progenitor.routines.delegation_nodes import _A2A_NO_LIMIT_TIMEOUT
+
+            assert kwargs["timeout"] == _A2A_NO_LIMIT_TIMEOUT

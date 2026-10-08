@@ -145,7 +145,9 @@ class SelfManifestBackend(_AsyncOnlyFileBackendMixin):  # pragma: no cover
     async def _write_raw(self, content: str) -> None:
         if self._source.source == "native":
             raise ValueError("native object agent manifests are read-only")
-        manifest = parse_object_agent_manifest(content, source="self-edit")
+        manifest = parse_object_agent_manifest(
+            content, source="self-edit", source_kind=self._source.source
+        )
         if manifest.name != self._source.name:
             raise ValueError(
                 "renaming an agent from its own SYSTEM.md is not supported; "
@@ -397,7 +399,9 @@ def create_object_agent_proxy(
         )
         if content is None:
             raise ValueError(f"object agent {source.name!r} is no longer installed")
-        return parse_object_agent_manifest(content, source=f"agent:{source.relative_path}")
+        return parse_object_agent_manifest(
+            content, source=f"agent:{source.relative_path}", source_kind=source.source
+        )
 
     async def run(state: Any, config: RunnableConfig) -> dict[str, Any]:
         manifest = await load_manifest()

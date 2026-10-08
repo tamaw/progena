@@ -132,6 +132,7 @@ def _filter_valid_agent_files(
             parse_object_agent_manifest(
                 system_prompt,
                 source=f"plugin:{plugin_name}/agents/objects/{agent_name}/SYSTEM.md",
+                source_kind="marketplace",
             )
         except ValueError as exc:
             skipped.append(agent_name)

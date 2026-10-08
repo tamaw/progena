@@ -1,6 +1,7 @@
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
+import { JSDOM } from 'jsdom';
 import { GraphEditContext } from './graphEditorContext';
 import { NodeInspector } from './NodeInspector';
 import { RoutineChain } from './RoutineChain';
@@ -22,16 +23,22 @@ function renderWithGraph(component, nodes, edges, overrides = {}) {
   );
 }
 
+function parseMarkup(markup) {
+  const { document } = new JSDOM(markup).window;
+  return document.body ?? document;
+}
+
 describe('extracted routine components', () => {
   it('renders inspector config and marks the required field on an incomplete prompt', () => {
     const node = { id: 'prompt', kind: 'prompt', label: 'Compose response', config: {} };
     const markup = renderWithGraph(<NodeInspector node={node} isNew />, [node], []);
+    const doc = parseMarkup(markup);
 
-    expect(markup).toContain('Compose response');
-    expect(markup).toContain('System prompt (optional)');
-    expect(markup).toContain('aria-required="true"');
-    expect(markup).toContain('One field is required before this step can be saved.');
-    expect(markup).toContain('Fill it in, or close to discard this step.');
+    expect(doc.textContent).toContain('Compose response');
+    expect(doc.textContent).toContain('System prompt (optional)');
+    expect(doc.querySelector('[aria-required="true"]')).not.toBeNull();
+    expect(doc.textContent).toContain('One field is required before this step can be saved.');
+    expect(doc.textContent).toContain('Fill it in, or close to discard this step.');
   });
 
   it('renders a complete inspector expression and cached run details', () => {
@@ -39,11 +46,12 @@ describe('extracted routine components', () => {
     const markup = renderWithGraph(<NodeInspector node={node} />, [node], [], {
       runMeta: { calculate: [{ duration_ms: 1250, output: { calculate: 3 } }] },
     });
+    const doc = parseMarkup(markup);
 
-    expect(markup).toContain('Calculate');
-    expect(markup).toContain('request.count + 1');
-    expect(markup).toContain('1.3s');
-    expect(markup).not.toContain('aria-required="true"');
+    expect(doc.textContent).toContain('Calculate');
+    expect(doc.textContent).toContain('request.count + 1');
+    expect(doc.textContent).toContain('1.3s');
+    expect(doc.querySelector('[aria-required="true"]')).toBeNull();
   });
 
   it('renders nested forks and their shared join once with connector controls', () => {
@@ -58,17 +66,18 @@ describe('extracted routine components', () => {
       { from: ['a', 'b', 'c'], to: 'joined', level: 'fan_in' },
     ];
     const markup = renderWithGraph(<RoutineChain nodes={nodes} edges={edges} entry="outer" />, nodes, edges);
+    const doc = parseMarkup(markup);
 
     for (const node of nodes) expect(markup.match(new RegExp(`data-node-id="${node.id}"`, 'g'))).toHaveLength(1);
     expect(markup.indexOf('data-node-id="a"')).toBeLessThan(markup.indexOf('data-node-id="b"'));
     expect(markup.indexOf('data-node-id="inner"')).toBeLessThan(markup.indexOf('data-node-id="c"'));
-    expect(markup).toContain('routine-fork--joined');
-    expect(markup).toContain('aria-label="Insert step here"');
-    expect(markup).not.toContain('Unreachable steps');
+    expect(doc.querySelector('.routine-fork--joined')).not.toBeNull();
+    expect(doc.querySelector('[aria-label="Insert step here"]')).not.toBeNull();
+    expect(doc.textContent).not.toContain('Unreachable steps');
 
-    const readOnlyMarkup = renderWithGraph(<RoutineChain nodes={nodes} edges={edges} entry="outer" />, nodes, edges, { readOnly: true });
-    expect(readOnlyMarkup).toContain('data-node-id="joined"');
-    expect(readOnlyMarkup).not.toContain('aria-label="Insert step here"');
-    expect(readOnlyMarkup).not.toContain('aria-label="Remove branch"');
+    const readOnlyDoc = parseMarkup(renderWithGraph(<RoutineChain nodes={nodes} edges={edges} entry="outer" />, nodes, edges, { readOnly: true }));
+    expect(readOnlyDoc.querySelector('[data-node-id="joined"]')).not.toBeNull();
+    expect(readOnlyDoc.querySelector('[aria-label="Insert step here"]')).toBeNull();
+    expect(readOnlyDoc.querySelector('[aria-label="Remove branch"]')).toBeNull();
   });
 });

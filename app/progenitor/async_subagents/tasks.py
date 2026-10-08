@@ -143,6 +143,10 @@ async def refresh_tracked_async_subagent_task(
             summary = latest_message
         completed_at = completed_at or utcnow()
         last_error = None
+    elif status == "interrupted":
+        # Paused for human approval, not finished: a resume continues the
+        # same thread, so completed_at stays unset.
+        latest_message = summary = "Awaiting human approval"
     elif status in {"error", "cancelled"}:
         error_text = run.get("error")
         last_error = str(error_text) if error_text else last_error

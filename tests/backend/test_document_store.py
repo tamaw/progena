@@ -43,6 +43,9 @@ class _FakeConnection:
     def cursor(self):
         return self._cursor
 
+    def execute(self, query, params=None):
+        return self._cursor.execute(query, params)
+
     def __enter__(self):
         return self
 
@@ -119,7 +122,7 @@ def test_ensure_change_trigger_notifies_state_only():
     emitted = " ".join(str(query) for query, _ in pool._cursor.executed)
     assert "progenitor_notify_store_change" in emitted
     assert "pg_notify" in emitted
-    assert "CREATE TRIGGER progenitor_store_change" in emitted
+    assert "CREATE OR REPLACE TRIGGER progenitor_store_change" in emitted
     # Deletes must notify too - the runtime process has no other way to tell the
     # backend a row disappeared.
     assert "AFTER INSERT OR UPDATE OR DELETE" in emitted
@@ -142,23 +145,27 @@ def test_document_store_open_preserves_documents_and_installs_revision_history()
     assert "CREATE TABLE IF NOT EXISTS store" in emitted
     assert "CREATE TABLE IF NOT EXISTS routine_graph_revisions" in emitted
     assert (
-        "CREATE TRIGGER progenitor_capture_routine_revision AFTER INSERT OR UPDATE ON store"
+        "CREATE OR REPLACE TRIGGER progenitor_capture_routine_revision AFTER INSERT OR UPDATE ON store"
         in emitted
     )
     assert (
-        "CREATE TRIGGER progenitor_capture_deleted_routine_revision BEFORE DELETE ON store"
+        "CREATE OR REPLACE TRIGGER progenitor_capture_deleted_routine_revision BEFORE DELETE ON store"
         in emitted
     )
     assert "RETURN source_row" in emitted
     assert "IF TG_OP = 'DELETE' THEN source_row := OLD;" in emitted
     assert "graph_doc := source_row.value -> 'payload'" in emitted
     assert (
-        "CREATE TRIGGER progenitor_routine_revisions_immutable BEFORE UPDATE ON routine_graph_revisions"
+        "CREATE OR REPLACE TRIGGER progenitor_routine_revisions_immutable BEFORE UPDATE ON routine_graph_revisions"
         in emitted
     )
     # Existing graphs still get immutable snapshots without rewriting the source
     # documents. Subsequent writes continue to capture revisions via the trigger.
-    backfill = next(statement for statement in statements if statement.startswith("INSERT INTO routine_graph_revisions"))
+    backfill = next(
+        statement
+        for statement in statements
+        if statement.startswith("INSERT INTO routine_graph_revisions")
+    )
     assert backfill.startswith("INSERT INTO routine_graph_revisions")
     assert "FROM store" in backfill
     assert "value -> 'payload'" in backfill
@@ -171,10 +178,11 @@ def test_document_store_open_preserves_documents_and_installs_revision_history()
         statement.startswith(
             (
                 "CREATE TABLE",
+                "SELECT pg_advisory_lock",
+                "SELECT pg_advisory_unlock",
                 "CREATE INDEX",
                 "CREATE OR REPLACE FUNCTION",
-                "DROP TRIGGER",
-                "CREATE TRIGGER",
+                "CREATE OR REPLACE TRIGGER",
                 "INSERT INTO routine_graph_revisions",
                 "INSERT INTO store",
             )

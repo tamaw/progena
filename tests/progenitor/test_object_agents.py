@@ -195,6 +195,35 @@ def test_manifest_filters_unknown_keys_and_parses_supported_contract():
     assert manifest.system_prompt == "You are a concise reviewer."
 
 
+def test_user_manifest_rejects_shell():
+    content = VALID_SYSTEM.replace(
+        "tools: [current_time]", "tools: []\nshell: true\nenv_passthrough: [GH_TOKEN]"
+    )
+    with pytest.raises(
+        ValueError, match="shell and env_passthrough are only allowed for native agents"
+    ):
+        parse_object_agent_manifest(content, source="test", source_kind="user")
+
+
+def test_marketplace_manifest_rejects_shell():
+    content = VALID_SYSTEM.replace(
+        "tools: [current_time]", "tools: []\nshell: true\nenv_passthrough: [GH_TOKEN]"
+    )
+    with pytest.raises(
+        ValueError, match="shell and env_passthrough are only allowed for native agents"
+    ):
+        parse_object_agent_manifest(content, source="test", source_kind="marketplace")
+
+
+def test_native_manifest_allows_shell():
+    content = VALID_SYSTEM.replace(
+        "tools: [current_time]", "tools: []\nshell: true\nenv_passthrough: [GH_TOKEN]"
+    )
+    manifest = parse_object_agent_manifest(content, source="test", source_kind="native")
+    assert manifest.shell is not None
+    assert manifest.shell.env_passthrough == ("GH_TOKEN",)
+
+
 def test_raw_front_matter_preserves_authoring_fields():
     raw = parse_front_matter(VALID_SYSTEM, source="test")
     assert raw["unknown_for_future_schema"] == "preserved_for_authoring"

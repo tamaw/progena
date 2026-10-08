@@ -32,7 +32,7 @@ branch_join_graph = {
     "name": "Routine Branch Join",
     "version": "2.0.0",
     "description": "E2E fixture: a router fork with two real branches converging at a fan-in join.",
-    "settings": {},
+    "policy_id": "default",
     "entry": "classify",
     "nodes": [
         {
@@ -104,7 +104,7 @@ all_controls_graph = {
     "name": "Routine All Controls",
     "version": "2.0.0",
     "description": "E2E fixture: a Send fan-out foreach whose body contains its own router fork with a join.",
-    "settings": {},
+    "policy_id": "default",
     "entry": "collect_items",
     "nodes": [
         {
@@ -267,7 +267,7 @@ private_context_graph = {
         "E2E fixture: a plain linear chain, so a fan-out inserted mid-chain "
         "makes any swallowed step obvious as a reorder."
     ),
-    "settings": {},
+    "policy_id": "default",
     "entry": "inject_context",
     "nodes": [
         {
