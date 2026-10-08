@@ -267,9 +267,10 @@ class AgentStore:
             if not isinstance(payload, dict) or not isinstance(payload.get("content"), str):
                 logger.warning("Skipping malformed object agent document %s", relative_path)
                 continue
+            source = "marketplace" if "__" in parts[0] else "user"
             try:
                 manifest = parse_object_agent_manifest(
-                    payload["content"], source=f"agent:{relative_path}"
+                    payload["content"], source=f"agent:{relative_path}", source_kind=source
                 )
             except ValueError as exc:
                 logger.warning("Skipping invalid object agent document %s: %s", relative_path, exc)
@@ -282,7 +283,6 @@ class AgentStore:
                 )
                 continue
             known_names.add(manifest.name)
-            source = "marketplace" if "__" in parts[0] else "user"
             entries.append((source, manifest.name, relative_path, manifest, payload["content"]))
         return entries
 
@@ -302,7 +302,9 @@ class AgentStore:
 
     def save_user_object_agent(self, content: str) -> dict[str, Any]:
         """Persist one author-created ``SYSTEM.md`` as an agent content document."""
-        manifest = parse_object_agent_manifest(content, source="user object agent")
+        manifest = parse_object_agent_manifest(
+            content, source="user object agent", source_kind="user"
+        )
         for record in self.list_object_agents():
             if record["name"] == manifest.name and record["card"].get("source") != "user":
                 raise ValueError(
@@ -329,7 +331,7 @@ class AgentStore:
         source, _old_name, location, _old_manifest, _old_raw = match
         if source == "native":
             raise ValueError("native object agent manifests are read-only")
-        manifest = parse_object_agent_manifest(content, source="object agent")
+        manifest = parse_object_agent_manifest(content, source="object agent", source_kind=source)
         new_id = f"object-{_slug(manifest.name)}"
         if new_id != agent_id and any(f"object-{_slug(entry[1])}" == new_id for entry in entries):
             raise ValueError(f"object agent name {manifest.name!r} is already in use")
@@ -369,6 +371,15 @@ class AgentStore:
         )
         return True
 
+    def _validate_skill_path(self, skill_path: str) -> list[str]:
+        """Reject traversal, empty, or dot segments in skill virtual paths."""
+        if not skill_path.startswith("/skills/"):
+            raise ValueError(f"skill path must start with /skills/: {skill_path!r}")
+        segments = skill_path.removeprefix("/skills/").split("/")
+        if any(segment in {"", ".", ".."} for segment in segments):
+            raise ValueError(f"skill path contains invalid segment: {skill_path!r}")
+        return segments
+
     def resolve_skill(self, skill_path: str) -> dict[str, Any] | None:
         """Resolve one skill's ``SKILL.md`` by its manifest ``skills:`` entry.
 
@@ -380,10 +391,15 @@ class AgentStore:
         ``/skills/<marketplace>__<plugin>/<name>`` for an installed
         marketplace-plugin skill (Postgres document store).
         """
-        segments = skill_path.removeprefix("/skills/").split("/")
+        try:
+            segments = self._validate_skill_path(skill_path)
+        except ValueError:
+            return None
         if len(segments) == 1:
             name = segments[0]
-            native_path = _NATIVE_SKILLS_ROOT / name / "SKILL.md"
+            native_path = (_NATIVE_SKILLS_ROOT / name / "SKILL.md").resolve()
+            if not native_path.is_relative_to(_NATIVE_SKILLS_ROOT.resolve()):
+                return None
             if not native_path.is_file():
                 return None
             return _skill_profile(
@@ -422,6 +438,7 @@ class AgentStore:
         reference from an agent manifest's ``skills:`` list, so silently
         changing it would orphan that reference.
         """
+        self._validate_skill_path(skill_path)
         existing = self.resolve_skill(skill_path)
         if existing is None:
             raise LookupError(f"skill {skill_path!r} not found")
@@ -437,7 +454,10 @@ class AgentStore:
             )
         if existing["source"] == "native":
             name = cast(str, existing["name"])
-            (_NATIVE_SKILLS_ROOT / name / "SKILL.md").write_text(content, encoding="utf-8")
+            native_path = (_NATIVE_SKILLS_ROOT / name / "SKILL.md").resolve()
+            if not native_path.is_relative_to(_NATIVE_SKILLS_ROOT.resolve()):
+                raise ValueError(f"skill path escapes native skills root: {skill_path!r}")
+            native_path.write_text(content, encoding="utf-8")
         else:
             self._document_store.save_document(
                 PROGENITOR_STATE_PREFIX,

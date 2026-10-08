@@ -10,7 +10,11 @@ CHECKPOINT_CHANNEL = "routine_checkpoints"
 
 # Keep LangGraph's schema and checkpoint format intact. NOTIFY contains only
 # identifiers and is delivered after commit; readers use the native saver.
+# Sent as one simple query (a single implicit transaction): the xact lock
+# serializes concurrent startups, which otherwise race on the function/trigger
+# catalog rows ("tuple concurrently updated" / "trigger already exists").
 CHECKPOINT_TRIGGER_SQL = """
+SELECT pg_advisory_xact_lock(hashtext('progenitor_routine_checkpoint_trigger'));
 CREATE OR REPLACE FUNCTION progenitor_notify_routine_checkpoint()
 RETURNS trigger AS $$
 BEGIN
@@ -21,8 +25,7 @@ BEGIN
     RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
-DROP TRIGGER IF EXISTS progenitor_routine_checkpoint ON checkpoints;
-CREATE TRIGGER progenitor_routine_checkpoint
+CREATE OR REPLACE TRIGGER progenitor_routine_checkpoint
 AFTER INSERT OR UPDATE ON checkpoints FOR EACH ROW
 EXECUTE FUNCTION progenitor_notify_routine_checkpoint();
 """

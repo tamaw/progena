@@ -94,4 +94,52 @@ describe('diffRoutineGraphs', () => {
     const invalid = diffRoutineGraphs(baseline, current);
     expect(invalid.size).toBe(0);
   });
+
+  it('invalidates downstream of a condition router when a branch target is edited', () => {
+    const baseline = {
+      entry: 'c',
+      nodes: [node('c', { kind: 'condition' }), node('t'), node('f')],
+      edges: [{ from: 'c', router: true, branches: { true: 't', false: 'f' } }],
+    };
+    const current = structuredClone(baseline);
+    current.nodes[1].config = { expression: 'changed' };
+    const invalid = diffRoutineGraphs(baseline, current);
+    expect(invalid).toEqual(new Set(['t']));
+    expect(isNodeRunValid('c', invalid)).toBe(true);
+    expect(isNodeRunValid('f', invalid)).toBe(true);
+  });
+
+  it('invalidates downstream of a fan_in join when a source node is edited', () => {
+    const baseline = {
+      entry: 'a',
+      nodes: [node('a', { kind: 'condition' }), node('b'), node('c'), node('j')],
+      edges: [
+        { from: 'a', router: true, branches: { true: 'b', false: 'c' } },
+        { from: ['b', 'c'], to: 'j', level: 'fan_in' },
+      ],
+    };
+    const current = structuredClone(baseline);
+    current.nodes[1].config = { expression: 'changed' };
+    const invalid = diffRoutineGraphs(baseline, current);
+    expect(invalid).toEqual(new Set(['b', 'j']));
+    expect(isNodeRunValid('a', invalid)).toBe(true);
+    expect(isNodeRunValid('c', invalid)).toBe(true);
+  });
+
+  it('invalidates loop body and exit nodes when a loop node is edited', () => {
+    const baseline = {
+      entry: 'a',
+      nodes: [node('a'), node('b'), node('c'), node('d')],
+      edges: [
+        edge('a', 'b'),
+        edge('b', 'c'),
+        { from: 'c', to: 'b', loop_guard: { expression: 'i < 3', on_false: 'd' } },
+      ],
+    };
+    const current = structuredClone(baseline);
+    current.nodes[1].config = { expression: 'changed' };
+    const invalid = diffRoutineGraphs(baseline, current);
+    expect(invalid).toEqual(new Set(['b', 'c', 'd']));
+    expect(isNodeRunValid('a', invalid)).toBe(true);
+  });
 });

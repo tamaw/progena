@@ -215,13 +215,49 @@ def build_agent_profiles(store: AgentStore) -> AgentProfilesResponse:
     """Build the internal-agent catalog from backend graph and manifest sources."""
     # Metadata can briefly outlive its live graph while DELETE notifications
     # are reconciled. Reads must hide these rows without recreating documents.
-    records = [
-        record
-        for record in store.list_agents()
-        if record.get("kind") != "routine" or store.get_routine_document(record["id"]) is not None
-    ] + store.list_object_agents()
+    records = (
+        [
+            record
+            for record in store.list_agents()
+            if record.get("kind") != "routine"
+            or store.get_routine_document(record["id"]) is not None
+        ]
+        + store.list_object_agents()
+        + a2a_profiles_from_registry()
+        + acp_profiles_from_registry()
+    )
     agents = [AgentProfile(**record) for record in records]
     return AgentProfilesResponse(agents=agents, total=len(agents))
+
+
+def _append_background_task_locked(
+    doc_store: BackendDocumentStore,
+    task: dict[str, Any],
+) -> None:
+    """Atomically append a task to the shared background_tasks document.
+
+    Uses a Postgres advisory lock so concurrent backend enqueues and runtime
+    dequeues cannot lose or duplicate tasks.
+    """
+    url = store_database_url(doc_store)
+    if not url:
+        existing = doc_store.get_document(PROGENITOR_STATE_PREFIX, "background_tasks", [])
+        tasks = list(existing.payload) if existing is not None else []
+        tasks.append(task)
+        doc_store.save_document(PROGENITOR_STATE_PREFIX, "background_tasks", tasks)
+        return
+
+    import psycopg
+
+    with psycopg.connect(url, autocommit=True) as conn:
+        conn.execute("SELECT pg_advisory_lock(hashtextextended('background_tasks', 0))")
+        try:
+            existing = doc_store.get_document(PROGENITOR_STATE_PREFIX, "background_tasks", [])
+            tasks = list(existing.payload) if existing is not None else []
+            tasks.append(task)
+            doc_store.save_document(PROGENITOR_STATE_PREFIX, "background_tasks", tasks)
+        finally:
+            conn.execute("SELECT pg_advisory_unlock(hashtextextended('background_tasks', 0))")
 
 
 def object_agent_system_markdown(payload: ObjectAgentCreateRequest) -> str:
@@ -492,10 +528,15 @@ def create_agent_profile_router(
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
         policy_document = await asyncio.to_thread(
-            get_document_store().get_document, PROGENITOR_STATE_PREFIX, f"policy:{body.policy_id}", None
+            get_document_store().get_document,
+            PROGENITOR_STATE_PREFIX,
+            f"policy:{body.policy_id}",
+            None,
         )
         if policy_document is None:
-            raise HTTPException(status_code=422, detail=f"Unknown execution policy '{body.policy_id}'")
+            raise HTTPException(
+                status_code=422, detail=f"Unknown execution policy '{body.policy_id}'"
+            )
 
         updated = store.update_graph(
             agent_id,
@@ -602,13 +643,6 @@ def create_agent_profile_router(
                 )
 
         doc_store = get_document_store()
-        # NOTE: the bare name here, not "background_tasks.json" -- that
-        # suffixed form is a different backend's on-disk filename, unrelated
-        # to the Postgres `store` key StateManager._get_runtime_document
-        # actually reads (confirmed empirically: writing to the suffixed key
-        # left the real document empty and the runtime never saw the task).
-        existing = doc_store.get_document(PROGENITOR_STATE_PREFIX, "background_tasks", [])
-        tasks = list(existing.payload) if existing is not None else []
         session_id = body.session_id or uuid.uuid4().hex
         metadata: dict[str, Any] = {
             "kind": "routine_run",
@@ -621,15 +655,15 @@ def create_agent_profile_router(
         if body.parameters:
             metadata["parameters"] = body.parameters
         queued_at = utcnow_isoformat()
-        tasks.append(
+        _append_background_task_locked(
+            doc_store,
             {
                 "id": f"routine-run-{uuid.uuid4().hex}",
                 "content": f'Run the "{agent_id}" routine graph.',
                 "metadata": metadata,
                 "created_at": queued_at,
-            }
+            },
         )
-        doc_store.save_document(PROGENITOR_STATE_PREFIX, "background_tasks", tasks)
         from app.progenitor.routines.events import RUN_EVENT_PREFIX
 
         lifecycle = {
@@ -690,20 +724,18 @@ def create_agent_profile_router(
                     "answer": body.answer,
                     "request_id": request_id,
                 }
-                existing = doc_store.get_document(PROGENITOR_STATE_PREFIX, "background_tasks", [])
-                tasks = list(existing.payload) if existing is not None else []
                 queued_at = utcnow_isoformat()
-                tasks.append(
-                    {
-                        "id": f"routine-answer-{uuid.uuid4().hex}",
-                        "content": "Answer a routine approval.",
-                        "metadata": metadata,
-                        "created_at": queued_at,
-                    }
-                )
                 doc_store.save_document(PROGENITOR_STATE_PREFIX, claim_key, metadata)
                 try:
-                    doc_store.save_document(PROGENITOR_STATE_PREFIX, "background_tasks", tasks)
+                    _append_background_task_locked(
+                        doc_store,
+                        {
+                            "id": f"routine-answer-{uuid.uuid4().hex}",
+                            "content": "Answer a routine approval.",
+                            "metadata": metadata,
+                            "created_at": queued_at,
+                        },
+                    )
                 except Exception:
                     doc_store.delete_document(PROGENITOR_STATE_PREFIX, claim_key)
                     raise

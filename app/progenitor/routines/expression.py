@@ -16,14 +16,57 @@ from __future__ import annotations
 import ast
 from typing import Any
 
+_MAX_EXPONENT = 1000
+_MAX_INT_RESULT_BITS = 100_000
+_MAX_SEQUENCE_REPEAT_LENGTH = 10_000
+
+
+def _safe_pow(a: Any, b: Any) -> Any:
+    if isinstance(b, int) and b > _MAX_EXPONENT:
+        raise UnsafeExpressionError(
+            f"exponent too large ({b} > {_MAX_EXPONENT}); power operations are bounded"
+        )
+    # A bounded exponent still explodes when chained ((10 ** 1000) ** 1000).
+    if (
+        isinstance(a, int)
+        and isinstance(b, int)
+        and b > 0
+        and a.bit_length() * b > _MAX_INT_RESULT_BITS
+    ):
+        raise UnsafeExpressionError(
+            f"power result too large (over {_MAX_INT_RESULT_BITS} bits); power operations are bounded"
+        )
+    return a**b
+
+
+def _safe_mult(a: Any, b: Any) -> Any:
+    # Check the repeated length before computing to avoid allocating huge sequences.
+    for seq, times in ((a, b), (b, a)):
+        if (
+            isinstance(seq, (str, bytes, list, tuple))
+            and isinstance(times, int)
+            and len(seq) * times > _MAX_SEQUENCE_REPEAT_LENGTH
+        ):
+            raise UnsafeExpressionError(
+                f"sequence repetition result too long (over {_MAX_SEQUENCE_REPEAT_LENGTH} items)"
+            )
+    return a * b  # type: ignore[operator]
+
+
+def _safe_mod(a: Any, b: Any) -> Any:
+    if isinstance(a, str):
+        raise UnsafeExpressionError("string formatting with '%' is not allowed")
+    return a % b
+
+
 _ALLOWED_BINOPS: dict[type[ast.operator], Any] = {
     ast.Add: lambda a, b: a + b,
     ast.Sub: lambda a, b: a - b,
-    ast.Mult: lambda a, b: a * b,
+    ast.Mult: _safe_mult,
     ast.Div: lambda a, b: a / b,
     ast.FloorDiv: lambda a, b: a // b,
-    ast.Mod: lambda a, b: a % b,
-    ast.Pow: lambda a, b: a**b,
+    ast.Mod: _safe_mod,
+    ast.Pow: _safe_pow,
 }
 
 _ALLOWED_COMPARES: dict[type[ast.cmpop], Any] = {

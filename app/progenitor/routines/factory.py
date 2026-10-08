@@ -266,6 +266,7 @@ def _build_node_callable(
     model_profile_resolver: Callable[[str], Awaitable[Any]] | None = None,
     tool_registry: Any = None,
     defs: dict[str, dict[str, Any]] | None = None,
+    policy_defaults: dict[str, Any] | None = None,
 ) -> Any:
     profile = _node_config(node).get("model_profile")
     if profile and node.kind in {"prompt", "classify"}:
@@ -307,7 +308,11 @@ def _build_node_callable(
             background_runner=agent_background_runner,
         )
     if node.kind == "a2a":
-        return _build_a2a_node(node, tool_registry=tool_registry)
+        return _build_a2a_node(
+            node,
+            tool_registry=tool_registry,
+            timeout=_node_timeout(_node_config(node), policy_defaults or {}),
+        )
     if node.kind == "foreach":
         return _build_foreach_node(node, object_agent_registry=agent_registry)
     if node.kind == "human":
@@ -659,6 +664,7 @@ def compile_routine_graph(
                     model_profile_resolver=model_profile_resolver,
                     tool_registry=tool_registry,
                     defs=graph.defs,
+                    policy_defaults=policy_defaults,
                 ),
                 route_fn=route_fns.get(node.id),
                 capture_output_key=capture_output_keys.get(node.id),

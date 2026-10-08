@@ -69,6 +69,15 @@ async def routine_run_node(
         return await failed("routine_run: missing routine_id in task metadata")
 
     if metadata.get("operation") == "resume":
+        missing = [
+            key
+            for key in ("thread_id", "answer", "interrupt_id", "request_id")
+            if key not in metadata
+        ]
+        if missing:
+            return await failed(
+                f"routine_run: resume metadata missing required field(s): {', '.join(missing)}"
+            )
         resumer = getattr(runtime.context, "routine_resumer", None)
         if resumer is None:
             return await failed("routine_run: routine resume unavailable")

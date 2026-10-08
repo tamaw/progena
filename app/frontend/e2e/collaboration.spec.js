@@ -90,7 +90,7 @@ test('19 quick-chat routines survive rapid switching, SSE reconnect, and sequent
     const raw = execFileSync('psql', [databaseUrl, '-Atc',
       `SELECT value->'payload'->'nodes' FROM store WHERE prefix='progenitor.state' AND key='routine:${second.id.replaceAll("'", "''")}'`], { encoding: 'utf8' });
     return JSON.parse(raw.trim())[0].config.expression;
-  }, { timeout: 180_000 }).toBe('39');
+  }, { timeout: 180_000, intervals: [1_000] }).toBe('39');
   await expect(page.getByRole('button', { name: 'New chat', exact: true })).toBeEnabled({ timeout: 180_000 });
   await closeChat(page);
   expect((await readGraph(page)).nodes[0].config.expression).toBe('39');

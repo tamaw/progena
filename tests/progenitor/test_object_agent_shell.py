@@ -116,9 +116,7 @@ async def test_shell_proxy_exposes_execute_capability(monkeypatch, tmp_path: Pat
     backend = await _compiled_backend(monkeypatch, _source(tmp_path, SHELL_SYSTEM), tmp_path)
 
     assert supports_execution(backend)
-    assert backend.default.cwd == (
-        tmp_path / "shell-workspaces" / "shell-reviewer"
-    )
+    assert backend.default.cwd == (tmp_path / "shell-workspaces" / "shell-reviewer")
     assert backend.default._default_timeout == 120
 
 
@@ -196,12 +194,19 @@ def test_shell_environment_is_scrubbed_and_explicit():
         shim_bin=Path("/shims"),
         agent_home=Path("/home/agent"),
         config=manifest.shell,
-        parent_env={"GH_TOKEN": "token", "AZURE_OPENAI_API_KEY": "secret"},
+        parent_env={
+            "GH_TOKEN": "token",
+            "AZURE_OPENAI_API_KEY": "secret",
+            "GH_HOST": "evil.com",
+            "GIT_DIR": "/elsewhere/.git",
+        },
     )
 
     assert environment["PATH"] == "/shims:/usr/bin:/bin"
     assert environment["GH_TOKEN"] == "token"
     assert "AZURE_OPENAI_API_KEY" not in environment
+    assert "GH_HOST" not in environment
+    assert "GIT_DIR" not in environment
 
 
 def test_shell_timeout_comes_from_environment(monkeypatch):

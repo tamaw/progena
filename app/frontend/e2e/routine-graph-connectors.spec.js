@@ -370,7 +370,7 @@ test.describe('routine graph connectors', () => {
     const scopeBefore = expanded.scopes[0];
     const before = scopeBefore.lanes[0];
     await page.locator('.routine-fork__lane .routine-fork__header-collapse').first().click();
-    await page.waitForTimeout(400);
+    await expect(page.locator('.routine-fork__lane').first()).toHaveClass(/routine-fork__lane--collapsed/);
     await settled(page);
     const scopeAfter = (await page.evaluate(readGraph)).scopes[0];
     const after = scopeAfter.lanes[0];

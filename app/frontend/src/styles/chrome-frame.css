@@ -7077,7 +7077,7 @@ body,
   backdrop-filter: blur(10px);
 }
 
-/* Run button's parameters modal (RunParametersModal in AgentGraph.jsx) --
+/* Run button's parameters modal (RunParametersModal in RoutineGraphEditor.jsx) --
    deliberately NOT .sidebar-modal-backdrop's fixed/inset:0/document.body
    portal: this backdrop is a plain child of .canvas-surface (already
    position:relative, already exactly the routine's own content bounds),
@@ -7225,7 +7225,7 @@ body,
 /* Run button while a run is in flight: same "gray out, stay mounted, pulse
    don't spin" idiom as the rest of this toolbar (see routine-step-card-run
    and routine-cap--warming below) -- the icon itself (Play -> Stop, swapped
-   in AgentGraph.jsx's isRunInProgress) pulses in place rather than the
+   in RoutineGraphEditor.jsx's isRunInProgress) pulses in place rather than the
    button disappearing or a spinner replacing it, and disabled dims the
    whole control since a second click would mint a second concurrent run,
    not stop this one -- there's no cancel endpoint for an in-flight run. */
@@ -7509,7 +7509,7 @@ body,
 }
 
 /* Held open until the step is saveable -- see closeInspector in
-   AgentGraph.jsx for what × actually does while locked. */
+   RoutineGraphEditor.jsx for what × actually does while locked. */
 .routine-node-inspector--locked {
   border-color: color-mix(in oklab, var(--color-warning, #d29922) 45%, var(--color-border));
 }
@@ -7571,7 +7571,7 @@ body,
 }
 
 /* Per-kind accents for the executable routine node kinds (also set inline via
-   GRAPH_KIND_COLORS in AgentGraph.jsx, which takes precedence; kept here too
+   GRAPH_KIND_COLORS in graphNodeKinds.js, which takes precedence; kept here too
    for any server-rendered/no-JS fallback). */
 .agents-graph-node--prompt {
   --node-color: #3b82f6;
@@ -7719,7 +7719,7 @@ body,
   flex: 0 0 auto;
 }
 
-/* The step card's run sub-header (see StepRunSummary in AgentGraph.jsx) --
+/* The step card's run sub-header (see StepRunSummary in RoutineChain.jsx) --
    shown only once run data exists for that node, so it has no reserved
    space when idle. */
 .routine-step-card__run {
@@ -7945,7 +7945,7 @@ body,
   min-height: 72px;
 }
 
-/* The NodeInspector "Last run" section (see NodeInspector in AgentGraph.jsx)
+/* The NodeInspector "Last run" section (see NodeInspector.jsx)
    -- only rendered once run_meta exists for the inspected node. */
 .routine-node-inspector__run {
   padding-top: 11px;
@@ -8203,7 +8203,7 @@ body,
 }
 
 /* Pulses while a run has kicked off but nothing anywhere has completed yet
-   (see `warmingUp` in AgentGraph.jsx) -- an expanding/fading ring around
+   (see `warmingUp` in RoutineGraphEditor.jsx) -- an expanding/fading ring around
    Start stands in for the entry node's own missing (would-be-inaccurate)
    ticking timer during that warm-up window. */
 .routine-cap--warming {

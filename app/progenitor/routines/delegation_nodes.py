@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import json
 from collections.abc import Awaitable, Callable
 from typing import Any
@@ -23,6 +24,10 @@ from .state import (
     _require_no_file_source,
     _resolve_inputs,
     _resolve_response_schema,
+)
+
+_routine_ancestry_var: contextvars.ContextVar[tuple[str, ...]] = contextvars.ContextVar(
+    "_routine_ancestry", default=()
 )
 
 
@@ -122,7 +127,7 @@ def _build_object_agent_node(
     return run
 
 
-def _build_a2a_node(node: RoutineNode, *, tool_registry: Any) -> Any:
+def _build_a2a_node(node: RoutineNode, *, tool_registry: Any, timeout: float | None = None) -> Any:
     """One-shot delegation to a registered Agent2Agent-protocol peer, resolved
     the same way the ``@agent_name request`` direct-call chat shortcut does
     (see ``DirectA2AFastPathMiddleware``)."""
@@ -171,10 +176,14 @@ def _build_a2a_node(node: RoutineNode, *, tool_registry: Any) -> Any:
 
         context = getattr(runtime, "context", None) if runtime is not None else None
         thread_id = (context or {}).get("request_id")
+        effective_timeout = (
+            timeout if timeout is not None and timeout > 0 else _A2A_NO_LIMIT_TIMEOUT
+        )
         response = await A2AClient().call_agent(
             cfg,
             rendered,
             blocking=True,
+            timeout=effective_timeout,
             context={"caller": "routine", "routing_mode": "routine_node", "thread_id": thread_id},
         )
         if not response.get("success"):
@@ -235,6 +244,10 @@ def _build_foreach_node(node: RoutineNode, *, object_agent_registry: dict[str, A
     return run_agent
 
 
+_ROUTINE_MAX_NESTING_DEPTH = 10
+_A2A_NO_LIMIT_TIMEOUT = 3600.0  # 1 hour — large finite stand-in for "unlimited"
+
+
 def _build_routine_node(
     node: RoutineNode,
     *,
@@ -248,6 +261,15 @@ def _build_routine_node(
     output_map = config.get("output_map") or {}
 
     async def run(state: RoutineState, runtime: Runtime | None = None) -> dict[str, Any]:
+        ancestry = _routine_ancestry_var.get()
+        if name in ancestry:
+            cycle = " -> ".join(ancestry + (name,))
+            raise ValueError(f"node {node.id}: nested routine cycle detected: {cycle}")
+        if len(ancestry) >= _ROUTINE_MAX_NESTING_DEPTH:
+            raise ValueError(
+                f"node {node.id}: nested routine depth exceeds limit "
+                f"({_ROUTINE_MAX_NESTING_DEPTH}): {' -> '.join(ancestry)} -> {name}"
+            )
         parent_data = state.get("data", {})
         child_data = (
             _resolve_inputs(node.id, input_map, parent_data) if input_map else dict(parent_data)
@@ -265,14 +287,18 @@ def _build_routine_node(
         child_name = name
 
         async def invoke() -> dict[str, Any]:
-            if routine_runner is not None:
-                return await routine_runner(child_name, child_state, runtime)
-            target = routine_registry.get(child_name)
-            if target is None:
-                raise KeyError(f"node {node.id}: unknown routine '{name}'")
-            if runtime is None:
-                return await target.ainvoke(child_state)
-            return await target.ainvoke(child_state, context=runtime.context)
+            token = _routine_ancestry_var.set(ancestry + (name,))
+            try:
+                if routine_runner is not None:
+                    return await routine_runner(child_name, child_state, runtime)
+                target = routine_registry.get(child_name)
+                if target is None:
+                    raise KeyError(f"node {node.id}: unknown routine '{name}'")
+                if runtime is None:
+                    return await target.ainvoke(child_state)
+                return await target.ainvoke(child_state, context=runtime.context)
+            finally:
+                _routine_ancestry_var.reset(token)
 
         result = None if pending else await invoke()
         while pending or (

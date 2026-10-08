@@ -87,10 +87,10 @@ async function cleanup(page, name, graphs) {
 
 test('15: new restricted object agent executes, live prompt edit changes rerun output without restart', async ({ page }, testInfo) => {
   const name = `pw342-delegate-${randomUUID().slice(0, 8)}`;
-  const graphs = [];
+  let removeGraph;
   try {
     await createAgent(page, name);
-    const graph = seedDelegatedRoutine(name); graphs.push(graph);
+    const { graph, cleanup } = seedDelegatedRoutine(name); removeGraph = cleanup;
     await open(page, graph);
     const firstId = await submit(page, graph, 'PRIVATE-FIRST');
     const first = await lifecycle(page, graph.id, 'completed', firstId);
@@ -108,15 +108,15 @@ test('15: new restricted object agent executes, live prompt edit changes rerun o
     expect(JSON.stringify(secondCheckpoint.messages)).not.toContain('PRIVATE-FIRST');
     expect(firstCheckpoint.messages.concat(secondCheckpoint.messages).every((m) => !m.tool_calls?.length)).toBe(true);
     await attachJsonEvidence(testInfo, 'delegation-j15.json', { first, second, firstCheckpoint, secondCheckpoint });
-  } finally { await cleanup(page, name, graphs); }
+  } finally { removeGraph?.(); await cleanup(page, name, []); }
 });
 
 test('16: independent delegated conversations isolate private input and same-run resume keeps checkpoint thread', async ({ page, context }, testInfo) => {
   const name = `pw342-isolate-${randomUUID().slice(0, 8)}`;
-  const graphs = [];
+  let removeGraph;
   try {
     await createAgent(page, name);
-    const graph = seedDelegatedRoutine(name); graphs.push(graph);
+    const { graph, cleanup } = seedDelegatedRoutine(name); removeGraph = cleanup;
     const other = await context.newPage();
     await open(page, graph); await open(other, graph);
     const [requestA, requestB] = await Promise.all([submit(page, graph, 'PRIVATE-A', true), submit(other, graph, 'PRIVATE-B', true)]);
@@ -139,12 +139,12 @@ test('16: independent delegated conversations isolate private input and same-run
     expect(delegatedCheckpoint(checkpointB.thread_id).checkpoint_id).toBe(checkpointB.checkpoint_id);
     await attachJsonEvidence(testInfo, 'delegation-j16.json', { pausedA, pausedB, completedA, checkpointA, checkpointB });
     await other.close();
-  } finally { await cleanup(page, name, graphs); }
+  } finally { removeGraph?.(); await cleanup(page, name, []); }
 });
 
 test('15 supplemental: a read-only mounted object agent receives an actual filesystem write denial', async ({ page }, testInfo) => {
   const name = `pw342-denial-${randomUUID().slice(0, 8)}`;
-  const graphs = [];
+  let removeGraph;
   try {
     await createAgent(page, name);
     await page.getByRole('button', { name: 'Edit manifest' }).click();
@@ -155,7 +155,7 @@ test('15 supplemental: a read-only mounted object agent receives an actual files
     await editor.fill(constrained.replace(prompt('v1'), `You are a filesystem permission test agent. Before replying, make exactly one write_file tool call with file_path ${path} and content permission-probe. This deliberately tests the permission refusal. Make the call even though the read-only permission means it must be refused. After receiving its error, reply with exactly JSON {"version":"v1","token":"<the private token in the latest user message>"}. Never copy tokens from older messages.`));
     await page.getByRole('button', { name: 'Save', exact: true }).click();
     await expect(page.locator('.agents-prompt')).toContainText('permission refusal');
-    const graph = seedDelegatedRoutine(name); graphs.push(graph);
+    const { graph, cleanup } = seedDelegatedRoutine(name); removeGraph = cleanup;
     await open(page, graph);
     const request = await submit(page, graph, 'ACCESS-PROBE');
     const completed = await lifecycle(page, graph.id, 'completed', request);
@@ -164,14 +164,14 @@ test('15 supplemental: a read-only mounted object agent receives an actual files
     expect(checkpoint.messages.some((message) => message.tool_calls?.some((call) => call.name === 'write_file'))).toBe(true);
     expect(checkpoint.messages.some((message) => message.type === 'tool' && /permission denied for write|mount is read-only/i.test(message.content))).toBe(true);
     await attachJsonEvidence(testInfo, 'delegation-j15-denial.json', { path, completed, checkpoint });
-  } finally { await cleanup(page, name, graphs); }
+  } finally { removeGraph?.(); await cleanup(page, name, []); }
 });
 
 test('missing object agent: page blocks run, Quick Chat creates its manifest, existing graph then executes', async ({ page }, testInfo) => {
   const name = `pw342-recover-${randomUUID().slice(0, 8)}`;
-  const graphs = [];
+  let removeGraph;
   try {
-    const graph = seedDelegatedRoutine(name); graphs.push(graph);
+    const { graph, cleanup } = seedDelegatedRoutine(name); removeGraph = cleanup;
     await open(page, graph);
     await expect(page.getByRole('button', { name: 'Run routine', exact: true })).toBeDisabled();
     await page.getByRole('button', { name: '1 validation issues, click to view', exact: true }).click();
@@ -214,5 +214,5 @@ test('missing object agent: page blocks run, Quick Chat creates its manifest, ex
     const checkpoint = delegatedCheckpoint(`routine-agent:${completed.thread_id}:delegate`);
     expect(checkpoint.checkpoint_id).toBeTruthy();
     await attachJsonEvidence(testInfo, 'missing-agent-recovery.json', { name, missingError, completed, checkpoint });
-  } finally { await cleanup(page, name, graphs); }
+  } finally { removeGraph?.(); await cleanup(page, name, []); }
 });

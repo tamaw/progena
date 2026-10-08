@@ -33,9 +33,18 @@ export function seedAgentExecution() {
     edges: [{ from: 'delegate', to: 'after', level: 'normal' }],
     input_schema: { type: 'object', properties: {} }, output_schema: { type: 'object', properties: { after: {} } },
   };
+  // Write as a native agent so shell: true is honoured (user/marketplace agents
+  // are not allowed shell since it is a privileged capability).
+  const nativeDir = resolve(root, 'data/agents/objects', name);
+  mkdirSync(nativeDir, { recursive: true });
+  writeFileSync(resolve(nativeDir, 'SYSTEM.md'), content);
   sql(`INSERT INTO store(prefix,key,value,created_at,updated_at) VALUES
-    ('progenitor.state',${quote(`agent:user/${name}/SYSTEM.md`)},${quote(JSON.stringify({ payload: { content } }))}::jsonb,now(),now()),
     ('progenitor.state',${quote(`routine:${id}`)},${quote(JSON.stringify({ payload: graph }))}::jsonb,now(),now());`);
+  // Trigger a runtime object-agent refresh so the newly-written native agent is
+  // discovered without requiring a runtime restart.
+  sql(`NOTIFY store_changed, '{"key":"agent:native/${name}/SYSTEM.md"}';`);
+  // Give the runtime a moment to process the notification and refresh its registry.
+  execFileSync('sleep', ['2']);
   return {
     graph, name, workspace,
     entered: () => existsSync(resolve(workspace, 'entered')),
@@ -43,7 +52,8 @@ export function seedAgentExecution() {
     reset: () => { for (const file of ['entered', 'release']) rmSync(resolve(workspace, file), { force: true }); },
     cleanup: () => {
       writeFileSync(resolve(workspace, 'release'), 'release');
-      sql(`DELETE FROM store WHERE prefix='progenitor.state' AND key IN (${quote(`routine:${id}`)},${quote(`agent:user/${name}/SYSTEM.md`)});`);
+      sql(`DELETE FROM store WHERE prefix='progenitor.state' AND key=${quote(`routine:${id}`)};`);
+      rmSync(nativeDir, { recursive: true, force: true });
     },
   };
 }

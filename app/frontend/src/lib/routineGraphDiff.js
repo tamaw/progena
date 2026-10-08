@@ -1,3 +1,5 @@
+import { edgeSourceIds } from '../components/agents/graphTopology';
+
 /**
  * Structural diff between two routine graph documents (same shape as
  * `serializeGraph` in graphEdits.js: `{ entry, nodes, edges, ... }`).
@@ -16,12 +18,29 @@
  * infinite recursion); its validity was already decided on first visit.
  */
 
+function edgeTargetIds(edge) {
+  if (!edge) return [];
+  if (edge.router) {
+    return [
+      ...Object.values(edge.branches || {}),
+      ...(edge.default ? [edge.default] : []),
+    ];
+  }
+  const targets = [];
+  if (edge.to) targets.push(edge.to);
+  if (edge.loop_guard?.on_false) targets.push(edge.loop_guard.on_false);
+  return targets;
+}
+
 function edgesByFrom(edges) {
   const map = new Map();
   for (const edge of edges || []) {
-    if (!edge || typeof edge.from !== 'string') continue;
-    if (!map.has(edge.from)) map.set(edge.from, []);
-    map.get(edge.from).push(edge);
+    if (!edge) continue;
+    for (const sourceId of edgeSourceIds(edge)) {
+      if (!sourceId) continue;
+      if (!map.has(sourceId)) map.set(sourceId, []);
+      map.get(sourceId).push(edge);
+    }
   }
   return map;
 }
@@ -40,14 +59,26 @@ function nodeSignature(node) {
 // field ordering; only the routing-relevant fields count.
 function edgeSetSignature(edges) {
   const sorted = (edges || [])
-    .map((edge) => ({
-      to: edge.to,
-      router: edge.router ?? null,
-      condition: edge.condition ?? null,
-      loop_guard: edge.loop_guard ?? null,
-      default: Boolean(edge.default),
-    }))
-    .sort((a, b) => `${a.to}\u0000${a.router}\u0000${a.condition}`.localeCompare(`${b.to}\u0000${b.router}\u0000${b.condition}`));
+    .map((edge) => {
+      if (edge.router) {
+        const branchEntries = Object.entries(edge.branches || {}).sort(([a], [b]) => a.localeCompare(b));
+        return {
+          router: true,
+          branches: branchEntries.map(([k, v]) => `${k}:${v}`),
+          default: edge.default ?? null,
+          level: edge.level ?? null,
+          state_key: edge.state_key ?? null,
+        };
+      }
+      return {
+        to: edge.to ?? null,
+        loop_guard: edge.loop_guard ?? null,
+        level: edge.level ?? null,
+        state_key: edge.state_key ?? null,
+        default: edge.default ?? null,
+      };
+    })
+    .sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
   return JSON.stringify(sorted);
 }
 
@@ -71,7 +102,11 @@ export function diffRoutineGraphs(baseline, current) {
       const id = stack.pop();
       if (invalidated.has(id) || !currentNodes.has(id)) continue;
       invalidated.add(id);
-      for (const edge of currentOut.get(id) || []) stack.push(edge.to);
+      for (const edge of currentOut.get(id) || []) {
+        for (const target of edgeTargetIds(edge)) {
+          if (target) stack.push(target);
+        }
+      }
     }
   }
 
@@ -89,10 +124,18 @@ export function diffRoutineGraphs(baseline, current) {
       // whatever it now points at has no verified relationship to what ran
       // last time, so everything downstream (per the *current* topology) is
       // invalidated, even though this node's own run details stay valid.
-      for (const edge of currentOut.get(nodeId) || []) markSubtreeInvalid(edge.to);
+      for (const edge of currentOut.get(nodeId) || []) {
+        for (const target of edgeTargetIds(edge)) {
+          if (target) markSubtreeInvalid(target);
+        }
+      }
       return;
     }
-    for (const edge of currentOut.get(nodeId) || []) walk(edge.to);
+    for (const edge of currentOut.get(nodeId) || []) {
+      for (const target of edgeTargetIds(edge)) {
+        if (target) walk(target);
+      }
+    }
   }
 
   if (current?.entry) walk(current.entry);

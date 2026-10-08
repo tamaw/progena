@@ -187,6 +187,7 @@ def _parse_shell(
     env_passthrough_value: Any,
     has_env_passthrough: bool,
     source: str,
+    source_kind: str | None = None,
 ) -> ObjectAgentShellConfig | None:
     if value is None:
         enabled = False
@@ -200,6 +201,12 @@ def _parse_shell(
         raise ValueError(
             f"{source}: env_passthrough entries must be upper-case environment variable names"
         )
+    if source_kind is not None and source_kind != "native":
+        if enabled or has_env_passthrough:
+            raise ValueError(
+                f"{source}: shell and env_passthrough are only allowed for native agents"
+            )
+        return None
     if not enabled:
         if has_env_passthrough:
             raise ValueError(f"{source}: env_passthrough requires shell: true")
@@ -250,7 +257,9 @@ def parse_front_matter(content: str, *, source: str) -> dict[str, Any]:
     return dict(raw)
 
 
-def parse_object_agent_manifest(content: str, *, source: str) -> ObjectAgentManifest:
+def parse_object_agent_manifest(
+    content: str, *, source: str, source_kind: str | None = None
+) -> ObjectAgentManifest:
     """Parse a ``SYSTEM.md`` document without applying JSON Schema validation."""
     raw = parse_front_matter(content, source=source)
     system_prompt = content.split("---", 2)[2]
@@ -294,6 +303,7 @@ def parse_object_agent_manifest(content: str, *, source: str) -> ObjectAgentMani
             env_passthrough_value=raw.get("env_passthrough"),
             has_env_passthrough="env_passthrough" in raw,
             source=source,
+            source_kind=source_kind,
         ),
     )
 
@@ -310,7 +320,9 @@ def discover_native_object_agents(native_root: Path) -> list[ObjectAgentSource]:
             continue
         try:
             content = system_path.read_text(encoding="utf-8")
-            manifest = parse_object_agent_manifest(content, source=str(system_path))
+            manifest = parse_object_agent_manifest(
+                content, source=str(system_path), source_kind="native"
+            )
         except (OSError, ValueError) as exc:
             logger.warning("Skipping invalid native agent %s: %s", system_path, exc)
             continue
@@ -339,7 +351,9 @@ async def discover_object_agents(
             continue
         source_label = f"marketplace:{parts[0]}" if "__" in parts[0] else "user"
         try:
-            manifest = parse_object_agent_manifest(content, source=f"agent:{relative_path}")
+            manifest = parse_object_agent_manifest(
+                content, source=f"agent:{relative_path}", source_kind=source_label
+            )
         except ValueError as exc:
             logger.warning("Skipping invalid object agent document %s: %s", relative_path, exc)
             continue

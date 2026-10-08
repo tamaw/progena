@@ -1230,6 +1230,7 @@ class PolicyDirectoryBackend(RoutineDirectoryBackend):
 
     async def awrite(self, file_path: str, content: str) -> WriteResult:
         from ..policies import parse_policy_document
+
         policy_id = self._parse_routine_name(self._name(file_path))
         if policy_id is None:
             return WriteResult(error="Expected /policies/<id>.json")
@@ -1251,8 +1252,12 @@ class PolicyDirectoryBackend(RoutineDirectoryBackend):
 
     async def als(self, path: str) -> LsResult:
         documents = await self._sm.list_execution_policies()
-        return LsResult(entries=[FileInfo(path=f"/{doc['id']}.json", is_dir=False)
-                                for doc in sorted(documents, key=lambda doc: doc["id"])])
+        return LsResult(
+            entries=[
+                FileInfo(path=f"/{doc['id']}.json", is_dir=False)
+                for doc in sorted(documents, key=lambda doc: doc["id"])
+            ]
+        )
 
 
 def validate_schedule_document(content: str) -> JsonDoc:
@@ -1528,7 +1533,7 @@ class UserAgentDirectoryBackend(ContentDocumentDirectoryBackend):
         try:
             raw = parse_front_matter(content, source=file_path)
             check_entry_schema("Agent front matter", raw, "agent-manifest.schema.v1.json")
-            manifest = parse_object_agent_manifest(content, source=file_path)
+            manifest = parse_object_agent_manifest(content, source=file_path, source_kind="user")
             slug = re.sub(r"[^a-z0-9]+", "-", manifest.name.strip().lower()).strip("-")
             if relative != f"{slug or 'agent'}/SYSTEM.md":
                 raise ValueError(

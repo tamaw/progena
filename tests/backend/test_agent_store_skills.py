@@ -122,3 +122,20 @@ def test_update_skill_raises_for_unknown_skill() -> None:
 
     with pytest.raises(LookupError):
         store.update_skill("/skills/acme__toolkit/missing-skill", "---\nname: x\n---\nx\n")
+
+
+@pytest.mark.parametrize(
+    "path", ["/skills/..", "/skills/../etc", "/skills/foo/..", "/skills/", "/skills/."]
+)
+def test_resolve_skill_rejects_traversal(path: str) -> None:
+    store = _make_store()
+    assert store.resolve_skill(path) is None
+
+
+@pytest.mark.parametrize(
+    "path", ["/skills/..", "/skills/../etc", "/skills/foo/..", "/skills/", "/skills/."]
+)
+def test_update_skill_rejects_traversal(path: str) -> None:
+    store = _make_store()
+    with pytest.raises(ValueError, match="invalid segment"):
+        store.update_skill(path, "---\nname: x\n---\nx\n")

@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 from collections.abc import Callable
+from contextlib import asynccontextmanager
 from typing import Any
 
 from ..content_documents import (
@@ -71,9 +72,11 @@ class StateManager:
     def __init__(
         self,
         runtime_store: LangGraphRuntimeStore,
+        database_url: str | None = None,
     ) -> None:
         self._state_cache: dict[str, Any] = {}
         self._runtime_store = runtime_store
+        self._database_url = database_url
         # Per-thread-id micro-locks for atomic read-modify-write merges of
         # the *same* thread's bookkeeping document (never held across LLM
         # calls, never contended across different threads).
@@ -629,22 +632,28 @@ class StateManager:
     # ==========================================================================
     async def get_execution_policy(self, policy_id: str) -> dict[str, Any] | None:
         from ..policies import POLICY_KEY_PREFIX
+
         payload = await self._runtime_store.peek_document(f"{POLICY_KEY_PREFIX}{policy_id}")
         return payload if isinstance(payload, dict) else None
 
     async def save_execution_policy(self, policy_id: str, payload: dict[str, Any]) -> None:
         from ..policies import POLICY_KEY_PREFIX, validate_policy
+
         policy = validate_policy(payload)
         if policy.id != policy_id:
             raise ValueError("Policy id must match filename")
-        await self._save_runtime_document(f"{POLICY_KEY_PREFIX}{policy_id}", policy.model_dump(mode="json"))
+        await self._save_runtime_document(
+            f"{POLICY_KEY_PREFIX}{policy_id}", policy.model_dump(mode="json")
+        )
 
     async def delete_execution_policy(self, policy_id: str) -> None:
         from ..policies import POLICY_KEY_PREFIX
+
         await self._runtime_store.delete_document(f"{POLICY_KEY_PREFIX}{policy_id}")
 
     async def list_execution_policies(self) -> list[dict[str, Any]]:
         from ..policies import POLICY_KEY_PREFIX
+
         rows = await self._runtime_store.list_documents(POLICY_KEY_PREFIX)
         return [payload for _, payload in rows if isinstance(payload, dict)]
 
@@ -919,20 +928,44 @@ class StateManager:
             [task.model_dump(mode="json") for task in tasks],
         )
 
+    @asynccontextmanager
+    async def _with_background_tasks_lock(self):
+        """Acquire a Postgres advisory lock for atomic background_tasks RMW.
+
+        Yields immediately when no database_url is configured (in-memory store).
+        """
+        if not self._database_url:
+            yield
+            return
+        from psycopg import AsyncConnection
+
+        async with await AsyncConnection.connect(self._database_url, autocommit=True) as conn:
+            await conn.execute("SELECT pg_advisory_lock(hashtextextended('background_tasks', 0))")
+            try:
+                yield
+            finally:
+                await conn.execute(
+                    "SELECT pg_advisory_unlock(hashtextextended('background_tasks', 0))"
+                )
+
     async def enqueue_background_task(self, task: BackgroundTaskEntry) -> None:
         """Add a background task to the queue."""
-        await background_store.enqueue_background_task(
-            task=task,
-            get_background_tasks_fn=self.get_background_tasks,
-            save_background_tasks_fn=self.save_background_tasks,
-        )
+        async with self._with_background_tasks_lock():
+            self.invalidate_document("background_tasks")
+            await background_store.enqueue_background_task(
+                task=task,
+                get_background_tasks_fn=self.get_background_tasks,
+                save_background_tasks_fn=self.save_background_tasks,
+            )
 
     async def dequeue_background_task(self) -> BackgroundTaskEntry | None:
         """Remove and return the next background task, or ``None`` if empty."""
-        return await background_store.dequeue_background_task(
-            get_background_tasks_fn=self.get_background_tasks,
-            save_background_tasks_fn=self.save_background_tasks,
-        )
+        async with self._with_background_tasks_lock():
+            self.invalidate_document("background_tasks")
+            return await background_store.dequeue_background_task(
+                get_background_tasks_fn=self.get_background_tasks,
+                save_background_tasks_fn=self.save_background_tasks,
+            )
 
     # ==========================================================================
     # Schedule Run Tracking

@@ -373,10 +373,21 @@ class PostgresDocumentStore:
 
     def open(self) -> None:
         self._pool.open()
-        self._ensure_store_table()
-        self._ensure_change_trigger()
-        self._ensure_routine_revision_history()
-        self._ensure_policy_revision_history()
+        # Concurrent startups (backend workers, seed scripts) otherwise race on
+        # the same CREATE OR REPLACE FUNCTION/TRIGGER catalog rows. A session
+        # lock on one pooled connection serializes setup; the steps below use
+        # other pooled connections.
+        with self._pool.connection() as conn:
+            conn.execute("SELECT pg_advisory_lock(hashtext('progenitor_document_store_setup'))")
+            try:
+                self._ensure_store_table()
+                self._ensure_change_trigger()
+                self._ensure_routine_revision_history()
+                self._ensure_policy_revision_history()
+            finally:
+                conn.execute(
+                    "SELECT pg_advisory_unlock(hashtext('progenitor_document_store_setup'))"
+                )
 
     def close(self) -> None:
         self._pool.close()
@@ -478,10 +489,9 @@ class PostgresDocumentStore:
                 $$ LANGUAGE plpgsql;
                 """
             )
-            cur.execute("DROP TRIGGER IF EXISTS progenitor_store_change ON store")
             cur.execute(
                 """
-                CREATE TRIGGER progenitor_store_change
+                CREATE OR REPLACE TRIGGER progenitor_store_change
                 AFTER INSERT OR UPDATE OR DELETE ON store
                 FOR EACH ROW EXECUTE FUNCTION progenitor_notify_store_change()
                 """
@@ -545,20 +555,16 @@ class PostgresDocumentStore:
                 $$ LANGUAGE plpgsql;
                 """.replace("__STATE_PREFIX__", state_prefix).replace("__KEY_PREFIX__", key_prefix)  # nosec B608
             cur.execute(capture_sql)
-            cur.execute("DROP TRIGGER IF EXISTS progenitor_capture_routine_revision ON store")
             cur.execute(
                 """
-                CREATE TRIGGER progenitor_capture_routine_revision
+                CREATE OR REPLACE TRIGGER progenitor_capture_routine_revision
                 AFTER INSERT OR UPDATE ON store
                 FOR EACH ROW EXECUTE FUNCTION progenitor_capture_routine_revision()
                 """
             )
             cur.execute(
-                "DROP TRIGGER IF EXISTS progenitor_capture_deleted_routine_revision ON store"
-            )
-            cur.execute(
                 """
-                CREATE TRIGGER progenitor_capture_deleted_routine_revision
+                CREATE OR REPLACE TRIGGER progenitor_capture_deleted_routine_revision
                 BEFORE DELETE ON store
                 FOR EACH ROW EXECUTE FUNCTION progenitor_capture_routine_revision()
                 """
@@ -575,11 +581,8 @@ class PostgresDocumentStore:
                 """
             )
             cur.execute(
-                "DROP TRIGGER IF EXISTS progenitor_routine_revisions_immutable ON routine_graph_revisions"
-            )
-            cur.execute(
                 """
-                CREATE TRIGGER progenitor_routine_revisions_immutable
+                CREATE OR REPLACE TRIGGER progenitor_routine_revisions_immutable
                 BEFORE UPDATE ON routine_graph_revisions
                 FOR EACH ROW EXECUTE FUNCTION progenitor_routine_revisions_immutable()
                 """
@@ -598,6 +601,7 @@ class PostgresDocumentStore:
 
     def _ensure_policy_revision_history(self) -> None:
         from app.progenitor.policies import ExecutionPolicy
+
         with self._cursor() as cur:
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS policy_revisions (
@@ -619,20 +623,29 @@ class PostgresDocumentStore:
                     RETURN source_row;
                 END;
                 $$ LANGUAGE plpgsql;
-                DROP TRIGGER IF EXISTS progenitor_capture_policy_revision ON store;
-                CREATE TRIGGER progenitor_capture_policy_revision AFTER INSERT OR UPDATE OR DELETE ON store
+                CREATE OR REPLACE TRIGGER progenitor_capture_policy_revision AFTER INSERT OR UPDATE OR DELETE ON store
                 FOR EACH ROW EXECUTE FUNCTION progenitor_capture_policy_revision();
                 CREATE OR REPLACE FUNCTION progenitor_policy_revisions_immutable() RETURNS trigger AS $$
                 BEGIN RAISE EXCEPTION 'policy revisions are immutable'; END;
                 $$ LANGUAGE plpgsql;
-                DROP TRIGGER IF EXISTS progenitor_policy_revisions_immutable ON policy_revisions;
-                CREATE TRIGGER progenitor_policy_revisions_immutable BEFORE UPDATE OR DELETE ON policy_revisions
+                CREATE OR REPLACE TRIGGER progenitor_policy_revisions_immutable BEFORE UPDATE OR DELETE ON policy_revisions
                 FOR EACH ROW EXECUTE FUNCTION progenitor_policy_revisions_immutable();
             """)
-            cur.execute("""INSERT INTO store(prefix,key,value,created_at,updated_at)
+            cur.execute(
+                """INSERT INTO store(prefix,key,value,created_at,updated_at)
                 VALUES (%s,%s,%s,now(),now()) ON CONFLICT(prefix,key) DO NOTHING""",
-                (PROGENITOR_STATE_PREFIX, "policy:default",
-                 Jsonb({"payload": ExecutionPolicy(id="default", name="Default").model_dump(mode="json")})))
+                (
+                    PROGENITOR_STATE_PREFIX,
+                    "policy:default",
+                    Jsonb(
+                        {
+                            "payload": ExecutionPolicy(id="default", name="Default").model_dump(
+                                mode="json"
+                            )
+                        }
+                    ),
+                ),
+            )
 
     def get_document(
         self, prefix: str, key: str, default: Any | None = None

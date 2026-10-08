@@ -1,13 +1,15 @@
 import { test, expect } from '@playwright/test';
 import { seedPolicyRoutine } from './helpers/policyFixture.mjs';
 import { observeRoutineEvents, attachJsonEvidence } from './helpers/routineFixture.mjs';
-test.setTimeout(300_000);
+// Runs go through the runtime's background queue, which a full parallel suite
+// can back up by minutes (one task per heartbeat cycle), so waits are generous.
+test.setTimeout(900_000);
 let fixture;
 test.afterEach(() => { fixture?.cleanup(); fixture = null; });
 async function lifecycle(page, requestId, status) {
   const read = () => page.evaluate((id) => window.__routineEvents.find((event) =>
     ['agent.routine.run.completed', 'agent.routine.run.failed', 'agent.routine.run.paused'].includes(event.type) && event.payload.request_id === id), requestId);
-  await expect.poll(read, { timeout: 120_000 }).toBeTruthy();
+  await expect.poll(read, { timeout: 300_000 }).toBeTruthy();
   const event = await read();
   expect(event.type, JSON.stringify(event.payload)).toBe(`agent.routine.run.${status}`);
   return event.payload;

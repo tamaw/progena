@@ -17,7 +17,10 @@ export function seedDelegatedRoutine(agentName, suffix = '') {
     output_schema: { type: 'object', properties: { done: { type: 'object' } } },
   };
   execFileSync('psql', [databaseUrl, '-v', 'ON_ERROR_STOP=1', '-q'], { input: `INSERT INTO store (prefix,key,value,created_at,updated_at) VALUES ('progenitor.state',${quote(`routine:${id}`)},${quote(JSON.stringify({ payload: graph }))}::jsonb,now(),now());` });
-  return graph;
+  const cleanup = () => {
+    execFileSync('psql', [databaseUrl, '-v', 'ON_ERROR_STOP=1', '-q'], { input: `DELETE FROM store WHERE prefix = 'progenitor.state' AND key = ${quote(`routine:${id}`)};` });
+  };
+  return { graph, cleanup };
 }
 export function delegatedCheckpoint(threadId) {
   const script = `import asyncio,json,sys\nfrom langgraph.checkpoint.postgres.aio import AsyncPostgresSaver\nasync def main():\n async with AsyncPostgresSaver.from_conn_string(sys.argv[1]) as saver:\n  result=await saver.aget_tuple({'configurable':{'thread_id':sys.argv[2]}})\n  values=result.checkpoint.get('channel_values',{}) if result else {}\n  messages=values.get('messages',[])\n  print(json.dumps({'thread_id':sys.argv[2],'checkpoint_id':result.checkpoint.get('id') if result else None,'run_meta':values.get('run_meta',{}),'interrupts':[getattr(item,'value',str(item)) for _,channel,value in (result.pending_writes or []) if channel=='__interrupt__' for item in value] if result else [],'messages':[{'type':getattr(m,'type','unknown'),'content':''.join(b.get('text','') for b in m.content if isinstance(b,dict) and b.get('type')=='text') if isinstance(m.content,list) else m.content,'tool_calls':getattr(m,'tool_calls',[])} for m in messages]},default=str))\nasyncio.run(main())`;
