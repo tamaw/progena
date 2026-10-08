@@ -17,7 +17,7 @@ from app.backend.agent_catalog_routes import (
     create_agent_profile_router,
     validate_agent_graph,
 )
-from app.backend.document_store import InMemoryDocumentStore, PROGENITOR_STATE_PREFIX
+from app.backend.document_store import PROGENITOR_STATE_PREFIX, InMemoryDocumentStore
 from app.progenitor.policies import ExecutionPolicy
 
 _DEFAULT_GRAPH = {
