@@ -21,6 +21,8 @@ _MAX_INT_RESULT_BITS = 100_000
 # Shared cap on any str/bytes/list/tuple built by `*` or `+` (simpleeval's MAX_STRING_LENGTH).
 _MAX_SEQUENCE_LENGTH = 100_000
 _SEQUENCE_TYPES = (str, bytes, list, tuple)
+# Bounds parse/walk cost; remaining operators only grow linearly with length.
+_MAX_EXPRESSION_LENGTH = 2000
 
 
 def _safe_pow(a: Any, b: Any) -> Any:
@@ -102,6 +104,10 @@ class UnsafeExpressionError(ValueError):
 
 def evaluate_expression(expression: str, namespace: dict[str, Any]) -> Any:
     """Evaluate ``expression`` against ``namespace``, rejecting unsafe syntax."""
+    if len(expression) > _MAX_EXPRESSION_LENGTH:
+        raise UnsafeExpressionError(
+            f"expression too long ({len(expression)} > {_MAX_EXPRESSION_LENGTH} characters)"
+        )
     try:
         tree = ast.parse(expression, mode="eval")
     except SyntaxError as exc:

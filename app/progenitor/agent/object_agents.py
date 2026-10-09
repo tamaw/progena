@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from collections.abc import Iterable
 from dataclasses import replace
@@ -41,7 +42,7 @@ from langchain_core.runnables import RunnableConfig, RunnableLambda
 from ..config import LLMConfig
 from .adapters import create_langchain_model
 from .backends import ReadOnlyBackend, create_object_agent_plugin_skill_routes
-from .middleware import AuditLoggingMiddleware
+from .middleware import AuditLoggingMiddleware, ToolErrorMiddleware
 from .object_agent_manifest import (
     OBJECT_AGENT_DOCUMENT_KIND,
     ObjectAgentManifest,
@@ -53,6 +54,8 @@ from .object_agent_manifest import (
 )
 from .shell_backend import ProgenitorShellBackend, ShellPaths, agent_home_slug
 from .state_backend import _AsyncOnlyFileBackendMixin
+
+logger = logging.getLogger(__name__)
 
 
 class ScopedMountBackend:
@@ -118,6 +121,57 @@ class ScopedMountBackend:
             [(self._path(path), content) for path, content in files]
         )
         return [replace(r, path=self._unpath(r.path)) for r in responses]
+
+    # Sync and legacy forms of the same calls. Anything path-taking that fell
+    # through __getattr__ would reach the whole parent route, unscoped.
+    def read(self, path: str, offset: int = 0, limit: int = 2000) -> Any:
+        return self._backend.read(self._path(path), offset, limit)
+
+    def write(self, path: str, content: str) -> Any:
+        return self._backend.write(self._path(path), content)
+
+    def edit(self, path: str, old: str, new: str, replace_all: bool = False) -> Any:
+        return self._backend.edit(self._path(path), old, new, replace_all)
+
+    def ls(self, path: str) -> Any:
+        return self._rebase(self._backend.ls(self._path(path)), "entries")
+
+    def glob(self, pattern: str, path: str | None = None) -> Any:
+        return self._rebase(self._backend.glob(pattern, self._path(path)), "matches")
+
+    def grep(self, pattern: str, path: str | None = None, glob: str | None = None) -> Any:
+        return self._rebase(self._backend.grep(pattern, self._path(path), glob), "matches")
+
+    def download_files(self, paths: list[str]) -> Any:
+        responses = self._backend.download_files([self._path(path) for path in paths])
+        return [replace(r, path=self._unpath(r.path)) for r in responses]
+
+    def upload_files(self, files: list[tuple[str, bytes]]) -> Any:
+        responses = self._backend.upload_files(
+            [(self._path(path), content) for path, content in files]
+        )
+        return [replace(r, path=self._unpath(r.path)) for r in responses]
+
+    def ls_info(self, path: str) -> Any:
+        return self._rebase(self._backend.ls_info(self._path(path)), "entries")
+
+    async def als_info(self, path: str) -> Any:
+        return self._rebase(await self._backend.als_info(self._path(path)), "entries")
+
+    def glob_info(self, pattern: str, path: str = "/") -> Any:
+        return self._rebase(self._backend.glob_info(pattern, self._path(path)), "matches")
+
+    async def aglob_info(self, pattern: str, path: str = "/") -> Any:
+        return self._rebase(await self._backend.aglob_info(pattern, self._path(path)), "matches")
+
+    def grep_raw(self, pattern: str, path: str | None = None, glob: str | None = None) -> Any:
+        return self._rebase(self._backend.grep_raw(pattern, self._path(path), glob), "matches")
+
+    async def agrep_raw(
+        self, pattern: str, path: str | None = None, glob: str | None = None
+    ) -> Any:
+        raw = await self._backend.agrep_raw(pattern, self._path(path), glob)
+        return self._rebase(raw, "matches")
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._backend, name)
@@ -351,9 +405,10 @@ class _DeclaredSkillsBackend(BackendProtocol):
     declared skills, never their siblings; file reads go to the agent's backend.
     """
 
-    def __init__(self, backend: Any, skill_dirs: list[str]) -> None:
+    def __init__(self, backend: Any, skill_dirs: list[str], *, agent_name: str) -> None:
         self._backend = backend
         self._skill_dirs = skill_dirs
+        self._agent_name = agent_name
 
     async def als(self, path: str) -> LsResult:
         parent = PurePosixPath(path)
@@ -366,7 +421,18 @@ class _DeclaredSkillsBackend(BackendProtocol):
         )
 
     async def adownload_files(self, paths: list[str]) -> list[FileDownloadResponse]:
-        return await self._backend.adownload_files(paths)
+        responses = await self._backend.adownload_files(paths)
+        for path, response in zip(paths, responses, strict=True):
+            if response.error is not None:
+                # Otherwise a typo or a folder of skills just loads nothing.
+                logger.warning(
+                    "object agent %r: listed skill %s not loaded (%s); skills entries "
+                    "must name a folder containing SKILL.md",
+                    self._agent_name,
+                    path.removesuffix("/SKILL.md"),
+                    response.error,
+                )
+        return responses
 
 
 def build_object_agent(
@@ -421,13 +487,14 @@ def build_object_agent(
         self_backend = CompositeBackend(default=self_backend.default, routes=routes)
 
     middleware: list[Any] = [
+        ToolErrorMiddleware(),
         SummarizationMiddleware(model=child_model),
         AuditLoggingMiddleware(log_sink=log_sink),
     ]
     if skill_dirs:
         middleware.append(
             SkillsMiddleware(
-                backend=_DeclaredSkillsBackend(self_backend, skill_dirs),
+                backend=_DeclaredSkillsBackend(self_backend, skill_dirs, agent_name=manifest.name),
                 sources=sorted({f"{PurePosixPath(d).parent}/" for d in skill_dirs}),
             )
         )

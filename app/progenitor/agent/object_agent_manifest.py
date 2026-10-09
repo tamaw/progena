@@ -303,6 +303,13 @@ def parse_object_agent_manifest(
         )
 
     mounts = _parse_mounts(raw.get("mounts"), source=source)
+    # /config/ holds runtime configuration (mcp.json adds MCP servers, agents.json
+    # the A2A registry); only bundled agents may change it, as with shell.
+    writable_config = any(
+        m.access == "read-write" and m.path.startswith("/config/") for m in mounts
+    )
+    if writable_config and source_kind is not None and source_kind != "native":
+        raise ValueError(f"{source}: read-write /config/ mounts are only allowed for native agents")
     permissions = _parse_permissions(raw.get("permissions"), source=source)
     # Manifests written before scoped mounts existed remain valid.  They have
     # no filesystem surface now; once a manifest declares mounts every

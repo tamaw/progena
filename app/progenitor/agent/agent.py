@@ -51,6 +51,7 @@ from .middleware import (
     DynamicMCPToolMiddleware,
     SchemaCompactionMiddleware,
     SecretRedactionMiddleware,
+    ToolErrorMiddleware,
 )
 from .object_agent_registry import LiveSubagentMiddleware, ObjectAgentRegistry
 from .object_agents import create_object_agent_proxy
@@ -499,6 +500,9 @@ async def create_progenitor_agent(
             specs_provider=live_async.descriptors,
         ),
     )
+    # Outermost of ours: a failing tool (e.g. a subagent that cannot be built)
+    # becomes an error result for the model instead of aborting the run.
+    custom_middleware.insert(0, ToolErrorMiddleware())
     agent = create_deep_agent(
         name="progenitor",
         model=model,
