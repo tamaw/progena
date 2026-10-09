@@ -77,32 +77,22 @@ test.describe('PR342 journey 15: object agent registration and prompt edits', ()
       await expect(page.locator('.agents-prompt')).toContainText(editedPrompt, { timeout: 20_000 });
     } finally {
       if (createSubmitted) {
-        // Even if a later assertion fails, locate and remove only this test's
-        // unique user object agent through the UI.
-        await page.goto('/agents');
-        await expect(page.locator('.agents-pane')).toBeVisible({ timeout: 30_000 });
+        // Even if a later assertion fails, remove only this test's unique user
+        // object agent through the UI. Wait for its profile: a one-shot count()
+        // races the roster snapshot and silently leaked the agent.
         await closeQuickChatIfOpen();
-        const search = page.getByPlaceholder('Search agents...');
-        await search.fill(name);
-        const exactName = page.locator('.agents-agent-row__name').getByText(name, { exact: true });
-        if (await exactName.count()) {
-          const row = exactName.locator('xpath=ancestor::button[contains(@class,"agents-agent-row")]');
-          await expect(row).toHaveCount(1);
-          await row.click();
-          await expect(page.locator('.agents-prompt')).toContainText(firstPrompt, { timeout: 30_000 });
+        await page.goto(`/agents/${encodeURIComponent(slug)}/details`);
+        const header = page.locator('.detail-header__title').first();
+        const found = await expect(header)
+          .toHaveText(name, { timeout: 30_000 })
+          .then(() => true, () => false);
+        if (found) {
           await page.getByRole('button', { name: 'Delete agent' }).click();
           await page.getByRole('dialog').getByRole('button', { name: 'Delete agent', exact: true }).click();
-          await expect(exactName).toHaveCount(0, { timeout: 30_000 });
-        } else {
-          // A submitted create request may have committed before the roster
-          // snapshot settles. Try its known resource route and delete only if
-          // the profile identifies the unique test agent.
-          await page.goto(`/agents/${encodeURIComponent(slug)}/details`);
-          const header = page.locator('.detail-header__title');
-          if (await header.count() && (await header.first().textContent())?.trim() === name) {
-            await page.getByRole('button', { name: 'Delete agent' }).click();
-            await page.getByRole('dialog').getByRole('button', { name: 'Delete agent', exact: true }).click();
-          }
+          await page.getByPlaceholder('Search agents...').fill(name);
+          await expect(
+            page.locator('.agents-agent-row__name').getByText(name, { exact: true }),
+          ).toHaveCount(0, { timeout: 30_000 });
         }
       }
     }

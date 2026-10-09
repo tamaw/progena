@@ -79,7 +79,8 @@ within those mounts or listed skills. Adding a skill does not grant access to
 the documents that skill manages. For example, an agent using
 `managing-routines` also needs a read-write mount for `/routines/`. Use the same
 pattern for `managing-agents` and `/agents/user/` when agent creation is part of
-its job.
+its job. Agents created here may mount `/config/` read-only only, and cannot
+enable `shell` or `env_passthrough`; those are reserved for bundled agents.
 
 Set `memory: true` to give an agent private memory. It can then write
 `/memories/agents/<name>/AGENTS.md`, which is loaded into its prompt on every

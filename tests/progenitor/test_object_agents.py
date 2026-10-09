@@ -206,7 +206,7 @@ def test_manifest_rejects_all_skills_wildcard():
         )
 
 
-async def test_only_listed_skills_load_into_the_prompt(monkeypatch, tmp_path: Path):
+async def test_only_listed_skills_load_into_the_prompt(monkeypatch, tmp_path: Path, caplog):
     monkeypatch.setattr(
         "app.progenitor.agent.object_agents.StateBackend",
         lambda: SimpleNamespace(aread=AsyncMock(return_value=ReadResult(error="File not found"))),
@@ -223,7 +223,9 @@ async def test_only_listed_skills_load_into_the_prompt(monkeypatch, tmp_path: Pa
         },
     )
     manifest = parse_object_agent_manifest(
-        VALID_SYSTEM.replace("skills: [/skills/review/]", "skills: [/skills/managing-repos]"),
+        VALID_SYSTEM.replace(
+            "skills: [/skills/review/]", "skills: [/skills/managing-repos, /skills/typo]"
+        ),
         source="test",
     )
     calls = []
@@ -242,8 +244,12 @@ async def test_only_listed_skills_load_into_the_prompt(monkeypatch, tmp_path: Pa
     )
 
     skills = next(m for m in calls[0]["middleware"] if isinstance(m, SkillsMiddleware))
-    update = await skills.abefore_agent({}, None, {})
+    with caplog.at_level("WARNING", logger="app.progenitor.agent.object_agents"):
+        update = await skills.abefore_agent({}, None, {})
     assert [skill["name"] for skill in update["skills_metadata"]] == ["managing-repos"]
+    # A listed skill without SKILL.md is reported instead of silently skipped.
+    assert any("/skills/typo" in r.getMessage() for r in caplog.records)
+    assert not any("managing-repos" in r.getMessage() for r in caplog.records)
     filesystem = next(m for m in calls[0]["middleware"] if isinstance(m, FilesystemMiddleware))
     assert not (await filesystem.backend.aread("/skills/managing-repos/SKILL.md")).error
     assert (await filesystem.backend.aread("/skills/sibling/SKILL.md")).error
@@ -287,6 +293,30 @@ def test_native_manifest_allows_shell():
     manifest = parse_object_agent_manifest(content, source="test", source_kind="native")
     assert manifest.shell is not None
     assert manifest.shell.env_passthrough == ("GH_TOKEN",)
+
+
+_CONFIG_MOUNT = "permissions: []\nmounts:\n  - path: {path}\n    access: {access}\n"
+
+
+@pytest.mark.parametrize("source_kind", ["user", "marketplace"])
+@pytest.mark.parametrize("path", ["/config/", "/config/mcp.json"])
+def test_non_native_manifest_rejects_writable_config_mount(source_kind, path):
+    content = VALID_SYSTEM.replace(
+        "permissions:\n  - operations: [read]\n    paths: [/repos/]\n",
+        _CONFIG_MOUNT.format(path=path, access="read-write"),
+    )
+    with pytest.raises(ValueError, match="read-write /config/ mounts are only allowed"):
+        parse_object_agent_manifest(content, source="test", source_kind=source_kind)
+
+
+@pytest.mark.parametrize("source_kind, access", [("user", "read"), ("native", "read-write")])
+def test_config_mount_allowed_read_only_or_for_native(source_kind, access):
+    content = VALID_SYSTEM.replace(
+        "permissions:\n  - operations: [read]\n    paths: [/repos/]\n",
+        _CONFIG_MOUNT.format(path="/config/", access=access),
+    )
+    manifest = parse_object_agent_manifest(content, source="test", source_kind=source_kind)
+    assert manifest.mounts[0].access == access
 
 
 def test_raw_front_matter_preserves_authoring_fields():
@@ -525,6 +555,13 @@ async def test_scoped_mount_lists_paths_the_child_can_read(tmp_path: Path):
     [match] = (await composite.aglob("**/SKILL.md", "/skills/pack/")).matches
     assert not (await composite.aread(match["path"])).error
     assert [skill["name"] for skill in await _alist_skills(composite, "/skills/pack/")] == ["lint"]
+    # Sync callers get the same scoping; the outside folder is never reached.
+    assert [entry["path"] for entry in composite.ls("/skills/pack/").entries] == [
+        "/skills/pack/lint/"
+    ]
+    [downloaded] = composite.download_files(["/skills/pack/lint/SKILL.md"])
+    assert b"name: lint" in (downloaded.content or b"")
+    assert "name: lint" in composite.read("/skills/pack/lint/SKILL.md").file_data["content"]
 
 
 async def test_main_agent_memory_excludes_object_agent_memories():

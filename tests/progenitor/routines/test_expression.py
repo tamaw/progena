@@ -187,3 +187,9 @@ class TestDoSBounds:
 
     def test_allows_numeric_mod(self):
         assert evaluate_expression("10 % 3", {}) == 1
+
+    def test_expression_length_boundary(self):
+        at_limit = "1" + " + 1" * 499  # 1997 characters
+        assert evaluate_expression(at_limit.ljust(2000), {}) == 500
+        with pytest.raises(UnsafeExpressionError, match="expression too long"):
+            evaluate_expression(at_limit.ljust(2001), {})
