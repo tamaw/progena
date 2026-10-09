@@ -160,7 +160,19 @@ class TestDoSBounds:
 
     def test_rejects_string_repetition_overflow(self):
         with pytest.raises(UnsafeExpressionError, match="sequence repetition result too long"):
-            evaluate_expression("'x' * 10001", {})
+            evaluate_expression("'x' * 100001", {})
+
+    def test_allows_repetition_at_limit(self):
+        assert len(evaluate_expression("'x' * 100000", {})) == 100_000
+
+    def test_rejects_concatenation_overflow(self):
+        # Doubling via `+` grows a sequence without ever using `*` on a large count.
+        with pytest.raises(UnsafeExpressionError, match="sequence concatenation result too long"):
+            evaluate_expression("s + s + s", {"s": "x" * 40_000})
+
+    def test_allows_concatenation_and_numeric_add(self):
+        assert evaluate_expression("a + b", {"a": [1], "b": [2]}) == [1, 2]
+        assert evaluate_expression("10 ** 300 + 10 ** 300", {}) == 2 * 10**300
 
     def test_rejects_large_power_then_mult(self):
         with pytest.raises(UnsafeExpressionError, match="sequence repetition result too long"):
