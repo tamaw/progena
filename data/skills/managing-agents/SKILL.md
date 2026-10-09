@@ -82,10 +82,12 @@ pattern for `managing-agents` and `/agents/user/` when agent creation is part of
 its job. Agents created here may mount `/config/` read-only only, and cannot
 enable `shell` or `env_passthrough`; those are reserved for bundled agents.
 
-Set `memory: true` to give an agent private memory. It can then write
-`/memories/agents/<name>/AGENTS.md`, which is loaded into its prompt on every
-run. No mount needs declaring, and these notes are not loaded into Progenitor's
-own memory.
+Set `memory: true` to give an agent private memory: its `/memories/` is its own
+writable folder, and every file in it is loaded into its prompt on every run
+(`/memories/AGENTS.md` first). No mount needs declaring; such an agent cannot
+also mount the shared `/memories/`. These notes are not loaded into
+Progenitor's own memory; Progenitor can inspect them at
+`/memories/agents/<name>/`.
 
 Confirm the saved name and the change briefly. Creating an agent does not
 execute it or modify any routine that references it.
