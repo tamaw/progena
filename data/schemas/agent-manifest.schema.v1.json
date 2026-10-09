@@ -1,0 +1,76 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas/agent-manifest.schema.json",
+  "title": "ObjectAgentManifest",
+  "description": "YAML front matter for a kind: object agent in /agents/user/<name>/SYSTEM.md or a bundled native agent. The Markdown body below the closing --- is the system prompt. User virtual-file writes enforce this schema and the runtime manifest parser.",
+  "type": "object",
+  "required": ["name", "description", "version", "kind"],
+  "additionalProperties": true,
+  "properties": {
+    "name": {
+      "type": "string",
+      "description": "Object agent name. Graph 'agent' nodes reference this string in agent_registry."
+    },
+    "description": {
+      "type": "string",
+      "description": "What this object agent does. Not exposed on the parent task tool (object agents are internal)."
+    },
+    "version": {
+      "type": "string",
+      "description": "Free-form version marker, e.g. '1.0.0'."
+    },
+    "kind": {
+      "const": "object",
+      "description": "Must be 'object' for agents under agents/objects/."
+    },
+    "model": {
+      "type": "string",
+      "description": "Optional model override, e.g. 'azure_ai:tools-default'. Defaults to the parent agent's model."
+    },
+    "tools": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Tool names resolved against the parent's tool registry (e.g. git_command, gh_command, current_time)."
+    },
+    "skills": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Individual skills, each a /skills/<name> folder containing SKILL.md. Each is loaded into the agent's prompt and mounted read-only; do not repeat it under mounts. To expose all skills as files, mount /skills/ instead."
+    },
+    "mounts": {
+      "type": "array",
+      "description": "Explicit virtual filesystem paths available to the agent. Paths must be beneath an existing Progenitor route.",
+      "items": {
+        "type": "object",
+        "required": ["path", "access"],
+        "additionalProperties": false,
+        "properties": {
+          "path": { "type": "string", "pattern": "^/" },
+          "access": { "enum": ["read", "read-write"] }
+        }
+      }
+    },
+    "permissions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["operations", "paths"],
+        "additionalProperties": false,
+        "properties": {
+          "operations": { "type": "array", "items": { "enum": ["read", "write"] } },
+          "paths": { "type": "array", "items": { "type": "string" } },
+          "mode": { "enum": ["allow", "deny"], "default": "allow" }
+        }
+      },
+      "description": "Extra filesystem permissions layered on top of default skill-isolation rules."
+    },
+    "interrupt_on": {
+      "type": "object",
+      "description": "Tool names requiring human approval before executing (HumanInTheLoopMiddleware)."
+    },
+    "memory": {
+      "type": "boolean",
+      "description": "Give the agent private, writable memory: its /memories/ is its own folder (stored under /memories/agents/<name>/), and every file there is loaded into its prompt. Cannot be combined with a /memories/ mount."
+    }
+  }
+}

@@ -27,6 +27,10 @@ class ToolContext:
     user_input: str = ""
     tool_args: dict[str, Any] | None = None
     tool_call_id: str = ""
+    # Bound async fn (thread_id, answer) -> dict, resolved once the agent's
+    # model/registries/checkpointer exist (see agent.py's resume_routine
+    # closure). Only resume_routine.py's tool uses this.
+    resume_routine: Any = None
 
 
 @dataclass

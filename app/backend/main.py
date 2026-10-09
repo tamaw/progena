@@ -762,6 +762,7 @@ async def lifespan(app: FastAPI):
             config.database_url,
             config.backend_database_url,
             config.backend_database_name,
+            document_store,
         )
     except Exception:  # noqa: BLE001 - backend must still start if agent DB is unavailable
         logger.exception("Failed to configure backend agent store")

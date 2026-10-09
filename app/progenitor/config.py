@@ -65,6 +65,21 @@ def _default_prompts_dir(project_root: Path | None = None) -> Path:
     return _default_data_dir(project_root) / "prompts"
 
 
+def _default_shim_bin_dir(project_root: Path | None = None) -> Path:
+    """Return the checked-in command-shim directory."""
+    return _default_data_dir(project_root) / "shims" / "bin"
+
+
+def _default_shell_home_dir(project_root: Path | None = None) -> Path:
+    """Return the runtime-only home directory for shell-enabled agents."""
+    return _default_data_dir(project_root) / "shell-home"
+
+
+def _default_shell_workspace_dir(project_root: Path | None = None) -> Path:
+    """Return writable shell scratch storage independent of repository mounts."""
+    return _default_data_dir(project_root) / "shell-workspaces"
+
+
 def default_mcp_config_payload() -> dict[str, Any]:
     """Return the default MCP server configuration stored in the shared state document."""
     return {"mcpServers": {}}
@@ -147,6 +162,8 @@ class RuntimeConfig:
     log_level: str = "info"
     log_format: str = "text"  # "text" | "json" for structured logging
     checkpoint_interval_seconds: int = 30
+    # Maximum duration for one object-agent shell command.
+    shell_timeout_seconds: int = 120
 
     # Queue bounds (memory protection)
     max_input_queue_size: int = 100  # Max pending input messages
@@ -170,6 +187,7 @@ class RuntimeConfig:
             log_level=os.getenv("PROGENITOR_LOG_LEVEL", "info"),
             log_format=os.getenv("PROGENITOR_LOG_FORMAT", "text"),
             checkpoint_interval_seconds=env_int("PROGENITOR_CHECKPOINT_INTERVAL_SECONDS", 30),
+            shell_timeout_seconds=env_int("PROGENITOR_SHELL_TIMEOUT_SECONDS", 120),
             # Queue bounds
             max_input_queue_size=env_int("PROGENITOR_MAX_INPUT_QUEUE_SIZE", 100),
             max_output_queue_size=env_int("PROGENITOR_MAX_OUTPUT_QUEUE_SIZE", 100),
@@ -188,6 +206,9 @@ class StorageConfig:
     log_dir: Path = field(default_factory=_default_log_dir)
     worktree_dir: Path = field(default_factory=_default_worktree_dir)
     prompts_dir: Path = field(default_factory=_default_prompts_dir)
+    shim_bin_dir: Path = field(default_factory=_default_shim_bin_dir)
+    shell_home_dir: Path = field(default_factory=_default_shell_home_dir)
+    shell_workspace_dir: Path = field(default_factory=_default_shell_workspace_dir)
 
     @classmethod
     def from_env(cls, project_root: Path | None = None) -> "StorageConfig":
@@ -203,6 +224,8 @@ class StorageConfig:
             )
         )
         default_prompts = default_data / "prompts"
+        default_shim_bin = default_data / "shims" / "bin"
+        default_shell_home = default_data / "shell-home"
 
         return cls(
             data_dir=default_data,
@@ -210,6 +233,11 @@ class StorageConfig:
             log_dir=default_logs,
             worktree_dir=default_worktrees,
             prompts_dir=Path(os.getenv("PROGENITOR_PROMPTS_DIR", str(default_prompts))),
+            shim_bin_dir=Path(os.getenv("PROGENITOR_SHELL_SHIM_BIN", str(default_shim_bin))),
+            shell_home_dir=Path(os.getenv("PROGENITOR_SHELL_HOME", str(default_shell_home))),
+            shell_workspace_dir=Path(
+                os.getenv("PROGENITOR_SHELL_WORKSPACE_DIR", str(default_data / "shell-workspaces"))
+            ),
         )
 
 
@@ -343,6 +371,8 @@ class ProgenitorConfig:
         ]:
             if not path:
                 errors.append(f"Storage {name} cannot be empty")
+        if not 1 <= self.runtime.shell_timeout_seconds <= 3600:
+            errors.append("PROGENITOR_SHELL_TIMEOUT_SECONDS must be between 1 and 3600")
 
         if errors:
             raise ValueError("Configuration validation failed:\n  - " + "\n  - ".join(errors))

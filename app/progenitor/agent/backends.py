@@ -5,6 +5,8 @@ Profile:
 - Ephemeral workspace (StateBackend) + persistent memories (Postgres-backed)
 - Scoped filesystem mounts for self-inspection and runtime data access:
   - /memories/ -> Postgres content documents, kind="memory" (read-write)
+  - /agents/user/ -> validated Postgres user agent manifests (read-write)
+  - /agents/ -> other Postgres agent manifests (read-only)
   - /self/ -> <project_root>/app (read-only)
   - /repos/ -> configured repo/worktree directory (read-only)
   - /logs/ -> configured log dir (read-only)
@@ -19,7 +21,7 @@ Profile:
     skill reads before calling structured_output
   - /config/ -> Postgres state documents the agent can read/edit as files,
     including mcp.json, plugins.json, marketplaces.json, schedule.json,
-    agents.json, repos.json, and preferences.json, plus the /config/tasks/ task
+    agents.json, repos.json, and preferences.json, plus the /tasks/ task
     directory (board.json and per-task <id>.md files).
     Writes persist via the StateManager; the runtime's store listener handles
     live MCP re-discovery, so no write-hook callback is needed here.
@@ -33,8 +35,8 @@ skills remain Postgres-backed, since those are fetched at runtime.
 """
 
 import logging
-from collections.abc import Callable
-from pathlib import Path
+from collections.abc import Callable, Iterable
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from deepagents.backends import (
@@ -42,19 +44,24 @@ from deepagents.backends import (
     FilesystemBackend,
     StateBackend,
 )
+from deepagents.backends.protocol import EditResult, FileUploadResponse, WriteResult
 
 from .attachment_backend import AttachmentDirectoryBackend
 from .state_backend import (
     ContentDocumentDirectoryBackend,
     InboxDirectoryBackend,
     KanbanTaskDirectoryBackend,
+    PolicyDirectoryBackend,
+    RoutineDirectoryBackend,
     StateDocumentBackend,
     StateFile,
+    UserAgentDirectoryBackend,
     WorkflowDirectoryBackend,
     create_health_state_file,
     create_knowledge_state_file,
     create_marketplaces_state_file,
     create_mcp_state_file,
+    create_model_profiles_state_file,
     create_plugins_state_file,
     create_preferences_state_file,
     create_registry_state_file,
@@ -78,8 +85,60 @@ class ReadOnlyBackend:
     async def can_delete_file(self, path: str, context: dict[str, Any]) -> bool:
         return False
 
+    def write(self, file_path: str, content: str) -> WriteResult:
+        return WriteResult(error="This mount is read-only")
+
+    async def awrite(self, file_path: str, content: str) -> WriteResult:
+        return self.write(file_path, content)
+
+    def edit(
+        self, file_path: str, old_string: str, new_string: str, replace_all: bool = False
+    ) -> EditResult:
+        return EditResult(error="This mount is read-only")
+
+    async def aedit(
+        self, file_path: str, old_string: str, new_string: str, replace_all: bool = False
+    ) -> EditResult:
+        return self.edit(file_path, old_string, new_string, replace_all)
+
+    def upload_files(self, files: list[tuple[str, bytes]]) -> list[FileUploadResponse]:
+        return [FileUploadResponse(path=path, error="permission_denied") for path, _ in files]
+
+    async def aupload_files(self, files: list[tuple[str, bytes]]) -> list[FileUploadResponse]:
+        return self.upload_files(files)
+
     def __getattr__(self, item: str) -> Any:
         return getattr(self._backend, item)
+
+
+def create_object_agent_plugin_skill_routes(
+    state_manager: Any, mount_paths: Iterable[str], skill_paths: Iterable[str] = ()
+) -> dict[str, Any]:
+    """Resolve declared plugin skill mounts without relying on startup routes.
+
+    Each route is rooted at a declared plugin mount or a named plugin skill
+    within a declared mount, rather than exposing the entire skill store.
+    Native skill paths keep their disk route.
+    The fresh child composite owns these routes; the parent is never mutated.
+    """
+    routes: dict[str, Any] = {}
+    mounts = tuple(mount_paths)
+    paths = set(mounts)
+    for skill in skill_paths:
+        path = str(PurePosixPath(skill)) + "/"
+        if any(path.startswith(mount) for mount in mounts):
+            paths.add(path)
+    for path in sorted(paths):
+        if not path.startswith("/skills/"):
+            continue
+        relative_path = path.removeprefix("/skills/").rstrip("/")
+        segment = relative_path.split("/", 1)[0]
+        if "__" not in segment:
+            continue
+        routes[path] = ReadOnlyBackend(
+            ContentDocumentDirectoryBackend(state_manager, "skill", path_prefix=relative_path)
+        )
+    return routes
 
 
 def create_progenitor_backend(
@@ -88,10 +147,12 @@ def create_progenitor_backend(
     log_dir: str | Path | None = None,
     schemas_dir: str | Path | None = None,
     skills_dir: str | Path | None = None,
+    agents_dir: str | Path | None = None,
     worktree_dir: str | Path | None = None,
     state_manager: Any | None = None,
     database_url: str | None = None,
     plugin_skill_segments: list[str] | None = None,
+    plugin_agent_segments: list[str] | None = None,
 ) -> Any:
     """Create a backend instance for the Progenitor DeepAgent.
 
@@ -101,6 +162,8 @@ def create_progenitor_backend(
         schemas_dir: JSON Schema directory. Defaults to ``<project_root>/data/schemas``.
         skills_dir: Progenitor's own skill directory. Defaults to
             ``<project_root>/data/skills``. Disk-mounted read-only at ``/skills/``.
+        agents_dir: Bundled agent directory, read-only at /agents/objects/
+            and /agents/native/. Defaults to <project_root>/data/agents/objects.
         worktree_dir: Repository/worktree directory. Defaults to ``<project_root>/data/repos``.
         state_manager: Required for prompts/memories/config mounts and for
             installed marketplace-plugin skill mounts (all Postgres-backed);
@@ -119,6 +182,7 @@ def create_progenitor_backend(
     resolved_log_dir = Path(log_dir) if log_dir else root / "logs"
     resolved_schemas_dir = Path(schemas_dir) if schemas_dir else root / "data" / "schemas"
     resolved_skills_dir = Path(skills_dir) if skills_dir else root / "data" / "skills"
+    resolved_agents_dir = Path(agents_dir) if agents_dir else root / "data" / "agents" / "objects"
     resolved_worktree_dir = Path(worktree_dir) if worktree_dir else root / "data" / "repos"
 
     def _route_backend(
@@ -145,6 +209,8 @@ def create_progenitor_backend(
         ("/logs/", resolved_log_dir, True),
         ("/schemas/", resolved_schemas_dir, True),
         ("/skills/", resolved_skills_dir, True),
+        ("/agents/objects/", resolved_agents_dir, True),
+        ("/agents/native/", resolved_agents_dir, True),
     ]
     for route, mount_path, ro in mounts:
         backend = _route_backend(mount_path, read_only=ro)
@@ -152,6 +218,12 @@ def create_progenitor_backend(
             routes[route] = backend
 
     if state_manager is not None:
+        routes["/agents/"] = ReadOnlyBackend(
+            ContentDocumentDirectoryBackend(state_manager, "agent")
+        )
+        routes["/agents/user/"] = UserAgentDirectoryBackend(
+            state_manager, native_root=resolved_agents_dir
+        )
         routes["/memories/"] = ContentDocumentDirectoryBackend(state_manager, "memory")
         routes["/prompts/"] = ReadOnlyBackend(
             ContentDocumentDirectoryBackend(state_manager, "prompt")
@@ -160,11 +232,15 @@ def create_progenitor_backend(
             routes[f"/skills/{segment}/"] = ReadOnlyBackend(
                 ContentDocumentDirectoryBackend(state_manager, "skill", path_prefix=segment)
             )
+        for segment in plugin_agent_segments or []:
+            routes[f"/agents/{segment}/"] = ReadOnlyBackend(
+                ContentDocumentDirectoryBackend(state_manager, "agent", path_prefix=segment)
+            )
 
         # State documents surfaced as virtual files (e.g. /config/mcp.json,
         # /config/schedule.json, /config/agents.json), backed by the runtime
         # StateManager so writes persist through the normal store path. Tasks get
-        # their own mount: a directory of per-task files (/config/tasks/<id>.md +
+        # their own mount: a directory of per-task files (/tasks/<id>.md +
         # board.json) so the agent edits one task per file instead of a giant blob.
         state_file_factories: list[Callable[[Any], StateFile]] = [
             create_mcp_state_file,
@@ -177,12 +253,15 @@ def create_progenitor_backend(
             create_repo_scan_state_file,
             create_health_state_file,
             create_preferences_state_file,
+            create_model_profiles_state_file,
         ]
         routes["/config/"] = StateDocumentBackend(
             [factory(state_manager) for factory in state_file_factories]
         )
-        routes["/config/tasks/"] = KanbanTaskDirectoryBackend(state_manager)
+        routes["/tasks/"] = KanbanTaskDirectoryBackend(state_manager)
         routes["/workflows/"] = WorkflowDirectoryBackend(state_manager)
+        routes["/routines/"] = RoutineDirectoryBackend(state_manager)
+        routes["/policies/"] = PolicyDirectoryBackend(state_manager)
         # User inbox: a directory of per-message files (/inbox/<id>.md) the
         # agent writes to send the user rich markdown messages.
         routes["/inbox/"] = InboxDirectoryBackend(state_manager)

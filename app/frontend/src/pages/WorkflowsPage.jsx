@@ -21,12 +21,14 @@ import Select from '../components/common/Select';
 import { useNotifications } from '../context/NotificationContext';
 import {
   deleteWorkflow,
+  fetchDocumentKinds,
   fetchWorkflowContent,
   fetchWorkflows,
   fetchWorkflowRuns,
   pauseWorkflow,
   resumeWorkflow,
   saveWorkflow,
+  selectDocumentKinds,
   selectWorkflowDetailByPath,
   selectWorkflowLatestRunById,
   selectWorkflowRuns,
@@ -68,6 +70,7 @@ const WORKFLOW_EVENT_TYPES = [
   'kanban.card.moved',
   'kanban.card.deleted',
   'kanban.card.status_changed',
+  'document.changed',
 ];
 const WORKFLOW_EVENT_TYPE_OPTIONS = WORKFLOW_EVENT_TYPES.map((eventType) => ({ value: eventType, label: eventType }));
 // Mirrors the fixed kanban pipeline from _kanban_default_columns() in
@@ -79,6 +82,13 @@ const WORKFLOW_KANBAN_COLUMNS = [
   { value: 'build', label: 'Build' },
   { value: 'validate', label: 'Validate' },
   { value: 'done', label: 'Done' },
+];
+// Only meaningful for the document.changed trigger. Mirrors
+// WorkflowTrigger.action in app/progenitor/workflows.py.
+const WORKFLOW_DOCUMENT_ACTIONS = [
+  { value: '', label: 'Any action' },
+  { value: 'upserted', label: 'Upserted (created/updated)' },
+  { value: 'deleted', label: 'Deleted' },
 ];
 const FILTERS = [
   { value: 'all', label: 'All' },
@@ -271,6 +281,9 @@ function buildNodeData(kind, node, callbacks, latestRun, sizes) {
       eventType: node.eventType || WORKFLOW_EVENT_TYPES[0],
       fromColumn: node.fromColumn || '',
       toColumn: node.toColumn || '',
+      keyPrefix: node.keyPrefix || '',
+      key: node.key || '',
+      action: node.action || '',
       currentNodeId: latestRun?.current_node_id || null,
       onChange: callbacks.onNodeChange,
       onDelete: callbacks.onDeleteNode,
@@ -366,6 +379,9 @@ function workflowToFlow(definition, callbacks, latestRun) {
         eventType: definition.trigger?.event_type || WORKFLOW_EVENT_TYPES[0],
         fromColumn: definition.trigger?.from_column || '',
         toColumn: definition.trigger?.to_column || '',
+        keyPrefix: definition.trigger?.key_prefix || '',
+        key: definition.trigger?.key || '',
+        action: definition.trigger?.action || '',
       }
       : node;
     return {
@@ -501,6 +517,9 @@ function flowToWorkflow(baseWorkflow, nodes, edges, viewport) {
       event_type: eventNode?.data?.eventType || baseWorkflow.trigger?.event_type || WORKFLOW_EVENT_TYPES[0],
       from_column: eventNode?.data?.fromColumn || null,
       to_column: eventNode?.data?.toColumn || null,
+      key_prefix: eventNode?.data?.keyPrefix || null,
+      key: eventNode?.data?.key || null,
+      action: eventNode?.data?.action || null,
     },
     graph: {
       nodes: graphNodes,
@@ -520,6 +539,11 @@ function flowToWorkflow(baseWorkflow, nodes, edges, viewport) {
 function EventNode({ id, data, selected }) {
   const isRunning = data.currentNodeId === id;
   const expanded = data.expanded;
+  const documentKinds = useSelector(selectDocumentKinds);
+  const documentKindOptions = useMemo(() => [
+    { value: '', label: 'Any document kind' },
+    ...documentKinds.map((kind) => ({ value: kind.key_prefix, label: kind.label })),
+  ], [documentKinds]);
   return (
     <>
       <NodeResizer
@@ -589,6 +613,42 @@ function EventNode({ id, data, selected }) {
                   </label>
                 </>
               ) : null}
+              {data.eventType === 'document.changed' ? (
+                <>
+                  <label className="workflow-graph-node__field">
+                    <span>Document kind</span>
+                    <Select
+                      className="nodrag"
+                      value={data.keyPrefix}
+                      onChange={(next) => data.onChange(id, { keyPrefix: next })}
+                      options={documentKindOptions}
+                      ariaLabel="Document kind"
+                      portal
+                    />
+                  </label>
+                  <label className="workflow-graph-node__field">
+                    <span>Key</span>
+                    <input
+                      className="nodrag"
+                      type="text"
+                      value={data.key}
+                      onChange={(event) => data.onChange(id, { key: event.target.value })}
+                      placeholder="Any key"
+                    />
+                  </label>
+                  <label className="workflow-graph-node__field">
+                    <span>Action</span>
+                    <Select
+                      className="nodrag"
+                      value={data.action}
+                      onChange={(next) => data.onChange(id, { action: next })}
+                      options={WORKFLOW_DOCUMENT_ACTIONS}
+                      ariaLabel="Action"
+                      portal
+                    />
+                  </label>
+                </>
+              ) : null}
               <p className="workflow-graph-node__hint">
                 One event node starts the v1 workflow path.
               </p>
@@ -599,6 +659,9 @@ function EventNode({ id, data, selected }) {
                 {data.eventType}
                 {data.eventType === 'kanban.card.moved' && (data.fromColumn || data.toColumn)
                   ? ` (${data.fromColumn || 'any'} → ${data.toColumn || 'any'})`
+                  : ''}
+                {data.eventType === 'document.changed' && (data.keyPrefix || data.key || data.action)
+                  ? ` (${data.keyPrefix || 'any kind'}${data.key ? `, key=${data.key}` : ''}${data.action ? `, ${data.action}` : ''})`
                   : ''}
               </div>
             </div>
@@ -949,7 +1012,7 @@ const NODE_TYPES = {
 
 // Chevrons for the right tools dock / collapse seam (point toward the action:
 // left = expand the panel leftward, right = collapse it away). Ported from the
-// Agents/Sequences canvas.
+// Agents/Routines canvas.
 function ChevronLeftSmall() {
   return (
     <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
@@ -977,7 +1040,7 @@ const DOCK_ITEM_META = {
 };
 
 // Bottom-center floating dock for adding nodes to the canvas — ported directly
-// from the Agents/Sequences canvas's GraphDock: drag onto the canvas or click
+// from the Agents/Routines canvas's GraphDock: drag onto the canvas or click
 // to add at the next slot. The event node is the fixed start and isn't
 // dock-addable.
 function WorkflowDock({ onAdd }) {
@@ -1008,7 +1071,7 @@ function WorkflowDock({ onAdd }) {
 }
 
 // Collapsed right-edge dock holding the workflow's auxiliary views (details
-// form, JSON editor, run history) — ported from the Agents/Sequences canvas's
+// form, JSON editor, run history) — ported from the Agents/Routines canvas's
 // GraphSideDock so the canvas itself can occupy the full page instead of
 // sharing space with a permanent header/form.
 const WORKFLOW_SIDE_ITEMS = [
@@ -1112,6 +1175,7 @@ function WorkflowsInner() {
   const { show } = useNotifications();
   const workflowsUrl = getApiUrl('workflows');
   const workflowRunsUrl = getApiUrl('workflowRuns');
+  const documentKindsUrl = getApiUrl('documentKinds');
   const realtime = useSelector(selectRealtime);
   const workflows = useSelector(selectWorkflows);
   const workflowsState = useSelector(selectWorkflowsState);
@@ -1162,13 +1226,22 @@ function WorkflowsInner() {
     }
   }, [dispatch, show, workflowRunsUrl]);
 
+  const loadDocumentKinds = useCallback(async () => {
+    try {
+      await dispatch(fetchDocumentKinds({ documentKindsUrl })).unwrap();
+    } catch (error) {
+      show('error', 'Document kinds load failed', error.message);
+    }
+  }, [dispatch, show, documentKindsUrl]);
+
   useEffect(() => {
     if (!realtime.connected) {
       return;
     }
     void loadWorkflows();
     void loadRuns();
-  }, [loadRuns, loadWorkflows, realtime.connected]);
+    void loadDocumentKinds();
+  }, [loadDocumentKinds, loadRuns, loadWorkflows, realtime.connected]);
 
   useEffect(() => {
     if (!workflows.length) {

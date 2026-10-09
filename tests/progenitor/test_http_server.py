@@ -11,11 +11,13 @@ import pytest
 from app.progenitor.async_subagents import HELLO_WORLD_ASYNC_RESULT
 from app.progenitor.runtime.http import ProgenitorHTTPServer
 from app.progenitor.state.models import A2ATaskRecord
+from tests.progenitor.conftest import _FakeRuntimeStore
 
 
 class _StateManager:
     def __init__(self) -> None:
         self.tasks: dict[str, A2ATaskRecord] = {}
+        self._runtime_store = _FakeRuntimeStore()
 
     async def get_current_state(self) -> dict:
         return {"thread_id": "thread-test", "cycle_count": 3}

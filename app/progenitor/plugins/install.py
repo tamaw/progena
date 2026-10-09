@@ -9,6 +9,7 @@ checks (digest comparison) without auto-applying.
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from typing import Any
 
 from ..utils import utcnow_isoformat
@@ -17,11 +18,21 @@ from .sources import (
     _parse_github_source,
     compute_digest,
     fetch_marketplace,
-    fetch_plugin_files_with_report,
+    fetch_plugin_content_files_with_report,
     resolve_plugin_version,
 )
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class ValidatedPluginContent:
+    """Valid installable content, its combined digest and skipped agent names."""
+
+    skills: dict[str, str]
+    agents: dict[str, str]
+    digest: str
+    skipped_agents: list[str]
 
 
 def _plugin_segment(key: str) -> str:
@@ -62,12 +73,79 @@ async def _fetch_and_digest(
     plugin_name: str,
     marketplace_name: str,
     catalog: MarketplaceCatalog | None = None,
-) -> tuple[dict[str, str], str]:
-    """Fetch a plugin's skill files and compute their digest."""
+) -> ValidatedPluginContent:
+    """Fetch valid skills/object agents and compute one content digest.
+
+    Invalid object-agent manifests are filtered out instead of failing an
+    otherwise usable plugin. The returned skipped names are surfaced as an
+    installed status warning by the reconciler.
+    """
     if catalog is None:
         catalog = _build_synthetic_catalog(entry, plugin_name, marketplace_name)
-    files, _skipped = await fetch_plugin_files_with_report(catalog, plugin_name)
-    return files, compute_digest(files)
+    files = await fetch_plugin_content_files_with_report(catalog, plugin_name)
+    skills = files.skills
+    valid_agents, skipped_agents = _filter_valid_agent_files(files.agents, plugin_name)
+    if not skills and not valid_agents:
+        suffix = (
+            f"; skipped invalid object agents: {', '.join(skipped_agents)}"
+            if skipped_agents
+            else ""
+        )
+        raise ValueError(f"plugin ships no valid installable skills or object agents{suffix}")
+    digest = compute_digest(
+        {
+            **{f"skills/{path}": content for path, content in skills.items()},
+            **{f"agents/{path}": content for path, content in valid_agents.items()},
+        }
+    )
+    return ValidatedPluginContent(
+        skills=skills, agents=valid_agents, digest=digest, skipped_agents=skipped_agents
+    )
+
+
+def _filter_valid_agent_files(
+    files: dict[str, str], plugin_name: str
+) -> tuple[dict[str, str], list[str]]:
+    """Keep complete, valid object-agent directories and skip bad ones."""
+    from ..agent.object_agent_manifest import parse_object_agent_manifest
+
+    by_agent: dict[str, dict[str, str]] = {}
+    for path, content in files.items():
+        agent_name, separator, relative = path.partition("/")
+        if not separator or not agent_name or not relative:
+            continue
+        by_agent.setdefault(agent_name, {})[relative] = content
+
+    valid: dict[str, str] = {}
+    skipped: list[str] = []
+    for agent_name, agent_files in sorted(by_agent.items()):
+        system_prompt = agent_files.get("SYSTEM.md")
+        if system_prompt is None:
+            skipped.append(agent_name)
+            logger.warning(
+                "Skipping object agent %r from plugin %r: missing SYSTEM.md",
+                agent_name,
+                plugin_name,
+            )
+            continue
+        try:
+            parse_object_agent_manifest(
+                system_prompt,
+                source=f"plugin:{plugin_name}/agents/objects/{agent_name}/SYSTEM.md",
+                source_kind="marketplace",
+            )
+        except ValueError as exc:
+            skipped.append(agent_name)
+            logger.warning(
+                "Skipping invalid object agent %r from plugin %r: %s",
+                agent_name,
+                plugin_name,
+                exc,
+            )
+            continue
+        for relative, content in agent_files.items():
+            valid[f"{agent_name}/{relative}"] = content
+    return valid, skipped
 
 
 async def check_plugin_updates(state_manager) -> dict[str, Any]:
@@ -122,8 +200,8 @@ async def check_plugin_updates(state_manager) -> dict[str, Any]:
                 # GitHub/git-subdir source, not via a marketplace listing):
                 # fall back to a digest comparison against upstream, same as
                 # reconcile_plugins' frozen-entry check.
-                _files, digest = await _fetch_and_digest(current, plugin_name, marketplace_name)
-                if digest != current.get("installed_digest"):
+                content = await _fetch_and_digest(current, plugin_name, marketplace_name)
+                if content.digest != current.get("installed_digest"):
                     current["available_version"] = resolve_plugin_version(current, None)
                     summary["updated_available"].append(key)
                     changed = True
@@ -170,11 +248,14 @@ async def reconcile_plugins(state_manager, *, log_sink=None) -> dict[str, Any]:
     desired = await state_manager.get_plugins_config()
     plugins = desired.get("plugins", {})
 
-    actual_rows = await state_manager.list_content_documents("skill")
-    actual_by_segment: dict[str, list[str]] = {}
-    for rel, _content in actual_rows:
-        seg = rel.split("/", 1)[0] if "/" in rel else rel
-        actual_by_segment.setdefault(seg, []).append(rel)
+    actual_by_kind_segment: dict[str, dict[str, list[str]]] = {}
+    for kind in ("skill", "agent"):
+        rows = await state_manager.list_content_documents(kind)
+        segments: dict[str, list[str]] = {}
+        for rel, _content in rows:
+            seg = rel.split("/", 1)[0] if "/" in rel else rel
+            segments.setdefault(seg, []).append(rel)
+        actual_by_kind_segment[kind] = segments
 
     summary: dict[str, list[str]] = {
         "installed": [],
@@ -185,18 +266,20 @@ async def reconcile_plugins(state_manager, *, log_sink=None) -> dict[str, Any]:
     changed = False
     now = utcnow_isoformat()
 
-    # --- 1. Remove skill documents for plugins no longer in desired state ---
-    # Progenitor's own native skills are disk-only now (never seeded into
-    # Postgres, see agent.py) -- any unsegmented ("no __") row still in the
-    # store is leftover from before that change and is safe to delete too.
-    desired_segments = {_plugin_segment(k) for k in plugins}
-    for seg, rels in list(actual_by_segment.items()):
-        if seg in desired_segments:
-            continue
-        for rel in rels:
-            await state_manager.delete_content_document("skill", rel)
-        summary["removed"].append(seg)
-        changed = True
+    # --- 1. Remove content for plugins no longer in desired state ---
+    # Only marketplace namespaces are plugin-owned. Bundled/user definitions
+    # must never be removed by plugin reconciliation.
+    desired_segments = {_plugin_segment(k) for k in plugins} | {"user"}
+    removed_segments: set[str] = set()
+    for kind, segments in actual_by_kind_segment.items():
+        for seg, rels in list(segments.items()):
+            if "__" not in seg or seg in desired_segments:
+                continue
+            for rel in rels:
+                await state_manager.delete_content_document(kind, rel)
+            removed_segments.add(seg)
+            changed = True
+    summary["removed"].extend(sorted(removed_segments))
 
     # --- 2. Process each desired plugin entry ---
     for key, entry in list(plugins.items()):
@@ -216,16 +299,29 @@ async def reconcile_plugins(state_manager, *, log_sink=None) -> dict[str, Any]:
             )
             resolved_version = resolve_plugin_version(current, None)
             if needs_install:
-                files, digest = await _fetch_and_digest(current, plugin_name, marketplace_name)
-                for path, content in files.items():
-                    await state_manager.save_content_document("skill", f"{seg}/{path}", content)
+                content = await _fetch_and_digest(current, plugin_name, marketplace_name)
+                # Replace the plugin's content as a unit so removed companion
+                # files cannot survive an upgrade.
+                for kind in ("skill", "agent"):
+                    for rel in actual_by_kind_segment[kind].get(seg, []):
+                        await state_manager.delete_content_document(kind, rel)
+                for path, text in content.skills.items():
+                    await state_manager.save_content_document("skill", f"{seg}/{path}", text)
+                for path, text in content.agents.items():
+                    await state_manager.save_content_document("agent", f"{seg}/{path}", text)
 
-                skills = sorted({p.split("/", 1)[0] for p in files if "/" in p})
+                skills = sorted({p.split("/", 1)[0] for p in content.skills if "/" in p})
+                agents = sorted({p.split("/", 1)[0] for p in content.agents if "/" in p})
                 current["installed_version"] = desired_version or resolved_version
-                current["installed_digest"] = digest
+                current["installed_digest"] = content.digest
                 current["skills"] = skills
+                current["agents"] = agents
                 current["status"] = "installed"
-                current["status_message"] = ""
+                current["status_message"] = (
+                    "Skipped invalid object agents: " + ", ".join(content.skipped_agents)
+                    if content.skipped_agents
+                    else ""
+                )
                 current["installed_at"] = current.get("installed_at") or now
                 current["last_checked"] = now
                 current["available_version"] = None
@@ -235,8 +331,8 @@ async def reconcile_plugins(state_manager, *, log_sink=None) -> dict[str, Any]:
                 # Frozen entry (no desired ``version`` bump pending): refresh
                 # ``available_version`` via a digest comparison against
                 # upstream, without touching installed_version or skills.
-                _files, digest = await _fetch_and_digest(current, plugin_name, marketplace_name)
-                if digest != current.get("installed_digest"):
+                content = await _fetch_and_digest(current, plugin_name, marketplace_name)
+                if content.digest != current.get("installed_digest"):
                     current["available_version"] = resolved_version
                     summary["updated_available"].append(key)
                     changed = True

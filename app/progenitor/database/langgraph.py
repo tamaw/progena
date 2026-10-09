@@ -39,6 +39,9 @@ async def _open_saver(
         saver = AsyncPostgresSaver(conn=conn)
         if setup:
             await saver.setup()
+            from ..routines.events import CHECKPOINT_TRIGGER_SQL
+
+            await conn.execute(CHECKPOINT_TRIGGER_SQL, prepare=False)
         return saver, conn
     except BaseException:
         await conn.close()
@@ -79,7 +82,7 @@ async def _open_store(
                     "autocommit": True,
                     "prepare_threshold": 0,
                     "row_factory": dict_row,
-                    **(pc.pop("kwargs", None) or {}),
+                    **pc.pop("kwargs", {}),
                 },
                 **cast(dict, pc),
             ),

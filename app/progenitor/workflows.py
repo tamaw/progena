@@ -10,14 +10,15 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from .document_kinds import (
+    WORKFLOW_DEFINITION_KEY_PREFIX,
+    WORKFLOW_INVOKE_REQUEST_KEY_PREFIX,
+    WORKFLOW_QUEUE_KEY_PREFIX,
+    WORKFLOW_RUN_KEY_PREFIX,
+)
 from .schemas import load_schema
 from .structured import validate_against_schema
 from .utils import utcnow_isoformat
-
-WORKFLOW_DEFINITION_KEY_PREFIX = "workflow:"
-WORKFLOW_RUN_KEY_PREFIX = "workflow_run:"
-WORKFLOW_QUEUE_KEY_PREFIX = "workflow_queue:"
-WORKFLOW_INVOKE_REQUEST_KEY_PREFIX = "workflow_invoke_request:"
 
 WORKFLOW_ALLOWED_EVENT_TYPES = (
     "kanban.card.created",
@@ -25,7 +26,13 @@ WORKFLOW_ALLOWED_EVENT_TYPES = (
     "kanban.card.moved",
     "kanban.card.deleted",
     "kanban.card.status_changed",
+    # Generic document-change event, fired for any tracked document kind
+    # (see document_kinds.py) via the store table's LISTEN/NOTIFY trigger.
+    # Filtered by the trigger's key_prefix/key/action fields below, not by
+    # from_column/to_column (kanban-only).
+    "document.changed",
 )
+WORKFLOW_DOCUMENT_TRIGGER_ACTIONS = ("upserted", "deleted")
 WORKFLOW_DEFAULT_EVENT_TYPE = WORKFLOW_ALLOWED_EVENT_TYPES[0]
 
 WORKFLOW_DEFAULT_AGENT_NAME = "progenitor"
@@ -50,6 +57,12 @@ class WorkflowTrigger(BaseModel):
     event_type: str
     from_column: str | None = None
     to_column: str | None = None
+    # document.changed filters: each is a wildcard when unset. key_prefix
+    # matches a document kind (see document_kinds.DOCUMENT_KINDS), key an
+    # exact document key, action the write kind (upserted vs deleted).
+    key_prefix: str | None = None
+    key: str | None = None
+    action: Literal["upserted", "deleted"] | None = None
 
 
 class WorkflowNodeEvent(BaseModel):
@@ -405,6 +418,14 @@ def validate_workflow_definition_payload(payload: Any) -> dict[str, Any]:
     ) and definition.trigger.event_type != "kanban.card.moved":
         raise ValueError(
             "from_column and to_column filters are only valid for kanban.card.moved triggers"
+        )
+    if (
+        definition.trigger.key_prefix is not None
+        or definition.trigger.key is not None
+        or definition.trigger.action is not None
+    ) and definition.trigger.event_type != "document.changed":
+        raise ValueError(
+            "key_prefix, key, and action filters are only valid for document.changed triggers"
         )
 
     _validate_workflow_graph(definition)

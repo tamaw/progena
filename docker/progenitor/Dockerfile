@@ -7,14 +7,26 @@ FROM python:3.12-slim
 ARG GIT_COMMIT=""
 ENV GIT_COMMIT=${GIT_COMMIT}
 
-# Install system dependencies (curl for healthchecks, ca-certs for TLS)
+# Install runtime CLI dependencies.
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    git \
     curl \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Note: GitHub CLI and Copilot CLI are NOT installed here.
-# Build/git operations are delegated to the builder_agent (see app/agents/builder_agent/).
+RUN set -eux; \
+    mkdir -p /usr/share/keyrings; \
+    curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+      -o /usr/share/keyrings/githubcli-archive-keyring.gpg; \
+    chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg; \
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+      > /etc/apt/sources.list.d/github-cli.list; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends gh; \
+    rm -rf /var/lib/apt/lists/*
+
+RUN addgroup --system --gid 10001 agent \
+    && adduser --system --uid 10001 --ingroup agent --home /home/agent agent
 
 # Set working directory
 WORKDIR /app
@@ -30,9 +42,17 @@ COPY data/skills/ ./data/skills/
 # preferences, workflow nodes, MCP entries, ...), unlike prompts/skills --
 # it's read from disk on every load_schema() call, not seeded once.
 COPY data/schemas/ ./data/schemas/
+# Native manifests are read-only runtime files, never imported into Postgres.
+COPY data/agents/ ./data/agents/
+COPY data/shims/ ./data/shims/
 COPY scripts/ ./scripts/
 RUN pip install --no-cache-dir . \
-    && mkdir -p /app/logs /app/tmp
+    && chown -R root:root /app/data/shims \
+    && chmod 0755 /app/data/shims/bin/* \
+    && chmod -R a-w /app/data/shims \
+    && chmod -R a-w /app/data/agents \
+    && mkdir -p /app/agent-home /app/repos /app/logs /app/tmp /app/shell-workspaces \
+    && chown -R agent:agent /app/agent-home /app/repos /app/logs /app/tmp /app/shell-workspaces
 
 # Set environment variables
 ENV PYTHONPATH=/app
@@ -41,6 +61,10 @@ ENV AGENT_NAME=progenitor
 ENV PROGENITOR_DATA_DIR=/app/data
 ENV PROGENITOR_LOG_DIR=/app/logs
 
+ENV PROGENITOR_SHELL_HOME=/app/agent-home
+ENV PROGENITOR_SHELL_WORKSPACE_DIR=/app/shell-workspaces
+ENV PROGENITOR_SHELL_SHIM_BIN=/app/data/shims/bin
+ENV PYTHONDONTWRITEBYTECODE=1
 # Expose chat server port
 EXPOSE 8000
 
@@ -53,3 +77,4 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
 
 # Default command (runs Progenitor agent)
 CMD ["python", "-m", "app.progenitor.main"]
+USER agent

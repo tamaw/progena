@@ -3,15 +3,20 @@ import { useDispatch, useSelector } from 'react-redux';
 import { useNavigate, useParams } from 'react-router-dom';
 import { getTimeBucket } from '../components/chat/conversationModel';
 import Select from '../components/common/Select';
+import { DraftField } from '../components/common/DetailCards';
+import PopupModal from '../components/common/PopupModal';
 import { useConfig } from '../context/ConfigContext';
-import { selectRealtime } from '../store/realtimeSlice';
+import { selectRealtimeConnected, selectRealtimeStreamReady } from '../store/realtimeSlice';
 import {
   fetchAgentProfiles,
   requestAgentDetail,
   selectActiveAgentProfile,
+  selectActiveAgentProfileState,
   selectAgentProfiles,
   selectAgentProfilesState,
   updateAgentGraph,
+  deleteAgentProfile,
+  updateObjectAgentProfile,
 } from '../store/uiDataSlice';
 import {
   PaneEmptyState,
@@ -26,61 +31,44 @@ import {
 import PageShell from '../components/layout/PageShell';
 import DetailPane from '../components/layout/DetailPane';
 import DetailHeader, {
-  ConfigureActionIcon,
   DeleteActionIcon,
   DetailHeaderAction,
   DetailHeaderActions,
-  DuplicateActionIcon,
-  PlayActionIcon,
+  EditActionIcon,
   SaveActionIcon,
 } from '../components/layout/DetailHeader';
-import { AgentGraphTab } from '../components/agents/AgentGraph';
-import { A2ADetailBody, ACPDetailBody, SubagentDetailBody } from '../components/agents/AgentDetailBodies';
+import { RoutineGraphEditor } from '../components/agents/RoutineGraphEditor';
+import { A2ADetailBody, ACPDetailBody, ObjectAgentDetailBody } from '../components/agents/AgentDetailBodies';
 import { formatAge } from '../components/agents/agentFormat';
 
-
 const AGENT_FILTERS = ['All', 'Running', 'Failed', 'Stopped', 'Disabled'];
-// the read-only detail bodies above (subagent / a2a / acp) and its own draft
-// field set. Blurbs explain the distinction in the type-picker modal.
+// Object agents are portable SYSTEM.md manifests. A2A and ACP are protocol
+// integrations, not internal agents, and are intentionally absent here.
 const AGENT_TYPES = [
   {
-    kind: 'subagent',
-    label: 'Subagent',
-    blurb: 'In-process DeepAgent persona with a system prompt, tools, repositories and knowledge.',
-  },
-  {
-    kind: 'a2a',
-    label: 'A2A agent',
-    blurb: 'Remote agent reached over the Agent-to-Agent protocol via its published agent card.',
-  },
-  {
-    kind: 'acp',
-    label: 'ACP agent',
-    blurb: 'Local agent driven over the Agent Client Protocol (stdio/TCP), e.g. a CLI coding agent.',
+    kind: 'object',
+    label: 'Object agent',
+    blurb: 'Manifest-backed internal agent with a Markdown system prompt and selected tools.',
   },
 ];
 
 const AGENT_TYPE_LABELS = Object.fromEntries(AGENT_TYPES.map((type) => [type.kind, type.label]));
 
-// Seed a blank draft for the picked kind. The editable form binds to these
-// fields; everything is mocked client-side until a real register_*_agent call
-// exists, so creating an agent just clears the draft for now.
 function makeDraftAgent(kind) {
-  const base = { kind, name: '', role: '', model: '', summary: '' };
-  if (kind === 'a2a') {
-    return { ...base, url: '', transport: 'jsonrpc', skills: '' };
-  }
-  if (kind === 'acp') {
-    return { ...base, command: '', transport: 'stdio', permissionMode: 'prompt', timeoutSeconds: '120' };
-  }
-  return { ...base, prompt: '', tools: '', repositories: '' };
+  return {
+    kind,
+    name: '',
+    model: '',
+    summary: '',
+    version: '1.0.0',
+    prompt: '',
+    tools: '',
+    skills: '',
+  };
 }
 
-// Sort modes offered by the toolbar sort menu. Each re-orders the visible list
-// (and, since group order is derived from list order, the groups too).
 const SORT_MODES = ['Type', 'Name', 'Recent'];
-// Lower rank sorts first under "Type" so kinds cluster in a stable order.
-const TYPE_RANK = { subagent: 0, a2a: 1, acp: 2 };
+const TYPE_RANK = { object: 0, routine: 2 };
 // Recency buckets for the "Recent" sort, mirroring the chat sidebar's headers.
 const RECENCY_BUCKETS = [
   ['today', 'Today'],
@@ -89,33 +77,18 @@ const RECENCY_BUCKETS = [
   ['last-week', 'Last Week'],
   ['later', 'Later'],
 ];
-// The agent graph now lives on the Sequences page; the Agents page shows only
+// The agent graph now lives on the Routines page; the Agents page shows only
 // Details, so the detail tab row is hidden in both views.
 
 // Default graph shape for agents without a stored graph (passed to the canvas).
 const FALLBACK_GRAPH = {
   status: 'Draft',
   summary: '',
+  entry: null,
   nodes: [],
   edges: [],
 };
 
-// Sequences isn't wired to real data yet — show one pretend entry instead of
-// the live agent list so the page reads as intentional, not empty/broken.
-const DUMMY_SEQUENCES = [{
-  id: 'sequence-demo',
-  kind: 'subagent',
-  name: 'Demo Sequence',
-  role: 'Placeholder — sequences aren’t wired up yet.',
-  summary: 'Placeholder — sequences aren’t wired up yet.',
-  status: 'draft',
-  updated: new Date().toISOString(),
-  model: '',
-  tools: [],
-  repositories: [],
-  knowledge: [],
-  skills: [],
-}];
 
 function normalizeStatus(status) {
   if (!status || status === 'draft') {
@@ -125,7 +98,10 @@ function normalizeStatus(status) {
 }
 
 function matchesAgent(agent, filter, search) {
-  const matchesFilter = filter === 'All' || normalizeStatus(agent.enabled === false ? 'disabled' : agent.status) === filter;
+  // Object agents have no runtime status/enabled concept (see AgentRow);
+  // they only ever match the unfiltered "All" view.
+  const matchesFilter = filter === 'All'
+    || (agent.kind !== 'object' && normalizeStatus(agent.enabled === false ? 'disabled' : agent.status) === filter);
   if (!matchesFilter) {
     return false;
   }
@@ -140,8 +116,6 @@ function matchesAgent(agent, filter, search) {
     agent.summary,
     ...(agent.skills || []).map((skill) => skill.name),
     ...(agent.tools || []).map((tool) => tool.name),
-    ...(agent.repositories || []).map((repo) => repo.name),
-    ...(agent.knowledge || []).map((item) => item.name),
   ]
     .filter(Boolean)
     .join(' ')
@@ -191,15 +165,18 @@ function StatusPill({ status }) {
 }
 
 function AgentRow({ agent, selected, onSelect }) {
-  const status = agent.enabled === false ? 'disabled' : (agent.status || 'draft');
+  // Object agents have no runtime status/enabled concept (see DetailHeader);
+  // showing a status dot for them would fabricate a "draft"/"disabled" state
+  // that doesn't exist in the manifest.
+  const status = agent.kind === 'object' ? null : (agent.enabled === false ? 'disabled' : (agent.status || 'draft'));
   return (
     <button
       type="button"
-      className={`sess-row agents-agent-row agents-agent-row--${status} ${selected ? 'is-selected' : ''}`}
+      className={`sess-row agents-agent-row ${status ? `agents-agent-row--${status}` : ''} ${selected ? 'is-selected' : ''}`}
       onClick={() => onSelect(agent.id)}
     >
       <span className="sess-row__top">
-        <span className={`sess-row__dot agents-agent-row__status agents-agent-row__status--${status}`} />
+        {status ? <span className={`sess-row__dot agents-agent-row__status agents-agent-row__status--${status}`} /> : null}
         <span className="sess-row__agent agents-agent-row__name">{agent.name}</span>
         <span className="sess-row__project">{agent.model}</span>
       </span>
@@ -207,17 +184,16 @@ function AgentRow({ agent, selected, onSelect }) {
       <span className="sess-row__title">{agent.role}</span>
       <span className="sess-row__msgs">
         <span><span className="num">{(agent.tools || []).length}</span> tools</span>
-        <span><span className="num">{(agent.repositories || []).length}</span> repos</span>
-        <span><span className="num">{(agent.knowledge || []).length}</span> knowledge</span>
+        <span><span className="num">{(agent.skills || []).length}</span> skills</span>
       </span>
     </button>
   );
 }
 
-// Sequences card list: a two-line card matching the Chat/Workflows pattern —
+// Routines card list: a two-line card matching the Chat/Workflows pattern —
 // a leading status dot (empty unless running/failed), name + last-activity
 // on the header line, and the agent's role as a single preview line below.
-function SequenceRow({ agent, selected, onSelect }) {
+function RoutineRow({ agent, selected, onSelect }) {
   const status = agent.status || 'draft';
   const dotTone = status === 'running' ? 'info' : (status === 'failed' || status === 'error') ? 'error' : '';
   return (
@@ -241,7 +217,6 @@ function SequenceRow({ agent, selected, onSelect }) {
   );
 }
 
-// Detail pane for A2A agents: everything shown is sourced from the live agent
 // Compact type-picker shown by "+ New": choose what kind of agent to scaffold.
 // Picking a type opens the editable draft in the detail pane.
 function NewAgentModal({ onPick, onClose }) {
@@ -277,34 +252,10 @@ function NewAgentModal({ onPick, onClose }) {
   );
 }
 
-function DraftField({ label, hint, children }) {
-  return (
-    <label className="agents-draft-field">
-      <span className="agents-draft-field__label">{label}</span>
-      {children}
-      {hint ? <span className="agents-draft-field__hint">{hint}</span> : null}
-    </label>
-  );
-}
-
-const A2A_TRANSPORT_OPTIONS = [
-  { value: 'jsonrpc', label: 'JSON-RPC' },
-  { value: 'grpc', label: 'gRPC' },
-  { value: 'http', label: 'HTTP+JSON' },
-];
-const ACP_TRANSPORT_OPTIONS = [
-  { value: 'stdio', label: 'stdio' },
-  { value: 'tcp', label: 'TCP' },
-];
-const ACP_PERMISSION_OPTIONS = [
-  { value: 'prompt', label: 'Prompt' },
-  { value: 'auto', label: 'Auto-approve' },
-  { value: 'readonly', label: 'Read-only' },
-];
-
-// Editable body for a not-yet-created agent. Mirrors the read-only detail bodies
-// per kind, but every fact is an input. Values are mocked client-side; nothing
-// persists until the (future) register_*_agent call is wired up.
+// Editable body for a new manifest-backed object agent — the only creatable
+// kind (A2A/ACP are protocol integrations wired via config, not created here).
+// Fields serialize to YAML front matter plus the Markdown system prompt in
+// SYSTEM.md.
 function DraftAgentDetailBody({ draft, onChange }) {
   const set = (field) => (event) => onChange(field, event.target.value);
   return (
@@ -315,115 +266,97 @@ function DraftAgentDetailBody({ draft, onChange }) {
 
       <section className="agents-section">
         <header className="agents-section__head"><h2>Identity</h2></header>
-        <div className="agents-draft-grid">
-          <DraftField label="Role"><input value={draft.role} onChange={set('role')} placeholder="e.g. Code reviewer" /></DraftField>
-          <DraftField label="Model"><input value={draft.model} onChange={set('model')} placeholder="e.g. gpt-5" /></DraftField>
-        </div>
+        <DraftField label="Model"><input value={draft.model} onChange={set('model')} placeholder="e.g. gpt-5" /></DraftField>
         <DraftField label="Description">
           <textarea rows="3" value={draft.summary} onChange={set('summary')} placeholder="What this agent is for…" />
         </DraftField>
       </section>
 
-      {draft.kind === 'subagent' ? (
-        <>
-          <section className="agents-section agents-section--prompt">
-            <header className="agents-section__head"><h2>System prompt</h2></header>
-            <DraftField label="Prompt" hint="The persona and instructions the subagent runs with.">
-              <textarea rows="8" value={draft.prompt} onChange={set('prompt')} placeholder="You are…" />
-            </DraftField>
-          </section>
-          <section className="agents-section">
-            <header className="agents-section__head"><h2>Connections</h2></header>
-            <div className="agents-draft-grid">
-              <DraftField label="Tools" hint="Comma-separated tool names.">
-                <input value={draft.tools} onChange={set('tools')} placeholder="shell, mcp, call_agent" />
-              </DraftField>
-              <DraftField label="Repositories" hint="Comma-separated repo names.">
-                <input value={draft.repositories} onChange={set('repositories')} placeholder="progenitor, docs" />
-              </DraftField>
-            </div>
-          </section>
-        </>
-      ) : draft.kind === 'a2a' ? (
-        <section className="agents-section">
-          <header className="agents-section__head"><h2>Connection</h2></header>
-          <DraftField label="Endpoint" hint="Base URL of the remote A2A server.">
-            <input value={draft.url} onChange={set('url')} placeholder="https://host:8107" />
+      <section className="agents-section agents-section--prompt">
+        <header className="agents-section__head"><h2>System prompt</h2></header>
+        <DraftField label="Prompt" hint="The persona and instructions the subagent runs with.">
+          <textarea rows="8" value={draft.prompt} onChange={set('prompt')} placeholder="You are…" />
+        </DraftField>
+      </section>
+      <section className="agents-section">
+        <header className="agents-section__head"><h2>Connections</h2></header>
+        <div className="agents-draft-grid">
+          <DraftField label="Tools" hint="Comma-separated tool names.">
+            <input value={draft.tools} onChange={set('tools')} placeholder="shell, mcp, call_agent" />
           </DraftField>
-          <div className="agents-draft-grid">
-            <DraftField label="Transport">
-              <Select
-                value={draft.transport}
-                onChange={(next) => onChange('transport', next)}
-                options={A2A_TRANSPORT_OPTIONS}
-                ariaLabel="Transport"
-              />
-            </DraftField>
-            <DraftField label="Skills" hint="Comma-separated skill ids.">
-              <input value={draft.skills} onChange={set('skills')} placeholder="build_agent, build_mcp" />
-            </DraftField>
-          </div>
-        </section>
-      ) : (
-        <section className="agents-section">
-          <header className="agents-section__head"><h2>Connection</h2></header>
-          <DraftField label="Command" hint="Process Progenitor spawns to speak ACP.">
-            <input value={draft.command} onChange={set('command')} placeholder="copilot --acp" />
+          <DraftField label="Skills" hint="Comma-separated /skills/ source paths.">
+            <input value={draft.skills} onChange={set('skills')} placeholder="/skills/review/" />
           </DraftField>
-          <div className="agents-draft-grid">
-            <DraftField label="Transport">
-              <Select
-                value={draft.transport}
-                onChange={(next) => onChange('transport', next)}
-                options={ACP_TRANSPORT_OPTIONS}
-                ariaLabel="Transport"
-              />
-            </DraftField>
-            <DraftField label="Permissions">
-              <Select
-                value={draft.permissionMode}
-                onChange={(next) => onChange('permissionMode', next)}
-                options={ACP_PERMISSION_OPTIONS}
-                ariaLabel="Permissions"
-              />
-            </DraftField>
-            <DraftField label="Timeout" hint="Seconds before a run is abandoned.">
-              <input value={draft.timeoutSeconds} onChange={set('timeoutSeconds')} inputMode="numeric" placeholder="120" />
-            </DraftField>
-          </div>
-        </section>
-      )}
+        </div>
+      </section>
     </div>
   );
 }
 
-function AgentsPage({ variant = 'agents' }) {
-  const isSequences = variant === 'sequences';
-  const basePath = isSequences ? '/sequences' : '/agents';
+const AGENTS_PAGE = {
+  kind: 'agents',
+  basePath: '/agents',
+  listLabel: 'Agents',
+  searchPlaceholder: 'Search agents...',
+  sortTitle: 'Sort agents',
+  createLabel: '+ New',
+};
+
+function AgentsPage() {
+  return <AgentWorkspace page={AGENTS_PAGE} />;
+}
+
+export function AgentWorkspace({ page }) {
+  const isRoutines = page.kind === 'routines';
+  const { basePath, listLabel, searchPlaceholder, sortTitle, createLabel } = page;
   const dispatch = useDispatch();
   const { getApiUrl } = useConfig();
-  const realtime = useSelector(selectRealtime);
+  const realtimeConnected = useSelector(selectRealtimeConnected);
   const fetchedAgents = useSelector(selectAgentProfiles);
-  // Sequences shows one pretend entry for now instead of the real agent list.
-  const agents = isSequences ? DUMMY_SEQUENCES : fetchedAgents;
+  const { agentId: routeAgentId } = useParams();
+  const agents = useMemo(() => {
+    if (!isRoutines) {
+      return fetchedAgents.filter((agent) => agent.kind !== 'routine');
+    }
+    return fetchedAgents.filter((agent) => agent.kind === 'routine');
+  }, [fetchedAgents, isRoutines]);
   const agentsState = useSelector(selectAgentProfilesState);
   const activeAgent = useSelector(selectActiveAgentProfile);
+  const activeAgentState = useSelector(selectActiveAgentProfileState);
+  const streamReady = useSelector(selectRealtimeStreamReady);
 
-  const { agentId: routeAgentId } = useParams();
   const navigate = useNavigate();
 
   const [activeFilter, setActiveFilter] = useState('All');
   const [search, setSearch] = useState('');
   const [sortMode, setSortMode] = useState('Type');
   const [graphEditorOpen, setGraphEditorOpen] = useState(false);
-  // "+ New" opens a small type-picker; choosing a type scaffolds an editable
-  // draft in the detail pane (mocked client-side until registration is wired up).
+  const [routineRunsOpen, setRoutineRunsOpen] = useState(false);
+  const [deleteConfirmationOpen, setDeleteConfirmationOpen] = useState(false);
+  const [deleteBusy, setDeleteBusy] = useState(false);
+  const [deleteError, setDeleteError] = useState('');
+  // Object agents only -- `null` means read-only, a string is the in-progress
+  // manifest draft. Lifted out of ObjectAgentDetailBody so the DetailHeader's
+  // top-level Edit action (detail-header__actions) and the inline "Edit"
+  // button inside the Manifest section drive the same state.
+  const [objectAgentDraft, setObjectAgentDraft] = useState(null);
+  const [objectAgentSaving, setObjectAgentSaving] = useState(false);
+  const [objectAgentError, setObjectAgentError] = useState('');
+  // "+ New" creates a portable SYSTEM.md manifest through the profile API.
   const [newAgentOpen, setNewAgentOpen] = useState(false);
   const [draftAgent, setDraftAgent] = useState(null);
+  const [draftError, setDraftError] = useState('');
+  const agentsUrl = getApiUrl('agentProfiles');
 
   const handleNewAgent = useCallback(() => {
+    if (isRoutines) {
+      window.dispatchEvent(new CustomEvent('progenitor:open-quick-chat', {
+        detail: { mode: 'routine-create' },
+      }));
+      return;
+    }
     setNewAgentOpen(true);
-  }, []);
+  }, [isRoutines]);
 
   const handlePickType = useCallback((kind) => {
     setDraftAgent(makeDraftAgent(kind));
@@ -438,24 +371,45 @@ function AgentsPage({ variant = 'agents' }) {
     setDraftAgent(null);
   }, []);
 
-  // Mocked create: real agents register through Progenitor's register_*_agent
-  // tools, so for now creating just clears the draft.
-  const createDraft = useCallback(() => {
-    setDraftAgent(null);
-  }, []);
+  const createDraft = useCallback(async () => {
+    if (!draftAgent) return;
+    const list = (value) => value.split(',').map((item) => item.trim()).filter(Boolean);
+    try {
+      setDraftError('');
+      const response = await fetch(`${agentsUrl}/object`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: draftAgent.name,
+          description: draftAgent.summary,
+          version: draftAgent.version,
+          model: draftAgent.model || null,
+          system_prompt: draftAgent.prompt,
+          tools: list(draftAgent.tools),
+          skills: list(draftAgent.skills),
+        }),
+      });
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}));
+        throw new Error(body.detail || 'Unable to create object agent.');
+      }
+      setDraftAgent(null);
+      dispatch(fetchAgentProfiles({ agentsUrl }));
+    } catch (error) {
+      setDraftError(error instanceof Error ? error.message : 'Unable to create object agent.');
+    }
+  }, [agentsUrl, dispatch, draftAgent]);
 
-  // Selection is derived from the URL (/agents/<id> or /sequences/<id>) so the
+  // Selection is derived from the URL (/agents/<id> or /routines/<id>) so the
   // view is refreshable and shareable; user actions navigate rather than setState.
   const selectedAgentId = routeAgentId ?? null;
 
-  const agentsUrl = getApiUrl('agentProfiles');
   const requestedListRef = useRef(null);
 
-  // Load the agent list once the realtime stream is connected; the snapshot
-  // arrives on the stream (the GET just acknowledges and triggers it). Skipped
-  // on Sequences, which shows a pretend entry instead of the real list.
+  // Load profiles once the realtime stream is connected. The GET acknowledges
+  // the request and the snapshot arrives on the stream.
   useEffect(() => {
-    if (isSequences || !realtime.connected) {
+    if (!realtimeConnected) {
       requestedListRef.current = null;
       return;
     }
@@ -464,33 +418,75 @@ function AgentsPage({ variant = 'agents' }) {
     }
     requestedListRef.current = agentsUrl;
     dispatch(fetchAgentProfiles({ agentsUrl }));
-  }, [agentsUrl, dispatch, isSequences, realtime.connected]);
+  }, [agentsUrl, dispatch, realtimeConnected]);
 
   // Selection defaults to the first agent without writing state in an effect.
   const effectiveAgentId = selectedAgentId ?? agents[0]?.id ?? null;
 
   const selectAgent = useCallback((id) => {
     setDraftAgent(null);
-    navigate(isSequences ? `${basePath}/${encodeURIComponent(id)}` : `${basePath}/${encodeURIComponent(id)}/details`);
-  }, [navigate, basePath, isSequences]);
-  // From a sequence graph, jump to that agent's profile on the Agents page.
+    navigate(isRoutines ? `${basePath}/${encodeURIComponent(id)}` : `${basePath}/${encodeURIComponent(id)}/details`);
+  }, [navigate, basePath, isRoutines]);
+  // From a routine graph, jump to that agent's profile on the Agents page.
   const showProfile = useCallback(() => {
     if (!effectiveAgentId) return;
     navigate(`/agents/${encodeURIComponent(effectiveAgentId)}/details`);
   }, [navigate, effectiveAgentId]);
 
-  // Request the full profile (incl. graph) whenever the selection changes.
-  // Skipped on Sequences — the pretend entry has no real detail to fetch.
-  useEffect(() => {
-    if (isSequences || !effectiveAgentId) {
+  // Routines and author-created ("source: user") object agents only --
+  // native object agents are repo files, marketplace ones are plugin-managed
+  // (Plugins > Uninstall), and A2A/ACP are read through external registries.
+  // The eligibility check lives at each call site (button visibility); this
+  // handler just needs an id. Mirrors Workflows' delete flow (PopupModal
+  // confirm -> DELETE -> navigate back to the list).
+  const handleDeleteAgent = useCallback(() => {
+    if (effectiveAgentId) {
+      setDeleteError('');
+      setDeleteConfirmationOpen(true);
+    }
+  }, [effectiveAgentId]);
+
+  const confirmDeleteAgent = useCallback(async () => {
+    if (!effectiveAgentId) {
+      setDeleteConfirmationOpen(false);
       return;
     }
-    dispatch(requestAgentDetail({
-      agentsUrl,
-      agentId: effectiveAgentId,
-      requestId: `${effectiveAgentId}-${Date.now()}`,
-    }));
-  }, [agentsUrl, dispatch, effectiveAgentId, isSequences]);
+    setDeleteBusy(true);
+    try {
+      await dispatch(deleteAgentProfile({ agentsUrl, agentId: effectiveAgentId })).unwrap();
+      setDeleteConfirmationOpen(false);
+      navigate(basePath, { replace: true });
+    } catch (error) {
+      setDeleteError(error.message || 'Failed to delete.');
+    } finally {
+      setDeleteBusy(false);
+    }
+  }, [agentsUrl, basePath, dispatch, effectiveAgentId, navigate]);
+
+  // The detail only ever comes back as a one-shot `agent.selected` broadcast,
+  // and the backend replays nothing to a subscriber it did not have at publish
+  // time (replay needs a Last-Event-ID, which a first load has none of). Ask
+  // before the stream is ready and the answer is published into the void: the
+  // graph pane then waits on `graphDetailPending` forever, since nothing
+  // retries. Wait for the subscriber to exist, then ask.
+  useEffect(() => {
+    if (!effectiveAgentId || !streamReady) {
+      return;
+    }
+    // A reconnect flips `streamReady` again; re-asking for a detail already in
+    // hand would restart the request for no new information.
+    if (activeAgent?.id === effectiveAgentId) {
+      return;
+    }
+    dispatch(requestAgentDetail({ agentsUrl, agentId: effectiveAgentId }));
+  }, [activeAgent?.id, agentsUrl, dispatch, effectiveAgentId, streamReady]);
+
+  // Object agents only. Switching agents mid-edit must never leave a draft
+  // bound to the wrong one underneath the newly-selected agent's page.
+  useEffect(() => {
+    setObjectAgentDraft(null);
+    setObjectAgentError('');
+  }, [effectiveAgentId]);
 
   const listAgent = useMemo(
     () => agents.find((agent) => agent.id === effectiveAgentId) || null,
@@ -498,35 +494,40 @@ function AgentsPage({ variant = 'agents' }) {
   );
   const selectedAgent = activeAgent && activeAgent.id === effectiveAgentId ? activeAgent : listAgent;
   const selectedGraph = selectedAgent?.graph || FALLBACK_GRAPH;
+  // The roster snapshot carries no `graph` -- only the per-agent detail does.
+  // GraphCanvas seeds its working nodes/edges once on mount, so mounting it
+  // against the roster entry would pin an empty chain that the later detail
+  // can never replace. Hold the canvas back until the detail for THIS id has
+  // landed. A failed detail request falls through to the roster entry rather
+  // than holding the gate shut forever.
+  const graphDetailPending = !activeAgentState.error
+    && (!activeAgent || activeAgent.id !== effectiveAgentId);
   const isA2A = selectedAgent?.kind === 'a2a';
   const isACP = selectedAgent?.kind === 'acp';
-  // Sequences view always shows the graph; Agents view always shows Details.
+  // Routines view always shows the graph; Agents view always shows Details.
   // The tab row is hidden in both (single view per page).
   const detailTabs = [];
-  const effectiveDetailTab = isSequences ? 'Graph' : 'Details';
+  const effectiveDetailTab = isRoutines ? 'Graph' : 'Details';
 
   // Reflect the active agent in the URL so the view is refreshable and shareable
-  // (e.g. /agents/subagent-code-reviewer/details or /sequences/subagent-...).
+  // (e.g. /agents/subagent-code-reviewer/details or /routines/subagent-...).
   useEffect(() => {
     if (!effectiveAgentId) return;
-    const target = isSequences
+    const target = isRoutines
       ? `${basePath}/${encodeURIComponent(effectiveAgentId)}`
       : `${basePath}/${encodeURIComponent(effectiveAgentId)}/details`;
     if (`${window.location.pathname}` !== target) {
       navigate(target, { replace: true });
     }
-  }, [effectiveAgentId, isSequences, basePath, navigate]);
+  }, [effectiveAgentId, isRoutines, basePath, navigate]);
 
   const visibleAgents = useMemo(
     () => sortAgents(agents.filter((agent) => matchesAgent(agent, activeFilter, search)), sortMode),
     [activeFilter, agents, search, sortMode],
   );
-  // List sections depend on the sort: "Name" is a flat list (no headers),
-  // "Recent" uses the chat sidebar's recency buckets, and "Type" keeps the
-  // agent's own group headers.
+  // Routine graphs are a flat list; other views can group by agent type.
   const sections = useMemo(() => {
-    // Sequences drops category grouping for now — a flat list, appearance-only.
-    if (isSequences || sortMode === 'Name') {
+    if (isRoutines || sortMode === 'Name') {
       return [{ key: 'all', title: null, agents: visibleAgents }];
     }
     if (sortMode === 'Recent') {
@@ -543,37 +544,92 @@ function AgentsPage({ variant = 'agents' }) {
     return [...new Set(visibleAgents.map((agent) => agent.group || 'Agents'))]
       .map((group) => ({ key: group, title: group, agents: grouped[group] || [] }))
       .filter((section) => section.agents.length);
-  }, [isSequences, sortMode, visibleAgents]);
+  }, [isRoutines, sortMode, visibleAgents]);
   const runningCount = agents.filter((agent) => agent.status === 'running').length;
   const taskCount = agents.reduce((total, agent) => total + (agent.tasks?.length || 0), 0);
-  const memoryCount = agents.reduce((total, agent) => total + (agent.memories?.length || 0), 0);
 
   async function handleSaveGraph(parsed) {
     return dispatch(updateAgentGraph({
       agentsUrl,
       agentId: effectiveAgentId,
+      entry: parsed.entry,
       nodes: parsed.nodes,
       edges: parsed.edges,
       status: parsed.status,
       summary: parsed.summary,
+      policy_id: parsed.policy_id,
+      input_schema: parsed.input_schema,
+      output_schema: parsed.output_schema,
+      $defs: parsed.$defs,
     })).unwrap();
   }
 
+  function slugifyAgentName(value) {
+    return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'agent';
+  }
+
+  function extractManifestName(content) {
+    const frontMatter = content.match(/^---\s*\n([\s\S]*?)\n---/);
+    if (!frontMatter) return null;
+    const nameLine = frontMatter[1].split('\n').find((line) => /^name:\s*/.test(line));
+    if (!nameLine) return null;
+    return nameLine.replace(/^name:\s*/, '').trim().replace(/^['"]|['"]$/g, '') || null;
+  }
+
+  async function handleSaveObjectAgent(manifest) {
+    if (!effectiveAgentId) return;
+    await dispatch(updateObjectAgentProfile({
+      agentsUrl,
+      agentId: effectiveAgentId,
+      manifest,
+    })).unwrap();
+    const name = extractManifestName(manifest.content);
+    if (name) {
+      const newId = `object-${slugifyAgentName(name)}`;
+      if (newId !== effectiveAgentId) {
+        selectAgent(newId);
+      }
+    }
+  }
+
+  function startEditObjectAgent() {
+    setObjectAgentDraft(selectedAgent?.card?.raw_content ?? '');
+    setObjectAgentError('');
+  }
+
+  function cancelEditObjectAgent() {
+    setObjectAgentDraft(null);
+    setObjectAgentError('');
+  }
+
+  async function saveObjectAgentDraft() {
+    if (objectAgentDraft === null) return;
+    setObjectAgentSaving(true);
+    setObjectAgentError('');
+    try {
+      await handleSaveObjectAgent({ content: objectAgentDraft });
+      setObjectAgentDraft(null);
+    } catch (error) {
+      setObjectAgentError(error.message || 'Failed to save agent.');
+    } finally {
+      setObjectAgentSaving(false);
+    }
+  }
 
   return (
     <PageShell>
-      <PaneList label="Agents" className="agents-pane">
+      <PaneList label={listLabel} className="agents-pane">
         <PaneListFilters
           filters={AGENT_FILTERS}
           activeFilter={activeFilter}
           onFilterChange={setActiveFilter}
-          actionLabel="+ New"
+          actionLabel={createLabel}
           onAction={handleNewAgent}
         />
         <PaneListToolbar>
-          <PaneListSearch value={search} placeholder="Search agents..." onChange={setSearch} />
+          <PaneListSearch value={search} placeholder={searchPlaceholder} onChange={setSearch} />
           <PaneListSortButton
-            title="Sort agents"
+            title={sortTitle}
             options={SORT_MODES}
             value={sortMode}
             onSelect={setSortMode}
@@ -584,8 +640,8 @@ function AgentsPage({ variant = 'agents' }) {
             groups={sections}
             getGroupItems={(section) => section.agents}
             renderItem={(agent) => (
-              isSequences ? (
-                <SequenceRow
+              isRoutines ? (
+                <RoutineRow
                   agent={agent}
                   selected={selectedAgent?.id === agent.id}
                   onSelect={selectAgent}
@@ -600,12 +656,11 @@ function AgentsPage({ variant = 'agents' }) {
             )}
           />
         ) : (
-          <PaneEmptyState>{agentsState.loading || !agentsState.loaded ? 'Loading agents…' : 'No agents match this view.'}</PaneEmptyState>
+          <PaneEmptyState>{agentsState.loading || !agentsState.loaded ? `Loading ${listLabel.toLowerCase()}…` : `No ${listLabel.toLowerCase()} match this view.`}</PaneEmptyState>
         )}
         <PaneListFooter>
           <span><span className="num">{runningCount}</span> running</span>
           <span><span className="num">{taskCount}</span> tasks</span>
-          <span><span className="num">{memoryCount}</span> memories</span>
         </PaneListFooter>
       </PaneList>
 
@@ -632,38 +687,58 @@ function AgentsPage({ variant = 'agents' }) {
               <span key="hint" className="muted">Unsaved draft</span>,
             ]}
           />
+          {draftError ? <p className="agents-draft__note agents-draft__note--error">{draftError}</p> : null}
           <DraftAgentDetailBody draft={draftAgent} onChange={updateDraft} />
         </DetailPane>
       ) : selectedAgent ? (
         <DetailPane className={`detail-pane--dense agents-detail ${effectiveDetailTab === 'Graph' ? 'is-graph-mode' : ''}`} label={`${selectedAgent.name} profile`}>
-          {/* Sequences (Graph) hides the detail header so the canvas fills the
+          {/* Routines (Graph) hides the detail header so the canvas fills the
               pane, matching the Workflows page. The Agents Details view keeps it. */}
           {effectiveDetailTab !== 'Graph' ? (
             <DetailHeader
               title={selectedAgent.name}
-              actions={(
-                <DetailHeaderActions>
-                  <DetailHeaderAction icon={<ConfigureActionIcon />} label="Configure" tooltip="Configure agent" ariaLabel="Configure agent" />
-                  <DetailHeaderAction icon={<DuplicateActionIcon />} label="Duplicate" tooltip="Duplicate agent" ariaLabel="Duplicate agent" />
+              actions={selectedAgent.kind === 'object' && selectedAgent.card?.source !== 'native' ? (
+                <DetailHeaderActions menuLabel="Agent actions">
                   <DetailHeaderAction
-                    icon={<PlayActionIcon />}
-                    label="Run"
-                    tooltip="Run agent"
-                    ariaLabel="Run agent"
-                    variant="primary"
+                    icon={<EditActionIcon />}
+                    label="Edit"
+                    tooltip="Edit manifest"
+                    ariaLabel="Edit manifest"
+                    onClick={startEditObjectAgent}
                   />
+                  {selectedAgent.card?.source === 'user' ? (
+                    <DetailHeaderAction
+                      icon={<DeleteActionIcon />}
+                      label="Delete"
+                      tooltip="Delete agent"
+                      ariaLabel="Delete agent"
+                      variant="danger"
+                      onClick={handleDeleteAgent}
+                    />
+                  ) : null}
                 </DetailHeaderActions>
-              )}
+              ) : null}
               meta={[
-                <StatusPill key="status" status={selectedAgent.enabled === false ? 'disabled' : selectedAgent.status} />,
-                <span key="model" className="sess-detail__model">{selectedAgent.model}</span>,
-                <span key="role" className="muted">{selectedAgent.role}</span>,
+                // Object agents have no schema-backed status/enabled concept
+                // (no runtime process, no manifest field) -- showing a pill
+                // here would fabricate a value the backend doesn't have.
+                selectedAgent.kind !== 'object'
+                  ? <StatusPill key="status" status={selectedAgent.enabled === false ? 'disabled' : selectedAgent.status} /> : null,
+                // Object agents show Model in the Manifest section and
+                // Tools/Skills counts in their own MiniListSection headers
+                // below -- repeating them here would be a literal duplicate
+                // of data already on the page. A2A/ACP have no such section,
+                // so the header remains their only place to show these.
+                selectedAgent.kind !== 'object' && selectedAgent.model
+                  ? <span key="model" className="sess-detail__model">{selectedAgent.model}</span> : null,
                 selectedAgent.url ? (
                   <a key="url" className="muted agents-agent-url" href={selectedAgent.url} target="_blank" rel="noreferrer">
                     {selectedAgent.transport ? `${selectedAgent.transport} · ` : ''}{selectedAgent.url}
                   </a>
                 ) : null,
-                <span key="links" className="muted">{(selectedAgent.skills || []).length ? `${selectedAgent.skills.length} skills · ` : ''}{(selectedAgent.tools || []).length} tools · {(selectedAgent.repositories || []).length} repos · {(selectedAgent.knowledge || []).length} knowledge</span>,
+                selectedAgent.kind !== 'object' ? (
+                  <span key="links" className="muted">{(selectedAgent.skills || []).length ? `${selectedAgent.skills.length} skills · ` : ''}{(selectedAgent.tools || []).length} tools</span>
+                ) : null,
               ]}
               tabs={detailTabs}
               activeTab={effectiveDetailTab}
@@ -676,31 +751,65 @@ function AgentsPage({ variant = 'agents' }) {
               ? <A2ADetailBody agent={selectedAgent} />
               : isACP
                 ? <ACPDetailBody agent={selectedAgent} />
-                : <SubagentDetailBody agent={selectedAgent} />
+                : (
+                  <ObjectAgentDetailBody
+                    agent={selectedAgent}
+                    agentsUrl={agentsUrl}
+                    editing={objectAgentDraft !== null}
+                    draft={objectAgentDraft}
+                    onDraftChange={setObjectAgentDraft}
+                    onStartEdit={startEditObjectAgent}
+                    onCancelEdit={cancelEditObjectAgent}
+                    onSaveEdit={saveObjectAgentDraft}
+                    saving={objectAgentSaving}
+                    error={objectAgentError}
+                  />
+                )
           ) : (
             <div className="detail-pane__body detail-pane__body--graph">
-              <div className={`agents-graph-layout ${graphEditorOpen ? 'is-editing' : ''}`}>
-                <AgentGraphTab
-                  key={selectedAgent.id}
-                  agent={selectedAgent}
-                  graph={selectedGraph}
-                  onPersist={handleSaveGraph}
-                  onShowProfile={showProfile}
-                  jsonOpen={graphEditorOpen}
-                  onOpenJson={() => setGraphEditorOpen(true)}
-                  onCloseJson={() => setGraphEditorOpen(false)}
-                />
-              </div>
+              {graphDetailPending ? (
+                <PaneEmptyState detail>Loading graph…</PaneEmptyState>
+              ) : (
+                <div className={`agents-graph-layout ${graphEditorOpen || routineRunsOpen ? 'is-editing' : ''}`}>
+                  <RoutineGraphEditor
+                    key={selectedAgent.id}
+                    agent={selectedAgent}
+                    graph={selectedGraph}
+                    confirmedGraph={selectedGraph}
+                    onPersist={handleSaveGraph}
+                    onShowProfile={isRoutines ? null : showProfile}
+                    onDelete={isRoutines ? handleDeleteAgent : null}
+                    jsonOpen={graphEditorOpen}
+                    onOpenJson={() => { setGraphEditorOpen(true); setRoutineRunsOpen(false); }}
+                    onCloseJson={() => setGraphEditorOpen(false)}
+                    runsOpen={routineRunsOpen}
+                    onOpenRuns={() => { setRoutineRunsOpen(true); setGraphEditorOpen(false); }}
+                    onCloseRuns={() => setRoutineRunsOpen(false)}
+                  />
+                </div>
+              )}
             </div>
           )}
         </DetailPane>
       ) : (
-        <DetailPane className="detail-pane--dense agents-detail" label="Agent profile">
-          <PaneEmptyState detail>{agentsState.loading || !agentsState.loaded ? 'Loading agents…' : 'Select an agent to view its profile.'}</PaneEmptyState>
+        <DetailPane className="detail-pane--dense agents-detail" label={`${listLabel.slice(0, -1)} profile`}>
+          <PaneEmptyState detail>{agentsState.loading || !agentsState.loaded ? `Loading ${listLabel.toLowerCase()}…` : `Select a${isRoutines ? '' : 'n'} ${listLabel.toLowerCase().slice(0, -1)} to view its profile.`}</PaneEmptyState>
         </DetailPane>
       )}
 
       {newAgentOpen ? <NewAgentModal onPick={handlePickType} onClose={() => setNewAgentOpen(false)} /> : null}
+      {deleteConfirmationOpen && selectedAgent ? (
+        <PopupModal
+          eyebrow={selectedAgent.kind === 'routine' ? 'Delete routine' : 'Delete agent'}
+          title={`Delete “${selectedAgent.name}”?`}
+          message={deleteError || `This ${selectedAgent.kind === 'routine' ? 'routine and its graph' : 'agent and its manifest'} will be permanently deleted.`}
+          confirmLabel={selectedAgent.kind === 'routine' ? 'Delete routine' : 'Delete agent'}
+          busyLabel="Deleting…"
+          onClose={() => setDeleteConfirmationOpen(false)}
+          onConfirm={confirmDeleteAgent}
+          busy={deleteBusy}
+        />
+      ) : null}
     </PageShell>
   );
 }

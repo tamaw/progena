@@ -10,7 +10,7 @@ describe('derivePageContext', () => {
     expect(derivePageContext('/knowledge/kb_1')).toEqual({ page: 'knowledge', id: 'kb_1' });
     expect(derivePageContext('/tools/server_1')).toEqual({ page: 'tools', id: 'server_1' });
     expect(derivePageContext('/agents/agent_1/settings')).toEqual({ page: 'agents', id: 'agent_1' });
-    expect(derivePageContext('/sequences/agent_1')).toEqual({ page: 'sequences', id: 'agent_1' });
+    expect(derivePageContext('/routines/agent_1')).toEqual({ page: 'routines', id: 'agent_1' });
     expect(derivePageContext('/chat/thread_1/new-chat')).toEqual({ page: 'chat', id: 'thread_1' });
   });
 

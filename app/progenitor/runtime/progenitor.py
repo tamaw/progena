@@ -11,12 +11,14 @@ from pathlib import Path
 from typing import Any
 
 from ..config import ProgenitorConfig, get_config
+from ..document_kinds import AGENT_SELF_EDIT_TOUCH_KEY_PREFIX
 from ..llm.client import LLMClient
 from ..mcp import MCPRuntime
 from ..registry import AgentRegistryRuntime
 from ..state.langgraph_store import LangGraphRuntimeStore
 from ..state.manager import StateManager
 from ..state.store_listener import RuntimeStoreListener
+from .agent_sync import AgentSyncScheduler
 from .heartbeat import ProgenitorLoop
 from .http import ProgenitorHTTPServer
 from .mcp_sync import MCPSyncScheduler
@@ -61,32 +63,44 @@ class Progenitor:
         self._store_listener: RuntimeStoreListener | None = None
         self._mcp_scheduler: MCPSyncScheduler | None = None
         self._plugin_scheduler: PluginSyncScheduler | None = None
+        self._agent_scheduler: AgentSyncScheduler | None = None
 
     def _on_store_change(self, payload: str) -> None:
-        """Handle a ``store`` NOTIFY by re-syncing the live MCP runtime.
+        """Route a ``store`` NOTIFY to the appropriate live registry scheduler.
 
         Runs in the listener task; routes by key onto the coalescing scheduler:
         ``mcp`` (server config: add/remove/enable/disable/url) needs a full
         re-discovery; ``mcp_tools`` (a per-tool enable toggle) only needs the
         disabled set re-applied. ``plugins`` triggers the plugin reconciler.
+        ``agent:`` documents and agent self-edit markers refresh object task
+        descriptors and the shared routine delegation map without rebuilding
+        the conversation graph.
         ``repos`` drops the cached declared-repos document so the next
         heartbeat scan sees backend-side create/update/delete calls instead
         of a stale in-process snapshot. ``repo_scan`` does the same for the
         heartbeat-derived git-state document -- the backend's on-demand
         "Fetch" action (``repo_service.fetch_and_rescan_repo``) writes it
-        directly too now, alongside the heartbeat. This is the single path
-        for both UI-driven and agent-driven config changes -- there is no
-        separate write-hook.
+        directly too now, alongside the heartbeat. ``background_tasks`` does
+        the same for the background-task queue -- the backend's routine
+        "Run" endpoint (``POST /agent-profiles/{id}/run``) enqueues onto it
+        directly, and without this the heartbeat's cached copy (seeded once
+        at boot) would never see backend-enqueued entries for the life of
+        the process. This is the single path for both UI-driven and
+        agent-driven config changes -- there is no separate write-hook.
         """
         try:
             data = json.loads(payload) if payload else {}
             key = data.get("key") if isinstance(data, dict) else None
         except (ValueError, TypeError):
             key = None
-        if key in ("repos", "repo_scan") and self.state_manager is not None:
+        if key in ("repos", "repo_scan", "background_tasks") and self.state_manager is not None:
             self.state_manager.invalidate_document(key)
-        if self._mcp_scheduler is None and self._plugin_scheduler is None:
-            return
+        if (
+            isinstance(key, str)
+            and key.startswith(("agent:", AGENT_SELF_EDIT_TOUCH_KEY_PREFIX))
+            and self._agent_scheduler is not None
+        ):
+            self._agent_scheduler.request()
         if key == "mcp" and self._mcp_scheduler is not None:
             self._mcp_scheduler.request(full=True)
         elif key == "mcp_tools" and self._mcp_scheduler is not None:
@@ -95,11 +109,20 @@ class Progenitor:
             self._plugin_scheduler.request()
 
     def _on_store_resync(self) -> None:
-        """On (re)connect, recover any MCP or plugin config change missed while disconnected."""
+        """Recover MCP, plugin, and object-agent changes missed while disconnected."""
         if self._mcp_scheduler is not None:
             self._mcp_scheduler.request(full=True)
         if self._plugin_scheduler is not None:
             self._plugin_scheduler.request()
+        if self._agent_scheduler is not None:
+            self._agent_scheduler.request()
+
+    async def _do_agent_refresh(self) -> None:
+        registry = getattr(self.graph, "object_agent_registry", None)
+        if registry is None:
+            registry = getattr(getattr(self.graph, "agent", None), "object_agent_registry", None)
+        if registry is not None:
+            await registry.refresh()
 
     async def _do_mcp_full_resync(self) -> None:
         from ..nodes.mcp import sync_mcp_runtime_context
@@ -127,6 +150,10 @@ class Progenitor:
         if self.state_manager is None:
             return
         summary = await reconcile_plugins(self.state_manager, log_sink=self.log_store)
+        # Reconcile may install/remove multiple agent documents. Refresh after
+        # completion too, even if their notifications preceded this pass.
+        if self._agent_scheduler is not None:
+            self._agent_scheduler.request()
         logger.info("Reconciled plugins from config change: %s", summary)
 
     async def initialize(self) -> None:
@@ -152,7 +179,10 @@ class Progenitor:
             debug_mode=os.getenv("PROGENITOR_STORE_LOG_DEBUG", "").lower() in ("1", "true", "yes"),
         )
         self.log_store = runtime_store
-        self.state_manager = StateManager(runtime_store=runtime_store)
+        self.state_manager = StateManager(
+            runtime_store=runtime_store,
+            database_url=self.config.database.url,
+        )
         await self.state_manager.initialize()
         mcp_payload = await self.state_manager.get_mcp_config()
         self.config.mcp = type(self.config.mcp).from_payload(mcp_payload)
@@ -212,6 +242,7 @@ class Progenitor:
         self._plugin_scheduler = PluginSyncScheduler(
             reconcile=self._do_plugin_reconcile,
         )
+        self._agent_scheduler = AgentSyncScheduler(reconcile=self._do_agent_refresh)
         self._store_listener = RuntimeStoreListener(
             self.config.database.url,
             on_change=self._on_store_change,
@@ -283,6 +314,10 @@ class Progenitor:
         if self._plugin_scheduler is not None:
             await self._plugin_scheduler.aclose()
             self._plugin_scheduler = None
+
+        if self._agent_scheduler is not None:
+            await self._agent_scheduler.aclose()
+            self._agent_scheduler = None
 
         if self._http_server is not None:
             await self._http_server.stop()

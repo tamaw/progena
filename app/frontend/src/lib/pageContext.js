@@ -11,7 +11,7 @@ const PAGE_ROUTES = [
   { basePath: '/dashboard', page: 'dashboard' },
   { basePath: '/tasks', page: 'tasks' },
   { basePath: '/workflows', page: 'workflows' },
-  { basePath: '/sequences', page: 'sequences' },
+  { basePath: '/routines', page: 'routines' },
   { basePath: '/agents', page: 'agents' },
   { basePath: '/plugins', page: 'plugins', idSegmentIndex: 1 }, // /plugins/:marketplace/:plugin
   { basePath: '/tools', page: 'tools' },
