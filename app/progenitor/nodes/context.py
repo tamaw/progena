@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
+RoutineRunner = Callable[[str, dict[str, Any]], Awaitable[dict[str, Any]]]
 
 
 @dataclass
@@ -36,3 +39,8 @@ class HeartbeatContext:
     startup_flags: set[str] = field(default_factory=set)
     llm_model: str = ""
     llm_reasoning_effort: str = ""
+    # Ephemeral routine execution entry point.  It resolves the routine
+    # document from Postgres for each invocation; it is deliberately not a
+    # registry of compiled routines.
+    routine_runner: RoutineRunner | None = None
+    routine_resumer: Callable[..., Awaitable[dict[str, Any]]] | None = None

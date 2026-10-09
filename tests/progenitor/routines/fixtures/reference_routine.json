@@ -1,0 +1,178 @@
+{
+  "id": "reference-routine",
+  "name": "reference-routine",
+  "description": "Validates a repo request (github.com host, deterministic) and access/local-clone state in a single repo-manager call, then takes only the safe action for that state -- clone, fast-forward pull, nothing, or a hard stop on uncommitted changes. Routing is deterministic; no LLM call is spent grading pass/fail.",
+  "version": "2.0.0",
+  "entry": "parse",
+  "nodes": [
+    {
+      "id": "parse",
+      "kind": "prompt",
+      "description": "Extract the target repo's host and owner/name from the natural-language request.",
+      "output_key": "parse",
+      "config": {
+        "prompt_template": "Extract the target GitHub repository from this request and respond with ONLY a JSON object of the form {{\"host\": \"<hostname the repo reference points at; use github.com if given as owner/name with no explicit domain>\", \"org\": \"<the owner/org portion only, exactly as it appears before the slash in the repo reference>\", \"repo\": \"<owner>/<name>\", \"override_dirty\": <bool: true only if the user explicitly says to proceed/ignore/continue despite uncommitted or local changes, e.g. in response to a prior warning about them>}} -- no prose, no markdown fences, no explanation. Request: {request}"
+      }
+    },
+    {
+      "id": "domain_check",
+      "kind": "condition",
+      "description": "Host gate only -- whether the caller may touch a given repo is GitHub's call, and `assess` already reports it as `accessible`, so an org allowlist here would duplicate that check against a list that goes stale.",
+      "output_key": "domain_check",
+      "config": {
+        "language": "python",
+        "expression": "parse_json.host == 'github.com'"
+      }
+    },
+    {
+      "id": "respond_invalid_domain",
+      "kind": "prompt",
+      "description": "Terminal node: reject requests for repos hosted anywhere but github.com.",
+      "output_key": "respond_invalid_domain",
+      "config": {
+        "prompt_template": "Only github.com repositories are supported by this pipeline. The request resolved to: {parse}\n\nReply with one short sentence telling the user their repo host isn't supported for this request: {request}"
+      }
+    },
+    {
+      "id": "assess",
+      "kind": "agent",
+      "description": "One repo-manager call covering both remote access and local clone state -- avoids a second round trip and reports structured JSON directly, so no separate LLM parse/grading step is needed downstream.",
+      "output_key": "assess",
+      "config": {
+        "agent_name": "repo-manager",
+        "prompt_template": "Check the repository {parse_json[repo]} (the org/name already resolved from the request -- use this exact org/name, don't re-derive it): (1) does it exist and do you have access to it, e.g. via `gh repo view` (2) is it already cloned into the sandbox at repos/{parse_json[repo]}, (3) if so, does `git status --porcelain` show any uncommitted or untracked changes, and (4) is the local branch behind the remote default branch. Respond with ONLY a JSON object of the form {{\"accessible\": <bool>, \"cloned\": <bool>, \"dirty\": <bool>, \"behind\": <bool>}} (dirty/behind should be false if not cloned) -- no prose, no markdown fences, no explanation. Original request: {request}"
+      }
+    },
+    {
+      "id": "route_decision",
+      "kind": "eval",
+      "description": "Deterministic classification of assess's JSON result into exactly one safe action. Not an LLM judgment call -- no_access wins over everything, then not_cloned, then dirty always wins over behind unless the user already explicitly authorized an override in this same request.",
+      "output_key": "route_decision",
+      "config": {
+        "language": "python",
+        "expression": "'no_access' if not assess_json.accessible else ('not_cloned' if not assess_json.cloned else (('dirty_override' if parse_json.override_dirty else 'dirty') if assess_json.dirty else ('behind' if assess_json.behind else 'up_to_date')))"
+      }
+    },
+    {
+      "id": "respond_no_access",
+      "kind": "prompt",
+      "description": "Terminal node: report that the repo couldn't be verified, without attempting any action.",
+      "output_key": "respond_no_access",
+      "config": {
+        "prompt_template": "The requested repository could not be verified as accessible. repo-manager reported: {assess}\n\nReply with one short sentence explaining the repo setup was stopped because access couldn't be confirmed, based on this original request: {request}"
+      }
+    },
+    {
+      "id": "respond_dirty",
+      "kind": "prompt",
+      "description": "Terminal node: hard stop on uncommitted/untracked local changes. Never auto-stash, auto-discard, or auto-pull over dirty state -- something else could be using that clone. Asks the user to decide: abort (fix it themselves), or explicitly say to proceed anyway on their next message.",
+      "output_key": "respond_dirty",
+      "config": {
+        "prompt_template": "The repo has uncommitted or untracked local changes, so no clone or pull action was taken to avoid data loss. repo-manager reported: {assess}\n\nReply with a short report describing the local changes, and ask the user to choose: (a) commit, stash, or discard the changes themselves and try again, or (b) explicitly tell you to proceed/ignore this and continue anyway, in which case the existing local state will be left untouched (no pull) and setup will continue as-is. Based on this original request: {request}"
+      }
+    },
+    {
+      "id": "respond_dirty_override",
+      "kind": "prompt",
+      "description": "Terminal node: the user already explicitly authorized proceeding despite uncommitted changes. Still never touches the dirty working tree -- no pull, no reset -- just continues without blocking.",
+      "output_key": "respond_dirty_override",
+      "config": {
+        "prompt_template": "The repo has uncommitted or untracked local changes, but the user explicitly authorized proceeding anyway. repo-manager reported: {assess}\n\nReply with a short report confirming setup continued as requested, and note that the existing local changes were left untouched (no pull was attempted) to avoid data loss. Original request: {request}"
+      }
+    },
+    {
+      "id": "clone",
+      "kind": "agent",
+      "description": "Clone the repo into the sandbox. Only reached when route_decision confirmed it isn't already cloned.",
+      "output_key": "clone",
+      "config": {
+        "agent_name": "repo-manager",
+        "prompt_template": "Clone the repository {parse_json[repo]} into the sandbox (it was confirmed not already present) -- use this exact org/name, keeping the standard repos/<org>/<repo-name> layout (pass the org as `repo` and the repo name as the clone destination, per your convention). Use a shallow clone with --depth 1 -- full history isn't needed for this. Report the local path it was cloned to. Original request: {request}"
+      }
+    },
+    {
+      "id": "respond_cloned",
+      "kind": "prompt",
+      "description": "Terminal node: report a fresh clone.",
+      "output_key": "respond_cloned",
+      "config": {
+        "prompt_template": "Summarize the repo setup performed for this request in one short report.\n\nClone: {clone}\n\nOriginal request: {request}"
+      }
+    },
+    {
+      "id": "pull",
+      "kind": "agent",
+      "description": "Fast-forward-only pull. Only reached when route_decision confirmed the repo is clean but behind origin.",
+      "output_key": "pull",
+      "config": {
+        "agent_name": "repo-manager",
+        "prompt_template": "The repo {parse_json[repo]} is already cloned and clean, but behind origin. Run a fast-forward-only pull (git pull --ff-only) against the remote default branch -- do not merge, rebase, or force -- and report the result. Original request: {request}"
+      }
+    },
+    {
+      "id": "respond_pulled",
+      "kind": "prompt",
+      "description": "Terminal node: report a fast-forward pull.",
+      "output_key": "respond_pulled",
+      "config": {
+        "prompt_template": "Summarize the repo setup performed for this request in one short report.\n\nPull: {pull}\n\nOriginal request: {request}"
+      }
+    },
+    {
+      "id": "respond_up_to_date",
+      "kind": "prompt",
+      "description": "Terminal node: nothing to do, repo already clean and current.",
+      "output_key": "respond_up_to_date",
+      "config": {
+        "prompt_template": "The repo referenced in this request is already cloned, clean, and up to date with origin -- no action was needed. Reply with one short sentence confirming this, based on this original request: {request}"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "parse",
+      "to": "domain_check",
+      "level": "normal"
+    },
+    {
+      "from": "domain_check",
+      "level": "route",
+      "router": "state_equals",
+      "state_key": "domain_check",
+      "branches": {
+        "true": "assess",
+        "false": "respond_invalid_domain"
+      }
+    },
+    {
+      "from": "assess",
+      "to": "route_decision",
+      "level": "normal"
+    },
+    {
+      "from": "route_decision",
+      "level": "route",
+      "router": "state_equals",
+      "state_key": "route_decision",
+      "branches": {
+        "no_access": "respond_no_access",
+        "not_cloned": "clone",
+        "dirty": "respond_dirty",
+        "dirty_override": "respond_dirty_override",
+        "behind": "pull",
+        "up_to_date": "respond_up_to_date"
+      },
+      "default": "respond_dirty"
+    },
+    {
+      "from": "clone",
+      "to": "respond_cloned",
+      "level": "normal"
+    },
+    {
+      "from": "pull",
+      "to": "respond_pulled",
+      "level": "normal"
+    }
+  ]
+}

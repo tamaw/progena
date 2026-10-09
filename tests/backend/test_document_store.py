@@ -43,6 +43,9 @@ class _FakeConnection:
     def cursor(self):
         return self._cursor
 
+    def execute(self, query, params=None):
+        return self._cursor.execute(query, params)
+
     def __enter__(self):
         return self
 
@@ -119,7 +122,7 @@ def test_ensure_change_trigger_notifies_state_only():
     emitted = " ".join(str(query) for query, _ in pool._cursor.executed)
     assert "progenitor_notify_store_change" in emitted
     assert "pg_notify" in emitted
-    assert "CREATE TRIGGER progenitor_store_change" in emitted
+    assert "CREATE OR REPLACE TRIGGER progenitor_store_change" in emitted
     # Deletes must notify too - the runtime process has no other way to tell the
     # backend a row disappeared.
     assert "AFTER INSERT OR UPDATE OR DELETE" in emitted
@@ -127,6 +130,115 @@ def test_ensure_change_trigger_notifies_state_only():
     assert "progenitor.state" in emitted
     assert "backend.state" in emitted
     assert "progenitor.logs" not in emitted
+
+
+def test_document_store_open_preserves_documents_and_installs_revision_history():
+    store = PostgresDocumentStore("postgresql://example")
+    pool = _HealthyPool(None)
+    store._pool = pool
+
+    store.open()
+
+    assert pool.opens == 1
+    statements = [" ".join(str(query).split()) for query, _ in pool._cursor.executed]
+    emitted = " ".join(statements)
+    assert "CREATE TABLE IF NOT EXISTS store" in emitted
+    assert "CREATE TABLE IF NOT EXISTS routine_graph_revisions" in emitted
+    assert (
+        "CREATE OR REPLACE TRIGGER progenitor_capture_routine_revision AFTER INSERT OR UPDATE ON store"
+        in emitted
+    )
+    assert (
+        "CREATE OR REPLACE TRIGGER progenitor_capture_deleted_routine_revision BEFORE DELETE ON store"
+        in emitted
+    )
+    assert "RETURN source_row" in emitted
+    assert "IF TG_OP = 'DELETE' THEN source_row := OLD;" in emitted
+    assert "graph_doc := source_row.value -> 'payload'" in emitted
+    assert (
+        "CREATE OR REPLACE TRIGGER progenitor_routine_revisions_immutable BEFORE UPDATE ON routine_graph_revisions"
+        in emitted
+    )
+    # Existing graphs still get immutable snapshots without rewriting the source
+    # documents. Subsequent writes continue to capture revisions via the trigger.
+    backfill = next(
+        statement
+        for statement in statements
+        if statement.startswith("INSERT INTO routine_graph_revisions")
+    )
+    assert backfill.startswith("INSERT INTO routine_graph_revisions")
+    assert "FROM store" in backfill
+    assert "value -> 'payload'" in backfill
+    assert "ON CONFLICT (routine_id, revision_id) DO NOTHING" in backfill
+    assert "RAISE EXCEPTION 'routine_graph_revisions rows are immutable" in emitted
+    assert "CREATE TABLE IF NOT EXISTS policy_revisions" in emitted
+    # Setup installs schema/triggers, captures history and seeds the default policy, whether
+    # the database is fresh or already contains documents/checkpoints.
+    assert all(
+        statement.startswith(
+            (
+                "CREATE TABLE",
+                "SELECT pg_advisory_lock",
+                "SELECT pg_advisory_unlock",
+                "CREATE INDEX",
+                "CREATE OR REPLACE FUNCTION",
+                "CREATE OR REPLACE TRIGGER",
+                "INSERT INTO routine_graph_revisions",
+                "INSERT INTO store",
+            )
+        )
+        for statement in statements
+    )
+
+
+class _RowsCursor(_FakeCursor):
+    """Like _FakeCursor but fetchall() returns canned rows -- list_routine_runs
+    reads its EXISTS(...) result via fetchall(), not fetchone()."""
+
+    def __init__(self, rows):
+        super().__init__(None)
+        self._rows = rows
+
+    def fetchall(self):
+        return self._rows
+
+
+def test_list_routine_runs_reads_error_channel_not_run_meta():
+    """The failed flag comes from checkpoint_writes.__error__, a single-query
+    EXISTS alongside the existing GROUP BY -- not a second round trip, and
+    not derived from deserializing run_meta (see document_store.py's
+    list_routine_runs docstring for why run_meta under-reports failures)."""
+    store = PostgresDocumentStore("postgresql://example")
+    rows = [
+        {
+            "thread_id": "routine:alpha:rev-a:run-failed",
+            "started_at": "2026-01-01T00:00:00+00:00",
+            "last_checkpoint_at": "2026-01-01T00:00:05+00:00",
+            "checkpoint_count": 3,
+            "failed": True,
+        },
+        {
+            "thread_id": "routine:alpha:rev-a:run-ok",
+            "started_at": "2026-01-02T00:00:00+00:00",
+            "last_checkpoint_at": "2026-01-02T00:00:05+00:00",
+            "checkpoint_count": 5,
+            "failed": False,
+        },
+    ]
+    pool = _HealthyPool(None)
+    pool._cursor = _RowsCursor(rows)
+    store._pool = pool
+
+    summaries, has_more = store.list_routine_runs("alpha", limit=50)
+
+    executed_query = str(pool._cursor.executed[0][0])
+    assert "checkpoint_writes" in executed_query
+    assert "__error__" in executed_query
+    assert has_more is False
+    assert [(s.run_id, s.failed) for s in summaries] == [
+        ("run-failed", True),
+        ("run-ok", False),
+    ]
 
 
 class _FakeNotify:
@@ -176,10 +288,16 @@ async def test_listener_resyncs_on_connect_then_streams_changes(monkeypatch):
 
     resyncs: list[bool] = []
     changes: list[str] = []
+
+    def resync():
+        # LISTEN must precede the snapshot read to avoid losing concurrent writes.
+        assert any("LISTEN" in str(query) for query in fake.executed)
+        resyncs.append(True)
+
     listener = StoreChangeListener(
         "postgresql://example",
         on_change=changes.append,
-        on_resync=lambda: resyncs.append(True),
+        on_resync=resync,
     )
 
     await listener._listen_once()

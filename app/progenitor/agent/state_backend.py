@@ -15,8 +15,10 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import yaml
@@ -40,9 +42,18 @@ from deepagents.backends.utils import (
     slice_read_response,
 )
 
+from ..routines.store import (
+    parse_routine_graph_document,
+    routine_file_name,
+    routine_id_from_path,
+)
 from ..runtime.thread_context import get_current_thread_id
 from ..schedule.engine import parse_schedule_datetime
 from ..schemas import check_entry_schema
+from ..state.model_profiles import (
+    default_model_profiles_payload,
+    validate_model_profiles_document,
+)
 from ..state.models import ScheduleEntry
 from ..state.preferences import default_preferences_payload, validate_preferences_document
 from ..utils import utcnow, utcnow_isoformat
@@ -650,6 +661,17 @@ def create_preferences_state_file(
     )
 
 
+def create_model_profiles_state_file(state_manager: Any) -> StateFile:
+    """Build the provider/deployment map exposed as ``/config/profile.json``."""
+    return _simple_state_file(
+        "profile.json",
+        get=state_manager.get_model_profiles_config,
+        save=state_manager.save_model_profiles_config,
+        validate=validate_model_profiles_document,
+        default=default_model_profiles_payload(),
+    )
+
+
 def _reject_health_write(_content: Any) -> JsonDoc:
     raise ValueError("health.json is read-only - it's written by the heartbeat loop, not the agent")
 
@@ -684,7 +706,7 @@ _RESERVED_PROJECT_IDS = {".", ".."}
 class KanbanTaskDirectoryBackend(_AsyncOnlyFileBackendMixin):
     """Async DeepAgent backend exposing the kanban board as a task directory.
 
-    Mounted at ``/config/tasks/``: ``board.json`` is the structure document
+    Mounted at ``/tasks/``: ``board.json`` is the structure document
     (columns + ``card_order``) and every card is one ``.md`` file (YAML
     frontmatter for the fields, markdown body for the description). Each card is
     its own ``kanban_card:<id>`` document in the shared Postgres store, so the
@@ -710,7 +732,7 @@ class KanbanTaskDirectoryBackend(_AsyncOnlyFileBackendMixin):
 
     @staticmethod
     def _name(file_path: str) -> str:
-        # CompositeBackend strips the /config/tasks/ route prefix before delegating.
+        # CompositeBackend strips the /tasks/ route prefix before delegating.
         return file_path.lstrip("/").removeprefix("tasks/")
 
     @staticmethod
@@ -1075,6 +1097,169 @@ class WorkflowDirectoryBackend(_AsyncOnlyFileBackendMixin):
         return GrepResult(matches=[])
 
 
+class RoutineDirectoryBackend(_AsyncOnlyFileBackendMixin):
+    """Async backend exposing routine graphs as ``/routines/*.json``.
+
+    Mirrors ``WorkflowDirectoryBackend`` exactly: one JSON document per file,
+    validated against ``graph.routine.schema.v1.json`` on write. The document
+    ``id`` is the owning agent's id, so this gives the agent the same
+    read/write/edit experience over routine graphs that it already has over
+    workflow definitions.
+    """
+
+    _ASYNC_ONLY = "RoutineDirectoryBackend is async-only; use the async file tools."
+
+    def __init__(self, state_manager: Any) -> None:
+        self._sm = state_manager
+
+    @staticmethod
+    def _name(file_path: str) -> str:
+        return file_path.lstrip("/").removeprefix("routines/")
+
+    @staticmethod
+    def _parse_routine_name(name: str) -> str | None:
+        if "/" in name or not name.endswith(".json"):
+            return None
+        try:
+            return routine_id_from_path(name)
+        except ValueError:
+            return None
+
+    async def _resolve_routine(self, name: str) -> tuple[str, dict[str, Any]] | None:
+        agent_id = self._parse_routine_name(name)
+        if agent_id is None:
+            return None
+        graph = await self._sm.get_routine_graph(agent_id)
+        if graph is None:
+            return None
+        return agent_id, graph
+
+    async def aread(self, file_path: str, offset: int = 0, limit: int = 2000) -> ReadResult:
+        resolved = await self._resolve_routine(self._name(file_path))
+        if resolved is None:
+            return ReadResult(error=f"File '{file_path}' not found")
+        _, graph = resolved
+        file_data = create_file_data(_doc_to_text(graph))
+        sliced = slice_read_response(file_data, offset, limit)
+        if isinstance(sliced, ReadResult):
+            return sliced
+        return ReadResult(
+            file_data=FileData(content=sliced, encoding=file_data.get("encoding", "utf-8"))
+        )
+
+    async def awrite(self, file_path: str, content: str) -> WriteResult:
+        name = self._name(file_path)
+        agent_id = self._parse_routine_name(name)
+        if agent_id is None:
+            return WriteResult(error=f"Unknown routine file '{file_path}' (expected <id>.json)")
+        try:
+            graph = parse_routine_graph_document(content)
+        except ValueError as exc:
+            return WriteResult(error=f"Invalid routine {name}: {exc}")
+        if graph.get("id") != agent_id:
+            return WriteResult(error=f"Routine id must match filename '{agent_id}'")
+        if await self._sm.get_execution_policy(graph["policy_id"]) is None:
+            return WriteResult(error=f"Unknown execution policy '{graph['policy_id']}'")
+        await self._sm.save_routine_graph(agent_id, graph)
+        return WriteResult(path=file_path)
+
+    async def aedit(
+        self,
+        file_path: str,
+        old_string: str,
+        new_string: str,
+        replace_all: bool = False,
+    ) -> EditResult:
+        read = await self.aread(file_path, 0, 10_000_000)
+        if read.error is not None:
+            return EditResult(error=f"Error: {read.error}")
+        current = read.file_data["content"] if read.file_data else ""
+        result = perform_string_replacement(current, old_string, new_string, replace_all)
+        if isinstance(result, str):
+            return EditResult(error=result)
+        new_content, occurrences = result
+        written = await self.awrite(file_path, new_content)
+        if written.error is not None:
+            return EditResult(error=f"Error: {written.error}")
+        return EditResult(path=file_path, occurrences=int(occurrences))
+
+    async def adelete(self, file_path: str) -> WriteResult:
+        resolved = await self._resolve_routine(self._name(file_path))
+        if resolved is None:
+            return WriteResult(error=f"File '{file_path}' not found")
+        agent_id, _ = resolved
+        await self._sm.delete_routine_graph(agent_id)
+        return WriteResult(path=file_path)
+
+    async def als(self, path: str) -> LsResult:
+        graphs = await self._sm.list_routine_graphs()
+        ordered = sorted(
+            (graph for graph in graphs if isinstance(graph, dict) and graph.get("id")),
+            key=lambda graph: (str(graph.get("name") or ""), str(graph.get("id") or "")),
+        )
+        entries = [
+            FileInfo(path=f"/{routine_file_name(str(graph['id']))}", is_dir=False)
+            for graph in ordered
+        ]
+        return LsResult(entries=entries)
+
+    async def aglob(self, pattern: str, path: str = "/") -> GlobResult:
+        return GlobResult(matches=[])
+
+    async def agrep(
+        self, pattern: str, path: str | None = None, glob: str | None = None
+    ) -> GrepResult:
+        return GrepResult(matches=[])
+
+
+class PolicyDirectoryBackend(RoutineDirectoryBackend):
+    """Validated policy JSON files backed by the shared Postgres document store."""
+
+    _ASYNC_ONLY = "PolicyDirectoryBackend is async-only; use the async file tools."
+
+    @staticmethod
+    def _name(file_path: str) -> str:
+        return file_path.lstrip("/").removeprefix("policies/")
+
+    async def _resolve_routine(self, name: str) -> tuple[str, dict[str, Any]] | None:
+        policy_id = self._parse_routine_name(name)
+        if policy_id is None:
+            return None
+        document = await self._sm.get_execution_policy(policy_id)
+        return (policy_id, document) if document is not None else None
+
+    async def awrite(self, file_path: str, content: str) -> WriteResult:
+        from ..policies import parse_policy_document
+
+        policy_id = self._parse_routine_name(self._name(file_path))
+        if policy_id is None:
+            return WriteResult(error="Expected /policies/<id>.json")
+        try:
+            document = parse_policy_document(content)
+            if document["id"] != policy_id:
+                raise ValueError("Policy id must match filename")
+            await self._sm.save_execution_policy(policy_id, document)
+        except ValueError as exc:
+            return WriteResult(error=str(exc))
+        return WriteResult(path=file_path)
+
+    async def adelete(self, file_path: str) -> WriteResult:
+        resolved = await self._resolve_routine(self._name(file_path))
+        if resolved is None:
+            return WriteResult(error=f"File '{file_path}' not found")
+        await self._sm.delete_execution_policy(resolved[0])
+        return WriteResult(path=file_path)
+
+    async def als(self, path: str) -> LsResult:
+        documents = await self._sm.list_execution_policies()
+        return LsResult(
+            entries=[
+                FileInfo(path=f"/{doc['id']}.json", is_dir=False)
+                for doc in sorted(documents, key=lambda doc: doc["id"])
+            ]
+        )
+
+
 def validate_schedule_document(content: str) -> JsonDoc:
     """Parse + validate the whole ``schedule.json`` payload.
 
@@ -1322,3 +1507,43 @@ class ContentDocumentDirectoryBackend(_AsyncOnlyFileBackendMixin):
         self, pattern: str, path: str | None = None, glob: str | None = None
     ) -> GrepResult:
         return GrepResult(matches=[])
+
+
+class UserAgentDirectoryBackend(ContentDocumentDirectoryBackend):
+    """Validated read/write user manifests mounted at ``/agents/user/``.
+
+    Save through StateManager so agent discovery and the existing store
+    LISTEN/NOTIFY pipeline observe the same document as the Agents page.
+    """
+
+    def __init__(self, state_manager: Any, *, native_root: Path) -> None:
+        super().__init__(state_manager, "agent", path_prefix="user")
+        self._native_root = native_root
+
+    async def awrite(self, file_path: str, content: str) -> WriteResult:
+        from .object_agent_manifest import (
+            discover_object_agents,
+            parse_front_matter,
+            parse_object_agent_manifest,
+        )
+
+        relative = file_path.lstrip("/")
+        if not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*/SYSTEM\.md", relative):
+            return WriteResult(error="Expected /agents/user/<kebab-case-name>/SYSTEM.md")
+        try:
+            raw = parse_front_matter(content, source=file_path)
+            check_entry_schema("Agent front matter", raw, "agent-manifest.schema.v1.json")
+            manifest = parse_object_agent_manifest(content, source=file_path, source_kind="user")
+            slug = re.sub(r"[^a-z0-9]+", "-", manifest.name.strip().lower()).strip("-")
+            if relative != f"{slug or 'agent'}/SYSTEM.md":
+                raise ValueError(
+                    "Agent name must match its directory; renaming requires a new path"
+                )
+            for source in await discover_object_agents(self._sm, self._native_root):
+                if source.name == manifest.name and source.relative_path != self._name(file_path):
+                    raise ValueError(
+                        f"Agent name {manifest.name!r} is already owned by {source.source}"
+                    )
+        except ValueError as exc:
+            return WriteResult(error=f"Invalid agent manifest: {exc}")
+        return await super().awrite(file_path, content)

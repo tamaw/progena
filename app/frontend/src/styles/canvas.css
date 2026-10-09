@@ -235,7 +235,7 @@
 }
 
 /* Collapsed right-edge tools dock (Details/JSON/Runs) for the workflow
-   canvas — ported directly from .agents-graph-side on the Agents/Sequences
+   canvas — ported directly from .agents-graph-side on the Agents/Routines
    canvas, just under a workflow-specific class name. */
 .workflow-side-dock {
   flex: none;
@@ -277,7 +277,7 @@
 
 /* Expanded side panel (Details form / JSON editor / Runs list) — replaces the
    side dock in place. Ported from .agents-graph-editor on the Agents/
-   Sequences canvas, generalized to hold any of the three panel contents. */
+   Routines canvas, generalized to hold any of the three panel contents. */
 .workflow-details-panel {
   position: relative;
   flex: none;
@@ -1166,7 +1166,7 @@
 /* ---- Workflow "JSON" side panel ------------------------------------------ */
 /* Overlay on the canvas's right edge: a collapsed tab (.canvas-json-dock)
    that expands into a full-height JSON editor (.canvas-json-editor). Mirrors
-   the Sequences page editor on the Agents canvas. */
+   the Routines page editor on the Agents canvas. */
 .canvas-json-dock {
   position: absolute;
   top: 12px;

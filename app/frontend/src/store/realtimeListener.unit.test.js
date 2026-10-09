@@ -1,3 +1,4 @@
+import { realtimeClientId } from './realtimeClient';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { configureStore } from '@reduxjs/toolkit';
 import realtimeReducer, { registerPendingOp } from './realtimeSlice';
@@ -97,7 +98,7 @@ describe('realtimeListener heartbeat watchdog', () => {
 
     expect(MockEventSource.instances).toHaveLength(1);
     const first = MockEventSource.instances[0];
-    expect(first.url).toBe(STREAM_URL);
+    expect(first.url).toBe(`${STREAM_URL}?client_id=${realtimeClientId}`);
 
     // A request left waiting on the dead connection must not pend forever.
     store.dispatch(registerPendingOp({ requestId: 'req-stale-1' }));
@@ -114,7 +115,7 @@ describe('realtimeListener heartbeat watchdog', () => {
     expect(first.closed).toBe(true);
     expect(MockEventSource.instances).toHaveLength(2);
     const second = MockEventSource.instances[1];
-    expect(second.url).toBe(STREAM_URL);
+    expect(second.url).toBe(`${STREAM_URL}?client_id=${realtimeClientId}`);
     expect(second.closed).toBe(false);
 
     // The pending operation was failed rather than left dangling, and the

@@ -13,5 +13,7 @@ Modules:
     middleware/: One module per custom middleware:
         async_subagent_tracking, audit_logging, direct_a2a_fast_path,
         dynamic_mcp, schema_compaction, and secret_redaction
-    subagents: Progenitor helper subagents
+    object_agent_manifest: Object-agent manifest parsing and discovery
+    object_agents: Object-agent construction and lazy invocation
+    async_subagents: Background async subagent descriptors
 """

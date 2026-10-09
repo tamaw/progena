@@ -610,6 +610,30 @@ describe('agent reducers', () => {
     expect(s.agents.active.detail.enabled).toBe(true);
   });
 
+  it('agents.snapshot does not clear a loaded active routine graph omitted from the roster', () => {
+    const graph = {
+      status: 'Draft',
+      entry: 'prompt-1',
+      nodes: [{ id: 'prompt-1', kind: 'prompt' }],
+      edges: [],
+    };
+    let s = reducer(undefined, agentsSnapshot(['routine-alpha']));
+    s = reducer(s, applyUiEvent({
+      type: 'agent.selected',
+      payload: { agent: { id: 'routine-alpha', kind: 'routine', graph } },
+    }));
+
+    // On a cold page load the selected-detail reply can be followed by the
+    // roster snapshot. The roster's graph:null must not replace the detail.
+    s = reducer(s, applyUiEvent({
+      type: 'agents.snapshot',
+      payload: { agents: [{ id: 'routine-alpha', kind: 'routine', name: 'Alpha', graph: null }] },
+    }));
+
+    expect(s.agents.byId['routine-alpha'].graph).toBeNull();
+    expect(s.agents.active.detail.graph).toEqual(graph);
+  });
+
   it('agent.upserted merges into an existing agent and appends new ones', () => {
     let s = reducer(undefined, agentsSnapshot(['alpha']));
     s = reducer(s, applyUiEvent({ type: 'agent.upserted', payload: { agent: { id: 'alpha', role: 'changed' } } }));
@@ -619,13 +643,27 @@ describe('agent reducers', () => {
     expect(s.agents.order).toEqual(['alpha', 'gamma']);
   });
 
-  it('agent.selected applies only when request_id matches the active request', () => {
+  it('agent.selected ignores a reply for an agent the selection has moved off', () => {
     let s = reducer(undefined, requestAgentDetail.pending('REQ1', {
       agentsUrl: '/x', agentId: 'alpha',
     }));
-    expect(s.agents.active.requestId).toBe('REQ1');
-    s = reducer(s, applyUiEvent({ type: 'agent.selected', payload: { agent: { id: 'alpha' }, request_id: 'REQ2' } }));
+    expect(s.agents.active.agentId).toBe('alpha');
+    s = reducer(s, applyUiEvent({ type: 'agent.selected', payload: { agent: { id: 'beta' }, request_id: 'REQ1' } }));
     expect(selectActiveAgentProfile({ uiData: s })).toBeNull();
+    s = reducer(s, applyUiEvent({ type: 'agent.selected', payload: { agent: { id: 'alpha' }, request_id: 'REQ1' } }));
+    expect(selectActiveAgentProfile({ uiData: s })).toEqual({ id: 'alpha' });
+  });
+
+  // A stream reconnect re-asks for the same agent, so several requests for it
+  // can be outstanding. Keying staleness on request_id made each new ask
+  // invalidate the previous one's answer, which under repeated reconnects
+  // rejected every reply in turn and hung the detail pane on "Loading…".
+  it('agent.selected accepts a reply for the selected agent from an earlier request', () => {
+    let s = reducer(undefined, requestAgentDetail.pending('REQ1', {
+      agentsUrl: '/x', agentId: 'alpha',
+    }));
+    s = reducer(s, requestAgentDetail.pending('REQ2', { agentsUrl: '/x', agentId: 'alpha' }));
+    expect(s.agents.active.requestId).toBe('REQ2');
     s = reducer(s, applyUiEvent({ type: 'agent.selected', payload: { agent: { id: 'alpha' }, request_id: 'REQ1' } }));
     expect(selectActiveAgentProfile({ uiData: s })).toEqual({ id: 'alpha' });
   });

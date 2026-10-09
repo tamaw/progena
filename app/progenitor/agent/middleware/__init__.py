@@ -8,6 +8,7 @@ from .direct_a2a_fast_path import DirectA2AFastPathMiddleware
 from .dynamic_mcp import DynamicMCPToolMiddleware
 from .schema_compaction import SchemaCompactionMiddleware
 from .secret_redaction import SecretRedactionMiddleware
+from .tool_errors import ToolErrorMiddleware
 
 __all__ = [
     "AsyncSubagentTrackingMiddleware",
@@ -17,4 +18,5 @@ __all__ = [
     "emit_stream_event",
     "SchemaCompactionMiddleware",
     "SecretRedactionMiddleware",
+    "ToolErrorMiddleware",
 ]

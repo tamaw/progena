@@ -48,17 +48,13 @@
 .prompts-tree-toggle,
 .prompts-tree-leaf {
   width: 100%;
-  border: 1px solid transparent;
-  background: transparent;
   color: var(--color-text-primary);
   text-align: left;
   cursor: pointer;
-  border-radius: 6px;
   padding: 7px 10px 8px;
   display: flex;
   flex-direction: column;
   gap: 2px;
-  transition: background-color 120ms ease, border-color 120ms ease;
 }
 
 .prompts-tree-toggle:hover,

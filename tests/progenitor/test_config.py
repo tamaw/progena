@@ -85,6 +85,7 @@ class TestLLMConfig:
             # "medium" but CI leaves it unset (code default "low"). Pinning the
             # env value keeps the assertion stable in both.
             "PROGENITOR_REASONING_EFFORT": "medium",
+            "PROGENITOR_REASONING_SUMMARY": "detailed",
         }
         with patch.dict(os.environ, env, clear=False):
             config = LLMConfig.from_env()

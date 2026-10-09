@@ -6,7 +6,6 @@ from fastapi.testclient import TestClient
 
 from app.backend.document_store import InMemoryDocumentStore, set_default_document_store
 from app.backend.main import app
-from app.backend.workflow_service import get_workflow_definition
 
 
 @pytest.fixture
@@ -42,16 +41,18 @@ def test_workflow_create_acknowledges_then_emits_canonical_state(workflow_env):
                 json={"title": "Prompt workflow"},
                 headers={"X-Request-ID": "workflow-create"},
             )
+            events = _drain(queue)
         assert_acknowledged(
             response, ["workflow.updated", "workflows.snapshot"], request_id="workflow-create"
         )
-        events = _drain(queue)
         workflow = events[0].payload["workflow"]
         assert len(workflow["graph"]["nodes"]) == 2
-        kinds = {node["kind"] for node in workflow["graph"]["nodes"].values()}
-        assert kinds == {"event", "agent"}
-        assert len(workflow["graph"]["edges"]) == 1
-        assert workflow["graph"]["edges"][0]["kind"] == "control"
+        nodes = workflow["graph"]["nodes"]
+        assert {node["kind"] for node in nodes.values()} == {"event", "agent"}
+        (edge,) = workflow["graph"]["edges"]
+        assert nodes[edge["from"]["node"]]["kind"] == "event"
+        assert nodes[edge["to"]["node"]]["kind"] == "agent"
+        assert edge["from"]["port"] == edge["to"]["port"] == "event_type"
     finally:
         ui_routes._ui_stream_subscribers.pop(queue, None)
 
@@ -74,12 +75,6 @@ def test_workflow_content_round_trip_keeps_typed_schemas(workflow_env):
     )
     payload["graph"]["edges"] = [
         {
-            "kind": "control",
-            "from": {"node": event_id, "port": "default"},
-            "to": {"node": agent_id, "port": "default"},
-        },
-        {
-            "kind": "data",
             "from": {"node": event_id, "port": "card"},
             "to": {"node": agent_id, "port": "card"},
         },

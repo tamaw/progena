@@ -91,6 +91,8 @@ logs/
 !logs/.gitkeep
 data/repos/*
 !data/repos/.gitkeep
+data/shell-home/
+data/shell-workspaces/
 tmp/
 .tmp/
 

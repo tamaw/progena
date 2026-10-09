@@ -395,6 +395,7 @@ class AsyncSubagentTaskStatus(StrEnum):
     SUCCESS = "success"
     ERROR = "error"
     CANCELLED = "cancelled"
+    INTERRUPTED = "interrupted"
 
 
 TERMINAL_ASYNC_SUBAGENT_TASK_STATUSES = frozenset(

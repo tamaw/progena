@@ -18,9 +18,12 @@
         "nodes": {"type": "object", "minProperties": 1, "additionalProperties": {"oneOf": [
           {"type": "object", "additionalProperties": false, "required": ["kind", "title", "event_type"], "properties": {
             "kind": {"const": "event"}, "title": {"type": "string", "minLength": 1},
-            "event_type": {"type": "string", "enum": ["kanban.card.created", "kanban.card.updated", "kanban.card.moved", "kanban.card.deleted", "kanban.card.status_changed"]},
+            "event_type": {"type": "string", "enum": ["kanban.card.created", "kanban.card.updated", "kanban.card.moved", "kanban.card.deleted", "kanban.card.status_changed", "document.changed"]},
             "from_column": {"type": ["string", "null"], "enum": ["backlog", "plan", "build", "validate", "done", null]},
             "to_column": {"type": ["string", "null"], "enum": ["backlog", "plan", "build", "validate", "done", null]},
+            "key_prefix": {"description": "Optional document.changed filter: document kind key prefix (see document_kinds.DOCUMENT_KINDS). Null/omitted means any kind.", "type": ["string", "null"]},
+            "key": {"description": "Optional document.changed filter: exact document key. Null/omitted means any key.", "type": ["string", "null"]},
+            "action": {"description": "Optional document.changed filter: write action. Null/omitted means any action.", "type": ["string", "null"], "enum": ["upserted", "deleted", null]},
             "output_schema": {"type": ["object", "null"]}
           }},
           {"type": "object", "additionalProperties": false, "required": ["kind", "title", "value", "output_schema"], "properties": {

@@ -5,7 +5,11 @@ Tests for Phase 3: Backend configuration and Postgres-backed content routing.
 from pathlib import Path
 from unittest.mock import MagicMock
 
-from app.progenitor.agent.backends import ReadOnlyBackend, create_progenitor_backend
+from app.progenitor.agent.backends import (
+    ReadOnlyBackend,
+    create_object_agent_plugin_skill_routes,
+    create_progenitor_backend,
+)
 
 
 class FakeContentStateManager(MagicMock):
@@ -18,7 +22,12 @@ class FakeContentStateManager(MagicMock):
 
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
-        self._docs: dict[str, dict[str, str]] = {"prompt": {}, "skill": {}, "memory": {}}
+        self._docs: dict[str, dict[str, str]] = {
+            "prompt": {},
+            "skill": {},
+            "memory": {},
+            "agent": {},
+        }
 
     async def get_content_document(self, kind: str, relative_path: str) -> str | None:
         return self._docs[kind].get(relative_path)
@@ -64,6 +73,7 @@ class TestBackendFactory:
         # without a state_manager -- as long as data/skills/ exists on disk,
         # which it does for this real project_root=".".
         assert "/skills/" in backend.routes
+        assert "/agents/" not in backend.routes
 
     def test_factory_uses_project_root(self, monkeypatch):
         """project_root is accepted for scoped filesystem mounts."""
@@ -101,12 +111,13 @@ class TestBackendFactory:
             assert isinstance(backend.routes["/skills/"]._backend, FilesystemBackend)
 
     def test_state_manager_mounts_config_and_inbox_routes(self, monkeypatch):
-        """A state_manager adds the /config/, /config/tasks/, /workflows/, and /inbox/ mounts."""
+        """A state_manager adds /config/, /tasks/, /workflows/, /routines/, /inbox/."""
         from unittest.mock import MagicMock
 
         from app.progenitor.agent.state_backend import (
             InboxDirectoryBackend,
             KanbanTaskDirectoryBackend,
+            RoutineDirectoryBackend,
             StateDocumentBackend,
             WorkflowDirectoryBackend,
         )
@@ -117,8 +128,9 @@ class TestBackendFactory:
         # construction time, so the stub needs arbitrary attribute access.
         backend = create_progenitor_backend(project_root=".", state_manager=MagicMock())
         assert isinstance(backend.routes["/config/"], StateDocumentBackend)
-        assert isinstance(backend.routes["/config/tasks/"], KanbanTaskDirectoryBackend)
+        assert isinstance(backend.routes["/tasks/"], KanbanTaskDirectoryBackend)
         assert isinstance(backend.routes["/workflows/"], WorkflowDirectoryBackend)
+        assert isinstance(backend.routes["/routines/"], RoutineDirectoryBackend)
         assert isinstance(backend.routes["/inbox/"], InboxDirectoryBackend)
 
     def test_factory_defaults_to_cwd(self, monkeypatch):
@@ -177,9 +189,7 @@ class TestBackendFactory:
         self._patch_runtime_free_state_backend(monkeypatch)
         state_manager = FakeContentStateManager()
         state_manager._docs["skill"]["acme__formatter/lint/SKILL.md"] = "---\nname: lint\n---\n"
-        state_manager._docs["skill"]["other__plugin/quality/SKILL.md"] = (
-            "---\nname: quality\n---\n"
-        )
+        state_manager._docs["skill"]["other__plugin/quality/SKILL.md"] = "---\nname: quality\n---\n"
 
         backend = create_progenitor_backend(
             project_root=".",
@@ -195,3 +205,146 @@ class TestBackendFactory:
         # Scoped to its own segment: the other plugin's file isn't visible here.
         cross_read = await backend.aread("/skills/acme__formatter/quality/SKILL.md")
         assert cross_read.error is not None
+
+    async def test_agent_introspection_combines_read_only_disk_and_pg(self, monkeypatch, tmp_path):
+        self._patch_runtime_free_state_backend(monkeypatch)
+        disk_path = tmp_path / "data/agents/objects/reviewer/SYSTEM.md"
+        disk_path.parent.mkdir(parents=True)
+        disk_path.write_text("Bundled disk manifest")
+        state_manager = FakeContentStateManager()
+        state_manager._docs["agent"]["native/reviewer/SYSTEM.md"] = "Persisted native manifest"
+        state_manager._docs["agent"]["user/custom/SYSTEM.md"] = "Persisted user manifest"
+        backend = create_progenitor_backend(project_root=tmp_path, state_manager=state_manager)
+        for path in ("/agents/native/reviewer/SYSTEM.md", "/agents/objects/reviewer/SYSTEM.md"):
+            read = await backend.aread(path)
+            assert read.error is None
+            assert read.file_data["content"] == "Bundled disk manifest"
+            assert (await backend.awrite(path, "overwrite")).error is not None
+            assert (await backend.aedit(path, "Bundled", "Modified")).error is not None
+            # CompositeBackend exposes no delete operation; native routes have
+            # no writable file tools and cannot be uninstalled through plugins.
+            assert not hasattr(backend, "adelete")
+            uploads = await backend.aupload_files([(path, b"overwrite")])
+            assert uploads[0].error == "permission_denied"
+            assert disk_path.read_text() == "Bundled disk manifest"
+        assert (await backend.aread("/agents/user/custom/SYSTEM.md")).error is None
+        assert (await backend.aread("/agents/objects/custom/SYSTEM.md")).error is not None
+        assert isinstance(backend.routes["/agents/"], ReadOnlyBackend)
+        del state_manager._docs["agent"]["native/reviewer/SYSTEM.md"]
+        assert (await backend.aread("/agents/objects/reviewer/SYSTEM.md")).error is None
+
+    async def test_user_agent_creation_yaml_render_edit_and_discovery(self, monkeypatch):
+        from app.progenitor.agent.object_agent_manifest import discover_object_agents
+        from app.progenitor.tools.json_to_yaml import JsonToYamlTool
+        from app.progenitor.tools.protocol import ToolContext
+
+        self._patch_runtime_free_state_backend(monkeypatch)
+        sm = FakeContentStateManager()
+        backend = create_progenitor_backend(project_root=".", state_manager=sm)
+        rendered = await JsonToYamlTool().execute(
+            ToolContext(
+                tool_registry=None,
+                llm_client=None,
+                tool_args={
+                    "data": {
+                        "name": "custom-reviewer",
+                        "description": "Review: code",
+                        "version": "1.0.0",
+                        "kind": "object",
+                        "tools": [],
+                        "skills": [],
+                        "system_prompt": "Review code carefully: explain your findings.",
+                    },
+                    "body_field": "system_prompt",
+                },
+            )
+        )
+        assert rendered.success
+        path = "/agents/user/custom-reviewer/SYSTEM.md"
+        content = rendered.data["content"]
+        assert (await backend.awrite(path, content)).error is None
+        assert (await backend.aread(path)).file_data["content"] == content
+        assert (
+            await backend.aedit(path, "Review code carefully", "Review code thoroughly")
+        ).error is None
+        discovered = await discover_object_agents(sm)
+        assert len(discovered) == 1
+        assert discovered[0].name == "custom-reviewer"
+        assert discovered[0].manifest.description == "Review: code"
+        assert "thoroughly" in discovered[0].manifest.system_prompt
+        assert discovered[0].relative_path == "user/custom-reviewer/SYSTEM.md"
+
+        # Failed edits leave the last valid document intact.
+        saved = sm._docs["agent"]["user/custom-reviewer/SYSTEM.md"]
+        assert (await backend.aedit(path, "kind: object", "kind: graph")).error is not None
+        assert sm._docs["agent"]["user/custom-reviewer/SYSTEM.md"] == saved
+
+    async def test_user_agent_rejects_invalid_documents_and_paths(self, monkeypatch):
+        self._patch_runtime_free_state_backend(monkeypatch)
+        sm = FakeContentStateManager()
+        backend = create_progenitor_backend(project_root=".", state_manager=sm)
+        valid = "---\nname: custom\ndescription: Reviewer\nversion: '1.0'\nkind: object\ntools: []\n---\nReview code.\n"
+        for content in (
+            "No front matter",
+            valid.replace("version: '1.0'\n", ""),
+            valid.replace("tools: []", "tools: [42]"),
+            valid.replace("Review code.", ""),
+            valid.replace("name: custom", "name: another"),
+        ):
+            assert (
+                await backend.awrite("/agents/user/custom/SYSTEM.md", content)
+            ).error is not None
+        for path in ("/agents/user/custom/agent.md", "/agents/user/custom/nested/SYSTEM.md"):
+            assert (await backend.awrite(path, valid)).error is not None
+        assert sm._docs["agent"] == {}
+
+    async def test_user_agent_cannot_shadow_native_or_plugin_agent(self, monkeypatch, tmp_path):
+        self._patch_runtime_free_state_backend(monkeypatch)
+        sm = FakeContentStateManager()
+        content = "---\nname: reviewer\ndescription: Reviewer\nversion: '1.0'\nkind: object\n---\nReview code.\n"
+        native = tmp_path / "data/agents/objects/reviewer/SYSTEM.md"
+        native.parent.mkdir(parents=True)
+        native.write_text(content)
+        backend = create_progenitor_backend(project_root=tmp_path, state_manager=sm)
+        path = "/agents/user/reviewer/SYSTEM.md"
+        assert "already owned" in (await backend.awrite(path, content)).error
+        native.unlink()
+        sm._docs["agent"]["acme__plugin/reviewer/SYSTEM.md"] = content
+        assert "already owned" in (await backend.awrite(path, content)).error
+        assert "user/reviewer/SYSTEM.md" not in sm._docs["agent"]
+
+
+async def test_dynamic_plugin_skill_routes_are_exact_and_read_only():
+    sm = FakeContentStateManager()
+    sm._docs["skill"]["acme__new/lint/SKILL.md"] = "Lint skill"
+    sm._docs["skill"]["acme__new/lint/resources/examples.md"] = "Companion examples"
+    sm._docs["skill"]["acme__new/other/SKILL.md"] = "Sibling skill"
+    routes = create_object_agent_plugin_skill_routes(
+        sm, ["/skills/acme__new/lint/", "/skills/native/", "/repos/"]
+    )
+    assert set(routes) == {"/skills/acme__new/lint/"}
+    route = routes["/skills/acme__new/lint/"]
+    assert (await route.aread("/SYSTEM.md")).error is not None
+    assert (await route.aread("/SKILL.md")).file_data["content"] == "Lint skill"
+    assert (await route.aread("/resources/examples.md")).file_data[
+        "content"
+    ] == "Companion examples"
+    assert (await route.aread("/other/SKILL.md")).error is not None
+    assert not await route.can_write_file("/SKILL.md", "change", {})
+    assert not await route.can_delete_file("/SKILL.md", {})
+
+
+def test_dynamic_plugin_skill_inference_stays_inside_declared_mounts():
+    sm = FakeContentStateManager()
+    routes = create_object_agent_plugin_skill_routes(
+        sm,
+        ["/skills/"],
+        ["/skills/acme__new/review/", "/skills/native/"],
+    )
+    assert set(routes) == {"/skills/acme__new/review/"}
+    narrower = create_object_agent_plugin_skill_routes(
+        sm,
+        ["/skills/acme__new/review/"],
+        ["/skills/other__plugin/review/", "/skills/acme__new/reviewer/"],
+    )
+    assert set(narrower) == {"/skills/acme__new/review/"}
