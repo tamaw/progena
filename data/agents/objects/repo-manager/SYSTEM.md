@@ -6,12 +6,11 @@ kind: object
 tools: []
 skills: [/skills/managing-repos]
 mounts:
-  - path: /skills/managing-repos/
-    access: read
   - path: /repos/
     access: read
 shell: true
 env_passthrough: [GH_TOKEN, GITHUB_TOKEN]
+memory: true
 ---
 You manage repositories for Progenitor. Inspect repository state and help with
 repository management requests using the available tools and permissions.

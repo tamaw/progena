@@ -5,13 +5,15 @@ from __future__ import annotations
 import os
 from collections.abc import Iterable
 from dataclasses import replace
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, cast
 
 from deepagents.backends import CompositeBackend, StateBackend
 from deepagents.backends.protocol import (
+    BackendProtocol,
     EditResult,
     FileData,
+    FileDownloadResponse,
     FileInfo,
     GlobResult,
     GrepResult,
@@ -25,6 +27,7 @@ from deepagents.backends.utils import (
     slice_read_response,
 )
 from deepagents.middleware.filesystem import FilesystemMiddleware
+from deepagents.middleware.memory import MemoryMiddleware
 from deepagents.middleware.skills import SkillsMiddleware
 from deepagents.middleware.subagents import CompiledSubAgent
 from langchain.agents import create_agent
@@ -42,10 +45,11 @@ from .middleware import AuditLoggingMiddleware
 from .object_agent_manifest import (
     OBJECT_AGENT_DOCUMENT_KIND,
     ObjectAgentManifest,
+    ObjectAgentMount,
     ObjectAgentSource,
-    _path_is_mounted,
     _validate_permissions_within_mounts,
     parse_object_agent_manifest,
+    skill_mounts,
 )
 from .shell_backend import ProgenitorShellBackend, ShellPaths, agent_home_slug
 from .state_backend import _AsyncOnlyFileBackendMixin
@@ -68,6 +72,20 @@ class ScopedMountBackend:
             return None
         return f"{self._suffix}/{path.lstrip('/')}".rstrip("/") or "/"
 
+    def _unpath(self, path: str) -> str:
+        # Results come back in the parent's coordinates; strip the suffix so
+        # paths the child lists are paths it can read.
+        if self._suffix and (path == self._suffix or path.startswith(f"{self._suffix}/")):
+            return path[len(self._suffix) :] or "/"
+        return path
+
+    def _rebase(self, result: Any, field: str) -> Any:
+        items = result if isinstance(result, list) else getattr(result, field, None)
+        if not items:
+            return result
+        rebased = [{**item, "path": self._unpath(item["path"])} for item in items]
+        return rebased if isinstance(result, list) else replace(result, **{field: rebased})
+
     async def aread(self, path: str, offset: int = 0, limit: int = 2000) -> Any:
         return await self._backend.aread(self._path(path), offset, limit)
 
@@ -81,13 +99,25 @@ class ScopedMountBackend:
         return await self._backend.adelete(self._path(path))
 
     async def als(self, path: str) -> Any:
-        return await self._backend.als(self._path(path))
+        return self._rebase(await self._backend.als(self._path(path)), "entries")
 
     async def aglob(self, pattern: str, path: str | None = None) -> Any:
-        return await self._backend.aglob(pattern, self._path(path))
+        return self._rebase(await self._backend.aglob(pattern, self._path(path)), "matches")
 
     async def agrep(self, pattern: str, path: str | None = None, glob: str | None = None) -> Any:
-        return await self._backend.agrep(pattern, self._path(path), glob)
+        return self._rebase(await self._backend.agrep(pattern, self._path(path), glob), "matches")
+
+    # Middleware (memory, skills) batch-loads through these; without them the
+    # call fell through __getattr__ to the unscoped parent route.
+    async def adownload_files(self, paths: list[str]) -> Any:
+        responses = await self._backend.adownload_files([self._path(path) for path in paths])
+        return [replace(r, path=self._unpath(r.path)) for r in responses]
+
+    async def aupload_files(self, files: list[tuple[str, bytes]]) -> Any:
+        responses = await self._backend.aupload_files(
+            [(self._path(path), content) for path, content in files]
+        )
+        return [replace(r, path=self._unpath(r.path)) for r in responses]
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._backend, name)
@@ -304,6 +334,41 @@ def _model_for_manifest(manifest: ObjectAgentManifest, parent_model: Any) -> Any
     return create_langchain_model(replace(LLMConfig.from_env(), model_default=manifest.model))
 
 
+AGENT_MEMORY_FILE = "AGENTS.md"
+OBJECT_AGENT_MEMORY_ROOT = "/memories/agents/"
+
+
+def object_agent_memory_dir(name: str) -> str:
+    """Private, writable memory folder for one object agent."""
+    return f"{OBJECT_AGENT_MEMORY_ROOT}{agent_home_slug(name)}/"
+
+
+class _DeclaredSkillsBackend(BackendProtocol):
+    """Show SkillsMiddleware only the skills the manifest lists.
+
+    Its loader lists a source folder and loads ``<child>/SKILL.md`` for every
+    sub-folder. Listing each declared skill's parent here returns just the
+    declared skills, never their siblings; file reads go to the agent's backend.
+    """
+
+    def __init__(self, backend: Any, skill_dirs: list[str]) -> None:
+        self._backend = backend
+        self._skill_dirs = skill_dirs
+
+    async def als(self, path: str) -> LsResult:
+        parent = PurePosixPath(path)
+        return LsResult(
+            entries=[
+                FileInfo(path=skill_dir, is_dir=True)
+                for skill_dir in self._skill_dirs
+                if PurePosixPath(skill_dir).parent == parent
+            ]
+        )
+
+    async def adownload_files(self, paths: list[str]) -> list[FileDownloadResponse]:
+        return await self._backend.adownload_files(paths)
+
+
 def build_object_agent(
     manifest: ObjectAgentManifest,
     *,
@@ -324,9 +389,25 @@ def build_object_agent(
     selected_tools = _tools_for_manifest(manifest, tools)
     if manifest.mounts:
         _validate_permissions_within_mounts(
-            manifest.permissions, manifest.mounts, source=f"object agent {manifest.name!r}"
+            manifest.permissions,
+            (*manifest.mounts, *skill_mounts(manifest.skills)),
+            source=f"object agent {manifest.name!r}",
         )
     child_model = _model_for_manifest(manifest, model)
+    skill_dirs = [mount.path for mount in skill_mounts(manifest.skills)]
+    memory_dir = object_agent_memory_dir(manifest.name) if manifest.memory else None
+    # Listed skills are read mounts of their own folders (a declared mount of the
+    # same path keeps its access); the agent's memory folder is always writable.
+    declared = {mount.path for mount in manifest.mounts}
+    extra = [m for m in skill_mounts(manifest.skills) if m.path not in declared]
+    if memory_dir is not None:
+        extra = [m for m in extra if m.path != memory_dir]
+        extra.append(ObjectAgentMount(path=memory_dir, access="read-write"))
+    if extra:
+        manifest = replace(
+            manifest,
+            mounts=tuple(m for m in manifest.mounts if m.path != memory_dir) + tuple(extra),
+        )
     routes = _scoped_routes(manifest, backend, state_manager=state_manager)
     if manifest.shell is None:
         self_backend = CompositeBackend(default=StateBackend(), routes=routes)
@@ -343,12 +424,17 @@ def build_object_agent(
         SummarizationMiddleware(model=child_model),
         AuditLoggingMiddleware(log_sink=log_sink),
     ]
-    if manifest.skills and manifest.mounts:
-        if not all(_path_is_mounted(skill, manifest.mounts) for skill in manifest.skills):
-            raise ValueError(
-                f"object agent {manifest.name!r}: skills must be covered by declared mounts"
+    if skill_dirs:
+        middleware.append(
+            SkillsMiddleware(
+                backend=_DeclaredSkillsBackend(self_backend, skill_dirs),
+                sources=sorted({f"{PurePosixPath(d).parent}/" for d in skill_dirs}),
             )
-        middleware.append(SkillsMiddleware(backend=self_backend, sources=list(manifest.skills)))
+        )
+    if memory_dir is not None:
+        middleware.append(
+            MemoryMiddleware(backend=self_backend, sources=[f"{memory_dir}{AGENT_MEMORY_FILE}"])
+        )
     if manifest.interrupt_on:
         middleware.append(
             HumanInTheLoopMiddleware(

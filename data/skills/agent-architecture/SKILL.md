@@ -49,6 +49,7 @@ views backed by those documents:
 - `/routines/<id>.json` — routine graph definitions.
 - `/policies/<id>.json` — validated routine execution policies.
 - `/agents/` (read-only) and `/agents/user/<name>/SYSTEM.md` (writable) — object-agent manifests.
+- `/memories/agents/<name>/AGENTS.md` — private memory for object agents with `memory: true`; excluded from Progenitor's own memory.
 
 Use the native `read_file`, `write_file`, and `edit_file` tools on those virtual
 paths. The state backend validates the resulting document and persists it

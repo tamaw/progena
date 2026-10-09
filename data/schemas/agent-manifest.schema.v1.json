@@ -35,7 +35,7 @@
     "skills": {
       "type": "array",
       "items": { "type": "string" },
-      "description": "Skill source paths wired into SkillsMiddleware (e.g. /skills/<name>/)."
+      "description": "Individual skills, each a /skills/<name> folder containing SKILL.md. Each is loaded into the agent's prompt and mounted read-only; do not repeat it under mounts. To expose all skills as files, mount /skills/ instead."
     },
     "mounts": {
       "type": "array",
@@ -67,6 +67,10 @@
     "interrupt_on": {
       "type": "object",
       "description": "Tool names requiring human approval before executing (HumanInTheLoopMiddleware)."
+    },
+    "memory": {
+      "type": "boolean",
+      "description": "Give the agent private, writable memory at /memories/agents/<name>/AGENTS.md, loaded into its prompt."
     }
   }
 }
