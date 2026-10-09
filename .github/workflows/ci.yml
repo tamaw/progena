@@ -230,6 +230,11 @@ jobs:
           docker image inspect ghcr.io/tamaw/progenitor-backend:${PROGENITOR_IMAGE_TAG} >/dev/null
           docker image inspect ghcr.io/tamaw/progenitor-frontend:${PROGENITOR_IMAGE_TAG} >/dev/null
           test -d "$PROGENITOR_HOST_SCHEMAS_DIR"
+          # The runtime runs as UID 10001; log files left by the old root container
+          # are not appendable, so hand its log folder over before starting it.
+          docker run --rm --user 0 --entrypoint sh -v "$PROGENITOR_HOST_LOGS_DIR:/logs" \
+            ghcr.io/tamaw/progenitor:${PROGENITOR_IMAGE_TAG} \
+            -c 'mkdir -p /logs/progenitor && chown -R 10001:10001 /logs/progenitor'
           docker compose -f docker/docker-compose.progenitor.yml up -d --no-build --pull never
           docker compose -f docker/docker-compose.progenitor.yml ps
 
