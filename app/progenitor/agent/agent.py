@@ -116,7 +116,12 @@ async def _resolve_runtime_memory_paths(
         return explicit_memory_paths or None
 
     rows = await state_manager.list_content_documents("memory")
-    discovered = sorted(f"/memories/{relative_path}" for relative_path, _content in rows)
+    # /memories/agents/<name>/ is private to each object agent (see object_agents.py).
+    discovered = sorted(
+        f"/memories/{relative_path}"
+        for relative_path, _content in rows
+        if not relative_path.startswith("agents/")
+    )
 
     memory_paths: list[str] = [DEFAULT_RUNTIME_MEMORY_PATH]
     for memory_path in discovered:

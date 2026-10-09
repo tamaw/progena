@@ -59,6 +59,8 @@ class ObjectAgentManifest:
     mounts: tuple[ObjectAgentMount, ...]
     interrupt_on: dict[str, bool | dict[str, Any]]
     shell: ObjectAgentShellConfig | None = None
+    # Opt-in private memory at /memories/agents/<slug>/AGENTS.md.
+    memory: bool = False
 
 
 @dataclass(frozen=True)
@@ -181,6 +183,14 @@ def _validate_permissions_within_mounts(
                 raise ValueError(f"{source}: permissions path {path!r} is outside declared mounts")
 
 
+def skill_mounts(skills: Iterable[str]) -> tuple[ObjectAgentMount, ...]:
+    """Each listed skill is an implicit read-only mount of exactly its own folder."""
+    return tuple(
+        ObjectAgentMount(path=f"{PurePosixPath(skill)}/", access="read")
+        for skill in dict.fromkeys(skills)
+    )
+
+
 def _parse_shell(
     value: Any,
     *,
@@ -257,6 +267,14 @@ def parse_front_matter(content: str, *, source: str) -> dict[str, Any]:
     return dict(raw)
 
 
+def _parse_memory(value: Any, *, source: str) -> bool:
+    if value is None:
+        return False
+    if not isinstance(value, bool):
+        raise ValueError(f"{source}: 'memory' must be a boolean")
+    return value
+
+
 def parse_object_agent_manifest(
     content: str, *, source: str, source_kind: str | None = None
 ) -> ObjectAgentManifest:
@@ -278,14 +296,22 @@ def parse_object_agent_manifest(
     skills = _string_list(raw.get("skills"), field="skills", source=source)
     if any(not skill.startswith("/skills/") or ".." in Path(skill).parts for skill in skills):
         raise ValueError(f"{source}: skills must be absolute paths below /skills/")
+    if any(PurePosixPath(skill) == PurePosixPath("/skills") for skill in skills):
+        raise ValueError(
+            f"{source}: skills entries name one skill folder (/skills/<name>); "
+            "use mounts for access to all skills"
+        )
 
     mounts = _parse_mounts(raw.get("mounts"), source=source)
     permissions = _parse_permissions(raw.get("permissions"), source=source)
     # Manifests written before scoped mounts existed remain valid.  They have
     # no filesystem surface now; once a manifest declares mounts every
-    # operation-level permission must be contained by one of them.
+    # operation-level permission must be contained by one of them (each
+    # listed skill counts as a read mount of its folder).
     if mounts:
-        _validate_permissions_within_mounts(permissions, mounts, source=source)
+        _validate_permissions_within_mounts(
+            permissions, (*mounts, *skill_mounts(skills)), source=source
+        )
 
     return ObjectAgentManifest(
         name=name,
@@ -305,6 +331,7 @@ def parse_object_agent_manifest(
             source=source,
             source_kind=source_kind,
         ),
+        memory=_parse_memory(raw.get("memory"), source=source),
     )
 
 

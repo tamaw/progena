@@ -6,9 +6,11 @@ import pytest
 from deepagents.backends import CompositeBackend, FilesystemBackend
 from deepagents.backends.protocol import ReadResult
 from deepagents.middleware.filesystem import FilesystemMiddleware
-from deepagents.middleware.skills import SkillsMiddleware
+from deepagents.middleware.memory import MemoryMiddleware
+from deepagents.middleware.skills import SkillsMiddleware, _alist_skills
 from langchain.agents.middleware import HumanInTheLoopMiddleware
 
+from app.progenitor.agent.agent import _resolve_runtime_memory_paths
 from app.progenitor.agent.backends import ReadOnlyBackend
 from app.progenitor.agent.object_agent_manifest import (
     OBJECT_AGENT_SYSTEM_FILE,
@@ -18,10 +20,12 @@ from app.progenitor.agent.object_agent_manifest import (
     parse_object_agent_manifest,
 )
 from app.progenitor.agent.object_agents import (
+    ScopedMountBackend,
     SelfManifestBackend,
     build_object_agent,
     create_object_agent_proxy,
 )
+from app.progenitor.agent.state_backend import ContentDocumentDirectoryBackend
 
 VALID_SYSTEM = """---
 name: reviewer
@@ -163,25 +167,86 @@ async def test_plugin_installed_after_startup_reads_skills_and_companions(
     ).file_data["content"] == "Updated examples."
 
 
-def test_plugin_skill_outside_declared_mount_is_rejected(monkeypatch):
+def test_listed_plugin_skill_is_mounted_without_declaring_it(monkeypatch):
     manifest = parse_object_agent_manifest(
         PLUGIN_SYSTEM.replace(
-            "skills: [/skills/acme__new/lint/]", "skills: [/skills/other__plugin/lint/]"
+            "skills: [/skills/acme__new/lint/]",
+            "skills: [/skills/acme__new/lint/, /skills/other__plugin/lint]",
         ),
         source="test",
+    )
+    calls = []
+    monkeypatch.setattr(
+        "app.progenitor.agent.object_agents.create_agent", lambda **kw: calls.append(kw)
     )
     monkeypatch.setattr(
         "app.progenitor.agent.object_agents.SummarizationMiddleware", lambda **_kw: object()
     )
-    with pytest.raises(ValueError, match="skills must be covered by declared mounts"):
-        build_object_agent(
-            manifest,
-            model=object(),
-            tools=[],
-            backend=object(),
-            checkpointer=None,
-            state_manager=_StateManager(),
+    build_object_agent(
+        manifest,
+        model=object(),
+        tools=[],
+        backend=object(),
+        checkpointer=None,
+        state_manager=_StateManager(),
+    )
+    filesystem = next(m for m in calls[0]["middleware"] if isinstance(m, FilesystemMiddleware))
+    # Exactly the listed skill folders; never their parent packs.
+    assert set(filesystem.backend.routes) == {
+        "/skills/acme__new/lint/",
+        "/skills/other__plugin/lint/",
+    }
+
+
+def test_manifest_rejects_all_skills_wildcard():
+    with pytest.raises(ValueError, match="use mounts for access to all skills"):
+        parse_object_agent_manifest(
+            VALID_SYSTEM.replace("skills: [/skills/review/]", "skills: [/skills/]"),
+            source="test",
         )
+
+
+async def test_only_listed_skills_load_into_the_prompt(monkeypatch, tmp_path: Path):
+    monkeypatch.setattr(
+        "app.progenitor.agent.object_agents.StateBackend",
+        lambda: SimpleNamespace(aread=AsyncMock(return_value=ReadResult(error="File not found"))),
+    )
+    for name in ("managing-repos", "sibling"):
+        (tmp_path / name).mkdir()
+        (tmp_path / name / "SKILL.md").write_text(
+            f"---\nname: {name}\ndescription: {name} skill.\n---\nbody\n"
+        )
+    parent = CompositeBackend(
+        default=object(),
+        routes={
+            "/skills/": ReadOnlyBackend(FilesystemBackend(root_dir=tmp_path, virtual_mode=True))
+        },
+    )
+    manifest = parse_object_agent_manifest(
+        VALID_SYSTEM.replace("skills: [/skills/review/]", "skills: [/skills/managing-repos]"),
+        source="test",
+    )
+    calls = []
+    monkeypatch.setattr(
+        "app.progenitor.agent.object_agents.create_agent", lambda **kw: calls.append(kw)
+    )
+    monkeypatch.setattr(
+        "app.progenitor.agent.object_agents.SummarizationMiddleware", lambda **_kw: object()
+    )
+    build_object_agent(
+        manifest,
+        model=object(),
+        tools=[SimpleNamespace(name="current_time")],
+        backend=parent,
+        checkpointer=None,
+    )
+
+    skills = next(m for m in calls[0]["middleware"] if isinstance(m, SkillsMiddleware))
+    update = await skills.abefore_agent({}, None, {})
+    assert [skill["name"] for skill in update["skills_metadata"]] == ["managing-repos"]
+    filesystem = next(m for m in calls[0]["middleware"] if isinstance(m, FilesystemMiddleware))
+    assert not (await filesystem.backend.aread("/skills/managing-repos/SKILL.md")).error
+    assert (await filesystem.backend.aread("/skills/sibling/SKILL.md")).error
 
 
 def test_manifest_filters_unknown_keys_and_parses_supported_contract():
@@ -262,7 +327,9 @@ async def test_lazy_proxy_reloads_and_builds_every_invocation(monkeypatch, tmp_p
         state_manager=sm,
         model=parent_model,
         tools=tools,
-        backend=CompositeBackend(default=object(), routes={"/repos/": object()}),
+        backend=CompositeBackend(
+            default=object(), routes={"/repos/": object(), "/skills/": object()}
+        ),
         checkpointer=checkpointer,
     )
     assert builds == []
@@ -365,6 +432,115 @@ def test_builder_rejects_unknown_tools_and_mounts(change, match):
     kwargs.update(change)
     with pytest.raises(ValueError, match=match):
         build_object_agent(manifest, **kwargs)
+
+
+class _MemoryStore:
+    def __init__(self):
+        self.docs: dict[str, str] = {}
+
+    async def get_content_document(self, kind, relative_path):
+        assert kind == "memory"
+        return self.docs.get(relative_path)
+
+    async def save_content_document(self, kind, relative_path, content):
+        assert kind == "memory"
+        self.docs[relative_path] = content
+
+
+@pytest.mark.parametrize(
+    "value, expected", [("", False), ("memory: true\n", True), ("memory: false\n", False)]
+)
+def test_manifest_parses_memory_flag(value, expected):
+    content = VALID_SYSTEM.replace("kind: object\n", f"kind: object\n{value}")
+    assert parse_object_agent_manifest(content, source="test").memory is expected
+
+
+def test_manifest_rejects_non_boolean_memory():
+    with pytest.raises(ValueError, match="'memory' must be a boolean"):
+        parse_object_agent_manifest(
+            VALID_SYSTEM.replace("kind: object\n", "kind: object\nmemory: yes please\n"),
+            source="test",
+        )
+
+
+async def test_memory_agent_gets_private_writable_memory_loaded_into_prompt(monkeypatch):
+    # A read-only /memories/ mount must not stop the agent writing its own folder.
+    content = (
+        VALID_SYSTEM.replace(
+            "name: reviewer",
+            "name: Code Reviewer\nmemory: true\nmounts:\n  - path: /memories/\n    access: read",
+        )
+        .replace("skills: [/skills/review/]", "skills: []")
+        .replace("paths: [/repos/]", "paths: [/memories/]")
+    )
+    manifest = parse_object_agent_manifest(content, source="test")
+    store = _MemoryStore()
+    store.docs["AGENTS.md"] = "shared"
+    parent = CompositeBackend(
+        default=object(), routes={"/memories/": ContentDocumentDirectoryBackend(store, "memory")}
+    )
+    calls = []
+    monkeypatch.setattr(
+        "app.progenitor.agent.object_agents.create_agent", lambda **kw: calls.append(kw)
+    )
+    monkeypatch.setattr(
+        "app.progenitor.agent.object_agents.SummarizationMiddleware", lambda **_kwargs: object()
+    )
+
+    build_object_agent(
+        manifest,
+        model=object(),
+        tools=[SimpleNamespace(name="current_time")],
+        backend=parent,
+        checkpointer=None,
+    )
+
+    middleware = calls[0]["middleware"]
+    memory = next(m for m in middleware if isinstance(m, MemoryMiddleware))
+    assert memory.sources == ["/memories/agents/code-reviewer/AGENTS.md"]
+    backend = next(m for m in middleware if isinstance(m, FilesystemMiddleware)).backend
+    await backend.awrite("/memories/agents/code-reviewer/AGENTS.md", "remember this")
+    assert store.docs["agents/code-reviewer/AGENTS.md"] == "remember this"
+    shared = await backend.awrite("/memories/AGENTS.md", "overwrite shared")
+    assert shared.error
+    assert store.docs["AGENTS.md"] == "shared"
+    # MemoryMiddleware batch-loads its sources; it must get the private file.
+    [loaded] = await backend.adownload_files(memory.sources)
+    assert loaded.content == b"remember this"
+
+
+async def test_scoped_mount_lists_paths_the_child_can_read(tmp_path: Path):
+    (tmp_path / "pack" / "lint").mkdir(parents=True)
+    (tmp_path / "pack" / "lint" / "SKILL.md").write_text(
+        "---\nname: lint\ndescription: Lint things.\n---\nbody\n"
+    )
+    # Same-named folder outside the mount: must never be what gets loaded.
+    (tmp_path / "lint").mkdir()
+    (tmp_path / "lint" / "SKILL.md").write_text("---\nname: outside\ndescription: no\n---\n")
+    scoped = ScopedMountBackend(FilesystemBackend(root_dir=tmp_path, virtual_mode=True), "/pack")
+    composite = CompositeBackend(default=object(), routes={"/skills/pack/": scoped})
+
+    listed = (await composite.als("/skills/pack/")).entries
+    assert [entry["path"] for entry in listed] == ["/skills/pack/lint/"]
+    [match] = (await composite.aglob("**/SKILL.md", "/skills/pack/")).matches
+    assert not (await composite.aread(match["path"])).error
+    assert [skill["name"] for skill in await _alist_skills(composite, "/skills/pack/")] == ["lint"]
+
+
+async def test_main_agent_memory_excludes_object_agent_memories():
+    store = SimpleNamespace(
+        list_content_documents=AsyncMock(
+            return_value=[
+                ("AGENTS.md", ""),
+                ("notes.md", ""),
+                ("agents/repo-manager/AGENTS.md", ""),
+            ]
+        )
+    )
+    assert await _resolve_runtime_memory_paths(store, None) == [
+        "/memories/AGENTS.md",
+        "/memories/notes.md",
+    ]
 
 
 @pytest.mark.parametrize(
@@ -482,7 +658,7 @@ async def test_lazy_proxy_resolves_only_declared_parent_tools(monkeypatch, tmp_p
         state_manager=sm,
         model="parent-model",
         tools=[_Tool("current_time"), _Tool("unrequested")],
-        backend=object(),
+        backend=CompositeBackend(default=object(), routes={"/skills/": object()}),
         checkpointer=object(),
     )
     await proxy["runnable"].ainvoke({"messages": []})
@@ -606,14 +782,13 @@ async def test_lazy_proxy_uses_only_declared_mounts_and_prompt(monkeypatch, tmp_
         state_manager=sm,
         model="parent-model",
         tools=[_NamedTool("current_time")],
-        backend=object(),
+        backend=CompositeBackend(default=object(), routes={"/skills/": object()}),
         checkpointer=object(),
     )
     await proxy["runnable"].ainvoke({"messages": []})
 
     create_kwargs = calls[0]
     assert create_kwargs["system_prompt"] == "You are a concise reviewer."
-    assert not any(
-        middleware.__class__.__name__ == "FilesystemMiddleware"
-        for middleware in create_kwargs["middleware"]
-    )
+    # No declared mounts: the only file surface is the listed skill's own folder.
+    filesystem = next(m for m in create_kwargs["middleware"] if isinstance(m, FilesystemMiddleware))
+    assert set(filesystem.backend.routes) == {"/skills/review/"}

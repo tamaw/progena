@@ -66,14 +66,25 @@ For a larger rewrite, generate schema-conformant front matter with
 
 ## Tools, skills, and filesystem access
 
-`tools` names the tools exposed to this agent. `skills` contains existing
-absolute `/skills/<skill-name>` paths. Agents have no filesystem mounts unless
-explicitly declared. Declare required paths in `mounts` with `access: read`
-or `read-write`; extra `permissions` must stay within those mounts.
-Adding a skill does not grant access to the documents that skill manages.
-For example, an agent using `managing-routines` needs a read mount for that
-skill and a read-write mount for `/routines/`. Use the same pattern for
-`managing-agents` and `/agents/user/` when agent creation is part of its job.
+`tools` names the tools exposed to this agent. `skills` lists individual
+skills, each an existing `/skills/<skill-name>` folder containing a `SKILL.md`.
+Each listed skill is loaded into the agent's prompt and mounted read-only, so
+do not repeat it under `mounts`. `skills` never takes a whole folder of skills;
+to give an agent read access to every skill, mount `/skills/` instead (that
+grants file access only and loads none of them into its prompt).
+
+Agents have no other filesystem access unless declared. Declare required paths
+in `mounts` with `access: read` or `read-write`; extra `permissions` must stay
+within those mounts or listed skills. Adding a skill does not grant access to
+the documents that skill manages. For example, an agent using
+`managing-routines` also needs a read-write mount for `/routines/`. Use the same
+pattern for `managing-agents` and `/agents/user/` when agent creation is part of
+its job.
+
+Set `memory: true` to give an agent private memory. It can then write
+`/memories/agents/<name>/AGENTS.md`, which is loaded into its prompt on every
+run. No mount needs declaring, and these notes are not loaded into Progenitor's
+own memory.
 
 Confirm the saved name and the change briefly. Creating an agent does not
 execute it or modify any routine that references it.
