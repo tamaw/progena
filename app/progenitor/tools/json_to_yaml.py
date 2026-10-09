@@ -58,7 +58,7 @@ class JsonToYamlTool(BaseSystemTool):
             "- data: the JSON object to render\n"
             "- body_field: (optional) a key in 'data' whose value becomes the "
             "markdown body below a closing '---', matching the frontmatter+body "
-            "shape of files like /config/tasks/<id>.md (body_field='description') "
+            "shape of files like /tasks/<id>.md (body_field='description') "
             "or /inbox/<id>.md (body_field='body'). Omit for a plain YAML dump.\n\n"
             "Returns 'content': the rendered text, ready to pass straight to "
             "write_file/edit_file."

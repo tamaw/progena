@@ -17,7 +17,10 @@ COPY scripts/ ./scripts/
 # unlike prompts/skills (Postgres-backed, seeded once), schemas are read
 # from disk on every load_schema() call, so this directory must exist.
 COPY data/schemas/ ./data/schemas/
-RUN pip install --no-cache-dir .
+# Bundled object agents are read-only files, shared with the runtime image.
+COPY data/agents/objects/ ./data/agents/objects/
+RUN pip install --no-cache-dir . \
+    && chmod -R a-w /app/data/agents/objects
 
 ENV PYTHONPATH=/app
 ENV PYTHONUNBUFFERED=1

@@ -456,6 +456,33 @@ def _trigger_column_filter_matches(trigger: WorkflowTrigger, event: Mapping[str,
     )
 
 
+def _document_trigger_filter_matches(trigger: WorkflowTrigger, event: Mapping[str, Any]) -> bool:
+    """Check a trigger's optional key_prefix/key/action filter against a document.changed payload.
+
+    Each field is a wildcard when unset on the trigger, so a trigger with no
+    filters set matches every document.changed event.
+    """
+
+    if not trigger.key_prefix and not trigger.key and not trigger.action:
+        return True
+    payload = event.get("payload")
+    if not isinstance(payload, dict):
+        return False
+    return (
+        (not trigger.key_prefix or trigger.key_prefix == payload.get("key_prefix"))
+        and (not trigger.key or trigger.key == payload.get("key"))
+        and (not trigger.action or trigger.action == payload.get("action"))
+    )
+
+
+def _trigger_matches(event_type: str, trigger: WorkflowTrigger, event: Mapping[str, Any]) -> bool:
+    """Pick the right filter matcher for the trigger's event type."""
+
+    if event_type == "document.changed":
+        return _document_trigger_filter_matches(trigger, event)
+    return _trigger_column_filter_matches(trigger, event)
+
+
 def _build_queued_run(
     workflow_id: str,
     trigger: Mapping[str, Any],
@@ -519,7 +546,7 @@ class WorkflowExecutor:
             definition
             for definition in list_workflow_definitions(store)
             if definition.trigger.event_type == event_type
-            and _trigger_column_filter_matches(definition.trigger, trigger)
+            and _trigger_matches(event_type, definition.trigger, trigger)
         ]
         started: list[WorkflowRun] = []
         for definition in definitions:

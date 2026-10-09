@@ -49,6 +49,10 @@ services:
         GIT_COMMIT: ${GIT_COMMIT:-}
     container_name: progenitor
     restart: unless-stopped
+    user: "10001:10001"
+    read_only: true
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
     depends_on:
       postgres:
         condition: service_healthy
@@ -60,12 +64,23 @@ services:
       TZ: ${PROGENITOR_TIMEZONE:-UTC}
       # Bind the runtime HTTP server on all interfaces so other containers (backend) can connect.
       PROGENITOR_HTTP_HOST: 0.0.0.0
+      GH_TOKEN: ${GH_TOKEN:-}
+      PROGENITOR_SHELL_HOME: /app/agent-home
+      PROGENITOR_SHELL_WORKSPACE_DIR: /app/shell-workspaces
+      PROGENITOR_SHELL_SHIM_BIN: /app/data/shims/bin
+      PROGENITOR_SHELL_TIMEOUT_SECONDS: ${PROGENITOR_SHELL_TIMEOUT_SECONDS:-120}
+      # State is transient in the hardened read-only runtime image.
+      PROGENITOR_STATE_DIR: /app/tmp/state
     volumes:
       - ${PROGENITOR_HOST_SCHEMAS_DIR:-../data/schemas}:/app/data/schemas:ro
       - ${PROGENITOR_HOST_LOGS_DIR:-../logs}:/app/logs
       - ${PROGENITOR_HOST_REPOS_DIR:-../repos}:/app/repos
+      # A fresh named volume inherits UID 10001 ownership from the image directory.
+      - progenitor-shell-workspaces:/app/shell-workspaces
+    # tmpfs mounts are root-owned unless uid/gid are set; the runtime runs as 10001.
     tmpfs:
-      - /app/tmp:rw,noexec,nosuid,size=1g
+      - /app/tmp:rw,noexec,nosuid,size=1g,uid=10001,gid=10001,mode=0755
+      - /app/agent-home:rw,nosuid,size=64m,uid=10001,gid=10001,mode=0700
     stdin_open: true
     tty: true
     networks:
@@ -82,6 +97,7 @@ services:
         limits:
           memory: 2G
           cpus: '2.0'
+          pids: 512
         reservations:
           memory: 512M
 
@@ -174,6 +190,7 @@ networks:
     external: true
 
 volumes:
+  progenitor-shell-workspaces:
   progenitor-postgres-data:
     name: progenitor-postgres-data
     external: true

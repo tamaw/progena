@@ -36,6 +36,13 @@ from fastapi.sse import EventSourceResponse, ServerSentEvent
 from pydantic import BaseModel, Field
 
 from app.progenitor.config import default_plugins_config_payload
+from app.progenitor.content_documents import (
+    AGENT_DOCUMENT_KEY_PREFIX,
+    AGENT_SELF_EDIT_TOUCH_KEY_PREFIX,
+    SKILL_DOCUMENT_KEY_PREFIX,
+)
+from app.progenitor.document_kinds import DOCUMENT_KINDS, KANBAN_CARD_KEY_PREFIX, key_prefix_for
+from app.progenitor.routines.store import ROUTINE_GRAPH_KEY_PREFIX
 from app.progenitor.schedule import Scheduler, default_timezone_name
 from app.progenitor.schedule.service import generate_schedule_id
 from app.progenitor.utils import utcnow
@@ -55,7 +62,11 @@ from app.progenitor.workflows import (
     workflow_id_from_path,
 )
 
-from .agent_profile_routes import broadcast_agent_profiles_snapshot, create_agent_profile_router
+from .agent_catalog_routes import (
+    AgentGraphModel,
+    broadcast_agent_profiles_snapshot,
+    create_agent_profile_router,
+)
 from .agent_store import get_agent_store
 from .alerts import (
     AlertInfo,
@@ -81,10 +92,12 @@ from .inbox_routes import (
 )
 from .knowledge_service import snapshot_bases as snapshot_knowledge_bases
 from .marketplace_service import load_marketplaces
+from .policy_routes import create_policy_router
 from .preferences_service import load_preferences
 from .prompt_service import PromptService
 from .repo_service import merged_repo_detail, merged_repo_rows, workspace_signal
 from .request_utils import request_correlation_id as _request_correlation_id
+from .routine_events import routine_events
 from .state_reader import StateReader, get_state_reader
 from .threads import complete_thread, fail_thread, upsert_thread
 from .workflow_service import (
@@ -104,6 +117,31 @@ from .workflow_service import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/ui", tags=["ui"])
+
+
+@router.get("/model-profiles")
+async def get_model_profiles() -> dict[str, Any]:
+    """Return public selector metadata, never credentials or arbitrary config."""
+    from app.progenitor.state.model_profiles import (
+        default_model_profiles_payload,
+        validate_model_profiles_payload,
+    )
+
+    default = default_model_profiles_payload()
+    document = await asyncio.to_thread(
+        get_default_document_store().get_document, PROGENITOR_STATE_PREFIX, "profile", default
+    )
+    try:
+        profiles = validate_model_profiles_payload(document.payload if document else default)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {
+        "profiles": [
+            {"name": name, "deployment": profile["deployment"]}
+            for name, profile in profiles.items()
+        ]
+    }
+
 
 KANBAN_EVENT_TYPE_LABELS = {
     "kanban.card.created": "Card created",
@@ -978,7 +1016,7 @@ def _kanban_board_store_key() -> str:
     return "kanban_board"
 
 
-_KANBAN_CARD_KEY_PREFIX = "kanban_card:"
+_KANBAN_CARD_KEY_PREFIX = KANBAN_CARD_KEY_PREFIX
 
 
 def _kanban_card_store_key(card_id: str) -> str:
@@ -1007,7 +1045,7 @@ _KANBAN_CARD_CONTENT_FIELDS = (
 
 # Last-dispatched state per card id, used to detect kanban.card.* changes that
 # didn't go through the REST routes below (an agent writing
-# /config/tasks/<id>.md directly bypasses them entirely). Guarded by
+# /tasks/<id>.md directly bypasses them entirely). Guarded by
 # _kanban_card_trigger_lock wherever it's read-then-written, so a REST-driven
 # change and the store-change reconciler picking up its own resulting NOTIFY
 # can't both decide to dispatch the same change.
@@ -1028,7 +1066,7 @@ def _kanban_card_change_triggers(previous_card: dict, refreshed_card: dict, now:
 
     Shared by the REST kanban routes and the generic store-change reconciler
     (_reconcile_kanban_card_triggers) so a card edit fires the same triggers
-    whether it came from the UI or an agent writing /config/tasks/<id>.md
+    whether it came from the UI or an agent writing /tasks/<id>.md
     directly.
     """
     triggers: list[dict] = []
@@ -1177,7 +1215,7 @@ async def _reconcile_kanban_card_triggers(changed_key: str | None) -> None:
     The REST routes (create/patch/delete) dispatch triggers inline and then
     record the resulting state via _remember_kanban_card_state. But the
     runtime agent's actual day-to-day mechanism for touching cards is
-    writing straight to /config/tasks/<id>.md, which persists via
+    writing straight to /tasks/<id>.md, which persists via
     StateManager straight to Postgres -- it never goes through these routes.
     This reconciler runs off the same store-change watcher that already
     pushes kanban.snapshot live (see _queue_state_watch_status), diffing the
@@ -2139,6 +2177,27 @@ async def get_workflows(
         request_id=request_id,
     )
     return acknowledgement_response(request_id, ["workflows.snapshot"])
+
+
+@router.get("/document-kinds", status_code=202, response_model=UiRequestAcknowledgement)
+async def get_document_kinds(
+    request: Request,
+    x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+):
+    """Return the canonical document-kind registry (label + key_prefix pairs).
+
+    Backs the workflow event trigger's document-kind picker (see
+    ``app.progenitor.document_kinds``) -- the same list every ``document.changed``
+    trigger's ``key_prefix`` filter is validated against.
+    """
+    request_id = _request_correlation_id(request, x_request_id)
+    kinds = [{"label": kind.label, "key_prefix": kind.key_prefix} for kind in DOCUMENT_KINDS]
+    broadcast_ui_event(
+        "document_kinds.snapshot",
+        {"items": kinds},
+        request_id=request_id,
+    )
+    return acknowledgement_response(request_id, ["document_kinds.snapshot"])
 
 
 @router.get("/workflows/content", status_code=202, response_model=UiRequestAcknowledgement)
@@ -3931,6 +3990,7 @@ _SSE_HEARTBEAT_INTERVAL: float = _parse_heartbeat_interval(
 # typically because it is blocked writing to a dead/half-open socket; leaving
 # it open makes the client's EventSource permanently deaf with no reconnect).
 _ui_stream_subscribers: dict[asyncio.Queue, asyncio.Task | None] = {}
+_ui_stream_clients: dict[asyncio.Queue, str] = {}
 _ui_event_seq = 0
 _ui_event_replay: list[UiEventEnvelope] = []
 _UI_EVENT_REPLAY_LIMIT = 200
@@ -4178,7 +4238,13 @@ def _queue_state_watch_status(snapshot, changed_key: str | None = None) -> None:
             broadcast_marketplaces_snapshot()
         if changed_key in (None, "plugins"):
             broadcast_plugins_snapshot()
-        if changed_key in (None, "registry"):
+        if (
+            changed_key is None
+            or changed_key == "registry"
+            or changed_key.startswith(AGENT_DOCUMENT_KEY_PREFIX)
+            or changed_key.startswith(SKILL_DOCUMENT_KEY_PREFIX)
+            or changed_key.startswith(AGENT_SELF_EDIT_TOUCH_KEY_PREFIX)
+        ):
             profile_task = asyncio.create_task(_broadcast_agent_profiles_safe())
             _active_agent_profile_broadcast_tasks.add(profile_task)
             profile_task.add_done_callback(_active_agent_profile_broadcast_tasks.discard)
@@ -4228,6 +4294,44 @@ def _queue_workflow_invoke_reconciliation(_snapshot, changed_key: str | None = N
     task.add_done_callback(_active_workflow_invoke_tasks.discard)
 
 
+_document_change_watch_callback = None
+_active_document_change_tasks: set[asyncio.Task] = set()
+
+
+def _queue_document_change_dispatch(key: str | None, action: str | None) -> None:
+    """Raw store-change watcher: dispatch a document.changed workflow trigger
+    for every tracked-document write, independent of whether any UI client
+    is connected or whether the coarse StateSnapshot diff moved.
+
+    Registered via ``add_raw_watcher`` (not ``add_watcher``/
+    ``_queue_state_watch_status``) so it also fires for document kinds that
+    carry no signal in ``StateSnapshot``'s tracked fields, mirroring
+    ``_queue_kanban_trigger_reconciliation``'s "must keep firing whether or
+    not anyone has the frontend open" requirement.
+    """
+    if key is None:
+        return
+    key_prefix = key_prefix_for(key)
+    if key_prefix is None:
+        return
+    task = asyncio.create_task(_dispatch_document_change_trigger(key, key_prefix, action))
+    _active_document_change_tasks.add(task)
+    task.add_done_callback(_active_document_change_tasks.discard)
+
+
+async def _dispatch_document_change_trigger(key: str, key_prefix: str, action: str | None) -> None:
+    trigger_payload = {
+        "event_type": "document.changed",
+        "payload": {"key_prefix": key_prefix, "key": key, "action": action},
+    }
+    try:
+        await get_workflow_executor().dispatch_event("document.changed", trigger_payload)
+    except Exception:
+        logger.debug(
+            "Failed to dispatch document.changed workflow trigger for %r", key, exc_info=True
+        )
+
+
 _kanban_trigger_watch_callback = None
 _active_kanban_reconcile_tasks: set[asyncio.Task] = set()
 
@@ -4235,7 +4339,7 @@ _active_kanban_reconcile_tasks: set[asyncio.Task] = set()
 def _queue_kanban_trigger_reconciliation(_snapshot, changed_key: str | None = None) -> None:
     """Always-on watcher that reconciles kanban.card.* workflow triggers for
     changes made outside the REST kanban routes -- chiefly the runtime agent
-    writing /config/tasks/<id>.md directly.
+    writing /tasks/<id>.md directly.
 
     Registered separately from _queue_state_watch_status, which returns
     immediately when no UI client is connected (fine for UI-push
@@ -4247,8 +4351,129 @@ def _queue_kanban_trigger_reconciliation(_snapshot, changed_key: str | None = No
     task.add_done_callback(_active_kanban_reconcile_tasks.discard)
 
 
+_routine_agent_watch_callback = None
+_active_routine_agent_tasks: set[asyncio.Task] = set()
+
+
+def _queue_routine_agent_reconciliation(_snapshot, changed_key: str | None = None) -> None:
+    """Always-on watcher that reconciles the ``agent``/``agent_graph`` rows
+    for routine graph documents written outside the HTTP graph-update route --
+    chiefly the runtime agent's ``/routines/<id>.json`` filesystem tool
+    (``RoutineDirectoryBackend.awrite``). That route requires the agent row to
+    already exist (see ``update_agent_graph``), so a routine the runtime
+    creates from scratch would otherwise never appear on the Routines page and
+    never get a canonical event -- this closes that gap so a runtime-authored
+    write reaches the frontend the exact same way a UI-driven graph edit does
+    (``agent.graph.updated`` / ``agents.snapshot`` on ``/api/ui/stream`` ->
+    Redux, see ``app/frontend/src/store/uiData/agents.js``).
+
+    Registered separately from ``_queue_state_watch_status``, which returns
+    immediately with no UI client connected (fine for UI-push optimization,
+    wrong here: the row must exist by the time someone opens the page, not
+    only while they're already looking at it). ROUTINE_GRAPH_KEY_PREFIX is in
+    ``state_reader._emit_if_changed``'s bypass list so no write here is
+    silently dropped by the coarse snapshot diff.
+    """
+    if changed_key is None or changed_key.startswith("policy:"):
+        async def push_policies():
+            from .policy_routes import policy_catalog
+            items = await asyncio.to_thread(policy_catalog, get_default_document_store())
+            broadcast_ui_event("policies.snapshot", {"items": items})
+        policy_task = asyncio.create_task(push_policies())
+        _active_routine_agent_tasks.add(policy_task)
+        policy_task.add_done_callback(_active_routine_agent_tasks.discard)
+    task = asyncio.create_task(_reconcile_routine_agent(changed_key))
+    _active_routine_agent_tasks.add(task)
+    task.add_done_callback(_active_routine_agent_tasks.discard)
+
+
+async def _reconcile_routine_agent(changed_key: str | None) -> None:
+    store = get_agent_store()
+    if store is None:
+        return
+    if changed_key is None:
+        # Include rows whose documents disappeared while disconnected.
+        document_ids = await asyncio.to_thread(store.list_routine_document_ids)
+        catalog_ids = await asyncio.to_thread(store.list_routine_catalog_ids)
+        agent_ids = sorted(set(document_ids) | set(catalog_ids))
+    elif changed_key.startswith(ROUTINE_GRAPH_KEY_PREFIX):
+        agent_ids = [changed_key.removeprefix(ROUTINE_GRAPH_KEY_PREFIX)]
+    else:
+        return
+
+    roster_changed = False
+    for agent_id in agent_ids:
+        if not agent_id:
+            continue
+        try:
+            graph_document = await asyncio.to_thread(store.get_routine_document, agent_id)
+            if graph_document is None:
+                deleted = await asyncio.to_thread(store.delete_routine_catalog_entry, agent_id)
+                if deleted:
+                    roster_changed = True
+                    broadcast_ui_event("agent.deleted", {"agent_id": agent_id})
+                continue
+            created = await asyncio.to_thread(store.ensure_routine_agent, agent_id, graph_document)
+            agent = await asyncio.to_thread(store.get_agent, agent_id)
+        except Exception:
+            logger.debug("Failed to reconcile routine agent %r", agent_id, exc_info=True)
+            continue
+        if agent is None or not isinstance(agent.get("graph"), dict):
+            continue
+        roster_changed = roster_changed or created
+        # `agent["graph"]` goes through `_graph_payload`, which re-reads the
+        # routine document from the store a second time (independently of
+        # `graph_document` above). That second read has raced with the write
+        # this same pass just made -- landing before it was visible -- and
+        # published an empty `nodes`/`edges` graph. GraphCanvas seeds its
+        # nodes/edges once per mount and never re-syncs from later prop
+        # updates, so one bad broadcast during mount left the routine
+        # looking permanently empty until the user forced a remount by
+        # selecting a different agent and back. Source entry/nodes/edges
+        # from the document we already fetched and just confirmed fresh;
+        # keep status/summary from the SQL row, which only that row tracks.
+        graph_payload = dict(agent["graph"])
+        graph_payload["entry"] = graph_document.get("entry")
+        graph_payload["nodes"] = graph_document.get("nodes", [])
+        graph_payload["edges"] = graph_document.get("edges", [])
+        broadcast_ui_event(
+            "agent.graph.updated",
+            {
+                "agent_id": agent_id,
+                "graph": AgentGraphModel(**graph_payload).model_dump(by_alias=True),
+            },
+        )
+        # The `store` trigger that fired this reconcile pass also appended a
+        # row to `routine_graph_revisions` (or no-opped on identical content,
+        # e.g. restoring a previously captured graph). Push the
+        # refreshed list so an already-open Revisions panel picks up a new
+        # entry live instead of only on its next manual Refresh.
+        try:
+            revisions = await asyncio.to_thread(
+                get_default_document_store().list_routine_revisions, agent_id
+            )
+        except Exception:
+            logger.debug("Failed to list routine revisions for %r", agent_id, exc_info=True)
+        else:
+            broadcast_ui_event(
+                "agent.routine.revisions.loaded",
+                {
+                    "agent_id": agent_id,
+                    "revisions": [
+                        {"revision_id": revision.revision_id, "captured_at": revision.captured_at}
+                        for revision in revisions
+                    ],
+                },
+            )
+
+    if roster_changed:
+        await _broadcast_agent_profiles_safe()
+
+
 async def start_state_status_watcher(reconnect_delay: float = 2.0) -> None:
-    global _state_watch_callback, _kanban_trigger_watch_callback, _workflow_invoke_watch_callback
+    global _state_watch_callback, _kanban_trigger_watch_callback
+    global _workflow_invoke_watch_callback, _routine_agent_watch_callback
+    global _document_change_watch_callback
     state_reader = get_state_reader()
     if _state_watch_callback is None:
         _state_watch_callback = _queue_state_watch_status
@@ -4259,11 +4484,21 @@ async def start_state_status_watcher(reconnect_delay: float = 2.0) -> None:
     if _workflow_invoke_watch_callback is None:
         _workflow_invoke_watch_callback = _queue_workflow_invoke_reconciliation
         state_reader.add_watcher(_workflow_invoke_watch_callback)
+    if _routine_agent_watch_callback is None:
+        _routine_agent_watch_callback = _queue_routine_agent_reconciliation
+        state_reader.add_watcher(_routine_agent_watch_callback)
+    if _document_change_watch_callback is None:
+        _document_change_watch_callback = _queue_document_change_dispatch
+        state_reader.add_raw_watcher(_document_change_watch_callback)
+        state_reader.add_raw_watcher(routine_events.document_changed)
+    await routine_events.start()
     await state_reader.start_watching(reconnect_delay)
 
 
 async def stop_state_status_watcher() -> None:
-    global _state_watch_callback, _kanban_trigger_watch_callback, _workflow_invoke_watch_callback
+    global _state_watch_callback, _kanban_trigger_watch_callback
+    global _workflow_invoke_watch_callback, _routine_agent_watch_callback
+    global _document_change_watch_callback
     state_reader = get_state_reader()
     if _state_watch_callback is not None:
         state_reader.remove_watcher(_state_watch_callback)
@@ -4274,6 +4509,14 @@ async def stop_state_status_watcher() -> None:
     if _workflow_invoke_watch_callback is not None:
         state_reader.remove_watcher(_workflow_invoke_watch_callback)
         _workflow_invoke_watch_callback = None
+    if _routine_agent_watch_callback is not None:
+        state_reader.remove_watcher(_routine_agent_watch_callback)
+        _routine_agent_watch_callback = None
+    if _document_change_watch_callback is not None:
+        state_reader.remove_raw_watcher(_document_change_watch_callback)
+        _document_change_watch_callback = None
+        state_reader.remove_raw_watcher(routine_events.document_changed)
+    await routine_events.stop()
     await state_reader.stop_watching()
 
 
@@ -4388,11 +4631,15 @@ def _next_ui_envelope(
 
 async def _generate_ui_stream(
     last_event_id: str | None = None,
+    client_id: str | None = None,
 ) -> AsyncGenerator[ServerSentEvent, None]:
     """Generate the canonical typed UI event stream."""
     queue: asyncio.Queue = asyncio.Queue(maxsize=100)
     current_task = asyncio.current_task()
     _ui_stream_subscribers[queue] = current_task
+    client_id = client_id or uuid.uuid4().hex
+    _ui_stream_clients[queue] = client_id
+    routine_events.connections.add(client_id)
     if current_task:
         _active_ui_stream_tasks.add(current_task)
 
@@ -4419,6 +4666,7 @@ async def _generate_ui_stream(
             {"stream": "ui", "status": initial_status, "alerts": _alerts_payload()},
         )
         yield ServerSentEvent(event="ui.event", data=connected.model_dump(), id=connected.id)
+        await routine_events.lifecycle_snapshot(client_id)
 
         while True:
             if shutdown_event.is_set():
@@ -4441,12 +4689,20 @@ async def _generate_ui_stream(
                     )
                     break
                 envelope = event["envelope"]
+                if "interest" in event and event["interest"] is not routine_events.interests.get(
+                    client_id
+                ):
+                    continue
                 yield ServerSentEvent(event="ui.event", data=envelope.model_dump(), id=envelope.id)
             except TimeoutError:
                 envelope = _next_ui_envelope("connection.heartbeat", {"timestamp": time.time()})
                 yield ServerSentEvent(event="ui.event", data=envelope.model_dump(), id=envelope.id)
     finally:
         _ui_stream_subscribers.pop(queue, None)
+        _ui_stream_clients.pop(queue, None)
+        # A reconnect may already have replaced this socket.
+        if client_id not in _ui_stream_clients.values():
+            routine_events.disconnected(client_id)
         if current_task:
             _active_ui_stream_tasks.discard(current_task)
         if not _ui_stream_subscribers:
@@ -4457,12 +4713,13 @@ async def _generate_ui_stream(
 async def ui_stream(
     response: Response,
     last_event_id: str | None = Header(default=None, alias="Last-Event-ID"),
+    client_id: str | None = Query(default=None, max_length=64),
 ) -> AsyncGenerator[ServerSentEvent, None]:
     """Canonical typed SSE stream for all frontend UI updates."""
     response.headers["X-Accel-Buffering"] = "no"
     response.headers["Cache-Control"] = "no-cache"
     response.headers["Connection"] = "keep-alive"
-    async for event in _generate_ui_stream(last_event_id):
+    async for event in _generate_ui_stream(last_event_id, client_id):
         yield event
 
 
@@ -4478,6 +4735,7 @@ def broadcast_ui_event(
     scope: Literal["global", "session", "chat"] = "global",
     session_id: str | None = None,
     request_id: str | None = None,
+    client_id: str | None = None,
 ) -> UiEventEnvelope:
     """Broadcast one typed event envelope to canonical /api/ui/stream subscribers.
 
@@ -4487,12 +4745,19 @@ def broadcast_ui_event(
     if request_id is not None:
         payload = {**payload, "request_id": request_id}
     envelope = _next_ui_envelope(event_type, payload, scope=scope, session_id=session_id)
-    _ui_event_replay.append(envelope)
-    del _ui_event_replay[:-_UI_EVENT_REPLAY_LIMIT]
+    # Targeted detail is recovered by a subscription snapshot, never replayed
+    # to other connections or to a page that has stopped watching.
+    if client_id is None:
+        _ui_event_replay.append(envelope)
+        del _ui_event_replay[:-_UI_EVENT_REPLAY_LIMIT]
 
     event = {"type": "ui.event", "envelope": envelope}
+    if client_id and event_type in {"agent.routine.runs.loaded", "agent.routine.run_state.loaded"}:
+        event["interest"] = routine_events.interests.get(client_id)
     dead: list[asyncio.Queue] = []
     for queue in _ui_stream_subscribers:
+        if client_id and _ui_stream_clients.get(queue) != client_id:
+            continue
         try:
             queue.put_nowait(event)
         except asyncio.QueueFull:
@@ -4783,6 +5048,7 @@ router.include_router(
 router.include_router(
     create_agent_profile_router(
         get_agent_store=get_agent_store,
+        get_document_store=get_default_document_store,
         broadcast_ui_event=broadcast_ui_event,
     )
 )
@@ -4828,3 +5094,7 @@ def broadcast_status_change(status: str, details: dict | None = None):
 def broadcast_alerts_state(*, request_id: str | None = None) -> None:
     """Broadcast full alert payload updates to subscribers."""
     broadcast_ui_event("alerts.updated", _alerts_payload(), request_id=request_id)
+
+
+
+router.include_router(create_policy_router(get_default_document_store, broadcast_ui_event))

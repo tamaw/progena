@@ -128,8 +128,10 @@ The DeepAgent receives a virtual filesystem view backed by those documents:
 - `/config/repo_scan.json`: Read-only heartbeat-derived git state per declared repo (branch, dirty count, commits, contributor count); never agent-editable
 - `/config/preferences.json`: User profile and UI settings (display name, timezone, theme, nav/panel layout)
 - `/config/health.json`: Read-only heartbeat status
-- `/config/tasks/board.json` and `/config/tasks/<id>.md`: Kanban structure and cards
+- `/tasks/board.json` and `/tasks/<id>.md`: Kanban structure and cards
 - `/workflows/<id>.json`: Workflow definitions
+- `/routines/<id>.json`: Routine graph definitions
+- `/policies/<id>.json`: Validated routine execution policies
 
 Native `read`/`write`/`edit` operations on these paths validate and persist the
 corresponding Postgres document. Conversation messages are kept in the

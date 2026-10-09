@@ -1,0 +1,168 @@
+{
+  "$defs": {
+    "PolicyRetry": {
+      "additionalProperties": false,
+      "properties": {
+        "max_retries": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Max Retries",
+          "type": "integer"
+        },
+        "initial_interval": {
+          "default": 0.1,
+          "minimum": 0,
+          "title": "Initial Interval",
+          "type": "number"
+        },
+        "backoff_factor": {
+          "default": 2,
+          "minimum": 1,
+          "title": "Backoff Factor",
+          "type": "number"
+        },
+        "max_interval": {
+          "default": 5,
+          "minimum": 0,
+          "title": "Max Interval",
+          "type": "number"
+        },
+        "jitter": {
+          "default": true,
+          "title": "Jitter",
+          "type": "boolean"
+        },
+        "retry_on": {
+          "default": "transient",
+          "enum": [
+            "transient",
+            "model_response",
+            "all"
+          ],
+          "title": "Retry On",
+          "type": "string"
+        }
+      },
+      "title": "PolicyRetry",
+      "type": "object"
+    },
+    "PolicyValues": {
+      "additionalProperties": false,
+      "properties": {
+        "retry": {
+          "$ref": "#/$defs/PolicyRetry"
+        },
+        "attempt_timeout": {
+          "default": 120,
+          "minimum": 0,
+          "title": "Attempt Timeout",
+          "type": "number"
+        },
+        "idle_timeout": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Idle Timeout"
+        },
+        "default_model_profile": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Default Model Profile"
+        },
+        "graph_step_limit": {
+          "default": 1000,
+          "minimum": 1,
+          "title": "Graph Step Limit",
+          "type": "integer"
+        },
+        "concurrency_limit": {
+          "default": 4,
+          "minimum": 1,
+          "title": "Concurrency Limit",
+          "type": "integer"
+        },
+        "default_fan_out_limit": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Default Fan Out Limit"
+        },
+        "cache_enabled": {
+          "default": false,
+          "title": "Cache Enabled",
+          "type": "boolean"
+        },
+        "cache_ttl": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cache Ttl"
+        }
+      },
+      "title": "PolicyValues",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "pattern": "^[a-zA-Z0-9_-]+$",
+      "title": "Id",
+      "type": "string"
+    },
+    "name": {
+      "minLength": 1,
+      "title": "Name",
+      "type": "string"
+    },
+    "description": {
+      "default": "",
+      "title": "Description",
+      "type": "string"
+    },
+    "version": {
+      "const": "1.0.0",
+      "default": "1.0.0",
+      "title": "Version",
+      "type": "string"
+    },
+    "values": {
+      "$ref": "#/$defs/PolicyValues"
+    }
+  },
+  "required": [
+    "id",
+    "name"
+  ],
+  "title": "ExecutionPolicy",
+  "type": "object"
+}

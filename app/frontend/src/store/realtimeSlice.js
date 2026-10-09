@@ -5,6 +5,12 @@ const MAX_RECEIVED_EVENTS_PER_REQUEST = 100;
 
 const initialState = {
   connected: false,
+  // `connected` follows EventSource.onopen, which is only "headers arrived".
+  // The backend registers our subscriber queue inside the stream generator and
+  // announces it with `connection.ready`, so that event -- not onopen -- is
+  // the point from which a broadcast can actually reach us. Anything whose
+  // only reply is a one-shot ui.event has to wait for this.
+  streamReady: false,
   status: 'idle',
   lastEventId: null,
   lastEventAt: null,
@@ -54,6 +60,7 @@ const realtimeSlice = createSlice({
   reducers: {
     realtimeConnecting(state) {
       state.status = 'connecting';
+      state.streamReady = false;
       state.error = null;
     },
     realtimeConnected(state) {
@@ -66,12 +73,18 @@ const realtimeSlice = createSlice({
       // genuinely new events that happen to reuse the same low ids.
       state.receivedIds = [];
     },
+    // The backend has us in its subscriber set; broadcasts can reach us now.
+    realtimeStreamReady(state) {
+      state.streamReady = true;
+    },
     realtimeDisconnected(state) {
       state.connected = false;
+      state.streamReady = false;
       state.status = 'disconnected';
     },
     realtimeErrored(state, action) {
       state.connected = false;
+      state.streamReady = false;
       state.status = 'error';
       state.error = action.payload || 'Realtime stream failed';
     },
@@ -170,6 +183,7 @@ const realtimeSlice = createSlice({
 export const {
   realtimeConnecting,
   realtimeConnected,
+  realtimeStreamReady,
   realtimeDisconnected,
   realtimeErrored,
   uiEventReceived,
@@ -180,6 +194,7 @@ export const {
 
 export const selectRealtime = (state) => state.realtime;
 export const selectRealtimeConnected = (state) => state.realtime.connected;
+export const selectRealtimeStreamReady = (state) => state.realtime.streamReady;
 export const selectLastUiEvent = (state) => state.realtime.lastEvent;
 export const selectUiEventQueue = (state) => state.realtime.eventQueue;
 export const selectPendingOp = (state, requestId) =>

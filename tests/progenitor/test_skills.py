@@ -108,6 +108,7 @@ class FakeContentStateManager:
         self._docs: dict[str, dict[str, str]] = {
             "prompt": {"progenitor/genesis.md": prompt},
             "skill": {},
+            "agent": {},
             "memory": {},
         }
 
@@ -123,6 +124,9 @@ class FakeContentStateManager:
     async def list_content_documents(self, kind: str) -> list[tuple[str, str]]:
         return list(self._docs[kind].items())
 
+    async def list_routine_graphs(self) -> list[dict]:
+        return []
+
 
 class TestSkillsWiring:
     """Test that skills are wired into the DeepAgent factory."""
@@ -134,7 +138,11 @@ class TestSkillsWiring:
             storage=SimpleNamespace(
                 state_dir=Path("data/state"),
                 prompts_dir=Path("data/prompts"),
+                shim_bin_dir=Path("data/shims/bin"),
+                shell_home_dir=Path("data/shell-home"),
+                shell_workspace_dir=Path("data/shell-workspaces"),
             ),
+            runtime=SimpleNamespace(shell_timeout_seconds=120),
         )
         with (
             patch("app.progenitor.agent.agent.create_deep_agent") as mock_create,
@@ -165,7 +173,11 @@ class TestSkillsWiring:
             storage=SimpleNamespace(
                 state_dir=Path("data/state"),
                 prompts_dir=Path("data/prompts"),
+                shim_bin_dir=Path("data/shims/bin"),
+                shell_home_dir=Path("data/shell-home"),
+                shell_workspace_dir=Path("data/shell-workspaces"),
             ),
+            runtime=SimpleNamespace(shell_timeout_seconds=120),
         )
         with (
             patch("app.progenitor.agent.agent.create_deep_agent") as mock_create,
@@ -198,7 +210,11 @@ class TestSkillsWiring:
             storage=SimpleNamespace(
                 state_dir=Path("data/state"),
                 prompts_dir=Path("data/prompts"),
+                shim_bin_dir=Path("data/shims/bin"),
+                shell_home_dir=Path("data/shell-home"),
+                shell_workspace_dir=Path("data/shell-workspaces"),
             ),
+            runtime=SimpleNamespace(shell_timeout_seconds=120),
         )
         with (
             patch("app.progenitor.agent.agent.create_deep_agent") as mock_create,
@@ -241,7 +257,11 @@ class TestSkillsWiring:
             storage=SimpleNamespace(
                 state_dir=Path("data/state"),
                 prompts_dir=Path("data/prompts"),
+                shim_bin_dir=Path("data/shims/bin"),
+                shell_home_dir=Path("data/shell-home"),
+                shell_workspace_dir=Path("data/shell-workspaces"),
             ),
+            runtime=SimpleNamespace(shell_timeout_seconds=120),
         )
         with (
             patch("app.progenitor.agent.agent.create_deep_agent") as mock_create,

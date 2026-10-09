@@ -1,5 +1,5 @@
-"""Postgres-backed content documents: prompts, runtime memories, and
-installed marketplace-plugin skills.
+"""Postgres-backed content documents: prompts, runtime memories, agent
+manifests, and installed marketplace-plugin skills.
 
 Prompts and memories used to be plain files under ``data/{prompts,memories}/``,
 bind-mounted from the host into both the ``progenitor`` and ``backend``
@@ -10,11 +10,14 @@ directories seeded and kept in sync outside of git.
 They now persist as documents in the shared Postgres ``store`` table (the
 same one used for ``mcp.json``/``schedule.json``/etc, see
 ``state/manager.py``), keyed by kind + relative path. The only remaining
-disk dependency is the one-time prompt seed: the git-tracked ``data/prompts/``
+prompt disk dependency is the one-time seed: the git-tracked ``data/prompts/``
 directory is baked into the container image (see ``docker/*/Dockerfile``) and
 used to populate Postgres on first boot, when no prompt documents exist yet.
 After that, the database is authoritative and the container never reads that
 directory again.
+
+Native agent manifests remain read-only files in ``data/agents/objects/``.
+They are not imported into Postgres; user and plugin agents use documents.
 
 Progenitor's own skills (``data/skills/``) are never seeded here -- they're a
 plain read-only disk mount (see ``agent/backends.py``), the same pattern as
@@ -29,16 +32,28 @@ import logging
 from pathlib import Path
 from typing import Any
 
+from .document_kinds import (
+    AGENT_DOCUMENT_KEY_PREFIX,
+    MEMORY_DOCUMENT_KEY_PREFIX,
+    PROMPT_DOCUMENT_KEY_PREFIX,
+    SKILL_DOCUMENT_KEY_PREFIX,
+)
+from .document_kinds import (
+    AGENT_SELF_EDIT_TOUCH_KEY_PREFIX as AGENT_SELF_EDIT_TOUCH_KEY_PREFIX,
+)
+
 logger = logging.getLogger(__name__)
 
-PROMPT_DOCUMENT_KEY_PREFIX = "prompt:"
-SKILL_DOCUMENT_KEY_PREFIX = "skill:"
-MEMORY_DOCUMENT_KEY_PREFIX = "memory:"
+# AGENT_SELF_EDIT_TOUCH_KEY_PREFIX: not a content-document kind itself -- a
+# legacy self-edit notification key. All manifests now persist as agent:
+# documents, whose writes directly trigger Postgres NOTIFY. Kept exported
+# for compatibility with older runtime writers and notification consumers.
 
 _KIND_PREFIXES: dict[str, str] = {
     "prompt": PROMPT_DOCUMENT_KEY_PREFIX,
     "skill": SKILL_DOCUMENT_KEY_PREFIX,
     "memory": MEMORY_DOCUMENT_KEY_PREFIX,
+    "agent": AGENT_DOCUMENT_KEY_PREFIX,
 }
 
 

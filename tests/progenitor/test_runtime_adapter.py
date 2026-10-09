@@ -18,6 +18,7 @@ class FakeContentStateManager:
         self._docs: dict[str, dict[str, str]] = {
             "prompt": {"progenitor/genesis.md": prompt},
             "skill": {},
+            "agent": {},
             "memory": {},
         }
 
@@ -32,6 +33,9 @@ class FakeContentStateManager:
 
     async def list_content_documents(self, kind: str) -> list[tuple[str, str]]:
         return list(self._docs[kind].items())
+
+    async def list_routine_graphs(self) -> list[dict]:
+        return []
 
 
 class TestCreateDeepAgentForLoop:

@@ -80,7 +80,7 @@ main.py
           -> agent/langchain_adapter.py::create_langchain_model()
           -> agent/backends.py::create_progenitor_backend()
           -> agent/tools_adapter.py::create_deepagent_tools()
-          -> agent/subagents.py::create_progenitor_subagents()
+          -> agent/async_subagents.py::create_progenitor_async_subagents()
           -> agent/middleware.py middleware classes
           -> deepagents.create_deep_agent()
 ```
@@ -116,7 +116,7 @@ create_progenitor_agent()  # async; requires state_manager
   -> _ensure_default_runtime_memory(state_manager)
   -> _resolve_runtime_memory_paths(state_manager, memory_paths)
   -> state_manager.get_content_document("prompt", "progenitor/genesis.md")
-  -> create_progenitor_subagents()
+  -> create_progenitor_async_subagents()
   -> create_deep_agent(...)
 ```
 
@@ -204,15 +204,45 @@ Middleware stack created by `create_progenitor_agent()`:
 | `SecretRedactionMiddleware` | Strongly used | Redacts secrets for logging paths while preserving original args for execution. |
 | `AuditLoggingMiddleware` | Strongly used when `log_dir` is provided | Emits tool stream events and writes `tool_calls.jsonl`. |
 
-### `agent/subagents.py`
+### `agent/async_subagents.py`
 
-Status: active for code-review and research helper delegation.
+Status: minimal -- regular (synchronous) subagent delegation is no longer
+code-defined here. `create_progenitor_agent()` (`agent/agent.py`) now builds
+its full subagent menu from persisted object definitions
+(`agent/object_agent_manifest.py`) plus routine-graph subagents. Async descriptors
+are supplied by `LiveAsyncSubagentMiddleware`, using the SDK's native background
+tools. `LiveSubagentMiddleware` supplies object/routine task descriptors;
+both see object registration refreshes after Postgres notifications. The only thing `agent/async_subagents.py`
+still defines is `create_hello_world_async_subagent()`, the deterministic
+`AsyncSubAgent` used for background-delegation smoke tests.
+
+Object definitions are parsed/discovered separately from their runtime in
+`agent/object_agents.py`. Its reusable construction entry point preserves
+scoped tools, mounts and permissions; the awaited proxy reloads the manifest
+from Postgres on each invocation. Native manifests are read-only bundled files,
+loaded at startup without importing them into Postgres; restart after dev edits.
+Routine Prompt, Classify, and Agent nodes can select `config.model_profile`
+from `/config/profile.json`. The profile resolver reads the current document
+at execution time, builds the Azure model adapter with its deployment and
+optional reasoning settings, and reports unknown profiles as execution errors.
+Agent-node overrides take precedence over the manifest model for that invocation,
+including background calls; definitions and unrelated calls retain their defaults.
+The inspector reads public profile names/deployments through `/api/ui/model-profiles`.
+The runtime's `async_subagents/protocol.py` exposes these same object agents
+through Agent Protocol: SDK `runs.wait` awaits completion, while `runs.create`
+starts background execution and returns its identity. Neither needs an async
+manifest flag. Thread/run results persist in Postgres runtime documents, and
+object agents use separate checkpoint threads. Background chat delegation
+reuses task tracking and completion notifications. Routine nodes default to
+waiting; `execution: "background"` returns a tracked task reference instead of
+awaiting the child result. Shutdown records cancellation, and startup marks abandoned
+running tasks as errors rather than automatically replaying tool side effects.
 
 | Subagent | Current use | Notes |
 | --- | --- | --- |
+| `hello-world-async` | Registered | Deterministic async smoke-test subagent, returns `HELLO_FROM_ASYNC_SUBAGENT`. |
 | ~~Build subagent~~ | Removed | Legacy inner-loop graph wrapper was deleted. |
-| Code reviewer | Registered | Always created as a DeepAgent subagent. Actual use depends on model delegation. |
-| Researcher | Registered | Always created as a DeepAgent subagent. Actual use depends on model delegation. |
+| ~~Code reviewer~~ / ~~Researcher~~ | Removed | Migrated to manifest-backed object agents (`data/agents/objects/`); no longer code-defined. |
 
 ## Runtime loop path
 
@@ -376,7 +406,7 @@ Runtime:
 
 DeepAgent virtual filesystem:
   -> /config/*.json reads/writes StateManager documents
-  -> /config/tasks/* reads/writes kanban documents
+  -> /tasks/* reads/writes kanban documents
   -> /workflows/*.json reads/writes workflow documents
 ```
 
@@ -655,7 +685,7 @@ Evidence:
 | --- | --- | --- |
 | Scheduler | `runtime/scheduler.py` | Scheduler enabled and due entries exist. |
 | A2A task polling | `runtime/a2a_tasks.py` | Tracked tasks exist. |
-| Code-review/research subagents | `agent/subagents.py` | Registered, actual use depends on model delegation. |
+| Object-agent/routine-graph subagents | `agent/object_agents.py`, `routines/subagent.py` | Postgres agent/routine documents refresh through LISTEN/NOTIFY; native agents are read-only bundled files loaded at startup. |
 | Reasoning config | `agent/langchain_adapter.py`, `streaming_utils.py`, `stream_events.py` | `config.llm.reasoning_enabled`. |
 | Skills | `agent/agent.py` | Postgres `skill:` content documents under `progenitor/` exist. |
 | Runtime memories | `agent/agent.py` | Postgres `memory:` content documents; default `AGENTS.md` is seeded. |
@@ -682,3 +712,37 @@ The active system-tool registry was moved to `tools/system_registry.py`; old
 node tests, builder/backlog state tests, app-level mock LLM tests, response
 model tests, and register/chat/intake tests were removed or rewritten around the
 active DeepAgent path.
+
+
+### Routine execution policies
+
+`app/progenitor/policies.py` owns the validated execution-policy contract.
+Policies are JSONB documents at `policy:<id>` in the state namespace, exposed
+as `/policies/<id>.json` by `PolicyDirectoryBackend`. The schema is
+`/schemas/policy.schema.v1.json`; `managing-policies` teaches the agent to use
+structured_output and validated virtual-file writes. Graphs select one document
+with `policy_id`; inline graph `settings` are not accepted.
+
+The Policy dock uses Redux acknowledged requests and the existing global SSE
+stream. Both API writes and agent writes persist first; Postgres notifications
+refresh the catalog. The graph reference saves through the normal graph editor.
+The default policy is an ordinary persisted document seeded once during store
+setup. Each policy edit captures immutable content in `policy_revisions`.
+
+`routines/subagent.py` resolves the live policy at new-run admission, records its
+id, exact revision and effective values in lifecycle events and checkpoints,
+and uses recorded values for interactive/approval continuation. Compiler cache
+identity includes the graph, policy snapshot and relevant model configuration.
+Prompt, Classify and Eval use native LangGraph caching with a process-local,
+shared cache backend. Keys isolate graph/policy/model configuration while
+allowing matching inputs to be reused across runs; restart clears that cache.
+TTL null does not expire entries; zero expires immediately. Node cache false
+opts out. Other node types are ineligible. Retried side-effecting nodes are
+never made idempotent by caching or checkpointing.
+
+Policy values configure retries/backoff/error categories, attempt/idle timeouts,
+default model profiles, graph steps, concurrency and default fan-out max_items.
+Node settings override defaults; explicit error routes still handle exhausted
+retries. Fan-out max_items retains its existing truncation semantics. Background
+agent completion/failure remains independent of parent completion. Arbitrary
+invocation overrides, budgets, approval expiry and durability controls are absent.

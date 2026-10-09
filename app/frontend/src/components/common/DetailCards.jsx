@@ -30,3 +30,13 @@ export function CapabilityChip({ label, on }) {
     </span>
   );
 }
+
+export function DraftField({ label, hint, children }) {
+  return (
+    <label className="agents-draft-field">
+      <span className="agents-draft-field__label">{label}</span>
+      {children}
+      {hint ? <span className="agents-draft-field__hint">{hint}</span> : null}
+    </label>
+  );
+}

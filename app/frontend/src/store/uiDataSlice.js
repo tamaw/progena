@@ -28,8 +28,10 @@ import * as logs from './uiData/logs';
 import * as preferences from './uiData/preferences';
 import * as marketplaces from './uiData/marketplaces';
 import * as repos from './uiData/repos';
+import * as policies from './uiData/policies';
+import * as documentKinds from './uiData/documentKinds';
 
-const domains = [runtime, mcp, knowledge, prompts, tasks, workflows, agents, chats, inbox, logs, preferences, marketplaces, repos];
+const domains = [runtime, mcp, knowledge, prompts, tasks, workflows, agents, chats, inbox, logs, preferences, marketplaces, repos, documentKinds, policies];
 
 const initialState = domains.reduce(
   (acc, domain) => ({ ...acc, ...domain.initialState }),
@@ -60,6 +62,9 @@ const NAV_ACTIVITY_EVENT_ROUTES = {
   'task.activity.updated': '/tasks',
   'agents.snapshot': '/agents',
   'agent.upserted': '/agents',
+  'agent.routine.run.started': '/routines',
+  'agent.routine.run.completed': '/routines',
+  'agent.routine.run.failed': '/routines',
   'plugins.snapshot': '/plugins',
   'mcp.snapshot': '/tools',
   'knowledge.snapshot': '/knowledge',
@@ -175,10 +180,29 @@ export {
   fetchAgentProfiles,
   requestAgentDetail,
   updateAgentGraph,
+  deleteAgentProfile,
+  updateObjectAgentProfile,
+  fetchAgentSkillContent,
+  updateAgentSkillContent,
+  fetchRoutineRuns,
+  fetchRoutineRevisions,
+  fetchRoutineRevision,
+  fetchRunState,
+  startRoutineRun,
+  answerRoutineApproval,
   selectAgentProfiles,
   selectAgentProfilesState,
   selectActiveAgentProfile,
   selectActiveAgentProfileState,
+  selectAgentSkillContent,
+  selectAgentRoutineRuns,
+  selectAgentRoutineRunsHasMore,
+  selectAgentRoutineRevisions,
+  selectAgentRoutineRevisionContent,
+  selectAgentRunState,
+  selectRoutineRunLifecycle,
+  selectLatestRoutineRunLifecycle,
+  selectLastRoutineRunNotification,
 } from './uiData/agents';
 
 export {
@@ -207,6 +231,12 @@ export {
   selectPromptsState,
   selectPromptContentEntry,
 } from './uiData/prompts';
+
+export {
+  fetchDocumentKinds,
+  selectDocumentKinds,
+  selectDocumentKindsState,
+} from './uiData/documentKinds';
 
 export {
   fetchMcp,
@@ -297,3 +327,5 @@ export {
 } from './uiData/repos';
 
 export default uiDataSlice.reducer;
+
+export { fetchPolicies, savePolicy, selectPolicies } from './uiData/policies';

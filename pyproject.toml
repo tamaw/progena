@@ -55,8 +55,9 @@ dev = [
     "locust>=2.20.0",
     "pre-commit>=3.6.0",
     "ruff>=0.3.0",
-    "mypy>=1.8.0",
-    "pyright>=1.1.0",
+    # Pinned: a floating pyright means CI and local can disagree on strictness,
+    # which is the exact failure mode this toolchain was consolidated to remove.
+    "pyright==1.1.408",
     "bandit[toml]>=1.7.0",
     "types-aiofiles",
     "types-croniter",
@@ -141,23 +142,22 @@ indent-style = "space"
 skip-magic-trailing-comma = false
 line-ending = "auto"
 
-# Mypy configuration
-[tool.mypy]
-python_version = "3.11"
-warn_return_any = true
-warn_unused_ignores = true
-disallow_untyped_defs = false  # Gradual typing
-ignore_missing_imports = true
+# Pyright configuration. Note the interpreter is NOT set here: pyright ignores
+# `venvPath`/`venv` and `pythonPath` from pyproject.toml (verified -- every
+# third-party import still failed to resolve), so both call sites pass
+# `--pythonpath .venv/bin/python` explicitly. Getting this wrong is silent:
+# an unresolved dependency degrades to Any and the run reports success.
+[tool.pyright]
+# Oldest interpreter we support, per requires-python.
+pythonVersion = "3.11"
+# Pinned so a pyright upgrade cannot silently change strictness under CI.
+typeCheckingMode = "standard"
+include = ["app"]
 exclude = [
-    "tests/",
-    "scripts/",
-    "examples/",
-    "app/chat-ui/",
+    "**/__pycache__",
+    "app/chat-ui",
+    "app/frontend",
 ]
-
-[[tool.mypy.overrides]]
-module = "tests.*"
-ignore_errors = true
 
 # Pytest configuration
 [tool.pytest.ini_options]

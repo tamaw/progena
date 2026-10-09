@@ -1,0 +1,435 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Routine Graph",
+  "description": "A declarative graph compiled by app.progenitor.routines.factory. Version 2 makes every executable node configuration and edge shape explicit; unknown fields are rejected rather than silently ignored.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "name", "description", "version", "entry", "nodes", "edges"],
+  "properties": {
+    "id": { "type": "string", "minLength": 1 },
+    "name": { "type": "string", "minLength": 1 },
+    "description": { "type": "string" },
+    "version": { "const": "2.0.0" },
+    "entry": { "$ref": "#/$defs/nodeId" },
+    "nodes": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/node" } },
+    "edges": { "type": "array", "items": { "$ref": "#/$defs/edge" } },
+    "policy_id": { "type": "string", "minLength": 1, "default": "default" },
+    "input_schema": { "$ref": "#/$defs/routineSchemaObject" },
+    "output_schema": { "$ref": "#/$defs/routineSchemaObject" },
+    "$defs": {
+      "type": "object",
+      "additionalProperties": { "type": "object" },
+      "description": "Routine-authored JSON Schema definitions reusable from response_schema with a #/$defs/<name> reference."
+    }
+  },
+  "$defs": {
+    "nodeId": {
+      "type": "string",
+      "minLength": 1,
+      "not": { "enum": ["__seed__", "__project_output__", "__start__", "__end__"] }
+    },
+    "node": {
+      "oneOf": [
+        { "$ref": "#/$defs/nodePrompt" },
+        { "$ref": "#/$defs/nodeEval" },
+        { "$ref": "#/$defs/nodeCondition" },
+        { "$ref": "#/$defs/nodeSwitch" },
+        { "$ref": "#/$defs/nodeSplit" },
+        { "$ref": "#/$defs/nodeClassify" },
+        { "$ref": "#/$defs/nodeAgent" },
+        { "$ref": "#/$defs/nodeA2A" },
+        { "$ref": "#/$defs/nodeNoop" },
+        { "$ref": "#/$defs/nodeHuman" },
+        { "$ref": "#/$defs/nodeForeach" },
+        { "$ref": "#/$defs/nodeRoutine" },
+        { "$ref": "#/$defs/nodeReduce" }
+      ]
+    },
+    "nodeBase": {
+      "type": "object",
+      "properties": {
+        "id": { "$ref": "#/$defs/nodeId" },
+        "description": { "type": "string" },
+        "output_key": { "type": "string", "minLength": 1 },
+        "label": { "type": ["string", "null"] },
+        "x": { "type": "number" },
+        "y": { "type": "number" }
+      }
+    },
+    "nodePrompt": {
+      "allOf": [
+        { "$ref": "#/$defs/nodeBase" },
+        { "required": ["id", "kind", "output_key", "config"], "properties": { "kind": { "const": "prompt" }, "config": { "$ref": "#/$defs/promptConfig" } } }
+      ],
+      "unevaluatedProperties": false
+    },
+    "nodeEval": {
+      "allOf": [
+        { "$ref": "#/$defs/nodeBase" },
+        { "required": ["id", "kind", "output_key", "config"], "properties": { "kind": { "const": "eval" }, "config": { "$ref": "#/$defs/evalConfig" } } }
+      ],
+      "unevaluatedProperties": false
+    },
+    "nodeCondition": {
+      "allOf": [
+        { "$ref": "#/$defs/nodeBase" },
+        { "required": ["id", "kind", "output_key", "config"], "properties": { "kind": { "const": "condition" }, "config": { "$ref": "#/$defs/conditionConfig" } } }
+      ],
+      "unevaluatedProperties": false
+    },
+    "nodeSwitch": {
+      "allOf": [
+        { "$ref": "#/$defs/nodeBase" },
+        { "required": ["id", "kind", "output_key", "config"], "properties": { "kind": { "const": "switch" }, "config": { "$ref": "#/$defs/switchConfig" } } }
+      ],
+      "unevaluatedProperties": false
+    },
+    "nodeSplit": {
+      "allOf": [
+        { "$ref": "#/$defs/nodeBase" },
+        { "required": ["id", "kind", "output_key"], "properties": { "kind": { "const": "split" }, "config": { "$ref": "#/$defs/splitConfig" } } }
+      ],
+      "unevaluatedProperties": false
+    },
+    "nodeClassify": {
+      "allOf": [
+        { "$ref": "#/$defs/nodeBase" },
+        { "required": ["id", "kind", "output_key", "config"], "properties": { "kind": { "const": "classify" }, "config": { "$ref": "#/$defs/classifyConfig" } } }
+      ],
+      "unevaluatedProperties": false
+    },
+    "nodeAgent": {
+      "allOf": [
+        { "$ref": "#/$defs/nodeBase" },
+        { "required": ["id", "kind", "output_key", "config"], "properties": { "kind": { "const": "agent" }, "config": { "$ref": "#/$defs/agentConfig" } } }
+      ],
+      "unevaluatedProperties": false
+    },
+    "nodeA2A": {
+      "allOf": [
+        { "$ref": "#/$defs/nodeBase" },
+        { "required": ["id", "kind", "output_key", "config"], "properties": { "kind": { "const": "a2a" }, "config": { "$ref": "#/$defs/a2aConfig" } } }
+      ],
+      "unevaluatedProperties": false
+    },
+    "nodeNoop": {
+      "allOf": [
+        { "$ref": "#/$defs/nodeBase" },
+        { "required": ["id", "kind", "output_key"], "properties": { "kind": { "const": "noop" }, "config": { "$ref": "#/$defs/noopConfig" } } }
+      ],
+      "unevaluatedProperties": false
+    },
+    "nodeHuman": {
+      "allOf": [
+        { "$ref": "#/$defs/nodeBase" },
+        { "required": ["id", "kind", "output_key", "config"], "properties": { "kind": { "const": "human" }, "config": { "$ref": "#/$defs/humanConfig" } } }
+      ],
+      "unevaluatedProperties": false
+    },
+    "nodeForeach": {
+      "allOf": [
+        { "$ref": "#/$defs/nodeBase" },
+        { "required": ["id", "kind", "output_key", "config"], "properties": { "kind": { "const": "foreach" }, "config": { "$ref": "#/$defs/foreachConfig" } } }
+      ],
+      "unevaluatedProperties": false
+    },
+    "nodeRoutine": {
+      "allOf": [
+        { "$ref": "#/$defs/nodeBase" },
+        { "required": ["id", "kind", "output_key", "config"], "properties": { "kind": { "const": "routine" }, "config": { "$ref": "#/$defs/routineConfig" } } }
+      ],
+      "unevaluatedProperties": false
+    },
+    "nodeReduce": {
+      "allOf": [
+        { "$ref": "#/$defs/nodeBase" },
+        { "required": ["id", "kind", "output_key", "config"], "properties": { "kind": { "const": "reduce" }, "config": { "$ref": "#/$defs/reduceConfig" } } }
+      ],
+      "unevaluatedProperties": false
+    },
+    "promptConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "model_profile": { "type": ["string", "null"], "minLength": 1 },
+        "prompt_template": { "type": "string", "minLength": 1 },
+        "prompt_file": { "type": "string", "minLength": 1 },
+        "system_prompt": { "type": "string" },
+        "response_schema": { "$ref": "#/$defs/responseSchema" },
+        "retry": { "$ref": "#/$defs/retryPolicy" },
+        "timeout": { "type": "number", "minimum": 0, "description": "Seconds before this node is abandoned, overriding the execution policy attempt timeout. 0 disables the limit." },
+        "cache": { "$ref": "#/$defs/cachePolicy" }
+      },
+      "oneOf": [
+        { "required": ["prompt_template"], "not": { "required": ["prompt_file"] } },
+        { "required": ["prompt_file"], "not": { "required": ["prompt_template"] } }
+      ]
+    },
+    "evalConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "language": { "const": "python" },
+        "expression": { "type": "string", "minLength": 1 },
+        "expression_file": { "type": "string", "minLength": 1 },
+        "defaults": { "type": "object", "description": "Per-name fallback used when that top-level state key referenced in `expression` is missing -- lets an expression work seedless on its first visit, e.g. an iteration counter reading its own not-yet-written prior output." },
+        "retry": { "$ref": "#/$defs/retryPolicy" },
+        "timeout": { "type": "number", "minimum": 0, "description": "Seconds before this node is abandoned, overriding the execution policy attempt timeout. 0 disables the limit." },
+        "cache": { "$ref": "#/$defs/cachePolicy" }
+      },
+      "oneOf": [
+        { "required": ["expression"], "not": { "required": ["expression_file"] } },
+        { "required": ["expression_file"], "not": { "required": ["expression"] } }
+      ]
+    },
+    "conditionConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "language": { "const": "python" },
+        "expression": { "type": "string", "minLength": 1 },
+        "expression_file": { "type": "string", "minLength": 1 },
+        "retry": { "$ref": "#/$defs/retryPolicy" },
+        "timeout": { "type": "number", "minimum": 0, "description": "Seconds before this node is abandoned, overriding the execution policy attempt timeout. 0 disables the limit." }
+      },
+      "oneOf": [
+        { "required": ["expression"], "not": { "required": ["expression_file"] } },
+        { "required": ["expression_file"], "not": { "required": ["expression"] } }
+      ]
+    },
+    "switchConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "language": { "const": "python" },
+        "expression": { "type": "string", "minLength": 1 },
+        "expression_file": { "type": "string", "minLength": 1 },
+        "retry": { "$ref": "#/$defs/retryPolicy" },
+        "timeout": { "type": "number", "minimum": 0, "description": "Seconds before this node is abandoned, overriding the execution policy attempt timeout. 0 disables the limit." }
+      },
+      "oneOf": [
+        { "required": ["expression"], "not": { "required": ["expression_file"] } },
+        { "required": ["expression_file"], "not": { "required": ["expression"] } }
+      ]
+    },
+    "splitConfig": { "type": "object", "additionalProperties": false },
+    "classifyConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["rubric_prompt", "response_schema"],
+      "properties": {
+        "model_profile": { "type": ["string", "null"], "minLength": 1 },
+        "rubric_prompt": { "type": "string", "minLength": 1 },
+        "response_schema": { "$ref": "#/$defs/responseSchema" },
+        "inputs": { "$ref": "#/$defs/inputMap" },
+        "retry": { "$ref": "#/$defs/retryPolicy" },
+        "timeout": { "type": "number", "minimum": 0, "description": "Seconds before this node is abandoned, overriding the execution policy attempt timeout. 0 disables the limit." },
+        "cache": { "$ref": "#/$defs/cachePolicy" }
+      }
+    },
+    "agentConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["agent_name"],
+      "properties": {
+        "model_profile": { "type": ["string", "null"], "minLength": 1 },
+        "agent_name": { "type": "string", "minLength": 1 },
+        "prompt_template": { "type": "string", "minLength": 1 },
+        "prompt_file": { "type": "string", "minLength": 1 },
+        "inputs": { "$ref": "#/$defs/inputMap" },
+        "response_schema": { "$ref": "#/$defs/responseSchema" },
+        "continue_thread": { "type": "boolean" },
+        "execution": { "enum": ["wait", "background"], "default": "wait", "description": "Wait returns the agent response. Background continues after launch and returns a task reference; response_schema validates the eventual task result." },
+        "retry": { "$ref": "#/$defs/retryPolicy" },
+        "timeout": { "type": "number", "minimum": 0, "description": "Seconds before this node is abandoned, overriding the execution policy attempt timeout. 0 disables the limit." }
+      },
+      "oneOf": [
+        { "required": ["prompt_template"], "not": { "anyOf": [{ "required": ["prompt_file"] }, { "required": ["inputs"] }] } },
+        { "required": ["prompt_file"], "not": { "anyOf": [{ "required": ["prompt_template"] }, { "required": ["inputs"] }] } },
+        { "required": ["inputs"], "not": { "anyOf": [{ "required": ["prompt_template"] }, { "required": ["prompt_file"] }] } }
+      ]
+    },
+    "a2aConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["agent_name"],
+      "properties": {
+        "agent_name": { "type": "string", "minLength": 1 },
+        "prompt_template": { "type": "string", "minLength": 1 },
+        "prompt_file": { "type": "string", "minLength": 1 },
+        "retry": { "$ref": "#/$defs/retryPolicy" },
+        "timeout": { "type": "number", "minimum": 0, "description": "Seconds before this node is abandoned, overriding the execution policy attempt timeout. 0 disables the limit." }
+      },
+      "oneOf": [
+        { "required": ["prompt_template"], "not": { "required": ["prompt_file"] } },
+        { "required": ["prompt_file"], "not": { "required": ["prompt_template"] } }
+      ]
+    },
+    "noopConfig": { "type": "object", "additionalProperties": false },
+    "humanConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["message"],
+      "properties": {
+        "message": { "type": "string", "minLength": 1 },
+        "allowed_responses": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "string", "minLength": 1 } },
+        "retry": { "$ref": "#/$defs/retryPolicy" },
+        "timeout": { "type": "number", "minimum": 0, "description": "Seconds before this node is abandoned, overriding the execution policy attempt timeout. 0 disables the limit." }
+      }
+    },
+    "foreachConfig": {
+      "oneOf": [
+        { "$ref": "#/$defs/foreachSendConfig" },
+        { "$ref": "#/$defs/foreachAgentConfig" }
+      ]
+    },
+    "reduceConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source_node"],
+      "properties": {
+        "source_node": { "$ref": "#/$defs/nodeId", "description": "Node whose output is collected from each execution, commonly the last node in a Send foreach body." },
+        "operation": { "type": "string", "enum": ["collect", "sum", "count", "min", "max", "product"], "default": "collect" }
+      }
+    },
+    "foreachSendConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "items_from"],
+      "properties": {
+        "mode": { "const": "send" },
+        "items_from": { "type": "string", "minLength": 1 },
+        "item_key": { "type": "string", "minLength": 1 },
+        "max_items": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "foreachAgentConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "items_from", "agent_name", "prompt_template"],
+      "properties": {
+        "mode": { "const": "agent" },
+        "items_from": { "type": "string", "minLength": 1 },
+        "agent_name": { "type": "string", "minLength": 1 },
+        "prompt_template": { "type": "string", "minLength": 1 },
+        "item_key": { "type": "string", "minLength": 1 },
+        "max_items": { "type": "integer", "minimum": 1 },
+        "max_concurrency": { "type": "integer", "minimum": 1 },
+        "retry": { "$ref": "#/$defs/retryPolicy" },
+        "timeout": { "type": "number", "minimum": 0, "description": "Seconds before this node is abandoned, overriding the execution policy attempt timeout. 0 disables the limit." }
+      }
+    },
+    "routineConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["routine_name"],
+      "properties": {
+        "routine_name": { "type": "string", "minLength": 1 },
+        "input_map": { "$ref": "#/$defs/inputMap" },
+        "output_map": { "$ref": "#/$defs/inputMap" },
+        "retry": { "$ref": "#/$defs/retryPolicy" },
+        "timeout": { "type": "number", "minimum": 0, "description": "Seconds before this node is abandoned, overriding the execution policy attempt timeout. 0 disables the limit." }
+      }
+    },
+    "inputMap": { "type": "object", "additionalProperties": { "type": "string", "minLength": 1 } },
+    "responseSchema": { "type": "object" },
+    "cachePolicy": {
+      "oneOf": [
+        { "type": "boolean" },
+        { "type": "object", "additionalProperties": false, "properties": { "ttl": { "type": "integer", "minimum": 0 } } }
+      ]
+    },
+    "retryPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "max_retries": { "type": "integer", "minimum": 0, "description": "Extra attempts after the first one fails. 0 never retries." },
+        "initial_interval": { "type": "number", "minimum": 0 },
+        "backoff_factor": { "type": "number", "minimum": 1 },
+        "max_interval": { "type": "number", "minimum": 0 },
+        "jitter": { "type": "boolean" },
+        "retry_on": { "enum": ["transient", "model_response", "all"] }
+      }
+    },
+    "loopGuard": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["expression"],
+      "properties": {
+        "expression": { "type": "string", "minLength": 1 },
+        "on_false": { "anyOf": [{ "$ref": "#/$defs/nodeId" }, { "type": "null" }] }
+      }
+    },
+    "edge": {
+      "oneOf": [
+        { "$ref": "#/$defs/normalEdge" },
+        { "$ref": "#/$defs/fanInEdge" },
+        { "$ref": "#/$defs/routerEdge" },
+        { "$ref": "#/$defs/foreachEmptyEdge" },
+        { "$ref": "#/$defs/errorEdge" }
+      ]
+    },
+    "normalEdge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["from", "to", "level"],
+      "properties": {
+        "from": { "$ref": "#/$defs/nodeId" },
+        "to": { "$ref": "#/$defs/nodeId" },
+        "level": { "const": "normal" },
+        "loop_guard": { "$ref": "#/$defs/loopGuard" }
+      }
+    },
+    "fanInEdge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["from", "to", "level"],
+      "properties": {
+        "from": { "type": "array", "minItems": 2, "uniqueItems": true, "items": { "$ref": "#/$defs/nodeId" } },
+        "to": { "$ref": "#/$defs/nodeId" },
+        "level": { "const": "fan_in" }
+      }
+    },
+    "routerEdge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["from", "level", "router", "state_key", "branches"],
+      "properties": {
+        "from": { "$ref": "#/$defs/nodeId" },
+        "level": { "const": "route" },
+        "router": { "const": "state_equals" },
+        "state_key": { "type": "string", "minLength": 1 },
+        "branches": { "type": "object", "minProperties": 1, "additionalProperties": { "$ref": "#/$defs/nodeId" } },
+        "default": { "$ref": "#/$defs/nodeId" }
+      }
+    },
+    "foreachEmptyEdge": {
+      "description": "Fallback continuation for a Send foreach with no items. Compiled as a destination of the foreach conditional route and hidden by the routine canvas.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["from", "to", "level"],
+      "properties": {
+        "from": { "$ref": "#/$defs/nodeId" },
+        "to": { "$ref": "#/$defs/nodeId" },
+        "level": { "const": "foreach_empty" }
+      }
+    },
+    "errorEdge": {
+      "description": "Where a node's failure goes once its retries are spent. Not a flow edge: it does not count as the source's one outgoing edge declaration, so a node names its normal successor and its error destination at the same time.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["from", "to", "level"],
+      "properties": {
+        "from": { "$ref": "#/$defs/nodeId" },
+        "to": { "$ref": "#/$defs/nodeId" },
+        "level": { "const": "error" }
+      }
+    },
+
+    "routineSchemaObject": {
+      "type": ["object", "null"],
+      "description": "A real JSON Schema object (type/properties/required/etc.) -- input_schema describes values a caller supplies before Run, output_schema describes the routine's declared final result fields (projected out of the internal data channel by the compiler). Same convention node-level response_schema uses, validated at invocation time via jsonschema rather than shape-checked here."
+    }
+  }
+}
