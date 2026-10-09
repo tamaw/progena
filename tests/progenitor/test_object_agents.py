@@ -24,6 +24,7 @@ from app.progenitor.agent.object_agents import (
     SelfManifestBackend,
     build_object_agent,
     create_object_agent_proxy,
+    object_agent_memory_sources,
 )
 from app.progenitor.agent.state_backend import ContentDocumentDirectoryBackend
 
@@ -476,6 +477,10 @@ class _MemoryStore:
         assert kind == "memory"
         self.docs[relative_path] = content
 
+    async def list_content_documents(self, kind):
+        assert kind == "memory"
+        return list(self.docs.items())
+
 
 @pytest.mark.parametrize(
     "value, expected", [("", False), ("memory: true\n", True), ("memory: false\n", False)]
@@ -493,19 +498,31 @@ def test_manifest_rejects_non_boolean_memory():
         )
 
 
-async def test_memory_agent_gets_private_writable_memory_loaded_into_prompt(monkeypatch):
-    # A read-only /memories/ mount must not stop the agent writing its own folder.
-    content = (
-        VALID_SYSTEM.replace(
-            "name: reviewer",
-            "name: Code Reviewer\nmemory: true\nmounts:\n  - path: /memories/\n    access: read",
-        )
-        .replace("skills: [/skills/review/]", "skills: []")
-        .replace("paths: [/repos/]", "paths: [/memories/]")
+def test_manifest_rejects_shared_memories_mount_with_private_memory():
+    content = VALID_SYSTEM.replace(
+        "kind: object\n",
+        "kind: object\nmemory: true\nmounts:\n  - path: /memories/\n    access: read\n",
+    ).replace("paths: [/repos/]", "paths: [/memories/]")
+    with pytest.raises(ValueError, match="memory: true uses /memories/ for the agent's private"):
+        parse_object_agent_manifest(content, source="test")
+
+
+async def test_memory_agent_sees_only_its_own_memory_at_memories(monkeypatch):
+    manifest = parse_object_agent_manifest(
+        VALID_SYSTEM.replace("name: reviewer", "name: Code Reviewer\nmemory: true").replace(
+            "skills: [/skills/review/]", "skills: []"
+        ),
+        source="test",
     )
-    manifest = parse_object_agent_manifest(content, source="test")
     store = _MemoryStore()
-    store.docs["AGENTS.md"] = "shared"
+    store.docs.update(
+        {
+            "AGENTS.md": "progenitor shared memory",
+            "agents/other-agent/AGENTS.md": "someone else",
+            "agents/code-reviewer/zeta.txt": "a stray note",
+            "agents/code-reviewer/AGENTS.md": "main notes",
+        }
+    )
     parent = CompositeBackend(
         default=object(), routes={"/memories/": ContentDocumentDirectoryBackend(store, "memory")}
     )
@@ -517,26 +534,31 @@ async def test_memory_agent_gets_private_writable_memory_loaded_into_prompt(monk
         "app.progenitor.agent.object_agents.SummarizationMiddleware", lambda **_kwargs: object()
     )
 
+    sources = await object_agent_memory_sources(store, manifest.name)
+    # Every private file loads, AGENTS.md first, whatever the agent named them.
+    assert sources == ["/memories/AGENTS.md", "/memories/zeta.txt"]
     build_object_agent(
         manifest,
         model=object(),
         tools=[SimpleNamespace(name="current_time")],
         backend=parent,
         checkpointer=None,
+        memory_sources=sources,
     )
 
     middleware = calls[0]["middleware"]
     memory = next(m for m in middleware if isinstance(m, MemoryMiddleware))
-    assert memory.sources == ["/memories/agents/code-reviewer/AGENTS.md"]
     backend = next(m for m in middleware if isinstance(m, FilesystemMiddleware)).backend
-    await backend.awrite("/memories/agents/code-reviewer/AGENTS.md", "remember this")
-    assert store.docs["agents/code-reviewer/AGENTS.md"] == "remember this"
-    shared = await backend.awrite("/memories/AGENTS.md", "overwrite shared")
-    assert shared.error
-    assert store.docs["AGENTS.md"] == "shared"
-    # MemoryMiddleware batch-loads its sources; it must get the private file.
-    [loaded] = await backend.adownload_files(memory.sources)
-    assert loaded.content == b"remember this"
+    loaded = await backend.adownload_files(memory.sources)
+    assert [r.content for r in loaded] == [b"main notes", b"a stray note"]
+    # Writes land in the agent's private folder; shared and other agents' memory
+    # are unreachable from its /memories/.
+    await backend.awrite("/memories/new.md", "fresh")
+    assert store.docs["agents/code-reviewer/new.md"] == "fresh"
+    await backend.aedit("/memories/AGENTS.md", "main notes", "edited notes")
+    assert store.docs["agents/code-reviewer/AGENTS.md"] == "edited notes"
+    assert store.docs["AGENTS.md"] == "progenitor shared memory"
+    assert (await backend.aread("/memories/other-agent/AGENTS.md")).error
 
 
 async def test_scoped_mount_lists_paths_the_child_can_read(tmp_path: Path):

@@ -46,9 +46,9 @@ from .middleware import AuditLoggingMiddleware, ToolErrorMiddleware
 from .object_agent_manifest import (
     OBJECT_AGENT_DOCUMENT_KIND,
     ObjectAgentManifest,
-    ObjectAgentMount,
     ObjectAgentSource,
     _validate_permissions_within_mounts,
+    implicit_mounts,
     parse_object_agent_manifest,
     skill_mounts,
 )
@@ -389,12 +389,25 @@ def _model_for_manifest(manifest: ObjectAgentManifest, parent_model: Any) -> Any
 
 
 AGENT_MEMORY_FILE = "AGENTS.md"
-OBJECT_AGENT_MEMORY_ROOT = "/memories/agents/"
+# What a memory: true agent sees; backed by its private documents only.
+AGENT_MEMORY_MOUNT = "/memories/"
 
 
-def object_agent_memory_dir(name: str) -> str:
-    """Private, writable memory folder for one object agent."""
-    return f"{OBJECT_AGENT_MEMORY_ROOT}{agent_home_slug(name)}/"
+def object_agent_memory_prefix(name: str) -> str:
+    """Storage prefix (memory document kind) of one agent's private memory."""
+    return f"agents/{agent_home_slug(name)}/"
+
+
+async def object_agent_memory_sources(state_manager: Any, name: str) -> list[str]:
+    """Every file in the agent's private memory, AGENTS.md first (as Progenitor
+    loads all of its own memory documents, not one fixed file)."""
+    prefix = object_agent_memory_prefix(name)
+    rows = await state_manager.list_content_documents("memory")
+    files = sorted(path.removeprefix(prefix) for path, _ in rows if path.startswith(prefix))
+    return [
+        f"{AGENT_MEMORY_MOUNT}{AGENT_MEMORY_FILE}",
+        *(f"{AGENT_MEMORY_MOUNT}{file}" for file in files if file != AGENT_MEMORY_FILE),
+    ]
 
 
 class _DeclaredSkillsBackend(BackendProtocol):
@@ -446,6 +459,7 @@ def build_object_agent(
     log_sink: Any | None = None,
     worktree_dir: Path | None = None,
     shell_paths: ShellPaths | None = None,
+    memory_sources: list[str] | None = None,
 ) -> Any:
     """Build one agent from the current manifest and its parent's runtime resources.
 
@@ -456,25 +470,29 @@ def build_object_agent(
     if manifest.mounts:
         _validate_permissions_within_mounts(
             manifest.permissions,
-            (*manifest.mounts, *skill_mounts(manifest.skills)),
+            (*manifest.mounts, *implicit_mounts(manifest.skills, memory=manifest.memory)),
             source=f"object agent {manifest.name!r}",
         )
     child_model = _model_for_manifest(manifest, model)
     skill_dirs = [mount.path for mount in skill_mounts(manifest.skills)]
-    memory_dir = object_agent_memory_dir(manifest.name) if manifest.memory else None
     # Listed skills are read mounts of their own folders (a declared mount of the
-    # same path keeps its access); the agent's memory folder is always writable.
+    # same path keeps its access).
     declared = {mount.path for mount in manifest.mounts}
     extra = [m for m in skill_mounts(manifest.skills) if m.path not in declared]
-    if memory_dir is not None:
-        extra = [m for m in extra if m.path != memory_dir]
-        extra.append(ObjectAgentMount(path=memory_dir, access="read-write"))
     if extra:
-        manifest = replace(
-            manifest,
-            mounts=tuple(m for m in manifest.mounts if m.path != memory_dir) + tuple(extra),
-        )
+        manifest = replace(manifest, mounts=manifest.mounts + tuple(extra))
     routes = _scoped_routes(manifest, backend, state_manager=state_manager)
+    if manifest.memory:
+        # The agent's /memories/ is its own private folder, always writable.
+        parent_memories = dict(getattr(backend, "routes", {})).get(AGENT_MEMORY_MOUNT)
+        if parent_memories is None:
+            raise ValueError(
+                f"object agent {manifest.name!r} enables memory but the runtime has no "
+                f"{AGENT_MEMORY_MOUNT} route"
+            )
+        routes[AGENT_MEMORY_MOUNT] = ScopedMountBackend(
+            parent_memories, "/" + object_agent_memory_prefix(manifest.name)
+        )
     if manifest.shell is None:
         self_backend = CompositeBackend(default=StateBackend(), routes=routes)
         workspace = None
@@ -498,9 +516,12 @@ def build_object_agent(
                 sources=sorted({f"{PurePosixPath(d).parent}/" for d in skill_dirs}),
             )
         )
-    if memory_dir is not None:
+    if manifest.memory:
         middleware.append(
-            MemoryMiddleware(backend=self_backend, sources=[f"{memory_dir}{AGENT_MEMORY_FILE}"])
+            MemoryMiddleware(
+                backend=self_backend,
+                sources=memory_sources or [f"{AGENT_MEMORY_MOUNT}{AGENT_MEMORY_FILE}"],
+            )
         )
     if manifest.interrupt_on:
         middleware.append(
@@ -508,7 +529,7 @@ def build_object_agent(
                 cast("dict[str, bool | InterruptOnConfig]", manifest.interrupt_on)
             )
         )
-    if manifest.mounts or workspace is not None:
+    if manifest.mounts or manifest.memory or workspace is not None:
         middleware.append(
             FilesystemMiddleware(
                 backend=self_backend,
@@ -565,6 +586,11 @@ def create_object_agent_proxy(
 
             selected_model = await resolve_model_profile(state_manager, profile)
             manifest = replace(manifest, model=None)
+        memory_sources = (
+            await object_agent_memory_sources(state_manager, manifest.name)
+            if manifest.memory
+            else None
+        )
         agent = build_object_agent(
             manifest,
             model=selected_model,
@@ -575,6 +601,7 @@ def create_object_agent_proxy(
             log_sink=log_sink,
             worktree_dir=worktree_dir,
             shell_paths=shell_paths,
+            memory_sources=memory_sources,
         )
         thread_id = config.get("configurable", {}).get("object_agent_thread_id")
         if thread_id:

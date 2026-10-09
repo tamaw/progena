@@ -191,6 +191,12 @@ def skill_mounts(skills: Iterable[str]) -> tuple[ObjectAgentMount, ...]:
     )
 
 
+def implicit_mounts(skills: Iterable[str], *, memory: bool) -> tuple[ObjectAgentMount, ...]:
+    """Mounts an agent gets without declaring them: its skills, and its memory."""
+    memory_mount = (ObjectAgentMount(path="/memories/", access="read-write"),) if memory else ()
+    return (*skill_mounts(skills), *memory_mount)
+
+
 def _parse_shell(
     value: Any,
     *,
@@ -310,14 +316,22 @@ def parse_object_agent_manifest(
     )
     if writable_config and source_kind is not None and source_kind != "native":
         raise ValueError(f"{source}: read-write /config/ mounts are only allowed for native agents")
+    memory = _parse_memory(raw.get("memory"), source=source)
+    # memory: true makes /memories/ the agent's private folder, so it can't
+    # also mount the shared one.
+    if memory and any(m.path.startswith("/memories/") for m in mounts):
+        raise ValueError(
+            f"{source}: memory: true uses /memories/ for the agent's private memory; "
+            "remove /memories/ mounts"
+        )
     permissions = _parse_permissions(raw.get("permissions"), source=source)
     # Manifests written before scoped mounts existed remain valid.  They have
     # no filesystem surface now; once a manifest declares mounts every
     # operation-level permission must be contained by one of them (each
-    # listed skill counts as a read mount of its folder).
+    # listed skill counts as a read mount of its folder, memory as /memories/).
     if mounts:
         _validate_permissions_within_mounts(
-            permissions, (*mounts, *skill_mounts(skills)), source=source
+            permissions, (*mounts, *implicit_mounts(skills, memory=memory)), source=source
         )
 
     return ObjectAgentManifest(
@@ -338,7 +352,7 @@ def parse_object_agent_manifest(
             source=source,
             source_kind=source_kind,
         ),
-        memory=_parse_memory(raw.get("memory"), source=source),
+        memory=memory,
     )
 
 

@@ -70,7 +70,7 @@
     },
     "memory": {
       "type": "boolean",
-      "description": "Give the agent private, writable memory at /memories/agents/<name>/AGENTS.md, loaded into its prompt."
+      "description": "Give the agent private, writable memory: its /memories/ is its own folder (stored under /memories/agents/<name>/), and every file there is loaded into its prompt. Cannot be combined with a /memories/ mount."
     }
   }
 }
