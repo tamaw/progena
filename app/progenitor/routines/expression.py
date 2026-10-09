@@ -18,7 +18,9 @@ from typing import Any
 
 _MAX_EXPONENT = 1000
 _MAX_INT_RESULT_BITS = 100_000
-_MAX_SEQUENCE_REPEAT_LENGTH = 10_000
+# Shared cap on any str/bytes/list/tuple built by `*` or `+` (simpleeval's MAX_STRING_LENGTH).
+_MAX_SEQUENCE_LENGTH = 100_000
+_SEQUENCE_TYPES = (str, bytes, list, tuple)
 
 
 def _safe_pow(a: Any, b: Any) -> Any:
@@ -43,14 +45,27 @@ def _safe_mult(a: Any, b: Any) -> Any:
     # Check the repeated length before computing to avoid allocating huge sequences.
     for seq, times in ((a, b), (b, a)):
         if (
-            isinstance(seq, (str, bytes, list, tuple))
+            isinstance(seq, _SEQUENCE_TYPES)
             and isinstance(times, int)
-            and len(seq) * times > _MAX_SEQUENCE_REPEAT_LENGTH
+            and len(seq) * times > _MAX_SEQUENCE_LENGTH
         ):
             raise UnsafeExpressionError(
-                f"sequence repetition result too long (over {_MAX_SEQUENCE_REPEAT_LENGTH} items)"
+                f"sequence repetition result too long (over {_MAX_SEQUENCE_LENGTH} items)"
             )
     return a * b  # type: ignore[operator]
+
+
+def _safe_add(a: Any, b: Any) -> Any:
+    # Repeated concatenation is the other way to grow a sequence from small literals.
+    if (
+        isinstance(a, _SEQUENCE_TYPES)
+        and isinstance(b, _SEQUENCE_TYPES)
+        and len(a) + len(b) > _MAX_SEQUENCE_LENGTH
+    ):
+        raise UnsafeExpressionError(
+            f"sequence concatenation result too long (over {_MAX_SEQUENCE_LENGTH} items)"
+        )
+    return a + b  # type: ignore[operator]
 
 
 def _safe_mod(a: Any, b: Any) -> Any:
@@ -60,7 +75,7 @@ def _safe_mod(a: Any, b: Any) -> Any:
 
 
 _ALLOWED_BINOPS: dict[type[ast.operator], Any] = {
-    ast.Add: lambda a, b: a + b,
+    ast.Add: _safe_add,
     ast.Sub: lambda a, b: a - b,
     ast.Mult: _safe_mult,
     ast.Div: lambda a, b: a / b,
