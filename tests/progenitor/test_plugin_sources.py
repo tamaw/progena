@@ -16,6 +16,7 @@ from app.progenitor.plugins.sources import (
     _parse_github_source,
     compute_digest,
     fetch_marketplace,
+    fetch_plugin_content_files_with_report,
     fetch_plugin_files_with_report,
     resolve_plugin_version,
 )
@@ -216,6 +217,36 @@ async def test_fetch_plugin_skills_over_http() -> None:
 
 
 @pytest.mark.asyncio
+async def test_fetch_plugin_agents_over_http() -> None:
+    catalog = MarketplaceCatalog(
+        name="Acme",
+        owner={"name": "Acme"},
+        plugins=[{"name": "demo", "source": "plugins/demo"}],
+        repository="acme/tools",
+        commit_sha="abc123",
+    )
+    system = "---\nname: reviewer\ndescription: Reviews\nversion: 1.0.0\nkind: object\n---\nReview."
+
+    async def fetch(url: str) -> bytes:
+        if "/git/trees/" in url:
+            return json.dumps(
+                {
+                    "tree": [
+                        {"path": "plugins/demo/agents/objects/reviewer/SYSTEM.md", "type": "blob"},
+                        {"path": "plugins/demo/skills/review/SKILL.md", "type": "blob"},
+                    ]
+                }
+            ).encode()
+        return system.encode()
+
+    with patch("app.progenitor.plugins.sources._fetch_url", side_effect=fetch):
+        files = await fetch_plugin_content_files_with_report(catalog, "demo")
+    assert files.skills == {"review/SKILL.md": system}
+    assert files.agents == {"reviewer/SYSTEM.md": system}
+    assert files.skipped_count == 0
+
+
+@pytest.mark.asyncio
 async def test_missing_skills_directory_is_empty() -> None:
     catalog = MarketplaceCatalog(
         name="Acme",
@@ -320,6 +351,24 @@ def test_extract_skills_respects_50_file_cap() -> None:
     # 56 files total (55 siblings + SKILL.md), cap is 50
     assert len(result) == 50
     assert skipped == 6
+
+
+def test_extracts_object_agents_alongside_skills() -> None:
+    from app.progenitor.plugins.sources import extract_plugin_content_files
+
+    content = extract_plugin_content_files(
+        {
+            "skills/review/SKILL.md": b"# Review",
+            "agents/objects/reviewer/SYSTEM.md": (
+                b"---\nname: reviewer\ndescription: Reviews\n"
+                b"version: 1.0.0\nkind: object\n---\nReview."
+            ),
+        },
+        "demo",
+    )
+
+    assert content.skills == {"review/SKILL.md": "# Review"}
+    assert content.agents["reviewer/SYSTEM.md"].startswith("---")
 
 
 # ---------------------------------------------------------------------------

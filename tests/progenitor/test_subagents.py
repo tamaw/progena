@@ -4,106 +4,21 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from app.progenitor.agent.subagents import (
-    create_code_review_subagent,
-    create_general_purpose_subagent,
+from app.progenitor.agent.async_subagents import (
     create_hello_world_async_subagent,
-    create_hello_world_subagent,
     create_progenitor_async_subagents,
-    create_progenitor_subagents,
-    create_progenitor_sync_subagents,
-    create_research_subagent,
 )
+from app.progenitor.agent.live_async_subagents import LiveAsyncSubagentMiddleware
+from app.progenitor.agent.object_agent_registry import LiveSubagentMiddleware
+from tests.progenitor.conftest import _FakeRuntimeStore
 
 
-class TestHelloWorldSubagent:
-    def test_returns_subagent(self):
-        result = create_hello_world_subagent()
-        assert isinstance(result, dict)
-        assert result["name"] == "hello-world"
-
-    def test_is_deterministic_and_tool_free(self):
-        result = create_hello_world_subagent()
-        assert "HELLO_FROM_SUBAGENT" in result["system_prompt"]
-        assert result.get("tools", []) == []
-
-
-class TestCodeReviewSubagent:
-    def test_returns_subagent(self):
-        result = create_code_review_subagent()
-        assert isinstance(result, dict)
-        assert result["name"] == "code-reviewer"
-
-    def test_has_system_prompt(self):
-        result = create_code_review_subagent()
-        assert "system_prompt" in result
-        assert len(result["system_prompt"]) > 20
-
-    def test_no_tools(self):
-        result = create_code_review_subagent()
-        assert result.get("tools", []) == []
-
-
-class TestResearchSubagent:
-    def test_returns_subagent(self):
-        result = create_research_subagent()
-        assert isinstance(result, dict)
-        assert result["name"] == "researcher"
-
-    def test_has_description(self):
-        result = create_research_subagent()
-        assert "research" in result["description"].lower()
-
-    def test_inherits_parent_tools(self):
-        result = create_research_subagent()
-        assert "tools" not in result
-
-
-class TestGeneralPurposeSubagent:
-    """Regression: deepagents auto-adds its own default "general-purpose"
-    subagent unless an explicit spec with that name is supplied, and the
-    auto-added default never receives our audit-logging middleware -- so
-    delegations to it emitted no nested tool lifecycle events. Supplying an
-    explicit spec here is how it opts into the same middleware the other
-    subagents get."""
-
-    def test_returns_subagent_named_general_purpose(self):
-        result = create_general_purpose_subagent()
-        assert isinstance(result, dict)
-        assert result["name"] == "general-purpose"
-
-    def test_has_audit_logging_middleware(self):
-        result = create_general_purpose_subagent()
-        assert len(result.get("middleware", [])) > 0
-
-
-class TestCreateProgenitorSubagents:
-    def test_creates_sync_subagents(self):
-        result = create_progenitor_sync_subagents()
-        names = [s["name"] for s in result]
-        assert names == ["hello-world", "code-reviewer", "researcher", "general-purpose"]
-
+class TestCreateProgenitorAsyncSubagents:
     def test_creates_async_subagents(self):
         result = create_progenitor_async_subagents("http://127.0.0.1:9501")
         assert [s["name"] for s in result] == ["hello-world-async"]
         assert result[0]["graph_id"] == "hello-world-async"
         assert result[0]["url"] == "http://127.0.0.1:9501/agent-protocol"
-
-    def test_creates_active_subagents(self):
-        result = create_progenitor_subagents("http://127.0.0.1:9501")
-        names = [s["name"] for s in result]
-        assert names == [
-            "hello-world",
-            "code-reviewer",
-            "researcher",
-            "general-purpose",
-            "hello-world-async",
-        ]
-
-    def test_subagent_names_unique(self):
-        result = create_progenitor_subagents("http://127.0.0.1:9501")
-        names = [s["name"] for s in result]
-        assert len(names) == len(set(names))
 
 
 class TestHelloWorldAsyncSubagent:
@@ -119,11 +34,14 @@ class TestSubagentWiring:
     async def test_factory_passes_subagents(self):
         with (
             patch("app.progenitor.agent.agent.create_deep_agent") as mock_create,
-            patch("app.progenitor.agent.agent.create_progenitor_subagents") as mock_subagents,
+            patch("app.progenitor.agent.agent.create_progenitor_async_subagents") as mock_subagents,
             patch("app.progenitor.agent.agent.create_progenitor_backend") as mock_backend,
         ):
             mock_create.return_value = MagicMock()
-            mock_subagents.return_value = [{"name": "researcher"}]
+            mock_subagents.return_value = [{
+                "name": "researcher", "description": "Researches in the background.",
+                "graph_id": "researcher", "url": "http://unused.test/agent-protocol",
+            }]
             mock_backend.return_value = MagicMock()
             with patch("app.progenitor.agent.agent.create_langchain_model") as mock_model:
                 mock_model.return_value = MagicMock()
@@ -131,10 +49,12 @@ class TestSubagentWiring:
 
                 class _FakeStateManager:
                     def __init__(self):
+                        self._runtime_store = _FakeRuntimeStore()
                         self._docs = {
                             "prompt": {"progenitor/genesis.md": "Genesis"},
                             "skill": {},
                             "memory": {},
+                            "agent": {},
                         }
 
                     async def get_content_document(self, kind, relative_path):
@@ -149,9 +69,23 @@ class TestSubagentWiring:
                     async def list_content_documents(self, kind):
                         return list(self._docs[kind].items())
 
-                await create_progenitor_agent(state_manager=_FakeStateManager())
+                    async def list_routine_graphs(self):
+                        return []
 
+                state_manager = _FakeStateManager()
+                await create_progenitor_agent(state_manager=state_manager)
                 call_kwargs = mock_create.call_args.kwargs
                 assert "subagents" in call_kwargs
-                assert call_kwargs["subagents"] == [{"name": "researcher"}]
+                assert call_kwargs["subagents"] == []
+                live_async = next(
+                    m for m in call_kwargs["middleware"] if isinstance(m, LiveAsyncSubagentMiddleware)
+                )
+                assert [spec["name"] for spec in live_async.descriptors()] == [
+                    "researcher", "repo-manager",
+                ]
+                live = next(
+                    m for m in call_kwargs["middleware"] if isinstance(m, LiveSubagentMiddleware)
+                )
+                assert [spec["name"] for spec in live._registry.descriptors] == ["repo-manager"]
+                assert "native/repo-manager/SYSTEM.md" not in state_manager._docs.get("agent", {})
                 mock_subagents.assert_called_once()

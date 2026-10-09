@@ -13,6 +13,7 @@ import {
   selectGeneratingChatIds,
   selectInboxUnreadCount,
   selectLastReceivedAlert,
+  selectLastRoutineRunNotification,
   selectPreferences,
   selectPreferencesSaveRequest,
   selectRequestIdByThreadId,
@@ -68,8 +69,8 @@ import {
   RefreshIcon,
   RepositoriesNavIcon,
   SchedulesNavIcon,
+  RoutinesNavIcon,
   SearchIcon,
-  SequencesNavIcon,
   SettingsAboutIcon,
   SettingsAgentsIcon,
   SettingsAppearanceIcon,
@@ -128,7 +129,7 @@ const navGroups = [
     label: 'Automate',
     items: [
       { to: '/workflows', icon: <WorkspaceNavIcon />, label: 'Workflows' },
-      { to: '/sequences', icon: <SequencesNavIcon />, label: 'Sequences' },
+      { to: '/routines', icon: <RoutinesNavIcon />, label: 'Routines' },
     ],
   },
   {
@@ -2274,6 +2275,16 @@ function AppRuntimeShell() {
   // when preferences.notificationSounds is on (Account > Notification
   // sounds), matching /config/preferences.json.
   const { show } = useNotifications();
+  const lastRoutineRun = useSelector(selectLastRoutineRunNotification);
+  const lastHandledRoutineRef = useRef(null);
+  useEffect(() => {
+    if (!lastRoutineRun || lastHandledRoutineRef.current === lastRoutineRun.request_id) return;
+    lastHandledRoutineRef.current = lastRoutineRun.request_id;
+    const failed = lastRoutineRun.status === 'failed';
+    show(failed ? 'error' : 'success', failed ? 'Routine failed' : 'Routine completed',
+      lastRoutineRun.error || lastRoutineRun.name || 'Routine finished successfully');
+    if (preferences.notificationSounds) playNotificationSound();
+  }, [lastRoutineRun, preferences.notificationSounds, show]);
   const lastReceivedAlert = useSelector(selectLastReceivedAlert);
   const lastHandledAlertSeqRef = useRef(0);
   useEffect(() => {
@@ -2318,6 +2329,13 @@ function AppRuntimeShell() {
       if (e.matches) {
         setIsNavCollapsed(false); // no icon rail — drawer handles narrow viewports
         setIsNavOpen(false);      // start with drawer closed
+      } else {
+        // Leaving mobile width: the drawer's open/closed state is meaningless
+        // at desktop width (no drawer, just the grid-column rail) — a stale
+        // isNavOpen=true would otherwise desync PrimaryNav's isCollapsed prop
+        // (forced false while "open") from the outer grid's collapsed-width
+        // column, rendering full labels squeezed into a 52px rail.
+        setIsNavOpen(false);
       }
     };
     mq.addEventListener('change', handler);
@@ -2467,6 +2485,11 @@ function AppRuntimeShell() {
   useEffect(() => {
     const handleOpenQuickChat = (event) => {
       const nextConfig = normalizeQuickChatConfig(event.detail);
+      const prompt = normalizeAiPrompt(event.detail?.prompt);
+      if (prompt) {
+        quickChatSubmissionIdRef.current += 1;
+        setQuickChatSubmission({ id: quickChatSubmissionIdRef.current, message: prompt });
+      }
       setQuickChatConfig(nextConfig);
       setActivePanel('quickChat');
     };
@@ -2500,7 +2523,13 @@ function AppRuntimeShell() {
   return (
     <div className={shellClass}>
       <PrimaryNav
-        isCollapsed={isNavCollapsed}
+        // The collapsed icon-only rail is a desktop space-saving preference;
+        // it's meaningless for the mobile/tablet slide-over drawer (which is
+        // already a full-width overlay), and the drawer's own toggle button
+        // is repurposed to "close" while open, so a collapsed desktop
+        // preference would otherwise make the labels permanently unreachable
+        // at narrow viewports. Force expanded whenever the drawer is open.
+        isCollapsed={isNavCollapsed && !isNavOpen}
         isOpen={isNavOpen}
         onClose={() => setIsNavOpen(false)}
         onToggleCollapse={() => setIsNavCollapsed((current) => {

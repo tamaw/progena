@@ -262,7 +262,7 @@ pytest tests/progenitor/ -v
 
 ```bash
 ruff check app/
-mypy app/
+pyright app/
 ```
 
 ### Adding New Capabilities

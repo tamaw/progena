@@ -21,6 +21,7 @@ from psycopg.types.json import Jsonb
 from psycopg_pool import ConnectionPool, PoolClosed
 
 from app.backend.delta_channel_replay import replay_delta_messages
+from app.progenitor.routines.store import ROUTINE_GRAPH_KEY_PREFIX
 
 PROGENITOR_STATE_PREFIX = "progenitor.state"
 PROGENITOR_LOG_PREFIX = "progenitor.logs"
@@ -51,6 +52,44 @@ class CheckpointThreadSnapshot:
     checkpoint_id: str | None
     checkpoint_ts: str | None
     messages: list[Any]
+    # Whether any checkpoint_writes row for this thread carries LangGraph's
+    # own '__error__' channel -- see list_routine_runs for why this, not a
+    # deserialized run_meta field, is the reliable failed/success signal.
+    failed: bool = False
+
+
+@dataclass(frozen=True)
+class RoutineRunSummary:
+    """One routine execution, reconstructed from its checkpoint thread.
+
+    ``thread_id`` follows ``routine:<routine_id>:<revision_id>:<run_id>``
+    (see ``app.progenitor.routines.subagent.create_routine_subagent``);
+    ``revision_id``/``run_id`` are parsed out of it, not stored separately.
+    """
+
+    thread_id: str
+    routine_id: str
+    revision_id: str | None
+    run_id: str | None
+    started_at: str | None
+    last_checkpoint_at: str | None
+    checkpoint_count: int
+    failed: bool
+
+
+@dataclass(frozen=True)
+class RoutineRevisionSummary:
+    """One immutable snapshot of a routine's graph document.
+
+    Rows come from ``routine_graph_revisions`` (see
+    ``app.backend.document_store.PostgresDocumentStore._ensure_routine_revision_history``),
+    which a Postgres trigger appends to on every write to a routine's live
+    document -- newest-first here mirrors the trigger's own capture order.
+    """
+
+    revision_id: str
+    routine_id: str
+    captured_at: str | None
 
 
 _MESSAGES_CHANNEL = "messages"
@@ -129,6 +168,16 @@ class BackendDocumentStore(Protocol):
         checkpoint_id: str | None = None,
     ) -> CheckpointThreadSnapshot | None: ...
 
+    def list_routine_runs(
+        self, routine_id: str, *, limit: int = 50, before: str | None = None
+    ) -> tuple[list[RoutineRunSummary], bool]: ...
+
+    def list_routine_revisions(
+        self, routine_id: str, *, limit: int = 50
+    ) -> list[RoutineRevisionSummary]: ...
+
+    def get_routine_revision(self, routine_id: str, revision_id: str) -> dict[str, Any] | None: ...
+
     def close(self) -> None: ...
 
 
@@ -138,6 +187,9 @@ class InMemoryDocumentStore:
     def __init__(self) -> None:
         self._documents: dict[tuple[str, str], StoredDocument] = {}
         self._checkpoint_threads: dict[str, CheckpointThreadSnapshot] = {}
+        self._routine_revisions: dict[
+            tuple[str, str], tuple[RoutineRevisionSummary, dict[str, Any]]
+        ] = {}
 
     def get_document(
         self, prefix: str, key: str, default: Any | None = None
@@ -238,6 +290,62 @@ class InMemoryDocumentStore:
             return None
         return snapshot
 
+    def list_routine_runs(
+        self, routine_id: str, *, limit: int = 50, before: str | None = None
+    ) -> tuple[list[RoutineRunSummary], bool]:
+        prefix = f"routine:{routine_id}:"
+        summaries = [
+            RoutineRunSummary(
+                thread_id=snapshot.thread_id,
+                routine_id=routine_id,
+                revision_id=(snapshot.thread_id.split(":", 3) + [None, None])[2],
+                run_id=(snapshot.thread_id.split(":", 3) + [None, None, None])[3],
+                started_at=snapshot.checkpoint_ts,
+                last_checkpoint_at=snapshot.checkpoint_ts,
+                checkpoint_count=1,
+                failed=snapshot.failed,
+            )
+            for snapshot in self._checkpoint_threads.values()
+            if snapshot.thread_id.startswith(prefix)
+        ]
+        summaries.sort(key=lambda summary: summary.last_checkpoint_at or "", reverse=True)
+        if before:
+            summaries = [s for s in summaries if (s.last_checkpoint_at or "") < before]
+        if limit <= 0:
+            return summaries, False
+        page = summaries[:limit]
+        return page, len(summaries) > limit
+
+    def list_routine_revisions(
+        self, routine_id: str, *, limit: int = 50
+    ) -> list[RoutineRevisionSummary]:
+        summaries = [
+            summary
+            for (rid, _revision_id), (summary, _graph) in self._routine_revisions.items()
+            if rid == routine_id
+        ]
+        summaries.sort(key=lambda summary: summary.captured_at or "", reverse=True)
+        return summaries[:limit] if limit > 0 else summaries
+
+    def get_routine_revision(self, routine_id: str, revision_id: str) -> dict[str, Any] | None:
+        entry = self._routine_revisions.get((routine_id, revision_id))
+        return entry[1] if entry is not None else None
+
+    def upsert_routine_revision(
+        self,
+        routine_id: str,
+        revision_id: str,
+        graph: dict[str, Any],
+        *,
+        captured_at: str | None = None,
+    ) -> None:
+        self._routine_revisions[(routine_id, revision_id)] = (
+            RoutineRevisionSummary(
+                revision_id=revision_id, routine_id=routine_id, captured_at=captured_at
+            ),
+            graph,
+        )
+
     def upsert_checkpoint_thread_snapshot(self, snapshot: CheckpointThreadSnapshot) -> None:
         self._checkpoint_threads[snapshot.thread_id] = snapshot
 
@@ -265,8 +373,21 @@ class PostgresDocumentStore:
 
     def open(self) -> None:
         self._pool.open()
-        self._ensure_store_table()
-        self._ensure_change_trigger()
+        # Concurrent startups (backend workers, seed scripts) otherwise race on
+        # the same CREATE OR REPLACE FUNCTION/TRIGGER catalog rows. A session
+        # lock on one pooled connection serializes setup; the steps below use
+        # other pooled connections.
+        with self._pool.connection() as conn:
+            conn.execute("SELECT pg_advisory_lock(hashtext('progenitor_document_store_setup'))")
+            try:
+                self._ensure_store_table()
+                self._ensure_change_trigger()
+                self._ensure_routine_revision_history()
+                self._ensure_policy_revision_history()
+            finally:
+                conn.execute(
+                    "SELECT pg_advisory_unlock(hashtext('progenitor_document_store_setup'))"
+                )
 
     def close(self) -> None:
         self._pool.close()
@@ -355,11 +476,12 @@ class PostgresDocumentStore:
                 DECLARE
                     row_prefix TEXT := COALESCE(NEW.prefix, OLD.prefix);
                     row_key TEXT := COALESCE(NEW.key, OLD.key);
+                    row_action TEXT := CASE WHEN TG_OP = 'DELETE' THEN 'deleted' ELSE 'upserted' END;
                 BEGIN
                     IF row_prefix IN ({prefixes}) THEN
                         PERFORM pg_notify(
                             '{STORE_CHANGE_CHANNEL}',
-                            json_build_object('prefix', row_prefix, 'key', row_key)::text
+                            json_build_object('prefix', row_prefix, 'key', row_key, 'action', row_action)::text
                         );
                     END IF;
                     RETURN COALESCE(NEW, OLD);
@@ -367,13 +489,162 @@ class PostgresDocumentStore:
                 $$ LANGUAGE plpgsql;
                 """
             )
-            cur.execute("DROP TRIGGER IF EXISTS progenitor_store_change ON store")
             cur.execute(
                 """
-                CREATE TRIGGER progenitor_store_change
+                CREATE OR REPLACE TRIGGER progenitor_store_change
                 AFTER INSERT OR UPDATE OR DELETE ON store
                 FOR EACH ROW EXECUTE FUNCTION progenitor_notify_store_change()
                 """
+            )
+
+    def _ensure_routine_revision_history(self) -> None:
+        """Capture immutable routine graph revisions via a Postgres trigger.
+
+        The ``store`` table is LangGraph's own; this never alters its schema.
+        A row trigger on ``store`` inserts into a separate
+        ``routine_graph_revisions`` table whenever a routine document is
+        written, so a chat thread that pinned a revision keeps resolving the
+        graph it started on even after the routine is edited or deleted.
+        DELETE captures OLD in the same transaction, preserving the final live
+        snapshot even when it predates installation of the capture trigger.
+        """
+        state_prefix = PROGENITOR_STATE_PREFIX
+        key_prefix = ROUTINE_GRAPH_KEY_PREFIX
+        with self._cursor() as cur:
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS routine_graph_revisions (
+                    routine_id  TEXT NOT NULL,
+                    graph       JSONB NOT NULL,
+                    revision_id TEXT NOT NULL GENERATED ALWAYS AS (encode(sha256(jsonb_send(graph)), 'hex')) STORED,
+                    captured_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    PRIMARY KEY (routine_id, revision_id)
+                )
+                """
+            )
+            cur.execute(
+                """
+                CREATE INDEX IF NOT EXISTS routine_graph_revisions_latest
+                    ON routine_graph_revisions (routine_id, captured_at DESC, revision_id DESC)
+                """
+            )
+            capture_sql = """
+                CREATE OR REPLACE FUNCTION progenitor_capture_routine_revision()
+                RETURNS trigger AS $$
+                DECLARE
+                    graph_doc JSONB;
+                    source_row store%ROWTYPE;
+                BEGIN
+                    IF TG_OP = 'DELETE' THEN
+                        source_row := OLD;
+                    ELSE
+                        source_row := NEW;
+                    END IF;
+                    IF source_row.prefix = '__STATE_PREFIX__'
+                        AND source_row.key LIKE '__KEY_PREFIX__%'
+                        AND length(source_row.key) > length('__KEY_PREFIX__') THEN
+                        graph_doc := source_row.value -> 'payload';
+                        IF graph_doc IS NOT NULL AND jsonb_typeof(graph_doc) = 'object' THEN
+                            INSERT INTO routine_graph_revisions (routine_id, graph)
+                            VALUES (substring(source_row.key from length('__KEY_PREFIX__') + 1), graph_doc)
+                            ON CONFLICT (routine_id, revision_id) DO NOTHING;
+                        END IF;
+                    END IF;
+                    RETURN source_row;
+                END;
+                $$ LANGUAGE plpgsql;
+                """.replace("__STATE_PREFIX__", state_prefix).replace("__KEY_PREFIX__", key_prefix)  # nosec B608
+            cur.execute(capture_sql)
+            cur.execute(
+                """
+                CREATE OR REPLACE TRIGGER progenitor_capture_routine_revision
+                AFTER INSERT OR UPDATE ON store
+                FOR EACH ROW EXECUTE FUNCTION progenitor_capture_routine_revision()
+                """
+            )
+            cur.execute(
+                """
+                CREATE OR REPLACE TRIGGER progenitor_capture_deleted_routine_revision
+                BEFORE DELETE ON store
+                FOR EACH ROW EXECUTE FUNCTION progenitor_capture_routine_revision()
+                """
+            )
+            cur.execute(
+                """
+                CREATE OR REPLACE FUNCTION progenitor_routine_revisions_immutable()
+                RETURNS trigger AS $$
+                BEGIN
+                    RAISE EXCEPTION 'routine_graph_revisions rows are immutable (attempted % on %/%)',
+                        TG_OP, OLD.routine_id, OLD.revision_id;
+                END;
+                $$ LANGUAGE plpgsql;
+                """
+            )
+            cur.execute(
+                """
+                CREATE OR REPLACE TRIGGER progenitor_routine_revisions_immutable
+                BEFORE UPDATE ON routine_graph_revisions
+                FOR EACH ROW EXECUTE FUNCTION progenitor_routine_revisions_immutable()
+                """
+            )
+            backfill_sql = """
+                INSERT INTO routine_graph_revisions (routine_id, graph)
+                SELECT substring(key from length('__KEY_PREFIX__') + 1), value -> 'payload'
+                FROM store
+                WHERE prefix = '__STATE_PREFIX__'
+                  AND key LIKE '__KEY_PREFIX__%'
+                  AND length(key) > length('__KEY_PREFIX__')
+                  AND jsonb_typeof(value -> 'payload') = 'object'
+                ON CONFLICT (routine_id, revision_id) DO NOTHING
+                """.replace("__STATE_PREFIX__", state_prefix).replace("__KEY_PREFIX__", key_prefix)  # nosec B608
+            cur.execute(backfill_sql)
+
+    def _ensure_policy_revision_history(self) -> None:
+        from app.progenitor.policies import ExecutionPolicy
+
+        with self._cursor() as cur:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS policy_revisions (
+                    policy_id TEXT NOT NULL, document JSONB NOT NULL,
+                    revision_id TEXT GENERATED ALWAYS AS (encode(sha256(jsonb_send(document)), 'hex')) STORED,
+                    captured_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    PRIMARY KEY (policy_id, revision_id)
+                );
+                CREATE OR REPLACE FUNCTION progenitor_capture_policy_revision() RETURNS trigger AS $$
+                DECLARE source_row store%ROWTYPE;
+                BEGIN
+                    IF TG_OP = 'DELETE' THEN source_row := OLD; ELSE source_row := NEW; END IF;
+                    IF source_row.prefix = 'progenitor.state' AND source_row.key LIKE 'policy:%'
+                        AND jsonb_typeof(source_row.value->'payload') = 'object' THEN
+                        INSERT INTO policy_revisions(policy_id, document)
+                        VALUES (substring(source_row.key from 8), source_row.value->'payload')
+                        ON CONFLICT DO NOTHING;
+                    END IF;
+                    RETURN source_row;
+                END;
+                $$ LANGUAGE plpgsql;
+                CREATE OR REPLACE TRIGGER progenitor_capture_policy_revision AFTER INSERT OR UPDATE OR DELETE ON store
+                FOR EACH ROW EXECUTE FUNCTION progenitor_capture_policy_revision();
+                CREATE OR REPLACE FUNCTION progenitor_policy_revisions_immutable() RETURNS trigger AS $$
+                BEGIN RAISE EXCEPTION 'policy revisions are immutable'; END;
+                $$ LANGUAGE plpgsql;
+                CREATE OR REPLACE TRIGGER progenitor_policy_revisions_immutable BEFORE UPDATE OR DELETE ON policy_revisions
+                FOR EACH ROW EXECUTE FUNCTION progenitor_policy_revisions_immutable();
+            """)
+            cur.execute(
+                """INSERT INTO store(prefix,key,value,created_at,updated_at)
+                VALUES (%s,%s,%s,now(),now()) ON CONFLICT(prefix,key) DO NOTHING""",
+                (
+                    PROGENITOR_STATE_PREFIX,
+                    "policy:default",
+                    Jsonb(
+                        {
+                            "payload": ExecutionPolicy(id="default", name="Default").model_dump(
+                                mode="json"
+                            )
+                        }
+                    ),
+                ),
             )
 
     def get_document(
@@ -626,6 +897,137 @@ class PostgresDocumentStore:
             messages=messages,
         )
 
+    def list_routine_runs(
+        self, routine_id: str, *, limit: int = 50, before: str | None = None
+    ) -> tuple[list[RoutineRunSummary], bool]:
+        """Every distinct routine-run checkpoint thread for one routine.
+
+        A run's thread_id is ``routine:<routine_id>:<revision_id>:<run_id>``
+        (see ``app.progenitor.routines.subagent.create_routine_subagent``).
+        Groups raw checkpoint rows by thread_id -- one row per run, newest
+        last-checkpoint first -- rather than reconstructing full message
+        history, which the Runs panel doesn't need.
+
+        ``before`` is a keyset cursor: the ``last_checkpoint_at`` of the
+        oldest run already loaded by the caller (verbatim string this same
+        method previously returned), so paging never relies on OFFSET
+        against a live-growing table. Fetches one extra row over ``limit``
+        purely to answer ``has_more`` without a second COUNT query, then
+        trims it back off before returning.
+
+        ``failed`` is a per-run ``EXISTS`` against ``checkpoint_writes`` for
+        LangGraph's own ``__error__`` pending-write channel -- written
+        unconditionally by LangGraph's task runner the instant any node
+        raises, *before* any of our own error-handling code runs. This is
+        deliberately NOT derived from the ``run_meta`` channel's own
+        per-node ``error`` field: that field only exists when
+        subagent.py's narrow exception catch fires AND its own backfill
+        write succeeds (both best-effort), so it under-reports real
+        failures. The EXISTS runs once per already-LIMIT-bounded row,
+        against ``checkpoint_writes_thread_id_idx`` -- no checkpoint blob
+        deserialization, no extra connection, one round trip alongside the
+        existing GROUP BY.
+        """
+        escaped = routine_id.translate({ord("\\"): "\\\\", ord("%"): "\\%", ord("_"): "\\_"})
+        pattern = f"routine:{escaped}:%"
+        params: list[Any] = [pattern, before is None, before, limit + 1]
+        with self._cursor() as cur:
+            cur.execute(
+                """
+                WITH runs AS (
+                    SELECT
+                        thread_id,
+                        min((checkpoint->>'ts')::timestamptz) AS started_at,
+                        max((checkpoint->>'ts')::timestamptz) AS last_checkpoint_at,
+                        count(*) AS checkpoint_count
+                    FROM checkpoints
+                    WHERE thread_id LIKE %s ESCAPE '\\'
+                    GROUP BY thread_id
+                    HAVING %s OR max((checkpoint->>'ts')::timestamptz) < %s::timestamptz
+                    ORDER BY last_checkpoint_at DESC
+                    LIMIT %s
+                )
+                SELECT
+                    runs.*,
+                    EXISTS (
+                        SELECT 1 FROM checkpoint_writes cw
+                        WHERE cw.thread_id = runs.thread_id AND cw.channel = '__error__'
+                    ) AS failed
+                FROM runs
+                ORDER BY last_checkpoint_at DESC
+                """,
+                params,
+            )
+            rows = cast(list[dict[str, Any]], cur.fetchall())
+        has_more = len(rows) > limit
+        rows = rows[:limit]
+        summaries: list[RoutineRunSummary] = []
+        for row in rows:
+            thread_id = row.get("thread_id")
+            if not isinstance(thread_id, str):
+                continue
+            parts = thread_id.split(":", 3)
+            revision_id = parts[2] if len(parts) > 2 else None
+            run_id = parts[3] if len(parts) > 3 else None
+            summaries.append(
+                RoutineRunSummary(
+                    thread_id=thread_id,
+                    routine_id=routine_id,
+                    revision_id=revision_id,
+                    run_id=run_id,
+                    started_at=str(row["started_at"]) if row.get("started_at") else None,
+                    last_checkpoint_at=(
+                        str(row["last_checkpoint_at"]) if row.get("last_checkpoint_at") else None
+                    ),
+                    checkpoint_count=int(row["checkpoint_count"] or 0),
+                    failed=bool(row.get("failed")),
+                )
+            )
+        return summaries, has_more
+
+    def list_routine_revisions(
+        self, routine_id: str, *, limit: int = 50
+    ) -> list[RoutineRevisionSummary]:
+        """Every captured revision of one routine's graph document, newest first.
+
+        Mirrors ``app.progenitor.routines.revisions.PostgresRoutineRevisionReader``,
+        reading the same ``routine_graph_revisions`` table this store's own
+        ``_ensure_routine_revision_history`` DDL/trigger populates.
+        """
+        with self._cursor() as cur:
+            cur.execute(
+                """
+                SELECT revision_id, captured_at
+                FROM routine_graph_revisions
+                WHERE routine_id = %s
+                ORDER BY captured_at DESC, revision_id DESC
+                LIMIT %s
+                """,
+                (routine_id, limit),
+            )
+            rows = cast(list[dict[str, Any]], cur.fetchall())
+        return [
+            RoutineRevisionSummary(
+                revision_id=row["revision_id"],
+                routine_id=routine_id,
+                captured_at=str(row["captured_at"]) if row.get("captured_at") else None,
+            )
+            for row in rows
+        ]
+
+    def get_routine_revision(self, routine_id: str, revision_id: str) -> dict[str, Any] | None:
+        with self._cursor() as cur:
+            cur.execute(
+                """
+                SELECT graph
+                FROM routine_graph_revisions
+                WHERE routine_id = %s AND revision_id = %s
+                """,
+                (routine_id, revision_id),
+            )
+            row = cast(dict[str, Any] | None, cur.fetchone())
+        return cast(dict[str, Any], row["graph"]) if row is not None else None
+
 
 def store_database_url(store: BackendDocumentStore | None) -> str | None:
     """Return the Postgres DSN backing ``store``, or None for non-Postgres stores."""
@@ -648,11 +1050,13 @@ class StoreChangeListener:
         on_change: Callable[[str], None],
         on_resync: Callable[[], None] | None = None,
         reconnect_delay: float = 2.0,
+        channel: str = STORE_CHANGE_CHANNEL,
     ) -> None:
         self._database_url = database_url
         self._on_change = on_change
         self._on_resync = on_resync
         self._reconnect_delay = reconnect_delay
+        self._channel = channel
         self._task: asyncio.Task[None] | None = None
 
     async def start(self) -> None:
@@ -688,12 +1092,11 @@ class StoreChangeListener:
     async def _listen_once(self) -> None:
         aconn = await psycopg.AsyncConnection.connect(self._database_url, autocommit=True)
         try:
-            # Recover anything that changed while we were disconnected before we
-            # start streaming live notifications.
+            # Subscribe first so changes during resync are queued, not lost.
+            await aconn.execute(sql.SQL("LISTEN {}").format(sql.Identifier(self._channel)))
             if self._on_resync is not None:
                 self._on_resync()
-            await aconn.execute(sql.SQL("LISTEN {}").format(sql.Identifier(STORE_CHANGE_CHANNEL)))
-            logger.info("Listening for store changes on %r", STORE_CHANGE_CHANNEL)
+            logger.info("Listening for store changes on %r", self._channel)
             async for notify in aconn.notifies():
                 self._on_change(notify.payload)
         finally:

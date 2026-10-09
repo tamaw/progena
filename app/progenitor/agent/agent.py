@@ -15,17 +15,35 @@ from pathlib import Path
 from typing import Any
 
 from deepagents import create_deep_agent
+from deepagents.middleware.async_subagents import AsyncSubAgent
+from deepagents.middleware.subagents import CompiledSubAgent
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph.state import CompiledStateGraph
 
+from ..async_subagents.tasks import create_agent_background_runner
 from ..config import ProgenitorConfig, get_config
 from ..content_documents import ensure_content_documents_seeded
+from ..routines.approvals import approval_lock
+from ..routines.graph import validate_routine_graph_payload
+from ..routines.revisions import (
+    NullRoutineRevisionReader,
+    PostgresRoutineRevisionReader,
+)
+from ..routines.subagent import (
+    create_routine_executor,
+    create_routine_subagent,
+    resolve_routine_document,
+    resume_routine_thread,
+)
+from ..state.model_profiles import resolve_model_profile
 from .adapters import (
     create_deepagent_tools,
     create_dynamic_mcp_tools,
     create_langchain_model,
 )
+from .async_subagents import create_progenitor_async_subagents
 from .backends import create_progenitor_backend
+from .live_async_subagents import LiveAsyncSubagentMiddleware
 from .middleware import (
     AsyncSubagentTrackingMiddleware,
     AuditLoggingMiddleware,
@@ -33,11 +51,12 @@ from .middleware import (
     DynamicMCPToolMiddleware,
     SchemaCompactionMiddleware,
     SecretRedactionMiddleware,
+    ToolErrorMiddleware,
 )
-from .subagents import (
-    create_progenitor_async_subagents,
-    create_progenitor_subagents,
-)
+from .object_agent_registry import LiveSubagentMiddleware, ObjectAgentRegistry
+from .object_agents import create_object_agent_proxy
+from .shell_backend import ShellPaths
+from .state import ProgenitorAgentState
 
 logger = logging.getLogger(__name__)
 
@@ -98,7 +117,12 @@ async def _resolve_runtime_memory_paths(
         return explicit_memory_paths or None
 
     rows = await state_manager.list_content_documents("memory")
-    discovered = sorted(f"/memories/{relative_path}" for relative_path, _content in rows)
+    # /memories/agents/<name>/ is private to each object agent (see object_agents.py).
+    discovered = sorted(
+        f"/memories/{relative_path}"
+        for relative_path, _content in rows
+        if not relative_path.startswith("agents/")
+    )
 
     memory_paths: list[str] = [DEFAULT_RUNTIME_MEMORY_PATH]
     for memory_path in discovered:
@@ -210,10 +234,18 @@ async def create_progenitor_agent(
     # /skills/<segment>/ route per plugin. The skills_dirs auto-discovery below
     # reuses these same rows -- only one query.
     skill_rows = await state_manager.list_content_documents("skill")
+    agent_rows = await state_manager.list_content_documents("agent")
     plugin_segments = sorted(
         {
             rel.split("/", 1)[0]
             for rel, _content in skill_rows
+            if "/" in rel and "__" in rel.split("/", 1)[0]
+        }
+    )
+    plugin_agent_segments = sorted(
+        {
+            rel.split("/", 1)[0]
+            for rel, _content in agent_rows
             if "/" in rel and "__" in rel.split("/", 1)[0]
         }
     )
@@ -222,21 +254,30 @@ async def create_progenitor_agent(
     # listener re-discovers MCP tools when the mcp document changes (the same path
     # used for UI-driven server/tool toggles), so no per-backend write-hook is
     # needed. The managing-mcp skill documents this edit flow for the agent.
+    database_url = getattr(getattr(config, "database", None), "url", None) or None
     backend = create_progenitor_backend(
         project_root=project_root,
         skills_dir=skills_dir,
+        agents_dir=data_dir / "agents" / "objects",
         worktree_dir=worktree_dir,
         state_manager=state_manager,
-        database_url=getattr(getattr(config, "database", None), "url", None) or None,
+        database_url=database_url,
         plugin_skill_segments=plugin_segments,
+        plugin_agent_segments=plugin_agent_segments,
     )
 
-    # Wrap Progenitor's system tools as DeepAgent-compatible tools
+    # Wrap Progenitor's system tools as DeepAgent-compatible tools. The
+    # resume_routine tool needs model/registries/checkpointer that don't
+    # exist yet at this point in construction (built below) -- this box is
+    # populated once they do; create_deepagent_tools reads it at call time,
+    # not at wrap time.
+    resume_routine_holder: dict[str, Any] = {}
     tools = create_deepagent_tools(
         tool_registry=tool_registry,
         llm_client=llm_client,
         state_manager=state_manager,
         live_state_provider=live_state_provider,
+        resume_routine_holder=resume_routine_holder,
     )
 
     custom_middleware = [
@@ -292,8 +333,162 @@ async def create_progenitor_agent(
     http_base_url = (
         getattr(runtime_config, "http_public_base_url", None) or f"http://{http_host}:{http_port}"
     )
-    subagents = create_progenitor_subagents(http_base_url, log_sink=log_sink)
     async_subagents = create_progenitor_async_subagents(http_base_url)
+    revision_reader = (
+        PostgresRoutineRevisionReader(database_url) if database_url else NullRoutineRevisionReader()
+    )
+
+    # Object agents use a registry because they are conversational subagents.
+    # Routine execution is different: routine documents are authoritative in
+    # Postgres, so deterministic runs resolve and compile a fresh document for
+    # each invocation rather than consulting an in-memory routine registry.
+    reserved_names = {spec["name"] for spec in async_subagents}
+
+    def object_proxy(source):
+        return create_object_agent_proxy(
+            source,
+            state_manager=state_manager,
+            model=model,
+            tools=tools,
+            backend=backend,
+            checkpointer=checkpointer,
+            log_sink=log_sink,
+            worktree_dir=worktree_dir,
+            shell_paths=ShellPaths(
+                shim_bin=Path(config.storage.shim_bin_dir),
+                agent_home=Path(config.storage.shell_home_dir),
+                timeout_seconds=config.runtime.shell_timeout_seconds,
+                workspace_root=Path(config.storage.shell_workspace_dir),
+            ),
+        )
+
+    live_objects = ObjectAgentRegistry(
+        state_manager=state_manager,
+        proxy_factory=object_proxy,
+        reserved_names=reserved_names,
+        native_root=data_dir / "agents" / "objects",
+    )
+    await live_objects.refresh()
+    live_async = LiveAsyncSubagentMiddleware(
+        live_objects, base_url=http_base_url, static_subagents=async_subagents
+    )
+    background_runner = create_agent_background_runner(state_manager, http_base_url)
+
+    async def profile_resolver(name):
+        return await resolve_model_profile(state_manager, name)
+
+    object_agent_registry = live_objects.callables
+    reserved_names.update(object_agent_registry)
+
+    async def _run_routine(
+        routine_id_or_name: str,
+        state: dict[str, Any],
+        runtime: Any | None = None,
+    ) -> dict[str, Any]:
+        """Resolve, compile, run, and discard one routine invocation.
+
+        This is used by both the heartbeat's deterministic Run action and
+        nested ``routine`` nodes.  The conversational subagent descriptors
+        below are still built at startup for DeepAgent task discovery, but
+        execution never looks up a compiled routine from a process registry.
+        """
+        resolved = await resolve_routine_document(state_manager, routine_id_or_name)
+        if resolved is None:
+            raise KeyError(f"unknown routine '{routine_id_or_name}'")
+        routine_id, graph_doc = resolved
+        executor = create_routine_executor(
+            routine_id=routine_id,
+            model=model,
+            state_manager=state_manager,
+            revision_reader=revision_reader,
+            agent_registry=object_agent_registry,
+            # Kept empty for backwards-compatible factory callers; all
+            # routine-to-routine calls use routine_runner below.
+            routine_registry={},
+            routine_runner=_run_routine,
+            agent_background_runner=background_runner,
+            model_profile_resolver=profile_resolver,
+            tool_registry=tool_registry,
+            checkpointer=checkpointer,
+            context=dict(getattr(runtime, "context", None) or {}),
+        )
+        resume = state.get("_routine_resume")
+        if resume:
+            # Share the UI/chat approval lock so answering a child directly
+            # cannot race with answering its approval through the parent.
+            async with approval_lock(resume["thread_id"], database_url, wait=True):
+                return await executor.ainvoke(state)
+        return await executor.ainvoke(state)
+
+    routine_subagents: list[CompiledSubAgent] = []
+    for graph_doc in await state_manager.list_routine_graphs():
+        routine_id = str(graph_doc.get("id") or "").strip()
+        if not routine_id:
+            logger.warning("Skipping routine graph document with no id: %r", graph_doc)
+            continue
+        if routine_id in reserved_names:
+            logger.warning("Skipping routine %r: name collides with an existing agent", routine_id)
+            continue
+        try:
+            validate_routine_graph_payload(graph_doc)
+        except (ValueError, KeyError) as exc:
+            logger.warning("Skipping routine %r: invalid graph document: %s", routine_id, exc)
+            continue
+        description = str(graph_doc.get("description") or "").strip() or (
+            f"Runs the {graph_doc.get('name') or routine_id} routine graph."
+        )
+        routine_spec = create_routine_subagent(
+            routine_id=routine_id,
+            description=description,
+            model=model,
+            state_manager=state_manager,
+            revision_reader=revision_reader,
+            agent_registry=object_agent_registry,
+            routine_registry={},
+            routine_runner=_run_routine,
+            agent_background_runner=background_runner,
+            model_profile_resolver=profile_resolver,
+            tool_registry=tool_registry,
+            checkpointer=checkpointer,
+        )
+        routine_subagents.append(routine_spec)
+        reserved_names.add(routine_id)
+
+    async def _resume_routine(thread_id: str, answer: Any, **kwargs: Any) -> dict[str, Any]:
+        return await resume_routine_thread(
+            thread_id=thread_id,
+            answer=answer,
+            database_url=database_url,
+            model=model,
+            state_manager=state_manager,
+            revision_reader=revision_reader,
+            agent_registry=object_agent_registry,
+            routine_registry={},
+            routine_runner=_run_routine,
+            agent_background_runner=background_runner,
+            model_profile_resolver=profile_resolver,
+            tool_registry=tool_registry,
+            checkpointer=checkpointer,
+            **kwargs,
+        )
+
+    resume_routine_holder["fn"] = _resume_routine
+
+    all_subagents: list[AsyncSubAgent | CompiledSubAgent] = [
+        *async_subagents,
+        *live_objects.descriptors,
+        *routine_subagents,
+    ]
+    custom_middleware.append(
+        LiveSubagentMiddleware(
+            live_objects,
+            static_subagents=routine_subagents,
+            backend=backend,
+            state_schema=ProgenitorAgentState,
+        )
+    )
+
+    custom_middleware.append(live_async)
 
     # Deep Agents' `memory=` parameter injects runtime memory from the
     # Postgres-backed memory documents (see backends.py's /memories/ mount).
@@ -302,8 +497,12 @@ async def create_progenitor_agent(
         AsyncSubagentTrackingMiddleware(
             state_manager=state_manager,
             async_subagents=async_subagents,
+            specs_provider=live_async.descriptors,
         ),
     )
+    # Outermost of ours: a failing tool (e.g. a subagent that cannot be built)
+    # becomes an error result for the model instead of aborting the run.
+    custom_middleware.insert(0, ToolErrorMiddleware())
     agent = create_deep_agent(
         name="progenitor",
         model=model,
@@ -313,14 +512,22 @@ async def create_progenitor_agent(
         store=store,
         skills=skills_dirs,
         memory=memory_paths or None,
-        subagents=subagents,
+        subagents=[],
         middleware=custom_middleware,
         checkpointer=checkpointer,
+        state_schema=ProgenitorAgentState,
     )
+    # The heartbeat uses this callable for deterministic UI-triggered runs.
+    # It is intentionally a resolver/runner, not a routine registry.
+    agent.routine_runner = _run_routine  # type: ignore[attr-defined]
+    agent.routine_resumer = _resume_routine  # type: ignore[attr-defined]
+    agent.object_agent_registry = live_objects  # type: ignore[attr-defined]
 
     logger.info(
-        "Created Progenitor DeepAgent: model=%s subagents=%s",
+        "Created Progenitor DeepAgent: model=%s agents=%s object_agents=%d graph_agents=%d",
         config.llm.model_default,
-        [subagent["name"] for subagent in subagents],
+        [subagent["name"] for subagent in all_subagents],
+        len(live_objects.descriptors),
+        len(routine_subagents),
     )
     return agent

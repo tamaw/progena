@@ -98,6 +98,20 @@ const workflowQuickChatConfig = {
   prompts: workflowQuickPrompts,
 };
 
+const routineQuickPrompts = [
+  'Create a new routine that researches a question, evaluates the findings, and writes a concise answer.',
+  'Create a new routine that processes each item in a list, summarizes them, and combines the summaries into a final report.',
+  'Modify this routine to add a quality-check step after the final report and revise the report when it finds missing details.',
+  'Modify this routine to add a human approval step before saving or sending the final report.',
+];
+const routineQuickChatConfig = {
+  ...defaultQuickChatConfig,
+  mode: 'routine-create',
+  title: 'Build a routine',
+  placeholder: 'Describe the routine you want...',
+  prompts: routineQuickPrompts,
+};
+
 
 const QUICK_CHAT_CONFIGS_BY_MODE = {
   'schedule-create': scheduleQuickChatConfig,
@@ -107,6 +121,7 @@ const QUICK_CHAT_CONFIGS_BY_MODE = {
   'inbox-compose': inboxQuickChatConfig,
   'inbox-edit': inboxEditQuickChatConfig,
   'workflow-create': workflowQuickChatConfig,
+  'routine-create': routineQuickChatConfig,
 };
 
 export function normalizeQuickChatConfig(config) {

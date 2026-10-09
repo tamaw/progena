@@ -4,9 +4,16 @@ import asyncio
 import json
 import logging
 from collections.abc import Callable
+from contextlib import asynccontextmanager
 from typing import Any
 
-from ..content_documents import content_document_key, content_document_prefix
+from ..content_documents import (
+    AGENT_SELF_EDIT_TOUCH_KEY_PREFIX,
+    content_document_key,
+    content_document_prefix,
+)
+from ..document_kinds import INBOX_MESSAGE_KEY_PREFIX
+from ..routines.store import ROUTINE_GRAPH_KEY_PREFIX, routine_graph_key
 from ..utils import utcnow_isoformat
 from ..workflows import (
     WORKFLOW_DEFINITION_KEY_PREFIX,
@@ -21,6 +28,7 @@ from . import (
     background_store,
 )
 from .langgraph_store import LangGraphRuntimeStore
+from .model_profiles import default_model_profiles_payload
 from .models import (
     A2ATaskRecord,
     ACPTaskRecord,
@@ -33,8 +41,6 @@ from .models import (
 from .preferences import default_preferences_payload
 
 logger = logging.getLogger(__name__)
-
-INBOX_MESSAGE_KEY_PREFIX = "inbox_message:"
 
 
 def _structured_log_message(log_name: str, payload: dict[str, Any]) -> str:
@@ -66,9 +72,11 @@ class StateManager:
     def __init__(
         self,
         runtime_store: LangGraphRuntimeStore,
+        database_url: str | None = None,
     ) -> None:
         self._state_cache: dict[str, Any] = {}
         self._runtime_store = runtime_store
+        self._database_url = database_url
         # Per-thread-id micro-locks for atomic read-modify-write merges of
         # the *same* thread's bookkeeping document (never held across LLM
         # calls, never contended across different threads).
@@ -146,6 +154,7 @@ class StateManager:
             "marketplaces": default_marketplaces_config_payload(),
             "knowledge": {"bases": []},
             "preferences": default_preferences_payload(),
+            "profile": default_model_profiles_payload(),
             "mcp_tools": {"tools": []},
             "schedule": default_schedule_config_payload(),
             "health": {},
@@ -177,6 +186,18 @@ class StateManager:
         """Save and cache a native-store-backed state document."""
         self._state_cache[name] = payload
         await self._runtime_store.save_document(name, payload)
+
+    async def save_routine_run_event(self, payload: dict[str, Any]) -> None:
+        """Persist lifecycle transitions without retaining them in the state cache."""
+        from ..routines.events import RUN_EVENT_PREFIX
+
+        key = f"{RUN_EVENT_PREFIX}{payload['request_id']}:{payload['status']}"
+        await self._runtime_store.save_document(key, payload)
+
+    async def get_routine_approval_decision(self, thread_id: str, interrupt_id: str) -> Any:
+        from ..routines.approvals import decision_key
+
+        return await self._runtime_store.peek_document(decision_key(thread_id, interrupt_id))
 
     async def _mutate_runtime_current_state(
         self,
@@ -450,6 +471,19 @@ class StateManager:
         await self._save_runtime_document("preferences", payload)
 
     # ==========================================================================
+    # Model profiles
+    # ==========================================================================
+    async def get_model_profiles_config(self) -> dict[str, Any]:
+        """Return the shared model profile map behind ``/config/profile.json``."""
+        default = default_model_profiles_payload()
+        payload = await self._runtime_store.get_document("profile", default)
+        return payload if isinstance(payload, dict) else default
+
+    async def save_model_profiles_config(self, payload: dict[str, Any]) -> None:
+        """Persist the validated shared model profile map."""
+        await self._save_runtime_document("profile", payload)
+
+    # ==========================================================================
     # Kanban board
     # ==========================================================================
     async def get_kanban_structure(self) -> dict[str, Any]:
@@ -593,6 +627,57 @@ class StateManager:
         rows = await self._runtime_store.list_documents(WORKFLOW_DEFINITION_KEY_PREFIX)
         return [payload for _, payload in rows if isinstance(payload, dict)]
 
+    # ==========================================================================
+    # Routine graphs
+    # ==========================================================================
+    async def get_execution_policy(self, policy_id: str) -> dict[str, Any] | None:
+        from ..policies import POLICY_KEY_PREFIX
+
+        payload = await self._runtime_store.peek_document(f"{POLICY_KEY_PREFIX}{policy_id}")
+        return payload if isinstance(payload, dict) else None
+
+    async def save_execution_policy(self, policy_id: str, payload: dict[str, Any]) -> None:
+        from ..policies import POLICY_KEY_PREFIX, validate_policy
+
+        policy = validate_policy(payload)
+        if policy.id != policy_id:
+            raise ValueError("Policy id must match filename")
+        await self._save_runtime_document(
+            f"{POLICY_KEY_PREFIX}{policy_id}", policy.model_dump(mode="json")
+        )
+
+    async def delete_execution_policy(self, policy_id: str) -> None:
+        from ..policies import POLICY_KEY_PREFIX
+
+        await self._runtime_store.delete_document(f"{POLICY_KEY_PREFIX}{policy_id}")
+
+    async def list_execution_policies(self) -> list[dict[str, Any]]:
+        from ..policies import POLICY_KEY_PREFIX
+
+        rows = await self._runtime_store.list_documents(POLICY_KEY_PREFIX)
+        return [payload for _, payload in rows if isinstance(payload, dict)]
+
+    async def get_routine_graph(self, agent_id: str) -> dict[str, Any] | None:
+        """Return one agent's routine graph document, or ``None`` if missing."""
+        key = routine_graph_key(agent_id)
+        payload = await self._runtime_store.peek_document(key)
+        return payload if isinstance(payload, dict) else None
+
+    async def save_routine_graph(self, agent_id: str, payload: dict[str, Any]) -> None:
+        """Persist one agent's routine graph document."""
+        key = routine_graph_key(agent_id)
+        await self._save_runtime_document(key, payload)
+
+    async def delete_routine_graph(self, agent_id: str) -> None:
+        """Remove one agent's routine graph document."""
+        key = routine_graph_key(agent_id)
+        await self._runtime_store.delete_document(key)
+
+    async def list_routine_graphs(self) -> list[dict[str, Any]]:
+        """Return all routine graph documents."""
+        rows = await self._runtime_store.list_documents(ROUTINE_GRAPH_KEY_PREFIX)
+        return [payload for _, payload in rows if isinstance(payload, dict)]
+
     async def list_workflow_runs(self) -> list[dict[str, Any]]:
         """Return all workflow run documents."""
         rows = await self._runtime_store.list_documents(WORKFLOW_RUN_KEY_PREFIX)
@@ -640,6 +725,21 @@ class StateManager:
         """Remove one content document."""
         key = content_document_key(kind, relative_path)
         await self._runtime_store.delete_document(key)
+
+    async def touch_object_agent(self, name: str) -> None:
+        """Record a marker so the backend's Postgres LISTEN/NOTIFY watcher
+        rebroadcasts this agent's profile to the Agents page.
+
+        Only needed for *native* agents, whose ``SelfManifestBackend`` writes
+        land on disk and never touch the ``store`` table on their own (unlike
+        a marketplace/user agent's ``save_content_document`` call, which
+        already produces a NOTIFY via its own row write). Called
+        unconditionally after every self-edit so the propagation path is one
+        mechanism regardless of source.
+        """
+        await self._save_runtime_document(
+            f"{AGENT_SELF_EDIT_TOUCH_KEY_PREFIX}{name}", {"at": utcnow_isoformat()}
+        )
 
     async def list_content_documents(self, kind: str) -> list[tuple[str, str]]:
         """Return ``(relative_path, content)`` for every document of one kind."""
@@ -828,20 +928,44 @@ class StateManager:
             [task.model_dump(mode="json") for task in tasks],
         )
 
+    @asynccontextmanager
+    async def _with_background_tasks_lock(self):
+        """Acquire a Postgres advisory lock for atomic background_tasks RMW.
+
+        Yields immediately when no database_url is configured (in-memory store).
+        """
+        if not self._database_url:
+            yield
+            return
+        from psycopg import AsyncConnection
+
+        async with await AsyncConnection.connect(self._database_url, autocommit=True) as conn:
+            await conn.execute("SELECT pg_advisory_lock(hashtextextended('background_tasks', 0))")
+            try:
+                yield
+            finally:
+                await conn.execute(
+                    "SELECT pg_advisory_unlock(hashtextextended('background_tasks', 0))"
+                )
+
     async def enqueue_background_task(self, task: BackgroundTaskEntry) -> None:
         """Add a background task to the queue."""
-        await background_store.enqueue_background_task(
-            task=task,
-            get_background_tasks_fn=self.get_background_tasks,
-            save_background_tasks_fn=self.save_background_tasks,
-        )
+        async with self._with_background_tasks_lock():
+            self.invalidate_document("background_tasks")
+            await background_store.enqueue_background_task(
+                task=task,
+                get_background_tasks_fn=self.get_background_tasks,
+                save_background_tasks_fn=self.save_background_tasks,
+            )
 
     async def dequeue_background_task(self) -> BackgroundTaskEntry | None:
         """Remove and return the next background task, or ``None`` if empty."""
-        return await background_store.dequeue_background_task(
-            get_background_tasks_fn=self.get_background_tasks,
-            save_background_tasks_fn=self.save_background_tasks,
-        )
+        async with self._with_background_tasks_lock():
+            self.invalidate_document("background_tasks")
+            return await background_store.dequeue_background_task(
+                get_background_tasks_fn=self.get_background_tasks,
+                save_background_tasks_fn=self.save_background_tasks,
+            )
 
     # ==========================================================================
     # Schedule Run Tracking

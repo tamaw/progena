@@ -2,17 +2,72 @@
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from datetime import datetime
 from typing import Any, cast
 
 from deepagents.middleware.async_subagents import AsyncSubAgent
 from langgraph_sdk import get_client
 
+from ..routines.messages import normalize_message_content
 from ..state.models import AsyncSubagentTaskRecord, AsyncSubagentTaskStatus
 from ..utils import utcnow
 
 HELLO_WORLD_ASYNC_ASSISTANT_ID = "hello-world-async"
 HELLO_WORLD_ASYNC_RESULT = "HELLO_FROM_ASYNC_SUBAGENT"
+
+
+def create_agent_background_runner(
+    state_manager: Any,
+    base_url: str,
+) -> Callable[..., Awaitable[dict[str, Any]]]:
+    """Launch a routine's object-agent task through the shared SDK runner."""
+    url = f"{base_url.rstrip('/')}/agent-protocol"
+
+    async def launch(
+        name: str,
+        prompt: str,
+        *,
+        parent_thread_id: str | None,
+        node_id: str,
+        response_schema: dict[str, Any] | None = None,
+        model_profile: str | None = None,
+    ) -> dict[str, Any]:
+        if model_profile:
+            from ..state.model_profiles import resolve_model_profile
+
+            await resolve_model_profile(state_manager, model_profile)
+        client = get_client(url=url)
+        thread = await client.threads.create()
+        run = await client.runs.create(
+            thread["thread_id"],
+            name,
+            input={"messages": [{"role": "user", "content": prompt}]},
+            config={
+                "configurable": {"response_schema": response_schema, "model_profile": model_profile}
+            },
+        )
+        task = {
+            "task_id": thread["thread_id"],
+            "thread_id": thread["thread_id"],
+            "run_id": run["run_id"],
+            "agent_name": name,
+            "status": run["status"],
+        }
+        record = build_tracked_task_record(
+            task,
+            spec=AsyncSubAgent(
+                name=name, description="Routine background delegation", graph_id=name, url=url
+            ),
+            parent_thread_id=parent_thread_id,
+            request_text=prompt,
+            request_metadata={"node_id": node_id, "routine_thread_id": parent_thread_id},
+            source="routine_agent",
+        )
+        await state_manager.upsert_async_subagent_task(record)
+        return task
+
+    return launch
 
 
 def build_tracked_task_record(
@@ -79,13 +134,19 @@ async def refresh_tracked_async_subagent_task(
         messages = values.get("messages") or []
         if messages:
             last = messages[-1]
-            latest_message = last.get("content", "") if isinstance(last, dict) else str(last)
+            latest_message = normalize_message_content(
+                last.get("content", "") if isinstance(last, dict) else str(last)
+            )
             summary = latest_message
         else:
             latest_message = "(completed with no output messages)"
             summary = latest_message
         completed_at = completed_at or utcnow()
         last_error = None
+    elif status == "interrupted":
+        # Paused for human approval, not finished: a resume continues the
+        # same thread, so completed_at stays unset.
+        latest_message = summary = "Awaiting human approval"
     elif status in {"error", "cancelled"}:
         error_text = run.get("error")
         last_error = str(error_text) if error_text else last_error

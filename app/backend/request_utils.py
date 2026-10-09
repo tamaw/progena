@@ -20,6 +20,7 @@ class BroadcastUiEvent(Protocol):
         scope: Literal["global", "session", "chat"] = "global",
         session_id: str | None = None,
         request_id: str | None = None,
+        client_id: str | None = None,
     ) -> UiEventEnvelope: ...
 
 

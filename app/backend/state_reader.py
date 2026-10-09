@@ -26,10 +26,16 @@ from pathlib import Path
 from typing import Any, cast
 
 from app.progenitor.config import default_mcp_config_payload
+from app.progenitor.content_documents import (
+    AGENT_DOCUMENT_KEY_PREFIX,
+    AGENT_SELF_EDIT_TOUCH_KEY_PREFIX,
+    SKILL_DOCUMENT_KEY_PREFIX,
+)
 from app.progenitor.mcp.loader import (
     normalize_mcp_config_payload,
     resolve_required_env_template,
 )
+from app.progenitor.routines.store import ROUTINE_GRAPH_KEY_PREFIX
 from app.progenitor.workflows import (
     WORKFLOW_DEFINITION_KEY_PREFIX,
     WORKFLOW_INVOKE_REQUEST_KEY_PREFIX,
@@ -518,6 +524,7 @@ class StateReader:
         self.document_store = document_store
         self._last_snapshot: StateSnapshot | None = None
         self._watchers: list[Callable[[StateSnapshot, str | None], None]] = []
+        self._raw_watchers: list[Callable[[str | None, str | None], None]] = []
         self._listener: StoreChangeListener | None = None
 
     @property
@@ -1804,6 +1811,21 @@ class StateReader:
         if callback in self._watchers:
             self._watchers.remove(callback)
 
+    def add_raw_watcher(self, callback: Callable[[str | None, str | None], None]) -> None:
+        """Register a watcher that fires on every store NOTIFY unconditionally.
+
+        Unlike ``add_watcher``, this bypasses ``_state_changed()``'s coarse
+        snapshot diff entirely and receives the raw ``(key, action)`` pair --
+        for consumers (document.changed workflow-trigger dispatch) that must
+        fire on every write to any tracked prefix, not just the fields
+        ``StateSnapshot`` happens to track.
+        """
+        self._raw_watchers.append(callback)
+
+    def remove_raw_watcher(self, callback: Callable[[str | None, str | None], None]) -> None:
+        if callback in self._raw_watchers:
+            self._raw_watchers.remove(callback)
+
     async def start_watching(self, reconnect_delay: float = 2.0) -> None:
         """Push state changes to watchers via Postgres LISTEN/NOTIFY (no polling).
 
@@ -1830,16 +1852,25 @@ class StateReader:
             self._listener = None
 
     def _on_store_change(self, payload: str) -> None:
-        # The NOTIFY payload is {"prefix": ..., "key": ...}; pass the key so
-        # watchers can route to the right dedicated event instead of recomputing
-        # everything.
+        # The NOTIFY payload is {"prefix": ..., "key": ..., "action": ...};
+        # pass the key so watchers can route to the right dedicated event
+        # instead of recomputing everything.
         changed_key: str | None = None
+        action: str | None = None
         try:
             data = json.loads(payload) if payload else {}
-            value = data.get("key") if isinstance(data, dict) else None
-            changed_key = value if isinstance(value, str) else None
+            key_value = data.get("key") if isinstance(data, dict) else None
+            changed_key = key_value if isinstance(key_value, str) else None
+            action_value = data.get("action") if isinstance(data, dict) else None
+            action = action_value if isinstance(action_value, str) else None
         except (ValueError, TypeError):
             changed_key = None
+            action = None
+        for raw_watcher in list(self._raw_watchers):
+            try:
+                raw_watcher(changed_key, action)
+            except Exception as e:
+                logger.warning("Raw watcher error: %s", e)
         self._emit_if_changed(changed_key)
 
     def _emit_if_changed(self, changed_key: str | None = None) -> None:
@@ -1854,16 +1885,29 @@ class StateReader:
             logger.error("Failed to read state snapshot: %s", e)
             return
         if not self._state_changed(snapshot):
-            workflow_change = bool(
+            # These key families carry no signal in the tracked session-state
+            # fields `_state_changed` diffs (cycle_count, agents/tools counts,
+            # etc.), so a write to them would otherwise never reach any
+            # watcher. Bypassing the diff for them mirrors the workflow
+            # carve-out below -- both exist because "this changed_key was
+            # written" is itself the notification, independent of whether the
+            # coarse snapshot moved.
+            key_bypasses_state_diff = bool(
                 changed_key
                 and (
-                    changed_key.startswith(WORKFLOW_DEFINITION_KEY_PREFIX)
+                    changed_key.startswith("policy:")
+                    or changed_key.startswith(WORKFLOW_DEFINITION_KEY_PREFIX)
                     or changed_key.startswith(WORKFLOW_RUN_KEY_PREFIX)
                     or changed_key.startswith(WORKFLOW_QUEUE_KEY_PREFIX)
                     or changed_key.startswith(WORKFLOW_INVOKE_REQUEST_KEY_PREFIX)
+                    or changed_key.startswith(AGENT_DOCUMENT_KEY_PREFIX)
+                    or changed_key.startswith(SKILL_DOCUMENT_KEY_PREFIX)
+                    or changed_key.startswith(AGENT_SELF_EDIT_TOUCH_KEY_PREFIX)
+                    or changed_key.startswith(ROUTINE_GRAPH_KEY_PREFIX)
                 )
             )
-            if not workflow_change:
+            # Reconnect must reach reconciliation even with unchanged state.
+            if changed_key is not None and not key_bypasses_state_diff:
                 return
         self._last_snapshot = snapshot
         for watcher in list(self._watchers):

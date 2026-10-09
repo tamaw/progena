@@ -1,6 +1,6 @@
 ---
 name: managing-tasks
-description: Create, edit, move, or delete kanban task cards by writing one markdown file per card under /config/tasks/. Use when a user asks to add a task, create a backlog item, move a card to a different column, change a task's status/title/labels, or remove a task from the board.
+description: Create, edit, move, or delete kanban task cards by writing one markdown file per card under /tasks/. Use when a user asks to add a task, create a backlog item, move a card to a different column, change a task's status/title/labels, or remove a task from the board.
 allowed-tools: read_file write_file edit_file delete_file ls generate_id structured_output json_to_yaml
 ---
 
@@ -9,10 +9,10 @@ allowed-tools: read_file write_file edit_file delete_file ls generate_id structu
 The kanban board lives as one virtual file per card, plus a read-only structure
 document:
 
-- `/config/tasks/board.json` — columns + card order, assembled automatically from
+- `/tasks/board.json` — columns + card order, assembled automatically from
   the cards below. Do not write this directly.
-- `/config/tasks/<id>.md` — one task card, YAML frontmatter + markdown body.
-  `/config/tasks/<project-id>/<id>.md` scopes a card to a project instead.
+- `/tasks/<id>.md` — one task card, YAML frontmatter + markdown body.
+  `/tasks/<project-id>/<id>.md` scopes a card to a project instead.
 
 Writing a card file persists it immediately (Postgres is the source of truth) and
 the Tasks page updates live — no separate "create task" tool, no index to maintain.
@@ -82,25 +82,25 @@ impossible rather than just documented:
    schema; the filename is what's actually authoritative.
 4. `json_to_yaml data=<object from step 3> body_field=description` — renders
    valid YAML frontmatter + the description as the trailing body.
-5. `write_file /config/tasks/<id>.md` with the returned `content`.
+5. `write_file /tasks/<id>.md` with the returned `content`.
 
 ### Create a task (manual)
 For a trivial one-liner, hand-writing the frontmatter directly (matching the
 File Schema above exactly) is fine:
 1. `generate_id prefix=card`
-2. `write_file /config/tasks/<id>.md` with frontmatter (including a real `summary`)
+2. `write_file /tasks/<id>.md` with frontmatter (including a real `summary`)
    plus the description body.
 
 ### Move a card / change status
-1. `read_file /config/tasks/<id>.md`
+1. `read_file /tasks/<id>.md`
 2. `edit_file` to change `column_id` and/or `status` in place.
 
 ### Edit title, labels, owner, or description
-1. `read_file /config/tasks/<id>.md`
+1. `read_file /tasks/<id>.md`
 2. `edit_file` the relevant frontmatter key or the body text.
 
 ### Delete a task
-`delete_file /config/tasks/<id>.md` removes the card from the board.
+`delete_file /tasks/<id>.md` removes the card from the board.
 
 ## After the Change
 Writing, editing, or deleting a card file triggers the Tasks page's live update
@@ -112,8 +112,8 @@ and column (or what changed, for an edit/move/delete). Only ask a follow-up
 question if the task title itself is unclear; otherwise make the change.
 
 ## Troubleshooting
-- Card not appearing on the board: confirm the path is under `/config/tasks/`, not
-  `/state/tasks/` or anywhere else — only `/config/tasks/` is backed by the kanban
+- Card not appearing on the board: confirm the path is under `/tasks/`, not
+  `/state/tasks/` or anywhere else — only `/tasks/` is backed by the kanban
   store and fires the live update.
 - `edit_file` old_string not found: re-read the file first — hand-authored YAML
   frontmatter can vary in spacing/quoting, so match the on-disk content exactly.

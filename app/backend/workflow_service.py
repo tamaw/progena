@@ -438,6 +438,30 @@ def _trigger_column_filter_matches(trigger: WorkflowNodeEvent, event: Mapping[st
     )
 
 
+def _document_trigger_filter_matches(trigger: WorkflowNodeEvent, event: Mapping[str, Any]) -> bool:
+    """Check a trigger's optional key_prefix/key/action filter against a flat document.changed event.
+
+    Each field is a wildcard when unset on the trigger, so a trigger with no
+    filters set matches every document.changed event.
+    """
+
+    return (
+        (not trigger.key_prefix or trigger.key_prefix == event.get("key_prefix"))
+        and (not trigger.key or trigger.key == event.get("key"))
+        and (not trigger.action or trigger.action == event.get("action"))
+    )
+
+
+def _trigger_matches(trigger: WorkflowNodeEvent, event_type: str, event: Mapping[str, Any]) -> bool:
+    """Match an event node's type and type-specific filters against an event."""
+
+    if trigger.event_type != event_type:
+        return False
+    if event_type == "document.changed":
+        return _document_trigger_filter_matches(trigger, event)
+    return _trigger_column_filter_matches(trigger, event)
+
+
 def _build_queued_run(
     workflow_id: str,
     trigger: Mapping[str, Any],
@@ -450,7 +474,7 @@ def _build_queued_run(
     invocation = invocation if isinstance(invocation, Mapping) else {}
     raw_source = invocation.get("source")
     source: WorkflowRunSource = (
-        raw_source if raw_source in ("kanban", "manual", "progenitor") else "manual"
+        raw_source if raw_source in ("kanban", "document", "manual", "progenitor") else "manual"
     )
     ancestry_raw = invocation.get("ancestry")
     ancestry = [str(item) for item in ancestry_raw] if isinstance(ancestry_raw, list) else []
@@ -609,13 +633,13 @@ class WorkflowExecutor:
             matching_nodes = [
                 (node_id, node)
                 for node_id, node in event_nodes
-                if node.event_type == event_type and _trigger_column_filter_matches(node, trigger)
+                if _trigger_matches(node, event_type, trigger)
             ]
             for trigger_node_id, _trigger_node in matching_nodes:
                 run = await self.trigger_workflow(
                     definition.id,
                     trigger,
-                    source="kanban",
+                    source="document" if event_type == "document.changed" else "kanban",
                     trigger_node_id=trigger_node_id,
                 )
                 if run is not None:

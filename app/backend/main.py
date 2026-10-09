@@ -53,7 +53,6 @@ from .plugin_routes import router as plugins_router
 from .preferences_routes import router as preferences_router
 from .repo_routes import router as repos_router
 from .request_utils import request_correlation_id as _strict_request_correlation_id
-from .routine_routes import router as routine_router
 from .session import (
     SessionConfig,
     SessionManager,
@@ -763,6 +762,7 @@ async def lifespan(app: FastAPI):
             config.database_url,
             config.backend_database_url,
             config.backend_database_name,
+            document_store,
         )
     except Exception:  # noqa: BLE001 - backend must still start if agent DB is unavailable
         logger.exception("Failed to configure backend agent store")
@@ -1006,7 +1006,6 @@ app = FastAPI(
     version=config.api_version,
     lifespan=lifespan,
 )
-app.include_router(routine_router)
 app.include_router(ui_router)
 app.include_router(knowledge_router)
 app.include_router(marketplaces_router)

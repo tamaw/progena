@@ -69,6 +69,42 @@ async def test_executor_runs_default_agent_from_event_data_without_thread_id():
 
 
 @pytest.mark.asyncio
+async def test_document_changed_event_node_filters_and_receives_flat_event():
+    store = InMemoryDocumentStore()
+    workflow = default_workflow_definition(event_type="document.changed")
+    event_id = _node_id(workflow, "event")
+    workflow["graph"]["nodes"][event_id].update(key_prefix="routine:", action="upserted")
+    definition = save_workflow_definition(store, workflow)
+    runner = RecordingRunner(["{}"])
+    executor = _executor(store, runner)
+    event = {
+        "event_type": "document.changed",
+        "timestamp": "2026-10-10T00:00:00+00:00",
+        "key_prefix": "routine:",
+        "key": "routine:abc",
+        "action": "upserted",
+    }
+
+    assert await executor.dispatch_event("document.changed", {**event, "action": "deleted"}) == []
+    assert (
+        await executor.dispatch_event("document.changed", {**event, "key_prefix": "policy:"}) == []
+    )
+    (run,) = await executor.dispatch_event("document.changed", event)
+
+    completed = await _wait_for(
+        lambda: (
+            get_workflow_run(store, run.run_id)
+            if get_workflow_run(store, run.run_id).status == "completed"
+            else None
+        )
+    )
+    assert completed.workflow_id == definition.id
+    assert completed.source == "document"
+    assert completed.trigger_node_id == event_id
+    assert completed.node_outputs[event_id]["key"] == "routine:abc"
+
+
+@pytest.mark.asyncio
 async def test_connected_agent_output_schedules_its_consumer_without_control_edge():
     store = InMemoryDocumentStore()
     workflow = default_workflow_definition()

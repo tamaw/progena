@@ -1,3 +1,4 @@
+import { createSelector } from '@reduxjs/toolkit';
 import {
   selectAgentProfiles,
   selectInboxMessages,
@@ -6,8 +7,14 @@ import {
   selectMcpServers,
   selectPrompts,
   selectRepos,
-  selectRoutines,
 } from '../uiDataSlice';
+
+// Routines are graph agent profiles (kind "routine"); runs resolve the
+// current persisted graph, so every listed routine is selectable.
+const selectRoutineProfiles = createSelector(
+  [selectAgentProfiles],
+  (profiles) => (profiles || []).filter((profile) => profile.kind === 'routine'),
+);
 /**
  * Whitelisted Redux collections exposed to workflow prompt pickers.
  * Picker schemas name one of these keys; they never carry a URL, query, or
@@ -54,14 +61,8 @@ export const WORKFLOW_REFERENCE_SOURCES = {
   },
   routine: {
     referenceKey: 'routine',
-    select: selectRoutines,
-    toOption: (item) => ({
-      value: item.id,
-      label: item.title || item.id,
-      description: item.description || '',
-      revision: item.published_revision,
-      disabled: !item.published_revision,
-    }),
+    select: selectRoutineProfiles,
+    toOption: (item) => ({ value: item.id, label: item.name || item.id, description: item.description || '' }),
   },
 };
 

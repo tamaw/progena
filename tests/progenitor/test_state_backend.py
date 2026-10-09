@@ -11,6 +11,7 @@ import pytest
 from app.progenitor.agent.state_backend import (
     InboxDirectoryBackend,
     KanbanTaskDirectoryBackend,
+    RoutineDirectoryBackend,
     StateDocumentBackend,
     WorkflowDirectoryBackend,
     card_to_markdown,
@@ -27,6 +28,7 @@ from app.progenitor.agent.state_backend import (
     validate_registry_document,
     validate_schedule_document,
 )
+from app.progenitor.routines.store import default_routine_graph
 from app.progenitor.state.models import ScheduleEntry
 from app.progenitor.workflows import default_workflow_definition
 
@@ -657,6 +659,82 @@ async def test_workflow_aedit_and_adelete_round_trip():
     deleted = await backend.adelete("/customer-followup.json")
     assert deleted.error is None
     assert sm.workflows == {}
+
+
+# ---- routines (per-agent JSON directory, mirrors workflows) ------------------
+
+
+class _FakeRoutineStateManager:
+    async def get_execution_policy(self, policy_id):
+        return {"id": policy_id}
+
+    def __init__(self, graphs: list[dict[str, Any]] | None = None) -> None:
+        self.graphs: dict[str, dict[str, Any]] = {
+            graph["id"]: copy.deepcopy(graph) for graph in graphs or []
+        }
+
+    async def get_routine_graph(self, agent_id: str) -> dict[str, Any] | None:
+        graph = self.graphs.get(agent_id)
+        return copy.deepcopy(graph) if graph is not None else None
+
+    async def save_routine_graph(self, agent_id: str, graph: dict[str, Any]) -> None:
+        self.graphs[agent_id] = copy.deepcopy(graph)
+
+    async def delete_routine_graph(self, agent_id: str) -> None:
+        self.graphs.pop(agent_id, None)
+
+    async def list_routine_graphs(self) -> list[dict[str, Any]]:
+        return [copy.deepcopy(graph) for graph in self.graphs.values()]
+
+
+def _routine_backend(graphs=None) -> tuple[RoutineDirectoryBackend, _FakeRoutineStateManager]:
+    sm = _FakeRoutineStateManager(graphs)
+    return RoutineDirectoryBackend(sm), sm
+
+
+async def test_routine_aread_and_ls():
+    graph = default_routine_graph("subagent-observe", name="Observe Agent")
+    backend, _sm = _routine_backend([graph])
+    listed = await backend.als("/")
+    assert [entry["path"] for entry in listed.entries] == ["/subagent-observe.json"]
+    read = await backend.aread("/subagent-observe.json")
+    assert read.error is None
+    assert json.loads(read.file_data["content"])["name"] == "Observe Agent"
+
+
+async def test_routine_awrite_persists_valid_graph():
+    graph = default_routine_graph("subagent-observe", name="Observe Agent")
+    backend, sm = _routine_backend([])
+    result = await backend.awrite("/subagent-observe.json", json.dumps(graph))
+    assert result.error is None
+    assert sm.graphs["subagent-observe"]["name"] == "Observe Agent"
+
+
+async def test_routine_awrite_rejects_filename_id_mismatch():
+    graph = default_routine_graph("subagent-observe", name="Observe Agent")
+    graph["id"] = "wrong-id"
+    backend, sm = _routine_backend([])
+    result = await backend.awrite("/subagent-observe.json", json.dumps(graph))
+    assert result.error and "must match filename" in result.error
+    assert sm.graphs == {}
+
+
+async def test_routine_awrite_rejects_invalid_schema():
+    backend, sm = _routine_backend([])
+    result = await backend.awrite("/subagent-observe.json", json.dumps({"id": "subagent-observe"}))
+    assert result.error is not None
+    assert sm.graphs == {}
+
+
+async def test_routine_aedit_and_adelete_round_trip():
+    graph = default_routine_graph("subagent-observe", name="Observe Agent")
+    backend, sm = _routine_backend([graph])
+    edited = await backend.aedit("/subagent-observe.json", "Observe Agent", "Watcher Agent")
+    assert edited.error is None
+    assert sm.graphs["subagent-observe"]["name"] == "Watcher Agent"
+    deleted = await backend.adelete("/subagent-observe.json")
+    assert deleted.error is None
+    assert sm.graphs == {}
 
 
 # ---- schedule (single file, object keyed by id) ------------------------------

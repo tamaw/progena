@@ -64,10 +64,15 @@ jobs:
           . .venv/bin/activate
           ruff check app/progenitor tests/progenitor tests/test_scheduler.py
 
-      - name: Type-check progenitor (pyright)
+      - name: Type-check (pyright)
+        # Covers all of app/, not just app/progenitor -- pyright reports zero
+        # errors across the tree, so the wider scope costs nothing and keeps
+        # app/backend and app/agents from drifting untyped.
+        # --pythonpath keeps this identical to the pre-commit hook, so the
+        # interpreter never depends on activation state.
         run: |
           . .venv/bin/activate
-          pyright app/progenitor
+          pyright --pythonpath .venv/bin/python app/
 
       - name: Tests progenitor (pytest)
         run: >
@@ -203,10 +208,12 @@ jobs:
           AZURE_OPENAI_API_KEY: ${{ secrets.AZURE_OPENAI_API_KEY }}
           AZURE_OPENAI_BASE_URL: ${{ secrets.AZURE_OPENAI_BASE_URL }}
           JINA_API_KEY: ${{ secrets.JINA_API_KEY }}
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
           PROGENITOR_MODEL_DEFAULT: ${{ vars.PROGENITOR_MODEL_DEFAULT }}
           PROGENITOR_TIMEZONE: ${{ vars.PROGENITOR_TIMEZONE }}
           PROGENITOR_REASONING_ENABLED: ${{ vars.PROGENITOR_REASONING_ENABLED }}
           PROGENITOR_REASONING_EFFORT: ${{ vars.PROGENITOR_REASONING_EFFORT }}
+          PROGENITOR_REASONING_SUMMARY: ${{ vars.PROGENITOR_REASONING_SUMMARY }}
           TELEGRAM_ENABLED: ${{ vars.TELEGRAM_ENABLED }}
           TELEGRAM_POLLING_ENABLED: ${{ vars.TELEGRAM_POLLING_ENABLED }}
           TELEGRAM_ALLOWED_USERS: ${{ vars.TELEGRAM_ALLOWED_USERS }}
@@ -223,6 +230,11 @@ jobs:
           docker image inspect ghcr.io/tamaw/progenitor-backend:${PROGENITOR_IMAGE_TAG} >/dev/null
           docker image inspect ghcr.io/tamaw/progenitor-frontend:${PROGENITOR_IMAGE_TAG} >/dev/null
           test -d "$PROGENITOR_HOST_SCHEMAS_DIR"
+          # The runtime runs as UID 10001; log files left by the old root container
+          # are not appendable, so hand its log folder over before starting it.
+          docker run --rm --user 0 --entrypoint sh -v "$PROGENITOR_HOST_LOGS_DIR:/logs" \
+            ghcr.io/tamaw/progenitor:${PROGENITOR_IMAGE_TAG} \
+            -c 'mkdir -p /logs/progenitor && chown -R 10001:10001 /logs/progenitor'
           docker compose -f docker/docker-compose.progenitor.yml up -d --no-build --pull never
           docker compose -f docker/docker-compose.progenitor.yml ps
 

@@ -409,6 +409,7 @@ class TestMiddlewareIntegration:
                         self._docs = {
                             "prompt": {"progenitor/genesis.md": "Genesis"},
                             "skill": {},
+                            "agent": {},
                             "memory": {},
                         }
 
@@ -424,6 +425,9 @@ class TestMiddlewareIntegration:
                     async def list_content_documents(self, kind):
                         return list(self._docs[kind].items())
 
+                    async def list_routine_graphs(self):
+                        return []
+
                 with tempfile.TemporaryDirectory() as tmpdir:
                     prompts_dir = Path(tmpdir) / "prompts"
                     prompts_dir.mkdir()
@@ -431,7 +435,11 @@ class TestMiddlewareIntegration:
                         llm=SimpleNamespace(model_default="gpt-chat-latest"),
                         storage=SimpleNamespace(
                             prompts_dir=prompts_dir,
+                            shim_bin_dir=Path(tmpdir) / "shims" / "bin",
+                            shell_home_dir=Path(tmpdir) / "shell-home",
+                            shell_workspace_dir=Path(tmpdir) / "shell-workspaces",
                         ),
+                        runtime=SimpleNamespace(shell_timeout_seconds=120),
                     )
                     await create_progenitor_agent(
                         config=fake_config,

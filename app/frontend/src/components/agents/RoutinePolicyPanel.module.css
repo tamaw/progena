@@ -1,0 +1,9 @@
+.panel { width: 340px; }
+.body { padding: 16px; overflow: auto; }
+.body fieldset { border: 0; padding: 0; margin: 0; }
+.body label { display: flex; flex-direction: column; gap: 5px; margin-bottom: 12px; font-size: 12px; }
+.body input, .body select { background: var(--bg-secondary, transparent); color: inherit; border: 1px solid var(--border-color, #555); border-radius: 5px; padding: 7px; width: 100%; box-sizing: border-box; }
+.body .check { flex-direction: row; align-items: center; }
+.check input { width: auto; }
+.body p { font-size: 12px; opacity: .8; overflow-wrap: anywhere; }
+.actions { display: flex; gap: 8px; }
