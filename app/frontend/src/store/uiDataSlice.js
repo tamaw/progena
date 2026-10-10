@@ -202,6 +202,7 @@ export {
   selectAgentRunState,
   selectRoutineRunLifecycle,
   selectLatestRoutineRunLifecycle,
+  selectRoutineLatestRunStatusByAgentId,
   selectLastRoutineRunNotification,
 } from './uiData/agents';
 

@@ -17,13 +17,15 @@ function sql(command) {
 
 // Seed only the graph document. Its normal committed-store notification creates
 // the catalog entry; execution and all assertions still use the live UI/runtime.
-export function seedRoutine({ failing = false } = {}) {
+// `retry` attaches a retry policy to the first node; with a failing expression
+// its backoff keeps the run in `started` for a known time, then it fails.
+export function seedRoutine({ failing = false, retry } = {}) {
   const id = `routine_sse_${randomUUID().replaceAll('-', '')}`;
   const graph = {
     id, name: `SSE verification ${id.slice(-8)}`, description: 'Deterministic event transport verification',
     version: '2.0.0', entry: 'first',
     nodes: [
-      { id: 'first', label: 'First', kind: 'eval', output_key: 'first', config: { expression: failing ? '1 / 0' : '9' } },
+      { id: 'first', label: 'First', kind: 'eval', output_key: 'first', config: { expression: failing ? '1 / 0' : '9', ...(retry ? { retry } : {}) } },
       { id: 'second', label: 'Second', kind: 'eval', output_key: 'second', config: { expression: 'first + 1' } },
     ],
     edges: [{ from: 'first', to: 'second', level: 'normal' }],

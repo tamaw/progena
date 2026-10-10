@@ -140,6 +140,7 @@ jobs:
               - 'pyproject.toml'
               - 'data/prompts/**'
               - 'data/skills/**'
+              - '.github/workflows/ci.yml'
 
       - uses: docker/setup-buildx-action@v3
 
