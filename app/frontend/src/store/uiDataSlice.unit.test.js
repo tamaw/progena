@@ -722,11 +722,14 @@ describe('agent reducers', () => {
       type: 'agent.routine.run.paused',
       payload: { agent_id: 'routine-c', request_id: 'r3', timestamp: '2026-10-07T00:00:03Z' },
     }));
-    // Older failed run superseded by newer completed run → not Failed
+    // A failed event that arrives late but is older than the started run
+    // does not override it: the newest timestamp wins, not the last event.
     s = reducer(s, applyUiEvent({
       type: 'agent.routine.run.failed',
       payload: { agent_id: 'routine-a', request_id: 'r4', timestamp: '2026-10-07T00:00:00Z' },
     }));
+    expect(selectRoutineLatestRunStatusByAgentId({ uiData: s })['routine-a']).toBe('Running');
+    // A newer completed run leaves the routine in no filter but All.
     s = reducer(s, applyUiEvent({
       type: 'agent.routine.run.completed',
       payload: { agent_id: 'routine-a', request_id: 'r5', timestamp: '2026-10-07T00:00:04Z' },

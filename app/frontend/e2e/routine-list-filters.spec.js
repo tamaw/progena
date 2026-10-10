@@ -30,10 +30,10 @@ async function visibleFixtures(pane, filter) {
 }
 
 test('routines list filters by the latest run status', async ({ page }) => {
-  const failed = seedRoutine({ failing: true });
-  const paused = seedRoutine();
-  const completed = seedRoutine();
-  fixtures.push(failed, paused, completed);
+  const seed = (options) => { const graph = seedRoutine(options); fixtures.push(graph); return graph; };
+  const failed = seed({ failing: true });
+  const paused = seed();
+  const completed = seed();
   await observeRoutineEvents(page);
 
   await openRoutine(page, failed);

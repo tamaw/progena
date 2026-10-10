@@ -316,12 +316,8 @@ export const selectAgentRoutineRevisions = (state, agentId) => state.uiData.agen
 export const selectAgentRoutineRevisionContent = (state, agentId, revisionId) => state.uiData.agents.revisionContentByKey[`${agentId}:${revisionId}`];
 export const selectAgentRunState = (state, threadId) => (threadId ? state.uiData.agents.runStateByThreadId[threadId] : undefined);
 export const selectRoutineRunLifecycle = (state, requestId) => state.uiData.agents.runLifecycleByRequestId[requestId];
-export const selectLatestRoutineRunLifecycle = createSelector(
-  [(state) => state.uiData.agents.runLifecycleByRequestId, (_, agentId) => agentId],
-  (runs, agentId) => Object.values(runs).filter((run) => run.agent_id === agentId)
-    .reduce((latest, run) => !latest || run.timestamp > latest.timestamp ? run : latest, null),
-);
-export const selectRoutineLatestRunStatusByAgentId = createSelector(
+// One rule for "latest run" per routine: newest lifecycle timestamp wins.
+const selectLatestRoutineRunByAgentId = createSelector(
   [(state) => state.uiData.agents.runLifecycleByRequestId],
   (runs) => {
     const latestByAgent = {};
@@ -332,14 +328,14 @@ export const selectRoutineLatestRunStatusByAgentId = createSelector(
         latestByAgent[run.agent_id] = run;
       }
     }
-    const statusMap = {};
-    for (const [agentId, run] of Object.entries(latestByAgent)) {
-      if (['enqueued', 'started'].includes(run.status)) statusMap[agentId] = 'Running';
-      else if (run.status === 'paused') statusMap[agentId] = 'Paused';
-      else if (run.status === 'failed') statusMap[agentId] = 'Failed';
-      else statusMap[agentId] = null;
-    }
-    return statusMap;
+    return latestByAgent;
   },
+);
+export const selectLatestRoutineRunLifecycle = (state, agentId) => selectLatestRoutineRunByAgentId(state)[agentId] ?? null;
+const RUN_STATUS_FILTER = { enqueued: 'Running', started: 'Running', paused: 'Paused', failed: 'Failed' };
+export const selectRoutineLatestRunStatusByAgentId = createSelector(
+  [selectLatestRoutineRunByAgentId],
+  (latestByAgent) => Object.fromEntries(Object.entries(latestByAgent)
+    .map(([agentId, run]) => [agentId, RUN_STATUS_FILTER[run.status] ?? null])),
 );
 export const selectLastRoutineRunNotification = (state) => state.uiData.agents.lastRunNotification;

@@ -33,8 +33,8 @@ import { formatAge } from '../components/agents/agentFormat';
 
 const ROUTINE_FILTERS = ['All', 'Running', 'Paused', 'Failed'];
 
-const SORT_MODES = ['Type', 'Name', 'Recent'];
-const TYPE_RANK = { routine: 2 };
+// Every row is a routine, so there is no Type sort.
+const SORT_MODES = ['Name', 'Recent'];
 
 const RECENCY_BUCKETS = [
   ['today', 'Today'],
@@ -62,12 +62,8 @@ function sortRoutines(routines, mode) {
   const comparators = {
     Name: byName,
     Recent: (a, b) => updatedTime(b) - updatedTime(a) || byName(a, b),
-    Type: (a, b) => {
-      const rank = (TYPE_RANK[a.kind] ?? 9) - (TYPE_RANK[b.kind] ?? 9);
-      return rank || byName(a, b);
-    },
   };
-  return [...routines].sort(comparators[mode] || comparators.Type);
+  return [...routines].sort(comparators[mode] || comparators.Name);
 }
 
 function matchesRoutine(routine, filter, search, runStatus) {
@@ -140,7 +136,7 @@ export default function RoutinesPage() {
 
   const [activeFilter, setActiveFilter] = useState('All');
   const [search, setSearch] = useState('');
-  const [sortMode, setSortMode] = useState('Type');
+  const [sortMode, setSortMode] = useState('Name');
   const [graphEditorOpen, setGraphEditorOpen] = useState(false);
   const [routineRunsOpen, setRoutineRunsOpen] = useState(false);
   const [deleteConfirmationOpen, setDeleteConfirmationOpen] = useState(false);
@@ -248,9 +244,6 @@ export default function RoutinesPage() {
   );
 
   const sections = useMemo(() => {
-    if (sortMode === 'Name') {
-      return [{ key: 'all', title: null, routines: visibleRoutines }];
-    }
     if (sortMode === 'Recent') {
       const buckets = new Map(RECENCY_BUCKETS.map(([key]) => [key, []]));
       visibleRoutines.forEach((routine) => {
@@ -264,8 +257,11 @@ export default function RoutinesPage() {
     return [{ key: 'all', title: null, routines: visibleRoutines }];
   }, [sortMode, visibleRoutines]);
 
-  const runningCount = routines.filter((agent) => agent.status === 'running').length;
-  const taskCount = routines.reduce((total, agent) => total + (agent.tasks?.length || 0), 0);
+  // Footer counts use the same latest-run status as the filters and dots.
+  const countByStatus = (status) => routines.filter((routine) => runStatusById[routine.id] === status).length;
+  const runningCount = countByStatus('Running');
+  const pausedCount = countByStatus('Paused');
+  const failedCount = countByStatus('Failed');
 
   async function handleSaveGraph(parsed) {
     return dispatch(updateAgentGraph({
@@ -320,7 +316,8 @@ export default function RoutinesPage() {
         )}
         <PaneListFooter>
           <span><span className="num">{runningCount}</span> running</span>
-          <span><span className="num">{taskCount}</span> tasks</span>
+          <span><span className="num">{pausedCount}</span> paused</span>
+          <span><span className="num">{failedCount}</span> failed</span>
         </PaneListFooter>
       </PaneList>
 
@@ -359,7 +356,7 @@ export default function RoutinesPage() {
       {deleteConfirmationOpen && selectedAgent ? (
         <PopupModal
           eyebrow="Delete routine"
-          title={`Delete "${selectedAgent.name}"?`}
+          title={`Delete “${selectedAgent.name}”?`}
           message={deleteError || 'This routine and its graph will be permanently deleted.'}
           confirmLabel="Delete routine"
           busyLabel="Deleting…"
