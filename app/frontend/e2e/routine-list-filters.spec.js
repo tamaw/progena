@@ -34,6 +34,9 @@ test('routines list filters by the latest run status', async ({ page }) => {
   const failed = seed({ failing: true });
   const paused = seed();
   const completed = seed();
+  // No sleep node exists: a failing node retried after a fixed 60s backoff
+  // holds the run in `started`, then fails it.
+  const running = seed({ failing: true, retry: { max_retries: 1, initial_interval: 60, max_interval: 60, jitter: false, retry_on: 'all' } });
   await observeRoutineEvents(page);
 
   await openRoutine(page, failed);
@@ -49,15 +52,22 @@ test('routines list filters by the latest run status', async ({ page }) => {
   await page.getByRole('button', { name: 'Run routine', exact: true }).click();
   await lifecycle(page, completed.id, 'completed');
 
+  await openRoutine(page, running);
+  await page.getByRole('button', { name: 'Run routine', exact: true }).click();
+  await lifecycle(page, running.id, 'started');
+
   await page.goto('/routines');
   const pane = page.locator('.routines-pane');
   await expect(pane).toBeVisible({ timeout: 20_000 });
   await expect(page.locator('.agents-pane')).toHaveCount(0);
   await expect(pane.getByRole('button', { name: new RegExp(completed.name) })).toBeVisible({ timeout: 30_000 });
 
-  const all = [failed.name, paused.name, completed.name].sort();
+  const all = [failed.name, paused.name, completed.name, running.name].sort();
+  await expect.poll(() => visibleFixtures(pane, 'Running'), { timeout: 30_000 }).toEqual([running.name]);
   await expect.poll(() => visibleFixtures(pane, 'Failed'), { timeout: 30_000 }).toEqual([failed.name]);
   await expect.poll(() => visibleFixtures(pane, 'Paused'), { timeout: 30_000 }).toEqual([paused.name]);
-  await expect.poll(() => visibleFixtures(pane, 'Running'), { timeout: 30_000 }).toEqual([]);
   await expect.poll(() => visibleFixtures(pane, 'All'), { timeout: 30_000 }).toEqual(all);
+  // When the backoff ends the run fails, and the list moves it live.
+  await expect.poll(() => visibleFixtures(pane, 'Failed'), { timeout: 150_000 }).toEqual([failed.name, running.name].sort());
+  await expect.poll(() => visibleFixtures(pane, 'Running'), { timeout: 10_000 }).toEqual([]);
 });
