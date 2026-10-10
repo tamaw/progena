@@ -321,4 +321,25 @@ export const selectLatestRoutineRunLifecycle = createSelector(
   (runs, agentId) => Object.values(runs).filter((run) => run.agent_id === agentId)
     .reduce((latest, run) => !latest || run.timestamp > latest.timestamp ? run : latest, null),
 );
+export const selectRoutineLatestRunStatusByAgentId = createSelector(
+  [(state) => state.uiData.agents.runLifecycleByRequestId],
+  (runs) => {
+    const latestByAgent = {};
+    for (const run of Object.values(runs)) {
+      if (!run.agent_id) continue;
+      const existing = latestByAgent[run.agent_id];
+      if (!existing || run.timestamp > existing.timestamp) {
+        latestByAgent[run.agent_id] = run;
+      }
+    }
+    const statusMap = {};
+    for (const [agentId, run] of Object.entries(latestByAgent)) {
+      if (['enqueued', 'started'].includes(run.status)) statusMap[agentId] = 'Running';
+      else if (run.status === 'paused') statusMap[agentId] = 'Paused';
+      else if (run.status === 'failed') statusMap[agentId] = 'Failed';
+      else statusMap[agentId] = null;
+    }
+    return statusMap;
+  },
+);
 export const selectLastRoutineRunNotification = (state) => state.uiData.agents.lastRunNotification;

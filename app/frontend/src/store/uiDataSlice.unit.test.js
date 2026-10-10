@@ -16,6 +16,7 @@ import reducer, {
   requestChatSessionReconciliation,
   updateChatSessionMetadata,
   selectActiveAgentProfile,
+  selectRoutineLatestRunStatusByAgentId,
   selectActiveChatSessionState,
   selectAgentProfiles,
   selectChatIndicators,
@@ -705,6 +706,36 @@ describe('agent reducers', () => {
     s = reducer(s, applyUiEvent({ type: 'agent.graph.updated', payload: { agent_id: 'alpha', graph } }));
     expect(s.agents.active.detail.graph).toEqual(graph);
     expect(s.agents.byId.alpha.graph).toEqual(graph);
+  });
+
+  it('selectRoutineLatestRunStatusByAgentId maps latest run lifecycle to display status', () => {
+    let s = reducer(undefined, agentsSnapshot(['routine-a', 'routine-b', 'routine-c']));
+    s = reducer(s, applyUiEvent({
+      type: 'agent.routine.run.started',
+      payload: { agent_id: 'routine-a', request_id: 'r1', timestamp: '2026-10-07T00:00:01Z' },
+    }));
+    s = reducer(s, applyUiEvent({
+      type: 'agent.routine.run.failed',
+      payload: { agent_id: 'routine-b', request_id: 'r2', timestamp: '2026-10-07T00:00:02Z' },
+    }));
+    s = reducer(s, applyUiEvent({
+      type: 'agent.routine.run.paused',
+      payload: { agent_id: 'routine-c', request_id: 'r3', timestamp: '2026-10-07T00:00:03Z' },
+    }));
+    // Older failed run superseded by newer completed run → not Failed
+    s = reducer(s, applyUiEvent({
+      type: 'agent.routine.run.failed',
+      payload: { agent_id: 'routine-a', request_id: 'r4', timestamp: '2026-10-07T00:00:00Z' },
+    }));
+    s = reducer(s, applyUiEvent({
+      type: 'agent.routine.run.completed',
+      payload: { agent_id: 'routine-a', request_id: 'r5', timestamp: '2026-10-07T00:00:04Z' },
+    }));
+
+    const statuses = selectRoutineLatestRunStatusByAgentId({ uiData: s });
+    expect(statuses['routine-a']).toBeNull();
+    expect(statuses['routine-b']).toBe('Failed');
+    expect(statuses['routine-c']).toBe('Paused');
   });
 });
 
