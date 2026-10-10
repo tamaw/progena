@@ -316,9 +316,26 @@ export const selectAgentRoutineRevisions = (state, agentId) => state.uiData.agen
 export const selectAgentRoutineRevisionContent = (state, agentId, revisionId) => state.uiData.agents.revisionContentByKey[`${agentId}:${revisionId}`];
 export const selectAgentRunState = (state, threadId) => (threadId ? state.uiData.agents.runStateByThreadId[threadId] : undefined);
 export const selectRoutineRunLifecycle = (state, requestId) => state.uiData.agents.runLifecycleByRequestId[requestId];
-export const selectLatestRoutineRunLifecycle = createSelector(
-  [(state) => state.uiData.agents.runLifecycleByRequestId, (_, agentId) => agentId],
-  (runs, agentId) => Object.values(runs).filter((run) => run.agent_id === agentId)
-    .reduce((latest, run) => !latest || run.timestamp > latest.timestamp ? run : latest, null),
+// One rule for "latest run" per routine: newest lifecycle timestamp wins.
+const selectLatestRoutineRunByAgentId = createSelector(
+  [(state) => state.uiData.agents.runLifecycleByRequestId],
+  (runs) => {
+    const latestByAgent = {};
+    for (const run of Object.values(runs)) {
+      if (!run.agent_id) continue;
+      const existing = latestByAgent[run.agent_id];
+      if (!existing || run.timestamp > existing.timestamp) {
+        latestByAgent[run.agent_id] = run;
+      }
+    }
+    return latestByAgent;
+  },
+);
+export const selectLatestRoutineRunLifecycle = (state, agentId) => selectLatestRoutineRunByAgentId(state)[agentId] ?? null;
+const RUN_STATUS_FILTER = { enqueued: 'Running', started: 'Running', paused: 'Paused', failed: 'Failed' };
+export const selectRoutineLatestRunStatusByAgentId = createSelector(
+  [selectLatestRoutineRunByAgentId],
+  (latestByAgent) => Object.fromEntries(Object.entries(latestByAgent)
+    .map(([agentId, run]) => [agentId, RUN_STATUS_FILTER[run.status] ?? null])),
 );
 export const selectLastRoutineRunNotification = (state) => state.uiData.agents.lastRunNotification;

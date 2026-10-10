@@ -11,10 +11,8 @@ import {
   fetchAgentProfiles,
   requestAgentDetail,
   selectActiveAgentProfile,
-  selectActiveAgentProfileState,
   selectAgentProfiles,
   selectAgentProfilesState,
-  updateAgentGraph,
   deleteAgentProfile,
   updateObjectAgentProfile,
 } from '../store/uiDataSlice';
@@ -37,7 +35,6 @@ import DetailHeader, {
   EditActionIcon,
   SaveActionIcon,
 } from '../components/layout/DetailHeader';
-import { RoutineGraphEditor } from '../components/agents/RoutineGraphEditor';
 import { A2ADetailBody, ACPDetailBody, ObjectAgentDetailBody } from '../components/agents/AgentDetailBodies';
 import { formatAge } from '../components/agents/agentFormat';
 
@@ -68,7 +65,7 @@ function makeDraftAgent(kind) {
 }
 
 const SORT_MODES = ['Type', 'Name', 'Recent'];
-const TYPE_RANK = { object: 0, routine: 2 };
+const TYPE_RANK = { object: 0 };
 // Recency buckets for the "Recent" sort, mirroring the chat sidebar's headers.
 const RECENCY_BUCKETS = [
   ['today', 'Today'],
@@ -77,18 +74,6 @@ const RECENCY_BUCKETS = [
   ['last-week', 'Last Week'],
   ['later', 'Later'],
 ];
-// The agent graph now lives on the Routines page; the Agents page shows only
-// Details, so the detail tab row is hidden in both views.
-
-// Default graph shape for agents without a stored graph (passed to the canvas).
-const FALLBACK_GRAPH = {
-  status: 'Draft',
-  summary: '',
-  entry: null,
-  nodes: [],
-  edges: [],
-};
-
 
 function normalizeStatus(status) {
   if (!status || status === 'draft') {
@@ -190,33 +175,6 @@ function AgentRow({ agent, selected, onSelect }) {
   );
 }
 
-// Routines card list: a two-line card matching the Chat/Workflows pattern —
-// a leading status dot (empty unless running/failed), name + last-activity
-// on the header line, and the agent's role as a single preview line below.
-function RoutineRow({ agent, selected, onSelect }) {
-  const status = agent.status || 'draft';
-  const dotTone = status === 'running' ? 'info' : (status === 'failed' || status === 'error') ? 'error' : '';
-  return (
-    <button
-      type="button"
-      className={`pane-card-row ${selected ? 'active' : ''}`}
-      onClick={() => onSelect(agent.id)}
-    >
-      <span
-        className={`pane-card-row__dot${dotTone ? ` pane-card-row__dot--${dotTone}` : ''}`}
-        aria-hidden="true"
-      />
-      <div className="pane-card-row__body">
-        <div className="pane-card-row__top">
-          <span className="pane-card-row__title">{agent.name}</span>
-          <span className="pane-card-row__age">{formatAge(agent.updated)}</span>
-        </div>
-        <div className="pane-card-row__preview">{agent.role || agent.summary || 'No description yet.'}</div>
-      </div>
-    </button>
-  );
-}
-
 // Compact type-picker shown by "+ New": choose what kind of agent to scaffold.
 // Picking a type opens the editable draft in the detail pane.
 function NewAgentModal({ onPick, onClose }) {
@@ -293,36 +251,18 @@ function DraftAgentDetailBody({ draft, onChange }) {
   );
 }
 
-const AGENTS_PAGE = {
-  kind: 'agents',
-  basePath: '/agents',
-  listLabel: 'Agents',
-  searchPlaceholder: 'Search agents...',
-  sortTitle: 'Sort agents',
-  createLabel: '+ New',
-};
-
-function AgentsPage() {
-  return <AgentWorkspace page={AGENTS_PAGE} />;
-}
-
-export function AgentWorkspace({ page }) {
-  const isRoutines = page.kind === 'routines';
-  const { basePath, listLabel, searchPlaceholder, sortTitle, createLabel } = page;
+export default function AgentsPage() {
   const dispatch = useDispatch();
   const { getApiUrl } = useConfig();
   const realtimeConnected = useSelector(selectRealtimeConnected);
   const fetchedAgents = useSelector(selectAgentProfiles);
   const { agentId: routeAgentId } = useParams();
-  const agents = useMemo(() => {
-    if (!isRoutines) {
-      return fetchedAgents.filter((agent) => agent.kind !== 'routine');
-    }
-    return fetchedAgents.filter((agent) => agent.kind === 'routine');
-  }, [fetchedAgents, isRoutines]);
+  const agents = useMemo(
+    () => fetchedAgents.filter((agent) => agent.kind !== 'routine'),
+    [fetchedAgents],
+  );
   const agentsState = useSelector(selectAgentProfilesState);
   const activeAgent = useSelector(selectActiveAgentProfile);
-  const activeAgentState = useSelector(selectActiveAgentProfileState);
   const streamReady = useSelector(selectRealtimeStreamReady);
 
   const navigate = useNavigate();
@@ -330,8 +270,6 @@ export function AgentWorkspace({ page }) {
   const [activeFilter, setActiveFilter] = useState('All');
   const [search, setSearch] = useState('');
   const [sortMode, setSortMode] = useState('Type');
-  const [graphEditorOpen, setGraphEditorOpen] = useState(false);
-  const [routineRunsOpen, setRoutineRunsOpen] = useState(false);
   const [deleteConfirmationOpen, setDeleteConfirmationOpen] = useState(false);
   const [deleteBusy, setDeleteBusy] = useState(false);
   const [deleteError, setDeleteError] = useState('');
@@ -349,14 +287,8 @@ export function AgentWorkspace({ page }) {
   const agentsUrl = getApiUrl('agentProfiles');
 
   const handleNewAgent = useCallback(() => {
-    if (isRoutines) {
-      window.dispatchEvent(new CustomEvent('progenitor:open-quick-chat', {
-        detail: { mode: 'routine-create' },
-      }));
-      return;
-    }
     setNewAgentOpen(true);
-  }, [isRoutines]);
+  }, []);
 
   const handlePickType = useCallback((kind) => {
     setDraftAgent(makeDraftAgent(kind));
@@ -400,8 +332,8 @@ export function AgentWorkspace({ page }) {
     }
   }, [agentsUrl, dispatch, draftAgent]);
 
-  // Selection is derived from the URL (/agents/<id> or /routines/<id>) so the
-  // view is refreshable and shareable; user actions navigate rather than setState.
+  // Selection is derived from the URL (/agents/<id>) so the view is
+  // refreshable and shareable; user actions navigate rather than setState.
   const selectedAgentId = routeAgentId ?? null;
 
   const requestedListRef = useRef(null);
@@ -425,15 +357,10 @@ export function AgentWorkspace({ page }) {
 
   const selectAgent = useCallback((id) => {
     setDraftAgent(null);
-    navigate(isRoutines ? `${basePath}/${encodeURIComponent(id)}` : `${basePath}/${encodeURIComponent(id)}/details`);
-  }, [navigate, basePath, isRoutines]);
-  // From a routine graph, jump to that agent's profile on the Agents page.
-  const showProfile = useCallback(() => {
-    if (!effectiveAgentId) return;
-    navigate(`/agents/${encodeURIComponent(effectiveAgentId)}/details`);
-  }, [navigate, effectiveAgentId]);
+    navigate(`/agents/${encodeURIComponent(id)}/details`);
+  }, [navigate]);
 
-  // Routines and author-created ("source: user") object agents only --
+  // Author-created ("source: user") object agents only --
   // native object agents are repo files, marketplace ones are plugin-managed
   // (Plugins > Uninstall), and A2A/ACP are read through external registries.
   // The eligibility check lives at each call site (button visibility); this
@@ -455,13 +382,13 @@ export function AgentWorkspace({ page }) {
     try {
       await dispatch(deleteAgentProfile({ agentsUrl, agentId: effectiveAgentId })).unwrap();
       setDeleteConfirmationOpen(false);
-      navigate(basePath, { replace: true });
+      navigate('/agents', { replace: true });
     } catch (error) {
       setDeleteError(error.message || 'Failed to delete.');
     } finally {
       setDeleteBusy(false);
     }
-  }, [agentsUrl, basePath, dispatch, effectiveAgentId, navigate]);
+  }, [agentsUrl, dispatch, effectiveAgentId, navigate]);
 
   // The detail only ever comes back as a one-shot `agent.selected` broadcast,
   // and the backend replays nothing to a subscriber it did not have at publish
@@ -493,41 +420,26 @@ export function AgentWorkspace({ page }) {
     [agents, effectiveAgentId],
   );
   const selectedAgent = activeAgent && activeAgent.id === effectiveAgentId ? activeAgent : listAgent;
-  const selectedGraph = selectedAgent?.graph || FALLBACK_GRAPH;
-  // The roster snapshot carries no `graph` -- only the per-agent detail does.
-  // GraphCanvas seeds its working nodes/edges once on mount, so mounting it
-  // against the roster entry would pin an empty chain that the later detail
-  // can never replace. Hold the canvas back until the detail for THIS id has
-  // landed. A failed detail request falls through to the roster entry rather
-  // than holding the gate shut forever.
-  const graphDetailPending = !activeAgentState.error
-    && (!activeAgent || activeAgent.id !== effectiveAgentId);
   const isA2A = selectedAgent?.kind === 'a2a';
   const isACP = selectedAgent?.kind === 'acp';
-  // Routines view always shows the graph; Agents view always shows Details.
-  // The tab row is hidden in both (single view per page).
-  const detailTabs = [];
-  const effectiveDetailTab = isRoutines ? 'Graph' : 'Details';
 
   // Reflect the active agent in the URL so the view is refreshable and shareable
-  // (e.g. /agents/subagent-code-reviewer/details or /routines/subagent-...).
+  // (e.g. /agents/subagent-code-reviewer/details).
   useEffect(() => {
     if (!effectiveAgentId) return;
-    const target = isRoutines
-      ? `${basePath}/${encodeURIComponent(effectiveAgentId)}`
-      : `${basePath}/${encodeURIComponent(effectiveAgentId)}/details`;
+    const target = `/agents/${encodeURIComponent(effectiveAgentId)}/details`;
     if (`${window.location.pathname}` !== target) {
       navigate(target, { replace: true });
     }
-  }, [effectiveAgentId, isRoutines, basePath, navigate]);
+  }, [effectiveAgentId, navigate]);
 
   const visibleAgents = useMemo(
     () => sortAgents(agents.filter((agent) => matchesAgent(agent, activeFilter, search)), sortMode),
     [activeFilter, agents, search, sortMode],
   );
-  // Routine graphs are a flat list; other views can group by agent type.
+
   const sections = useMemo(() => {
-    if (isRoutines || sortMode === 'Name') {
+    if (sortMode === 'Name') {
       return [{ key: 'all', title: null, agents: visibleAgents }];
     }
     if (sortMode === 'Recent') {
@@ -544,25 +456,10 @@ export function AgentWorkspace({ page }) {
     return [...new Set(visibleAgents.map((agent) => agent.group || 'Agents'))]
       .map((group) => ({ key: group, title: group, agents: grouped[group] || [] }))
       .filter((section) => section.agents.length);
-  }, [isRoutines, sortMode, visibleAgents]);
+  }, [sortMode, visibleAgents]);
+
   const runningCount = agents.filter((agent) => agent.status === 'running').length;
   const taskCount = agents.reduce((total, agent) => total + (agent.tasks?.length || 0), 0);
-
-  async function handleSaveGraph(parsed) {
-    return dispatch(updateAgentGraph({
-      agentsUrl,
-      agentId: effectiveAgentId,
-      entry: parsed.entry,
-      nodes: parsed.nodes,
-      edges: parsed.edges,
-      status: parsed.status,
-      summary: parsed.summary,
-      policy_id: parsed.policy_id,
-      input_schema: parsed.input_schema,
-      output_schema: parsed.output_schema,
-      $defs: parsed.$defs,
-    })).unwrap();
-  }
 
   function slugifyAgentName(value) {
     return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'agent';
@@ -618,18 +515,18 @@ export function AgentWorkspace({ page }) {
 
   return (
     <PageShell>
-      <PaneList label={listLabel} className="agents-pane">
+      <PaneList label="Agents" className="agents-pane">
         <PaneListFilters
           filters={AGENT_FILTERS}
           activeFilter={activeFilter}
           onFilterChange={setActiveFilter}
-          actionLabel={createLabel}
+          actionLabel="+ New"
           onAction={handleNewAgent}
         />
         <PaneListToolbar>
-          <PaneListSearch value={search} placeholder={searchPlaceholder} onChange={setSearch} />
+          <PaneListSearch value={search} placeholder="Search agents..." onChange={setSearch} />
           <PaneListSortButton
-            title={sortTitle}
+            title="Sort agents"
             options={SORT_MODES}
             value={sortMode}
             onSelect={setSortMode}
@@ -640,23 +537,15 @@ export function AgentWorkspace({ page }) {
             groups={sections}
             getGroupItems={(section) => section.agents}
             renderItem={(agent) => (
-              isRoutines ? (
-                <RoutineRow
-                  agent={agent}
-                  selected={selectedAgent?.id === agent.id}
-                  onSelect={selectAgent}
-                />
-              ) : (
-                <AgentRow
-                  agent={agent}
-                  selected={selectedAgent?.id === agent.id}
-                  onSelect={selectAgent}
-                />
-              )
+              <AgentRow
+                agent={agent}
+                selected={selectedAgent?.id === agent.id}
+                onSelect={selectAgent}
+              />
             )}
           />
         ) : (
-          <PaneEmptyState>{agentsState.loading || !agentsState.loaded ? `Loading ${listLabel.toLowerCase()}…` : `No ${listLabel.toLowerCase()} match this view.`}</PaneEmptyState>
+          <PaneEmptyState>{agentsState.loading || !agentsState.loaded ? 'Loading agents…' : 'No agents match this view.'}</PaneEmptyState>
         )}
         <PaneListFooter>
           <span><span className="num">{runningCount}</span> running</span>
@@ -691,119 +580,85 @@ export function AgentWorkspace({ page }) {
           <DraftAgentDetailBody draft={draftAgent} onChange={updateDraft} />
         </DetailPane>
       ) : selectedAgent ? (
-        <DetailPane className={`detail-pane--dense agents-detail ${effectiveDetailTab === 'Graph' ? 'is-graph-mode' : ''}`} label={`${selectedAgent.name} profile`}>
-          {/* Routines (Graph) hides the detail header so the canvas fills the
-              pane, matching the Workflows page. The Agents Details view keeps it. */}
-          {effectiveDetailTab !== 'Graph' ? (
-            <DetailHeader
-              title={selectedAgent.name}
-              actions={selectedAgent.kind === 'object' && selectedAgent.card?.source !== 'native' ? (
-                <DetailHeaderActions menuLabel="Agent actions">
+        <DetailPane className="detail-pane--dense agents-detail" label={`${selectedAgent.name} profile`}>
+          <DetailHeader
+            title={selectedAgent.name}
+            actions={selectedAgent.kind === 'object' && selectedAgent.card?.source !== 'native' ? (
+              <DetailHeaderActions menuLabel="Agent actions">
+                <DetailHeaderAction
+                  icon={<EditActionIcon />}
+                  label="Edit"
+                  tooltip="Edit manifest"
+                  ariaLabel="Edit manifest"
+                  onClick={startEditObjectAgent}
+                />
+                {selectedAgent.card?.source === 'user' ? (
                   <DetailHeaderAction
-                    icon={<EditActionIcon />}
-                    label="Edit"
-                    tooltip="Edit manifest"
-                    ariaLabel="Edit manifest"
-                    onClick={startEditObjectAgent}
+                    icon={<DeleteActionIcon />}
+                    label="Delete"
+                    tooltip="Delete agent"
+                    ariaLabel="Delete agent"
+                    variant="danger"
+                    onClick={handleDeleteAgent}
                   />
-                  {selectedAgent.card?.source === 'user' ? (
-                    <DetailHeaderAction
-                      icon={<DeleteActionIcon />}
-                      label="Delete"
-                      tooltip="Delete agent"
-                      ariaLabel="Delete agent"
-                      variant="danger"
-                      onClick={handleDeleteAgent}
-                    />
-                  ) : null}
-                </DetailHeaderActions>
-              ) : null}
-              meta={[
-                // Object agents have no schema-backed status/enabled concept
-                // (no runtime process, no manifest field) -- showing a pill
-                // here would fabricate a value the backend doesn't have.
-                selectedAgent.kind !== 'object'
-                  ? <StatusPill key="status" status={selectedAgent.enabled === false ? 'disabled' : selectedAgent.status} /> : null,
-                // Object agents show Model in the Manifest section and
-                // Tools/Skills counts in their own MiniListSection headers
-                // below -- repeating them here would be a literal duplicate
-                // of data already on the page. A2A/ACP have no such section,
-                // so the header remains their only place to show these.
-                selectedAgent.kind !== 'object' && selectedAgent.model
-                  ? <span key="model" className="sess-detail__model">{selectedAgent.model}</span> : null,
-                selectedAgent.url ? (
-                  <a key="url" className="muted agents-agent-url" href={selectedAgent.url} target="_blank" rel="noreferrer">
-                    {selectedAgent.transport ? `${selectedAgent.transport} · ` : ''}{selectedAgent.url}
-                  </a>
-                ) : null,
-                selectedAgent.kind !== 'object' ? (
-                  <span key="links" className="muted">{(selectedAgent.skills || []).length ? `${selectedAgent.skills.length} skills · ` : ''}{(selectedAgent.tools || []).length} tools</span>
-                ) : null,
-              ]}
-              tabs={detailTabs}
-              activeTab={effectiveDetailTab}
-              tabLabel="Agent detail tabs"
-            />
-          ) : null}
-
-          {effectiveDetailTab === 'Details' ? (
-            isA2A
-              ? <A2ADetailBody agent={selectedAgent} />
-              : isACP
-                ? <ACPDetailBody agent={selectedAgent} />
-                : (
-                  <ObjectAgentDetailBody
-                    agent={selectedAgent}
-                    agentsUrl={agentsUrl}
-                    editing={objectAgentDraft !== null}
-                    draft={objectAgentDraft}
-                    onDraftChange={setObjectAgentDraft}
-                    onStartEdit={startEditObjectAgent}
-                    onCancelEdit={cancelEditObjectAgent}
-                    onSaveEdit={saveObjectAgentDraft}
-                    saving={objectAgentSaving}
-                    error={objectAgentError}
-                  />
-                )
-          ) : (
-            <div className="detail-pane__body detail-pane__body--graph">
-              {graphDetailPending ? (
-                <PaneEmptyState detail>Loading graph…</PaneEmptyState>
-              ) : (
-                <div className={`agents-graph-layout ${graphEditorOpen || routineRunsOpen ? 'is-editing' : ''}`}>
-                  <RoutineGraphEditor
-                    key={selectedAgent.id}
-                    agent={selectedAgent}
-                    graph={selectedGraph}
-                    confirmedGraph={selectedGraph}
-                    onPersist={handleSaveGraph}
-                    onShowProfile={isRoutines ? null : showProfile}
-                    onDelete={isRoutines ? handleDeleteAgent : null}
-                    jsonOpen={graphEditorOpen}
-                    onOpenJson={() => { setGraphEditorOpen(true); setRoutineRunsOpen(false); }}
-                    onCloseJson={() => setGraphEditorOpen(false)}
-                    runsOpen={routineRunsOpen}
-                    onOpenRuns={() => { setRoutineRunsOpen(true); setGraphEditorOpen(false); }}
-                    onCloseRuns={() => setRoutineRunsOpen(false)}
-                  />
-                </div>
+                ) : null}
+              </DetailHeaderActions>
+            ) : null}
+            meta={[
+              // Object agents have no schema-backed status/enabled concept
+              // (no runtime process, no manifest field) -- showing a pill
+              // here would fabricate a value the backend doesn't have.
+              selectedAgent.kind !== 'object'
+                ? <StatusPill key="status" status={selectedAgent.enabled === false ? 'disabled' : selectedAgent.status} /> : null,
+              // Object agents show Model in the Manifest section and
+              // Tools/Skills counts in their own MiniListSection headers
+              // below -- repeating them here would be a literal duplicate
+              // of data already on the page. A2A/ACP have no such section,
+              // so the header remains their only place to show these.
+              selectedAgent.kind !== 'object' && selectedAgent.model
+                ? <span key="model" className="sess-detail__model">{selectedAgent.model}</span> : null,
+              selectedAgent.url ? (
+                <a key="url" className="muted agents-agent-url" href={selectedAgent.url} target="_blank" rel="noreferrer">
+                  {selectedAgent.transport ? `${selectedAgent.transport} · ` : ''}{selectedAgent.url}
+                </a>
+              ) : null,
+              selectedAgent.kind !== 'object' ? (
+                <span key="links" className="muted">{(selectedAgent.skills || []).length ? `${selectedAgent.skills.length} skills · ` : ''}{(selectedAgent.tools || []).length} tools</span>
+              ) : null,
+            ]}
+          />
+          {isA2A
+            ? <A2ADetailBody agent={selectedAgent} />
+            : isACP
+              ? <ACPDetailBody agent={selectedAgent} />
+              : (
+                <ObjectAgentDetailBody
+                  agent={selectedAgent}
+                  agentsUrl={agentsUrl}
+                  editing={objectAgentDraft !== null}
+                  draft={objectAgentDraft}
+                  onDraftChange={setObjectAgentDraft}
+                  onStartEdit={startEditObjectAgent}
+                  onCancelEdit={cancelEditObjectAgent}
+                  onSaveEdit={saveObjectAgentDraft}
+                  saving={objectAgentSaving}
+                  error={objectAgentError}
+                />
               )}
-            </div>
-          )}
         </DetailPane>
       ) : (
-        <DetailPane className="detail-pane--dense agents-detail" label={`${listLabel.slice(0, -1)} profile`}>
-          <PaneEmptyState detail>{agentsState.loading || !agentsState.loaded ? `Loading ${listLabel.toLowerCase()}…` : `Select a${isRoutines ? '' : 'n'} ${listLabel.toLowerCase().slice(0, -1)} to view its profile.`}</PaneEmptyState>
+        <DetailPane className="detail-pane--dense agents-detail" label="Agent profile">
+          <PaneEmptyState detail>{agentsState.loading || !agentsState.loaded ? 'Loading agents…' : 'Select an agent to view its profile.'}</PaneEmptyState>
         </DetailPane>
       )}
 
       {newAgentOpen ? <NewAgentModal onPick={handlePickType} onClose={() => setNewAgentOpen(false)} /> : null}
       {deleteConfirmationOpen && selectedAgent ? (
         <PopupModal
-          eyebrow={selectedAgent.kind === 'routine' ? 'Delete routine' : 'Delete agent'}
+          eyebrow="Delete agent"
           title={`Delete “${selectedAgent.name}”?`}
-          message={deleteError || `This ${selectedAgent.kind === 'routine' ? 'routine and its graph' : 'agent and its manifest'} will be permanently deleted.`}
-          confirmLabel={selectedAgent.kind === 'routine' ? 'Delete routine' : 'Delete agent'}
+          message={deleteError || 'This agent and its manifest will be permanently deleted.'}
+          confirmLabel="Delete agent"
           busyLabel="Deleting…"
           onClose={() => setDeleteConfirmationOpen(false)}
           onConfirm={confirmDeleteAgent}
@@ -813,5 +668,3 @@ export function AgentWorkspace({ page }) {
     </PageShell>
   );
 }
-
-export default AgentsPage;

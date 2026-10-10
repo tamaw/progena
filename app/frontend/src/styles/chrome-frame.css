@@ -6150,6 +6150,7 @@ body,
 }
 
 .agents-pane,
+.routines-pane,
 .schedules-pane {
   min-width: 0;
 }
@@ -9699,6 +9700,7 @@ body,
   }
 
   .agents-pane,
+  .routines-pane,
   .schedules-pane {
     max-height: 42vh;
     border-right: 0;
