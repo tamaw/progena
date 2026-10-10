@@ -65,7 +65,7 @@ function makeDraftAgent(kind) {
 }
 
 const SORT_MODES = ['Type', 'Name', 'Recent'];
-const TYPE_RANK = { object: 0, routine: 2 };
+const TYPE_RANK = { object: 0 };
 // Recency buckets for the "Recent" sort, mirroring the chat sidebar's headers.
 const RECENCY_BUCKETS = [
   ['today', 'Today'],
@@ -360,7 +360,7 @@ export default function AgentsPage() {
     navigate(`/agents/${encodeURIComponent(id)}/details`);
   }, [navigate]);
 
-  // Routines and author-created ("source: user") object agents only --
+  // Author-created ("source: user") object agents only --
   // native object agents are repo files, marketplace ones are plugin-managed
   // (Plugins > Uninstall), and A2A/ACP are read through external registries.
   // The eligibility check lives at each call site (button visibility); this
@@ -656,7 +656,7 @@ export default function AgentsPage() {
       {deleteConfirmationOpen && selectedAgent ? (
         <PopupModal
           eyebrow="Delete agent"
-          title={`Delete "${selectedAgent.name}"?`}
+          title={`Delete “${selectedAgent.name}”?`}
           message={deleteError || 'This agent and its manifest will be permanently deleted.'}
           confirmLabel="Delete agent"
           busyLabel="Deleting…"
