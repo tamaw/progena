@@ -80,6 +80,7 @@ import {
   SettingsMarketplacesIcon,
   SettingsTeamIcon,
   PluginsNavIcon,
+  ProfilesNavIcon,
   SunIcon,
   TasksNavIcon,
   ToolsNavIcon,
@@ -144,6 +145,7 @@ const navGroups = [
     label: 'Facilitate',
     items: [
       { to: '/plugins', icon: <PluginsNavIcon />, label: 'Plugins', trackActivity: true },
+      { to: '/profiles', icon: <ProfilesNavIcon />, label: 'Profiles', trackActivity: true },
       { to: '/tools', icon: <ToolsNavIcon />, label: 'Tools', trackActivity: true },
       { to: '/knowledge', icon: <KnowledgeNavIcon />, label: 'Knowledge', trackActivity: true },
       { to: '/schedules', icon: <SchedulesNavIcon />, label: 'Schedules', trackActivity: true },

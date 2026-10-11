@@ -2,8 +2,8 @@ import { useEffect, useRef } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { useConfig } from '../context/ConfigContext';
 import { startRealtimeStream, stopRealtimeStream } from './realtimeListener';
-import { selectRealtimeConnected } from './realtimeSlice';
-import { fetchChatSessions, fetchInbox, selectGeneratingChatIds } from './uiDataSlice';
+import { selectRealtimeConnected, selectRealtimeStreamReady } from './realtimeSlice';
+import { fetchChatSessions, fetchInbox, fetchModelProfiles, selectGeneratingChatIds } from './uiDataSlice';
 
 function selectHasActiveChatGeneration(state) {
   const selectedGeneratingChatIds = selectGeneratingChatIds(state);
@@ -18,12 +18,15 @@ export default function RealtimeBridge() {
   const dispatch = useDispatch();
   const { getApiUrl } = useConfig();
   const realtimeConnected = useSelector(selectRealtimeConnected);
+  const streamReady = useSelector(selectRealtimeStreamReady);
   const hasActiveGeneration = useSelector(selectHasActiveChatGeneration);
   const requestedChatsUrlRef = useRef(null);
   const requestedInboxUrlRef = useRef(null);
+  const requestedProfilesUrlRef = useRef(null);
   const streamUrl = getApiUrl('stream');
   const chatsUrl = getApiUrl('chats');
   const inboxUrl = getApiUrl('inbox');
+  const modelProfilesUrl = getApiUrl('modelProfiles');
 
   useEffect(() => {
     dispatch(startRealtimeStream({ streamUrl }));
@@ -63,6 +66,17 @@ export default function RealtimeBridge() {
     requestedInboxUrlRef.current = inboxUrl;
     dispatch(fetchInbox({ inboxUrl }));
   }, [dispatch, inboxUrl, realtimeConnected]);
+
+  // Profiles serve both their management page and routine model selectors.
+  useEffect(() => {
+    if (!streamReady) {
+      requestedProfilesUrlRef.current = null;
+      return;
+    }
+    if (requestedProfilesUrlRef.current === modelProfilesUrl) return;
+    requestedProfilesUrlRef.current = modelProfilesUrl;
+    dispatch(fetchModelProfiles({ modelProfilesUrl }));
+  }, [dispatch, modelProfilesUrl, streamReady]);
 
   return null;
 }

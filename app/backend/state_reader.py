@@ -37,6 +37,7 @@ from app.progenitor.mcp.loader import (
     resolve_required_env_template,
 )
 from app.progenitor.routines.store import ROUTINE_GRAPH_KEY_PREFIX
+from app.progenitor.state.model_profiles import MODEL_PROFILES_DOC_KEY
 from app.progenitor.workflows import (
     WORKFLOW_DEFINITION_KEY_PREFIX,
     WORKFLOW_INVOKE_REQUEST_KEY_PREFIX,
@@ -1895,6 +1896,7 @@ class StateReader:
                 and (
                     changed_key.startswith("policy:")
                     or changed_key == "schedule"
+                    or changed_key == MODEL_PROFILES_DOC_KEY
                     or changed_key.startswith(INBOX_MESSAGE_KEY_PREFIX)
                     or changed_key.startswith(WORKFLOW_DEFINITION_KEY_PREFIX)
                     or changed_key.startswith(WORKFLOW_RUN_KEY_PREFIX)

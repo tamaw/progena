@@ -125,7 +125,7 @@ replacement for document-specific rules.
 
 ## Surface 2: backend acknowledgement routes (`app/backend/ui_routes.py`)
 
-The retained widget, schedule, event-widget, MCP, kanban, and task routes are
+The retained widget, schedule, event-widget, MCP, kanban, task, and model-profile routes are
 finite command/query routes. Each browser request carries `X-Request-ID`,
 persists its document change or builds its snapshot, enqueues the causal
 canonical `/api/ui/stream` event, and then returns only an HTTP `202 Accepted`
@@ -158,6 +158,27 @@ Schedule, event-widget, and MCP entries retain their own validation and save
 closures because their document shapes differ. Kanban is deliberately separate:
 it is one document per card and maintains card order and task activity; it is
 not a candidate for dict-entry helper reuse.
+
+### Model profiles
+
+`GET /api/ui/model-profiles` and `PATCH /api/ui/model-profiles/{name}` publish
+`profiles.snapshot` with `{profiles, request_id}` before returning the standard
+`202` acknowledgement. Each public entry contains `name`, `provider`,
+`deployment`, and any supported reasoning overrides; unrelated private fields
+are never published. PATCH accepts only deployment and `reasoning_enabled`,
+`reasoning_effort`, or `reasoning_summary`. A null optional field removes its
+override (runtime environment inheritance); deployment remains required.
+Unsupported fields and malformed configuration produce `422`; unknown profiles
+produce `404`. The full public snapshot is validated before persistence, and
+unchanged raw siblings/private properties are retained.
+
+Postgres changes to the `progenitor.state` / `profile` document trigger an
+unsolicited `profiles.snapshot`. This key bypasses coarse `StateSnapshot` diff
+filtering because profiles are not runtime-health fields. The existing canonical
+stream is reused: no profile-specific stream or polling. On `connection.ready`
+and reconnect, the frontend hydrates the shared catalogue consumed by the
+Profiles page and routine model-profile fields.
+
 
 ### Publish after persistence
 
