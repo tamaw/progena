@@ -81,13 +81,17 @@ file.
 1. `grep <tool name> /config/mcp_tools.json` (or `read_file` it) to find the tool's
    entry. Names are prefixed with the server: `jina_search_jina_blog`, not
    `search_jina_blog`.
-2. `read_file /schemas/mcp_tool_entry.schema.v1.json`
-3. `structured_output json_schema=<content from step 2> input=<that tool's current entry>
-   instruction="Return this exact entry with enabled set to false."` (or `true`). This
-   validates the entry against the schema before you write it.
-4. `edit_file /config/mcp_tools.json`, replacing that one entry with the result from
-   step 3. Every write is validated against the same schema; adding keys, adding or
-   removing tools, or changing any field other than `enabled` is rejected.
+2. Recommended: `read_file /schemas/mcp_tool_entry.schema.v1.json`, then
+   `structured_output json_schema=<that schema> input=<the tool's current entry>
+   instruction="Return this exact entry with enabled set to false."` (or `true`) to get
+   a schema-valid entry. For a plain flag flip you may skip this and edit directly.
+3. `edit_file /config/mcp_tools.json`, changing only that entry's `"enabled"` (or
+   replacing the entry with the result from step 2). Every write is validated against
+   the same schema; adding keys, adding or removing tools, or changing any field other
+   than `enabled` is rejected.
+4. If the write is rejected: do not work around it (no new keys, no URL changes).
+   Read the error, re-read the file, then use step 2 (`structured_output` with the
+   schema and the current entry) to produce a valid entry and retry the edit.
 5. Verify: call `mcp` and confirm `disabled_count` changed and the tool is no longer
    (or is again) in the live tool list. Only then tell the user it's done.
 
