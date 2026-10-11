@@ -66,7 +66,7 @@ async def test_executor_runs_default_agent_from_event_data_without_thread_id():
         )
     )
 
-    assert runner.calls[0]["thread_id"] is None
+    assert runner.calls[0]["thread_id"] is not None
     assert "thread_id" not in completed.node_outputs[definition.graph.edges[0].from_.node]
 
 
@@ -78,20 +78,10 @@ async def test_connected_agent_output_schedules_its_consumer_without_control_edg
     event_id = _node_id(workflow, "event")
     first_id = _node_id(workflow, "agent")
     second_id = "agent_consumer"
-    workflow["graph"]["nodes"][first_id]["input_schema"] = {
-        "type": "object",
-        "required": ["key"],
-        "properties": {"key": {"type": "string"}},
-    }
-    workflow["graph"]["nodes"][first_id]["output_schema"] = {
-        "type": "object",
-        "required": ["summary"],
-        "properties": {"summary": {"type": "string"}},
-    }
     workflow["graph"]["nodes"][second_id] = {
         "kind": "agent",
         "title": "Consumer",
-        "message": "Consume it.",
+        "template": "Consume: {summary}",
         "input_schema": {
             "type": "object",
             "required": ["summary"],
@@ -105,7 +95,7 @@ async def test_connected_agent_output_schedules_its_consumer_without_control_edg
             "to": {"node": first_id, "port": "key"},
         },
         {
-            "from": {"node": first_id, "port": "summary"},
+            "from": {"node": first_id, "port": "message"},
             "to": {"node": second_id, "port": "summary"},
         },
     ]
@@ -149,11 +139,7 @@ async def test_selected_condition_port_schedules_its_consumer_as_dataflow():
         "value": True,
         "output_schema": {"type": "boolean"},
     }
-    workflow["graph"]["nodes"][agent_id]["input_schema"] = {
-        "type": "object",
-        "required": ["result"],
-        "properties": {"result": {"type": "boolean"}},
-    }
+    workflow["graph"]["nodes"][agent_id]["template"] = "Result: {result}"
     workflow["graph"]["edges"] = [
         {
             "from": {"node": "data_ready", "port": "value"},
@@ -179,3 +165,260 @@ async def test_selected_condition_port_schedules_its_consumer_as_dataflow():
 
     assert completed.completed_node_ids == [condition_id, agent_id]
     assert len(runner.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_missing_placeholder_value_fails_step():
+    store = InMemoryDocumentStore()
+    seed_document_types(store)
+    workflow = default_workflow_definition()
+    agent_id = _node_id(workflow, "agent")
+    workflow["graph"]["nodes"][agent_id]["template"] = "Hello {missing.x}"
+    workflow["graph"]["nodes"]["data_missing"] = {
+        "kind": "data",
+        "title": "Missing",
+        "value": {},
+        "output_schema": {"type": "object"},
+    }
+    workflow["graph"]["edges"] = [
+        {
+            "from": {"node": "data_missing", "port": "value"},
+            "to": {"node": agent_id, "port": "missing"},
+        }
+    ]
+    definition = save_workflow_definition(store, workflow)
+    runner = RecordingRunner(["ok"])
+    executor = _executor(store, runner)
+
+    run = await executor.trigger_workflow(definition.id, build_manual_trigger_event(definition))
+    completed = await _wait_for(
+        lambda: (
+            get_workflow_run(store, run.run_id)
+            if get_workflow_run(store, run.run_id).status in ("completed", "failed")
+            else None
+        )
+    )
+
+    assert completed.status == "failed"
+    assert "missing value for {missing.x}" in completed.last_error
+
+
+@pytest.mark.asyncio
+async def test_per_run_thread_shared_by_nodes_and_overridden_by_wired_thread_id():
+    store = InMemoryDocumentStore()
+    seed_document_types(store)
+    workflow = default_workflow_definition()
+    event_id = _node_id(workflow, "event")
+    first_id = _node_id(workflow, "agent")
+    second_id = "agent_2"
+    workflow["graph"]["nodes"][first_id]["template"] = "First: {key}"
+    workflow["graph"]["nodes"][second_id] = {
+        "kind": "agent",
+        "title": "Second",
+        "template": "Second: {key}",
+        "input_schema": {"type": "object", "properties": {}},
+        "output_schema": {"type": "object", "properties": {}},
+    }
+    workflow["graph"]["edges"] = [
+        {"from": {"node": event_id, "port": "key"}, "to": {"node": first_id, "port": "key"}},
+        {"from": {"node": event_id, "port": "key"}, "to": {"node": second_id, "port": "key"}},
+    ]
+    definition = save_workflow_definition(store, workflow)
+    runner = RecordingRunner(["a", "b"])
+    executor = _executor(store, runner)
+
+    run = await executor.trigger_workflow(definition.id, build_manual_trigger_event(definition))
+    completed = await _wait_for(
+        lambda: (
+            get_workflow_run(store, run.run_id)
+            if get_workflow_run(store, run.run_id).status == "completed"
+            else None
+        )
+    )
+
+    assert completed.status == "completed"
+    thread_id = runner.calls[0]["thread_id"]
+    assert thread_id is not None
+    assert runner.calls[1]["thread_id"] == thread_id
+
+
+@pytest.mark.asyncio
+async def test_wired_thread_id_overrides_per_run_thread():
+    store = InMemoryDocumentStore()
+    seed_document_types(store)
+    workflow = default_workflow_definition()
+    event_id = _node_id(workflow, "event")
+    first_id = _node_id(workflow, "agent")
+    second_id = "agent_2"
+    workflow["graph"]["nodes"][first_id]["template"] = "First: {key}"
+    workflow["graph"]["nodes"][second_id] = {
+        "kind": "agent",
+        "title": "Second",
+        "template": "Second: {key}",
+        "input_schema": {"type": "object", "properties": {}},
+        "output_schema": {"type": "object", "properties": {}},
+    }
+    workflow["graph"]["nodes"]["thread_override"] = {
+        "kind": "data",
+        "title": "Thread",
+        "value": "custom_thread_123",
+        "output_schema": {"type": "string"},
+    }
+    workflow["graph"]["edges"] = [
+        {"from": {"node": event_id, "port": "key"}, "to": {"node": first_id, "port": "key"}},
+        {"from": {"node": event_id, "port": "key"}, "to": {"node": second_id, "port": "key"}},
+        {
+            "from": {"node": "thread_override", "port": "value"},
+            "to": {"node": first_id, "port": "thread_id"},
+        },
+        {
+            "from": {"node": "thread_override", "port": "value"},
+            "to": {"node": second_id, "port": "thread_id"},
+        },
+    ]
+    definition = save_workflow_definition(store, workflow)
+    runner = RecordingRunner(["c", "d"])
+    executor = _executor(store, runner)
+
+    run = await executor.trigger_workflow(definition.id, build_manual_trigger_event(definition))
+    await _wait_for(
+        lambda: (
+            get_workflow_run(store, run.run_id)
+            if get_workflow_run(store, run.run_id).status == "completed"
+            else None
+        )
+    )
+    assert runner.calls[0]["thread_id"] == "custom_thread_123"
+    assert runner.calls[1]["thread_id"] == "custom_thread_123"
+
+
+@pytest.mark.asyncio
+async def test_extract_returns_the_structured_reply_as_result():
+    store = InMemoryDocumentStore()
+    seed_document_types(store)
+    workflow = default_workflow_definition()
+    event_id = _node_id(workflow, "event")
+    extract_id = "extract_1"
+    agent_id = _node_id(workflow, "agent")
+    workflow["graph"]["nodes"][extract_id] = {
+        "kind": "extract",
+        "title": "Extract",
+        "template": "Extract: {key}",
+        "schema": {"type": "string"},
+    }
+    del workflow["graph"]["nodes"][agent_id]
+    workflow["graph"]["edges"] = [
+        {"from": {"node": event_id, "port": "key"}, "to": {"node": extract_id, "port": "key"}},
+    ]
+    definition = save_workflow_definition(store, workflow)
+    runner = RecordingRunner(['```json\n{"value": "structured_result"}\n```'])
+    executor = _executor(store, runner)
+
+    run = await executor.trigger_workflow(definition.id, build_manual_trigger_event(definition))
+    completed = await _wait_for(
+        lambda: (
+            get_workflow_run(store, run.run_id)
+            if get_workflow_run(store, run.run_id).status == "completed"
+            else None
+        )
+    )
+
+    assert completed.status == "completed"
+    assert completed.node_outputs[extract_id]["result"] == "structured_result"
+    sent = runner.calls[0]["input_text"]
+    assert "structured_output" in sent and '"value"' in sent
+
+
+@pytest.mark.asyncio
+async def test_extract_fails_when_reply_is_not_json():
+    store = InMemoryDocumentStore()
+    seed_document_types(store)
+    workflow = default_workflow_definition()
+    event_id = _node_id(workflow, "event")
+    extract_id = "extract_1"
+    agent_id = _node_id(workflow, "agent")
+    workflow["graph"]["nodes"][extract_id] = {
+        "kind": "extract",
+        "title": "Extract",
+        "template": "Extract: {key}",
+        "schema": {"type": "string"},
+    }
+    del workflow["graph"]["nodes"][agent_id]
+    workflow["graph"]["edges"] = [
+        {"from": {"node": event_id, "port": "key"}, "to": {"node": extract_id, "port": "key"}},
+    ]
+    definition = save_workflow_definition(store, workflow)
+    runner = RecordingRunner(["Done! I rated it high."])
+    executor = _executor(store, runner)
+
+    run = await executor.trigger_workflow(definition.id, build_manual_trigger_event(definition))
+    completed = await _wait_for(
+        lambda: (
+            get_workflow_run(store, run.run_id)
+            if get_workflow_run(store, run.run_id).status in ("completed", "failed")
+            else None
+        )
+    )
+
+    assert completed.status == "failed"
+    assert "reply was not the JSON result" in completed.last_error
+
+
+@pytest.mark.asyncio
+async def test_extract_fails_when_structured_output_invalid():
+    store = InMemoryDocumentStore()
+    seed_document_types(store)
+    workflow = default_workflow_definition()
+    event_id = _node_id(workflow, "event")
+    extract_id = "extract_1"
+    agent_id = _node_id(workflow, "agent")
+    workflow["graph"]["nodes"][extract_id] = {
+        "kind": "extract",
+        "title": "Extract",
+        "template": "Extract: {key}",
+        "schema": {"type": "number"},
+    }
+    del workflow["graph"]["nodes"][agent_id]
+    workflow["graph"]["edges"] = [
+        {"from": {"node": event_id, "port": "key"}, "to": {"node": extract_id, "port": "key"}},
+    ]
+    definition = save_workflow_definition(store, workflow)
+    runner = RecordingRunner(['{"value": "not_a_number"}'])
+    executor = _executor(store, runner)
+
+    run = await executor.trigger_workflow(definition.id, build_manual_trigger_event(definition))
+    completed = await _wait_for(
+        lambda: (
+            get_workflow_run(store, run.run_id)
+            if get_workflow_run(store, run.run_id).status in ("completed", "failed")
+            else None
+        )
+    )
+
+    assert completed.status == "failed"
+    assert "failed schema validation" in completed.last_error
+
+
+@pytest.mark.asyncio
+async def test_agent_subagent_instruction_present():
+    store = InMemoryDocumentStore()
+    seed_document_types(store)
+    workflow = default_workflow_definition()
+    agent_id = _node_id(workflow, "agent")
+    workflow["graph"]["nodes"][agent_id]["template"] = "Do work: {key}"
+    workflow["graph"]["nodes"][agent_id]["subagent"] = "specialist"
+    definition = save_workflow_definition(store, workflow)
+    runner = RecordingRunner(["done"])
+    executor = _executor(store, runner)
+
+    run = await executor.trigger_workflow(definition.id, build_manual_trigger_event(definition))
+    await _wait_for(
+        lambda: (
+            get_workflow_run(store, run.run_id)
+            if get_workflow_run(store, run.run_id).status == "completed"
+            else None
+        )
+    )
+
+    assert "specialist" in runner.calls[0]["input_text"]
+    assert "sub-agent" in runner.calls[0]["input_text"]

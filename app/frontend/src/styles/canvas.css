@@ -379,7 +379,7 @@
   --workflow-node-color: #3fb950;
 }
 
-.workflow-graph-node--mcp {
+.workflow-graph-node--extract {
   --workflow-node-color: #a371f7;
 }
 
@@ -393,6 +393,10 @@
 
 .workflow-graph-node--human_input {
   --workflow-node-color: #39c5cf;
+}
+
+.workflow-graph-node--unpack {
+  --workflow-node-color: #bc8cff;
 }
 
 .workflow-graph-node .node-type-icon {
@@ -431,6 +435,13 @@
 
 .workflow-canvas--cut .react-flow__pane {
   cursor: crosshair;
+}
+
+/* Right-drag pan works with every tool; the cursor overrides nodes and edges
+   too because the pointer crosses them while panning. */
+.workflow-canvas--right-panning,
+.workflow-canvas--right-panning * {
+  cursor: grab !important;
 }
 
 .workflow-canvas--cut .react-flow__edge,
@@ -892,7 +903,7 @@
   --workflow-node-color: #f2cc60;
 }
 
-.workflow-dock-item--mcp-tool {
+.workflow-dock-item--extract {
   --workflow-node-color: #a371f7;
 }
 
@@ -930,7 +941,7 @@
 .canvas-dock-icon.knowledge-search { background: color-mix(in oklab, #3fb950 18%, transparent) !important; color: #3fb950 !important; }
 .canvas-dock-icon.repository-task { background: color-mix(in oklab, #d29922 18%, transparent) !important; color: #d29922 !important; }
 .canvas-dock-icon.kanban-task { background: color-mix(in oklab, #f2cc60 18%, transparent) !important; color: #f2cc60 !important; }
-.canvas-dock-icon.mcp-tool { background: color-mix(in oklab, #a371f7 18%, transparent) !important; color: #a371f7 !important; }
+.canvas-dock-icon.extract { background: color-mix(in oklab, #a371f7 18%, transparent) !important; color: #a371f7 !important; }
 .canvas-dock-icon.ask-user { background: color-mix(in oklab, #39c5cf 18%, transparent) !important; color: #39c5cf !important; }
 .canvas-dock-icon.inbox-message { background: color-mix(in oklab, #bc8cff 18%, transparent) !important; color: #bc8cff !important; }
 .canvas-dock-icon.routine { background: color-mix(in oklab, #2dd4bf 18%, transparent) !important; color: #2dd4bf !important; }
@@ -1470,126 +1481,6 @@
   padding: 4px 0;
 }
 
-/* ---- MCP Node ---- */
-.mcp-tool-detail {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.mcp-tool-description {
-  margin: 0;
-  font-size: 11px;
-  color: var(--color-text-muted);
-  line-height: 1.45;
-}
-
-.mcp-bindings {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.mcp-bindings__title {
-  font-size: 10px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--color-text-muted);
-}
-
-.mcp-binding-field {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  padding: 8px;
-  background: var(--color-bg-primary);
-  border: 1px solid var(--color-border);
-  border-radius: 7px;
-}
-
-.mcp-binding-field__header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-
-.mcp-binding-field__name {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--color-text-primary);
-}
-
-.mcp-binding-field__type {
-  font-size: 10px;
-  color: var(--color-text-muted);
-  text-transform: uppercase;
-}
-
-.mcp-binding-field__controls {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.mcp-binding-field__controls select,
-.mcp-binding-field__controls input {
-  padding: 5px 7px;
-  font-size: 11px;
-  background: var(--color-bg-secondary);
-  border: 1px solid var(--color-border);
-  border-radius: 5px;
-  color: var(--color-text-primary);
-  flex: 1;
-  min-width: 0;
-}
-
-.mcp-binding-field__clear {
-  background: none;
-  border: none;
-  color: var(--color-text-muted);
-  cursor: pointer;
-  font-size: 14px;
-  line-height: 1;
-  width: 20px;
-  height: 20px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 4px;
-  flex-shrink: 0;
-}
-
-.mcp-binding-field__clear:hover {
-  color: #f85149;
-  background: rgba(248, 81, 73, 0.15);
-}
-
-.mcp-schema-fallback,
-.mcp-schema-missing {
-  margin: 0;
-  font-size: 11px;
-  color: var(--color-text-muted);
-  line-height: 1.45;
-}
-
-.node-meta-chip.mcp-server {
-  background: rgba(163, 113, 247, 0.12);
-  color: #a371f7;
-}
-
-.node-meta-chip.mcp-tool {
-  background: rgba(163, 113, 247, 0.18);
-  color: #a371f7;
-  font-weight: 600;
-}
-
-.node-type-icon.mcp {
-  background: rgba(163, 113, 247, 0.2);
-  color: #a371f7;
-}
-
 
 .workflow-node-ports {
   display: grid;
@@ -1635,6 +1526,33 @@
 
 .workflow-node-ports__empty {
   align-self: center;
+}
+
+.workflow-node-port__unpack {
+  background: transparent;
+  border: none;
+  color: var(--workflow-node-color);
+  cursor: pointer;
+  font-size: 0.75rem;
+  line-height: 1;
+  padding: 0 2px;
+}
+
+.workflow-node-port--toggle {
+  background: transparent;
+  border: none;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.72rem;
+  font-weight: 500;
+  padding: 0;
+  text-align: right;
+  width: 100%;
+}
+
+.workflow-node-port--toggle:hover {
+  color: var(--color-accent);
 }
 
 .workflow-node-options-backdrop {

@@ -67,11 +67,7 @@ def test_workflow_content_round_trip_keeps_typed_schemas(workflow_env):
     agent_id = next(
         node_id for node_id, node in payload["graph"]["nodes"].items() if node["kind"] == "agent"
     )
-    payload["graph"]["nodes"][agent_id]["input_schema"] = {
-        "type": "object",
-        "required": ["card"],
-        "properties": {"card": {"title": "Card", "type": "object"}},
-    }
+    payload["graph"]["nodes"][agent_id]["template"] = "Process card: {card}"
     payload["graph"]["nodes"]["data_card"] = {
         "kind": "data",
         "title": "Card",

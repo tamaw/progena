@@ -42,6 +42,7 @@ from deepagents.backends.utils import (
     slice_read_response,
 )
 
+from ..prompts.templates import parse_prompt_template
 from ..routines.store import (
     parse_routine_graph_document,
     routine_file_name,
@@ -1548,4 +1549,19 @@ class UserAgentDirectoryBackend(ContentDocumentDirectoryBackend):
                     )
         except ValueError as exc:
             return WriteResult(error=f"Invalid agent manifest: {exc}")
+        return await super().awrite(file_path, content)
+
+
+class PromptDocumentDirectoryBackend(ContentDocumentDirectoryBackend):
+    """Validated read/write prompt documents mounted at ``/prompts/``.
+
+    Every write is validated with :func:`parse_prompt_template`; failures
+    surface as a ``WriteResult.error`` so the agent sees the reason.
+    """
+
+    async def awrite(self, file_path: str, content: str) -> WriteResult:
+        try:
+            parse_prompt_template(content)
+        except ValueError as exc:
+            return WriteResult(error=f"Invalid prompt template: {exc}")
         return await super().awrite(file_path, content)

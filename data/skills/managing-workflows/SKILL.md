@@ -22,17 +22,19 @@ Core rules:
 
 Document events:
 - Every create/update/delete of a stored document is an event. An `event` node subscribes by `document_type` (a registered type id). Built-in ids: `kanban_card`, `kanban_task` (task body), `inbox_message`, `workflow`, `workflow_run`, `routine`, `policy`, `agent`, `skill`, `memory`, `prompt`, `preferences`, `schedule`, `mcp`, `plugins`, `marketplaces`, `knowledge`, `repos`, `kanban_board`. Writing a workflow with an unknown id fails with the list of registered ids.
-- Optional filters on the event node: `key` (exact document key), `operations` (subset of `created`/`updated`/`deleted`; empty = any), `changed_fields` (fire only if one of these top-level fields changed), `match` (equality on output ports, e.g. `{"after.column_id": "done"}`).
-- Event output ports: `event_id`, `document_type`, `key`, `id` (key without prefix), `op`, `timestamp`, `changed_fields`, `before`, `after`, plus one `before.<field>` / `after.<field>` port per document field. `before` is absent on created, `after` on deleted.
+- Optional filters on the event node: `key` (exact document key), `operations` (subset of `created`/`updated`/`deleted`; empty = any), `changed_fields` (fire only if one of these top-level fields changed), `match` (equality at dotted output paths, e.g. `{"after.column_id": "done"}`; the path must exist).
+- Event output ports: `event_id`, `document_type`, `key`, `id` (key without prefix), `op`, `timestamp`, `changed_fields`, `before`, `after`. `before`/`after` are the whole document, typed with the document type's label (e.g. `Kanban Card`); wire them into an `unpack` node to reach individual fields. `before` is absent on created, `after` on deleted.
 - Example — "a card moved to Done": `{"kind": "event", "title": "Card done", "document_type": "kanban_card", "operations": ["updated"], "changed_fields": ["column_id"], "match": {"after.column_id": "done"}}`.
 
 Node kinds:
 - `event` — entrypoint described above; no inbound edges.
 - `data` — literal `value` with an `output_schema`; output port `value`.
-- `document_read` — reads one document directly (no LLM). Fields `kind`, `title`, `document_type`. Input `id` for collection types (e.g. wire `event.id` → `read.id` to load a card's `kanban_task` body), or `trigger` (any value, for sequencing) for single-document types. Outputs `found`, `key`, `id`, `document`, and `document.<field>` ports.
+- `document_read` — reads one document directly (no LLM). Fields `kind`, `title`, `document_type`. Input `id` for collection types (e.g. wire `event.id` → `read.id` to load a card's `kanban_task` body), or `trigger` (any value, for sequencing) for single-document types. Outputs `found`, `key`, `id`, `document` (typed with the document type).
+- `unpack` — pure step (no LLM) exposing one object's fields. Fields `kind`, `title`. Single input `value`: wire any object port (`event.after`, `read.document`, or another unpack's object field). Output ports are that object's properties, derived on save. Example — card column into a query: `event.after` → `card.value`, `card.column_id` → `peers.column_id`.
 - `document_query` — equality query over a collection type (no LLM). Fields `kind`, `title`, `document_type`, `filter_fields` (each becomes a required input port), `limit` (1–200). With no filters it takes a `trigger` input. Outputs `items`, `keys`, `count`.
-- `agent` — runs a message through Progenitor with a typed `input_schema`/`output_schema`.
-- `mcp` — invokes a configured MCP tool.
+- `extract` — fields `kind`, `title`, exactly one of `prompt` (a `/prompts/` path) or `template` (inline), optional `schema` (document type id, schema file name, or inline JSON schema). Inputs: one port per `{placeholder}` root, plus optional `thread_id`. Progenitor answers via `structured_output`; output `result` (typed by the schema) and `thread_id`. Schema comes from `schema`, else the template's front matter `output_schema`, else the typed input `result` is wired into; with none, saving fails.
+- `agent` — same template fields plus optional `subagent` (a registered sub-agent to delegate to). Outputs `message` (Progenitor's reply text) and `thread_id`.
+- Templates are markdown with optional front matter (`title`, `description`, `inputs` mapping placeholder roots to types, `output_schema`, `system`). Placeholders `{card}` / `{card.title}` become input ports; a missing value fails the step. All prompt steps in a run share one thread unless `thread_id` is wired.
 - `condition` — deterministic branch with `true`/`false` outputs.
 - `approval` — pauses for an approval decision.
 - `human_input` — pauses for a typed human-supplied value.
@@ -56,7 +58,7 @@ Validation reminders:
 - at least one `event` node is required; event nodes cannot have inbound edges
 - every non-source node needs an inbound edge, and every required input port needs exactly one edge
 - edge ports must exist on both nodes and have compatible types
-- `match` keys must be event output ports; `changed_fields` must be document fields
+- `match` keys must be dotted paths starting at an event output port (e.g. `after.column_id`); `changed_fields` must be document fields
 - `document_query` requires a collection document type
 - the graph must be acyclic
 - a workflow's own run writes never re-trigger it (runs carry their ancestry)

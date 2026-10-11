@@ -5,11 +5,13 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import uuid
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any, Protocol
 
+from app.backend.chat_sessions import CHAT_METADATA_PREFIX
 from app.backend.document_events import list_document_types
 from app.backend.document_store import (
     PROGENITOR_STATE_PREFIX,
@@ -17,6 +19,7 @@ from app.backend.document_store import (
     document_write_origin,
 )
 from app.progenitor.document_types import DocumentType
+from app.progenitor.prompts.templates import parse_prompt_template, render_prompt_template
 from app.progenitor.structured import validate_against_schema
 from app.progenitor.utils import utcnow_isoformat
 from app.progenitor.workflows import (
@@ -29,15 +32,16 @@ from app.progenitor.workflows import (
     WorkflowNodeDocumentQuery,
     WorkflowNodeDocumentRead,
     WorkflowNodeEvent,
+    WorkflowNodeExtract,
     WorkflowNodeHumanInput,
-    WorkflowNodeMcp,
+    WorkflowNodeUnpack,
     WorkflowRun,
     WorkflowRunSource,
-    apply_document_type_schemas,
     build_document_read_output,
     build_workflow_list_item,
     coerce_workflow_definition,
     coerce_workflow_run,
+    derive_workflow_port_schemas,
     validate_workflow_definition_payload,
     workflow_definition_key,
     workflow_id_from_path,
@@ -88,28 +92,17 @@ class PromptExecutionResult:
 
 
 class WorkflowPromptRunner(Protocol):
-    """Agent-node runner adapter: the sole node kind backed by Progenitor."""
+    """Agent/extract-node runner adapter: backed by Progenitor."""
 
     async def __call__(
         self,
         *,
         workflow: WorkflowDefinition,
         node_id: str,
-        node: WorkflowNodeAgent,
+        node: WorkflowNodeAgent | WorkflowNodeExtract,
         input_text: str,
         thread_id: str | None,
     ) -> PromptExecutionResult: ...
-
-
-class McpToolCaller(Protocol):
-    """Adapter for executing a specific MCP tool during workflow execution."""
-
-    async def __call__(
-        self,
-        server_id: str,
-        tool_name: str,
-        arguments: dict[str, Any],
-    ) -> dict[str, Any]: ...
 
 
 def _coerce_stored_workflow_definition(
@@ -158,13 +151,70 @@ def get_workflow_definition(
     return _coerce_stored_workflow_definition(store, workflow_definition_key(workflow_id), document)
 
 
+def _save_workflow_thread_metadata(
+    store: BackendDocumentStore, thread_id: str, workflow_title: str
+) -> None:
+    """Create or update chat metadata so the thread appears in the sidebar."""
+    from app.backend.chat_sessions import CHAT_INDEX_KEY
+
+    metadata = {
+        "title": f"Workflow: {workflow_title}",
+        "thread_id": thread_id,
+        "ui_owned": True,
+        "created_at": utcnow_isoformat(),
+        "updated_at": utcnow_isoformat(),
+        "last_activity": utcnow_isoformat(),
+    }
+    store.save_document(CHAT_METADATA_PREFIX, thread_id, metadata)
+    index_doc = store.get_document(CHAT_METADATA_PREFIX, CHAT_INDEX_KEY, [])
+    index_payload = getattr(index_doc, "payload", index_doc) if index_doc is not None else []
+    index = list(index_payload) if isinstance(index_payload, list) else []
+    if thread_id not in index:
+        index.append(thread_id)
+        store.save_document(CHAT_METADATA_PREFIX, CHAT_INDEX_KEY, index)
+
+
+def _prompt_loader_from_store(store: BackendDocumentStore) -> Callable[[str], str]:
+    """Return a loader that reads prompt documents from the backend store."""
+    from app.progenitor.document_kinds import PROMPT_DOCUMENT_KEY_PREFIX
+
+    def load(path: str) -> str:
+        document = store.get_document(
+            PROGENITOR_STATE_PREFIX, f"{PROMPT_DOCUMENT_KEY_PREFIX}{path}", None
+        )
+        if document is None:
+            raise ValueError(f"prompt document '{path}' not found")
+        payload = getattr(document, "payload", document)
+        content = payload.get("content") if isinstance(payload, dict) else None
+        if not isinstance(content, str):
+            raise ValueError(f"prompt document '{path}' has no content")
+        return content
+
+    return load
+
+
+def _node_template_text(
+    store: BackendDocumentStore, node: WorkflowNodeExtract | WorkflowNodeAgent
+) -> str:
+    """The node's template: its referenced ``prompt:`` document, else its inline text."""
+
+    if node.prompt:
+        return _prompt_loader_from_store(store)(node.prompt)
+    return node.template or ""
+
+
 def save_workflow_definition(
     store: BackendDocumentStore,
     payload: Mapping[str, Any],
+    prompt_loader: Callable[[str], str] | None = None,
 ) -> WorkflowDefinition:
     """Derive document port schemas, validate, and persist one workflow definition."""
 
-    typed = apply_document_type_schemas(payload, list_document_types(store))
+    if prompt_loader is None:
+        prompt_loader = _prompt_loader_from_store(store)
+    typed = derive_workflow_port_schemas(
+        payload, list_document_types(store), prompt_loader=prompt_loader
+    )
     normalized = validate_workflow_definition_payload(typed)
     definition = WorkflowDefinition.model_validate(normalized)
     store.save_document(
@@ -420,18 +470,19 @@ def evaluate_workflow_condition(expression: str, resolved_input: Mapping[str, An
     raise ValueError("condition must be an input port path or a == / != comparison")
 
 
-def _parse_node_output_json(node_title: str, output_text: str) -> dict[str, Any]:
-    """Parse and shape-check one node's raw JSON output before it is published."""
+def _parse_json_reply(node_title: str, reply: str) -> Any:
+    """Parse a turn's final reply as one JSON value (an optional ```json fence allowed)."""
 
+    text = reply.strip()
+    fenced = re.fullmatch(r"```(?:json)?\s*(.*?)\s*```", text, flags=re.DOTALL)
+    if fenced:
+        text = fenced.group(1)
     try:
-        parsed = json.loads(output_text)
+        return json.loads(text)
     except json.JSONDecodeError as exc:
         raise ValueError(
-            f"node '{node_title}' returned non-JSON output for its output_schema"
+            f"extract node '{node_title}': Progenitor's reply was not the JSON result"
         ) from exc
-    if not isinstance(parsed, dict):
-        raise ValueError(f"node '{node_title}' output must be a JSON object")
-    return parsed
 
 
 def _validate_node_output(node: Any, output: Mapping[str, Any]) -> None:
@@ -513,104 +564,6 @@ def _execute_document_node(
     return {"items": items, "keys": keys, "count": len(items)}
 
 
-def _lookup_mcp_tool(
-    store: BackendDocumentStore,
-    server_id: str,
-    tool_name: str,
-) -> dict[str, Any]:
-    """Return the discovered MCP tool definition from the shared document store."""
-
-    tools_document = _document_payload(
-        store.get_document(PROGENITOR_STATE_PREFIX, "mcp_tools", None), {}
-    )
-    tools = tools_document.get("tools") if isinstance(tools_document, Mapping) else None
-    tools = tools if isinstance(tools, list) else []
-    selected_tool = next(
-        (
-            tool
-            for tool in tools
-            if isinstance(tool, Mapping)
-            and tool.get("mcp_server_name") == server_id
-            and (tool.get("name") == tool_name or tool.get("mcp_original_name") == tool_name)
-            and tool.get("enabled", True) is not False
-        ),
-        None,
-    )
-    if not isinstance(selected_tool, Mapping):
-        raise ValueError(
-            f"MCP tool '{tool_name}' on server '{server_id}' is unavailable or disabled"
-        )
-    return dict(selected_tool)
-
-
-def _normalize_mcp_result(result: dict[str, Any]) -> dict[str, Any]:
-    """Normalize an MCP tool result into a downstream-consumable object."""
-
-    content = result.get("content")
-    if isinstance(content, list):
-        texts: list[str] = []
-        for item in content:
-            if isinstance(item, dict) and item.get("type") == "text":
-                texts.append(str(item.get("text") or ""))
-        if texts:
-            return {"text": "\n".join(texts)}
-    if isinstance(content, str):
-        return {"text": content}
-    return dict(result)
-
-
-def _mcp_server_url_from_store(store: BackendDocumentStore, server_id: str) -> str | None:
-    """Read the configured URL for an MCP server from the shared document store."""
-
-    mcp_doc = _document_payload(store.get_document(PROGENITOR_STATE_PREFIX, "mcp", None), {})
-    servers = mcp_doc.get("mcpServers") if isinstance(mcp_doc, Mapping) else None
-    if not isinstance(servers, Mapping):
-        return None
-    server = servers.get(server_id)
-    if not isinstance(server, Mapping):
-        return None
-    url = str(server.get("url") or server.get("endpoint") or "").strip()
-    return url or None
-
-
-def _create_default_mcp_caller(
-    store_getter: Callable[[], BackendDocumentStore],
-) -> McpToolCaller:
-    """Return a caller that executes MCP tools via HTTP JSON-RPC using the store."""
-
-    async def call_mcp_tool(
-        server_id: str, tool_name: str, arguments: dict[str, Any]
-    ) -> dict[str, Any]:
-        store = store_getter()
-        url = _mcp_server_url_from_store(store, server_id)
-        if not url:
-            return {"error": f"MCP server '{server_id}' is not configured"}
-
-        import httpx
-
-        request = {
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "tools/call",
-            "params": {"name": tool_name, "arguments": arguments},
-        }
-        try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                response = await client.post(url, json=request)
-                response.raise_for_status()
-                payload = response.json()
-                if not isinstance(payload, dict):
-                    raise ValueError("Invalid MCP JSON-RPC response")
-                if error := payload.get("error"):
-                    return {"error": error}
-                return dict(payload.get("result", payload))
-        except (httpx.HTTPError, json.JSONDecodeError, ValueError) as exc:
-            logger.warning("MCP tool call failed: %s", exc)
-            return {"error": f"MCP call failed: {exc}"}
-
-    return call_mcp_tool
-
-
 class WorkflowExecutor:
     """Backend-resident workflow executor for typed control/data graphs."""
 
@@ -620,16 +573,21 @@ class WorkflowExecutor:
         store_getter: Callable[[], BackendDocumentStore],
         prompt_runner: WorkflowPromptRunner,
         emit_event: Callable[[str, Mapping[str, Any]], Any],
-        mcp_caller: McpToolCaller | None = None,
     ) -> None:
         self._store_getter = store_getter
         self._prompt_runner = prompt_runner
         self._emit_event = emit_event
-        self._mcp_caller = mcp_caller
         self._tasks: dict[str, asyncio.Task[None]] = {}
         self._locks: dict[str, asyncio.Lock] = {}
         # document type id -> [(workflow id, event node id, event node)]
         self._subscriptions: dict[str, list[tuple[str, str, WorkflowNodeEvent]]] | None = None
+
+    def _resolve_thread_id(self, resolved_input: Mapping[str, Any], run: WorkflowRun) -> str | None:
+        """Return the thread id for a node: wired input wins, then run thread."""
+        wired = resolved_input.get("thread_id")
+        if wired is not None:
+            return str(wired)
+        return run.thread_id
 
     def invalidate_subscriptions(self) -> None:
         """Drop the cached event-node index; rebuilt on the next dispatch."""
@@ -948,14 +906,17 @@ class WorkflowExecutor:
             self._emit_event("workflow.run.updated", paused_run.model_dump(mode="json"))
             return
         if run.status == "queued":
+            thread_id = run.thread_id or f"workflow_thread_{uuid.uuid4().hex[:12]}"
             run = run.model_copy(
                 update={
                     "status": "running",
                     "started_at": run.started_at or utcnow_isoformat(),
+                    "thread_id": thread_id,
                     "updated_at": utcnow_isoformat(),
                 }
             )
             save_workflow_run(store, run)
+            _save_workflow_thread_metadata(store, thread_id, definition.title)
             self._emit_event("workflow.run.started", run.model_dump(mode="json"))
 
         # Node-output registry: every node's typed output object, keyed by
@@ -1044,52 +1005,99 @@ class WorkflowExecutor:
                     output_object = _execute_document_node(store, node, resolved_input)
                     _validate_node_output(node, output_object)
                     output_text = _bounded_text(json.dumps(output_object, default=str))
-                elif isinstance(node, WorkflowNodeMcp):
-                    if self._mcp_caller is None:
-                        raise RuntimeError("MCP execution is not configured for this executor")
+                elif isinstance(node, WorkflowNodeUnpack):
                     _validate_node_input(node, resolved_input)
-                    tool = resolved_input.get("tool") or {}
-                    server_id = str(tool.get("server_id") or "")
-                    tool_name = str(tool.get("tool_name") or "")
-                    arguments = dict(resolved_input.get("arguments") or {})
-                    tool_definition = _lookup_mcp_tool(store, server_id, tool_name)
-                    tool_input_schema = tool_definition.get("inputSchema")
-                    if tool_input_schema is not None:
-                        error = validate_against_schema(arguments, tool_input_schema)
-                        if error:
+                    value = resolved_input.get("value")
+                    properties = workflow_node_output_ports(node)
+                    output_object = {
+                        name: field
+                        for name, field in (value.items() if isinstance(value, Mapping) else ())
+                        if name in properties
+                    }
+                    _validate_node_output(node, output_object)
+                    output_text = _bounded_text(json.dumps(output_object, default=str))
+                elif isinstance(node, WorkflowNodeExtract):
+                    _validate_node_input(node, resolved_input)
+                    template = parse_prompt_template(_node_template_text(store, node))
+                    input_text = render_prompt_template(template, resolved_input)
+                    result_schema = node.output_schema.get("properties", {}).get("result")
+                    if not isinstance(result_schema, dict):
+                        raise ValueError(f"extract node '{node.title}' has no result schema")
+                    # Definitions hoisted to the node's root travel with the
+                    # schema so internal $refs resolve; structured_output needs
+                    # an object root, so anything else is wrapped as {"value": ...}.
+                    definitions = {
+                        key: node.output_schema[key]
+                        for key in ("$defs", "definitions")
+                        if isinstance(node.output_schema.get(key), dict)
+                    }
+                    unwrap = result_schema.get("type") != "object"
+                    tool_schema = (
+                        {
+                            "type": "object",
+                            "required": ["value"],
+                            "properties": {"value": result_schema},
+                        }
+                        if unwrap
+                        else dict(result_schema)
+                    ) | definitions
+                    # The turn's final reply is the only full result the backend
+                    # receives (tool results reach it as previews only), so
+                    # Progenitor returns the structured_output value verbatim.
+                    instruction = (
+                        f"{input_text}\n\n"
+                        "Produce the answer by calling the structured_output tool exactly once "
+                        "with this JSON schema, then reply with exactly the JSON value it "
+                        "returned and nothing else:\n"
+                        f"```json\n{json.dumps(tool_schema, indent=2)}\n```"
+                    )
+                    thread_id = self._resolve_thread_id(resolved_input, latest_run) or ""
+                    prompt_result = await self._prompt_runner(
+                        workflow=definition,
+                        node_id=node_id,
+                        node=node,
+                        input_text=instruction,
+                        thread_id=thread_id,
+                    )
+                    structured = _parse_json_reply(node.title, prompt_result.response)
+                    if unwrap:
+                        if not isinstance(structured, Mapping) or "value" not in structured:
                             raise ValueError(
-                                f"mcp node '{node.title}' arguments failed tool schema "
-                                f"validation: {error}"
+                                f"extract node '{node.title}' output is missing 'value'"
                             )
-                    raw_result = await self._mcp_caller(server_id, tool_name, arguments)
-                    if isinstance(raw_result, dict) and raw_result.get("error"):
-                        raise RuntimeError(
-                            f"mcp node '{node.title}' tool call failed: {raw_result['error']}"
+                        structured = structured["value"]
+                    error = validate_against_schema(structured, dict(result_schema) | definitions)
+                    if error:
+                        raise ValueError(
+                            f"extract node '{node.title}' output failed schema validation: {error}"
                         )
-                    raw_output = _normalize_mcp_result(raw_result)
-                    output_text = _bounded_text(json.dumps(raw_output, default=str))
-                    if workflow_node_output_ports(node):
-                        _validate_node_output(node, raw_output)
-                        output_object = raw_output
-                else:
-                    if not isinstance(node, WorkflowNodeAgent):
-                        raise TypeError(f"node '{node_id}' does not execute as an agent")
+                    output_object = {"result": structured, "thread_id": thread_id}
+                    output_text = _bounded_text(json.dumps(output_object, default=str))
+                elif isinstance(node, WorkflowNodeAgent):
                     _validate_node_input(node, resolved_input)
-                    input_text = compose_workflow_agent_input(resolved_input, message=node.message)
+                    template = parse_prompt_template(_node_template_text(store, node))
+                    input_text = render_prompt_template(template, resolved_input)
+                    if node.subagent:
+                        input_text = (
+                            f"{input_text}\n\n"
+                            f"Delegate this task to the '{node.subagent}' sub-agent and return its answer."
+                        )
+                    thread_id = self._resolve_thread_id(resolved_input, latest_run)
                     prompt_result = await self._prompt_runner(
                         workflow=definition,
                         node_id=node_id,
                         node=node,
                         input_text=input_text,
-                        thread_id=(
-                            str(resolved_input["thread_id"])
-                            if resolved_input.get("thread_id") is not None
-                            else None
-                        ),
+                        thread_id=thread_id,
                     )
-                    output_object = _parse_node_output_json(node.title, prompt_result.response)
+                    output_object = {
+                        "message": prompt_result.response,
+                        "thread_id": thread_id or "",
+                    }
                     _validate_node_output(node, output_object)
                     output_text = _bounded_text(prompt_result.response)
+                else:
+                    raise TypeError(f"node '{node_id}' has unsupported kind '{node.kind}'")
             except Exception as exc:
                 self._mark_failed(store, latest_run, error=str(exc))
                 await self._maybe_start_next_run_locked(store, workflow_id)
