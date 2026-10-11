@@ -18,6 +18,7 @@ updates live.
 - User asks to remove / disconnect a server
 - User asks to change a server's URL, headers, or description
 - User asks to enable or disable a server
+- User asks to enable or disable one MCP tool while keeping its server on
 
 ## Always Read Before You Edit
 `/config/mcp.json` is serialized with sorted keys and 2-space indentation. Read it
@@ -70,14 +71,32 @@ tools simply stop being discovered.
 
 ### Enable / disable a single tool
 When the user wants one tool off but the rest of its server on, do NOT touch the
-server in `/config/mcp.json` (that turns off every tool on it). Instead:
-1. `read_file /config/mcp_tools.json` — the discovered tools, one entry per tool with
-   its prefixed `name` (e.g. `jina_search_jina_blog`), `server`, and `enabled`.
-2. `edit_file /config/mcp_tools.json` to flip only that tool's `"enabled"` to `false`
-   (or back to `true`).
-Only `enabled` can change in this file; the tool list itself comes from discovery, so
-adding, removing, or editing other fields is rejected. The flag is the same one the
-Tools page toggles, survives re-discovery, and takes effect on the next turn.
+server in `/config/mcp.json` (that turns off every tool on it), and do NOT change its
+URL. Per-tool on/off lives in `/config/mcp_tools.json`: a `tools` array produced by
+MCP discovery, one entry per tool, shaped by `/schemas/mcp_tool_entry.schema.v1.json`
+(`name`, `server`, `original_name`, `description`, `enabled`). The only thing you may
+change is a tool's `enabled` flag; there is no other setting or override key in that
+file.
+
+1. `grep <tool name> /config/mcp_tools.json` (or `read_file` it) to find the tool's
+   entry. Names are prefixed with the server: `jina_search_jina_blog`, not
+   `search_jina_blog`.
+2. Recommended: `read_file /schemas/mcp_tool_entry.schema.v1.json`, then
+   `structured_output json_schema=<that schema> input=<the tool's current entry>
+   instruction="Return this exact entry with enabled set to false."` (or `true`) to get
+   a schema-valid entry. For a plain flag flip you may skip this and edit directly.
+3. `edit_file /config/mcp_tools.json`, changing only that entry's `"enabled"` (or
+   replacing the entry with the result from step 2). Every write is validated against
+   the same schema; adding keys, adding or removing tools, or changing any field other
+   than `enabled` is rejected.
+4. If the write is rejected: do not work around it (no new keys, no URL changes).
+   Read the error, re-read the file, then use step 2 (`structured_output` with the
+   schema and the current entry) to produce a valid entry and retry the edit.
+5. Verify: call `mcp` and confirm `disabled_count` changed and the tool is no longer
+   (or is again) in the live tool list. Only then tell the user it's done.
+
+The flag is the same one the Tools page toggles: the tool stays listed there, can be
+switched back on, survives re-discovery, and takes effect on the next turn.
 
 ### Edit URL / headers / description
 Change the relevant field in place with `edit_file`.

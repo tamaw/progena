@@ -38,9 +38,11 @@ from deepagents.backends.protocol import (
 from deepagents.backends.utils import (
     create_file_data,
     file_data_to_string,
+    grep_matches_from_files,
     perform_string_replacement,
     slice_read_response,
 )
+from wcmatch import glob as wcglob
 
 from ..routines.store import (
     parse_routine_graph_document,
@@ -323,12 +325,16 @@ def _doc_to_text(doc: JsonDoc) -> str:
 
 
 class _AsyncOnlyFileBackendMixin:
-    """Shared sync-method stubs for filesystem backends that are async-only.
+    """Shared async surface for the virtual backends over Postgres documents.
 
     The Progenitor DeepAgent runs async, so only each backend's async surface
     (aread/awrite/aedit/als/aglob/agrep) is ever wired up. Subclasses set their
-    own ``_ASYNC_ONLY`` message and mix this in instead of repeating these six
+    own ``_ASYNC_ONLY`` message and mix this in instead of repeating the sync
     stubs verbatim.
+
+    ``agrep``/``aglob`` are implemented once here on top of each subclass's
+    own ``als`` and ``aread``: grep searches exactly the text ``read_file``
+    shows (so its line numbers line up), glob matches the listed paths.
 
     Also supplies ``adownload_files``, required by DeepAgents'
     ``BackendProtocol`` (used e.g. by ``MemoryMiddleware``/``SkillsMiddleware``
@@ -378,6 +384,53 @@ class _AsyncOnlyFileBackendMixin:
                 FileDownloadResponse(path=path, content=content.encode("utf-8"), error=None)
             )
         return responses
+
+    async def _virtual_file_paths(self) -> list[str]:
+        """Every file path this backend lists, walking into subdirectories."""
+        paths: list[str] = []
+        pending, seen = ["/"], {"/"}
+        while pending:
+            listing = await self.als(pending.pop())  # type: ignore[attr-defined]
+            for entry in listing.entries or []:
+                entry_path = entry["path"]
+                if entry.get("is_dir"):
+                    if entry_path not in seen:
+                        seen.add(entry_path)
+                        pending.append(entry_path)
+                else:
+                    paths.append(entry_path)
+        return paths
+
+    async def aglob(self, pattern: str, path: str = "/") -> GlobResult:
+        """Listed paths under ``path`` matching ``pattern`` (``**`` recurses)."""
+        base = (path or "/").rstrip("/")
+        effective = pattern.lstrip("/")
+        matches: list[FileInfo] = []
+        for file_path in await self._virtual_file_paths():
+            if base and not file_path.startswith(f"{base}/"):
+                continue
+            relative = file_path[len(base) + 1 :]
+            if wcglob.globmatch(relative, effective, flags=wcglob.BRACE | wcglob.GLOBSTAR):
+                matches.append(FileInfo(path=file_path, is_dir=False))
+        return GlobResult(matches=matches)
+
+    async def agrep(
+        self, pattern: str, path: str | None = None, glob: str | None = None
+    ) -> GrepResult:
+        """Literal search over the rendered documents, as ``read_file`` shows them."""
+        base = (path or "/").rstrip("/")
+        files: dict[str, FileData] = {}
+        for file_path in await self._virtual_file_paths():
+            if base and file_path != base and not file_path.startswith(f"{base}/"):
+                continue
+            try:
+                result = await self.aread(file_path, 0, 10_000_000)  # type: ignore[attr-defined]
+            except Exception as exc:  # noqa: BLE001 - one unreadable document must not hide the rest
+                logger.warning("grep: skipping unreadable %s: %s", file_path, exc)
+                continue
+            if result.error is None and result.file_data is not None:
+                files[file_path] = result.file_data
+        return grep_matches_from_files(files, pattern, path or "/", glob)
 
 
 class StateDocumentBackend(_AsyncOnlyFileBackendMixin):
@@ -442,14 +495,6 @@ class StateDocumentBackend(_AsyncOnlyFileBackendMixin):
         entries = [FileInfo(path=f"/{name}", is_dir=False) for name in sorted(self._files)]
         return LsResult(entries=entries)
 
-    async def aglob(self, pattern: str, path: str = "/") -> GlobResult:
-        return GlobResult(matches=[])
-
-    async def agrep(
-        self, pattern: str, path: str | None = None, glob: str | None = None
-    ) -> GrepResult:
-        return GrepResult(matches=[])
-
     async def _after_write(self, state_file: StateFile) -> None:
         if state_file.on_change is None:
             return
@@ -506,13 +551,12 @@ def _validate_mcp_tools_document(content: str) -> JsonDoc:
     except json.JSONDecodeError as exc:
         raise ValueError(f"not valid JSON: {exc}") from exc
     tools = data.get("tools") if isinstance(data, dict) else None
-    if not isinstance(tools, list) or not all(
-        isinstance(tool, dict) and isinstance(tool.get("name"), str) for tool in tools
-    ):
-        raise ValueError('expected {"tools": [{"name": ..., "enabled": ...}, ...]}')
-    for tool in tools:
-        if not isinstance(tool.get("enabled", True), bool):
-            raise ValueError(f"tool '{tool['name']}': enabled must be true or false")
+    if not isinstance(tools, list):
+        raise ValueError('expected {"tools": [<mcp_tool_entry>, ...]}')
+    for index, tool in enumerate(tools):
+        if not isinstance(tool, dict):
+            raise ValueError(f"tool {index}: expected an object")
+        check_entry_schema(f"tool '{tool.get('name', index)}'", tool, "mcp_tool_entry")
     return data
 
 
@@ -535,8 +579,20 @@ def create_mcp_tools_state_file(state_manager: Any) -> StateFile:
             for tool in current_tools
             if isinstance(tool, dict) and tool.get("name")
         }
-        new_tools = doc.get("tools", []) if isinstance(doc, dict) else []
-        new_by_name = {str(tool["name"]): tool for tool in new_tools}
+        if not isinstance(doc, dict):
+            raise ValueError("expected a JSON object")
+        # Everything outside `tools` (servers, updated_at) is discovery-owned;
+        # an added key here would be silently dropped, so the edit would look
+        # successful while changing nothing.
+        current_rest = {k: v for k, v in current.items() if k != "tools"}
+        edited_rest = {k: v for k, v in doc.items() if k != "tools"}
+        if edited_rest != current_rest:
+            raise ValueError(
+                "only a tool's `enabled` flag inside `tools` can change - there are no "
+                "other settings in this file; to disable a tool set "
+                '`"enabled": false` on its entry in `tools`'
+            )
+        new_by_name = {str(tool["name"]): tool for tool in doc.get("tools", [])}
         if set(new_by_name) != set(current_by_name):
             raise ValueError(
                 "tools can't be added or removed here - the list comes from MCP discovery; "
@@ -929,14 +985,6 @@ class KanbanTaskDirectoryBackend(_AsyncOnlyFileBackendMixin):
         ]
         return LsResult(entries=entries)
 
-    async def aglob(self, pattern: str, path: str = "/") -> GlobResult:
-        return GlobResult(matches=[])
-
-    async def agrep(
-        self, pattern: str, path: str | None = None, glob: str | None = None
-    ) -> GrepResult:
-        return GrepResult(matches=[])
-
 
 class InboxDirectoryBackend(_AsyncOnlyFileBackendMixin):
     """Async DeepAgent backend exposing the user's inbox as a message directory.
@@ -1042,14 +1090,6 @@ class InboxDirectoryBackend(_AsyncOnlyFileBackendMixin):
         )
         entries = [FileInfo(path=f"/{message['id']}.md", is_dir=False) for message in ordered]
         return LsResult(entries=entries)
-
-    async def aglob(self, pattern: str, path: str = "/") -> GlobResult:
-        return GlobResult(matches=[])
-
-    async def agrep(
-        self, pattern: str, path: str | None = None, glob: str | None = None
-    ) -> GrepResult:
-        return GrepResult(matches=[])
 
 
 class WorkflowDirectoryBackend(_AsyncOnlyFileBackendMixin):
@@ -1158,14 +1198,6 @@ class WorkflowDirectoryBackend(_AsyncOnlyFileBackendMixin):
         ]
         return LsResult(entries=entries)
 
-    async def aglob(self, pattern: str, path: str = "/") -> GlobResult:
-        return GlobResult(matches=[])
-
-    async def agrep(
-        self, pattern: str, path: str | None = None, glob: str | None = None
-    ) -> GrepResult:
-        return GrepResult(matches=[])
-
 
 class RoutineDirectoryBackend(_AsyncOnlyFileBackendMixin):
     """Async backend exposing routine graphs as ``/routines/*.json``.
@@ -1272,14 +1304,6 @@ class RoutineDirectoryBackend(_AsyncOnlyFileBackendMixin):
             for graph in ordered
         ]
         return LsResult(entries=entries)
-
-    async def aglob(self, pattern: str, path: str = "/") -> GlobResult:
-        return GlobResult(matches=[])
-
-    async def agrep(
-        self, pattern: str, path: str | None = None, glob: str | None = None
-    ) -> GrepResult:
-        return GrepResult(matches=[])
 
 
 class PolicyDirectoryBackend(RoutineDirectoryBackend):
@@ -1569,14 +1593,6 @@ class ContentDocumentDirectoryBackend(_AsyncOnlyFileBackendMixin):
             for f in sorted(files)
         ]
         return LsResult(entries=entries)
-
-    async def aglob(self, pattern: str, path: str = "/") -> GlobResult:
-        return GlobResult(matches=[])
-
-    async def agrep(
-        self, pattern: str, path: str | None = None, glob: str | None = None
-    ) -> GrepResult:
-        return GrepResult(matches=[])
 
 
 class UserAgentDirectoryBackend(ContentDocumentDirectoryBackend):
