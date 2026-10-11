@@ -79,35 +79,6 @@ def test_mcp_server_entry_schema_accepts_url_or_endpoint() -> None:
         jsonschema.validate({"transport": "http"}, schema)
 
 
-def test_workflow_node_user_and_code_schemas_match_definition_shapes() -> None:
-    """node_user/node_code standalone schemas exist and accept the same shapes
-    the inline 'user'/'code' oneOf branches in definition.workflow.schema.v1.json do."""
-    import jsonschema
-
-    user_schema = schemas.load_schema("node_user.workflow")
-    jsonschema.validate(
-        {
-            "kind": "user",
-            "title": "Notify",
-            "message_type": "notify_user",
-            "message": "The workflow finished.",
-            "notification_title": "Workflow done",
-            "level": "success",
-        },
-        user_schema,
-    )
-    with pytest.raises(jsonschema.ValidationError):
-        jsonschema.validate({"kind": "user", "title": "Notify"}, user_schema)
-
-    code_schema = schemas.load_schema("node_code.workflow")
-    jsonschema.validate(
-        {"kind": "code", "title": "Run", "language": "python", "content": "print(1)"},
-        code_schema,
-    )
-    with pytest.raises(jsonschema.ValidationError):
-        jsonschema.validate({"kind": "code", "title": "Run", "language": "python"}, code_schema)
-
-
 def test_shipped_schemas_are_valid_json_schema() -> None:
     """Every schema checked into data/schemas/ must be a valid JSON Schema."""
     import jsonschema

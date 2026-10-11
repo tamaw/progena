@@ -64,7 +64,7 @@ def backend_client(monkeypatch):
 
     mock_client = AsyncMock()
     mock_client.send_message.return_value = AgentResponse(
-        response="workflow response",
+        response="{}",
         reasoning=None,
         reasoning_tokens=None,
     )
@@ -138,13 +138,13 @@ async def test_agent_card_move_fires_matching_workflow(workflow_env, backend_cli
     await _reconcile_kanban_card_triggers("kanban_card:card_agent_1")
 
     run = await _wait_for_completed_run(store, workflow_id)
-    assert run["status"] == "completed"
-    assert run["trigger_event"]["event_type"] == "kanban.card.moved"
-    payload = run["trigger_event"]["payload"]
-    assert payload["from"]["column_id"] == "backlog"
-    assert payload["to"]["column_id"] == "done"
-    assert payload["task"]["path"] == "tasks/card_agent_1.md"
-    assert "Agent-authored card" in payload["task"]["content"]
+    assert run["status"] == "completed", run["last_error"]
+    event = run["trigger_event"]
+    assert event["event_type"] == "kanban.card.moved"
+    assert event["from"]["column_id"] == "backlog"
+    assert event["to"]["column_id"] == "done"
+    assert event["task"]["path"] == "tasks/card_agent_1.md"
+    assert "Agent-authored card" in event["task"]["content"]
 
 
 async def test_rest_driven_move_is_not_double_dispatched_by_reconciler(
