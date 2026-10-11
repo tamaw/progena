@@ -1126,6 +1126,13 @@ async def test_mcp_tools_edit_disables_one_tool_and_keeps_discovery_data():
         (lambda doc: doc["tools"].append({"name": "made_up", "enabled": True}), "added or removed"),
         (lambda doc: doc["tools"][0].update(description="hacked"), "only `enabled`"),
         (lambda doc: doc["tools"][0].update(enabled="no"), "true or false"),
+        # Seen live: the agent added a top-level override map instead of
+        # flipping the tool's flag; that must fail, not save as a no-op.
+        (
+            lambda doc: doc.update(tool_overrides={"jina_search_jina_blog": {"enabled": False}}),
+            '`"enabled": false` on its entry',
+        ),
+        (lambda doc: doc["servers"]["jina"].update(status="error"), "only a tool's `enabled`"),
     ],
 )
 async def test_mcp_tools_rejects_anything_but_enabled_flags(mutate, message):
