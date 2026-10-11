@@ -2075,20 +2075,25 @@ function RunParametersModal({ inputSchema, values, onChange, missingRequiredPara
   const names = Object.keys(properties);
   const confirmRef = useRef(null);
   const openerRef = useRef(document.activeElement);
+  const onCloseRef = useRef(onClose);
+  useEffect(() => { onCloseRef.current = onClose; }, [onClose]);
   const missing = new Set(missingRequiredParams);
 
+  // Mount-only: callers pass inline onClose arrows, so depending on onClose
+  // would re-run this on every parent render (each keystroke), refocusing
+  // the opener/Run button and stealing focus from the input being typed in.
   useEffect(() => {
     const opener = openerRef.current;
     confirmRef.current?.focus();
     const handleKeyDown = (event) => {
-      if (event.key === 'Escape') onClose();
+      if (event.key === 'Escape') onCloseRef.current();
     };
     document.addEventListener('keydown', handleKeyDown);
     return () => {
       document.removeEventListener('keydown', handleKeyDown);
       if (opener?.isConnected) opener.focus();
     };
-  }, [onClose]);
+  }, []);
 
   const setValue = (name, raw) => {
     onChange((current) => {
@@ -2180,19 +2185,23 @@ function RoutineOutputModal({ outputSchema, runData, onClose }) {
   const names = Object.keys(properties);
   const closeRef = useRef(null);
   const openerRef = useRef(document.activeElement);
+  const onCloseRef = useRef(onClose);
+  useEffect(() => { onCloseRef.current = onClose; }, [onClose]);
 
+  // Mount-only for the same reason as RunParametersModal: live runData
+  // re-renders would otherwise yank focus back to Close each update.
   useEffect(() => {
     const opener = openerRef.current;
     closeRef.current?.focus();
     const handleKeyDown = (event) => {
-      if (event.key === 'Escape') onClose();
+      if (event.key === 'Escape') onCloseRef.current();
     };
     document.addEventListener('keydown', handleKeyDown);
     return () => {
       document.removeEventListener('keydown', handleKeyDown);
       if (opener?.isConnected) opener.focus();
     };
-  }, [onClose]);
+  }, []);
 
   return (
     <div className="routine-run-modal-backdrop" role="presentation" onMouseDown={onClose}>
