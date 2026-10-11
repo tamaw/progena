@@ -2,7 +2,8 @@
 HTTP-based Progenitor Client for Backend.
 
 Talks to the Progenitor runtime's persistent HTTP + SSE endpoints
-(``POST /v1/chat``, ``POST /v1/chat/{request_id}/cancel``, ``GET /v1/events``).
+(``POST /v1/responses``, ``POST /v1/responses/{response_id}/cancel``,
+``DELETE /v1/conversations/{id}``, ``GET /v1/events``).
 
 Features:
 - HTTP/SSE communication (no custom framing)
@@ -266,37 +267,79 @@ class SSEProgenitorClient:
         request_id: str | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> AsyncIterator[dict[str, Any]]:
-        """Send a message and stream structured chat events."""
+        """Send a message and stream structured chat events.
+
+        Posts to the runtime's ``/v1/responses`` endpoint (OpenAI Responses
+        API shape) and translates the returned SSE frames back into the
+        existing internal dicts so the rest of the backend stays unchanged.
+        """
         if not self._started:
             await self.start()
         assert self._client is not None
 
-        body: dict[str, Any] = {"message": message}
+        request_metadata = dict(metadata or {})
         if request_id:
-            body["request_id"] = request_id
-        if metadata:
-            body["metadata"] = metadata
+            # The runtime uses metadata.request_id as the response id, which is
+            # what POST /v1/responses/{id}/cancel addresses.
+            request_metadata["request_id"] = request_id
+        body: dict[str, Any] = {"input": message, "stream": True}
+        if request_metadata:
+            body["metadata"] = request_metadata
+        thread_id = request_metadata.get("thread_id")
+        if thread_id:
+            body["conversation"] = thread_id
 
         request_timeout = httpx.Timeout(5.0, read=self.config.progenitor_timeout)
         async with self._client.stream(
-            "POST", "/v1/chat", json=body, timeout=request_timeout
+            "POST", "/v1/responses", json=body, timeout=request_timeout
         ) as response:
             if response.status_code != 200:
                 error_body = await response.aread()
                 raise RuntimeError(f"Progenitor error: {_decode_error_body(error_body)}")
 
-            async for event_name, data in _iter_sse_frames(response):
-                if event_name == "queued":
-                    continue
-                if event_name == "error":
-                    raise RuntimeError(f"Progenitor error: {data.get('error', 'unknown error')}")
-                if event_name == "done":
+            async for _event_name, data in _iter_sse_frames(response):
+                event_type = data.get("type", "")
+
+                if event_type == "response.output_text.delta":
+                    yield {
+                        "type": "stream_chunk",
+                        "content": data.get("delta", ""),
+                        "is_final": False,
+                        "request_id": request_id,
+                        "runtime_emitted_at_ms": data.get("runtime_emitted_at_ms"),
+                        "runtime_stream_seq": data.get("runtime_stream_seq"),
+                    }
+                elif event_type == "progenitor.stream_event":
+                    yielded: dict[str, Any] = {
+                        "type": "stream_event",
+                        "event_type": data.get("event_type", ""),
+                        "content": data.get("content", ""),
+                        "metadata": data.get("metadata", {}),
+                        "request_id": request_id,
+                        "runtime_emitted_at_ms": data.get("runtime_emitted_at_ms"),
+                        "runtime_stream_seq": data.get("runtime_stream_seq"),
+                    }
+                    images = data.get("images")
+                    if isinstance(images, list) and images:
+                        yielded["images"] = images
+                    yield yielded
+                elif event_type == "response.completed":
+                    yield {
+                        "type": "stream_chunk",
+                        "content": "",
+                        "is_final": True,
+                        "request_id": request_id,
+                    }
                     return
-                if event_name in ("stream_chunk", "stream_event"):
-                    yield data
+                elif event_type == "response.incomplete":
+                    return
+                elif event_type == "response.failed":
+                    error = data.get("response", {}).get("error", {})
+                    raise RuntimeError(f"Progenitor error: {error.get('message', 'unknown error')}")
+                # All other events (response.created, response.in_progress, …) are ignored.
 
     async def cancel_request(self, request_id: str) -> bool:
-        """Best-effort cancellation of an active chat request."""
+        """Best-effort cancellation of an active response."""
         if not request_id.strip():
             return False
 
@@ -304,11 +347,26 @@ class SSEProgenitorClient:
             async with httpx.AsyncClient(
                 base_url=self._base_url, timeout=httpx.Timeout(CANCEL_TIMEOUT_SECONDS)
             ) as client:
-                response = await client.post(f"/v1/chat/{quote(request_id, safe='')}/cancel")
+                response = await client.post(f"/v1/responses/{quote(request_id, safe='')}/cancel")
                 response.raise_for_status()
-                return bool(response.json().get("cancelled", False))
+                return bool(response.json().get("status") == "cancelled")
         except Exception as e:
             logger.warning("Failed to send HTTP cancel for %s: %s", request_id, e)
+            return False
+
+    async def delete_conversation(self, thread_id: str) -> bool:
+        """Best-effort deletion of a conversation thread on the runtime."""
+        if not thread_id.strip():
+            return False
+
+        try:
+            async with httpx.AsyncClient(
+                base_url=self._base_url, timeout=httpx.Timeout(10.0)
+            ) as client:
+                response = await client.delete(f"/v1/conversations/{quote(thread_id, safe='')}")
+                return response.status_code == 200
+        except Exception as e:
+            logger.warning("Failed to delete conversation %s: %s", thread_id, e)
             return False
 
     @property

@@ -2,7 +2,7 @@
 
 This document captures the repeatable live-evaluation model for Progenitor. The scenarios are derived from the tests under `tests/progenitor/` and are intended to validate the real running system, not just static correctness.
 
-**Rule for this evaluation pass:** drive the system through the Progenitor HTTP chat surface (`POST /v1/chat`, `GET /v1/events`) like a live user. Scenario outcomes should be judged from chat requests, chat responses, streaming events, and chat-visible behavior rather than direct filesystem inspection or ad hoc HTTP probes.
+**Rule for this evaluation pass:** drive the system through the Progenitor HTTP chat surface (`POST /v1/responses`, `GET /v1/events`) like a live user. Scenario outcomes should be judged from chat requests, chat responses, streaming events, and chat-visible behavior rather than direct filesystem inspection or ad hoc HTTP probes.
 
 Note: earlier evaluation passes (see "Observed result" sections below) ran against the old TCP socket IPC transport (`:9500`). Progenitor now serves chat and background events over HTTP + SSE from the persistent runtime HTTP server (`:9501`); the historical outcomes below describe those old runs faithfully.
 

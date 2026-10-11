@@ -2,13 +2,10 @@
 
 from __future__ import annotations
 
-import os
 from datetime import UTC, datetime
 from typing import Any, cast
 
 from pydantic import BaseModel, Field, model_validator
-
-from app.backend.document_store import PostgresDocumentStore
 
 from ..runtime.messages import extract_message_text, get_last_ai_message
 from .protocol import BaseSystemTool, ToolContext, ToolResult
@@ -83,30 +80,24 @@ def _summarize_checkpoint_message(message: Any) -> dict[str, Any]:
     }
 
 
-def _load_checkpoint_snapshot(thread_id: str) -> dict[str, Any] | None:
-    database_url = os.getenv("PROGENITOR_DATABASE_URL", "").strip()
-    if not database_url:
+async def _load_checkpoint_snapshot(thread_state: Any, thread_id: str) -> dict[str, Any] | None:
+    """Read a run thread's latest state natively from the Progenitor agent graph."""
+    if thread_state is None:
+        return None
+    snapshot = await thread_state(thread_id)
+    if snapshot is None or snapshot.created_at is None:
         return None
 
-    store = PostgresDocumentStore(database_url)
-    try:
-        store.open()
-        snapshot = store.get_checkpoint_thread_snapshot(thread_id)
-    finally:
-        store.close()
-
-    if snapshot is None:
-        return None
-
-    messages = [_summarize_checkpoint_message(message) for message in snapshot.messages]
-    assistant_message = get_last_ai_message(snapshot.messages)
+    raw_messages = (snapshot.values or {}).get("messages") or []
+    messages = [_summarize_checkpoint_message(message) for message in raw_messages]
+    assistant_message = get_last_ai_message(raw_messages)
     assistant_text = (
         extract_message_text(assistant_message) if assistant_message is not None else None
     )
     return {
-        "thread_id": snapshot.thread_id,
-        "checkpoint_id": snapshot.checkpoint_id,
-        "checkpoint_ts": snapshot.checkpoint_ts,
+        "thread_id": thread_id,
+        "checkpoint_id": (snapshot.config.get("configurable") or {}).get("checkpoint_id"),
+        "checkpoint_ts": snapshot.created_at,
         "messages": messages,
         "assistant_response": assistant_text,
     }
@@ -288,11 +279,13 @@ class GetScheduleRunResultTool(BaseSystemTool):
         checkpoint_note = None
         thread_id = str(target.get("thread_id") or "").strip()
         if include_messages and thread_id:
-            checkpoint = _load_checkpoint_snapshot(thread_id)
+            checkpoint = await _load_checkpoint_snapshot(context.thread_state, thread_id)
             if checkpoint is not None:
                 checkpoint["messages"] = checkpoint.get("messages", [])[-message_limit:]
             else:
-                checkpoint_note = "Checkpoint snapshot unavailable. Ensure PROGENITOR_DATABASE_URL is set and the thread has checkpoint data."
+                checkpoint_note = (
+                    "Checkpoint snapshot unavailable: the run thread has no saved state."
+                )
 
         payload: dict[str, Any] = {
             "run": _summarize_run(target) | {"response": target.get("response")},

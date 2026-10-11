@@ -9,6 +9,7 @@ import asyncio
 import json
 import logging
 import sys
+import uuid
 from collections.abc import AsyncIterator
 from datetime import datetime
 from pathlib import Path
@@ -98,6 +99,11 @@ async def iter_chat_sse_frames(
             event_name = None
 
 
+# One conversation per test session so multi-turn tests share a thread; a
+# request without a conversation gets a fresh isolated one from the runtime.
+INTEGRATION_CONVERSATION = f"conv_integration_{uuid.uuid4().hex[:12]}"
+
+
 async def send_message_and_collect(
     client: httpx.AsyncClient,
     message: str,
@@ -132,16 +138,25 @@ async def send_message_and_collect(
 
     try:
         async with client.stream(
-            "POST", "/v1/chat", json={"message": message}, timeout=timeout
+            "POST",
+            "/v1/responses",
+            json={"input": message, "stream": True, "conversation": INTEGRATION_CONVERSATION},
+            timeout=timeout,
         ) as response:
             async for event_name, data in iter_chat_sse_frames(response):
-                if event_name == "error":
-                    raise RuntimeError(str(data.get("error", "unknown error")))
-                if event_name == "done":
+                if event_name == "response.failed":
+                    raise RuntimeError(
+                        str(
+                            data.get("response", {})
+                            .get("error", {})
+                            .get("message", "unknown error")
+                        )
+                    )
+                if event_name in ("response.completed", "response.incomplete"):
                     break
-                if event_name != "stream_chunk":
+                if event_name != "response.output_text.delta":
                     continue
-                chunk = str(data.get("content", ""))
+                chunk = str(data.get("delta", ""))
                 if chunk:
                     result["chunks"].append(chunk)
                     result["response"] += chunk

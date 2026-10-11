@@ -185,17 +185,17 @@ def create_deepagent_tools(
     llm_client: Any = None,
     state_manager: Any = None,
     live_state_provider: Callable[[], Any] | None = None,
-    resume_routine_holder: dict[str, Any] | None = None,
+    late_bindings: dict[str, Any] | None = None,
 ) -> list[StructuredTool]:
     """Wrap every registered system tool as a DeepAgent-compatible StructuredTool.
 
     ``live_state_provider`` returns the running loop's mutable state dict so tool
     state updates land in live conversation state; without it, tools fall back to
-    a snapshot from ``state_manager``. ``resume_routine_holder`` is a mutable
-    box agent.py populates *after* this function returns (its "fn" key isn't
-    set until the routine/agent registries it closes over exist) -- read here
-    at call time, not at wrap time, so the tool sees the real function once
-    construction finishes.
+    a snapshot from ``state_manager``. ``late_bindings`` is a mutable box
+    agent.py populates *after* this function returns (``resume_routine`` and
+    ``thread_state`` need the registries / compiled agent that don't exist
+    yet) -- read here at call time, not at wrap time, so tools see the real
+    functions once construction finishes.
     """
 
     def _wrap(system_tool: Any) -> StructuredTool:
@@ -214,7 +214,8 @@ def create_deepagent_tools(
                 user_input=str(kwargs.get("request") or ""),
                 tool_args=dict(kwargs),
                 tool_call_id=tool_call_id,
-                resume_routine=(resume_routine_holder or {}).get("fn"),
+                resume_routine=(late_bindings or {}).get("resume_routine"),
+                thread_state=(late_bindings or {}).get("thread_state"),
             )
             result = await system_tool.execute(ctx)
             if not result.success:

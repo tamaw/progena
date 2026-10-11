@@ -4197,7 +4197,7 @@ async def _broadcast_latest_status() -> None:
         current = await _get_current_status()
         broadcast_ui_event("status.updated", current)
         if _ui_stream_subscribers:
-            _broadcast_chat_sessions_snapshot()
+            await _broadcast_chat_sessions_snapshot()
     finally:
         _state_watch_push_task = None
 
@@ -4375,10 +4375,13 @@ def _queue_routine_agent_reconciliation(_snapshot, changed_key: str | None = Non
     silently dropped by the coarse snapshot diff.
     """
     if changed_key is None or changed_key.startswith("policy:"):
+
         async def push_policies():
             from .policy_routes import policy_catalog
+
             items = await asyncio.to_thread(policy_catalog, get_default_document_store())
             broadcast_ui_event("policies.snapshot", {"items": items})
+
         policy_task = asyncio.create_task(push_policies())
         _active_routine_agent_tasks.add(policy_task)
         policy_task.add_done_callback(_active_routine_agent_tasks.discard)
@@ -5018,8 +5021,8 @@ def broadcast_widgets_snapshot(
     return broadcast_ui_event("widgets.updated", {"items": payload}, request_id=request_id)
 
 
-def _broadcast_chat_sessions_snapshot(include_archived: bool = True):
-    return broadcast_chat_sessions_snapshot(
+async def _broadcast_chat_sessions_snapshot(include_archived: bool = True):
+    return await broadcast_chat_sessions_snapshot(
         get_document_store=get_default_document_store,
         broadcast_ui_event=broadcast_ui_event,
         include_archived=include_archived,
@@ -5034,6 +5037,15 @@ def _get_active_request_id_for_thread(thread_id: str) -> str | None:
     return _main._active_request_id_for_thread(thread_id)
 
 
+async def _delete_conversation_via_client(thread_id: str) -> bool:
+    from . import main as _main
+
+    client = getattr(_main, "client", None)
+    if client is None or not hasattr(client, "delete_conversation"):
+        return False
+    return await client.delete_conversation(thread_id)
+
+
 router.include_router(
     create_chat_router(
         get_document_store=get_default_document_store,
@@ -5041,6 +5053,7 @@ router.include_router(
         get_current_state=lambda thread_id: get_state_reader().get_progenitor_state(thread_id),
         get_thread_messages=lambda thread_id: get_state_reader().get_thread_messages(thread_id),
         get_active_request_id=_get_active_request_id_for_thread,
+        delete_conversation=_delete_conversation_via_client,
     )
 )
 
@@ -5094,7 +5107,6 @@ def broadcast_status_change(status: str, details: dict | None = None):
 def broadcast_alerts_state(*, request_id: str | None = None) -> None:
     """Broadcast full alert payload updates to subscribers."""
     broadcast_ui_event("alerts.updated", _alerts_payload(), request_id=request_id)
-
 
 
 router.include_router(create_policy_router(get_default_document_store, broadcast_ui_event))
