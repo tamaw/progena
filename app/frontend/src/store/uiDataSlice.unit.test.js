@@ -492,6 +492,16 @@ describe('applyUiEvent reducer', () => {
     expect(selectActiveChatSessionState({ uiData: s }).pendingOlderPage).toBeNull();
   });
 
+  it('document_types.snapshot replaces the document type list and marks loaded', () => {
+    const items = [
+      { id: 'kanban_card', label: 'Kanban Card', collection: true, document_schema: { type: 'object', properties: { title: { type: 'string' } } } },
+      { id: 'inbox_message', label: 'Inbox Message', collection: false, document_schema: { type: 'object', properties: { subject: { type: 'string' } } } },
+    ];
+    const s = reducer(undefined, applyUiEvent({ type: 'document_types.snapshot', payload: { items } }));
+    expect(s.documentTypes.items).toEqual(items);
+    expect(s.documentTypes.loaded).toBe(true);
+  });
+
   it('workflow snapshot/detail/run events populate the workflows domain', () => {
     let s = reducer(undefined, applyUiEvent({
       type: 'workflows.snapshot',
@@ -504,7 +514,7 @@ describe('applyUiEvent reducer', () => {
             enabled: true,
             paused: false,
             version: 1,
-            event_type: 'kanban.card.created',
+            document_type: 'kanban_card',
             node_count: 2,
             updated_at: '2026-07-06T00:00:00Z',
             created_at: '2026-07-06T00:00:00Z',
@@ -526,10 +536,10 @@ describe('applyUiEvent reducer', () => {
           enabled: true,
           paused: false,
           version: 1,
-          trigger: { type: 'event', event_type: 'kanban.card.created' },
+          document_type: 'kanban_card',
           graph: {
             nodes: {
-              event_a: { kind: 'event', title: 'Event' },
+              event_a: { kind: 'event', title: 'Event', document_type: 'kanban_card' },
               prompt_a: { kind: 'prompt', title: 'Prompt', prompt: 'Handle it', agent_name: 'progenitor', role: null },
             },
             edges: [{ from: { node: 'event_a', port: 'default' }, to: { node: 'prompt_a', port: 'default' } }],
@@ -551,7 +561,7 @@ describe('applyUiEvent reducer', () => {
         current_node_id: null,
         completed_node_ids: ['event_a', 'prompt_a'],
         thread_id: 'thread_1',
-        trigger_event: { event_type: 'kanban.card.created' },
+        trigger_event: { document_type: 'kanban_card', op: 'created', key: 'kanban_card:1', id: '1' },
         last_output: 'done',
         last_error: null,
         queued_at: '2026-07-06T00:00:00Z',
@@ -928,8 +938,8 @@ describe('nav activity tracking (unseen-page dots)', () => {
           enabled: true,
           paused: false,
           version: 1,
-          trigger: { type: 'event', event_type: 'kanban.card.created' },
-          graph: { nodes: { event_a: { kind: 'event', title: 'Event' } }, edges: [] },
+          document_type: 'kanban_card',
+          graph: { nodes: { event_a: { kind: 'event', title: 'Event', document_type: 'kanban_card' } }, edges: [] },
           ui: {},
           updated_at: '2026-07-06T00:00:00Z',
           created_at: '2026-07-06T00:00:00Z',

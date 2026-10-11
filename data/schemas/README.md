@@ -27,6 +27,13 @@ the native `write`/`edit` file tools.
 | `inbox_message.schema.v1.json` | A single inbox message (`inbox_message:<id>`) | object | `managing-inbox` |
 | `preferences.schema.v1.json` | The whole `preferences` document | object | `managing-preferences` |
 | `definition.workflow.schema.v1.json` | A whole `workflow:<id>` document | object | `managing-workflows` |
+| `workflow_run.schema.v1.json` | A whole `workflow_run:<id>` document | object | `workflow_run` document type |
+| `content_document.schema.v1.json` | A whole text document (`agent:`/`skill:`/`memory:`/`prompt:`/`kanban_task_content:`) | object | content document types |
+
+Whole-document schemas also back **document types** (`document_type:<id>` rows
+in Postgres, see `app/progenitor/document_types.py`): a type's `schema` names
+the file here that types its documents, and workflow event/read/query nodes
+get one port per top-level property of it.
 
 **Most schemas here describe one entry, not a whole document** — that's the
 default for `mcp.json`/`schedule.json` (objects keyed by name/id: adding is

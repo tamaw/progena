@@ -16,7 +16,7 @@ const defaultConfig = {
       agentProfiles: '/api/ui/agent-profiles',
       workflows: '/api/ui/workflows',
       workflowRuns: '/api/ui/workflow-runs',
-      documentKinds: '/api/ui/document-kinds',
+      documentTypes: '/api/ui/document-types',
       widgets: '/api/ui/widgets',
       mcp: '/api/ui/mcp',
       kanban: '/api/ui/kanban',

@@ -607,6 +607,11 @@ class _FakeWorkflowStateManager:
     async def list_workflow_definitions(self) -> list[dict[str, Any]]:
         return [copy.deepcopy(workflow) for workflow in self.workflows.values()]
 
+    async def list_document_types(self) -> dict[str, Any]:
+        from app.progenitor.document_types import BUILTIN_DOCUMENT_TYPES
+
+        return {t.id: t for t in BUILTIN_DOCUMENT_TYPES}
+
 
 def _workflow_backend(workflows=None) -> tuple[WorkflowDirectoryBackend, _FakeWorkflowStateManager]:
     sm = _FakeWorkflowStateManager(workflows)

@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import copy
 import logging
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
-from datetime import UTC, datetime
-from typing import Any, Protocol, cast
+from datetime import UTC, datetime, timedelta
+from typing import Any, Literal, LiteralString, Protocol, cast
 
 import psycopg
 from langchain_core.runnables import RunnableConfig
@@ -33,6 +35,32 @@ BACKEND_STATE_PREFIX = "backend.state"
 STORE_CHANGE_CHANNEL = "store_changed"
 _STORE_CHANGE_PREFIXES = (PROGENITOR_STATE_PREFIX, BACKEND_STATE_PREFIX)
 
+# Durable document event log: every create/update/delete of a state-namespace
+# document appends one ``document_events`` row (with before/after payloads and
+# the writer's origin) and NOTIFYs its sequence number on this channel.
+DOCUMENT_EVENT_CHANNEL = "document_events"
+
+DocumentEventOp = Literal["created", "updated", "deleted"]
+
+# Session-scoped writer identity recorded on each document event. A workflow
+# run sets it to its run id so events caused by its own writes carry their
+# ancestry and cannot re-trigger the workflow that produced them.
+_document_write_origin: ContextVar[str | None] = ContextVar(
+    "progenitor_document_write_origin", default=None
+)
+
+
+@contextmanager
+def document_write_origin(origin: str) -> Iterator[None]:
+    """Tag every document write in this context with ``origin``."""
+
+    token = _document_write_origin.set(origin)
+    try:
+        yield
+    finally:
+        _document_write_origin.reset(token)
+
+
 logger = logging.getLogger(__name__)
 
 
@@ -42,6 +70,20 @@ class StoredDocument:
 
     payload: Any
     updated_at: datetime | None = None
+
+
+@dataclass(frozen=True)
+class DocumentEvent:
+    """One row of the durable document event log."""
+
+    seq: int
+    prefix: str
+    key: str
+    op: DocumentEventOp
+    before: Any
+    after: Any
+    origin: str | None
+    created_at: datetime
 
 
 @dataclass(frozen=True)
@@ -145,6 +187,16 @@ class BackendDocumentStore(Protocol):
 
     def delete_document(self, prefix: str, key: str) -> None: ...
 
+    def read_document_events(self, after_seq: int, limit: int) -> list[DocumentEvent]: ...
+
+    def latest_document_event_seq(self) -> int: ...
+
+    def get_document_event_cursor(self, consumer: str) -> int | None: ...
+
+    def save_document_event_cursor(self, consumer: str, seq: int) -> None: ...
+
+    def prune_document_events(self, *, through_seq: int, older_than: timedelta) -> int: ...
+
     def query_logs(
         self,
         *,
@@ -190,13 +242,16 @@ class InMemoryDocumentStore:
         self._routine_revisions: dict[
             tuple[str, str], tuple[RoutineRevisionSummary, dict[str, Any]]
         ] = {}
+        self._events: list[DocumentEvent] = []
+        self._event_cursors: dict[str, int] = {}
+        self._event_listeners: list[Callable[[int], None]] = []
 
     def get_document(
         self, prefix: str, key: str, default: Any | None = None
     ) -> StoredDocument | None:
         document = self._documents.get((prefix, key))
         if document is not None:
-            return document
+            return StoredDocument(copy.deepcopy(document.payload), document.updated_at)
         if default is None:
             return None
         return StoredDocument(default, None)
@@ -204,7 +259,7 @@ class InMemoryDocumentStore:
     def list_documents(self, prefix: str, key_prefix: str) -> list[tuple[str, StoredDocument]]:
         return sorted(
             (
-                (key, document)
+                (key, StoredDocument(copy.deepcopy(document.payload), document.updated_at))
                 for (doc_prefix, key), document in self._documents.items()
                 if doc_prefix == prefix and key.startswith(key_prefix)
             ),
@@ -212,10 +267,71 @@ class InMemoryDocumentStore:
         )
 
     def save_document(self, prefix: str, key: str, payload: Any) -> None:
-        self._documents[(prefix, key)] = StoredDocument(payload, datetime.now(UTC))
+        # Copy like Postgres serialization does, so later in-place edits by the
+        # caller cannot rewrite the stored value (or an event's before/after).
+        stored = copy.deepcopy(payload)
+        previous = self._documents.get((prefix, key))
+        self._documents[(prefix, key)] = StoredDocument(stored, datetime.now(UTC))
+        if previous is None:
+            self._record_event(prefix, key, "created", None, stored)
+        elif previous.payload != stored:
+            self._record_event(prefix, key, "updated", previous.payload, stored)
 
     def delete_document(self, prefix: str, key: str) -> None:
-        self._documents.pop((prefix, key), None)
+        previous = self._documents.pop((prefix, key), None)
+        if previous is not None:
+            self._record_event(prefix, key, "deleted", previous.payload, None)
+
+    def add_document_event_listener(self, listener: Callable[[int], None]) -> None:
+        """Call ``listener(seq)`` after each recorded event (the in-memory NOTIFY)."""
+
+        self._event_listeners.append(listener)
+
+    def remove_document_event_listener(self, listener: Callable[[int], None]) -> None:
+        if listener in self._event_listeners:
+            self._event_listeners.remove(listener)
+
+    def _record_event(
+        self, prefix: str, key: str, op: DocumentEventOp, before: Any, after: Any
+    ) -> None:
+        if prefix not in _STORE_CHANGE_PREFIXES:
+            return
+        seq = self._events[-1].seq + 1 if self._events else 1
+        self._events.append(
+            DocumentEvent(
+                seq=seq,
+                prefix=prefix,
+                key=key,
+                op=op,
+                before=copy.deepcopy(before),
+                after=copy.deepcopy(after),
+                origin=_document_write_origin.get(),
+                created_at=datetime.now(UTC),
+            )
+        )
+        for listener in list(self._event_listeners):
+            listener(seq)
+
+    def read_document_events(self, after_seq: int, limit: int) -> list[DocumentEvent]:
+        return [event for event in self._events if event.seq > after_seq][:limit]
+
+    def latest_document_event_seq(self) -> int:
+        return self._events[-1].seq if self._events else 0
+
+    def get_document_event_cursor(self, consumer: str) -> int | None:
+        return self._event_cursors.get(consumer)
+
+    def save_document_event_cursor(self, consumer: str, seq: int) -> None:
+        self._event_cursors[consumer] = seq
+
+    def prune_document_events(self, *, through_seq: int, older_than: timedelta) -> int:
+        cutoff = datetime.now(UTC) - older_than
+        kept = [
+            event for event in self._events if event.seq > through_seq or event.created_at >= cutoff
+        ]
+        removed = len(self._events) - len(kept)
+        self._events = kept
+        return removed
 
     def query_logs(
         self,
@@ -382,6 +498,7 @@ class PostgresDocumentStore:
             try:
                 self._ensure_store_table()
                 self._ensure_change_trigger()
+                self._ensure_document_event_log()
                 self._ensure_routine_revision_history()
                 self._ensure_policy_revision_history()
             finally:
@@ -494,6 +611,88 @@ class PostgresDocumentStore:
                 CREATE OR REPLACE TRIGGER progenitor_store_change
                 AFTER INSERT OR UPDATE OR DELETE ON store
                 FOR EACH ROW EXECUTE FUNCTION progenitor_notify_store_change()
+                """
+            )
+
+    def _ensure_document_event_log(self) -> None:
+        """Install the durable document event log and its capture trigger.
+
+        Every INSERT/UPDATE/DELETE of a state-namespace ``store`` row appends one
+        ``document_events`` row carrying ``created``/``updated``/``deleted``, the
+        before/after payloads, and the writer origin (``progenitor.origin``,
+        set transaction-locally by ``document_write_origin``). Rewrites of an
+        identical value are skipped. The row's sequence number is NOTIFYed on
+        ``document_events`` so consumers wake up, then catch up from their
+        stored cursor -- missed notifications never lose events. Like the
+        revision histories, this lives in separate tables so LangGraph's own
+        ``store`` schema is never altered.
+        """
+        prefixes = ", ".join(f"'{prefix}'" for prefix in _STORE_CHANGE_PREFIXES)
+        with self._cursor() as cur:
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS document_events (
+                    seq BIGSERIAL PRIMARY KEY,
+                    prefix TEXT NOT NULL,
+                    key TEXT NOT NULL,
+                    op TEXT NOT NULL CHECK (op IN ('created', 'updated', 'deleted')),
+                    before JSONB,
+                    after JSONB,
+                    origin TEXT,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                )
+                """
+            )
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS document_events_created_at_idx "
+                "ON document_events (created_at)"
+            )
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS document_event_cursors (
+                    consumer TEXT PRIMARY KEY,
+                    seq BIGINT NOT NULL,
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                )
+                """
+            )
+            cur.execute(
+                """
+                CREATE OR REPLACE FUNCTION progenitor_record_document_event()
+                RETURNS trigger AS $$
+                DECLARE
+                    row_prefix TEXT := COALESCE(NEW.prefix, OLD.prefix);
+                    event_seq BIGINT;
+                BEGIN
+                    IF row_prefix NOT IN (__PREFIXES__) THEN
+                        RETURN NULL;
+                    END IF;
+                    IF TG_OP = 'UPDATE' AND OLD.value IS NOT DISTINCT FROM NEW.value THEN
+                        RETURN NULL;
+                    END IF;
+                    INSERT INTO document_events (prefix, key, op, before, after, origin)
+                    VALUES (
+                        row_prefix,
+                        COALESCE(NEW.key, OLD.key),
+                        CASE TG_OP WHEN 'INSERT' THEN 'created'
+                                   WHEN 'UPDATE' THEN 'updated'
+                                   ELSE 'deleted' END,
+                        CASE WHEN TG_OP = 'INSERT' THEN NULL ELSE OLD.value -> 'payload' END,
+                        CASE WHEN TG_OP = 'DELETE' THEN NULL ELSE NEW.value -> 'payload' END,
+                        NULLIF(current_setting('progenitor.origin', true), '')
+                    )
+                    RETURNING seq INTO event_seq;
+                    PERFORM pg_notify('__CHANNEL__', event_seq::text);
+                    RETURN NULL;
+                END;
+                $$ LANGUAGE plpgsql;
+                """.replace("__PREFIXES__", prefixes).replace("__CHANNEL__", DOCUMENT_EVENT_CHANNEL)  # nosec B608
+            )
+            cur.execute(
+                """
+                CREATE OR REPLACE TRIGGER progenitor_document_event
+                AFTER INSERT OR UPDATE OR DELETE ON store
+                FOR EACH ROW EXECUTE FUNCTION progenitor_record_document_event()
                 """
             )
 
@@ -681,24 +880,90 @@ class PostgresDocumentStore:
 
     def save_document(self, prefix: str, key: str, payload: Any) -> None:
         value = {"payload": payload}
+        self._write_with_origin(
+            """
+            INSERT INTO store (prefix, key, value, created_at, updated_at)
+            VALUES (%s, %s, %s, now(), now())
+            ON CONFLICT (prefix, key) DO UPDATE
+                SET value = EXCLUDED.value,
+                    updated_at = now()
+            """,
+            (prefix, key, Jsonb(value)),
+        )
+
+    def delete_document(self, prefix: str, key: str) -> None:
+        self._write_with_origin(
+            "DELETE FROM store WHERE prefix = %s AND key = %s",
+            (prefix, key),
+        )
+
+    def _write_with_origin(self, query: LiteralString, params: tuple[Any, ...]) -> None:
+        """Run one store write, tagging it with the context's writer origin.
+
+        ``set_config(..., true)`` is transaction-local, so the tagged write runs
+        in an explicit transaction where the event-log trigger can read it.
+        """
+        origin = _document_write_origin.get()
+        with self._cursor() as cur:
+            if origin is None:
+                cur.execute(query, params)
+                return
+            with cur.connection.transaction():
+                cur.execute("SELECT set_config('progenitor.origin', %s, true)", (origin,))
+                cur.execute(query, params)
+
+    def read_document_events(self, after_seq: int, limit: int) -> list[DocumentEvent]:
+        with self._cursor() as cur:
+            cur.execute(
+                "SELECT seq, prefix, key, op, before, after, origin, created_at "
+                "FROM document_events WHERE seq > %s ORDER BY seq LIMIT %s",
+                (after_seq, limit),
+            )
+            rows = cast(list[dict[str, Any]], cur.fetchall())
+        return [
+            DocumentEvent(
+                seq=int(row["seq"]),
+                prefix=str(row["prefix"]),
+                key=str(row["key"]),
+                op=cast(DocumentEventOp, row["op"]),
+                before=row.get("before"),
+                after=row.get("after"),
+                origin=row.get("origin"),
+                created_at=row["created_at"].astimezone(UTC),
+            )
+            for row in rows
+        ]
+
+    def latest_document_event_seq(self) -> int:
+        with self._cursor() as cur:
+            cur.execute("SELECT COALESCE(MAX(seq), 0) AS seq FROM document_events")
+            row = cast(dict[str, Any], cur.fetchone())
+        return int(row["seq"])
+
+    def get_document_event_cursor(self, consumer: str) -> int | None:
+        with self._cursor() as cur:
+            cur.execute("SELECT seq FROM document_event_cursors WHERE consumer = %s", (consumer,))
+            row = cast(dict[str, Any] | None, cur.fetchone())
+        return int(row["seq"]) if row is not None else None
+
+    def save_document_event_cursor(self, consumer: str, seq: int) -> None:
         with self._cursor() as cur:
             cur.execute(
                 """
-                INSERT INTO store (prefix, key, value, created_at, updated_at)
-                VALUES (%s, %s, %s, now(), now())
-                ON CONFLICT (prefix, key) DO UPDATE
-                    SET value = EXCLUDED.value,
-                        updated_at = now()
+                INSERT INTO document_event_cursors (consumer, seq, updated_at)
+                VALUES (%s, %s, now())
+                ON CONFLICT (consumer) DO UPDATE SET seq = EXCLUDED.seq, updated_at = now()
                 """,
-                (prefix, key, Jsonb(value)),
+                (consumer, seq),
             )
 
-    def delete_document(self, prefix: str, key: str) -> None:
+    def prune_document_events(self, *, through_seq: int, older_than: timedelta) -> int:
         with self._cursor() as cur:
             cur.execute(
-                "DELETE FROM store WHERE prefix = %s AND key = %s",
-                (prefix, key),
+                "DELETE FROM document_events WHERE seq <= %s AND created_at < now() - %s",
+                (through_seq, older_than),
             )
+            return cur.rowcount
 
     def query_logs(
         self,

@@ -16,6 +16,7 @@ from ack_helpers import assert_acknowledged, assert_acknowledgement_body
 from fastapi.testclient import TestClient
 
 from app.backend.alerts import clear_alerts, create_alert
+from app.backend.document_events import seed_document_types
 from app.backend.document_store import (
     BACKEND_STATE_PREFIX,
     PROGENITOR_LOG_PREFIX,
@@ -46,21 +47,25 @@ def clear_thread_registry():
 
 
 @pytest.fixture
-def kanban_state_reader(tmp_path, monkeypatch):
+def kanban_state_reader(tmp_path, monkeypatch, document_store):
     """Provide an isolated state reader for kanban persistence tests."""
     logs_dir = tmp_path / "logs"
     logs_dir.mkdir(parents=True)
 
     state_reader = StateReader(
-        document_store=InMemoryDocumentStore(),
+        document_store=document_store,
         logs_dir=logs_dir,
     )
     monkeypatch.setattr("app.backend.ui_routes.get_state_reader", lambda: state_reader)
+    import app.backend.ui_routes as ui_routes
+
+    ui_routes._document_event_dispatcher = None
     yield state_reader
+    ui_routes._document_event_dispatcher = None
 
 
 @pytest.fixture
-def tasks_state_reader(tmp_path, monkeypatch):
+def tasks_state_reader(tmp_path, monkeypatch, document_store):
     """State reader backed by the shared document store for tasks (DB-only).
 
     Tasks have no file fallback, so these tests need a real document store. The
@@ -73,17 +78,22 @@ def tasks_state_reader(tmp_path, monkeypatch):
     logs_dir.mkdir(parents=True)
 
     state_reader = StateReader(
-        document_store=InMemoryDocumentStore(),
+        document_store=document_store,
         logs_dir=logs_dir,
     )
     monkeypatch.setattr("app.backend.ui_routes.get_state_reader", lambda: state_reader)
+    import app.backend.ui_routes as ui_routes
+
+    ui_routes._document_event_dispatcher = None
     yield state_reader
+    ui_routes._document_event_dispatcher = None
 
 
 @pytest.fixture
 def document_store():
     store = InMemoryDocumentStore()
     set_default_document_store(store)
+    seed_document_types(store)
     yield store
     set_default_document_store(InMemoryDocumentStore())
 
@@ -2218,7 +2228,7 @@ class TestWorkspaceBridgeActions:
             "/api/ui/events",
             json={
                 "name": "Card created trigger",
-                "event_type": "kanban.card.created",
+                "event_type": "kanban_card.created",
                 "enabled": True,
             },
         )
@@ -2234,7 +2244,7 @@ class TestWorkspaceBridgeActions:
         assert len(event_widget_ids) == 1
         event_widget_id = event_widget_ids[0]
         assert stored[event_widget_id]["name"] == "Card created trigger"
-        assert stored[event_widget_id]["event_type"] == "kanban.card.created"
+        assert stored[event_widget_id]["event_type"] == "kanban_card.created"
         assert stored[event_widget_id]["trigger_count"] == 0
 
         from app.backend import ui_routes
@@ -2253,7 +2263,7 @@ class TestWorkspaceBridgeActions:
                 "evt-1": {
                     "id": "evt-1",
                     "name": "Created trigger",
-                    "event_type": "kanban.card.created",
+                    "event_type": "kanban_card.created",
                     "enabled": True,
                     "trigger_count": 0,
                     "last_run_status": "idle",
@@ -2266,7 +2276,7 @@ class TestWorkspaceBridgeActions:
             "/api/ui/widgets/event:evt-1",
             json={
                 "name": "Deleted trigger",
-                "event_type": "kanban.card.deleted",
+                "event_type": "kanban_card.deleted",
                 "enabled": False,
             },
         )
@@ -2279,16 +2289,19 @@ class TestWorkspaceBridgeActions:
         stored_doc = store.get_document(BACKEND_STATE_PREFIX, "event_widgets", None)
         stored = stored_doc.payload if stored_doc else {}
         assert stored["evt-1"]["name"] == "Deleted trigger"
-        assert stored["evt-1"]["event_type"] == "kanban.card.deleted"
+        assert stored["evt-1"]["event_type"] == "kanban_card.deleted"
         assert stored["evt-1"]["enabled"] is False
 
-    def test_kanban_create_and_update_events_trigger_matching_widgets(
+    @pytest.mark.asyncio
+    async def test_kanban_create_and_update_events_trigger_matching_widgets(
         self, client, tasks_state_reader
     ):
+        from app.backend.ui_routes import get_document_event_dispatcher
+
         store = tasks_state_reader.document_store
         client.post(
             "/api/ui/events",
-            json={"name": "Created", "event_type": "kanban.card.created"},
+            json={"name": "Created", "event_type": "kanban_card.created"},
         )
         stored_doc = store.get_document(BACKEND_STATE_PREFIX, "event_widgets", None)
         stored = stored_doc.payload if stored_doc else {}
@@ -2296,7 +2309,7 @@ class TestWorkspaceBridgeActions:
 
         client.post(
             "/api/ui/events",
-            json={"name": "Updated", "event_type": "kanban.card.updated"},
+            json={"name": "Updated", "event_type": "kanban_card.updated"},
         )
         stored_doc = store.get_document(BACKEND_STATE_PREFIX, "event_widgets", None)
         stored = stored_doc.payload if stored_doc else {}
@@ -2306,6 +2319,7 @@ class TestWorkspaceBridgeActions:
             "/api/ui/kanban/cards",
             json={"title": "Evented card", "summary": "Initial summary"},
         )
+        await get_document_event_dispatcher().drain()
         board = store.get_document(PROGENITOR_STATE_PREFIX, "kanban_board", None)
         card_id = board.payload["card_order"][-1]
 
@@ -2317,8 +2331,9 @@ class TestWorkspaceBridgeActions:
         created_w = next(w for w in widgets_items if w["id"] == f"event:{created_widget_id}")
         created_data = created_w["data"]
         assert created_data["trigger_count"] == 1
-        assert created_data["last_payload"]["card"]["id"] == card_id
-        assert created_data["last_payload"]["event_type"] == "kanban.card.created"
+        assert created_data["last_payload"]["id"] == card_id
+        assert created_data["last_payload"]["document_type"] == "kanban_card"
+        assert created_data["last_payload"]["op"] == "created"
 
         update_response = client.patch(
             f"/api/ui/kanban/cards/{card_id}",
@@ -2326,87 +2341,71 @@ class TestWorkspaceBridgeActions:
         )
 
         assert update_response.status_code == 202
+        await get_document_event_dispatcher().drain()
         widgets_resp = client.get("/api/ui/widgets")
         assert widgets_resp.status_code == 202
         widgets_items = ui_routes._ui_event_replay[-1].payload.get("items", [])
         updated_w = next(w for w in widgets_items if w["id"] == f"event:{updated_widget_id}")
         updated_data = updated_w["data"]
         assert updated_data["trigger_count"] == 1
-        assert updated_data["last_payload"]["card"]["id"] == card_id
-        assert updated_data["last_payload"]["changed_fields"] == ["summary"]
-        assert updated_data["last_payload"]["event_type"] == "kanban.card.updated"
+        assert updated_data["last_payload"]["id"] == card_id
+        assert updated_data["last_payload"]["document_type"] == "kanban_card"
+        assert updated_data["last_payload"]["op"] == "updated"
 
-    def test_kanban_move_status_and_delete_events_trigger_matching_widgets(
+    @pytest.mark.asyncio
+    async def test_kanban_update_and_delete_events_trigger_matching_widgets(
         self, client, tasks_state_reader
     ):
-        client.post(
-            "/api/ui/events",
-            json={"name": "Moved", "event_type": "kanban.card.moved"},
-        )
+        from app.backend.ui_routes import get_document_event_dispatcher
+
         store = tasks_state_reader.document_store
-        stored_doc = store.get_document(BACKEND_STATE_PREFIX, "event_widgets", None)
-        stored = stored_doc.payload if stored_doc else {}
-        moved_widget_id = next(iter(stored.keys()))
-
         client.post(
             "/api/ui/events",
-            json={"name": "Status", "event_type": "kanban.card.status_changed"},
+            json={"name": "Updated", "event_type": "kanban_card.updated"},
         )
         stored_doc = store.get_document(BACKEND_STATE_PREFIX, "event_widgets", None)
         stored = stored_doc.payload if stored_doc else {}
-        status_widget_id = next(k for k in stored if k != moved_widget_id)
+        updated_widget_id = next(iter(stored.keys()))
 
         client.post(
             "/api/ui/events",
-            json={"name": "Deleted", "event_type": "kanban.card.deleted"},
+            json={"name": "Deleted", "event_type": "kanban_card.deleted"},
         )
         stored_doc = store.get_document(BACKEND_STATE_PREFIX, "event_widgets", None)
         stored = stored_doc.payload if stored_doc else {}
-        deleted_widget_id = next(k for k in stored if k not in (moved_widget_id, status_widget_id))
+        deleted_widget_id = next(k for k in stored if k != updated_widget_id)
 
         client.post("/api/ui/kanban/cards", json={"title": "First card"})
+        await get_document_event_dispatcher().drain()
         board = store.get_document(PROGENITOR_STATE_PREFIX, "kanban_board", None)
         first_id = board.payload["card_order"][0]
         client.post("/api/ui/kanban/cards", json={"title": "Second card"})
+        await get_document_event_dispatcher().drain()
         board = store.get_document(PROGENITOR_STATE_PREFIX, "kanban_board", None)
         second_id = board.payload["card_order"][-1]
 
         move_response = client.patch(
             f"/api/ui/kanban/cards/{second_id}",
-            json={"position": 0},
+            json={"column_id": "done"},
         )
         assert move_response.status_code == 202
+        await get_document_event_dispatcher().drain()
 
         from app.backend import ui_routes
 
         widgets_resp = client.get("/api/ui/widgets")
         assert widgets_resp.status_code == 202
         widgets_items = ui_routes._ui_event_replay[-1].payload.get("items", [])
-        moved_w = next(w for w in widgets_items if w["id"] == f"event:{moved_widget_id}")
-        moved_data = moved_w["data"]
-        assert moved_data["trigger_count"] == 1
-        assert moved_data["last_payload"]["card"]["id"] == second_id
-        assert moved_data["last_payload"]["from"]["position"] == 1
-        assert moved_data["last_payload"]["to"]["position"] == 0
-
-        status_response = client.patch(
-            f"/api/ui/kanban/cards/{first_id}",
-            json={"status": "running"},
-        )
-        assert status_response.status_code == 202
-
-        widgets_resp = client.get("/api/ui/widgets")
-        assert widgets_resp.status_code == 202
-        widgets_items = ui_routes._ui_event_replay[-1].payload.get("items", [])
-        status_w = next(w for w in widgets_items if w["id"] == f"event:{status_widget_id}")
-        status_data = status_w["data"]
-        assert status_data["trigger_count"] == 1
-        assert status_data["last_payload"]["card"]["id"] == first_id
-        assert status_data["last_payload"]["from_status"] == "draft"
-        assert status_data["last_payload"]["to_status"] == "running"
+        updated_w = next(w for w in widgets_items if w["id"] == f"event:{updated_widget_id}")
+        updated_data = updated_w["data"]
+        assert updated_data["trigger_count"] == 1
+        assert updated_data["last_payload"]["id"] == second_id
+        assert updated_data["last_payload"]["document_type"] == "kanban_card"
+        assert updated_data["last_payload"]["op"] == "updated"
 
         delete_response = client.delete(f"/api/ui/kanban/cards/{first_id}")
         assert delete_response.status_code == 202
+        await get_document_event_dispatcher().drain()
 
         widgets_resp = client.get("/api/ui/widgets")
         assert widgets_resp.status_code == 202
@@ -2414,8 +2413,9 @@ class TestWorkspaceBridgeActions:
         deleted_w = next(w for w in widgets_items if w["id"] == f"event:{deleted_widget_id}")
         deleted_data = deleted_w["data"]
         assert deleted_data["trigger_count"] == 1
-        assert deleted_data["last_payload"]["card"]["id"] == first_id
-        assert deleted_data["last_payload"]["event_type"] == "kanban.card.deleted"
+        assert deleted_data["last_payload"]["id"] == first_id
+        assert deleted_data["last_payload"]["document_type"] == "kanban_card"
+        assert deleted_data["last_payload"]["op"] == "deleted"
 
     def test_run_and_generate_actions_use_existing_client(self, client):
         from app.backend import main as backend_main

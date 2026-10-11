@@ -123,6 +123,20 @@ definitions. The state backend also performs semantic validation such as cron
 parsing and timestamp checks; schema validation is an enforced floor, not a
 replacement for document-specific rules.
 
+### Document types and document events
+
+`document_type:<id>` rows (seeded from `BUILTIN_DOCUMENT_TYPES` in
+`app/progenitor/document_types.py` by both the backend and the runtime) map an
+exact key or key prefix to a label and a schema file here. Every
+create/update/delete of a `progenitor.state`/`backend.state` row is appended
+by a Postgres trigger to `document_events` with before/after payloads and the
+writer origin (`progenitor.origin`, set by `document_write_origin`); identical
+rewrites are skipped. The backend's `DocumentEventDispatcher`
+(`app/backend/document_events.py`) consumes the log from a cursor in
+`document_event_cursors`, resolves each key to its type, and feeds workflow
+event nodes, event widgets, and task activity. Processed events older than a
+day are pruned.
+
 ## Surface 2: backend acknowledgement routes (`app/backend/ui_routes.py`)
 
 The retained widget, schedule, event-widget, MCP, kanban, and task routes are

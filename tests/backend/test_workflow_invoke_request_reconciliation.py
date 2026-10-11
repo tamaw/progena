@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from app.backend.document_events import seed_document_types
 from app.backend.document_store import (
     PROGENITOR_STATE_PREFIX,
     InMemoryDocumentStore,
@@ -25,6 +26,7 @@ from app.progenitor.workflows import (
 def workflow_env(monkeypatch):
     store = InMemoryDocumentStore()
     set_default_document_store(store)
+    seed_document_types(store)
     monkeypatch.setattr(
         "app.backend.main.configure_default_document_store", lambda *_a, **_k: store
     )

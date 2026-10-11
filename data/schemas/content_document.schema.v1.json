@@ -1,0 +1,18 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Content document",
+  "description": "A text document (agent manifest, skill, memory, prompt, or task body) stored as a '<kind>:<path>' row whose payload carries the raw text.",
+  "type": "object",
+  "properties": {
+    "content": {
+      "type": "string",
+      "description": "The document text."
+    },
+    "updated_at": {
+      "type": "string",
+      "description": "ISO8601 last-update timestamp, when recorded."
+    }
+  },
+  "required": ["content"],
+  "additionalProperties": true
+}

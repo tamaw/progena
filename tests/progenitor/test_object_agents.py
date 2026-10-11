@@ -65,7 +65,6 @@ Review with the lint skill.
 class _StateManager:
     def __init__(self, documents=None):
         self.documents = documents or {}
-        self.touched = []
         self.markers = {}
         self._runtime_store = SimpleNamespace(
             peek_document=AsyncMock(side_effect=lambda key: self.markers.get(key)),
@@ -85,9 +84,6 @@ class _StateManager:
     async def save_content_document(self, kind, relative_path, content):
         assert kind == "agent"
         self.documents[relative_path] = content
-
-    async def touch_object_agent(self, name):
-        self.touched.append(name)
 
 
 @pytest.mark.parametrize("broad_mount", [False, True])
@@ -750,7 +746,6 @@ async def test_self_manifest_backend_native_source_is_read_only(tmp_path: Path):
     assert (await mount.adelete("/SYSTEM.md")).error is not None
     assert (await mount.aedit("/SYSTEM.md", "concise", "edited")).error is not None
     assert system_path.read_text(encoding="utf-8") == VALID_SYSTEM
-    assert sm.touched == []
 
 
 @pytest.mark.asyncio
@@ -764,7 +759,6 @@ async def test_self_manifest_backend_writes_installed_document_via_state_manager
     write = await mount.awrite("/SYSTEM.md", updated)
     assert write.error is None
     assert sm.documents[relative_path] == updated
-    assert sm.touched == []
 
     read = await mount.aread("/SYSTEM.md")
     assert read.file_data["content"] == updated
