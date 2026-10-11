@@ -92,7 +92,13 @@ async function runWithValue(page, value) {
   await page.getByRole('button', { name: 'Run routine' }).click();
   const dialog = page.getByRole('dialog', { name: 'Set parameters' });
   await expect(dialog).toBeVisible();
-  await dialog.getByRole('spinbutton', { name: 'value' }).fill(String(value));
+  // Type key by key (not fill): each keystroke re-renders the editor, and the
+  // modal must not steal focus back to its Run button between keys.
+  const input = dialog.getByRole('spinbutton', { name: 'value' });
+  await input.click();
+  await input.pressSequentially(String(value));
+  await expect(input).toBeFocused();
+  await expect(input).toHaveValue(String(value));
   await dialog.getByRole('button', { name: 'Run' }).click();
 }
 
