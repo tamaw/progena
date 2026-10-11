@@ -31,6 +31,7 @@ from app.progenitor.content_documents import (
     AGENT_SELF_EDIT_TOUCH_KEY_PREFIX,
     SKILL_DOCUMENT_KEY_PREFIX,
 )
+from app.progenitor.document_kinds import INBOX_MESSAGE_KEY_PREFIX
 from app.progenitor.mcp.loader import (
     normalize_mcp_config_payload,
     resolve_required_env_template,
@@ -1885,17 +1886,16 @@ class StateReader:
             logger.error("Failed to read state snapshot: %s", e)
             return
         if not self._state_changed(snapshot):
-            # These key families carry no signal in the tracked session-state
-            # fields `_state_changed` diffs (cycle_count, agents/tools counts,
-            # etc.), so a write to them would otherwise never reach any
-            # watcher. Bypassing the diff for them mirrors the workflow
-            # carve-out below -- both exist because "this changed_key was
-            # written" is itself the notification, independent of whether the
-            # coarse snapshot moved.
+            # A sibling key's notification can already have consumed the
+            # snapshot diff for a committed transaction. Dedicated collections
+            # must still receive their own key's write, including metadata-only
+            # schedule/inbox edits and the workflow/document families below.
             key_bypasses_state_diff = bool(
                 changed_key
                 and (
                     changed_key.startswith("policy:")
+                    or changed_key == "schedule"
+                    or changed_key.startswith(INBOX_MESSAGE_KEY_PREFIX)
                     or changed_key.startswith(WORKFLOW_DEFINITION_KEY_PREFIX)
                     or changed_key.startswith(WORKFLOW_RUN_KEY_PREFIX)
                     or changed_key.startswith(WORKFLOW_QUEUE_KEY_PREFIX)
