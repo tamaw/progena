@@ -39,6 +39,7 @@ The runtime state namespace is `("progenitor", "state")`; structured logs use
 views backed by those documents:
 
 - `/config/mcp.json` — MCP server configuration.
+- `/config/mcp_tools.json` — discovered MCP tools; only each tool's `enabled` flag is editable.
 - `/config/knowledge.json` — knowledge-base settings.
 - `/config/schedule.json` — scheduled tasks keyed by ID.
 - `/config/agents.json` — A2A registry agents and runtime tools.

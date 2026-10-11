@@ -326,7 +326,10 @@ function buildBackendSessionItem(chat, selectedBackendChatId, unreadChatIds, bac
     ?? toValidTimestamp(chat.created_at)
     ?? 0;
   const messageCount = Number.isFinite(chat.message_count) ? chat.message_count : 0;
-  const summary = chat.preview || `${messageCount} ${messageCount === 1 ? 'message' : 'messages'}`;
+  const summary = chat.preview
+    || (chat.history_unavailable
+      ? 'History unavailable'
+      : `${messageCount} ${messageCount === 1 ? 'message' : 'messages'}`);
   const selected = selectedBackendChatId === chat.thread_id;
 
   return {
@@ -402,7 +405,9 @@ export function shouldLoadSelectedBackendChat({
 //   (first send settling before the server bumps message_count),
 // - it carries runtime flags (unread/generating/errored — something is
 //   happening in it that the user must be able to see),
-// - the user pinned or renamed it (deliberate acts that make it theirs).
+// - the user pinned or renamed it (deliberate acts that make it theirs),
+// - its history is unavailable (runtime unreachable), so its emptiness is
+//   unknown, not real.
 export function isHiddenEmptyDraft(chat, {
   selectedBackendChatId,
   localMessageCount,
@@ -411,7 +416,7 @@ export function isHiddenEmptyDraft(chat, {
   backgroundErrorChatIds,
 }) {
   const messageCount = Number.isFinite(chat.message_count) ? chat.message_count : 0;
-  if (messageCount > 0 || chat.archived || chat.pinned) {
+  if (messageCount > 0 || chat.archived || chat.pinned || chat.history_unavailable) {
     return false;
   }
   if ((chat.title || DEFAULT_CHAT_TITLE) !== DEFAULT_CHAT_TITLE) {

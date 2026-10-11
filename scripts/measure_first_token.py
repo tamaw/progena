@@ -180,33 +180,34 @@ async def measure_direct() -> dict[str, Any]:
 
 
 async def measure_runtime(base_url: str) -> dict[str, Any]:
-    """Measure POST /v1/chat to the runtime's direct SSE response."""
+    """Measure POST /v1/responses to the runtime's direct SSE response."""
     request_id = f"measure-runtime-{uuid.uuid4().hex[:12]}"
     thread_id = f"measure-runtime-thread-{uuid.uuid4().hex[:12]}"
     payload = {
-        "message": PROMPT,
-        "request_id": request_id,
-        "metadata": {"thread_id": thread_id},
+        "input": PROMPT,
+        "stream": True,
+        "conversation": thread_id,
+        "metadata": {"request_id": request_id},
     }
     async with httpx.AsyncClient(timeout=None) as client:
         started_ns = now_ns()
         async with client.stream(
-            "POST", f"{base_url.rstrip('/')}/v1/chat", json=payload
+            "POST", f"{base_url.rstrip('/')}/v1/responses", json=payload
         ) as response:
             response.raise_for_status()
             first_token_ns: int | None = None
             chunk_count = 0
             response_text = ""
             async for event_name, data in iter_sse(response):
-                if event_name != "stream_chunk" or not isinstance(data, dict):
+                if event_name in ("response.completed", "response.incomplete"):
+                    break
+                if event_name != "response.output_text.delta" or not isinstance(data, dict):
                     continue
-                if data.get("is_final"):
-                    continue
-                content = str(data.get("content") or "")
-                if not content:
+                delta = str(data.get("delta") or "")
+                if not delta:
                     continue
                 chunk_count += 1
-                response_text += content
+                response_text += delta
                 if first_token_ns is None:
                     first_token_ns = now_ns()
             return result(
@@ -217,7 +218,7 @@ async def measure_runtime(base_url: str) -> dict[str, Any]:
                 response_preview=response_text[:120],
                 request_id=request_id,
                 thread_id=thread_id,
-                endpoint=f"{base_url.rstrip('/')}/v1/chat",
+                endpoint=f"{base_url.rstrip('/')}/v1/responses",
             )
 
 

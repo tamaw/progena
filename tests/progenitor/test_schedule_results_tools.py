@@ -1,14 +1,32 @@
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from typing import Any
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from langchain_core.messages import AIMessage, HumanMessage
+from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.graph import START, MessagesState, StateGraph
 
 from app.progenitor.tools.protocol import ToolContext
 from app.progenitor.tools.schedule_results import (
     GetScheduleRunResultTool,
     ListScheduleRunsTool,
 )
+
+
+async def _thread_state_reader(thread_id: str, messages: list[Any]) -> Any:
+    """A real checkpointed graph whose run thread holds ``messages``."""
+    builder = StateGraph(MessagesState)
+    builder.add_node("record", lambda _state: {"messages": messages})
+    builder.add_edge(START, "record")
+    graph = builder.compile(checkpointer=InMemorySaver())
+    await graph.ainvoke({"messages": []}, {"configurable": {"thread_id": thread_id}})
+
+    async def thread_state(requested_thread_id: str) -> Any:
+        return await graph.aget_state({"configurable": {"thread_id": requested_thread_id}})
+
+    return thread_state
 
 
 @pytest.mark.asyncio
@@ -90,35 +108,38 @@ async def test_get_schedule_run_result_includes_checkpoint_snapshot() -> None:
         }
     )
     tool = GetScheduleRunResultTool()
+    thread_state = await _thread_state_reader(
+        "sched_report_abcd1234",
+        [
+            HumanMessage(content="Run schedule"),
+            AIMessage(content="Working on it"),
+            HumanMessage(content="Continue"),
+            AIMessage(content="Report complete"),
+        ],
+    )
 
-    with patch(
-        "app.progenitor.tools.schedule_results._load_checkpoint_snapshot",
-        return_value={
-            "thread_id": "sched_report_abcd1234",
-            "checkpoint_id": "cp_1",
-            "checkpoint_ts": "2026-06-19T12:01:00+00:00",
-            "assistant_response": "Report complete",
-            "messages": [
-                {"role": "user", "content": "Run schedule"},
-                {"role": "assistant", "content": "Report complete"},
-            ],
-        },
-    ):
-        result = await tool.execute(
-            ToolContext(
-                tool_registry=MagicMock(),
-                llm_client=MagicMock(),
-                state_manager=state_manager,
-                tool_args={"run_id": "schedrun_123", "include_messages": True, "message_limit": 2},
-            )
+    result = await tool.execute(
+        ToolContext(
+            tool_registry=MagicMock(),
+            llm_client=MagicMock(),
+            state_manager=state_manager,
+            tool_args={"run_id": "schedrun_123", "include_messages": True, "message_limit": 2},
+            thread_state=thread_state,
         )
+    )
 
     assert result.success is True
     assert result.data is not None
     assert result.data["run"]["run_id"] == "schedrun_123"
     assert result.data["schedule"]["id"] == "sched_report"
-    assert result.data["checkpoint"]["assistant_response"] == "Report complete"
-    assert len(result.data["checkpoint"]["messages"]) == 2
+    checkpoint = result.data["checkpoint"]
+    assert checkpoint["thread_id"] == "sched_report_abcd1234"
+    assert checkpoint["checkpoint_id"]
+    assert checkpoint["assistant_response"] == "Report complete"
+    assert checkpoint["messages"] == [
+        {"role": "human", "content": "Continue"},
+        {"role": "ai", "content": "Report complete"},
+    ]
 
 
 @pytest.mark.asyncio
@@ -139,19 +160,19 @@ async def test_get_schedule_run_result_returns_checkpoint_note_when_unavailable(
     )
     state_manager.get_schedule = AsyncMock(return_value={})
     tool = GetScheduleRunResultTool()
+    thread_state = await _thread_state_reader("some_other_thread", [AIMessage(content="x")])
 
-    with patch(
-        "app.progenitor.tools.schedule_results._load_checkpoint_snapshot", return_value=None
-    ):
-        result = await tool.execute(
-            ToolContext(
-                tool_registry=MagicMock(),
-                llm_client=MagicMock(),
-                state_manager=state_manager,
-                tool_args={"run_id": "schedrun_123"},
-            )
+    result = await tool.execute(
+        ToolContext(
+            tool_registry=MagicMock(),
+            llm_client=MagicMock(),
+            state_manager=state_manager,
+            tool_args={"run_id": "schedrun_123"},
+            thread_state=thread_state,
         )
+    )
 
     assert result.success is True
     assert result.data is not None
+    assert result.data["checkpoint"] is None
     assert "checkpoint_note" in result.data
