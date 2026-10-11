@@ -1,8 +1,4 @@
-"""Contract tests for the HTTP + SSE chat endpoints (RuntimeChatService).
-
-These port the direct-DeepAgent request path from the retired TCP server onto
-the new HTTP transport.
-"""
+"""Contract tests for the Responses/Conversations API HTTP endpoints."""
 
 from __future__ import annotations
 
@@ -11,15 +7,25 @@ import json
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from types import SimpleNamespace
-from typing import Any
+from typing import Annotated, Any, TypedDict
 
 import httpx
 import pytest
 from aiohttp import web
+from langchain.agents import create_agent
+from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
+from langchain_core.messages import AIMessage, HumanMessage
+from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.graph import END, START, StateGraph
+from langgraph.graph.message import add_messages
+from langgraph.store.memory import InMemoryStore
 
 from app.progenitor.config import RuntimeConfig
 from app.progenitor.runtime.http_chat import RuntimeChatService
 from app.progenitor.runtime.queues import RuntimeQueues
+from app.progenitor.sse.deepagent_stream import DeepAgentSSEStream
+from app.progenitor.state.langgraph_store import LangGraphRuntimeStore
+from app.progenitor.state.manager import StateManager
 
 pytestmark = pytest.mark.asyncio
 
@@ -115,9 +121,22 @@ class FakeHeartbeatContext:
     audit_log_sink: Any = None
 
 
+def _make_real_graph() -> Any:
+    """Build a tiny compiled LangGraph with InMemorySaver for aget_state/adelete_thread tests."""
+
+    class _State(TypedDict):
+        messages: Annotated[list, add_messages]
+
+    builder = StateGraph(_State)
+    builder.add_node("n", lambda s: {"messages": [AIMessage(content="hi", id="a1")]})
+    builder.add_edge(START, "n")
+    builder.add_edge("n", END)
+    return builder.compile(checkpointer=InMemorySaver())
+
+
 @dataclass
 class FakeLoopRunner:
-    graph: Any = field(default_factory=lambda: SimpleNamespace(astream=lambda *a, **k: None))
+    graph: Any = field(default_factory=lambda: _make_real_graph())
     thread_id: str = "progenitor_main"
 
     def __post_init__(self) -> None:
@@ -138,13 +157,6 @@ class _ChatServer:
 async def _start_chat_server(
     loop_runner: Any, *, bridge_factory: Any = None, start_drain: bool = False
 ) -> _ChatServer:
-    """Start a standalone chat server.
-
-    ``start_drain`` launches the ``/v1/events`` fan-out loop, which is also the
-    sole consumer of ``loop_runner.queues.get_event()``. Leave it off (default)
-    for chat-only tests that assert directly against the event queue, since a
-    running drain loop would race them for the same single-consumer queue.
-    """
     service = RuntimeChatService(loop_runner, bridge_factory=bridge_factory)
     if start_drain:
         await service.start()
@@ -165,18 +177,27 @@ async def _stop_chat_server(server: _ChatServer) -> None:
     await server.runner.cleanup()
 
 
-async def _post_chat(
+TEST_CONVERSATION = "test-conversation"
+
+
+async def _post_responses(
     client: httpx.AsyncClient,
     base_url: str,
-    message: str,
+    input_text: str,
     request_id: str,
     metadata: dict[str, Any] | None = None,
+    stream: bool = True,
+    conversation: str | None = TEST_CONVERSATION,
 ) -> list[tuple[str, dict[str, Any]]]:
     frames: list[tuple[str, dict[str, Any]]] = []
-    body: dict[str, Any] = {"message": message, "request_id": request_id}
-    if metadata is not None:
-        body["metadata"] = metadata
-    async with client.stream("POST", f"{base_url}/v1/chat", json=body) as response:
+    body: dict[str, Any] = {
+        "input": input_text,
+        "stream": stream,
+        "metadata": {"request_id": request_id, **(metadata or {})},
+    }
+    if conversation is not None:
+        body["conversation"] = conversation
+    async with client.stream("POST", f"{base_url}/v1/responses", json=body) as response:
         assert response.status_code == 200
         event_name: str | None = None
         async for line in response.aiter_lines():
@@ -189,7 +210,7 @@ async def _post_chat(
                 assert event_name is not None
                 data = json.loads(line[len("data: ") :])
                 frames.append((event_name, data))
-                if event_name in ("done", "error"):
+                if event_name in ("response.completed", "response.failed", "response.incomplete"):
                     break
     return frames
 
@@ -201,101 +222,82 @@ def _client() -> httpx.AsyncClient:
 # -- Tests ----------------------------------------------------------------
 
 
-async def test_chat_stream_envelope_order_and_done() -> None:
+async def test_responses_stream_envelope_order_and_completed() -> None:
     loop_runner = FakeLoopRunner()
     script = [
+        {"type": "stream_chunk", "content": "Hello", "is_final": False},
         {
             "type": "stream_event",
             "event_type": "node_update",
             "content": "",
             "metadata": {"node_name": "respond"},
         },
-        {"type": "stream_chunk", "content": "Hello", "is_final": False},
         {"type": "stream_chunk", "content": "", "is_final": True},
     ]
     server = await _start_chat_server(loop_runner, bridge_factory=make_bridge_factory(script))
     try:
         async with _client() as client:
-            frames = await _post_chat(client, server.base_url, "hi", "req-1")
+            frames = await _post_responses(client, server.base_url, "hi", "resp-1")
     finally:
         await _stop_chat_server(server)
 
-    stream_payloads = [
-        payload for event_name, payload in frames if event_name in {"stream_event", "stream_chunk"}
-    ]
-    assert [payload["runtime_stream_seq"] for payload in stream_payloads] == list(
-        range(1, len(stream_payloads) + 1)
-    )
-    assert all(
-        type(payload["runtime_emitted_at_ms"]) is int and payload["runtime_emitted_at_ms"] > 0
-        for payload in stream_payloads
-    )
-    assert [
-        (
-            event_name,
-            {
-                field: value
-                for field, value in payload.items()
-                if field not in {"runtime_emitted_at_ms", "runtime_stream_seq"}
-            },
-        )
-        for event_name, payload in frames
-    ] == [
-        (
-            "stream_event",
-            {
-                "type": "stream_event",
-                "event_type": "node_update",
-                "content": "",
-                "metadata": {"node_name": "respond"},
-                "request_id": "req-1",
-            },
-        ),
-        (
-            "stream_chunk",
-            {"type": "stream_chunk", "content": "Hello", "is_final": False, "request_id": "req-1"},
-        ),
-        (
-            "stream_chunk",
-            {"type": "stream_chunk", "content": "", "is_final": True, "request_id": "req-1"},
-        ),
-        ("done", {"request_id": "req-1", "status": "completed"}),
-    ]
+    event_names = [n for n, _ in frames]
+    assert event_names[0] == "response.created"
+    assert event_names[1] == "response.in_progress"
+    assert event_names[2] == "response.output_item.added"
+    assert event_names[3] == "response.content_part.added"
+    assert event_names[4] == "response.output_text.delta"
+    assert event_names[5] == "progenitor.stream_event"
+    assert event_names[6] == "response.output_text.done"
+    assert event_names[7] == "response.content_part.done"
+    assert event_names[8] == "response.output_item.done"
+    assert event_names[9] == "response.completed"
+
+    # Delta carries content
+    deltas = [p for n, p in frames if n == "response.output_text.delta"]
+    assert deltas[0]["delta"] == "Hello"
+    assert deltas[0]["item_id"] == "msg_resp-1"
+
+    # Completed response object
+    completed = frames[-1][1]
+    assert completed["response"]["status"] == "completed"
+    # Fake bridge does not add messages to the graph, so output is empty.
+    assert completed["response"]["output"] == []
 
 
-async def test_chat_rejects_missing_message_and_bad_json() -> None:
+async def test_responses_rejects_missing_input_and_bad_json() -> None:
     loop_runner = FakeLoopRunner()
     server = await _start_chat_server(loop_runner)
     try:
         async with httpx.AsyncClient() as client:
-            resp = await client.post(f"{server.base_url}/v1/chat", json={})
+            resp = await client.post(f"{server.base_url}/v1/responses", json={})
             assert resp.status_code == 400
-            assert resp.json()["code"] == "BAD_REQUEST"
+            assert resp.json()["error"]["code"] == "bad_request"
 
             resp2 = await client.post(
-                f"{server.base_url}/v1/chat",
+                f"{server.base_url}/v1/responses",
                 content=b"not json",
                 headers={"Content-Type": "application/json"},
             )
             assert resp2.status_code == 400
-            assert resp2.json()["code"] == "BAD_REQUEST"
+            assert resp2.json()["error"]["code"] == "bad_request"
     finally:
         await _stop_chat_server(server)
 
 
-async def test_chat_503_when_graph_missing_astream() -> None:
+async def test_responses_503_when_graph_missing_astream() -> None:
     loop_runner = FakeLoopRunner(graph=object())
     server = await _start_chat_server(loop_runner)
     try:
         async with httpx.AsyncClient() as client:
-            resp = await client.post(f"{server.base_url}/v1/chat", json={"message": "hi"})
+            resp = await client.post(f"{server.base_url}/v1/responses", json={"input": "hi"})
             assert resp.status_code == 503
-            assert resp.json()["code"] == "GRAPH_UNAVAILABLE"
+            assert resp.json()["error"]["code"] == "graph_unavailable"
     finally:
         await _stop_chat_server(server)
 
 
-async def test_chat_serializes_requests_and_emits_queued_event() -> None:
+async def test_responses_serializes_requests_and_emits_queued() -> None:
     loop_runner = FakeLoopRunner()
     gate = asyncio.Event()
     script = {
@@ -308,15 +310,19 @@ async def test_chat_serializes_requests_and_emits_queued_event() -> None:
     task_a = task_b = None
     try:
         async with _client() as client:
-            task_a = asyncio.create_task(_post_chat(client, server.base_url, "first", "req-a"))
+            task_a = asyncio.create_task(
+                _post_responses(client, server.base_url, "first", "resp-a")
+            )
             await asyncio.sleep(0.2)
-            task_b = asyncio.create_task(_post_chat(client, server.base_url, "second", "req-b"))
+            task_b = asyncio.create_task(
+                _post_responses(client, server.base_url, "second", "resp-b")
+            )
             await asyncio.sleep(0.2)
 
             queued_event = await loop_runner.queues.get_event(timeout=1.0)
             assert queued_event is not None
             assert queued_event["event_type"] == "message_queued"
-            assert queued_event["metadata"]["request_id"] == "req-b"
+            assert queued_event["metadata"]["request_id"] == "resp-b"
 
             gate.set()
             frames_a = await asyncio.wait_for(task_a, timeout=5.0)
@@ -328,20 +334,14 @@ async def test_chat_serializes_requests_and_emits_queued_event() -> None:
                 task.cancel()
         await _stop_chat_server(server)
 
-    assert frames_a[-1] == ("done", {"request_id": "req-a", "status": "completed"})
-    assert frames_b[0] == ("queued", {"request_id": "req-b", "streaming": True})
-    assert frames_b[-1] == ("done", {"request_id": "req-b", "status": "completed"})
-    assert [
-        [
-            payload["runtime_stream_seq"]
-            for event_name, payload in request_frames
-            if event_name in {"stream_event", "stream_chunk"}
-        ]
-        for request_frames in (frames_a, frames_b)
-    ] == [[1], [1]]
+    assert frames_a[-1][0] == "response.completed"
+    assert frames_b[0][0] == "response.created"
+    assert frames_b[1][0] == "response.queued"
+    assert frames_b[2][0] == "response.in_progress"
+    assert frames_b[-1][0] == "response.completed"
 
 
-async def test_chat_cancel_mid_stream_skips_checkpoint() -> None:
+async def test_responses_cancel_mid_stream_skips_checkpoint() -> None:
     loop_runner = FakeLoopRunner()
     gate = asyncio.Event()
     script = [
@@ -352,14 +352,20 @@ async def test_chat_cancel_mid_stream_skips_checkpoint() -> None:
     task = None
     try:
         async with _client() as client:
-            task = asyncio.create_task(_post_chat(client, server.base_url, "hi", "req-cancel"))
+            task = asyncio.create_task(
+                _post_responses(client, server.base_url, "hi", "resp-cancel")
+            )
             await asyncio.sleep(0.2)
 
-            cancel_resp = await client.post(f"{server.base_url}/v1/chat/req-cancel/cancel")
-            assert cancel_resp.json() == {"request_id": "req-cancel", "cancelled": True}
+            cancel_resp = await client.post(f"{server.base_url}/v1/responses/resp-cancel/cancel")
+            assert cancel_resp.status_code == 200
+            assert cancel_resp.json()["status"] == "cancelled"
 
-            unknown_resp = await client.post(f"{server.base_url}/v1/chat/does-not-exist/cancel")
-            assert unknown_resp.json() == {"request_id": "does-not-exist", "cancelled": False}
+            unknown_resp = await client.post(
+                f"{server.base_url}/v1/responses/does-not-exist/cancel"
+            )
+            assert unknown_resp.status_code == 404
+            assert unknown_resp.json()["error"]["code"] == "not_found"
 
             gate.set()
             frames = await asyncio.wait_for(task, timeout=5.0)
@@ -369,11 +375,12 @@ async def test_chat_cancel_mid_stream_skips_checkpoint() -> None:
             task.cancel()
         await _stop_chat_server(server)
 
-    assert frames == [("done", {"request_id": "req-cancel", "status": "cancelled"})]
+    assert frames[-1][0] == "response.incomplete"
+    assert frames[-1][1]["response"]["status"] == "cancelled"
     assert loop_runner.state_manager.saved_checkpoints == []
 
 
-async def test_chat_bridge_cancellation_does_not_synthesize_done_frame() -> None:
+async def test_responses_bridge_cancellation_does_not_synthesize_completed() -> None:
     loop_runner = FakeLoopRunner()
     script = [
         {"type": "stream_chunk", "content": "partial", "is_final": False},
@@ -382,25 +389,21 @@ async def test_chat_bridge_cancellation_does_not_synthesize_done_frame() -> None
     server = await _start_chat_server(loop_runner, bridge_factory=make_bridge_factory(script))
     try:
         async with _client() as client:
-            frames = await _post_chat(client, server.base_url, "hi", "req-bridge-cancel")
+            frames = await _post_responses(client, server.base_url, "hi", "resp-bridge-cancel")
     finally:
         await _stop_chat_server(server)
 
-    assert frames[0][0] == "stream_chunk"
-    assert frames[0][1]["content"] == "partial"
-    assert not any(name == "done" for name, _ in frames)
+    event_names = [n for n, _ in frames]
+    assert event_names[0] == "response.created"
+    assert event_names[1] == "response.in_progress"
+    assert event_names[2] == "response.output_item.added"
+    assert not any(name == "response.completed" for name, _ in frames)
     assert loop_runner.state_manager.saved_checkpoints == []
 
 
-async def test_chat_writes_keepalive_comments_during_a_silent_bridge_gap(monkeypatch) -> None:
-    """A long silent gap in bridge.stream() must not starve the response body.
-
-    Regression test: bridge.stream() can go quiet for minutes (a long tool
-    call or subagent invocation with no interim output). Without periodic
-    keepalive bytes, the backend's httpx client eventually hits its read
-    timeout and surfaces a spurious "Streaming error" to the user even though
-    the turn was still in progress.
-    """
+async def test_responses_writes_keepalive_comments_during_a_silent_bridge_gap(
+    monkeypatch,
+) -> None:
     monkeypatch.setattr("app.progenitor.runtime.http_chat.EVENTS_KEEPALIVE_SECONDS", 0.05)
 
     loop_runner = FakeLoopRunner()
@@ -415,8 +418,12 @@ async def test_chat_writes_keepalive_comments_during_a_silent_bridge_gap(monkeyp
             _client() as client,
             client.stream(
                 "POST",
-                f"{server.base_url}/v1/chat",
-                json={"message": "hi", "request_id": "req-keepalive"},
+                f"{server.base_url}/v1/responses",
+                json={
+                    "input": "hi",
+                    "stream": True,
+                    "metadata": {"request_id": "resp-keepalive"},
+                },
             ) as response,
         ):
             assert response.status_code == 200
@@ -427,7 +434,7 @@ async def test_chat_writes_keepalive_comments_during_a_silent_bridge_gap(monkeyp
                 if not gate_released and raw.count(b": keepalive\n\n") >= 2:
                     gate_released = True
                     gate.set()
-                if b"event: done\n" in raw:
+                if b"event: response.completed\n" in raw:
                     break
     finally:
         gate.set()
@@ -477,13 +484,21 @@ async def test_direct_stream_queue_applies_backpressure(monkeypatch) -> None:
     )
     response = _SlowResponse()
     stream_task = asyncio.create_task(
-        service._stream_chat(response, "hello", "request-queue-bound", None, asyncio.Event(), 123.0)
+        service._stream_turn(
+            response,
+            "hello",
+            "request-queue-bound",
+            "thread-1",
+            "m1",
+            None,
+            asyncio.Event(),
+            123.0,
+            0,
+        )
     )
     try:
         await asyncio.wait_for(first_write_started.wait(), timeout=2.0)
         await asyncio.sleep(0)
-        # One item is being written and at most two are buffered; the producer
-        # may have fetched the next item before blocking on queue.put().
         assert produced <= 4
         assert produced > 1
     finally:
@@ -491,22 +506,21 @@ async def test_direct_stream_queue_applies_backpressure(monkeypatch) -> None:
         await asyncio.wait_for(stream_task, timeout=2.0)
 
 
-async def test_chat_happy_path_runs_checkpoint() -> None:
+async def test_responses_happy_path_runs_checkpoint() -> None:
     loop_runner = FakeLoopRunner()
     script = [{"type": "stream_chunk", "content": "ok", "is_final": True}]
     server = await _start_chat_server(loop_runner, bridge_factory=make_bridge_factory(script))
     try:
         async with _client() as client:
-            frames = await _post_chat(client, server.base_url, "hi", "req-checkpoint")
+            frames = await _post_responses(client, server.base_url, "hi", "resp-checkpoint")
     finally:
         await _stop_chat_server(server)
 
-    assert frames[-1] == ("done", {"request_id": "req-checkpoint", "status": "completed"})
-    # checkpoint_node writes per-thread document only (mirror removed)
+    assert frames[-1][0] == "response.completed"
     assert len(loop_runner.state_manager.saved_checkpoints) == 1
 
 
-async def test_chat_checkpoint_failure_emits_error_not_done() -> None:
+async def test_responses_checkpoint_failure_emits_failed_not_completed() -> None:
     """A checkpoint failure must not be masked by an already-sent 'completed' frame."""
     loop_runner = FakeLoopRunner()
 
@@ -521,17 +535,17 @@ async def test_chat_checkpoint_failure_emits_error_not_done() -> None:
     server = await _start_chat_server(loop_runner, bridge_factory=make_bridge_factory(script))
     try:
         async with _client() as client:
-            frames = await _post_chat(client, server.base_url, "hi", "req-checkpoint-fail")
+            frames = await _post_responses(client, server.base_url, "hi", "resp-checkpoint-fail")
     finally:
         await _stop_chat_server(server)
 
-    assert frames[-1][0] == "error"
-    assert frames[-1][1]["code"] == "CHECKPOINT_ERROR"
-    assert "disk full" in frames[-1][1]["error"]
-    assert not any(name == "done" for name, _ in frames)
+    assert frames[-1][0] == "response.failed"
+    assert frames[-1][1]["response"]["error"]["code"] == "checkpoint_error"
+    assert "disk full" in frames[-1][1]["response"]["error"]["message"]
+    assert not any(name == "response.completed" for name, _ in frames)
 
 
-async def test_chat_bridge_error_emits_error_frame_and_releases_lock() -> None:
+async def test_responses_bridge_error_emits_failed_and_releases_lock() -> None:
     loop_runner = FakeLoopRunner()
     script = {
         "boom": [_Raise(RuntimeError("kaboom"))],
@@ -542,18 +556,18 @@ async def test_chat_bridge_error_emits_error_frame_and_releases_lock() -> None:
     )
     try:
         async with _client() as client:
-            frames = await _post_chat(client, server.base_url, "boom", "req-err")
-            assert frames[-1][0] == "error"
-            assert frames[-1][1]["code"] == "STREAM_ERROR"
-            assert "kaboom" in frames[-1][1]["error"]
+            frames = await _post_responses(client, server.base_url, "boom", "resp-err")
+            assert frames[-1][0] == "response.failed"
+            assert frames[-1][1]["response"]["error"]["code"] == "stream_error"
+            assert "kaboom" in frames[-1][1]["response"]["error"]["message"]
 
-            frames_ok = await _post_chat(client, server.base_url, "ok", "req-ok")
-            assert frames_ok[-1] == ("done", {"request_id": "req-ok", "status": "completed"})
+            frames_ok = await _post_responses(client, server.base_url, "ok", "resp-ok")
+            assert frames_ok[-1][0] == "response.completed"
     finally:
         await _stop_chat_server(server)
 
 
-async def test_chat_thread_id_resolution_precedence() -> None:
+async def test_responses_conversation_resolution() -> None:
     loop_runner = FakeLoopRunner(thread_id="state-thread")
     captured: list[ScriptedBridge] = []
 
@@ -570,13 +584,160 @@ async def test_chat_thread_id_resolution_precedence() -> None:
     server = await _start_chat_server(loop_runner, bridge_factory=factory)
     try:
         async with _client() as client:
-            await _post_chat(client, server.base_url, "hi", "req-a")
-            assert captured[-1].thread_id == "state-thread"
-
-            await _post_chat(
-                client, server.base_url, "hi", "req-b", metadata={"thread_id": "explicit-thread"}
+            frames_a = await _post_responses(
+                client, server.base_url, "hi", "resp-a", conversation=None
             )
-            assert captured[-1].thread_id == "explicit-thread"
+            frames_b = await _post_responses(
+                client, server.base_url, "hi", "resp-b", conversation=None
+            )
+            first, second = captured[0].thread_id, captured[1].thread_id
+            # No conversation: a fresh isolated one each time, never the loop's
+            # own thread, and reported back on the response.
+            assert first.startswith("conv_") and second.startswith("conv_")
+            assert first != second
+            assert frames_a[-1][1]["response"]["conversation"] == {"id": first}
+            assert frames_b[-1][1]["response"]["conversation"] == {"id": second}
+
+            for conversation in ("named-thread", {"id": "named-thread"}):
+                body = {"input": "hi", "stream": False, "conversation": conversation}
+                resp = await client.post(f"{server.base_url}/v1/responses", json=body)
+                assert resp.json()["conversation"] == {"id": "named-thread"}
+                assert captured[-1].thread_id == "named-thread"
+    finally:
+        await _stop_chat_server(server)
+
+
+async def test_responses_non_streaming_returns_completed() -> None:
+    loop_runner = FakeLoopRunner()
+    script = [{"type": "stream_chunk", "content": "yes", "is_final": True}]
+    server = await _start_chat_server(loop_runner, bridge_factory=make_bridge_factory(script))
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                f"{server.base_url}/v1/responses",
+                json={
+                    "input": "hi",
+                    "stream": False,
+                    "metadata": {"request_id": "resp-ns"},
+                },
+            )
+            assert resp.status_code == 200
+            body = resp.json()
+            assert body["status"] == "completed"
+            assert body["id"] == "resp-ns"
+            # Fake bridge does not add messages to the graph, so output is empty.
+            assert body["output"] == []
+    finally:
+        await _stop_chat_server(server)
+
+
+async def test_items_404_when_no_checkpoint() -> None:
+    loop_runner = FakeLoopRunner(graph=_make_real_graph())
+    server = await _start_chat_server(loop_runner)
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(f"{server.base_url}/v1/conversations/no-such-thread/items")
+            assert resp.status_code == 404
+            assert resp.json()["error"]["code"] == "not_found"
+    finally:
+        await _stop_chat_server(server)
+
+
+async def test_items_with_real_graph() -> None:
+    graph = _make_real_graph()
+    loop_runner = FakeLoopRunner(graph=graph)
+    server = await _start_chat_server(loop_runner)
+    try:
+        # Seed the graph
+        await graph.ainvoke(
+            {"messages": [HumanMessage(content="hello", id="h1")]},
+            {"configurable": {"thread_id": "t1"}},
+        )
+
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(
+                f"{server.base_url}/v1/conversations/t1/items?order=asc&limit=10"
+            )
+            assert resp.status_code == 200
+            body = resp.json()
+            assert body["object"] == "list"
+            assert len(body["data"]) == 2
+            assert body["data"][0]["role"] == "user"
+            assert body["data"][1]["role"] == "assistant"
+            assert body["has_more"] is False
+    finally:
+        await _stop_chat_server(server)
+
+
+async def test_items_paging_and_invalid_limit() -> None:
+    graph = _make_real_graph()
+    loop_runner = FakeLoopRunner(graph=graph)
+    server = await _start_chat_server(loop_runner)
+    try:
+        await graph.ainvoke(
+            {"messages": [HumanMessage(content="a", id="h1")]},
+            {"configurable": {"thread_id": "t1"}},
+        )
+
+        async with httpx.AsyncClient() as client:
+            # limit too high
+            resp = await client.get(f"{server.base_url}/v1/conversations/t1/items?limit=200")
+            assert resp.status_code == 400
+
+            # limit too low
+            resp2 = await client.get(f"{server.base_url}/v1/conversations/t1/items?limit=0")
+            assert resp2.status_code == 400
+    finally:
+        await _stop_chat_server(server)
+
+
+async def test_delete_conversation_409_in_flight() -> None:
+    loop_runner = FakeLoopRunner()
+    gate = asyncio.Event()
+    script = [_Wait(gate), {"type": "stream_chunk", "content": "x", "is_final": True}]
+    server = await _start_chat_server(loop_runner, bridge_factory=make_bridge_factory(script))
+    task = None
+    try:
+        async with _client() as client:
+            task = asyncio.create_task(_post_responses(client, server.base_url, "hi", "resp-del"))
+            await asyncio.sleep(0.2)
+
+            resp = await client.delete(f"{server.base_url}/v1/conversations/{TEST_CONVERSATION}")
+            assert resp.status_code == 409
+            assert resp.json()["error"]["code"] == "conflict"
+
+            gate.set()
+            await asyncio.wait_for(task, timeout=5.0)
+    finally:
+        gate.set()
+        if task is not None and not task.done():
+            task.cancel()
+        await _stop_chat_server(server)
+
+
+async def test_delete_conversation_removes_checkpoints_and_runtime_state() -> None:
+    graph = _make_real_graph()
+    loop_runner = FakeLoopRunner(graph=graph)
+    state_manager = StateManager(runtime_store=LangGraphRuntimeStore(InMemoryStore()))
+    loop_runner.heartbeat_context = FakeHeartbeatContext(state_manager)  # type: ignore[arg-type]
+    server = await _start_chat_server(loop_runner)
+    try:
+        await graph.ainvoke(
+            {"messages": [HumanMessage(content="a", id="h1")]},
+            {"configurable": {"thread_id": "t1"}},
+        )
+        await state_manager.update_current_state({"cycle_count": 3}, thread_id="t1")
+        await state_manager.update_current_state({"cycle_count": 5}, thread_id="t2")
+
+        async with httpx.AsyncClient() as client:
+            resp = await client.delete(f"{server.base_url}/v1/conversations/t1")
+        assert resp.status_code == 200
+        assert resp.json() == {"id": "t1", "object": "conversation.deleted", "deleted": True}
+
+        state = await graph.aget_state({"configurable": {"thread_id": "t1"}})
+        assert state.created_at is None
+        assert await state_manager.get_current_state(thread_id="t1") == {}
+        assert await state_manager.get_current_state(thread_id="t2") == {"cycle_count": 5}
     finally:
         await _stop_chat_server(server)
 
@@ -636,3 +797,97 @@ async def test_events_slow_subscriber_does_not_block_fast_subscriber() -> None:
         assert slow_queue.qsize() == 2
     finally:
         await service.stop()
+
+
+_MODEL_INPUTS: list[list[Any]] = []
+
+
+class _SlowStreamingModel(GenericFakeChatModel):
+    """Fake chat model that streams word by word slowly and records its inputs."""
+
+    async def _astream(self, messages, stop=None, run_manager=None, **kwargs):  # type: ignore[override]
+        _MODEL_INPUTS.append(list(messages))
+        async for chunk in super()._astream(messages, stop=stop, run_manager=run_manager, **kwargs):
+            await asyncio.sleep(0.05)
+            yield chunk
+
+
+async def test_cancelled_turn_keeps_partial_reply_and_next_turn_continues() -> None:
+    """Real create_agent graph + real SSE bridge: Stop keeps what was streamed."""
+    _MODEL_INPUTS.clear()
+    model = _SlowStreamingModel(
+        messages=iter(
+            [
+                AIMessage(content=" ".join(f"word{i}" for i in range(200))),
+                AIMessage(content="continued"),
+            ]
+        )
+    )
+    graph = create_agent(model=model, tools=[], checkpointer=InMemorySaver())
+    loop_runner = FakeLoopRunner(graph=graph)
+    server = await _start_chat_server(loop_runner, bridge_factory=DeepAgentSSEStream)
+    config = {"configurable": {"thread_id": "c-cancel"}}
+    try:
+        async with _client() as client:
+            frames: list[tuple[str, dict[str, Any]]] = []
+            body = {
+                "input": "write a lot",
+                "stream": True,
+                "conversation": "c-cancel",
+                "metadata": {"request_id": "resp_c1"},
+            }
+            async with client.stream("POST", f"{server.base_url}/v1/responses", json=body) as resp:
+                event_name = None
+                async for line in resp.aiter_lines():
+                    if line.startswith("event: "):
+                        event_name = line[len("event: ") :]
+                    elif line.startswith("data: "):
+                        frames.append((str(event_name), json.loads(line[len("data: ") :])))
+                        is_delta = event_name == "response.output_text.delta"
+                        deltas = [f for f in frames if f[0] == "response.output_text.delta"]
+                        if is_delta and len(deltas) == 3:
+                            cancel = await client.post(
+                                f"{server.base_url}/v1/responses/resp_c1/cancel"
+                            )
+                            assert cancel.status_code == 200
+                        if event_name == "response.incomplete":
+                            break
+
+            streamed = "".join(
+                f[1]["delta"] for f in frames if f[0] == "response.output_text.delta"
+            )
+            assert streamed.startswith("word0")
+            final = frames[-1][1]["response"]
+            assert final["status"] == "cancelled"
+            [item] = final["output"]
+            assert item["id"] == "msg_resp_c1"
+            assert item["status"] == "incomplete"
+            assert item["content"][0]["text"] == streamed
+
+            # The thread now ends with the partial reply and has nothing pending.
+            state = await graph.aget_state(config)
+            assert state.next == ()
+            items = await client.get(
+                f"{server.base_url}/v1/conversations/c-cancel/items", params={"order": "asc"}
+            )
+            assert [(i["type"], i.get("role"), i["status"]) for i in items.json()["data"]] == [
+                ("message", "user", "completed"),
+                ("message", "assistant", "incomplete"),
+            ]
+
+            # The next turn runs fresh and sees the partial reply as context.
+            resp = await client.post(
+                f"{server.base_url}/v1/responses",
+                json={"input": "continue", "conversation": "c-cancel"},
+            )
+            assert resp.json()["status"] == "completed"
+            last_input = _MODEL_INPUTS[-1]
+            assert [(m.type, m.content) for m in last_input if m.type != "system"] == [
+                ("human", "write a lot"),
+                ("ai", streamed),
+                ("human", "continue"),
+            ]
+            state = await graph.aget_state(config)
+            assert state.values["messages"][-1].content == "continued"
+    finally:
+        await _stop_chat_server(server)

@@ -61,6 +61,7 @@ from .state_backend import (
     create_knowledge_state_file,
     create_marketplaces_state_file,
     create_mcp_state_file,
+    create_mcp_tools_state_file,
     create_model_profiles_state_file,
     create_plugins_state_file,
     create_preferences_state_file,
@@ -244,6 +245,7 @@ def create_progenitor_backend(
         # board.json) so the agent edits one task per file instead of a giant blob.
         state_file_factories: list[Callable[[Any], StateFile]] = [
             create_mcp_state_file,
+            create_mcp_tools_state_file,
             create_plugins_state_file,
             create_marketplaces_state_file,
             create_knowledge_state_file,

@@ -673,6 +673,10 @@ describe('isHiddenEmptyDraft', () => {
   it('never hides sessions with persisted messages', () => {
     expect(isHiddenEmptyDraft({ ...emptyDraft, message_count: 1 }, ctx)).toBe(false);
   });
+
+  it('never hides sessions whose history is unavailable', () => {
+    expect(isHiddenEmptyDraft({ ...emptyDraft, history_unavailable: true }, ctx)).toBe(false);
+  });
 });
 
 describe('shouldLoadSelectedBackendChat', () => {

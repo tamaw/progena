@@ -794,6 +794,12 @@ class StateManager:
             lambda current: current.update(updates), thread_id=thread_id
         )
 
+    async def delete_current_state(self, thread_id: str) -> None:
+        """Remove a conversation's current state document (when it is deleted)."""
+        key = self._current_state_document_key(thread_id)
+        self._state_cache.pop(key, None)
+        await self._runtime_store.delete_document(key)
+
     # ==========================================================================
     # A2A Task Tracking
     # ==========================================================================

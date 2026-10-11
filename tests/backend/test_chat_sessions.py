@@ -261,6 +261,46 @@ class TestAttachmentContextStripping:
         assert user_message.content == "hello"
 
 
+class TestCancelledReplies:
+    """A turn the user stopped is saved by the runtime as an assistant message
+    marked ``response_metadata.status == "cancelled"``; on reload it must read
+    the same as the live UI showed it (``… [Cancelled]``), even when nothing
+    had streamed yet.
+    """
+
+    def _detail(self, assistant_content: str):
+        store = InMemoryDocumentStore()
+        create_chat_metadata(store, ChatCreateRequest(thread_id="thread_cancel"))
+        store.upsert_checkpoint_thread_snapshot(
+            CheckpointThreadSnapshot(
+                thread_id="thread_cancel",
+                checkpoint_id="checkpoint-1",
+                checkpoint_ts="2026-10-11T00:00:00Z",
+                messages=[
+                    {"id": "u1", "type": "human", "content": "write a lot"},
+                    {
+                        "id": "msg_resp_1",
+                        "type": "ai",
+                        "content": assistant_content,
+                        "response_metadata": {"status": "cancelled"},
+                    },
+                ],
+            )
+        )
+        detail = get_chat_detail(store, "thread_cancel")
+        assert detail is not None
+        return [(message.role, message.content) for message in detail.messages]
+
+    def test_partial_reply_is_shown_with_cancelled_suffix(self):
+        assert self._detail("word0 word1") == [
+            ("user", "write a lot"),
+            ("assistant", "word0 word1 [Cancelled]"),
+        ]
+
+    def test_reply_cancelled_before_any_text_still_shows(self):
+        assert self._detail("") == [("user", "write a lot"), ("assistant", "[Cancelled]")]
+
+
 class TestDisplayMetadataNormalization:
     def test_chat_detail_preserves_optional_assistant_display_metadata(self):
         store = InMemoryDocumentStore()

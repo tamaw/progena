@@ -22,11 +22,50 @@ to the backend and receives browser application data through two SSE roles:
 - Restores and checkpoints runtime state.
 - Builds the DeepAgent-backed conversation graph.
 - Processes scheduled work through the same core path as user input.
+- Exposes an OpenAI Responses/Conversations-API-compatible HTTP contract to the
+  backend; internally every endpoint is native LangGraph (`graph.astream`,
+  `graph.aget_state`, `checkpointer.adelete_thread`):
+  - `POST /v1/responses` runs one turn. `conversation` (string or `{id}`) is the
+    LangGraph `thread_id`; without one the turn runs in a fresh isolated
+    `conv_<uuid>` conversation, returned as `response.conversation.id`. The
+    backend names Telegram turns `tele_<chat_id>[_<topic_id>]` so each Telegram
+    chat keeps its history. `metadata.request_id` becomes the response id. With
+    `stream: true` it emits `response.created` / `response.queued` /
+    `response.in_progress`, `response.output_item.*`,
+    `response.content_part.*`, `response.output_text.delta|done`, then
+    `response.completed` (response `output` = model items added this turn),
+    `response.failed`, or `response.incomplete` with status `cancelled`.
+  - `POST /v1/responses/{id}/cancel` cancels an in-flight response (404 when
+    none). The text streamed so far is saved to the conversation as an
+    assistant message marked `response_metadata.status = "cancelled"` (written
+    as the agent's `model` node via `aupdate_state`), so it stays in history,
+    shows as `… [Cancelled]` in the UI, and is context for the next turn. Its
+    items carry status `incomplete` and are the cancelled response's `output`.
+  - `GET /v1/conversations/{id}/items` lists the thread's messages as Responses
+    items (`message`, `reasoning`, `function_call`, `function_call_output`) with
+    `after` / `limit` (1–100) / `order` paging.
+  - `DELETE /v1/conversations/{id}` deletes the thread's checkpoints and its
+    runtime `current_state` document (409 while a turn is in flight).
+  - Vendor extensions outside the OpenAI spec: `progenitor.stream_event` SSE
+    events carry the runtime's tool/reasoning/subagent activity; the
+    `include=progenitor.langchain_message` items option adds
+    `source_message_id` to every item and the serialized LangChain message to
+    the first item of each message in the page; the `checkpoint_id` query
+    parameter reads a specific checkpoint; `metadata` values may be
+    non-strings.
+- `GET /v1/events` broadcasts runtime agent events to the backend.
 
 ### Backend (`app/backend/`)
 
 - Exposes the browser's finite command/query routes and bridges work to the
   runtime.
+- Discovers chats from the checkpoint tables by SQL, but reads chat messages
+  only through the runtime's conversation items endpoint, cached per
+  `(thread_id, checkpoint_id)`. Reads run off the event loop with pooled
+  connections. While the runtime is unreachable the last copy seen of a chat
+  is served; a chat never read before lists with `history_unavailable: true`
+  and its detail returns 503 instead of an empty chat. A deleted chat stays
+  deleted even while live runtime state for it exists.
 - Owns the canonical `GET /api/ui/stream` SSE transport for connection
   lifecycle, retained state, and chat response lifecycle events.
 - Owns the dedicated `GET /api/ui/responses/{request_id}/stream` SSE transport
