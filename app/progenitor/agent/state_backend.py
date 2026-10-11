@@ -535,8 +535,20 @@ def create_mcp_tools_state_file(state_manager: Any) -> StateFile:
             for tool in current_tools
             if isinstance(tool, dict) and tool.get("name")
         }
-        new_tools = doc.get("tools", []) if isinstance(doc, dict) else []
-        new_by_name = {str(tool["name"]): tool for tool in new_tools}
+        if not isinstance(doc, dict):
+            raise ValueError("expected a JSON object")
+        # Everything outside `tools` (servers, updated_at) is discovery-owned;
+        # an added key here would be silently dropped, so the edit would look
+        # successful while changing nothing.
+        current_rest = {k: v for k, v in current.items() if k != "tools"}
+        edited_rest = {k: v for k, v in doc.items() if k != "tools"}
+        if edited_rest != current_rest:
+            raise ValueError(
+                "only a tool's `enabled` flag inside `tools` can change - there are no "
+                "other settings in this file; to disable a tool set "
+                '`"enabled": false` on its entry in `tools`'
+            )
+        new_by_name = {str(tool["name"]): tool for tool in doc.get("tools", [])}
         if set(new_by_name) != set(current_by_name):
             raise ValueError(
                 "tools can't be added or removed here - the list comes from MCP discovery; "

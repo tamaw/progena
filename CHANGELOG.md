@@ -42,6 +42,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Exception Handling**: Added DEBUG logging to previously silent exception handlers (CQ-009)
 
 ### Fixed
+- `/config/mcp_tools.json` rejected nothing outside `tools`: an agent edit that added its own top-level key (e.g. a `tool_overrides` map) was silently dropped and reported as success while no tool changed. Any change outside a tool's `enabled` flag is now rejected with a message pointing at the flag.
 - Telemetry exception handlers now log at DEBUG level instead of silently passing
 
 ## [0.6.0] - 2026-01-29
