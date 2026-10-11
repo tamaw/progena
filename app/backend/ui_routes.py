@@ -1924,9 +1924,7 @@ def _apply_event_widget_triggers(
 
             timestamp = str(trigger.get("timestamp") or utcnow().isoformat())
             normalized_payload = {
-                key: value
-                for key, value in trigger.items()
-                if key not in ("event_type", "timestamp")
+                key: value for key, value in trigger.items() if key != "timestamp"
             }
             summary = str(
                 trigger.get("summary") or _summarize_event_trigger(event_type, normalized_payload)

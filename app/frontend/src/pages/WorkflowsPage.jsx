@@ -1,5 +1,5 @@
 import { createPortal } from 'react-dom';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { selectRealtime } from '../store/realtimeSlice';
 import { useSearchParams } from 'react-router-dom';
@@ -1020,6 +1020,7 @@ function WorkflowDock({ menuAnchor, onOpenMenu, onCloseMenu, onAdd, tool, onTool
   const filterRef = useRef(null);
   const dockRef = useRef(null);
   const addButtonRef = useRef(null);
+  const menuRef = useRef(null);
   const menuOpen = Boolean(menuAnchor);
   const normalizedFilter = filter.trim().toLowerCase();
   const categories = NODE_MENU_CATEGORIES
@@ -1065,22 +1066,26 @@ function WorkflowDock({ menuAnchor, onOpenMenu, onCloseMenu, onAdd, tool, onTool
     onCloseMenu();
   };
 
-  const menuStyle = menuAnchor?.screenPosition
-    ? (() => {
-        const dockRect = dockRef.current?.getBoundingClientRect();
-        const left = Math.max(16, Math.min(menuAnchor.screenPosition.x, window.innerWidth - 346));
-        const top = Math.max(16, Math.min(menuAnchor.screenPosition.y, window.innerHeight - 510));
-        return {
-          left: `${left - (dockRect?.left || 0)}px`,
-          top: `${top - (dockRect?.top || 0)}px`,
-        };
-      })()
-    : undefined;
+  const screenPosition = menuAnchor?.screenPosition;
+  useLayoutEffect(() => {
+    const menu = menuRef.current;
+    if (!menu) return;
+    if (!screenPosition) {
+      menu.style.left = '';
+      menu.style.top = '';
+      return;
+    }
+    const dockRect = dockRef.current?.getBoundingClientRect();
+    const left = Math.max(16, Math.min(screenPosition.x, window.innerWidth - 346));
+    const top = Math.max(16, Math.min(screenPosition.y, window.innerHeight - 510));
+    menu.style.left = `${left - (dockRect?.left || 0)}px`;
+    menu.style.top = `${top - (dockRect?.top || 0)}px`;
+  }, [menuOpen, screenPosition]);
 
   return (
     <div ref={dockRef} className="canvas-dock workflow-canvas-dock">
       {menuOpen ? (
-        <div className={`workflow-node-menu${menuAnchor?.screenPosition ? ' workflow-node-menu--cursor' : ''}`} style={menuStyle} role="menu" aria-label="Add workflow node">
+        <div ref={menuRef} className={`workflow-node-menu${screenPosition ? ' workflow-node-menu--cursor' : ''}`} role="menu" aria-label="Add workflow node">
           <label className="workflow-node-menu__filter">
             <span className="sr-only">Filter nodes</span>
             <input ref={filterRef} type="search" value={filter} onChange={(event) => setFilter(event.target.value)} placeholder="Filter nodes…" />

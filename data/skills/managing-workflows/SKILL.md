@@ -9,10 +9,6 @@ Workflow definitions live as one JSON file per workflow:
 
 Schemas are mounted read-only under `/schemas/`:
 - `/schemas/definition.workflow.schema.v1.json` — the complete graph-native definition schema; use it to create or rewrite a workflow.
-- `/schemas/node_event.workflow.schema.v1.json` — an event entrypoint node.
-- `/schemas/node_prompt.workflow.schema.v1.json` — the `prompt` node.
-- `/schemas/node_user.workflow.schema.v1.json` — the `user` (notify) node.
-- `/schemas/node_code.workflow.schema.v1.json` — the `code` node.
 
 Event nodes are stored in `graph.nodes`; there is no top-level trigger field.
 
