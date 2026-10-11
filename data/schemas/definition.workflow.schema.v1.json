@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Workflow Definition",
-  "description": "A graph-native workflow contains event and literal-value sources plus typed value connections. Every connection supplies data and establishes execution dependency.",
+  "description": "A graph-native workflow contains document-event and literal-value sources plus typed value connections. Every connection supplies data and establishes execution dependency. Event, document_read, and document_query port schemas are derived from the node's document type (document_type:<id> rows) on save.",
   "type": "object",
   "additionalProperties": false,
   "required": ["id", "title", "description", "enabled", "paused", "version", "graph", "ui", "updated_at", "created_at"],
@@ -16,18 +16,29 @@
       "type": "object", "additionalProperties": false, "required": ["nodes", "edges"],
       "properties": {
         "nodes": {"type": "object", "minProperties": 1, "additionalProperties": {"oneOf": [
-          {"type": "object", "additionalProperties": false, "required": ["kind", "title", "event_type"], "properties": {
+          {"type": "object", "additionalProperties": false, "required": ["kind", "title", "document_type"], "properties": {
             "kind": {"const": "event"}, "title": {"type": "string", "minLength": 1},
-            "event_type": {"type": "string", "enum": ["kanban.card.created", "kanban.card.updated", "kanban.card.moved", "kanban.card.deleted", "kanban.card.status_changed", "document.changed"]},
-            "from_column": {"type": ["string", "null"], "enum": ["backlog", "plan", "build", "validate", "done", null]},
-            "to_column": {"type": ["string", "null"], "enum": ["backlog", "plan", "build", "validate", "done", null]},
-            "key_prefix": {"description": "Optional document.changed filter: document kind key prefix (see document_kinds.DOCUMENT_KINDS). Null/omitted means any kind.", "type": ["string", "null"]},
-            "key": {"description": "Optional document.changed filter: exact document key. Null/omitted means any key.", "type": ["string", "null"]},
-            "action": {"description": "Optional document.changed filter: write action. Null/omitted means any action.", "type": ["string", "null"], "enum": ["upserted", "deleted", null]},
-            "output_schema": {"type": ["object", "null"]}
+            "document_type": {"description": "Id of the document type whose create/update/delete events start this workflow.", "type": "string", "minLength": 1},
+            "key": {"description": "Optional filter: exact document key. Null/omitted means any document of the type.", "type": ["string", "null"]},
+            "operations": {"description": "Optional filter: operations to fire on. Empty/omitted means any.", "type": "array", "uniqueItems": true, "items": {"enum": ["created", "updated", "deleted"]}},
+            "changed_fields": {"description": "Optional filter: fire only when at least one of these top-level document fields changed. Empty/omitted means any.", "type": "array", "items": {"type": "string", "minLength": 1}},
+            "match": {"description": "Optional filter: equality on output ports, e.g. {\"after.column_id\": \"done\"}.", "type": "object"},
+            "output_schema": {"type": "object"}
           }},
           {"type": "object", "additionalProperties": false, "required": ["kind", "title", "value", "output_schema"], "properties": {
             "kind": {"const": "data"}, "title": {"type": "string", "minLength": 1}, "value": {}, "output_schema": {"type": "object"}
+          }},
+          {"type": "object", "additionalProperties": false, "required": ["kind", "title", "document_type"], "properties": {
+            "kind": {"const": "document_read"}, "title": {"type": "string", "minLength": 1},
+            "document_type": {"type": "string", "minLength": 1},
+            "input_schema": {"type": "object"}, "output_schema": {"type": "object"}
+          }},
+          {"type": "object", "additionalProperties": false, "required": ["kind", "title", "document_type"], "properties": {
+            "kind": {"const": "document_query"}, "title": {"type": "string", "minLength": 1},
+            "document_type": {"type": "string", "minLength": 1},
+            "filter_fields": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
+            "limit": {"type": "integer", "minimum": 1, "maximum": 200},
+            "input_schema": {"type": "object"}, "output_schema": {"type": "object"}
           }},
           {"type": "object", "additionalProperties": false, "required": ["kind", "title", "message", "input_schema", "output_schema"], "properties": {
             "kind": {"const": "agent"}, "title": {"type": "string", "minLength": 1}, "message": {"type": "string", "minLength": 1}, "input_schema": {"type": "object"}, "output_schema": {"type": "object"}

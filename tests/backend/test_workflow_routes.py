@@ -4,6 +4,7 @@ import pytest
 from ack_helpers import assert_acknowledged
 from fastapi.testclient import TestClient
 
+from app.backend.document_events import seed_document_types
 from app.backend.document_store import InMemoryDocumentStore, set_default_document_store
 from app.backend.main import app
 
@@ -12,6 +13,7 @@ from app.backend.main import app
 def workflow_env(monkeypatch):
     store = InMemoryDocumentStore()
     set_default_document_store(store)
+    seed_document_types(store)
     monkeypatch.setattr(
         "app.backend.main.configure_default_document_store", lambda *_args, **_kwargs: store
     )
@@ -52,7 +54,7 @@ def test_workflow_create_acknowledges_then_emits_canonical_state(workflow_env):
         (edge,) = workflow["graph"]["edges"]
         assert nodes[edge["from"]["node"]]["kind"] == "event"
         assert nodes[edge["to"]["node"]]["kind"] == "agent"
-        assert edge["from"]["port"] == edge["to"]["port"] == "event_type"
+        assert edge["from"]["port"] == edge["to"]["port"] == "key"
     finally:
         ui_routes._ui_stream_subscribers.pop(queue, None)
 
@@ -70,12 +72,15 @@ def test_workflow_content_round_trip_keeps_typed_schemas(workflow_env):
         "required": ["card"],
         "properties": {"card": {"title": "Card", "type": "object"}},
     }
-    event_id = next(
-        node_id for node_id, node in payload["graph"]["nodes"].items() if node["kind"] == "event"
-    )
+    payload["graph"]["nodes"]["data_card"] = {
+        "kind": "data",
+        "title": "Card",
+        "value": {},
+        "output_schema": {"type": "object"},
+    }
     payload["graph"]["edges"] = [
         {
-            "from": {"node": event_id, "port": "card"},
+            "from": {"node": "data_card", "port": "value"},
             "to": {"node": agent_id, "port": "card"},
         },
     ]

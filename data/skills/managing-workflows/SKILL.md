@@ -1,6 +1,6 @@
 ---
 name: managing-workflows
-description: Create, inspect, update, pause/resume, wire, or delete backend-native workflow definitions by editing one file under /workflows/ at a time. Use when a user asks to create or modify a workflow that reacts to kanban events and runs prompt, user-message, or code nodes through the backend workflow executor.
+description: Create, inspect, update, pause/resume, wire, or delete backend-native workflow definitions by editing one file under /workflows/ at a time. Use when a user asks to create or modify a workflow that reacts to document create/update/delete events (kanban cards, inbox messages, workflow runs, preferences, ...) and runs agent, MCP, condition, approval, or direct document read/query nodes through the backend workflow executor.
 allowed-tools: read_file write_file edit_file ls structured_output generate_id current_time
 ---
 
@@ -9,8 +9,7 @@ Workflow definitions live as one JSON file per workflow:
 
 Schemas are mounted read-only under `/schemas/`:
 - `/schemas/definition.workflow.schema.v1.json` — the complete graph-native definition schema; use it to create or rewrite a workflow.
-
-Event nodes are stored in `graph.nodes`; there is no top-level trigger field.
+- Document schemas (e.g. `/schemas/task.schema.v1.json` for kanban cards) describe the fields a document type exposes as ports.
 
 Core rules:
 1. Work on exactly one workflow file at a time.
@@ -18,45 +17,46 @@ Core rules:
 3. Preserve `id`, `created_at`, and unrelated `ui` fields unless the user asked to change them.
 4. Do not add runtime execution fields to the definition file.
 5. Prefer `edit_file` for focused changes. Use `write_file` only when creating a new workflow or rewriting the whole document intentionally.
-6. Use `structured_output` against the complete definition schema whenever creating or reshaping event nodes, other nodes, or edges — do not hand-assemble JSON from memory.
+6. Use `structured_output` against the complete definition schema whenever creating or reshaping nodes or edges — do not hand-assemble JSON from memory.
+7. Never hand-write `input_schema`/`output_schema` for `event`, `document_read`, or `document_query` nodes: the server derives them from the node's `document_type` on save. Wire edges to the port names listed below.
+
+Document events:
+- Every create/update/delete of a stored document is an event. An `event` node subscribes by `document_type` (a registered type id). Built-in ids: `kanban_card`, `kanban_task` (task body), `inbox_message`, `workflow`, `workflow_run`, `routine`, `policy`, `agent`, `skill`, `memory`, `prompt`, `preferences`, `schedule`, `mcp`, `plugins`, `marketplaces`, `knowledge`, `repos`, `kanban_board`. Writing a workflow with an unknown id fails with the list of registered ids.
+- Optional filters on the event node: `key` (exact document key), `operations` (subset of `created`/`updated`/`deleted`; empty = any), `changed_fields` (fire only if one of these top-level fields changed), `match` (equality on output ports, e.g. `{"after.column_id": "done"}`).
+- Event output ports: `event_id`, `document_type`, `key`, `id` (key without prefix), `op`, `timestamp`, `changed_fields`, `before`, `after`, plus one `before.<field>` / `after.<field>` port per document field. `before` is absent on created, `after` on deleted.
+- Example — "a card moved to Done": `{"kind": "event", "title": "Card done", "document_type": "kanban_card", "operations": ["updated"], "changed_fields": ["column_id"], "match": {"after.column_id": "done"}}`.
+
+Node kinds:
+- `event` — entrypoint described above; no inbound edges.
+- `data` — literal `value` with an `output_schema`; output port `value`.
+- `document_read` — reads one document directly (no LLM). Fields `kind`, `title`, `document_type`. Input `id` for collection types (e.g. wire `event.id` → `read.id` to load a card's `kanban_task` body), or `trigger` (any value, for sequencing) for single-document types. Outputs `found`, `key`, `id`, `document`, and `document.<field>` ports.
+- `document_query` — equality query over a collection type (no LLM). Fields `kind`, `title`, `document_type`, `filter_fields` (each becomes a required input port), `limit` (1–200). With no filters it takes a `trigger` input. Outputs `items`, `keys`, `count`.
+- `agent` — runs a message through Progenitor with a typed `input_schema`/`output_schema`.
+- `mcp` — invokes a configured MCP tool.
+- `condition` — deterministic branch with `true`/`false` outputs.
+- `approval` — pauses for an approval decision.
+- `human_input` — pauses for a typed human-supplied value.
+
+Prefer `document_read`/`document_query` over an `agent` node whenever a step only needs to look a document up.
 
 Recommended flow for a new workflow:
 1. `ls /workflows/`
 2. `read_file /schemas/definition.workflow.schema.v1.json`
 3. Generate ids for the workflow and its nodes.
-4. One `structured_output` call, `schema_file: definition.workflow.schema.v1.json`, describing every event node, executable node, and edge — this produces the complete, schema-valid definition in one shot.
+4. One `structured_output` call, `schema_file: definition.workflow.schema.v1.json`, describing every node and edge — this produces the complete, schema-valid definition in one shot.
 5. `write_file /workflows/<workflow-id>.json`
 
 Recommended flow for editing an existing workflow:
 1. `ls /workflows/`
 2. `read_file /workflows/<workflow-id>.json`
 3. If only one field changes, update it with `edit_file` directly.
-4. If an event node, several nodes, or edge wiring changes together, read the complete definition schema and use `structured_output` to produce the whole updated definition, then persist only that workflow file.
-
-Minimal valid v2 workflow shape:
-- one or more `event` nodes
-- one or more executable nodes
-- every event node has no inbound edges and an edge to its first executable step
-- each event node carries its own `event_type`, optional `from_column`, and optional `to_column`
-- event types are one of:
-  - `kanban.card.created`
-  - `kanban.card.updated`
-  - `kanban.card.moved`
-  - `kanban.card.deleted`
-  - `kanban.card.status_changed`
-- `from_column` / `to_column` are only meaningful for `kanban.card.moved`; filters are one of `backlog`, `plan`, `build`, `validate`, `done`, or `null`.
-
-Node kinds:
-- `event` — graph entrypoint with fields `kind`, `title`, `event_type`, optional `from_column`, optional `to_column`.
-- `prompt` — runs a prompt through the backend SSE path.
-- `condition` — deterministic branch with `true`/`false` outputs.
-- `approval` — pauses for an approval decision.
-- `mcp` — invokes a configured MCP tool.
+4. If several nodes or edge wiring change together, read the complete definition schema and use `structured_output` to produce the whole updated definition, then persist only that workflow file.
 
 Validation reminders:
-- at least one `event` node is required
-- event nodes cannot have inbound edges
-- event nodes have at most one outbound edge
-- non-event roots are invalid
-- edges must point to existing node ids
+- at least one `event` node is required; event nodes cannot have inbound edges
+- every non-source node needs an inbound edge, and every required input port needs exactly one edge
+- edge ports must exist on both nodes and have compatible types
+- `match` keys must be event output ports; `changed_fields` must be document fields
+- `document_query` requires a collection document type
 - the graph must be acyclic
+- a workflow's own run writes never re-trigger it (runs carry their ancestry)

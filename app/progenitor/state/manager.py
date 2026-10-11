@@ -7,12 +7,9 @@ from collections.abc import Callable
 from contextlib import asynccontextmanager
 from typing import Any
 
-from ..content_documents import (
-    AGENT_SELF_EDIT_TOUCH_KEY_PREFIX,
-    content_document_key,
-    content_document_prefix,
-)
-from ..document_kinds import INBOX_MESSAGE_KEY_PREFIX
+from ..content_documents import content_document_key, content_document_prefix
+from ..document_kinds import DOCUMENT_TYPE_KEY_PREFIX, INBOX_MESSAGE_KEY_PREFIX
+from ..document_types import DocumentType, builtin_document_type_rows, parse_document_types
 from ..routines.store import ROUTINE_GRAPH_KEY_PREFIX, routine_graph_key
 from ..utils import utcnow_isoformat
 from ..workflows import (
@@ -68,6 +65,12 @@ class StateManager:
         "background_tasks": "background_tasks.json",
         "registry": "agents.json",
     }
+
+    # Documents the backend also writes directly to Postgres (repo "Fetch",
+    # routine "Run" enqueues, UI repo edits). They are never cached, so this
+    # process needs no change notifications to stay coherent and a flush on
+    # close/commit can never overwrite another writer's update.
+    READ_THROUGH_DOCUMENTS: frozenset[str] = frozenset({"repos", "repo_scan", "background_tasks"})
 
     def __init__(
         self,
@@ -165,26 +168,26 @@ class StateManager:
                 payload, migrated = self._normalize_schedule_payload(payload)
                 if migrated:
                     await self._runtime_store.save_document(name, payload)
-            self._state_cache[name] = payload
+            if name not in self.READ_THROUGH_DOCUMENTS:
+                self._state_cache[name] = payload
+        await self._seed_document_types()
 
     async def _get_runtime_document(self, name: str) -> Any:
-        """Return a cached native-store-backed state document."""
+        """Return a native-store-backed state document.
+
+        Documents other processes also write (``READ_THROUGH_DOCUMENTS``) are
+        always read from the store; the rest are cached.
+        """
+        if name in self.READ_THROUGH_DOCUMENTS:
+            return await self._runtime_store.get_document(name, {})
         if name not in self._state_cache:
             self._state_cache[name] = await self._runtime_store.get_document(name, {})
         return self._state_cache[name]
 
-    def invalidate_document(self, name: str) -> None:
-        """Drop a cached document so the next read re-fetches from the store.
-
-        Needed when another process (the backend, via a direct Postgres
-        write) mutates a document this instance has already cached — the
-        runtime store listener calls this on the matching NOTIFY key.
-        """
-        self._state_cache.pop(name, None)
-
     async def _save_runtime_document(self, name: str, payload: Any) -> None:
-        """Save and cache a native-store-backed state document."""
-        self._state_cache[name] = payload
+        """Save a native-store-backed state document (caching it unless read-through)."""
+        if name not in self.READ_THROUGH_DOCUMENTS:
+            self._state_cache[name] = payload
         await self._runtime_store.save_document(name, payload)
 
     async def save_routine_run_event(self, payload: dict[str, Any]) -> None:
@@ -628,6 +631,20 @@ class StateManager:
         return [payload for _, payload in rows if isinstance(payload, dict)]
 
     # ==========================================================================
+    # Document types
+    # ==========================================================================
+    async def list_document_types(self) -> dict[str, DocumentType]:
+        """Return the ``document_type:<id>`` registry, keyed by type id."""
+        rows = await self._runtime_store.list_documents(DOCUMENT_TYPE_KEY_PREFIX)
+        return parse_document_types(payload for _, payload in rows)
+
+    async def _seed_document_types(self) -> None:
+        """Write the built-in document types, touching only rows that differ."""
+        for key, payload in builtin_document_type_rows():
+            if await self._runtime_store.peek_document(key) != payload:
+                await self._runtime_store.save_document(key, payload)
+
+    # ==========================================================================
     # Routine graphs
     # ==========================================================================
     async def get_execution_policy(self, policy_id: str) -> dict[str, Any] | None:
@@ -725,21 +742,6 @@ class StateManager:
         """Remove one content document."""
         key = content_document_key(kind, relative_path)
         await self._runtime_store.delete_document(key)
-
-    async def touch_object_agent(self, name: str) -> None:
-        """Record a marker so the backend's Postgres LISTEN/NOTIFY watcher
-        rebroadcasts this agent's profile to the Agents page.
-
-        Only needed for *native* agents, whose ``SelfManifestBackend`` writes
-        land on disk and never touch the ``store`` table on their own (unlike
-        a marketplace/user agent's ``save_content_document`` call, which
-        already produces a NOTIFY via its own row write). Called
-        unconditionally after every self-edit so the propagation path is one
-        mechanism regardless of source.
-        """
-        await self._save_runtime_document(
-            f"{AGENT_SELF_EDIT_TOUCH_KEY_PREFIX}{name}", {"at": utcnow_isoformat()}
-        )
 
     async def list_content_documents(self, kind: str) -> list[tuple[str, str]]:
         """Return ``(relative_path, content)`` for every document of one kind."""
@@ -951,7 +953,6 @@ class StateManager:
     async def enqueue_background_task(self, task: BackgroundTaskEntry) -> None:
         """Add a background task to the queue."""
         async with self._with_background_tasks_lock():
-            self.invalidate_document("background_tasks")
             await background_store.enqueue_background_task(
                 task=task,
                 get_background_tasks_fn=self.get_background_tasks,
@@ -961,7 +962,6 @@ class StateManager:
     async def dequeue_background_task(self) -> BackgroundTaskEntry | None:
         """Remove and return the next background task, or ``None`` if empty."""
         async with self._with_background_tasks_lock():
-            self.invalidate_document("background_tasks")
             return await background_store.dequeue_background_task(
                 get_background_tasks_fn=self.get_background_tasks,
                 save_background_tasks_fn=self.save_background_tasks,

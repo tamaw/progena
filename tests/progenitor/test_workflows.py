@@ -1,7 +1,9 @@
 import pytest
 
+from app.progenitor.document_types import BUILTIN_DOCUMENT_TYPES
 from app.progenitor.workflows import (
     WorkflowDefinition,
+    apply_document_type_schemas,
     default_workflow_definition,
     ordered_workflow_node_ids,
     validate_workflow_definition_payload,
@@ -24,19 +26,25 @@ def _agent_node(title, *, message="Handle it.", input_schema=None, output_schema
     }
 
 
+def _default_with_schemas():
+    return apply_document_type_schemas(
+        default_workflow_definition(), {t.id: t for t in BUILTIN_DOCUMENT_TYPES}
+    )
+
+
 def test_default_workflow_wires_an_event_property():
-    normalized = validate_workflow_definition_payload(default_workflow_definition())
+    normalized = validate_workflow_definition_payload(_default_with_schemas())
     event_id = _node_id(normalized, "event")
     agent_id = _node_id(normalized, "agent")
 
     event = normalized["graph"]["nodes"][event_id]
     agent = normalized["graph"]["nodes"][agent_id]
     assert "thread_id" not in event["output_schema"]["properties"]
-    assert agent["input_schema"]["properties"]["event_type"] == {"type": "string"}
+    assert agent["input_schema"]["properties"]["key"] == {"type": "string"}
     assert normalized["graph"]["edges"] == [
         {
-            "from": {"node": event_id, "port": "event_type"},
-            "to": {"node": agent_id, "port": "event_type"},
+            "from": {"node": event_id, "port": "key"},
+            "to": {"node": agent_id, "port": "key"},
         }
     ]
 
@@ -50,7 +58,7 @@ def test_workflow_edges_have_no_control_kind():
 
 
 def test_connected_property_is_the_execution_dependency():
-    payload = default_workflow_definition()
+    payload = _default_with_schemas()
     event_id = _node_id(payload, "event")
     source_id = _node_id(payload, "agent")
     target_id = "agent_consumer"
@@ -58,8 +66,8 @@ def test_connected_property_is_the_execution_dependency():
         "Source",
         input_schema={
             "type": "object",
-            "required": ["event_type"],
-            "properties": {"event_type": {"type": "string"}},
+            "required": ["key"],
+            "properties": {"key": {"type": "string"}},
         },
         output_schema={
             "type": "object",
@@ -77,8 +85,8 @@ def test_connected_property_is_the_execution_dependency():
     )
     payload["graph"]["edges"] = [
         {
-            "from": {"node": event_id, "port": "event_type"},
-            "to": {"node": source_id, "port": "event_type"},
+            "from": {"node": event_id, "port": "key"},
+            "to": {"node": source_id, "port": "key"},
         },
         {"from": {"node": source_id, "port": "title"}, "to": {"node": target_id, "port": "title"}},
     ]
@@ -99,37 +107,37 @@ def test_executable_node_without_connection_is_rejected():
 
 
 def test_required_input_must_have_a_connected_property():
-    payload = default_workflow_definition()
+    payload = _default_with_schemas()
     agent_id = _node_id(payload, "agent")
     payload["graph"]["nodes"][agent_id]["input_schema"] = {
         "type": "object",
-        "required": ["card"],
-        "properties": {"card": {"type": "object"}, "event_type": {"type": "string"}},
+        "required": ["after"],
+        "properties": {"after": {"type": "object"}, "key": {"type": "string"}},
     }
     event_id = _node_id(payload, "event")
     payload["graph"]["edges"] = [
         {
-            "from": {"node": event_id, "port": "event_type"},
-            "to": {"node": agent_id, "port": "event_type"},
+            "from": {"node": event_id, "port": "key"},
+            "to": {"node": agent_id, "port": "key"},
         }
     ]
 
-    with pytest.raises(ValueError, match="required input 'card'"):
+    with pytest.raises(ValueError, match="required input 'after'"):
         validate_workflow_definition_payload(payload)
 
 
 def test_duplicate_input_connection_is_rejected():
-    payload = default_workflow_definition()
+    payload = _default_with_schemas()
     agent_id = _node_id(payload, "agent")
-    data_id = "data_event_type"
+    data_id = "data_key"
     payload["graph"]["nodes"][data_id] = {
         "kind": "data",
-        "title": "Event type",
+        "title": "Key",
         "value": "manual",
         "output_schema": {"type": "string"},
     }
     payload["graph"]["edges"].append(
-        {"from": {"node": data_id, "port": "value"}, "to": {"node": agent_id, "port": "event_type"}}
+        {"from": {"node": data_id, "port": "value"}, "to": {"node": agent_id, "port": "key"}}
     )
 
     with pytest.raises(ValueError, match="more than one edge"):
@@ -137,7 +145,7 @@ def test_duplicate_input_connection_is_rejected():
 
 
 def test_cycle_of_connected_properties_is_rejected():
-    payload = default_workflow_definition()
+    payload = _default_with_schemas()
     event_id = _node_id(payload, "event")
     first_id = _node_id(payload, "agent")
     second_id = "agent_second"
@@ -151,7 +159,7 @@ def test_cycle_of_connected_properties_is_rejected():
     )
     payload["graph"]["edges"] = [
         {
-            "from": {"node": event_id, "port": "event_type"},
+            "from": {"node": event_id, "port": "key"},
             "to": {"node": first_id, "port": "value"},
         },
         {"from": {"node": first_id, "port": "value"}, "to": {"node": second_id, "port": "value"}},

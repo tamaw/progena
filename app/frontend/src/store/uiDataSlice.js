@@ -29,9 +29,9 @@ import * as preferences from './uiData/preferences';
 import * as marketplaces from './uiData/marketplaces';
 import * as repos from './uiData/repos';
 import * as policies from './uiData/policies';
-import * as documentKinds from './uiData/documentKinds';
+import * as documentTypes from './uiData/documentTypes';
 
-const domains = [runtime, mcp, knowledge, prompts, tasks, workflows, agents, chats, inbox, logs, preferences, marketplaces, repos, documentKinds, policies];
+const domains = [runtime, mcp, knowledge, prompts, tasks, workflows, agents, chats, inbox, logs, preferences, marketplaces, repos, documentTypes, policies];
 
 const initialState = domains.reduce(
   (acc, domain) => ({ ...acc, ...domain.initialState }),
@@ -234,10 +234,10 @@ export {
 } from './uiData/prompts';
 
 export {
-  fetchDocumentKinds,
-  selectDocumentKinds,
-  selectDocumentKindsState,
-} from './uiData/documentKinds';
+  fetchDocumentTypes,
+  selectDocumentTypes,
+  selectDocumentTypesState,
+} from './uiData/documentTypes';
 
 export {
   fetchMcp,

@@ -38,16 +38,8 @@ from .document_kinds import (
     PROMPT_DOCUMENT_KEY_PREFIX,
     SKILL_DOCUMENT_KEY_PREFIX,
 )
-from .document_kinds import (
-    AGENT_SELF_EDIT_TOUCH_KEY_PREFIX as AGENT_SELF_EDIT_TOUCH_KEY_PREFIX,
-)
 
 logger = logging.getLogger(__name__)
-
-# AGENT_SELF_EDIT_TOUCH_KEY_PREFIX: not a content-document kind itself -- a
-# legacy self-edit notification key. All manifests now persist as agent:
-# documents, whose writes directly trigger Postgres NOTIFY. Kept exported
-# for compatibility with older runtime writers and notification consumers.
 
 _KIND_PREFIXES: dict[str, str] = {
     "prompt": PROMPT_DOCUMENT_KEY_PREFIX,

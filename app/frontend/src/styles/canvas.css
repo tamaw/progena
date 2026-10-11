@@ -1783,6 +1783,68 @@
   padding: 7px 8px;
 }
 
+.workflow-node-options__field input {
+  background: var(--color-input-bg, transparent);
+  border: 1px solid var(--color-border);
+  border-radius: 5px;
+  color: var(--color-text);
+  min-width: 0;
+  padding: 7px 8px;
+}
+
+.workflow-node-options__checkboxes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 4px;
+}
+
+.workflow-node-options__checkbox {
+  align-items: center;
+  color: var(--color-text);
+  cursor: pointer;
+  display: inline-flex;
+  font-size: 0.8rem;
+  gap: 6px;
+}
+
+.workflow-node-options__checkbox input {
+  accent-color: var(--color-accent);
+  margin: 0;
+}
+
+.workflow-node-options__tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.workflow-node-options__tag {
+  align-items: center;
+  background: var(--color-surface-raised, rgb(255 255 255 / 4%));
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  display: inline-flex;
+  gap: 4px;
+  padding: 4px 8px;
+  font-size: 0.78rem;
+}
+
+.workflow-node-options__tag button {
+  background: none;
+  border: none;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  font-size: 0.9rem;
+  line-height: 1;
+  padding: 0 2px;
+}
+
+.workflow-node-options__tag button:hover {
+  color: var(--color-text);
+}
+
 @media (max-width: 620px) {
   .workflow-node-options-backdrop { padding: 12px; }
   .workflow-node-options__mapping-form { grid-template-columns: 1fr; }

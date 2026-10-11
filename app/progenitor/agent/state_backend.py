@@ -1031,7 +1031,9 @@ class WorkflowDirectoryBackend(_AsyncOnlyFileBackendMixin):
         if workflow_id is None:
             return WriteResult(error=f"Unknown workflow file '{file_path}' (expected <id>.json)")
         try:
-            workflow = validate_workflow_definition_document(content)
+            workflow = validate_workflow_definition_document(
+                content, await self._sm.list_document_types()
+            )
         except ValueError as exc:
             return WriteResult(error=f"Invalid workflow {name}: {exc}")
         if workflow.get("id") != workflow_id:

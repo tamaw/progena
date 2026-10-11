@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Document events for workflows**: every create/update/delete of a state document is appended to a durable `document_events` log (before/after payloads, writer origin) by a Postgres trigger; the backend consumes it from a persisted cursor, so events written while it is down are dispatched on restart
+  - Document types are registered as `document_type:<id>` rows in Postgres (built-ins seeded at startup) and map key prefixes/keys to schemas under `data/schemas/`
+  - Workflow event nodes subscribe by `document_type` with optional `key`, `operations`, `changed_fields`, and `match` filters, and expose `before`/`after` plus one `before.<field>`/`after.<field>` port per schema property
+  - New `document_read` and `document_query` workflow nodes read documents directly, without an agent call
+  - Workflow runs tag their writes with their run id, so a workflow is never re-triggered by its own run documents
+  - Replaces the `kanban.card.*` and `document.changed` event types, the in-memory kanban diff cache, and `/api/ui/document-kinds` (now `/api/ui/document-types`); event widgets use `<document_type>.<op>` names
+  - Routine run lifecycle UI events (`agent.routine.run.*`) are published from the document event log; `StateReader.add_raw_watcher` is removed
+  - The runtime's store listener now only refreshes chat-facing registries (MCP servers/tools, plugins, `agent:` documents); `repos`, `repo_scan`, and `background_tasks` are read through from Postgres by `StateManager` instead of cached and invalidated on NOTIFY, and the unused `touch_object_agent` / `agent-touch:` marker path is removed
 - **DeepAgent Integration** (`app/progenitor/agent/`): Selective adoption of LangChain's `deepagents` library
   - `deep_agent.py`: Factory creating configured DeepAgent with LiteLLM routing, tools, middleware, skills, memory, and subagents
   - `langchain_adapter.py`: ChatOpenAI → LiteLLM proxy bridge with Azure structured output bypass

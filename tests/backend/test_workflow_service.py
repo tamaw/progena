@@ -2,6 +2,7 @@ import asyncio
 
 import pytest
 
+from app.backend.document_events import seed_document_types
 from app.backend.document_store import InMemoryDocumentStore
 from app.backend.workflow_service import (
     PromptExecutionResult,
@@ -49,6 +50,7 @@ def _executor(store, runner):
 @pytest.mark.asyncio
 async def test_executor_runs_default_agent_from_event_data_without_thread_id():
     store = InMemoryDocumentStore()
+    seed_document_types(store)
     workflow = default_workflow_definition()
     definition = save_workflow_definition(store, workflow)
     runner = RecordingRunner(["{}"])
@@ -69,52 +71,17 @@ async def test_executor_runs_default_agent_from_event_data_without_thread_id():
 
 
 @pytest.mark.asyncio
-async def test_document_changed_event_node_filters_and_receives_flat_event():
-    store = InMemoryDocumentStore()
-    workflow = default_workflow_definition(event_type="document.changed")
-    event_id = _node_id(workflow, "event")
-    workflow["graph"]["nodes"][event_id].update(key_prefix="routine:", action="upserted")
-    definition = save_workflow_definition(store, workflow)
-    runner = RecordingRunner(["{}"])
-    executor = _executor(store, runner)
-    event = {
-        "event_type": "document.changed",
-        "timestamp": "2026-10-10T00:00:00+00:00",
-        "key_prefix": "routine:",
-        "key": "routine:abc",
-        "action": "upserted",
-    }
-
-    assert await executor.dispatch_event("document.changed", {**event, "action": "deleted"}) == []
-    assert (
-        await executor.dispatch_event("document.changed", {**event, "key_prefix": "policy:"}) == []
-    )
-    (run,) = await executor.dispatch_event("document.changed", event)
-
-    completed = await _wait_for(
-        lambda: (
-            get_workflow_run(store, run.run_id)
-            if get_workflow_run(store, run.run_id).status == "completed"
-            else None
-        )
-    )
-    assert completed.workflow_id == definition.id
-    assert completed.source == "document"
-    assert completed.trigger_node_id == event_id
-    assert completed.node_outputs[event_id]["key"] == "routine:abc"
-
-
-@pytest.mark.asyncio
 async def test_connected_agent_output_schedules_its_consumer_without_control_edge():
     store = InMemoryDocumentStore()
+    seed_document_types(store)
     workflow = default_workflow_definition()
     event_id = _node_id(workflow, "event")
     first_id = _node_id(workflow, "agent")
     second_id = "agent_consumer"
     workflow["graph"]["nodes"][first_id]["input_schema"] = {
         "type": "object",
-        "required": ["event_type"],
-        "properties": {"event_type": {"type": "string"}},
+        "required": ["key"],
+        "properties": {"key": {"type": "string"}},
     }
     workflow["graph"]["nodes"][first_id]["output_schema"] = {
         "type": "object",
@@ -134,8 +101,8 @@ async def test_connected_agent_output_schedules_its_consumer_without_control_edg
     }
     workflow["graph"]["edges"] = [
         {
-            "from": {"node": event_id, "port": "event_type"},
-            "to": {"node": first_id, "port": "event_type"},
+            "from": {"node": event_id, "port": "key"},
+            "to": {"node": first_id, "port": "key"},
         },
         {
             "from": {"node": first_id, "port": "summary"},
@@ -162,6 +129,7 @@ async def test_connected_agent_output_schedules_its_consumer_without_control_edg
 @pytest.mark.asyncio
 async def test_selected_condition_port_schedules_its_consumer_as_dataflow():
     store = InMemoryDocumentStore()
+    seed_document_types(store)
     workflow = default_workflow_definition()
     agent_id = _node_id(workflow, "agent")
     condition_id = "condition_gate"

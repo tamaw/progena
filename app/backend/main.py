@@ -40,6 +40,7 @@ from .attachments import ATTACHMENT_CONTEXT_MARKER, format_attachments_for_conte
 from .chat_sessions import UiRequestAcknowledgement, acknowledgement_response
 from .client import ProgenitorClient
 from .config import ChatServerConfig
+from .document_events import seed_document_types
 from .document_store import configure_default_document_store
 from .knowledge_routes import router as knowledge_router
 from .marketplace_routes import router as marketplaces_router
@@ -748,6 +749,7 @@ async def lifespan(app: FastAPI):
     # Startup
     logger.info("Starting backend with enhanced features...")
     document_store = configure_default_document_store(config.database_url)
+    seed_document_types(document_store)
     attachment_blob_store = configure_attachment_blob_store(config.database_url)
 
     async def close_document_store() -> None:

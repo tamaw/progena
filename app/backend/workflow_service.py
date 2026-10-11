@@ -10,22 +10,31 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-from app.backend.document_store import PROGENITOR_STATE_PREFIX, BackendDocumentStore
+from app.backend.document_events import list_document_types
+from app.backend.document_store import (
+    PROGENITOR_STATE_PREFIX,
+    BackendDocumentStore,
+    document_write_origin,
+)
+from app.progenitor.document_types import DocumentType
 from app.progenitor.structured import validate_against_schema
 from app.progenitor.utils import utcnow_isoformat
 from app.progenitor.workflows import (
     MAX_WORKFLOW_INVOKE_DEPTH,
-    WORKFLOW_ALLOWED_EVENT_TYPES,
     WorkflowDefinition,
     WorkflowListItem,
     WorkflowNodeAgent,
     WorkflowNodeApproval,
     WorkflowNodeCondition,
+    WorkflowNodeDocumentQuery,
+    WorkflowNodeDocumentRead,
     WorkflowNodeEvent,
     WorkflowNodeHumanInput,
     WorkflowNodeMcp,
     WorkflowRun,
     WorkflowRunSource,
+    apply_document_type_schemas,
+    build_document_read_output,
     build_workflow_list_item,
     coerce_workflow_definition,
     coerce_workflow_run,
@@ -153,9 +162,10 @@ def save_workflow_definition(
     store: BackendDocumentStore,
     payload: Mapping[str, Any],
 ) -> WorkflowDefinition:
-    """Validate and persist one workflow definition."""
+    """Derive document port schemas, validate, and persist one workflow definition."""
 
-    normalized = validate_workflow_definition_payload(dict(payload))
+    typed = apply_document_type_schemas(payload, list_document_types(store))
+    normalized = validate_workflow_definition_payload(typed)
     definition = WorkflowDefinition.model_validate(normalized)
     store.save_document(
         PROGENITOR_STATE_PREFIX,
@@ -207,13 +217,19 @@ def get_workflow_run(store: BackendDocumentStore, run_id: str) -> WorkflowRun | 
 
 
 def save_workflow_run(store: BackendDocumentStore, run: WorkflowRun) -> WorkflowRun:
-    """Persist one workflow run."""
+    """Persist one workflow run, tagging the write with the run as its origin.
 
-    store.save_document(
-        PROGENITOR_STATE_PREFIX,
-        workflow_run_key(run.run_id),
-        run.model_dump(mode="json"),
-    )
+    The origin lets the document event dispatcher give events caused by this
+    run the run's ancestry, so a workflow cannot re-trigger itself through its
+    own run documents.
+    """
+
+    with document_write_origin(run.run_id):
+        store.save_document(
+            PROGENITOR_STATE_PREFIX,
+            workflow_run_key(run.run_id),
+            run.model_dump(mode="json"),
+        )
     return run
 
 
@@ -271,28 +287,30 @@ def find_active_workflow_run(
 def build_manual_trigger_event(
     definition: WorkflowDefinition,
     *,
-    event_type: str | None = None,
     payload: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Build a flat trigger event for a manual operator-triggered workflow run.
+    """Build a document event output object for a manual operator-triggered run.
 
-    The returned dict matches the triggering event node's flat
-    ``output_schema`` directly -- no ``payload`` envelope.
+    ``payload`` is merged over neutral defaults for the first event node's
+    document type, so the result matches that node's flat ``output_schema``.
     """
 
-    default_event = next(
+    event_node = next(
         (node for node in definition.graph.nodes.values() if isinstance(node, WorkflowNodeEvent)),
         None,
     )
-    resolved_type = (
-        str(event_type or (default_event.event_type if default_event else "")).strip().lower()
-    )
-    if resolved_type not in WORKFLOW_ALLOWED_EVENT_TYPES:
-        raise ValueError(f"unsupported workflow trigger event type: {resolved_type}")
-    event = dict(payload or {})
-    event.setdefault("event_type", resolved_type)
-    event.setdefault("timestamp", utcnow_isoformat())
-    return event
+    if event_node is None:
+        raise ValueError("workflow has no event node to trigger")
+    return {
+        "event_id": 0,
+        "document_type": event_node.document_type,
+        "key": "",
+        "id": "",
+        "op": "updated",
+        "timestamp": utcnow_isoformat(),
+        "changed_fields": [],
+        **dict(payload or {}),
+    }
 
 
 def compose_workflow_agent_input(resolved_input: Mapping[str, Any], *, message: str) -> str:
@@ -424,44 +442,6 @@ def _validate_node_output(node: Any, output: Mapping[str, Any]) -> None:
         raise ValueError(f"node '{node.title}' output failed schema validation: {error}")
 
 
-def _trigger_column_filter_matches(trigger: WorkflowNodeEvent, event: Mapping[str, Any]) -> bool:
-    """Check a trigger's optional kanban column filters against a flat event."""
-
-    if not trigger.from_column and not trigger.to_column:
-        return True
-    from_position = event.get("from")
-    to_position = event.get("to")
-    from_column = from_position.get("column_id") if isinstance(from_position, Mapping) else None
-    to_column = to_position.get("column_id") if isinstance(to_position, Mapping) else None
-    return (not trigger.from_column or trigger.from_column == from_column) and (
-        not trigger.to_column or trigger.to_column == to_column
-    )
-
-
-def _document_trigger_filter_matches(trigger: WorkflowNodeEvent, event: Mapping[str, Any]) -> bool:
-    """Check a trigger's optional key_prefix/key/action filter against a flat document.changed event.
-
-    Each field is a wildcard when unset on the trigger, so a trigger with no
-    filters set matches every document.changed event.
-    """
-
-    return (
-        (not trigger.key_prefix or trigger.key_prefix == event.get("key_prefix"))
-        and (not trigger.key or trigger.key == event.get("key"))
-        and (not trigger.action or trigger.action == event.get("action"))
-    )
-
-
-def _trigger_matches(trigger: WorkflowNodeEvent, event_type: str, event: Mapping[str, Any]) -> bool:
-    """Match an event node's type and type-specific filters against an event."""
-
-    if trigger.event_type != event_type:
-        return False
-    if event_type == "document.changed":
-        return _document_trigger_filter_matches(trigger, event)
-    return _trigger_column_filter_matches(trigger, event)
-
-
 def _build_queued_run(
     workflow_id: str,
     trigger: Mapping[str, Any],
@@ -474,7 +454,7 @@ def _build_queued_run(
     invocation = invocation if isinstance(invocation, Mapping) else {}
     raw_source = invocation.get("source")
     source: WorkflowRunSource = (
-        raw_source if raw_source in ("kanban", "document", "manual", "progenitor") else "manual"
+        raw_source if raw_source in ("document", "manual", "progenitor") else "manual"
     )
     ancestry_raw = invocation.get("ancestry")
     ancestry = [str(item) for item in ancestry_raw] if isinstance(ancestry_raw, list) else []
@@ -490,6 +470,47 @@ def _build_queued_run(
         queued_at=now,
         updated_at=now,
     )
+
+
+def _resolve_node_document_type(
+    store: BackendDocumentStore, node: WorkflowNodeDocumentRead | WorkflowNodeDocumentQuery
+) -> DocumentType:
+    document_type = list_document_types(store).get(node.document_type)
+    if document_type is None:
+        raise ValueError(f"node '{node.title}' references unknown document type")
+    return document_type
+
+
+def _execute_document_node(
+    store: BackendDocumentStore,
+    node: WorkflowNodeDocumentRead | WorkflowNodeDocumentQuery,
+    resolved_input: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Read or query documents directly from the store (no agent involved)."""
+
+    document_type = _resolve_node_document_type(store, node)
+    if isinstance(node, WorkflowNodeDocumentRead):
+        key = document_type.document_key(str(resolved_input.get("id") or ""))
+        document = store.get_document(PROGENITOR_STATE_PREFIX, key, None)
+        return build_document_read_output(
+            document_type, key, document.payload if document is not None else None
+        )
+    if document_type.key_prefix is None:
+        raise ValueError(f"node '{node.title}' needs a collection document type")
+    filters = {field: resolved_input.get(field) for field in node.filter_fields}
+    keys: list[str] = []
+    items: list[Any] = []
+    for key, document in store.list_documents(PROGENITOR_STATE_PREFIX, document_type.key_prefix):
+        payload = document.payload
+        if not isinstance(payload, Mapping) or any(
+            payload.get(field) != value for field, value in filters.items()
+        ):
+            continue
+        keys.append(key)
+        items.append(payload)
+        if len(items) >= node.limit:
+            break
+    return {"items": items, "keys": keys, "count": len(items)}
 
 
 def _lookup_mcp_tool(
@@ -607,43 +628,69 @@ class WorkflowExecutor:
         self._mcp_caller = mcp_caller
         self._tasks: dict[str, asyncio.Task[None]] = {}
         self._locks: dict[str, asyncio.Lock] = {}
+        # document type id -> [(workflow id, event node id, event node)]
+        self._subscriptions: dict[str, list[tuple[str, str, WorkflowNodeEvent]]] | None = None
 
-    async def dispatch_triggers(self, triggers: list[dict[str, Any]]) -> list[WorkflowRun]:
-        """Dispatch a batch of trigger payloads to matching workflows."""
+    def invalidate_subscriptions(self) -> None:
+        """Drop the cached event-node index; rebuilt on the next dispatch."""
 
+        self._subscriptions = None
+
+    def _subscriptions_for(self, document_type: str) -> list[tuple[str, str, WorkflowNodeEvent]]:
+        if self._subscriptions is None:
+            index: dict[str, list[tuple[str, str, WorkflowNodeEvent]]] = {}
+            for definition in list_workflow_definitions(self._store_getter()):
+                for node_id, node in definition.graph.nodes.items():
+                    if isinstance(node, WorkflowNodeEvent):
+                        index.setdefault(node.document_type, []).append(
+                            (definition.id, node_id, node)
+                        )
+            self._subscriptions = index
+        return self._subscriptions.get(document_type, [])
+
+    def _origin_ancestry(self, origin: str | None) -> list[str]:
+        """Ancestry for an event written by a workflow run: its chain plus its workflow."""
+
+        if not origin:
+            return []
+        try:
+            run = get_workflow_run(self._store_getter(), origin)
+        except Exception:
+            logger.debug("Ignoring unreadable origin run %r", origin, exc_info=True)
+            return []
+        return [*run.ancestry, run.workflow_id] if run is not None else []
+
+    async def dispatch_document_event(
+        self,
+        event: Mapping[str, Any],
+        *,
+        origin: str | None = None,
+    ) -> list[WorkflowRun]:
+        """Start every workflow whose event node matches one document event.
+
+        ``origin`` is the writer recorded on the event; a run id makes the
+        event inherit that run's ancestry, so the workflow cannot re-trigger
+        itself through its own writes.
+        """
+
+        document_type = str(event.get("document_type") or "")
+        subscriptions = list(self._subscriptions_for(document_type))
+        if not subscriptions:
+            return []
+        ancestry = self._origin_ancestry(origin)
         started: list[WorkflowRun] = []
-        for trigger in triggers:
-            event_type = str(trigger.get("event_type") or "").strip().lower()
-            if not event_type:
+        for workflow_id, node_id, node in subscriptions:
+            if not node.matches(event):
                 continue
-            started.extend(await self.dispatch_event(event_type, trigger))
-        return started
-
-    async def dispatch_event(self, event_type: str, trigger: dict[str, Any]) -> list[WorkflowRun]:
-        """Dispatch one event payload to all matching workflow entry nodes."""
-
-        store = self._store_getter()
-        started: list[WorkflowRun] = []
-        for definition in list_workflow_definitions(store):
-            event_nodes = [
-                (node_id, node)
-                for node_id, node in definition.graph.nodes.items()
-                if isinstance(node, WorkflowNodeEvent)
-            ]
-            matching_nodes = [
-                (node_id, node)
-                for node_id, node in event_nodes
-                if _trigger_matches(node, event_type, trigger)
-            ]
-            for trigger_node_id, _trigger_node in matching_nodes:
-                run = await self.trigger_workflow(
-                    definition.id,
-                    trigger,
-                    source="document" if event_type == "document.changed" else "kanban",
-                    trigger_node_id=trigger_node_id,
-                )
-                if run is not None:
-                    started.append(run)
+            run = await self.trigger_workflow(
+                workflow_id,
+                event,
+                source="document",
+                ancestry=ancestry,
+                trigger_node_id=node_id,
+            )
+            if run is not None:
+                started.append(run)
         return started
 
     async def trigger_workflow(
@@ -992,6 +1039,11 @@ class WorkflowExecutor:
                     save_workflow_run(store, paused_run)
                     self._emit_event("workflow.run.updated", paused_run.model_dump(mode="json"))
                     return
+                elif isinstance(node, WorkflowNodeDocumentRead | WorkflowNodeDocumentQuery):
+                    _validate_node_input(node, resolved_input)
+                    output_object = _execute_document_node(store, node, resolved_input)
+                    _validate_node_output(node, output_object)
+                    output_text = _bounded_text(json.dumps(output_object, default=str))
                 elif isinstance(node, WorkflowNodeMcp):
                     if self._mcp_caller is None:
                         raise RuntimeError("MCP execution is not configured for this executor")
