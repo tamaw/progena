@@ -1,6 +1,6 @@
 ---
 name: managing-mcp
-description: Add, remove, edit, enable, or disable external MCP servers by editing the /config/mcp.json config file. Use when a user asks to connect, register, update, or drop an MCP server, or to turn one on/off.
+description: Add, remove, edit, enable, or disable external MCP servers by editing /config/mcp.json, and enable or disable individual MCP tools via /config/mcp_tools.json. Use when a user asks to connect, register, update, or drop an MCP server, turn one on/off, or turn a single MCP tool on/off.
 allowed-tools: read_file edit_file write_file structured_output mcp mcp_refresh
 ---
 
@@ -64,9 +64,20 @@ Only bother with `structured_output` when several fields are involved (e.g. head
 with templated secrets) — for a one- or two-field server, hand-authoring the object is
 fine.
 
-### Enable / disable
+### Enable / disable a server
 Flip the `enabled` boolean for that server. Disabling keeps the config; the server's
 tools simply stop being discovered.
+
+### Enable / disable a single tool
+When the user wants one tool off but the rest of its server on, do NOT touch the
+server in `/config/mcp.json` (that turns off every tool on it). Instead:
+1. `read_file /config/mcp_tools.json` — the discovered tools, one entry per tool with
+   its prefixed `name` (e.g. `jina_search_jina_blog`), `server`, and `enabled`.
+2. `edit_file /config/mcp_tools.json` to flip only that tool's `"enabled"` to `false`
+   (or back to `true`).
+Only `enabled` can change in this file; the tool list itself comes from discovery, so
+adding, removing, or editing other fields is rejected. The flag is the same one the
+Tools page toggles, survives re-discovery, and takes effect on the next turn.
 
 ### Edit URL / headers / description
 Change the relevant field in place with `edit_file`.

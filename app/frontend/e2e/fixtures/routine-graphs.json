@@ -1,0 +1,632 @@
+{
+  "routine-branch-join": {
+    "id": "routine-branch-join",
+    "name": "Routine Branch Join",
+    "version": "2.0.0",
+    "description": "E2E fixture: a router fork with two real branches converging at a fan-in join.",
+    "policy_id": "default",
+    "entry": "classify",
+    "nodes": [
+      {
+        "id": "classify",
+        "kind": "prompt",
+        "label": "Classify Request",
+        "description": "Classify the incoming request.",
+        "config": {
+          "prompt_template": "Classify {request}. Return a JSON object with field 'category' as 'urgent' or 'routine'.",
+          "response_schema": {
+            "type": "object",
+            "required": [
+              "category"
+            ],
+            "properties": {
+              "category": {
+                "type": "string",
+                "enum": [
+                  "urgent",
+                  "routine"
+                ]
+              }
+            }
+          }
+        },
+        "output_key": "classification"
+      },
+      {
+        "id": "handle_urgent",
+        "kind": "prompt",
+        "label": "Handle Urgent",
+        "description": "Respond to an urgent request.",
+        "config": {
+          "prompt_template": "Write a brief urgent-priority acknowledgement."
+        },
+        "output_key": "urgent_reply"
+      },
+      {
+        "id": "handle_routine",
+        "kind": "prompt",
+        "label": "Handle Routine",
+        "description": "Respond to a routine request.",
+        "config": {
+          "prompt_template": "Write a brief standard-priority acknowledgement."
+        },
+        "output_key": "routine_reply"
+      },
+      {
+        "id": "combine",
+        "kind": "prompt",
+        "label": "Combine Reply",
+        "description": "Combine whichever branch ran into one reply.",
+        "config": {
+          "prompt_template": "Combine {urgent_reply} or {routine_reply} into a final reply."
+        },
+        "output_key": "combine"
+      },
+      {
+        "id": "noop",
+        "kind": "noop",
+        "label": "Join fan-out",
+        "description": "",
+        "config": {},
+        "output_key": "noop"
+      }
+    ],
+    "edges": [
+      {
+        "from": "classify",
+        "level": "route",
+        "router": "state_equals",
+        "state_key": "classification.category",
+        "branches": {
+          "urgent": "handle_urgent",
+          "routine": "handle_routine"
+        }
+      },
+      {
+        "from": [
+          "handle_urgent",
+          "handle_routine"
+        ],
+        "to": "combine",
+        "level": "fan_in"
+      },
+      {
+        "from": "combine",
+        "to": "noop",
+        "level": "normal"
+      }
+    ]
+  },
+  "routine-all-controls": {
+    "id": "routine-all-controls",
+    "name": "Routine All Controls",
+    "version": "2.0.0",
+    "description": "E2E fixture: a Send fan-out foreach whose body contains its own router fork with a join.",
+    "policy_id": "default",
+    "entry": "collect_items",
+    "nodes": [
+      {
+        "id": "collect_items",
+        "kind": "foreach",
+        "label": "Collect Items",
+        "description": "Fan out over each item.",
+        "config": {
+          "mode": "send",
+          "items_from": "items",
+          "item_key": "item"
+        },
+        "output_key": "collect_items"
+      },
+      {
+        "id": "classify_item",
+        "kind": "prompt",
+        "label": "Classify Item",
+        "description": "Classify one item.",
+        "config": {
+          "prompt_template": "Classify {item}. Return a JSON object with field 'kind' as 'a' or 'b'.",
+          "response_schema": {
+            "type": "object",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "a",
+                  "b"
+                ]
+              }
+            }
+          }
+        },
+        "output_key": "item_kind"
+      },
+      {
+        "id": "handle_a",
+        "kind": "prompt",
+        "label": "Handle Kind A",
+        "description": "Handle a kind-a item.",
+        "config": {
+          "prompt_template": "Process a kind-a item."
+        },
+        "output_key": "a_result"
+      },
+      {
+        "id": "handle_b",
+        "kind": "prompt",
+        "label": "Handle Kind B",
+        "description": "Handle a kind-b item.",
+        "config": {
+          "prompt_template": "Process a kind-b item."
+        },
+        "output_key": "b_result"
+      },
+      {
+        "id": "combine_item",
+        "kind": "prompt",
+        "label": "Combine Item Result",
+        "description": "Combine whichever branch ran into one result.",
+        "config": {
+          "prompt_template": "Combine {a_result} or {b_result} into one item result."
+        },
+        "output_key": "combine_item"
+      },
+      {
+        "id": "noop",
+        "kind": "noop",
+        "label": "Join fan-out",
+        "description": "",
+        "config": {},
+        "output_key": "noop"
+      },
+      {
+        "id": "finalize",
+        "kind": "prompt",
+        "label": "Finalize",
+        "description": "Summarize every item's result.",
+        "config": {
+          "prompt_template": "Summarize all item results into one report."
+        },
+        "output_key": "finalize"
+      }
+    ],
+    "edges": [
+      {
+        "from": "collect_items",
+        "to": "classify_item",
+        "level": "normal"
+      },
+      {
+        "from": "classify_item",
+        "level": "route",
+        "router": "state_equals",
+        "state_key": "item_kind.kind",
+        "branches": {
+          "a": "handle_a",
+          "b": "handle_b"
+        }
+      },
+      {
+        "from": [
+          "handle_a",
+          "handle_b"
+        ],
+        "to": "combine_item",
+        "level": "fan_in"
+      },
+      {
+        "from": "combine_item",
+        "to": "noop",
+        "level": "normal"
+      },
+      {
+        "from": "noop",
+        "to": "finalize",
+        "level": "normal"
+      }
+    ]
+  },
+  "routine-condition-gate": {
+    "id": "routine-condition-gate",
+    "name": "routine-condition-gate",
+    "edges": [
+      {
+        "to": "gate",
+        "from": "score",
+        "level": "normal"
+      },
+      {
+        "from": "gate",
+        "level": "route",
+        "router": "state_equals",
+        "branches": {
+          "true": "handle_long",
+          "false": "handle_short"
+        },
+        "state_key": "gate"
+      },
+      {
+        "to": "combine",
+        "from": [
+          "handle_long",
+          "handle_short"
+        ],
+        "level": "fan_in"
+      },
+      {
+        "to": "noop",
+        "from": "combine",
+        "level": "normal"
+      }
+    ],
+    "entry": "score",
+    "nodes": [
+      {
+        "id": "score",
+        "kind": "eval",
+        "label": "Score Request",
+        "config": {
+          "expression": "len(request)"
+        },
+        "output_key": "score",
+        "description": "Produce a numeric score to gate on."
+      },
+      {
+        "id": "gate",
+        "kind": "condition",
+        "label": "Long Enough",
+        "config": {
+          "expression": "score > 20"
+        },
+        "output_key": "gate",
+        "description": "Two-way gate: the fork below is fixed to true/false."
+      },
+      {
+        "id": "handle_long",
+        "kind": "prompt",
+        "label": "Handle Long",
+        "config": {
+          "prompt_template": "Summarise the long request."
+        },
+        "output_key": "long_reply",
+        "description": "The true arm."
+      },
+      {
+        "id": "handle_short",
+        "kind": "prompt",
+        "label": "Handle Short",
+        "config": {
+          "prompt_template": "Answer the short request directly."
+        },
+        "output_key": "short_reply",
+        "description": "The false arm."
+      },
+      {
+        "id": "combine",
+        "kind": "prompt",
+        "label": "Combine Reply",
+        "config": {
+          "prompt_template": "Combine {long_reply} or {short_reply} into a reply."
+        },
+        "output_key": "combine",
+        "description": "Combine whichever arm ran."
+      },
+      {
+        "id": "noop",
+        "kind": "noop",
+        "label": "Done",
+        "config": {},
+        "output_key": "noop",
+        "description": ""
+      }
+    ],
+    "version": "2.0.0",
+    "description": ""
+  },
+  "routine-private-context": {
+    "id": "routine-private-context",
+    "name": "Routine Private Context",
+    "version": "2.0.0",
+    "description": "E2E fixture: a plain linear chain, so a fan-out inserted mid-chain makes any swallowed step obvious as a reorder.",
+    "policy_id": "default",
+    "entry": "inject_context",
+    "nodes": [
+      {
+        "id": "inject_context",
+        "kind": "prompt",
+        "label": "Inject context",
+        "description": "Seed the run with the caller's private context.",
+        "config": {
+          "prompt_template": "Summarise the private context in {request}."
+        },
+        "output_key": "context"
+      },
+      {
+        "id": "build_private_trace",
+        "kind": "prompt",
+        "label": "Build private trace",
+        "description": "Build a trace that never leaves the routine.",
+        "config": {
+          "prompt_template": "Build a private trace from {context}."
+        },
+        "output_key": "trace"
+      },
+      {
+        "id": "run_shared_subgraph",
+        "kind": "routine",
+        "label": "Run shared subgraph",
+        "description": "Hand the trace to a shared routine.",
+        "config": {
+          "routine_name": "feedback-categoriser"
+        },
+        "output_key": "shared"
+      },
+      {
+        "id": "return_public_answer",
+        "kind": "prompt",
+        "label": "Return public answer",
+        "description": "Answer with only the shareable part.",
+        "config": {
+          "prompt_template": "Answer using {shared}, omitting the private trace."
+        },
+        "output_key": "answer"
+      }
+    ],
+    "edges": [
+      {
+        "from": "inject_context",
+        "to": "build_private_trace",
+        "level": "normal"
+      },
+      {
+        "from": "build_private_trace",
+        "to": "run_shared_subgraph",
+        "level": "normal"
+      },
+      {
+        "from": "run_shared_subgraph",
+        "to": "return_public_answer",
+        "level": "normal"
+      }
+    ]
+  },
+  "feedback-categoriser": {
+    "id": "feedback-categoriser",
+    "name": "Feedback Categoriser E2E",
+    "version": "2.0.0",
+    "description": "E2E fixture: a router fork with two real branches converging at a fan-in join.",
+    "policy_id": "default",
+    "entry": "classify",
+    "nodes": [
+      {
+        "id": "classify",
+        "kind": "prompt",
+        "label": "Classify Request",
+        "description": "Classify the incoming request.",
+        "config": {
+          "prompt_template": "Classify {request}. Return a JSON object with field 'category' as 'urgent' or 'routine'.",
+          "response_schema": {
+            "type": "object",
+            "required": [
+              "category"
+            ],
+            "properties": {
+              "category": {
+                "type": "string",
+                "enum": [
+                  "urgent",
+                  "routine"
+                ]
+              }
+            }
+          }
+        },
+        "output_key": "classification"
+      },
+      {
+        "id": "handle_urgent",
+        "kind": "prompt",
+        "label": "Handle Urgent",
+        "description": "Respond to an urgent request.",
+        "config": {
+          "prompt_template": "Write a brief urgent-priority acknowledgement."
+        },
+        "output_key": "urgent_reply"
+      },
+      {
+        "id": "handle_routine",
+        "kind": "prompt",
+        "label": "Handle Routine",
+        "description": "Respond to a routine request.",
+        "config": {
+          "prompt_template": "Write a brief standard-priority acknowledgement."
+        },
+        "output_key": "routine_reply"
+      },
+      {
+        "id": "combine",
+        "kind": "prompt",
+        "label": "Combine Reply",
+        "description": "Combine whichever branch ran into one reply.",
+        "config": {
+          "prompt_template": "Combine {urgent_reply} or {routine_reply} into a final reply."
+        },
+        "output_key": "combine"
+      },
+      {
+        "id": "noop",
+        "kind": "noop",
+        "label": "Join fan-out",
+        "description": "",
+        "config": {},
+        "output_key": "noop"
+      }
+    ],
+    "edges": [
+      {
+        "from": "classify",
+        "level": "route",
+        "router": "state_equals",
+        "state_key": "classification.category",
+        "branches": {
+          "urgent": "handle_urgent",
+          "routine": "handle_routine"
+        }
+      },
+      {
+        "from": [
+          "handle_urgent",
+          "handle_routine"
+        ],
+        "to": "combine",
+        "level": "fan_in"
+      },
+      {
+        "from": "combine",
+        "to": "noop",
+        "level": "normal"
+      }
+    ]
+  },
+  "repo-setup-worker": {
+    "id": "repo-setup-worker",
+    "name": "Repo Setup Worker E2E",
+    "version": "2.0.0",
+    "description": "E2E fixture: a router fork with two real branches converging at a fan-in join.",
+    "policy_id": "default",
+    "entry": "classify",
+    "nodes": [
+      {
+        "id": "classify",
+        "kind": "prompt",
+        "label": "Classify Request",
+        "description": "Classify the incoming request.",
+        "config": {
+          "prompt_template": "Classify {request}. Return a JSON object with field 'category' as 'urgent' or 'routine'.",
+          "response_schema": {
+            "type": "object",
+            "required": [
+              "category"
+            ],
+            "properties": {
+              "category": {
+                "type": "string",
+                "enum": [
+                  "urgent",
+                  "routine"
+                ]
+              }
+            }
+          }
+        },
+        "output_key": "classification"
+      },
+      {
+        "id": "handle_urgent",
+        "kind": "condition",
+        "label": "Handle Urgent",
+        "description": "Respond to an urgent request.",
+        "config": {
+          "expression": "True"
+        },
+        "output_key": "urgent_reply"
+      },
+      {
+        "id": "handle_routine",
+        "kind": "prompt",
+        "label": "Handle Routine",
+        "description": "Respond to a routine request.",
+        "config": {
+          "prompt_template": "Write a brief standard-priority acknowledgement."
+        },
+        "output_key": "routine_reply"
+      },
+      {
+        "id": "combine",
+        "kind": "prompt",
+        "label": "Combine Reply",
+        "description": "Combine whichever branch ran into one reply.",
+        "config": {
+          "prompt_template": "Combine {urgent_reply} or {routine_reply} into a final reply."
+        },
+        "output_key": "combine"
+      },
+      {
+        "id": "noop",
+        "kind": "noop",
+        "label": "Join fan-out",
+        "description": "",
+        "config": {},
+        "output_key": "noop"
+      },
+      {
+        "id": "nested_a",
+        "kind": "noop",
+        "label": "nested_a",
+        "config": {},
+        "output_key": "nested_a",
+        "description": "Nested connector fixture"
+      },
+      {
+        "id": "nested_b",
+        "kind": "noop",
+        "label": "nested_b",
+        "config": {},
+        "output_key": "nested_b",
+        "description": "Nested connector fixture"
+      },
+      {
+        "id": "nested_join",
+        "kind": "noop",
+        "label": "nested_join",
+        "config": {},
+        "output_key": "nested_join",
+        "description": "Nested connector fixture"
+      }
+    ],
+    "edges": [
+      {
+        "from": "classify",
+        "level": "route",
+        "router": "state_equals",
+        "state_key": "classification.category",
+        "branches": {
+          "urgent": "handle_urgent",
+          "routine": "handle_routine"
+        }
+      },
+      {
+        "from": "combine",
+        "to": "noop",
+        "level": "normal"
+      },
+      {
+        "from": "handle_urgent",
+        "level": "route",
+        "router": "state_equals",
+        "state_key": "urgent_reply",
+        "branches": {
+          "true": "nested_a",
+          "false": "nested_b"
+        }
+      },
+      {
+        "from": [
+          "nested_a",
+          "nested_b"
+        ],
+        "to": "nested_join",
+        "level": "fan_in"
+      },
+      {
+        "from": [
+          "nested_join",
+          "handle_routine"
+        ],
+        "to": "combine",
+        "level": "fan_in"
+      }
+    ]
+  }
+}

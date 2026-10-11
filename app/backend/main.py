@@ -527,6 +527,18 @@ class ShutdownManager:
 shutdown_manager = ShutdownManager(drain_timeout=30.0)
 
 
+def _telegram_conversation_id(chat_id: Any, message_thread_id: Any = None) -> str:
+    """Runtime conversation for a Telegram chat (and forum topic, when used).
+
+    Telegram turns persist per chat under a ``tele_`` prefix; other callers
+    that name no conversation get an isolated ``conv_`` one from the runtime.
+    """
+    conversation_id = f"tele_{chat_id}"
+    if message_thread_id is not None:
+        conversation_id += f"_{message_thread_id}"
+    return conversation_id
+
+
 async def _send_telegram_connected_message(
     telegram: TelegramClient,
     progenitor: ProgenitorClient | SSEProgenitorClient,
@@ -546,9 +558,11 @@ async def _send_telegram_connected_message(
         # Ensure the client is started/connected (we normally lazy-start).
         if not progenitor.is_running:
             await progenitor.start()
-
+        conversation_id = _telegram_conversation_id(telegram.config.chat_id)
         response_text = (
-            await progenitor.send_message(prompt, request_id=request_id)
+            await progenitor.send_message(
+                prompt, request_id=request_id, metadata={"thread_id": conversation_id}
+            )
         ).response.strip()
         if not response_text:
             raise RuntimeError("Empty greeting response from agent")
@@ -691,10 +705,13 @@ async def _handle_telegram_agent_message(
                 await progenitor.start()
 
             request_id = f"telegram-{chat_id}-{uuid.uuid4().hex[:8]}"
+            conversation_id = _telegram_conversation_id(chat_id, metadata.get("message_thread_id"))
             streamed_chars = await telegram.stream_agent_response_to_chat(
                 chat_id,
                 _stream_text_chunks(
-                    progenitor.send_message_stream_events(message, request_id=request_id)
+                    progenitor.send_message_stream_events(
+                        message, request_id=request_id, metadata={"thread_id": conversation_id}
+                    )
                 ),
                 message_thread_id=metadata.get("message_thread_id"),
             )
@@ -747,7 +764,9 @@ async def lifespan(app: FastAPI):
 
     # Startup
     logger.info("Starting backend with enhanced features...")
-    document_store = configure_default_document_store(config.database_url)
+    document_store = configure_default_document_store(
+        config.database_url, runtime_url=config.progenitor_runtime_url
+    )
     attachment_blob_store = configure_attachment_blob_store(config.database_url)
 
     async def close_document_store() -> None:

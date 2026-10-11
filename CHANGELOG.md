@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Runtime Responses API contract** (`app/progenitor/runtime/http_chat.py`, `runtime/responses_api.py`): the runtime now serves an OpenAI Responses/Conversations-compatible API backed by native LangGraph — `POST /v1/responses` (streaming and non-streaming), `POST /v1/responses/{id}/cancel`, `GET /v1/conversations/{id}/items`, `DELETE /v1/conversations/{id}`. See `docs/SPEC.md` for vendor extensions.
+- **Per-tool MCP enable/disable for the agent** (`/config/mcp_tools.json`, `app/progenitor/agent/state_backend.py`): the agent can now turn a single MCP tool on or off by flipping its `enabled` flag, the same flag the Tools page toggles, instead of disabling the whole server or editing its URL. Only `enabled` is editable; the tool list stays discovery-owned and any other edit is rejected with an explanation. The `managing-mcp` skill documents the flow.
 - **DeepAgent Integration** (`app/progenitor/agent/`): Selective adoption of LangChain's `deepagents` library
   - `deep_agent.py`: Factory creating configured DeepAgent with LiteLLM routing, tools, middleware, skills, memory, and subagents
   - `langchain_adapter.py`: ChatOpenAI → LiteLLM proxy bridge with Azure structured output bypass
@@ -29,6 +31,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Pre-commit Configuration**: Automated linting and formatting with ruff, black, and mypy
 
 ### Changed
+- **Chat history reads go through the runtime** (`app/backend/runtime_conversations.py`): the backend no longer rebuilds messages from checkpoint blobs; it pages the runtime's conversation items (cached per checkpoint, pooled connections, off the event loop). Fixes chats rendering as an empty "New chat" when their latest checkpoint held a `DeltaChannel` snapshot. While the runtime is unreachable, chats keep their last known history, or list as "history unavailable" with a 503 on open, instead of looking empty.
+- **Backend ↔ runtime chat transport**: `SSEProgenitorClient` uses `/v1/responses`; `/v1/chat` and `/v1/chat/{id}/cancel` are removed. A request without a `conversation` now runs in a fresh `conv_` conversation instead of the runtime's main thread; Telegram turns use a per-chat `tele_` conversation. Deleting a chat in the UI now also deletes its runtime thread and live state, and a deleted chat no longer reappears as "Current chat".
+- **Tool results in conversation items**: `function_call_output.output` keeps multi-part tool results as Responses input parts (text, images) instead of a Python repr.
+- **Stopping a reply keeps it**: when a turn is cancelled, the runtime saves the text streamed so far to the conversation (native `aupdate_state`, marked cancelled). After a reload the chat shows `… [Cancelled]` instead of losing the reply, and the next turn sees it, so "continue" picks up where it stopped.
+- **`langgraph-checkpoint-postgres` pinned to the langgraph#8556 fix commit** (`pyproject.toml`): reading a checkpoint more than 1,024 checkpoints back in a thread (DeltaChannel messages) silently returned no messages on 3.1.2 (langgraph#8448). No PyPI release has the fix yet; revert to a version pin once one does. Existing virtualenvs need `pip install --force-reinstall --no-deps` of the pinned URL, since the commit still reports version 3.1.2.
+- **Schedule run results** read run threads with the agent graph's `aget_state` instead of the backend document store.
+- **E2E routine fixtures are self-contained**: `scripts/seed_e2e_fixtures.py` is removed. The connector, editing and sequences-redirect specs insert their own uniquely-suffixed copies of the graphs in `app/frontend/e2e/fixtures/routine-graphs.json` (`seedGraphFixtures` in `e2e/helpers/routineFixture.mjs`) and delete them afterwards, so the suite needs no seed step and leaves nothing behind. `tests/backend/test_e2e_routine_fixtures.py` keeps the graphs valid.
 - **Conversation Compressor**: Now uses tiktoken for accurate token estimation
 - **Exception Handling**: Added DEBUG logging to previously silent exception handlers (CQ-009)
 

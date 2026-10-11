@@ -409,9 +409,9 @@ class StateDocumentBackend(_AsyncOnlyFileBackendMixin):
             return WriteResult(error=f"Unknown state file '{file_path}'")
         try:
             doc = state_file.validate(content)
+            await state_file.save(doc)
         except ValueError as exc:
             return WriteResult(error=f"Invalid {state_file.name}: {exc}")
-        await state_file.save(doc)
         await self._after_write(state_file)
         return WriteResult(path=file_path)
 
@@ -432,9 +432,9 @@ class StateDocumentBackend(_AsyncOnlyFileBackendMixin):
         new_content, occurrences = result
         try:
             doc = state_file.validate(new_content)
+            await state_file.save(doc)
         except ValueError as exc:
             return EditResult(error=f"Error: edit produced invalid {state_file.name}: {exc}")
-        await state_file.save(doc)
         await self._after_write(state_file)
         return EditResult(path=file_path, occurrences=int(occurrences))
 
@@ -497,6 +497,76 @@ def create_mcp_state_file(
         validate=validate_mcp_document,
         default={"mcpServers": {}},
         on_change=on_change,
+    )
+
+
+def _validate_mcp_tools_document(content: str) -> JsonDoc:
+    try:
+        data = json.loads(content)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"not valid JSON: {exc}") from exc
+    tools = data.get("tools") if isinstance(data, dict) else None
+    if not isinstance(tools, list) or not all(
+        isinstance(tool, dict) and isinstance(tool.get("name"), str) for tool in tools
+    ):
+        raise ValueError('expected {"tools": [{"name": ..., "enabled": ...}, ...]}')
+    for tool in tools:
+        if not isinstance(tool.get("enabled", True), bool):
+            raise ValueError(f"tool '{tool['name']}': enabled must be true or false")
+    return data
+
+
+def create_mcp_tools_state_file(state_manager: Any) -> StateFile:
+    """Build ``mcp_tools.json``: discovered MCP tools, toggleable one by one.
+
+    The tool list is produced by MCP discovery (servers, names, descriptions
+    are rewritten on every re-discovery), so the only edit accepted is a
+    tool's ``enabled`` flag - the same flag the Tools page toggles. Any other
+    change is rejected with an explanation. The runtime's store listener
+    re-applies the flags on the change, so a disabled tool disappears from the
+    agent's tool set on its next turn; discovery keeps the flag afterwards.
+    """
+
+    async def save(doc: JsonDoc) -> None:
+        current = await state_manager.get_mcp_tools()
+        current_tools = current.get("tools", []) if isinstance(current, dict) else []
+        current_by_name = {
+            str(tool["name"]): tool
+            for tool in current_tools
+            if isinstance(tool, dict) and tool.get("name")
+        }
+        new_tools = doc.get("tools", []) if isinstance(doc, dict) else []
+        new_by_name = {str(tool["name"]): tool for tool in new_tools}
+        if set(new_by_name) != set(current_by_name):
+            raise ValueError(
+                "tools can't be added or removed here - the list comes from MCP discovery; "
+                "manage servers in /config/mcp.json and only flip a tool's `enabled` flag here"
+            )
+        for name, tool in new_by_name.items():
+            existing = {k: v for k, v in current_by_name[name].items() if k != "enabled"}
+            edited = {k: v for k, v in tool.items() if k != "enabled"}
+            if edited != existing:
+                raise ValueError(
+                    f"tool '{name}': only `enabled` can be changed - its other fields come "
+                    "from MCP discovery"
+                )
+        await state_manager.save_mcp_tools(
+            {
+                **current,
+                "tools": [
+                    {**tool, "enabled": bool(new_by_name[str(tool["name"])].get("enabled", True))}
+                    for tool in current_tools
+                    if isinstance(tool, dict) and tool.get("name")
+                ],
+            }
+        )
+
+    return _simple_state_file(
+        "mcp_tools.json",
+        get=state_manager.get_mcp_tools,
+        save=save,
+        validate=_validate_mcp_tools_document,
+        default={"tools": []},
     )
 
 

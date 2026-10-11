@@ -18,6 +18,7 @@ from app.progenitor.agent.state_backend import (
     create_health_state_file,
     create_knowledge_state_file,
     create_mcp_state_file,
+    create_mcp_tools_state_file,
     create_registry_state_file,
     create_schedule_state_file,
     inbox_message_to_markdown,
@@ -1054,3 +1055,81 @@ async def test_health_aedit_is_rejected():
     result = await backend.aedit("/health.json", '"running"', '"stopped"')
     assert result.error and "read-only" in result.error
     assert sm.health == {"status": "running"}
+
+
+# ---- mcp_tools.json (per-tool enable/disable) -------------------------------
+
+
+class _FakeMcpToolsStateManager:
+    def __init__(self) -> None:
+        self.payload: dict[str, Any] = {
+            "tools": [
+                {
+                    "name": "jina_search_web",
+                    "server": "jina",
+                    "original_name": "search_web",
+                    "description": "Search the web",
+                    "enabled": True,
+                },
+                {
+                    "name": "jina_search_jina_blog",
+                    "server": "jina",
+                    "original_name": "search_jina_blog",
+                    "description": "Search the Jina blog",
+                    "enabled": True,
+                },
+            ],
+            "servers": {"jina": {"status": "connected", "tool_count": 2}},
+            "updated_at": "2026-10-11T00:00:00Z",
+        }
+        self.saved: list[dict[str, Any]] = []
+
+    async def get_mcp_tools(self) -> dict[str, Any]:
+        return copy.deepcopy(self.payload)
+
+    async def save_mcp_tools(self, payload: dict[str, Any]) -> None:
+        self.payload = copy.deepcopy(payload)
+        self.saved.append(copy.deepcopy(payload))
+
+
+def _mcp_tools_backend() -> tuple[StateDocumentBackend, _FakeMcpToolsStateManager]:
+    sm = _FakeMcpToolsStateManager()
+    return StateDocumentBackend([create_mcp_tools_state_file(sm)]), sm
+
+
+async def _edit_tools(backend: StateDocumentBackend, mutate) -> Any:
+    current = json.loads((await backend.aread("/mcp_tools.json", 0, 10_000)).file_data["content"])  # type: ignore[index]
+    mutate(current)
+    return await backend.awrite("/mcp_tools.json", json.dumps(current))
+
+
+async def test_mcp_tools_edit_disables_one_tool_and_keeps_discovery_data():
+    backend, sm = _mcp_tools_backend()
+    result = await backend.aedit(
+        "/mcp_tools.json",
+        '"description": "Search the Jina blog",\n      "enabled": true',
+        '"description": "Search the Jina blog",\n      "enabled": false',
+    )
+    assert result.error is None
+    assert {tool["name"]: tool["enabled"] for tool in sm.payload["tools"]} == {
+        "jina_search_web": True,
+        "jina_search_jina_blog": False,
+    }
+    assert sm.payload["servers"] == {"jina": {"status": "connected", "tool_count": 2}}
+    assert sm.payload["updated_at"] == "2026-10-11T00:00:00Z"
+
+
+@pytest.mark.parametrize(
+    ("mutate", "message"),
+    [
+        (lambda doc: doc["tools"].pop(), "added or removed"),
+        (lambda doc: doc["tools"].append({"name": "made_up", "enabled": True}), "added or removed"),
+        (lambda doc: doc["tools"][0].update(description="hacked"), "only `enabled`"),
+        (lambda doc: doc["tools"][0].update(enabled="no"), "true or false"),
+    ],
+)
+async def test_mcp_tools_rejects_anything_but_enabled_flags(mutate, message):
+    backend, sm = _mcp_tools_backend()
+    result = await _edit_tools(backend, mutate)
+    assert result.error is not None and message in result.error
+    assert sm.saved == []
