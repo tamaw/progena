@@ -29,10 +29,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Pre-commit Configuration**: Automated linting and formatting with ruff, black, and mypy
 
 ### Changed
+- **Dashboard**: Replaced the dated page with a responsive, theme-aware workspace overview covering recent workflow runs, pending reviews, upcoming enabled schedules, runtime resource search/status filters, inline logs, and collapsible runtime diagnostics. Dashboard collections hydrate through the canonical notification stream and recover after reconnect.
 - **Conversation Compressor**: Now uses tiktoken for accurate token estimation
 - **Exception Handling**: Added DEBUG logging to previously silent exception handlers (CQ-009)
 
 ### Fixed
+- Schedule and inbox document notifications now reach their collection subscribers even when a sibling document from the same transaction has already refreshed the shared state snapshot.
 - Telemetry exception handlers now log at DEBUG level instead of silently passing
 
 ## [0.6.0] - 2026-01-29
