@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - **Runtime Responses API contract** (`app/progenitor/runtime/http_chat.py`, `runtime/responses_api.py`): the runtime now serves an OpenAI Responses/Conversations-compatible API backed by native LangGraph — `POST /v1/responses` (streaming and non-streaming), `POST /v1/responses/{id}/cancel`, `GET /v1/conversations/{id}/items`, `DELETE /v1/conversations/{id}`. See `docs/SPEC.md` for vendor extensions.
-- **Per-tool MCP enable/disable for the agent** (`/config/mcp_tools.json`, `app/progenitor/agent/state_backend.py`): the agent can now turn a single MCP tool on or off by flipping its `enabled` flag, the same flag the Tools page toggles, instead of disabling the whole server or editing its URL. Only `enabled` is editable; the tool list stays discovery-owned and any other edit is rejected with an explanation. The `managing-mcp` skill documents the flow.
+- **Per-tool MCP enable/disable for the agent** (`/config/mcp_tools.json`, `app/progenitor/agent/state_backend.py`): the agent can now turn a single MCP tool on or off by flipping its `enabled` flag, the same flag the Tools page toggles, instead of disabling the whole server or editing its URL. Only `enabled` is editable; the tool list stays discovery-owned and any other edit is rejected with an explanation. Entries are validated against the new `data/schemas/mcp_tool_entry.schema.v1.json`, and the `managing-mcp` skill documents the flow (find the entry, schema + `structured_output`, edit, verify with `mcp`).
 - **DeepAgent Integration** (`app/progenitor/agent/`): Selective adoption of LangChain's `deepagents` library
   - `deep_agent.py`: Factory creating configured DeepAgent with LiteLLM routing, tools, middleware, skills, memory, and subagents
   - `langchain_adapter.py`: ChatOpenAI → LiteLLM proxy bridge with Azure structured output bypass
@@ -42,6 +42,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Exception Handling**: Added DEBUG logging to previously silent exception handlers (CQ-009)
 
 ### Fixed
+- `/config/mcp_tools.json` rejected nothing outside `tools`: an agent edit that added its own top-level key (e.g. a `tool_overrides` map) was silently dropped and reported as success while no tool changed. Any change outside a tool's `enabled` flag is now rejected with a message pointing at the flag.
+- `grep` and `glob` on the agent's virtual folders (`/config`, `/tasks`, `/inbox`, `/workflows`, `/routines`, `/policies`, content documents) always returned nothing, so the agent was told text it had just read didn't exist (this is how it ended up inventing a `tool_overrides` key). They now search the documents as `read_file` renders them, with matching line numbers.
 - Telemetry exception handlers now log at DEBUG level instead of silently passing
 
 ## [0.6.0] - 2026-01-29

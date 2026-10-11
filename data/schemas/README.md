@@ -19,6 +19,7 @@ the native `write`/`edit` file tools.
 | --- | --- | --- | --- |
 | `schedule_entry.schema.v1.json` | One entry's value in `schedule` (keyed by id) | object | `managing-schedules` |
 | `mcp_server_entry.schema.v1.json` | One server under `mcpServers` (keyed by name) | object | `managing-mcp` |
+| `mcp_tool_entry.schema.v1.json` | One object in `mcp_tools`'s `tools` array (only `enabled` is editable) | object | `managing-mcp` |
 | `plugin_entry.schema.v1.json` | One plugin under `plugins` (keyed by `<marketplace>/<plugin>`) | object | `managing-plugins` |
 | `marketplace_entry.schema.v1.json` | One marketplace under `marketplaces` (keyed by marketplace name) | object | `managing-marketplaces` |
 | `agent_entry.schema.v1.json` | One object in `registry`'s `agents` array | object | `managing-agents` |
