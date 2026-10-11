@@ -20,7 +20,12 @@ from app.backend.workflow_service import (
     save_workflow_definition,
 )
 from app.progenitor.document_types import BUILTIN_DOCUMENT_TYPES
-from app.progenitor.workflows import apply_document_type_schemas, default_workflow_definition
+from app.progenitor.workflows import (
+    WorkflowNodeEvent,
+    default_workflow_definition,
+    derive_workflow_port_schemas,
+    validate_workflow_definition_payload,
+)
 
 BUILTIN_TYPES = {item.id: item for item in BUILTIN_DOCUMENT_TYPES}
 
@@ -141,8 +146,8 @@ async def test_card_move_to_done_starts_filtered_workflow_once_with_document_por
         [("event", "id", "body", "id")],
     )
     definition = save_workflow_definition(store, workflow)
-    assert {"after.title", "before.column_id", "after"} <= set(
-        definition.graph.nodes["event"].output_schema["properties"]
+    assert definition.graph.nodes["event"].output_schema["properties"]["after"]["title"] == (
+        "Kanban Card"
     )
     dispatcher = ui_routes.get_document_event_dispatcher()
     store.save_document(PROGENITOR_STATE_PREFIX, "kanban_task_content:c1", {"content": "# Brief"})
@@ -161,10 +166,10 @@ async def test_card_move_to_done_starts_filtered_workflow_once_with_document_por
     await dispatcher.drain()
 
     assert len(list_workflow_runs(store, workflow_id=definition.id)) == 1
-    assert run.trigger_event["before.column_id"] == "build"
+    assert run.trigger_event["before"]["column_id"] == "build"
     assert run.trigger_event["changed_fields"] == ["column_id"]
     assert run.node_outputs["body"]["found"] is True
-    assert run.node_outputs["body"]["document.content"] == "# Brief"
+    assert run.node_outputs["body"]["document"]["content"] == "# Brief"
 
 
 @pytest.mark.asyncio
@@ -189,20 +194,24 @@ async def test_workflow_is_not_retriggered_by_its_own_run_documents(store):
 
 
 @pytest.mark.asyncio
-async def test_query_node_returns_collection_documents_matching_event_field(store):
+async def test_query_node_returns_collection_documents_matching_unpacked_field(store):
     workflow = _workflow(
         {"document_type": "kanban_card", "operations": ["created"]},
         {
+            "card": {"kind": "unpack", "title": "Card"},
             "peers": {
                 "kind": "document_query",
                 "title": "Same column",
                 "document_type": "kanban_card",
                 "filter_fields": ["column_id"],
-            }
+            },
         },
-        [("event", "after.column_id", "peers", "column_id")],
+        [("event", "after", "card", "value"), ("card", "column_id", "peers", "column_id")],
     )
     definition = save_workflow_definition(store, workflow)
+    assert (
+        definition.graph.nodes["card"].input_schema["properties"]["value"]["title"] == "Kanban Card"
+    )
     dispatcher = ui_routes.get_document_event_dispatcher()
     store.save_document(PROGENITOR_STATE_PREFIX, "kanban_card:a", _card("a", "plan"))
     store.save_document(PROGENITOR_STATE_PREFIX, "kanban_card:b", _card("b", "build"))
@@ -219,6 +228,7 @@ async def test_query_node_returns_collection_documents_matching_event_field(stor
             if run.trigger_event["key"] == "kanban_card:c"
         ]
     )
+    assert runs[0].node_outputs["card"]["column_id"] == "plan"
     assert runs[0].node_outputs["peers"]["keys"] == ["kanban_card:a", "kanban_card:c"]
     assert runs[0].node_outputs["peers"]["count"] == 2
 
@@ -226,7 +236,7 @@ async def test_query_node_returns_collection_documents_matching_event_field(stor
 def test_document_node_types_are_validated_against_the_registry():
     unknown = _workflow({"document_type": "nope"}, {}, [])
     with pytest.raises(ValueError, match="unknown document type 'nope'"):
-        apply_document_type_schemas(unknown, BUILTIN_TYPES)
+        derive_workflow_port_schemas(unknown, BUILTIN_TYPES)
 
     single = _workflow(
         {"document_type": "kanban_card"},
@@ -234,4 +244,91 @@ def test_document_node_types_are_validated_against_the_registry():
         [],
     )
     with pytest.raises(ValueError, match="needs a collection document type"):
-        apply_document_type_schemas(single, BUILTIN_TYPES)
+        derive_workflow_port_schemas(single, BUILTIN_TYPES)
+
+
+def _nested_data_workflow(inner_port):
+    """Data(value: {card: {meta: {owner}}}) -> Unpack -> Unpack(card) -> Agent(meta)."""
+
+    nested = {
+        "type": "object",
+        "properties": {
+            "card": {
+                "type": "object",
+                "required": ["meta"],
+                "properties": {
+                    "meta": {
+                        "type": "object",
+                        "properties": {"owner": {"type": "string"}},
+                    }
+                },
+            }
+        },
+    }
+    return _workflow(
+        {"document_type": "kanban_card"},
+        {
+            "data": {"kind": "data", "title": "Data", "value": {}, "output_schema": nested},
+            "outer": {"kind": "unpack", "title": "Outer"},
+            "inner": {"kind": "unpack", "title": "Inner"},
+            "agent": {
+                "kind": "agent",
+                "title": "Agent",
+                "template": "Go {meta}",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {"meta": {"type": "object"}},
+                },
+                "output_schema": {"type": "object", "properties": {}},
+            },
+        },
+        # Listed inner-first so derivation cannot rely on edge order.
+        [
+            ("inner", inner_port, "agent", "meta"),
+            ("outer", "card", "inner", "value"),
+            ("data", "value", "outer", "value"),
+        ],
+    )
+
+
+def test_unpack_chains_derive_ports_from_the_upstream_object():
+    derived = derive_workflow_port_schemas(_nested_data_workflow("meta"), BUILTIN_TYPES)
+    nodes = derived["graph"]["nodes"]
+    assert set(nodes["outer"]["output_schema"]["properties"]) == {"card"}
+    assert set(nodes["inner"]["output_schema"]["properties"]) == {"meta"}
+    assert nodes["inner"]["output_schema"]["required"] == ["meta"]
+    validate_workflow_definition_payload(derived)
+
+    stale = derive_workflow_port_schemas(_nested_data_workflow("owner"), BUILTIN_TYPES)
+    with pytest.raises(ValueError, match="has no output port 'owner'"):
+        validate_workflow_definition_payload(stale)
+
+
+def test_event_ports_are_typed_documents_and_match_paths_are_validated():
+    derived = derive_workflow_port_schemas(
+        _workflow({"document_type": "kanban_card"}, {}, []), BUILTIN_TYPES
+    )
+    properties = derived["graph"]["nodes"]["event"]["output_schema"]["properties"]
+    assert set(properties) == {
+        "event_id",
+        "document_type",
+        "key",
+        "id",
+        "op",
+        "timestamp",
+        "changed_fields",
+        "before",
+        "after",
+    }
+    assert properties["after"]["title"] == properties["before"]["title"] == "Kanban Card"
+
+    bad = _workflow({"document_type": "kanban_card", "match": {"after.nope": 1}}, {}, [])
+    with pytest.raises(ValueError, match="unknown path"):
+        validate_workflow_definition_payload(derive_workflow_port_schemas(bad, BUILTIN_TYPES))
+
+
+def test_match_path_requires_presence():
+    node = WorkflowNodeEvent(document_type="kanban_card", match={"before.column_id": None})
+    created = {"document_type": "kanban_card", "after": {"column_id": None}}
+    assert not node.matches(created)
+    assert node.matches({**created, "before": {"column_id": None}})

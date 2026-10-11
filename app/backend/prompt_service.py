@@ -220,11 +220,17 @@ class PromptService:
         return self._build_record(sanitized, document.payload["content"], document.updated_at)
 
     def save_prompt(self, relative_path: str, content: str) -> PromptRecord:
+        from app.progenitor.prompts.templates import parse_prompt_template
+
         sanitized = self._sanitize_relative_path(relative_path)
         key = content_document_key(_PROMPT_KIND, sanitized)
         existing = self.store.get_document(PROGENITOR_STATE_PREFIX, key, None)
         if existing is None or not isinstance(existing.payload, dict):
             raise FileNotFoundError(relative_path)
+        try:
+            parse_prompt_template(content)
+        except ValueError as exc:
+            raise ValueError(str(exc)) from exc
         self.store.save_document(
             PROGENITOR_STATE_PREFIX,
             key,

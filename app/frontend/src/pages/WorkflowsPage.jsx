@@ -30,7 +30,9 @@ import {
   pauseWorkflow,
   resumeWorkflow,
   saveWorkflow,
+  selectAgentProfiles,
   selectDocumentTypes,
+  selectPrompts,
   selectWorkflowDetailByPath,
   selectWorkflowLatestRunById,
   selectWorkflowRuns,
@@ -103,9 +105,9 @@ const DEFAULT_NODE_SIZES = {
     data: { width: 320, height: 140 },
     settings: { width: 380, height: 280 },
   },
-  mcp: {
+  extract: {
     data: { width: 340, height: 160 },
-    settings: { width: 420, height: 300 },
+    settings: { width: 440, height: 320 },
   },
   condition: {
     data: { width: 300, height: 130 },
@@ -127,8 +129,12 @@ const DEFAULT_NODE_SIZES = {
     data: { width: 320, height: 140 },
     settings: { width: 420, height: 300 },
   },
+  unpack: {
+    data: { width: 280, height: 120 },
+    settings: { width: 340, height: 240 },
+  },
 };
-// V3 node menu: generic agent, data, event, mcp, condition, approval, and
+// V3 node menu: generic agent, data, event, extract, condition, approval, and
 // human_input nodes only. No capability-specific kinds.
 const NODE_MENU_CATEGORIES = [
   { id: 'triggers', label: 'Triggers', items: [{ id: 'event', kind: 'event', label: 'Event', icon: 'E' }] },
@@ -137,8 +143,9 @@ const NODE_MENU_CATEGORIES = [
     { id: 'data', kind: 'data', label: 'Data', icon: 'D' },
     { id: 'document_read', kind: 'document_read', label: 'Read document', icon: 'R' },
     { id: 'document_query', kind: 'document_query', label: 'Query documents', icon: 'Q' },
+    { id: 'unpack', kind: 'unpack', label: 'Unpack', icon: 'U' },
+    { id: 'extract', kind: 'extract', label: 'Extract', icon: 'X' },
   ]} ,
-  { id: 'tools', label: 'Tools', items: [{ id: 'mcp', kind: 'mcp', label: 'MCP Tool', icon: 'M' }] },
   {
     id: 'logic',
     label: 'Logic',
@@ -187,26 +194,20 @@ const DOCK_NODE_DEFAULTS = {
   event: defaultEventNode,
   agent: () => ({
     title: 'Agent',
-    message: 'Handle this workflow event.',
+    prompt: null,
+    template: '',
+    subagent: null,
     inputSchema: { type: 'object', properties: {} },
-    outputSchema: { type: 'object', properties: {} },
+    outputSchema: { type: 'object', required: ['message', 'thread_id'], properties: { message: { type: 'string' }, thread_id: { type: 'string' } } },
   }),
   data: () => ({ title: 'Data', value: null, outputSchema: { type: 'object' } }),
-  mcp: () => ({
-    title: 'MCP Tool',
-    inputSchema: {
-      type: 'object',
-      required: ['tool', 'arguments'],
-      properties: {
-        tool: {
-          title: 'McpTool',
-          type: 'object',
-          properties: { server_id: { type: 'string' }, tool_name: { type: 'string' } },
-        },
-        arguments: { type: 'object' },
-      },
-    },
-    outputSchema: { type: 'object' },
+  extract: () => ({
+    title: 'Extract',
+    prompt: null,
+    template: '',
+    schema: null,
+    inputSchema: { type: 'object', properties: {} },
+    outputSchema: { type: 'object', required: ['result', 'thread_id'], properties: { result: {}, thread_id: { type: 'string' } } },
   }),
   condition: () => ({
     title: 'Condition',
@@ -234,12 +235,19 @@ const DOCK_NODE_DEFAULTS = {
   }),
   document_read: defaultReadNode,
   document_query: defaultQueryNode,
+  unpack: () => ({
+    title: 'Unpack',
+    inputSchema: { type: 'object', required: ['value'], properties: { value: { type: 'object' } } },
+    outputSchema: { type: 'object', properties: {} },
+  }),
 };
 
 function resolveNodeSizes(kind, storedSize, inputSchema, outputSchema) {
   const defaults = DEFAULT_NODE_SIZES[kind] || DEFAULT_NODE_SIZES.agent;
   const inputPortCount = nodeInputPorts(kind, inputSchema).length;
-  const outputPortCount = nodeOutputPorts(kind, outputSchema).length;
+  // Unpack outputs are sized by the ports it shows (sizeUnpackNodes), not by
+  // every property of the object it unpacks.
+  const outputPortCount = kind === 'unpack' ? 0 : nodeOutputPorts(kind, outputSchema).length;
   const maxPorts = Math.max(inputPortCount, outputPortCount);
   const autoHeight = maxPorts > 0 ? 69 + (maxPorts - 1) * 28 : defaults.data.height;
   return {
@@ -282,16 +290,75 @@ function cloneValue(value) {
   return value ? JSON.parse(JSON.stringify(value)) : value;
 }
 
+// Mirrors the server-side placeholder grammar: {root} or {root.a.b} where each
+// segment matches [A-Za-z_][A-Za-z0-9_]*. JSON literals like {"a": 1} are ignored.
+// thread_id is reserved and never treated as a placeholder root.
+function parsePromptPlaceholders(text) {
+  if (!text || typeof text !== 'string') return { roots: [], placeholders: [] };
+  const roots = [];
+  const placeholders = [];
+  const seen = new Set();
+  const regex = /\{([A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*)\}/g;
+  let match;
+  while ((match = regex.exec(text)) !== null) {
+    const full = match[1];
+    const root = full.split('.')[0];
+    if (root === 'thread_id') continue;
+    placeholders.push(full);
+    if (!seen.has(root)) {
+      seen.add(root);
+      roots.push(root);
+    }
+  }
+  return { roots, placeholders };
+}
+
+function derivePromptInputSchema(text) {
+  const { roots } = parsePromptPlaceholders(text);
+  if (roots.length === 0) return { type: 'object', properties: {} };
+  const properties = {};
+  roots.forEach((root) => {
+    properties[root] = {};
+  });
+  return { type: 'object', required: roots, properties };
+}
+
+function derivePromptNodeSchemas(kind, text) {
+  const inputSchema = derivePromptInputSchema(text);
+  if (kind === 'agent') {
+    return {
+      inputSchema,
+      outputSchema: {
+        type: 'object',
+        required: ['message', 'thread_id'],
+        properties: { message: { type: 'string' }, thread_id: { type: 'string' } },
+      },
+    };
+  }
+  if (kind === 'extract') {
+    return {
+      inputSchema,
+      outputSchema: {
+        type: 'object',
+        required: ['result', 'thread_id'],
+        properties: { result: {}, thread_id: { type: 'string' } },
+      },
+    };
+  }
+  return { inputSchema: null, outputSchema: null };
+}
+
 const NODE_MINIMAP_COLORS = {
   event: '#ffa657',
   agent: '#58a6ff',
   data: '#3fb950',
-  mcp: '#a371f7',
+  extract: '#a371f7',
   condition: '#d29922',
   approval: '#f85149',
   human_input: '#39c5cf',
   document_read: '#79c0ff',
   document_query: '#a5d6ff',
+  unpack: '#bc8cff',
 };
 
 function nodeColor(node) {
@@ -346,6 +413,7 @@ function buildNodeData(kind, node, callbacks, latestRun) {
     onToggleExpanded: callbacks.onToggleExpanded,
     onOpenOptions: callbacks.onOpenOptions,
     onResize: callbacks.onResize,
+    onUnpack: callbacks.onUnpack,
   };
   const runState = workflowRunState(latestRun);
   if (kind === 'event') {
@@ -370,7 +438,25 @@ function buildNodeData(kind, node, callbacks, latestRun) {
       ...runState,
       kind,
       title: node.title || 'Agent',
-      message: node.message || '',
+      prompt: node.prompt ?? null,
+      template: node.template ?? null,
+      subagent: node.subagent ?? null,
+      inputSchema: cloneValue(node.input_schema) || null,
+      outputSchema: cloneValue(node.output_schema) || null,
+      onChange: callbacks.onNodeChange,
+      onDelete: callbacks.onDeleteNode,
+      canDelete: true,
+    };
+  }
+  if (kind === 'extract') {
+    return {
+      ...shared,
+      ...runState,
+      kind,
+      title: node.title || 'Extract',
+      prompt: node.prompt ?? null,
+      template: node.template ?? null,
+      schema: node.schema ?? null,
       inputSchema: cloneValue(node.input_schema) || null,
       outputSchema: cloneValue(node.output_schema) || null,
       onChange: callbacks.onNodeChange,
@@ -414,19 +500,6 @@ function buildNodeData(kind, node, callbacks, latestRun) {
       message: node.message || '',
       inputSchema: cloneValue(node.input_schema) || null,
       outputSchema: cloneValue(node.output_schema) || { type: 'string', enum: ['approved', 'rejected'] },
-      onChange: callbacks.onNodeChange,
-      onDelete: callbacks.onDeleteNode,
-      canDelete: true,
-    };
-  }
-  if (kind === 'mcp') {
-    return {
-      ...shared,
-      ...runState,
-      kind,
-      title: node.title || 'MCP Tool',
-      inputSchema: cloneValue(node.input_schema) || null,
-      outputSchema: cloneValue(node.output_schema) || null,
       onChange: callbacks.onNodeChange,
       onDelete: callbacks.onDeleteNode,
       canDelete: true,
@@ -476,6 +549,20 @@ function buildNodeData(kind, node, callbacks, latestRun) {
       canDelete: true,
     };
   }
+  if (kind === 'unpack') {
+    return {
+      ...shared,
+      ...runState,
+      kind,
+      title: node.title || 'Unpack',
+      showAllFields: Boolean(node.show_all_fields),
+      inputSchema: cloneValue(node.input_schema) || { type: 'object', required: ['value'], properties: { value: { type: 'object' } } },
+      outputSchema: cloneValue(node.output_schema) || { type: 'object', properties: {} },
+      onChange: callbacks.onNodeChange,
+      onDelete: callbacks.onDeleteNode,
+      canDelete: true,
+    };
+  }
   return { ...shared, ...runState, kind, title: node.title || 'Node', onChange: callbacks.onNodeChange, onDelete: callbacks.onDeleteNode, canDelete: true };
 }
 
@@ -496,7 +583,23 @@ function workflowToFlow(definition, callbacks, latestRun) {
           match: node.match,
           outputSchema: cloneValue(node.output_schema) || null,
         }
-      : node;
+      : kind === 'agent'
+        ? {
+          ...node,
+          prompt: node.prompt ?? null,
+          template: node.template ?? null,
+          subagent: node.subagent ?? null,
+        }
+      : kind === 'extract'
+        ? {
+          ...node,
+          prompt: node.prompt ?? null,
+          template: node.template ?? null,
+          schema: node.schema ?? null,
+        }
+      : kind === 'unpack'
+        ? { ...node, show_all_fields: Boolean(uiNode.show_all_fields) }
+        : node;
     return {
       id: nodeId,
       type: kind,
@@ -588,12 +691,25 @@ function flowToWorkflow(baseWorkflow, nodes, edges, viewport) {
         value: cloneValue(node.data?.value) ?? null,
         output_schema: cloneValue(node.data?.outputSchema) || { type: 'object' },
       };
-    } else if (node.type === 'mcp') {
+    } else if (node.type === 'agent') {
       graphNodes[node.id] = {
-        kind: 'mcp',
-        title: String(node.data?.title || 'MCP Tool'),
-        input_schema: cloneValue(node.data?.inputSchema) || DOCK_NODE_DEFAULTS.mcp().inputSchema,
-        output_schema: cloneValue(node.data?.outputSchema) || { type: 'object' },
+        kind: 'agent',
+        title: String(node.data?.title || 'Agent'),
+        prompt: node.data?.prompt ?? null,
+        template: node.data?.template ?? null,
+        subagent: node.data?.subagent ?? null,
+        input_schema: cloneValue(node.data?.inputSchema) || { type: 'object', properties: {} },
+        output_schema: cloneValue(node.data?.outputSchema) || { type: 'object', required: ['message', 'thread_id'], properties: { message: { type: 'string' }, thread_id: { type: 'string' } } },
+      };
+    } else if (node.type === 'extract') {
+      graphNodes[node.id] = {
+        kind: 'extract',
+        title: String(node.data?.title || 'Extract'),
+        prompt: node.data?.prompt ?? null,
+        template: node.data?.template ?? null,
+        schema: node.data?.schema ?? null,
+        input_schema: cloneValue(node.data?.inputSchema) || { type: 'object', properties: {} },
+        output_schema: cloneValue(node.data?.outputSchema) || { type: 'object', required: ['result', 'thread_id'], properties: { result: {}, thread_id: { type: 'string' } } },
       };
     } else if (node.type === 'condition') {
       graphNodes[node.id] = {
@@ -619,13 +735,22 @@ function flowToWorkflow(baseWorkflow, nodes, edges, viewport) {
         input_schema: cloneValue(node.data?.inputSchema) || { type: 'object', properties: {} },
         output_schema: cloneValue(node.data?.outputSchema) || { type: 'object', properties: {} },
       };
+    } else if (node.type === 'unpack') {
+      graphNodes[node.id] = {
+        kind: 'unpack',
+        title: String(node.data?.title || 'Unpack'),
+        input_schema: cloneValue(node.data?.inputSchema) || { type: 'object', required: ['value'], properties: { value: { type: 'object' } } },
+        output_schema: cloneValue(node.data?.outputSchema) || { type: 'object', properties: {} },
+      };
     } else {
       graphNodes[node.id] = {
         kind: 'agent',
         title: String(node.data?.title || 'Agent'),
-        message: String(node.data?.message || ''),
+        prompt: node.data?.prompt ?? null,
+        template: node.data?.template ?? null,
+        subagent: node.data?.subagent ?? null,
         input_schema: cloneValue(node.data?.inputSchema) || { type: 'object', properties: {} },
-        output_schema: cloneValue(node.data?.outputSchema) || { type: 'object', properties: {} },
+        output_schema: cloneValue(node.data?.outputSchema) || { type: 'object', required: ['message', 'thread_id'], properties: { message: { type: 'string' }, thread_id: { type: 'string' } } },
       };
     }
     const hasCustomSize = node.data?.dataSize || node.data?.settingsSize;
@@ -644,6 +769,8 @@ function flowToWorkflow(baseWorkflow, nodes, edges, viewport) {
           settings: { width: Math.round(sizes.settings.width), height: Math.round(sizes.settings.height) },
         },
       } : {}),
+      // View state only: whether an Unpack node lists every field.
+      ...(node.type === 'unpack' && node.data?.showAllFields ? { show_all_fields: true } : {}),
     };
   });
   return {
@@ -733,9 +860,116 @@ function portFromHandle(handle) {
   return handle?.includes(':') ? handle.slice(handle.indexOf(':') + 1) : handle;
 }
 
-function visibleNodePortProperties(properties, nodeHeight, connectedNames = []) {
-  if (!Number.isFinite(nodeHeight)) return properties;
+function isUnpackableSchema(definition) {
+  return definition?.type === 'object' && definition.properties && Object.keys(definition.properties).length > 0;
+}
+
+function hoistDefinitions(target, source) {
+  const sourceDefs = source?.$defs || source?.definitions;
+  if (!sourceDefs || typeof sourceDefs !== 'object') return;
+  const targetDefs = target.$defs || target.definitions;
+  const merged = { ...targetDefs, ...cloneValue(sourceDefs) };
+  if (source.$defs !== undefined || (target.$defs === undefined && target.definitions === undefined)) {
+    target.$defs = merged;
+  } else {
+    target.definitions = merged;
+  }
+}
+
+function deriveUnpackSchemas(nodeId, nodes, edges) {
+  const valueEdge = edges.find((e) => e.target === nodeId && portFromHandle(e.targetHandle) === 'value');
+  if (!valueEdge) {
+    return {
+      inputSchema: { type: 'object', required: ['value'], properties: { value: { type: 'object' } } },
+      outputSchema: { type: 'object', properties: {} },
+    };
+  }
+  const sourceNode = nodes.find((n) => n.id === valueEdge.source);
+  const sourcePort = portFromHandle(valueEdge.sourceHandle);
+  const sourceSchema = sourceNode?.data?.outputSchema;
+  const sourceProperty = nodeOutputPorts(sourceNode?.data?.kind, sourceSchema)
+    .find((p) => p.name === sourcePort);
+
+  const sourceDef = sourceProperty?.definition || { type: 'object' };
+  const inputSchema = {
+    type: 'object',
+    required: ['value'],
+    properties: { value: cloneValue(sourceDef) },
+  };
+  hoistDefinitions(inputSchema, sourceSchema);
+
+  const outputSchema = {
+    type: 'object',
+    properties: cloneValue(sourceDef.properties || {}),
+    required: cloneValue(sourceDef.required || []),
+  };
+  hoistDefinitions(outputSchema, sourceDef);
+  hoistDefinitions(outputSchema, sourceSchema);
+
+  return { inputSchema, outputSchema };
+}
+
+function recomputeUnpackSchemas(nodes, edges) {
+  const unpackIds = nodes.filter((n) => n.data?.kind === 'unpack').map((n) => n.id);
+  if (!unpackIds.length) return nodes;
+
+  const nodesById = Object.fromEntries(nodes.map((n) => [n.id, n]));
+  // Each pass settles one more link of an Unpack chain; a cycle (rejected on
+  // save) must not spin forever, so the pass count is bounded like the server.
+  for (let pass = 0; pass <= unpackIds.length; pass += 1) {
+    let changed = false;
+    for (const unpackId of unpackIds) {
+      const unpack = nodesById[unpackId];
+      const { inputSchema, outputSchema } = deriveUnpackSchemas(unpackId, Object.values(nodesById), edges);
+      const currentInput = JSON.stringify(unpack.data?.inputSchema);
+      const currentOutput = JSON.stringify(unpack.data?.outputSchema);
+      const nextInput = JSON.stringify(inputSchema);
+      const nextOutput = JSON.stringify(outputSchema);
+      if (currentInput !== nextInput || currentOutput !== nextOutput) {
+        nodesById[unpackId] = { ...unpack, data: { ...unpack.data, inputSchema, outputSchema } };
+        changed = true;
+      }
+    }
+    if (!changed) break;
+  }
+  return sizeUnpackNodes(Object.values(nodesById), edges);
+}
+
+// Until the user resizes it, an Unpack node is exactly tall enough for its
+// shown ports plus the show/hide-fields toggle row.
+function sizeUnpackNodes(nodes, edges) {
+  return nodes.map((node) => {
+    if (node.data?.kind !== 'unpack' || node.data?.dataSize || node.data?.expanded) return node;
+    const connected = edges.filter((edge) => edge.source === node.id).map((edge) => portFromHandle(edge.sourceHandle));
+    const shown = visibleNodePortProperties(nodeOutputPorts('unpack', node.data?.outputSchema), node.height, connected, Boolean(node.data?.showAllFields)).length;
+    const height = Math.max(DEFAULT_NODE_SIZES.unpack.data.height, 69 + shown * 28);
+    return node.height === height ? node : { ...node, height, style: { ...node.style, height } };
+  });
+}
+
+function computeLostEdgesForUnpackChange(currentEdges, nextNodes) {
+  const nextNodesById = Object.fromEntries(nextNodes.map((n) => [n.id, n]));
+  const lostEdges = [];
+  for (const edge of currentEdges) {
+    const sourceNode = nextNodesById[edge.source];
+    if (sourceNode?.data?.kind !== 'unpack') continue;
+    const portName = portFromHandle(edge.sourceHandle);
+    const outputProps = sourceNode.data?.outputSchema?.properties || {};
+    if (!outputProps[portName]) {
+      lostEdges.push(edge);
+    }
+  }
+  return lostEdges;
+}
+
+// ``showAllFields`` is only passed for Unpack nodes (null otherwise): collapsed
+// they show just the connected outputs, expanded every property.
+function visibleNodePortProperties(properties, nodeHeight, connectedNames = [], showAllFields = null) {
   const connectedSet = new Set(connectedNames);
+  if (showAllFields !== null) {
+    return showAllFields ? properties : properties.filter((p) => connectedSet.has(p.name));
+  }
+  if (!Number.isFinite(nodeHeight)) return properties;
   const connected = properties.filter((p) => connectedSet.has(p.name));
   const unconnected = properties.filter((p) => !connectedSet.has(p.name));
   const maxPorts = Math.max(0, Math.floor((nodeHeight - 8 - 61) / 28) + 1);
@@ -743,9 +977,9 @@ function visibleNodePortProperties(properties, nodeHeight, connectedNames = []) 
   return [...connected, ...unconnected.slice(0, remainingSlots)];
 }
 
-function WorkflowNodeHandles({ kind, inputSchema, outputSchema, nodeHeight, connectedInputPorts = [], connectedOutputPorts = [] }) {
+function WorkflowNodeHandles({ kind, inputSchema, outputSchema, nodeHeight, connectedInputPorts = [], connectedOutputPorts = [], showAllFields = null }) {
   const inputProperties = visibleNodePortProperties(nodeInputPorts(kind, inputSchema), nodeHeight, connectedInputPorts);
-  const outputProperties = visibleNodePortProperties(nodeOutputPorts(kind, outputSchema), nodeHeight, connectedOutputPorts);
+  const outputProperties = visibleNodePortProperties(nodeOutputPorts(kind, outputSchema), nodeHeight, connectedOutputPorts, showAllFields);
   const top = (index) => `${61 + index * 28}px`;
   return (
     <>
@@ -761,9 +995,12 @@ function WorkflowNodeHandles({ kind, inputSchema, outputSchema, nodeHeight, conn
 
 // Renders port labels in exactly the order and subset WorkflowNodeHandles
 // places handles, so every handle (and its edge) lines up with its label.
-function WorkflowNodePorts({ kind, inputSchema, outputSchema, nodeHeight, connectedInputPorts = [], connectedOutputPorts = [] }) {
+function WorkflowNodePorts({ kind, inputSchema, outputSchema, nodeHeight, connectedInputPorts = [], connectedOutputPorts = [], showAllFields = null, onToggleShowAllFields, onUnpack }) {
   const inputProperties = visibleNodePortProperties(nodeInputPorts(kind, inputSchema), nodeHeight, connectedInputPorts);
-  const outputProperties = visibleNodePortProperties(nodeOutputPorts(kind, outputSchema), nodeHeight, connectedOutputPorts);
+  const outputProperties = visibleNodePortProperties(nodeOutputPorts(kind, outputSchema), nodeHeight, connectedOutputPorts, showAllFields);
+  const unconnectedCount = showAllFields !== null
+    ? nodeOutputPorts(kind, outputSchema).filter((p) => !connectedOutputPorts.includes(p.name)).length
+    : 0;
   return (
     <div className="workflow-node-ports">
       <div className="workflow-node-ports__column workflow-node-ports__column--inputs">
@@ -775,12 +1012,21 @@ function WorkflowNodePorts({ kind, inputSchema, outputSchema, nodeHeight, connec
         )) : <span className="workflow-node-ports__empty">No inputs</span>}
       </div>
       <div className="workflow-node-ports__column workflow-node-ports__column--outputs">
-        {outputProperties.length ? outputProperties.map(({ name, definition }) => (
+        {outputProperties.map(({ name, definition }) => (
           <div className="workflow-node-port" key={`output-${name}`}>
+            {onUnpack && isUnpackableSchema(definition) ? (
+              <button type="button" className="workflow-node-port__unpack" onClick={() => onUnpack(name)} aria-label={`Unpack ${name}`}>▸</button>
+            ) : null}
             <small>{schemaType(definition)}</small>
             <span>{name}</span>
           </div>
-        )) : <span className="workflow-node-ports__empty">No outputs</span>}
+        ))}
+        {unconnectedCount > 0 ? (
+          <button type="button" className="workflow-node-port workflow-node-port--toggle nodrag" onClick={onToggleShowAllFields} aria-expanded={Boolean(showAllFields)}>
+            {showAllFields ? 'Hide unused fields' : `+ ${unconnectedCount} field${unconnectedCount === 1 ? '' : 's'}`}
+          </button>
+        ) : null}
+        {!outputProperties.length && !unconnectedCount ? <span className="workflow-node-ports__empty">No outputs</span> : null}
       </div>
     </div>
   );
@@ -856,6 +1102,21 @@ function WorkflowNodeOptionsModal({ node, onChange, onClose }) {
     if (!props || typeof props !== 'object') return [];
     return Object.keys(props).map((key) => ({ value: key, label: key }));
   }, [selectedDocumentType]);
+
+  const prompts = useSelector(selectPrompts);
+  const promptOptions = useMemo(() =>
+    prompts.map((p) => ({ value: p.path, label: p.title || p.path })),
+  [prompts]);
+
+  const agentProfiles = useSelector(selectAgentProfiles);
+  const subagentOptions = useMemo(() => {
+    const names = agentProfiles.map((a) => a.name).filter(Boolean);
+    return [...new Set(names)].sort().map((name) => ({ value: name, label: name }));
+  }, [agentProfiles]);
+
+  const knownSchema = useMemo(() =>
+    documentTypeOptions.some((o) => o.value === node.data?.schema),
+  [documentTypeOptions, node.data?.schema]);
 
   const handleEventTypeChange = (documentTypeId) => {
     const dt = documentTypes.find((t) => t.id === documentTypeId);
@@ -1032,17 +1293,98 @@ function WorkflowNodeOptionsModal({ node, onChange, onClose }) {
                 </label>
               </>
             ) : null}
-            {kind === 'agent' ? (
+            {kind === 'agent' || kind === 'extract' ? (
               <>
-                <label className="workflow-node-options__field">Message<textarea value={node.data?.message || ''} onChange={(event) => onChange(node.id, { message: event.target.value })} rows={4} /></label>
-                <JsonFieldEditor label="Input schema" value={node.data?.inputSchema} onCommit={(inputSchema) => onChange(node.id, { inputSchema })} />
-                <JsonFieldEditor label="Output schema" value={node.data?.outputSchema} onCommit={(outputSchema) => onChange(node.id, { outputSchema })} />
+                <div className="workflow-node-options__field">
+                  <span>Prompt source</span>
+                  <div className="workflow-node-options__checkboxes">
+                    <label className="workflow-node-options__checkbox">
+                      <input
+                        type="radio"
+                        name={`prompt-source-${node.id}`}
+                        checked={node.data?.prompt != null}
+                        onChange={() => {
+                          const firstPath = prompts[0]?.path || '';
+                          onChange(node.id, { prompt: firstPath, template: null });
+                        }}
+                      />
+                      Prompt document
+                    </label>
+                    <label className="workflow-node-options__checkbox">
+                      <input
+                        type="radio"
+                        name={`prompt-source-${node.id}`}
+                        checked={node.data?.prompt == null}
+                        onChange={() => onChange(node.id, { prompt: null, template: '' })}
+                      />
+                      Inline template
+                    </label>
+                  </div>
+                </div>
+                {node.data?.prompt != null ? (
+                  <label className="workflow-node-options__field">
+                    Prompt
+                    <Select
+                      value={node.data?.prompt || ''}
+                      onChange={(path) => onChange(node.id, { prompt: path || null })}
+                      options={[{ value: '', label: 'Select prompt…' }, ...promptOptions]}
+                      ariaLabel="Prompt document"
+                    />
+                  </label>
+                ) : (
+                  <label className="workflow-node-options__field">
+                    Template
+                    <textarea
+                      value={node.data?.template || ''}
+                      onChange={(event) => {
+                        const text = event.target.value;
+                        const schemas = derivePromptNodeSchemas(kind, text);
+                        onChange(node.id, { template: text, inputSchema: schemas.inputSchema, outputSchema: schemas.outputSchema });
+                      }}
+                      rows={6}
+                    />
+                  </label>
+                )}
               </>
             ) : null}
-            {kind === 'mcp' ? (
+            {kind === 'agent' ? (
+              <label className="workflow-node-options__field">
+                Subagent
+                <Select
+                  value={node.data?.subagent || ''}
+                  onChange={(val) => onChange(node.id, { subagent: val || null })}
+                  options={[{ value: '', label: 'Progenitor' }, ...subagentOptions]}
+                  ariaLabel="Subagent"
+                />
+              </label>
+            ) : null}
+            {kind === 'extract' ? (
               <>
-                <JsonFieldEditor label="Input schema (tool + arguments)" value={node.data?.inputSchema} onCommit={(inputSchema) => onChange(node.id, { inputSchema })} />
-                <JsonFieldEditor label="Output schema" value={node.data?.outputSchema} onCommit={(outputSchema) => onChange(node.id, { outputSchema })} />
+                <label className="workflow-node-options__field">
+                  Result schema
+                  <Select
+                    value={knownSchema ? (node.data?.schema || '') : '__custom__'}
+                    onChange={(val) => {
+                      if (val === '__custom__') {
+                        onChange(node.id, { schema: '' });
+                      } else {
+                        onChange(node.id, { schema: val || null });
+                      }
+                    }}
+                    options={[{ value: '', label: 'Infer' }, ...documentTypeOptions, { value: '__custom__', label: 'Other…' }]}
+                    ariaLabel="Result schema"
+                  />
+                </label>
+                {!knownSchema ? (
+                  <label className="workflow-node-options__field">
+                    Schema name
+                    <input
+                      value={node.data?.schema || ''}
+                      onChange={(event) => onChange(node.id, { schema: event.target.value || null })}
+                      placeholder="Type a schema name"
+                    />
+                  </label>
+                ) : null}
               </>
             ) : null}
             {kind === 'data' ? (
@@ -1118,7 +1460,7 @@ function PromptNode({ id, data, selected, height }) {
           ) : null}
         </div>
         <div className="node-body">
-          <WorkflowNodePorts kind={data.kind} inputSchema={data.inputSchema} outputSchema={data.outputSchema} nodeHeight={height} connectedInputPorts={connectedInputPorts} connectedOutputPorts={connectedOutputPorts} />
+          <WorkflowNodePorts kind={data.kind} inputSchema={data.inputSchema} outputSchema={data.outputSchema} nodeHeight={height} connectedInputPorts={connectedInputPorts} connectedOutputPorts={connectedOutputPorts} onUnpack={data.onUnpack ? (port) => data.onUnpack(id, port) : undefined} />
         </div>
       </div>
       <WorkflowNodeHandles kind={data.kind} inputSchema={data.inputSchema} outputSchema={data.outputSchema} nodeHeight={height} connectedInputPorts={connectedInputPorts} connectedOutputPorts={connectedOutputPorts} />
@@ -1141,7 +1483,7 @@ function DocumentEventNode({ id, data, selected, height }) {
           {data.canDelete ? <button type="button" className="node-remove-btn" onClick={() => data.onDelete(id)} aria-label="Delete event">×</button> : null}
         </div>
         <div className="node-body">
-          <WorkflowNodePorts kind="event" inputSchema={null} outputSchema={data.outputSchema} nodeHeight={height} connectedOutputPorts={connectedOutputPorts} />
+          <WorkflowNodePorts kind="event" inputSchema={null} outputSchema={data.outputSchema} nodeHeight={height} connectedOutputPorts={connectedOutputPorts} onUnpack={data.onUnpack ? (port) => data.onUnpack(id, port) : undefined} />
         </div>
       </div>
       <WorkflowNodeHandles kind="event" inputSchema={null} outputSchema={data.outputSchema} nodeHeight={height} connectedOutputPorts={connectedOutputPorts} />
@@ -1164,7 +1506,7 @@ function WorkflowDataNode({ id, data, selected, height }) {
           <button type="button" className="node-remove-btn" onClick={() => data.onDelete(id)} aria-label="Delete data node">×</button>
         </div>
         <div className="node-body">
-          <WorkflowNodePorts kind="data" inputSchema={null} outputSchema={data.outputSchema} nodeHeight={height} connectedOutputPorts={connectedOutputPorts} />
+          <WorkflowNodePorts kind="data" inputSchema={null} outputSchema={data.outputSchema} nodeHeight={height} connectedOutputPorts={connectedOutputPorts} onUnpack={data.onUnpack ? (port) => data.onUnpack(id, port) : undefined} />
         </div>
       </div>
       <WorkflowNodeHandles kind="data" inputSchema={null} outputSchema={data.outputSchema} nodeHeight={height} connectedOutputPorts={connectedOutputPorts} />
@@ -1197,16 +1539,50 @@ function WorkflowControlNode({ id, data, selected, height }) {
   );
 }
 
+function UnpackNode({ id, data, selected, height }) {
+  const edges = useEdges();
+  const connectedInputPorts = useMemo(() => edges.filter((e) => e.target === id).map((e) => portFromHandle(e.targetHandle)), [edges, id]);
+  const connectedOutputPorts = useMemo(() => edges.filter((e) => e.source === id).map((e) => portFromHandle(e.sourceHandle)), [edges, id]);
+
+  return (
+    <>
+      <NodeResizer minWidth={260} minHeight={110} isVisible={selected} onResizeEnd={(_event, params) => data.onResize(id, { width: params.width, height: params.height })} />
+      <div className={`canvas-node workflow-graph-node workflow-graph-node--data ${selected ? 'selected' : ''}`}>
+        <div className="node-title-bar drag-handle">
+          <span className="node-type-icon unpack">U</span>
+          <WorkflowNodeTitle expanded={false} title={data.title} placeholder="Unpack" onChange={(event) => data.onChange(id, { title: event.target.value })} />
+          <button type="button" className="node-options-btn nodrag" onClick={() => data.onOpenOptions(id)} aria-label="Configure node" data-tooltip="Configure node"><ConfigureActionIcon /></button>
+          <button type="button" className="node-remove-btn" onClick={() => data.onDelete(id)} aria-label="Delete unpack node">×</button>
+        </div>
+        <div className="node-body">
+          <WorkflowNodePorts
+            kind={data.kind}
+            inputSchema={data.inputSchema}
+            outputSchema={data.outputSchema}
+            nodeHeight={height}
+            connectedInputPorts={connectedInputPorts}
+            connectedOutputPorts={connectedOutputPorts}
+            showAllFields={Boolean(data.showAllFields)}
+            onToggleShowAllFields={() => data.onChange(id, { showAllFields: !data.showAllFields })}
+          />
+        </div>
+      </div>
+      <WorkflowNodeHandles kind={data.kind} inputSchema={data.inputSchema} outputSchema={data.outputSchema} nodeHeight={height} connectedInputPorts={connectedInputPorts} connectedOutputPorts={connectedOutputPorts} showAllFields={Boolean(data.showAllFields)} />
+    </>
+  );
+}
+
 const NODE_TYPES = {
   event: DocumentEventNode,
   agent: PromptNode,
-  mcp: PromptNode,
+  extract: PromptNode,
   human_input: PromptNode,
   data: WorkflowDataNode,
   condition: WorkflowControlNode,
   approval: WorkflowControlNode,
   document_read: PromptNode,
   document_query: PromptNode,
+  unpack: UnpackNode,
 };
 
 // Chevrons for the right tools dock / collapse seam (point toward the action:
@@ -1382,7 +1758,7 @@ const DOCK_ITEM_META = {
   'call-agent': { icon: 'A', label: 'Agent' },
   'knowledge-search': { icon: 'K', label: 'Knowledge' },
   'kanban-task': { icon: 'T', label: 'Kanban' },
-  'mcp-tool': { icon: 'M', label: 'MCP' },
+  extract: { icon: 'X', label: 'Extract' },
   'ask-user': { icon: 'U', label: 'Ask' },
   'inbox-message': { icon: 'I', label: 'Inbox' },
   routine: { icon: 'R', label: 'Routine' },
@@ -1512,12 +1888,16 @@ function WorkflowsInner() {
   const [canvasTool, setCanvasTool] = useState('pointer');
   const canvasInteraction = canvasToolSettings(canvasTool);
   const rightPointerRef = useRef(null);
+  const [rightPanning, setRightPanning] = useState(false);
+  const connectingRef = useRef(null);
+  const didConnectRef = useRef(false);
   const selectedLatestRun = useSelector((state) => {
     const workflowId = selectedDetail?.workflow?.id || selectedPath.replace(/^.*\/|\.json$/g, '');
     return selectWorkflowLatestRunById(state, workflowId);
   });
   const nodesRef = useRef([]);
   const edgesRef = useRef([]);
+  const createUnpackNodeRef = useRef(() => {});
   const viewportRef = useRef(DEFAULT_VIEWPORT);
   const syncedPathRef = useRef('');
   const syncedHashRef = useRef('');
@@ -1644,10 +2024,38 @@ function WorkflowsInner() {
     const cloned = cloneValue(workflow);
     const flow = workflowToFlow(cloned, {
       onNodeChange: (nodeId, patch) => {
-        setGraphNodes((currentNodes) => {
-          const nextNodes = currentNodes.map((node) => (
-            node.id === nodeId ? { ...node, data: { ...node.data, ...patch } } : node
+        const node = nodesRef.current.find((n) => n.id === nodeId);
+        const nextOutputSchema = patch.outputSchema !== undefined ? patch.outputSchema : node?.data?.outputSchema;
+        if (!hydratingGraphRef.current && JSON.stringify(node?.data?.outputSchema) !== JSON.stringify(nextOutputSchema)) {
+          const nextNodes = nodesRef.current.map((n) => (
+            n.id === nodeId ? { ...n, data: { ...n.data, ...patch } } : n
           ));
+          const recomputed = recomputeUnpackSchemas(nextNodes, edgesRef.current);
+          const lostEdges = computeLostEdgesForUnpackChange(edgesRef.current, recomputed);
+          if (lostEdges.length > 0) {
+            const edgeList = lostEdges.map((e) => `${e.source} → ${e.target}`).join(', ');
+            const confirmed = window.confirm(
+              `This change will remove ${lostEdges.length} connection(s): ${edgeList}. Continue?`,
+            );
+            if (!confirmed) return;
+            const finalEdges = edgesRef.current.filter((e) => !lostEdges.some((r) => r.id === e.id));
+            const prunedNodes = sizeUnpackNodes(recomputed, finalEdges);
+            setGraphNodes(prunedNodes);
+            setGraphEdges(finalEdges);
+            nodesRef.current = prunedNodes;
+            edgesRef.current = finalEdges;
+            setDraftWorkflow((current) => flowToWorkflow(current || cloned, prunedNodes, finalEdges, viewportRef.current));
+            return;
+          }
+          setGraphNodes(recomputed);
+          nodesRef.current = recomputed;
+          setDraftWorkflow((current) => flowToWorkflow(current || cloned, recomputed, edgesRef.current, viewportRef.current));
+          return;
+        }
+        setGraphNodes((currentNodes) => {
+          const nextNodes = sizeUnpackNodes(currentNodes.map((node) => (
+            node.id === nodeId ? { ...node, data: { ...node.data, ...patch } } : node
+          )), edgesRef.current);
           nodesRef.current = nextNodes;
           if (!hydratingGraphRef.current) setLocalDraftDirty(true);
           setDraftWorkflow((current) => flowToWorkflow(current || cloned, nextNodes, edgesRef.current, viewportRef.current));
@@ -1655,6 +2063,36 @@ function WorkflowsInner() {
         });
       },
       onTriggerChange: (patch) => {
+        if (!hydratingGraphRef.current && patch.outputSchema !== undefined) {
+          const eventNodes = nodesRef.current.filter((n) => n.type === 'event');
+          const wouldChange = eventNodes.some((n) => JSON.stringify(n.data?.outputSchema) !== JSON.stringify(patch.outputSchema));
+          if (wouldChange) {
+            const nextNodes = nodesRef.current.map((node) => (
+              node.type === 'event' ? { ...node, data: { ...node.data, ...patch } } : node
+            ));
+            const recomputed = recomputeUnpackSchemas(nextNodes, edgesRef.current);
+            const lostEdges = computeLostEdgesForUnpackChange(edgesRef.current, recomputed);
+            if (lostEdges.length > 0) {
+              const edgeList = lostEdges.map((e) => `${e.source} → ${e.target}`).join(', ');
+              const confirmed = window.confirm(
+                `This change will remove ${lostEdges.length} connection(s): ${edgeList}. Continue?`,
+              );
+              if (!confirmed) return;
+              const finalEdges = edgesRef.current.filter((e) => !lostEdges.some((r) => r.id === e.id));
+              const prunedNodes = sizeUnpackNodes(recomputed, finalEdges);
+              setGraphNodes(prunedNodes);
+              setGraphEdges(finalEdges);
+              nodesRef.current = prunedNodes;
+              edgesRef.current = finalEdges;
+              setDraftWorkflow((current) => flowToWorkflow(current || cloned, prunedNodes, finalEdges, viewportRef.current));
+              return;
+            }
+            setGraphNodes(recomputed);
+            nodesRef.current = recomputed;
+            setDraftWorkflow((current) => flowToWorkflow(current || cloned, recomputed, edgesRef.current, viewportRef.current));
+            return;
+          }
+        }
         setGraphNodes((currentNodes) => {
           const nextNodes = currentNodes.map((node) => (
             node.type === 'event' ? { ...node, data: { ...node.data, ...patch } } : node
@@ -1676,6 +2114,15 @@ function WorkflowsInner() {
           setDraftWorkflow((current) => flowToWorkflow(current || cloned, nextNodes, nextEdges, viewportRef.current));
           return nextNodes;
         });
+      },
+      onUnpack: (sourceNodeId, sourcePort) => {
+        const sourceNode = nodesRef.current.find((n) => n.id === sourceNodeId);
+        if (!sourceNode) return;
+        const position = {
+          x: sourceNode.position.x + (sourceNode.width || 320) + 40,
+          y: sourceNode.position.y,
+        };
+        createUnpackNodeRef.current(sourceNodeId, sourcePort, position);
       },
       onOpenOptions: setNodeOptionsId,
       onToggleExpanded: (nodeId) => {
@@ -1721,6 +2168,7 @@ function WorkflowsInner() {
         });
       },
     }, latestRun);
+    flow.nodes = sizeUnpackNodes(flow.nodes, flow.edges);
     nodesRef.current = flow.nodes;
     edgesRef.current = flow.edges;
     viewportRef.current = flow.viewport;
@@ -1805,16 +2253,59 @@ function WorkflowsInner() {
     });
   }, [syncWorkflowFromGraph]);
 
+  const portFromHandle = useCallback((handleId) => (
+    handleId?.startsWith('out:') || handleId?.startsWith('in:')
+      ? handleId.slice(handleId.indexOf(':') + 1)
+      : ''
+  ), []);
+
   const onEdgesChange = useCallback((changes) => {
+    const removingValueEdges = changes
+      .filter((c) => c.type === 'remove')
+      .map((c) => edgesRef.current.find((e) => e.id === c.id))
+      .filter((edge) => {
+        if (!edge) return false;
+        const targetNode = nodesRef.current.find((n) => n.id === edge.target);
+        return targetNode?.data?.kind === 'unpack' && portFromHandle(edge.targetHandle) === 'value';
+      });
+
+    if (removingValueEdges.length > 0 && !hydratingGraphRef.current) {
+      const nextEdges = applyEdgeChanges(changes, edgesRef.current);
+      const nextNodes = recomputeUnpackSchemas(nodesRef.current, nextEdges);
+      const lostEdges = computeLostEdgesForUnpackChange(edgesRef.current, nextNodes);
+      if (lostEdges.length > 0) {
+        const edgeList = lostEdges.map((e) => `${e.source} → ${e.target}`).join(', ');
+        const confirmed = window.confirm(
+          `Removing the value input will disconnect ${lostEdges.length} connection(s): ${edgeList}. Continue?`,
+        );
+        if (!confirmed) return;
+        const finalEdges = nextEdges.filter((e) => !lostEdges.some((r) => r.id === e.id));
+        const prunedNodes = sizeUnpackNodes(nextNodes, finalEdges);
+        setGraphNodes(prunedNodes);
+        setGraphEdges(finalEdges);
+        syncWorkflowFromGraph(prunedNodes, finalEdges);
+        return;
+      }
+      setGraphEdges(nextEdges);
+      syncWorkflowFromGraph(nextNodes, nextEdges);
+      return;
+    }
+
     setGraphEdges((currentEdges) => {
       const nextEdges = applyEdgeChanges(changes, currentEdges);
       if (!hydratingGraphRef.current) {
         const marksDirty = changes.some((change) => change.type === 'add' || change.type === 'remove');
-        syncWorkflowFromGraph(nodesRef.current, nextEdges, viewportRef.current, marksDirty);
+        const recomputed = recomputeUnpackSchemas(nodesRef.current, nextEdges);
+        if (recomputed !== nodesRef.current) {
+          setGraphNodes(recomputed);
+          syncWorkflowFromGraph(recomputed, nextEdges, viewportRef.current, marksDirty);
+        } else {
+          syncWorkflowFromGraph(nodesRef.current, nextEdges, viewportRef.current, marksDirty);
+        }
       }
       return nextEdges;
     });
-  }, [syncWorkflowFromGraph]);
+  }, [syncWorkflowFromGraph, portFromHandle]);
 
   const handleEdgeClick = useCallback((event, edge) => {
     if (canvasTool !== 'cut') return;
@@ -1824,12 +2315,6 @@ function WorkflowsInner() {
     setGraphEdges(nextEdges);
     syncWorkflowFromGraph(nodesRef.current, nextEdges, viewportRef.current);
   }, [canvasTool, syncWorkflowFromGraph]);
-
-  const portFromHandle = useCallback((handleId) => (
-    handleId?.startsWith('out:') || handleId?.startsWith('in:')
-      ? handleId.slice(handleId.indexOf(':') + 1)
-      : ''
-  ), []);
 
   const validateConnection = useCallback((connection) => {
     const source = nodesRef.current.find((node) => node.id === connection.source);
@@ -1854,6 +2339,7 @@ function WorkflowsInner() {
   }, [portFromHandle]);
 
   const onConnect = useCallback((connection) => {
+    didConnectRef.current = true;
     const validationError = validateConnection(connection);
     if (validationError) {
       show('error', 'Invalid workflow connection', validationError);
@@ -1864,10 +2350,36 @@ function WorkflowsInner() {
         { ...connection, ...DEFAULT_EDGE_OPTIONS, className: 'workflow-edge--data' },
         currentEdges,
       );
-      syncWorkflowFromGraph(nodesRef.current, nextEdges, viewportRef.current);
+      const recomputed = recomputeUnpackSchemas(nodesRef.current, nextEdges);
+      if (recomputed !== nodesRef.current) {
+        setGraphNodes(recomputed);
+      }
+      syncWorkflowFromGraph(recomputed, nextEdges, viewportRef.current);
       return nextEdges;
     });
   }, [show, syncWorkflowFromGraph, validateConnection]);
+
+  const onConnectStart = useCallback((_event, { nodeId, handleId, handleType }) => {
+    if (handleType === 'source') {
+      const node = nodesRef.current.find((n) => n.id === nodeId);
+      const port = portFromHandle(handleId);
+      const prop = nodeOutputPorts(node?.data?.kind, node?.data?.outputSchema).find((p) => p.name === port);
+      if (isUnpackableSchema(prop?.definition)) {
+        connectingRef.current = { nodeId, handleId, port };
+        didConnectRef.current = false;
+      }
+    }
+  }, [portFromHandle]);
+
+  const onConnectEnd = useCallback((event) => {
+    if (!connectingRef.current) return;
+    if (!didConnectRef.current) {
+      const position = reactFlow.screenToFlowPosition({ x: event.clientX, y: event.clientY });
+      createUnpackNodeRef.current(connectingRef.current.nodeId, connectingRef.current.port, position);
+    }
+    connectingRef.current = null;
+    didConnectRef.current = false;
+  }, [reactFlow]);
 
   const handleViewportChange = useCallback((_event, viewport) => {
     viewportRef.current = viewport;
@@ -1943,6 +2455,15 @@ function WorkflowsInner() {
             syncWorkflowFromGraph(updatedNodes, updatedEdges, viewportRef.current);
           },
           onOpenOptions: setNodeOptionsId,
+          onUnpack: (sourceNodeId, sourcePort) => {
+            const sourceNode = nodesRef.current.find((n) => n.id === sourceNodeId);
+            if (!sourceNode) return;
+            const pos = {
+              x: sourceNode.position.x + (sourceNode.width || 320) + 40,
+              y: sourceNode.position.y,
+            };
+            createUnpackNodeRef.current(sourceNodeId, sourcePort, pos);
+          },
           onToggleExpanded: (targetId) => {
             setGraphNodes((currentNodes) => {
               const nextNodes = currentNodes.map((node) => {
@@ -1991,6 +2512,101 @@ function WorkflowsInner() {
     syncWorkflowFromGraph(nextNodes, nextEdges, viewportRef.current);
   }, [draftWorkflow, documentTypes, setGraphEdges, setGraphNodes, setNodeOptionsId, syncWorkflowFromGraph]);
 
+  const createUnpackNode = useCallback((sourceNodeId, sourcePort, position) => {
+    const nodeId = `unpack_${Math.random().toString(36).slice(2, 10)}`;
+    const sizes = DEFAULT_NODE_SIZES.unpack;
+    const newNode = {
+      id: nodeId,
+      type: 'unpack',
+      width: sizes.data.width,
+      height: sizes.data.height,
+      style: { width: sizes.data.width, height: sizes.data.height },
+      position,
+      data: {
+        kind: 'unpack',
+        title: 'Unpack',
+        inputSchema: { type: 'object', required: ['value'], properties: { value: { type: 'object' } } },
+        outputSchema: { type: 'object', properties: {} },
+        currentNodeId: null,
+        completedNodeIds: [],
+        expanded: false,
+        onChange: (targetId, patch) => {
+          setGraphNodes((currentNodes) => {
+            const updated = currentNodes.map((node) => (
+              node.id === targetId ? { ...node, data: { ...node.data, ...patch } } : node
+            ));
+            const recomputed = recomputeUnpackSchemas(updated, edgesRef.current);
+            nodesRef.current = recomputed;
+            syncWorkflowFromGraph(recomputed, edgesRef.current);
+            return recomputed;
+          });
+        },
+        onDelete: (targetId) => {
+          const updatedNodes = nodesRef.current.filter((node) => node.id !== targetId);
+          const updatedEdges = edgesRef.current.filter((edge) => edge.source !== targetId && edge.target !== targetId);
+          setGraphNodes(updatedNodes);
+          setGraphEdges(updatedEdges);
+          syncWorkflowFromGraph(updatedNodes, updatedEdges);
+        },
+        onOpenOptions: setNodeOptionsId,
+        onToggleExpanded: (targetId) => {
+          setGraphNodes((currentNodes) => {
+            const nextNodes = currentNodes.map((node) => {
+              if (node.id !== targetId) return node;
+              const nextExpanded = !node.data.expanded;
+              const nextSize = nodeCurrentSize(node, nextExpanded);
+              return {
+                ...node,
+                width: nextSize.width,
+                height: nextSize.height,
+                style: { ...node.style, width: nextSize.width, height: nextSize.height },
+                data: { ...node.data, expanded: nextExpanded },
+              };
+            });
+            syncWorkflowFromGraph(nextNodes, edgesRef.current);
+            return nextNodes;
+          });
+        },
+        onResize: (targetId, size) => {
+          setGraphNodes((currentNodes) => {
+            const nextNodes = currentNodes.map((node) => {
+              if (node.id !== targetId) return node;
+              const sizeKey = node.data.expanded ? 'settingsSize' : 'dataSize';
+              return {
+                ...node,
+                width: size.width,
+                height: size.height,
+                style: { ...node.style, width: size.width, height: size.height },
+                data: { ...node.data, [sizeKey]: size },
+              };
+            });
+            syncWorkflowFromGraph(nextNodes, edgesRef.current);
+            return nextNodes;
+          });
+        },
+        canDelete: true,
+      },
+    };
+    const newEdge = {
+      id: `edge_${sourceNodeId}_${sourcePort}_${nodeId}_value`,
+      source: sourceNodeId,
+      sourceHandle: `out:${sourcePort}`,
+      target: nodeId,
+      targetHandle: 'in:value',
+      ...DEFAULT_EDGE_OPTIONS,
+      className: 'workflow-edge--data',
+    };
+    const nextNodes = [...nodesRef.current, newNode];
+    const nextEdges = [...edgesRef.current, newEdge];
+    const recomputed = recomputeUnpackSchemas(nextNodes, nextEdges);
+    setGraphNodes(recomputed);
+    setGraphEdges(nextEdges);
+    syncWorkflowFromGraph(recomputed, nextEdges);
+  }, [setGraphEdges, setGraphNodes, setNodeOptionsId, syncWorkflowFromGraph]);
+  // Callbacks declared above (graph hydration, palette add, drag-to-pane) call
+  // this through the ref: it depends on syncWorkflowFromGraph, declared later.
+  createUnpackNodeRef.current = createUnpackNode;
+
   const onCanvasPaneClick = useCallback((event) => {
     if (event.button === 0) {
       setNodeMenuAnchor(null);
@@ -2000,8 +2616,24 @@ function WorkflowsInner() {
   const onCanvasPointerDown = useCallback((event) => {
     if (event.button === 2) {
       rightPointerRef.current = { x: event.clientX, y: event.clientY, moved: false };
+      setRightPanning(true);
     }
   }, []);
+
+  // Right-drag pans the canvas; show the grab cursor for as long as the right
+  // button is held, wherever it is released.
+  useEffect(() => {
+    if (!rightPanning) return undefined;
+    const release = (event) => {
+      if (event.type === 'blur' || !(event.buttons & 2)) setRightPanning(false);
+    };
+    window.addEventListener('pointerup', release);
+    window.addEventListener('blur', release);
+    return () => {
+      window.removeEventListener('pointerup', release);
+      window.removeEventListener('blur', release);
+    };
+  }, [rightPanning]);
 
   const onCanvasPointerMove = useCallback((event) => {
     const pointer = rightPointerRef.current;
@@ -2044,9 +2676,9 @@ function WorkflowsInner() {
       const flow = workflowToFlow(parsed, {
         onNodeChange: (nodeId, patch) => {
           setGraphNodes((currentNodes) => {
-            const nextNodes = currentNodes.map((node) => (
+            const nextNodes = sizeUnpackNodes(currentNodes.map((node) => (
               node.id === nodeId ? { ...node, data: { ...node.data, ...patch } } : node
-            ));
+            )), edgesRef.current);
             syncWorkflowFromGraph(nextNodes, edgesRef.current, viewportRef.current);
             return nextNodes;
           });
@@ -2278,7 +2910,7 @@ function WorkflowsInner() {
               <section className="agents-graph-panel">
                 <div className="agents-graph-shell">
                   <div
-                    className={`canvas-surface workflow-canvas workflow-canvas--${canvasTool}`}
+                    className={`canvas-surface workflow-canvas workflow-canvas--${canvasTool}${rightPanning ? ' workflow-canvas--right-panning' : ''}`}
                     onDrop={onCanvasDrop}
                     onDragOver={onCanvasDragOver}
                     onPointerDown={onCanvasPointerDown}
@@ -2328,6 +2960,8 @@ function WorkflowsInner() {
                       onNodesChange={onNodesChange}
                       onEdgesChange={onEdgesChange}
                       onConnect={onConnect}
+                      onConnectStart={onConnectStart}
+                      onConnectEnd={onConnectEnd}
                       onEdgeClick={handleEdgeClick}
                       panOnDrag={canvasInteraction.panOnDrag}
                       selectionOnDrag={canvasInteraction.selectionOnDrag}
@@ -2455,7 +3089,7 @@ function WorkflowsInner() {
 
 // This helper is exported for the focused workflow graph unit test.
 // eslint-disable-next-line react-refresh/only-export-components
-export { flowToWorkflow, workflowToFlow, NODE_MENU_CATEGORIES, schemaProperties, canvasMenuAnchor, visibleNodePortProperties };
+export { flowToWorkflow, workflowToFlow, NODE_MENU_CATEGORIES, schemaProperties, canvasMenuAnchor, visibleNodePortProperties, deriveUnpackSchemas, recomputeUnpackSchemas, computeLostEdgesForUnpackChange, isUnpackableSchema, parsePromptPlaceholders, derivePromptInputSchema };
 export default function WorkflowsPage() {
   return (
     <ReactFlowProvider>

@@ -6,7 +6,7 @@ import copy
 import json
 import uuid
 from collections import defaultdict
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -18,6 +18,7 @@ from .document_kinds import (
     WORKFLOW_RUN_KEY_PREFIX,
 )
 from .document_types import DOCUMENT_OPERATIONS, DocumentOperation, DocumentType
+from .prompts.templates import parse_prompt_template, resolve_type_ref
 from .schemas import load_schema
 from .structured import validate_against_schema
 from .utils import utcnow_isoformat
@@ -40,15 +41,7 @@ _TRIGGER_INPUT_SCHEMA = {
     "required": ["trigger"],
     "properties": {"trigger": _ANY_VALUE_SCHEMA},
 }
-_MCP_TOOL_SCHEMA = {
-    "title": "McpTool",
-    "type": "object",
-    "required": ["server_id", "tool_name"],
-    "properties": {
-        "server_id": {"type": "string"},
-        "tool_name": {"type": "string"},
-    },
-}
+
 # Root keywords that only make sense at a schema's own root. ``$id`` would
 # re-base ``$ref`` resolution, so it is dropped; definitions are hoisted to the
 # composed port schema's root so internal ``#/$defs/...`` refs keep resolving.
@@ -56,14 +49,18 @@ _SCHEMA_ROOT_ONLY_KEYS = ("$schema", "$id")
 _SCHEMA_DEFINITION_KEYS = ("$defs", "definitions")
 
 
-def _embed_document_schema(
-    document_schema: Mapping[str, Any] | None,
-) -> tuple[dict[str, Any], dict[str, Any], dict[str, dict[str, Any]]]:
-    """Split one document schema into (embeddable schema, properties, root definitions)."""
+def _typed_document_schema(
+    document_type: DocumentType, document_schema: Mapping[str, Any] | None
+) -> tuple[dict[str, Any], dict[str, dict[str, Any]]]:
+    """Return (embeddable document schema titled with the type label, root definitions).
 
-    if not document_schema:
-        return dict(_JSON_OBJECT_SCHEMA), {}, {}
-    embedded = copy.deepcopy(dict(document_schema))
+    The title makes the port nominally typed: two document types sharing one
+    schema file still only connect to ports of their own type.
+    """
+
+    embedded: dict[str, Any] = (
+        copy.deepcopy(dict(document_schema)) if document_schema else dict(_JSON_OBJECT_SCHEMA)
+    )
     for key in _SCHEMA_ROOT_ONLY_KEYS:
         embedded.pop(key, None)
     definitions = {
@@ -71,26 +68,21 @@ def _embed_document_schema(
         for key in _SCHEMA_DEFINITION_KEYS
         if isinstance(embedded.get(key), dict)
     }
-    properties = embedded.get("properties")
-    return embedded, dict(properties) if isinstance(properties, dict) else {}, definitions
-
-
-def _flattened_ports(prefix: str, properties: Mapping[str, Any]) -> dict[str, Any]:
-    return {f"{prefix}.{name}": copy.deepcopy(schema) for name, schema in properties.items()}
+    embedded["title"] = document_type.label
+    return embedded, definitions
 
 
 def document_event_output_schema(
     document_type: DocumentType, document_schema: Mapping[str, Any] | None
 ) -> dict[str, Any]:
-    """Return the flat output contract of an event node on ``document_type``.
+    """Return the output contract of an event node on ``document_type``.
 
-    ``before``/``after`` carry the whole document; every top-level document
-    property is also its own directly connectable ``before.<p>``/``after.<p>``
-    port. Sides absent for an operation (``before`` on created, ``after`` on
-    deleted) are simply not produced.
+    ``before``/``after`` carry the whole document as one typed port; Unpack
+    nodes expose its fields. Sides absent for an operation (``before`` on
+    created, ``after`` on deleted) are simply not produced.
     """
 
-    embedded, properties, definitions = _embed_document_schema(document_schema)
+    embedded, definitions = _typed_document_schema(document_type, document_schema)
     return {
         "title": f"{document_type.label} event",
         "type": "object",
@@ -104,9 +96,7 @@ def document_event_output_schema(
             "timestamp": {"type": "string"},
             "changed_fields": {"type": "array", "items": {"type": "string"}},
             "before": copy.deepcopy(embedded),
-            "after": copy.deepcopy(embedded),
-            **_flattened_ports("before", properties),
-            **_flattened_ports("after", properties),
+            "after": embedded,
         },
         **definitions,
     }
@@ -123,7 +113,7 @@ def document_read_input_schema(document_type: DocumentType) -> dict[str, Any]:
 def document_read_output_schema(
     document_type: DocumentType, document_schema: Mapping[str, Any] | None
 ) -> dict[str, Any]:
-    embedded, properties, definitions = _embed_document_schema(document_schema)
+    embedded, definitions = _typed_document_schema(document_type, document_schema)
     return {
         "title": f"{document_type.label} read",
         "type": "object",
@@ -133,7 +123,6 @@ def document_read_output_schema(
             "key": {"type": "string"},
             "id": {"type": "string"},
             "document": embedded,
-            **_flattened_ports("document", properties),
         },
         **definitions,
     }
@@ -146,7 +135,8 @@ def document_query_input_schema(
 ) -> dict[str, Any]:
     if not filter_fields:
         return copy.deepcopy(_TRIGGER_INPUT_SCHEMA)
-    _embedded, properties, definitions = _embed_document_schema(document_schema)
+    embedded, definitions = _typed_document_schema(document_type, document_schema)
+    properties = unpackable_properties(embedded)
     if properties:
         unknown = [field for field in filter_fields if field not in properties]
         if unknown:
@@ -167,7 +157,7 @@ def document_query_input_schema(
 def document_query_output_schema(
     document_type: DocumentType, document_schema: Mapping[str, Any] | None
 ) -> dict[str, Any]:
-    embedded, _properties, definitions = _embed_document_schema(document_schema)
+    embedded, definitions = _typed_document_schema(document_type, document_schema)
     return {
         "title": f"{document_type.label} query",
         "type": "object",
@@ -214,12 +204,10 @@ def build_document_event_output(
         "timestamp": timestamp,
         "changed_fields": document_changed_fields(before, after),
     }
-    for side, value in (("before", before), ("after", after)):
-        if value is None:
-            continue
-        output[side] = value
-        if isinstance(value, Mapping):
-            output.update({f"{side}.{name}": field for name, field in value.items()})
+    if before is not None:
+        output["before"] = before
+    if after is not None:
+        output["after"] = after
     return output
 
 
@@ -233,9 +221,56 @@ def build_document_read_output(
     }
     if document is not None:
         output["document"] = document
-        if isinstance(document, Mapping):
-            output.update({f"document.{name}": field for name, field in document.items()})
     return output
+
+
+def value_at_path(value: Any, path: str) -> Any:
+    """Walk a dotted path (``after.column_id``) into nested objects; ``None`` if absent."""
+
+    for part in path.split("."):
+        if not isinstance(value, Mapping) or part not in value:
+            return None
+        value = value[part]
+    return value
+
+
+def path_exists(value: Any, path: str) -> bool:
+    """Whether every segment of a dotted path is present."""
+
+    for part in path.split("."):
+        if not isinstance(value, Mapping) or part not in value:
+            return False
+        value = value[part]
+    return True
+
+
+def schema_at_path(ports: Mapping[str, Any], path: str) -> dict[str, Any] | None:
+    """Resolve a dotted path against port schemas' nested ``properties``.
+
+    ``None`` when a segment is not declared; an object schema that declares no
+    ``properties`` at all is open, so any deeper path resolves to ``{}``.
+    """
+
+    schema: Any = {"properties": ports}
+    for part in path.split("."):
+        if not isinstance(schema, Mapping):
+            return None
+        properties = schema.get("properties")
+        if properties is None and schema.get("type") == "object":
+            return {}
+        if not isinstance(properties, Mapping) or part not in properties:
+            return None
+        schema = properties[part]
+    return dict(schema) if isinstance(schema, Mapping) else {}
+
+
+def unpackable_properties(schema: Mapping[str, Any] | None) -> dict[str, Any]:
+    """Properties of an object port schema an Unpack node can expose (empty if none)."""
+
+    if not isinstance(schema, Mapping) or schema.get("type") != "object":
+        return {}
+    properties = schema.get("properties")
+    return dict(properties) if isinstance(properties, Mapping) else {}
 
 
 class WorkflowNodeEvent(BaseModel):
@@ -243,8 +278,8 @@ class WorkflowNodeEvent(BaseModel):
 
     Filters are all optional: ``key`` pins one document, ``operations`` limits
     the op (empty = any), ``changed_fields`` requires at least one listed
-    top-level field to differ, and ``match`` requires equality on output ports
-    (e.g. ``{"after.column_id": "done"}``).
+    top-level field to differ, and ``match`` requires equality at dotted
+    output paths (e.g. ``{"after.column_id": "done"}``).
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -271,7 +306,10 @@ class WorkflowNodeEvent(BaseModel):
             event.get("changed_fields") or []
         ):
             return False
-        return all(event.get(port) == value for port, value in self.match.items())
+        return all(
+            value_at_path(event, path) == value and path_exists(event, path)
+            for path, value in self.match.items()
+        )
 
 
 class WorkflowNodeData(BaseModel):
@@ -289,7 +327,7 @@ class WorkflowNodeDocumentRead(BaseModel):
     """Deterministic read of one document of a type; no LLM involved.
 
     Schemas are derived from the document type on save (see
-    ``apply_document_type_schemas``).
+    ``derive_workflow_port_schemas``).
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -319,35 +357,71 @@ class WorkflowNodeDocumentQuery(BaseModel):
     output_schema: dict[str, Any] = Field(default_factory=lambda: dict(_JSON_OBJECT_SCHEMA))
 
 
+class WorkflowNodeUnpack(BaseModel):
+    """Pure step exposing one object's properties as output ports.
+
+    Its single ``value`` input takes any object port; output ports are that
+    object's properties, re-derived from the upstream port on every save (see
+    ``derive_workflow_port_schemas``). Which ports the editor lists is view
+    state kept in the definition's ``ui`` section.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["unpack"] = "unpack"
+    title: str = "Unpack"
+    input_schema: dict[str, Any] = Field(default_factory=lambda: _unpack_input_schema(None, {}))
+    output_schema: dict[str, Any] = Field(default_factory=lambda: _unpack_output_schema(None, {}))
+
+
+def _unpack_input_schema(
+    source: Mapping[str, Any] | None, definitions: Mapping[str, Any]
+) -> dict[str, Any]:
+    return {
+        "type": "object",
+        "required": ["value"],
+        "properties": {"value": copy.deepcopy(dict(source)) if source else {"type": "object"}},
+        **copy.deepcopy(dict(definitions)),
+    }
+
+
+def _unpack_output_schema(
+    source: Mapping[str, Any] | None, definitions: Mapping[str, Any]
+) -> dict[str, Any]:
+    required = source.get("required") if source else None
+    return {
+        "type": "object",
+        "properties": copy.deepcopy(unpackable_properties(source)),
+        "required": list(required) if isinstance(required, list) else [],
+        **copy.deepcopy(dict(definitions)),
+    }
+
+
+class WorkflowNodeExtract(BaseModel):
+    """Prompt-backed extraction step with structured output."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["extract"] = "extract"
+    title: str = "Extract"
+    prompt: str | None = None
+    template: str | None = None
+    schema_ref: str | dict | None = Field(default=None, alias="schema")
+    input_schema: dict[str, Any] = Field(default_factory=lambda: dict(_JSON_OBJECT_SCHEMA))
+    output_schema: dict[str, Any] = Field(default_factory=lambda: dict(_JSON_OBJECT_SCHEMA))
+
+
 class WorkflowNodeAgent(BaseModel):
-    """A generic Progenitor-backed step: typed input, message, typed output."""
+    """Prompt-backed agent step delegating to Progenitor."""
 
     model_config = ConfigDict(extra="forbid")
 
     kind: Literal["agent"] = "agent"
     title: str = "Agent"
-    message: str
+    prompt: str | None = None
+    template: str | None = None
+    subagent: str | None = None
     input_schema: dict[str, Any] = Field(default_factory=lambda: dict(_JSON_OBJECT_SCHEMA))
-    output_schema: dict[str, Any] = Field(default_factory=lambda: dict(_JSON_OBJECT_SCHEMA))
-
-
-class WorkflowNodeMcp(BaseModel):
-    """Deterministic MCP tool invocation with a typed tool selection input."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    kind: Literal["mcp"] = "mcp"
-    title: str = "MCP Tool"
-    input_schema: dict[str, Any] = Field(
-        default_factory=lambda: {
-            "type": "object",
-            "required": ["tool", "arguments"],
-            "properties": {
-                "tool": dict(_MCP_TOOL_SCHEMA),
-                "arguments": dict(_JSON_OBJECT_SCHEMA),
-            },
-        }
-    )
     output_schema: dict[str, Any] = Field(default_factory=lambda: dict(_JSON_OBJECT_SCHEMA))
 
 
@@ -405,8 +479,9 @@ WorkflowNode = Annotated[
     | WorkflowNodeData
     | WorkflowNodeDocumentRead
     | WorkflowNodeDocumentQuery
+    | WorkflowNodeUnpack
+    | WorkflowNodeExtract
     | WorkflowNodeAgent
-    | WorkflowNodeMcp
     | WorkflowNodeCondition
     | WorkflowNodeApproval
     | WorkflowNodeHumanInput,
@@ -578,7 +653,7 @@ def default_workflow_definition(
 ) -> dict[str, Any]:
     """Return the minimal graph-native workflow document.
 
-    Event port schemas are filled in by ``apply_document_type_schemas`` on save.
+    Event port schemas are filled in by ``derive_workflow_port_schemas`` on save.
     """
 
     created_at = utcnow_isoformat()
@@ -607,13 +682,20 @@ def default_workflow_definition(
                 agent_node_id: {
                     "kind": "agent",
                     "title": "Agent",
-                    "message": "Handle this workflow event.",
+                    "template": "Handle this workflow event.\n\nDocument key: {key}",
                     "input_schema": {
                         "type": "object",
                         "required": ["key"],
                         "properties": {"key": {"type": "string"}},
                     },
-                    "output_schema": {"type": "object", "properties": {}},
+                    "output_schema": {
+                        "type": "object",
+                        "required": ["message", "thread_id"],
+                        "properties": {
+                            "message": {"type": "string"},
+                            "thread_id": {"type": "string"},
+                        },
+                    },
                 },
             },
             "edges": [
@@ -647,14 +729,150 @@ def default_workflow_definition(
     }
 
 
-def apply_document_type_schemas(
-    payload: Mapping[str, Any], document_types: Mapping[str, DocumentType]
-) -> dict[str, Any]:
-    """Return ``payload`` with every document node's port schemas derived from its type.
+def _node_prompt_text(node: dict[str, Any], prompt_loader: Callable[[str], str] | None) -> str:
+    """Return the prompt template text for an extract/agent node."""
+    prompt_path = node.get("prompt")
+    if prompt_path:
+        if prompt_loader is None:
+            raise ValueError(
+                f"node '{node.get('title')}' references prompt '{prompt_path}' but "
+                f"no prompt loader is available"
+            )
+        return prompt_loader(prompt_path)
+    template = node.get("template")
+    if isinstance(template, str):
+        return template
+    raise ValueError("extract/agent node must have either 'prompt' or 'template'")
 
-    Run on every save path (backend routes and the runtime's virtual
-    ``/workflows/`` mount) so ports always reflect the registered type schema,
-    whatever schemas the writer sent.
+
+def _derive_prompt_node_input_schema(
+    node: dict[str, Any],
+    document_types: Mapping[str, DocumentType],
+    prompt_loader: Callable[[str], str] | None,
+) -> dict[str, Any]:
+    """Derive input schema for an extract/agent node from its prompt template."""
+    text = _node_prompt_text(node, prompt_loader)
+    template = parse_prompt_template(text)
+    properties: dict[str, Any] = {}
+    for root in template.roots:
+        type_ref = template.inputs.get(root)
+        if type_ref is not None:
+            properties[root] = resolve_type_ref(type_ref, document_types)
+        else:
+            properties[root] = _ANY_VALUE_SCHEMA
+    properties["thread_id"] = {"type": "string"}
+    required = list(template.roots)
+    return {"type": "object", "required": required, "properties": properties}
+
+
+def _derive_extract_output_schema(
+    node: dict[str, Any],
+    node_id: str,
+    nodes: dict[str, Any],
+    edges: list[Any],
+    document_types: Mapping[str, DocumentType],
+    prompt_loader: Callable[[str], str] | None,
+) -> dict[str, Any]:
+    """Derive the result schema for an extract node with precedence rules."""
+    # 1. Node-level schema wins
+    node_schema = node.get("schema")
+    if node_schema is not None:
+        result_schema = resolve_type_ref(node_schema, document_types)
+        return {
+            "type": "object",
+            "required": ["result", "thread_id"],
+            "properties": {
+                "result": result_schema,
+                "thread_id": {"type": "string"},
+            },
+        }
+
+    # 2. Template front matter output_schema
+    text = _node_prompt_text(node, prompt_loader)
+    template = parse_prompt_template(text)
+    if template.output_schema is not None:
+        result_schema = resolve_type_ref(template.output_schema, document_types)
+        return {
+            "type": "object",
+            "required": ["result", "thread_id"],
+            "properties": {
+                "result": result_schema,
+                "thread_id": {"type": "string"},
+            },
+        }
+
+    # 3. Infer from downstream non-unpack targets
+    target_schemas: list[dict[str, Any]] = []
+    for edge in edges:
+        source = edge.get("from") if isinstance(edge, dict) else None
+        target = edge.get("to") if isinstance(edge, dict) else None
+        if (
+            isinstance(source, dict)
+            and isinstance(target, dict)
+            and source.get("node") == node_id
+            and source.get("port") == "result"
+        ):
+            target_node = nodes.get(str(target.get("node")))
+            if not isinstance(target_node, dict) or target_node.get("kind") == "unpack":
+                continue
+            target_input = (
+                target_node.get("input_schema")
+                if isinstance(target_node, dict)
+                else target_node.input_schema
+            )
+            target_schema = schema_at_path(
+                target_input.get("properties", {}) if isinstance(target_input, Mapping) else {},
+                str(target.get("port")),
+            )
+            # An untyped input ({}: e.g. an Agent placeholder) carries no shape
+            # to ask Progenitor for, so it never counts as an inferred schema.
+            if target_schema:
+                target_schemas.append(target_schema)
+
+    if not target_schemas:
+        raise ValueError(f"extract node '{node_id}' needs a schema")
+
+    first = target_schemas[0]
+    for other in target_schemas[1:]:
+        if other != first:
+            raise ValueError(
+                f"extract node '{node_id}' result is wired to multiple targets with "
+                f"different schemas"
+            )
+
+    return {
+        "type": "object",
+        "required": ["result", "thread_id"],
+        "properties": {
+            "result": first,
+            "thread_id": {"type": "string"},
+        },
+    }
+
+
+def _derive_agent_output_schema() -> dict[str, Any]:
+    return {
+        "type": "object",
+        "required": ["message", "thread_id"],
+        "properties": {
+            "message": {"type": "string"},
+            "thread_id": {"type": "string"},
+        },
+    }
+
+
+def derive_workflow_port_schemas(
+    payload: Mapping[str, Any],
+    document_types: Mapping[str, DocumentType],
+    prompt_loader: Callable[[str], str] | None = None,
+) -> dict[str, Any]:
+    """Return ``payload`` with every derived node's port schemas recomputed.
+
+    Document nodes (event/read/query) take theirs from the registered type
+    schema; Unpack nodes take theirs from the port feeding their ``value``
+    input, so Unpack chains resolve in dependency order. Extract/agent nodes
+    take theirs from their prompt template placeholders. Run on every save
+    path so ports never reflect whatever schemas the writer sent.
     """
 
     result = copy.deepcopy(dict(payload))
@@ -697,11 +915,90 @@ def apply_document_type_schemas(
                 document_type, document_schema, [str(field) for field in filter_fields]
             )
             node["output_schema"] = document_query_output_schema(document_type, document_schema)
+    raw_edges = graph.get("edges") if isinstance(graph, dict) else None
+    edges: list[Any] = raw_edges if isinstance(raw_edges, list) else []
+    prompt_nodes = {
+        node_id: node
+        for node_id, node in nodes.items()
+        if isinstance(node, dict) and node.get("kind") in {"extract", "agent"}
+    }
+    # Order matters: every prompt node's inputs first (Extract infers its result
+    # from the inputs it feeds), then Extract results, then Unpack (which may
+    # unpack an Extract result; an Unpack value never constrains an Extract).
+    for node in prompt_nodes.values():
+        node["input_schema"] = _derive_prompt_node_input_schema(node, document_types, prompt_loader)
+    for node_id, node in prompt_nodes.items():
+        if node["kind"] == "extract":
+            node["output_schema"] = _derive_extract_output_schema(
+                node, node_id, nodes, edges, document_types, prompt_loader
+            )
+        else:
+            node["output_schema"] = _derive_agent_output_schema()
+    _derive_unpack_schemas(nodes, edges)
+
     return result
 
 
+def _raw_output_port(node: Any, port: str) -> tuple[dict[str, Any] | None, dict[str, Any]]:
+    """Return (port schema, root definitions) for one output port of a raw node dict."""
+
+    schema = node.get("output_schema") if isinstance(node, dict) else None
+    if not isinstance(schema, dict):
+        return None, {}
+    definitions = {
+        key: schema[key] for key in _SCHEMA_DEFINITION_KEYS if isinstance(schema.get(key), dict)
+    }
+    if node.get("kind") == "data":
+        return (schema if port == "value" else None), definitions
+    properties = schema.get("properties") if schema.get("type") == "object" else None
+    port_schema = properties.get(port) if isinstance(properties, dict) else None
+    return (port_schema if isinstance(port_schema, dict) else None), definitions
+
+
+def _derive_unpack_schemas(nodes: dict[str, Any], edges: Any) -> None:
+    unpack_ids = [
+        node_id
+        for node_id, node in nodes.items()
+        if isinstance(node, dict) and node.get("kind") == "unpack"
+    ]
+    if not unpack_ids:
+        return
+    feeds: dict[str, tuple[str, str]] = {}
+    for edge in edges if isinstance(edges, list) else []:
+        source = edge.get("from") if isinstance(edge, dict) else None
+        target = edge.get("to") if isinstance(edge, dict) else None
+        if (
+            isinstance(source, dict)
+            and isinstance(target, dict)
+            and target.get("node") in unpack_ids
+            and target.get("port") == "value"
+        ):
+            feeds[str(target["node"])] = (str(source.get("node")), str(source.get("port")))
+    # Each pass settles at least one more link of any Unpack chain; cycles are
+    # rejected later by graph validation, so the pass count is bounded.
+    for _ in range(len(unpack_ids) + 1):
+        changed = False
+        for node_id in unpack_ids:
+            node = nodes[node_id]
+            source_node_id, source_port = feeds.get(node_id, ("", ""))
+            source, definitions = _raw_output_port(nodes.get(source_node_id), source_port)
+            input_schema = _unpack_input_schema(source, definitions)
+            output_schema = _unpack_output_schema(source, definitions)
+            if (
+                node.get("input_schema") != input_schema
+                or node.get("output_schema") != output_schema
+            ):
+                node["input_schema"] = input_schema
+                node["output_schema"] = output_schema
+                changed = True
+        if not changed:
+            break
+
+
 def validate_workflow_definition_document(
-    content: str, document_types: Mapping[str, DocumentType]
+    content: str,
+    document_types: Mapping[str, DocumentType],
+    prompt_loader: Callable[[str], str] | None = None,
 ) -> dict[str, Any]:
     """Parse a workflow definition JSON document, derive its port schemas, and validate it."""
 
@@ -711,7 +1008,9 @@ def validate_workflow_definition_document(
         raise ValueError(f"not valid JSON: {exc}") from exc
     if not isinstance(parsed, dict):
         raise ValueError("workflow definition must be a JSON object")
-    return validate_workflow_definition_payload(apply_document_type_schemas(parsed, document_types))
+    return validate_workflow_definition_payload(
+        derive_workflow_port_schemas(parsed, document_types, prompt_loader=prompt_loader)
+    )
 
 
 def validate_workflow_definition_payload(payload: Any) -> dict[str, Any]:
@@ -732,11 +1031,11 @@ def validate_workflow_definition_payload(payload: Any) -> dict[str, Any]:
         raise ValueError("workflow graph must contain at least one event node")
     for node_id, event_node in event_nodes.items():
         ports = workflow_node_output_ports(event_node)
-        unknown_ports = [port for port in event_node.match if port not in ports]
-        if unknown_ports:
+        unknown_paths = [path for path in event_node.match if schema_at_path(ports, path) is None]
+        if unknown_paths:
             raise ValueError(
-                f"event node '{node_id}' match references unknown port(s) "
-                f"{', '.join(unknown_ports)}"
+                f"event node '{node_id}' match references unknown path(s) "
+                f"{', '.join(unknown_paths)}"
             )
         document_fields = (ports.get("after") or {}).get("properties")
         if isinstance(document_fields, dict) and document_fields:
@@ -880,8 +1179,10 @@ def _validate_workflow_graph(definition: WorkflowDefinition) -> None:
             raise ValueError(f"approval node '{node_id}' is missing a message")
         elif isinstance(node, WorkflowNodeHumanInput) and not node.message.strip():
             raise ValueError(f"human_input node '{node_id}' is missing a message")
-        elif isinstance(node, WorkflowNodeAgent) and not node.message.strip():
-            raise ValueError(f"agent node '{node_id}' is missing a message")
+        elif isinstance(node, WorkflowNodeExtract | WorkflowNodeAgent) and not (
+            node.prompt or node.template
+        ):
+            raise ValueError(f"{node.kind} node '{node_id}' is missing a prompt or template")
 
 
 def _validate_data_edges(definition: WorkflowDefinition) -> None:

@@ -52,6 +52,7 @@ from .state_backend import (
     InboxDirectoryBackend,
     KanbanTaskDirectoryBackend,
     PolicyDirectoryBackend,
+    PromptDocumentDirectoryBackend,
     RoutineDirectoryBackend,
     StateDocumentBackend,
     StateFile,
@@ -225,9 +226,7 @@ def create_progenitor_backend(
             state_manager, native_root=resolved_agents_dir
         )
         routes["/memories/"] = ContentDocumentDirectoryBackend(state_manager, "memory")
-        routes["/prompts/"] = ReadOnlyBackend(
-            ContentDocumentDirectoryBackend(state_manager, "prompt")
-        )
+        routes["/prompts/"] = PromptDocumentDirectoryBackend(state_manager, "prompt")
         for segment in plugin_skill_segments or []:
             routes[f"/skills/{segment}/"] = ReadOnlyBackend(
                 ContentDocumentDirectoryBackend(state_manager, "skill", path_prefix=segment)

@@ -1,5 +1,18 @@
 import { describe, expect, it, vi } from 'vitest';
-import { NODE_MENU_CATEGORIES, canvasMenuAnchor, flowToWorkflow, schemaProperties, visibleNodePortProperties, workflowToFlow } from './WorkflowsPage';
+import {
+  NODE_MENU_CATEGORIES,
+  canvasMenuAnchor,
+  flowToWorkflow,
+  schemaProperties,
+  visibleNodePortProperties,
+  workflowToFlow,
+  deriveUnpackSchemas,
+  recomputeUnpackSchemas,
+  computeLostEdgesForUnpackChange,
+  isUnpackableSchema,
+  parsePromptPlaceholders,
+  derivePromptInputSchema,
+} from './WorkflowsPage';
 import { canvasToolSettings } from './workflowCanvasTools';
 
 const AGENT_OUTPUT_SCHEMA = {
@@ -18,10 +31,8 @@ const KANBAN_EVENT_OUTPUT_SCHEMA = {
     op: { type: 'string' },
     timestamp: { type: 'string' },
     changed_fields: { type: 'array', items: { type: 'string' } },
-    before: { type: 'object' },
-    after: { type: 'object' },
-    'after.title': { type: 'string' },
-    'after.column_id': { type: 'string' },
+    before: { title: 'Kanban Card', type: 'object', properties: { title: { type: 'string' }, column_id: { type: 'string' } } },
+    after: { title: 'Kanban Card', type: 'object', properties: { title: { type: 'string' }, column_id: { type: 'string' } } },
   },
 };
 
@@ -38,7 +49,7 @@ describe('workflowToFlow', () => {
       graph: {
         nodes: {
           event: { kind: 'event', title: 'Event', document_type: 'kanban_card', output_schema: KANBAN_EVENT_OUTPUT_SCHEMA },
-          agent: { kind: 'agent', title: 'Agent', message: 'Go', input_schema: { type: 'object', properties: { document_type: { type: 'string' } } }, output_schema: { type: 'object', properties: {} } },
+          agent: { kind: 'agent', title: 'Agent', prompt: null, template: 'Go', subagent: null, input_schema: { type: 'object', properties: { document_type: { type: 'string' } } }, output_schema: { type: 'object', properties: {} } },
         },
         edges: [{ from: { node: 'event', port: 'document_type' }, to: { node: 'agent', port: 'document_type' } }],
       },
@@ -52,38 +63,12 @@ describe('workflowToFlow', () => {
     });
   });
 
-  it('maps dotted port names for nested document properties', () => {
-    const flow = workflowToFlow({
-      graph: {
-        nodes: {
-          event: { kind: 'event', title: 'Event', document_type: 'kanban_card', output_schema: KANBAN_EVENT_OUTPUT_SCHEMA },
-          agent: { kind: 'agent', title: 'Agent', message: 'Go', input_schema: { type: 'object', properties: { 'after.title': { type: 'string' } } }, output_schema: { type: 'object', properties: {} } },
-        },
-        edges: [{ from: { node: 'event', port: 'after.title' }, to: { node: 'agent', port: 'after.title' } }],
-      },
-      ui: { nodes: {} },
-    }, {}, null);
-
-    const edge = flow.edges.find((e) => e.source === 'event');
-    expect(edge).toMatchObject({
-      sourceHandle: 'out:after.title',
-      target: 'agent',
-      targetHandle: 'in:after.title',
-    });
-
-    const persisted = flowToWorkflow({}, flow.nodes, flow.edges, flow.viewport);
-    expect(persisted.graph.edges).toContainEqual({
-      from: { node: 'event', port: 'after.title' },
-      to: { node: 'agent', port: 'after.title' },
-    });
-  });
-
   it('maps condition results through ordinary typed ports', () => {
     const flow = workflowToFlow({
       graph: {
         nodes: {
           condition: { kind: 'condition', title: 'Condition', expression: 'ready', input_schema: { type: 'object', properties: {} }, output_schema: { type: 'object', properties: { true: { type: 'boolean' } } } },
-          agent: { kind: 'agent', title: 'Agent', message: 'Go', input_schema: { type: 'object', properties: { result: { type: 'boolean' } } }, output_schema: { type: 'object', properties: {} } },
+          agent: { kind: 'agent', title: 'Agent', prompt: null, template: 'Go', subagent: null, input_schema: { type: 'object', properties: { result: { type: 'boolean' } } }, output_schema: { type: 'object', properties: {} } },
         },
         edges: [{ from: { node: 'condition', port: 'true' }, to: { node: 'agent', port: 'result' } }],
       },
@@ -106,8 +91,8 @@ describe('workflowToFlow', () => {
     const workflow = {
       graph: {
         nodes: {
-          source: { kind: 'agent', title: 'Source', message: 'Go', input_schema: { type: 'object', properties: {} }, output_schema: AGENT_OUTPUT_SCHEMA },
-          target: { kind: 'agent', title: 'Target', message: 'Go', input_schema: agentInputSchema, output_schema: { type: 'object', properties: {} } },
+          source: { kind: 'agent', title: 'Source', prompt: null, template: 'Go', subagent: null, input_schema: { type: 'object', properties: {} }, output_schema: AGENT_OUTPUT_SCHEMA },
+          target: { kind: 'agent', title: 'Target', prompt: null, template: 'Go', subagent: null, input_schema: agentInputSchema, output_schema: { type: 'object', properties: {} } },
         },
         edges: [{ from: { node: 'source', port: 'title' }, to: { node: 'target', port: 'title' } }],
       },
@@ -160,9 +145,9 @@ describe('workflowToFlow', () => {
       graph: {
         nodes: {
           event: { kind: 'event', title: 'Event', document_type: 'kanban_card', output_schema: KANBAN_EVENT_OUTPUT_SCHEMA },
-          agent: { kind: 'agent', title: 'Agent', message: 'Go', input_schema: { type: 'object', properties: {} }, output_schema: { type: 'object', properties: {} } },
+          agent: { kind: 'agent', title: 'Agent', prompt: null, template: 'Go', subagent: null, input_schema: { type: 'object', properties: {} }, output_schema: { type: 'object', properties: {} } },
           data: { kind: 'data', title: 'Data', value: 1, output_schema: { type: 'number' } },
-          mcp: { kind: 'mcp', title: 'MCP', input_schema: { type: 'object', properties: {} }, output_schema: { type: 'object', properties: {} } },
+          extract: { kind: 'extract', title: 'Extract', prompt: null, template: '', schema: null, input_schema: { type: 'object', properties: {} }, output_schema: { type: 'object', properties: {} } },
           condition: { kind: 'condition', title: 'Condition', expression: 'ready', input_schema: { type: 'object', properties: {} } },
           approval: { kind: 'approval', title: 'Approval', message: 'Approve?', input_schema: { type: 'object', properties: {} } },
           human_input: { kind: 'human_input', title: 'Human', message: 'Pick one', input_schema: { type: 'object', properties: {} }, output_schema: { type: 'object', properties: {} } },
@@ -180,7 +165,7 @@ describe('workflowToFlow', () => {
       event: 'event',
       agent: 'agent',
       data: 'data',
-      mcp: 'mcp',
+      extract: 'extract',
       condition: 'condition',
       approval: 'approval',
       human_input: 'human_input',
@@ -193,7 +178,7 @@ describe('workflowToFlow', () => {
     const flow = workflowToFlow({
       graph: {
         nodes: {
-          agent: { kind: 'agent', title: 'Notify', message: 'Notify the user.', input_schema: { type: 'object', properties: {} }, output_schema: { type: 'object', properties: {} } },
+          agent: { kind: 'agent', title: 'Notify', prompt: null, template: 'Notify the user.', subagent: null, input_schema: { type: 'object', properties: {} }, output_schema: { type: 'object', properties: {} } },
         },
         edges: [],
       },
@@ -224,7 +209,7 @@ describe('workflowToFlow', () => {
             match: { 'after.column_id': 'done' },
             output_schema: KANBAN_EVENT_OUTPUT_SCHEMA,
           },
-          agent_1: { kind: 'agent', title: 'Notify', message: 'Notify the user.', input_schema: { type: 'object', properties: {} }, output_schema: { type: 'object', properties: {} } },
+          agent_1: { kind: 'agent', title: 'Notify', prompt: null, template: 'Notify the user.', subagent: null, input_schema: { type: 'object', properties: {} }, output_schema: { type: 'object', properties: {} } },
         },
         edges: [{ from: { node: 'event_1', port: 'default' }, to: { node: 'agent_1', port: 'default' } }],
       },
@@ -324,11 +309,11 @@ describe('workflowToFlow', () => {
 });
 
 describe('workflow node menu', () => {
-  it('exposes exactly the nine V3 node kinds and no capability-specific kinds', () => {
+  it('exposes exactly the ten V3 node kinds and no capability-specific kinds', () => {
     const addableKinds = NODE_MENU_CATEGORIES.flatMap((category) => category.items).map((item) => item.kind);
 
     expect(addableKinds.sort()).toEqual(
-      ['agent', 'approval', 'condition', 'data', 'document_query', 'document_read', 'event', 'human_input', 'mcp'].sort(),
+      ['agent', 'approval', 'condition', 'data', 'document_query', 'document_read', 'event', 'extract', 'human_input', 'unpack'].sort(),
     );
   });
 });
@@ -403,11 +388,13 @@ describe('data edge diagnostics', () => {
     const workflow = {
       graph: {
         nodes: {
-          source: { kind: 'agent', title: 'Source', message: 'Go', input_schema: { type: 'object', properties: {} }, output_schema: { type: 'object', properties: { title: { type: 'string' } } } },
+          source: { kind: 'agent', title: 'Source', prompt: null, template: 'Go', subagent: null, input_schema: { type: 'object', properties: {} }, output_schema: { type: 'object', properties: { title: { type: 'string' } } } },
           target: {
             kind: 'agent',
             title: 'Target',
-            message: 'Go',
+            prompt: null,
+            template: 'Go',
+            subagent: null,
             input_schema: { type: 'object', properties: { count: { type: 'integer' } } },
             output_schema: { type: 'object', properties: {} },
           },
@@ -579,6 +566,220 @@ describe('auto-sized nodes without stored size', () => {
     expect(persisted.ui.nodes.event_1.size).toEqual({
       data: { width: 350, height: 180 },
       settings: { width: 340, height: 260 },
+    });
+  });
+});
+
+describe('unpack schema derivation', () => {
+  it('derives unpack schemas from a connected object port', () => {
+    const nodes = [
+      { id: 'event', data: { kind: 'event', outputSchema: KANBAN_EVENT_OUTPUT_SCHEMA } },
+      { id: 'unpack', data: { kind: 'unpack', id: 'unpack' } },
+    ];
+    const edges = [{ source: 'event', target: 'unpack', sourceHandle: 'out:after', targetHandle: 'in:value' }];
+    const { inputSchema, outputSchema } = deriveUnpackSchemas('unpack', nodes, edges);
+    expect(inputSchema.properties.value).toMatchObject({ title: 'Kanban Card', type: 'object' });
+    expect(outputSchema.properties).toHaveProperty('title');
+    expect(outputSchema.properties).toHaveProperty('column_id');
+  });
+
+  it('returns empty schemas when no value edge is connected', () => {
+    const nodes = [{ id: 'unpack', data: { kind: 'unpack', id: 'unpack' } }];
+    const edges = [];
+    const { inputSchema, outputSchema } = deriveUnpackSchemas('unpack', nodes, edges);
+    expect(inputSchema.properties.value).toEqual({ type: 'object' });
+    expect(outputSchema.properties).toEqual({});
+  });
+
+  it('handles chained unpack nodes', () => {
+    const nodes = [
+      { id: 'event', data: { kind: 'event', outputSchema: KANBAN_EVENT_OUTPUT_SCHEMA } },
+      { id: 'unpack1', data: { kind: 'unpack', id: 'unpack1', outputSchema: { type: 'object', properties: { title: { type: 'string' }, column_id: { type: 'string' } } } } },
+      { id: 'unpack2', data: { kind: 'unpack', id: 'unpack2' } },
+    ];
+    const edges = [
+      { source: 'event', target: 'unpack1', sourceHandle: 'out:after', targetHandle: 'in:value' },
+      { source: 'unpack1', target: 'unpack2', sourceHandle: 'out:column_id', targetHandle: 'in:value' },
+    ];
+    const result = recomputeUnpackSchemas(nodes, edges);
+    const unpack1 = result.find((n) => n.id === 'unpack1');
+    const unpack2 = result.find((n) => n.id === 'unpack2');
+    expect(unpack1.data.outputSchema.properties).toHaveProperty('title');
+    expect(unpack2.data.inputSchema.properties.value).toEqual({ type: 'string' });
+    expect(unpack2.data.outputSchema.properties).toEqual({});
+  });
+});
+
+describe('unpack visible ports', () => {
+  it('shows only connected fields collapsed and every field expanded, in schema order', () => {
+    const properties = [
+      { name: 'title' },
+      { name: 'column_id' },
+      { name: 'status' },
+    ];
+    expect(visibleNodePortProperties(properties, 200, ['status', 'title'], false).map((p) => p.name)).toEqual(['title', 'status']);
+    expect(visibleNodePortProperties(properties, 200, ['status'], true).map((p) => p.name)).toEqual(['title', 'column_id', 'status']);
+  });
+
+  it('shows all ports for a normal node when fields is not provided', () => {
+    const properties = [
+      { name: 'title' },
+      { name: 'column_id' },
+    ];
+    const visible = visibleNodePortProperties(properties, 200, []);
+    expect(visible.map((p) => p.name)).toEqual(['title', 'column_id']);
+  });
+});
+
+describe('unpack edge loss computation', () => {
+  it('detects edges that would be lost when an unpack output schema changes', () => {
+    const currentEdges = [
+      { id: 'e1', source: 'unpack', sourceHandle: 'out:title', target: 'agent' },
+      { id: 'e2', source: 'unpack', sourceHandle: 'out:column_id', target: 'query' },
+    ];
+    const nextNodes = [
+      { id: 'unpack', data: { kind: 'unpack', outputSchema: { type: 'object', properties: { title: { type: 'string' } } } } },
+    ];
+    const lost = computeLostEdgesForUnpackChange(currentEdges, nextNodes);
+    expect(lost).toHaveLength(1);
+    expect(lost[0].id).toBe('e2');
+  });
+
+  it('returns an empty array when no edges would be lost', () => {
+    const currentEdges = [
+      { id: 'e1', source: 'unpack', sourceHandle: 'out:title', target: 'agent' },
+    ];
+    const nextNodes = [
+      { id: 'unpack', data: { kind: 'unpack', outputSchema: { type: 'object', properties: { title: { type: 'string' }, column_id: { type: 'string' } } } } },
+    ];
+    const lost = computeLostEdgesForUnpackChange(currentEdges, nextNodes);
+    expect(lost).toHaveLength(0);
+  });
+});
+
+describe('isUnpackableSchema', () => {
+  it('returns true for an object schema with properties', () => {
+    expect(isUnpackableSchema({ type: 'object', properties: { a: { type: 'string' } } })).toBe(true);
+  });
+
+  it('returns false for non-object or empty properties', () => {
+    expect(isUnpackableSchema({ type: 'string' })).toBe(false);
+    expect(isUnpackableSchema({ type: 'object', properties: {} })).toBe(false);
+    expect(isUnpackableSchema(null)).toBe(false);
+  });
+});
+
+describe('parsePromptPlaceholders', () => {
+  it('extracts dotted placeholder roots in first-appearance order', () => {
+    const result = parsePromptPlaceholders('Card {card.title} moved to {card.column_id} by {actor.name}');
+    expect(result.roots).toEqual(['card', 'actor']);
+    expect(result.placeholders).toEqual(['card.title', 'card.column_id', 'actor.name']);
+  });
+
+  it('ignores JSON literals like braces with quotes', () => {
+    const result = parsePromptPlaceholders('Payload: {"a": 1} and {root}');
+    expect(result.roots).toEqual(['root']);
+    expect(result.placeholders).toEqual(['root']);
+  });
+
+  it('treats thread_id as reserved and excludes it from roots', () => {
+    const result = parsePromptPlaceholders('{thread_id} and {thread_id.value} and {data}');
+    expect(result.roots).toEqual(['data']);
+    expect(result.placeholders).toEqual(['data']);
+  });
+
+  it('returns empty arrays for null or empty text', () => {
+    expect(parsePromptPlaceholders('')).toEqual({ roots: [], placeholders: [] });
+    expect(parsePromptPlaceholders(null)).toEqual({ roots: [], placeholders: [] });
+  });
+});
+
+describe('derivePromptInputSchema', () => {
+  it('builds an object schema with required roots from placeholders', () => {
+    const schema = derivePromptInputSchema('Card {card.title} in {board.name}');
+    expect(schema).toEqual({
+      type: 'object',
+      required: ['card', 'board'],
+      properties: { card: {}, board: {} },
+    });
+  });
+
+  it('returns empty properties when there are no placeholders', () => {
+    const schema = derivePromptInputSchema('Hello world');
+    expect(schema).toEqual({ type: 'object', properties: {} });
+  });
+});
+
+describe('agent node round-trip', () => {
+  it('serializes and deserializes prompt, template, and subagent', () => {
+    const workflow = {
+      graph: {
+        nodes: {
+          agent_1: {
+            kind: 'agent',
+            title: 'Notify',
+            prompt: null,
+            template: 'Notify about {card.title}',
+            subagent: 'Helper',
+            input_schema: { type: 'object', required: ['card'], properties: { card: {} } },
+            output_schema: { type: 'object', required: ['message', 'thread_id'], properties: { message: { type: 'string' }, thread_id: { type: 'string' } } },
+          },
+        },
+        edges: [],
+      },
+      ui: { nodes: {} },
+    };
+
+    const flow = workflowToFlow(workflow, {}, null);
+    const node = flow.nodes.find((n) => n.id === 'agent_1');
+    expect(node.type).toBe('agent');
+    expect(node.data.prompt).toBeNull();
+    expect(node.data.template).toBe('Notify about {card.title}');
+    expect(node.data.subagent).toBe('Helper');
+
+    const persisted = flowToWorkflow(workflow, flow.nodes, flow.edges, flow.viewport);
+    expect(persisted.graph.nodes.agent_1).toMatchObject({
+      kind: 'agent',
+      prompt: null,
+      template: 'Notify about {card.title}',
+      subagent: 'Helper',
+    });
+  });
+});
+
+describe('extract node round-trip', () => {
+  it('serializes and deserializes prompt, template, and schema', () => {
+    const workflow = {
+      graph: {
+        nodes: {
+          extract_1: {
+            kind: 'extract',
+            title: 'Parse',
+            prompt: 'prompts/parse.md',
+            template: null,
+            schema: 'kanban_card',
+            input_schema: { type: 'object', properties: {} },
+            output_schema: { type: 'object', required: ['result', 'thread_id'], properties: { result: {}, thread_id: { type: 'string' } } },
+          },
+        },
+        edges: [],
+      },
+      ui: { nodes: {} },
+    };
+
+    const flow = workflowToFlow(workflow, {}, null);
+    const node = flow.nodes.find((n) => n.id === 'extract_1');
+    expect(node.type).toBe('extract');
+    expect(node.data.prompt).toBe('prompts/parse.md');
+    expect(node.data.template).toBeNull();
+    expect(node.data.schema).toBe('kanban_card');
+
+    const persisted = flowToWorkflow(workflow, flow.nodes, flow.edges, flow.viewport);
+    expect(persisted.graph.nodes.extract_1).toMatchObject({
+      kind: 'extract',
+      prompt: 'prompts/parse.md',
+      template: null,
+      schema: 'kanban_card',
     });
   });
 });

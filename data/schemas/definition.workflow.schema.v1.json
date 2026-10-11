@@ -22,7 +22,7 @@
             "key": {"description": "Optional filter: exact document key. Null/omitted means any document of the type.", "type": ["string", "null"]},
             "operations": {"description": "Optional filter: operations to fire on. Empty/omitted means any.", "type": "array", "uniqueItems": true, "items": {"enum": ["created", "updated", "deleted"]}},
             "changed_fields": {"description": "Optional filter: fire only when at least one of these top-level document fields changed. Empty/omitted means any.", "type": "array", "items": {"type": "string", "minLength": 1}},
-            "match": {"description": "Optional filter: equality on output ports, e.g. {\"after.column_id\": \"done\"}.", "type": "object"},
+            "match": {"description": "Optional filter: equality at dotted output paths, e.g. {\"after.column_id\": \"done\"}.", "type": "object"},
             "output_schema": {"type": "object"}
           }},
           {"type": "object", "additionalProperties": false, "required": ["kind", "title", "value", "output_schema"], "properties": {
@@ -40,11 +40,15 @@
             "limit": {"type": "integer", "minimum": 1, "maximum": 200},
             "input_schema": {"type": "object"}, "output_schema": {"type": "object"}
           }},
-          {"type": "object", "additionalProperties": false, "required": ["kind", "title", "message", "input_schema", "output_schema"], "properties": {
-            "kind": {"const": "agent"}, "title": {"type": "string", "minLength": 1}, "message": {"type": "string", "minLength": 1}, "input_schema": {"type": "object"}, "output_schema": {"type": "object"}
+          {"type": "object", "additionalProperties": false, "required": ["kind", "title"], "properties": {
+            "kind": {"const": "unpack"}, "title": {"type": "string", "minLength": 1},
+            "input_schema": {"type": "object"}, "output_schema": {"type": "object"}
           }},
-          {"type": "object", "additionalProperties": false, "required": ["kind", "title", "input_schema", "output_schema"], "properties": {
-            "kind": {"const": "mcp"}, "title": {"type": "string", "minLength": 1}, "input_schema": {"type": "object"}, "output_schema": {"type": "object"}
+          {"type": "object", "additionalProperties": false, "required": ["kind", "title"], "properties": {
+            "kind": {"const": "extract"}, "title": {"type": "string", "minLength": 1}, "prompt": {"type": ["string", "null"]}, "template": {"type": ["string", "null"]}, "schema": {}, "input_schema": {"type": "object"}, "output_schema": {"type": "object"}
+          }},
+          {"type": "object", "additionalProperties": false, "required": ["kind", "title"], "properties": {
+            "kind": {"const": "agent"}, "title": {"type": "string", "minLength": 1}, "prompt": {"type": ["string", "null"]}, "template": {"type": ["string", "null"]}, "subagent": {"type": ["string", "null"]}, "input_schema": {"type": "object"}, "output_schema": {"type": "object"}
           }},
           {"type": "object", "additionalProperties": false, "required": ["kind", "title", "expression"], "properties": {
             "kind": {"const": "condition"}, "title": {"type": "string", "minLength": 1}, "expression": {"type": "string", "minLength": 1}, "input_schema": {"type": "object"}, "output_schema": {"type": "object"}

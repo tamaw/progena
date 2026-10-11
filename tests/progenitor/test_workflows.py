@@ -3,8 +3,8 @@ import pytest
 from app.progenitor.document_types import BUILTIN_DOCUMENT_TYPES
 from app.progenitor.workflows import (
     WorkflowDefinition,
-    apply_document_type_schemas,
     default_workflow_definition,
+    derive_workflow_port_schemas,
     ordered_workflow_node_ids,
     validate_workflow_definition_payload,
 )
@@ -16,18 +16,18 @@ def _node_id(payload, kind):
     )
 
 
-def _agent_node(title, *, message="Handle it.", input_schema=None, output_schema=None):
+def _agent_node(title, *, template="Handle it.", input_schema=None, output_schema=None):
     return {
         "kind": "agent",
         "title": title,
-        "message": message,
+        "template": template,
         "input_schema": input_schema or {"type": "object", "properties": {}},
         "output_schema": output_schema or {"type": "object", "properties": {}},
     }
 
 
 def _default_with_schemas():
-    return apply_document_type_schemas(
+    return derive_workflow_port_schemas(
         default_workflow_definition(), {t.id: t for t in BUILTIN_DOCUMENT_TYPES}
     )
 
@@ -40,7 +40,7 @@ def test_default_workflow_wires_an_event_property():
     event = normalized["graph"]["nodes"][event_id]
     agent = normalized["graph"]["nodes"][agent_id]
     assert "thread_id" not in event["output_schema"]["properties"]
-    assert agent["input_schema"]["properties"]["key"] == {"type": "string"}
+    assert agent["input_schema"]["properties"]["key"] == {}
     assert normalized["graph"]["edges"] == [
         {
             "from": {"node": event_id, "port": "key"},
@@ -213,3 +213,172 @@ def test_condition_and_approval_expose_selected_value_ports():
     assert normalized["graph"]["nodes"][condition_id]["output_schema"]["properties"]["true"] == {
         "type": "boolean"
     }
+
+
+def test_derive_extract_ports_from_inline_template():
+    payload = default_workflow_definition()
+    agent_id = next(nid for nid, n in payload["graph"]["nodes"].items() if n["kind"] == "agent")
+    event_id = next(nid for nid, n in payload["graph"]["nodes"].items() if n["kind"] == "event")
+    extract_id = "extract_1"
+    payload["graph"]["nodes"][agent_id]["template"] = "Consume: {result}"
+    payload["graph"]["nodes"][extract_id] = {
+        "kind": "extract",
+        "title": "Extract",
+        "template": "---\ninputs:\n  title:\n    type: string\noutput_schema:\n  type: string\n---\ntitle: {title}",
+    }
+    payload["graph"]["edges"] = [
+        {
+            "from": {"node": event_id, "port": "key"},
+            "to": {"node": extract_id, "port": "title"},
+        },
+        {
+            "from": {"node": extract_id, "port": "result"},
+            "to": {"node": agent_id, "port": "result"},
+        },
+    ]
+    typed = derive_workflow_port_schemas(payload, {t.id: t for t in BUILTIN_DOCUMENT_TYPES})
+    normalized = validate_workflow_definition_payload(typed)
+    extract = normalized["graph"]["nodes"][extract_id]
+    assert extract["input_schema"]["required"] == ["title"]
+    assert extract["input_schema"]["properties"]["title"] == {"type": "string"}
+    assert extract["output_schema"]["properties"]["result"] == {"type": "string"}
+
+
+def test_derive_extract_ports_from_prompt_document():
+    def fake_loader(path: str) -> str:
+        return "---\ninputs:\n  name:\n    type: string\noutput_schema:\n  type: string\n---\nname: {name}"
+
+    payload = default_workflow_definition()
+    extract_id = "extract_1"
+    payload["graph"]["nodes"][extract_id] = {
+        "kind": "extract",
+        "title": "Extract",
+        "prompt": "workflows/test.md",
+    }
+    agent_id = next(nid for nid, n in payload["graph"]["nodes"].items() if n["kind"] == "agent")
+    payload["graph"]["nodes"][agent_id]["template"] = "Hello {name}"
+    payload["graph"]["edges"] = [
+        {
+            "from": {"node": extract_id, "port": "result"},
+            "to": {"node": agent_id, "port": "name"},
+        }
+    ]
+    typed = derive_workflow_port_schemas(
+        payload,
+        {t.id: t for t in BUILTIN_DOCUMENT_TYPES},
+        prompt_loader=fake_loader,
+    )
+    extract = typed["graph"]["nodes"][extract_id]
+    assert extract["input_schema"]["required"] == ["name"]
+    assert extract["input_schema"]["properties"]["name"] == {"type": "string"}
+    assert extract["output_schema"]["properties"]["result"] == {"type": "string"}
+
+
+def test_extract_schema_precedence_node_over_frontmatter():
+    payload = default_workflow_definition()
+    extract_id = "extract_1"
+    payload["graph"]["nodes"][extract_id] = {
+        "kind": "extract",
+        "title": "Extract",
+        "template": "---\noutput_schema:\n  type: string\n---\nHello",
+        "schema": {"type": "number"},
+    }
+    typed = derive_workflow_port_schemas(payload, {t.id: t for t in BUILTIN_DOCUMENT_TYPES})
+    extract = typed["graph"]["nodes"][extract_id]
+    assert extract["output_schema"]["properties"]["result"] == {"type": "number"}
+
+
+def test_extract_schema_precedence_frontmatter_over_downstream():
+    payload = default_workflow_definition()
+    extract_id = "extract_1"
+    agent_id = next(nid for nid, n in payload["graph"]["nodes"].items() if n["kind"] == "agent")
+    payload["graph"]["nodes"][extract_id] = {
+        "kind": "extract",
+        "title": "Extract",
+        "template": "---\noutput_schema:\n  type: number\n---\nHello",
+    }
+    payload["graph"]["nodes"][agent_id]["template"] = "Result: {result}"
+    payload["graph"]["edges"] = [
+        {
+            "from": {"node": extract_id, "port": "result"},
+            "to": {"node": agent_id, "port": "result"},
+        }
+    ]
+    typed = derive_workflow_port_schemas(payload, {t.id: t for t in BUILTIN_DOCUMENT_TYPES})
+    extract = typed["graph"]["nodes"][extract_id]
+    assert extract["output_schema"]["properties"]["result"] == {"type": "number"}
+
+
+def _extract_feeding(targets):
+    """Default workflow plus an Extract whose ``result`` feeds each (node_id, port, node)."""
+
+    payload = default_workflow_definition()
+    payload["graph"]["nodes"]["extract_1"] = {
+        "kind": "extract",
+        "title": "Extract",
+        "template": "Pick a column.",
+    }
+    payload["graph"]["edges"] = []
+    for node_id, port, node in targets:
+        payload["graph"]["nodes"][node_id] = node
+        payload["graph"]["edges"].append(
+            {"from": {"node": "extract_1", "port": "result"}, "to": {"node": node_id, "port": port}}
+        )
+    return payload
+
+
+_COLUMN_QUERY = {
+    "kind": "document_query",
+    "title": "Cards in column",
+    "document_type": "kanban_card",
+    "filter_fields": ["column_id"],
+}
+_TYPED_CARD_AGENT = _agent_node(
+    "Card agent", template="---\ninputs:\n  card: kanban_card\n---\nLook at {card.title}."
+)
+_TYPES = {t.id: t for t in BUILTIN_DOCUMENT_TYPES}
+
+
+def test_extract_schema_inferred_from_typed_downstream_input():
+    typed = derive_workflow_port_schemas(
+        _extract_feeding([("peers", "column_id", _COLUMN_QUERY)]), _TYPES
+    )
+    peers_input = typed["graph"]["nodes"]["peers"]["input_schema"]["properties"]["column_id"]
+    result = typed["graph"]["nodes"]["extract_1"]["output_schema"]["properties"]["result"]
+    assert result == peers_input
+    assert result["type"] == "string"
+
+
+def test_extract_schema_untyped_downstream_input_is_not_a_schema():
+    untyped_agent = _agent_node("Plain", template="Value: {result}")
+    with pytest.raises(ValueError, match="needs a schema"):
+        derive_workflow_port_schemas(_extract_feeding([("plain", "result", untyped_agent)]), _TYPES)
+
+
+def test_extract_schema_conflicting_targets_rejected():
+    payload = _extract_feeding(
+        [("peers", "column_id", _COLUMN_QUERY), ("card_agent", "card", _TYPED_CARD_AGENT)]
+    )
+    with pytest.raises(ValueError, match="different schemas"):
+        derive_workflow_port_schemas(payload, _TYPES)
+
+
+def test_unpack_of_extract_result_sees_the_resolved_schema():
+    payload = _extract_feeding([("card", "value", {"kind": "unpack", "title": "Card"})])
+    payload["graph"]["nodes"]["extract_1"]["schema"] = "kanban_card"
+    typed = derive_workflow_port_schemas(payload, _TYPES)
+    unpack = typed["graph"]["nodes"]["card"]
+    assert unpack["input_schema"]["properties"]["value"]["title"] == "Kanban Card"
+    assert {"column_id", "title"} <= set(unpack["output_schema"]["properties"])
+
+
+def test_extract_schema_no_targets_rejected():
+    payload = default_workflow_definition()
+    extract_id = "extract_1"
+    payload["graph"]["nodes"][extract_id] = {
+        "kind": "extract",
+        "title": "Extract",
+        "template": "Hello",
+    }
+    with pytest.raises(ValueError, match="needs a schema"):
+        derive_workflow_port_schemas(payload, {t.id: t for t in BUILTIN_DOCUMENT_TYPES})

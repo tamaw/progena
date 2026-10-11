@@ -594,11 +594,10 @@ async def _workflow_prompt_runner(
     input_text: str,
     thread_id: str | None,
 ) -> PromptExecutionResult:
-    """Execute every agent workflow step through one normal prompt path.
+    """Execute every agent/extract workflow step through one normal prompt path.
 
-    ``input_text`` already carries the node's message alongside its resolved
-    typed input (see ``compose_workflow_agent_input``); it is the sole
-    instruction sent to the model.
+    ``input_text`` is the rendered prompt (plus any appended instructions);
+    it is the sole instruction sent to the model.
     """
 
     widget_id = f"workflow:{workflow.id}:{node_id}"
@@ -617,8 +616,6 @@ async def _workflow_prompt_runner(
 
 def get_workflow_executor() -> WorkflowExecutor:
     """Return the singleton backend workflow executor."""
-    from app.backend.workflow_service import _create_default_mcp_caller
-
     global _workflow_executor
     if _workflow_executor is None:
         _workflow_executor = WorkflowExecutor(
@@ -629,7 +626,6 @@ def get_workflow_executor() -> WorkflowExecutor:
                 payload,
                 request_id=_workflow_event_request_id(payload),
             ),
-            mcp_caller=_create_default_mcp_caller(get_default_document_store),
         )
     return _workflow_executor
 

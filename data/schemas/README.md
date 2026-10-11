@@ -32,8 +32,9 @@ the native `write`/`edit` file tools.
 
 Whole-document schemas also back **document types** (`document_type:<id>` rows
 in Postgres, see `app/progenitor/document_types.py`): a type's `schema` names
-the file here that types its documents, and workflow event/read/query nodes
-get one port per top-level property of it.
+the file here that types its documents. Workflow event/read/query nodes expose
+each document as one port typed with the document type's label (e.g. `after:
+Kanban Card`); an Unpack node exposes its top-level properties as ports.
 
 **Most schemas here describe one entry, not a whole document** — that's the
 default for `mcp.json`/`schedule.json` (objects keyed by name/id: adding is
