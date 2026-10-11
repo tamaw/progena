@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { removeRoutines, seedGraphFixtures } from './helpers/routineFixture.mjs';
 
 /**
  * Routine graph connectors.
@@ -15,10 +16,20 @@ import { test, expect } from '@playwright/test';
  * scope's centre axis, symmetric fan-out/fan-in clearance, and a graph that
  * only ever overflows rightward.
  *
- * Requires the running stack (see playwright.config.js).
- * Seed its fixtures first: activate the root .venv, then run
- * `python scripts/seed_e2e_fixtures.py` from the project root.
+ * Requires the running stack (see playwright.config.js). Each worker seeds its
+ * own copies of the fixture graphs (e2e/fixtures/routine-graphs.json) and
+ * removes them afterwards.
  */
+
+const FIXTURES = [
+  'routine-branch-join', 'routine-all-controls', 'routine-condition-gate',
+  'feedback-categoriser', 'repo-setup-worker',
+];
+// fixture id -> this worker's seeded routine id
+let ids = {};
+test.beforeAll(() => { ids = seedGraphFixtures(FIXTURES); });
+test.afterAll(() => removeRoutines(Object.values(ids)));
+const routinePath = (fixtureId) => `/routines/${ids[fixtureId]}`;
 
 // Sub-1/64px. Anything larger is a real offset, not LayoutUnit rounding.
 const AXIS_EPSILON = 0.02;
@@ -174,8 +185,8 @@ async function settled(page) {
   }, { timeout: 20_000, polling: 'raf' });
 }
 
-async function graphAt(page, routineId) {
-  await page.goto(`/routines/${routineId}`);
+async function graphAt(page, fixtureId) {
+  await page.goto(routinePath(fixtureId));
   await expect(page.locator('.routine-chain')).toBeVisible({ timeout: 20_000 });
   await expect(page.locator('.canvas-node').first()).toBeVisible({ timeout: 20_000 });
   await settled(page);
@@ -301,7 +312,7 @@ test.describe('routine graph connectors', () => {
     // exercises nesting -- and nesting is what the rail selectors get wrong: a
     // lane holding a whole fork will clip the inner rails with the outer lane's
     // modifier unless every rule uses a direct-child combinator.
-    await page.goto('/routines/repo-setup-worker');
+    await page.goto(routinePath('repo-setup-worker'));
     // `waitFor`, not `isVisible`: the latter samples immediately, so it would
     // skip or run depending on whether the graph had loaded yet.
     await expect(page.locator('.routine-fork').first()).toBeVisible({ timeout: 30_000 });
@@ -353,7 +364,7 @@ test.describe('routine graph connectors', () => {
   });
 
   test('the label stem reaches the label, and a collapsed lane draws none', async ({ page }) => {
-    await page.goto('/routines/routine-branch-join');
+    await page.goto(routinePath('routine-branch-join'));
     await expect(page.locator('.routine-fork').first()).toBeVisible({ timeout: 20_000 });
     await settled(page);
 
@@ -412,7 +423,7 @@ test.describe('routine graph connectors', () => {
     // the join must NOT compensate for that by re-centring on just the real
     // branches -- that would pull it off the axis everything above and
     // below the fork shares.
-    await page.goto('/routines/feedback-categoriser');
+    await page.goto(routinePath('feedback-categoriser'));
     await expect(page.locator('.routine-fork--joined').first()).toBeVisible({ timeout: 30_000 });
     await settled(page);
     const geometry = await page.evaluate(() => {
@@ -445,7 +456,7 @@ test.describe('routine graph connectors', () => {
     // neighbour, never past the fork's outer edge. A specificity mismatch
     // against the unclipped base rule (right/left: -11px on every lane) can
     // silently reinstate the overhang the clip was meant to remove.
-    await page.goto('/routines/feedback-categoriser');
+    await page.goto(routinePath('feedback-categoriser'));
     await expect(page.locator('.routine-fork--joined').first()).toBeVisible({ timeout: 30_000 });
     await settled(page);
     const geometry = await page.evaluate(() => {
@@ -476,7 +487,7 @@ test.describe('routine graph connectors', () => {
     // the add-slot's position, not the real lane's, so reassigning it onto
     // the real last lane (rather than suppressing the add-slot's own bar)
     // strands the join's stem short of the bar.
-    await page.goto('/routines/feedback-categoriser');
+    await page.goto(routinePath('feedback-categoriser'));
     await expect(page.locator('.routine-fork--joined').first()).toBeVisible({ timeout: 30_000 });
     await settled(page);
     const result = await page.evaluate(() => {
@@ -519,7 +530,7 @@ test.describe('routine graph connectors', () => {
     // over free-form cases, there is nothing to add, remove or rename, and a
     // default would be unreachable. Guards both the lane set and the fact
     // that an ordinary router on the same page keeps all of those controls.
-    await page.goto('/routines/routine-condition-gate');
+    await page.goto(routinePath('routine-condition-gate'));
     await expect(page.locator('.routine-fork').first()).toBeVisible({ timeout: 20_000 });
 
     const fork = await page.evaluate(() => {
