@@ -382,3 +382,79 @@ def test_extract_schema_no_targets_rejected():
     }
     with pytest.raises(ValueError, match="needs a schema"):
         derive_workflow_port_schemas(payload, {t.id: t for t in BUILTIN_DOCUMENT_TYPES})
+
+
+def cron_workflow(*, expression="0 9 * * 1-5", timezone="Australia/Melbourne", overlap="skip"):
+    """Cron trigger feeding ``scheduled_for`` into an agent template."""
+
+    payload = default_workflow_definition()
+    payload["graph"] = {
+        "nodes": {
+            "cron": {
+                "kind": "cron",
+                "title": "Weekdays",
+                "expression": expression,
+                "timezone": timezone,
+                "overlap": overlap,
+            },
+            "agent": _agent_node("Digest", template="Due at {scheduled_for}"),
+        },
+        "edges": [
+            {
+                "from": {"node": "cron", "port": "scheduled_for"},
+                "to": {"node": "agent", "port": "scheduled_for"},
+            }
+        ],
+    }
+    payload["ui"] = {}
+    return payload
+
+
+def _derive(payload):
+    return derive_workflow_port_schemas(payload, {t.id: t for t in BUILTIN_DOCUMENT_TYPES})
+
+
+def test_cron_only_workflow_is_valid_and_exposes_typed_ports():
+    normalized = validate_workflow_definition_payload(_derive(cron_workflow()))
+    ports = normalized["graph"]["nodes"]["cron"]["output_schema"]["properties"]
+    assert ports["scheduled_for"] == {"type": "string", "format": "date-time"}
+    assert set(ports) == {"scheduled_for", "fired_at", "timezone"}
+
+
+@pytest.mark.parametrize(
+    ("expression", "timezone", "message"),
+    [
+        ("0 9 * *", "UTC", "must have 5 fields"),
+        ("0 25 * * *", "UTC", "invalid cron expression"),
+        ("*/5 * * * * *", "UTC", "must have 5 fields"),
+        ("0 9 * * *", "Mars/Olympus", "unknown timezone"),
+    ],
+)
+def test_cron_node_rejects_bad_expression_or_timezone(expression, timezone, message):
+    with pytest.raises(ValueError, match=message):
+        validate_workflow_definition_payload(
+            _derive(cron_workflow(expression=expression, timezone=timezone))
+        )
+
+
+def test_cron_node_cannot_have_inbound_edges():
+    payload = cron_workflow()
+    payload["graph"]["nodes"]["data"] = {
+        "kind": "data",
+        "title": "Data",
+        "value": "x",
+        "output_schema": {"type": "string"},
+    }
+    payload["graph"]["edges"].append(
+        {"from": {"node": "data", "port": "value"}, "to": {"node": "cron", "port": "timezone"}}
+    )
+    with pytest.raises(ValueError, match="no input port|cannot have inbound"):
+        validate_workflow_definition_payload(_derive(payload))
+
+
+def test_workflow_without_any_trigger_is_rejected():
+    payload = cron_workflow()
+    del payload["graph"]["nodes"]["cron"]
+    payload["graph"]["edges"] = []
+    with pytest.raises(ValueError, match="at least one event or cron trigger"):
+        validate_workflow_definition_payload(_derive(payload))

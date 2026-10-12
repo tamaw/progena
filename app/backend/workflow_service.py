@@ -21,7 +21,7 @@ from app.backend.document_store import (
 from app.progenitor.document_types import DocumentType
 from app.progenitor.prompts.templates import parse_prompt_template, render_prompt_template
 from app.progenitor.structured import validate_against_schema
-from app.progenitor.utils import utcnow_isoformat
+from app.progenitor.utils import utcnow, utcnow_isoformat
 from app.progenitor.workflows import (
     MAX_WORKFLOW_INVOKE_DEPTH,
     WorkflowDefinition,
@@ -29,6 +29,7 @@ from app.progenitor.workflows import (
     WorkflowNodeAgent,
     WorkflowNodeApproval,
     WorkflowNodeCondition,
+    WorkflowNodeCron,
     WorkflowNodeDocumentQuery,
     WorkflowNodeDocumentRead,
     WorkflowNodeEvent,
@@ -37,6 +38,8 @@ from app.progenitor.workflows import (
     WorkflowNodeUnpack,
     WorkflowRun,
     WorkflowRunSource,
+    WorkflowTriggerNode,
+    build_cron_trigger_output,
     build_document_read_output,
     build_workflow_list_item,
     coerce_workflow_definition,
@@ -334,26 +337,40 @@ def find_active_workflow_run(
     return None
 
 
+def first_trigger_node_id(definition: WorkflowDefinition) -> str | None:
+    """The trigger node a run starts from when no specific trigger fired it."""
+
+    return next(
+        (
+            node_id
+            for node_id, node in definition.graph.nodes.items()
+            if isinstance(node, WorkflowTriggerNode)
+        ),
+        None,
+    )
+
+
 def build_manual_trigger_event(
     definition: WorkflowDefinition,
     *,
     payload: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Build a document event output object for a manual operator-triggered run.
+    """Build the trigger output object for an on-demand run of the first trigger node.
 
-    ``payload`` is merged over neutral defaults for the first event node's
-    document type, so the result matches that node's flat ``output_schema``.
+    A cron node fires as if due now. For an event node, ``payload`` is merged
+    over neutral defaults for its document type.
     """
 
-    event_node = next(
-        (node for node in definition.graph.nodes.values() if isinstance(node, WorkflowNodeEvent)),
-        None,
-    )
-    if event_node is None:
-        raise ValueError("workflow has no event node to trigger")
+    node_id = first_trigger_node_id(definition)
+    node = definition.graph.nodes.get(node_id) if node_id else None
+    if isinstance(node, WorkflowNodeCron):
+        now = utcnow()
+        return build_cron_trigger_output(node, scheduled_for=now, fired_at=now)
+    if not isinstance(node, WorkflowNodeEvent):
+        raise ValueError("workflow has no trigger node")
     return {
         "event_id": 0,
-        "document_type": event_node.document_type,
+        "document_type": node.document_type,
         "key": "",
         "id": "",
         "op": "updated",
@@ -505,7 +522,7 @@ def _build_queued_run(
     invocation = invocation if isinstance(invocation, Mapping) else {}
     raw_source = invocation.get("source")
     source: WorkflowRunSource = (
-        raw_source if raw_source in ("document", "manual", "progenitor") else "manual"
+        raw_source if raw_source in ("document", "manual", "progenitor", "cron") else "manual"
     )
     ancestry_raw = invocation.get("ancestry")
     ancestry = [str(item) for item in ancestry_raw] if isinstance(ancestry_raw, list) else []
@@ -692,21 +709,14 @@ class WorkflowExecutor:
             if definition is None or not definition.enabled or definition.paused:
                 return None
             if not trigger_node_id:
-                trigger_node_id = next(
-                    (
-                        node_id
-                        for node_id, node in definition.graph.nodes.items()
-                        if isinstance(node, WorkflowNodeEvent)
-                    ),
-                    None,
-                )
+                trigger_node_id = first_trigger_node_id(definition)
             trigger_node = definition.graph.nodes.get(trigger_node_id) if trigger_node_id else None
-            if not isinstance(trigger_node, WorkflowNodeEvent):
+            if not isinstance(trigger_node, WorkflowTriggerNode):
                 return None
             trigger_with_meta["_invocation"]["trigger_node_id"] = trigger_node_id
             trigger_error = (
                 None
-                if source == "progenitor"
+                if source == "progenitor" and isinstance(trigger_node, WorkflowNodeEvent)
                 else validate_against_schema(
                     trigger_with_meta,
                     trigger_node.output_schema or {},
@@ -722,6 +732,18 @@ class WorkflowExecutor:
 
             active_run = find_active_workflow_run(store, workflow_id)
             if active_run is not None:
+                if (
+                    source == "cron"
+                    and isinstance(trigger_node, WorkflowNodeCron)
+                    and trigger_node.overlap == "skip"
+                ):
+                    logger.info(
+                        "Skipping cron fire of workflow %r node %r: run %r is still active",
+                        workflow_id,
+                        trigger_node_id,
+                        active_run.run_id,
+                    )
+                    return None
                 queue = get_workflow_queue(store, workflow_id)
                 queue.append(trigger_with_meta)
                 save_workflow_queue(store, workflow_id, queue)
@@ -951,7 +973,7 @@ class WorkflowExecutor:
                     candidate_id
                     for candidate_id, candidate in definition.graph.nodes.items()
                     if candidate_id not in completed
-                    and not isinstance(candidate, WorkflowNodeEvent)
+                    and not isinstance(candidate, WorkflowTriggerNode)
                     and workflow_node_output_object(candidate) is None
                     and _node_is_ready(definition, candidate_id, node_outputs)
                 ),

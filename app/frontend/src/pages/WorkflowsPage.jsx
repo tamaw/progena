@@ -133,11 +133,15 @@ const DEFAULT_NODE_SIZES = {
     data: { width: 280, height: 120 },
     settings: { width: 340, height: 240 },
   },
+  cron: {
+    data: { width: 320, height: 220 },
+    settings: { width: 380, height: 320 },
+  },
 };
 // V3 node menu: generic agent, data, event, extract, condition, approval, and
 // human_input nodes only. No capability-specific kinds.
 const NODE_MENU_CATEGORIES = [
-  { id: 'triggers', label: 'Triggers', items: [{ id: 'event', kind: 'event', label: 'Event', icon: 'E' }] },
+  { id: 'triggers', label: 'Triggers', items: [{ id: 'event', kind: 'event', label: 'Event', icon: 'E' }, { id: 'cron', kind: 'cron', label: 'Cron', icon: 'C' }] },
   { id: 'agents', label: 'Agents', items: [{ id: 'agent', kind: 'agent', label: 'Agent', icon: 'A' }] },
   { id: 'data', label: 'Data', items: [
     { id: 'data', kind: 'data', label: 'Data', icon: 'D' },
@@ -167,6 +171,25 @@ function defaultEventNode(documentTypes) {
     changedFields: [],
     match: {},
     outputSchema: cloneValue(firstType?.event_output_schema) || null,
+  };
+}
+
+function defaultCronNode() {
+  const tz = typeof Intl !== 'undefined' ? Intl.DateTimeFormat().resolvedOptions().timeZone : 'UTC';
+  return {
+    title: 'Cron',
+    expression: '*/5 * * * *',
+    timezone: tz,
+    overlap: 'skip',
+    outputSchema: {
+      type: 'object',
+      required: ['scheduled_for', 'fired_at', 'timezone'],
+      properties: {
+        scheduled_for: { type: 'string', format: 'date-time' },
+        fired_at: { type: 'string', format: 'date-time' },
+        timezone: { type: 'string' },
+      },
+    },
   };
 }
 
@@ -233,6 +256,7 @@ const DOCK_NODE_DEFAULTS = {
     inputSchema: { type: 'object', properties: {} },
     outputSchema: { type: 'object', properties: {} },
   }),
+  cron: defaultCronNode,
   document_read: defaultReadNode,
   document_query: defaultQueryNode,
   unpack: () => ({
@@ -432,6 +456,20 @@ function buildNodeData(kind, node, callbacks, latestRun) {
       canDelete: false,
     };
   }
+  if (kind === 'cron') {
+    return {
+      ...shared,
+      kind,
+      title: node.title || 'Cron',
+      expression: node.expression || '*/5 * * * *',
+      timezone: node.timezone || 'UTC',
+      overlap: node.overlap || 'skip',
+      outputSchema: cloneValue(node.output_schema) || null,
+      onChange: callbacks.onNodeChange,
+      onDelete: callbacks.onDeleteNode,
+      canDelete: false,
+    };
+  }
   if (kind === 'agent') {
     return {
       ...shared,
@@ -583,7 +621,15 @@ function workflowToFlow(definition, callbacks, latestRun) {
           match: node.match,
           outputSchema: cloneValue(node.output_schema) || null,
         }
-      : kind === 'agent'
+      : kind === 'cron'
+        ? {
+            ...node,
+            expression: node.expression,
+            timezone: node.timezone,
+            overlap: node.overlap,
+            outputSchema: cloneValue(node.output_schema) || null,
+          }
+        : kind === 'agent'
         ? {
           ...node,
           prompt: node.prompt ?? null,
@@ -632,10 +678,14 @@ function workflowToFlow(definition, callbacks, latestRun) {
   };
 }
 
+function isTriggerKind(kind) {
+  return kind === 'event' || kind === 'cron';
+}
+
 function applyRunStateToNodes(nodes, latestRun) {
   const { currentNodeId, completedNodeIds } = workflowRunState(latestRun);
   return nodes.map((node) => {
-    const nextData = node.type === 'event'
+    const nextData = isTriggerKind(node.type)
       ? node.data
       : { ...node.data, currentNodeId, completedNodeIds };
     if (nextData === node.data) {
@@ -664,6 +714,15 @@ function flowToWorkflow(baseWorkflow, nodes, edges, viewport) {
         operations: Array.isArray(node.data?.operations) ? [...node.data.operations] : [],
         changed_fields: Array.isArray(node.data?.changedFields) ? [...node.data.changedFields] : [],
         match: cloneValue(node.data?.match) || {},
+        output_schema: cloneValue(node.data?.outputSchema) || null,
+      };
+    } else if (node.type === 'cron') {
+      graphNodes[node.id] = {
+        kind: 'cron',
+        title: String(node.data?.title || 'Cron'),
+        expression: node.data?.expression || '*/5 * * * *',
+        timezone: node.data?.timezone || 'UTC',
+        overlap: node.data?.overlap || 'skip',
         output_schema: cloneValue(node.data?.outputSchema) || null,
       };
     } else if (node.type === 'document_read') {
@@ -832,7 +891,7 @@ function nodeOutputPorts(kind, outputSchema) {
 }
 
 function nodeInputPorts(kind, inputSchema) {
-  if (kind === 'data' || kind === 'event') {
+  if (kind === 'data' || kind === 'event' || kind === 'cron') {
     return [];
   }
   return schemaProperties(inputSchema);
@@ -1118,6 +1177,47 @@ function WorkflowNodeOptionsModal({ node, onChange, onClose }) {
     documentTypeOptions.some((o) => o.value === node.data?.schema),
   [documentTypeOptions, node.data?.schema]);
 
+  const [cronPreview, setCronPreview] = useState({ nextRuns: [], error: '' });
+  const cronAbortRef = useRef(null);
+  const cronDebounceRef = useRef(null);
+
+  useEffect(() => {
+    if (kind !== 'cron') return undefined;
+    const expression = node.data?.expression || '';
+    const timezone = node.data?.timezone || '';
+    clearTimeout(cronDebounceRef.current);
+    if (!expression || !timezone) {
+      return () => clearTimeout(cronDebounceRef.current);
+    }
+    cronDebounceRef.current = setTimeout(() => {
+      cronAbortRef.current?.abort();
+      const controller = new AbortController();
+      cronAbortRef.current = controller;
+      fetch(`/api/ui/workflows/cron-preview?expression=${encodeURIComponent(expression)}&timezone=${encodeURIComponent(timezone)}&count=3`, {
+        signal: controller.signal,
+      })
+        .then(async (res) => {
+          if (res.status === 200) {
+            const data = await res.json();
+            setCronPreview({ nextRuns: data.next_runs || [], error: '' });
+          } else if (res.status === 400) {
+            const data = await res.json();
+            setCronPreview({ nextRuns: [], error: data.detail || 'Invalid expression' });
+          } else {
+            setCronPreview({ nextRuns: [], error: `HTTP ${res.status}` });
+          }
+        })
+        .catch((err) => {
+          if (err.name !== 'AbortError') {
+            setCronPreview({ nextRuns: [], error: err.message });
+          }
+        });
+    }, 300);
+    return () => {
+      clearTimeout(cronDebounceRef.current);
+    };
+  }, [kind, node.data?.expression, node.data?.timezone]);
+
   const handleEventTypeChange = (documentTypeId) => {
     const dt = documentTypes.find((t) => t.id === documentTypeId);
     onChange(node.id, {
@@ -1233,6 +1333,67 @@ function WorkflowNodeOptionsModal({ node, onChange, onClose }) {
                   </div>
                 </label>
                 <JsonFieldEditor label="Match" value={node.data?.match} onCommit={(match) => onChange(node.id, { match })} />
+              </>
+            ) : null}
+            {kind === 'cron' ? (
+              <>
+                <label className="workflow-node-options__field">
+                  Expression
+                  <input
+                    value={node.data?.expression || ''}
+                    onChange={(event) => onChange(node.id, { expression: event.target.value })}
+                    placeholder="*/5 * * * *"
+                  />
+                </label>
+                <div className="workflow-node-options__field">
+                  <span>Presets</span>
+                  <div className="workflow-node-options__checkboxes">
+                    {[
+                      { label: 'Every 5 min', expr: '*/5 * * * *' },
+                      { label: 'Hourly', expr: '0 * * * *' },
+                      { label: 'Daily 9:00', expr: '0 9 * * *' },
+                      { label: 'Weekdays 9:00', expr: '0 9 * * 1-5' },
+                    ].map((preset) => (
+                      <button
+                        key={preset.expr}
+                        type="button"
+                        className="node-action-btn"
+                        onClick={() => onChange(node.id, { expression: preset.expr })}
+                      >
+                        {preset.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <label className="workflow-node-options__field">
+                  Timezone
+                  <input
+                    value={node.data?.timezone || ''}
+                    onChange={(event) => onChange(node.id, { timezone: event.target.value })}
+                    placeholder="Australia/Melbourne"
+                  />
+                </label>
+                <label className="workflow-node-options__field">
+                  Overlap
+                  <Select
+                    value={node.data?.overlap || 'skip'}
+                    onChange={(val) => onChange(node.id, { overlap: val })}
+                    options={[{ value: 'skip', label: 'Skip if still running' }, { value: 'queue', label: 'Queue' }]}
+                    ariaLabel="Overlap behaviour"
+                  />
+                </label>
+                <div className="workflow-node-options__field">
+                  <span>Next runs</span>
+                  {cronPreview.error ? (
+                    <small className="workflow-node-options__error">{cronPreview.error}</small>
+                  ) : (
+                    <ul className="workflow-node-options__next-runs">
+                      {cronPreview.nextRuns.map((run, i) => (
+                        <li key={i}>{run}</li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
               </>
             ) : null}
             {kind === 'document_read' ? (
@@ -1491,6 +1652,32 @@ function DocumentEventNode({ id, data, selected, height }) {
   );
 }
 
+function CronNode({ id, data, selected, height }) {
+  const edges = useEdges();
+  const connectedOutputPorts = useMemo(() => edges.filter((e) => e.source === id).map((e) => portFromHandle(e.sourceHandle)), [edges, id]);
+
+  return (
+    <>
+      <NodeResizer minWidth={280} minHeight={110} isVisible={selected} onResizeEnd={(_event, params) => data.onResize(id, { width: params.width, height: params.height })} />
+      <div className={`canvas-node workflow-graph-node workflow-graph-node--cron ${selected ? 'selected' : ''}`}>
+        <div className="node-title-bar drag-handle">
+          <span className="node-type-icon cron">C</span>
+          <WorkflowNodeTitle expanded={false} title={data.title} placeholder="Cron title" onChange={(event) => data.onChange(id, { title: event.target.value })} />
+          <button type="button" className="node-options-btn nodrag" onClick={() => data.onOpenOptions(id)} aria-label="Configure node" data-tooltip="Configure node"><ConfigureActionIcon /></button>
+          {data.canDelete ? <button type="button" className="node-remove-btn" onClick={() => data.onDelete(id)} aria-label="Delete cron">×</button> : null}
+        </div>
+        <div className="node-body">
+          <div className="workflow-graph-node__field">
+            <span>{data.expression || '*/5 * * * *'}</span>
+          </div>
+          <WorkflowNodePorts kind="cron" inputSchema={null} outputSchema={data.outputSchema} nodeHeight={height} connectedOutputPorts={connectedOutputPorts} onUnpack={data.onUnpack ? (port) => data.onUnpack(id, port) : undefined} />
+        </div>
+      </div>
+      <WorkflowNodeHandles kind="cron" inputSchema={null} outputSchema={data.outputSchema} nodeHeight={height} connectedOutputPorts={connectedOutputPorts} />
+    </>
+  );
+}
+
 function WorkflowDataNode({ id, data, selected, height }) {
   const edges = useEdges();
   const connectedOutputPorts = useMemo(() => edges.filter((e) => e.source === id).map((e) => portFromHandle(e.sourceHandle)), [edges, id]);
@@ -1574,6 +1761,7 @@ function UnpackNode({ id, data, selected, height }) {
 
 const NODE_TYPES = {
   event: DocumentEventNode,
+  cron: CronNode,
   agent: PromptNode,
   extract: PromptNode,
   human_input: PromptNode,
@@ -1803,6 +1991,9 @@ function WorkflowRow({ item, latestRun, selectedPath, onSelect }) {
           <span className="pane-card-row__age">{formatRelativeTime(latestRun?.updated_at)}</span>
         </div>
         <div className="pane-card-row__preview">{item.description || 'No description yet.'}</div>
+        {(item.triggers || []).length > 0 ? (
+          <div className="pane-card-row__meta">{item.triggers.join(' · ')}</div>
+        ) : null}
       </div>
     </button>
   );
@@ -1975,7 +2166,8 @@ function WorkflowsInner() {
     const filtered = workflows.filter((item) => {
       if (filter === 'enabled' && item.enabled === false) return false;
       if (filter === 'paused' && !item.paused) return false;
-      const searchable = `${item.title} ${item.description} ${item.document_type}`.toLowerCase();
+      const triggerText = (item.triggers || []).join(' ');
+      const searchable = `${item.title} ${item.description} ${triggerText}`.toLowerCase();
       return !normalizedQuery || searchable.includes(normalizedQuery);
     });
     return [...filtered].sort((left, right) => {
@@ -2056,47 +2248,6 @@ function WorkflowsInner() {
           const nextNodes = sizeUnpackNodes(currentNodes.map((node) => (
             node.id === nodeId ? { ...node, data: { ...node.data, ...patch } } : node
           )), edgesRef.current);
-          nodesRef.current = nextNodes;
-          if (!hydratingGraphRef.current) setLocalDraftDirty(true);
-          setDraftWorkflow((current) => flowToWorkflow(current || cloned, nextNodes, edgesRef.current, viewportRef.current));
-          return nextNodes;
-        });
-      },
-      onTriggerChange: (patch) => {
-        if (!hydratingGraphRef.current && patch.outputSchema !== undefined) {
-          const eventNodes = nodesRef.current.filter((n) => n.type === 'event');
-          const wouldChange = eventNodes.some((n) => JSON.stringify(n.data?.outputSchema) !== JSON.stringify(patch.outputSchema));
-          if (wouldChange) {
-            const nextNodes = nodesRef.current.map((node) => (
-              node.type === 'event' ? { ...node, data: { ...node.data, ...patch } } : node
-            ));
-            const recomputed = recomputeUnpackSchemas(nextNodes, edgesRef.current);
-            const lostEdges = computeLostEdgesForUnpackChange(edgesRef.current, recomputed);
-            if (lostEdges.length > 0) {
-              const edgeList = lostEdges.map((e) => `${e.source} → ${e.target}`).join(', ');
-              const confirmed = window.confirm(
-                `This change will remove ${lostEdges.length} connection(s): ${edgeList}. Continue?`,
-              );
-              if (!confirmed) return;
-              const finalEdges = edgesRef.current.filter((e) => !lostEdges.some((r) => r.id === e.id));
-              const prunedNodes = sizeUnpackNodes(recomputed, finalEdges);
-              setGraphNodes(prunedNodes);
-              setGraphEdges(finalEdges);
-              nodesRef.current = prunedNodes;
-              edgesRef.current = finalEdges;
-              setDraftWorkflow((current) => flowToWorkflow(current || cloned, prunedNodes, finalEdges, viewportRef.current));
-              return;
-            }
-            setGraphNodes(recomputed);
-            nodesRef.current = recomputed;
-            setDraftWorkflow((current) => flowToWorkflow(current || cloned, recomputed, edgesRef.current, viewportRef.current));
-            return;
-          }
-        }
-        setGraphNodes((currentNodes) => {
-          const nextNodes = currentNodes.map((node) => (
-            node.type === 'event' ? { ...node, data: { ...node.data, ...patch } } : node
-          ));
           nodesRef.current = nextNodes;
           if (!hydratingGraphRef.current) setLocalDraftDirty(true);
           setDraftWorkflow((current) => flowToWorkflow(current || cloned, nextNodes, edgesRef.current, viewportRef.current));
@@ -2428,25 +2579,15 @@ function WorkflowsInner() {
           currentNodeId: null,
           completedNodeIds: [],
           expanded: true,
-          onChange: nodeType === 'event'
-            ? (patch) => {
-                setGraphNodes((currentNodes) => {
-                  const updated = currentNodes.map((node) => (
-                    node.id === nodeId ? { ...node, data: { ...node.data, ...patch } } : node
-                  ));
-                  syncWorkflowFromGraph(updated, edgesRef.current, viewportRef.current);
-                  return updated;
-                });
-              }
-            : (targetId, patch) => {
-                setGraphNodes((currentNodes) => {
-                  const updated = currentNodes.map((node) => (
-                    node.id === targetId ? { ...node, data: { ...node.data, ...patch } } : node
-                  ));
-                  syncWorkflowFromGraph(updated, edgesRef.current, viewportRef.current);
-                  return updated;
-                });
-              },
+          onChange: (targetId, patch) => {
+            setGraphNodes((currentNodes) => {
+              const updated = currentNodes.map((node) => (
+                node.id === targetId ? { ...node, data: { ...node.data, ...patch } } : node
+              ));
+              syncWorkflowFromGraph(updated, edgesRef.current, viewportRef.current);
+              return updated;
+            });
+          },
           onDelete: (targetId) => {
             const updatedNodes = nodesRef.current.filter((node) => node.id !== targetId);
             const updatedEdges = edgesRef.current.filter((edge) => edge.source !== targetId && edge.target !== targetId);
@@ -2679,15 +2820,6 @@ function WorkflowsInner() {
             const nextNodes = sizeUnpackNodes(currentNodes.map((node) => (
               node.id === nodeId ? { ...node, data: { ...node.data, ...patch } } : node
             )), edgesRef.current);
-            syncWorkflowFromGraph(nextNodes, edgesRef.current, viewportRef.current);
-            return nextNodes;
-          });
-        },
-        onTriggerChange: (patch) => {
-          setGraphNodes((currentNodes) => {
-            const nextNodes = currentNodes.map((node) => (
-              node.type === 'event' ? { ...node, data: { ...node.data, ...patch } } : node
-            ));
             syncWorkflowFromGraph(nextNodes, edgesRef.current, viewportRef.current);
             return nextNodes;
           });
@@ -3089,7 +3221,7 @@ function WorkflowsInner() {
 
 // This helper is exported for the focused workflow graph unit test.
 // eslint-disable-next-line react-refresh/only-export-components
-export { flowToWorkflow, workflowToFlow, NODE_MENU_CATEGORIES, schemaProperties, canvasMenuAnchor, visibleNodePortProperties, deriveUnpackSchemas, recomputeUnpackSchemas, computeLostEdgesForUnpackChange, isUnpackableSchema, parsePromptPlaceholders, derivePromptInputSchema };
+export { flowToWorkflow, workflowToFlow, NODE_MENU_CATEGORIES, schemaProperties, canvasMenuAnchor, visibleNodePortProperties, deriveUnpackSchemas, recomputeUnpackSchemas, computeLostEdgesForUnpackChange, isUnpackableSchema, parsePromptPlaceholders, derivePromptInputSchema, nodeInputPorts, nodeOutputPorts };
 export default function WorkflowsPage() {
   return (
     <ReactFlowProvider>

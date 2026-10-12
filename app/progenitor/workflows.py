@@ -7,10 +7,12 @@ import json
 import uuid
 from collections import defaultdict
 from collections.abc import Callable, Mapping
+from datetime import datetime
 from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from .cron import cron_error, resolve_timezone
 from .document_kinds import (
     WORKFLOW_DEFINITION_KEY_PREFIX,
     WORKFLOW_INVOKE_REQUEST_KEY_PREFIX,
@@ -32,7 +34,8 @@ MAX_WORKFLOW_INVOKE_DEPTH = 3
 MAX_WORKFLOW_QUERY_LIMIT = 200
 
 WorkflowRunStatus = Literal["queued", "running", "paused", "completed", "failed"]
-WorkflowRunSource = Literal["document", "manual", "progenitor"]
+WorkflowRunSource = Literal["document", "manual", "progenitor", "cron"]
+WorkflowCronOverlap = Literal["skip", "queue"]
 
 _JSON_OBJECT_SCHEMA = {"type": "object"}
 _ANY_VALUE_SCHEMA: dict[str, Any] = {}
@@ -312,6 +315,50 @@ class WorkflowNodeEvent(BaseModel):
         )
 
 
+CRON_OUTPUT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "required": ["scheduled_for", "fired_at", "timezone"],
+    "properties": {
+        "scheduled_for": {"type": "string", "format": "date-time"},
+        "fired_at": {"type": "string", "format": "date-time"},
+        "timezone": {"type": "string"},
+    },
+}
+
+
+class WorkflowNodeCron(BaseModel):
+    """Entrypoint fired by the backend clock on a 5-field cron expression.
+
+    ``overlap`` decides what a fire does while the workflow still has an
+    active run: ``skip`` drops it, ``queue`` runs it after the active one.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["cron"] = "cron"
+    title: str = "Cron"
+    expression: str = Field(min_length=1)
+    timezone: str = Field(min_length=1)
+    overlap: WorkflowCronOverlap = "skip"
+    output_schema: dict[str, Any] = Field(default_factory=lambda: copy.deepcopy(CRON_OUTPUT_SCHEMA))
+
+
+WorkflowTriggerNode = WorkflowNodeEvent | WorkflowNodeCron
+
+
+def build_cron_trigger_output(
+    node: WorkflowNodeCron, *, scheduled_for: datetime, fired_at: datetime
+) -> dict[str, Any]:
+    """The output object a cron node emits for one due time."""
+
+    zone = resolve_timezone(node.timezone)
+    return {
+        "scheduled_for": scheduled_for.astimezone(zone).isoformat(),
+        "fired_at": fired_at.astimezone(zone).isoformat(),
+        "timezone": node.timezone,
+    }
+
+
 class WorkflowNodeData(BaseModel):
     """A literal typed value node with no execution behavior."""
 
@@ -476,6 +523,7 @@ class WorkflowNodeHumanInput(BaseModel):
 
 WorkflowNode = Annotated[
     WorkflowNodeEvent
+    | WorkflowNodeCron
     | WorkflowNodeData
     | WorkflowNodeDocumentRead
     | WorkflowNodeDocumentQuery
@@ -545,6 +593,7 @@ class WorkflowListItem(BaseModel):
     paused: bool = False
     version: int = WORKFLOW_VERSION
     document_type: str
+    triggers: list[str] = Field(default_factory=list)
     node_count: int = 0
     updated_at: str
     created_at: str
@@ -630,6 +679,11 @@ def build_workflow_list_item(definition: WorkflowDefinition) -> WorkflowListItem
         (node for node in definition.graph.nodes.values() if isinstance(node, WorkflowNodeEvent)),
         None,
     )
+    triggers = [
+        node.document_type if isinstance(node, WorkflowNodeEvent) else f"cron {node.expression}"
+        for node in definition.graph.nodes.values()
+        if isinstance(node, WorkflowTriggerNode)
+    ]
     return WorkflowListItem(
         id=definition.id,
         title=definition.title,
@@ -638,6 +692,7 @@ def build_workflow_list_item(definition: WorkflowDefinition) -> WorkflowListItem
         paused=definition.paused,
         version=definition.version,
         document_type=event_node.document_type if event_node else "",
+        triggers=triggers,
         node_count=len(definition.graph.nodes),
         updated_at=definition.updated_at,
         created_at=definition.created_at,
@@ -868,8 +923,9 @@ def derive_workflow_port_schemas(
 ) -> dict[str, Any]:
     """Return ``payload`` with every derived node's port schemas recomputed.
 
-    Document nodes (event/read/query) take theirs from the registered type
-    schema; Unpack nodes take theirs from the port feeding their ``value``
+    Cron nodes get the fixed cron output schema. Document nodes
+    (event/read/query) take theirs from the registered type schema; Unpack
+    nodes take theirs from the port feeding their ``value``
     input, so Unpack chains resolve in dependency order. Extract/agent nodes
     take theirs from their prompt template placeholders. Run on every save
     path so ports never reflect whatever schemas the writer sent.
@@ -882,6 +938,9 @@ def derive_workflow_port_schemas(
         return result
     schemas: dict[str, dict[str, Any] | None] = {}
     for node_id, node in nodes.items():
+        if isinstance(node, dict) and node.get("kind") == "cron":
+            node["output_schema"] = copy.deepcopy(CRON_OUTPUT_SCHEMA)
+            continue
         if not isinstance(node, dict) or node.get("kind") not in {
             "event",
             "document_read",
@@ -1027,8 +1086,13 @@ def validate_workflow_definition_payload(payload: Any) -> dict[str, Any]:
         for node_id, node in definition.graph.nodes.items()
         if isinstance(node, WorkflowNodeEvent)
     }
-    if not event_nodes:
-        raise ValueError("workflow graph must contain at least one event node")
+    if not any(isinstance(node, WorkflowTriggerNode) for node in definition.graph.nodes.values()):
+        raise ValueError("workflow graph must contain at least one event or cron trigger node")
+    for node_id, node in definition.graph.nodes.items():
+        if isinstance(node, WorkflowNodeCron) and (
+            error := cron_error(node.expression, node.timezone)
+        ):
+            raise ValueError(f"cron node '{node_id}': {error}")
     for node_id, event_node in event_nodes.items():
         ports = workflow_node_output_ports(event_node)
         unknown_paths = [path for path in event_node.match if schema_at_path(ports, path) is None]
@@ -1064,10 +1128,10 @@ def ordered_workflow_node_ids(definition: WorkflowDefinition) -> list[str]:
     event_roots = [
         node_id
         for node_id, node in definition.graph.nodes.items()
-        if isinstance(node, WorkflowNodeEvent) and inbound[node_id] == 0
+        if isinstance(node, WorkflowTriggerNode) and inbound[node_id] == 0
     ]
     if len(event_roots) != 1:
-        raise ValueError("ordered nodes are unavailable without exactly one event root")
+        raise ValueError("ordered nodes are unavailable without exactly one trigger root")
     ordered, seen = [], set()
     next_nodes = outgoing.get(event_roots[0], [])
     if len(next_nodes) > 1:
@@ -1131,7 +1195,7 @@ def workflow_node_output_ports(node: WorkflowNode) -> dict[str, dict[str, Any]]:
 def workflow_node_input_ports(node: WorkflowNode) -> dict[str, dict[str, Any]]:
     """Return the named, typed input ports for one node."""
 
-    if isinstance(node, WorkflowNodeData | WorkflowNodeEvent):
+    if isinstance(node, WorkflowNodeData | WorkflowNodeEvent | WorkflowNodeCron):
         return {}
     schema = node.input_schema or {}
     if schema.get("type") != "object":
@@ -1217,9 +1281,12 @@ def _validate_data_edges(definition: WorkflowDefinition) -> None:
         adjacency[edge.from_.node].append(edge.to.node)
 
     for node_id, node in nodes.items():
-        if isinstance(node, WorkflowNodeEvent) and inbound[node_id]:
-            raise ValueError("event nodes cannot have inbound edges")
-        if not isinstance(node, WorkflowNodeData | WorkflowNodeEvent) and not inbound[node_id]:
+        if isinstance(node, WorkflowTriggerNode) and inbound[node_id]:
+            raise ValueError(f"trigger node '{node_id}' cannot have inbound edges")
+        if (
+            not isinstance(node, WorkflowNodeData | WorkflowNodeEvent | WorkflowNodeCron)
+            and not inbound[node_id]
+        ):
             raise ValueError(f"executable node '{node_id}' has no inbound connection")
         input_schema = getattr(node, "input_schema", None) or {}
         for port in input_schema.get("required") or []:
