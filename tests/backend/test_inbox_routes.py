@@ -169,7 +169,9 @@ class TestInboxRoutes:
             PROGENITOR_STATE_PREFIX,
             "inbox_message:msg_plan",
             {
-                **_message_payload("msg_plan", title="Plan", created_at="2026-07-06T00:00:00+00:00"),
+                **_message_payload(
+                    "msg_plan", title="Plan", created_at="2026-07-06T00:00:00+00:00"
+                ),
                 "requires_approval": True,
                 "task_id": "card_1",
             },
@@ -220,6 +222,122 @@ class TestInboxRoutes:
         assert types == ["inbox.message.deleted", "inbox.snapshot"]
         assert envelopes[0].payload["message_id"] == "msg_old"
         assert envelopes[1].payload["total"] == 1
+
+    def test_patch_section_replaces_range_and_broadcasts(self, client, seeded_store):
+        with _StreamCapture() as capture:
+            response = client.patch(
+                "/api/ui/inbox/msg_new/section",
+                json={
+                    "expected_body": "Body of msg_new",
+                    "start": 5,
+                    "end": 7,
+                    "replacement": "is",
+                },
+            )
+
+        assert_acknowledged(response, ["inbox.snapshot"])
+
+        stored = seeded_store.get_document(PROGENITOR_STATE_PREFIX, "inbox_message:msg_new")
+        assert stored.payload["body"] == "Body is msg_new"
+
+        types = [envelope.type for envelope in capture.event_types()]
+        assert types == ["inbox.message.upserted", "inbox.snapshot"]
+
+    def test_patch_section_with_astral_characters(self, client, document_store):
+        # U+1F600 😀 occupies two UTF-16 code units; U+10437 𐐷 also occupies two.
+        body = "Hello 😀 𐐷 world"
+        payload = _message_payload("emoji", title="Emoji", created_at="2026-07-06T00:00:00+00:00")
+        payload["body"] = body
+        document_store.save_document(
+            PROGENITOR_STATE_PREFIX,
+            "inbox_message:emoji",
+            payload,
+        )
+        # Replace "😀 " (start=6, end=9) with ""
+        response = client.patch(
+            "/api/ui/inbox/emoji/section",
+            json={"expected_body": body, "start": 6, "end": 9, "replacement": ""},
+        )
+        assert_acknowledged(response, ["inbox.snapshot"])
+
+        stored = document_store.get_document(PROGENITOR_STATE_PREFIX, "inbox_message:emoji")
+        assert stored.payload["body"] == "Hello 𐐷 world"
+
+    def test_patch_section_stale_body_returns_409(self, client, seeded_store):
+        response = client.patch(
+            "/api/ui/inbox/msg_new/section",
+            json={
+                "expected_body": "stale body",
+                "start": 0,
+                "end": 5,
+                "replacement": "fresh",
+            },
+        )
+        assert response.status_code == 409
+
+        stored = seeded_store.get_document(PROGENITOR_STATE_PREFIX, "inbox_message:msg_new")
+        assert stored.payload["body"] == "Body of msg_new"
+
+    def test_patch_section_preserves_concurrent_metadata(self, client, seeded_store):
+        # Simulate concurrent metadata change by mutating the store directly.
+        seeded_store.save_document(
+            PROGENITOR_STATE_PREFIX,
+            "inbox_message:msg_new",
+            {
+                **_message_payload(
+                    "msg_new", title="New digest", created_at="2026-07-05T00:00:00+00:00"
+                ),
+                "read": True,
+                "read_at": "2026-07-05T01:00:00+00:00",
+            },
+        )
+        response = client.patch(
+            "/api/ui/inbox/msg_new/section",
+            json={
+                "expected_body": "Body of msg_new",
+                "start": 0,
+                "end": 4,
+                "replacement": "Text",
+            },
+        )
+        assert_acknowledged(response, ["inbox.snapshot"])
+
+        stored = seeded_store.get_document(PROGENITOR_STATE_PREFIX, "inbox_message:msg_new")
+        assert stored.payload["body"] == "Text of msg_new"
+        assert stored.payload["read"] is True
+        assert stored.payload["read_at"] == "2026-07-05T01:00:00+00:00"
+
+    def test_patch_section_invalid_range_returns_400(self, client, seeded_store):
+        for bad in (
+            {"expected_body": "Body of msg_new", "start": -1, "end": 3, "replacement": ""},
+            {"expected_body": "Body of msg_new", "start": 3, "end": 2, "replacement": ""},
+            {"expected_body": "Body of msg_new", "start": 0, "end": 100, "replacement": ""},
+        ):
+            response = client.patch("/api/ui/inbox/msg_new/section", json=bad)
+            assert response.status_code == 400, bad
+
+    def test_patch_section_splits_surrogate_pair_returns_400(self, client, document_store):
+        body = "a𐐷b"  # 𐐷 is U+10437, two UTF-16 code units
+        payload = _message_payload("surrogate", title="S", created_at="2026-07-06T00:00:00+00:00")
+        payload["body"] = body
+        document_store.save_document(
+            PROGENITOR_STATE_PREFIX,
+            "inbox_message:surrogate",
+            payload,
+        )
+        # start=2 splits the surrogate pair (indices 0='a', 1-2='𐐷', 3='b')
+        response = client.patch(
+            "/api/ui/inbox/surrogate/section",
+            json={"expected_body": body, "start": 2, "end": 3, "replacement": ""},
+        )
+        assert response.status_code == 400
+
+    def test_patch_section_unknown_message_404s(self, client, document_store):
+        response = client.patch(
+            "/api/ui/inbox/nope/section",
+            json={"expected_body": "x", "start": 0, "end": 1, "replacement": "y"},
+        )
+        assert response.status_code == 404
 
     def test_delete_unknown_message_404s(self, client, document_store):
         response = client.delete("/api/ui/inbox/nope")

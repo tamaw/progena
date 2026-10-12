@@ -265,6 +265,7 @@ export {
 export {
   fetchInbox,
   markInboxMessageRead,
+  patchInboxSection,
   deleteInboxMessage,
   decideInboxMessage,
   archiveInboxMessage,

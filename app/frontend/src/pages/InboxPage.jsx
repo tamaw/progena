@@ -25,8 +25,6 @@ import {
 } from '../components/layout/PaneList';
 import { useConfig } from '../context/ConfigContext';
 import { formatStartedTime } from '../components/chat/conversationModel';
-import { useMermaidRender } from '../hooks/useMermaidRender';
-import { renderMarkdownToHtml } from '../lib/markdown';
 import {
   archiveInboxMessage,
   decideInboxMessage,
@@ -36,6 +34,7 @@ import {
   selectInboxState,
 } from '../store/uiDataSlice';
 import { formatRelativeTime } from './tasksPageModel';
+import StructuredInboxBody from './StructuredInboxBody';
 import {
   filterInboxMessages,
   getInboxMessageStatus,
@@ -79,15 +78,6 @@ function previewText(body) {
   return firstLine.length > 120 ? `${firstLine.slice(0, 120)}…` : firstLine;
 }
 
-function InboxMessageBody({ content }) {
-  const html = useMemo(() => renderMarkdownToHtml(content), [content]);
-  const containerRef = useRef(null);
-  useMermaidRender(containerRef, content);
-  if (!content) return null;
-  return (
-    <div ref={containerRef} className="markdown-content" dangerouslySetInnerHTML={{ __html: html }} />
-  );
-}
 
 export default function InboxPage() {
   const dispatch = useDispatch();
@@ -386,7 +376,7 @@ export default function InboxPage() {
         />
         <div className="detail-pane__body inbox-detail__body">
           {selectedMessage ? (
-            <InboxMessageBody content={selectedMessage.body} />
+            <StructuredInboxBody key={selectedMessage.id} message={selectedMessage} inboxUrl={inboxUrl} />
           ) : (
             <div className="welcome-message">
               <h2>{messages.length === 0 ? 'Your inbox is empty' : 'No message selected'}</h2>

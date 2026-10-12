@@ -6133,6 +6133,153 @@ body,
   flex-direction: column;
 }
 
+.inbox-structured-body {
+  width: 100%;
+  min-width: 0;
+}
+
+.inbox-section {
+  margin: 4px 0 2px 4px;
+  padding: 0 0 0 12px;
+  min-width: 0;
+  border-left: 2px solid var(--color-border);
+}
+
+.inbox-section.is-selected {
+  border-color: var(--color-accent, var(--color-text-primary));
+}
+
+.inbox-section__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.inbox-section__select {
+  padding: 2px 4px;
+  background: transparent;
+  border: 0;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+}
+
+.inbox-section__content {
+  cursor: pointer;
+}
+
+.inbox-section__actions,
+.inbox-section__actions form,
+.inbox-section__format,
+.inbox-section__options {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.inbox-section__actions button,
+.inbox-section__editor button,
+.inbox-section__question button {
+  cursor: pointer;
+  border: 1px solid var(--color-border);
+  border-radius: 5px;
+  padding: 4px 8px;
+  background: var(--color-bg-secondary);
+  color: var(--color-text-primary);
+}
+
+.inbox-section__actions .inbox-section__ai-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background:
+    linear-gradient(var(--color-bg-secondary), var(--color-bg-secondary)) padding-box,
+    linear-gradient(120deg, color-mix(in oklab, var(--color-accent) 65%, var(--color-border)), var(--color-border), color-mix(in oklab, var(--color-accent) 35%, var(--color-border))) border-box;
+}
+
+.inbox-section__ai-action svg {
+  color: var(--color-accent);
+  filter: drop-shadow(0 0 5px color-mix(in oklab, var(--color-accent) 35%, transparent));
+}
+
+.inbox-section__actions .inbox-section__ai-action:hover,
+.inbox-section__actions .inbox-section__ai-action:focus-visible {
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 2px var(--color-accent-soft);
+}
+
+.inbox-section__actions .inbox-section__edit-action.is-active {
+  border-color: var(--color-accent);
+  background: var(--color-accent-soft);
+}
+
+.inbox-section__actions input,
+.inbox-section__options input,
+.inbox-section__editor textarea {
+  border: 1px solid var(--color-border);
+  border-radius: 5px;
+  padding: 7px;
+  background: var(--color-bg-primary);
+  color: var(--color-text-primary);
+}
+
+.inbox-section__editor textarea {
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 360px;
+  resize: vertical;
+  margin: 8px 0;
+  font: inherit;
+}
+
+.inbox-section__preview {
+  margin: 10px 0;
+  padding: 10px;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+}
+
+.inbox-section__question {
+  margin: 6px 0;
+}
+
+.inbox-section__options {
+  margin-top: 6px;
+  align-items: stretch;
+  flex-direction: row;
+}
+
+.inbox-section__options > button {
+  flex: 1 1 160px;
+}
+
+.inbox-section__options form {
+  flex: 1 0 100%;
+  display: flex;
+  gap: 6px;
+}
+
+.inbox-section__options .is-active {
+  border-color: var(--color-accent);
+  background: var(--color-accent-soft);
+}
+
+.inbox-section__options form input {
+  flex: 1;
+  min-width: 0;
+}
+
+.inbox-section__error {
+  color: var(--color-error);
+}
+
 /* Dense meta row: items fit on one line (Agents/Models/Channels/Schedules), so
    widen the gap vs the wrapping chat/tasks rows. */
 .detail-pane--dense .detail-header__meta-group {

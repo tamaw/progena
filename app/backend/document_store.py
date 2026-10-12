@@ -19,6 +19,7 @@ from psycopg.types.json import Jsonb
 from psycopg_pool import ConnectionPool, PoolClosed
 
 from app.backend.runtime_conversations import RuntimeConversationReader, RuntimeUnavailable
+from app.progenitor.document_kinds import INBOX_MESSAGE_KEY_PREFIX
 from app.progenitor.routines.store import ROUTINE_GRAPH_KEY_PREFIX
 
 PROGENITOR_STATE_PREFIX = "progenitor.state"
@@ -106,6 +107,10 @@ class BackendDocumentStore(Protocol):
 
     def save_document(self, prefix: str, key: str, payload: Any) -> None: ...
 
+    def update_document_body_if(
+        self, prefix: str, key: str, expected_body: str, new_body: str
+    ) -> bool: ...
+
     def delete_document(self, prefix: str, key: str) -> None: ...
 
     def query_logs(
@@ -176,6 +181,19 @@ class InMemoryDocumentStore:
 
     def save_document(self, prefix: str, key: str, payload: Any) -> None:
         self._documents[(prefix, key)] = StoredDocument(payload, datetime.now(UTC))
+
+    def update_document_body_if(
+        self, prefix: str, key: str, expected_body: str, new_body: str
+    ) -> bool:
+        document = self._documents.get((prefix, key))
+        if document is None or not isinstance(document.payload, dict):
+            return False
+        if document.payload.get("body") != expected_body:
+            return False
+        new_payload = dict(document.payload)
+        new_payload["body"] = new_body
+        self._documents[(prefix, key)] = StoredDocument(new_payload, datetime.now(UTC))
+        return True
 
     def delete_document(self, prefix: str, key: str) -> None:
         self._documents.pop((prefix, key), None)
@@ -347,6 +365,7 @@ class PostgresDocumentStore:
                 self._ensure_store_table()
                 self._ensure_change_trigger()
                 self._ensure_routine_revision_history()
+                self._ensure_inbox_revision_history()
                 self._ensure_policy_revision_history()
             finally:
                 conn.execute(
@@ -547,6 +566,101 @@ class PostgresDocumentStore:
                 """.replace("__STATE_PREFIX__", state_prefix).replace("__KEY_PREFIX__", key_prefix)  # nosec B608
             cur.execute(backfill_sql)
 
+    def _ensure_inbox_revision_history(self) -> None:
+        """Capture full inbox payloads, including frontmatter, on every store write.
+
+        Mirrors routine graph history: immutable, content-addressed snapshots
+        captured by a store trigger, with a backfill for existing messages.
+        The delete trigger preserves the last live version.
+        """
+        with self._cursor() as cur:
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS inbox_message_revisions (
+                    message_id TEXT NOT NULL,
+                    document JSONB NOT NULL,
+                    revision_id TEXT GENERATED ALWAYS AS (encode(sha256(jsonb_send(document)), 'hex')) STORED,
+                    captured_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    PRIMARY KEY (message_id, revision_id)
+                )
+                """
+            )
+            cur.execute(
+                """
+                CREATE INDEX IF NOT EXISTS inbox_message_revisions_latest
+                    ON inbox_message_revisions (message_id, captured_at DESC, revision_id DESC)
+                """
+            )
+            cur.execute(
+                sql.SQL("""
+                CREATE OR REPLACE FUNCTION progenitor_capture_inbox_revision()
+                RETURNS trigger AS $$
+                DECLARE source_row store%ROWTYPE;
+                BEGIN
+                    IF TG_OP = 'DELETE' THEN source_row := OLD; ELSE source_row := NEW; END IF;
+                    IF source_row.prefix = {state_prefix}
+                        AND left(source_row.key, length({key_prefix})) = {key_prefix}
+                        AND length(source_row.key) > length({key_prefix})
+                        AND jsonb_typeof(source_row.value->'payload') = 'object' THEN
+                        INSERT INTO inbox_message_revisions (message_id, document)
+                        VALUES (substring(source_row.key from length({key_prefix}) + 1), source_row.value->'payload')
+                        ON CONFLICT (message_id, revision_id) DO NOTHING;
+                    END IF;
+                    RETURN source_row;
+                END;
+                $$ LANGUAGE plpgsql;
+                """).format(
+                    state_prefix=sql.Literal(PROGENITOR_STATE_PREFIX),
+                    key_prefix=sql.Literal(INBOX_MESSAGE_KEY_PREFIX),
+                )
+            )
+            cur.execute(
+                """
+                CREATE OR REPLACE TRIGGER progenitor_capture_inbox_revision
+                AFTER INSERT OR UPDATE ON store
+                FOR EACH ROW EXECUTE FUNCTION progenitor_capture_inbox_revision()
+                """
+            )
+            cur.execute(
+                """
+                CREATE OR REPLACE TRIGGER progenitor_capture_deleted_inbox_revision
+                BEFORE DELETE ON store
+                FOR EACH ROW EXECUTE FUNCTION progenitor_capture_inbox_revision()
+                """
+            )
+            cur.execute(
+                """
+                CREATE OR REPLACE FUNCTION progenitor_inbox_revisions_immutable()
+                RETURNS trigger AS $$
+                BEGIN RAISE EXCEPTION 'inbox_message_revisions rows are immutable'; END;
+                $$ LANGUAGE plpgsql;
+                """
+            )
+            cur.execute(
+                """
+                CREATE OR REPLACE TRIGGER progenitor_inbox_revisions_immutable
+                BEFORE UPDATE OR DELETE ON inbox_message_revisions
+                FOR EACH ROW EXECUTE FUNCTION progenitor_inbox_revisions_immutable()
+                """
+            )
+            cur.execute(
+                """
+                INSERT INTO inbox_message_revisions (message_id, document)
+                SELECT substring(key from length(%s) + 1), value->'payload'
+                FROM store
+                WHERE prefix = %s AND left(key, length(%s)) = %s AND length(key) > length(%s)
+                    AND jsonb_typeof(value->'payload') = 'object'
+                ON CONFLICT (message_id, revision_id) DO NOTHING
+                """,
+                (
+                    INBOX_MESSAGE_KEY_PREFIX,
+                    PROGENITOR_STATE_PREFIX,
+                    INBOX_MESSAGE_KEY_PREFIX,
+                    INBOX_MESSAGE_KEY_PREFIX,
+                    INBOX_MESSAGE_KEY_PREFIX,
+                ),
+            )
+
     def _ensure_policy_revision_history(self) -> None:
         from app.progenitor.policies import ExecutionPolicy
 
@@ -640,6 +754,22 @@ class PostgresDocumentStore:
                 """,
                 (prefix, key, Jsonb(value)),
             )
+
+    def update_document_body_if(
+        self, prefix: str, key: str, expected_body: str, new_body: str
+    ) -> bool:
+        with self._cursor() as cur:
+            cur.execute(
+                """
+                UPDATE store
+                SET value = jsonb_set(value, '{payload,body}', to_jsonb(%s::text)),
+                    updated_at = now()
+                WHERE prefix = %s AND key = %s
+                  AND value -> 'payload' ->> 'body' = %s
+                """,
+                (new_body, prefix, key, expected_body),
+            )
+            return cur.rowcount == 1
 
     def delete_document(self, prefix: str, key: str) -> None:
         with self._cursor() as cur:

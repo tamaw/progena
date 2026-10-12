@@ -54,6 +54,44 @@ Full message body in **markdown** — headings, lists, links, code blocks, and
 `/schemas/inbox_message.schema.v1.json` documents the full message shape
 (useful as a reference; not required reading to send one).
 
+## Structured sections and questions
+
+When a message needs individually editable parts, wrap Markdown in matching
+XML-like tags such as `<plan>…</plan>`. Tags have no special visual styles:
+each nested section receives the same compact, non-interactive left bracket;
+the first top-level section starts selected to show its actions. Click its
+heading or rendered Markdown to select it. The action bar keeps AI edit and
+explain first; hand Edit toggles a large Markdown editor below the bar. Keep
+tags balanced; literal examples belong in Markdown code spans or fenced blocks.
+
+For a choice, put one question and its options in each `<questions>` block:
+
+```xml
+<plan>
+Choose an implementation:
+<questions id="implementation">
+Which approach should we use?
+<options>
+<option>Use the existing API</option>
+<option>Add a dedicated endpoint</option>
+</options>
+</questions>
+</plan>
+```
+
+The listed options appear directly below the question without a show/hide
+step. The UI adds an "Enter your own" choice that opens a free-text answer
+field; do not include that choice in the message's `<options>` data.
+
+Use a stable `id` per question so the selected block is unambiguous. Multiple
+`<questions>` blocks can appear in a section. When the user chooses an option
+or enters their own answer, the quick-chat request identifies the question and
+asks you to read its latest version, then rewrite that `<questions>` section in
+your own words to include both the question and answer. Keep its wrapper, `id`,
+and `<options>` list so the user can revise their choice. Do not insert an
+`<answer>` tag or append the selected text verbatim. Preserve all unrelated
+sections and user-owned frontmatter.
+
 ## Common operations
 
 ### Send a message (recommended — schema-validated)
