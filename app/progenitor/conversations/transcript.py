@@ -21,7 +21,7 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, tzinfo
 from typing import Any
 
@@ -219,8 +219,10 @@ class _Renderer:
         for block in _content_blocks(message):
             kind = block.get("type")
             if kind == "reasoning":
-                for summary in block.get("summary") or []:
-                    thought = _reasoning_action(summary.get("text", ""))
+                summaries = block.get("summary") or []
+                for summary in [summaries] if isinstance(summaries, str) else summaries:
+                    text = summary.get("text", "") if isinstance(summary, dict) else str(summary)
+                    thought = _reasoning_action(text)
                     if thought:
                         out.append(Line(at, f"* {nick} {thought}"))
             elif kind == "text":
@@ -246,8 +248,9 @@ class _Renderer:
                 request = args.get("description") or args.get("request") or ""
                 out += [Line(at, f"-> *{agent}* {row}") for row in _rows(str(request))]
                 return out
-            out += self.render(child, nick)
+            out += self.render(child if child.nick else replace(child, nick=agent), nick)
             out.append(Line(out[-1].at, f"-!- {agent} [subagent] has left #{self.channel}"))
+            entry.line = base + len(out) - 1  # the part line gains the reason if the task failed
             return out
         if name in _NOTICE_TOOLS:
             return [Line(at, f"-{nick}- {row}") for row in _rows(_notice_text(name, args))]
@@ -271,7 +274,11 @@ class _Renderer:
         text = _message_text(message)
         failed = message.status == "error" or text.startswith("Error")
         if name in _DELEGATION_TOOLS:
-            return self._delegate_result(name, args, text, failed, at, call["id"])
+            if entry.line is not None:  # inlined task subagent: transcript and part already out
+                if failed:
+                    lines[entry.line].text += f" [{_reason(text)}]"
+                return []
+            return self._delegate_result(name, args, text, failed, at)
         if name == "check_async_task":
             return self._async_check(args, text, failed, at, nick)
         if entry.line is None:
@@ -292,7 +299,6 @@ class _Renderer:
         text: str,
         failed: bool,
         at: datetime | None,
-        call_id: str,
     ) -> list[Line]:
         agent = _delegate_name(name, args)
         if name == "start_async_task":
@@ -304,8 +310,6 @@ class _Renderer:
         kind = "subagent" if name == "task" else "a2a"
         if failed:
             return [Line(at, f"-!- {agent} [{kind}] has left #{self.channel} [{_reason(text)}]")]
-        if name == "task" and call_id in self.subagents:
-            return []  # The inlined transcript already ended with this reply and the part.
         if name == "call_agent":
             return self._a2a_result(agent, text, at)
         return [*_say(at, f"@{agent}", text), self._part(at, agent, kind)]

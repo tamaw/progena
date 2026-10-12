@@ -70,7 +70,8 @@ async def _load_thread(
     thread = ThreadMessages(
         messages=list(messages),
         committed_at=_commit_times(history[::-1]),
-        nick=str(tip.metadata.get("lc_agent_name") or DEFAULT_AGENT_NICK),
+        # An unnamed subagent namespace gets "" so the renderer uses the task's subagent_type.
+        nick=str(tip.metadata.get("lc_agent_name") or ("" if ns else DEFAULT_AGENT_NICK)),
     )
     return thread, str(tip.config["configurable"]["checkpoint_id"])
 

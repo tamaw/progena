@@ -78,6 +78,46 @@ def test_failed_direct_agent_calls_never_join() -> None:
     ]
 
 
+def test_failed_task_subagent_parts_once_with_the_reason_and_unnamed_child_uses_its_type() -> None:
+    root = _thread(
+        HumanMessage("which repos?"),
+        AIMessage(
+            "",
+            tool_calls=[
+                _call("task", "call-1", subagent_type="repo-manager", description="List repos")
+            ],
+            response_metadata=MODEL,
+        ),
+        ToolMessage("Error: subagent crashed", tool_call_id="call-1", name="task", status="error"),
+    )
+    child = _thread(HumanMessage("List repos"), nick="")
+    assert _lines(root, {"call-1": child}) == [
+        "<Tama> which repos?",
+        "-!- repo-manager [subagent] has joined #abcd1234",
+        "-> *repo-manager* List repos",
+        "-!- repo-manager [subagent] has left #abcd1234 [subagent crashed]",
+    ]
+
+
+def test_reasoning_summaries_that_are_plain_strings_still_render() -> None:
+    lines = _lines(
+        _thread(
+            HumanMessage("go"),
+            AIMessage(
+                content=[
+                    {"type": "reasoning", "summary": "**Reading the schedule**\n\nbody"},
+                    {"type": "reasoning", "summary": ["**Planning a reply**"]},
+                ],
+                response_metadata=MODEL,
+            ),
+        )
+    )
+    assert lines[1:] == [
+        "* progenitor is reading the schedule",
+        "* progenitor is planning a reply",
+    ]
+
+
 def test_task_subagent_is_inlined_between_join_and_part_without_repeating_its_reply() -> None:
     root = _thread(
         HumanMessage("which repos?"),

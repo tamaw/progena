@@ -15,15 +15,17 @@ history:
 
 - `<date>` is the day the chat started (user's timezone), `<title-slug>` is the
   chat's sidebar title, `<id8>` is the first 8 characters of its thread id.
-- `ls` lists newest activity first. Archived chats have no file; a renamed chat
-  gets a new name, so `ls` again if a path stops resolving.
+- `ls` lists newest activity first, as of each chat's last read (a chat with
+  new turns you haven't read may sit lower). Archived chats have no file; a
+  renamed chat gets a new name, so `ls` again if a path stops resolving.
 - The chat you are in right now is included, up to its last completed step.
 - Files cannot be written, edited, or deleted.
 
 ## Line format
 
-Every line starts with `HH:MM:SS` in the user's timezone. The header gives the
-topic (chat title), who set it, and everyone who took part (`@` marks agents).
+After a short header (topic = chat title, who set it, and everyone who took
+part; `@` marks agents), each line starts with `HH:MM:SS` in the user's
+timezone, or `--:--:--` when the time is unknown.
 
 | Line | Meaning |
 |---|---|
@@ -33,7 +35,8 @@ topic (chat title), who set it, and everyone who took part (`@` marks agents).
 | `* progenitor reads /config/schedule.json` | A tool call. `can't read … (reason)` means it failed; `(exit 1)` after `runs` means the command failed. |
 | `-progenitor- [success] Title: body` | A notification, message, or question sent to the user outside the chat. |
 | `-!- repo-manager [subagent] has joined #id8` | A delegation starts. `[subagent]`, `[async]`, or `[a2a]` says how. |
-| `-> *repo-manager* request` | The request handed to that agent. Its own thinking and tool calls follow, then `has left`. |
+| `-> *repo-manager* request` | The request handed to that agent. For `[subagent]` its own thinking and tool calls follow, then `has left`. `[async]` and `[a2a]` agents only reply later as `<@agent>` lines. |
+| `-!- repo-manager [subagent] has left #id8 [reason]` | The delegation ended; a `[reason]` at the end means it failed. |
 | `<Tama> greetings_agent: hi` | The user typed `@greetings_agent hi`, talking to that agent directly instead of to you. |
 | `-!- nobody_agent: No such nick/channel` | A direct agent call failed; the reason follows the colon. |
 | `-!- progenitor has quit [cancelled by Tama]` | The user stopped that reply part-way. |
@@ -50,7 +53,8 @@ back.
 - Search one period first: `grep` with `glob` set to a date prefix such as
   `2026-10-*` reads far fewer logs.
 - What the user asked: grep for `<Tama>` (their nick) in that file.
-- Failures: grep for `can't` or `has quit`.
+- Failures: grep for `can't` or `has quit`; for delegations grep `has left` and
+  look for a trailing `[reason]`.
 - Delegations: grep for `has joined`.
 - Read a long chat in pages with `read_file` offset/limit.
 

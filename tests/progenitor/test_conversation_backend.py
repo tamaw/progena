@@ -6,14 +6,15 @@ import re
 from typing import Annotated, Any, TypedDict
 
 import pytest
-from langchain_core.messages import AIMessage, AnyMessage, HumanMessage
+from langchain_core.messages import AIMessage, AnyMessage, HumanMessage, ToolMessage
 from langgraph.channels.delta import DeltaChannel
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.checkpoint.serde.types import _DeltaSnapshot
-from langgraph.graph import START, StateGraph
-from langgraph.graph.message import _messages_delta_reducer
+from langgraph.graph import END, START, StateGraph
+from langgraph.graph.message import _messages_delta_reducer, add_messages
 from langgraph.store.memory import InMemoryStore
 
+from app.progenitor.agent.backends import create_progenitor_backend
 from app.progenitor.agent.conversation_backend import ConversationDirectoryBackend
 from app.progenitor.conversations.service import ConversationTranscripts
 from app.progenitor.conversations.sessions import CHAT_INDEX_KEY, CHAT_SESSIONS_NAMESPACE
@@ -68,6 +69,59 @@ class _Chats:
     async def turn(self, thread_id: str, question: str, answer: str) -> None:
         messages = [HumanMessage(question), AIMessage(answer, response_metadata=MODEL)]
         await self.graph.ainvoke({"messages": messages}, {"configurable": {"thread_id": thread_id}})
+
+    async def delegated_turn(self, thread_id: str, question: str) -> None:
+        """One turn where the model calls ``task`` and a checkpointed subagent answers.
+
+        Mirrors DeepAgents: the subagent graph runs inside the parent's ``tools``
+        node, so it checkpoints under its own ``tools:<task_id>`` namespace with
+        its ``lc_agent_name`` in the checkpoint metadata.
+        """
+
+        class _ChildState(TypedDict):
+            messages: Annotated[list[AnyMessage], add_messages]
+
+        child_builder = StateGraph(_ChildState)
+        child_builder.add_node(
+            "model",
+            lambda _state: {
+                "messages": [AIMessage("No repos configured.", response_metadata=MODEL)]
+            },
+        )
+        child_builder.add_edge(START, "model")
+        child = child_builder.compile().with_config({"metadata": {"lc_agent_name": "repo-manager"}})
+
+        def model(state: dict[str, Any]) -> dict[str, Any]:
+            if isinstance(state["messages"][-1], ToolMessage):
+                return {"messages": [AIMessage("None are configured.", response_metadata=MODEL)]}
+            call = {
+                "name": "task",
+                "args": {"subagent_type": "repo-manager", "description": "List the repos"},
+                "id": "call-task",
+                "type": "tool_call",
+            }
+            return {"messages": [AIMessage("", tool_calls=[call], response_metadata=MODEL)]}
+
+        async def tools(state: dict[str, Any]) -> dict[str, Any]:
+            call = state["messages"][-1].tool_calls[0]
+            result = await child.ainvoke({"messages": [HumanMessage(call["args"]["description"])]})
+            reply = ToolMessage(
+                result["messages"][-1].content, tool_call_id=call["id"], name="task"
+            )
+            return {"messages": [reply]}
+
+        builder = StateGraph(_DeltaMessagesState)
+        builder.add_node("model", model)
+        builder.add_node("tools", tools)
+        builder.add_edge(START, "model")
+        builder.add_conditional_edges(
+            "model", lambda state: "tools" if state["messages"][-1].tool_calls else END
+        )
+        builder.add_edge("tools", "model")
+        graph = builder.compile(checkpointer=self.saver)
+        await graph.ainvoke(
+            {"messages": [HumanMessage(question)]}, {"configurable": {"thread_id": thread_id}}
+        )
 
     async def names(self) -> list[str]:
         listing = await self.backend.als("/")
@@ -137,6 +191,25 @@ async def test_chat_whose_newest_checkpoint_is_a_delta_snapshot_renders_in_full(
     assert asked == answered == [str(i) for i in range(turns)]
 
 
+async def test_task_subagent_checkpoints_are_inlined_under_the_delegating_call(
+    chats: _Chats,
+) -> None:
+    await chats.session("aaaaaaaa-repos")
+    await chats.delegated_turn("aaaaaaaa-repos", "which repos?")
+    [name] = await chats.names()
+
+    body = [line.split(" ", 1)[1] for line in (await chats.text(name)).splitlines()[4:]]
+
+    assert body == [
+        "<Tama> which repos?",
+        "-!- repo-manager [subagent] has joined #aaaaaaaa",
+        "-> *repo-manager* List the repos",
+        "<@repo-manager> No repos configured.",
+        "-!- repo-manager [subagent] has left #aaaaaaaa",
+        "<@progenitor> None are configured.",
+    ]
+
+
 async def test_read_includes_new_turns_while_grep_searches_the_last_rendered_copy(
     chats: _Chats,
 ) -> None:
@@ -163,6 +236,45 @@ async def test_grep_line_numbers_match_read_file(chats: _Chats) -> None:
     assert matches
     for match in matches:
         assert lines[match["line"] - 1] == match["text"]
+
+
+async def test_grep_path_and_glob_select_files_before_searching(chats: _Chats) -> None:
+    await chats.session("aaaaaaaa-weekend", title="Weekend plans")
+    await chats.turn("aaaaaaaa-weekend", "plan the weekend", "shared answer")
+    await chats.session("bbbbbbbb-repos", title="Repo check")
+    await chats.turn("bbbbbbbb-repos", "check the repos", "shared answer")
+    names = await chats.names()
+    [weekend] = [name for name in names if "weekend" in name]
+
+    def paths(result: Any) -> set[str]:
+        return {match["path"] for match in result.matches}
+
+    assert paths(await chats.backend.agrep("shared answer", "/")) == set(names)
+    assert paths(await chats.backend.agrep("shared answer", "/", "*_weekend-plans_*")) == {weekend}
+    assert paths(await chats.backend.agrep("shared answer", weekend)) == {weekend}
+
+
+async def test_mount_serves_conversations_through_the_agent_filesystem(
+    chats: _Chats, monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+) -> None:
+    # The default StateBackend needs a live graph runtime; it's irrelevant here.
+    monkeypatch.setattr("app.progenitor.agent.backends.StateBackend", lambda: None)
+    filesystem = create_progenitor_backend(
+        project_root=tmp_path, state_manager=chats.state_manager, checkpointer=chats.saver
+    )
+    await chats.session("aaaaaaaa-live", title="Weekend plans")
+    await chats.turn("aaaaaaaa-live", "plan my weekend", "Sure.")
+
+    listing = await filesystem.als("/conversations/")
+    [path] = [entry["path"] for entry in listing.entries or []]
+    read = await filesystem.aread(path, 0, 100)
+    found = await filesystem.agrep("Sure.", "/conversations/", "*_weekend-plans_*")
+    written = await filesystem.awrite(path, "x")
+
+    assert re.fullmatch(r"/conversations/\d{4}-\d{2}-\d{2}_weekend-plans_aaaaaaaa\.txt", path)
+    assert read.file_data is not None and "<Tama> plan my weekend" in read.file_data["content"]
+    assert [match["path"] for match in found.matches] == [path]
+    assert written.error is not None
 
 
 async def test_rename_and_display_name_apply_without_a_new_turn(chats: _Chats) -> None:
