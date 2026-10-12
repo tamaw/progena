@@ -41,7 +41,12 @@ from app.progenitor.content_documents import (
     AGENT_SELF_EDIT_TOUCH_KEY_PREFIX,
     SKILL_DOCUMENT_KEY_PREFIX,
 )
-from app.progenitor.document_kinds import DOCUMENT_KINDS, KANBAN_CARD_KEY_PREFIX, key_prefix_for
+from app.progenitor.document_kinds import (
+    DOCUMENT_KINDS,
+    KANBAN_CARD_KEY_PREFIX,
+    KNOWLEDGE_PAGE_KEY_PREFIX,
+    key_prefix_for,
+)
 from app.progenitor.routines.store import ROUTINE_GRAPH_KEY_PREFIX
 from app.progenitor.schedule import Scheduler, default_timezone_name
 from app.progenitor.schedule.service import generate_schedule_id
@@ -4232,6 +4237,11 @@ def _queue_state_watch_status(snapshot, changed_key: str | None = None) -> None:
             broadcast_schedule_snapshot()
         if changed_key in (None, "knowledge"):
             broadcast_knowledge_snapshot()
+        if changed_key is not None and changed_key.startswith(KNOWLEDGE_PAGE_KEY_PREFIX):
+            base_id = changed_key.removeprefix(KNOWLEDGE_PAGE_KEY_PREFIX).split("/", 1)[0]
+            if base_id:
+                broadcast_knowledge_pages_snapshot(base_id)
+            broadcast_knowledge_snapshot()
         if changed_key in (None, "preferences"):
             broadcast_preferences_snapshot()
         if changed_key in (None, "marketplaces"):
@@ -4857,6 +4867,18 @@ def broadcast_knowledge_snapshot(
     """
     payload = snapshot_knowledge_bases() if bases is None else bases
     return broadcast_ui_event("knowledge.snapshot", {"bases": payload}, request_id=request_id)
+
+
+def broadcast_knowledge_pages_snapshot(
+    base_id: str, *, request_id: str | None = None
+) -> UiEventEnvelope:
+    from .knowledge_pages import list_pages
+
+    return broadcast_ui_event(
+        "knowledge.pages.snapshot",
+        {"base_id": base_id, "pages": list_pages(base_id)},
+        request_id=request_id,
+    )
 
 
 def broadcast_preferences_snapshot(

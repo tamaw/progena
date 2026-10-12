@@ -45,14 +45,8 @@ export function matchesQuery(base, query) {
     base.name,
     base.description,
     base.owner,
-    base.embeddingModel,
-    base.table,
-    base.database,
-    base.indexType,
-    base.metric,
+    base.path,
     ...(Array.isArray(base.tags) ? base.tags : []),
-    ...(Array.isArray(base.collections) ? base.collections.map((c) => c.name) : []),
-    ...(Array.isArray(base.pluggedInto) ? base.pluggedInto : []),
   ]
     .filter(Boolean)
     .join(' ')
@@ -114,37 +108,21 @@ export function formatCount(value) {
   return new Intl.NumberFormat().format(num);
 }
 
-// Adapt a backend knowledge-base row (snake_case, pgvector-oriented) into the
-// shape the page renders. Every knowledge base is reachable by the runtime
-// `knowledge_search` tool, so each one reports as plugged into Progenitor. The
-// raw `sources` array is passed through unchanged so edits can PUT it back.
+// Adapt a backend knowledge-base row (snake_case) into the shape the page
+// renders. `path` and `page_count` are derived by the backend snapshot; saves
+// PUT the raw rows, so fields not mapped here are preserved.
 export function fromApiBase(apiBase) {
-  const collections = Array.isArray(apiBase.collections) ? apiBase.collections : [];
-  const documents = Number(apiBase.documents) || 0;
   const lastSynced = apiBase.updated_at || apiBase.created_at || null;
-  const host = '127.0.0.1:15433';
-  const database = 'progenitor';
   return {
     id: apiBase.id,
     name: apiBase.name || apiBase.id,
     status: apiBase.status || 'connected',
     owner: apiBase.owner || 'user',
-    description: apiBase.description || 'pgvector knowledge base.',
-    embeddingModel: apiBase.embedding_model || 'progenitor-hash-256',
-    storeType: apiBase.store_type || 'pgvector',
-    dimensions: Number(apiBase.dimensions) || 256,
-    indexType: apiBase.index_type || 'Flat',
-    metric: apiBase.metric || 'cosine',
-    host,
-    database,
-    table: 'knowledge_documents',
-    connectionString: apiBase.connection_string || `postgresql://progenitor@${host}/${database}`,
-    documents,
+    description: apiBase.description || 'Knowledge base.',
     lastSynced,
+    pageCount: Number(apiBase.page_count) || 0,
+    path: apiBase.path || `/knowledge/${apiBase.id}/`,
     tags: Array.isArray(apiBase.tags) ? apiBase.tags : [],
-    sources: Array.isArray(apiBase.sources) ? apiBase.sources : [],
-    collections: collections.map((name) => ({ name, updated: lastSynced })),
-    pluggedInto: ['Progenitor'],
   };
 }
 

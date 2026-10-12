@@ -52,6 +52,7 @@ from deepagents.backends.protocol import EditResult, FileUploadResponse, WriteRe
 from ..conversations.service import ConversationTranscripts
 from .attachment_backend import AttachmentDirectoryBackend
 from .conversation_backend import ConversationDirectoryBackend
+from .knowledge_backend import KnowledgePageBackend
 from .state_backend import (
     ContentDocumentDirectoryBackend,
     InboxDirectoryBackend,
@@ -235,6 +236,7 @@ def create_progenitor_backend(
             state_manager, native_root=resolved_agents_dir
         )
         routes["/memories/"] = ContentDocumentDirectoryBackend(state_manager, "memory")
+        routes["/knowledge/"] = KnowledgePageBackend(state_manager)
         routes["/prompts/"] = ReadOnlyBackend(
             ContentDocumentDirectoryBackend(state_manager, "prompt")
         )

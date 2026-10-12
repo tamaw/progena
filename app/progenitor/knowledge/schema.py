@@ -24,6 +24,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 
 from ..schemas import check_entry_schema
 from .embedding import EMBED_DIM, EMBED_MODEL_NAME
+from .pages import BASE_ID_RE
 
 VALID_METRICS = ("cosine", "l2", "inner_product")
 VALID_INDEX_TYPES = ("Flat", "HNSW", "IVFFlat")
@@ -38,8 +39,14 @@ def slugify(value: str) -> str:
     return base or "kb"
 
 
-def generate_base_id(name: str) -> str:
-    return f"{slugify(name)[:32]}-{uuid.uuid4().hex[:6]}"
+def generate_base_id(name: str, taken: set[str]) -> str:
+    candidate = slugify(name)[:48]
+    if candidate not in taken:
+        return candidate
+    suffix = 2
+    while f"{candidate}-{suffix}" in taken:
+        suffix += 1
+    return f"{candidate}-{suffix}"
 
 
 def generate_source_id() -> str:
@@ -152,13 +159,10 @@ def _format_validation_error(exc: ValidationError) -> str:
     return f"{location}: {message}" if location else message
 
 
-def validate_knowledge_payload(data: Any) -> dict[str, Any]:
-    """Validate and normalize a knowledge payload (``{"bases": [...]}``).
-
-    Fills missing ids and timestamps, dedupes tags, and drops unknown fields.
-    Raises ``ValueError`` (with a concise message) on any schema violation or a
-    duplicate base id.
-    """
+def validate_knowledge_payload(
+    data: Any, *, reserved_ids: frozenset[str] = frozenset()
+) -> dict[str, Any]:
+    """Validate and normalize a knowledge payload."""
     if not isinstance(data, dict):
         raise ValueError("top level must be a JSON object")
     try:
@@ -167,15 +171,20 @@ def validate_knowledge_payload(data: Any) -> dict[str, Any]:
         raise ValueError(_format_validation_error(exc)) from exc
 
     timestamp = now_isoformat()
+    provided_ids = {str(base.id).strip() for base in payload.bases if str(base.id or "").strip()}
+    for base_id in provided_ids:
+        if not BASE_ID_RE.fullmatch(base_id):
+            raise ValueError(
+                f"base id '{base_id}' must be lowercase kebab-case (a-z, 0-9, -), max 64 chars"
+            )
     seen_ids: set[str] = set()
+    all_taken = provided_ids | set(reserved_ids)
     bases: list[dict[str, Any]] = []
     for base in payload.bases:
         entry = base.model_dump(mode="json")
         base_id = str(entry.get("id") or "").strip()
         if not base_id:
-            base_id = generate_base_id(entry["name"])
-            while base_id in seen_ids:
-                base_id = generate_base_id(entry["name"])
+            base_id = generate_base_id(entry["name"], taken=seen_ids | all_taken)
         if base_id in seen_ids:
             raise ValueError(f"duplicate base id '{base_id}'")
         seen_ids.add(base_id)
@@ -195,7 +204,6 @@ def validate_knowledge_payload(data: Any) -> dict[str, Any]:
         entry["sources"] = sources
         check_entry_schema(f"base '{base_id}'", entry, "knowledge_base_entry")
         bases.append(entry)
-
     return {"bases": bases}
 
 

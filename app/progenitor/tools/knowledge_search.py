@@ -45,9 +45,10 @@ class KnowledgeSearchTool(BaseSystemTool):
     @property
     def description(self) -> str:
         return (
-            "Search the Progenitor knowledge bases (Postgres pgvector stores) and "
-            "return the most relevant stored passages. Use this to recall facts, "
-            "documents, or notes that the user has saved in a knowledge base."
+            "Semantic search over source documents indexed into pgvector for a "
+            "knowledge base. This does NOT search knowledge-base pages: for what a "
+            "knowledge base knows, read /knowledge/index.md and the pages under "
+            "/knowledge/<base-id>/ (curating-knowledge skill)."
         )
 
     @property
@@ -100,7 +101,8 @@ class KnowledgeSearchTool(BaseSystemTool):
                     "query": query,
                     "results": [],
                     "count": 0,
-                    "note": "No knowledge bases exist yet. Create one first.",
+                    "note": "No source documents have been indexed. Knowledge-base pages "
+                    "live under /knowledge/<base-id>/; read them with read_file/grep.",
                 }
             )
         except Exception as exc:

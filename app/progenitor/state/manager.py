@@ -14,6 +14,7 @@ from ..content_documents import (
 )
 from ..conversations.sessions import CHAT_INDEX_KEY, CHAT_SESSIONS_NAMESPACE
 from ..document_kinds import INBOX_MESSAGE_KEY_PREFIX
+from ..knowledge.pages import knowledge_page_key
 from ..routines.store import ROUTINE_GRAPH_KEY_PREFIX, routine_graph_key
 from ..utils import utcnow_isoformat
 from ..workflows import (
@@ -802,6 +803,34 @@ class StateManager:
             if isinstance(payload, dict) and isinstance(payload.get("content"), str):
                 results.append((key[len(prefix) :], payload["content"]))
         return results
+
+    async def get_knowledge_page(self, base_id: str, path: str) -> dict[str, Any] | None:
+        payload = await self._runtime_store.peek_document(knowledge_page_key(base_id, path))
+        if isinstance(payload, dict) and isinstance(payload.get("content"), str):
+            return payload
+        return None
+
+    async def save_knowledge_page(self, base_id: str, path: str, content: str) -> None:
+        await self._save_runtime_document(
+            knowledge_page_key(base_id, path),
+            {"content": content, "updated_at": utcnow_isoformat()},
+        )
+
+    async def list_knowledge_pages(self) -> list[tuple[str, str, dict[str, Any]]]:
+        rows = await self._runtime_store.list_documents("knowledge:")
+        result: list[tuple[str, str, dict[str, Any]]] = []
+        for key, payload in rows:
+            remainder = key[len("knowledge:") :]
+            base_id, separator, path = remainder.partition("/")
+            if (
+                separator
+                and base_id
+                and path
+                and isinstance(payload, dict)
+                and isinstance(payload.get("content"), str)
+            ):
+                result.append((base_id, path, payload))
+        return result
 
     # ==========================================================================
     # MCP tools

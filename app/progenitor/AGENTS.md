@@ -122,6 +122,7 @@ write its runtime state as JSON files under `data/state`.
 The DeepAgent receives a virtual filesystem view backed by those documents:
 - `/config/mcp.json`: MCP server configuration
 - `/config/knowledge.json`: Knowledge-base settings
+- `/knowledge/<base-id>/`: knowledge-base pages (OKF markdown; see the curating-knowledge skill)
 - `/config/schedule.json`: Scheduled tasks
 - `/config/agents.json`: A2A agent registry and runtime tools
 - `/config/repos.json`: Declared repositories (name, remote, local worktree path, read/write access) — agent-editable

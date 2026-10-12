@@ -38,6 +38,7 @@ KANBAN_CARD_KEY_PREFIX = "kanban_card:"
 INBOX_MESSAGE_KEY_PREFIX = "inbox_message:"
 WORKFLOW_DEFINITION_KEY_PREFIX = "workflow:"
 WORKFLOW_RUN_KEY_PREFIX = "workflow_run:"
+KNOWLEDGE_PAGE_KEY_PREFIX = "knowledge:"
 
 # Internal-plumbing prefixes: real ``store`` key prefixes, still centralized
 # here to avoid re-drift, but deliberately left out of ``DOCUMENT_KINDS``
@@ -66,6 +67,7 @@ DOCUMENT_KINDS: tuple[DocumentKind, ...] = (
     DocumentKind("Inbox Message", INBOX_MESSAGE_KEY_PREFIX),
     DocumentKind("Workflow", WORKFLOW_DEFINITION_KEY_PREFIX),
     DocumentKind("Workflow Run", WORKFLOW_RUN_KEY_PREFIX),
+    DocumentKind("Knowledge Page", KNOWLEDGE_PAGE_KEY_PREFIX),
 )
 
 
