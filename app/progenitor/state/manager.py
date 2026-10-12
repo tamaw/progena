@@ -477,7 +477,7 @@ class StateManager:
     # Model profiles
     # ==========================================================================
     async def get_model_profiles_config(self) -> dict[str, Any]:
-        """Return the shared model profile map behind ``/config/profile.json``."""
+        """Return the shared model profile map behind ``/config/profiles.json``."""
         default = default_model_profiles_payload()
         payload = await self._runtime_store.get_document("profile", default)
         return payload if isinstance(payload, dict) else default

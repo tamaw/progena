@@ -30,8 +30,9 @@ import * as marketplaces from './uiData/marketplaces';
 import * as repos from './uiData/repos';
 import * as policies from './uiData/policies';
 import * as documentTypes from './uiData/documentTypes';
+import * as modelProfiles from './uiData/modelProfiles';
 
-const domains = [runtime, mcp, knowledge, prompts, tasks, workflows, agents, chats, inbox, logs, preferences, marketplaces, repos, documentTypes, policies];
+const domains = [runtime, mcp, knowledge, prompts, tasks, workflows, agents, chats, inbox, logs, preferences, marketplaces, repos, documentTypes, policies, modelProfiles];
 
 const initialState = domains.reduce(
   (acc, domain) => ({ ...acc, ...domain.initialState }),
@@ -78,6 +79,7 @@ const NAV_ACTIVITY_EVENT_ROUTES = {
   'workflow.run.completed': '/workflows',
   'workflow.run.failed': '/workflows',
   'repositories.snapshot': '/repositories',
+  'profiles.snapshot': '/profiles',
 };
 
 const navActivityInitialState = {
@@ -98,6 +100,10 @@ const uiDataSlice = createSlice({
     ...domainReducers,
     applyUiEvent(state, action) {
       const event = action.payload;
+      // Reconnect and other tabs hydrate this shared catalogue globally.
+      // Identical snapshots are not new profile activity.
+      const profileChanged = event?.type !== 'profiles.snapshot'
+        || JSON.stringify(state.modelProfiles.profiles) !== JSON.stringify(event?.payload?.profiles || []);
       const handler = eventHandlers[event?.type];
       if (handler) {
         handler(state, event?.payload || {}, event);
@@ -106,7 +112,7 @@ const uiDataSlice = createSlice({
       if (route) {
         if (!state.navActivity.seenBaselineRoutes[route]) {
           state.navActivity.seenBaselineRoutes[route] = true;
-        } else if (state.navActivity.activeRoute !== route) {
+        } else if (state.navActivity.activeRoute !== route && profileChanged) {
           state.navActivity.unseenRoutes[route] = true;
         }
       }
@@ -249,11 +255,13 @@ export {
 
 export {
   fetchWidgets,
+  fetchSchedules,
   markAlertsViewed,
   selectUiStatus,
   selectUiAlerts,
   selectUiWidgets,
   selectSchedules,
+  selectSchedulesState,
   selectLastReceivedAlert,
 } from './uiData/runtime';
 export {
@@ -326,6 +334,14 @@ export {
   selectWorkspaceSignal,
   selectRepoDetail,
 } from './uiData/repos';
+
+export {
+  fetchModelProfiles,
+  patchModelProfile,
+  deleteModelProfile,
+  selectModelProfiles,
+  selectModelProfilesState,
+} from './uiData/modelProfiles';
 
 export default uiDataSlice.reducer;
 

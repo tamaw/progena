@@ -21,10 +21,10 @@ Profile:
     skill reads before calling structured_output
   - /config/ -> Postgres state documents the agent can read/edit as files,
     including mcp.json, plugins.json, marketplaces.json, schedule.json,
-    agents.json, repos.json, and preferences.json, plus the /tasks/ task
-    directory (board.json and per-task <id>.md files).
-    Writes persist via the StateManager; the runtime's store listener handles
-    live MCP re-discovery, so no write-hook callback is needed here.
+    agents.json, repos.json, preferences.json, and profiles.json, plus the /tasks/
+    task directory (board.json and per-task <id>.md files). Writes persist via
+    the StateManager; the Postgres listener publishes the corresponding live UI
+    snapshot.
 
 Prompts and memories used to be plain files bind-mounted from the host (see
 ``content_documents.py`` for why); they're Postgres documents now. Progenitor's
