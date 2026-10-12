@@ -288,6 +288,68 @@ class TestPatchEdits:
         assert saved["smoke profile/review"]["deployment"] == "updated"
 
 
+class TestDeleteProfiles:
+    def test_delete_preserves_remaining_raw_profiles_and_broadcasts_snapshot(self):
+        store = InMemoryDocumentStore()
+        store.save_document(
+            PROGENITOR_STATE_PREFIX,
+            "profile",
+            {
+                "general": {
+                    "provider": "azure_openai",
+                    "deployment": "general-deployment",
+                    "private": "must-remain-server-side",
+                },
+                "review/profile": {
+                    "provider": "azure_openai",
+                    "deployment": "review-deployment",
+                    "private": "also-server-side",
+                },
+            },
+        )
+        app, events = _make_app(store)
+        with TestClient(app, headers={"X-Request-ID": "delete-test"}) as client:
+            response = client.delete("/model-profiles/review%2Fprofile")
+
+        assert response.status_code == 202
+        assert_acknowledged(response, ["profiles.snapshot"], request_id="delete-test")
+        assert store.get_document(PROGENITOR_STATE_PREFIX, "profile").payload == {
+            "general": {
+                "provider": "azure_openai",
+                "deployment": "general-deployment",
+                "private": "must-remain-server-side",
+            }
+        }
+        assert events == [
+            (
+                "profiles.snapshot",
+                {
+                    "profiles": [
+                        {
+                            "name": "general",
+                            "provider": "azure_openai",
+                            "deployment": "general-deployment",
+                        }
+                    ]
+                },
+                {"request_id": "delete-test"},
+            )
+        ]
+
+    def test_delete_unknown_profile_does_not_persist_or_broadcast(self):
+        store = InMemoryDocumentStore()
+        original = {"general": {"provider": "azure_openai", "deployment": "general"}}
+        store.save_document(PROGENITOR_STATE_PREFIX, "profile", original)
+        app, events = _make_app(store)
+
+        with TestClient(app) as client:
+            response = client.delete("/model-profiles/missing")
+
+        assert response.status_code == 404
+        assert store.get_document(PROGENITOR_STATE_PREFIX, "profile").payload == original
+        assert events == []
+
+
 class TestNotificationSameTransactionDiffConsumption:
     """When an external edit commits in the same Postgres transaction as a
     health heartbeat update, the health diff may be consumed first. The profile

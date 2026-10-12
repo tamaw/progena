@@ -1,4 +1,4 @@
-"""Model profile routes — the backend-persisted ``/config/profile.json`` document.
+"""Model profile routes — the backend-persisted ``/config/profiles.json`` document.
 
 Mirrors the acknowledged-request / SSE document flow used by policies and
 agent profiles: GET and PATCH return 202 and publish a ``profiles.snapshot``
@@ -156,6 +156,42 @@ def create_model_profile_router(
             ]
         }
         # Validate the complete causal snapshot before the write can commit.
+        await asyncio.to_thread(
+            store.save_document, PROGENITOR_STATE_PREFIX, MODEL_PROFILES_DOC_KEY, updated_document
+        )
+        broadcast("profiles.snapshot", payload, request_id=request_id)
+        return acknowledgement_response(request_id, ["profiles.snapshot"])
+
+    @router.delete(
+        "/model-profiles/{name:path}", status_code=202, response_model=UiRequestAcknowledgement
+    )
+    async def delete_model_profile(name: str, request: Request) -> UiRequestAcknowledgement:
+        request_id = request_correlation_id(request, request.headers.get("x-request-id"))
+        store = get_store()
+        document = await asyncio.to_thread(
+            store.get_document, PROGENITOR_STATE_PREFIX, MODEL_PROFILES_DOC_KEY
+        )
+        raw = document.payload if document else default_model_profiles_payload()
+        if not isinstance(raw, dict):
+            raise HTTPException(status_code=422, detail="Stored profile document is malformed")
+        try:
+            profiles = validate_model_profiles_payload(dict(raw))
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        if name not in profiles:
+            raise HTTPException(status_code=404, detail=f"Profile {name!r} not found")
+
+        # Delete the original raw key, not its normalized public name. This
+        # matches PATCH and preserves the identity of unaffected siblings.
+        stored_name = next(key for key in reversed(raw) if key.strip() == name)
+        updated_document = {key: value for key, value in raw.items() if key != stored_name}
+        payload = {
+            "profiles": [
+                _safe_public_profile(profile_name, config)
+                for profile_name, config in profiles.items()
+                if profile_name != name
+            ]
+        }
         await asyncio.to_thread(
             store.save_document, PROGENITOR_STATE_PREFIX, MODEL_PROFILES_DOC_KEY, updated_document
         )
