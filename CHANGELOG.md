@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- **Model profiles**: Added a separate searchable list/detail page at `/profiles`, backed by `/config/profile.json`. Users can edit deployment and reasoning overrides, restore environment inheritance, and receive live Postgres-driven updates in both the page and routine profile selectors. Drafts are preserved and saves blocked when the selected profile changes remotely.
+- **Model profiles**: Added a separate searchable list/detail page at `/profiles`, backed by `/config/profiles.json`. Users can edit deployment and reasoning overrides in the same bordered configuration surface as agents, delete a profile from the detail header, restore environment inheritance, and receive live Postgres-driven updates in both the page and routine profile selectors. Progenitor can add, edit, or remove complete profile maps through its agent-writable virtual file. Drafts are preserved and saves blocked when the selected profile changes remotely.
 - **DeepAgent Integration** (`app/progenitor/agent/`): Selective adoption of LangChain's `deepagents` library
   - `deep_agent.py`: Factory creating configured DeepAgent with LiteLLM routing, tools, middleware, skills, memory, and subagents
   - `langchain_adapter.py`: ChatOpenAI → LiteLLM proxy bridge with Azure structured output bypass

@@ -662,9 +662,9 @@ def create_preferences_state_file(
 
 
 def create_model_profiles_state_file(state_manager: Any) -> StateFile:
-    """Build the provider/deployment map exposed as ``/config/profile.json``."""
+    """Build the provider/deployment map exposed as ``/config/profiles.json``."""
     return _simple_state_file(
-        "profile.json",
+        "profiles.json",
         get=state_manager.get_model_profiles_config,
         save=state_manager.save_model_profiles_config,
         validate=validate_model_profiles_document,

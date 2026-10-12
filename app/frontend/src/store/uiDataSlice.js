@@ -338,6 +338,7 @@ export {
 export {
   fetchModelProfiles,
   patchModelProfile,
+  deleteModelProfile,
   selectModelProfiles,
   selectModelProfilesState,
 } from './uiData/modelProfiles';

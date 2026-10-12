@@ -60,6 +60,19 @@ const knowledgeQuickChatConfig = {
   prompts: knowledgeQuickPrompts,
 };
 
+const profileQuickPrompts = [
+  'Add an Azure OpenAI model profile named fast-chat using deployment gpt-5-mini.',
+  'Create a model profile named deep-reasoning with high reasoning effort.',
+  'Add a profile for deployment gpt-5.3-chat and enable reasoning summaries.',
+];
+const profileQuickChatConfig = {
+  ...defaultQuickChatConfig,
+  mode: 'profile-create',
+  title: 'Add a model profile',
+  placeholder: 'Describe the model profile you want...',
+  prompts: profileQuickPrompts,
+};
+
 const inboxQuickPrompts = [
   "Summarize this week's repo activity and send it to my inbox.",
   'Write me an inbox message with your current priorities and blockers.',
@@ -118,6 +131,7 @@ const QUICK_CHAT_CONFIGS_BY_MODE = {
   'mcp-create': mcpQuickChatConfig,
   'task-create': taskQuickChatConfig,
   'knowledge-create': knowledgeQuickChatConfig,
+  'profile-create': profileQuickChatConfig,
   'inbox-compose': inboxQuickChatConfig,
   'inbox-edit': inboxEditQuickChatConfig,
   'workflow-create': workflowQuickChatConfig,

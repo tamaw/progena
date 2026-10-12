@@ -18,6 +18,7 @@ from app.progenitor.agent.state_backend import (
     create_health_state_file,
     create_knowledge_state_file,
     create_mcp_state_file,
+    create_model_profiles_state_file,
     create_registry_state_file,
     create_schedule_state_file,
     inbox_message_to_markdown,
@@ -81,6 +82,51 @@ def _knowledge_backend(
 
     backend = StateDocumentBackend([create_knowledge_state_file(sm, on_change=on_change)])
     return backend, sm, reloads
+
+
+class _FakeModelProfilesStateManager:
+    def __init__(self) -> None:
+        self.payload = {"general": {"provider": "azure_openai", "deployment": "general-v1"}}
+        self.saved: list[dict[str, Any]] = []
+
+    async def get_model_profiles_config(self) -> dict[str, Any]:
+        return copy.deepcopy(self.payload)
+
+    async def save_model_profiles_config(self, payload: dict[str, Any]) -> None:
+        self.payload = copy.deepcopy(payload)
+        self.saved.append(copy.deepcopy(payload))
+
+
+@pytest.mark.asyncio
+async def test_model_profiles_file_adds_edits_and_removes_profiles_for_the_agent():
+    state_manager = _FakeModelProfilesStateManager()
+    backend = StateDocumentBackend([create_model_profiles_state_file(state_manager)])
+
+    assert (await backend.aread("/profile.json")).error is not None
+
+    created = await backend.awrite(
+        "/profiles.json",
+        json.dumps(
+            {
+                "general": {"provider": "azure_openai", "deployment": "general-v1"},
+                "review": {"provider": "azure_openai", "deployment": "review-v1"},
+            }
+        ),
+    )
+    assert created.error is None
+    assert state_manager.saved[-1]["review"]["deployment"] == "review-v1"
+
+    edited = await backend.aedit("/profiles.json", "review-v1", "review-v2")
+    assert edited.error is None
+    assert edited.occurrences == 1
+    assert state_manager.payload["review"]["deployment"] == "review-v2"
+
+    removed = await backend.awrite(
+        "/profiles.json",
+        json.dumps({"general": {"provider": "azure_openai", "deployment": "general-v1"}}),
+    )
+    assert removed.error is None
+    assert "review" not in state_manager.payload
 
 
 # ---- validation ------------------------------------------------------------

@@ -9,12 +9,12 @@ import {
 import PageShell from '../components/layout/PageShell';
 import DetailPane from '../components/layout/DetailPane';
 import DetailHeader, {
-  DetailHeaderActions, DetailHeaderAction, EditActionIcon, SaveActionIcon,
+  DeleteActionIcon, DetailHeaderActions, DetailHeaderAction,
 } from '../components/layout/DetailHeader';
-import { CloseIcon } from '../components/layout/navIcons';
+import PopupModal from '../components/common/PopupModal';
 import { useConfig } from '../context/ConfigContext';
 import {
-  fetchModelProfiles, patchModelProfile, selectModelProfiles, selectModelProfilesState,
+  deleteModelProfile, fetchModelProfiles, patchModelProfile, selectModelProfiles, selectModelProfilesState,
 } from '../store/uiDataSlice';
 import { selectRealtimeStreamReady } from '../store/realtimeSlice';
 import { useSnapshotSave } from '../store/uiData/snapshotSave';
@@ -48,12 +48,16 @@ function buildPatch(draft, base) {
 
 function ProfileDetails({ profile, profiles, catalogue, url, connected }) {
   const dispatch = useDispatch();
+  const navigate = useNavigate();
   const [draft, setDraft] = useState(null);
   const [baseline, setBaseline] = useState(null);
   const [saving, setSaving] = useState(false);
   const [pendingSave, setPendingSave] = useState(null);
   const [statusMessage, setStatusMessage] = useState('');
   const [error, setError] = useState(null);
+  const [deleteConfirmationOpen, setDeleteConfirmationOpen] = useState(false);
+  const [deleteBusy, setDeleteBusy] = useState(false);
+  const [deleteError, setDeleteError] = useState('');
   const completedRequestId = catalogue.saveRequest.completedRequestId;
   const ownSnapshot = pendingSave && completedRequestId === pendingSave.requestId;
   const conflict = Boolean(draft && baseline && !ownSnapshot
@@ -101,6 +105,23 @@ function ProfileDetails({ profile, profiles, catalogue, url, connected }) {
   };
   const updateDraft = (field, value) => setDraft((current) => ({ ...current, [field]: value }));
 
+  const handleDelete = () => {
+    setDeleteError('');
+    setDeleteConfirmationOpen(true);
+  };
+  const confirmDelete = async () => {
+    setDeleteBusy(true);
+    try {
+      await dispatch(deleteModelProfile({ modelProfilesUrl: url, name: profile.name })).unwrap();
+      setDeleteConfirmationOpen(false);
+      navigate('/profiles', { replace: true });
+    } catch (deleteFailure) {
+      setDeleteError(deleteFailure.message || 'Failed to delete profile.');
+    } finally {
+      setDeleteBusy(false);
+    }
+  };
+
   return (
     <>
       <DetailHeader title={profile.name} meta={[
@@ -108,11 +129,16 @@ function ProfileDetails({ profile, profiles, catalogue, url, connected }) {
         <span key="deployment" className="profiles-badge profiles-badge--deployment">{profile.deployment}</span>,
         isCustomized(profile) ? <span key="custom" className="profiles-badge profiles-badge--customized">Customized</span> : null,
       ]} actions={(
-        <DetailHeaderActions>
-          {draft ? [
-            <DetailHeaderAction key="cancel" icon={<CloseIcon />} label="Cancel" ariaLabel="Cancel edit" tooltip="Cancel edit" onClick={cancelEdit} disabled={saving} />,
-            <DetailHeaderAction key="save" icon={<SaveActionIcon />} label="Save" ariaLabel="Save changes" tooltip="Save changes" onClick={handleSave} disabled={saving || conflict || !connected} />,
-          ] : <DetailHeaderAction icon={<EditActionIcon />} label="Edit" ariaLabel="Edit profile" tooltip="Edit profile" onClick={startEdit} disabled={!connected || catalogue.loading || Boolean(catalogue.error)} />}
+        <DetailHeaderActions menuLabel="Profile actions">
+          <DetailHeaderAction
+            icon={<DeleteActionIcon />}
+            label="Delete"
+            ariaLabel="Delete profile"
+            tooltip="Delete profile"
+            variant="danger"
+            onClick={handleDelete}
+            disabled={saving || !connected || catalogue.loading || Boolean(catalogue.error)}
+          />
         </DetailHeaderActions>
       )} />
       <div className="detail-pane__body">
@@ -124,41 +150,62 @@ function ProfileDetails({ profile, profiles, catalogue, url, connected }) {
             <button type="button" className="repo-btn repo-btn--ghost" onClick={startEdit} disabled={saving}>Restart edit</button>
           </div>
         ) : null}
-        <section className="profiles-section">
-          <header className="profiles-section__head"><h2>Configuration</h2></header>
+        <section className="agents-section profiles-section">
+          <header className="agents-section__head profiles-section__head">
+            <h2>Configuration</h2>
+            {draft ? (
+              <div className="profiles-section__actions">
+                <button type="button" className="repo-btn repo-btn--ghost" onClick={cancelEdit} disabled={saving}>Cancel</button>
+                <button type="button" className="repo-btn repo-btn--primary" onClick={handleSave} disabled={saving || conflict || !connected}>{saving ? 'Saving…' : 'Save'}</button>
+              </div>
+            ) : (
+              <button type="button" className="repo-btn repo-btn--ghost" onClick={startEdit} disabled={!connected || catalogue.loading || Boolean(catalogue.error)}>Edit</button>
+            )}
+          </header>
           {draft ? (
-            <form className="profiles-form" onSubmit={(event) => { event.preventDefault(); handleSave(); }}>
-              <label className="profiles-field">
-                <span className="profiles-field__label">Deployment <span aria-hidden="true" className="profiles-field__required">*</span></span>
+            <form className="agents-card-facts agents-draft profiles-form" onSubmit={(event) => { event.preventDefault(); handleSave(); }}>
+              <label className="agents-draft-field profiles-field">
+                <span className="agents-draft-field__label">Deployment <span aria-hidden="true" className="profiles-field__required">*</span></span>
                 <input type="text" value={draft.deployment} onChange={(event) => updateDraft('deployment', event.target.value)} disabled={saving} required />
               </label>
-              <label className="profiles-field">
-                <span className="profiles-field__label">Reasoning enabled</span>
+              <label className="agents-draft-field profiles-field">
+                <span className="agents-draft-field__label">Reasoning enabled</span>
                 <select value={draft.reasoning_enabled} onChange={(event) => updateDraft('reasoning_enabled', event.target.value)} disabled={saving}>
                   <option value="">Inherit</option><option value="true">Enabled</option><option value="false">Disabled</option>
                 </select>
               </label>
               {['reasoning_effort', 'reasoning_summary'].map((field) => (
-                <label className="profiles-field" key={field}>
-                  <span className="profiles-field__label">{field === 'reasoning_effort' ? 'Reasoning effort' : 'Reasoning summary'}</span>
+                <label className="agents-draft-field profiles-field" key={field}>
+                  <span className="agents-draft-field__label">{field === 'reasoning_effort' ? 'Reasoning effort' : 'Reasoning summary'}</span>
                   <input type="text" value={draft[field]} onChange={(event) => updateDraft(field, event.target.value)} disabled={saving} placeholder="Inherit" />
                 </label>
               ))}
               <p className="profiles-form__hint">{saving ? 'Saving…' : 'Inherit uses runtime environment settings. Clear effort or summary to remove its override.'}</p>
             </form>
           ) : (
-            <dl className="profiles-config-grid">
-              <div><dt>Name</dt><dd>{profile.name}</dd></div>
-              <div><dt>Provider</dt><dd>{providerLabel(profile.provider)}</dd></div>
-              <div><dt>Source</dt><dd><code>/config/profile.json</code></dd></div>
-              <div><dt>Deployment</dt><dd>{profile.deployment}</dd></div>
-              <div><dt>Reasoning enabled</dt><dd>{profile.reasoning_enabled == null ? 'Inherit' : profile.reasoning_enabled ? 'Enabled' : 'Disabled'}</dd></div>
-              <div><dt>Reasoning effort</dt><dd>{profile.reasoning_effort || 'Inherit'}</dd></div>
-              <div><dt>Reasoning summary</dt><dd>{profile.reasoning_summary || 'Inherit'}</dd></div>
+            <dl className="agents-card-facts profiles-config-grid">
+              <div className="agents-card-fact"><dt className="agents-card-fact__label">Name</dt><dd className="agents-card-fact__value">{profile.name}</dd></div>
+              <div className="agents-card-fact"><dt className="agents-card-fact__label">Provider</dt><dd className="agents-card-fact__value">{providerLabel(profile.provider)}</dd></div>
+              <div className="agents-card-fact"><dt className="agents-card-fact__label">Deployment</dt><dd className="agents-card-fact__value">{profile.deployment}</dd></div>
+              <div className="agents-card-fact"><dt className="agents-card-fact__label">Reasoning enabled</dt><dd className="agents-card-fact__value">{profile.reasoning_enabled == null ? 'Inherit' : profile.reasoning_enabled ? 'Enabled' : 'Disabled'}</dd></div>
+              <div className="agents-card-fact"><dt className="agents-card-fact__label">Reasoning effort</dt><dd className="agents-card-fact__value">{profile.reasoning_effort || 'Inherit'}</dd></div>
+              <div className="agents-card-fact"><dt className="agents-card-fact__label">Reasoning summary</dt><dd className="agents-card-fact__value">{profile.reasoning_summary || 'Inherit'}</dd></div>
             </dl>
           )}
         </section>
       </div>
+      {deleteConfirmationOpen ? (
+        <PopupModal
+          eyebrow="Delete profile"
+          title={`Delete “${profile.name}”?`}
+          message={deleteError || 'This model profile will be permanently deleted.'}
+          confirmLabel="Delete profile"
+          busyLabel="Deleting…"
+          onClose={() => setDeleteConfirmationOpen(false)}
+          onConfirm={confirmDelete}
+          busy={deleteBusy}
+        />
+      ) : null}
     </>
   );
 }
@@ -187,6 +234,12 @@ export default function ProfilesPage() {
       navigate('/profiles', { replace: true });
     }
   }, [catalogue.loaded, profileName, profiles, navigate]);
+
+  const openCreateProfileChat = useCallback(() => {
+    window.dispatchEvent(new CustomEvent('progenitor:open-quick-chat', {
+      detail: { mode: 'profile-create' },
+    }));
+  }, []);
   const loadingMessage = catalogue.error ? 'Model profiles could not be loaded.'
     : !connected ? 'Waiting for the live connection…'
       : !catalogue.loaded ? 'Loading model profiles…' : 'No model profiles configured.';
@@ -194,7 +247,13 @@ export default function ProfilesPage() {
   return (
     <PageShell className="profiles-page" label="Model profiles">
       <PaneList className="profiles-pane" label="Model profiles">
-        <PaneListFilters filters={FILTERS} activeFilter={filter} onFilterChange={setFilter} />
+        <PaneListFilters
+          filters={FILTERS}
+          activeFilter={filter}
+          onFilterChange={setFilter}
+          actionLabel="+ New"
+          onAction={openCreateProfileChat}
+        />
         <PaneListToolbar>
           <PaneListSearch value={query} placeholder="Search profiles…" onChange={setQuery} />
           <PaneListSortButton title="Sort profiles" options={['Name', 'Provider']} value={sort} onSelect={setSort} />

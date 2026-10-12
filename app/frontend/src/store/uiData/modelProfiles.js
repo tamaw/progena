@@ -36,6 +36,14 @@ export const patchModelProfile = createAcknowledgedThunk(
   ),
 );
 
+export const deleteModelProfile = createAcknowledgedThunk(
+  'uiData/deleteModelProfile',
+  ({ modelProfilesUrl, name }, { requestId }) => requestAcknowledged(
+    `${modelProfilesUrl}/${encodeURIComponent(name)}`,
+    { method: 'DELETE', requestId },
+  ),
+);
+
 export const eventHandlers = {
   'profiles.snapshot': (state, payload) => {
     state.modelProfiles.profiles = Array.isArray(payload.profiles) ? payload.profiles : [];

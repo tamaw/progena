@@ -84,15 +84,16 @@ The current `/config/` document views are:
 - `knowledge.json` — knowledge-base settings; agent-writable.
 - `schedule.json` — schedule entries keyed by ID; agent-writable with audit diffing.
 - `agents.json` — registry agents and runtime tools; agent-writable.
+- `profiles.json` — model-profile map keyed by name; agent-writable.
 - `health.json` — heartbeat status; read-only and runtime-owned.
 
 The JSON suffix describes the virtual view. It does not imply a local file under
 `data/state`.
 
-Four documents (`mcp.json`, `knowledge.json`, `agents.json`, and `health.json`)
-use the simple get/save shape. Schedule has unique semantics that a generic
-factory would have to special-case: `id` lives in the dict key, exactly one of
-`cron_expression`/`scheduled_at` is required, and changes emit the same
+Five documents (`mcp.json`, `knowledge.json`, `agents.json`, `profiles.json`, and
+`health.json`) use the simple get/save shape. Schedule has unique semantics that
+a generic factory would have to special-case: `id` lives in the dict key, exactly
+one of `cron_expression`/`scheduled_at` is required, and changes emit the same
 `entry_added`/`entry_removed`/`entry_updated` audit events as direct
 `StateManager` mutations.
 
@@ -104,6 +105,7 @@ state_file_factories = [
     create_knowledge_state_file,
     create_schedule_state_file,
     create_registry_state_file,
+    create_model_profiles_state_file,
     create_health_state_file,
 ]
 routes["/config/"] = StateDocumentBackend(
@@ -161,16 +163,22 @@ not a candidate for dict-entry helper reuse.
 
 ### Model profiles
 
-`GET /api/ui/model-profiles` and `PATCH /api/ui/model-profiles/{name}` publish
-`profiles.snapshot` with `{profiles, request_id}` before returning the standard
-`202` acknowledgement. Each public entry contains `name`, `provider`,
-`deployment`, and any supported reasoning overrides; unrelated private fields
-are never published. PATCH accepts only deployment and `reasoning_enabled`,
-`reasoning_effort`, or `reasoning_summary`. A null optional field removes its
-override (runtime environment inheritance); deployment remains required.
-Unsupported fields and malformed configuration produce `422`; unknown profiles
-produce `404`. The full public snapshot is validated before persistence, and
-unchanged raw siblings/private properties are retained.
+`GET /api/ui/model-profiles`, `PATCH /api/ui/model-profiles/{name}`, and
+`DELETE /api/ui/model-profiles/{name}` publish `profiles.snapshot` with
+`{profiles, request_id}` before returning the standard `202` acknowledgement.
+Each public entry contains `name`, `provider`, `deployment`, and any supported
+reasoning overrides; unrelated private fields are never published. PATCH accepts
+only deployment and `reasoning_enabled`, `reasoning_effort`, or
+`reasoning_summary`. A null optional field removes its override (runtime
+environment inheritance); deployment remains required. DELETE removes the named
+raw entry while retaining raw sibling configuration. Unsupported fields and
+malformed configuration produce `422`; unknown profiles produce `404`. The full
+public snapshot is validated before persistence, and unchanged raw
+siblings/private properties are retained.
+
+`profiles.json` is also an agent-writable `/config/` virtual file. Progenitor can
+write the complete validated map to add, edit, or remove profiles; its
+`StateManager` write lands in the same Postgres row as the UI route.
 
 Postgres changes to the `progenitor.state` / `profile` document trigger an
 unsolicited `profiles.snapshot`. This key bypasses coarse `StateSnapshot` diff
