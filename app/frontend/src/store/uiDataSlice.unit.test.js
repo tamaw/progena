@@ -32,6 +32,8 @@ import reducer, {
   selectTaskContentEntry,
   selectUnreadChatIds,
   fetchInbox,
+  fetchSchedules,
+  selectSchedulesState,
   selectWorkflowDetailByPath,
   selectWorkflowLatestRunById,
   selectWorkflowRuns,
@@ -952,5 +954,57 @@ describe('nav activity tracking (unseen-page dots)', () => {
   it('unmapped event types are ignored', () => {
     const s = reducer(undefined, applyUiEvent({ type: 'not.a.tracked.event', payload: {} }));
     expect(selectUnseenNavRoutes({ uiData: s })).toEqual({});
+  });
+});
+
+describe('schedule snapshot recovery', () => {
+  const args = { schedulesUrl: '/api/ui/schedules' };
+  const schedule = { id: 'daily', name: 'Daily review', enabled: true, next_run: '2026-10-12T09:00:00Z' };
+
+  it('keeps the list pending until its causal snapshot, including snapshot-before-ack ordering', () => {
+    let state = reducer(undefined, fetchSchedules.pending('first', args));
+    state = reducer(state, fetchSchedules.fulfilled({
+      request_id: 'first', event_types: ['schedule.snapshot'],
+    }, 'first', args));
+    expect(selectSchedulesState({ uiData: state })).toMatchObject({
+      items: [], loaded: false, loading: true, requestId: 'first',
+    });
+
+    state = reducer(state, applyUiEvent({
+      type: 'schedule.snapshot', payload: { items: [schedule], request_id: 'first' },
+    }));
+    expect(selectSchedulesState({ uiData: state })).toMatchObject({
+      items: [schedule], loaded: true, loading: false, error: null, requestId: null,
+    });
+
+    state = reducer(state, fetchSchedules.pending('recovery', args));
+    state = reducer(state, applyUiEvent({
+      type: 'schedule.snapshot', payload: { items: [], request_id: 'recovery' },
+    }));
+    state = reducer(state, fetchSchedules.fulfilled({
+      request_id: 'recovery', event_types: ['schedule.snapshot'],
+    }, 'recovery', args));
+    expect(selectSchedulesState({ uiData: state })).toMatchObject({
+      items: [], loaded: true, loading: false, error: null, requestId: null,
+    });
+  });
+
+  it('does not let a disconnected request failure cancel a newer recovery request', () => {
+    let state = reducer(undefined, fetchSchedules.pending('disconnected', args));
+    state = reducer(state, fetchSchedules.pending('reconnected', args));
+    state = reducer(state, fetchSchedules.rejected(new Error('Old connection failed'), 'disconnected', args));
+    expect(selectSchedulesState({ uiData: state })).toMatchObject({
+      loading: true, error: null, requestId: 'reconnected',
+    });
+    state = reducer(state, fetchSchedules.rejected(new Error('Recovery failed'), 'reconnected', args));
+    expect(selectSchedulesState({ uiData: state })).toMatchObject({
+      loading: false, error: 'Recovery failed', requestId: null,
+    });
+    state = reducer(state, applyUiEvent({
+      type: 'schedule.snapshot', payload: { items: [schedule] },
+    }));
+    expect(selectSchedulesState({ uiData: state })).toMatchObject({
+      items: [schedule], loaded: true, error: null,
+    });
   });
 });
