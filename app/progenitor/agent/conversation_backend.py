@@ -69,13 +69,14 @@ class ConversationDirectoryBackend(_AsyncOnlyFileBackendMixin):
     async def agrep(
         self, pattern: str, path: str | None = None, glob: str | None = None
     ) -> GrepResult:
-        """Literal search over the cached transcripts; ``glob`` narrows by file name first."""
-        names = [file.name for file in await self._transcripts.list_files()]
+        """Literal search over the cached transcripts; ``path``/``glob`` narrow by file name first."""
         target = self._name(path or "/").rstrip("/")
-        if target:
-            names = [name for name in names if name == target]
-        if glob:
-            names = [name for name in names if fnmatch.fnmatch(name, glob, flags=fnmatch.BRACE)]
-        contents = await self._transcripts.contents(names)
+
+        def include(name: str) -> bool:
+            if target and name != target:
+                return False
+            return not glob or fnmatch.fnmatch(name, glob, flags=fnmatch.BRACE)
+
+        contents = await self._transcripts.contents(include)
         files = {f"/{name}": create_file_data(text) for name, text in contents.items()}
         return grep_matches_from_files(files, pattern, path or "/", glob)

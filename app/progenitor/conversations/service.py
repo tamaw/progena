@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import asyncio
 import re
-from collections.abc import Iterable
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
@@ -82,9 +82,11 @@ class ConversationTranscripts:
             return content if content is not None else await self._text(session, settings)
         return None
 
-    async def contents(self, names: Iterable[str] | None = None) -> dict[str, str]:
-        """Cached text of the named transcripts (all when ``names`` is None), for grep."""
-        wanted = set(names) if names is not None else None
+    async def contents(self, include: Callable[[str], bool] | None = None) -> dict[str, str]:
+        """Cached text of every transcript whose file name ``include`` accepts (all if None).
+
+        Filtering by name happens before any text is loaded or re-rendered.
+        """
         sessions, entries, settings = await self._snapshot()
         selected: list[tuple[str, dict[str, Any], dict[str, Any]]] = []
         for session in sessions:
@@ -92,7 +94,7 @@ class ConversationTranscripts:
             if entry is None or entry.get("empty"):
                 continue
             name = _file_name(session, entry, settings)
-            if wanted is None or name in wanted:
+            if include is None or include(name):
                 selected.append((name, session, entry))
 
         async def _current(session: dict[str, Any], entry: dict[str, Any]) -> str | None:
