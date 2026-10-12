@@ -262,6 +262,7 @@ async def create_progenitor_agent(
         worktree_dir=worktree_dir,
         state_manager=state_manager,
         database_url=database_url,
+        checkpointer=checkpointer,
         plugin_skill_segments=plugin_segments,
         plugin_agent_segments=plugin_agent_segments,
     )
