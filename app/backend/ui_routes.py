@@ -3886,7 +3886,7 @@ async def _broadcast_latest_status() -> None:
         current = await _get_current_status()
         broadcast_ui_event("status.updated", current)
         if _ui_stream_subscribers:
-            _broadcast_chat_sessions_snapshot()
+            await _broadcast_chat_sessions_snapshot()
     finally:
         _state_watch_push_task = None
 
@@ -4706,8 +4706,8 @@ def broadcast_widgets_snapshot(
     return broadcast_ui_event("widgets.updated", {"items": payload}, request_id=request_id)
 
 
-def _broadcast_chat_sessions_snapshot(include_archived: bool = True):
-    return broadcast_chat_sessions_snapshot(
+async def _broadcast_chat_sessions_snapshot(include_archived: bool = True):
+    return await broadcast_chat_sessions_snapshot(
         get_document_store=get_default_document_store,
         broadcast_ui_event=broadcast_ui_event,
         include_archived=include_archived,
@@ -4722,6 +4722,15 @@ def _get_active_request_id_for_thread(thread_id: str) -> str | None:
     return _main._active_request_id_for_thread(thread_id)
 
 
+async def _delete_conversation_via_client(thread_id: str) -> bool:
+    from . import main as _main
+
+    client = getattr(_main, "client", None)
+    if client is None or not hasattr(client, "delete_conversation"):
+        return False
+    return await client.delete_conversation(thread_id)
+
+
 router.include_router(
     create_chat_router(
         get_document_store=get_default_document_store,
@@ -4729,6 +4738,7 @@ router.include_router(
         get_current_state=lambda thread_id: get_state_reader().get_progenitor_state(thread_id),
         get_thread_messages=lambda thread_id: get_state_reader().get_thread_messages(thread_id),
         get_active_request_id=_get_active_request_id_for_thread,
+        delete_conversation=_delete_conversation_via_client,
     )
 )
 

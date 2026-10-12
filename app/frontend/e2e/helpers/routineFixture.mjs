@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 
 const databaseUrl = process.env.PROGENITOR_DATABASE_URL
   || 'postgresql://progenitor:progenitor@127.0.0.1:15433/progenitor';
@@ -39,6 +39,34 @@ export function seedRoutine({ failing = false, retry } = {}) {
 
 export function removeRoutine(id) {
   sql(`DELETE FROM store WHERE prefix = 'progenitor.state' AND key = ${quote(`routine:${id}`)};`);
+}
+
+// Persisted routine graphs the connector/editing specs render (forks, joins,
+// nested lanes, for-each). Validated by tests/backend/test_e2e_routine_fixtures.py.
+const graphFixtures = JSON.parse(
+  readFileSync(new URL('../fixtures/routine-graphs.json', import.meta.url), 'utf8'),
+);
+
+// Insert private copies of named fixture graphs (unique ids, so parallel
+// workers never share or delete each other's rows) and return
+// `{ fixtureId: seededId }`. Pair with `removeRoutines(Object.values(ids))`.
+export function seedGraphFixtures(fixtureIds) {
+  const suffix = randomUUID().replaceAll('-', '').slice(0, 8);
+  const ids = {};
+  for (const fixtureId of fixtureIds) {
+    const fixture = graphFixtures[fixtureId];
+    if (!fixture) throw new Error(`unknown routine fixture: ${fixtureId}`);
+    const id = `${fixtureId}-${suffix}`;
+    const graph = { ...structuredClone(fixture), id, name: `${fixture.name} ${suffix}` };
+    sql(`INSERT INTO store (prefix, key, value, created_at, updated_at)
+         VALUES ('progenitor.state', ${quote(`routine:${id}`)}, ${quote(JSON.stringify({ payload: graph }))}::jsonb, now(), now());`);
+    ids[fixtureId] = id;
+  }
+  return ids;
+}
+
+export function removeRoutines(ids) {
+  for (const id of ids) removeRoutine(id);
 }
 
 export async function observeRoutineEvents(page) {

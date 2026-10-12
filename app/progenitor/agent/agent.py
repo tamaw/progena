@@ -262,22 +262,23 @@ async def create_progenitor_agent(
         worktree_dir=worktree_dir,
         state_manager=state_manager,
         database_url=database_url,
+        checkpointer=checkpointer,
         plugin_skill_segments=plugin_segments,
         plugin_agent_segments=plugin_agent_segments,
     )
 
     # Wrap Progenitor's system tools as DeepAgent-compatible tools. The
-    # resume_routine tool needs model/registries/checkpointer that don't
-    # exist yet at this point in construction (built below) -- this box is
-    # populated once they do; create_deepagent_tools reads it at call time,
-    # not at wrap time.
-    resume_routine_holder: dict[str, Any] = {}
+    # resume_routine tool needs model/registries/checkpointer, and
+    # schedule_results needs the compiled agent itself; neither exists yet at
+    # this point in construction (built below) -- this box is populated once
+    # they do; create_deepagent_tools reads it at call time, not at wrap time.
+    late_bindings: dict[str, Any] = {}
     tools = create_deepagent_tools(
         tool_registry=tool_registry,
         llm_client=llm_client,
         state_manager=state_manager,
         live_state_provider=live_state_provider,
-        resume_routine_holder=resume_routine_holder,
+        late_bindings=late_bindings,
     )
 
     custom_middleware = [
@@ -472,7 +473,7 @@ async def create_progenitor_agent(
             **kwargs,
         )
 
-    resume_routine_holder["fn"] = _resume_routine
+    late_bindings["resume_routine"] = _resume_routine
 
     all_subagents: list[AsyncSubAgent | CompiledSubAgent] = [
         *async_subagents,
@@ -522,6 +523,11 @@ async def create_progenitor_agent(
     agent.routine_runner = _run_routine  # type: ignore[attr-defined]
     agent.routine_resumer = _resume_routine  # type: ignore[attr-defined]
     agent.object_agent_registry = live_objects  # type: ignore[attr-defined]
+
+    async def _thread_state(thread_id: str) -> Any:
+        return await agent.aget_state({"configurable": {"thread_id": thread_id}})
+
+    late_bindings["thread_state"] = _thread_state
 
     logger.info(
         "Created Progenitor DeepAgent: model=%s agents=%s object_agents=%d graph_agents=%d",

@@ -88,3 +88,24 @@ def test_shipped_schemas_are_valid_json_schema() -> None:
     assert names, "expected shipped schemas under data/schemas/"
     for name in names:
         jsonschema.Draft7Validator.check_schema(schemas.load_schema(name))
+
+
+def test_mcp_tool_entry_schema_accepts_what_discovery_writes() -> None:
+    """Every agent edit of /config/mcp_tools.json re-validates all entries, so the
+    shape `_sync_mcp_tool_flags` persists (server may be None) must conform."""
+    import jsonschema
+
+    schema = schemas.load_schema("mcp_tool_entry")
+    for server in ("jina", None):
+        jsonschema.validate(
+            {
+                "name": "jina_search_web",
+                "server": server,
+                "original_name": "search_web",
+                "description": "Search the web",
+                "enabled": True,
+            },
+            schema,
+        )
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate({"name": "x", "enabled": True, "override": False}, schema)

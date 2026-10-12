@@ -1,7 +1,7 @@
 """Shared HTTP + SSE helpers for the live evaluation scripts.
 
 Both ``evaluate_progenitor_live.py`` and ``evaluate_heartbeat_live.py`` talk to
-the Progenitor runtime's persistent HTTP server (chat over ``POST /v1/chat``,
+the Progenitor runtime's persistent HTTP server (chat over ``POST /v1/responses``,
 background events over ``GET /v1/events``) instead of the old TCP IPC socket.
 """
 
@@ -20,7 +20,9 @@ import httpx
 DEFAULT_BASE_URL = "http://127.0.0.1:9501"
 
 
-async def iter_sse_frames(response: httpx.Response) -> AsyncIterator[tuple[str, dict[str, Any]]]:
+async def iter_sse_frames(
+    response: httpx.Response,
+) -> AsyncIterator[tuple[str, dict[str, Any]]]:
     """Parse ``event:``/``data:`` SSE frames from a streaming httpx response."""
     event_name: str | None = None
     async for line in response.aiter_lines():
@@ -36,6 +38,12 @@ async def iter_sse_frames(response: httpx.Response) -> AsyncIterator[tuple[str, 
             event_name = None
 
 
+# One conversation per evaluation run: multi-turn scenarios (recall, follow-ups)
+# need their turns on the same thread, and a request without a conversation
+# would get a fresh isolated one from the runtime.
+LIVE_EVAL_CONVERSATION = f"conv_live_eval_{uuid.uuid4().hex[:12]}"
+
+
 async def http_stream_items(
     client: httpx.AsyncClient,
     timeout: float,
@@ -44,23 +52,28 @@ async def http_stream_items(
     metadata: dict[str, Any] | None = None,
     request_id_prefix: str = "live-eval-stream",
 ) -> list[dict[str, Any]]:
-    """Send a chat message and collect the raw stream_event/stream_chunk item dicts."""
+    """Send a chat message and collect the raw streamed item dicts."""
     items: list[dict[str, Any]] = []
     body = {
-        "message": prompt,
-        "request_id": f"{request_id_prefix}-{uuid.uuid4().hex[:8]}",
-        "metadata": metadata or {"source": "live_evaluation"},
+        "input": prompt,
+        "stream": True,
+        "conversation": LIVE_EVAL_CONVERSATION,
+        "metadata": {
+            "request_id": f"{request_id_prefix}-{uuid.uuid4().hex[:8]}",
+            **(metadata or {"source": "live_evaluation"}),
+        },
     }
-    async with client.stream("POST", "/v1/chat", json=body, timeout=timeout) as response:
+    async with client.stream("POST", "/v1/responses", json=body, timeout=timeout) as response:
         if response.status_code != 200:
             error_body = await response.aread()
-            raise RuntimeError(f"chat request failed ({response.status_code}): {error_body!r}")
+            raise RuntimeError(f"responses request failed ({response.status_code}): {error_body!r}")
         async for event_name, data in iter_sse_frames(response):
-            if event_name == "queued":
+            if event_name == "response.queued":
                 continue
-            if event_name == "error":
-                raise RuntimeError(str(data.get("error") or "unknown chat error"))
-            if event_name == "done":
+            if event_name == "response.failed":
+                error = data.get("response", {}).get("error", {})
+                raise RuntimeError(str(error.get("message") or "unknown chat error"))
+            if event_name in ("response.completed", "response.incomplete"):
                 break
             items.append(data)
     return items
@@ -78,9 +91,14 @@ async def http_assistant_response(
     items = await http_stream_items(
         client, timeout, prompt, metadata=metadata, request_id_prefix=request_id_prefix
     )
-    return "".join(
-        str(item.get("content") or "") for item in items if item.get("type") == "stream_chunk"
-    )
+    text_parts: list[str] = []
+    for item in items:
+        if item.get("type") == "response.output_text.delta":
+            text_parts.append(str(item.get("delta") or ""))
+        elif item.get("type") == "stream_chunk":
+            # Backward-compat for any legacy bridges still emitting stream_chunk
+            text_parts.append(str(item.get("content") or ""))
+    return "".join(text_parts)
 
 
 class EventCollector:

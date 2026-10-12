@@ -76,7 +76,7 @@ Browser → Frontend (Vite :5173)
          LangGraph + DeepAgent + Postgres
 ```
 
-The frontend never talks directly to the runtime. Vite proxies all `/api/`, `/v1/`, and `/health` paths to the backend at `:8000`; the backend forwards conversation requests to the runtime's persistent HTTP server (`POST /v1/chat`, `GET /v1/events`) over HTTP + SSE.
+The frontend never talks directly to the runtime. Vite proxies all `/api/`, `/v1/`, and `/health` paths to the backend at `:8000`; the backend forwards conversation requests to the runtime's persistent HTTP server (`POST /v1/responses`, `GET /v1/events`) over HTTP + SSE.
 
 ### Progenitor runtime (`app/progenitor/`)
 
@@ -91,7 +91,7 @@ Key submodules:
 - `state/models.py` — `ProgenitorState` TypedDict; `ConversationMessage`, `ScheduleEntry`, `A2ATaskRecord`
 - `runtime/progenitor.py` — lifecycle (startup, Postgres init, HTTP server, loop)
 - `runtime/heartbeat.py` — background loop execution
-- `runtime/http.py` — persistent HTTP server (health, agent card, A2A callbacks); mounts `runtime/http_chat.py`'s `RuntimeChatService` (`POST /v1/chat`, `POST /v1/chat/{request_id}/cancel`, `GET /v1/events`)
+- `runtime/http.py` — persistent HTTP server (health, agent card, A2A callbacks); mounts `runtime/http_chat.py`'s `RuntimeChatService` (`POST /v1/responses`, `POST /v1/responses/{response_id}/cancel`, `GET /v1/conversations/{conversation_id}/items`, `DELETE /v1/conversations/{conversation_id}`, `GET /v1/events`)
 - `sse/` — transport-agnostic stream envelope helpers shared by the chat endpoint (`deepagent_stream.py`, `stream_events.py`, `stream_payloads.py`); not itself a transport
 - `tools/` — 23+ LangGraph tools: `call_agent`, `schedule_task`, `mcp`, `shell`, `new_conversation`, etc.
 - `agent/` — DeepAgent integration layer (`agent.py`, `middleware.py`, `subagents.py`)

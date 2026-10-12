@@ -278,7 +278,7 @@ is canonical and response content is request-scoped on the dedicated response
 stream. There is no response-body token stream.
 
 Browser generation uses the `/api/ui/responses` routes above. It is distinct
-from the backend-to-runtime `/v1/chat` and `/v1/events` protocols, which remain
+from the backend-to-runtime `/v1/responses` and `/v1/events` protocols, which remain
 internal and are not browser APIs.
 
 `POST /api/ui/events` is a finite **event-widget creation** route if present in
