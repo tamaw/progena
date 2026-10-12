@@ -18,6 +18,11 @@
       "type": "string",
       "description": "What this knowledge base is for."
     },
+    "instructions": {
+      "type": "string",
+      "maxLength": 20000,
+      "description": "The base's brief (markdown): what belongs in it and how pages should be written. Shown at the top of /knowledge/<id>/index.md for curating agents."
+    },
     "owner": { "type": "string", "default": "user" },
     "scope": { "type": "string", "default": "Mine" },
     "status": {

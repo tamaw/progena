@@ -7,7 +7,6 @@ from typing import Any
 
 from app.progenitor.knowledge.pages import (
     INDEX_FILE,
-    INSTRUCTIONS_FILE,
     classify_page_path,
     render_directory_index,
     split_front_matter,
@@ -57,7 +56,7 @@ def _rows(base_id: str) -> list[tuple[str, dict[str, Any]]]:
 
 
 def list_pages(base_id: str) -> list[dict[str, Any]]:
-    """Live pages in a base: concepts with front matter facts, plus reserved files."""
+    """Live pages in a base: concepts with front matter facts, plus ``log.md``."""
     pages: list[dict[str, Any]] = []
     for path, payload in _rows(base_id):
         if not _live(payload):
@@ -90,8 +89,17 @@ def read_page(base_id: str, path: str) -> dict[str, Any] | None:
         directory = path[: -len(INDEX_FILE)].rstrip("/")
         live = [(p, payload["content"]) for p, payload in _rows(base_id) if _live(payload)]
         title = str(base.get("name") or base_id) if not directory else directory.rsplit("/", 1)[-1]
-        content = render_directory_index(title=title, directory=directory, live_pages=live)
+        content = render_directory_index(
+            title=title,
+            directory=directory,
+            live_pages=live,
+            instructions=str(base.get("instructions") or ""),
+        )
         return _page_view(path, content, None)
+    try:
+        classify_page_path(path)
+    except ValueError:
+        return None
     payload = _payload(base_id, path)
     if payload is None or not _live(payload):
         return None
@@ -119,12 +127,6 @@ def _save(base_id: str, path: str, content: str, *, deleted_at: str | None = Non
     if deleted_at:
         payload["deleted_at"] = deleted_at
     _store().save_document(PROGENITOR_STATE_PREFIX, _key(base_id, path), payload)
-
-
-def save_instructions(base_id: str, content: str) -> None:
-    if _base(base_id) is None:
-        raise ValueError("Knowledge base not found.")
-    _save(base_id, INSTRUCTIONS_FILE, content)
 
 
 def soft_delete_page(base_id: str, path: str) -> None:

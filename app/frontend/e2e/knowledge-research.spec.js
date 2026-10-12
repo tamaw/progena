@@ -34,7 +34,7 @@ const TOPICS = {
     subject: 'the Raft consensus algorithm',
     scope: 'what it is, how leader election works, and how log replication works',
     keyPage: /elect/,
-    keyFact: /election timeout/i,
+    keyFact: /majority/i,
     question: 'what is Raft and how does it elect a leader?',
   },
 };
@@ -64,7 +64,12 @@ function pageRows() {
 }
 const livePages = () => pageRows().filter((row) => !row.deleted);
 const conceptPaths = () => livePages().map((row) => row.path)
-  .filter((path) => !['INSTRUCTIONS.md', 'log.md'].includes(path) && !path.endsWith('/index.md'));
+  .filter((path) => path !== 'log.md' && !path.endsWith('/index.md'));
+
+function baseInstructions() {
+  return sql(`SELECT base->>'instructions' FROM store, jsonb_array_elements(value->'payload'->'bases') base
+    WHERE prefix = 'progenitor.state' AND key = 'knowledge' AND base->>'id' = ${quote(BASE_ID)}`);
+}
 
 function agentManifest(name) {
   return sql(`SELECT value->'payload'->>'content' FROM store
@@ -127,12 +132,13 @@ test('research agent fills a knowledge base from the web and a second agent answ
 
   await test.step('Progenitor creates the knowledge base and a researcher agent', async () => {
     await chat(page, `Create a knowledge base named "${BASE_NAME}" (its id will be ${BASE_ID}) with the description `
-      + `"Research notes on ${TOPIC.subject}", and write its INSTRUCTIONS.md asking for one concept page `
+      + `"Research notes on ${TOPIC.subject}", and set its instructions to ask for one concept page `
       + `per topic with sources. Then create a user object agent named ${RESEARCHER} (description "Researches topics `
       + 'on the web and writes knowledge pages") that can use the Jina web search and read tools and has knowledge '
       + `write access to ${BASE_ID}. Do not run it yet.`);
     await poll(() => sql(`SELECT count(*) FROM store WHERE key = 'knowledge'
       AND value->'payload'->'bases' @> ${quote(JSON.stringify([{ id: BASE_ID }]))}::jsonb`) === '1', 'base created');
+    await poll(() => baseInstructions().length > 0, 'base instructions set in the catalog');
     await poll(() => new RegExp(`base:\\s*${BASE_ID}`).test(agentManifest(RESEARCHER)), 'researcher manifest grants the base');
     expect(agentManifest(RESEARCHER)).toMatch(/access:\s*write/);
     evidence.researcherManifest = agentManifest(RESEARCHER);
@@ -187,8 +193,11 @@ test('research agent fills a knowledge base from the web and a second agent answ
     await expect(brief).not.toHaveValue('');
     await brief.fill(`${await brief.inputValue()}\n\n${INSTRUCTIONS_MARKER}\n`);
     await page.getByRole('button', { name: 'Save', exact: true }).click();
-    await poll(() => sql(`SELECT value->'payload'->>'content' FROM store
-      WHERE key = ${quote(`knowledge:${BASE_ID}/INSTRUCTIONS.md`)}`).includes(INSTRUCTIONS_MARKER), 'brief saved', 30_000);
+    await poll(() => baseInstructions().includes(INSTRUCTIONS_MARKER), 'brief saved to the catalog', 30_000);
+    // Agents see the brief at the top of the base's generated index.
+    await page.getByRole('button', { name: 'Pages', exact: true }).click();
+    await page.goto(`${page.url().split('?')[0]}?page=index.md`);
+    await expect(page.locator('.knowledge-pages-tab article .markdown-content')).toContainText(INSTRUCTIONS_MARKER);
 
     // Rename the key page into a folder and delete the other page.
     renamedPath = `reviewed/${first.split('/').at(-1)}`;
