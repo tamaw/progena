@@ -10002,3 +10002,15 @@ body,
   line-height: 1.5;
   resize: vertical;
 }
+
+.knowledge-pages-tab aside .knowledge-tree-dir > strong {
+  display: block;
+  padding: 6px 8px 2px;
+  font-size: 13px;
+}
+
+.knowledge-pages-tab aside .knowledge-tree-dir > ul {
+  margin-left: 10px;
+  padding-left: 8px;
+  border-left: 1px solid var(--color-border);
+}
