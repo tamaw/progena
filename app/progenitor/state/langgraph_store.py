@@ -12,6 +12,11 @@ from .models import redact_secrets
 
 STATE_NAMESPACE = ("progenitor", "state")
 LOG_NAMESPACE_PREFIX = ("progenitor", "logs")
+# Rendered chat transcripts cached for the /conversations/ mount: small
+# metadata entries and the text in sibling namespaces, so listing reads no
+# text. Outside ``progenitor.state``, so cache writes never fire store NOTIFYs.
+CONVERSATION_META_NAMESPACE = ("progenitor", "conversations", "meta")
+CONVERSATION_LOGS_NAMESPACE = ("progenitor", "conversations", "logs")
 
 
 class AsyncLangGraphStore(Protocol):
@@ -100,6 +105,31 @@ class LangGraphRuntimeStore:
                 key = str(getattr(item, "key", ""))
                 if key.startswith(key_prefix):
                     results.append((key, _item_value(item).get("payload")))
+            if len(items) < page_size:
+                return results
+            offset += page_size
+
+    async def get_item(self, namespace: tuple[str, ...], key: str) -> dict[str, Any] | None:
+        """Return one raw item value from any namespace, or ``None``."""
+        item = await self._store.aget(namespace, key)
+        return _item_value(item) if item is not None else None
+
+    async def put_item(self, namespace: tuple[str, ...], key: str, value: dict[str, Any]) -> None:
+        """Persist one raw item value in any namespace."""
+        await self._store.aput(namespace, key, value)
+
+    async def delete_item(self, namespace: tuple[str, ...], key: str) -> None:
+        """Remove one item from any namespace (no-op if absent)."""
+        await self._store.adelete(namespace, key)
+
+    async def list_items(self, namespace: tuple[str, ...]) -> list[tuple[str, dict[str, Any]]]:
+        """Return ``(key, value)`` for every item in ``namespace``, paging past asearch's default."""
+        page_size = 500
+        offset = 0
+        results: list[tuple[str, dict[str, Any]]] = []
+        while True:
+            items = await self._store.asearch(namespace, limit=page_size, offset=offset)
+            results += [(str(getattr(item, "key", "")), _item_value(item)) for item in items]
             if len(items) < page_size:
                 return results
             offset += page_size

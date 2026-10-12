@@ -469,6 +469,75 @@ class TestUIRoutes:
         assert detail["session"]["thread_id"] == thread_id
         assert detail["session"]["messages"][1]["reasoning_text"] == "Need to count down."
 
+    def test_deleted_chat_stays_deleted_despite_live_runtime_state(
+        self, client, document_store, monkeypatch
+    ):
+        from app.backend import ui_routes
+
+        thread_id = "thread-deleted"
+        client.post("/api/ui/chats", json={"title": "Doomed", "thread_id": thread_id})
+        assert client.delete(f"/api/ui/chats/{thread_id}").status_code == 202
+
+        class _LiveStateReader:
+            """The runtime still holds a current_state document for the thread."""
+
+            def get_progenitor_state(self, thread_id: str | None = None) -> dict[str, Any]:
+                return {"thread_id": thread_id, "cycle_count": 1}
+
+            def get_thread_messages(self, thread_id: str) -> list[Any]:
+                return [{"id": "m1", "type": "human", "content": "hello"}]
+
+        monkeypatch.setattr("app.backend.ui_routes.get_state_reader", lambda: _LiveStateReader())
+        event_start = len(ui_routes._ui_event_replay)
+
+        assert client.get(f"/api/ui/chats/{thread_id}").status_code == 404
+        assert client.get(f"/api/ui/chats/{thread_id}/messages").status_code == 404
+        assert not [
+            event
+            for event in ui_routes._ui_event_replay[event_start:]
+            if event.type == "chat.session.upserted"
+        ]
+
+    def test_chat_detail_reports_runtime_outage_instead_of_empty_chat(
+        self, client, document_store, monkeypatch
+    ):
+        from app.backend.runtime_conversations import RuntimeUnavailable
+
+        client.post("/api/ui/chats", json={"title": "Has history", "thread_id": "thread-out"})
+
+        def _unavailable(*_args: Any, **_kwargs: Any) -> Any:
+            raise RuntimeUnavailable("runtime unreachable")
+
+        monkeypatch.setattr(document_store, "get_checkpoint_thread_snapshot", _unavailable)
+
+        response = client.get("/api/ui/chats/thread-out")
+        assert response.status_code == 503
+        # The list still renders (metadata title) while the runtime is down.
+        assert client.get("/api/ui/chats").status_code == 202
+
+    async def test_slow_chat_read_does_not_block_other_requests(self, document_store, monkeypatch):
+        import time
+
+        import httpx
+
+        def _slow_snapshot(*_args: Any, **_kwargs: Any) -> None:
+            time.sleep(1.0)  # a slow runtime read, synchronous like the real reader
+            return None
+
+        monkeypatch.setattr(document_store, "get_checkpoint_thread_snapshot", _slow_snapshot)
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as async_client:
+            started = time.monotonic()
+            slow = asyncio.create_task(async_client.get("/api/ui/chats/thread-slow"))
+            await asyncio.sleep(0.1)  # let the slow read start
+            fast = await async_client.get("/api/ui/preferences")
+            fast_done_after = time.monotonic() - started
+            await slow
+        assert fast.status_code == 202
+        # Had the slow read run on the event loop, nothing (not even the sleep
+        # above) could finish before it did, ~1s in.
+        assert fast_done_after < 0.6
+
     def test_chat_detail_loads_checkpoint_only_thread_ids_without_sess_prefix(
         self,
         client,

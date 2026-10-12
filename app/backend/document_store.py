@@ -7,6 +7,7 @@ import contextlib
 import copy
 import logging
 from collections.abc import Callable, Iterable, Iterator
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -14,15 +15,12 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, Literal, LiteralString, Protocol, cast
 
 import psycopg
-from langchain_core.runnables import RunnableConfig
-from langgraph.checkpoint.base import CheckpointTuple
-from langgraph.checkpoint.postgres import PostgresSaver
 from psycopg import sql
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 from psycopg_pool import ConnectionPool, PoolClosed
 
-from app.backend.delta_channel_replay import replay_delta_messages
+from app.backend.runtime_conversations import RuntimeConversationReader, RuntimeUnavailable
 from app.progenitor.routines.store import ROUTINE_GRAPH_KEY_PREFIX
 
 PROGENITOR_STATE_PREFIX = "progenitor.state"
@@ -34,6 +32,8 @@ BACKEND_STATE_PREFIX = "backend.state"
 # high-frequency ``progenitor.logs.*`` rows are deliberately excluded).
 STORE_CHANGE_CHANNEL = "store_changed"
 _STORE_CHANGE_PREFIXES = (PROGENITOR_STATE_PREFIX, BACKEND_STATE_PREFIX)
+# Parallel runtime reads when the chat list needs messages for many threads.
+CONVERSATION_FETCH_CONCURRENCY = 8
 
 # Durable document event log: every create/update/delete of a state-namespace
 # document appends one ``document_events`` row (with before/after payloads and
@@ -98,6 +98,9 @@ class CheckpointThreadSnapshot:
     # own '__error__' channel -- see list_routine_runs for why this, not a
     # deserialized run_meta field, is the reliable failed/success signal.
     failed: bool = False
+    # False when the runtime could not be reached to read ``messages`` (which is
+    # then empty), so callers can tell "no messages" from "unknown right now".
+    messages_available: bool = True
 
 
 @dataclass(frozen=True)
@@ -132,46 +135,6 @@ class RoutineRevisionSummary:
     revision_id: str
     routine_id: str
     captured_at: str | None
-
-
-_MESSAGES_CHANNEL = "messages"
-
-
-def _reconstruct_checkpoint_messages(
-    saver: PostgresSaver,
-    *,
-    thread_id: str,
-    checkpoint_ns: str = "",
-    checkpoint_id: str | None,
-) -> list[Any]:
-    configurable: dict[str, Any] = {"thread_id": thread_id, "checkpoint_ns": checkpoint_ns}
-    if checkpoint_id:
-        configurable["checkpoint_id"] = checkpoint_id
-    config: RunnableConfig = {"configurable": configurable}
-    checkpoint = saver.get_tuple(config)
-    if checkpoint is None:
-        return []
-    return _messages_from_checkpoint_tuple(saver, checkpoint)
-
-
-def _messages_from_checkpoint_tuple(saver: PostgresSaver, checkpoint: CheckpointTuple) -> list[Any]:
-    channel_values = checkpoint.checkpoint.get("channel_values", {})
-    if isinstance(channel_values, dict) and _MESSAGES_CHANNEL in channel_values:
-        messages = channel_values[_MESSAGES_CHANNEL]
-        return list(messages) if isinstance(messages, list) else []
-
-    # `messages` is a DeltaChannel (deepagents>=0.6): checkpoints only carry a
-    # value in channel_values every snapshot_frequency turns, so its absence
-    # here is normal. Replay the deltas from checkpoint_writes the same way
-    # LangGraph's own channels_from_checkpoint() does -- see
-    # delta_channel_replay.py for the replay itself and its caveats.
-    history = saver.get_delta_channel_history(
-        config=checkpoint.config, channels=[_MESSAGES_CHANNEL]
-    )
-    entry = history.get(_MESSAGES_CHANNEL)
-    if entry is None:
-        return []
-    return replay_delta_messages(entry)
 
 
 class BackendDocumentStore(Protocol):
@@ -472,9 +435,10 @@ class InMemoryDocumentStore:
 class PostgresDocumentStore:
     """Synchronous Postgres client for the LangGraph ``store`` table."""
 
-    def __init__(self, database_url: str) -> None:
+    def __init__(self, database_url: str, *, runtime_url: str | None = None) -> None:
         self._database_url = database_url
         self._pool = self._create_pool()
+        self._conversation_reader = RuntimeConversationReader(runtime_url) if runtime_url else None
 
     @property
     def database_url(self) -> str:
@@ -508,38 +472,22 @@ class PostgresDocumentStore:
 
     def close(self) -> None:
         self._pool.close()
+        if self._conversation_reader is not None:
+            self._conversation_reader.close()
 
     def _recreate_pool(self) -> None:
         self._pool = self._create_pool()
         self._pool.open()
 
-    def _checkpoint_saver(self) -> PostgresSaver:
-        return PostgresSaver(self._pool)
+    def _checkpoint_messages(self, *, thread_id: str, checkpoint_id: str | None) -> list[Any]:
+        """Messages of one thread checkpoint, read through the runtime.
 
-    def _checkpoint_messages(
-        self,
-        *,
-        thread_id: str,
-        checkpoint_ns: str = "",
-        checkpoint_id: str | None,
-    ) -> list[Any]:
-        try:
-            return _reconstruct_checkpoint_messages(
-                self._checkpoint_saver(),
-                thread_id=thread_id,
-                checkpoint_ns=checkpoint_ns,
-                checkpoint_id=checkpoint_id,
-            )
-        except PoolClosed:
-            logger.warning("Backend checkpoint saver pool was closed; recreating it")
-            self._recreate_pool()
-            self._ensure_store_table()
-            return _reconstruct_checkpoint_messages(
-                self._checkpoint_saver(),
-                thread_id=thread_id,
-                checkpoint_ns=checkpoint_ns,
-                checkpoint_id=checkpoint_id,
-            )
+        Raises ``RuntimeUnavailable`` when the runtime cannot be reached and
+        no earlier copy of the thread is known.
+        """
+        if self._conversation_reader is None:
+            return []
+        return self._conversation_reader.get_messages(thread_id, checkpoint_id)
 
     @contextmanager
     def _cursor(self):
@@ -1069,12 +1017,9 @@ class PostgresDocumentStore:
                             ORDER BY (c.checkpoint->>'ts')::timestamptz DESC, c.checkpoint_id DESC
                         ) AS rn
                     FROM checkpoints c
-                    -- Filters on channel_versions, not channel_values: the
-                    -- messages DeltaChannel bumps a version on every write
-                    -- but only lands in channel_values on a snapshot turn.
-                    -- _messages_from_checkpoint_tuple() (above) is what
-                    -- actually reconstructs the value for non-snapshot rows.
-                    WHERE c.checkpoint ? 'channel_versions'
+                    -- Filters on channel_versions, not channel_values.
+                    WHERE c.checkpoint_ns = ''
+                      AND c.checkpoint ? 'channel_versions'
                       AND c.checkpoint->'channel_versions' ? 'messages'
                 )
                 SELECT thread_id, checkpoint_ns, checkpoint_id, checkpoint_ts
@@ -1086,28 +1031,37 @@ class PostgresDocumentStore:
                 (limit,),
             )
             rows = cast(list[dict[str, Any]], cur.fetchall())
-        snapshots: list[CheckpointThreadSnapshot] = []
-        for row in rows:
-            thread_id = row.get("thread_id")
-            if not isinstance(thread_id, str) or not thread_id:
-                continue
-            checkpoint_ns = row.get("checkpoint_ns")
-            resolved_checkpoint_ns = checkpoint_ns if isinstance(checkpoint_ns, str) else ""
-            checkpoint_id = str(row["checkpoint_id"]) if row.get("checkpoint_id") else None
-            messages = self._checkpoint_messages(
+        targets = [
+            (
+                str(row["thread_id"]),
+                str(row["checkpoint_id"]) if row.get("checkpoint_id") else None,
+                row,
+            )
+            for row in rows
+            if isinstance(row.get("thread_id"), str) and row.get("thread_id")
+        ]
+
+        def _messages_or_unavailable(target: tuple[str, str | None, Any]) -> list[Any] | None:
+            # The list must still render while the runtime is down; None marks
+            # the thread's messages as unknown rather than empty.
+            thread_id, checkpoint_id, _row = target
+            try:
+                return self._checkpoint_messages(thread_id=thread_id, checkpoint_id=checkpoint_id)
+            except RuntimeUnavailable:
+                return None
+
+        with ThreadPoolExecutor(max_workers=CONVERSATION_FETCH_CONCURRENCY) as pool:
+            all_messages = list(pool.map(_messages_or_unavailable, targets))
+        return [
+            CheckpointThreadSnapshot(
                 thread_id=thread_id,
-                checkpoint_ns=resolved_checkpoint_ns,
                 checkpoint_id=checkpoint_id,
+                checkpoint_ts=str(row["checkpoint_ts"]) if row.get("checkpoint_ts") else None,
+                messages=messages or [],
+                messages_available=messages is not None,
             )
-            snapshots.append(
-                CheckpointThreadSnapshot(
-                    thread_id=thread_id,
-                    checkpoint_id=checkpoint_id,
-                    checkpoint_ts=str(row["checkpoint_ts"]) if row.get("checkpoint_ts") else None,
-                    messages=messages,
-                )
-            )
-        return snapshots
+            for (thread_id, checkpoint_id, row), messages in zip(targets, all_messages, strict=True)
+        ]
 
     def get_checkpoint_thread_snapshot(
         self,
@@ -1119,6 +1073,7 @@ class PostgresDocumentStore:
         # list_checkpoint_thread_snapshots() above.
         clauses = [
             sql.SQL("c.thread_id = %s"),
+            sql.SQL("c.checkpoint_ns = ''"),
             sql.SQL("c.checkpoint ? 'channel_versions'"),
             sql.SQL("c.checkpoint->'channel_versions' ? 'messages'"),
         ]
@@ -1147,13 +1102,9 @@ class PostgresDocumentStore:
         resolved_thread_id = row.get("thread_id")
         if not isinstance(resolved_thread_id, str) or not resolved_thread_id:
             return None
-        checkpoint_ns = row.get("checkpoint_ns")
-        resolved_checkpoint_ns = checkpoint_ns if isinstance(checkpoint_ns, str) else ""
         resolved_checkpoint_id = str(row["checkpoint_id"]) if row.get("checkpoint_id") else None
         messages = self._checkpoint_messages(
-            thread_id=resolved_thread_id,
-            checkpoint_ns=resolved_checkpoint_ns,
-            checkpoint_id=resolved_checkpoint_id,
+            thread_id=resolved_thread_id, checkpoint_id=resolved_checkpoint_id
         )
         return CheckpointThreadSnapshot(
             thread_id=resolved_thread_id,
@@ -1399,12 +1350,14 @@ def _timestamp_text(value: Any) -> str:
 _default_store: BackendDocumentStore = InMemoryDocumentStore()
 
 
-def configure_default_document_store(database_url: str | None) -> BackendDocumentStore:
+def configure_default_document_store(
+    database_url: str | None, *, runtime_url: str | None = None
+) -> BackendDocumentStore:
     """Configure the process-wide backend document store."""
     global _default_store
     _default_store.close()
     if database_url:
-        pg_store = PostgresDocumentStore(database_url)
+        pg_store = PostgresDocumentStore(database_url, runtime_url=runtime_url)
         pg_store.open()
         store: BackendDocumentStore = pg_store
         logger.info("Backend document store connected to Postgres")

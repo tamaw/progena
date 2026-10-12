@@ -109,7 +109,7 @@ saving. Offline edits cannot be submitted; reconnect refreshes the catalogue.
 Progenitor can add, edit, or remove entries by writing its agent-writable
 `/config/profiles.json` virtual file; those Postgres writes update the page live.
 
-Browser generation uses `/api/ui/responses`. The backend-to-runtime `/v1/chat`
+Browser generation uses `/api/ui/responses`. The backend-to-runtime `/v1/responses`
 and `/v1/events` protocols are internal and are not frontend APIs.
 
 `/healthz` is a Docker-only Nginx-to-backend liveness probe returning an empty `200 OK`; it is not a browser application API, and the standalone Vite proxy does not forward it. `/ready`, `/live`, `/health`, `/health/detailed`, legacy session/attachment/conversation endpoints, response-body data routes, and `/api/ui/events` or `/api/ui/status` streams are not frontend APIs.

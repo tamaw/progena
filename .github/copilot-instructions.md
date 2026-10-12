@@ -27,7 +27,7 @@ The agent runs continuously, processing user input and scheduled tasks. When idl
 
 ### Data Flow
 ```
-User → Frontend → Backend (/v1/chat) → HTTP + SSE → ProgenitorLoop → LangGraph nodes → LLM
+User → Frontend → Backend (/v1/responses) → HTTP + SSE → ProgenitorLoop → LangGraph nodes → LLM
                                     ↑↓ (async queues)
                         State persistence:
                         - current_state.json (user session: messages, tool calls)

@@ -25,6 +25,9 @@ Profile:
     task directory (board.json and per-task <id>.md files). Writes persist via
     the StateManager; the Postgres listener publishes the corresponding live UI
     snapshot.
+  - /conversations/ -> chat history as IRC-style logs, one
+    <date>_<title-slug>_<id8>.txt per non-archived chat (read-only), rendered
+    from the LangGraph checkpointer and cached in the store
 
 Prompts and memories used to be plain files bind-mounted from the host (see
 ``content_documents.py`` for why); they're Postgres documents now. Progenitor's
@@ -46,7 +49,9 @@ from deepagents.backends import (
 )
 from deepagents.backends.protocol import EditResult, FileUploadResponse, WriteResult
 
+from ..conversations.service import ConversationTranscripts
 from .attachment_backend import AttachmentDirectoryBackend
+from .conversation_backend import ConversationDirectoryBackend
 from .state_backend import (
     ContentDocumentDirectoryBackend,
     InboxDirectoryBackend,
@@ -62,6 +67,7 @@ from .state_backend import (
     create_knowledge_state_file,
     create_marketplaces_state_file,
     create_mcp_state_file,
+    create_mcp_tools_state_file,
     create_model_profiles_state_file,
     create_plugins_state_file,
     create_preferences_state_file,
@@ -152,6 +158,7 @@ def create_progenitor_backend(
     worktree_dir: str | Path | None = None,
     state_manager: Any | None = None,
     database_url: str | None = None,
+    checkpointer: Any | None = None,
     plugin_skill_segments: list[str] | None = None,
     plugin_agent_segments: list[str] | None = None,
 ) -> Any:
@@ -172,6 +179,9 @@ def create_progenitor_backend(
         database_url: Required for the ``/attachments/`` mount (raw SQL over the
             same Postgres ``attachments`` blob table the backend writes to);
             without it the mount is omitted entirely.
+        checkpointer: The agent's LangGraph checkpointer. With ``state_manager``
+            it enables the read-only ``/conversations/`` chat-history mount;
+            without either, that mount is omitted.
         plugin_skill_segments: One ``<marketplace>__<plugin>`` segment per
             currently-installed marketplace plugin; each gets its own
             ``/skills/<segment>/`` route scoped to just that plugin's skill
@@ -243,6 +253,7 @@ def create_progenitor_backend(
         # board.json) so the agent edits one task per file instead of a giant blob.
         state_file_factories: list[Callable[[Any], StateFile]] = [
             create_mcp_state_file,
+            create_mcp_tools_state_file,
             create_plugins_state_file,
             create_marketplaces_state_file,
             create_knowledge_state_file,
@@ -264,6 +275,10 @@ def create_progenitor_backend(
         # User inbox: a directory of per-message files (/inbox/<id>.md) the
         # agent writes to send the user rich markdown messages.
         routes["/inbox/"] = InboxDirectoryBackend(state_manager)
+        if checkpointer is not None:
+            routes["/conversations/"] = ReadOnlyBackend(
+                ConversationDirectoryBackend(ConversationTranscripts(state_manager, checkpointer))
+            )
 
     if database_url:
         # Uploaded chat attachments, read directly from the same Postgres

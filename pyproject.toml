@@ -21,7 +21,11 @@ dependencies = [
     "openai>=1.0.0",
     "langgraph>=0.4.0",
     "langgraph-checkpoint-sqlite>=3.0.0",
-    "langgraph-checkpoint-postgres>=3.0.0",
+    # Pinned to the merge commit of langgraph#8556 (fixes #8448: DeltaChannel
+    # history reads of checkpoints >1024 back silently returned no messages).
+    # Not in a PyPI release yet (latest 3.1.2); go back to a version pin
+    # (">=3.1.3") once one ships with it.
+    "langgraph-checkpoint-postgres @ https://github.com/langchain-ai/langgraph/archive/c0279f09103de4e52194217e103e8b3d59ce16c1.tar.gz#subdirectory=libs/checkpoint-postgres",
     "psycopg[binary,pool]>=3.2.0",
     "deepagents>=0.6.12,<0.7.0",
     "langchain-openai>=0.3.0",
@@ -33,6 +37,7 @@ dependencies = [
     "mcp>=1.9.2,<2.0.0",
     "pydantic>=2.0.0",
     "croniter>=2.0.5",
+    "wcmatch>=10.1",  # glob over virtual /config, /tasks, ... (same matcher deepagents uses)
     "aiohttp>=3.9.0",
     "aiofiles>=24.1.0",
     "pytz>=2024.1",

@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { removeRoutines, seedGraphFixtures } from './helpers/routineFixture.mjs';
 
 /**
  * Routine graph editing — the fan-out scope.
@@ -12,16 +13,17 @@ import { test, expect } from '@playwright/test';
  * target, and the edge-splicing is the only thing keeping it honest when the
  * body's first step comes and goes.
  *
- * These drive the real `+` menu on the existing seeded test routine. The tests
- * inspect edits in the JSON editor without applying or persisting them.
+ * These drive the real `+` menu on a seeded copy of the routine-private-context
+ * fixture (e2e/fixtures/routine-graphs.json). The tests inspect edits in the
+ * JSON editor without applying or persisting them.
  *
  * Requires the running stack (see playwright.config.js).
- * Seed its fixture first: activate the root .venv, then run
- * `python scripts/seed_e2e_fixtures.py` from the project root.
  */
 
 // A plain linear chain, so anything the fan-out swallows is obvious.
-const ROUTINE = '/routines/routine-private-context';
+let ids = {};
+test.beforeAll(() => { ids = seedGraphFixtures(['routine-private-context']); });
+test.afterAll(() => removeRoutines(Object.values(ids)));
 const CHAIN_AFTER = ['Build private trace', 'Run shared subgraph', 'Return public answer'];
 
 const canvas = (page) => page.locator('.routine-chain');
@@ -29,7 +31,7 @@ const status = (page) => page.locator('.agents-graph-validation-action');
 const foreachBody = (page) => page.locator('.routine-foreach__body');
 
 async function openRoutine(page) {
-  await page.goto(ROUTINE);
+  await page.goto(`/routines/${ids['routine-private-context']}`);
   await expect(canvas(page)).toBeVisible({ timeout: 20_000 });
   await expect(page.locator('.canvas-node').first()).toBeVisible({ timeout: 20_000 });
   await expect(status(page)).toHaveAttribute('aria-label', 'Graph is valid');

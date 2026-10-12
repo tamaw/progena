@@ -47,7 +47,8 @@ class ProgenitorHTTPServer:
         store = getattr(state_manager, "_runtime_store", None)
         self._agent_protocol = (
             ObjectAgentProtocol(store=store, resolve_agent=self._resolve_object_agent)
-            if store is not None else None
+            if store is not None
+            else None
         )
         self._chat_service = RuntimeChatService(loop_runner) if loop_runner is not None else None
 

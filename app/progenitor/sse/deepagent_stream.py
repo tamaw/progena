@@ -6,7 +6,7 @@ import inspect
 import logging
 import os
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator, AsyncIterator
 from typing import Any, cast
 from urllib.parse import urlsplit, urlunsplit
 
@@ -170,7 +170,7 @@ class DeepAgentSSEStream:
         thread_id: str,
         received_at: float | None = None,
         attachments: list[dict[str, Any]] | None = None,
-    ) -> AsyncIterator[dict[str, Any]]:
+    ) -> AsyncGenerator[dict[str, Any]]:
         """Yield SSE stream items from ``graph.astream``."""
 
         additional_kwargs: dict[str, Any] = {

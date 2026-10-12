@@ -18,6 +18,7 @@ from app.progenitor.agent.state_backend import (
     create_health_state_file,
     create_knowledge_state_file,
     create_mcp_state_file,
+    create_mcp_tools_state_file,
     create_model_profiles_state_file,
     create_registry_state_file,
     create_schedule_state_file,
@@ -1105,3 +1106,137 @@ async def test_health_aedit_is_rejected():
     result = await backend.aedit("/health.json", '"running"', '"stopped"')
     assert result.error and "read-only" in result.error
     assert sm.health == {"status": "running"}
+
+
+# ---- mcp_tools.json (per-tool enable/disable) -------------------------------
+
+
+class _FakeMcpToolsStateManager:
+    def __init__(self) -> None:
+        self.payload: dict[str, Any] = {
+            "tools": [
+                {
+                    "name": "jina_search_web",
+                    "server": "jina",
+                    "original_name": "search_web",
+                    "description": "Search the web",
+                    "enabled": True,
+                },
+                {
+                    "name": "jina_search_jina_blog",
+                    "server": "jina",
+                    "original_name": "search_jina_blog",
+                    "description": "Search the Jina blog",
+                    "enabled": True,
+                },
+            ],
+            "servers": {"jina": {"status": "connected", "tool_count": 2}},
+            "updated_at": "2026-10-11T00:00:00Z",
+        }
+        self.saved: list[dict[str, Any]] = []
+
+    async def get_mcp_tools(self) -> dict[str, Any]:
+        return copy.deepcopy(self.payload)
+
+    async def save_mcp_tools(self, payload: dict[str, Any]) -> None:
+        self.payload = copy.deepcopy(payload)
+        self.saved.append(copy.deepcopy(payload))
+
+
+def _mcp_tools_backend() -> tuple[StateDocumentBackend, _FakeMcpToolsStateManager]:
+    sm = _FakeMcpToolsStateManager()
+    return StateDocumentBackend([create_mcp_tools_state_file(sm)]), sm
+
+
+async def _edit_tools(backend: StateDocumentBackend, mutate) -> Any:
+    current = json.loads((await backend.aread("/mcp_tools.json", 0, 10_000)).file_data["content"])  # type: ignore[index]
+    mutate(current)
+    return await backend.awrite("/mcp_tools.json", json.dumps(current))
+
+
+async def test_mcp_tools_edit_disables_one_tool_and_keeps_discovery_data():
+    backend, sm = _mcp_tools_backend()
+    result = await backend.aedit(
+        "/mcp_tools.json",
+        '"description": "Search the Jina blog",\n      "enabled": true',
+        '"description": "Search the Jina blog",\n      "enabled": false',
+    )
+    assert result.error is None
+    assert {tool["name"]: tool["enabled"] for tool in sm.payload["tools"]} == {
+        "jina_search_web": True,
+        "jina_search_jina_blog": False,
+    }
+    assert sm.payload["servers"] == {"jina": {"status": "connected", "tool_count": 2}}
+    assert sm.payload["updated_at"] == "2026-10-11T00:00:00Z"
+
+
+@pytest.mark.parametrize(
+    ("mutate", "message"),
+    [
+        (lambda doc: doc["tools"].pop(), "added or removed"),
+        (lambda doc: doc["tools"].append({"name": "made_up", "enabled": True}), "added or removed"),
+        (lambda doc: doc["tools"][0].update(description="hacked"), "only `enabled`"),
+        (lambda doc: doc["tools"][0].update(enabled="no"), "does not conform to schema"),
+        (lambda doc: doc["tools"][0].update(override=True), "does not conform to schema"),
+        # Seen live: the agent added a top-level override map instead of
+        # flipping the tool's flag; that must fail, not save as a no-op.
+        (
+            lambda doc: doc.update(tool_overrides={"jina_search_jina_blog": {"enabled": False}}),
+            '`"enabled": false` on its entry',
+        ),
+        (lambda doc: doc["servers"]["jina"].update(status="error"), "only a tool's `enabled`"),
+    ],
+)
+async def test_mcp_tools_rejects_anything_but_enabled_flags(mutate, message):
+    backend, sm = _mcp_tools_backend()
+    result = await _edit_tools(backend, mutate)
+    assert result.error is not None and message in result.error
+    assert sm.saved == []
+
+
+# ---- grep / glob over the virtual documents -----------------------------------
+
+
+async def test_grep_finds_text_on_the_line_read_file_shows():
+    # Seen live: grep reported "No matches found" for a tool that was in
+    # /config/mcp_tools.json, so the agent concluded it was missing and
+    # invented a new key instead of flipping the tool's flag.
+    backend, _sm = _mcp_tools_backend()
+    result = await backend.agrep("jina_search_jina_blog")
+    assert result.error is None
+    [match] = result.matches or []
+    assert match["path"] == "/mcp_tools.json"
+    content = (await backend.aread("/mcp_tools.json", 0, 10_000)).file_data["content"]  # type: ignore[index]
+    assert content.split("\n")[match["line"] - 1] == match["text"]
+    assert '"name": "jina_search_jina_blog"' in match["text"]
+
+
+async def test_grep_and_glob_walk_into_subdirectories():
+    backend, _sm = _kanban_backend(
+        [
+            {"id": "card_1", "title": "Top level"},
+            {"id": "card_2", "title": "Scoped needle", "project_id": "acme"},
+        ]
+    )
+    grep = await backend.agrep("Scoped needle")
+    assert [m["path"] for m in grep.matches or []] == ["/acme/card_2.md"]
+
+    nested = await backend.aglob("**/*.md")
+    assert sorted(f["path"] for f in nested.matches or []) == ["/acme/card_2.md", "/card_1.md"]
+    top_only = await backend.aglob("*.md")
+    assert [f["path"] for f in top_only.matches or []] == ["/card_1.md"]
+
+
+async def test_grep_respects_path_and_glob_filters_and_misses_cleanly():
+    backend, _sm = _kanban_backend(
+        [
+            {"id": "card_1", "title": "needle one"},
+            {"id": "card_2", "title": "needle two", "project_id": "acme"},
+        ]
+    )
+    scoped = await backend.agrep("needle", path="/acme")
+    assert {m["path"] for m in scoped.matches or []} == {"/acme/card_2.md"}
+    json_only = await backend.agrep("needle", glob="*.json")
+    assert json_only.matches == []
+    missing = await backend.agrep("not-there-anywhere")
+    assert missing.error is None and missing.matches == []

@@ -58,7 +58,7 @@ main.py::main()
           -> ProgenitorLoop(...)
       -> create_task(loop_runner.run_forever())  # background
       -> ProgenitorHTTPServer(loop_runner=...).start()
-          -> mounts RuntimeChatService's /v1/chat, /v1/chat/{id}/cancel, /v1/events
+          -> mounts RuntimeChatService's /v1/responses, /v1/responses/{id}/cancel, /v1/conversations/{id}/items, /v1/conversations/{id}, /v1/events
 ```
 
 Strength: strongly used when `python -m app.progenitor.main` runs.
@@ -342,8 +342,10 @@ main.py::Progenitor.run()
   -> ProgenitorHTTPServer(loop_runner=..., ...)
   -> ProgenitorHTTPServer.start()
       -> web.Application() with RuntimeChatService.routes():
-           POST /v1/chat
-           POST /v1/chat/{request_id}/cancel
+           POST /v1/responses
+           POST /v1/responses/{response_id}/cancel
+           GET  /v1/conversations/{conversation_id}/items
+           DELETE /v1/conversations/{conversation_id}
            GET  /v1/events
       -> RuntimeChatService.start() -> create_task(_drain_loop())
 ```
@@ -351,18 +353,19 @@ main.py::Progenitor.run()
 Request processing:
 
 ```text
-RuntimeChatService.handle_chat()  # POST /v1/chat
-  -> parse JSON body, require "message"
+RuntimeChatService.handle_responses()  # POST /v1/responses
+  -> parse JSON body, require "input"
   -> open a StreamResponse (Content-Type: text/event-stream) immediately
   -> serialize concurrent requests per thread_id (_inflight_by_thread)
-  -> _stream_chat()
+  -> _stream_turn()
       -> _create_direct_stream_bridge() -> DeepAgentSSEStream
       -> background _produce() task drains bridge.stream() into a queue
       -> foreground loop writes SSE frames as items arrive, or an SSE
          keepalive comment every EVENTS_KEEPALIVE_SECONDS if the bridge
          goes quiet (long tool call/subagent with no interim output)
-      -> stream_event / stream_chunk / error frames written via
-         _write_frame(); a POST /v1/chat/{request_id}/cancel request or a
+      -> response.created / response.in_progress / response.output_text.delta /
+         progenitor.stream_event / response.completed frames written via
+         _write_frame(); a POST /v1/responses/{response_id}/cancel request or a
          dropped client connection sets the per-request cancel_event
 ```
 
@@ -376,7 +379,7 @@ RuntimeQueues.push_event(...)  # e.g. via Progenitor's deferred_push_event
   -> fan out to every open GET /v1/events subscriber queue
   -> RuntimeChatService.handle_events() writes SSE frames to each subscriber
   -> app/backend/sse_client.py's SSEProgenitorClient consumes /v1/events
-     and /v1/chat, forwarding to the backend's own broadcast callback
+     and /v1/responses, forwarding to the backend's own broadcast callback
 ```
 
 Strength: strongly used whenever the backend talks to the Progenitor runtime

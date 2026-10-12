@@ -14,6 +14,12 @@ from app.progenitor.a2a.payloads import (
 from app.progenitor.a2a.payloads import (
     _MAX_PROGRESS_MESSAGE_TEXT_LENGTH as _REPLAYED_PROGRESS_MESSAGE_TEXT_LIMIT,
 )
+from app.progenitor.conversations.sessions import (
+    CHAT_INDEX_KEY,
+    CHAT_METADATA_PREFIX,
+    DEFAULT_CHAT_TITLE,
+    display_title,
+)
 from app.progenitor.runtime.messages import (
     attach_reasoning_trace,
     extract_cache_read_token_count,
@@ -27,6 +33,7 @@ from app.progenitor.state.models import redact_secrets
 
 from .attachments import ATTACHMENT_CONTEXT_MARKER
 from .document_store import BackendDocumentStore, CheckpointThreadSnapshot
+from .runtime_conversations import RuntimeUnavailable
 
 # History must not replay arbitrary tool artifacts (which may contain raw files,
 # images, or credentials). Keep only the SSE-compatible user-facing projection.
@@ -108,9 +115,6 @@ def _curated_tool_artifact(artifact: Any) -> dict[str, Any] | None:
     return projection
 
 
-CHAT_METADATA_PREFIX = "backend.chat.sessions"
-CHAT_INDEX_KEY = "__index__"
-DEFAULT_CHAT_TITLE = "New chat"
 SCHEDULED_TASK_PREFIX = "[Scheduled Task]"
 BACKEND_ALERT_PREFIX = "A backend alert was just created for the user."
 
@@ -149,6 +153,9 @@ class ChatSessionSummary(BaseModel):
     last_activity: str | None = None
     message_count: int = 0
     preview: str = ""
+    # The runtime could not be reached to read this chat's messages, so
+    # message_count/preview are unknown (not zero) until it is back.
+    history_unavailable: bool = False
 
 
 class ChatSessionDetail(ChatSessionSummary):
@@ -304,9 +311,18 @@ def _resolve_metadata_key(store: BackendDocumentStore, thread_id: str) -> str | 
         if metadata is None:
             continue
         candidate_thread_id = _thread_id_for_metadata(metadata)
-        if candidate_thread_id == thread_id or (query_thread_id and candidate_thread_id == query_thread_id):
+        if candidate_thread_id == thread_id or (
+            query_thread_id and candidate_thread_id == query_thread_id
+        ):
             return key
     return None
+
+
+def is_chat_deleted(store: BackendDocumentStore, thread_id: str) -> bool:
+    """Whether the user deleted this chat (its backend metadata is tombstoned)."""
+    metadata_key = _resolve_metadata_key(store, thread_id)
+    metadata = _get_metadata(store, metadata_key) if metadata_key is not None else None
+    return bool(metadata and metadata.get("deleted") is True)
 
 
 def create_chat_metadata(
@@ -749,6 +765,19 @@ def _extract_raw_tool_calls(raw: Any) -> list[dict[str, Any]]:
     return result
 
 
+CANCELLED_SUFFIX = " [Cancelled]"
+
+
+def _is_cancelled_reply(raw: Any) -> bool:
+    """An assistant reply the runtime saved from a cancelled turn."""
+    metadata = (
+        raw.get("response_metadata")
+        if isinstance(raw, dict)
+        else getattr(raw, "response_metadata", None)
+    )
+    return isinstance(metadata, dict) and metadata.get("status") == "cancelled"
+
+
 def _chat_message_from_raw(
     raw: Any,
     index: int,
@@ -770,6 +799,9 @@ def _chat_message_from_raw(
         content = _strip_attachment_context(
             extract_message_text(raw) or _message_text(getattr(raw, "content", ""))
         )
+    if role == "assistant" and _is_cancelled_reply(raw):
+        # Same suffix the live UI appends when a streaming turn is cancelled.
+        content = f"{content}{CANCELLED_SUFFIX}" if content else CANCELLED_SUFFIX.strip()
     if not content and role == "assistant":
         return None
     reasoning_text = extract_reasoning_trace(raw) or ""
@@ -971,11 +1003,15 @@ def _summary_from_metadata(
     metadata: dict[str, Any],
     *,
     fallback_messages: list[ChatMessage] | None = None,
+    history_unavailable: bool = False,
 ) -> ChatSessionSummary:
     messages = fallback_messages or []
     preview = next((message.content for message in reversed(messages) if message.content), "")
     raw_title = str(metadata.get("title") or "Untitled chat")
-    title = _display_title(raw_title, messages)
+    first_user_message = next(
+        (message.content for message in messages if message.role == "user"), ""
+    )
+    title = display_title(raw_title, first_user_message)
     return ChatSessionSummary(
         thread_id=str(metadata["thread_id"]),
         title=title,
@@ -988,6 +1024,7 @@ def _summary_from_metadata(
         last_activity=metadata.get("last_activity") or metadata.get("updated_at"),
         message_count=len(messages),
         preview=preview,
+        history_unavailable=history_unavailable,
     )
 
 
@@ -998,19 +1035,6 @@ def _metadata_sort_key(metadata: dict[str, Any]) -> str:
         or metadata.get("created_at")
         or ""
     )
-
-
-def _display_title(raw_title: str, messages: list[ChatMessage]) -> str:
-    title = raw_title.strip() or "Untitled chat"
-    if title.lower() not in {DEFAULT_CHAT_TITLE.lower(), "new conversation", "untitled chat"}:
-        return title
-    first_user_message = next(
-        (message.content for message in messages if message.role == "user"), ""
-    )
-    if not first_user_message:
-        return title
-    normalized = " ".join(first_user_message.split())
-    return normalized[:64] if normalized else title
 
 
 def _checkpoint_snapshot_for_metadata(
@@ -1104,9 +1128,16 @@ def list_chat_sessions(
             continue
         if metadata.get("archived") is True and not include_archived:
             continue
-        snapshot = _checkpoint_snapshot_for_metadata(
-            store, metadata, cached_snapshots=snapshots_by_thread_id
-        )
+        try:
+            snapshot = _checkpoint_snapshot_for_metadata(
+                store, metadata, cached_snapshots=snapshots_by_thread_id
+            )
+            history_unavailable = snapshot is not None and not snapshot.messages_available
+        except RuntimeUnavailable:
+            # The list still renders with the metadata title while the runtime
+            # is down; detail views report the outage instead.
+            snapshot = None
+            history_unavailable = True
         fallback_messages = _messages_from_checkpoint(snapshot, tool_call_audit=tool_call_audit)
         if snapshot is not None:
             covered_threads.add(snapshot.thread_id)
@@ -1117,18 +1148,28 @@ def list_chat_sessions(
             if metadata_thread_id:
                 hidden_threads.add(metadata_thread_id)
             continue
-        sessions.append(_summary_from_metadata(metadata, fallback_messages=fallback_messages))
+        sessions.append(
+            _summary_from_metadata(
+                metadata,
+                fallback_messages=fallback_messages,
+                history_unavailable=history_unavailable,
+            )
+        )
 
     for snapshot in checkpoint_snapshots:
         if snapshot.thread_id in covered_threads or snapshot.thread_id in hidden_threads:
             continue
         messages = _messages_from_checkpoint(snapshot, tool_call_audit=tool_call_audit)
-        if not messages:
+        if not messages and snapshot.messages_available:
             continue
         metadata = _checkpoint_metadata(snapshot)
         if _is_activity_only_session(metadata, messages):
             continue
-        summary = _summary_from_metadata(metadata, fallback_messages=messages)
+        summary = _summary_from_metadata(
+            metadata,
+            fallback_messages=messages,
+            history_unavailable=not snapshot.messages_available,
+        )
         if include_archived or not summary.archived:
             sessions.append(summary)
 

@@ -1,0 +1,31 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "MCP tool entry",
+  "description": "One object in the 'tools' array of the 'mcp_tools' state document (/config/mcp_tools.json). Entries are produced by MCP discovery; the only field an edit may change is 'enabled'.",
+  "type": "object",
+  "properties": {
+    "name": {
+      "type": "string",
+      "description": "Prefixed tool name the agent sees, '<server>_<original_name>' (e.g. 'jina_search_jina_blog'). Discovery-owned."
+    },
+    "server": {
+      "type": ["string", "null"],
+      "description": "Name of the MCP server (key under 'mcpServers' in /config/mcp.json) that exposes this tool. Discovery-owned."
+    },
+    "original_name": {
+      "type": "string",
+      "description": "The tool's name as the MCP server reports it. Discovery-owned."
+    },
+    "description": {
+      "type": "string",
+      "description": "The tool's description as the MCP server reports it. Discovery-owned."
+    },
+    "enabled": {
+      "type": "boolean",
+      "description": "Whether the agent may use this tool. false disables just this tool while its server stays connected; it stays listed (and toggleable) on the Tools page and survives re-discovery.",
+      "default": true
+    }
+  },
+  "required": ["name", "enabled"],
+  "additionalProperties": false
+}
