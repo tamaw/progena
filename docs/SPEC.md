@@ -199,6 +199,12 @@ documents, not files in `data/state` or `data/config`. State-document changes ar
 broadcast to the canonical UI stream after the write succeeds; details are in
 [STATE_DOCUMENTS.md](STATE_DOCUMENTS.md).
 
+Chat history is exposed the same way, read-only: `/conversations/` lists one
+IRC-style `<date>_<title-slug>_<id8>.txt` per non-archived chat, rendered from the
+LangGraph checkpointer and cached in the store under `progenitor.conversations`
+(`app/progenitor/conversations/`). Listing and grep use the cache; reading a file
+re-renders that chat first if a newer checkpoint exists.
+
 ## Public interfaces
 
 - **Browser transports:** app-lifetime `GET /api/ui/stream` plus request-scoped
