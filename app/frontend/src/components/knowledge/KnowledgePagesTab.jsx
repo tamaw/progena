@@ -22,18 +22,22 @@ import {
 import { buildPageTree } from '../../pages/knowledgePagesModel';
 
 function Tree({ node, selectedPath, onSelect }) {
+  // A directory's own generated/reserved files come first, then subfolders, then
+  // concept pages, so a folder's index.md never looks like a sibling of the root's.
+  const page = (entry) => (
+    <li key={entry.path} className={entry.path === selectedPath ? 'is-selected' : ''}>
+      <button type="button" onClick={() => onSelect(entry.path)}>{entry.title || entry.name}</button>
+    </li>
+  );
   return <>
+    {node.pages.filter((entry) => entry.kind !== 'concept').map(page)}
     {node.directories.map((dir) => (
-      <li key={dir.path} className={selectedPath?.startsWith(`${dir.path}/`) ? 'is-open' : ''}>
+      <li key={dir.path} className={`knowledge-tree-dir${selectedPath?.startsWith(`${dir.path}/`) ? ' is-open' : ''}`}>
         <strong>{dir.name}/</strong>
         <ul><Tree node={dir} selectedPath={selectedPath} onSelect={onSelect} /></ul>
       </li>
     ))}
-    {node.pages.map((page) => (
-      <li key={page.path} className={page.path === selectedPath ? 'is-selected' : ''}>
-        <button type="button" onClick={() => onSelect(page.path)}>{page.title || page.name}</button>
-      </li>
-    ))}
+    {node.pages.filter((entry) => entry.kind === 'concept').map(page)}
   </>;
 }
 
