@@ -164,3 +164,19 @@ def test_index_folder(tmp_path) -> None:
             assert stats[base_id]["documents"] == 1
         finally:
             kstore.delete_documents_for_source(conn, source_id)
+
+
+def test_base_ids_are_slugs_with_collision_suffixes():
+    payload = kschema.validate_knowledge_payload(
+        {"bases": [{"name": "Engineering Notes"}, {"name": "Engineering Notes"}]}
+    )
+    assert [b["id"] for b in payload["bases"]] == ["engineering-notes", "engineering-notes-2"]
+    reserved = kschema.validate_knowledge_payload(
+        {"bases": [{"name": "Engineering Notes"}]}, reserved_ids=frozenset({"engineering-notes"})
+    )
+    assert reserved["bases"][0]["id"] == "engineering-notes-2"
+
+
+def test_provided_non_slug_base_id_is_rejected():
+    with pytest.raises(ValueError, match="lowercase kebab-case"):
+        kschema.validate_knowledge_payload({"bases": [{"id": "Eng Notes", "name": "Eng"}]})

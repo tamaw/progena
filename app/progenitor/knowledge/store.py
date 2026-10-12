@@ -151,7 +151,7 @@ def new_base(
     entry = KnowledgeBaseModel(
         name=name, description=description, owner=owner, scope=scope
     ).model_dump(mode="json")
-    entry["id"] = generate_base_id(name)
+    entry["id"] = generate_base_id(name, taken=set())
     entry["created_at"] = timestamp
     entry["updated_at"] = timestamp
     return entry

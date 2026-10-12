@@ -43,19 +43,25 @@ def save_bases(bases: list[dict[str, Any]]) -> None:
 
 
 def snapshot_bases() -> list[dict[str, Any]]:
-    """Return bases with derived SQL stats (documents/collections) merged in."""
+    """Return bases with derived SQL and page stats merged in."""
     bases = load_bases()
     url = store_database_url(get_default_document_store())
     stats: dict[str, dict[str, Any]] = {}
     if url and bases:
         with psycopg.connect(url) as conn:
             stats = base_document_stats(conn)
+    from .knowledge_pages import live_page_counts
+
+    page_counts = live_page_counts()
     merged: list[dict[str, Any]] = []
     for base in bases:
-        base_stats = stats.get(str(base.get("id")), {})
+        base_id = str(base.get("id"))
+        base_stats = stats.get(base_id, {})
         merged.append(
             {
                 **base,
+                "path": f"/knowledge/{base_id}/",
+                "page_count": page_counts.get(base_id, 0),
                 "documents": base_stats.get("documents", 0),
                 "collections": base_stats.get("collections", []),
             }

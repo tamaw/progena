@@ -218,10 +218,20 @@ export {
 export {
   fetchKnowledge,
   saveKnowledge,
-  indexKnowledgeSource,
+  fetchKnowledgePages,
+  fetchKnowledgePage,
+  saveKnowledgeInstructions,
+  deleteKnowledgePage,
+  renameKnowledgePage,
+  fetchKnowledgePageRevisions,
+  fetchKnowledgePageRevision,
+  restoreKnowledgePageRevision,
   selectKnowledgeBases,
   selectKnowledgeState,
-  selectKnowledgeSearch,
+  selectKnowledgePages,
+  selectKnowledgePage,
+  selectKnowledgeRevisions,
+  selectKnowledgeRevisionContent,
 } from './uiData/knowledge';
 
 export {

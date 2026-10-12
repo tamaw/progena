@@ -17,22 +17,14 @@ const bases = [
     name: 'Progenitor architecture',
     status: 'connected',
     owner: 'Builder',
-    embeddingModel: 'text-embedding-3-large',
-    table: 'kb_architecture',
-    documents: 320,
     lastSynced: '2026-06-27T06:00:00Z',
     tags: ['runtime', 'design'],
-    collections: [{ name: 'graph_nodes' }],
-    pluggedInto: ['Builder'],
   },
   {
     id: 'runbooks',
     name: 'Agent runbooks',
     status: 'syncing',
     owner: 'Observer',
-    embeddingModel: 'text-embedding-3-small',
-    table: 'kb_runbooks',
-    documents: 88,
     lastSynced: '2026-06-26T06:00:00Z',
     tags: ['ops'],
   },
@@ -41,9 +33,6 @@ const bases = [
     name: 'MCP reference',
     status: 'error',
     owner: 'Observer',
-    embeddingModel: 'text-embedding-3-large',
-    table: 'kb_mcp',
-    documents: 154,
     lastSynced: '2026-06-20T06:00:00Z',
     tags: ['tooling'],
   },
@@ -67,11 +56,10 @@ describe('matchesFilter', () => {
 });
 
 describe('matchesQuery', () => {
-  it('searches across name, model, table, tags and collections', () => {
+  it('searches across name, description, owner, path and tags', () => {
     expect(matchesQuery(bases[0], '')).toBe(true);
     expect(matchesQuery(bases[0], 'architecture')).toBe(true);
-    expect(matchesQuery(bases[0], 'graph_nodes')).toBe(true);
-    expect(matchesQuery(bases[0], 'text-embedding-3-large')).toBe(true);
+    expect(matchesQuery(bases[0], 'Builder')).toBe(true);
     expect(matchesQuery(bases[0], 'ops')).toBe(false);
   });
 });
@@ -132,35 +120,25 @@ describe('fromApiBase', () => {
       owner: 'observer',
       scope: 'Shared',
       status: 'connected',
-      embedding_model: 'progenitor-hash-256',
-      dimensions: 256,
-      metric: 'cosine',
-      documents: 5,
-      collections: ['facts', 'people'],
+      page_count: 5,
+      path: '/knowledge/kb-1/',
       tags: ['priority', 'ops'],
-      sources: [{ id: 'src-1', path: '/tmp/docs', status: 'indexed', document_count: 2 }],
       updated_at: '2026-06-27T06:00:00Z',
     });
     expect(ui.id).toBe('kb-1');
     expect(ui.name).toBe('Ops notes');
-    expect(ui.documents).toBe(5);
-    expect(ui.embeddingModel).toBe('progenitor-hash-256');
-    expect(ui.dimensions).toBe(256);
-    expect(ui.table).toBe('knowledge_documents');
+    expect(ui.pageCount).toBe(5);
+    expect(ui.path).toBe('/knowledge/kb-1/');
     expect(ui.tags).toEqual(['priority', 'ops']);
-    expect(ui.collections.map((c) => c.name)).toEqual(['facts', 'people']);
-    expect(ui.sources).toEqual([{ id: 'src-1', path: '/tmp/docs', status: 'indexed', document_count: 2 }]);
-    expect(ui.pluggedInto).toEqual(['Progenitor']);
     expect(ui.lastSynced).toBe('2026-06-27T06:00:00Z');
   });
 
   it('falls back when optional fields are missing', () => {
     const ui = fromApiBase({ id: 'x' });
     expect(ui.name).toBe('x');
-    expect(ui.documents).toBe(0);
-    expect(ui.dimensions).toBe(256);
+    expect(ui.pageCount).toBe(0);
+    expect(ui.path).toBe('/knowledge/x/');
     expect(ui.tags).toEqual([]);
-    expect(ui.sources).toEqual([]);
   });
 });
 

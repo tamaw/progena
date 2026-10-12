@@ -50,7 +50,7 @@ const taskQuickChatConfig = {
 const knowledgeQuickPrompts = [
   'Create a knowledge base called Release Notes for changelog snippets, tagged release.',
   'Add a knowledge base named Runbooks with the tags ops, oncall.',
-  'Create a knowledge base "Research Notes" and add the folder /data/research as a source.',
+  'Create a knowledge base "Research Notes" for durable findings, tagged research.',
 ];
 // Looks like the default quick chat (icon + header, no descriptive text block) —
 // just seeded with knowledge-create example prompts.

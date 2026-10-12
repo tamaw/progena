@@ -851,3 +851,189 @@ async def test_lazy_proxy_uses_only_declared_mounts_and_prompt(monkeypatch, tmp_
     # No declared mounts: the only file surface is the listed skill's own folder.
     filesystem = next(m for m in create_kwargs["middleware"] if isinstance(m, FilesystemMiddleware))
     assert set(filesystem.backend.routes) == {"/skills/review/"}
+
+
+KNOWLEDGE_PAGE = "---\ntype: Concept\ntitle: Retry\n---\nRetry three times.\n"
+
+
+class _KnowledgeStateManager(_StateManager):
+    def __init__(self, documents=None, bases=("eng", "ops")):
+        super().__init__(documents)
+        self.bases = list(bases)
+        self.pages = {}
+
+    async def get_knowledge_config(self):
+        return {"bases": [{"id": base, "name": base.title()} for base in self.bases]}
+
+    async def get_knowledge_page(self, base, path):
+        return self.pages.get((base, path))
+
+    async def save_knowledge_page(self, base, path, content):
+        self.pages[(base, path)] = {"content": content}
+
+    async def list_knowledge_pages(self):
+        return [(base, path, payload) for (base, path), payload in self.pages.items()]
+
+
+def _knowledge_system(grants: str, perm_path: str = "/knowledge/eng/", ops: str = "read") -> str:
+    return (
+        VALID_SYSTEM.replace("kind: object\n", f"kind: object\nknowledge:\n{grants}")
+        .replace("skills: [/skills/review/]", "skills: []")
+        .replace(
+            "operations: [read]\n    paths: [/repos/]",
+            f"operations: [{ops}]\n    paths: [{perm_path}]",
+        )
+    )
+
+
+@pytest.mark.parametrize(
+    ("grants", "message"),
+    [
+        ("  - base: Bad Base\n    access: read\n", r"knowledge\[0\]\.base"),
+        ("  - base: eng\n    access: admin\n", r"knowledge\[0\]\.access must be read or write"),
+        ("  - base: eng\n    access: read\n  - base: eng\n    access: write\n", "duplicate"),
+    ],
+)
+def test_manifest_rejects_invalid_knowledge_grants(grants, message):
+    with pytest.raises(ValueError, match=message):
+        parse_object_agent_manifest(_knowledge_system(grants), source="test")
+
+
+def test_manifest_rejects_knowledge_as_mount():
+    content = VALID_SYSTEM.replace(
+        "kind: object\n", "kind: object\nmounts:\n  - path: /knowledge/eng/\n    access: read\n"
+    )
+    with pytest.raises(ValueError, match="'knowledge' field, not mounts"):
+        parse_object_agent_manifest(content, source="test")
+
+
+async def _knowledge_child_backend(monkeypatch, access: str):
+    from deepagents.backends.protocol import LsResult, WriteResult
+
+    from app.progenitor.agent.knowledge_backend import KnowledgePageBackend
+
+    monkeypatch.setattr(
+        "app.progenitor.agent.object_agents.StateBackend",
+        lambda: SimpleNamespace(
+            aread=AsyncMock(return_value=ReadResult(error="File not found")),
+            awrite=AsyncMock(return_value=WriteResult(error="no state route")),
+            als=AsyncMock(return_value=LsResult(entries=[])),
+        ),
+    )
+    manifest = parse_object_agent_manifest(
+        _knowledge_system(
+            f"  - base: eng\n    access: {access}\n",
+            ops="read, write" if access == "write" else "read",
+        ),
+        source="test",
+    )
+    sm = _KnowledgeStateManager()
+    sm.pages[("eng", "a.md")] = {"content": KNOWLEDGE_PAGE}
+    sm.pages[("ops", "secret.md")] = {"content": KNOWLEDGE_PAGE}
+    parent = CompositeBackend(
+        default=object(),
+        routes={"/knowledge/": KnowledgePageBackend(sm), "/skills/": object()},
+    )
+    calls = []
+    monkeypatch.setattr(
+        "app.progenitor.agent.object_agents.create_agent", lambda **kw: calls.append(kw)
+    )
+    monkeypatch.setattr(
+        "app.progenitor.agent.object_agents.SummarizationMiddleware", lambda **_kwargs: object()
+    )
+    build_object_agent(
+        manifest,
+        model=object(),
+        tools=[SimpleNamespace(name="current_time")],
+        backend=parent,
+        checkpointer=None,
+    )
+    middleware = calls[0]["middleware"]
+    skills = next(m for m in middleware if isinstance(m, SkillsMiddleware))
+    backend = next(m for m in middleware if isinstance(m, FilesystemMiddleware)).backend
+    return sm, backend, skills
+
+
+async def test_read_knowledge_grant_reads_but_cannot_write_or_see_siblings(monkeypatch):
+    _, backend, _ = await _knowledge_child_backend(monkeypatch, "read")
+    assert "Retry three times." in (await backend.aread("/knowledge/eng/a.md")).file_data["content"]
+    assert (await backend.awrite("/knowledge/eng/b.md", KNOWLEDGE_PAGE)).error
+    assert (await backend.aread("/knowledge/ops/secret.md")).error
+    listed = [entry["path"] for entry in (await backend.als("/knowledge/")).entries]
+    assert all(not path.startswith("/knowledge/ops") for path in listed)
+
+
+async def test_write_knowledge_grant_lands_in_its_base(monkeypatch):
+    sm, backend, _ = await _knowledge_child_backend(monkeypatch, "write")
+    assert (await backend.awrite("/knowledge/eng/b.md", KNOWLEDGE_PAGE)).error is None
+    assert ("eng", "b.md") in sm.pages
+    assert (await backend.awrite("/knowledge/eng/INSTRUCTIONS.md", "brief")).error
+    assert (await backend.awrite("/knowledge/ops/b.md", KNOWLEDGE_PAGE)).error
+
+
+def test_knowledge_grant_attaches_curating_skill(monkeypatch):
+    from app.progenitor.agent import object_agents
+
+    manifest = parse_object_agent_manifest(
+        _knowledge_system("  - base: eng\n    access: read\n"), source="test"
+    )
+    seen = []
+    monkeypatch.setattr(
+        object_agents,
+        "_DeclaredSkillsBackend",
+        lambda backend, dirs, **_kw: seen.append(dirs) or backend,
+    )
+    monkeypatch.setattr(object_agents, "create_agent", lambda **_kw: object())
+    monkeypatch.setattr(object_agents, "SummarizationMiddleware", lambda **_kwargs: object())
+    parent = CompositeBackend(
+        default=object(),
+        routes={
+            "/knowledge/": SimpleNamespace(for_object_agent=lambda: object()),
+            "/skills/": object(),
+        },
+    )
+    build_object_agent(
+        manifest,
+        model=object(),
+        tools=[SimpleNamespace(name="current_time")],
+        backend=parent,
+        checkpointer=None,
+    )
+    assert any("/skills/curating-knowledge" in str(d) for dirs in seen for d in dirs)
+
+
+async def test_proxy_skips_unknown_base_and_reports_warning(monkeypatch):
+    from langchain_core.messages import AIMessage
+
+    from app.progenitor.agent.knowledge_backend import KnowledgePageBackend
+
+    system = _knowledge_system("  - base: nope\n    access: read\n", perm_path="/knowledge/nope/")
+    sm = _KnowledgeStateManager({"user/reviewer/SYSTEM.md": system})
+    source = (await discover_object_agents(sm))[0]
+    built = []
+
+    def create(**kwargs):
+        built.append(kwargs)
+        return SimpleNamespace(
+            ainvoke=AsyncMock(return_value={"messages": [AIMessage(content="done")]})
+        )
+
+    monkeypatch.setattr("app.progenitor.agent.object_agents.create_agent", create)
+    monkeypatch.setattr(
+        "app.progenitor.agent.object_agents.SummarizationMiddleware", lambda **_kwargs: object()
+    )
+    proxy = create_object_agent_proxy(
+        source,
+        state_manager=sm,
+        model=object(),
+        tools=[SimpleNamespace(name="current_time")],
+        backend=CompositeBackend(
+            default=object(), routes={"/knowledge/": KnowledgePageBackend(sm), "/skills/": object()}
+        ),
+        checkpointer=None,
+    )
+    result = await proxy["runnable"].ainvoke({"messages": []})
+    last = result["messages"][-1]
+    assert last.text.startswith("done\n\nWarnings:\n- ")
+    assert "does not exist in /config/knowledge.json" in last.text
+    assert built
