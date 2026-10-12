@@ -11,12 +11,37 @@ import { attachJsonEvidence } from './helpers/routineFixture.mjs';
 //      rename, delete).
 //   4. A second, read-only agent answers questions from the modified pages.
 // Set KEEP_KNOWLEDGE_E2E=1 to keep the created base/agents for manual viewing.
+// Pick the research topic with KNOWLEDGE_E2E_TOPIC=mcp|raft (default mcp).
 
 const databaseUrl = process.env.PROGENITOR_DATABASE_URL
   || 'postgresql://progenitor:progenitor@127.0.0.1:15433/progenitor';
 const RUN = Date.now().toString(36).slice(-5);
-const BASE_NAME = `MCP Research ${RUN}`;
-const BASE_ID = `mcp-research-${RUN}`;
+// Research topics. `keyPage` names the page the UI renames (the answerer must
+// find it in its new folder); `keyFact` must appear in that page and the answer.
+const TOPICS = {
+  mcp: {
+    name: 'MCP Research',
+    slug: 'mcp-research',
+    subject: 'the Model Context Protocol',
+    scope: 'what it is, its architecture of hosts/clients/servers, and its transports',
+    keyPage: /transport/,
+    keyFact: /stdio/i,
+    question: 'what is the Model Context Protocol and which transports does it define?',
+  },
+  raft: {
+    name: 'Raft Research',
+    slug: 'raft-research',
+    subject: 'the Raft consensus algorithm',
+    scope: 'what it is, how leader election works, and how log replication works',
+    keyPage: /elect/,
+    keyFact: /election timeout/i,
+    question: 'what is Raft and how does it elect a leader?',
+  },
+};
+const TOPIC = TOPICS[process.env.KNOWLEDGE_E2E_TOPIC || 'mcp'];
+if (!TOPIC) throw new Error(`KNOWLEDGE_E2E_TOPIC must be one of: ${Object.keys(TOPICS).join(', ')}`);
+const BASE_NAME = `${TOPIC.name} ${RUN}`;
+const BASE_ID = `${TOPIC.slug}-${RUN}`;
 const RESEARCHER = `researcher-${RUN}`;
 const ANSWERER = `kb-answerer-${RUN}`;
 const INSTRUCTIONS_MARKER = `Edited in the UI by e2e run ${RUN}.`;
@@ -102,13 +127,13 @@ test('research agent fills a knowledge base from the web and a second agent answ
 
   await test.step('Progenitor creates the knowledge base and a researcher agent', async () => {
     await chat(page, `Create a knowledge base named "${BASE_NAME}" (its id will be ${BASE_ID}) with the description `
-      + '"Research notes on the Model Context Protocol", and write its INSTRUCTIONS.md asking for one concept page '
+      + `"Research notes on ${TOPIC.subject}", and write its INSTRUCTIONS.md asking for one concept page `
       + `per topic with sources. Then create a user object agent named ${RESEARCHER} (description "Researches topics `
       + 'on the web and writes knowledge pages") that can use the Jina web search and read tools and has knowledge '
       + `write access to ${BASE_ID}. Do not run it yet.`);
     await poll(() => sql(`SELECT count(*) FROM store WHERE key = 'knowledge'
       AND value->'payload'->'bases' @> ${quote(JSON.stringify([{ id: BASE_ID }]))}::jsonb`) === '1', 'base created');
-    await poll(() => /base:\s*mcp-research/.test(agentManifest(RESEARCHER)), 'researcher manifest grants the base');
+    await poll(() => new RegExp(`base:\\s*${BASE_ID}`).test(agentManifest(RESEARCHER)), 'researcher manifest grants the base');
     expect(agentManifest(RESEARCHER)).toMatch(/access:\s*write/);
     evidence.researcherManifest = agentManifest(RESEARCHER);
     await page.goto('/agents');
@@ -116,14 +141,15 @@ test('research agent fills a knowledge base from the web and a second agent answ
   });
 
   await test.step('the researcher fills the knowledge base from web research', async () => {
-    await chat(page, `Use the task tool with subagent_type "${RESEARCHER}" (a user object agent, not an A2A agent) to research the Model Context Protocol on the web (what it is, `
-      + 'its architecture of hosts/clients/servers, and its transports) and write at least three concept pages '
+    await chat(page, `Use the task tool with subagent_type "${RESEARCHER}" (a user object agent, not an A2A agent) to research ${TOPIC.subject} on the web (${TOPIC.scope}) `
+      + 'and write at least three concept pages '
       + `into /knowledge/${BASE_ID}/, each with type, title, description and the source URLs in "sources", `
       + 'then append an ingest entry to log.md. Report the page paths it wrote.');
     await poll(() => conceptPaths().length >= 3, 'at least three concept pages written', 60_000);
     const sources = sql(`SELECT string_agg(value->'payload'->>'content', '\n') FROM store
       WHERE key LIKE ${quote(`knowledge:${BASE_ID}/%`)} AND key NOT LIKE '%log.md'`);
-    expect(sources).toMatch(/sources:/);
+    // Sources may be front matter (`sources:`) or a Sources section, as the brief asks.
+    expect(sources).toMatch(/^sources:|^#+ sources/im);
     expect(sources).toMatch(/https?:\/\//);
     expect(sources).toMatch(/generated:\s*\n\s*at:/);
     expect(livePages().map((row) => row.path)).toContain('log.md');
@@ -139,12 +165,12 @@ test('research agent fills a knowledge base from the web and a second agent answ
     await page.getByRole('button', { name: 'Pages', exact: true }).click();
     const tree = page.locator('.knowledge-pages-tab aside');
     await expect(tree.getByRole('button', { name: 'log.md' })).toBeVisible();
-    // Rename the page that explains transports (the answerer must find it in its new
+    // Rename the page holding the key fact (the answerer must find it in its new
     // folder) and delete a different one (the answerer must not cite it).
     const contents = Object.fromEntries(conceptPaths().map((path) => [path, sql(`SELECT value->'payload'->>'content'
       FROM store WHERE key = ${quote(`knowledge:${BASE_ID}/${path}`)}`)]));
-    const mentionsTransports = (path) => /stdio/i.test(contents[path]);
-    const first = conceptPaths().find((path) => /transport/.test(path) && mentionsTransports(path))
+    const mentionsTransports = (path) => TOPIC.keyFact.test(contents[path]);
+    const first = conceptPaths().find((path) => TOPIC.keyPage.test(path) && mentionsTransports(path))
       || conceptPaths().find(mentionsTransports) || conceptPaths()[0];
     const others = conceptPaths().filter((path) => path !== first);
     const second = others.find((path) => !mentionsTransports(path)) || others[0];
@@ -164,7 +190,7 @@ test('research agent fills a knowledge base from the web and a second agent answ
     await poll(() => sql(`SELECT value->'payload'->>'content' FROM store
       WHERE key = ${quote(`knowledge:${BASE_ID}/INSTRUCTIONS.md`)}`).includes(INSTRUCTIONS_MARKER), 'brief saved', 30_000);
 
-    // Rename the transports page into a folder and delete the other page.
+    // Rename the key page into a folder and delete the other page.
     renamedPath = `reviewed/${first.split('/').at(-1)}`;
     await page.getByRole('button', { name: 'Pages', exact: true }).click();
     await page.goto(`${page.url().split('?')[0]}?page=${encodeURIComponent(first)}`);
@@ -186,17 +212,17 @@ test('research agent fills a knowledge base from the web and a second agent answ
   });
 
   await test.step('a read-only agent answers from the modified knowledge base', async () => {
-    await chat(page, `Create a user object agent named ${ANSWERER} (description "Answers questions from the MCP `
-      + `research knowledge base") with read-only knowledge access to ${BASE_ID} and no other tools. Do not run it yet.`);
+    await chat(page, `Create a user object agent named ${ANSWERER} (description "Answers questions from the `
+      + `${TOPIC.name} knowledge base") with read-only knowledge access to ${BASE_ID} and no other tools. Do not run it yet.`);
     await poll(() => /access:\s*read/.test(agentManifest(ANSWERER)), 'answerer manifest grants read access');
     expect(agentManifest(ANSWERER)).not.toMatch(/access:\s*write/);
 
-    const answer = await chat(page, `Use the task tool with subagent_type "${ANSWERER}" (a user object agent) to ask: "Using only the knowledge base, what is the Model `
-      + 'Context Protocol and which transports does it define? Cite the knowledge page path for every claim, and also '
+    const answer = await chat(page, `Use the task tool with subagent_type "${ANSWERER}" (a user object agent) to ask: "Using only the knowledge base, ${TOPIC.question} `
+      + 'Cite the knowledge page path for every claim, and also '
       + 'try to add a page called notes/answerer.md and report whether that worked." Relay its full answer verbatim.');
     evidence.answer = answer;
     expect(answer).toContain(`/knowledge/${BASE_ID}/${renamedPath}`);
-    expect(answer.toLowerCase()).toMatch(/stdio/);
+    expect(answer).toMatch(TOPIC.keyFact);
     expect(answer).not.toContain(`/knowledge/${BASE_ID}/${deletedPath}`);
     expect(livePages().map((row) => row.path)).not.toContain('notes/answerer.md');
   });
