@@ -1,4 +1,4 @@
-"""Validation and defaults for the virtual ``/config/profile.json`` document."""
+"""Validation and defaults for the virtual ``/config/profiles.json`` document."""
 
 from __future__ import annotations
 
@@ -48,7 +48,7 @@ def validate_model_profiles_document(content: str) -> dict[str, Any]:
     try:
         payload = json.loads(content)
     except json.JSONDecodeError as exc:
-        raise ValueError(f"profile.json must be valid JSON: {exc}") from exc
+        raise ValueError(f"profiles.json must be valid JSON: {exc}") from exc
     return validate_model_profiles_payload(payload)
 
 

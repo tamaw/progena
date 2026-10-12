@@ -20,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Prompt template workflow nodes**: `extract` and `agent` nodes replace the old `agent` (message-based) and `mcp` nodes. Both render a prompt template (inline `template`, or a `prompt` document path) with values from their input ports (one per `{placeholder}` root) and send it to Progenitor as a normal chat turn. `extract` has Progenitor answer through its `structured_output` tool and reply with that JSON, which is validated against the result schema (node `schema` > template front matter `output_schema` > the typed input `result` is wired into). `agent` returns Progenitor's reply as `message` and can name a `subagent` to delegate to. All prompt steps in a run share one thread (a wired `thread_id` overrides), listed in Chat as `Workflow: <title>`.
 - **Prompt templates**: prompt documents take optional YAML front matter (`title`, `description`, `inputs`, `output_schema`, `system`) and `{name}` / `{name.path}` placeholders; the agent's `/prompts/` mount is writable (front matter validated on write), and shipped prompts missing from Postgres are added on startup without overwriting edited ones
 - **Workflow canvas**: the cursor shows grab while the right button is held to pan
+- **Model profiles**: Added a separate searchable list/detail page at `/profiles`, backed by `/config/profiles.json`. Users can edit deployment and reasoning overrides in the same bordered configuration surface as agents, delete a profile from the detail header, restore environment inheritance, and receive live Postgres-driven updates in both the page and routine profile selectors. Progenitor can add, edit, or remove complete profile maps through its agent-writable virtual file. Drafts are preserved and saves blocked when the selected profile changes remotely.
 - **DeepAgent Integration** (`app/progenitor/agent/`): Selective adoption of LangChain's `deepagents` library
   - `deep_agent.py`: Factory creating configured DeepAgent with LiteLLM routing, tools, middleware, skills, memory, and subagents
   - `langchain_adapter.py`: ChatOpenAI → LiteLLM proxy bridge with Azure structured output bypass
@@ -46,6 +47,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Exception Handling**: Added DEBUG logging to previously silent exception handlers (CQ-009)
 
 ### Fixed
+- Profile notifications now bypass unrelated state-snapshot diffs; profile queries and edits use `202` acknowledgements plus correlated `profiles.snapshot` events instead of successful HTTP response-body data.
+- Snapshot-confirmed saves no longer have their success status overwritten by the acknowledgement-waiting effect; request failures preserve the draft and show the error.
 - Schedule and inbox document notifications now reach their collection subscribers even when a sibling document from the same transaction has already refreshed the shared state snapshot.
 - Telemetry exception handlers now log at DEBUG level instead of silently passing
 
