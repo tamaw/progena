@@ -573,6 +573,30 @@ describe('applyUiEvent reducer', () => {
     expect(selectWorkflowRuns({ uiData: s })).toHaveLength(1);
     expect(selectWorkflowLatestRunById({ uiData: s }, 'wf_1')?.run_id).toBe('run_1');
   });
+
+  it('workflow.updated summarises every trigger on the list row from the saved graph', () => {
+    const s = reducer(undefined, applyUiEvent({
+      type: 'workflow.updated',
+      payload: {
+        path: '/workflows/wf_2.json',
+        workflow: {
+          id: 'wf_2',
+          title: 'Digest',
+          graph: {
+            nodes: {
+              tick: { kind: 'cron', title: 'Weekdays', expression: '0 9 * * 1-5', timezone: 'UTC' },
+              card: { kind: 'event', title: 'Card', document_type: 'kanban_card' },
+              say: { kind: 'agent', title: 'Say', template: 'Hi' },
+            },
+            edges: [],
+          },
+        },
+      },
+    }));
+    const row = s.workflows.items.find((item) => item.id === 'wf_2');
+    expect(row.triggers).toEqual(['cron 0 9 * * 1-5', 'kanban_card']);
+    expect(row.document_type).toBe('kanban_card');
+  });
 });
 
 describe('selectChatSessions (memoized)', () => {

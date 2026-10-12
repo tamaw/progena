@@ -98,12 +98,12 @@ test.describe('refactored surfaces — prove interactive behaviour', () => {
     await expect(search).toHaveValue('zzz-no-such-agent-zzz');
     expect(errors).toEqual([]);
   });
-  test('Workflows renders its empty state without persisted workflow records', async ({ page }) => {
+  test('Workflows search shows its no-match state regardless of stored workflows', async ({ page }) => {
     const errors = trackPageErrors(page);
     await page.goto('/workflows');
 
+    await page.getByPlaceholder('Search workflows').fill('zzz-no-such-workflow-zzz');
     await expect(page.getByText('No workflows match the current filters.')).toBeVisible();
-    await expect(page.getByText('Select a workflow to edit or create a new one.')).toBeVisible();
     expect(errors).toEqual([]);
   });
 

@@ -371,6 +371,10 @@
   --workflow-node-color: #ffa657;
 }
 
+.workflow-graph-node--cron {
+  --workflow-node-color: #bc8cff;
+}
+
 .workflow-graph-node--agent {
   --workflow-node-color: #58a6ff;
 }
@@ -877,6 +881,7 @@
 .canvas-dock-icon.label { background: rgba(139, 148, 158, 0.18); color: #8b949e; }
 .canvas-dock-icon.schedule { background: rgba(188, 140, 255, 0.18); color: #bc8cff; }
 .canvas-dock-icon.event { background: rgba(255, 166, 87, 0.18); color: #ffa657; }
+.canvas-dock-icon.cron { background: rgba(188, 140, 255, 0.18); color: #bc8cff; }
 .canvas-dock-icon.group { background: rgba(110, 118, 129, 0.18); color: #6e7681; }
 .canvas-dock-icon.agent { background: rgba(248, 81, 73, 0.18); color: #f85149; }
 .canvas-dock-icon.condition { background: rgba(210, 153, 34, 0.18); color: #d29922; }
@@ -1761,6 +1766,25 @@
 
 .workflow-node-options__tag button:hover {
   color: var(--color-text);
+}
+
+.workflow-node-options__next-runs {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0;
+  font-family: var(--font-family-mono, monospace);
+  font-size: 12px;
+  color: var(--color-text-muted);
+}
+
+.workflow-node-options__next-runs li {
+  padding: 2px 0;
+}
+
+.workflow-node-options__error {
+  color: var(--color-danger, #f85149);
+  font-size: 12px;
+  margin-top: 4px;
 }
 
 @media (max-width: 620px) {

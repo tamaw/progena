@@ -12,6 +12,7 @@ import {
   isUnpackableSchema,
   parsePromptPlaceholders,
   derivePromptInputSchema,
+  nodeInputPorts,
 } from './WorkflowsPage';
 import { canvasToolSettings } from './workflowCanvasTools';
 
@@ -145,6 +146,7 @@ describe('workflowToFlow', () => {
       graph: {
         nodes: {
           event: { kind: 'event', title: 'Event', document_type: 'kanban_card', output_schema: KANBAN_EVENT_OUTPUT_SCHEMA },
+          cron: { kind: 'cron', title: 'Cron', expression: '0 9 * * 1-5', timezone: 'Australia/Melbourne', overlap: 'skip', output_schema: { type: 'object', required: ['scheduled_for', 'fired_at', 'timezone'], properties: { scheduled_for: { type: 'string', format: 'date-time' }, fired_at: { type: 'string', format: 'date-time' }, timezone: { type: 'string' } } } },
           agent: { kind: 'agent', title: 'Agent', prompt: null, template: 'Go', subagent: null, input_schema: { type: 'object', properties: {} }, output_schema: { type: 'object', properties: {} } },
           data: { kind: 'data', title: 'Data', value: 1, output_schema: { type: 'number' } },
           extract: { kind: 'extract', title: 'Extract', prompt: null, template: '', schema: null, input_schema: { type: 'object', properties: {} }, output_schema: { type: 'object', properties: {} } },
@@ -163,6 +165,7 @@ describe('workflowToFlow', () => {
     const typesById = Object.fromEntries(flow.nodes.map((node) => [node.id, node.type]));
     expect(typesById).toEqual({
       event: 'event',
+      cron: 'cron',
       agent: 'agent',
       data: 'data',
       extract: 'extract',
@@ -243,6 +246,49 @@ describe('workflowToFlow', () => {
     });
   });
 
+  it('round-trips a cron node', () => {
+    const workflow = {
+      graph: {
+        nodes: {
+          cron_1: {
+            kind: 'cron',
+            title: 'Weekdays 9am',
+            expression: '0 9 * * 1-5',
+            timezone: 'Australia/Melbourne',
+            overlap: 'skip',
+            output_schema: {
+              type: 'object',
+              required: ['scheduled_for', 'fired_at', 'timezone'],
+              properties: {
+                scheduled_for: { type: 'string', format: 'date-time' },
+                fired_at: { type: 'string', format: 'date-time' },
+                timezone: { type: 'string' },
+              },
+            },
+          },
+        },
+        edges: [],
+      },
+      ui: { nodes: {} },
+    };
+
+    const flow = workflowToFlow(workflow, {}, null);
+    const node = flow.nodes.find((n) => n.id === 'cron_1');
+    expect(node.type).toBe('cron');
+    expect(node.data.expression).toBe('0 9 * * 1-5');
+    expect(node.data.timezone).toBe('Australia/Melbourne');
+    expect(node.data.overlap).toBe('skip');
+    expect(node.data.canDelete).toBe(false);
+
+    const persisted = flowToWorkflow(workflow, flow.nodes, flow.edges, flow.viewport);
+    expect(persisted.graph.nodes.cron_1).toMatchObject({
+      kind: 'cron',
+      expression: '0 9 * * 1-5',
+      timezone: 'Australia/Melbourne',
+      overlap: 'skip',
+    });
+  });
+
   it('round-trips a document_read node', () => {
     const workflow = {
       graph: {
@@ -309,11 +355,11 @@ describe('workflowToFlow', () => {
 });
 
 describe('workflow node menu', () => {
-  it('exposes exactly the ten V3 node kinds and no capability-specific kinds', () => {
+  it('exposes exactly the eleven V3 node kinds and no capability-specific kinds', () => {
     const addableKinds = NODE_MENU_CATEGORIES.flatMap((category) => category.items).map((item) => item.kind);
 
     expect(addableKinds.sort()).toEqual(
-      ['agent', 'approval', 'condition', 'data', 'document_query', 'document_read', 'event', 'extract', 'human_input', 'unpack'].sort(),
+      ['agent', 'approval', 'condition', 'cron', 'data', 'document_query', 'document_read', 'event', 'extract', 'human_input', 'unpack'].sort(),
     );
   });
 });
@@ -343,6 +389,10 @@ describe('node interface properties', () => {
       expect.objectContaining({ name: 'card', required: false }),
       expect.objectContaining({ name: 'source', required: false }),
     ]);
+  });
+
+  it('gives cron nodes no input ports', () => {
+    expect(nodeInputPorts('cron', { type: 'object', properties: { a: { type: 'string' } } })).toEqual([]);
   });
 
   it('exposes an event node\'s output properties directly, with no payload envelope', () => {

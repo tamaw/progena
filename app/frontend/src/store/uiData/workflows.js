@@ -41,6 +41,14 @@ function upsertWorkflowListItem(state, workflow) {
   if (!workflow?.id) {
     return;
   }
+  const nodes = Object.values(workflow.graph?.nodes || {});
+  const firstEvent = nodes.find((node) => node?.kind === 'event');
+  // Same summary rule as the server's build_workflow_list_item.
+  const triggers = nodes.flatMap((node) => {
+    if (node?.kind === 'event') return [node.document_type || ''];
+    if (node?.kind === 'cron') return [`cron ${node.expression || ''}`];
+    return [];
+  });
   const listItem = {
     id: workflow.id,
     title: workflow.title || 'Untitled workflow',
@@ -48,8 +56,9 @@ function upsertWorkflowListItem(state, workflow) {
     enabled: workflow.enabled !== false,
     paused: Boolean(workflow.paused),
     version: Number.isFinite(workflow.version) ? workflow.version : 1,
-    document_type: workflow.document_type || '',
-    node_count: Object.keys(workflow.graph?.nodes || {}).length,
+    document_type: firstEvent?.document_type || '',
+    triggers,
+    node_count: nodes.length,
     updated_at: workflow.updated_at || '',
     created_at: workflow.created_at || '',
   };

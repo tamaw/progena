@@ -18,7 +18,7 @@ Core rules:
 4. Do not add runtime execution fields to the definition file.
 5. Prefer `edit_file` for focused changes. Use `write_file` only when creating a new workflow or rewriting the whole document intentionally.
 6. Use `structured_output` against the complete definition schema whenever creating or reshaping nodes or edges — do not hand-assemble JSON from memory.
-7. Never hand-write `input_schema`/`output_schema` for `event`, `document_read`, or `document_query` nodes: the server derives them from the node's `document_type` on save. Wire edges to the port names listed below.
+7. Never hand-write `input_schema`/`output_schema` for `event`, `cron`, `document_read`, or `document_query` nodes: the server derives them on save. Wire edges to the port names listed below.
 
 Document events:
 - Every create/update/delete of a stored document is an event. An `event` node subscribes by `document_type` (a registered type id). Built-in ids: `kanban_card`, `kanban_task` (task body), `inbox_message`, `workflow`, `workflow_run`, `routine`, `policy`, `agent`, `skill`, `memory`, `prompt`, `preferences`, `schedule`, `mcp`, `plugins`, `marketplaces`, `knowledge`, `repos`, `kanban_board`. Writing a workflow with an unknown id fails with the list of registered ids.
@@ -28,6 +28,8 @@ Document events:
 
 Node kinds:
 - `event` — entrypoint described above; no inbound edges.
+- `cron` — time entrypoint run by the backend clock; no inbound edges. Fields `kind`, `title`, `expression` (5-field cron, e.g. `0 9 * * 1-5`), `timezone` (IANA, e.g. `Australia/Melbourne`), `overlap` (`skip` default: drop a fire while the workflow still has an active run; `queue`: run it afterwards). Outputs `scheduled_for`, `fired_at` (ISO date-times in the node's timezone), `timezone`. A fire missed while the backend was down runs once on restart; a paused workflow does not replay missed fires. This is for workflows only — to remind yourself or the user later, use your own schedules (`/config/schedule.json`), not a workflow.
+  Example — weekday digest: `{"kind": "cron", "title": "Weekdays 9am", "expression": "0 9 * * 1-5", "timezone": "Australia/Melbourne"}` with `cron.scheduled_for` → an `agent` template `{scheduled_for}` placeholder.
 - `data` — literal `value` with an `output_schema`; output port `value`.
 - `document_read` — reads one document directly (no LLM). Fields `kind`, `title`, `document_type`. Input `id` for collection types (e.g. wire `event.id` → `read.id` to load a card's `kanban_task` body), or `trigger` (any value, for sequencing) for single-document types. Outputs `found`, `key`, `id`, `document` (typed with the document type).
 - `unpack` — pure step (no LLM) exposing one object's fields. Fields `kind`, `title`. Single input `value`: wire any object port (`event.after`, `read.document`, or another unpack's object field). Output ports are that object's properties, derived on save. Example — card column into a query: `event.after` → `card.value`, `card.column_id` → `peers.column_id`.
@@ -55,7 +57,8 @@ Recommended flow for editing an existing workflow:
 4. If several nodes or edge wiring change together, read the complete definition schema and use `structured_output` to produce the whole updated definition, then persist only that workflow file.
 
 Validation reminders:
-- at least one `event` node is required; event nodes cannot have inbound edges
+- at least one trigger (`event` or `cron`) is required; trigger nodes cannot have inbound edges
+- `cron` needs a valid 5-field `expression` and a real IANA `timezone`
 - every non-source node needs an inbound edge, and every required input port needs exactly one edge
 - edge ports must exist on both nodes and have compatible types
 - `match` keys must be dotted paths starting at an event output port (e.g. `after.column_id`); `changed_fields` must be document fields

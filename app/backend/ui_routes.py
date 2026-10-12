@@ -36,10 +36,11 @@ from pydantic import BaseModel, Field
 
 from app.progenitor.config import default_plugins_config_payload
 from app.progenitor.content_documents import AGENT_DOCUMENT_KEY_PREFIX, SKILL_DOCUMENT_KEY_PREFIX
+from app.progenitor.cron import cron_error, default_timezone_name, next_cron_time
 from app.progenitor.document_kinds import KANBAN_CARD_KEY_PREFIX, KANBAN_TASK_CONTENT_KEY_PREFIX
 from app.progenitor.document_types import DOCUMENT_OPERATIONS, DocumentType
 from app.progenitor.routines.store import ROUTINE_GRAPH_KEY_PREFIX
-from app.progenitor.schedule import Scheduler, default_timezone_name
+from app.progenitor.schedule import Scheduler
 from app.progenitor.schedule.service import generate_schedule_id
 from app.progenitor.utils import utcnow
 from app.progenitor.workflows import (
@@ -50,6 +51,7 @@ from app.progenitor.workflows import (
     WORKFLOW_RUN_KEY_PREFIX,
     WorkflowDefinition,
     WorkflowListItem,
+    WorkflowNodeCron,
     WorkflowRun,
     default_workflow_definition,
     document_event_output_schema,
@@ -103,13 +105,16 @@ from .request_utils import request_correlation_id as _request_correlation_id
 from .routine_events import routine_events
 from .state_reader import StateReader, get_state_reader
 from .threads import complete_thread, fail_thread, upsert_thread
+from .workflow_cron import WorkflowCronClock
 from .workflow_service import (
     PromptExecutionResult,
     WorkflowExecutor,
     build_manual_trigger_event,
     delete_workflow_definition,
+    first_trigger_node_id,
     get_workflow_definition,
     get_workflow_run,
+    list_workflow_definitions,
     list_workflow_list_items,
     list_workflow_runs,
     save_workflow_definition,
@@ -142,6 +147,24 @@ async def get_model_profiles() -> dict[str, Any]:
             for name, profile in profiles.items()
         ]
     }
+
+
+@router.get("/workflows/cron-preview")
+async def preview_workflow_cron(
+    expression: str,
+    timezone: str,
+    count: int = Query(default=3, ge=1, le=10),
+) -> dict[str, Any]:
+    """Next due times of a cron trigger, computed exactly as the backend clock fires them."""
+    error = cron_error(expression, timezone)
+    if error:
+        raise HTTPException(status_code=400, detail=error)
+    runs: list[str] = []
+    cursor = utcnow()
+    for _ in range(count):
+        cursor = next_cron_time(expression, cursor, timezone)
+        runs.append(cursor.isoformat())
+    return {"next_runs": runs}
 
 
 MAX_EVENT_WIDGET_LOGS = 20
@@ -628,6 +651,21 @@ def get_workflow_executor() -> WorkflowExecutor:
             ),
         )
     return _workflow_executor
+
+
+_workflow_cron_clock: WorkflowCronClock | None = None
+
+
+def get_workflow_cron_clock() -> WorkflowCronClock:
+    """Return the singleton clock firing workflow cron trigger nodes."""
+    global _workflow_cron_clock
+    if _workflow_cron_clock is None:
+        _workflow_cron_clock = WorkflowCronClock(
+            store_getter=get_default_document_store,
+            definitions_getter=list_workflow_definitions,
+            executor_getter=get_workflow_executor,
+        )
+    return _workflow_cron_clock
 
 
 def _schedule_item_to_info(item) -> ScheduleItemInfo:
@@ -1748,13 +1786,21 @@ async def _reconcile_workflow_invoke_requests(changed_key: str | None = None) ->
                 logger.warning("Dropping malformed workflow invoke request %r", key, exc_info=True)
                 store.delete_document(PROGENITOR_STATE_PREFIX, key)
                 continue
-            trigger = {
+            trigger: dict[str, Any] = {
                 "event_type": "progenitor.invoke",
                 "timestamp": request.requested_at,
                 "input": request.input,
                 "source": "progenitor",
             }
             try:
+                definition = get_workflow_definition(store, request.workflow_id)
+                first_trigger = (
+                    definition.graph.nodes.get(first_trigger_node_id(definition) or "")
+                    if definition is not None
+                    else None
+                )
+                if definition is not None and isinstance(first_trigger, WorkflowNodeCron):
+                    trigger = build_manual_trigger_event(definition)
                 await executor.trigger_workflow(
                     request.workflow_id,
                     trigger,
@@ -3986,6 +4032,7 @@ async def _dispatch_document_event_workflows(typed: TypedDocumentEvent) -> None:
     executor = get_workflow_executor()
     if typed.event.key.startswith(WORKFLOW_DEFINITION_KEY_PREFIX):
         executor.invalidate_subscriptions()
+        get_workflow_cron_clock().wake()
     if typed.output is None:
         return
     await executor.dispatch_document_event(typed.output, origin=typed.event.origin)
@@ -4146,6 +4193,7 @@ async def start_state_status_watcher(reconnect_delay: float = 2.0) -> None:
         state_reader.add_watcher(_routine_agent_watch_callback)
     await routine_events.start()
     await get_document_event_dispatcher().start(reconnect_delay)
+    await get_workflow_cron_clock().start()
     await state_reader.start_watching(reconnect_delay)
 
 
@@ -4163,6 +4211,7 @@ async def stop_state_status_watcher() -> None:
         state_reader.remove_watcher(_routine_agent_watch_callback)
         _routine_agent_watch_callback = None
     await routine_events.stop()
+    await get_workflow_cron_clock().stop()
     await get_document_event_dispatcher().stop()
     await state_reader.stop_watching()
 
