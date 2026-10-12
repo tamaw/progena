@@ -69,7 +69,20 @@ state — it does not necessarily extend to user-facing data without checking
 first.
 
 The one deliberate exception left in the codebase is kanban's
-`_migrate_inline_cards` (`ui_routes.py`) — a precedent from before this rule
+`_migrate_inline_cards` (`ui_routes.py`) — a precedent from before this rule.
+
+## Inbox message revisions
+
+Each `/inbox/<id>.md` message is a separate `progenitor.state` /
+`inbox_message:<id>` store row. Backend startup installs a trigger that captures
+its complete JSON payload into `inbox_message_revisions` on insert, update, and
+delete, and backfills currently stored messages. Like `routine_graph_revisions`,
+each revision is immutable and keyed by message ID plus a content hash. The
+payload includes the body and frontmatter fields, so user-owned read, archive,
+and decision changes can also produce revisions; writing identical content
+again does not. History is stored only; the inbox has no revision browser or
+restore action.
+
 ## Surface 1: agent-facing virtual files (`app/progenitor/agent/state_backend.py`)
 
 `StateFile` is the unit: a virtual file backed by `load`/`save`/`validate`
