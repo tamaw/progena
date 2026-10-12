@@ -14,6 +14,12 @@ from app.progenitor.a2a.payloads import (
 from app.progenitor.a2a.payloads import (
     _MAX_PROGRESS_MESSAGE_TEXT_LENGTH as _REPLAYED_PROGRESS_MESSAGE_TEXT_LIMIT,
 )
+from app.progenitor.conversations.sessions import (
+    CHAT_INDEX_KEY,
+    CHAT_METADATA_PREFIX,
+    DEFAULT_CHAT_TITLE,
+    display_title,
+)
 from app.progenitor.runtime.messages import (
     attach_reasoning_trace,
     extract_cache_read_token_count,
@@ -109,9 +115,6 @@ def _curated_tool_artifact(artifact: Any) -> dict[str, Any] | None:
     return projection
 
 
-CHAT_METADATA_PREFIX = "backend.chat.sessions"
-CHAT_INDEX_KEY = "__index__"
-DEFAULT_CHAT_TITLE = "New chat"
 SCHEDULED_TASK_PREFIX = "[Scheduled Task]"
 BACKEND_ALERT_PREFIX = "A backend alert was just created for the user."
 
@@ -1005,7 +1008,10 @@ def _summary_from_metadata(
     messages = fallback_messages or []
     preview = next((message.content for message in reversed(messages) if message.content), "")
     raw_title = str(metadata.get("title") or "Untitled chat")
-    title = _display_title(raw_title, messages)
+    first_user_message = next(
+        (message.content for message in messages if message.role == "user"), ""
+    )
+    title = display_title(raw_title, first_user_message)
     return ChatSessionSummary(
         thread_id=str(metadata["thread_id"]),
         title=title,
@@ -1029,19 +1035,6 @@ def _metadata_sort_key(metadata: dict[str, Any]) -> str:
         or metadata.get("created_at")
         or ""
     )
-
-
-def _display_title(raw_title: str, messages: list[ChatMessage]) -> str:
-    title = raw_title.strip() or "Untitled chat"
-    if title.lower() not in {DEFAULT_CHAT_TITLE.lower(), "new conversation", "untitled chat"}:
-        return title
-    first_user_message = next(
-        (message.content for message in messages if message.role == "user"), ""
-    )
-    if not first_user_message:
-        return title
-    normalized = " ".join(first_user_message.split())
-    return normalized[:64] if normalized else title
 
 
 def _checkpoint_snapshot_for_metadata(

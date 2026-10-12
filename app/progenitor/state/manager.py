@@ -12,6 +12,7 @@ from ..content_documents import (
     content_document_key,
     content_document_prefix,
 )
+from ..conversations.sessions import CHAT_INDEX_KEY, CHAT_SESSIONS_NAMESPACE
 from ..document_kinds import INBOX_MESSAGE_KEY_PREFIX
 from ..routines.store import ROUTINE_GRAPH_KEY_PREFIX, routine_graph_key
 from ..utils import utcnow_isoformat
@@ -27,7 +28,11 @@ from . import (
     async_subagent_store,
     background_store,
 )
-from .langgraph_store import LangGraphRuntimeStore
+from .langgraph_store import (
+    CONVERSATION_LOGS_NAMESPACE,
+    CONVERSATION_META_NAMESPACE,
+    LangGraphRuntimeStore,
+)
 from .model_profiles import default_model_profiles_payload
 from .models import (
     A2ATaskRecord,
@@ -602,6 +607,53 @@ class StateManager:
         """Return all inbox message documents (unsorted; callers order them)."""
         rows = await self._runtime_store.list_documents(INBOX_MESSAGE_KEY_PREFIX)
         return [payload for _, payload in rows if isinstance(payload, dict)]
+
+    # ==========================================================================
+    # Chat sessions (backend-owned, read-only here) and rendered transcripts
+    # ==========================================================================
+    async def list_chat_sessions(self) -> list[dict[str, Any]]:
+        """Return the backend's chat session documents in index order.
+
+        One read of the whole namespace; each payload gains its ``thread_id``.
+        Reads straight from the shared store: the backend writes these on
+        create, rename, and archive.
+        """
+        rows = dict(await self._runtime_store.list_items(CHAT_SESSIONS_NAMESPACE))
+        thread_ids = (rows.get(CHAT_INDEX_KEY) or {}).get("payload") or []
+        sessions: list[dict[str, Any]] = []
+        for thread_id in thread_ids:
+            payload = (rows.get(str(thread_id)) or {}).get("payload")
+            if isinstance(payload, dict):
+                sessions.append({**payload, "thread_id": str(thread_id)})
+        return sessions
+
+    async def list_conversation_transcripts(self) -> dict[str, dict[str, Any]]:
+        """Return cached transcript metadata keyed by thread id (no text)."""
+        rows = await self._runtime_store.list_items(CONVERSATION_META_NAMESPACE)
+        return dict(rows)
+
+    async def get_conversation_log(self, thread_id: str) -> str | None:
+        """Return one chat's cached transcript text, or ``None``."""
+        item = await self._runtime_store.get_item(CONVERSATION_LOGS_NAMESPACE, thread_id)
+        text = (item or {}).get("text")
+        return text if isinstance(text, str) else None
+
+    async def save_conversation_transcript(
+        self, thread_id: str, meta: dict[str, Any], text: str | None
+    ) -> None:
+        """Persist one chat's transcript metadata and, when it has messages, its text."""
+        if text is None:
+            await self._runtime_store.delete_item(CONVERSATION_LOGS_NAMESPACE, thread_id)
+        else:
+            await self._runtime_store.put_item(
+                CONVERSATION_LOGS_NAMESPACE, thread_id, {"text": text}
+            )
+        await self._runtime_store.put_item(CONVERSATION_META_NAMESPACE, thread_id, meta)
+
+    async def delete_conversation_transcript(self, thread_id: str) -> None:
+        """Drop one chat's cached transcript metadata and text."""
+        await self._runtime_store.delete_item(CONVERSATION_META_NAMESPACE, thread_id)
+        await self._runtime_store.delete_item(CONVERSATION_LOGS_NAMESPACE, thread_id)
 
     # ==========================================================================
     # Workflow definitions
