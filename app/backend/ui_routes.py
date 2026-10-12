@@ -95,6 +95,7 @@ from .inbox_routes import (
 )
 from .knowledge_service import snapshot_bases as snapshot_knowledge_bases
 from .marketplace_service import load_marketplaces
+from .model_profile_routes import create_model_profile_router
 from .policy_routes import create_policy_router
 from .preferences_service import load_preferences
 from .prompt_service import PromptService
@@ -118,30 +119,6 @@ from .workflow_service import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/ui", tags=["ui"])
-
-
-@router.get("/model-profiles")
-async def get_model_profiles() -> dict[str, Any]:
-    """Return public selector metadata, never credentials or arbitrary config."""
-    from app.progenitor.state.model_profiles import (
-        default_model_profiles_payload,
-        validate_model_profiles_payload,
-    )
-
-    default = default_model_profiles_payload()
-    document = await asyncio.to_thread(
-        get_default_document_store().get_document, PROGENITOR_STATE_PREFIX, "profile", default
-    )
-    try:
-        profiles = validate_model_profiles_payload(document.payload if document else default)
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    return {
-        "profiles": [
-            {"name": name, "deployment": profile["deployment"]}
-            for name, profile in profiles.items()
-        ]
-    }
 
 
 MAX_EVENT_WIDGET_LOGS = 20
@@ -3672,6 +3649,8 @@ _active_ui_stream_tasks: set[asyncio.Task] = set()
 # Keep a strong reference to fire-and-forget agent-profile broadcasts so the
 # event loop's weak task reference can't let one get garbage-collected mid-run.
 _active_agent_profile_broadcast_tasks: set[asyncio.Task] = set()
+# Same for model-profile broadcasts.
+_active_model_profile_broadcast_tasks: set[asyncio.Task] = set()
 
 
 def has_active_ui_stream_subscribers() -> bool:
@@ -3877,6 +3856,15 @@ async def _broadcast_agent_profiles_safe() -> None:
         logger.debug("Failed to broadcast agent profiles snapshot", exc_info=True)
 
 
+async def _broadcast_model_profiles_safe() -> None:
+    try:
+        from .model_profile_routes import broadcast_model_profiles_snapshot
+
+        await broadcast_model_profiles_snapshot(get_default_document_store(), broadcast_ui_event)
+    except Exception:
+        logger.debug("Failed to broadcast model profiles snapshot", exc_info=True)
+
+
 def _queue_state_watch_status(snapshot, changed_key: str | None = None) -> None:
     global _state_watch_push_task
     if not _ui_stream_subscribers:
@@ -3902,6 +3890,10 @@ def _queue_state_watch_status(snapshot, changed_key: str | None = None) -> None:
             broadcast_marketplaces_snapshot()
         if changed_key in (None, "plugins"):
             broadcast_plugins_snapshot()
+        if changed_key in (None, "profile"):
+            profile_task = asyncio.create_task(_broadcast_model_profiles_safe())
+            _active_model_profile_broadcast_tasks.add(profile_task)
+            profile_task.add_done_callback(_active_model_profile_broadcast_tasks.discard)
         if (
             changed_key is None
             or changed_key == "registry"
@@ -4744,3 +4736,10 @@ def broadcast_alerts_state(*, request_id: str | None = None) -> None:
 
 
 router.include_router(create_policy_router(get_default_document_store, broadcast_ui_event))
+
+router.include_router(
+    create_model_profile_router(
+        get_store=get_default_document_store,
+        broadcast=broadcast_ui_event,
+    )
+)

@@ -1,4 +1,4 @@
-import React, { useContext, useRef, useState, useMemo, useLayoutEffect, useEffect } from 'react';
+import React, { useContext, useRef, useState, useMemo, useLayoutEffect } from 'react';
 import { MissingFieldsContext, GraphEditContext } from './graphEditorContext';
 import hljs from 'highlight.js/lib/common';
 import { checkExpressionSyntax } from '../../lib/restrictedExpression';
@@ -11,46 +11,52 @@ import {
   schemaFieldsToText,
   textToSchemaFields,
 } from './graphFieldHelpers';
-import { useSelector } from 'react-redux';
-import { selectAgentProfiles } from '../../store/uiDataSlice';
+import { useDispatch, useSelector } from 'react-redux';
+import { fetchModelProfiles, selectAgentProfiles, selectModelProfiles, selectModelProfilesState } from '../../store/uiDataSlice';
+import { selectRealtimeStreamReady } from '../../store/realtimeSlice';
+import { useConfig } from '../../context/ConfigContext';
 import Select from '../common/Select';
 import { createPortal } from 'react-dom';
 import { useBufferedFieldText } from './useBufferedFieldText';
 
-
 function ModelProfileField({ id, config, updateNodeConfig }) {
-  const [profiles, setProfiles] = useState([]);
-  const [error, setError] = useState('');
-  const refresh = async () => {
-    try {
-      const response = await fetch('/api/ui/model-profiles');
-      if (!response.ok) throw new Error('Unable to load model profiles');
-      const data = await response.json();
-      setProfiles(data.profiles || []);
-      setError('');
-    } catch (cause) { setError(cause.message); }
-  };
-  useEffect(() => {
-    let active = true;
-    fetch('/api/ui/model-profiles').then(async (response) => {
-      if (!response.ok) throw new Error('Unable to load model profiles');
-      const data = await response.json();
-      if (active) setProfiles(data.profiles || []);
-    }).catch((cause) => { if (active) setError(cause.message); });
-    return () => { active = false; };
-  }, []);
+  const dispatch = useDispatch();
+  const { getApiUrl } = useConfig();
+  const streamReady = useSelector(selectRealtimeStreamReady);
+  const profiles = useSelector(selectModelProfiles);
+  const profilesState = useSelector(selectModelProfilesState);
   const value = config?.model_profile || '';
+
   return (
-    <label className="agents-graph-node__field">
+    <div className="agents-graph-node__field">
       <span className="agents-graph-node__field-label">Model profile</span>
-      <select className="agents-graph-node__toolinput" aria-label="Model profile" value={value}
-        onFocus={refresh} onChange={(event) => updateNodeConfig(id, { model_profile: event.target.value || null })}>
+      <select
+        className="agents-graph-node__toolinput"
+        aria-label="Model profile"
+        value={value}
+        onChange={(event) => updateNodeConfig(id, { model_profile: event.target.value || null })}
+      >
         <option value="">Use default</option>
-        {value && !profiles.some((profile) => profile.name === value) ? <option value={value}>{value} (unavailable)</option> : null}
-        {profiles.map((profile) => <option key={profile.name} value={profile.name}>{profile.name} — {profile.deployment}</option>)}
+        {value && !profiles.some((profile) => profile.name === value) ? (
+          <option value={value}>{value} (unavailable)</option>
+        ) : null}
+        {profiles.map((profile) => (
+          <option key={profile.name} value={profile.name}>
+            {profile.name} — {profile.deployment}
+          </option>
+        ))}
       </select>
-      {error ? <span role="alert">{error}</span> : null}
-    </label>
+      {profilesState.error ? (
+        <>
+          <span role="alert">{profilesState.error}</span>
+          <button type="button" className="repo-btn repo-btn--ghost"
+            disabled={!streamReady || profilesState.loading}
+            onClick={() => dispatch(fetchModelProfiles({ modelProfilesUrl: getApiUrl('modelProfiles') }))}>
+            Retry profiles
+          </button>
+        </>
+      ) : null}
+    </div>
   );
 }
 
