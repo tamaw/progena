@@ -510,7 +510,7 @@ def build_object_agent(
                 "/knowledge/ route"
             )
         for grant in manifest.knowledge:
-            scoped = ScopedMountBackend(parent_knowledge.for_object_agent(), f"/{grant.base}")
+            scoped = ScopedMountBackend(parent_knowledge, f"/{grant.base}")
             routes[f"/knowledge/{grant.base}/"] = (
                 scoped if grant.access == "write" else ReadOnlyBackend(scoped)
             )

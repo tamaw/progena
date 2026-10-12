@@ -8,9 +8,15 @@ PAGE = "---\ntype: Concept\ntitle: A\ndescription: First page\n---\nRetry budget
 class FakeStateManager:
     def __init__(self):
         self.pages = {}
+        self.instructions = ""
 
     async def get_knowledge_config(self):
-        return {"bases": [{"id": "eng", "name": "Engineering"}, {"id": "ops", "name": "Ops"}]}
+        return {
+            "bases": [
+                {"id": "eng", "name": "Engineering", "instructions": self.instructions},
+                {"id": "ops", "name": "Ops"},
+            ]
+        }
 
     async def get_knowledge_page(self, base, path):
         return self.pages.get((base, path))
@@ -68,13 +74,17 @@ async def test_soft_deleted_page_is_hidden_until_rewritten():
     assert (await backend.aread("/eng/concepts/a.md")).error is None
 
 
-async def test_object_agent_cannot_write_instructions():
-    backend = KnowledgePageBackend(FakeStateManager())
-    assert (await backend.awrite("/eng/INSTRUCTIONS.md", "brief")).error is None
-    assert (
-        "maintained by the user"
-        in (await backend.for_object_agent().awrite("/eng/INSTRUCTIONS.md", "x")).error
-    )
+async def test_base_index_shows_catalog_instructions_and_brief_file_is_not_a_page():
+    manager = FakeStateManager()
+    manager.instructions = "Keep one page per decision."
+    backend = KnowledgePageBackend(manager)
+    index = (await backend.aread("/eng/index.md")).file_data["content"]
+    assert "## Instructions\n\nKeep one page per decision." in index
+    assert "kebab-case" in (await backend.awrite("/eng/INSTRUCTIONS.md", "brief")).error
+    # A legacy INSTRUCTIONS.md row is neither listed nor readable.
+    manager.pages[("eng", "INSTRUCTIONS.md")] = {"content": "old brief"}
+    assert "/eng/INSTRUCTIONS.md" not in [e["path"] for e in (await backend.als("/eng/")).entries]
+    assert (await backend.aread("/eng/INSTRUCTIONS.md")).error
 
 
 async def test_composite_route_lists_greps_and_globs():

@@ -34,12 +34,17 @@ from .state_backend import _AsyncOnlyFileBackendMixin
 class KnowledgePageBackend(_AsyncOnlyFileBackendMixin):
     _ASYNC_ONLY = "KnowledgePageBackend is async-only; use the async file tools."
 
-    def __init__(self, state_manager: Any, *, allow_instructions_write: bool = True) -> None:
+    def __init__(self, state_manager: Any) -> None:
         self._sm = state_manager
-        self._allow_instructions_write = allow_instructions_write
 
-    def for_object_agent(self) -> KnowledgePageBackend:
-        return KnowledgePageBackend(self._sm, allow_instructions_write=False)
+    @staticmethod
+    def _valid_path(path: str) -> bool:
+        """Stored keys that no longer classify (e.g. legacy files) are hidden."""
+        try:
+            classify_page_path(path)
+        except ValueError:
+            return False
+        return True
 
     @staticmethod
     def _split(file_path: str) -> tuple[str | None, str]:
@@ -79,7 +84,12 @@ class KnowledgePageBackend(_AsyncOnlyFileBackendMixin):
             if row_base == base_id and self._live(payload)
         ]
         title = str(base.get("name") or base_id) if not directory else directory.rsplit("/", 1)[-1]
-        return render_directory_index(title=title, directory=directory, live_pages=live)
+        return render_directory_index(
+            title=title,
+            directory=directory,
+            live_pages=live,
+            instructions=str(base.get("instructions") or ""),
+        )
 
     async def aread(self, file_path: str, offset: int = 0, limit: int = 2000) -> ReadResult:
         base_id, path = self._split(file_path)
@@ -93,7 +103,7 @@ class KnowledgePageBackend(_AsyncOnlyFileBackendMixin):
                 content = await self._index(base_id, path, base)
             else:
                 payload = await self._sm.get_knowledge_page(base_id, path)
-                if not self._live(payload):
+                if not self._live(payload) or not self._valid_path(path):
                     return ReadResult(error=f"File '{file_path}' not found")
                 content = payload["content"]
         file_data = create_file_data(content)
@@ -117,8 +127,6 @@ class KnowledgePageBackend(_AsyncOnlyFileBackendMixin):
             return WriteResult(
                 error="index.md is generated from page front matter and cannot be written"
             )
-        if kind == "instructions" and not self._allow_instructions_write:
-            return WriteResult(error="INSTRUCTIONS.md is maintained by the user and the main agent")
         payload = await self._sm.get_knowledge_page(base_id, path)
         previous = payload.get("content") if self._live(payload) else None
         try:
@@ -171,6 +179,7 @@ class KnowledgePageBackend(_AsyncOnlyFileBackendMixin):
                 row_base != base_id
                 or not self._live(payload)
                 or not row_path.startswith(dir_prefix)
+                or not self._valid_path(row_path)
             ):
                 continue
             rest = row_path[len(dir_prefix) :]

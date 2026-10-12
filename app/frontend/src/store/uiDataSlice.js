@@ -220,7 +220,6 @@ export {
   saveKnowledge,
   fetchKnowledgePages,
   fetchKnowledgePage,
-  saveKnowledgeInstructions,
   deleteKnowledgePage,
   renameKnowledgePage,
   fetchKnowledgePageRevisions,

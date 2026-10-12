@@ -16,11 +16,10 @@ describe('buildPageTree', () => {
 
   it('places reserved files before concepts and adds synthetic index', () => {
     const tree = buildPageTree([
-      { path: 'INSTRUCTIONS.md', kind: 'instructions' },
       { path: 'log.md', kind: 'log' },
       { path: 'concepts/x.md', title: 'X', kind: 'concept' },
     ]);
-    expect(tree.pages.map((p) => p.name)).toEqual(['index.md', 'INSTRUCTIONS.md', 'log.md']);
+    expect(tree.pages.map((p) => p.name)).toEqual(['index.md', 'log.md']);
     expect(tree.directories[0].pages.map((p) => p.name)).toEqual(['index.md', 'x.md']);
   });
 });

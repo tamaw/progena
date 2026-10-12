@@ -9,12 +9,11 @@ import yaml
 
 INDEX_FILE = "index.md"
 LOG_FILE = "log.md"
-INSTRUCTIONS_FILE = "INSTRUCTIONS.md"
 KNOWLEDGE_MOUNT = "/knowledge/"
 BASE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
 SEGMENT_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,79}$")
 
-PageKind = Literal["concept", "index", "log", "instructions"]
+PageKind = Literal["concept", "index", "log"]
 _CONCEPT_ERROR = (
     "knowledge pages need YAML front matter with a non-empty 'type' (OKF v0.2), e.g.\n"
     "---\ntype: Concept\ntitle: ...\ndescription: ...\n---"
@@ -32,8 +31,6 @@ def classify_page_path(path: str) -> PageKind:
     if path.startswith("/") or len(path) > 240 or not path or "\\" in path:
         raise ValueError(_PATH_ERROR)
     parts = path.split("/")
-    if path == INSTRUCTIONS_FILE:
-        return "instructions"
     if parts[-1] == LOG_FILE:
         if len(parts) != 1:
             raise ValueError("log.md is only allowed at the base root")
@@ -106,11 +103,16 @@ def render_index(
     pages: list[tuple[str, dict[str, Any]]],
     subdirs: list[str],
     is_base_root: bool,
+    instructions: str = "",
 ) -> str:
     lines: list[str] = []
     if is_base_root:
         lines.extend(["---", 'okf_version: "0.2"', "---", ""])
     lines.append(f"# {title}")
+    if is_base_root and instructions.strip():
+        # The base's brief lives in /config/knowledge.json; agents without /config
+        # access (object agents) read it here.
+        lines.extend(["", "## Instructions", "", instructions.strip()])
     grouped: dict[str, list[tuple[str, dict[str, Any]]]] = {}
     for filename, front_matter in pages:
         grouped.setdefault(str(front_matter.get("type", "Concept")), []).append(
@@ -129,14 +131,7 @@ def render_index(
         lines.extend(["", "## Directories"])
         lines.extend(f"- [{name}/]({name}/index.md)" for name in sorted(subdirs))
     if is_base_root:
-        lines.extend(
-            [
-                "",
-                "## Reserved",
-                f"- [INSTRUCTIONS.md]({INSTRUCTIONS_FILE})",
-                f"- [log.md]({LOG_FILE})",
-            ]
-        )
+        lines.extend(["", "## Reserved", f"- [log.md]({LOG_FILE})"])
     return "\n".join(lines) + "\n"
 
 
@@ -149,7 +144,9 @@ def render_root_index(bases: list[dict[str, Any]]) -> str:
     return "\n".join(lines) + "\n"
 
 
-def render_directory_index(*, title: str, directory: str, live_pages: list[tuple[str, str]]) -> str:
+def render_directory_index(
+    *, title: str, directory: str, live_pages: list[tuple[str, str]], instructions: str = ""
+) -> str:
     """Render ``directory``'s index from ``(path, content)`` of a base's live pages."""
     dir_prefix = f"{directory}/" if directory else ""
     pages: list[tuple[str, dict[str, Any]]] = []
@@ -175,4 +172,5 @@ def render_directory_index(*, title: str, directory: str, live_pages: list[tuple
         pages=pages,
         subdirs=sorted(subdirs),
         is_base_root=not directory,
+        instructions=instructions,
     )

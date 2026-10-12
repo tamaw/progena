@@ -114,17 +114,20 @@ def test_rename_moves_page_and_rejects_existing_target(harness):
     ]
 
 
-def test_instructions_put_saves_brief(harness):
-    client, store, _ = harness
-    response = client.put(
-        "/api/ui/knowledge/eng/instructions", json={"content": "Track decisions."}
+def test_base_index_includes_catalog_instructions(harness):
+    client, store, events = harness
+    store.save_document(
+        PROGENITOR_STATE_PREFIX,
+        "knowledge",
+        {"bases": [{"id": "eng", "name": "Engineering", "instructions": "Track decisions."}]},
     )
-    assert_acknowledged(response, ["knowledge.pages.snapshot"])
+    client.get("/api/ui/knowledge/eng/page", params={"path": "index.md"})
     assert (
-        store.get_document(PROGENITOR_STATE_PREFIX, "knowledge:eng/INSTRUCTIONS.md").payload[
-            "content"
-        ]
-        == "Track decisions."
+        "## Instructions\n\nTrack decisions." in _last(events, "knowledge.page.loaded")["content"]
+    )
+    assert client.put("/api/ui/knowledge/eng/instructions", json={"content": "x"}).status_code in (
+        404,
+        405,
     )
 
 

@@ -37,7 +37,6 @@ from .knowledge_pages import (
     read_page,
     rename_page,
     restore_revision,
-    save_instructions,
     soft_delete_page,
 )
 from .knowledge_service import load_bases, save_bases, snapshot_bases
@@ -158,24 +157,6 @@ async def get_knowledge_page(
         raise HTTPException(status_code=404, detail="Knowledge page not found.")
     broadcast_ui_event("knowledge.page.loaded", {"base_id": base_id, **page}, request_id=request_id)
     return acknowledgement_response(request_id, ["knowledge.page.loaded"])
-
-
-@router.put("/{base_id}/instructions", status_code=202, response_model=UiRequestAcknowledgement)
-async def put_knowledge_instructions(
-    base_id: str,
-    payload: dict[str, Any],
-    request: Request,
-    x_request_id: str | None = _REQUEST_ID_HEADER,
-) -> UiRequestAcknowledgement:
-    """Save the base's ``INSTRUCTIONS.md`` brief."""
-    request_id = _request_correlation_id(request, x_request_id)
-    await _require_base(base_id)
-    content = payload.get("content")
-    if not isinstance(content, str):
-        raise HTTPException(status_code=400, detail="content must be a string")
-    await asyncio.to_thread(save_instructions, base_id, content)
-    await _broadcast_pages(base_id, request_id)
-    return acknowledgement_response(request_id, ["knowledge.pages.snapshot"])
 
 
 @router.delete("/{base_id}/page", status_code=202, response_model=UiRequestAcknowledgement)

@@ -35,9 +35,9 @@ export function buildPageTree(pages = []) {
   const sort = (node) => {
     node.directories.sort((a, b) => a.name.localeCompare(b.name));
     node.pages.sort((a, b) => {
-      const order = { index: 0, instructions: 1, log: 2, concept: 3 };
-      const aOrder = order[a.kind] ?? 3;
-      const bOrder = order[b.kind] ?? 3;
+      const order = { index: 0, log: 1, concept: 2 };
+      const aOrder = order[a.kind] ?? 2;
+      const bOrder = order[b.kind] ?? 2;
       if (aOrder !== bOrder) return aOrder - bOrder;
       return String(a.title || a.name).localeCompare(String(b.title || b.name));
     });

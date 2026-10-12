@@ -13,7 +13,8 @@ def test_classify_reserved_and_concept_paths():
     assert classify_page_path("concepts/retry-policy.md") == "concept"
     assert classify_page_path("index.md") == "index"
     assert classify_page_path("log.md") == "log"
-    assert classify_page_path("INSTRUCTIONS.md") == "instructions"
+    with pytest.raises(ValueError):
+        classify_page_path("INSTRUCTIONS.md")
     with pytest.raises(ValueError):
         classify_page_path("nested/log.md")
     with pytest.raises(ValueError):
@@ -48,6 +49,7 @@ def test_render_index_groups_types_and_directories():
         ],
         subdirs=["notes"],
         is_base_root=True,
+        instructions="Record decisions with rationale.\n",
     )
     assert output == (
         "---\n"
@@ -55,6 +57,10 @@ def test_render_index_groups_types_and_directories():
         "---\n"
         "\n"
         "# Engineering\n"
+        "\n"
+        "## Instructions\n"
+        "\n"
+        "Record decisions with rationale.\n"
         "\n"
         "## Concept\n"
         "- [A](a.md)\n"
@@ -66,6 +72,5 @@ def test_render_index_groups_types_and_directories():
         "- [notes/](notes/index.md)\n"
         "\n"
         "## Reserved\n"
-        "- [INSTRUCTIONS.md](INSTRUCTIONS.md)\n"
         "- [log.md](log.md)\n"
     )

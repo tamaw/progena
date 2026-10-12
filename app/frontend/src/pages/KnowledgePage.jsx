@@ -544,7 +544,10 @@ export default function KnowledgePage() {
                 <KnowledgePagesTab baseId={selectedBaseId} knowledgeUrl={knowledgeUrl} />
               ) : null}
               {detailTab === 'Instructions' ? (
-                <KnowledgeInstructionsTab baseId={selectedBaseId} knowledgeUrl={knowledgeUrl} />
+                <KnowledgeInstructionsTab
+                  instructions={selectedBase.instructions}
+                  onSave={(instructions) => patchSelected({ instructions })}
+                />
               ) : null}
             </div>
           </>
