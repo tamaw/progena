@@ -99,15 +99,9 @@ function Breadcrumbs({ baseName, tree, selectedPath, onSelect }) {
   );
 }
 
-function frontMatterFacts(frontMatter) {
-  const fm = frontMatter && typeof frontMatter === 'object' ? frontMatter : {};
-  const list = (value) => (Array.isArray(value) ? value.map(String) : value ? [String(value)] : []);
-  return {
-    type: fm.type ? String(fm.type) : null,
-    tags: list(fm.tags),
-    sources: list(fm.sources),
-    generatedAt: fm.generated && typeof fm.generated === 'object' && fm.generated.at ? String(fm.generated.at) : null,
-  };
+function frontMatterSources(frontMatter) {
+  const sources = frontMatter && typeof frontMatter === 'object' ? frontMatter.sources : null;
+  return (Array.isArray(sources) ? sources : sources ? [sources] : []).map(String);
 }
 
 function PageBody({ content, path, onNavigate }) {
@@ -200,8 +194,7 @@ export default function KnowledgePagesTab({ baseId, baseName, knowledgeUrl }) {
   const selectPage = (path) => setParams(path === 'index.md' ? {} : { page: path });
 
   const isConcept = selectedPageMeta?.kind === 'concept';
-  const facts = frontMatterFacts(page?.front_matter);
-  const hasFacts = Boolean(facts.type || facts.tags.length || facts.sources.length || facts.generatedAt);
+  const sources = frontMatterSources(page?.front_matter);
   const displayContent = viewingRevisionId
     ? (revisionContent === null ? 'Loading…' : stripYamlFrontmatter(revisionContent))
     : (page?.body ?? page?.content ?? '');
@@ -220,15 +213,21 @@ export default function KnowledgePagesTab({ baseId, baseName, knowledgeUrl }) {
                 </div>
               )}
             </header>
-            {hasFacts && (
-              <dl className="knowledge-page-facts">
-                {facts.type ? <><dt>Type</dt><dd>{facts.type}</dd></> : null}
-                {facts.tags?.length ? <><dt>Tags</dt><dd>{facts.tags.join(', ')}</dd></> : null}
-                {facts.sources?.length ? <><dt>Sources</dt><dd>{facts.sources.join(', ')}</dd></> : null}
-                {facts.generatedAt ? <><dt>Generated</dt><dd>{facts.generatedAt}</dd></> : null}
-              </dl>
-            )}
             <PageBody content={displayContent} path={selectedPath} onNavigate={selectPage} />
+            {sources.length > 0 && (
+              <section className="knowledge-page-sources">
+                <h3>Sources</h3>
+                <ul>
+                  {sources.map((source) => (
+                    <li key={source}>
+                      {/^https?:\/\//i.test(source)
+                        ? <a href={source} target="_blank" rel="noopener noreferrer">{source}</a>
+                        : <code>{source}</code>}
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            )}
             {revisions.length > 0 && (
               <section className="knowledge-page-revisions">
                 <h3>Revisions</h3>

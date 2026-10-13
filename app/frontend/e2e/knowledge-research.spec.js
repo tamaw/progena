@@ -157,7 +157,7 @@ test('research agent fills a knowledge base from the web and a second agent answ
   let deletedPath;
   await test.step('the pages are browsable and editable in the Knowledge UI', async () => {
     await openKnowledgeBase(page);
-    await expect(page.getByText(`${conceptPaths().length} pages`, { exact: true })).toBeVisible();
+    await expect(page.locator('.task-card.is-selected .kb-card__info')).toContainText(`${conceptPaths().length} pages`);
 
     // The base index loads by default; its page links open in place, without a reload.
     const crumbs = page.locator('.knowledge-breadcrumbs');
@@ -182,8 +182,8 @@ test('research agent fills a knowledge base from the web and a second agent answ
     const second = others.find((path) => !mentionsTransports(path)) || others[0];
     await page.goto(`${page.url().split('?')[0]}?page=${encodeURIComponent(first)}`);
     const reader = page.locator('.knowledge-pages-tab article');
-    await expect(reader.locator('.knowledge-page-facts')).toContainText('Type');
-    await expect(reader.locator('.knowledge-page-facts')).toContainText('Sources');
+    await expect(page.getByText(/^generated /)).toBeVisible();
+    await expect(reader.locator('.knowledge-page-sources li').first()).toBeVisible();
     await expect(reader.locator('.markdown-content')).not.toContainText('generated:');
     await expect(reader.getByRole('heading', { name: 'Revisions' })).toBeVisible();
 

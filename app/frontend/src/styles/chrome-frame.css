@@ -1555,6 +1555,12 @@ body,
   white-space: nowrap;
 }
 
+.kb-card__info {
+  gap: 10px;
+  font-size: 11px;
+  color: var(--color-text-muted);
+}
+
 .kb-card__dot {
   display: inline-block;
   flex-shrink: 0;
@@ -9699,38 +9705,25 @@ body,
   gap: 8px;
 }
 
-.knowledge-page-facts {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px 18px;
-  margin: 0 0 12px;
-  padding: 10px 12px;
-  border: 1px solid var(--color-border);
-  border-radius: 8px;
-  background: var(--color-bg-secondary);
-  font-size: 12px;
-}
-
-.knowledge-page-facts dt {
-  color: var(--color-text-muted);
-  font-weight: 500;
-}
-
-.knowledge-page-facts dd {
-  margin: 0;
-  color: var(--color-text-primary);
-}
-
+.knowledge-page-sources,
 .knowledge-page-revisions {
   margin-top: 16px;
   padding-top: 12px;
   border-top: 1px solid var(--color-border);
 }
 
+.knowledge-page-sources h3,
 .knowledge-page-revisions h3 {
   margin: 0 0 8px;
   font-size: 13px;
   font-weight: 600;
+}
+
+.knowledge-page-sources ul {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 12.5px;
+  overflow-wrap: anywhere;
 }
 
 .knowledge-page-revisions ul {
