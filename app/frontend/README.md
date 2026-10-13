@@ -57,6 +57,10 @@ Application data uses a canonical lifecycle transport and a request-scoped chat-
 
 The canonical UI stream has bounded replay via `Last-Event-ID`; `connection.ready` follows available replay. The dedicated response stream has its own bounded content replay. On `chat.response.resync_required`, stop appending live content and reconcile from persisted chat data after the canonical terminal lifecycle event. There is no `/api/ui/events` or `/api/ui/status` EventSource and no HTTP-body fallback.
 
+### Structured document content
+
+`src/components/common/StructuredDocumentBody.jsx` renders Markdown with nested XML-like sections from `content` using `parseStructuredContent` in `src/lib/structuredContent.js`. It owns section selection, the Markdown editor, stale read-only drafts, question options, and the inline AI-edit popover. Unavailable actions are hidden: supply `onSaveSection({ expectedBody, start, end, replacement })` for atomic hand edits, `onAskAgent(instruction, { draft, inline, clientId })` for AI actions, and `onAnswerQuestion({ question, choice, content })` for interactive questions. The caller owns persistence, agent prompts, and event-driven document refreshes. The Inbox adapter is `src/pages/StructuredInboxBody.jsx`; Tasks does not use this component yet and need not support questions.
+
 ## Project Structure
 
 ```

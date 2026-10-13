@@ -6140,30 +6140,30 @@ body,
   padding: 8px 20px 12px;
 }
 
-.inbox-structured-body {
+.structured-document-body {
   width: 100%;
   min-width: 0;
 }
 
-.inbox-structured-body > .markdown-content:first-child > :first-child {
+.structured-document-body > .markdown-content:first-child > :first-child {
   margin-top: 0;
 }
 
-.inbox-structured-body .markdown-content table {
+.structured-document-body .markdown-content table {
   width: 100%;
   margin: var(--spacing-sm) 0;
   border-collapse: collapse;
   font-size: var(--font-size-sm);
 }
 
-.inbox-structured-body .markdown-content th,
-.inbox-structured-body .markdown-content td {
+.structured-document-body .markdown-content th,
+.structured-document-body .markdown-content td {
   padding: var(--spacing-sm);
   border: 1px solid var(--color-border);
   text-align: left;
 }
 
-.inbox-structured-body .markdown-content th {
+.structured-document-body .markdown-content th {
   background: var(--color-bg-tertiary);
   font-weight: 600;
 }
