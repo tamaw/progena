@@ -84,6 +84,12 @@ test.describe('structured inbox', () => {
       }));
       expect(spacing.left).toBeLessThanOrEqual(12);
       expect(spacing.top).toBeLessThanOrEqual(4);
+      const inner = page.getByRole('button', { name: 'Select <inner> section' }).locator('..').locator('..');
+      const beforeHover = await nested.evaluate((section) => getComputedStyle(section).borderLeftColor);
+      const parentBeforeHover = await inner.evaluate((section) => getComputedStyle(section).borderLeftColor);
+      await nested.locator('pre code').hover();
+      await expect.poll(() => nested.evaluate((section) => getComputedStyle(section).borderLeftColor)).not.toBe(beforeHover);
+      await expect.poll(() => inner.evaluate((section) => getComputedStyle(section).borderLeftColor)).toBe(parentBeforeHover);
       const summary = page.getByRole('button', { name: 'Select <summary> section' }).locator('..').locator('..');
       const bottomGap = await summary.evaluate((section) => section.getBoundingClientRect().bottom
         - section.querySelector(':scope > .inbox-section__content').getBoundingClientRect().bottom);
