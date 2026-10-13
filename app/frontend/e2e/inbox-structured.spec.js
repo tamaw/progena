@@ -367,16 +367,67 @@ test.describe('structured inbox', () => {
       await expect(actions.locator('button').first().locator('svg')).toBeVisible();
       await page.getByRole('button', { name: 'Edit with AI', exact: true }).click();
 
-      // In-place AI instruction form appears.
-      const aiInput = page.getByRole('textbox', { name: 'AI edit instruction' });
-      await expect(aiInput).toBeVisible();
+      const dialog = page.getByRole('dialog', { name: 'Edit section with AI' });
+      const aiButton = page.getByRole('button', { name: 'Edit with AI', exact: true });
+      await expect(dialog).toBeVisible();
+      await expect(aiButton).toHaveAttribute('aria-expanded', 'true');
+      const position = await page.evaluate(() => ({
+        iconBottom: document.querySelector('.inbox-section__actions .is-active').getBoundingClientRect().bottom,
+        popupTop: document.querySelector('.inbox-ai-popover').getBoundingClientRect().top,
+      }));
+      expect(position.popupTop).toBeGreaterThan(position.iconBottom);
+      const aiInput = dialog.getByRole('textbox', { name: 'AI edit instruction' });
+      await expect(dialog.getByRole('button', { name: 'Send AI edit' })).toBeDisabled();
       await aiInput.fill('Make it shorter');
-      await page.getByRole('button', { name: 'Send' }).click();
+      await dialog.getByRole('button', { name: 'Send AI edit' }).click();
+      await expect(dialog).toHaveCount(0);
+      await expect(page.locator('.inbox-section__actions button[aria-label="Edit with AI"]')).toHaveAttribute('aria-expanded', 'false');
 
-      // Quick chat panel opens with the instruction.
       const panel = page.locator('.topnav-pane--quick.is-open');
       await expect(panel).toBeVisible({ timeout: 10_000 });
       await expect(panel.locator('.qchat-user')).toContainText('Make it shorter');
+    } finally {
+      removeInboxMessage(id);
+    }
+  });
+
+  test('AI popover closes on outside click or Escape and can hand off an unsent draft', async ({ page }) => {
+    const title = 'AI Popover Draft';
+    const id = uniqueInboxId('aipop');
+    seedInboxMessage({ id, title, body: '# AI Popover Draft\n\n<plan>\n<step>Review the draft.</step>\n</plan>' });
+    try {
+      await gotoInbox(page, title);
+      await page.getByRole('button', { name: 'Select <step> section' }).hover();
+      const aiButton = page.getByRole('toolbar', { name: 'step section actions' }).getByRole('button', { name: 'Edit with AI' });
+      const dialog = page.getByRole('dialog', { name: 'Edit section with AI' });
+      await aiButton.click();
+      await expect(aiButton).toHaveClass(/is-active/);
+      await expect(dialog).toBeVisible();
+      await page.getByRole('heading', { name: title }).last().click();
+      await expect(dialog).toHaveCount(0);
+      await expect(page.locator('.inbox-section__actions button[aria-label="Edit with AI"]').last()).toHaveAttribute('aria-expanded', 'false');
+      await page.getByRole('button', { name: 'Select <step> section' }).hover();
+      await aiButton.click();
+      await aiButton.click();
+      await expect(dialog).toHaveCount(0);
+      await expect(page.locator('.inbox-section__actions button[aria-label="Edit with AI"]').last()).not.toHaveClass(/is-active/);
+      await page.getByRole('button', { name: 'Select <step> section' }).hover();
+      await aiButton.click();
+      await dialog.getByRole('textbox', { name: 'AI edit instruction' }).fill('Clarify this step');
+      await page.keyboard.press('Escape');
+      await expect(dialog).toHaveCount(0);
+      await expect(page.locator('.inbox-section__actions button[aria-label="Edit with AI"]').last()).toHaveAttribute('aria-expanded', 'false');
+      await page.getByRole('button', { name: 'Select <step> section' }).hover();
+      await aiButton.click();
+      await dialog.getByRole('textbox', { name: 'AI edit instruction' }).fill('Shorten this step');
+      await dialog.getByRole('button', { name: 'Open in quick chat' }).click();
+      await expect(dialog).toHaveCount(0);
+      const panel = page.locator('.topnav-pane--quick.is-open');
+      await expect(panel).toBeVisible({ timeout: 10_000 });
+      const composer = panel.getByRole('textbox', { name: 'How should this message change?' });
+      await expect(composer).toContainText('Shorten this step');
+      await expect(composer).toContainText('<step>');
+      await expect(panel.locator('.qchat-user')).toHaveCount(0);
     } finally {
       removeInboxMessage(id);
     }
