@@ -8,12 +8,11 @@ PAGE = "---\ntype: Concept\ntitle: A\ndescription: First page\n---\nRetry budget
 class FakeStateManager:
     def __init__(self):
         self.pages = {}
-        self.instructions = ""
 
     async def get_knowledge_config(self):
         return {
             "bases": [
-                {"id": "eng", "name": "Engineering", "instructions": self.instructions},
+                {"id": "eng", "name": "Engineering"},
                 {"id": "ops", "name": "Ops"},
             ]
         }
@@ -74,12 +73,9 @@ async def test_soft_deleted_page_is_hidden_until_rewritten():
     assert (await backend.aread("/eng/concepts/a.md")).error is None
 
 
-async def test_base_index_shows_catalog_instructions_and_brief_file_is_not_a_page():
+async def test_invalid_legacy_rows_are_neither_listed_nor_readable():
     manager = FakeStateManager()
-    manager.instructions = "Keep one page per decision."
     backend = KnowledgePageBackend(manager)
-    index = (await backend.aread("/eng/index.md")).file_data["content"]
-    assert "## Instructions\n\nKeep one page per decision." in index
     assert "kebab-case" in (await backend.awrite("/eng/INSTRUCTIONS.md", "brief")).error
     # A legacy INSTRUCTIONS.md row is neither listed nor readable.
     manager.pages[("eng", "INSTRUCTIONS.md")] = {"content": "old brief"}

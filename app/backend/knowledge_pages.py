@@ -89,12 +89,7 @@ def read_page(base_id: str, path: str) -> dict[str, Any] | None:
         directory = path[: -len(INDEX_FILE)].rstrip("/")
         live = [(p, payload["content"]) for p, payload in _rows(base_id) if _live(payload)]
         title = str(base.get("name") or base_id) if not directory else directory.rsplit("/", 1)[-1]
-        content = render_directory_index(
-            title=title,
-            directory=directory,
-            live_pages=live,
-            instructions=str(base.get("instructions") or ""),
-        )
+        content = render_directory_index(title=title, directory=directory, live_pages=live)
         return _page_view(path, content, None)
     try:
         classify_page_path(path)

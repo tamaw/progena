@@ -84,12 +84,7 @@ class KnowledgePageBackend(_AsyncOnlyFileBackendMixin):
             if row_base == base_id and self._live(payload)
         ]
         title = str(base.get("name") or base_id) if not directory else directory.rsplit("/", 1)[-1]
-        return render_directory_index(
-            title=title,
-            directory=directory,
-            live_pages=live,
-            instructions=str(base.get("instructions") or ""),
-        )
+        return render_directory_index(title=title, directory=directory, live_pages=live)
 
     async def aread(self, file_path: str, offset: int = 0, limit: int = 2000) -> ReadResult:
         base_id, path = self._split(file_path)

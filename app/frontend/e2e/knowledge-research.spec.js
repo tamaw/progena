@@ -7,8 +7,8 @@ import { attachJsonEvidence } from './helpers/routineFixture.mjs';
 //   1. Progenitor registers the Jina MCP server.
 //   2. Progenitor creates a knowledge base and a researcher object agent with
 //      write access to it, then the researcher fills it from web research.
-//   3. The pages are inspected and modified in the Knowledge UI (instructions,
-//      rename, delete).
+//   3. The pages are inspected and modified in the Knowledge UI (rename,
+//      delete).
 //   4. A second, read-only agent answers questions from the modified pages.
 // Set KEEP_KNOWLEDGE_E2E=1 to keep the created base/agents for manual viewing.
 // Pick the research topic with KNOWLEDGE_E2E_TOPIC=mcp|raft (default mcp).
@@ -44,7 +44,6 @@ const BASE_NAME = `${TOPIC.name} ${RUN}`;
 const BASE_ID = `${TOPIC.slug}-${RUN}`;
 const RESEARCHER = `researcher-${RUN}`;
 const ANSWERER = `kb-answerer-${RUN}`;
-const INSTRUCTIONS_MARKER = `Edited in the UI by e2e run ${RUN}.`;
 
 test.describe.configure({ mode: 'serial' });
 test.setTimeout(15 * 60_000);
@@ -65,11 +64,6 @@ function pageRows() {
 const livePages = () => pageRows().filter((row) => !row.deleted);
 const conceptPaths = () => livePages().map((row) => row.path)
   .filter((path) => path !== 'log.md' && !path.endsWith('/index.md'));
-
-function baseInstructions() {
-  return sql(`SELECT base->>'instructions' FROM store, jsonb_array_elements(value->'payload'->'bases') base
-    WHERE prefix = 'progenitor.state' AND key = 'knowledge' AND base->>'id' = ${quote(BASE_ID)}`);
-}
 
 function agentManifest(name) {
   return sql(`SELECT value->'payload'->>'content' FROM store
@@ -132,13 +126,11 @@ test('research agent fills a knowledge base from the web and a second agent answ
 
   await test.step('Progenitor creates the knowledge base and a researcher agent', async () => {
     await chat(page, `Create a knowledge base named "${BASE_NAME}" (its id will be ${BASE_ID}) with the description `
-      + `"Research notes on ${TOPIC.subject}", and set its instructions to ask for one concept page `
-      + `per topic with sources. Then create a user object agent named ${RESEARCHER} (description "Researches topics `
+      + `"Research notes on ${TOPIC.subject}". Then create a user object agent named ${RESEARCHER} (description "Researches topics `
       + 'on the web and writes knowledge pages") that can use the Jina web search and read tools and has knowledge '
       + `write access to ${BASE_ID}. Do not run it yet.`);
     await poll(() => sql(`SELECT count(*) FROM store WHERE key = 'knowledge'
       AND value->'payload'->'bases' @> ${quote(JSON.stringify([{ id: BASE_ID }]))}::jsonb`) === '1', 'base created');
-    await poll(() => baseInstructions().length > 0, 'base instructions set in the catalog');
     await poll(() => new RegExp(`base:\\s*${BASE_ID}`).test(agentManifest(RESEARCHER)), 'researcher manifest grants the base');
     expect(agentManifest(RESEARCHER)).toMatch(/access:\s*write/);
     evidence.researcherManifest = agentManifest(RESEARCHER);
@@ -186,18 +178,6 @@ test('research agent fills a knowledge base from the web and a second agent answ
     await expect(reader.locator('.knowledge-page-facts')).toContainText('Sources');
     await expect(reader.locator('.markdown-content')).not.toContainText('generated:');
     await expect(reader.getByRole('heading', { name: 'Revisions' })).toBeVisible();
-
-    // Edit the brief.
-    await page.getByRole('button', { name: 'Instructions', exact: true }).click();
-    const brief = page.locator('.knowledge-instructions-tab textarea');
-    await expect(brief).not.toHaveValue('');
-    await brief.fill(`${await brief.inputValue()}\n\n${INSTRUCTIONS_MARKER}\n`);
-    await page.getByRole('button', { name: 'Save', exact: true }).click();
-    await poll(() => baseInstructions().includes(INSTRUCTIONS_MARKER), 'brief saved to the catalog', 30_000);
-    // Agents see the brief at the top of the base's generated index.
-    await page.getByRole('button', { name: 'Pages', exact: true }).click();
-    await page.goto(`${page.url().split('?')[0]}?page=index.md`);
-    await expect(page.locator('.knowledge-pages-tab article .markdown-content')).toContainText(INSTRUCTIONS_MARKER);
 
     // Rename the key page into a folder and delete the other page.
     renamedPath = `reviewed/${first.split('/').at(-1)}`;

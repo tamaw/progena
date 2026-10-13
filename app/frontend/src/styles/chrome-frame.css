@@ -9981,28 +9981,6 @@ body,
   }
 }
 
-.knowledge-instructions-tab {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 10px;
-  padding: 12px 0;
-}
-
-.knowledge-instructions-tab textarea {
-  width: 100%;
-  min-height: 320px;
-  padding: 10px 12px;
-  border: 1px solid var(--color-border);
-  border-radius: 8px;
-  background: var(--color-bg-primary, transparent);
-  color: var(--color-text-primary);
-  font-family: var(--font-mono, ui-monospace, monospace);
-  font-size: 13px;
-  line-height: 1.5;
-  resize: vertical;
-}
-
 .knowledge-pages-tab aside .knowledge-tree-dir > strong {
   display: block;
   padding: 6px 8px 2px;

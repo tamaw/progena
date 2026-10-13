@@ -49,7 +49,6 @@ def test_render_index_groups_types_and_directories():
         ],
         subdirs=["notes"],
         is_base_root=True,
-        instructions="Record decisions with rationale.\n",
     )
     assert output == (
         "---\n"
@@ -57,10 +56,6 @@ def test_render_index_groups_types_and_directories():
         "---\n"
         "\n"
         "# Engineering\n"
-        "\n"
-        "## Instructions\n"
-        "\n"
-        "Record decisions with rationale.\n"
         "\n"
         "## Concept\n"
         "- [A](a.md)\n"
