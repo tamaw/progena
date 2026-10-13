@@ -197,8 +197,7 @@ export default function KnowledgePagesTab({ baseId, baseName, knowledgeUrl }) {
   const displayContent = viewingRevisionId
     ? (revisionContent === null ? 'Loading…' : stripYamlFrontmatter(revisionContent))
     : (page?.body ?? page?.content ?? '');
-  // Pages that already carry their own "Sources" heading don't get a second list.
-  const sources = /^#{1,6}\s+sources\s*$/im.test(displayContent) ? [] : frontMatterSources(page?.front_matter);
+  const sources = frontMatterSources(page?.front_matter);
 
   return (
     <div className="knowledge-pages-tab">
