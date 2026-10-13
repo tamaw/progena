@@ -64,6 +64,48 @@ heading or rendered Markdown to select it. The action bar keeps AI edit and
 explain first; hand Edit toggles a large Markdown editor below the bar. Keep
 tags balanced; literal examples belong in Markdown code spans or fenced blocks.
 
+Most of a message can stay ordinary Markdown. Add tags only around content
+that should be selected and edited independently. For example:
+
+```md
+# Release brief
+
+The candidate is ready for review. See the [test report](https://example.com/report).
+
+- API checks passed
+- Browser checks are in progress
+
+<decision>
+Ship after browser checks finish. **Do not** bypass the release checklist.
+</decision>
+
+## Next steps
+
+1. Review the report.
+2. Confirm the release window.
+```
+
+A question can also appear among normal Markdown paragraphs without a
+surrounding `<plan>` tag:
+
+```md
+# Migration note
+
+The current data remains available while we switch the reader.
+
+<questions id="migration-window">
+When should we switch traffic?
+<options>
+<option>During the next maintenance window</option>
+<option>After a week of shadow reads</option>
+</options>
+</questions>
+
+## Rollback
+
+Restore the previous reader if validation fails.
+```
+
 For a choice, put one question and its options in each `<questions>` block:
 
 ```xml

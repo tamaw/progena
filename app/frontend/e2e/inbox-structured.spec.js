@@ -99,6 +99,47 @@ test.describe('structured inbox', () => {
     }
   });
 
+  test('renders mostly Markdown with a single editable section', async ({ page }) => {
+    const title = 'Mixed Markdown';
+    const id = uniqueInboxId('mixed');
+    const body = [
+      '# Mixed Markdown',
+      '',
+      'A **plain Markdown** introduction.',
+      '',
+      '- First check',
+      '- Second check',
+      '',
+      '<decision>',
+      'Release after **review**.',
+      '</decision>',
+      '',
+      '## Follow-up',
+      '',
+      '| Item | Status |',
+      '| --- | --- |',
+      '| Review | Pending |',
+      '',
+      '`<plan>literal example</plan>` remains code.',
+    ].join('\n');
+    seedInboxMessage({ id, title, body });
+    try {
+      await gotoInbox(page, title);
+      const content = page.locator('.inbox-detail__body');
+      await expect(content.locator('h1')).toHaveText('Mixed Markdown');
+      await expect(content.locator('strong').first()).toHaveText('plain Markdown');
+      await expect(content.locator('li')).toHaveCount(2);
+      await expect(content.getByRole('button', { name: 'Select <decision> section' })).toHaveAttribute('aria-pressed', 'true');
+      await expect(content.locator('.inbox-section__content strong')).toHaveText('review');
+      await expect(content.locator('h2')).toHaveText('Follow-up');
+      await expect(content.locator('table td')).toContainText(['Review', 'Pending']);
+      await expect(content.locator('code')).toContainText('<plan>literal example</plan>');
+      await expect(content.locator('.inbox-section')).toHaveCount(1);
+    } finally {
+      removeInboxMessage(id);
+    }
+  });
+
   test('section text stays in place as the action bar moves', async ({ page }) => {
     const title = 'Stable Selection';
     const id = uniqueInboxId('selection');
