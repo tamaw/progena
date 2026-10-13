@@ -1,32 +1,33 @@
-// Pure helpers for the Knowledge tab: Postgres (pgvector) knowledge bases that
-// can be plugged into Progenitor agents. Kept free of React so the
-// filter/search/sort/group logic is unit-testable in isolation, mirroring
-// tasksPageModel.js.
+// Pure helpers for the Knowledge tab: agent-maintained markdown knowledge bases.
+// Kept free of React so the filter/search/sort/group logic is unit-testable
+// in isolation, mirroring tasksPageModel.js.
 
 export const KB_STATUS_META = {
-  connected: { label: 'Connected', tone: 'ok' },
-  syncing: { label: 'Syncing', tone: 'warning' },
-  error: { label: 'Error', tone: 'error' },
-  idle: { label: 'Idle', tone: 'muted' },
+  indexed: { label: 'Indexed', tone: 'ok' },
+  indexing: { label: 'Indexing', tone: 'warning' },
+  failed: { label: 'Failed', tone: 'error' },
 };
 
 // Left-pane filter chips. Mirrors the Agents page (All / Running / ...): one
 // "All" plus one chip per actionable status.
-export const KB_FILTERS = ['All', 'Connected', 'Syncing', 'Error'];
+export const KB_FILTERS = ['All', 'Indexed', 'Indexing', 'Failed'];
 
 // Group/sort dimensions for the left pane.
-export const KB_SORTS = ['Status', 'Type', 'Name'];
+export const KB_SORTS = ['Status', 'Name'];
 
 // Status groups, in render order. Empty groups are dropped by groupBases().
 const KB_GROUP_ORDER = [
-  { status: 'connected', label: 'Connected' },
-  { status: 'syncing', label: 'Syncing' },
-  { status: 'error', label: 'Needs attention' },
-  { status: 'idle', label: 'Idle' },
+  { status: 'indexed', label: 'Indexed' },
+  { status: 'indexing', label: 'Indexing' },
+  { status: 'failed', label: 'Needs attention' },
 ];
 
-export function statusMeta(status) {
-  return KB_STATUS_META[status] || KB_STATUS_META.idle;
+export function statusMeta(status, { indexedPages, indexPages } = {}) {
+  const meta = KB_STATUS_META[status] || KB_STATUS_META.indexing;
+  if (status === 'indexing' && Number.isFinite(indexedPages) && Number.isFinite(indexPages) && indexPages > 0) {
+    return { ...meta, label: `Indexing ${indexedPages}/${indexPages}` };
+  }
+  return meta;
 }
 
 export function matchesFilter(base, filter) {
@@ -68,24 +69,12 @@ export function sortBases(bases) {
   );
 }
 
-function typeOf(base) {
-  return base.storeType || 'pgvector';
-}
-
 // Filter + search, then bucket into ordered, non-empty groups by the chosen
-// dimension: Status (default), Type (e.g. pgvector), or Name (single list).
+// dimension: Status (default) or Name (single list).
 export function groupBases(bases, filter, query, sortMode) {
   const visible = filterBases(bases, filter, query);
   if (!visible.length) {
     return [];
-  }
-  if (sortMode === 'Type') {
-    const types = [...new Set(visible.map(typeOf))].sort((a, b) => a.localeCompare(b));
-    return types.map((type) => ({
-      key: `type:${type}`,
-      label: type,
-      bases: sortBases(visible.filter((base) => typeOf(base) === type)),
-    }));
   }
   if (sortMode === 'Name') {
     return [{ key: 'all', label: 'All', bases: sortBases(visible) }];
@@ -112,17 +101,20 @@ export function formatCount(value) {
 // renders. `path` and `page_count` are derived by the backend snapshot; saves
 // PUT the raw rows, so fields not mapped here are preserved.
 export function fromApiBase(apiBase) {
-  const lastSynced = apiBase.updated_at || apiBase.created_at || null;
   return {
     id: apiBase.id,
     name: apiBase.name || apiBase.id,
-    status: apiBase.status || 'connected',
+    status: apiBase.index_status || 'indexing',
     owner: apiBase.owner || 'user',
     description: apiBase.description || 'Knowledge base.',
-    lastSynced,
     pageCount: Number(apiBase.page_count) || 0,
     path: apiBase.path || `/knowledge/${apiBase.id}/`,
     tags: Array.isArray(apiBase.tags) ? apiBase.tags : [],
+    indexPages: Number(apiBase.index_pages) || 0,
+    indexedPages: Number(apiBase.indexed_pages) || 0,
+    indexError: apiBase.index_error || '',
+    indexedAt: apiBase.indexed_at || null,
+    lastSynced: apiBase.indexed_at || apiBase.updated_at || apiBase.created_at || null,
   };
 }
 

@@ -1008,6 +1008,19 @@ async def lifespan(app: FastAPI):
         timeout=5.0,
     )
 
+    # Knowledge search indexer (Postgres only; idle if another process holds its lock).
+    from .knowledge_indexer import get_knowledge_indexer
+
+    indexer = get_knowledge_indexer()
+    await indexer.start()
+    if indexer.running:
+        graceful_shutdown.register_callback(
+            "stop_knowledge_indexer",
+            indexer.stop,
+            priority=35,
+            timeout=10.0,
+        )
+
     yield
 
     # Graceful Shutdown (OPS-002) - now using enhanced manager

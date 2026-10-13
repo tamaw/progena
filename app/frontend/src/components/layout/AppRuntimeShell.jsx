@@ -25,6 +25,8 @@ import {
   selectMarketplaces,
   fetchMarketplaces,
   saveMarketplaces,
+  searchKnowledge,
+  selectKnowledgeSearchResults,
 } from '../../store/uiDataSlice';
 import { selectRealtime, selectUiEventQueue } from '../../store/realtimeSlice';
 import { consumeUiEventQueue } from '../../store/uiData/eventQueue';
@@ -1772,8 +1774,26 @@ function widgetSearchTarget(widget, title) {
 }
 
 function SearchPanel({ query, widgets, onClose, isPinned, onTogglePin, isOpen }) {
+  const dispatch = useDispatch();
+  const { getApiUrl } = useConfig();
   const [search, setSearch] = useState(query);
+  const [activeQuery, setActiveQuery] = useState('');
   const normalizedSearch = normalizeSearchText(search);
+  const knowledgeResults = useSelector((state) => selectKnowledgeSearchResults(state, activeQuery));
+
+  useEffect(() => {
+    if (normalizedSearch.length < 3) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- clearing search results when query is too short
+      setActiveQuery('');
+      return;
+    }
+    const timer = setTimeout(() => {
+      dispatch(searchKnowledge({ knowledgeUrl: getApiUrl('/api/ui/knowledge'), query: normalizedSearch }));
+      setActiveQuery(normalizedSearch);
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [normalizedSearch, dispatch, getApiUrl]);
+
   const routeResults = navItems
     .filter((item) => normalizeSearchText(`${item.label} ${item.to}`).includes(normalizedSearch))
     .map((item) => ({
@@ -1799,6 +1819,8 @@ function SearchPanel({ query, widgets, onClose, isPinned, onTogglePin, isOpen })
       };
     });
   const results = normalizedSearch ? routeResults.concat(widgetResults) : [];
+  const knowledgeGroup = knowledgeResults && Array.isArray(knowledgeResults.results) ? knowledgeResults.results : [];
+  const isSearching = normalizedSearch.length >= 3 && (activeQuery !== normalizedSearch || !knowledgeResults);
 
   return (
     <TopNavPane title="Search" className="topnav-pane--search" onClose={onClose} isPinned={isPinned} onTogglePin={onTogglePin} isOpen={isOpen}>
@@ -1814,7 +1836,10 @@ function SearchPanel({ query, widgets, onClose, isPinned, onTogglePin, isOpen })
         </div>
         {normalizedSearch ? (
           <div className="topnav-list chrome-search-results">
-            {results.length === 0 ? <div className="chrome-empty">No matches.</div> : null}
+            {results.length === 0 && knowledgeGroup.length === 0 && !isSearching && !knowledgeResults?.error ? (
+              <div className="chrome-empty">No matches.</div>
+            ) : null}
+            {isSearching ? <div className="chrome-search-loading muted">Searching…</div> : null}
             {results.map((result) => (
               <NavLink key={result.id} to={result.to} className="topnav-list-item chrome-search-result" onClick={onClose}>
                 <span className="topnav-list-item__dot" />
@@ -1824,6 +1849,32 @@ function SearchPanel({ query, widgets, onClose, isPinned, onTogglePin, isOpen })
                 </span>
               </NavLink>
             ))}
+            {knowledgeGroup.length > 0 ? (
+              <div className="chrome-search-group">
+                <div className="chrome-search-group__label">Knowledge</div>
+                {knowledgeGroup.map((result) => (
+                  <NavLink
+                    key={`knowledge:${result.base_id}:${result.path}`}
+                    to={`${buildEntityPath('/knowledge', result.base_id, result.base_name)}?page=${encodeURIComponent(result.path)}`}
+                    className="topnav-list-item chrome-search-result"
+                    onClick={onClose}
+                  >
+                    <span className="topnav-list-item__dot" />
+                    <span>
+                      <strong>{result.title || result.path}</strong>
+                      <small>
+                        {result.heading ? `${result.heading} — ` : ''}
+                        {result.base_name}
+                        {result.snippet ? ` — ${result.snippet}` : ''}
+                      </small>
+                    </span>
+                  </NavLink>
+                ))}
+              </div>
+            ) : null}
+            {knowledgeResults && knowledgeResults.error ? (
+              <div className="chrome-search-error muted">{knowledgeResults.error}</div>
+            ) : null}
           </div>
         ) : null}
       </div>

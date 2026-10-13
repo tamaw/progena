@@ -8,6 +8,7 @@ PAGE = "---\ntype: Concept\ntitle: A\ndescription: First page\n---\nRetry budget
 class FakeStateManager:
     def __init__(self):
         self.pages = {}
+        self.index = {"embedding": None, "bases": {}}
 
     async def get_knowledge_config(self):
         return {
@@ -25,6 +26,9 @@ class FakeStateManager:
 
     async def list_knowledge_pages(self):
         return [(base, path, payload) for (base, path), payload in self.pages.items()]
+
+    async def get_knowledge_index(self):
+        return self.index
 
 
 async def test_writes_validate_base_path_and_front_matter():
@@ -50,6 +54,24 @@ async def test_generated_index_lists_pages_and_cannot_be_written():
     nested = (await backend.aread("/eng/concepts/index.md")).file_data["content"]
     assert "- [A](a.md) — First page" in nested
     assert "[Engineering](eng/index.md)" in (await backend.aread("/index.md")).file_data["content"]
+
+
+async def test_indexer_status_is_a_read_only_root_file_and_shown_in_indexes():
+    manager = FakeStateManager()
+    manager.index = {
+        "embedding": {"profile": "embeddings", "deployment": "d", "dimensions": 1536},
+        "bases": {"eng": {"status": "indexing", "pages": 7, "indexed_pages": 3}},
+    }
+    backend = KnowledgePageBackend(manager)
+    assert "/indexer.json" in [e["path"] for e in (await backend.als("/")).entries]
+    status = (await backend.aread("/indexer.json")).file_data["content"]
+    assert '"indexed_pages": 3' in status
+    assert "/config/indexer.json" in (await backend.awrite("/indexer.json", "{}")).error
+    root = (await backend.aread("/index.md")).file_data["content"]
+    assert "[Engineering](eng/index.md) · search: indexing 3/7" in root
+    assert "[Ops](ops/index.md) · search: not indexed yet" in root
+    base = (await backend.aread("/eng/index.md")).file_data["content"]
+    assert "# Engineering\n\nSearch index: indexing 3/7\n" in base
 
 
 async def test_log_is_append_only_and_agents_cannot_delete():

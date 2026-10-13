@@ -1,6 +1,6 @@
 ---
 name: managing-knowledge
-description: Create, rename, describe, tag, or remove knowledge bases by editing /config/knowledge.json.
+description: Create, rename, describe, tag, or remove knowledge bases by editing /config/knowledge.json, and configure knowledge search indexing in /config/indexer.json.
 allowed-tools: read_file edit_file write_file structured_output
 ---
 
@@ -19,4 +19,16 @@ Page work belongs to the `curating-knowledge` skill. Use `/knowledge/<id>/` for 
 3. Make the smallest valid JSON edit.
 4. Use the curating-knowledge skill to ingest, query, or lint pages.
 
-The persisted catalog keeps the base's name, description, owner, scope, status, tags, and legacy vector configuration. Derived `path` and `page_count` fields shown by the UI are read-only snapshot fields.
+The persisted catalog keeps each base's name, description, owner, scope, and tags. Derived `path`, `page_count`, and search-index fields shown by the UI are read-only snapshot fields.
+
+## Search indexing
+
+Pages are embedded for the `search` tool by the backend indexer. Its settings are `/config/indexer.json`:
+
+```json
+{"profile": "embeddings", "dimensions": 1536}
+```
+
+`profile` must name an entry in `/config/profile.json` whose `deployment` is an Azure OpenAI embeddings model (e.g. `{"provider": "azure_openai", "deployment": "text-embedding-3-small"}`). `dimensions` is 1–2000. Changing either rebuilds the whole index. With no profile set, every base reports `failed` and `search` explains what to set.
+
+Progress is read-only in `/knowledge/indexer.json` (per base: `indexing` / `indexed` / `failed`, page counts, pending pages, error) and summarized at the top of each base's `index.md`.

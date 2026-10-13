@@ -225,12 +225,14 @@ export {
   fetchKnowledgePageRevisions,
   fetchKnowledgePageRevision,
   restoreKnowledgePageRevision,
+  searchKnowledge,
   selectKnowledgeBases,
   selectKnowledgeState,
   selectKnowledgePages,
   selectKnowledgePage,
   selectKnowledgeRevisions,
   selectKnowledgeRevisionContent,
+  selectKnowledgeSearchResults,
 } from './uiData/knowledge';
 
 export {

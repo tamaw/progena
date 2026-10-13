@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from typing import Any, Literal
 
 import yaml
 
 INDEX_FILE = "index.md"
 LOG_FILE = "log.md"
+INDEXER_FILE = "indexer.json"
 KNOWLEDGE_MOUNT = "/knowledge/"
 BASE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
 SEGMENT_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,79}$")
@@ -103,11 +105,14 @@ def render_index(
     pages: list[tuple[str, dict[str, Any]]],
     subdirs: list[str],
     is_base_root: bool,
+    search_status: str = "",
 ) -> str:
     lines: list[str] = []
     if is_base_root:
         lines.extend(["---", 'okf_version: "0.2"', "---", ""])
     lines.append(f"# {title}")
+    if is_base_root and search_status:
+        lines.extend(["", f"Search index: {search_status}"])
     grouped: dict[str, list[tuple[str, dict[str, Any]]]] = {}
     for filename, front_matter in pages:
         grouped.setdefault(str(front_matter.get("type", "Concept")), []).append(
@@ -130,16 +135,25 @@ def render_index(
     return "\n".join(lines) + "\n"
 
 
-def render_root_index(bases: list[dict[str, Any]]) -> str:
+def render_root_index(
+    bases: list[dict[str, Any]], search_statuses: Mapping[str, str] | None = None
+) -> str:
+    statuses = search_statuses or {}
     lines = ["# Knowledge", ""]
     for base in sorted(bases, key=lambda item: str(item.get("name", "")).lower()):
         description = str(base.get("description") or "").strip()
         suffix = f" — {description}" if description else ""
+        status = statuses.get(str(base.get("id")))
+        if status:
+            suffix += f" · search: {status}"
         lines.append(f"- [{base.get('name', base.get('id'))}]({base.get('id')}/index.md){suffix}")
+    lines.extend(["", f"Search indexer status: [{INDEXER_FILE}]({INDEXER_FILE})"])
     return "\n".join(lines) + "\n"
 
 
-def render_directory_index(*, title: str, directory: str, live_pages: list[tuple[str, str]]) -> str:
+def render_directory_index(
+    *, title: str, directory: str, live_pages: list[tuple[str, str]], search_status: str = ""
+) -> str:
     """Render ``directory``'s index from ``(path, content)`` of a base's live pages."""
     dir_prefix = f"{directory}/" if directory else ""
     pages: list[tuple[str, dict[str, Any]]] = []
@@ -165,4 +179,5 @@ def render_directory_index(*, title: str, directory: str, live_pages: list[tuple
         pages=pages,
         subdirs=sorted(subdirs),
         is_base_root=not directory,
+        search_status=search_status,
     )

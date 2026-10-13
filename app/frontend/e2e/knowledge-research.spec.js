@@ -26,6 +26,7 @@ const TOPICS = {
     scope: 'what it is, its architecture of hosts/clients/servers, and its transports',
     keyPage: /transport/,
     keyFact: /stdio/i,
+    searchTerm: 'stdio',
     question: 'what is the Model Context Protocol and which transports does it define?',
   },
   raft: {
@@ -35,6 +36,7 @@ const TOPICS = {
     scope: 'what it is, how leader election works, and how log replication works',
     keyPage: /elect/,
     keyFact: /majority/i,
+    searchTerm: 'majority',
     question: 'what is Raft and how does it elect a leader?',
   },
 };
@@ -156,6 +158,7 @@ test('research agent fills a knowledge base from the web and a second agent answ
   let deletedPath;
   await test.step('the pages are browsable and editable in the Knowledge UI', async () => {
     await openKnowledgeBase(page);
+    await poll(() => page.locator('.task-card.is-selected .kb-card__dot--ok').isVisible(), 'base shows indexed status', 120_000);
     await expect(page.locator('.task-card.is-selected .kb-card__info')).toContainText(`${conceptPaths().length} pages`);
 
     // The base index loads by default; its page links open in place, without a reload.
@@ -206,6 +209,17 @@ test('research agent fills a knowledge base from the web and a second agent answ
     evidence.deleted = deletedPath;
   });
 
+  await test.step('global search finds knowledge pages', async () => {
+    await page.getByRole('button', { name: 'Search', exact: true }).click();
+    const input = page.locator('.chrome-search-panel__input input');
+    await input.fill(TOPIC.searchTerm);
+    const firstResult = page.locator('.chrome-search-group .chrome-search-result').first();
+    await expect(firstResult).toBeVisible({ timeout: 30_000 });
+    await firstResult.click();
+    await expect(page.locator('.knowledge-pages-tab article')).toBeVisible();
+    await expect(page).toHaveURL(/page=/);
+  });
+
   await test.step('a read-only agent answers from the modified knowledge base', async () => {
     await chat(page, `Create a user object agent named ${ANSWERER} (description "Answers questions from the `
       + `${TOPIC.name} knowledge base") with read-only knowledge access to ${BASE_ID} and no other tools. Do not run it yet.`);
@@ -213,6 +227,7 @@ test('research agent fills a knowledge base from the web and a second agent answ
     expect(agentManifest(ANSWERER)).not.toMatch(/access:\s*write/);
 
     const answer = await chat(page, `Use the task tool with subagent_type "${ANSWERER}" (a user object agent) to ask: "Using only the knowledge base, ${TOPIC.question} `
+      + 'First use the search tool, then read the relevant pages. '
       + 'Cite the knowledge page path for every claim, and also '
       + 'try to add a page called notes/answerer.md and report whether that worked." Relay its full answer verbatim.');
     evidence.answer = answer;
