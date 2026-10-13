@@ -112,10 +112,15 @@ function PageBody({ content, path, onNavigate }) {
   const handleClick = (event) => {
     const anchor = event.target.closest?.('a[href]');
     if (!anchor || event.metaKey || event.ctrlKey || event.shiftKey) return;
-    const target = resolvePageLink(path, anchor.getAttribute('href'));
+    const href = anchor.getAttribute('href');
+    const target = resolvePageLink(path, href);
     if (target) {
       event.preventDefault();
       onNavigate(target);
+    } else if (/^https?:\/\//i.test(href)) {
+      // Web links leave the app in a new tab, like the Sources list.
+      event.preventDefault();
+      window.open(href, '_blank', 'noopener,noreferrer');
     }
   };
   return <div ref={containerRef} className="markdown-content" onClick={handleClick} dangerouslySetInnerHTML={{ __html: html }} />;
