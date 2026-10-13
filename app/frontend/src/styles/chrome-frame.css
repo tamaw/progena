@@ -6369,6 +6369,19 @@ body,
   font: inherit;
 }
 
+.inbox-section__editor[aria-label="Out-of-date manual draft"] {
+  margin-bottom: 12px;
+  padding: 10px;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: var(--color-bg-secondary);
+}
+
+.inbox-section__editor textarea[readonly] {
+  min-height: 96px;
+  max-height: 180px;
+}
+
 .inbox-section__preview {
   margin: 10px 0;
   padding: 10px;
