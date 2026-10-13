@@ -60,10 +60,12 @@ When a message needs individually editable parts, wrap Markdown in matching
 XML-like tags such as `<plan>…</plan>`. Tags have no special visual styles:
 each nested section receives the same compact, non-interactive left bracket.
 No section starts selected. Hover a section to reveal its icon actions; each
-icon expands to its full label on hover or keyboard focus. Click the heading
-or rendered Markdown to select a section. Hand Edit toggles a large Markdown
-editor below the action bar. Keep tags balanced; literal examples belong in
-Markdown code spans or fenced blocks.
+icon expands to its full label on hover or keyboard focus. AI Edit opens a
+small prompt below its icon: Send submits through quick chat; Pop out moves
+the unsent draft into quick chat. Clicking away or pressing Escape dismisses
+it. Click a heading or rendered Markdown to select a section. Hand Edit
+toggles a large Markdown editor below the action bar. Keep tags balanced;
+literal examples belong in Markdown code spans or fenced blocks.
 
 Most of a message can stay ordinary Markdown. Add tags only around content
 that should be selected and edited independently. For example:

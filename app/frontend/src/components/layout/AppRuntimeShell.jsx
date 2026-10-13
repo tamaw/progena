@@ -830,6 +830,8 @@ function QuickChatPanel({
   isOpen,
   pendingSubmission,
   onSubmissionConsumed,
+  pendingComposerDraft,
+  onComposerDraftConsumed,
 }) {
   const { sendMessageStream, cancelStream, observeResponseStream } = useChatApi();
   const { config, getApiUrl } = useConfig();
@@ -1290,6 +1292,11 @@ function QuickChatPanel({
     setComposerSeed((current) => ({ key: current.key + 1, message: '' }));
     void submit(pendingSubmission.message);
   }, [isSending, onSubmissionConsumed, pendingSubmission, submit]);
+  useEffect(() => {
+    if (!pendingComposerDraft?.message) return;
+    onComposerDraftConsumed?.(pendingComposerDraft.id);
+    setComposerSeed((current) => ({ key: current.key + 1, message: pendingComposerDraft.message }));
+  }, [pendingComposerDraft, onComposerDraftConsumed]);
 
   const openInChat = useCallback(() => {
     if (history.length > 0) {
@@ -2141,7 +2148,7 @@ function AccountPanel({ onClose, isPinned, onTogglePin, isOpen }) {
 // Transition durations must match the CSS transition on .topnav-pane.
 const PANEL_EXIT_MS = 200;
 const PANEL_ENTER_DELAY_MS = 16; // one rAF tick
-function PanelHost({ activePanel, settingsOpen, quickChatConfig, quickChatSubmission, onQuickChatSubmissionConsumed, searchQuery, setActivePanel, setSettingsOpen, isPinned, onTogglePin, onResetLiveUiState }) {
+function PanelHost({ activePanel, settingsOpen, quickChatConfig, quickChatSubmission, quickChatDraft, onQuickChatSubmissionConsumed, onQuickChatDraftConsumed, searchQuery, setActivePanel, setSettingsOpen, isPinned, onTogglePin, onResetLiveUiState }) {
   const widgets = useSelector(selectUiWidgets);
   const closePanel = useCallback(() => setActivePanel(null), [setActivePanel]);
 
@@ -2238,6 +2245,8 @@ function PanelHost({ activePanel, settingsOpen, quickChatConfig, quickChatSubmis
           panelConfig={quickChatConfig}
           pendingSubmission={quickChatSubmission}
           onSubmissionConsumed={onQuickChatSubmissionConsumed}
+          pendingComposerDraft={quickChatDraft}
+          onComposerDraftConsumed={onQuickChatDraftConsumed}
           {...shared}
         />
         {settingsOverlay}
@@ -2304,6 +2313,7 @@ function AppRuntimeShell() {
   const [quickChatConfig, setQuickChatConfig] = useState(defaultQuickChatConfig);
   const searchQuery = '';
   const [quickChatSubmission, setQuickChatSubmission] = useState(null);
+  const [quickChatDraft, setQuickChatDraft] = useState(null);
   const quickChatSubmissionIdRef = useRef(0);
   const quickChatInputRef = useRef(null);
   const [isNavCollapsed, setIsNavCollapsed] = useState(
@@ -2488,6 +2498,11 @@ function AppRuntimeShell() {
         quickChatSubmissionIdRef.current += 1;
         setQuickChatSubmission({ id: quickChatSubmissionIdRef.current, message: prompt });
       }
+      const draft = normalizeAiPrompt(event.detail?.draft);
+      if (draft) {
+        quickChatSubmissionIdRef.current += 1;
+        setQuickChatDraft({ id: quickChatSubmissionIdRef.current, message: draft });
+      }
       setQuickChatConfig(nextConfig);
       setActivePanel('quickChat');
     };
@@ -2512,6 +2527,9 @@ function AppRuntimeShell() {
   }, []);
   const handleQuickChatSubmissionConsumed = useCallback(() => {
     setQuickChatSubmission(null);
+  }, []);
+  const handleQuickChatDraftConsumed = useCallback(() => {
+    setQuickChatDraft(null);
   }, []);
   const handleOpenPanel = useCallback((panel) => {
     if (panel === 'insights') {
@@ -2557,8 +2575,10 @@ function AppRuntimeShell() {
         settingsOpen={settingsOpen}
         quickChatConfig={quickChatConfig}
         quickChatSubmission={quickChatSubmission}
+        quickChatDraft={quickChatDraft}
         setSettingsOpen={setSettingsOpen}
         onQuickChatSubmissionConsumed={handleQuickChatSubmissionConsumed}
+        onQuickChatDraftConsumed={handleQuickChatDraftConsumed}
         searchQuery={searchQuery}
         setActivePanel={setActivePanel}
         isPinned={isPinned}
