@@ -90,10 +90,9 @@ async function chat(page, prompt) {
   return reply.innerText();
 }
 
-async function openKnowledgeBase(page, tab) {
+async function openKnowledgeBase(page) {
   await page.goto('/knowledge');
   await page.getByRole('button', { name: new RegExp(BASE_NAME) }).click();
-  await page.getByRole('button', { name: tab, exact: true }).click();
 }
 
 test.afterAll(() => {
@@ -157,10 +156,9 @@ test('research agent fills a knowledge base from the web and a second agent answ
   let renamedPath;
   let deletedPath;
   await test.step('the pages are browsable and editable in the Knowledge UI', async () => {
-    await openKnowledgeBase(page, 'Overview');
-    await expect(page.locator('.metric-card, .agents-metrics').first()).toContainText(String(conceptPaths().length));
+    await openKnowledgeBase(page);
+    await expect(page.getByText(`${conceptPaths().length} pages`, { exact: true })).toBeVisible();
 
-    await page.getByRole('button', { name: 'Pages', exact: true }).click();
     const tree = page.locator('.knowledge-pages-tab aside');
     await expect(tree.getByRole('button', { name: 'log.md' })).toBeVisible();
     // Rename the page holding the key fact (the answerer must find it in its new
@@ -181,7 +179,6 @@ test('research agent fills a knowledge base from the web and a second agent answ
 
     // Rename the key page into a folder and delete the other page.
     renamedPath = `reviewed/${first.split('/').at(-1)}`;
-    await page.getByRole('button', { name: 'Pages', exact: true }).click();
     await page.goto(`${page.url().split('?')[0]}?page=${encodeURIComponent(first)}`);
     page.once('dialog', (dialog) => dialog.accept(renamedPath));
     await reader.getByRole('button', { name: 'Rename' }).click();
