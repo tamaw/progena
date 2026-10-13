@@ -46,3 +46,19 @@ export function buildPageTree(pages = []) {
   };
   return sort(root);
 }
+
+export const dirOf = (path) => (path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : '');
+
+// Resolve a relative markdown link against the page it appears on; null when it
+// isn't a page in this base (external URL, anchor, absolute path, non-.md).
+export function resolvePageLink(fromPath, href) {
+  if (!href || /^[a-z][a-z0-9+.-]*:|^[/#]/i.test(href)) return null;
+  const target = href.split('#')[0].split('?')[0];
+  if (!target.endsWith('.md') && !target.endsWith('/')) return null;
+  const parts = dirOf(fromPath).split('/').filter(Boolean);
+  for (const part of target.split('/')) {
+    if (part === '..') { if (!parts.length) return null; parts.pop(); } else if (part && part !== '.') parts.push(part);
+  }
+  const resolved = parts.join('/');
+  return target.endsWith('/') ? `${resolved ? `${resolved}/` : ''}index.md` : resolved;
+}
