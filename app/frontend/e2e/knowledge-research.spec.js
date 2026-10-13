@@ -145,8 +145,7 @@ test('research agent fills a knowledge base from the web and a second agent answ
     await poll(() => conceptPaths().length >= 3, 'at least three concept pages written', 60_000);
     const sources = sql(`SELECT string_agg(value->'payload'->>'content', '\n') FROM store
       WHERE key LIKE ${quote(`knowledge:${BASE_ID}/%`)} AND key NOT LIKE '%log.md'`);
-    // Sources may be front matter (`sources:`) or a Sources section, as the brief asks.
-    expect(sources).toMatch(/^sources:|^#+ sources/im);
+    expect(sources).toMatch(/^sources:/m);
     expect(sources).toMatch(/https?:\/\//);
     expect(sources).toMatch(/generated:\s*\n\s*at:/);
     expect(livePages().map((row) => row.path)).toContain('log.md');
