@@ -1,5 +1,5 @@
 /**
- * Structured-tag parser for inbox message bodies.
+ * Structured-tag parser for Markdown document bodies.
  *
  * Parses arbitrary nested XML-like tags with attributes into a node tree.
  * Everything inside fenced code blocks (```) or inline backticks (`) is
@@ -39,7 +39,7 @@ const VOID_TAGS = new Set([
  * @param {string} source
  * @returns {Array<TextNode|SectionNode>}
  */
-export function parseInboxContent(source) {
+export function parseStructuredContent(source) {
   const parser = new Parser(String(source ?? ''));
   return parser.parseDocument();
 }
