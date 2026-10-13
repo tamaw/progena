@@ -8,7 +8,7 @@ allowed-tools: ls read_file write_file edit_file grep glob
 
 Read `/knowledge/index.md`, then the base's `index.md` before curating pages. Each base has generated `index.md` files, markdown concept pages, and root `log.md`. An `index.md` lists only the pages in its own directory; subfolders appear under `## Directories`, so follow those links (or `glob **/*.md` in the base) to see every page.
 
-Concept pages use OKF v0.2 YAML front matter. `type` is required; use `title`, `description`, `tags`, and `sources` such as `/conversations/<file>.txt` or URLs. `generated.at` is stamped automatically. Use relative markdown links and lowercase kebab-case `.md` paths.
+Concept pages use OKF v0.2 YAML front matter. `type` is required; use `title`, `description`, `tags`, and `sources` such as `/conversations/<file>.txt` or URLs. List sources only in front matter; don't repeat them in a body `Sources` section, since the UI already shows them under the page. `generated.at` is stamped automatically. Use relative markdown links and lowercase kebab-case `.md` paths.
 
 `log.md` is append-only. Add entries such as `## [YYYY-MM-DD] ingest | Title`. Agents cannot delete pages; mark obsolete pages with `status: deprecated`.
 
