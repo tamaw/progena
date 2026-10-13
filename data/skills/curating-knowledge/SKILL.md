@@ -6,7 +6,7 @@ allowed-tools: ls read_file write_file edit_file grep glob
 
 # Curating knowledge
 
-Read `/knowledge/index.md`, then the base's `index.md` before curating pages; its `## Instructions` section is the user's brief for the base, so follow it. Each base has generated `index.md` files, markdown concept pages, and root `log.md`. An `index.md` lists only the pages in its own directory; subfolders appear under `## Directories`, so follow those links (or `glob **/*.md` in the base) to see every page.
+Read `/knowledge/index.md`, then the base's `index.md` before curating pages. Each base has generated `index.md` files, markdown concept pages, and root `log.md`. An `index.md` lists only the pages in its own directory; subfolders appear under `## Directories`, so follow those links (or `glob **/*.md` in the base) to see every page.
 
 Concept pages use OKF v0.2 YAML front matter. `type` is required; use `title`, `description`, `tags`, and `sources` such as `/conversations/<file>.txt` or URLs. `generated.at` is stamped automatically. Use relative markdown links and lowercase kebab-case `.md` paths.
 
@@ -14,7 +14,7 @@ Concept pages use OKF v0.2 YAML front matter. `type` is required; use `title`, `
 
 ## Ingest
 
-Read the base index (with its instructions), read the source, create or update focused concept pages, then append an ingest entry to `log.md`.
+Read the base index, read the source, create or update focused concept pages, then append an ingest entry to `log.md`.
 
 ## Query
 

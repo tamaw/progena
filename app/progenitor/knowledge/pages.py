@@ -103,16 +103,11 @@ def render_index(
     pages: list[tuple[str, dict[str, Any]]],
     subdirs: list[str],
     is_base_root: bool,
-    instructions: str = "",
 ) -> str:
     lines: list[str] = []
     if is_base_root:
         lines.extend(["---", 'okf_version: "0.2"', "---", ""])
     lines.append(f"# {title}")
-    if is_base_root and instructions.strip():
-        # The base's brief lives in /config/knowledge.json; agents without /config
-        # access (object agents) read it here.
-        lines.extend(["", "## Instructions", "", instructions.strip()])
     grouped: dict[str, list[tuple[str, dict[str, Any]]]] = {}
     for filename, front_matter in pages:
         grouped.setdefault(str(front_matter.get("type", "Concept")), []).append(
@@ -144,9 +139,7 @@ def render_root_index(bases: list[dict[str, Any]]) -> str:
     return "\n".join(lines) + "\n"
 
 
-def render_directory_index(
-    *, title: str, directory: str, live_pages: list[tuple[str, str]], instructions: str = ""
-) -> str:
+def render_directory_index(*, title: str, directory: str, live_pages: list[tuple[str, str]]) -> str:
     """Render ``directory``'s index from ``(path, content)`` of a base's live pages."""
     dir_prefix = f"{directory}/" if directory else ""
     pages: list[tuple[str, dict[str, Any]]] = []
@@ -172,5 +165,4 @@ def render_directory_index(
         pages=pages,
         subdirs=sorted(subdirs),
         is_base_root=not directory,
-        instructions=instructions,
     )

@@ -119,7 +119,6 @@ export function fromApiBase(apiBase) {
     status: apiBase.status || 'connected',
     owner: apiBase.owner || 'user',
     description: apiBase.description || 'Knowledge base.',
-    instructions: typeof apiBase.instructions === 'string' ? apiBase.instructions : '',
     lastSynced,
     pageCount: Number(apiBase.page_count) || 0,
     path: apiBase.path || `/knowledge/${apiBase.id}/`,

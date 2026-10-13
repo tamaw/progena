@@ -10,7 +10,6 @@ import {
   selectKnowledgeState,
 } from '../store/uiDataSlice';
 import KnowledgePagesTab from '../components/knowledge/KnowledgePagesTab';
-import KnowledgeInstructionsTab from '../components/knowledge/KnowledgeInstructionsTab';
 import { selectRealtime } from '../store/realtimeSlice';
 import PageShell from '../components/layout/PageShell';
 import DetailPane from '../components/layout/DetailPane';
@@ -439,7 +438,7 @@ export default function KnowledgePage() {
                 <DetailStatus key="status" tone={meta.tone}>{meta.label}</DetailStatus>,
                 <span key="path" className="muted">{selectedBase.path}</span>,
               ]}
-              tabs={['Overview', 'Pages', 'Instructions']}
+              tabs={['Overview', 'Pages']}
               activeTab={detailTab}
               onTabChange={setDetailTab}
               tabLabel="Knowledge base tabs"
@@ -542,12 +541,6 @@ export default function KnowledgePage() {
               ) : null}
               {detailTab === 'Pages' ? (
                 <KnowledgePagesTab baseId={selectedBaseId} knowledgeUrl={knowledgeUrl} />
-              ) : null}
-              {detailTab === 'Instructions' ? (
-                <KnowledgeInstructionsTab
-                  instructions={selectedBase.instructions}
-                  onSave={(instructions) => patchSelected({ instructions })}
-                />
               ) : null}
             </div>
           </>

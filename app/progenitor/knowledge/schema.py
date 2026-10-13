@@ -97,7 +97,6 @@ class KnowledgeBaseModel(BaseModel):
     id: str = Field(default="", max_length=120)
     name: str = Field(min_length=1, max_length=160)
     description: str = Field(default="", max_length=4000)
-    instructions: str = Field(default="", max_length=20000)
     owner: str = Field(default="user", max_length=80)
     scope: str = Field(default="Mine", max_length=40)
     status: str = Field(default="connected")
