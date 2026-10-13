@@ -159,8 +159,16 @@ test('research agent fills a knowledge base from the web and a second agent answ
     await openKnowledgeBase(page);
     await expect(page.getByText(`${conceptPaths().length} pages`, { exact: true })).toBeVisible();
 
-    const tree = page.locator('.knowledge-pages-tab aside');
-    await expect(tree.getByRole('button', { name: 'log.md' })).toBeVisible();
+    // The base index loads by default; its page links open in place, without a reload.
+    const crumbs = page.locator('.knowledge-breadcrumbs');
+    await expect(crumbs).toContainText(BASE_NAME);
+    await crumbs.getByRole('button', { name: BASE_NAME }).click();
+    await expect(page.locator('.knowledge-crumb-menu').getByRole('button', { name: 'log.md' })).toBeVisible();
+    await page.keyboard.press('Escape');
+    await page.evaluate(() => { window.knowledgeE2eNoReload = true; });
+    await page.locator('.knowledge-pages-tab .markdown-content a[href$=".md"]:not([href$="index.md"]):not([href="log.md"])').first().click();
+    await expect(page).toHaveURL(/page=/);
+    expect(await page.evaluate(() => window.knowledgeE2eNoReload)).toBe(true);
     // Rename the page holding the key fact (the answerer must find it in its new
     // folder) and delete a different one (the answerer must not cite it).
     const contents = Object.fromEntries(conceptPaths().map((path) => [path, sql(`SELECT value->'payload'->>'content'
@@ -183,7 +191,7 @@ test('research agent fills a knowledge base from the web and a second agent answ
     page.once('dialog', (dialog) => dialog.accept(renamedPath));
     await reader.getByRole('button', { name: 'Rename' }).click();
     await expect(page).toHaveURL(new RegExp(`page=${encodeURIComponent(renamedPath).replace(/[%]/g, '%')}`), { timeout: 30_000 });
-    await expect(tree.getByText('reviewed/')).toBeVisible({ timeout: 30_000 });
+    await expect(crumbs).toContainText('reviewed', { timeout: 30_000 });
 
     deletedPath = second;
     await page.goto(`${page.url().split('?')[0]}?page=${encodeURIComponent(deletedPath)}`);

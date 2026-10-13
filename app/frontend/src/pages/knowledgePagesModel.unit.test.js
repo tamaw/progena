@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildPageTree } from './knowledgePagesModel';
+import { buildPageTree, resolvePageLink } from './knowledgePagesModel';
 
 describe('buildPageTree', () => {
   it('groups directories before pages and sorts titles', () => {
@@ -21,5 +21,22 @@ describe('buildPageTree', () => {
     ]);
     expect(tree.pages.map((p) => p.name)).toEqual(['index.md', 'log.md']);
     expect(tree.directories[0].pages.map((p) => p.name)).toEqual(['index.md', 'x.md']);
+  });
+});
+
+describe('resolvePageLink', () => {
+  it('resolves relative page links against the current page', () => {
+    expect(resolvePageLink('index.md', 'reviewed/leader-election.md')).toBe('reviewed/leader-election.md');
+    expect(resolvePageLink('reviewed/leader-election.md', '../what-is-raft.md#terms')).toBe('what-is-raft.md');
+    expect(resolvePageLink('reviewed/index.md', './')).toBe('reviewed/index.md');
+    expect(resolvePageLink('index.md', 'reviewed/')).toBe('reviewed/index.md');
+  });
+
+  it('leaves external, absolute, anchor, non-page, and escaping links alone', () => {
+    expect(resolvePageLink('index.md', 'https://raft.github.io/')).toBeNull();
+    expect(resolvePageLink('index.md', '/knowledge/other/index.md')).toBeNull();
+    expect(resolvePageLink('index.md', '#top')).toBeNull();
+    expect(resolvePageLink('index.md', 'diagram.png')).toBeNull();
+    expect(resolvePageLink('index.md', '../other-base/index.md')).toBeNull();
   });
 });

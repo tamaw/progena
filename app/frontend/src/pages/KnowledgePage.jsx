@@ -325,7 +325,7 @@ export default function KnowledgePage() {
             />
 
             <div className="task-detail__body">
-              <KnowledgePagesTab baseId={selectedBaseId} knowledgeUrl={knowledgeUrl} />
+              <KnowledgePagesTab baseId={selectedBaseId} baseName={selectedBase.name} knowledgeUrl={knowledgeUrl} />
             </div>
           </>
         ) : (
