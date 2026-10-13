@@ -659,7 +659,7 @@ test.describe('structured inbox', () => {
     }
   });
 
-  test('conflict error when body changes during edit', async ({ page }) => {
+  test('manual draft becomes read-only while the latest AI-updated section renders live', async ({ page }) => {
     const title = 'Conflict';
     const id = uniqueInboxId('conflict');
     const body = [
@@ -678,14 +678,21 @@ test.describe('structured inbox', () => {
       await page.getByRole('button', { name: 'Edit', exact: true }).click();
       await expect(page.locator('.inbox-section__editor')).toBeVisible();
 
-      // Simulate a concurrent modification in the database.
-      const newBody = body.replace('Original plan.', 'Concurrently changed plan.');
-      updateInboxBody(id, newBody);
-
-      // Try to save; the PATCH should return 409 because expected_body no longer matches.
-      await page.getByRole('button', { name: 'Save' }).click();
-
-      await expect(page.locator('.inbox-section__error')).toContainText('changed');
+      await page.getByRole('textbox', { name: 'Section Markdown' }).fill('My unsaved manual draft.');
+      // The agent's document write arrives through the ordinary inbox event.
+      updateInboxBody(id, body.replace('Original plan.', 'Concurrently changed plan.'));
+      await expect(page.locator('.inbox-section__content')).toContainText('Concurrently changed plan.');
+      const staleDraft = page.getByRole('group', { name: 'Out-of-date manual draft' });
+      await expect(staleDraft.getByRole('alert')).toContainText('Manual draft out of date');
+      await expect(staleDraft.getByRole('textbox', { name: 'Section Markdown' })).toHaveValue('My unsaved manual draft.');
+      await expect(staleDraft.getByRole('textbox', { name: 'Section Markdown' })).toHaveAttribute('readonly', '');
+      await expect(staleDraft.getByRole('button', { name: 'Save' })).toBeDisabled();
+      await expect(page.locator('.inbox-section__actions')).toHaveCount(0);
+      await staleDraft.getByRole('button', { name: 'Close draft' }).click();
+      await expect(staleDraft).toHaveCount(0);
+      await page.getByRole('button', { name: 'Select <plan> section' }).hover();
+      await page.getByRole('button', { name: 'Edit', exact: true }).click();
+      await expect(page.getByRole('textbox', { name: 'Section Markdown' })).toHaveValue(/\nConcurrently changed plan\.\n/);
     } finally {
       removeInboxMessage(id);
     }

@@ -50,10 +50,8 @@ export default function StructuredInboxBody({ message, inboxUrl }) {
   const content = message.body || '';
   const [selected, setSelected] = useState(null);
   const [mode, setMode] = useState(null);
-  const displayContent = selected && mode === 'edit' && selected.source !== content
-    ? selected.source
-    : content;
-  const nodes = useMemo(() => parseInboxContent(displayContent), [displayContent]);
+  const staleHandEdit = Boolean(selected && mode === 'edit' && selected.source !== content);
+  const nodes = useMemo(() => parseInboxContent(content), [content]);
   const [draft, setDraft] = useState('');
   const [instruction, setInstruction] = useState('');
   const [popoverPosition, setPopoverPosition] = useState(null);
@@ -135,6 +133,7 @@ export default function StructuredInboxBody({ message, inboxUrl }) {
   }, [aiJob, content]);
 
   function select(node) {
+    if (staleHandEdit) return;
     setAiJob(null);
     if (selected?.start === node.start && selected?.end === node.end) {
       setSelected(null);
@@ -177,6 +176,29 @@ export default function StructuredInboxBody({ message, inboxUrl }) {
     openAgent(message, `Read the latest /inbox/${message.id}.md and locate this exact question section${id ? ` (id ${JSON.stringify(id)})` : ''}:\n${block}\n\nThe user answered ${JSON.stringify(value)}. Rewrite this <questions> section in your own words to include the question and its answer naturally in the document. Keep its <questions> wrapper, id, and <options> list so the user can change their answer later. Do not add an <answer> tag or simply append the selected text. Preserve all other sections and user-owned frontmatter. If this question has changed, ask before editing.`);
   }
 
+  function renderEditor(node, stale = false) {
+    return (
+      <div className="inbox-section__editor" role={stale ? 'group' : undefined} aria-label={stale ? 'Out-of-date manual draft' : undefined}>
+        {stale ? <p role="alert" className="inbox-section__error">Manual draft out of date. The latest message is shown below. Copy your draft or close it; Save is disabled.</p> : null}
+        {!stale && <div className="inbox-section__format" role="toolbar" aria-label="Markdown formatting">
+          {[['Bold', '**', '**'], ['Italic', '*', '*'], ['Link', '[', '](url)'], ['Code', '`', '`']].map(([label, prefix, suffix]) => (
+            <button key={label} type="button" onClick={() => {
+              const input = inputRef.current;
+              if (!input) return;
+              const { selectionStart, selectionEnd } = input;
+              setDraft(insertFormatting(draft, selectionStart, selectionEnd, prefix, suffix));
+              requestAnimationFrame(() => { input.focus(); input.setSelectionRange(selectionStart + prefix.length, selectionEnd + prefix.length); });
+            }}>{label}</button>
+          ))}
+        </div>}
+        <textarea ref={inputRef} aria-label="Section Markdown" readOnly={stale} value={draft} onChange={(event) => setDraft(event.target.value)} />
+        {!stale && <div className="inbox-section__preview"><strong>Preview</strong><Markdown content={draft} /></div>}
+        <button type="button" disabled={stale} onClick={() => save(`${selected.source.slice(node.start, node.openEnd)}${draft}${selected.source.slice(node.closeStart, node.end)}`)}>Save</button>
+        <button type="button" onClick={() => { setMode(null); if (stale) setSelected(null); }}>{stale ? 'Close draft' : 'Cancel'}</button>
+      </div>
+    );
+  }
+
   function renderNode(node) {
     if (node.type === 'text') {
       if (!node.content.trim()) return null;
@@ -184,7 +206,7 @@ export default function StructuredInboxBody({ message, inboxUrl }) {
       return <Markdown key={`text-${node.start}`} content={rendered} />;
     }
     const key = `${node.start}-${node.end}`;
-    const active = selected?.start === node.start && selected?.end === node.end;
+    const active = !staleHandEdit && selected?.start === node.start && selected?.end === node.end;
     const isQuestion = node.tag === 'questions';
     const questionKey = node.attributes?.id ? `question:${node.attributes.id}` : key;
     const questions = node.children.filter((child) => child.type === 'section' && child.tag === 'questions');
@@ -194,7 +216,8 @@ export default function StructuredInboxBody({ message, inboxUrl }) {
     return (
       <section key={key} className={`inbox-section${active ? ' is-selected' : ''}`}>
         <div className="inbox-section__head">
-          <button type="button" className="inbox-section__select" aria-pressed={active} onClick={() => select(node)} aria-label={`Select <${node.tag}> section`}>{node.tag}</button>
+          <button type="button" className="inbox-section__select" aria-pressed={active} disabled={staleHandEdit} onClick={() => select(node)} aria-label={`Select <${node.tag}> section`}>{node.tag}</button>
+          {!staleHandEdit && (
           <div className="inbox-section__actions" role="toolbar" aria-label={`${node.tag} section actions`}>
             <button
               type="button"
@@ -224,26 +247,9 @@ export default function StructuredInboxBody({ message, inboxUrl }) {
               <DeleteActionIcon /><span className="msg-action-btn__label">Remove</span>
             </button>
           </div>
+          )}
         </div>
-        {active && mode === 'edit' ? (
-          <div className="inbox-section__editor">
-            <div className="inbox-section__format" role="toolbar" aria-label="Markdown formatting">
-              {[['Bold', '**', '**'], ['Italic', '*', '*'], ['Link', '[', '](url)'], ['Code', '`', '`']].map(([label, prefix, suffix]) => (
-                <button key={label} type="button" onClick={() => {
-                  const input = inputRef.current;
-                  if (!input) return;
-                  const { selectionStart, selectionEnd } = input;
-                  setDraft(insertFormatting(draft, selectionStart, selectionEnd, prefix, suffix));
-                  requestAnimationFrame(() => { input.focus(); input.setSelectionRange(selectionStart + prefix.length, selectionEnd + prefix.length); });
-                }}>{label}</button>
-              ))}
-            </div>
-            <textarea ref={inputRef} aria-label="Section Markdown" value={draft} onChange={(event) => setDraft(event.target.value)} />
-            <div className="inbox-section__preview"><strong>Preview</strong><Markdown content={draft} /></div>
-            <button type="button" onClick={() => save(`${selected.source.slice(node.start, node.openEnd)}${draft}${selected.source.slice(node.closeStart, node.end)}`)}>Save</button>
-            <button type="button" onClick={() => setMode(null)}>Cancel</button>
-          </div>
-        ) : (
+        {active && mode === 'edit' ? renderEditor(node) : (
           <>
             <div className="inbox-section__content" onClick={(event) => {
               if (event.target.closest('.inbox-section') !== event.currentTarget.closest('.inbox-section')) return;
@@ -283,7 +289,7 @@ export default function StructuredInboxBody({ message, inboxUrl }) {
     );
   }
 
-  const showContentConflict = selected && selected.source !== content
+  const showContentConflict = selected && selected.source !== content && mode !== 'edit'
     && !(mode === 'ai' && aiJob && aiJob.phase !== 'error');
 
   return (
@@ -293,6 +299,7 @@ export default function StructuredInboxBody({ message, inboxUrl }) {
           {error || 'This message changed while you were editing. Select the latest section to review it.'}
         </p>
       ) : null}
+      {staleHandEdit ? renderEditor(selected, true) : null}
       {nodes.map(renderNode)}
       {selected && mode === 'ai' && popoverPosition ? createPortal(
         <form
