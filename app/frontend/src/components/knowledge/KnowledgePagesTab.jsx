@@ -58,16 +58,29 @@ function Breadcrumbs({ baseName, tree, selectedPath, onSelect }) {
   return (
     <ol className="knowledge-breadcrumbs" ref={ref} aria-label="Page path">
       {crumbs.map((crumb) => {
-        const key = crumb.key || `dir:${crumb.dir}`;
+        if (crumb.key) {
+          return <li key={crumb.key}><span className="knowledge-crumb-current" aria-current="page">{crumb.label}</span></li>;
+        }
+        const key = `dir:${crumb.dir}`;
+        const index = crumb.dir ? `${crumb.dir}/index.md` : 'index.md';
         const node = openDir === key ? findDir(tree, crumb.dir) : null;
         return (
           <li key={key}>
-            <button type="button" aria-expanded={openDir === key} onClick={() => setOpenDir(openDir === key ? null : key)}>
+            <button type="button" aria-current={index === selectedPath ? 'page' : undefined} onClick={() => choose(index)}>
               {crumb.label}
+            </button>
+            <button
+              type="button"
+              className="knowledge-crumb-toggle"
+              aria-label={`Files in ${crumb.label}`}
+              aria-expanded={openDir === key}
+              onClick={() => setOpenDir(openDir === key ? null : key)}
+            >
+              ▾
             </button>
             {node && (
               <ul className="knowledge-crumb-menu">
-                {node.pages.map((entry) => (
+                {node.pages.filter((entry) => entry.name !== 'index.md').map((entry) => (
                   <li key={entry.path} className={entry.path === selectedPath ? 'is-selected' : ''}>
                     <button type="button" onClick={() => choose(entry.path)}>{entry.title || entry.name}</button>
                   </li>
