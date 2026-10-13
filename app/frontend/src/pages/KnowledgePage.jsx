@@ -62,17 +62,6 @@ function KnowledgeCard({ base, selected, onSelect }) {
   );
 }
 
-// Headline metric tile, mirroring the Schedules detail pane.
-function MetricCard({ label, value, detail }) {
-  return (
-    <div className="agents-metric-card">
-      <span>{label}</span>
-      <strong>{value}</strong>
-      <small>{detail}</small>
-    </div>
-  );
-}
-
 // Icon + title + sub + chip row, mirroring the Schedules connection/activity
 // lists. Used for connection details, connected agents, and collections.
 function InfoRow({ title, sub, chip }) {
@@ -437,6 +426,8 @@ export default function KnowledgePage() {
               meta={[
                 <DetailStatus key="status" tone={meta.tone}>{meta.label}</DetailStatus>,
                 <span key="path" className="muted">{selectedBase.path}</span>,
+                <span key="pages" className="muted">{formatCount(selectedBase.pageCount)} pages</span>,
+                <span key="synced" className="muted">synced {formatRelativeTime(selectedBase.lastSynced)}</span>,
               ]}
               tabs={['Overview', 'Pages']}
               activeTab={detailTab}
@@ -447,11 +438,6 @@ export default function KnowledgePage() {
             <div className="task-detail__body">
               {detailTab === 'Overview' ? (
                 <>
-                  <div className="agents-metrics">
-                    <MetricCard label="Pages" value={formatCount(selectedBase.pageCount)} detail="live pages" />
-                    <MetricCard label="Last sync" value={formatRelativeTime(selectedBase.lastSynced)} detail={statusMeta(selectedBase.status).label.toLowerCase()} />
-                  </div>
-
                   <section className="agents-section schedules-summary">
                     <header className="agents-section__head">
                       <h2>Description</h2>
