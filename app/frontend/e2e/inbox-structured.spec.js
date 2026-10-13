@@ -10,9 +10,9 @@ import {
 /**
  * Structured inbox browser regression.
  *
- * Covers nested decorative margins, literal code, default selection,
- * theme-aware colors, markdown edit+preview, remove, AI/explain quick chat,
- * question options/free text, answer revisions, and edit conflicts.
+ * Covers nested decorative margins, hover-only expanding icon actions,
+ * themed Markdown tables and answer choices, literal code, markdown
+ * edit+preview, removal, AI/explain chat, revisions, and edit conflicts.
  *
  * Requires an isolated database configured via INBOX_SMOKE_DATABASE_URL.
  * Each test seeds uniquely-named rows and cleans them up in a finally block.
@@ -62,9 +62,19 @@ test.describe('structured inbox', () => {
     try {
       await gotoInbox(page, title);
 
-      // The first top-level tag is selected on open; nested tags remain independently selectable.
-      await expect(page.getByRole('button', { name: 'Select <notes> section' })).toHaveAttribute('aria-pressed', 'true');
+      // No section is preselected; its compact action rail appears on hover.
+      await expect(page.getByRole('button', { name: 'Select <notes> section' })).toHaveAttribute('aria-pressed', 'false');
+      await expect(page.getByRole('toolbar', { name: 'notes section actions' })).toBeHidden();
+      await page.getByRole('button', { name: 'Select <notes> section' }).hover();
       await expect(page.getByRole('toolbar', { name: 'notes section actions' })).toBeVisible();
+      const aiAction = page.getByRole('toolbar', { name: 'notes section actions' }).getByRole('button', { name: 'Edit with AI' });
+      const compactWidth = await aiAction.evaluate((button) => button.getBoundingClientRect().width);
+      expect(compactWidth).toBeLessThanOrEqual(30);
+      await aiAction.hover();
+      await expect.poll(() => aiAction.evaluate((button) => button.getBoundingClientRect().width)).toBeGreaterThan(compactWidth);
+      await page.getByRole('button', { name: 'Select <inner> section' }).hover();
+      await expect(page.getByRole('toolbar', { name: 'inner section actions' })).toBeVisible();
+      await expect(page.getByRole('toolbar', { name: 'notes section actions' })).toBeHidden();
       await expect(page.getByRole('button', { name: 'Select <notes> section' })).toHaveText('notes');
       await expect(page.getByRole('button', { name: 'Select <inner> section' })).toHaveText('inner');
       await expect(page.getByRole('button', { name: 'Select <deep> section' })).toBeVisible();
@@ -129,10 +139,16 @@ test.describe('structured inbox', () => {
       await expect(content.locator('h1')).toHaveText('Mixed Markdown');
       await expect(content.locator('strong').first()).toHaveText('plain Markdown');
       await expect(content.locator('li')).toHaveCount(2);
-      await expect(content.getByRole('button', { name: 'Select <decision> section' })).toHaveAttribute('aria-pressed', 'true');
+      await expect(content.getByRole('button', { name: 'Select <decision> section' })).toHaveAttribute('aria-pressed', 'false');
       await expect(content.locator('.inbox-section__content strong')).toHaveText('review');
       await expect(content.locator('h2')).toHaveText('Follow-up');
       await expect(content.locator('table td')).toContainText(['Review', 'Pending']);
+      const tableStyle = await content.locator('table th').first().evaluate((cell) => ({
+        border: getComputedStyle(cell).borderTopStyle,
+        background: getComputedStyle(cell).backgroundColor,
+      }));
+      expect(tableStyle.border).toBe('solid');
+      expect(tableStyle.background).not.toBe('rgba(0, 0, 0, 0)');
       await expect(content.locator('code')).toContainText('<plan>literal example</plan>');
       await expect(content.locator('.inbox-section')).toHaveCount(1);
     } finally {
@@ -147,6 +163,7 @@ test.describe('structured inbox', () => {
     try {
       await gotoInbox(page, title);
       await page.setViewportSize({ width: 480, height: 900 });
+      await expect(page.locator('.inbox-section__content')).toHaveCount(2);
       const positions = () => page.locator('.inbox-section__content').evaluateAll((contents) =>
         contents.map((content) => content.getBoundingClientRect().top));
       const before = await positions();
@@ -165,6 +182,7 @@ test.describe('structured inbox', () => {
     seedInboxMessage({ id, title, body: '# Theme Colors\n\n<plan>\nTheme-aware section.\n</plan>' });
     try {
       await gotoInbox(page, title);
+      await page.getByRole('button', { name: 'Select <plan> section' }).click();
       const colors = async (theme) => page.evaluate((nextTheme) => {
         document.documentElement.dataset.theme = nextTheme;
         const probe = document.createElement('span');
@@ -177,8 +195,8 @@ test.describe('structured inbox', () => {
         const foreground = getComputedStyle(probe).color;
         probe.remove();
         const section = getComputedStyle(document.querySelector('.inbox-section.is-selected'));
-        const ai = getComputedStyle(document.querySelector('.inbox-section__ai-action'));
-        const remove = getComputedStyle(document.querySelector('.inbox-section__remove-action'));
+        const ai = getComputedStyle(document.querySelector('.inbox-section__actions .msg-action-btn'));
+        const remove = getComputedStyle(document.querySelector('.inbox-section__actions button[aria-label="Remove"]'));
         return {
           accent,
           sectionBorder: section.borderLeftColor,
@@ -186,21 +204,20 @@ test.describe('structured inbox', () => {
           surface,
           buttonText: remove.color,
           foreground,
-          aiIcon: getComputedStyle(document.querySelector('.inbox-section__ai-action svg')).color,
-          aiBackground: ai.backgroundImage,
+          aiIcon: getComputedStyle(document.querySelector('.inbox-section__actions .msg-action-btn svg')).color,
+          aiBackground: ai.backgroundColor,
         };
       }, theme);
       const dark = await colors('dark');
       const light = await colors('light');
       for (const palette of [dark, light]) {
         expect(palette.sectionBorder).toBe(palette.accent);
-        expect(palette.aiIcon).toBe(palette.accent);
-        expect(palette.buttonBackground).toBe(palette.surface);
-        expect(palette.buttonText).toBe(palette.foreground);
-        expect(palette.aiBackground).toContain(palette.surface);
+        expect(palette.aiIcon).toBe(palette.buttonText);
+        expect(palette.buttonBackground).toBe('rgba(0, 0, 0, 0)');
+        expect(palette.buttonText).not.toBe(palette.surface);
+        expect(palette.aiBackground).toBe('rgba(0, 0, 0, 0)');
       }
       expect(light.sectionBorder).not.toBe(dark.sectionBorder);
-      expect(light.buttonBackground).not.toBe(dark.buttonBackground);
     } finally {
       removeInboxMessage(id);
     }
@@ -221,12 +238,12 @@ test.describe('structured inbox', () => {
     try {
       await gotoInbox(page, title);
 
-      // The first section is selected on open.
-      await expect(page.getByRole('button', { name: 'Select <plan> section' })).toHaveAttribute('aria-pressed', 'true');
+      await expect(page.getByRole('button', { name: 'Select <plan> section' })).toHaveAttribute('aria-pressed', 'false');
+      await page.getByRole('button', { name: 'Select <plan> section' }).hover();
       await expect(page.locator('.inbox-section__actions')).toBeVisible();
 
-      // Edit toggles below the persistent action bar and opens a full-width editor.
-      const edit = page.getByRole('button', { name: '✎ Edit' });
+      // Edit toggles below the action rail and opens a full-width editor.
+      const edit = page.getByRole('button', { name: 'Edit', exact: true });
       await expect(edit).toHaveAttribute('aria-pressed', 'false');
       await edit.click();
       await expect(edit).toHaveAttribute('aria-pressed', 'true');
@@ -284,8 +301,9 @@ test.describe('structured inbox', () => {
     try {
       await gotoInbox(page, title);
 
-      await expect(page.getByRole('button', { name: 'Select <plan> section' })).toHaveAttribute('aria-pressed', 'true');
-      await expect(page.locator('.inbox-section__actions')).toBeVisible();
+      await expect(page.getByRole('button', { name: 'Select <plan> section' })).toHaveAttribute('aria-pressed', 'false');
+      await page.getByRole('button', { name: 'Select <plan> section' }).hover();
+      await expect(page.getByRole('toolbar', { name: 'plan section actions' })).toBeVisible();
       await expect(page.getByRole('button', { name: 'Remove', exact: true }).locator('svg')).toBeVisible();
 
       page.on('dialog', (dialog) => dialog.accept());
@@ -314,7 +332,7 @@ test.describe('structured inbox', () => {
     try {
       await gotoInbox(page, title);
 
-      await expect(page.getByRole('button', { name: 'Select <plan> section' })).toHaveAttribute('aria-pressed', 'true');
+      await page.getByRole('button', { name: 'Select <plan> section' }).hover();
       await page.getByRole('button', { name: 'Explain', exact: true }).click();
 
       // Quick chat panel opens and auto-submits the explain prompt.
@@ -341,7 +359,7 @@ test.describe('structured inbox', () => {
     try {
       await gotoInbox(page, title);
 
-      await expect(page.getByRole('button', { name: 'Select <plan> section' })).toHaveAttribute('aria-pressed', 'true');
+      await page.getByRole('button', { name: 'Select <plan> section' }).hover();
       const actions = page.getByRole('toolbar', { name: 'plan section actions' });
       await expect(actions.locator('button').nth(1)).toHaveText('Explain');
       await expect(actions.locator('button').nth(1).locator('svg')).toBeVisible();
@@ -383,9 +401,13 @@ test.describe('structured inbox', () => {
     try {
       await gotoInbox(page, title);
 
-      await expect(page.getByRole('button', { name: 'Select <questions> section' })).toHaveAttribute('aria-pressed', 'true');
+      await expect(page.getByRole('button', { name: 'Select <questions> section' })).toHaveAttribute('aria-pressed', 'false');
       await expect(page.getByRole('button', { name: 'Show options' })).toHaveCount(0);
       await expect(page.getByRole('button', { name: 'Reject' })).toBeVisible();
+      const answer = page.getByRole('button', { name: 'Reject' });
+      const normalBackground = await answer.evaluate((button) => getComputedStyle(button).backgroundColor);
+      await answer.hover();
+      await expect.poll(() => answer.evaluate((button) => getComputedStyle(button).backgroundColor)).not.toBe(normalBackground);
 
       await page.getByRole('button', { name: 'Reject' }).click();
 
@@ -415,7 +437,7 @@ test.describe('structured inbox', () => {
     try {
       await gotoInbox(page, title);
 
-      await expect(page.getByRole('button', { name: 'Select <questions> section' })).toHaveAttribute('aria-pressed', 'true');
+      await expect(page.getByRole('button', { name: 'Select <questions> section' })).toHaveAttribute('aria-pressed', 'false');
       const ownAnswer = page.getByRole('button', { name: 'Enter your own' });
       await expect(page.getByRole('button', { name: 'None' })).toBeVisible();
       await expect(page.getByRole('textbox', { name: 'Your own answer' })).toHaveCount(0);
@@ -491,8 +513,8 @@ test.describe('structured inbox', () => {
     try {
       await gotoInbox(page, title);
 
-      await expect(page.getByRole('button', { name: 'Select <plan> section' })).toHaveAttribute('aria-pressed', 'true');
-      await page.getByRole('button', { name: '✎ Edit' }).click();
+      await page.getByRole('button', { name: 'Select <plan> section' }).hover();
+      await page.getByRole('button', { name: 'Edit', exact: true }).click();
       await expect(page.locator('.inbox-section__editor')).toBeVisible();
 
       // Simulate a concurrent modification in the database.

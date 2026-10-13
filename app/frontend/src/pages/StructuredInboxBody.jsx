@@ -4,8 +4,8 @@ import { useMermaidRender } from '../hooks/useMermaidRender';
 import { renderMarkdownToHtml } from '../lib/markdown';
 import { parseInboxContent } from '../lib/inboxContent';
 import { patchInboxSection } from '../store/uiDataSlice';
-import { ProgenitorAiIcon } from '../components/layout/navIcons';
-import { DeleteActionIcon } from '../components/layout/DetailHeader';
+import { ProgenitorAiIcon, QuickChatIcon } from '../components/layout/navIcons';
+import { DeleteActionIcon, EditActionIcon } from '../components/layout/DetailHeader';
 
 function Markdown({ content }) {
   const ref = useRef(null);
@@ -28,18 +28,10 @@ function insertFormatting(value, selectionStart, selectionEnd, prefix, suffix) {
   return `${value.slice(0, selectionStart)}${prefix}${value.slice(selectionStart, selectionEnd)}${suffix}${value.slice(selectionEnd)}`;
 }
 
-function firstSectionSelection(nodes, content) {
-  const first = nodes.find((node) => node.type === 'section');
-  return first ? {
-    start: first.start, end: first.end, openEnd: first.openEnd,
-    closeStart: first.closeStart, tag: first.tag, source: content,
-  } : null;
-}
-
 export default function StructuredInboxBody({ message, inboxUrl }) {
   const dispatch = useDispatch();
   const content = message.body || '';
-  const [selected, setSelected] = useState(() => firstSectionSelection(parseInboxContent(content), content));
+  const [selected, setSelected] = useState(null);
   const [mode, setMode] = useState(null);
   const displayContent = selected && mode === 'edit' && selected.source !== content
     ? selected.source
@@ -56,7 +48,7 @@ export default function StructuredInboxBody({ message, inboxUrl }) {
   useEffect(() => {
     if (previousContent.current === content || mode === 'edit') return;
     previousContent.current = content;
-    setSelected(firstSectionSelection(nodes, content));
+    setSelected(null);
     setMode(null);
   }, [content, mode, nodes]);
 
@@ -74,16 +66,15 @@ export default function StructuredInboxBody({ message, inboxUrl }) {
     setError('');
   }
 
-  async function save(replacement) {
-    if (!selected) return;
+  async function save(replacement, target = selected) {
+    if (!target) return;
     setError('');
     try {
-      const updatedBody = `${selected.source.slice(0, selected.start)}${replacement}${selected.source.slice(selected.end)}`;
       await dispatch(patchInboxSection({
-        inboxUrl, messageId: message.id, expectedBody: selected.source,
-        start: selected.start, end: selected.end, replacement,
+        inboxUrl, messageId: message.id, expectedBody: target.source,
+        start: target.start, end: target.end, replacement,
       })).unwrap();
-      setSelected(firstSectionSelection(parseInboxContent(updatedBody), updatedBody));
+      setSelected(null);
       setMode(null);
     } catch (failure) {
       setError(failure?.message || 'This message changed. Review the latest version and try again.');
@@ -121,30 +112,32 @@ export default function StructuredInboxBody({ message, inboxUrl }) {
       <section key={key} className={`inbox-section${active ? ' is-selected' : ''}`}>
         <div className="inbox-section__head">
           <button type="button" className="inbox-section__select" aria-pressed={active} onClick={() => select(node)} aria-label={`Select <${node.tag}> section`}>{node.tag}</button>
-          {active ? (
-            <div className="inbox-section__actions" role="toolbar" aria-label={`${node.tag} section actions`}>
-              {mode === 'ai' ? (
-                <form onSubmit={(event) => { event.preventDefault(); if (instruction.trim()) { submitAgent(node, instruction.trim()); setMode(null); } }}>
-                  <input aria-label="AI edit instruction" autoFocus value={instruction} onChange={(event) => setInstruction(event.target.value)} placeholder="How should this section change?" />
-                  <button type="submit">Send</button><button type="button" onClick={() => setMode(null)}>Cancel</button>
-                </form>
-              ) : (
-                <>
-                  <button type="button" className="inbox-section__ai-action" onClick={() => setMode('ai')}>
-                    <ProgenitorAiIcon /> Edit with AI
-                  </button>
-                  <button type="button" className="inbox-section__ai-action" onClick={() => submitAgent(node, 'Explain this section to me in chat. Do not modify the file.')}>
-                    <ProgenitorAiIcon /> Explain
-                  </button>
-                  <button type="button" className={mode === 'edit' ? 'inbox-section__edit-action is-active' : 'inbox-section__edit-action'} aria-pressed={mode === 'edit'} onClick={() => {
-                    if (mode === 'edit') setMode(null);
-                    else { setDraft(content.slice(node.openEnd, node.closeStart)); setMode('edit'); }
-                  }}>✎ Edit</button>
-                  <button type="button" className="inbox-section__remove-action" onClick={() => { if (window.confirm(`Remove the entire <${node.tag}> section and its contents?`)) save(''); }}><DeleteActionIcon /> Remove</button>
-                </>
-              )}
-            </div>
-          ) : null}
+          <div className="inbox-section__actions" role="toolbar" aria-label={`${node.tag} section actions`}>
+            {active && mode === 'ai' ? (
+              <form onSubmit={(event) => { event.preventDefault(); if (instruction.trim()) { submitAgent(node, instruction.trim()); setMode(null); } }}>
+                <input aria-label="AI edit instruction" autoFocus value={instruction} onChange={(event) => setInstruction(event.target.value)} placeholder="How should this section change?" />
+                <button type="submit">Send</button><button type="button" onClick={() => setMode(null)}>Cancel</button>
+              </form>
+            ) : (
+              <>
+                <button type="button" className="msg-action-btn" aria-label="Edit with AI" onClick={() => { if (!active) select(node); setMode('ai'); }}>
+                  <ProgenitorAiIcon /><span className="msg-action-btn__label">Edit with AI</span>
+                </button>
+                <button type="button" className="msg-action-btn" aria-label="Explain" onClick={() => submitAgent(node, 'Explain this section to me in chat. Do not modify the file.')}>
+                  <QuickChatIcon /><span className="msg-action-btn__label">Explain</span>
+                </button>
+                <button type="button" className={`msg-action-btn${active && mode === 'edit' ? ' is-active' : ''}`} aria-label="Edit" aria-pressed={active && mode === 'edit'} onClick={() => {
+                  if (active && mode === 'edit') setMode(null);
+                  else { if (!active) select(node); setDraft(content.slice(node.openEnd, node.closeStart)); setMode('edit'); }
+                }}>
+                  <EditActionIcon /><span className="msg-action-btn__label">Edit</span>
+                </button>
+                <button type="button" className="msg-action-btn" aria-label="Remove" onClick={() => { if (window.confirm(`Remove the entire <${node.tag}> section and its contents?`)) save('', { ...node, source: content }); }}>
+                  <DeleteActionIcon /><span className="msg-action-btn__label">Remove</span>
+                </button>
+              </>
+            )}
+          </div>
         </div>
         {active && mode === 'edit' ? (
           <div className="inbox-section__editor">

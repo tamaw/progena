@@ -6143,6 +6143,25 @@ body,
   margin-top: 0;
 }
 
+.inbox-structured-body .markdown-content table {
+  width: 100%;
+  margin: var(--spacing-sm) 0;
+  border-collapse: collapse;
+  font-size: var(--font-size-sm);
+}
+
+.inbox-structured-body .markdown-content th,
+.inbox-structured-body .markdown-content td {
+  padding: var(--spacing-sm);
+  border: 1px solid var(--color-border);
+  text-align: left;
+}
+
+.inbox-structured-body .markdown-content th {
+  background: var(--color-bg-tertiary);
+  font-weight: 600;
+}
+
 .inbox-section {
   margin: 4px 0 2px 4px;
   padding: 0 0 0 12px;
@@ -6218,37 +6237,40 @@ body,
   color: var(--color-text-primary);
 }
 
-.inbox-section__remove-action {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
+.inbox-section__actions {
+  visibility: hidden;
+  opacity: 0;
+  pointer-events: none;
 }
 
-.inbox-section__actions .inbox-section__ai-action {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  border: 1px solid transparent;
-  border-radius: 8px;
-  background:
-    linear-gradient(var(--color-bg-secondary), var(--color-bg-secondary)) padding-box,
-    linear-gradient(120deg, color-mix(in oklab, var(--color-accent) 65%, var(--color-border)), var(--color-border), color-mix(in oklab, var(--color-accent) 35%, var(--color-border))) border-box;
+.inbox-section:hover:not(:has(.inbox-section:hover)) > .inbox-section__head > .inbox-section__actions,
+.inbox-section:focus-within:not(:has(.inbox-section:focus-within)) > .inbox-section__head > .inbox-section__actions,
+.inbox-section.is-selected:not(:has(.inbox-section:hover)) > .inbox-section__head > .inbox-section__actions {
+  visibility: visible;
+  opacity: 1;
+  pointer-events: auto;
 }
 
-.inbox-section__ai-action svg {
-  color: var(--color-accent);
-  filter: drop-shadow(0 0 5px color-mix(in oklab, var(--color-accent) 35%, transparent));
+.inbox-section__actions .msg-action-btn {
+  height: 26px;
+  max-width: 26px;
+  padding: 0 6px;
+  border: 0;
+  background: transparent;
+  color: var(--color-text-secondary);
 }
 
-.inbox-section__actions .inbox-section__ai-action:hover,
-.inbox-section__actions .inbox-section__ai-action:focus-visible {
-  border-color: var(--color-accent);
-  box-shadow: 0 0 0 2px var(--color-accent-soft);
+.inbox-section__actions .msg-action-btn:hover,
+.inbox-section__actions .msg-action-btn:focus-visible {
+  max-width: 120px;
+  padding: 0 7px;
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
 }
 
-.inbox-section__actions .inbox-section__edit-action.is-active {
-  border-color: var(--color-accent);
+.inbox-section__actions .msg-action-btn.is-active {
   background: var(--color-accent-soft);
+  color: var(--color-accent);
 }
 
 .inbox-section__actions input,
@@ -6297,6 +6319,13 @@ body,
   flex: 1 0 100%;
   display: flex;
   gap: 6px;
+}
+
+.inbox-section__options > button:hover,
+.inbox-section__options > button:focus-visible {
+  border-color: var(--color-accent);
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
 }
 
 .inbox-section__options .is-active {

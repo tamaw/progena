@@ -58,11 +58,12 @@ Full message body in **markdown** — headings, lists, links, code blocks, and
 
 When a message needs individually editable parts, wrap Markdown in matching
 XML-like tags such as `<plan>…</plan>`. Tags have no special visual styles:
-each nested section receives the same compact, non-interactive left bracket;
-the first top-level section starts selected to show its actions. Click its
-heading or rendered Markdown to select it. The action bar keeps AI edit and
-explain first; hand Edit toggles a large Markdown editor below the bar. Keep
-tags balanced; literal examples belong in Markdown code spans or fenced blocks.
+each nested section receives the same compact, non-interactive left bracket.
+No section starts selected. Hover a section to reveal its icon actions; each
+icon expands to its full label on hover or keyboard focus. Click the heading
+or rendered Markdown to select a section. Hand Edit toggles a large Markdown
+editor below the action bar. Keep tags balanced; literal examples belong in
+Markdown code spans or fenced blocks.
 
 Most of a message can stay ordinary Markdown. Add tags only around content
 that should be selected and edited independently. For example:
