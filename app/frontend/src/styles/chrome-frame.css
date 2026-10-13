@@ -6155,10 +6155,11 @@ body,
 
 .inbox-section__head {
   display: flex;
+  min-height: 30px;
   align-items: flex-start;
   justify-content: space-between;
   gap: 8px;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
 }
 
 .inbox-section__select {
@@ -6183,6 +6184,22 @@ body,
   flex-wrap: wrap;
   align-items: center;
   gap: 6px;
+}
+
+.inbox-section__actions {
+  min-width: 0;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.inbox-section__actions::-webkit-scrollbar {
+  display: none;
+}
+
+.inbox-section__actions > button {
+  flex: none;
+  white-space: nowrap;
 }
 
 .inbox-section__actions button,

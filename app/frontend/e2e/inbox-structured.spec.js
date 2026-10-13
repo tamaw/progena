@@ -99,6 +99,25 @@ test.describe('structured inbox', () => {
     }
   });
 
+  test('section text stays in place as the action bar moves', async ({ page }) => {
+    const title = 'Stable Selection';
+    const id = uniqueInboxId('selection');
+    seedInboxMessage({ id, title, body: '# Stable Selection\n\n<plan>\nFirst section.\n</plan>\n\n<notes>\nSecond section.\n</notes>' });
+    try {
+      await gotoInbox(page, title);
+      await page.setViewportSize({ width: 480, height: 900 });
+      const positions = () => page.locator('.inbox-section__content').evaluateAll((contents) =>
+        contents.map((content) => content.getBoundingClientRect().top));
+      const before = await positions();
+      await page.getByRole('button', { name: 'Select <notes> section' }).click();
+      expect(await positions()).toEqual(before);
+      await page.getByRole('button', { name: 'Select <plan> section' }).click();
+      expect(await positions()).toEqual(before);
+    } finally {
+      removeInboxMessage(id);
+    }
+  });
+
   test('section colors follow light and dark theme tokens', async ({ page }) => {
     const title = 'Theme Colors';
     const id = uniqueInboxId('theme');
