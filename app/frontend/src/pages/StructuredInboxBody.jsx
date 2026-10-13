@@ -5,6 +5,7 @@ import { renderMarkdownToHtml } from '../lib/markdown';
 import { parseInboxContent } from '../lib/inboxContent';
 import { patchInboxSection } from '../store/uiDataSlice';
 import { ProgenitorAiIcon } from '../components/layout/navIcons';
+import { DeleteActionIcon } from '../components/layout/DetailHeader';
 
 function Markdown({ content }) {
   const ref = useRef(null);
@@ -139,7 +140,7 @@ export default function StructuredInboxBody({ message, inboxUrl }) {
                     if (mode === 'edit') setMode(null);
                     else { setDraft(content.slice(node.openEnd, node.closeStart)); setMode('edit'); }
                   }}>✎ Edit</button>
-                  <button type="button" onClick={() => { if (window.confirm(`Remove the entire <${node.tag}> section and its contents?`)) save(''); }}>Remove</button>
+                  <button type="button" className="inbox-section__remove-action" onClick={() => { if (window.confirm(`Remove the entire <${node.tag}> section and its contents?`)) save(''); }}><DeleteActionIcon /> Remove</button>
                 </>
               )}
             </div>

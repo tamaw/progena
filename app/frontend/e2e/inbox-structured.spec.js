@@ -173,6 +173,7 @@ test.describe('structured inbox', () => {
 
       await expect(page.getByRole('button', { name: 'Select <plan> section' })).toHaveAttribute('aria-pressed', 'true');
       await expect(page.locator('.inbox-section__actions')).toBeVisible();
+      await expect(page.getByRole('button', { name: 'Remove', exact: true }).locator('svg')).toBeVisible();
 
       page.on('dialog', (dialog) => dialog.accept());
       await page.getByRole('button', { name: 'Remove', exact: true }).click();
