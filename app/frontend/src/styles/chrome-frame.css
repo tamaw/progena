@@ -9654,8 +9654,18 @@ body,
   background: var(--color-bg-secondary);
 }
 
-.knowledge-breadcrumbs > li:last-child > button {
+.knowledge-breadcrumbs [aria-current='page'] {
   font-weight: 600;
+}
+
+.knowledge-crumb-current {
+  padding: 3px 6px;
+}
+
+.knowledge-breadcrumbs .knowledge-crumb-toggle {
+  padding: 3px 4px;
+  color: var(--color-text-muted);
+  font-size: 11px;
 }
 
 .knowledge-crumb-menu {

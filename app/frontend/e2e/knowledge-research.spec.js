@@ -162,8 +162,10 @@ test('research agent fills a knowledge base from the web and a second agent answ
     // The base index loads by default; its page links open in place, without a reload.
     const crumbs = page.locator('.knowledge-breadcrumbs');
     await expect(crumbs).toContainText(BASE_NAME);
-    await crumbs.getByRole('button', { name: BASE_NAME }).click();
-    await expect(page.locator('.knowledge-crumb-menu').getByRole('button', { name: 'log.md' })).toBeVisible();
+    await crumbs.getByRole('button', { name: `Files in ${BASE_NAME}` }).click();
+    const menu = page.locator('.knowledge-crumb-menu');
+    await expect(menu.getByRole('button', { name: 'log.md' })).toBeVisible();
+    await expect(menu.getByRole('button', { name: 'Index' })).toHaveCount(0);
     await page.keyboard.press('Escape');
     await page.evaluate(() => { window.knowledgeE2eNoReload = true; });
     await page.locator('.knowledge-pages-tab .markdown-content a[href$=".md"]:not([href$="index.md"]):not([href="log.md"])').first().click();
