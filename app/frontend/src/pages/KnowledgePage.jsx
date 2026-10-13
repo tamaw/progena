@@ -8,6 +8,7 @@ import {
   saveKnowledge,
   selectKnowledgeBases,
   selectKnowledgePage,
+  selectKnowledgePages,
   selectKnowledgeState,
 } from '../store/uiDataSlice';
 import KnowledgePagesTab from '../components/knowledge/KnowledgePagesTab';
@@ -45,16 +46,27 @@ import {
 
 
 
-// Type, tags, and readable generated time of the open page, from its front matter.
-function pageHeaderFacts(frontMatter) {
+const readableTime = (ms) => (Number.isFinite(ms)
+  ? new Date(ms).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
+  : null);
+
+// Header facts for the open page. A concept page reports its front matter; a
+// generated index reports when the newest page in its folder (and subfolders)
+// changed, i.e. what the index is up to date with.
+function pageHeaderFacts(path, frontMatter, pages) {
+  if (path.split('/').at(-1) === 'index.md') {
+    const prefix = path.slice(0, -'index.md'.length);
+    const newest = Math.max(...pages
+      .filter((page) => page.kind === 'concept' && page.path.startsWith(prefix))
+      .map((page) => Date.parse(page.updated_at))
+      .filter(Number.isFinite));
+    return { type: 'index', tags: [], generatedAt: readableTime(newest) };
+  }
   const fm = frontMatter && typeof frontMatter === 'object' ? frontMatter : {};
-  const at = fm.generated && typeof fm.generated === 'object' ? Date.parse(fm.generated.at) : NaN;
   return {
     type: fm.type ? String(fm.type) : null,
     tags: Array.isArray(fm.tags) ? fm.tags.map(String) : fm.tags ? [String(fm.tags)] : [],
-    generatedAt: Number.isFinite(at)
-      ? new Date(at).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
-      : null,
+    generatedAt: readableTime(fm.generated && typeof fm.generated === 'object' ? Date.parse(fm.generated.at) : NaN),
   };
 }
 
@@ -224,9 +236,10 @@ export default function KnowledgePage() {
   const openPage = useSelector((state) => (selectedBaseId
     ? selectKnowledgePage(state, selectedBaseId, openPagePath)
     : null));
-  const pageFacts = pageHeaderFacts(openPage?.front_matter);
-  // Generated indexes have no page type of their own.
-  if (openPage && openPagePath.split('/').at(-1) === 'index.md') pageFacts.type = 'index';
+  const basePages = useSelector((state) => (selectedBaseId ? selectKnowledgePages(state, selectedBaseId) : null));
+  const pageFacts = openPage
+    ? pageHeaderFacts(openPagePath, openPage.front_matter, basePages || [])
+    : { type: null, tags: [], generatedAt: null };
 
   return (
     <PageShell className="tasks-page knowledge-page">
