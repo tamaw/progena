@@ -71,14 +71,13 @@ function pageHeaderFacts(path, frontMatter, pages) {
 }
 
 function KnowledgeCard({ base, selected, onSelect }) {
-  const meta = statusMeta(base.status);
+  const meta = statusMeta(base.status, { indexedPages: base.indexedPages, indexPages: base.indexPages });
   return (
     <article className={`task-card ${selected ? 'is-selected' : ''}`}>
       <button type="button" className="task-card__button" onClick={() => onSelect(base.id)}>
         <div className="task-card__title kb-card__title">
           <span className={`kb-card__dot kb-card__dot--${meta.tone}`} title={meta.label} aria-label={meta.label} />
           <span className="kb-card__name">{base.name}</span>
-          <span className="kb-card__type">{base.storeType}</span>
         </div>
         <div className="task-card__meta">
           <span className="kb-card__desc">{base.description}</span>
@@ -172,7 +171,7 @@ export default function KnowledgePage() {
   }, [bases, loaded, navigate, selectedBaseId]);
 
 
-  const connectedCount = bases.filter((base) => base.status === 'connected').length;
+  const indexedCount = bases.filter((base) => base.status === 'indexed').length;
 
   const putBases = (nextRaw) => dispatch(saveKnowledge({ knowledgeUrl, bases: nextRaw })).unwrap();
   const patchSelected = (patch) => putBases(
@@ -231,7 +230,9 @@ export default function KnowledgePage() {
     }
   };
 
-  const meta = selectedBase ? statusMeta(selectedBase.status) : null;
+  const meta = selectedBase
+    ? statusMeta(selectedBase.status, { indexedPages: selectedBase.indexedPages, indexPages: selectedBase.indexPages })
+    : null;
   const openPagePath = searchParams.get('page') || 'index.md';
   const openPage = useSelector((state) => (selectedBaseId
     ? selectKnowledgePage(state, selectedBaseId, openPagePath)
@@ -286,8 +287,8 @@ export default function KnowledgePage() {
             ) : null}
 
             <PaneListFooter>
-              <span><span className="num">{bases.length}</span> stores</span>
-              <span>{connectedCount} connected</span>
+              <span><span className="num">{bases.length}</span> bases</span>
+              <span>{indexedCount} indexed</span>
             </PaneListFooter>
           </>
         )}
@@ -356,7 +357,13 @@ export default function KnowledgePage() {
                 </DetailHeaderActions>
               )}
               meta={[
-                <DetailStatus key="status" tone={meta.tone}>{meta.label}</DetailStatus>,
+                meta && meta.tone === 'error' ? (
+                  <span key="status" title={selectedBase.indexError || ''}>
+                    <DetailStatus tone={meta.tone}>{meta.label}</DetailStatus>
+                  </span>
+                ) : (
+                  <DetailStatus key="status" tone={meta.tone}>{meta.label}</DetailStatus>
+                ),
                 ...(pageFacts.type ? [<span key="type" className="muted">{pageFacts.type}</span>] : []),
                 ...(pageFacts.tags.length ? [<span key="tags" className="muted">{pageFacts.tags.join(', ')}</span>] : []),
                 ...(pageFacts.generatedAt ? [<span key="generated" className="muted">generated {pageFacts.generatedAt}</span>] : []),

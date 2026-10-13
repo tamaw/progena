@@ -144,3 +144,16 @@ def test_workflow_definition_validator_rejects_cycles():
 
     with pytest.raises(ValueError, match="acyclic"):
         validate_workflow_definition_payload(payload)
+
+
+def test_knowledge_index_triggers_filter_only_by_base_key():
+    payload = default_workflow_definition(event_type="knowledge.index.completed")
+    payload["trigger"]["key"] = "raft-research"
+    assert validate_workflow_definition_payload(payload)["trigger"]["key"] == "raft-research"
+    payload["trigger"]["action"] = "upserted"
+    with pytest.raises(ValueError, match="filter only by key"):
+        validate_workflow_definition_payload(payload)
+    kanban = default_workflow_definition(event_type="kanban.card.created")
+    kanban["trigger"]["key"] = "raft-research"
+    with pytest.raises(ValueError, match="only valid for document.changed"):
+        validate_workflow_definition_payload(kanban)

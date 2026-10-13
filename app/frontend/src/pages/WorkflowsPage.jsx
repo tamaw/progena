@@ -71,6 +71,8 @@ const WORKFLOW_EVENT_TYPES = [
   'kanban.card.deleted',
   'kanban.card.status_changed',
   'document.changed',
+  'knowledge.index.completed',
+  'knowledge.index.failed',
 ];
 const WORKFLOW_EVENT_TYPE_OPTIONS = WORKFLOW_EVENT_TYPES.map((eventType) => ({ value: eventType, label: eventType }));
 // Mirrors the fixed kanban pipeline from _kanban_default_columns() in
@@ -649,6 +651,18 @@ function EventNode({ id, data, selected }) {
                   </label>
                 </>
               ) : null}
+              {data.eventType.startsWith('knowledge.index.') ? (
+                <label className="workflow-graph-node__field">
+                  <span>Knowledge base id</span>
+                  <input
+                    className="nodrag"
+                    type="text"
+                    value={data.key}
+                    onChange={(event) => data.onChange(id, { key: event.target.value })}
+                    placeholder="Any knowledge base"
+                  />
+                </label>
+              ) : null}
               <p className="workflow-graph-node__hint">
                 One event node starts the v1 workflow path.
               </p>
@@ -663,6 +677,7 @@ function EventNode({ id, data, selected }) {
                 {data.eventType === 'document.changed' && (data.keyPrefix || data.key || data.action)
                   ? ` (${data.keyPrefix || 'any kind'}${data.key ? `, key=${data.key}` : ''}${data.action ? `, ${data.action}` : ''})`
                   : ''}
+                {data.eventType.startsWith('knowledge.index.') && data.key ? ` (${data.key})` : ''}
               </div>
             </div>
           )}

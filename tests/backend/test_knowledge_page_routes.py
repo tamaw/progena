@@ -170,3 +170,14 @@ class _NullConnection:
 
     def __exit__(self, *_exc):
         return False
+
+
+def test_search_reports_missing_indexer_settings_in_the_event(harness):
+    client, _, events = harness
+    assert_acknowledged(
+        client.get("/api/ui/knowledge/search", params={"q": "retries"}),
+        ["knowledge.search.results"],
+    )
+    payload = _last(events, "knowledge.search.results")
+    assert payload["query"] == "retries" and payload["results"] == []
+    assert "/config/indexer.json" in payload["error"]

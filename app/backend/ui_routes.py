@@ -4342,6 +4342,28 @@ async def _dispatch_document_change_trigger(key: str, key_prefix: str, action: s
         )
 
 
+# --------------------------------------------------------------------------- #
+# Knowledge indexer watchers
+# --------------------------------------------------------------------------- #
+_knowledge_index_watch_callback = None
+
+
+def _queue_knowledge_index_dispatch(key: str | None, action: str | None) -> None:
+    """Raw watcher: page writes reindex their base; catalog/settings changes reindex all."""
+    if key is not None:
+        from .knowledge_indexer import get_knowledge_indexer
+
+        get_knowledge_indexer().on_store_change(key)
+
+
+def _queue_knowledge_index_resync(_snapshot, changed_key: str | None = None) -> None:
+    """State watcher: a listener reconnect (``changed_key`` None) reconciles every base."""
+    if changed_key is None:
+        from .knowledge_indexer import get_knowledge_indexer
+
+        get_knowledge_indexer().on_store_change(None)
+
+
 _kanban_trigger_watch_callback = None
 _active_kanban_reconcile_tasks: set[asyncio.Task] = set()
 
@@ -4486,7 +4508,7 @@ async def _reconcile_routine_agent(changed_key: str | None) -> None:
 async def start_state_status_watcher(reconnect_delay: float = 2.0) -> None:
     global _state_watch_callback, _kanban_trigger_watch_callback
     global _workflow_invoke_watch_callback, _routine_agent_watch_callback
-    global _document_change_watch_callback
+    global _document_change_watch_callback, _knowledge_index_watch_callback
     state_reader = get_state_reader()
     if _state_watch_callback is None:
         _state_watch_callback = _queue_state_watch_status
@@ -4504,6 +4526,10 @@ async def start_state_status_watcher(reconnect_delay: float = 2.0) -> None:
         _document_change_watch_callback = _queue_document_change_dispatch
         state_reader.add_raw_watcher(_document_change_watch_callback)
         state_reader.add_raw_watcher(routine_events.document_changed)
+    if _knowledge_index_watch_callback is None:
+        _knowledge_index_watch_callback = _queue_knowledge_index_dispatch
+        state_reader.add_raw_watcher(_knowledge_index_watch_callback)
+        state_reader.add_watcher(_queue_knowledge_index_resync)
     await routine_events.start()
     await state_reader.start_watching(reconnect_delay)
 
@@ -4511,7 +4537,7 @@ async def start_state_status_watcher(reconnect_delay: float = 2.0) -> None:
 async def stop_state_status_watcher() -> None:
     global _state_watch_callback, _kanban_trigger_watch_callback
     global _workflow_invoke_watch_callback, _routine_agent_watch_callback
-    global _document_change_watch_callback
+    global _document_change_watch_callback, _knowledge_index_watch_callback
     state_reader = get_state_reader()
     if _state_watch_callback is not None:
         state_reader.remove_watcher(_state_watch_callback)
@@ -4529,6 +4555,10 @@ async def stop_state_status_watcher() -> None:
         state_reader.remove_raw_watcher(_document_change_watch_callback)
         _document_change_watch_callback = None
         state_reader.remove_raw_watcher(routine_events.document_changed)
+    if _knowledge_index_watch_callback is not None:
+        state_reader.remove_raw_watcher(_knowledge_index_watch_callback)
+        state_reader.remove_watcher(_queue_knowledge_index_resync)
+        _knowledge_index_watch_callback = None
     await routine_events.stop()
     await state_reader.stop_watching()
 

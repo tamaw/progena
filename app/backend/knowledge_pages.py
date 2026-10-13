@@ -5,6 +5,11 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from app.progenitor.knowledge.indexer_config import (
+    INDEX_STATUS_DOC_KEY,
+    describe_index_status,
+    index_record,
+)
 from app.progenitor.knowledge.pages import (
     INDEX_FILE,
     classify_page_path,
@@ -89,7 +94,15 @@ def read_page(base_id: str, path: str) -> dict[str, Any] | None:
         directory = path[: -len(INDEX_FILE)].rstrip("/")
         live = [(p, payload["content"]) for p, payload in _rows(base_id) if _live(payload)]
         title = str(base.get("name") or base_id) if not directory else directory.rsplit("/", 1)[-1]
-        content = render_directory_index(title=title, directory=directory, live_pages=live)
+        row = _store().get_document(PROGENITOR_STATE_PREFIX, INDEX_STATUS_DOC_KEY)
+        content = render_directory_index(
+            title=title,
+            directory=directory,
+            live_pages=live,
+            search_status=describe_index_status(
+                index_record(row.payload if row is not None else None, base_id)
+            ),
+        )
         return _page_view(path, content, None)
     try:
         classify_page_path(path)
