@@ -6257,7 +6257,8 @@ body,
 }
 
 .inbox-section__options > button {
-  flex: 1 1 160px;
+  flex: 0 1 auto;
+  max-width: 100%;
 }
 
 .inbox-section__options form {
