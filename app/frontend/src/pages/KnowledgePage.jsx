@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
-import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import { buildEntityPath, useEntityUrlSync } from '../lib/routes';
 import { useConfig } from '../context/ConfigContext';
 import {
@@ -62,20 +62,6 @@ function KnowledgeCard({ base, selected, onSelect }) {
   );
 }
 
-// Icon + title + sub + chip row, mirroring the Schedules connection/activity
-// lists. Used for connection details, connected agents, and collections.
-function InfoRow({ title, sub, chip }) {
-  return (
-    <div className="agents-connection-row kb-noicon">
-      <div className="agents-connection-row__body">
-        <strong>{title}</strong>
-        {sub ? <p>{sub}</p> : null}
-      </div>
-      {chip ? <span className="agents-chip agents-chip--info">{chip}</span> : null}
-    </div>
-  );
-}
-
 export default function KnowledgePage() {
   const navigate = useNavigate();
   const { getApiUrl } = useConfig();
@@ -95,21 +81,10 @@ export default function KnowledgePage() {
   const [activeFilter, setActiveFilter] = useState('All');
   const [searchQuery, setSearchQuery] = useState('');
   const [sortMode, setSortMode] = useState('Status');
-  const [searchParams] = useSearchParams();
-  // A deep link to a page (?page=…) opens the Pages tab.
-  const [detailTab, setDetailTab] = useState(() => (searchParams.get('page') ? 'Pages' : 'Overview'));
-  const [addingTag, setAddingTag] = useState(false);
-  const [tagDraft, setTagDraft] = useState('');
-  const [savingTag, setSavingTag] = useState(false);
-  const [tagError, setTagError] = useState('');
   const [editingName, setEditingName] = useState(false);
   const [nameDraft, setNameDraft] = useState('');
   const [savingName, setSavingName] = useState(false);
   const nameInputRef = useRef(null);
-  const [editingDesc, setEditingDesc] = useState(false);
-  const [descDraft, setDescDraft] = useState('');
-  const [savingDesc, setSavingDesc] = useState(false);
-  const [descError, setDescError] = useState('');
   const { collapsed, setCollapsed, paneClassName } = usePaneCollapse('tasks-list');
 
   const knowledgeUrl = getApiUrl('/api/ui/knowledge');
@@ -125,9 +100,6 @@ export default function KnowledgePage() {
 
   // Clear edit state when switching to a different base.
   useEffect(() => {
-    setAddingTag(false);
-    setTagDraft('');
-    setTagError('');
     setEditingName(false);
     setNameDraft('');
   }, [selectedBaseId]);
@@ -171,14 +143,6 @@ export default function KnowledgePage() {
 
   const connectedCount = bases.filter((base) => base.status === 'connected').length;
 
-  // Keep the editable description draft in sync with the selected store.
-  const selectedDescription = selectedBase?.description || '';
-  useEffect(() => {
-    setDescDraft(selectedDescription);
-    setDescError('');
-    setEditingDesc(false);
-  }, [selectedBase?.id, selectedDescription]);
-
   const putBases = (nextRaw) => dispatch(saveKnowledge({ knowledgeUrl, bases: nextRaw })).unwrap();
   const patchSelected = (patch) => putBases(
     rawBases.map((base) => (base.id === selectedBase?.id
@@ -204,48 +168,6 @@ export default function KnowledgePage() {
       navigate('/knowledge', { replace: true });
     }
     await putBases(rawBases.filter((base) => base.id !== id));
-  };
-
-  // Persist the full tag list, then let the broadcast refresh the view.
-  const saveTags = async (nextTags) => {
-    if (!selectedBase || savingTag) {
-      return false;
-    }
-    setSavingTag(true);
-    setTagError('');
-    try {
-      await patchSelected({ tags: nextTags });
-      return true;
-    } catch (error) {
-      setTagError(error.message || 'Failed to update tags.');
-      return false;
-    } finally {
-      setSavingTag(false);
-    }
-  };
-
-  const addTag = async (event) => {
-    event?.preventDefault?.();
-    const label = tagDraft.trim();
-    if (!label || !selectedBase) {
-      return;
-    }
-    if (selectedBase.tags.some((tag) => tag.toLowerCase() === label.toLowerCase())) {
-      setTagDraft('');
-      setAddingTag(false);
-      return;
-    }
-    if (await saveTags([...selectedBase.tags, label])) {
-      setTagDraft('');
-      setAddingTag(false);
-    }
-  };
-
-  const removeTag = (label) => {
-    if (!selectedBase) {
-      return;
-    }
-    saveTags(selectedBase.tags.filter((tag) => tag !== label));
   };
 
   const startNameEdit = () => {
@@ -275,35 +197,6 @@ export default function KnowledgePage() {
       // Leave edit mode open so the draft isn't lost on a transient error.
     } finally {
       setSavingName(false);
-    }
-  };
-
-  const startDescEdit = () => {
-    setDescDraft(selectedDescription);
-    setDescError('');
-    setEditingDesc(true);
-  };
-
-  const cancelDescEdit = () => {
-    setDescDraft(selectedDescription);
-    setDescError('');
-    setEditingDesc(false);
-  };
-
-  const saveDescription = async (event) => {
-    event?.preventDefault?.();
-    if (!selectedBase || savingDesc) {
-      return;
-    }
-    setSavingDesc(true);
-    setDescError('');
-    try {
-      await patchSelected({ description: descDraft.trim() });
-      setEditingDesc(false);
-    } catch (error) {
-      setDescError(error.message || 'Failed to update description.');
-    } finally {
-      setSavingDesc(false);
     }
   };
 
@@ -429,105 +322,10 @@ export default function KnowledgePage() {
                 <span key="pages" className="muted">{formatCount(selectedBase.pageCount)} pages</span>,
                 <span key="synced" className="muted">synced {formatRelativeTime(selectedBase.lastSynced)}</span>,
               ]}
-              tabs={['Overview', 'Pages']}
-              activeTab={detailTab}
-              onTabChange={setDetailTab}
-              tabLabel="Knowledge base tabs"
             />
 
             <div className="task-detail__body">
-              {detailTab === 'Overview' ? (
-                <>
-                  <section className="agents-section schedules-summary">
-                    <header className="agents-section__head">
-                      <h2>Description</h2>
-                      <div>
-                        {editingDesc ? (
-                          <>
-                            <button type="button" className="repo-btn repo-btn--ghost" onClick={cancelDescEdit} disabled={savingDesc}>
-                              Cancel
-                            </button>
-                            <button
-                              type="button"
-                              className="repo-btn"
-                              onClick={saveDescription}
-                              disabled={savingDesc || descDraft.trim() === selectedDescription}
-                            >
-                              {savingDesc ? 'Saving…' : 'Save'}
-                            </button>
-                          </>
-                        ) : (
-                          <button type="button" className="repo-btn repo-btn--ghost" onClick={startDescEdit}>
-                            Edit
-                          </button>
-                        )}
-                      </div>
-                    </header>
-                    {editingDesc ? (
-                      <textarea
-                        className="kb-source-form__textarea"
-                        rows={4}
-                        placeholder="Describe what this knowledge base contains…"
-                        value={descDraft}
-                        onChange={(event) => setDescDraft(event.target.value)}
-                      />
-                    ) : (
-                      <p>{selectedBase.description}</p>
-                    )}
-                    {descError ? <div className="task-alert">{descError}</div> : null}
-                  </section>
-
-                  <section className="agents-section">
-                    <header className="agents-section__head">
-                      <h2>Tags <span>{selectedBase.tags.length}</span></h2>
-                      <div>
-                        <button
-                          type="button"
-                          className="repo-btn repo-btn--ghost"
-                          onClick={() => { setAddingTag((open) => !open); setTagError(''); setTagDraft(''); }}
-                        >
-                          {addingTag ? 'Cancel' : '+ Add tag'}
-                        </button>
-                      </div>
-                    </header>
-                    {addingTag ? (
-                      <form className="kb-tag-form" onSubmit={addTag}>
-                        <input
-                          className="kb-tag-form__input"
-                          placeholder="Tag name (e.g. priority, internal)"
-                          value={tagDraft}
-                          onChange={(event) => setTagDraft(event.target.value)}
-                        />
-                        <button type="submit" className="repo-btn" disabled={savingTag || !tagDraft.trim()}>
-                          {savingTag ? 'Adding…' : 'Add'}
-                        </button>
-                      </form>
-                    ) : null}
-                    {tagError ? <div className="task-alert">{tagError}</div> : null}
-                    {selectedBase.tags.length ? (
-                      <div className="agents-chip-row">
-                        {selectedBase.tags.map((tag) => (
-                          <span key={tag} className="agents-chip agents-chip--muted kb-tag">
-                            {tag}
-                            <button
-                              type="button"
-                              className="kb-tag__remove"
-                              aria-label={`Remove tag ${tag}`}
-                              disabled={savingTag}
-                              onClick={() => removeTag(tag)}
-                            >
-                              ×
-                            </button>
-                          </span>
-                        ))}
-                      </div>
-                    ) : <div className="task-meta-sub">No tags.</div>}
-                  </section>
-                </>
-              ) : null}
-              {detailTab === 'Pages' ? (
-                <KnowledgePagesTab baseId={selectedBaseId} knowledgeUrl={knowledgeUrl} />
-              ) : null}
+              <KnowledgePagesTab baseId={selectedBaseId} knowledgeUrl={knowledgeUrl} />
             </div>
           </>
         ) : (
