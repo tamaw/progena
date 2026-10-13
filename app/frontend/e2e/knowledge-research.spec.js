@@ -183,7 +183,7 @@ test('research agent fills a knowledge base from the web and a second agent answ
     await page.goto(`${page.url().split('?')[0]}?page=${encodeURIComponent(first)}`);
     const reader = page.locator('.knowledge-pages-tab article');
     await expect(page.getByText(/^generated /)).toBeVisible();
-    await expect(reader.locator('.knowledge-page-sources li').first()).toBeVisible();
+    await expect(reader.getByRole('heading', { name: /^sources$/i })).toHaveCount(1);
     await expect(reader.locator('.markdown-content')).not.toContainText('generated:');
     await expect(reader.getByRole('heading', { name: 'Revisions' })).toBeVisible();
 
