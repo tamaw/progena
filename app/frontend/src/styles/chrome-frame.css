@@ -6192,6 +6192,12 @@ body,
   color: var(--color-text-primary);
 }
 
+.inbox-section__remove-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .inbox-section__actions .inbox-section__ai-action {
   display: inline-flex;
   align-items: center;
