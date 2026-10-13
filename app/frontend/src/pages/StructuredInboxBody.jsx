@@ -15,13 +15,15 @@ function Markdown({ content }) {
   return <div ref={ref} className="markdown-content" dangerouslySetInnerHTML={{ __html: html }} />;
 }
 
-function openAgent(message, instruction, { draft = false } = {}) {
+function openAgent(message, instruction, { draft = false, inline = false, clientId = null } = {}) {
   const prompt = `For the inbox file /inbox/${message.id}.md: ${instruction}`;
   window.dispatchEvent(new CustomEvent('progenitor:open-quick-chat', {
     detail: {
       mode: 'inbox-edit',
       subtitle: message.title || message.id,
       [draft ? 'draft' : 'prompt']: prompt,
+      inline,
+      clientId,
     },
   }));
 }
@@ -55,6 +57,7 @@ export default function StructuredInboxBody({ message, inboxUrl }) {
   const [draft, setDraft] = useState('');
   const [instruction, setInstruction] = useState('');
   const [popoverPosition, setPopoverPosition] = useState(null);
+  const [aiJob, setAiJob] = useState(null);
   const popoverRef = useRef(null);
   const aiTriggerRef = useRef(null);
   const [error, setError] = useState('');
@@ -66,9 +69,10 @@ export default function StructuredInboxBody({ message, inboxUrl }) {
   useEffect(() => {
     if (previousContent.current === content || mode === 'edit') return;
     previousContent.current = content;
+    if (mode === 'ai' && aiJob && aiJob.phase !== 'error') return;
     setSelected(null);
     setMode(null);
-  }, [content, mode, nodes]);
+  }, [content, mode, aiJob]);
 
   useEffect(() => {
     if (mode !== 'ai') return undefined;
@@ -76,11 +80,13 @@ export default function StructuredInboxBody({ message, inboxUrl }) {
       if (popoverRef.current?.contains(event.target) || aiTriggerRef.current?.contains(event.target)) return;
       setMode(null);
       setSelected(null);
+      setAiJob(null);
     };
     const escape = (event) => {
       if (event.key === 'Escape') {
         setMode(null);
         setSelected(null);
+        setAiJob(null);
         aiTriggerRef.current?.focus();
       }
     };
@@ -99,7 +105,37 @@ export default function StructuredInboxBody({ message, inboxUrl }) {
     };
   }, [mode]);
 
+  useEffect(() => {
+    const handleStatus = (event) => {
+      setAiJob((current) => {
+        if (!current || current.id !== event.detail?.clientId) return current;
+        return event.detail.status === 'completed'
+          ? { ...current, phase: 'updating' }
+          : { ...current, phase: 'error', error: event.detail.error || 'The quick-chat response did not complete.' };
+      });
+    };
+    window.addEventListener('progenitor:quick-chat-inline-status', handleStatus);
+    return () => window.removeEventListener('progenitor:quick-chat-inline-status', handleStatus);
+  }, []);
+
+  useEffect(() => {
+    if (aiJob?.phase !== 'updating') return undefined;
+    if (!content.includes(aiJob.originalSection)) {
+      setAiJob(null);
+      setMode(null);
+      setSelected(null);
+      return undefined;
+    }
+    const timeout = window.setTimeout(() => {
+      setAiJob((current) => current?.id === aiJob.id && current.phase === 'updating'
+        ? { ...current, phase: 'error', error: 'No inbox update arrived. Open quick chat to review the response.' }
+        : current);
+    }, 30_000);
+    return () => window.clearTimeout(timeout);
+  }, [aiJob, content]);
+
   function select(node) {
+    setAiJob(null);
     if (selected?.start === node.start && selected?.end === node.end) {
       setSelected(null);
       setMode(null);
@@ -167,7 +203,7 @@ export default function StructuredInboxBody({ message, inboxUrl }) {
               aria-label="Edit with AI"
               aria-expanded={active && mode === 'ai'}
               onClick={(event) => {
-                if (active && mode === 'ai') { setMode(null); setSelected(null); return; }
+                if (active && mode === 'ai') { setMode(null); setSelected(null); setAiJob(null); return; }
                 if (!active) select(node);
                 setPopoverPosition(positionAiPopover(event.currentTarget));
                 setMode('ai');
@@ -264,25 +300,33 @@ export default function StructuredInboxBody({ message, inboxUrl }) {
           style={popoverPosition}
           onSubmit={(event) => {
             event.preventDefault();
-            if (!instruction.trim()) return;
-            submitAgent(selected, instruction.trim());
-            setMode(null);
-            setSelected(null);
+            if (!instruction.trim() || (aiJob && aiJob.phase !== 'error')) return;
+            const id = crypto.randomUUID();
+            setAiJob({ id, originalSection: content.slice(selected.start, selected.end), phase: 'working', error: '' });
+            submitAgent(selected, instruction.trim(), { inline: true, clientId: id });
           }}
         >
           <ProgenitorAiIcon />
-          <input aria-label="AI edit instruction" autoFocus value={instruction} onChange={(event) => setInstruction(event.target.value)} placeholder="How should this section change?" />
-          <button type="button" aria-label="Open in quick chat" title="Open in quick chat" onClick={() => {
+          <input
+            aria-label={aiJob && aiJob.phase !== 'error' ? 'AI edit status' : 'AI edit instruction'}
+            autoFocus
+            readOnly={Boolean(aiJob && aiJob.phase !== 'error')}
+            value={aiJob?.phase === 'working' ? 'Working…' : aiJob?.phase === 'updating' ? 'Updating…' : instruction}
+            onChange={(event) => setInstruction(event.target.value)}
+            placeholder="How should this section change?"
+          />
+          <button type="button" aria-label="Open in quick chat" title="Open in quick chat" disabled={Boolean(aiJob && aiJob.phase !== 'error')} onClick={() => {
             submitAgent(selected, instruction.trim() || 'Please update this section as follows:', { draft: true });
             setMode(null);
             setSelected(null);
           }}><OpenChatIcon /></button>
-          <button type="submit" className="btn-send" aria-label="Send AI edit" title="Send AI edit" disabled={!instruction.trim()}>
+          <button type="submit" className="btn-send" aria-label="Send AI edit" title="Send AI edit" disabled={!instruction.trim() || Boolean(aiJob && aiJob.phase !== 'error')}>
             <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
               <line x1="12" y1="19" x2="12" y2="5" />
               <polyline points="5 12 12 5 19 12" />
             </svg>
           </button>
+          {aiJob?.phase === 'error' ? <span role="alert" className="inbox-ai-popover__error">{aiJob.error}</span> : null}
         </form>,
         document.body,
       ) : null}

@@ -2051,6 +2051,12 @@ body,
   transform: translateX(0);
 }
 
+.topnav-pane.is-background {
+  visibility: hidden;
+  pointer-events: none;
+  transition: none;
+}
+
 
 /* Pinned: exits fixed positioning and occupies the third grid column */
 .topnav-pane.is-pinned {
@@ -6278,6 +6284,7 @@ body,
   position: fixed;
   z-index: 999;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
   box-sizing: border-box;
@@ -6330,6 +6337,12 @@ body,
 
 .inbox-ai-popover .btn-send {
   flex: none;
+}
+
+.inbox-ai-popover__error {
+  flex-basis: 100%;
+  color: var(--color-error);
+  font-size: 12px;
 }
 
 .inbox-section__actions .msg-action-btn.is-active .msg-action-btn__label {
