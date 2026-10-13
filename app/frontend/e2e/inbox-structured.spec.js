@@ -430,6 +430,47 @@ test.describe('structured inbox', () => {
     }
   });
 
+  test('AI edit does not show a hand-edit conflict when its document update precedes the response', async ({ page }) => {
+    const title = 'AI Edit Early Update';
+    const id = uniqueInboxId('aiearly');
+    const body = '# AI Edit Early Update\n\n<plan>\nOriginal plan.\n</plan>';
+    seedInboxMessage({ id, title, body });
+    await page.route('**/api/ui/responses', async (route) => {
+      await route.fulfill({
+        status: 202,
+        contentType: 'application/json',
+        body: JSON.stringify({ request_id: route.request().headers()['x-request-id'], event_types: ['chat.response.completed'] }),
+      });
+    });
+    try {
+      await gotoInbox(page, title);
+      await page.getByRole('button', { name: 'Select <plan> section' }).hover();
+      await page.getByRole('button', { name: 'Edit with AI', exact: true }).click();
+      const dialog = page.getByRole('dialog', { name: 'Edit section with AI' });
+      await dialog.getByRole('textbox', { name: 'AI edit instruction' }).fill('Rewrite the plan');
+      await page.evaluate(() => {
+        window.addEventListener('progenitor:open-quick-chat', (event) => {
+          if (event.detail?.inline) window.__inlineClientId = event.detail.clientId;
+        }, { once: true });
+      });
+      const requestPromise = page.waitForRequest((request) => request.url().includes('/api/ui/responses') && request.method() === 'POST');
+      await dialog.getByRole('button', { name: 'Send AI edit' }).click();
+      await requestPromise;
+      updateInboxBody(id, body.replace('Original plan.', 'Updated by the agent.'));
+      await expect(page.locator('.inbox-section__content')).toContainText('Updated by the agent.');
+      await expect(dialog.getByRole('textbox', { name: 'AI edit status' })).toHaveValue('Working…');
+      await expect(page.getByText('This message changed while you were editing. Select the latest section to review it.')).toHaveCount(0);
+      await page.evaluate(() => {
+        window.dispatchEvent(new CustomEvent('progenitor:quick-chat-inline-status', {
+          detail: { clientId: window.__inlineClientId, status: 'completed' },
+        }));
+      });
+      await expect(dialog).toHaveCount(0);
+    } finally {
+      removeInboxMessage(id);
+    }
+  });
+
   test('Enter submits inline AI edit and a failed send can retry in the same chat session', async ({ page }) => {
     const title = 'Retry AI Edit';
     const id = uniqueInboxId('airetry');

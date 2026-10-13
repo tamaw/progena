@@ -283,9 +283,12 @@ export default function StructuredInboxBody({ message, inboxUrl }) {
     );
   }
 
+  const showContentConflict = selected && selected.source !== content
+    && !(mode === 'ai' && aiJob && aiJob.phase !== 'error');
+
   return (
     <div className="inbox-structured-body">
-      {(error || (selected && selected.source !== content)) ? (
+      {(error || showContentConflict) ? (
         <p role="alert" className="inbox-section__error">
           {error || 'This message changed while you were editing. Select the latest section to review it.'}
         </p>
