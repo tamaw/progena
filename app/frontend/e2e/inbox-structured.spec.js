@@ -344,7 +344,7 @@ test.describe('structured inbox', () => {
     }
   });
 
-  test('edit with AI opens quick chat after typing instruction', async ({ page }) => {
+  test('inline AI edit sends to quick chat without opening the pane and waits for the inbox update', async ({ page }) => {
     const title = 'Edit With AI';
     const id = uniqueInboxId('aiedit');
     const body = [
@@ -356,6 +356,22 @@ test.describe('structured inbox', () => {
     ].join('\n');
 
     seedInboxMessage({ id, title, body });
+    await page.addInitScript(() => {
+      const NativeEventSource = window.EventSource;
+      window.EventSource = function captureUiStream(url, options) {
+        const source = new NativeEventSource(url, options);
+        if (String(url).includes('/api/ui/stream')) window.__inboxUiStream = source;
+        return source;
+      };
+    });
+    await page.route('**/api/ui/responses', async (route) => {
+      const requestId = route.request().headers()['x-request-id'];
+      await route.fulfill({
+        status: 202,
+        contentType: 'application/json',
+        body: JSON.stringify({ request_id: requestId, event_types: ['chat.response.started', 'chat.response.completed'] }),
+      });
+    });
     try {
       await gotoInbox(page, title);
 
@@ -379,13 +395,66 @@ test.describe('structured inbox', () => {
       const aiInput = dialog.getByRole('textbox', { name: 'AI edit instruction' });
       await expect(dialog.getByRole('button', { name: 'Send AI edit' })).toBeDisabled();
       await aiInput.fill('Make it shorter');
+      const responseRequest = page.waitForRequest((request) => request.url().includes('/api/ui/responses') && request.method() === 'POST', { timeout: 15_000 });
       await dialog.getByRole('button', { name: 'Send AI edit' }).click();
-      await expect(dialog).toHaveCount(0);
-      await expect(page.locator('.inbox-section__actions button[aria-label="Edit with AI"]')).toHaveAttribute('aria-expanded', 'false');
+      await expect(dialog.getByRole('textbox', { name: 'AI edit status' })).toHaveValue('Working…');
+      await expect(dialog.getByRole('button', { name: 'Send AI edit' })).toBeDisabled();
+      await expect(page.locator('.topnav-pane--quick.is-open')).toHaveCount(0);
+      const request = await responseRequest;
+      const outgoing = JSON.parse(request.postData());
+      expect(outgoing.input[0].content).toContain('Make it shorter');
+      expect(outgoing.input[0].content).toContain(body.slice(body.indexOf('<plan>')));
+      expect(outgoing.metadata.thread_id).toBeTruthy();
 
-      const panel = page.locator('.topnav-pane--quick.is-open');
-      await expect(panel).toBeVisible({ timeout: 10_000 });
-      await expect(panel.locator('.qchat-user')).toContainText('Make it shorter');
+      // Complete through the UI event stream consumed by quick chat. A
+      // response alone cannot dismiss the popover; the document must change.
+      await page.evaluate((requestId) => {
+        window.__inboxUiStream.dispatchEvent(new MessageEvent('ui.event', {
+          data: JSON.stringify({
+            id: crypto.randomUUID(),
+            type: 'chat.response.completed',
+            payload: { request_id: requestId },
+          }),
+        }));
+      }, request.headers()['x-request-id']);
+      await expect(dialog.getByRole('textbox', { name: 'AI edit status' })).toHaveValue('Updating…');
+      updateInboxBody(id, `${body}\n\nUnrelated note.`);
+      await expect(page.locator('.inbox-detail__body')).toContainText('Unrelated note.');
+      await expect(dialog.getByRole('textbox', { name: 'AI edit status' })).toHaveValue('Updating…');
+      updateInboxBody(id, body.replace('Old plan.', 'Short plan.'));
+      await expect(page.locator('.inbox-section__content')).toContainText('Short plan.');
+      await expect(dialog).toHaveCount(0);
+      await expect(page.locator('.topnav-pane--quick.is-open')).toHaveCount(0);
+    } finally {
+      removeInboxMessage(id);
+    }
+  });
+
+  test('Enter submits inline AI edit and a failed send can retry in the same chat session', async ({ page }) => {
+    const title = 'Retry AI Edit';
+    const id = uniqueInboxId('airetry');
+    seedInboxMessage({ id, title, body: '# Retry AI Edit\n\n<plan>\nKeep this intact.\n</plan>' });
+    const requests = [];
+    await page.route('**/api/ui/responses', async (route) => {
+      requests.push(JSON.parse(route.request().postData()));
+      await route.fulfill({ status: 503, contentType: 'application/json', body: '{"detail":"Agent temporarily unavailable"}' });
+    });
+    try {
+      await gotoInbox(page, title);
+      await page.getByRole('button', { name: 'Select <plan> section' }).hover();
+      await page.getByRole('button', { name: 'Edit with AI', exact: true }).click();
+      const dialog = page.getByRole('dialog', { name: 'Edit section with AI' });
+      await dialog.getByRole('textbox', { name: 'AI edit instruction' }).fill('Make this clearer');
+      await dialog.getByRole('textbox', { name: 'AI edit instruction' }).press('Enter');
+      await expect(dialog.getByRole('alert')).toContainText('Agent temporarily unavailable');
+      await expect(page.locator('.topnav-pane--quick.is-open')).toHaveCount(0);
+      await expect(dialog.getByRole('textbox', { name: 'AI edit instruction' })).toHaveValue('Make this clearer');
+      await dialog.getByRole('button', { name: 'Send AI edit' }).click();
+      await expect.poll(() => requests.length).toBe(2);
+      await expect(dialog.getByRole('alert')).toContainText('Agent temporarily unavailable');
+      expect(requests[0].input[0].content).toContain('Make this clearer');
+      expect(requests[1].metadata.thread_id).toBe(requests[0].metadata.thread_id);
+      await expect(page.locator('.inbox-section__content')).toContainText('Keep this intact.');
     } finally {
       removeInboxMessage(id);
     }

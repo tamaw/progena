@@ -274,6 +274,7 @@ function TopNavPane({
   onTogglePin,
   isPinned,
   isOpen = true,
+  isBackground = false,
   className = '',
   bodyClassName = 'topnav-pane__body',
 }) {
@@ -281,11 +282,13 @@ function TopNavPane({
   return (
     <>
       <aside
-        className={`topnav-pane${isOpen ? ' is-open' : ''}${isPinned ? ' is-pinned' : ''} ${className}`.trim()}
+        className={`topnav-pane${isOpen ? ' is-open' : ''}${isPinned ? ' is-pinned' : ''}${isBackground ? ' is-background' : ''} ${className}`.trim()}
         aria-label={title}
         aria-labelledby={`${panelId}-title`}
-        role={isPinned ? undefined : 'dialog'}
-        aria-modal={isPinned ? undefined : true}
+        aria-hidden={isBackground || undefined}
+        inert={isBackground || undefined}
+        role={isBackground ? undefined : isPinned ? undefined : 'dialog'}
+        aria-modal={isBackground || isPinned ? undefined : true}
       >
         <header className="topnav-pane__head">
           <div className="topnav-pane__heading">
@@ -828,10 +831,12 @@ function QuickChatPanel({
   isPinned,
   onTogglePin,
   isOpen,
+  isBackground = false,
   pendingSubmission,
   onSubmissionConsumed,
   pendingComposerDraft,
   onComposerDraftConsumed,
+  onInlineSubmissionSettled,
 }) {
   const { sendMessageStream, cancelStream, observeResponseStream } = useChatApi();
   const { config, getApiUrl } = useConfig();
@@ -867,6 +872,7 @@ function QuickChatPanel({
   const eventSequenceRef = useRef(0);
   const isQuickChatMountedRef = useRef(false);
   const activeAssistantIdRef = useRef(null);
+  const consumedSubmissionIdRef = useRef(null);
   const scrollEndRef = useRef(null);
 
   // Keep the transcript pinned to the latest message, including as it streams
@@ -1067,9 +1073,16 @@ function QuickChatPanel({
     if (scratchThreadId) {
       return scratchThreadId;
     }
-    const threadId = sessionPromiseRef.current
-      ? await sessionPromiseRef.current
-      : await startFreshQuickThread();
+    // StrictMode can unmount the first draft waiter while submit is awaiting
+    // it, then mount a replacement. Use the replacement rather than failing
+    // the user's send because the obsolete waiter resolved to null.
+    const pending = sessionPromiseRef.current;
+    let threadId = pending ? await pending : await startFreshQuickThread();
+    if (!threadId && pending && sessionPromiseRef.current !== pending) {
+      threadId = sessionPromiseRef.current
+        ? await sessionPromiseRef.current
+        : await startFreshQuickThread();
+    }
     if (!threadId) {
       throw new Error('Unable to create a quick chat thread.');
     }
@@ -1166,7 +1179,7 @@ function QuickChatPanel({
   }, [normalizedConfig.mode, preferences.loaded, preferences.quickChatThreadId, rehydrateFromPersistedThread, startFreshQuickThread]);
 
 
-  const submit = useCallback(async (message, attachments = []) => {
+  const submit = useCallback(async (message, attachments = [], onSettled) => {
     const text = message.trim();
     if ((!text && attachments.length === 0) || isSending) return;
     const attachmentIds = attachments.map((attachment) => attachment.id).filter(Boolean);
@@ -1191,6 +1204,8 @@ function QuickChatPanel({
     setHistory(nextHistory);
     setIsSending(true);
     setError('');
+    let terminalStatus = 'failed';
+    let terminalError = '';
 
     try {
       const threadId = await ensureQuickThread();
@@ -1229,6 +1244,7 @@ function QuickChatPanel({
           )));
         },
         (status) => {
+          terminalStatus = status === 'cancelled' ? 'cancelled' : 'completed';
           if (isStale()) return;
           setHistory((currentHistory) => currentHistory.map((turn) => {
             if (turn.id !== assistantId) return turn;
@@ -1246,6 +1262,8 @@ function QuickChatPanel({
           activeAssistantIdRef.current = null;
         },
         (streamError) => {
+          terminalStatus = 'failed';
+          terminalError = streamError.message;
           if (isStale()) return;
           setError(streamError.message);
           setHistory((currentHistory) => currentHistory.map((turn) => (
@@ -1268,6 +1286,8 @@ function QuickChatPanel({
         activeAssistantIdRef.current = null;
       }
     } catch (sendError) {
+      terminalStatus = 'failed';
+      terminalError = sendError.message;
       if (sendError.name !== 'AbortError' && activeAssistantIdRef.current === assistantId) {
         setError(sendError.message);
         setHistory((currentHistory) => currentHistory.map((turn) => (
@@ -1281,17 +1301,21 @@ function QuickChatPanel({
         activeAssistantIdRef.current = null;
       }
       setIsSending(false);
+      onSettled?.(terminalStatus, terminalError);
     }
   }, [ensureQuickThread, history, isSending, location.pathname, sendMessageStream]);
   useEffect(() => {
-    if (!pendingSubmission?.message || isSending) {
+    if (!pendingSubmission?.message || isSending || consumedSubmissionIdRef.current === pendingSubmission.id) {
       return;
     }
 
+    consumedSubmissionIdRef.current = pendingSubmission.id;
     onSubmissionConsumed?.(pendingSubmission.id);
     setComposerSeed((current) => ({ key: current.key + 1, message: '' }));
-    void submit(pendingSubmission.message);
-  }, [isSending, onSubmissionConsumed, pendingSubmission, submit]);
+    void submit(pendingSubmission.message, [], pendingSubmission.inline
+      ? (status, error) => onInlineSubmissionSettled?.(pendingSubmission.clientId, status, error)
+      : undefined);
+  }, [isSending, onInlineSubmissionSettled, onSubmissionConsumed, pendingSubmission, submit]);
   useEffect(() => {
     if (!pendingComposerDraft?.message) return;
     onComposerDraftConsumed?.(pendingComposerDraft.id);
@@ -1377,6 +1401,7 @@ function QuickChatPanel({
       onClose={onClose}
       isPinned={isPinned}
       onTogglePin={onTogglePin}
+      isBackground={isBackground}
       isOpen={isOpen}
       actions={(
         <>
@@ -1426,7 +1451,7 @@ function QuickChatPanel({
         disabled={false}
         enableSlashCommands={false}
         allowStop
-        autoFocus
+        autoFocus={!isBackground}
         keepFocusAfterSend
         initialMessage={composerSeed.message}
         enableAttachments
@@ -2148,7 +2173,7 @@ function AccountPanel({ onClose, isPinned, onTogglePin, isOpen }) {
 // Transition durations must match the CSS transition on .topnav-pane.
 const PANEL_EXIT_MS = 200;
 const PANEL_ENTER_DELAY_MS = 16; // one rAF tick
-function PanelHost({ activePanel, settingsOpen, quickChatConfig, quickChatSubmission, quickChatDraft, onQuickChatSubmissionConsumed, onQuickChatDraftConsumed, searchQuery, setActivePanel, setSettingsOpen, isPinned, onTogglePin, onResetLiveUiState }) {
+function PanelHost({ activePanel, settingsOpen, quickChatConfig, quickChatSubmission, quickChatDraft, quickChatInlineActive, onQuickChatSubmissionConsumed, onQuickChatDraftConsumed, onQuickChatInlineSettled, searchQuery, setActivePanel, setSettingsOpen, isPinned, onTogglePin, onResetLiveUiState }) {
   const widgets = useSelector(selectUiWidgets);
   const closePanel = useCallback(() => setActivePanel(null), [setActivePanel]);
 
@@ -2198,7 +2223,7 @@ function PanelHost({ activePanel, settingsOpen, quickChatConfig, quickChatSubmis
     document.addEventListener('keydown', handleKeyDown);
     return () => document.removeEventListener('keydown', handleKeyDown);
   }, [activePanel, closePanel, settingsOpen, setSettingsOpen]);
-  if (!displayed && !settingsOpen) return null;
+  if (!displayed && !settingsOpen && !quickChatInlineActive) return null;
 
   // Settings and Account are modal popups (centered window) — both portal to
   // document.body with a full-viewport scrim so the blurred backdrop covers
@@ -2212,7 +2237,22 @@ function PanelHost({ activePanel, settingsOpen, quickChatConfig, quickChatSubmis
     </>,
     document.body,
   ) : null;
-  if (!displayed) return settingsOverlay;
+  const quickChatVisible = displayed === 'quickChat';
+  const quickChatHost = quickChatVisible || quickChatInlineActive ? (
+    <QuickChatPanel
+      onClose={closePanel}
+      panelConfig={quickChatConfig}
+      pendingSubmission={quickChatSubmission}
+      onSubmissionConsumed={onQuickChatSubmissionConsumed}
+      pendingComposerDraft={quickChatDraft}
+      onComposerDraftConsumed={onQuickChatDraftConsumed}
+      onInlineSubmissionSettled={onQuickChatInlineSettled}
+      isBackground={!quickChatVisible}
+      isOpen={quickChatVisible && isOpen}
+      isPinned={quickChatVisible && isPinned}
+      onTogglePin={onTogglePin}
+    />
+  ) : null;
   const accountOverlay = displayed === 'account' ? createPortal(
     <>
       <button type="button" className="modal-scrim" aria-label="Close account" onClick={closePanel} />
@@ -2235,29 +2275,20 @@ function PanelHost({ activePanel, settingsOpen, quickChatConfig, quickChatSubmis
 
   const shared = { isOpen, isPinned, onTogglePin };
 
-  if (displayed === 'alerts') return <>{scrim}<AlertsPanel onClose={closePanel} {...shared} />{settingsOverlay}</>;
-  if (displayed === 'quickChat') {
-    return (
-      <>
-        {scrim}
-        <QuickChatPanel
-          onClose={closePanel}
-          panelConfig={quickChatConfig}
-          pendingSubmission={quickChatSubmission}
-          onSubmissionConsumed={onQuickChatSubmissionConsumed}
-          pendingComposerDraft={quickChatDraft}
-          onComposerDraftConsumed={onQuickChatDraftConsumed}
-          {...shared}
-        />
-        {settingsOverlay}
-      </>
-    );
-  }
-  if (displayed === 'settings') return settingsOverlay;
-  if (displayed === 'account') return <>{accountOverlay}{settingsOverlay}</>;
-  if (displayed === 'search') return <>{scrim}<SearchPanel query={searchQuery} widgets={widgets} onClose={closePanel} {...shared} />{settingsOverlay}</>;
-  if (displayed === 'insights') return <>{scrim}<InsightsPanel onClose={closePanel} {...shared} />{settingsOverlay}</>;
-  return null;
+  let panelContent = null;
+  if (displayed === 'alerts') panelContent = <AlertsPanel onClose={closePanel} {...shared} />;
+  if (displayed === 'search') panelContent = <SearchPanel query={searchQuery} widgets={widgets} onClose={closePanel} {...shared} />;
+  if (displayed === 'insights') panelContent = <InsightsPanel onClose={closePanel} {...shared} />;
+  const showScrim = ['alerts', 'quickChat', 'search', 'insights'].includes(displayed);
+  return (
+    <>
+      {quickChatHost}
+      {showScrim ? scrim : null}
+      {panelContent}
+      {accountOverlay}
+      {settingsOverlay}
+    </>
+  );
 }
 
 function AppRuntimeShell() {
@@ -2315,6 +2346,8 @@ function AppRuntimeShell() {
   const [quickChatSubmission, setQuickChatSubmission] = useState(null);
   const [quickChatDraft, setQuickChatDraft] = useState(null);
   const quickChatSubmissionIdRef = useRef(0);
+  const [quickChatInlineActive, setQuickChatInlineActive] = useState(false);
+  const quickChatInlineBusyRef = useRef(false);
   const quickChatInputRef = useRef(null);
   const [isNavCollapsed, setIsNavCollapsed] = useState(
     () => localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY) === 'true',
@@ -2494,17 +2527,32 @@ function AppRuntimeShell() {
     const handleOpenQuickChat = (event) => {
       const nextConfig = normalizeQuickChatConfig(event.detail);
       const prompt = normalizeAiPrompt(event.detail?.prompt);
+      const inline = event.detail?.inline === true;
+      const clientId = typeof event.detail?.clientId === 'string' ? event.detail.clientId : null;
+      if (inline && quickChatInlineBusyRef.current) {
+        window.dispatchEvent(new CustomEvent('progenitor:quick-chat-inline-status', {
+          detail: { clientId, status: 'failed', error: 'Another quick-chat edit is already running.' },
+        }));
+        return;
+      }
       if (prompt) {
         quickChatSubmissionIdRef.current += 1;
-        setQuickChatSubmission({ id: quickChatSubmissionIdRef.current, message: prompt });
+        setQuickChatSubmission({ id: quickChatSubmissionIdRef.current, message: prompt, inline, clientId });
+        if (inline) {
+          setQuickChatConfig(nextConfig);
+          quickChatInlineBusyRef.current = true;
+          setQuickChatInlineActive(true);
+        }
       }
       const draft = normalizeAiPrompt(event.detail?.draft);
       if (draft) {
         quickChatSubmissionIdRef.current += 1;
         setQuickChatDraft({ id: quickChatSubmissionIdRef.current, message: draft });
       }
-      setQuickChatConfig(nextConfig);
-      setActivePanel('quickChat');
+      if (!inline) {
+        setQuickChatConfig(nextConfig);
+        setActivePanel('quickChat');
+      }
     };
     window.addEventListener('progenitor:open-quick-chat', handleOpenQuickChat);
     return () => {
@@ -2525,11 +2573,18 @@ function AppRuntimeShell() {
     setQuickChatConfig(defaultQuickChatConfig);
     setActivePanel('quickChat');
   }, []);
-  const handleQuickChatSubmissionConsumed = useCallback(() => {
-    setQuickChatSubmission(null);
+  const handleQuickChatSubmissionConsumed = useCallback((id) => {
+    setQuickChatSubmission((current) => current?.id === id ? null : current);
   }, []);
   const handleQuickChatDraftConsumed = useCallback(() => {
     setQuickChatDraft(null);
+  }, []);
+  const handleQuickChatInlineSettled = useCallback((clientId, status, error) => {
+    quickChatInlineBusyRef.current = false;
+    setQuickChatInlineActive(false);
+    window.dispatchEvent(new CustomEvent('progenitor:quick-chat-inline-status', {
+      detail: { clientId, status, error },
+    }));
   }, []);
   const handleOpenPanel = useCallback((panel) => {
     if (panel === 'insights') {
@@ -2576,6 +2631,8 @@ function AppRuntimeShell() {
         quickChatConfig={quickChatConfig}
         quickChatSubmission={quickChatSubmission}
         quickChatDraft={quickChatDraft}
+        quickChatInlineActive={quickChatInlineActive}
+        onQuickChatInlineSettled={handleQuickChatInlineSettled}
         setSettingsOpen={setSettingsOpen}
         onQuickChatSubmissionConsumed={handleQuickChatSubmissionConsumed}
         onQuickChatDraftConsumed={handleQuickChatDraftConsumed}
