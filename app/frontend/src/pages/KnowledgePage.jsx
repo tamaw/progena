@@ -220,10 +220,13 @@ export default function KnowledgePage() {
   };
 
   const meta = selectedBase ? statusMeta(selectedBase.status) : null;
+  const openPagePath = searchParams.get('page') || 'index.md';
   const openPage = useSelector((state) => (selectedBaseId
-    ? selectKnowledgePage(state, selectedBaseId, searchParams.get('page') || 'index.md')
+    ? selectKnowledgePage(state, selectedBaseId, openPagePath)
     : null));
   const pageFacts = pageHeaderFacts(openPage?.front_matter);
+  // Generated indexes have no page type of their own.
+  if (openPage && openPagePath.split('/').at(-1) === 'index.md') pageFacts.type = 'index';
 
   return (
     <PageShell className="tasks-page knowledge-page">
