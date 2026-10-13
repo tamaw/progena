@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { buildEntityPath, useEntityUrlSync } from '../lib/routes';
 import { useConfig } from '../context/ConfigContext';
 import {
   fetchKnowledge,
   saveKnowledge,
   selectKnowledgeBases,
+  selectKnowledgePage,
   selectKnowledgeState,
 } from '../store/uiDataSlice';
 import KnowledgePagesTab from '../components/knowledge/KnowledgePagesTab';
@@ -44,6 +45,19 @@ import {
 
 
 
+// Type, tags, and readable generated time of the open page, from its front matter.
+function pageHeaderFacts(frontMatter) {
+  const fm = frontMatter && typeof frontMatter === 'object' ? frontMatter : {};
+  const at = fm.generated && typeof fm.generated === 'object' ? Date.parse(fm.generated.at) : NaN;
+  return {
+    type: fm.type ? String(fm.type) : null,
+    tags: Array.isArray(fm.tags) ? fm.tags.map(String) : fm.tags ? [String(fm.tags)] : [],
+    generatedAt: Number.isFinite(at)
+      ? new Date(at).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
+      : null,
+  };
+}
+
 function KnowledgeCard({ base, selected, onSelect }) {
   const meta = statusMeta(base.status);
   return (
@@ -57,6 +71,10 @@ function KnowledgeCard({ base, selected, onSelect }) {
         <div className="task-card__meta">
           <span className="kb-card__desc">{base.description}</span>
         </div>
+        <div className="task-card__meta kb-card__info">
+          <span>{formatCount(base.pageCount)} pages</span>
+          <span>synced {formatRelativeTime(base.lastSynced)}</span>
+        </div>
       </button>
     </article>
   );
@@ -69,6 +87,7 @@ export default function KnowledgePage() {
   // `titleSlug` is display context only (e.g. /knowledge/src-abc123/docs) --
   // selection is driven entirely by the id, never by the slug.
   const { baseId: urlBaseId } = useParams();
+  const [searchParams] = useSearchParams();
   const selectedBaseId = typeof urlBaseId === 'string' && urlBaseId.trim().length > 0
     ? urlBaseId
     : null;
@@ -201,6 +220,10 @@ export default function KnowledgePage() {
   };
 
   const meta = selectedBase ? statusMeta(selectedBase.status) : null;
+  const openPage = useSelector((state) => (selectedBaseId
+    ? selectKnowledgePage(state, selectedBaseId, searchParams.get('page') || 'index.md')
+    : null));
+  const pageFacts = pageHeaderFacts(openPage?.front_matter);
 
   return (
     <PageShell className="tasks-page knowledge-page">
@@ -318,9 +341,9 @@ export default function KnowledgePage() {
               )}
               meta={[
                 <DetailStatus key="status" tone={meta.tone}>{meta.label}</DetailStatus>,
-                <span key="path" className="muted">{selectedBase.path}</span>,
-                <span key="pages" className="muted">{formatCount(selectedBase.pageCount)} pages</span>,
-                <span key="synced" className="muted">synced {formatRelativeTime(selectedBase.lastSynced)}</span>,
+                ...(pageFacts.type ? [<span key="type" className="muted">{pageFacts.type}</span>] : []),
+                ...(pageFacts.tags.length ? [<span key="tags" className="muted">{pageFacts.tags.join(', ')}</span>] : []),
+                ...(pageFacts.generatedAt ? [<span key="generated" className="muted">generated {pageFacts.generatedAt}</span>] : []),
               ]}
             />
 
