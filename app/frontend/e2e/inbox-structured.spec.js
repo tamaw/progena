@@ -10,9 +10,9 @@ import {
 /**
  * Structured inbox browser regression.
  *
- * Covers nested brackets and collapse, literal code, default selection,
- * markdown edit+preview, remove, AI/explain quick chat, questions
- * option/free text, answer revisions, and optimistic-concurrency conflicts.
+ * Covers nested decorative margins, literal code, default selection,
+ * theme-aware colors, markdown edit+preview, remove, AI/explain quick chat,
+ * question options/free text, answer revisions, and edit conflicts.
  *
  * Requires an isolated database configured via INBOX_SMOKE_DATABASE_URL.
  * Each test seeds uniquely-named rows and cleans them up in a finally block.
@@ -94,6 +94,53 @@ test.describe('structured inbox', () => {
       const bottomGap = await summary.evaluate((section) => section.getBoundingClientRect().bottom
         - section.querySelector(':scope > .inbox-section__content').getBoundingClientRect().bottom);
       expect(bottomGap).toBeLessThan(6);
+    } finally {
+      removeInboxMessage(id);
+    }
+  });
+
+  test('section colors follow light and dark theme tokens', async ({ page }) => {
+    const title = 'Theme Colors';
+    const id = uniqueInboxId('theme');
+    seedInboxMessage({ id, title, body: '# Theme Colors\n\n<plan>\nTheme-aware section.\n</plan>' });
+    try {
+      await gotoInbox(page, title);
+      const colors = async (theme) => page.evaluate((nextTheme) => {
+        document.documentElement.dataset.theme = nextTheme;
+        const probe = document.createElement('span');
+        probe.style.color = 'var(--color-accent)';
+        probe.style.backgroundColor = 'var(--color-bg-secondary)';
+        document.body.append(probe);
+        const accent = getComputedStyle(probe).color;
+        const surface = getComputedStyle(probe).backgroundColor;
+        probe.style.color = 'var(--color-text-primary)';
+        const foreground = getComputedStyle(probe).color;
+        probe.remove();
+        const section = getComputedStyle(document.querySelector('.inbox-section.is-selected'));
+        const ai = getComputedStyle(document.querySelector('.inbox-section__ai-action'));
+        const remove = getComputedStyle(document.querySelector('.inbox-section__remove-action'));
+        return {
+          accent,
+          sectionBorder: section.borderLeftColor,
+          buttonBackground: remove.backgroundColor,
+          surface,
+          buttonText: remove.color,
+          foreground,
+          aiIcon: getComputedStyle(document.querySelector('.inbox-section__ai-action svg')).color,
+          aiBackground: ai.backgroundImage,
+        };
+      }, theme);
+      const dark = await colors('dark');
+      const light = await colors('light');
+      for (const palette of [dark, light]) {
+        expect(palette.sectionBorder).toBe(palette.accent);
+        expect(palette.aiIcon).toBe(palette.accent);
+        expect(palette.buttonBackground).toBe(palette.surface);
+        expect(palette.buttonText).toBe(palette.foreground);
+        expect(palette.aiBackground).toContain(palette.surface);
+      }
+      expect(light.sectionBorder).not.toBe(dark.sectionBorder);
+      expect(light.buttonBackground).not.toBe(dark.buttonBackground);
     } finally {
       removeInboxMessage(id);
     }
