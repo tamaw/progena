@@ -107,10 +107,6 @@ class BackendDocumentStore(Protocol):
 
     def save_document(self, prefix: str, key: str, payload: Any) -> None: ...
 
-    def update_document_body_if(
-        self, prefix: str, key: str, expected_body: str, new_body: str
-    ) -> bool: ...
-
     def delete_document(self, prefix: str, key: str) -> None: ...
 
     def query_logs(
@@ -181,19 +177,6 @@ class InMemoryDocumentStore:
 
     def save_document(self, prefix: str, key: str, payload: Any) -> None:
         self._documents[(prefix, key)] = StoredDocument(payload, datetime.now(UTC))
-
-    def update_document_body_if(
-        self, prefix: str, key: str, expected_body: str, new_body: str
-    ) -> bool:
-        document = self._documents.get((prefix, key))
-        if document is None or not isinstance(document.payload, dict):
-            return False
-        if document.payload.get("body") != expected_body:
-            return False
-        new_payload = dict(document.payload)
-        new_payload["body"] = new_body
-        self._documents[(prefix, key)] = StoredDocument(new_payload, datetime.now(UTC))
-        return True
 
     def delete_document(self, prefix: str, key: str) -> None:
         self._documents.pop((prefix, key), None)
@@ -754,22 +737,6 @@ class PostgresDocumentStore:
                 """,
                 (prefix, key, Jsonb(value)),
             )
-
-    def update_document_body_if(
-        self, prefix: str, key: str, expected_body: str, new_body: str
-    ) -> bool:
-        with self._cursor() as cur:
-            cur.execute(
-                """
-                UPDATE store
-                SET value = jsonb_set(value, '{payload,body}', to_jsonb(%s::text)),
-                    updated_at = now()
-                WHERE prefix = %s AND key = %s
-                  AND value -> 'payload' ->> 'body' = %s
-                """,
-                (new_body, prefix, key, expected_body),
-            )
-            return cur.rowcount == 1
 
     def delete_document(self, prefix: str, key: str) -> None:
         with self._cursor() as cur:

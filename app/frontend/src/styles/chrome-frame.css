@@ -6207,7 +6207,6 @@ body,
 }
 
 .inbox-section__actions,
-.inbox-section__format,
 .inbox-section__options {
   display: flex;
   flex-wrap: wrap;
@@ -6232,7 +6231,6 @@ body,
 }
 
 .inbox-section__actions button,
-.inbox-section__editor button,
 .inbox-section__question button {
   cursor: pointer;
   border: 1px solid var(--color-border);
@@ -6350,8 +6348,7 @@ body,
   opacity: 1;
 }
 
-.inbox-section__options input,
-.inbox-section__editor textarea {
+.inbox-section__options input {
   border: 1px solid var(--color-border);
   border-radius: 5px;
   padding: 7px;
@@ -6359,35 +6356,6 @@ body,
   color: var(--color-text-primary);
 }
 
-.inbox-section__editor textarea {
-  display: block;
-  box-sizing: border-box;
-  width: 100%;
-  min-height: 360px;
-  resize: vertical;
-  margin: 8px 0;
-  font: inherit;
-}
-
-.inbox-section__editor[aria-label="Out-of-date manual draft"] {
-  margin-bottom: 12px;
-  padding: 10px;
-  border: 1px solid var(--color-border);
-  border-radius: 6px;
-  background: var(--color-bg-secondary);
-}
-
-.inbox-section__editor textarea[readonly] {
-  min-height: 96px;
-  max-height: 180px;
-}
-
-.inbox-section__preview {
-  margin: 10px 0;
-  padding: 10px;
-  border: 1px solid var(--color-border);
-  border-radius: 6px;
-}
 
 .inbox-section__question {
   margin: 6px 0;
@@ -6427,9 +6395,6 @@ body,
   min-width: 0;
 }
 
-.inbox-section__error {
-  color: var(--color-error);
-}
 
 /* Dense meta row: items fit on one line (Agents/Models/Channels/Schedules), so
    widen the gap vs the wrapping chat/tasks rows. */

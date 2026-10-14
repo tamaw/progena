@@ -55,13 +55,6 @@ class InboxDecisionRequest(BaseModel):
     decision: Literal["approved", "rejected"]
 
 
-class InboxSectionPatchRequest(BaseModel):
-    expected_body: str
-    start: int
-    end: int
-    replacement: str
-
-
 def _message_key(message_id: str) -> str:
     return f"{INBOX_MESSAGE_KEY_PREFIX}{message_id}"
 
@@ -85,49 +78,6 @@ def _normalize_message(key: str, payload: Any) -> InboxMessage | None:
         task_id=str(payload["task_id"]) if payload.get("task_id") else None,
         archived=bool(payload.get("archived", False)),
     )
-
-
-def _validate_utf16_offsets(s: str, start: int, end: int) -> None:
-    """Validate that *start* and *end* are valid UTF-16 code-unit offsets in *s*.
-
-    Raises ``ValueError`` if the range is negative, out of bounds, or splits a
-    surrogate pair (astral characters occupy two UTF-16 code units).
-    """
-    if start < 0 or end < 0 or start > end:
-        raise ValueError("Invalid UTF-16 offset range")
-
-    total = 0
-    for ch in s:
-        cu = 2 if ord(ch) > 0xFFFF else 1
-        if cu == 2:
-            if start == total + 1:
-                raise ValueError("Start offset splits a surrogate pair")
-            if end == total + 1:
-                raise ValueError("End offset splits a surrogate pair")
-        total += cu
-
-    if start > total or end > total:
-        raise ValueError("UTF-16 offset out of bounds")
-
-
-def _utf16_splice(s: str, start: int, end: int, replacement: str) -> str:
-    """Return *s* with the UTF-16 code-unit range ``[start, end)`` replaced by
-    *replacement*.
-
-    Precondition: offsets have already been validated by
-    ``_validate_utf16_offsets``.
-    """
-    before_parts: list[str] = []
-    after_parts: list[str] = []
-    idx = 0
-    for ch in s:
-        cu = 2 if ord(ch) > 0xFFFF else 1
-        if idx + cu <= start:
-            before_parts.append(ch)
-        elif idx >= end:
-            after_parts.append(ch)
-        idx += cu
-    return "".join(before_parts) + replacement + "".join(after_parts)
 
 
 def list_inbox_messages(store: BackendDocumentStore) -> list[InboxMessage]:
@@ -276,58 +226,6 @@ def create_inbox_router(
             payload["read_at"] = datetime.now(UTC).isoformat()
 
         mutate_message(message_id, mutate, request_id=request_id)
-        return acknowledgement_response(request_id, ["inbox.snapshot"])
-
-    @router.patch(
-        "/inbox/{message_id}/section",
-        status_code=202,
-        response_model=UiRequestAcknowledgement,
-    )
-    async def patch_inbox_message_section(
-        http_request: Request,
-        message_id: str,
-        request: InboxSectionPatchRequest,
-        x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
-    ):
-        """Atomically replace a UTF-16 code-unit range in a message's body.
-
-        The UI sends the body it believes is current (*expected_body*) along
-        with *start*/*end* offsets measured in JavaScript UTF-16 code units.
-        The backend validates the offsets, verifies the live body still matches
-        *expected_body*, and splices *replacement* into the range.  If the body
-        has changed concurrently a ``409 Conflict`` is returned so the UI can
-        refresh and retry.
-        """
-        request_id = _request_correlation_id(http_request, x_request_id)
-
-        try:
-            _validate_utf16_offsets(request.expected_body, request.start, request.end)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=f"Invalid section range: {exc}") from None
-
-        new_body = _utf16_splice(
-            request.expected_body, request.start, request.end, request.replacement
-        )
-
-        store = get_document_store()
-        load_message(store, message_id)
-        success = store.update_document_body_if(
-            PROGENITOR_STATE_PREFIX, _message_key(message_id), request.expected_body, new_body
-        )
-        if not success:
-            raise HTTPException(status_code=409, detail="Inbox message body has changed")
-
-        payload = load_message(store, message_id)
-        message = _normalize_message(_message_key(message_id), payload)
-        if message is None:
-            raise HTTPException(status_code=500, detail="Inbox message could not be loaded")
-
-        broadcast_ui_event(
-            "inbox.message.upserted",
-            {"message": message.model_dump()},
-            request_id=request_id,
-        )
-        broadcast_snapshot(request_id=request_id)
         return acknowledgement_response(request_id, ["inbox.snapshot"])
 
     @router.delete("/inbox/{message_id}", status_code=202, response_model=UiRequestAcknowledgement)

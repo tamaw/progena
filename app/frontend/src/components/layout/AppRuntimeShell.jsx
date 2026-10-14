@@ -1305,6 +1305,12 @@ function QuickChatPanel({
     }
   }, [ensureQuickThread, history, isSending, location.pathname, sendMessageStream]);
   useEffect(() => {
+    if (!isSending || !pendingSubmission?.inline || consumedSubmissionIdRef.current === pendingSubmission.id) return;
+    consumedSubmissionIdRef.current = pendingSubmission.id;
+    onSubmissionConsumed?.(pendingSubmission.id);
+    onInlineSubmissionSettled?.(pendingSubmission.clientId, 'failed', 'Quick chat is busy. Try again when it finishes.');
+  }, [isSending, pendingSubmission, onSubmissionConsumed, onInlineSubmissionSettled]);
+  useEffect(() => {
     if (!pendingSubmission?.message || isSending || consumedSubmissionIdRef.current === pendingSubmission.id) {
       return;
     }
@@ -2346,6 +2352,7 @@ function AppRuntimeShell() {
   const [quickChatSubmission, setQuickChatSubmission] = useState(null);
   const [quickChatDraft, setQuickChatDraft] = useState(null);
   const quickChatSubmissionIdRef = useRef(0);
+  const pendingQuickChatRef = useRef(null);
   const [quickChatInlineActive, setQuickChatInlineActive] = useState(false);
   const quickChatInlineBusyRef = useRef(false);
   const quickChatInputRef = useRef(null);
@@ -2536,8 +2543,25 @@ function AppRuntimeShell() {
         return;
       }
       if (prompt) {
+        if (pendingQuickChatRef.current) {
+          if (inline) {
+            window.dispatchEvent(new CustomEvent('progenitor:quick-chat-inline-status', {
+              detail: { clientId, status: 'failed', error: 'Quick chat is busy. Try again when it finishes.' },
+            }));
+          } else {
+            quickChatSubmissionIdRef.current += 1;
+            setQuickChatDraft({ id: quickChatSubmissionIdRef.current, message: prompt });
+          }
+          if (!inline) {
+            setQuickChatConfig(nextConfig);
+            setActivePanel('quickChat');
+          }
+          return;
+        }
         quickChatSubmissionIdRef.current += 1;
-        setQuickChatSubmission({ id: quickChatSubmissionIdRef.current, message: prompt, inline, clientId });
+        const pending = { id: quickChatSubmissionIdRef.current, message: prompt, inline, clientId };
+        pendingQuickChatRef.current = pending;
+        setQuickChatSubmission(pending);
         if (inline) {
           setQuickChatConfig(nextConfig);
           quickChatInlineBusyRef.current = true;
@@ -2569,11 +2593,18 @@ function AppRuntimeShell() {
     }
     event.currentTarget.reset();
     quickChatSubmissionIdRef.current += 1;
-    setQuickChatSubmission({ id: quickChatSubmissionIdRef.current, message: prompt });
+    const pending = { id: quickChatSubmissionIdRef.current, message: prompt };
+    if (pendingQuickChatRef.current) {
+      setQuickChatDraft(pending);
+    } else {
+      pendingQuickChatRef.current = pending;
+      setQuickChatSubmission(pending);
+    }
     setQuickChatConfig(defaultQuickChatConfig);
     setActivePanel('quickChat');
   }, []);
   const handleQuickChatSubmissionConsumed = useCallback((id) => {
+    if (pendingQuickChatRef.current?.id === id) pendingQuickChatRef.current = null;
     setQuickChatSubmission((current) => current?.id === id ? null : current);
   }, []);
   const handleQuickChatDraftConsumed = useCallback(() => {

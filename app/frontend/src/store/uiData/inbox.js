@@ -66,17 +66,6 @@ export const archiveInboxMessage = createAcknowledgedThunk('uiData/archiveInboxM
   { method: 'POST', body: { archived }, requestId },
 ));
 
-export const patchInboxSection = createAcknowledgedThunk('uiData/patchInboxSection', ({
-  inboxUrl, messageId, expectedBody, start, end, replacement,
-}, { requestId }) => requestAcknowledged(
-  `${inboxUrl}/${encodeURIComponent(messageId)}/section`,
-  {
-    method: 'PATCH',
-    body: { expected_body: expectedBody, start, end, replacement },
-    requestId,
-    errorLabel: 'Could not save section',
-  },
-));
 
 export const eventHandlers = {
   'inbox.snapshot': (state, payload) => {

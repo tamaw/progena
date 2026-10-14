@@ -17,17 +17,15 @@ function documentFor(props) {
   }
 }
 
-describe('StructuredDocumentBody optional actions', () => {
-  it('renders nested content without offering unavailable edit, AI, or answer actions', () => {
-    const content = '<plan>Review **this**.\n<questions>Proceed?<options><option>Yes</option></options></questions></plan>';
-    const readonly = documentFor({ content });
-    expect(readonly.querySelector('.inbox-section__content strong')?.textContent).toBe('this');
-    expect(readonly.querySelectorAll('.inbox-section')).toHaveLength(4);
-    expect(readonly.querySelectorAll('[role="toolbar"], .inbox-section__question')).toHaveLength(0);
-    expect(readonly.querySelector('.inbox-section__select')?.disabled).toBe(true);
-
-    const editable = documentFor({ content, onSaveSection: async () => {} });
-    expect([...editable.querySelectorAll('[role="toolbar"] button')].map((button) => button.getAttribute('aria-label'))).toEqual(['Edit', 'Remove', 'Edit', 'Remove', 'Edit', 'Remove', 'Edit', 'Remove']);
-    expect(editable.querySelector('[aria-label="Edit with AI"]')).toBeNull();
+describe('StructuredDocumentBody', () => {
+  it('keeps nested questions between the surrounding paragraphs', () => {
+    const content = '<plan>Before.\n<questions>Proceed?<options><option>Yes</option></options></questions>\nAfter.</plan>';
+    const document = documentFor({ content, onAskAgent: () => {}, onAnswerQuestion: () => {} });
+    const plan = document.querySelector('.inbox-section');
+    const rendered = plan.querySelector('.inbox-section__content');
+    expect(rendered.textContent.indexOf('Before.')).toBeLessThan(rendered.textContent.indexOf('Proceed?'));
+    expect(rendered.textContent.indexOf('Proceed?')).toBeLessThan(rendered.textContent.indexOf('After.'));
+    expect(plan.querySelector('[aria-label="Edit"]')).toBeNull();
+    expect(plan.querySelector('[aria-label="Remove"]')).not.toBeNull();
   });
 });
