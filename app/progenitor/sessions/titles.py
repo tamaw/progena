@@ -1,17 +1,9 @@
-"""Chat session documents shared by the backend and the runtime.
-
-The backend owns these documents (one per chat under ``backend.chat.sessions``
-plus an ``__index__`` list of thread ids); the runtime reads them to know
-which chats exist, their titles, and whether they are archived. The title
-rule lives here so the chat sidebar and the agent's transcripts never disagree.
-"""
+"""Chat session title rules shared by the backend and the runtime."""
 
 from __future__ import annotations
 
-CHAT_METADATA_PREFIX = "backend.chat.sessions"
-CHAT_SESSIONS_NAMESPACE = tuple(CHAT_METADATA_PREFIX.split("."))
-CHAT_INDEX_KEY = "__index__"
 DEFAULT_CHAT_TITLE = "New chat"
+DEFAULT_USER_NICK = "user"
 _PLACEHOLDER_TITLES = {DEFAULT_CHAT_TITLE.lower(), "new conversation", "untitled chat"}
 _DERIVED_TITLE_CHARS = 64
 

@@ -174,6 +174,39 @@ def document_query_output_schema(
     }
 
 
+def document_write_input_schema(
+    document_type: DocumentType, document_schema: Mapping[str, Any] | None
+) -> dict[str, Any]:
+    """Input ports: ``id`` for collections, plus one optional port per writable field."""
+    embedded, definitions = _typed_document_schema(document_type, document_schema)
+    properties: dict[str, Any] = {}
+    if document_type.collection:
+        properties["id"] = {"type": "string"}
+    writable_props = unpackable_properties(embedded)
+    for field in document_type.writable:
+        properties[field] = copy.deepcopy(writable_props.get(field, _ANY_VALUE_SCHEMA))
+    required = ["id"] if document_type.collection else []
+    return {"type": "object", "required": required, "properties": properties, **definitions}
+
+
+def document_write_output_schema(
+    document_type: DocumentType, document_schema: Mapping[str, Any] | None
+) -> dict[str, Any]:
+    """Output ports: ``found`` plus one optional port per writable field."""
+    embedded, definitions = _typed_document_schema(document_type, document_schema)
+    writable_props = unpackable_properties(embedded)
+    properties: dict[str, Any] = {"found": {"type": "boolean"}}
+    for field in document_type.writable:
+        properties[field] = copy.deepcopy(writable_props.get(field, _ANY_VALUE_SCHEMA))
+    return {
+        "title": f"{document_type.label} write",
+        "type": "object",
+        "required": ["found"],
+        "properties": properties,
+        **definitions,
+    }
+
+
 def document_changed_fields(before: Any, after: Any) -> list[str]:
     """Top-level fields whose value differs between two document payloads."""
 
@@ -404,6 +437,22 @@ class WorkflowNodeDocumentQuery(BaseModel):
     output_schema: dict[str, Any] = Field(default_factory=lambda: dict(_JSON_OBJECT_SCHEMA))
 
 
+class WorkflowNodeDocumentWrite(BaseModel):
+    """Atomic partial write of one document of a type; no LLM involved.
+
+    Only fields declared in the type's ``writable`` tuple may be written.
+    Schemas are derived from the document type on save.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["document_write"] = "document_write"
+    title: str = "Write document"
+    document_type: str = Field(min_length=1)
+    input_schema: dict[str, Any] = Field(default_factory=lambda: dict(_JSON_OBJECT_SCHEMA))
+    output_schema: dict[str, Any] = Field(default_factory=lambda: dict(_JSON_OBJECT_SCHEMA))
+
+
 class WorkflowNodeUnpack(BaseModel):
     """Pure step exposing one object's properties as output ports.
 
@@ -527,6 +576,7 @@ WorkflowNode = Annotated[
     | WorkflowNodeData
     | WorkflowNodeDocumentRead
     | WorkflowNodeDocumentQuery
+    | WorkflowNodeDocumentWrite
     | WorkflowNodeUnpack
     | WorkflowNodeExtract
     | WorkflowNodeAgent
@@ -945,6 +995,7 @@ def derive_workflow_port_schemas(
             "event",
             "document_read",
             "document_query",
+            "document_write",
         }:
             continue
         type_id = node.get("document_type")
@@ -963,6 +1014,14 @@ def derive_workflow_port_schemas(
         elif kind == "document_read":
             node["input_schema"] = document_read_input_schema(document_type)
             node["output_schema"] = document_read_output_schema(document_type, document_schema)
+        elif kind == "document_write":
+            if not document_type.writable:
+                raise ValueError(
+                    f"document_write node '{node_id}' cannot use '{document_type.id}': "
+                    f"it has no writable fields"
+                )
+            node["input_schema"] = document_write_input_schema(document_type, document_schema)
+            node["output_schema"] = document_write_output_schema(document_type, document_schema)
         else:
             if not document_type.collection:
                 raise ValueError(

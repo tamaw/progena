@@ -332,3 +332,113 @@ def test_match_path_requires_presence():
     created = {"document_type": "kanban_card", "after": {"column_id": None}}
     assert not node.matches(created)
     assert node.matches({**created, "before": {"column_id": None}})
+
+
+def test_document_write_rejects_non_writable_type():
+    workflow = _workflow(
+        {"document_type": "kanban_card"},
+        {"write": {"kind": "document_write", "title": "Write", "document_type": "kanban_board"}},
+        [],
+    )
+    with pytest.raises(ValueError, match="has no writable fields"):
+        derive_workflow_port_schemas(workflow, BUILTIN_TYPES)
+
+
+def test_document_write_derives_ports_from_writable_fields():
+    workflow = _workflow(
+        {"document_type": "kanban_card"},
+        {"write": {"kind": "document_write", "title": "Write", "document_type": "session"}},
+        [],
+    )
+    derived = derive_workflow_port_schemas(workflow, BUILTIN_TYPES)
+    write = derived["graph"]["nodes"]["write"]
+    assert write["input_schema"]["required"] == ["id"]
+    assert set(write["input_schema"]["properties"]) == {"id", "title", "pinned", "archived"}
+    assert set(write["output_schema"]["properties"]) == {"found", "title", "pinned", "archived"}
+    assert write["output_schema"]["required"] == ["found"]
+
+
+@pytest.mark.asyncio
+async def test_document_write_node_executes_merge_and_sets_origin(store):
+    workflow = _workflow(
+        {"document_type": "session"},
+        {
+            "title_data": {
+                "kind": "data",
+                "title": "Title",
+                "value": "Renamed",
+                "output_schema": {"type": "string"},
+            },
+            "write": {
+                "kind": "document_write",
+                "title": "Set title",
+                "document_type": "session",
+            },
+        },
+        [
+            ("event", "id", "write", "id"),
+            ("title_data", "value", "write", "title"),
+        ],
+    )
+    definition = save_workflow_definition(store, workflow)
+    store.save_document(
+        PROGENITOR_STATE_PREFIX,
+        "session:t1",
+        {
+            "id": "t1",
+            "thread_id": "t1",
+            "source": "ui",
+            "title": "Old",
+            "first_message": "hi",
+            "pinned": False,
+            "archived": False,
+            "created_at": "2024-01-01T00:00:00Z",
+            "last_activity": "2024-01-01T00:00:00Z",
+            "content": "",
+        },
+    )
+    executor = ui_routes.get_workflow_executor()
+    await executor.trigger_workflow(
+        definition.id, build_manual_trigger_event(definition, payload={"id": "t1"})
+    )
+    [completed] = await _wait_for(lambda: _completed_runs(store, definition.id))
+    assert completed.node_outputs["write"]["found"] is True
+    assert completed.node_outputs["write"]["title"] == "Renamed"
+    updated = store.get_document(PROGENITOR_STATE_PREFIX, "session:t1")
+    assert updated.payload["title"] == "Renamed"
+    # Verify origin was set to run id
+    events = store.read_document_events(0, 100)
+    session_events = [e for e in events if e.key == "session:t1" and e.op == "updated"]
+    assert len(session_events) == 1
+    assert session_events[0].origin == completed.run_id
+
+
+@pytest.mark.asyncio
+async def test_document_write_node_not_found_returns_false(store):
+    workflow = _workflow(
+        {"document_type": "session"},
+        {
+            "title_data": {
+                "kind": "data",
+                "title": "Title",
+                "value": "Renamed",
+                "output_schema": {"type": "string"},
+            },
+            "write": {
+                "kind": "document_write",
+                "title": "Set title",
+                "document_type": "session",
+            },
+        },
+        [
+            ("event", "id", "write", "id"),
+            ("title_data", "value", "write", "title"),
+        ],
+    )
+    definition = save_workflow_definition(store, workflow)
+    executor = ui_routes.get_workflow_executor()
+    await executor.trigger_workflow(
+        definition.id, build_manual_trigger_event(definition, payload={"id": "missing"})
+    )
+    [completed] = await _wait_for(lambda: _completed_runs(store, definition.id))
+    assert completed.node_outputs["write"]["found"] is False

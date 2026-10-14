@@ -460,6 +460,16 @@ describe('getActiveRouteThreadId', () => {
       initialSelectionPending: true,
     })).toBe('url-thread');
   });
+
+  it('routes an empty local draft once initial selection completes', () => {
+    expect(getActiveRouteThreadId({
+      selectedBackendChatId: null,
+      messages: [],
+      threadId: 'draft-thread',
+      urlThreadId: 'previous-chat',
+      initialSelectionPending: false,
+    })).toBe('draft-thread');
+  });
 });
 
 describe('new-chat empty state', () => {

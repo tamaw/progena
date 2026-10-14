@@ -71,6 +71,7 @@ class ScriptedBridge:
         thread_id: str,
         received_at: float | None = None,
         attachments: list[dict[str, Any]] | None = None,
+        source: str | None = None,
     ):
         self.thread_id = thread_id
         items = self._script(message) if callable(self._script) else self._script
@@ -113,6 +114,12 @@ class FakeStateManager:
         self, updates: dict[str, Any], thread_id: str | None = None
     ) -> None:
         self._current_state.update(updates)
+
+    async def merge_session(self, thread_id: str, fields: dict[str, Any]) -> bool:
+        return False
+
+    async def get_preferences_config(self) -> dict[str, Any]:
+        return {"display_name": "user", "timezone": "UTC"}
 
 
 @dataclass
@@ -460,8 +467,9 @@ async def test_direct_stream_queue_applies_backpressure(monkeypatch) -> None:
             thread_id: str,
             received_at: float | None = None,
             attachments: list[dict[str, Any]] | None = None,
+            source: str | None = None,
         ):
-            del thread_id, received_at
+            del thread_id, received_at, source
             nonlocal produced
             for index in range(30):
                 produced += 1
@@ -665,6 +673,54 @@ async def test_items_with_real_graph() -> None:
             assert body["data"][0]["role"] == "user"
             assert body["data"][1]["role"] == "assistant"
             assert body["has_more"] is False
+    finally:
+        await _stop_chat_server(server)
+
+
+async def test_turn_threads_progenitor_source_from_metadata() -> None:
+    loop_runner = FakeLoopRunner()
+    bridges: list[Any] = []
+
+    class _CapturingBridge:
+        def __init__(self) -> None:
+            self.last_source: str | None = None
+
+        async def stream(
+            self,
+            message: str,
+            *,
+            thread_id: str,
+            received_at: float,
+            source: str | None = None,
+            attachments: Any = None,
+        ) -> Any:
+            self.last_source = source
+            yield {"type": "stream_chunk", "content": "ok", "is_final": True}
+
+    def _bridge_factory(*_args: Any, **_kwargs: Any) -> _CapturingBridge:
+        b = _CapturingBridge()
+        bridges.append(b)
+        return b
+
+    server = await _start_chat_server(loop_runner, bridge_factory=_bridge_factory)
+    try:
+        async with httpx.AsyncClient() as client:
+            await _post_responses(
+                client, server.base_url, "hi", "req-ui", metadata={"source": "ui"}
+            )
+        assert bridges[-1].last_source == "ui"
+
+        async with httpx.AsyncClient() as client:
+            await _post_responses(
+                client, server.base_url, "hi", "req-api", metadata={"source": "api"}
+            )
+        assert bridges[-1].last_source == "api"
+
+        async with httpx.AsyncClient() as client:
+            await _post_responses(
+                client, server.base_url, "hi", "req-wf", metadata={"source": "workflow"}
+            )
+        assert bridges[-1].last_source is None
     finally:
         await _stop_chat_server(server)
 

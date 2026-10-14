@@ -84,6 +84,9 @@ from .ui_routes import (
 )
 from .ui_routes import router as ui_router
 
+SOURCE_TELEGRAM = "telegram"
+SOURCE_UI = "ui"
+
 logger = logging.getLogger(__name__)
 
 # Global config and client
@@ -562,7 +565,9 @@ async def _send_telegram_connected_message(
         conversation_id = _telegram_conversation_id(telegram.config.chat_id)
         response_text = (
             await progenitor.send_message(
-                prompt, request_id=request_id, metadata={"thread_id": conversation_id}
+                prompt,
+                request_id=request_id,
+                metadata={"thread_id": conversation_id, "source": SOURCE_TELEGRAM},
             )
         ).response.strip()
         if not response_text:
@@ -711,7 +716,9 @@ async def _handle_telegram_agent_message(
                 chat_id,
                 _stream_text_chunks(
                     progenitor.send_message_stream_events(
-                        message, request_id=request_id, metadata={"thread_id": conversation_id}
+                        message,
+                        request_id=request_id,
+                        metadata={"thread_id": conversation_id, "source": SOURCE_TELEGRAM},
                     )
                 ),
                 message_thread_id=metadata.get("message_thread_id"),
@@ -1553,6 +1560,7 @@ def _build_chat_request_metadata(
     ).strip()
     thread_id = requested_thread_id or _default_conversation_id(session)
     metadata["thread_id"] = thread_id
+    metadata["source"] = SOURCE_UI
     return thread_id, metadata
 
 

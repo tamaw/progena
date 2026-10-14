@@ -148,6 +148,8 @@ class BackendDocumentStore(Protocol):
 
     def save_document(self, prefix: str, key: str, payload: Any) -> None: ...
 
+    def merge_document(self, prefix: str, key: str, payload: Any) -> bool: ...
+
     def delete_document(self, prefix: str, key: str) -> None: ...
 
     def read_document_events(self, after_seq: int, limit: int) -> list[DocumentEvent]: ...
@@ -244,6 +246,17 @@ class InMemoryDocumentStore:
         previous = self._documents.pop((prefix, key), None)
         if previous is not None:
             self._record_event(prefix, key, "deleted", previous.payload, None)
+
+    def merge_document(self, prefix: str, key: str, payload: Any) -> bool:
+        previous = self._documents.get((prefix, key))
+        if previous is None or not isinstance(previous.payload, dict):
+            return False
+        merged = {**previous.payload, **payload}
+        stored = copy.deepcopy(merged)
+        self._documents[(prefix, key)] = StoredDocument(stored, datetime.now(UTC))
+        if previous.payload != stored:
+            self._record_event(prefix, key, "updated", previous.payload, stored)
+        return True
 
     def add_document_event_listener(self, listener: Callable[[int], None]) -> None:
         """Call ``listener(seq)`` after each recorded event (the in-memory NOTIFY)."""
@@ -618,6 +631,17 @@ class PostgresDocumentStore:
                     IF TG_OP = 'UPDATE' AND OLD.value IS NOT DISTINCT FROM NEW.value THEN
                         RETURN NULL;
                     END IF;
+                    -- Noise filter: content/last_activity-only updates on session docs
+                    -- do not log an event, because they happen on every turn.
+                    IF TG_OP = 'UPDATE'
+                        AND row_prefix = 'progenitor.state'
+                        AND COALESCE(NEW.key, OLD.key) LIKE 'session:%'
+                        AND (OLD.value -> 'payload') - 'content' - 'last_activity'
+                            IS NOT DISTINCT FROM
+                            (NEW.value -> 'payload') - 'content' - 'last_activity'
+                    THEN
+                        RETURN NULL;
+                    END IF;
                     INSERT INTO document_events (prefix, key, op, before, after, origin)
                     VALUES (
                         row_prefix,
@@ -839,13 +863,29 @@ class PostgresDocumentStore:
             (prefix, key, Jsonb(value)),
         )
 
+    def merge_document(self, prefix: str, key: str, payload: Any) -> bool:
+        """Merge ``payload`` into an existing document's payload; ``False`` if it is missing."""
+
+        return (
+            self._write_with_origin(
+                """
+            UPDATE store
+            SET value = jsonb_set(value, '{payload}', (value->'payload') || %s::jsonb),
+                updated_at = now()
+            WHERE prefix = %s AND key = %s
+            """,
+                (Jsonb(payload), prefix, key),
+            )
+            > 0
+        )
+
     def delete_document(self, prefix: str, key: str) -> None:
         self._write_with_origin(
             "DELETE FROM store WHERE prefix = %s AND key = %s",
             (prefix, key),
         )
 
-    def _write_with_origin(self, query: LiteralString, params: tuple[Any, ...]) -> None:
+    def _write_with_origin(self, query: LiteralString, params: tuple[Any, ...]) -> int:
         """Run one store write, tagging it with the context's writer origin.
 
         ``set_config(..., true)`` is transaction-local, so the tagged write runs
@@ -855,10 +895,11 @@ class PostgresDocumentStore:
         with self._cursor() as cur:
             if origin is None:
                 cur.execute(query, params)
-                return
+                return cur.rowcount
             with cur.connection.transaction():
                 cur.execute("SELECT set_config('progenitor.origin', %s, true)", (origin,))
                 cur.execute(query, params)
+            return cur.rowcount
 
     def read_document_events(self, after_seq: int, limit: int) -> list[DocumentEvent]:
         with self._cursor() as cur:

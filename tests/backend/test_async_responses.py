@@ -279,7 +279,7 @@ class TestAsyncResponseHandling:
         assert captured == {
             "message": "hi",
             "request_id": request_id,
-            "metadata": {"thread_id": "thread_sess_thread_abc"},
+            "metadata": {"thread_id": "thread_sess_thread_abc", "source": "ui"},
         }
         assert [event_name for event_name, _ in canonical_frames] == ["ui.event"] * 2
         lifecycle = [event for _, event in canonical_frames]
@@ -952,7 +952,7 @@ class TestAsyncResponseHandling:
         assert captured == {
             "message": "hi",
             "request_id": request_id,
-            "metadata": {"thread_id": "thread_sess_thread_xyz"},
+            "metadata": {"thread_id": "thread_sess_thread_xyz", "source": "ui"},
             "include_reasoning": None,
         }
         assert [event.type for event in events] == [

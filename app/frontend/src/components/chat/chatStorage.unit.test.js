@@ -5,8 +5,6 @@ import {
   writeJsonOrRemove,
   loadStoredPinnedSessionIds,
   persistPinnedSessionIds,
-  loadStoredCustomChatTitle,
-  persistCustomChatTitle,
   loadQuickChatHandoff,
 } from './chatStorage';
 
@@ -48,18 +46,6 @@ describe('pinned session ids', () => {
   it('filters out non-string entries on load', () => {
     localStorage.setItem(PINNED_CHAT_SESSIONS_KEY, JSON.stringify(['a', 2, '', null, 'b']));
     expect(loadStoredPinnedSessionIds()).toEqual(['a', 'b']);
-  });
-});
-
-describe('custom chat title', () => {
-  it('persists a normalized title and reads it back', () => {
-    persistCustomChatTitle('sess1', '  My Title  ');
-    expect(loadStoredCustomChatTitle()).toEqual({ threadId: 'sess1', title: 'My Title' });
-  });
-  it('removes the key when the title is empty', () => {
-    persistCustomChatTitle('sess1', 'X');
-    persistCustomChatTitle('sess1', '   ');
-    expect(loadStoredCustomChatTitle()).toEqual({ threadId: null, title: '' });
   });
 });
 

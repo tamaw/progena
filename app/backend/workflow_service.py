@@ -11,7 +11,6 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-from app.backend.chat_sessions import CHAT_METADATA_PREFIX
 from app.backend.document_events import list_document_types
 from app.backend.document_store import (
     PROGENITOR_STATE_PREFIX,
@@ -32,6 +31,7 @@ from app.progenitor.workflows import (
     WorkflowNodeCron,
     WorkflowNodeDocumentQuery,
     WorkflowNodeDocumentRead,
+    WorkflowNodeDocumentWrite,
     WorkflowNodeEvent,
     WorkflowNodeExtract,
     WorkflowNodeHumanInput,
@@ -101,6 +101,7 @@ class WorkflowPromptRunner(Protocol):
         self,
         *,
         workflow: WorkflowDefinition,
+        run_id: str,
         node_id: str,
         node: WorkflowNodeAgent | WorkflowNodeExtract,
         input_text: str,
@@ -152,29 +153,6 @@ def get_workflow_definition(
     if document is None:
         return None
     return _coerce_stored_workflow_definition(store, workflow_definition_key(workflow_id), document)
-
-
-def _save_workflow_thread_metadata(
-    store: BackendDocumentStore, thread_id: str, workflow_title: str
-) -> None:
-    """Create or update chat metadata so the thread appears in the sidebar."""
-    from app.backend.chat_sessions import CHAT_INDEX_KEY
-
-    metadata = {
-        "title": f"Workflow: {workflow_title}",
-        "thread_id": thread_id,
-        "ui_owned": True,
-        "created_at": utcnow_isoformat(),
-        "updated_at": utcnow_isoformat(),
-        "last_activity": utcnow_isoformat(),
-    }
-    store.save_document(CHAT_METADATA_PREFIX, thread_id, metadata)
-    index_doc = store.get_document(CHAT_METADATA_PREFIX, CHAT_INDEX_KEY, [])
-    index_payload = getattr(index_doc, "payload", index_doc) if index_doc is not None else []
-    index = list(index_payload) if isinstance(index_payload, list) else []
-    if thread_id not in index:
-        index.append(thread_id)
-        store.save_document(CHAT_METADATA_PREFIX, CHAT_INDEX_KEY, index)
 
 
 def _prompt_loader_from_store(store: BackendDocumentStore) -> Callable[[str], str]:
@@ -541,7 +519,8 @@ def _build_queued_run(
 
 
 def _resolve_node_document_type(
-    store: BackendDocumentStore, node: WorkflowNodeDocumentRead | WorkflowNodeDocumentQuery
+    store: BackendDocumentStore,
+    node: WorkflowNodeDocumentRead | WorkflowNodeDocumentQuery | WorkflowNodeDocumentWrite,
 ) -> DocumentType:
     document_type = list_document_types(store).get(node.document_type)
     if document_type is None:
@@ -579,6 +558,48 @@ def _execute_document_node(
         if len(items) >= node.limit:
             break
     return {"items": items, "keys": keys, "count": len(items)}
+
+
+def _execute_document_write_node(
+    store: BackendDocumentStore,
+    node: WorkflowNodeDocumentWrite,
+    resolved_input: Mapping[str, Any],
+    run_id: str,
+) -> dict[str, Any]:
+    """Atomic partial write of one document; never inserts."""
+
+    document_type = _resolve_node_document_type(store, node)
+    key = document_type.document_key(str(resolved_input.get("id") or ""))
+    merge_payload: dict[str, Any] = {}
+    for field in document_type.writable:
+        if field in resolved_input and resolved_input[field] is not None:
+            merge_payload[field] = resolved_input[field]
+    if not merge_payload:
+        document = store.get_document(PROGENITOR_STATE_PREFIX, key, None)
+        return {"found": document is not None, **dict.fromkeys(document_type.writable)}
+    document_schema = document_type.load_schema()
+    if document_schema is not None:
+        from app.progenitor.structured import validate_against_schema
+
+        partial_schema = {
+            "type": "object",
+            "properties": {
+                field: document_schema.get("properties", {}).get(field, {})
+                for field in document_type.writable
+            },
+        }
+        error = validate_against_schema(merge_payload, partial_schema)
+        if error:
+            raise ValueError(
+                f"document_write node '{node.title}' output failed schema validation: {error}"
+            )
+    with document_write_origin(run_id):
+        found = store.merge_document(PROGENITOR_STATE_PREFIX, key, merge_payload)
+    output: dict[str, Any] = {"found": found}
+    for field in document_type.writable:
+        if field in merge_payload:
+            output[field] = merge_payload[field]
+    return output
 
 
 class WorkflowExecutor:
@@ -938,7 +959,6 @@ class WorkflowExecutor:
                 }
             )
             save_workflow_run(store, run)
-            _save_workflow_thread_metadata(store, thread_id, definition.title)
             self._emit_event("workflow.run.started", run.model_dump(mode="json"))
 
         # Node-output registry: every node's typed output object, keyed by
@@ -1027,6 +1047,13 @@ class WorkflowExecutor:
                     output_object = _execute_document_node(store, node, resolved_input)
                     _validate_node_output(node, output_object)
                     output_text = _bounded_text(json.dumps(output_object, default=str))
+                elif isinstance(node, WorkflowNodeDocumentWrite):
+                    _validate_node_input(node, resolved_input)
+                    output_object = _execute_document_write_node(
+                        store, node, resolved_input, latest_run.run_id
+                    )
+                    _validate_node_output(node, output_object)
+                    output_text = _bounded_text(json.dumps(output_object, default=str))
                 elif isinstance(node, WorkflowNodeUnpack):
                     _validate_node_input(node, resolved_input)
                     value = resolved_input.get("value")
@@ -1076,6 +1103,7 @@ class WorkflowExecutor:
                     thread_id = self._resolve_thread_id(resolved_input, latest_run) or ""
                     prompt_result = await self._prompt_runner(
                         workflow=definition,
+                        run_id=latest_run.run_id,
                         node_id=node_id,
                         node=node,
                         input_text=instruction,
@@ -1107,6 +1135,7 @@ class WorkflowExecutor:
                     thread_id = self._resolve_thread_id(resolved_input, latest_run)
                     prompt_result = await self._prompt_runner(
                         workflow=definition,
+                        run_id=latest_run.run_id,
                         node_id=node_id,
                         node=node,
                         input_text=input_text,

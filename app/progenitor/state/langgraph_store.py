@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sys
 import uuid
 from collections.abc import Mapping
@@ -12,11 +13,6 @@ from .models import redact_secrets
 
 STATE_NAMESPACE = ("progenitor", "state")
 LOG_NAMESPACE_PREFIX = ("progenitor", "logs")
-# Rendered chat transcripts cached for the /conversations/ mount: small
-# metadata entries and the text in sibling namespaces, so listing reads no
-# text. Outside ``progenitor.state``, so cache writes never fire store NOTIFYs.
-CONVERSATION_META_NAMESPACE = ("progenitor", "conversations", "meta")
-CONVERSATION_LOGS_NAMESPACE = ("progenitor", "conversations", "logs")
 
 
 class AsyncLangGraphStore(Protocol):
@@ -84,6 +80,40 @@ class LangGraphRuntimeStore:
     async def save_document(self, name: str, payload: Any) -> None:
         """Persist one runtime document."""
         await self._store.aput(STATE_NAMESPACE, name, {"payload": payload})
+
+    async def merge_session(self, thread_id: str, fields: dict[str, Any]) -> bool:
+        """Atomically merge ``fields`` into the payload of ``session:<thread_id>``.
+
+        Returns ``True`` when the row existed and was updated.
+        """
+        key = f"session:{thread_id}"
+        conn = getattr(self._store, "conn", None)
+        if conn is None:
+            item = await self._store.aget(STATE_NAMESPACE, key)
+            if item is None:
+                return False
+            payload = _item_value(item).get("payload", {})
+            payload.update(fields)
+            await self._store.aput(STATE_NAMESPACE, key, {"payload": payload})
+            return True
+        params = (json.dumps(fields), key)
+        sql = """
+            UPDATE store
+            SET value = jsonb_set(value, '{payload}',
+                (value->'payload') || %s::jsonb
+            ), updated_at = now()
+            WHERE prefix = 'progenitor.state' AND key = %s
+            RETURNING 1
+        """
+        if hasattr(conn, "connection"):
+            async with conn.connection() as connection, connection.cursor() as cur:
+                await cur.execute(sql, params)
+                row = await cur.fetchone()
+        else:
+            async with conn.cursor() as cur:
+                await cur.execute(sql, params)
+                row = await cur.fetchone()
+        return row is not None
 
     async def delete_document(self, name: str) -> None:
         """Remove one runtime document (no-op if it was never written)."""
