@@ -6170,17 +6170,15 @@ body,
 
 .inbox-section {
   margin: 4px 0 2px 4px;
-  padding: 0 0 0 12px;
   min-width: 0;
-  border-left: 2px solid var(--color-border);
 }
 
-.inbox-section:hover:not(:has(.inbox-section:hover)):not(.is-selected) {
+.inbox-section:hover:not(:has(.inbox-section:hover)):not(.is-selected) > .inbox-section__content {
   border-left-color: color-mix(in oklab, var(--color-accent) 45%, var(--color-border));
 }
 
-.inbox-section.is-selected {
-  border-color: var(--color-accent, var(--color-text-primary));
+.inbox-section.is-selected > .inbox-section__content {
+  border-left-color: var(--color-accent, var(--color-text-primary));
 }
 
 .inbox-section__head {
@@ -6220,6 +6218,8 @@ body,
 }
 
 .inbox-section__content {
+  padding-left: 12px;
+  border-left: 2px solid var(--color-border);
   cursor: pointer;
 }
 
