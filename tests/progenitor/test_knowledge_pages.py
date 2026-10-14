@@ -3,6 +3,7 @@ import pytest
 from app.progenitor.knowledge.pages import (
     check_log_append,
     classify_page_path,
+    render_directory_index,
     render_index,
     stamp_generated,
     validate_concept_page,
@@ -69,3 +70,25 @@ def test_render_index_groups_types_and_directories():
         "## Reserved\n"
         "- [log.md](log.md)\n"
     )
+
+
+def test_directory_index_hides_deprecated_pages_and_emptied_folders():
+    def page(title, status=None):
+        extra = f"status: {status}\n" if status else ""
+        return f"---\ntype: Concept\ntitle: {title}\n{extra}---\nBody\n"
+
+    live = [
+        ("current.md", page("Current")),
+        ("old.md", page("Old", "Deprecated")),
+        ("archive/gone.md", page("Gone", "deprecated")),
+        ("guides/setup.md", page("Setup")),
+        ("guides/legacy.md", page("Legacy", "deprecated")),
+    ]
+    root = render_directory_index(title="Eng", directory="", live_pages=live)
+    assert "[Current](current.md)" in root
+    assert "old.md" not in root
+    assert "archive/" not in root
+    assert "[guides/](guides/index.md)" in root
+    guides = render_directory_index(title="guides", directory="guides", live_pages=live)
+    assert "[Setup](setup.md)" in guides
+    assert "legacy.md" not in guides

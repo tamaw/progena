@@ -23,17 +23,4 @@ describe('knowledge index events', () => {
     expect(state.knowledge.bases[0].index_status).toBe('failed');
     expect(state.knowledge.bases[0].index_error).toBe('embedder missing');
   });
-
-  it('stores search results by query', () => {
-    let state = populated();
-    state = reducer(state, applyUiEvent({ type: 'knowledge.search.results', payload: { query: 'raft', results: [{ base_id: 'two', path: 'raft.md', title: 'Raft' }], error: null } }));
-    expect(state.knowledge.searchResultsByQuery.raft.results).toHaveLength(1);
-    expect(state.knowledge.searchResultsByQuery.raft.error).toBeNull();
-  });
-
-  it('stores search error when present', () => {
-    let state = populated();
-    state = reducer(state, applyUiEvent({ type: 'knowledge.search.results', payload: { query: 'x', results: [], error: 'not configured' } }));
-    expect(state.knowledge.searchResultsByQuery.x.error).toBe('not configured');
-  });
 });

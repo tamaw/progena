@@ -47,6 +47,14 @@ export function buildPageTree(pages = []) {
   return sort(root);
 }
 
+// Label for a captured page revision: its capture time, or a short id when unknown.
+export function formatRevisionTime(revision) {
+  if (!revision) return '';
+  return revision.captured_at
+    ? new Date(revision.captured_at).toLocaleString()
+    : String(revision.revision_id || '').slice(0, 8);
+}
+
 export const dirOf = (path) => (path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : '');
 
 // Resolve a relative markdown link against the page it appears on; null when it

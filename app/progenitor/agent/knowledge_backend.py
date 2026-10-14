@@ -73,19 +73,15 @@ class KnowledgePageBackend(_AsyncOnlyFileBackendMixin):
         return next((base for base in await self._bases() if base.get("id") == base_id), None)
 
     @staticmethod
-    def _live(payload: dict[str, Any] | None) -> bool:
-        return (
-            isinstance(payload, dict)
-            and not payload.get("deleted_at")
-            and isinstance(payload.get("content"), str)
-        )
+    def _stored(payload: dict[str, Any] | None) -> bool:
+        return isinstance(payload, dict) and isinstance(payload.get("content"), str)
 
     async def _index(self, base_id: str, path: str, base: dict[str, Any]) -> str:
         directory = path[: -len(INDEX_FILE)].rstrip("/")
         live = [
             (row_path, payload["content"])
             for row_base, row_path, payload in await self._sm.list_knowledge_pages()
-            if row_base == base_id and self._live(payload)
+            if row_base == base_id and self._stored(payload)
         ]
         title = str(base.get("name") or base_id) if not directory else directory.rsplit("/", 1)[-1]
         status = await self._sm.get_knowledge_index()
@@ -121,7 +117,7 @@ class KnowledgePageBackend(_AsyncOnlyFileBackendMixin):
                 content = await self._index(base_id, path, base)
             else:
                 payload = await self._sm.get_knowledge_page(base_id, path)
-                if not self._live(payload) or not self._valid_path(path):
+                if not self._stored(payload) or not self._valid_path(path):
                     return ReadResult(error=f"File '{file_path}' not found")
                 content = payload["content"]
         file_data = create_file_data(content)
@@ -154,7 +150,7 @@ class KnowledgePageBackend(_AsyncOnlyFileBackendMixin):
                 error="index.md is generated from page front matter and cannot be written"
             )
         payload = await self._sm.get_knowledge_page(base_id, path)
-        previous = payload.get("content") if self._live(payload) else None
+        previous = payload.get("content") if self._stored(payload) else None
         try:
             if kind == "log":
                 check_log_append(previous, content)
@@ -182,6 +178,9 @@ class KnowledgePageBackend(_AsyncOnlyFileBackendMixin):
             return EditResult(error=f"Error: {written.error}")
         return EditResult(path=file_path, occurrences=int(occurrences))
 
+    # Not reachable by agents on deepagents < 0.7 (no delete tool). 0.7 adds the
+    # ``delete`` tool that calls this; see ``pages.is_deprecated`` for the plan to
+    # replace deprecation with real deletes then.
     async def adelete(self, file_path: str) -> WriteResult:
         return WriteResult(
             error="Knowledge pages cannot be deleted by agents; set 'status: deprecated' in the page front matter instead"
@@ -204,7 +203,7 @@ class KnowledgePageBackend(_AsyncOnlyFileBackendMixin):
         for row_base, row_path, payload in await self._sm.list_knowledge_pages():
             if (
                 row_base != base_id
-                or not self._live(payload)
+                or not self._stored(payload)
                 or not row_path.startswith(dir_prefix)
                 or not self._valid_path(row_path)
             ):

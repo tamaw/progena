@@ -18,6 +18,8 @@ from ..schemas import check_entry_schema
 INDEXER_DOC_KEY = "indexer"
 INDEX_STATUS_DOC_KEY = "knowledge_index"
 DEFAULT_DIMENSIONS = 1536
+# Calibrated on text-embedding-3-small: on-topic chunks score ~0.3-0.5, unrelated ones ~0.1-0.2.
+DEFAULT_MIN_SIMILARITY = 0.25
 
 NOT_CONFIGURED_MESSAGE = (
     'Set "profile" in /config/indexer.json to an embeddings deployment from /config/profile.json'
@@ -41,7 +43,11 @@ class EmbeddingTarget:
 
 
 def default_indexer_payload() -> dict[str, Any]:
-    return {"profile": "", "dimensions": DEFAULT_DIMENSIONS}
+    return {
+        "profile": "",
+        "dimensions": DEFAULT_DIMENSIONS,
+        "min_similarity": DEFAULT_MIN_SIMILARITY,
+    }
 
 
 def validate_indexer_payload(
@@ -85,6 +91,12 @@ def resolve_embedding_target(
     if not deployment:
         raise ValueError(NOT_CONFIGURED_MESSAGE)
     return EmbeddingTarget(name, deployment, int(data.get("dimensions") or DEFAULT_DIMENSIONS))
+
+
+def min_similarity(settings: Mapping[str, Any] | None) -> float:
+    """Cosine-similarity cut-off for search results that don't also match by keyword."""
+    value = (settings or {}).get("min_similarity", DEFAULT_MIN_SIMILARITY)
+    return float(value) if isinstance(value, int | float) else DEFAULT_MIN_SIMILARITY
 
 
 def index_record(status_doc: Mapping[str, Any] | None, base_id: str) -> dict[str, Any] | None:

@@ -5,7 +5,6 @@ export const initialState = {
   knowledge: {
     bases: [], loaded: false, loading: false, error: null, requestId: null,
     pagesByBaseId: {}, pageByKey: {}, revisionsByKey: {}, revisionContentByKey: {},
-    searchResultsByQuery: {},
   },
 };
 
@@ -23,12 +22,8 @@ export const fetchKnowledge = createAcknowledgedThunk('uiData/fetchKnowledge', a
 export const saveKnowledge = createAcknowledgedThunk('uiData/saveKnowledge', async ({ knowledgeUrl, bases }, { requestId }) => requestAcknowledged(knowledgeUrl, { method: 'PUT', body: { bases }, requestId }));
 export const fetchKnowledgePages = createAcknowledgedThunk('uiData/fetchKnowledgePages', async ({ knowledgeUrl, baseId }, { requestId }) => requestAcknowledged(`${knowledgeUrl}/${encodeURIComponent(baseId)}/pages`, { requestId }));
 export const fetchKnowledgePage = createAcknowledgedThunk('uiData/fetchKnowledgePage', async ({ knowledgeUrl, baseId, path }, { requestId }) => requestAcknowledged(`${knowledgeUrl}/${encodeURIComponent(baseId)}/page?path=${encodeURIComponent(path)}`, { requestId }));
-export const deleteKnowledgePage = createAcknowledgedThunk('uiData/deleteKnowledgePage', async ({ knowledgeUrl, baseId, path }, { requestId }) => requestAcknowledged(`${knowledgeUrl}/${encodeURIComponent(baseId)}/page?path=${encodeURIComponent(path)}`, { method: 'DELETE', requestId }));
-export const renameKnowledgePage = createAcknowledgedThunk('uiData/renameKnowledgePage', async ({ knowledgeUrl, baseId, path, newPath }, { requestId }) => requestAcknowledged(`${knowledgeUrl}/${encodeURIComponent(baseId)}/page/rename`, { method: 'POST', body: { path, new_path: newPath }, requestId }));
 export const fetchKnowledgePageRevisions = createAcknowledgedThunk('uiData/fetchKnowledgePageRevisions', async ({ knowledgeUrl, baseId, path }, { requestId }) => requestAcknowledged(`${knowledgeUrl}/${encodeURIComponent(baseId)}/page/revisions?path=${encodeURIComponent(path)}`, { requestId }));
 export const fetchKnowledgePageRevision = createAcknowledgedThunk('uiData/fetchKnowledgePageRevision', async ({ knowledgeUrl, baseId, path, revisionId }, { requestId }) => requestAcknowledged(`${knowledgeUrl}/${encodeURIComponent(baseId)}/page/revisions/${encodeURIComponent(revisionId)}?path=${encodeURIComponent(path)}`, { requestId }));
-export const restoreKnowledgePageRevision = createAcknowledgedThunk('uiData/restoreKnowledgePageRevision', async ({ knowledgeUrl, baseId, path, revisionId }, { requestId }) => requestAcknowledged(`${knowledgeUrl}/${encodeURIComponent(baseId)}/page/revisions/${encodeURIComponent(revisionId)}/restore?path=${encodeURIComponent(path)}`, { method: 'POST', requestId }));
-export const searchKnowledge = createAcknowledgedThunk('uiData/searchKnowledge', async ({ knowledgeUrl, query, limit = 8 }, { requestId }) => requestAcknowledged(`${knowledgeUrl}/search?q=${encodeURIComponent(query)}&limit=${limit}`, { requestId }));
 
 function patchBaseIndexStatus(state, payload) {
   const bases = state.knowledge.bases;
@@ -56,13 +51,6 @@ export const eventHandlers = {
   'knowledge.index.progress': patchBaseIndexStatus,
   'knowledge.index.completed': patchBaseIndexStatus,
   'knowledge.index.failed': patchBaseIndexStatus,
-  'knowledge.search.results': (state, payload) => {
-    state.knowledge.searchResultsByQuery[payload.query] = {
-      query: payload.query,
-      results: Array.isArray(payload.results) ? payload.results : [],
-      error: payload.error || null,
-    };
-  },
 };
 
 export function buildExtraReducers(builder) {
@@ -74,4 +62,3 @@ export const selectKnowledgePages = (state, baseId) => state.uiData.knowledge.pa
 export const selectKnowledgePage = (state, baseId, path) => state.uiData.knowledge.pageByKey[pageKey(baseId, path)] || null;
 export const selectKnowledgeRevisions = (state, baseId, path) => state.uiData.knowledge.revisionsByKey[pageKey(baseId, path)] || [];
 export const selectKnowledgeRevisionContent = (state, baseId, path, revisionId) => state.uiData.knowledge.revisionContentByKey[revisionKey(baseId, path, revisionId)] || null;
-export const selectKnowledgeSearchResults = (state, query) => state.uiData.knowledge.searchResultsByQuery[query] || null;

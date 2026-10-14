@@ -151,19 +151,34 @@ def render_root_index(
     return "\n".join(lines) + "\n"
 
 
+def is_deprecated(front_matter: Mapping[str, Any] | None) -> bool:
+    """Whether a page's front matter retires it (``status: deprecated``).
+
+    Deprecation stands in for deletion while agents have no delete tool
+    (deepagents < 0.7). deepagents 0.7 adds a ``delete`` filesystem tool backed
+    by ``adelete`` (``KnowledgePageBackend.adelete``); once we upgrade, let agents
+    delete pages there (revisions keep the history) and remove this rule and
+    its callers: the generated indexes, the backend page list, and search
+    indexing (``index.is_indexable``).
+    """
+    return (
+        bool(front_matter) and str(front_matter.get("status", "")).strip().lower() == "deprecated"
+    )
+
+
 def render_directory_index(
     *, title: str, directory: str, live_pages: list[tuple[str, str]], search_status: str = ""
 ) -> str:
-    """Render ``directory``'s index from ``(path, content)`` of a base's live pages."""
+    """Render ``directory``'s index from ``(path, content)`` of a base's live pages.
+
+    Deprecated pages are left out (they stay readable by path), and so are
+    subdirectories that hold nothing else.
+    """
     dir_prefix = f"{directory}/" if directory else ""
     pages: list[tuple[str, dict[str, Any]]] = []
     subdirs: set[str] = set()
     for path, content in live_pages:
         if not path.startswith(dir_prefix):
-            continue
-        rest = path[len(dir_prefix) :]
-        if "/" in rest:
-            subdirs.add(rest.split("/", 1)[0])
             continue
         try:
             if classify_page_path(path) != "concept":
@@ -171,7 +186,12 @@ def render_directory_index(
             front_matter, _ = split_front_matter(content)
         except ValueError:
             continue
-        if front_matter:
+        if not front_matter or is_deprecated(front_matter):
+            continue
+        rest = path[len(dir_prefix) :]
+        if "/" in rest:
+            subdirs.add(rest.split("/", 1)[0])
+        else:
             pages.append((rest, front_matter))
     return render_index(
         title=title,
