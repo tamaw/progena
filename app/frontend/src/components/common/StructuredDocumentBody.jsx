@@ -103,7 +103,7 @@ export default function StructuredDocumentBody({ content = '', onAskAgent, onAns
   function submitAgent(node, action, options) {
     if (node.source !== undefined && node.source !== content) return false;
     const exact = content.slice(node.start, node.end);
-    const label = node.type === 'heading' ? `## ${node.title}` : `<${node.tag}>`;
+    const label = node.type === 'heading' ? `${'#'.repeat(node.level)} ${node.title}` : `<${node.tag}>`;
     onAskAgent?.(`Find this exact ${label} section (including its content):\n${exact}\n\n${action} Keep other sections intact. If the section changed, ask before editing.`, options);
     return true;
   }
@@ -125,10 +125,11 @@ export default function StructuredDocumentBody({ content = '', onAskAgent, onAns
       const key = `${node.start}-${node.end}`;
       const active = selectionCurrent && selected.start === node.start && selected.end === node.end && aiJob?.phase !== 'completed';
       const levelPrefix = '#'.repeat(node.level);
+      const HeadingTag = `h${node.level}`;
       return (
         <section key={key} className={`inbox-section${active ? ' is-selected' : ''}`}>
           <div className="inbox-section__head">
-            <button type="button" className="inbox-section__select" aria-pressed={active} disabled={!onAskAgent} onClick={() => select(node)} aria-label={`Select ${levelPrefix} ${node.title} section`}>{levelPrefix} {node.title}</button>
+            <HeadingTag className="inbox-section__title"><button type="button" className="inbox-section__select" aria-pressed={active} disabled={!onAskAgent} onClick={() => select(node)} aria-label={`Select ${levelPrefix} ${node.title} section`}>{node.title}</button></HeadingTag>
             {onAskAgent && (
               <div className="inbox-section__actions" role="toolbar" aria-label={`${levelPrefix} ${node.title} section actions`}>
                 <button

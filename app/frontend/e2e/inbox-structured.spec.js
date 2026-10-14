@@ -79,8 +79,12 @@ test.describe('structured inbox', () => {
       await page.getByRole('button', { name: 'Select ### Inner section' }).hover();
       await expect(page.getByRole('toolbar', { name: 'Inner section actions' })).toBeVisible();
       await expect(page.getByRole('toolbar', { name: 'Notes section actions' })).toBeHidden();
-      await expect(page.getByRole('button', { name: 'Select ## Notes section' })).toHaveText('## Notes');
-      await expect(page.getByRole('button', { name: 'Select ### Inner section' })).toHaveText('### Inner');
+      await expect(page.getByRole('heading', { name: 'Notes', level: 2 })).toBeVisible();
+      await expect(page.getByRole('heading', { name: 'Inner', level: 3 })).toBeVisible();
+      await expect(page.getByRole('heading', { name: 'Deep', level: 4 })).toBeVisible();
+      const titleSize = await page.getByRole('heading', { name: 'Notes', level: 2 }).evaluate((heading) => parseFloat(getComputedStyle(heading).fontSize));
+      const nestedSize = await page.getByRole('heading', { name: 'Inner', level: 3 }).evaluate((heading) => parseFloat(getComputedStyle(heading).fontSize));
+      expect(titleSize).toBeGreaterThan(nestedSize);
       await expect(page.getByRole('button', { name: 'Select #### Deep section' })).toBeVisible();
       await page.locator('.inbox-section__content').getByText('Inner section with inline code.').click();
       await expect(page.getByRole('button', { name: 'Select ### Inner section' })).toHaveAttribute('aria-pressed', 'true');
@@ -91,20 +95,20 @@ test.describe('structured inbox', () => {
       await expect(page.getByRole('button', { name: 'Select ## Summary section' })).toHaveAttribute('aria-pressed', 'true');
       await expect(page.locator('.inbox-section__content pre code')).toContainText('def deep():');
       await expect(page.getByRole('button', { name: 'Select ### Inner section' })).toBeVisible();
-      const nested = page.getByRole('button', { name: 'Select #### Deep section' }).locator('..').locator('..');
+      const nested = page.getByRole('button', { name: 'Select #### Deep section' }).locator('xpath=ancestor::section[contains(@class, "inbox-section")][1]');
       const spacing = await nested.evaluate((section) => ({
         left: parseFloat(getComputedStyle(section).paddingLeft),
         top: parseFloat(getComputedStyle(section).marginTop),
       }));
       expect(spacing.left).toBeLessThanOrEqual(12);
       expect(spacing.top).toBeLessThanOrEqual(4);
-      const inner = page.getByRole('button', { name: 'Select ### Inner section' }).locator('..').locator('..');
+      const inner = page.getByRole('button', { name: 'Select ### Inner section' }).locator('xpath=ancestor::section[contains(@class, "inbox-section")][1]');
       const beforeHover = await nested.evaluate((section) => getComputedStyle(section).borderLeftColor);
       const parentBeforeHover = await inner.evaluate((section) => getComputedStyle(section).borderLeftColor);
       await nested.locator('pre code').hover();
       await expect.poll(() => nested.evaluate((section) => getComputedStyle(section).borderLeftColor)).not.toBe(beforeHover);
       await expect.poll(() => inner.evaluate((section) => getComputedStyle(section).borderLeftColor)).toBe(parentBeforeHover);
-      const summary = page.getByRole('button', { name: 'Select ## Summary section' }).locator('..').locator('..');
+      const summary = page.getByRole('button', { name: 'Select ## Summary section' }).locator('xpath=ancestor::section[contains(@class, "inbox-section")][1]');
       const bottomGap = await summary.evaluate((section) => section.getBoundingClientRect().bottom
         - section.querySelector(':scope > .inbox-section__content').getBoundingClientRect().bottom);
       expect(bottomGap).toBeLessThan(6);

@@ -51,7 +51,7 @@ describe('StructuredDocumentBody', () => {
     const sections = document.querySelectorAll('.inbox-section');
     expect(sections.length).toBe(1);
     const head = sections[0].querySelector('.inbox-section__head');
-    expect(head.querySelector('.inbox-section__select').textContent).toBe('## Plan');
+    expect(head.querySelector('h2.inbox-section__title .inbox-section__select').textContent).toBe('Plan');
     expect(head.querySelector('[aria-label="Edit with AI"]')).not.toBeNull();
     expect(head.querySelector('[aria-label="Explain"]')).not.toBeNull();
     expect(head.querySelector('[aria-label="Remove"]')).not.toBeNull();
@@ -67,8 +67,8 @@ describe('StructuredDocumentBody', () => {
     const document = documentFor({ content: '## Plan\nOverview.\n### Detail\nMore info.', onAskAgent: () => {}, onAnswerQuestion: () => {} });
     const outer = document.querySelectorAll('.inbox-section');
     expect(outer.length).toBe(2);
-    expect(outer[0].querySelector('.inbox-section__select').textContent).toBe('## Plan');
-    expect(outer[1].querySelector('.inbox-section__select').textContent).toBe('### Detail');
+    expect(outer[0].querySelector('h2.inbox-section__title .inbox-section__select').textContent).toBe('Plan');
+    expect(outer[1].querySelector('h3.inbox-section__title .inbox-section__select').textContent).toBe('Detail');
     expect(outer[0].contains(outer[1])).toBe(true);
   });
 
@@ -130,7 +130,7 @@ describe('StructuredDocumentBody', () => {
     expect(options[2].textContent).toBe('Enter your own');
   });
 
-  it('shows heading level indicators correctly for ##–######', () => {
+  it('uses semantic heading levels without Markdown markers in the UI', () => {
     parseStructuredContent.mockReturnValue([
       nHeading(2, 'Two', 0, 10, []),
       nHeading(3, 'Three', 10, 22, []),
@@ -139,12 +139,10 @@ describe('StructuredDocumentBody', () => {
       nHeading(6, 'Six', 46, 56, []),
     ]);
     const document = documentFor({ content: '## Two\n### Three\n#### Four\n##### Five\n###### Six', onAskAgent: () => {}, onAnswerQuestion: () => {} });
-    const buttons = document.querySelectorAll('.inbox-section__select');
-    expect(buttons[0].textContent).toBe('## Two');
-    expect(buttons[1].textContent).toBe('### Three');
-    expect(buttons[2].textContent).toBe('#### Four');
-    expect(buttons[3].textContent).toBe('##### Five');
-    expect(buttons[4].textContent).toBe('###### Six');
+    for (const [index, title] of ['Two', 'Three', 'Four', 'Five', 'Six'].entries()) {
+      const heading = document.querySelector(`h${index + 2}.inbox-section__title`);
+      expect(heading.querySelector('button').textContent).toBe(title);
+    }
   });
 
   it('does not render H1 as a selectable section', () => {
