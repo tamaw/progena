@@ -56,20 +56,22 @@ Full message body in **markdown** — headings, lists, links, code blocks, and
 
 ## Structured sections and questions
 
-When a message needs individually selectable parts, wrap Markdown in matching
-XML-like tags such as `<plan>…</plan>`. Tags have no special visual styles:
-each nested section receives the same compact left bracket.
+When a message needs individually selectable parts, use Markdown headings
+`##`–`######`. Each heading starts a selectable section that continues until
+the next same-or-higher heading, a `<questions>` block, or the end of the
+document. The `#` title heading is not selectable.
 No section starts selected. Hover a section to reveal its icon actions; each
 icon expands to its full label on hover or keyboard focus. AI Edit opens a
 small prompt below its icon: Send instructs the agent through quick chat;
 Pop out moves the unsent draft into quick chat. Clicking away or pressing Escape
 dismisses it. Click a heading or rendered Markdown to select a section.
 Remove asks the agent to delete the section; the UI does not edit message
-content directly. Keep tags balanced; literal examples belong in Markdown
-code spans or fenced blocks.
+content directly. Literal examples belong in Markdown code spans or fenced
+blocks.
 
-Most of a message can stay ordinary Markdown. Add tags only around content
-that users may want to ask the agent to change independently. For example:
+Most of a message can stay ordinary Markdown. Add sub-headings only around
+content that users may want to ask the agent to change independently. For
+example:
 
 ```md
 # Release brief
@@ -79,9 +81,9 @@ The candidate is ready for review. See the [test report](https://example.com/rep
 - API checks passed
 - Browser checks are in progress
 
-<decision>
+## Decision
+
 Ship after browser checks finish. **Do not** bypass the release checklist.
-</decision>
 
 ## Next steps
 
@@ -90,7 +92,7 @@ Ship after browser checks finish. **Do not** bypass the release checklist.
 ```
 
 A question can also appear among normal Markdown paragraphs without a
-surrounding `<plan>` tag:
+surrounding heading:
 
 ```md
 # Migration note
@@ -112,9 +114,11 @@ Restore the previous reader if validation fails.
 
 For a choice, put one question and its options in each `<questions>` block:
 
-```xml
-<plan>
-Choose an implementation:
+```md
+## Implementation
+
+Choose an approach:
+
 <questions id="implementation">
 Which approach should we use?
 <options>
@@ -122,7 +126,6 @@ Which approach should we use?
 <option>Add a dedicated endpoint</option>
 </options>
 </questions>
-</plan>
 ```
 
 The listed options appear directly below the question without a show/hide

@@ -9,6 +9,10 @@ function nSection(tag, attributes, start, end, openEnd, closeStart, children) {
   return { type: 'section', tag, attributes, start, end, openEnd, closeStart, children };
 }
 
+function nHeading(level, title, start, end, children) {
+  return { type: 'heading', level, start, end, title, children };
+}
+
 describe('parseStructuredContent', () => {
   it('returns empty array for empty string', () => {
     expect(parseStructuredContent('')).toEqual([]);
@@ -20,100 +24,254 @@ describe('parseStructuredContent', () => {
     ]);
   });
 
-  it('parses a simple section', () => {
-    const source = '<question>What is 2+2?</question>';
+  // ─── Headings ───
+
+  it('parses a level-2 heading', () => {
+    const source = '## Plan';
     expect(parseStructuredContent(source)).toEqual([
-      nSection('question', {}, 0, 33, 10, 22, [
-        nText('What is 2+2?', 10, 22),
+      nHeading(2, 'Plan', 0, 7, []),
+    ]);
+  });
+
+  it('parses a level-6 heading', () => {
+    const source = '###### Deep';
+    expect(parseStructuredContent(source)).toEqual([
+      nHeading(6, 'Deep', 0, 11, []),
+    ]);
+  });
+
+  it('treats H1 as plain text', () => {
+    const source = '# Title';
+    expect(parseStructuredContent(source)).toEqual([
+      nText('# Title', 0, 7),
+    ]);
+  });
+
+  it('treats single # without space as plain text', () => {
+    const source = '#not-a-heading';
+    expect(parseStructuredContent(source)).toEqual([
+      nText('#not-a-heading', 0, 14),
+    ]);
+  });
+
+  it('parses heading with content until EOF', () => {
+    const source = '## Plan\nDo this.';
+    expect(parseStructuredContent(source)).toEqual([
+      nHeading(2, 'Plan', 0, 16, [
+        nText('Do this.', 8, 16),
       ]),
     ]);
   });
 
-  it('parses nested sections', () => {
-    const source = '<outer><inner>text</inner></outer>';
+  it('parses heading with content until next same-level heading', () => {
+    const source = '## A\nbody A\n## B\nbody B';
     expect(parseStructuredContent(source)).toEqual([
-      nSection('outer', {}, 0, 34, 7, 26, [
-        nSection('inner', {}, 7, 26, 14, 18, [
-          nText('text', 14, 18),
+      nHeading(2, 'A', 0, 12, [
+        nText('body A\n', 5, 12),
+      ]),
+      nHeading(2, 'B', 12, 23, [
+        nText('body B', 17, 23),
+      ]),
+    ]);
+  });
+
+  it('parses heading bounded by higher-level heading', () => {
+    const source = '## A\n### B\nbody B\n## C';
+    expect(parseStructuredContent(source)).toEqual([
+      nHeading(2, 'A', 0, 18, [
+        nHeading(3, 'B', 5, 18, [
+          nText('body B\n', 11, 18),
         ]),
       ]),
+      nHeading(2, 'C', 18, 22, []),
     ]);
   });
 
-  it('parses deeply nested sections', () => {
-    const source = '<a><b><c>deep</c></b></a>';
+  it('parses deeply nested headings', () => {
+    const source = '## A\n### B\n#### C\nbody\n### D';
     expect(parseStructuredContent(source)).toEqual([
-      nSection('a', {}, 0, 25, 3, 21, [
-        nSection('b', {}, 3, 21, 6, 17, [
-          nSection('c', {}, 6, 17, 9, 13, [
-            nText('deep', 9, 13),
+      nHeading(2, 'A', 0, 28, [
+        nHeading(3, 'B', 5, 23, [
+          nHeading(4, 'C', 11, 23, [
+            nText('body\n', 18, 23),
+          ]),
+        ]),
+        nHeading(3, 'D', 23, 28, []),
+      ]),
+    ]);
+  });
+
+  it('preserves text before and after headings', () => {
+    const source = 'before\n## Mid\nafter';
+    expect(parseStructuredContent(source)).toEqual([
+      nText('before\n', 0, 7),
+      nHeading(2, 'Mid', 7, 19, [
+        nText('after', 14, 19),
+      ]),
+    ]);
+  });
+
+  it('trims heading title', () => {
+    const source = '##  Spaced Out  ';
+    expect(parseStructuredContent(source)).toEqual([
+      nHeading(2, 'Spaced Out', 0, 16, []),
+    ]);
+  });
+
+  it('parses heading with CRLF', () => {
+    const source = '## Plan\r\nbody';
+    expect(parseStructuredContent(source)).toEqual([
+      nHeading(2, 'Plan', 0, 13, [
+        nText('body', 9, 13),
+      ]),
+    ]);
+  });
+
+  // ─── Allowed sections (questions/options/option) ───
+
+  it('parses questions/options/option as sections', () => {
+    const source = '<questions id="q1">Pick one:<options><option value="a">A</option><option value="b">B</option></options></questions>';
+    expect(parseStructuredContent(source)).toEqual([
+      nSection('questions', { id: 'q1' }, 0, 115, 19, 103, [
+        nText('Pick one:', 19, 28),
+        nSection('options', {}, 28, 103, 37, 93, [
+          nSection('option', { value: 'a' }, 37, 65, 55, 56, [
+            nText('A', 55, 56),
+          ]),
+          nSection('option', { value: 'b' }, 65, 93, 83, 84, [
+            nText('B', 83, 84),
           ]),
         ]),
       ]),
     ]);
   });
 
-  it('keeps duplicate tag names independently addressable', () => {
-    const source = '<q id="1">A</q><q id="2">B</q>';
+  it('treats disallowed tags as literal text', () => {
+    const source = '<plan>text</plan>';
     expect(parseStructuredContent(source)).toEqual([
-      nSection('q', { id: '1' }, 0, 15, 10, 11, [
-        nText('A', 10, 11),
-      ]),
-      nSection('q', { id: '2' }, 15, 30, 25, 26, [
-        nText('B', 25, 26),
-      ]),
+      nText('<plan>text</plan>', 0, 17),
     ]);
   });
 
-  it('parses attributes with double quotes', () => {
-    const source = '<question id="q1" type="math">content</question>';
+  it('treats nested disallowed tags as literal text', () => {
+    const source = '<outer><inner>text</inner></outer>';
     expect(parseStructuredContent(source)).toEqual([
-      nSection('question', { id: 'q1', type: 'math' }, 0, 48, 30, 37, [
-        nText('content', 30, 37),
-      ]),
+      nText('<outer><inner>text</inner></outer>', 0, 34),
     ]);
   });
 
-  it('parses attributes with single quotes', () => {
-    const source = "<tag val='x'>text</tag>";
+  it('treats arbitrary tags with attributes as literal text', () => {
+    const source = '<tag a="1">text</tag>';
     expect(parseStructuredContent(source)).toEqual([
-      nSection('tag', { val: 'x' }, 0, 23, 13, 17, [
-        nText('text', 13, 17),
-      ]),
+      nText('<tag a="1">text</tag>', 0, 21),
     ]);
   });
 
-  it('parses unquoted attributes', () => {
-    const source = '<tag flag=value>text</tag>';
-    expect(parseStructuredContent(source)).toEqual([
-      nSection('tag', { flag: 'value' }, 0, 26, 16, 20, [
-        nText('text', 16, 20),
-      ]),
-    ]);
-  });
-
-  it('parses boolean attributes without value', () => {
-    const source = '<tag disabled>text</tag>';
-    expect(parseStructuredContent(source)).toEqual([
-      nSection('tag', { disabled: '' }, 0, 24, 14, 18, [
-        nText('text', 14, 18),
-      ]),
-    ]);
-  });
-
-  it('treats self-closing tag as section with empty children', () => {
+  it('treats self-closing disallowed tags as text', () => {
     const source = '<br/>';
     expect(parseStructuredContent(source)).toEqual([
-      nSection('br', {}, 0, 5, 5, 5, []),
+      nText('<br/>', 0, 5),
     ]);
   });
 
-  it('treats void tag as self-closing', () => {
+  it('treats void disallowed tags as text', () => {
     const source = '<br>';
     expect(parseStructuredContent(source)).toEqual([
-      nSection('br', {}, 0, 4, 4, 4, []),
+      nText('<br>', 0, 4),
     ]);
   });
+
+  it('treats malformed tag as literal text', () => {
+    const source = '<123>not a tag</123>';
+    expect(parseStructuredContent(source)).toEqual([
+      nText('<123>not a tag</123>', 0, 20),
+    ]);
+  });
+
+  it('treats unclosed allowed tag as literal text', () => {
+    const source = '<questions>no end';
+    expect(parseStructuredContent(source)).toEqual([
+      nText('<questions>no end', 0, 17),
+    ]);
+  });
+
+  it('treats mismatched close tag as literal text', () => {
+    const source = '<options>text</questions>';
+    expect(parseStructuredContent(source)).toEqual([
+      nText('<options>text</questions>', 0, 25),
+    ]);
+  });
+
+  it('treats unexpected close tag at top level as text', () => {
+    const source = '</surprise>';
+    expect(parseStructuredContent(source)).toEqual([
+      nText('</surprise>', 0, 11),
+    ]);
+  });
+
+  it('preserves text before and after allowed sections', () => {
+    const source = 'before<questions>inside</questions>after';
+    expect(parseStructuredContent(source)).toEqual([
+      nText('before', 0, 6),
+      nSection('questions', {}, 6, 35, 17, 23, [
+        nText('inside', 17, 23),
+      ]),
+      nText('after', 35, 40),
+    ]);
+  });
+
+  it('handles adjacent allowed sections', () => {
+    const source = '<questions>1</questions><options>2</options>';
+    expect(parseStructuredContent(source)).toEqual([
+      nSection('questions', {}, 0, 24, 11, 12, [
+        nText('1', 11, 12),
+      ]),
+      nSection('options', {}, 24, 44, 33, 34, [
+        nText('2', 33, 34),
+      ]),
+    ]);
+  });
+
+  it('handles empty allowed section', () => {
+    const source = '<options></options>';
+    expect(parseStructuredContent(source)).toEqual([
+      nSection('options', {}, 0, 19, 9, 9, []),
+    ]);
+  });
+
+  // ─── Headings inside allowed sections ───
+
+  it('parses headings inside questions sections', () => {
+    const source = '<questions>\n## Q1\nYes or no?\n</questions>';
+    expect(parseStructuredContent(source)).toEqual([
+      nSection('questions', {}, 0, 41, 11, 29, [
+        nText('\n', 11, 12),
+        nHeading(2, 'Q1', 12, 29, [
+          nText('Yes or no?\n', 18, 29),
+        ]),
+      ]),
+    ]);
+  });
+
+  // ─── Allowed sections inside headings ───
+
+  it('parses questions section inside heading', () => {
+    const source = '## Plan\n<questions>Pick one:<options><option value="a">A</option></options></questions>';
+    expect(parseStructuredContent(source)).toEqual([
+      nHeading(2, 'Plan', 0, 87, [
+        nSection('questions', {}, 8, 87, 19, 75, [
+          nText('Pick one:', 19, 28),
+          nSection('options', {}, 28, 75, 37, 65, [
+            nSection('option', { value: 'a' }, 37, 65, 55, 56, [
+              nText('A', 55, 56),
+            ]),
+          ]),
+        ]),
+      ]),
+    ]);
+  });
+
+  // ─── Code fences and inline code ───
 
   it('leaves fenced code blocks as literal text', () => {
     const source = '```html\n<div>hello</div>\n```';
@@ -123,9 +281,9 @@ describe('parseStructuredContent', () => {
   });
 
   it('keeps tilde-fenced tag examples literal while parsing the next section', () => {
-    const source = '~~~~xml\n<plan>example</plan>\n~~~~\n<plan>real</plan>';
+    const source = '~~~~xml\n<plan>example</plan>\n~~~~\n<questions>real</questions>';
     const nodes = parseStructuredContent(source);
-    expect(nodes.filter((node) => node.type === 'section').map((node) => node.tag)).toEqual(['plan']);
+    expect(nodes.filter((node) => node.type === 'section').map((node) => node.tag)).toEqual(['questions']);
     expect(nodes[0].content).toContain('<plan>example</plan>');
     expect(nodes[1].children[0].content).toBe('real');
   });
@@ -138,111 +296,34 @@ describe('parseStructuredContent', () => {
   });
 
   it('leaves tags inside code fences as text', () => {
-    const source = '<outer>```\n<inner>text</inner>\n```\n</outer>';
+    const source = '<questions>```\n<fake>code</fake>\n```\n</questions>';
     expect(parseStructuredContent(source)).toEqual([
-      nSection('outer', {}, 0, 43, 7, 35, [
-        nText('```\n<inner>text</inner>\n```\n', 7, 35),
+      nSection('questions', {}, 0, 49, 11, 37, [
+        nText('```\n<fake>code</fake>\n```\n', 11, 37),
       ]),
     ]);
   });
 
   it('leaves tags inside inline code as text within a section', () => {
-    const source = '<outer>`<inner>text</inner>`</outer>';
+    const source = '<questions>`<fake>code</fake>`</questions>';
     expect(parseStructuredContent(source)).toEqual([
-      nSection('outer', {}, 0, 36, 7, 28, [
-        nText('`<inner>text</inner>`', 7, 28),
+      nSection('questions', {}, 0, 42, 11, 30, [
+        nText('`<fake>code</fake>`', 11, 30),
       ]),
     ]);
   });
 
-  it('treats malformed tag as literal text', () => {
-    const source = '<123>not a tag</123>';
+  it('leaves heading syntax inside code fence as literal text', () => {
+    const source = '```\n## Not a heading\n```';
     expect(parseStructuredContent(source)).toEqual([
-      nText('<123>not a tag</123>', 0, 20),
+      nText('```\n## Not a heading\n```', 0, 24),
     ]);
   });
 
-  it('treats unclosed tag as literal text', () => {
-    const source = '<unclosed>no end';
+  it('leaves heading syntax inside inline code as literal text', () => {
+    const source = '`## Not a heading`';
     expect(parseStructuredContent(source)).toEqual([
-      nText('<unclosed>no end', 0, 16),
-    ]);
-  });
-
-  it('treats mismatched close tag as literal text', () => {
-    const source = '<a>text</b>';
-    expect(parseStructuredContent(source)).toEqual([
-      nText('<a>text</b>', 0, 11),
-    ]);
-  });
-
-  it('treats unexpected close tag at top level as text', () => {
-    const source = '</surprise>';
-    expect(parseStructuredContent(source)).toEqual([
-      nText('</surprise>', 0, 11),
-    ]);
-  });
-
-  it('preserves text before and after sections', () => {
-    const source = 'before<section>inside</section>after';
-    expect(parseStructuredContent(source)).toEqual([
-      nText('before', 0, 6),
-      nSection('section', {}, 6, 31, 15, 21, [
-        nText('inside', 15, 21),
-      ]),
-      nText('after', 31, 36),
-    ]);
-  });
-
-  it('handles adjacent sections', () => {
-    const source = '<a>1</a><b>2</b>';
-    expect(parseStructuredContent(source)).toEqual([
-      nSection('a', {}, 0, 8, 3, 4, [
-        nText('1', 3, 4),
-      ]),
-      nSection('b', {}, 8, 16, 11, 12, [
-        nText('2', 11, 12),
-      ]),
-    ]);
-  });
-
-  it('handles empty section', () => {
-    const source = '<empty></empty>';
-    expect(parseStructuredContent(source)).toEqual([
-      nSection('empty', {}, 0, 15, 7, 7, []),
-    ]);
-  });
-
-  it('handles multiple attributes with whitespace', () => {
-    const source = '<tag  a="1"   b=\'2\'  c=3>text</tag>';
-    expect(parseStructuredContent(source)).toEqual([
-      nSection('tag', { a: '1', b: '2', c: '3' }, 0, 35, 25, 29, [
-        nText('text', 25, 29),
-      ]),
-    ]);
-  });
-
-  it('handles mixed content with nested sections and text', () => {
-    const source = 'Hello <user name="Ada">how are <status>you</status>?</user> today';
-    expect(parseStructuredContent(source)).toEqual([
-      nText('Hello ', 0, 6),
-      nSection('user', { name: 'Ada' }, 6, 59, 23, 52, [
-        nText('how are ', 23, 31),
-        nSection('status', {}, 31, 51, 39, 42, [
-          nText('you', 39, 42),
-        ]),
-        nText('?', 51, 52),
-      ]),
-      nText(' today', 59, 65),
-    ]);
-  });
-
-  it('treats tag-like text in code fence inside section as text', () => {
-    const source = '<section>```\n<fake>code</fake>\n```\n</section>';
-    expect(parseStructuredContent(source)).toEqual([
-      nSection('section', {}, 0, 45, 9, 35, [
-        nText('```\n<fake>code</fake>\n```\n', 9, 35),
-      ]),
+      nText('`## Not a heading`', 0, 18),
     ]);
   });
 
@@ -254,10 +335,10 @@ describe('parseStructuredContent', () => {
   });
 
   it('leaves double-backtick inline code as text within a section', () => {
-    const source = '<outer>``<inner>``</outer>';
+    const source = '<questions>``<inner>``</questions>';
     expect(parseStructuredContent(source)).toEqual([
-      nSection('outer', {}, 0, 26, 7, 18, [
-        nText('``<inner>``', 7, 18),
+      nSection('questions', {}, 0, 34, 11, 22, [
+        nText('``<inner>``', 11, 22),
       ]),
     ]);
   });
@@ -284,14 +365,16 @@ describe('parseStructuredContent', () => {
   });
 
   it('parses real tags after a valid fenced code block', () => {
-    const source = '```\n<code>inside</code>\n```\n<real>outside</real>';
+    const source = '```\n<code>inside</code>\n```\n<questions>outside</questions>';
     expect(parseStructuredContent(source)).toEqual([
       nText('```\n<code>inside</code>\n```\n', 0, 28),
-      nSection('real', {}, 28, 48, 34, 41, [
-        nText('outside', 34, 41),
+      nSection('questions', {}, 28, 58, 39, 46, [
+        nText('outside', 39, 46),
       ]),
     ]);
   });
+
+  // ─── Edge cases ───
 
   it('treats incomplete tag start as text', () => {
     const source = 'text<';
@@ -307,21 +390,59 @@ describe('parseStructuredContent', () => {
     ]);
   });
 
-  it('parses question/options/answer as ordinary sections', () => {
-    const source = '<question id="q1">Pick one:</question><options><option value="a">A</option><option value="b">B</option></options><answer id="q1" />';
+  it('handles mixed content with headings and text', () => {
+    const source = 'Hello\n## User\nhow are\n### Status\nyou\n? today';
     expect(parseStructuredContent(source)).toEqual([
-      nSection('question', { id: 'q1' }, 0, 38, 18, 27, [
-        nText('Pick one:', 18, 27),
-      ]),
-      nSection('options', {}, 38, 113, 47, 103, [
-        nSection('option', { value: 'a' }, 47, 75, 65, 66, [
-          nText('A', 65, 66),
-        ]),
-        nSection('option', { value: 'b' }, 75, 103, 93, 94, [
-          nText('B', 93, 94),
+      nText('Hello\n', 0, 6),
+      nHeading(2, 'User', 6, 44, [
+        nText('how are\n', 14, 22),
+        nHeading(3, 'Status', 22, 44, [
+          nText('you\n? today', 33, 44),
         ]),
       ]),
-      nSection('answer', { id: 'q1' }, 113, 131, 131, 131, []),
+    ]);
+  });
+
+  it('parses question/options/option with heading nearby', () => {
+    const source = '## Intro\n<questions>Q</questions>\n## Outro';
+    expect(parseStructuredContent(source)).toEqual([
+      nHeading(2, 'Intro', 0, 34, [
+        nSection('questions', {}, 9, 33, 20, 21, [
+          nText('Q', 20, 21),
+        ]),
+        nText('\n', 33, 34),
+      ]),
+      nHeading(2, 'Outro', 34, 42, []),
+    ]);
+  });
+
+  it('recognises heading after disallowed tag text', () => {
+    const source = '<div>text</div>\n## Real Heading';
+    expect(parseStructuredContent(source)).toEqual([
+      nText('<div>text</div>\n', 0, 16),
+      nHeading(2, 'Real Heading', 16, 31, []),
+    ]);
+  });
+
+  it('keeps duplicate tag-like text independently', () => {
+    const source = '<q id="1">A</q><q id="2">B</q>';
+    expect(parseStructuredContent(source)).toEqual([
+      nText('<q id="1">A</q><q id="2">B</q>', 0, 30),
+    ]);
+  });
+
+  it('preserves a single # as text even at line start', () => {
+    const source = '#\n## Real';
+    expect(parseStructuredContent(source)).toEqual([
+      nText('#\n', 0, 2),
+      nHeading(2, 'Real', 2, 9, []),
+    ]);
+  });
+
+  it('parses heading with seven hashes as text', () => {
+    const source = '####### Too many';
+    expect(parseStructuredContent(source)).toEqual([
+      nText('####### Too many', 0, 16),
     ]);
   });
 });

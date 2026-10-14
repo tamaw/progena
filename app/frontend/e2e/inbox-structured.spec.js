@@ -10,9 +10,11 @@ import {
 /**
  * Structured inbox browser regression.
  *
- * Covers nested decorative margins, hover-only expanding icon actions,
- * themed Markdown tables and answer choices, literal code, AI-only
- * editing and removal, AI/explain chat, revisions, and live refresh.
+ * Covers Markdown heading sections (##–######), nested heading margins,
+ * hover-only expanding icon actions, themed Markdown tables and answer
+ * choices, literal code, AI-only editing and removal, AI/explain chat,
+ * mixed Markdown with <questions> tags, heading selection, exact section
+ * sends, revisions, and live refresh.
  *
  * Requires an isolated database configured via INBOX_SMOKE_DATABASE_URL.
  * Each test seeds uniquely-named rows and cleans them up in a finally block.
@@ -36,26 +38,28 @@ test.describe('structured inbox', () => {
     await expect(page.locator('.inbox-detail')).toBeVisible();
   };
 
-  test('renders nested brackets and literal code', async ({ page }) => {
+  test('renders nested headings and literal code', async ({ page }) => {
     const title = 'Nested & Code';
     const id = uniqueInboxId('nested');
     const body = [
       '# Nested & Code',
       '',
-      '<notes>',
-      '<inner>',
+      '## Notes',
+      '',
+      '### Inner',
+      '',
       'Inner section with `inline code`.',
-      '<deep>',
+      '',
+      '#### Deep',
+      '',
       '```python',
       'def deep():',
       '    return 42',
       '```',
-      '</deep>',
-      '</inner>',
-      '</notes>',
-      '<summary>',
+      '',
+      '## Summary',
+      '',
       'Independent section.',
-      '</summary>',
     ].join('\n');
 
     seedInboxMessage({ id, title, body });
@@ -63,44 +67,44 @@ test.describe('structured inbox', () => {
       await gotoInbox(page, title);
 
       // No section is preselected; its compact action rail appears on hover.
-      await expect(page.getByRole('button', { name: 'Select <notes> section' })).toHaveAttribute('aria-pressed', 'false');
-      await expect(page.getByRole('toolbar', { name: 'notes section actions' })).toBeHidden();
-      await page.getByRole('button', { name: 'Select <notes> section' }).hover();
-      await expect(page.getByRole('toolbar', { name: 'notes section actions' })).toBeVisible();
-      const aiAction = page.getByRole('toolbar', { name: 'notes section actions' }).getByRole('button', { name: 'Edit with AI' });
+      await expect(page.getByRole('button', { name: 'Select ## Notes section' })).toHaveAttribute('aria-pressed', 'false');
+      await expect(page.getByRole('toolbar', { name: 'Notes section actions' })).toBeHidden();
+      await page.getByRole('button', { name: 'Select ## Notes section' }).hover();
+      await expect(page.getByRole('toolbar', { name: 'Notes section actions' })).toBeVisible();
+      const aiAction = page.getByRole('toolbar', { name: 'Notes section actions' }).getByRole('button', { name: 'Edit with AI' });
       const compactWidth = await aiAction.evaluate((button) => button.getBoundingClientRect().width);
       expect(compactWidth).toBeLessThanOrEqual(30);
       await aiAction.hover();
       await expect.poll(() => aiAction.evaluate((button) => button.getBoundingClientRect().width)).toBeGreaterThan(compactWidth);
-      await page.getByRole('button', { name: 'Select <inner> section' }).hover();
-      await expect(page.getByRole('toolbar', { name: 'inner section actions' })).toBeVisible();
-      await expect(page.getByRole('toolbar', { name: 'notes section actions' })).toBeHidden();
-      await expect(page.getByRole('button', { name: 'Select <notes> section' })).toHaveText('notes');
-      await expect(page.getByRole('button', { name: 'Select <inner> section' })).toHaveText('inner');
-      await expect(page.getByRole('button', { name: 'Select <deep> section' })).toBeVisible();
+      await page.getByRole('button', { name: 'Select ### Inner section' }).hover();
+      await expect(page.getByRole('toolbar', { name: 'Inner section actions' })).toBeVisible();
+      await expect(page.getByRole('toolbar', { name: 'Notes section actions' })).toBeHidden();
+      await expect(page.getByRole('button', { name: 'Select ## Notes section' })).toHaveText('## Notes');
+      await expect(page.getByRole('button', { name: 'Select ### Inner section' })).toHaveText('### Inner');
+      await expect(page.getByRole('button', { name: 'Select #### Deep section' })).toBeVisible();
       await page.locator('.inbox-section__content').getByText('Inner section with inline code.').click();
-      await expect(page.getByRole('button', { name: 'Select <inner> section' })).toHaveAttribute('aria-pressed', 'true');
-      await expect(page.getByRole('button', { name: 'Select <notes> section' })).toHaveAttribute('aria-pressed', 'false');
+      await expect(page.getByRole('button', { name: 'Select ### Inner section' })).toHaveAttribute('aria-pressed', 'true');
+      await expect(page.getByRole('button', { name: 'Select ## Notes section' })).toHaveAttribute('aria-pressed', 'false');
       await expect(page.locator('.inbox-section__bracket')).toHaveCount(0);
-      await expect(page.getByRole('button', { name: 'Collapse <deep> section' })).toHaveCount(0);
-      await page.getByRole('button', { name: 'Select <summary> section' }).click();
-      await expect(page.getByRole('button', { name: 'Select <summary> section' })).toHaveAttribute('aria-pressed', 'true');
+      await expect(page.getByRole('button', { name: 'Collapse #### Deep section' })).toHaveCount(0);
+      await page.getByRole('button', { name: 'Select ## Summary section' }).click();
+      await expect(page.getByRole('button', { name: 'Select ## Summary section' })).toHaveAttribute('aria-pressed', 'true');
       await expect(page.locator('.inbox-section__content pre code')).toContainText('def deep():');
-      await expect(page.getByRole('button', { name: 'Select <inner> section' })).toBeVisible();
-      const nested = page.getByRole('button', { name: 'Select <deep> section' }).locator('..').locator('..');
+      await expect(page.getByRole('button', { name: 'Select ### Inner section' })).toBeVisible();
+      const nested = page.getByRole('button', { name: 'Select #### Deep section' }).locator('..').locator('..');
       const spacing = await nested.evaluate((section) => ({
         left: parseFloat(getComputedStyle(section).paddingLeft),
         top: parseFloat(getComputedStyle(section).marginTop),
       }));
       expect(spacing.left).toBeLessThanOrEqual(12);
       expect(spacing.top).toBeLessThanOrEqual(4);
-      const inner = page.getByRole('button', { name: 'Select <inner> section' }).locator('..').locator('..');
+      const inner = page.getByRole('button', { name: 'Select ### Inner section' }).locator('..').locator('..');
       const beforeHover = await nested.evaluate((section) => getComputedStyle(section).borderLeftColor);
       const parentBeforeHover = await inner.evaluate((section) => getComputedStyle(section).borderLeftColor);
       await nested.locator('pre code').hover();
       await expect.poll(() => nested.evaluate((section) => getComputedStyle(section).borderLeftColor)).not.toBe(beforeHover);
       await expect.poll(() => inner.evaluate((section) => getComputedStyle(section).borderLeftColor)).toBe(parentBeforeHover);
-      const summary = page.getByRole('button', { name: 'Select <summary> section' }).locator('..').locator('..');
+      const summary = page.getByRole('button', { name: 'Select ## Summary section' }).locator('..').locator('..');
       const bottomGap = await summary.evaluate((section) => section.getBoundingClientRect().bottom
         - section.querySelector(':scope > .inbox-section__content').getBoundingClientRect().bottom);
       expect(bottomGap).toBeLessThan(6);
@@ -120,9 +124,9 @@ test.describe('structured inbox', () => {
       '- First check',
       '- Second check',
       '',
-      '<decision>',
+      '## Decision',
+      '',
       'Release after **review**.',
-      '</decision>',
       '',
       '## Follow-up',
       '',
@@ -139,15 +143,15 @@ test.describe('structured inbox', () => {
       await expect(content.locator('h1')).toHaveText('Mixed Markdown');
       await expect(content.locator('strong').first()).toHaveText('plain Markdown');
       await expect(content.locator('li')).toHaveCount(2);
-      await expect(content.getByRole('button', { name: 'Select <decision> section' })).toHaveAttribute('aria-pressed', 'false');
+      await expect(content.getByRole('button', { name: 'Select ## Decision section' })).toHaveAttribute('aria-pressed', 'false');
       await expect(content.locator('.inbox-section__content strong')).toHaveText('review');
-      await expect(content.locator('h2')).toHaveText('Follow-up');
+      await expect(content.getByRole('button', { name: 'Select ## Follow-up section' })).toBeVisible();
       await expect(content.locator('table td')).toContainText(['Review', 'Pending']);
       await expect.poll(() => content.locator('table th').first().evaluate((cell) => getComputedStyle(cell).borderTopStyle)).toBe('solid');
       const tableBackground = await content.locator('table th').first().evaluate((cell) => getComputedStyle(cell).backgroundColor);
       expect(tableBackground).not.toBe('rgba(0, 0, 0, 0)');
       await expect(content.locator('code')).toContainText('<plan>literal example</plan>');
-      await expect(content.locator('.inbox-section')).toHaveCount(1);
+      await expect(content.locator('.inbox-section')).toHaveCount(2);
     } finally {
       removeInboxMessage(id);
     }
@@ -156,7 +160,7 @@ test.describe('structured inbox', () => {
   test('section text stays in place as the action bar moves', async ({ page }) => {
     const title = 'Stable Selection';
     const id = uniqueInboxId('selection');
-    seedInboxMessage({ id, title, body: '# Stable Selection\n\n<plan>\nFirst section.\n</plan>\n\n<notes>\nSecond section.\n</notes>' });
+    seedInboxMessage({ id, title, body: '# Stable Selection\n\n## Plan\n\nFirst section.\n\n## Notes\n\nSecond section.' });
     try {
       await gotoInbox(page, title);
       await page.setViewportSize({ width: 480, height: 900 });
@@ -164,9 +168,9 @@ test.describe('structured inbox', () => {
       const positions = () => page.locator('.inbox-section__content').evaluateAll((contents) =>
         contents.map((content) => content.getBoundingClientRect().top));
       const before = await positions();
-      await page.getByRole('button', { name: 'Select <notes> section' }).click();
+      await page.getByRole('button', { name: 'Select ## Notes section' }).click();
       expect(await positions()).toEqual(before);
-      await page.getByRole('button', { name: 'Select <plan> section' }).click();
+      await page.getByRole('button', { name: 'Select ## Plan section' }).click();
       expect(await positions()).toEqual(before);
     } finally {
       removeInboxMessage(id);
@@ -176,10 +180,10 @@ test.describe('structured inbox', () => {
   test('section colors follow light and dark theme tokens', async ({ page }) => {
     const title = 'Theme Colors';
     const id = uniqueInboxId('theme');
-    seedInboxMessage({ id, title, body: '# Theme Colors\n\n<plan>\nTheme-aware section.\n</plan>' });
+    seedInboxMessage({ id, title, body: '# Theme Colors\n\n## Plan\n\nTheme-aware section.' });
     try {
       await gotoInbox(page, title);
-      await page.getByRole('button', { name: 'Select <plan> section' }).click();
+      await page.getByRole('button', { name: 'Select ## Plan section' }).click();
       const colors = async (theme) => page.evaluate((nextTheme) => {
         document.documentElement.dataset.theme = nextTheme;
         const probe = document.createElement('span');
@@ -226,13 +230,13 @@ test.describe('structured inbox', () => {
     const body = [
       '# AI Remove Section',
       '',
-      '<plan>',
-      'Temporary plan.',
-      '</plan>',
+      '## Plan',
       '',
-      '<notes>',
+      'Temporary plan.',
+      '',
+      '## Notes',
+      '',
       'Keep me.',
-      '</notes>',
     ].join('\n');
 
     await page.route('**/api/ui/responses', async (route) => {
@@ -247,9 +251,9 @@ test.describe('structured inbox', () => {
     try {
       await gotoInbox(page, title);
 
-      await expect(page.getByRole('button', { name: 'Select <plan> section' })).toHaveAttribute('aria-pressed', 'false');
-      await page.getByRole('button', { name: 'Select <plan> section' }).hover();
-      await expect(page.getByRole('toolbar', { name: 'plan section actions' })).toBeVisible();
+      await expect(page.getByRole('button', { name: 'Select ## Plan section' })).toHaveAttribute('aria-pressed', 'false');
+      await page.getByRole('button', { name: 'Select ## Plan section' }).hover();
+      await expect(page.getByRole('toolbar', { name: 'Plan section actions' })).toBeVisible();
 
       const removeButton = page.getByRole('button', { name: 'Remove', exact: true });
       await expect(removeButton.locator('svg')).toBeVisible();
@@ -259,9 +263,9 @@ test.describe('structured inbox', () => {
       const request = await requestPromise;
       const outgoing = JSON.parse(request.postData()).input[0].content;
       expect(outgoing).toContain(`/inbox/${id}.md`);
-      expect(outgoing).toContain('<plan>\nTemporary plan.\n</plan>');
+      expect(outgoing).toContain('## Plan\n\nTemporary plan.');
       expect(outgoing).toContain('Remove this entire section');
-      await expect(page.getByRole('button', { name: 'Select <plan> section' })).toBeVisible();
+      await expect(page.getByRole('button', { name: 'Select ## Plan section' })).toBeVisible();
     } finally {
       removeInboxMessage(id);
     }
@@ -274,16 +278,16 @@ test.describe('structured inbox', () => {
     const body = [
       '# Explain Quick Chat',
       '',
-      '<plan>',
+      '## Plan',
+      '',
       'Do important work.',
-      '</plan>',
     ].join('\n');
 
     seedInboxMessage({ id, title, body });
     try {
       await gotoInbox(page, title);
 
-      await page.getByRole('button', { name: 'Select <plan> section' }).hover();
+      await page.getByRole('button', { name: 'Select ## Plan section' }).hover();
       await page.getByRole('button', { name: 'Explain', exact: true }).click();
 
       // Quick chat panel opens and auto-submits the explain prompt.
@@ -301,9 +305,9 @@ test.describe('structured inbox', () => {
     const body = [
       '# Edit With AI',
       '',
-      '<plan>',
+      '## Plan',
+      '',
       'Old plan.',
-      '</plan>',
     ].join('\n');
 
     seedInboxMessage({ id, title, body });
@@ -326,8 +330,8 @@ test.describe('structured inbox', () => {
     try {
       await gotoInbox(page, title);
 
-      await page.getByRole('button', { name: 'Select <plan> section' }).hover();
-      const actions = page.getByRole('toolbar', { name: 'plan section actions' });
+      await page.getByRole('button', { name: 'Select ## Plan section' }).hover();
+      const actions = page.getByRole('toolbar', { name: 'Plan section actions' });
       await expect(actions.locator('button').nth(1)).toHaveText('Explain');
       await expect(actions.locator('button').nth(1).locator('svg')).toBeVisible();
       await expect(actions.locator('button').first()).toHaveText('Edit with AI');
@@ -354,7 +358,7 @@ test.describe('structured inbox', () => {
       const request = await responseRequest;
       const outgoing = JSON.parse(request.postData());
       expect(outgoing.input[0].content).toContain('Make it shorter');
-      expect(outgoing.input[0].content).toContain(body.slice(body.indexOf('<plan>')));
+      expect(outgoing.input[0].content).toContain('## Plan\n\nOld plan.');
       expect(outgoing.metadata.thread_id).toBeTruthy();
 
       // Complete through the UI event stream consumed by quick chat.
@@ -380,7 +384,7 @@ test.describe('structured inbox', () => {
   test('AI instruction keeps showing current document when an external write arrives first', async ({ page }) => {
     const title = 'AI Edit Early Update';
     const id = uniqueInboxId('aiearly');
-    const body = '# AI Edit Early Update\n\n<plan>\nOriginal plan.\n</plan>';
+    const body = '# AI Edit Early Update\n\n## Plan\n\nOriginal plan.';
     seedInboxMessage({ id, title, body });
     await page.route('**/api/ui/responses', async (route) => {
       await route.fulfill({
@@ -391,7 +395,7 @@ test.describe('structured inbox', () => {
     });
     try {
       await gotoInbox(page, title);
-      await page.getByRole('button', { name: 'Select <plan> section' }).hover();
+      await page.getByRole('button', { name: 'Select ## Plan section' }).hover();
       await page.getByRole('button', { name: 'Edit with AI', exact: true }).click();
       const dialog = page.getByRole('dialog', { name: 'Edit section with AI' });
       await dialog.getByRole('textbox', { name: 'AI edit instruction' }).fill('Rewrite the plan');
@@ -421,7 +425,7 @@ test.describe('structured inbox', () => {
   test('Enter submits inline AI edit and a failed send can retry in the same chat session', async ({ page }) => {
     const title = 'Retry AI Edit';
     const id = uniqueInboxId('airetry');
-    seedInboxMessage({ id, title, body: '# Retry AI Edit\n\n<plan>\nKeep this intact.\n</plan>' });
+    seedInboxMessage({ id, title, body: '# Retry AI Edit\n\n## Plan\n\nKeep this intact.' });
     const requests = [];
     await page.route('**/api/ui/responses', async (route) => {
       requests.push(JSON.parse(route.request().postData()));
@@ -429,7 +433,7 @@ test.describe('structured inbox', () => {
     });
     try {
       await gotoInbox(page, title);
-      await page.getByRole('button', { name: 'Select <plan> section' }).hover();
+      await page.getByRole('button', { name: 'Select ## Plan section' }).hover();
       await page.getByRole('button', { name: 'Edit with AI', exact: true }).click();
       const dialog = page.getByRole('dialog', { name: 'Edit section with AI' });
       await dialog.getByRole('textbox', { name: 'AI edit instruction' }).fill('Make this clearer');
@@ -451,11 +455,11 @@ test.describe('structured inbox', () => {
   test('AI popover closes on outside click or Escape and can hand off an unsent draft', async ({ page }) => {
     const title = 'AI Popover Draft';
     const id = uniqueInboxId('aipop');
-    seedInboxMessage({ id, title, body: '# AI Popover Draft\n\n<plan>\n<step>Review the draft.</step>\n</plan>' });
+    seedInboxMessage({ id, title, body: '# AI Popover Draft\n\n## Plan\n\n### Step\n\nReview the draft.' });
     try {
       await gotoInbox(page, title);
-      await page.getByRole('button', { name: 'Select <step> section' }).hover();
-      const aiButton = page.getByRole('toolbar', { name: 'step section actions' }).getByRole('button', { name: 'Edit with AI' });
+      await page.getByRole('button', { name: 'Select ### Step section' }).hover();
+      const aiButton = page.getByRole('toolbar', { name: 'Step section actions' }).getByRole('button', { name: 'Edit with AI' });
       const dialog = page.getByRole('dialog', { name: 'Edit section with AI' });
       await aiButton.click();
       await expect(aiButton).toHaveClass(/is-active/);
@@ -463,18 +467,18 @@ test.describe('structured inbox', () => {
       await page.getByRole('heading', { name: title }).last().click();
       await expect(dialog).toHaveCount(0);
       await expect(page.locator('.inbox-section__actions button[aria-label="Edit with AI"]').last()).toHaveAttribute('aria-expanded', 'false');
-      await page.getByRole('button', { name: 'Select <step> section' }).hover();
+      await page.getByRole('button', { name: 'Select ### Step section' }).hover();
       await aiButton.click();
       await aiButton.click();
       await expect(dialog).toHaveCount(0);
       await expect(page.locator('.inbox-section__actions button[aria-label="Edit with AI"]').last()).not.toHaveClass(/is-active/);
-      await page.getByRole('button', { name: 'Select <step> section' }).hover();
+      await page.getByRole('button', { name: 'Select ### Step section' }).hover();
       await aiButton.click();
       await dialog.getByRole('textbox', { name: 'AI edit instruction' }).fill('Clarify this step');
       await page.keyboard.press('Escape');
       await expect(dialog).toHaveCount(0);
       await expect(page.locator('.inbox-section__actions button[aria-label="Edit with AI"]').last()).toHaveAttribute('aria-expanded', 'false');
-      await page.getByRole('button', { name: 'Select <step> section' }).hover();
+      await page.getByRole('button', { name: 'Select ### Step section' }).hover();
       await aiButton.click();
       await dialog.getByRole('textbox', { name: 'AI edit instruction' }).fill('Shorten this step');
       await dialog.getByRole('button', { name: 'Open in quick chat' }).click();
@@ -483,7 +487,7 @@ test.describe('structured inbox', () => {
       await expect(panel).toBeVisible({ timeout: 10_000 });
       const composer = panel.getByRole('textbox', { name: 'How should this message change?' });
       await expect(composer).toContainText('Shorten this step');
-      await expect(composer).toContainText('<step>');
+      await expect(composer).toContainText('### Step');
       await expect(panel.locator('.qchat-user')).toHaveCount(0);
     } finally {
       removeInboxMessage(id);
@@ -615,10 +619,142 @@ test.describe('structured inbox', () => {
     }
   });
 
+  test('renders mixed Markdown with question tags among headings', async ({ page }) => {
+    const title = 'Mixed Questions';
+    const id = uniqueInboxId('mixedq');
+    const body = [
+      '# Mixed Questions',
+      '',
+      'Intro paragraph.',
+      '',
+      '## Approach',
+      '',
+      'Pick an approach.',
+      '',
+      '<questions id="approach">',
+      'Which approach should we use?',
+      '<options>',
+      '<option>Conservative</option>',
+      '<option>Aggressive</option>',
+      '</options>',
+      '</questions>',
+      '',
+      '## Details',
+      '',
+      'More info here.',
+      '',
+      '<questions id="details">',
+      'Any concerns?',
+      '<options>',
+      '<option>None</option>',
+      '</options>',
+      '</questions>',
+      '',
+      '## Closing',
+      '',
+      'End of message.',
+    ].join('\n');
+
+    seedInboxMessage({ id, title, body });
+    try {
+      await gotoInbox(page, title);
+      const content = page.locator('.inbox-detail__body');
+
+      // Headings are selectable sections.
+      await expect(content.getByRole('button', { name: 'Select ## Approach section' })).toHaveAttribute('aria-pressed', 'false');
+      await expect(content.getByRole('button', { name: 'Select ## Details section' })).toHaveAttribute('aria-pressed', 'false');
+      await expect(content.getByRole('button', { name: 'Select ## Closing section' })).toHaveAttribute('aria-pressed', 'false');
+
+      // Questions are also selectable sections.
+      await expect(content.getByRole('button', { name: 'Select <questions> section' })).toHaveCount(2);
+
+      // Options are visible.
+      await expect(content.getByRole('button', { name: 'Conservative' })).toBeVisible();
+      await expect(content.getByRole('button', { name: 'Aggressive' })).toBeVisible();
+      await expect(content.getByRole('button', { name: 'None' })).toBeVisible();
+
+      // Clicking a heading selects it, not the question inside.
+      await content.getByRole('button', { name: 'Select ## Approach section' }).click();
+      await expect(content.getByRole('button', { name: 'Select ## Approach section' })).toHaveAttribute('aria-pressed', 'true');
+
+      // Clicking a question option opens quick chat.
+      await content.getByRole('button', { name: 'Conservative' }).click();
+      const panel = page.locator('.topnav-pane--quick.is-open');
+      await expect(panel).toBeVisible({ timeout: 10_000 });
+      await expect(panel.locator('.qchat-user')).toContainText('Conservative');
+    } finally {
+      removeInboxMessage(id);
+    }
+  });
+
+  test('heading selection toggles and sends exact heading section', async ({ page }) => {
+    const title = 'Heading Selection';
+    const id = uniqueInboxId('hsel');
+    const body = [
+      '# Heading Selection',
+      '',
+      '## First',
+      '',
+      'First content.',
+      '',
+      '### Nested',
+      '',
+      'Nested content.',
+      '',
+      '## Second',
+      '',
+      'Second content.',
+    ].join('\n');
+
+    await page.route('**/api/ui/responses', async (route) => {
+      const requestId = route.request().headers()['x-request-id'];
+      await route.fulfill({
+        status: 202,
+        contentType: 'application/json',
+        body: JSON.stringify({ request_id: requestId, event_types: ['chat.response.started'] }),
+      });
+    });
+
+    seedInboxMessage({ id, title, body });
+    try {
+      await gotoInbox(page, title);
+
+      // No section preselected.
+      await expect(page.getByRole('button', { name: 'Select ## First section' })).toHaveAttribute('aria-pressed', 'false');
+      await expect(page.getByRole('button', { name: 'Select ### Nested section' })).toHaveAttribute('aria-pressed', 'false');
+      await expect(page.getByRole('button', { name: 'Select ## Second section' })).toHaveAttribute('aria-pressed', 'false');
+
+      // Clicking a heading selects it.
+      await page.getByRole('button', { name: 'Select ## First section' }).click();
+      await expect(page.getByRole('button', { name: 'Select ## First section' })).toHaveAttribute('aria-pressed', 'true');
+      await expect(page.getByRole('button', { name: 'Select ### Nested section' })).toHaveAttribute('aria-pressed', 'false');
+
+      // Clicking the same heading deselects it.
+      await page.getByRole('button', { name: 'Select ## First section' }).click();
+      await expect(page.getByRole('button', { name: 'Select ## First section' })).toHaveAttribute('aria-pressed', 'false');
+
+      // Clicking nested heading selects only the nested section.
+      await page.getByRole('button', { name: 'Select ### Nested section' }).click();
+      await expect(page.getByRole('button', { name: 'Select ### Nested section' })).toHaveAttribute('aria-pressed', 'true');
+      await expect(page.getByRole('button', { name: 'Select ## First section' })).toHaveAttribute('aria-pressed', 'false');
+
+      // AI Edit sends the exact heading section.
+      await page.getByRole('button', { name: 'Select ## Second section' }).hover();
+      const requestPromise = page.waitForRequest((request) => request.url().includes('/api/ui/responses') && request.method() === 'POST');
+      await page.getByRole('toolbar', { name: 'Second section actions' }).getByRole('button', { name: 'Explain' }).click();
+      const request = await requestPromise;
+      const outgoing = JSON.parse(request.postData()).input[0].content;
+      expect(outgoing).toContain('## Second\n\nSecond content.');
+      expect(outgoing).toContain('Explain this section');
+    } finally {
+      removeInboxMessage(id);
+    }
+  });
+
   test('busy quick chat reports an inline instruction failure instead of silently losing it', async ({ page }) => {
     const title = 'Lost Inline Race';
     const id = uniqueInboxId('race');
-    const body = '# Lost Inline Race\n\n<plan>\nFirst plan.\n</plan>';
+    const body = '# Lost Inline Race\n\n## Plan\n\nFirst plan.';
     seedInboxMessage({ id, title, body });
     await page.addInitScript(() => {
       window.__inlineStatuses = [];
@@ -649,7 +785,7 @@ test.describe('structured inbox', () => {
       await gotoInbox(page, title);
 
       // Explain starts a regular quick-chat send; hold its request open.
-      await page.getByRole('button', { name: 'Select <plan> section' }).hover();
+      await page.getByRole('button', { name: 'Select ## Plan section' }).hover();
       await page.getByRole('button', { name: 'Explain', exact: true }).click();
       await expect.poll(() => requests.length).toBe(1);
 
@@ -667,7 +803,7 @@ test.describe('structured inbox', () => {
         expect.objectContaining({ clientId: 'race-inline', status: 'failed' }),
       );
       expect(requests[0].input[0].content).toContain('Explain this section');
-      await expect(page.getByRole('button', { name: 'Select <plan> section' })).toBeVisible();
+      await expect(page.getByRole('button', { name: 'Select ## Plan section' })).toBeVisible();
     } finally {
       firstResolve();
       removeInboxMessage(id);

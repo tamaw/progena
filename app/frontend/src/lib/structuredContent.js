@@ -1,10 +1,12 @@
 /**
  * Structured-tag parser for Markdown document bodies.
  *
- * Parses arbitrary nested XML-like tags with attributes into a node tree.
- * Everything inside fenced code blocks (```) or inline backticks (`) is
- * left as literal text.  Malformed / unclosed constructs are emitted as
- * literal text nodes so they can never be executed as HTML.
+ * Parses Markdown headings (##–######) and a whitelist of XML-like tags
+ * (<questions>, <options>, <option>) into a node tree.  Everything else
+ * that looks like a tag is emitted as literal text.  Everything inside
+ * fenced code blocks (```) or inline backticks (`) is left as literal text.
+ * Malformed / unclosed constructs are emitted as literal text nodes so they
+ * can never be executed as HTML.
  *
  * Offsets are UTF-16 code-unit indices (standard JavaScript string indices).
  */
@@ -26,9 +28,20 @@
  * @property {number} end
  * @property {number} openEnd   // index after the opening '>'
  * @property {number} closeStart // index of the closing '<'
- * @property {Array<TextNode|SectionNode>} children
+ * @property {Array<TextNode|SectionNode|HeadingNode>} children
  */
 
+/**
+ * @typedef {Object} HeadingNode
+ * @property {'heading'} type
+ * @property {number} level
+ * @property {number} start
+ * @property {number} end
+ * @property {string} title
+ * @property {Array<TextNode|SectionNode|HeadingNode>} children
+ */
+
+const ALLOWED_SECTION_TAGS = new Set(['questions', 'options', 'option']);
 const VOID_TAGS = new Set([
   'area','base','br','col','embed','hr','img','input',
   'link','meta','param','source','track','wbr',
@@ -37,7 +50,7 @@ const VOID_TAGS = new Set([
 /**
  * Parse a source string into an array of top-level nodes.
  * @param {string} source
- * @returns {Array<TextNode|SectionNode>}
+ * @returns {Array<TextNode|SectionNode|HeadingNode>}
  */
 export function parseStructuredContent(source) {
   const parser = new Parser(String(source ?? ''));
@@ -52,16 +65,31 @@ class Parser {
   }
 
   parseDocument() {
+    return this.parseContent(() => false);
+  }
+
+  /**
+   * Parse content until the stop predicate returns true or EOF.
+   * @param {(() => boolean)|null} stopPredicate
+   * @returns {Array<TextNode|SectionNode|HeadingNode>}
+   */
+  parseContent(stopPredicate) {
     const nodes = [];
     while (this.pos < this.len) {
-      const node = this.parseTopLevelNode();
+      if (stopPredicate && stopPredicate()) break;
+      const node = this.parseNode(stopPredicate);
       if (node) nodes.push(node);
     }
     return mergeTextNodes(nodes);
   }
 
-  parseTopLevelNode() {
-    if (this.pos >= this.len) return null;
+  /**
+   * Parse the next node at the current position.
+   * @param {(() => boolean)|null} stopPredicate
+   * @returns {TextNode|SectionNode|HeadingNode|null}
+   */
+  parseNode(stopPredicate) {
+    if (stopPredicate && stopPredicate()) return null;
 
     // Code fence always wins
     if (this.peek(3) === '```' || this.peek(3) === '~~~') {
@@ -72,24 +100,37 @@ class Parser {
       return this.consumeInlineCode();
     }
 
+    // Heading at start of line (##–###### only; H1 is plain text)
+    if (this.isAtLineStart() && this.peek(1) === '#') {
+      const heading = this.tryParseHeading(stopPredicate);
+      if (heading) return heading;
+      // Not a valid heading (e.g. #no-space or single #) → consume '#' as text
+      this.pos++;
+      return this.emitText(this.pos - 1, this.pos);
+    }
+
     if (this.peek(1) === '<') {
       const tagStart = this.pos;
       const parsed = this.tryParseTag();
       if (parsed) {
         if (parsed.kind === 'open') {
-          if (VOID_TAGS.has(parsed.name)) {
-            return this.emitSelfClosing(tagStart, parsed);
+          if (ALLOWED_SECTION_TAGS.has(parsed.name)) {
+            if (VOID_TAGS.has(parsed.name)) {
+              return this.emitSelfClosing(tagStart, parsed);
+            }
+            return this.parseAllowedSection(tagStart, parsed, stopPredicate);
           }
-          const section = this.parseSection(tagStart, parsed);
-          // If parseSection returns a text node, it means the tag was unclosed
-          // and we fell back to text.
-          return section;
+          // Disallowed tag → literal text
+          return this.emitText(tagStart, this.pos);
         }
         if (parsed.kind === 'self') {
-          return this.emitSelfClosing(tagStart, parsed);
+          if (ALLOWED_SECTION_TAGS.has(parsed.name)) {
+            return this.emitSelfClosing(tagStart, parsed);
+          }
+          return this.emitText(tagStart, this.pos);
         }
         if (parsed.kind === 'close') {
-          // Unexpected close tag at top level → literal text
+          // Unexpected close tag → literal text
           return this.emitText(tagStart, this.pos);
         }
       }
@@ -98,18 +139,175 @@ class Parser {
       return this.emitText(tagStart, this.pos);
     }
 
-    return this.consumePlainText();
+    return this.consumePlainText(stopPredicate);
   }
 
   /**
-   * Parse a section starting with an already-consumed open tag.
+   * Attempt to parse a Markdown heading (##–######) at the current position.
+   * On success, returns a HeadingNode and advances past the heading section.
+   * On failure, leaves this.pos unchanged and returns null.
+   */
+  tryParseHeading(stopPredicate) {
+    const start = this.pos;
+    let level = 0;
+    while (this.pos < this.len && this.source[this.pos] === '#' && level < 6) {
+      level++;
+      this.pos++;
+    }
+    if (level < 2) {
+      this.pos = start;
+      return null;
+    }
+    if (this.pos >= this.len || (this.source[this.pos] !== ' ' && this.source[this.pos] !== '\t')) {
+      this.pos = start;
+      return null;
+    }
+    // Skip whitespace after hashes
+    while (this.pos < this.len && (this.source[this.pos] === ' ' || this.source[this.pos] === '\t')) {
+      this.pos++;
+    }
+    const titleStart = this.pos;
+    while (this.pos < this.len && this.source[this.pos] !== '\n' && this.source[this.pos] !== '\r') {
+      this.pos++;
+    }
+    const title = this.source.slice(titleStart, this.pos).trim();
+    // Consume newline after heading line
+    if (this.pos < this.len && this.source[this.pos] === '\r') this.pos++;
+    if (this.pos < this.len && this.source[this.pos] === '\n') this.pos++;
+
+    // Parse children until next same-or-higher heading or stop predicate
+    const children = this.parseHeadingChildren(level, stopPredicate);
+
+    const end = this.pos;
+    return { type: 'heading', level, start, end, title, children };
+  }
+
+  /**
+   * Parse content inside a heading, stopping at heading boundaries.
+   * This mirrors parseAllowedSection logic for nested sections so that
+   * close tags for enclosing allowed sections are visible.
+   */
+  parseHeadingChildren(level, stopPredicate) {
+    const nodes = [];
+    while (this.pos < this.len) {
+      if (stopPredicate && stopPredicate()) break;
+
+      // Check for heading boundary (same or higher level)
+      if (this.isAtLineStart() && this.peek(1) === '#') {
+        const saved = this.pos;
+        let nextLevel = 0;
+        while (this.pos < this.len && this.source[this.pos] === '#' && nextLevel < 6) {
+          nextLevel++;
+          this.pos++;
+        }
+        const isHeading = nextLevel >= 1 && this.pos < this.len && (this.source[this.pos] === ' ' || this.source[this.pos] === '\t');
+        this.pos = saved;
+        if (isHeading && nextLevel <= level) break;
+      }
+
+      // Code fences and inline code are always literal text
+      if (this.peek(3) === '```' || this.peek(3) === '~~~') {
+        nodes.push(this.consumeCodeFence());
+        continue;
+      }
+      if (this.peek(1) === '`') {
+        nodes.push(this.consumeInlineCode());
+        continue;
+      }
+
+      // Nested heading
+      if (this.isAtLineStart() && this.peek(1) === '#') {
+        const heading = this.tryParseHeading(stopPredicate);
+        if (heading) {
+          nodes.push(heading);
+          continue;
+        }
+        this.pos++;
+        nodes.push(this.emitText(this.pos - 1, this.pos));
+        continue;
+      }
+
+      // Allowed sections
+      if (this.peek(1) === '<') {
+        const tagStart = this.pos;
+        const parsed = this.tryParseTag();
+        if (parsed) {
+          if (parsed.kind === 'open') {
+            if (ALLOWED_SECTION_TAGS.has(parsed.name)) {
+              if (VOID_TAGS.has(parsed.name)) {
+                nodes.push(this.emitSelfClosing(tagStart, parsed));
+              } else {
+                const section = this.parseAllowedSection(tagStart, parsed, () => {
+                  if (stopPredicate && stopPredicate()) return true;
+                  if (!this.isAtLineStart()) return false;
+                  const saved = this.pos;
+                  let nextLevel = 0;
+                  while (this.pos < this.len && this.source[this.pos] === '#' && nextLevel < 6) {
+                    nextLevel++;
+                    this.pos++;
+                  }
+                  const isHeading = nextLevel >= 1 && this.pos < this.len && (this.source[this.pos] === ' ' || this.source[this.pos] === '\t');
+                  this.pos = saved;
+                  return isHeading && nextLevel <= level;
+                });
+                nodes.push(section);
+              }
+            } else {
+              nodes.push(this.emitText(tagStart, this.pos));
+            }
+            continue;
+          }
+          if (parsed.kind === 'self') {
+            if (ALLOWED_SECTION_TAGS.has(parsed.name)) {
+              nodes.push(this.emitSelfClosing(tagStart, parsed));
+            } else {
+              nodes.push(this.emitText(tagStart, this.pos));
+            }
+            continue;
+          }
+          if (parsed.kind === 'close') {
+            // Stop parsing heading children at any close tag;
+            // let the caller (parseAllowedSection or top-level) decide
+            // whether to match it or treat it as text.
+            this.pos = tagStart;
+            break;
+          }
+        }
+        this.pos++;
+        nodes.push(this.emitText(tagStart, this.pos));
+        continue;
+      }
+
+      // Plain text
+      const textStart = this.pos;
+      while (this.pos < this.len) {
+        if (stopPredicate && stopPredicate()) break;
+        const ch = this.source[this.pos];
+        if (ch === '<' || this.peek(3) === '```' || this.peek(3) === '~~~' || ch === '`') break;
+        if (this.isAtLineStart() && ch === '#') break;
+        this.pos++;
+      }
+      if (this.pos > textStart) {
+        nodes.push(this.emitText(textStart, this.pos));
+      }
+    }
+    return mergeTextNodes(nodes);
+  }
+
+  /**
+   * Parse an allowed XML-like section starting with an already-consumed open tag.
    * Returns a SectionNode on success, or a TextNode on failure (unclosed).
    */
-  parseSection(start, openTag) {
+  parseAllowedSection(start, openTag, parentStopPredicate) {
     // Stack of { tag, start, openTag, children }
     const stack = [{ tag: openTag.name, start, openTag, children: [] }];
 
     while (this.pos < this.len) {
+      if (parentStopPredicate && parentStopPredicate()) {
+        // Parent boundary reached before section closed → unclosed
+        return this.emitText(start, this.pos);
+      }
+
       // Code fences and inline code are always literal text
       if (this.peek(3) === '```' || this.peek(3) === '~~~') {
         stack[stack.length - 1].children.push(this.consumeCodeFence());
@@ -117,6 +315,19 @@ class Parser {
       }
       if (this.peek(1) === '`') {
         stack[stack.length - 1].children.push(this.consumeInlineCode());
+        continue;
+      }
+
+      // Heading inside allowed section
+      if (this.isAtLineStart() && this.peek(1) === '#') {
+        const heading = this.tryParseHeading(parentStopPredicate);
+        if (heading) {
+          stack[stack.length - 1].children.push(heading);
+          continue;
+        }
+        // Not a valid heading → consume '#' as text
+        this.pos++;
+        stack[stack.length - 1].children.push(this.emitText(this.pos - 1, this.pos));
         continue;
       }
 
@@ -130,16 +341,25 @@ class Parser {
         }
 
         if (parsed.kind === 'open') {
-          if (VOID_TAGS.has(parsed.name)) {
-            stack[stack.length - 1].children.push(this.emitSelfClosing(innerTagStart, parsed));
+          if (ALLOWED_SECTION_TAGS.has(parsed.name)) {
+            if (VOID_TAGS.has(parsed.name)) {
+              stack[stack.length - 1].children.push(this.emitSelfClosing(innerTagStart, parsed));
+            } else {
+              stack.push({ tag: parsed.name, start: innerTagStart, openTag: parsed, children: [] });
+            }
           } else {
-            stack.push({ tag: parsed.name, start: innerTagStart, openTag: parsed, children: [] });
+            // Disallowed tag inside section → literal text
+            stack[stack.length - 1].children.push(this.emitText(innerTagStart, this.pos));
           }
           continue;
         }
 
         if (parsed.kind === 'self') {
-          stack[stack.length - 1].children.push(this.emitSelfClosing(innerTagStart, parsed));
+          if (ALLOWED_SECTION_TAGS.has(parsed.name)) {
+            stack[stack.length - 1].children.push(this.emitSelfClosing(innerTagStart, parsed));
+          } else {
+            stack[stack.length - 1].children.push(this.emitText(innerTagStart, this.pos));
+          }
           continue;
         }
 
@@ -169,8 +389,10 @@ class Parser {
       // Plain text inside current section
       const textStart = this.pos;
       while (this.pos < this.len) {
+        if (parentStopPredicate && parentStopPredicate()) break;
         const ch = this.source[this.pos];
         if (ch === '<' || this.peek(3) === '```' || this.peek(3) === '~~~' || ch === '`') break;
+        if (this.isAtLineStart() && ch === '#') break;
         this.pos++;
       }
       if (this.pos > textStart) {
@@ -178,8 +400,7 @@ class Parser {
       }
     }
 
-    // Ran out of source with unclosed tag(s) → emit everything from the
-    // original start to current position as plain text.
+    // Ran out of source with unclosed tag(s) → emit everything as plain text.
     return this.emitText(start, this.pos);
   }
 
@@ -218,11 +439,13 @@ class Parser {
     };
   }
 
-  consumePlainText() {
+  consumePlainText(stopPredicate) {
     const start = this.pos;
     while (this.pos < this.len) {
+      if (stopPredicate && stopPredicate()) break;
       const ch = this.source[this.pos];
       if (ch === '<' || this.peek(3) === '```' || this.peek(3) === '~~~' || ch === '`') break;
+      if (this.isAtLineStart() && ch === '#') break;
       this.pos++;
     }
     return this.emitText(start, this.pos);
@@ -387,7 +610,7 @@ class Parser {
           if (this.pos < this.len) this.pos++; // consume closing quote
         } else {
           const valueStart = this.pos;
-          while (this.pos < this.len && !/[\s>/]/.test(this.source[this.pos])) this.pos++;
+          while (this.pos < this.len && !/\s|>|\//.test(this.source[this.pos])) this.pos++;
           attrValue = this.source.slice(valueStart, this.pos);
         }
       }
@@ -395,6 +618,12 @@ class Parser {
       attrs[attrName] = attrValue;
     }
     return { ok: false };
+  }
+
+  isAtLineStart() {
+    if (this.pos === 0) return true;
+    const prev = this.source[this.pos - 1];
+    return prev === '\n' || prev === '\r';
   }
 
   peek(n) {
