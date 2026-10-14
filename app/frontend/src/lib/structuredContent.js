@@ -239,11 +239,38 @@ class Parser {
     if (this.pos < this.len) this.pos++;
     while (this.pos < this.len) {
       if (this.source[this.pos] === marker) {
+        // Closing fence must be on its own line.
+        let lineStart = this.pos - 1;
+        while (lineStart >= start && this.source[lineStart] !== '\n') lineStart--;
+        let onlyWsBefore = true;
+        for (let p = lineStart + 1; p < this.pos; p++) {
+          if (this.source[p] !== ' ' && this.source[p] !== '\t') {
+            onlyWsBefore = false;
+            break;
+          }
+        }
+        if (!onlyWsBefore) {
+          this.pos++;
+          continue;
+        }
+
         let end = this.pos;
-        while (this.source[end] === marker) end++;
-        if (end - this.pos >= size && (this.source[end] === '\n' || this.source[end] === '<' || end === this.len)) {
-          this.pos = end;
-          break;
+        while (end < this.len && this.source[end] === marker) end++;
+        if (end - this.pos >= size) {
+          let after = end;
+          while (after < this.len && (this.source[after] === ' ' || this.source[after] === '\t')) after++;
+          if (after >= this.len) {
+            this.pos = after;
+            break;
+          }
+          if (this.source[after] === '\n') {
+            this.pos = after + 1;
+            break;
+          }
+          if (this.source[after] === '\r' && this.source[after + 1] === '\n') {
+            this.pos = after + 2;
+            break;
+          }
         }
       }
       this.pos++;
@@ -253,11 +280,24 @@ class Parser {
 
   consumeInlineCode() {
     const start = this.pos;
-    this.pos++; // consume `
-    while (this.pos < this.len && this.source[this.pos] !== '`') {
+    let tickCount = 0;
+    while (this.pos < this.len && this.source[this.pos] === '`') {
+      tickCount++;
       this.pos++;
     }
-    if (this.pos < this.len) this.pos++; // consume closing `
+    while (this.pos < this.len) {
+      if (this.source[this.pos] === '`') {
+        const runStart = this.pos;
+        while (this.pos < this.len && this.source[this.pos] === '`') {
+          this.pos++;
+        }
+        if (this.pos - runStart === tickCount) {
+          break;
+        }
+      } else {
+        this.pos++;
+      }
+    }
     return this.emitText(start, this.pos);
   }
 
@@ -347,7 +387,7 @@ class Parser {
           if (this.pos < this.len) this.pos++; // consume closing quote
         } else {
           const valueStart = this.pos;
-          while (this.pos < this.len && !/[\s>\/]/.test(this.source[this.pos])) this.pos++;
+          while (this.pos < this.len && !/[\s>/]/.test(this.source[this.pos])) this.pos++;
           attrValue = this.source.slice(valueStart, this.pos);
         }
       }

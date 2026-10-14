@@ -11,8 +11,8 @@ import {
  * Structured inbox browser regression.
  *
  * Covers nested decorative margins, hover-only expanding icon actions,
- * themed Markdown tables and answer choices, literal code, markdown
- * edit+preview, removal, AI/explain chat, revisions, and edit conflicts.
+ * themed Markdown tables and answer choices, literal code, AI-only
+ * editing and removal, AI/explain chat, revisions, and live refresh.
  *
  * Requires an isolated database configured via INBOX_SMOKE_DATABASE_URL.
  * Each test seeds uniquely-named rows and cleans them up in a finally block.
@@ -109,7 +109,7 @@ test.describe('structured inbox', () => {
     }
   });
 
-  test('renders mostly Markdown with a single editable section', async ({ page }) => {
+  test('renders mostly Markdown with a single selectable section', async ({ page }) => {
     const title = 'Mixed Markdown';
     const id = uniqueInboxId('mixed');
     const body = [
@@ -143,12 +143,9 @@ test.describe('structured inbox', () => {
       await expect(content.locator('.inbox-section__content strong')).toHaveText('review');
       await expect(content.locator('h2')).toHaveText('Follow-up');
       await expect(content.locator('table td')).toContainText(['Review', 'Pending']);
-      const tableStyle = await content.locator('table th').first().evaluate((cell) => ({
-        border: getComputedStyle(cell).borderTopStyle,
-        background: getComputedStyle(cell).backgroundColor,
-      }));
-      expect(tableStyle.border).toBe('solid');
-      expect(tableStyle.background).not.toBe('rgba(0, 0, 0, 0)');
+      await expect.poll(() => content.locator('table th').first().evaluate((cell) => getComputedStyle(cell).borderTopStyle)).toBe('solid');
+      const tableBackground = await content.locator('table th').first().evaluate((cell) => getComputedStyle(cell).backgroundColor);
+      expect(tableBackground).not.toBe('rgba(0, 0, 0, 0)');
       await expect(content.locator('code')).toContainText('<plan>literal example</plan>');
       await expect(content.locator('.inbox-section')).toHaveCount(1);
     } finally {
@@ -223,70 +220,11 @@ test.describe('structured inbox', () => {
     }
   });
 
-  test('markdown edit, formatting and preview', async ({ page }) => {
-    const title = 'Edit Preview';
-    const id = uniqueInboxId('edit');
+  test('Remove instructs the agent with the selected section rather than deleting it directly', async ({ page }) => {
+    const title = 'AI Remove Section';
+    const id = uniqueInboxId('airemove');
     const body = [
-      '# Edit Preview',
-      '',
-      '<plan>',
-      'Build the feature.',
-      '</plan>',
-    ].join('\n');
-
-    seedInboxMessage({ id, title, body });
-    try {
-      await gotoInbox(page, title);
-
-      await expect(page.getByRole('button', { name: 'Select <plan> section' })).toHaveAttribute('aria-pressed', 'false');
-      await page.getByRole('button', { name: 'Select <plan> section' }).hover();
-      await expect(page.locator('.inbox-section__actions')).toBeVisible();
-
-      // Edit toggles below the action rail and opens a full-width editor.
-      const edit = page.getByRole('button', { name: 'Edit', exact: true });
-      await expect(edit).toHaveAttribute('aria-pressed', 'false');
-      await edit.click();
-      await expect(edit).toHaveAttribute('aria-pressed', 'true');
-      await expect(page.locator('.inbox-section__actions')).toBeVisible();
-      await expect(page.locator('.inbox-section__editor')).toBeVisible();
-      const textarea = page.getByRole('textbox', { name: 'Section Markdown' });
-      await expect(textarea).toHaveValue(/\nBuild the feature\.\n/);
-      const editorSize = await textarea.evaluate((el) => ({ height: el.getBoundingClientRect().height, width: el.getBoundingClientRect().width }));
-      const sectionWidth = await page.locator('.inbox-section').first().evaluate((el) => el.getBoundingClientRect().width);
-      expect(editorSize.height).toBeGreaterThanOrEqual(360);
-      expect(editorSize.width).toBeGreaterThan(sectionWidth * 0.8);
-      await edit.click();
-      await expect(edit).toHaveAttribute('aria-pressed', 'false');
-      await expect(page.locator('.inbox-section__editor')).toHaveCount(0);
-      await edit.click();
-      await expect(page.locator('.inbox-section__editor')).toBeVisible();
-
-      // Append text, select it, and bold-format it.
-      await textarea.fill('Build the feature. Then test it.');
-      await textarea.evaluate((el) => {
-        const start = el.value.indexOf('Then test it.');
-        el.setSelectionRange(start, start + 'Then test it.'.length);
-      });
-      await page.getByRole('button', { name: 'Bold' }).click();
-
-      // Preview should reflect the bold formatting.
-      const preview = page.locator('.inbox-section__preview .markdown-content');
-      await expect(preview.locator('strong')).toHaveText('Then test it.');
-
-      // Save and verify the updated body.
-      await page.getByRole('button', { name: 'Save' }).click();
-      await expect(page.locator('.inbox-section__editor')).toHaveCount(0);
-      await expect(page.locator('.inbox-section__content strong')).toHaveText('Then test it.');
-    } finally {
-      removeInboxMessage(id);
-    }
-  });
-
-  test('remove section with confirm', async ({ page }) => {
-    const title = 'Remove Section';
-    const id = uniqueInboxId('remove');
-    const body = [
-      '# Remove Section',
+      '# AI Remove Section',
       '',
       '<plan>',
       'Temporary plan.',
@@ -297,6 +235,14 @@ test.describe('structured inbox', () => {
       '</notes>',
     ].join('\n');
 
+    await page.route('**/api/ui/responses', async (route) => {
+      const requestId = route.request().headers()['x-request-id'];
+      await route.fulfill({
+        status: 202,
+        contentType: 'application/json',
+        body: JSON.stringify({ request_id: requestId, event_types: ['chat.response.started'] }),
+      });
+    });
     seedInboxMessage({ id, title, body });
     try {
       await gotoInbox(page, title);
@@ -304,18 +250,23 @@ test.describe('structured inbox', () => {
       await expect(page.getByRole('button', { name: 'Select <plan> section' })).toHaveAttribute('aria-pressed', 'false');
       await page.getByRole('button', { name: 'Select <plan> section' }).hover();
       await expect(page.getByRole('toolbar', { name: 'plan section actions' })).toBeVisible();
-      await expect(page.getByRole('button', { name: 'Remove', exact: true }).locator('svg')).toBeVisible();
 
-      page.on('dialog', (dialog) => dialog.accept());
-      await page.getByRole('button', { name: 'Remove', exact: true }).click();
-
-      // After removal the <plan> button should disappear; <notes> remains.
-      await expect(page.getByRole('button', { name: 'Select <plan> section' })).toHaveCount(0);
-      await expect(page.getByRole('button', { name: 'Select <notes> section' })).toBeVisible();
+      const removeButton = page.getByRole('button', { name: 'Remove', exact: true });
+      await expect(removeButton.locator('svg')).toBeVisible();
+      page.once('dialog', (dialog) => dialog.accept());
+      const requestPromise = page.waitForRequest((request) => request.url().includes('/api/ui/responses') && request.method() === 'POST');
+      await removeButton.click();
+      const request = await requestPromise;
+      const outgoing = JSON.parse(request.postData()).input[0].content;
+      expect(outgoing).toContain(`/inbox/${id}.md`);
+      expect(outgoing).toContain('<plan>\nTemporary plan.\n</plan>');
+      expect(outgoing).toContain('Remove this entire section');
+      await expect(page.getByRole('button', { name: 'Select <plan> section' })).toBeVisible();
     } finally {
       removeInboxMessage(id);
     }
   });
+
 
   test('explain opens quick chat with pre-filled instruction', async ({ page }) => {
     const title = 'Explain Quick Chat';
@@ -344,7 +295,7 @@ test.describe('structured inbox', () => {
     }
   });
 
-  test('inline AI edit sends to quick chat without opening the pane and waits for the inbox update', async ({ page }) => {
+  test('inline AI instruction completes independently of inbox document refresh', async ({ page }) => {
     const title = 'Edit With AI';
     const id = uniqueInboxId('aiedit');
     const body = [
@@ -406,8 +357,8 @@ test.describe('structured inbox', () => {
       expect(outgoing.input[0].content).toContain(body.slice(body.indexOf('<plan>')));
       expect(outgoing.metadata.thread_id).toBeTruthy();
 
-      // Complete through the UI event stream consumed by quick chat. A
-      // response alone cannot dismiss the popover; the document must change.
+      // Complete through the UI event stream consumed by quick chat.
+      // The popover closes on terminal completion; the document update refreshes independently.
       await page.evaluate((requestId) => {
         window.__inboxUiStream.dispatchEvent(new MessageEvent('ui.event', {
           data: JSON.stringify({
@@ -417,20 +368,16 @@ test.describe('structured inbox', () => {
           }),
         }));
       }, request.headers()['x-request-id']);
-      await expect(dialog.getByRole('textbox', { name: 'AI edit status' })).toHaveValue('Updating…');
-      updateInboxBody(id, `${body}\n\nUnrelated note.`);
-      await expect(page.locator('.inbox-detail__body')).toContainText('Unrelated note.');
-      await expect(dialog.getByRole('textbox', { name: 'AI edit status' })).toHaveValue('Updating…');
+      await expect(dialog).toHaveCount(0);
       updateInboxBody(id, body.replace('Old plan.', 'Short plan.'));
       await expect(page.locator('.inbox-section__content')).toContainText('Short plan.');
-      await expect(dialog).toHaveCount(0);
       await expect(page.locator('.topnav-pane--quick.is-open')).toHaveCount(0);
     } finally {
       removeInboxMessage(id);
     }
   });
 
-  test('AI edit does not show a hand-edit conflict when its document update precedes the response', async ({ page }) => {
+  test('AI instruction keeps showing current document when an external write arrives first', async ({ page }) => {
     const title = 'AI Edit Early Update';
     const id = uniqueInboxId('aiearly');
     const body = '# AI Edit Early Update\n\n<plan>\nOriginal plan.\n</plan>';
@@ -639,18 +586,27 @@ test.describe('structured inbox', () => {
     ].join('\n');
 
     seedInboxMessage({ id, title, body });
+    await page.route('**/api/ui/responses', async (route) => {
+      const requestId = route.request().headers()['x-request-id'];
+      await route.fulfill({
+        status: 202,
+        contentType: 'application/json',
+        body: JSON.stringify({ request_id: requestId, event_types: ['chat.response.started', 'chat.response.completed'] }),
+      });
+    });
     try {
       await gotoInbox(page, title);
       await expect(page.locator('.inbox-section__content')).toContainText('The status is green');
       await expect(page.getByRole('button', { name: 'Green' })).toBeVisible();
-      await page.getByRole('button', { name: 'Red' }).click();
 
+      // Independent prompt submission: option click opens quick chat with the choice and question id.
+      await page.getByRole('button', { name: 'Red' }).click();
       const panel = page.locator('.topnav-pane--quick.is-open');
       await expect(panel).toBeVisible({ timeout: 10_000 });
       await expect(panel.locator('.qchat-user')).toContainText('Red');
       await expect(panel.locator('.qchat-user')).toContainText('rev1');
 
-      // The agent's file write arrives through the ordinary inbox snapshot.
+      // External document update observation: a DB write refreshes the viewer live.
       updateInboxBody(id, body.replace('The status is green: proceed with the current approach.', 'The status is red: change course before proceeding.'));
       await expect(page.locator('.inbox-section__content')).toContainText('The status is red');
       await expect(page.getByRole('button', { name: 'Green' })).toBeVisible();
@@ -659,41 +615,61 @@ test.describe('structured inbox', () => {
     }
   });
 
-  test('manual draft becomes read-only while the latest AI-updated section renders live', async ({ page }) => {
-    const title = 'Conflict';
-    const id = uniqueInboxId('conflict');
-    const body = [
-      '# Conflict',
-      '',
-      '<plan>',
-      'Original plan.',
-      '</plan>',
-    ].join('\n');
-
+  test('busy quick chat reports an inline instruction failure instead of silently losing it', async ({ page }) => {
+    const title = 'Lost Inline Race';
+    const id = uniqueInboxId('race');
+    const body = '# Lost Inline Race\n\n<plan>\nFirst plan.\n</plan>';
     seedInboxMessage({ id, title, body });
+    await page.addInitScript(() => {
+      window.__inlineStatuses = [];
+      window.addEventListener('progenitor:quick-chat-inline-status', (event) => {
+        window.__inlineStatuses.push(event.detail);
+      });
+    });
+
+    let firstResolve;
+    const firstDeferred = new Promise((resolve) => { firstResolve = resolve; });
+    const requests = [];
+
+
+    await page.route('**/api/ui/responses', async (route) => {
+      const requestId = route.request().headers()['x-request-id'];
+      requests.push(JSON.parse(route.request().postData()));
+      if (requests.length === 1) {
+        await firstDeferred;
+      }
+      await route.fulfill({
+        status: 202,
+        contentType: 'application/json',
+        body: JSON.stringify({ request_id: requestId, event_types: ['chat.response.completed'] }),
+      });
+    });
+
     try {
       await gotoInbox(page, title);
 
+      // Explain starts a regular quick-chat send; hold its request open.
       await page.getByRole('button', { name: 'Select <plan> section' }).hover();
-      await page.getByRole('button', { name: 'Edit', exact: true }).click();
-      await expect(page.locator('.inbox-section__editor')).toBeVisible();
+      await page.getByRole('button', { name: 'Explain', exact: true }).click();
+      await expect.poll(() => requests.length).toBe(1);
 
-      await page.getByRole('textbox', { name: 'Section Markdown' }).fill('My unsaved manual draft.');
-      // The agent's document write arrives through the ordinary inbox event.
-      updateInboxBody(id, body.replace('Original plan.', 'Concurrently changed plan.'));
-      await expect(page.locator('.inbox-section__content')).toContainText('Concurrently changed plan.');
-      const staleDraft = page.getByRole('group', { name: 'Out-of-date manual draft' });
-      await expect(staleDraft.getByRole('alert')).toContainText('Manual draft out of date');
-      await expect(staleDraft.getByRole('textbox', { name: 'Section Markdown' })).toHaveValue('My unsaved manual draft.');
-      await expect(staleDraft.getByRole('textbox', { name: 'Section Markdown' })).toHaveAttribute('readonly', '');
-      await expect(staleDraft.getByRole('button', { name: 'Save' })).toBeDisabled();
-      await expect(page.locator('.inbox-section__actions')).toHaveCount(0);
-      await staleDraft.getByRole('button', { name: 'Close draft' }).click();
-      await expect(staleDraft).toHaveCount(0);
-      await page.getByRole('button', { name: 'Select <plan> section' }).hover();
-      await page.getByRole('button', { name: 'Edit', exact: true }).click();
-      await expect(page.getByRole('textbox', { name: 'Section Markdown' })).toHaveValue(/\nConcurrently changed plan\.\n/);
+      // The modal pane covers the inbox, so dispatch the same event as AI Edit.
+      // Another regular instruction must not overwrite or silence its failure.
+      await page.evaluate(() => {
+        window.dispatchEvent(new CustomEvent('progenitor:open-quick-chat', {
+          detail: { prompt: 'Inline instruction', inline: true, clientId: 'race-inline' },
+        }));
+        window.dispatchEvent(new CustomEvent('progenitor:open-quick-chat', {
+          detail: { prompt: 'Other regular instruction' },
+        }));
+      });
+      await expect.poll(() => page.evaluate(() => window.__inlineStatuses)).toContainEqual(
+        expect.objectContaining({ clientId: 'race-inline', status: 'failed' }),
+      );
+      expect(requests[0].input[0].content).toContain('Explain this section');
+      await expect(page.getByRole('button', { name: 'Select <plan> section' })).toBeVisible();
     } finally {
+      firstResolve();
       removeInboxMessage(id);
     }
   });

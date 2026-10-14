@@ -1,6 +1,4 @@
-import { useDispatch } from 'react-redux';
 import StructuredDocumentBody from '../components/common/StructuredDocumentBody';
-import { patchInboxSection } from '../store/uiDataSlice';
 
 function openAgent(message, instruction, { draft = false, inline = false, clientId = null } = {}) {
   const prompt = `For the inbox file /inbox/${message.id}.md: ${instruction}`;
@@ -15,14 +13,10 @@ function openAgent(message, instruction, { draft = false, inline = false, client
   }));
 }
 
-export default function StructuredInboxBody({ message, inboxUrl }) {
-  const dispatch = useDispatch();
+export default function StructuredInboxBody({ message }) {
   return (
     <StructuredDocumentBody
       content={message.body || ''}
-      onSaveSection={({ expectedBody, start, end, replacement }) => dispatch(patchInboxSection({
-        inboxUrl, messageId: message.id, expectedBody, start, end, replacement,
-      })).unwrap()}
       onAskAgent={(instruction, options) => openAgent(message, instruction, options)}
       onAnswerQuestion={({ question, choice, content }) => {
         const block = content.slice(question.start, question.end);

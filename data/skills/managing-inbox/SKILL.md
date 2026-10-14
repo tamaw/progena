@@ -56,19 +56,20 @@ Full message body in **markdown** — headings, lists, links, code blocks, and
 
 ## Structured sections and questions
 
-When a message needs individually editable parts, wrap Markdown in matching
+When a message needs individually selectable parts, wrap Markdown in matching
 XML-like tags such as `<plan>…</plan>`. Tags have no special visual styles:
-each nested section receives the same compact, non-interactive left bracket.
+each nested section receives the same compact left bracket.
 No section starts selected. Hover a section to reveal its icon actions; each
 icon expands to its full label on hover or keyboard focus. AI Edit opens a
-small prompt below its icon: Send submits through quick chat; Pop out moves
-the unsent draft into quick chat. Clicking away or pressing Escape dismisses
-it. Click a heading or rendered Markdown to select a section. Hand Edit
-toggles a large Markdown editor below the action bar. Keep tags balanced;
-literal examples belong in Markdown code spans or fenced blocks.
+small prompt below its icon: Send instructs the agent through quick chat;
+Pop out moves the unsent draft into quick chat. Clicking away or pressing Escape
+dismisses it. Click a heading or rendered Markdown to select a section.
+Remove asks the agent to delete the section; the UI does not edit message
+content directly. Keep tags balanced; literal examples belong in Markdown
+code spans or fenced blocks.
 
 Most of a message can stay ordinary Markdown. Add tags only around content
-that should be selected and edited independently. For example:
+that users may want to ask the agent to change independently. For example:
 
 ```md
 # Release brief

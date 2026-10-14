@@ -4,7 +4,7 @@ import { useMermaidRender } from '../../hooks/useMermaidRender';
 import { renderMarkdownToHtml } from '../../lib/markdown';
 import { parseStructuredContent } from '../../lib/structuredContent';
 import { OpenChatIcon, ProgenitorAiIcon, QuickChatIcon } from '../layout/navIcons';
-import { DeleteActionIcon, EditActionIcon } from '../layout/DetailHeader';
+import { DeleteActionIcon } from '../layout/DetailHeader';
 
 function Markdown({ content }) {
   const ref = useRef(null);
@@ -13,10 +13,6 @@ function Markdown({ content }) {
   return <div ref={ref} className="markdown-content" dangerouslySetInnerHTML={{ __html: html }} />;
 }
 
-
-function insertFormatting(value, selectionStart, selectionEnd, prefix, suffix) {
-  return `${value.slice(0, selectionStart)}${prefix}${value.slice(selectionStart, selectionEnd)}${suffix}${value.slice(selectionEnd)}`;
-}
 
 function positionAiPopover(button) {
   const rect = button.getBoundingClientRect();
@@ -31,33 +27,24 @@ function positionAiPopover(button) {
   };
 }
 
-export default function StructuredDocumentBody({ content = '', onSaveSection, onAskAgent, onAnswerQuestion }) {
+export default function StructuredDocumentBody({ content = '', onAskAgent, onAnswerQuestion }) {
   const [selected, setSelected] = useState(null);
   const [mode, setMode] = useState(null);
-  const staleHandEdit = Boolean(selected && mode === 'edit' && selected.source !== content);
   const nodes = useMemo(() => parseStructuredContent(content), [content]);
-  const [draft, setDraft] = useState('');
   const [instruction, setInstruction] = useState('');
   const [popoverPosition, setPopoverPosition] = useState(null);
   const [aiJob, setAiJob] = useState(null);
   const popoverRef = useRef(null);
   const aiTriggerRef = useRef(null);
-  const [error, setError] = useState('');
   const [openAnswers, setOpenAnswers] = useState({});
   const [answerDrafts, setAnswerDrafts] = useState({});
-  const inputRef = useRef(null);
 
-  const previousContent = useRef(content);
-  useEffect(() => {
-    if (previousContent.current === content || mode === 'edit') return;
-    previousContent.current = content;
-    if (mode === 'ai' && aiJob && aiJob.phase !== 'error') return;
-    setSelected(null);
-    setMode(null);
-  }, [content, mode, aiJob]);
+  const selectionCurrent = selected?.source === content;
+  const aiPopoverOpen = mode === 'ai' && aiJob?.phase !== 'completed'
+    && (selectionCurrent || aiJob?.phase === 'working');
 
   useEffect(() => {
-    if (mode !== 'ai') return undefined;
+    if (!aiPopoverOpen) return undefined;
     const dismiss = (event) => {
       if (popoverRef.current?.contains(event.target) || aiTriggerRef.current?.contains(event.target)) return;
       setMode(null);
@@ -85,14 +72,14 @@ export default function StructuredDocumentBody({ content = '', onSaveSection, on
       window.removeEventListener('scroll', reposition, true);
       window.removeEventListener('resize', reposition);
     };
-  }, [mode]);
+  }, [aiPopoverOpen]);
 
   useEffect(() => {
     const handleStatus = (event) => {
       setAiJob((current) => {
         if (!current || current.id !== event.detail?.clientId) return current;
         return event.detail.status === 'completed'
-          ? { ...current, phase: 'updating' }
+          ? { ...current, phase: 'completed' }
           : { ...current, phase: 'error', error: event.detail.error || 'The quick-chat response did not complete.' };
       });
     };
@@ -100,55 +87,24 @@ export default function StructuredDocumentBody({ content = '', onSaveSection, on
     return () => window.removeEventListener('progenitor:quick-chat-inline-status', handleStatus);
   }, []);
 
-  useEffect(() => {
-    if (aiJob?.phase !== 'updating') return undefined;
-    if (!content.includes(aiJob.originalSection)) {
-      setAiJob(null);
-      setMode(null);
-      setSelected(null);
-      return undefined;
-    }
-    const timeout = window.setTimeout(() => {
-      setAiJob((current) => current?.id === aiJob.id && current.phase === 'updating'
-        ? { ...current, phase: 'error', error: 'No inbox update arrived. Open quick chat to review the response.' }
-        : current);
-    }, 30_000);
-    return () => window.clearTimeout(timeout);
-  }, [aiJob, content]);
 
   function select(node) {
-    if (staleHandEdit) return;
     setAiJob(null);
-    if (selected?.start === node.start && selected?.end === node.end) {
+    if (selected?.source === content && selected.start === node.start && selected.end === node.end) {
       setSelected(null);
       setMode(null);
       return;
     }
-    previousContent.current = content;
-    setSelected({ start: node.start, end: node.end, openEnd: node.openEnd, closeStart: node.closeStart, tag: node.tag, source: content });
-    setDraft(content.slice(node.openEnd, node.closeStart));
+    setSelected({ start: node.start, end: node.end, tag: node.tag, source: content });
     setInstruction('');
     setMode(null);
-    setError('');
-  }
-
-  async function save(replacement, target = selected) {
-    if (!target || !onSaveSection) return;
-    setError('');
-    try {
-      await onSaveSection({
-        expectedBody: target.source, start: target.start, end: target.end, replacement,
-      });
-      setSelected(null);
-      setMode(null);
-    } catch (failure) {
-      setError(failure?.message || 'This message changed. Review the latest version and try again.');
-    }
   }
 
   function submitAgent(node, action, options) {
+    if (node.source !== undefined && node.source !== content) return false;
     const exact = content.slice(node.start, node.end);
     onAskAgent?.(`Find this exact <${node.tag}> section (including its tags):\n${exact}\n\n${action} Keep other sections intact. If the section changed, ask before editing.`, options);
+    return true;
   }
 
   function submitAnswer(question, choice) {
@@ -156,28 +112,6 @@ export default function StructuredDocumentBody({ content = '', onSaveSection, on
     if (value) onAnswerQuestion?.({ question, choice: value, content });
   }
 
-  function renderEditor(node, stale = false) {
-    return (
-      <div className="inbox-section__editor" role={stale ? 'group' : undefined} aria-label={stale ? 'Out-of-date manual draft' : undefined}>
-        {stale ? <p role="alert" className="inbox-section__error">Manual draft out of date. The latest message is shown below. Copy your draft or close it; Save is disabled.</p> : null}
-        {!stale && <div className="inbox-section__format" role="toolbar" aria-label="Markdown formatting">
-          {[['Bold', '**', '**'], ['Italic', '*', '*'], ['Link', '[', '](url)'], ['Code', '`', '`']].map(([label, prefix, suffix]) => (
-            <button key={label} type="button" onClick={() => {
-              const input = inputRef.current;
-              if (!input) return;
-              const { selectionStart, selectionEnd } = input;
-              setDraft(insertFormatting(draft, selectionStart, selectionEnd, prefix, suffix));
-              requestAnimationFrame(() => { input.focus(); input.setSelectionRange(selectionStart + prefix.length, selectionEnd + prefix.length); });
-            }}>{label}</button>
-          ))}
-        </div>}
-        <textarea ref={inputRef} aria-label="Section Markdown" readOnly={stale} value={draft} onChange={(event) => setDraft(event.target.value)} />
-        {!stale && <div className="inbox-section__preview"><strong>Preview</strong><Markdown content={draft} /></div>}
-        <button type="button" disabled={stale} onClick={() => save(`${selected.source.slice(node.start, node.openEnd)}${draft}${selected.source.slice(node.closeStart, node.end)}`)}>Save</button>
-        <button type="button" onClick={() => { setMode(null); if (stale) setSelected(null); }}>{stale ? 'Close draft' : 'Cancel'}</button>
-      </div>
-    );
-  }
 
   function renderNode(node) {
     if (node.type === 'text') {
@@ -186,29 +120,26 @@ export default function StructuredDocumentBody({ content = '', onSaveSection, on
       return <Markdown key={`text-${node.start}`} content={rendered} />;
     }
     const key = `${node.start}-${node.end}`;
-    const active = !staleHandEdit && selected?.start === node.start && selected?.end === node.end;
+    const active = selectionCurrent && selected.start === node.start && selected.end === node.end && aiJob?.phase !== 'completed';
     const isQuestion = node.tag === 'questions' && Boolean(onAnswerQuestion);
     const questionKey = node.attributes?.id ? `question:${node.attributes.id}` : key;
-    const questions = node.children.filter((child) => child.type === 'section' && child.tag === 'questions');
-    const ordinary = node.children.filter((child) => !questions.includes(child));
     const questionOptions = isQuestion ? node.children.find((child) => child.type === 'section' && child.tag === 'options') : null;
-    const questionText = isQuestion ? ordinary.filter((child) => child !== questionOptions) : ordinary;
+    const questionText = isQuestion ? node.children.filter((child) => child !== questionOptions) : node.children;
     return (
       <section key={key} className={`inbox-section${active ? ' is-selected' : ''}`}>
         <div className="inbox-section__head">
-          <button type="button" className="inbox-section__select" aria-pressed={active} disabled={staleHandEdit || (!onSaveSection && !onAskAgent)} onClick={() => select(node)} aria-label={`Select <${node.tag}> section`}>{node.tag}</button>
-          {!staleHandEdit && (onSaveSection || onAskAgent) && (
+          <button type="button" className="inbox-section__select" aria-pressed={active} disabled={!onAskAgent} onClick={() => select(node)} aria-label={`Select <${node.tag}> section`}>{node.tag}</button>
+          {onAskAgent && (
           <div className="inbox-section__actions" role="toolbar" aria-label={`${node.tag} section actions`}>
-            {onAskAgent && (
-              <>
+            <>
             <button
               type="button"
-              ref={active && mode === 'ai' ? aiTriggerRef : null}
-              className={`msg-action-btn${active && mode === 'ai' ? ' is-active' : ''}`}
+              ref={active && aiPopoverOpen ? aiTriggerRef : null}
+              className={`msg-action-btn${active && aiPopoverOpen ? ' is-active' : ''}`}
               aria-label="Edit with AI"
-              aria-expanded={active && mode === 'ai'}
+              aria-expanded={active && aiPopoverOpen}
               onClick={(event) => {
-                if (active && mode === 'ai') { setMode(null); setSelected(null); setAiJob(null); return; }
+                if (active && aiPopoverOpen) { setMode(null); setSelected(null); setAiJob(null); return; }
                 if (!active) select(node);
                 setPopoverPosition(positionAiPopover(event.currentTarget));
                 setMode('ai');
@@ -219,28 +150,20 @@ export default function StructuredDocumentBody({ content = '', onSaveSection, on
             <button type="button" className="msg-action-btn" aria-label="Explain" onClick={() => submitAgent(node, 'Explain this section to me in chat. Do not modify the file.')}>
               <QuickChatIcon /><span className="msg-action-btn__label">Explain</span>
             </button>
-              </>
-            )}
-            {onSaveSection && (
-              <>
-            <button type="button" className={`msg-action-btn${active && mode === 'edit' ? ' is-active' : ''}`} aria-label="Edit" aria-pressed={active && mode === 'edit'} onClick={() => {
-              if (active && mode === 'edit') setMode(null);
-              else { if (!active) select(node); setDraft(content.slice(node.openEnd, node.closeStart)); setMode('edit'); }
+            <button type="button" className="msg-action-btn" aria-label="Remove" onClick={() => {
+              if (window.confirm(`Ask Progenitor to remove the entire <${node.tag}> section and its contents?`)) {
+                submitAgent(node, 'Remove this entire section and its contents from the inbox file.');
+              }
             }}>
-              <EditActionIcon /><span className="msg-action-btn__label">Edit</span>
-            </button>
-            <button type="button" className="msg-action-btn" aria-label="Remove" onClick={() => { if (window.confirm(`Remove the entire <${node.tag}> section and its contents?`)) save('', { ...node, source: content }); }}>
               <DeleteActionIcon /><span className="msg-action-btn__label">Remove</span>
             </button>
-              </>
-            )}
+            </>
           </div>
           )}
         </div>
-        {active && mode === 'edit' ? renderEditor(node) : (
-          <>
+        <>
             <div className="inbox-section__content" onClick={(event) => {
-              if (!onSaveSection && !onAskAgent) return;
+              if (!onAskAgent) return;
               if (event.target.closest('.inbox-section') !== event.currentTarget.closest('.inbox-section')) return;
               if (event.target.closest('a, button, input, textarea, select, [contenteditable="true"]')) return;
               select(node);
@@ -271,26 +194,16 @@ export default function StructuredDocumentBody({ content = '', onSaveSection, on
                   ) : null}
                 </div>
               </div>
-            ) : questions.map(renderNode)}
+            ) : null}
           </>
-        )}
       </section>
     );
   }
 
-  const showContentConflict = selected && selected.source !== content && mode !== 'edit'
-    && !(mode === 'ai' && aiJob && aiJob.phase !== 'error');
-
   return (
     <div className="structured-document-body">
-      {(error || showContentConflict) ? (
-        <p role="alert" className="inbox-section__error">
-          {error || 'This message changed while you were editing. Select the latest section to review it.'}
-        </p>
-      ) : null}
-      {staleHandEdit ? renderEditor(selected, true) : null}
       {nodes.map(renderNode)}
-      {selected && mode === 'ai' && popoverPosition ? createPortal(
+      {selected && aiPopoverOpen && popoverPosition ? createPortal(
         <form
           ref={popoverRef}
           className="inbox-ai-popover"
@@ -300,8 +213,9 @@ export default function StructuredDocumentBody({ content = '', onSaveSection, on
           onSubmit={(event) => {
             event.preventDefault();
             if (!instruction.trim() || (aiJob && aiJob.phase !== 'error')) return;
+            if (selected.source !== content) return;
             const id = crypto.randomUUID();
-            setAiJob({ id, originalSection: content.slice(selected.start, selected.end), phase: 'working', error: '' });
+            setAiJob({ id, phase: 'working', error: '' });
             submitAgent(selected, instruction.trim(), { inline: true, clientId: id });
           }}
         >
@@ -310,7 +224,7 @@ export default function StructuredDocumentBody({ content = '', onSaveSection, on
             aria-label={aiJob && aiJob.phase !== 'error' ? 'AI edit status' : 'AI edit instruction'}
             autoFocus
             readOnly={Boolean(aiJob && aiJob.phase !== 'error')}
-            value={aiJob?.phase === 'working' ? 'Working…' : aiJob?.phase === 'updating' ? 'Updating…' : instruction}
+            value={aiJob?.phase === 'working' ? 'Working…' : instruction}
             onChange={(event) => setInstruction(event.target.value)}
             placeholder="How should this section change?"
           />

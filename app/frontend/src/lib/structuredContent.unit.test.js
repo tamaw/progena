@@ -138,10 +138,10 @@ describe('parseStructuredContent', () => {
   });
 
   it('leaves tags inside code fences as text', () => {
-    const source = '<outer>```\n<inner>text</inner>\n```</outer>';
+    const source = '<outer>```\n<inner>text</inner>\n```\n</outer>';
     expect(parseStructuredContent(source)).toEqual([
-      nSection('outer', {}, 0, 42, 7, 34, [
-        nText('```\n<inner>text</inner>\n```', 7, 34),
+      nSection('outer', {}, 0, 43, 7, 35, [
+        nText('```\n<inner>text</inner>\n```\n', 7, 35),
       ]),
     ]);
   });
@@ -238,10 +238,57 @@ describe('parseStructuredContent', () => {
   });
 
   it('treats tag-like text in code fence inside section as text', () => {
-    const source = '<section>```\n<fake>code</fake>\n```</section>';
+    const source = '<section>```\n<fake>code</fake>\n```\n</section>';
     expect(parseStructuredContent(source)).toEqual([
-      nSection('section', {}, 0, 44, 9, 34, [
-        nText('```\n<fake>code</fake>\n```', 9, 34),
+      nSection('section', {}, 0, 45, 9, 35, [
+        nText('```\n<fake>code</fake>\n```\n', 9, 35),
+      ]),
+    ]);
+  });
+
+  it('leaves double-backtick inline code as literal text', () => {
+    const source = '``<div>``';
+    expect(parseStructuredContent(source)).toEqual([
+      nText('``<div>``', 0, 9),
+    ]);
+  });
+
+  it('leaves double-backtick inline code as text within a section', () => {
+    const source = '<outer>``<inner>``</outer>';
+    expect(parseStructuredContent(source)).toEqual([
+      nSection('outer', {}, 0, 26, 7, 18, [
+        nText('``<inner>``', 7, 18),
+      ]),
+    ]);
+  });
+
+  it('recognises CRLF in fenced code block closing line', () => {
+    const source = '```\r\n<tag>hello</tag>\r\n```\r\n';
+    expect(parseStructuredContent(source)).toEqual([
+      nText('```\r\n<tag>hello</tag>\r\n```\r\n', 0, 28),
+    ]);
+  });
+
+  it('recognises trailing whitespace in fenced code block closing line', () => {
+    const source = '```\n<tag>hello</tag>\n```   \n';
+    expect(parseStructuredContent(source)).toEqual([
+      nText('```\n<tag>hello</tag>\n```   \n', 0, 28),
+    ]);
+  });
+
+  it('recognises CRLF and trailing whitespace in fenced code block closing line', () => {
+    const source = '```\r\n<tag>hello</tag>\r\n```   \r\n';
+    expect(parseStructuredContent(source)).toEqual([
+      nText('```\r\n<tag>hello</tag>\r\n```   \r\n', 0, 31),
+    ]);
+  });
+
+  it('parses real tags after a valid fenced code block', () => {
+    const source = '```\n<code>inside</code>\n```\n<real>outside</real>';
+    expect(parseStructuredContent(source)).toEqual([
+      nText('```\n<code>inside</code>\n```\n', 0, 28),
+      nSection('real', {}, 28, 48, 34, 41, [
+        nText('outside', 34, 41),
       ]),
     ]);
   });
