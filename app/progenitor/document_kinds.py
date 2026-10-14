@@ -140,7 +140,7 @@ DOCUMENT_KINDS: tuple[DocumentKind, ...] = (
         WORKFLOW_DEFINITION_KEY_PREFIX,
         search=SearchSpec(
             section="Workflows",
-            route="/workflows?path={id}",
+            route="/workflows/{id}",
             fields=("title", "description"),
             title_field="title",
         ),

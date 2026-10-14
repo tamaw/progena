@@ -52,23 +52,42 @@ const readableTime = (ms) => (Number.isFinite(ms)
   ? new Date(ms).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
   : null);
 
+// Search-index values for the base root, from the live base record (updated by
+// knowledge.index.* events), not the cached index.md front matter.
+function searchIndexFacts(base) {
+  if (!base) return [];
+  const pages = base.indexPages;
+  const at = readableTime(Date.parse(base.indexedAt));
+  return [
+    `${base.indexedPages}/${pages} page${pages === 1 ? '' : 's'} indexed`,
+    ...(at ? [`indexed ${at}`] : []),
+  ];
+}
+
 // Header facts for the open page. A concept page reports its front matter; a
 // generated index reports when the newest page in its folder (and subfolders)
-// changed, i.e. what the index is up to date with.
-function pageHeaderFacts(path, frontMatter, pages) {
+// changed, i.e. what the index is up to date with, plus (at the base root) the
+// base's search-index progress.
+function pageHeaderFacts(path, frontMatter, pages, base) {
+  const fm = frontMatter && typeof frontMatter === 'object' ? frontMatter : {};
   if (path.split('/').at(-1) === 'index.md') {
     const prefix = path.slice(0, -'index.md'.length);
     const newest = Math.max(...pages
       .filter((page) => page.kind === 'concept' && page.path.startsWith(prefix))
       .map((page) => Date.parse(page.updated_at))
       .filter(Number.isFinite));
-    return { type: 'index', tags: [], generatedAt: readableTime(newest) };
+    return {
+      type: 'index',
+      tags: [],
+      generatedAt: readableTime(newest),
+      extra: path === 'index.md' ? searchIndexFacts(base) : [],
+    };
   }
-  const fm = frontMatter && typeof frontMatter === 'object' ? frontMatter : {};
   return {
     type: fm.type ? String(fm.type) : null,
     tags: Array.isArray(fm.tags) ? fm.tags.map(String) : fm.tags ? [String(fm.tags)] : [],
     generatedAt: readableTime(fm.generated && typeof fm.generated === 'object' ? Date.parse(fm.generated.at) : NaN),
+    extra: [],
   };
 }
 
@@ -261,8 +280,8 @@ export default function KnowledgePage() {
     : null));
   const basePages = useSelector((state) => (openBaseId ? selectKnowledgePages(state, openBaseId) : null));
   const pageFacts = openPage
-    ? pageHeaderFacts(openPagePath, openPage.front_matter, basePages || [])
-    : { type: null, tags: [], generatedAt: null };
+    ? pageHeaderFacts(openPagePath, openPage.front_matter, basePages || [], selectedBase)
+    : { type: null, tags: [], generatedAt: null, extra: [] };
   const viewingRevisionId = searchParams.get('revision');
   const viewingRevision = useSelector((state) => (openBaseId && viewingRevisionId
     ? selectKnowledgeRevisions(state, openBaseId, openPagePath).find((rev) => rev.revision_id === viewingRevisionId) || null
@@ -397,6 +416,7 @@ export default function KnowledgePage() {
                 ...(pageFacts.type ? [<span key="type" className="muted">{pageFacts.type}</span>] : []),
                 ...(pageFacts.tags.length ? [<span key="tags" className="muted">{pageFacts.tags.join(', ')}</span>] : []),
                 ...(generatedAt ? [<span key="generated" className="muted">generated {generatedAt}</span>] : []),
+                ...(viewingRevisionId ? [] : pageFacts.extra.map((fact) => <span key={fact} className="muted">{fact}</span>)),
               ]}
             />
 

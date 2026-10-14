@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 import uuid
 from typing import Any
@@ -110,7 +111,7 @@ async def test_new_pages_are_indexed_with_lifecycle_events(harness):
     assert state["events"] == []
 
 
-async def test_only_changed_pages_are_reembedded_and_removed_or_deprecated_pages_dropped(harness):
+async def test_changed_pages_reembedded_removed_dropped_deprecated_flagged(harness):
     indexer, store, state, url = harness
     store.save_document(PROGENITOR_STATE_PREFIX, "knowledge:eng/a.md", _page("A", "Alpha."))
     store.save_document(PROGENITOR_STATE_PREFIX, "knowledge:eng/b.md", _page("B", "Beta."))
@@ -125,9 +126,18 @@ async def test_only_changed_pages_are_reembedded_and_removed_or_deprecated_pages
         {"content": "---\ntype: Concept\ntitle: C\nstatus: deprecated\n---\nGamma.\n"},
     )
     await indexer.reconcile("eng")
-    assert len(state["calls"]) == 1 and "Alpha 2." in state["calls"][0][0]
-    assert _chunk_paths(url, "eng") == {"a.md"}
-    assert _record(store, "eng")["pages"] == 1
+    embedded = " ".join(text for call in state["calls"] for text in call)
+    assert len(state["calls"]) == 2 and "Alpha 2." in embedded and "Gamma." in embedded
+    assert _chunk_paths(url, "eng") == {"a.md", "c.md"}
+    # A deprecated page stays searchable (ranked last), flagged on its chunks.
+    with psycopg.connect(url) as conn:
+        flags = dict(
+            conn.execute(
+                "SELECT path, bool_and(deprecated) FROM knowledge_chunks "
+                "WHERE base_id = 'eng' GROUP BY path"
+            ).fetchall()
+        )
+    assert flags == {"a.md": False, "c.md": True}
 
 
 async def test_removed_base_loses_chunks_and_status(harness):
@@ -186,3 +196,61 @@ async def test_dimension_change_rebuilds_the_index(harness):
     status = store.get_document(PROGENITOR_STATE_PREFIX, INDEX_STATUS_DOC_KEY).payload
     assert status["embedding"]["dimensions"] == 4
     assert status["bases"]["eng"]["status"] == "indexed"
+
+
+def _competing_indexer(url: str, lock_key: str) -> KnowledgeIndexer:
+    async def no_dispatch(event_type: str, payload: dict[str, Any]) -> None:
+        return None
+
+    return KnowledgeIndexer(
+        database_url=url,
+        embedder_factory=lambda target: FakeEmbedder(target.dimensions, []),
+        publish=lambda event_type, payload: None,
+        dispatch=no_dispatch,
+        lock_retry_seconds=0.05,
+        lock_key=lock_key,
+    )
+
+
+async def _until(condition, timeout: float = 5.0) -> None:
+    deadline = asyncio.get_running_loop().time() + timeout
+    while not condition():
+        assert asyncio.get_running_loop().time() < deadline, "condition not reached"
+        await asyncio.sleep(0.02)
+
+
+async def test_a_waiting_backend_takes_over_when_the_lock_holder_stops(harness):
+    _, _, _, url = harness
+    lock_key = f"pytest-{uuid.uuid4().hex}"
+    first, second = _competing_indexer(url, lock_key), _competing_indexer(url, lock_key)
+    try:
+        await first.start()
+        await _until(lambda: first.running)
+        await second.start()
+        await asyncio.sleep(0.2)
+        assert not second.running
+        await first.stop()
+        await _until(lambda: second.running)
+    finally:
+        await first.stop()
+        await second.stop()
+
+
+async def test_losing_the_lock_connection_stops_the_worker_and_reacquires(harness):
+    _, _, _, url = harness
+    indexer = _competing_indexer(url, f"pytest-{uuid.uuid4().hex}")
+    try:
+        await indexer.start()
+        await _until(lambda: indexer.running and indexer._lock_conn is not None)
+        old_pid = indexer._lock_conn.info.backend_pid
+        with psycopg.connect(DB_URL, autocommit=True) as conn:
+            conn.execute("SELECT pg_terminate_backend(%s)", (old_pid,))
+        await _until(
+            lambda: (
+                indexer.running
+                and indexer._lock_conn is not None
+                and indexer._lock_conn.info.backend_pid != old_pid
+            )
+        )
+    finally:
+        await indexer.stop()

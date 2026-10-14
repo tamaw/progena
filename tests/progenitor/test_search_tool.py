@@ -96,11 +96,15 @@ async def test_search_ranks_pages_scopes_bases_and_reports_pending(monkeypatch, 
     election = _page("Leader Election", "A candidate wins with a majority quorum.")
     replication = _page("Log Replication", "Followers append entries.")
     other = _page("Ops Majority", "Ops also mentions majority quorum.")
+    retired = _page("Old Election", "A candidate wins with a majority quorum.").replace(
+        "---\n", "---\nstatus: deprecated\n", 1
+    )
     with psycopg.connect(schema_url) as conn:
         kindex.ensure_index_schema(conn, DIMS)
         for base, path, content, axis in (
             (eng, "election.md", election, 1),
             (eng, "replication.md", replication, 2),
+            (eng, "old-election.md", retired, 1),
             (ops, "majority.md", other, 1),
         ):
             front_matter, chunks = kindex.chunk_page(content)
@@ -109,7 +113,7 @@ async def test_search_ranks_pages_scopes_bases_and_reports_pending(monkeypatch, 
                 base,
                 path,
                 kindex.page_sha(content),
-                front_matter["title"],
+                front_matter,
                 chunks,
                 [_vector(axis) for _ in chunks],
             )
@@ -117,6 +121,7 @@ async def test_search_ranks_pages_scopes_bases_and_reports_pending(monkeypatch, 
         (eng, "election.md"): election,
         (eng, "replication.md"): replication.replace("append", "replicate"),  # edited since
         (eng, "new.md"): _page("New", "Not indexed yet."),
+        (eng, "old-election.md"): retired,
         (ops, "majority.md"): other,
     }
     sm = FakeStateManager([eng, ops], pages, profile="embeddings")
@@ -125,6 +130,10 @@ async def test_search_ranks_pages_scopes_bases_and_reports_pending(monkeypatch, 
     assert everything.success
     paths = [hit["path"] for hit in everything.data["results"]]
     assert set(paths[:2]) == {f"/knowledge/{eng}/election.md", f"/knowledge/{ops}/majority.md"}
+    # A deprecated page matching just as well stays findable but ranks after current pages.
+    assert paths[2] == f"/knowledge/{eng}/old-election.md"
+    assert everything.data["results"][2]["deprecated"] is True
+    assert "deprecated" not in everything.data["results"][0]
     assert everything.data["index"][eng]["pending"] == ["new.md", "replication.md"]
     assert everything.data["index"][ops]["pending"] == []
     # Below the similarity cut-off and no keyword match: left out.

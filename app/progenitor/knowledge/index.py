@@ -25,6 +25,10 @@ MAX_CHUNK_CHARS = 1500
 SNIPPET_CHARS = 300
 _CANDIDATES = 40
 _RRF_K = 60
+# A deprecated page's fused score is multiplied by this. RRF scores of chunks in the
+# candidate set range ~1/(60+40)..2/61, so 0.05 puts every deprecated chunk below
+# every current one: deprecated pages only surface when nothing current matches.
+_DEPRECATED_SCORE_FACTOR = 0.05
 _HEADING_RE = re.compile(r"^(#{1,3})\s+(.+?)\s*#*\s*$")
 
 
@@ -41,15 +45,12 @@ def page_sha(content: str) -> str:
     return hashlib.sha256(content.encode("utf-8")).hexdigest()
 
 
-def is_indexable(path: str, content: str) -> bool:
-    """Concept pages are indexed unless their front matter deprecates them."""
+def is_indexable(path: str) -> bool:
+    """Concept pages are indexed (deprecated ones too, ranked last; see ``_SEARCH_SQL``)."""
     try:
-        if classify_page_path(path) != "concept":
-            return False
-        front_matter, _ = split_front_matter(content)
+        return classify_page_path(path) == "concept"
     except ValueError:
         return False
-    return not is_deprecated(front_matter)
 
 
 def _pack(paragraphs: list[str]) -> list[str]:
@@ -95,9 +96,20 @@ def chunk_page(content: str) -> tuple[dict[str, Any], list[PageChunk]]:
         else:
             sections[-1][1].append(line)
     chunks: list[PageChunk] = []
+    # A heading with no text of its own (e.g. "# Raft" right before "## Elections")
+    # is carried into the next section's heading so it stays searchable.
+    carried: list[str] = []
     for heading, lines in sections:
         paragraphs = [p.strip() for p in "\n".join(lines).split("\n\n") if p.strip()]
-        chunks.extend(PageChunk(heading, text) for text in _pack(paragraphs))
+        if not paragraphs:
+            if heading:
+                carried.append(heading)
+            continue
+        full_heading = " › ".join([*carried, heading] if heading else carried)
+        carried = []
+        chunks.extend(PageChunk(full_heading, text) for text in _pack(paragraphs))
+    if carried:
+        chunks.append(PageChunk(" › ".join(carried), " › ".join(carried)))
     if not chunks:
         summary = " — ".join(
             str(fm.get(key) or "").strip() for key in ("title", "description") if fm.get(key)
@@ -118,7 +130,7 @@ def pending_paths(live: Mapping[str, str], indexed: Mapping[str, str]) -> list[s
     return sorted(
         path
         for path, content in live.items()
-        if is_indexable(path, content) and indexed.get(path) != page_sha(content)
+        if is_indexable(path) and indexed.get(path) != page_sha(content)
     )
 
 
@@ -156,6 +168,11 @@ def ensure_index_schema(conn: psycopg.Connection, dimensions: int) -> bool:
         sql.SQL("DROP TABLE IF EXISTS {}").format(sql.Identifier(schema, "knowledge_documents"))
     )
     if _column_dimensions(conn) == dimensions:
+        conn.execute(
+            sql.SQL(
+                "ALTER TABLE {} ADD COLUMN IF NOT EXISTS deprecated boolean NOT NULL DEFAULT false"
+            ).format(sql.Identifier(schema, "knowledge_chunks"))
+        )
         conn.commit()
         return False
     conn.execute(
@@ -172,6 +189,7 @@ def ensure_index_schema(conn: psycopg.Connection, dimensions: int) -> bool:
                 heading   text NOT NULL DEFAULT '',
                 content   text NOT NULL,
                 page_sha  text NOT NULL,
+                deprecated boolean NOT NULL DEFAULT false,
                 embedding vector({dims}) NOT NULL,
                 tsv       tsvector GENERATED ALWAYS AS (
                     to_tsvector('english', title || ' ' || heading || ' ' || content)
@@ -207,20 +225,22 @@ def replace_page_chunks(
     base_id: str,
     path: str,
     sha: str,
-    title: str,
+    front_matter: Mapping[str, Any],
     chunks: list[PageChunk],
     vectors: list[list[float]],
 ) -> None:
+    title = str(front_matter.get("title") or "")
+    deprecated = is_deprecated(front_matter)
     conn.execute("DELETE FROM knowledge_chunks WHERE base_id = %s AND path = %s", (base_id, path))
     with conn.cursor() as cur:
         cur.executemany(
             """
             INSERT INTO knowledge_chunks
-                (base_id, path, chunk_no, title, heading, content, page_sha, embedding)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s::vector)
+                (base_id, path, chunk_no, title, heading, content, page_sha, deprecated, embedding)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s::vector)
             """,
             [
-                (base_id, path, n, title, c.heading, c.text, sha, to_pgvector(v))
+                (base_id, path, n, title, c.heading, c.text, sha, deprecated, to_pgvector(v))
                 for n, (c, v) in enumerate(zip(chunks, vectors, strict=True))
             ],
         )
@@ -290,21 +310,24 @@ _SEARCH_SQL: LiteralString = """
         GROUP BY base_id, path, chunk_no
     ),
     -- Keep a chunk only if it matched by keyword or is similar enough by meaning.
+    -- Deprecated pages stay searchable but rank below every current page.
     relevant AS (
-        SELECT f.base_id, f.path, f.chunk_no, f.score, f.keyword,
+        SELECT f.base_id, f.path, f.chunk_no, f.keyword, c.deprecated,
+               f.score * CASE WHEN c.deprecated THEN %(deprecated_factor)s ELSE 1 END AS score,
                (1 - (c.embedding <=> q.v))::float AS similarity
         FROM fused f
         JOIN knowledge_chunks c USING (base_id, path, chunk_no), q
         WHERE f.keyword OR 1 - (c.embedding <=> q.v) >= %(min_similarity)s
     ),
     best AS (
-        SELECT DISTINCT ON (base_id, path) base_id, path, chunk_no, score, keyword, similarity
+        SELECT DISTINCT ON (base_id, path)
+               base_id, path, chunk_no, score, keyword, similarity, deprecated
         FROM relevant
         ORDER BY base_id, path, score DESC
     )
     SELECT b.base_id, b.path, c.title, c.heading,
            left(c.content, %(snippet)s) AS snippet, b.score::float AS score,
-           b.similarity, b.keyword AS keyword_match
+           b.similarity, b.keyword AS keyword_match, b.deprecated
     FROM best b
     JOIN knowledge_chunks c USING (base_id, path, chunk_no)
     ORDER BY b.score DESC, b.base_id, b.path
@@ -328,6 +351,7 @@ def _search_params(
         "snippet": SNIPPET_CHARS,
         "limit": limit,
         "min_similarity": min_similarity,
+        "deprecated_factor": _DEPRECATED_SCORE_FACTOR,
     }
 
 

@@ -1767,21 +1767,29 @@ function SearchPanel({ query, onClose, isPinned, onTogglePin, isOpen }) {
   const { getApiUrl } = useConfig();
   const [search, setSearch] = useState(query);
   const [activeQuery, setActiveQuery] = useState('');
+  // A rejected request (network/non-202) for a query; no results event will come.
+  const [requestError, setRequestError] = useState(null);
+  // The backend matches literal text, so it gets the query as typed (trimmed);
+  // the punctuation-insensitive form is only for matching sidebar pages here.
+  const backendQuery = search.trim();
   const normalizedSearch = normalizeSearchText(search);
   const searchData = useSelector((state) => selectSearchResults(state, activeQuery));
 
   useEffect(() => {
-    if (normalizedSearch.length < 3) {
+    if (backendQuery.length < 3) {
       // eslint-disable-next-line react-hooks/set-state-in-effect -- clearing search results when query is too short
       setActiveQuery('');
       return;
     }
     const timer = setTimeout(() => {
-      dispatch(searchAll({ searchUrl: getApiUrl('/api/ui/search'), query: normalizedSearch }));
-      setActiveQuery(normalizedSearch);
+      setActiveQuery(backendQuery);
+      setRequestError(null);
+      dispatch(searchAll({ searchUrl: getApiUrl('/api/ui/search'), query: backendQuery }))
+        .unwrap()
+        .catch((error) => setRequestError({ query: backendQuery, message: error?.message || 'Search failed' }));
     }, 300);
     return () => clearTimeout(timer);
-  }, [normalizedSearch, dispatch, getApiUrl]);
+  }, [backendQuery, dispatch, getApiUrl]);
 
   const routeResults = navItems
     .filter((item) => normalizeSearchText(`${item.label} ${item.to}`).includes(normalizedSearch))
@@ -1792,10 +1800,11 @@ function SearchPanel({ query, onClose, isPinned, onTogglePin, isOpen }) {
       to: item.to,
     }));
 
+  const failedRequest = requestError && requestError.query === backendQuery && !searchData ? requestError.message : null;
   const backendSections = searchData && Array.isArray(searchData.sections) ? searchData.sections : [];
-  const isSearching = normalizedSearch.length >= 3 && (activeQuery !== normalizedSearch || !searchData);
+  const isSearching = backendQuery.length >= 3 && !failedRequest && (activeQuery !== backendQuery || !searchData);
   const hasAnyResults = routeResults.length > 0 || backendSections.some((s) => s.results && s.results.length > 0);
-  const hasAnyError = backendSections.some((s) => s.error);
+  const hasAnyError = Boolean(failedRequest) || backendSections.some((s) => s.error);
 
   return (
     <TopNavPane title="Search" className="topnav-pane--search" onClose={onClose} isPinned={isPinned} onTogglePin={onTogglePin} isOpen={isOpen}>
@@ -1815,6 +1824,7 @@ function SearchPanel({ query, onClose, isPinned, onTogglePin, isOpen }) {
               <div className="chrome-empty">No matches.</div>
             ) : null}
             {isSearching ? <div className="chrome-search-loading muted">Searching…</div> : null}
+            {failedRequest ? <div className="chrome-search-error muted">{failedRequest}</div> : null}
             {routeResults.length > 0 ? (
               <div className="chrome-search-group">
                 <div className="chrome-search-group__label">Pages</div>

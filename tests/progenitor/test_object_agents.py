@@ -199,6 +199,32 @@ def test_listed_plugin_skill_is_mounted_without_declaring_it(monkeypatch):
     }
 
 
+def test_listed_search_without_knowledge_grants_is_not_given_the_unscoped_tool(monkeypatch):
+    # The parent's `search` reads every base; an agent without grants must not get it.
+    manifest = parse_object_agent_manifest(
+        VALID_SYSTEM.replace("tools: [current_time]", "tools: [current_time, search]").replace(
+            "skills: [/skills/review/]", "skills: []"
+        ),
+        source="test",
+    )
+    calls = []
+    monkeypatch.setattr(
+        "app.progenitor.agent.object_agents.create_agent", lambda **kw: calls.append(kw)
+    )
+    monkeypatch.setattr(
+        "app.progenitor.agent.object_agents.SummarizationMiddleware", lambda **_kw: object()
+    )
+    build_object_agent(
+        manifest,
+        model=object(),
+        tools=[SimpleNamespace(name="current_time"), SimpleNamespace(name="search")],
+        backend=object(),
+        checkpointer=None,
+        state_manager=_StateManager(),
+    )
+    assert [tool.name for tool in calls[0]["tools"]] == ["current_time"]
+
+
 def test_manifest_rejects_all_skills_wildcard():
     with pytest.raises(ValueError, match="use mounts for access to all skills"):
         parse_object_agent_manifest(

@@ -7,7 +7,7 @@ from typing import Any
 
 from app.progenitor.knowledge.indexer_config import (
     INDEX_STATUS_DOC_KEY,
-    describe_index_status,
+    index_front_matter,
     index_record,
 )
 from app.progenitor.knowledge.pages import (
@@ -92,7 +92,7 @@ def read_page(base_id: str, path: str) -> dict[str, Any] | None:
             title=title,
             directory=directory,
             live_pages=live,
-            search_status=describe_index_status(
+            search_index=index_front_matter(
                 index_record(row.payload if row is not None else None, base_id)
             ),
         )

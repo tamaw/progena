@@ -470,14 +470,18 @@ def build_object_agent(
     """
     if manifest.knowledge and CURATING_KNOWLEDGE_SKILL not in manifest.skills:
         manifest = replace(manifest, skills=manifest.skills + (CURATING_KNOWLEDGE_SKILL,))
-    selected_tools = _tools_for_manifest(manifest, tools)
+    # The parent's `search` covers every base; an object agent only ever gets it
+    # scoped to its knowledge grants, and not at all without grants.
+    selected_tools = [
+        tool
+        for tool in _tools_for_manifest(manifest, tools)
+        if getattr(tool, "name", "") != "search"
+    ]
     if manifest.knowledge:
-        # Knowledge grants come with `search`, limited to the granted bases.
         from ..tools.search import SearchTool
         from .adapters import wrap_system_tool
 
         granted = frozenset(grant.base for grant in manifest.knowledge)
-        selected_tools = [tool for tool in selected_tools if getattr(tool, "name", "") != "search"]
         selected_tools.append(
             wrap_system_tool(SearchTool(allowed_bases=granted), state_manager=state_manager)
         )

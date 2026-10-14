@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from contextlib import suppress
 from typing import Any
 
@@ -50,6 +50,7 @@ logger = logging.getLogger(__name__)
 
 _ADVISORY_LOCK_KEY = "progenitor_knowledge_indexer"
 _DEBOUNCE_SECONDS = 2.0
+_LOCK_RETRY_SECONDS = 5.0
 _ALL = "*"
 SETTINGS_KEYS = frozenset({"knowledge", INDEXER_DOC_KEY, "profile"})
 
@@ -84,7 +85,7 @@ def _live_pages(base_id: str) -> dict[str, str]:
         payload = document.payload if isinstance(document.payload, dict) else {}
         path = key[len(prefix) :]
         content = payload.get("content")
-        if isinstance(content, str) and is_indexable(path, content):
+        if isinstance(content, str) and is_indexable(path):
             live[path] = content
     return live
 
@@ -114,16 +115,22 @@ class KnowledgeIndexer:
         publish: Publisher = _default_publish,
         dispatch: Dispatcher = _default_dispatch,
         debounce_seconds: float = _DEBOUNCE_SECONDS,
+        lock_retry_seconds: float = _LOCK_RETRY_SECONDS,
+        lock_key: str = _ADVISORY_LOCK_KEY,
     ) -> None:
         self._url = database_url
         self._embedder_factory = embedder_factory
         self._publish = publish
         self._dispatch = dispatch
         self._debounce = debounce_seconds
+        self._lock_retry = lock_retry_seconds
+        self._lock_key = lock_key
         self._queue: asyncio.Queue[str] = asyncio.Queue()
         self._timers: dict[str, asyncio.TimerHandle] = {}
         self._worker: asyncio.Task[None] | None = None
+        self._lock_task: asyncio.Task[None] | None = None
         self._lock_conn: psycopg.Connection | None = None
+        self._stopping = asyncio.Event()
 
     @property
     def running(self) -> bool:
@@ -137,24 +144,66 @@ class KnowledgeIndexer:
 
     # ------------------------------------------------------------------ lifecycle
     async def start(self) -> None:
-        if self._worker is not None:
+        """Start competing for the indexer lock; the holder runs the worker.
+
+        Every backend process keeps trying, so if the holder exits (or its lock
+        connection drops) another process takes over within ``lock_retry_seconds``.
+        """
+        if self._lock_task is not None:
             return
         url = self._url or store_database_url(get_default_document_store())
         if not url:
             logger.info("Knowledge indexer disabled: no Postgres document store")
             return
-        if not await asyncio.to_thread(self._acquire_lock, url):
-            logger.info("Knowledge indexer idle: another backend process holds the lock")
-            return
         self._url = url
-        self._worker = asyncio.create_task(self._run(), name="knowledge-indexer")
-        self.schedule_all()
-        logger.info("Knowledge indexer started")
+        self._stopping.clear()
+        self._lock_task = asyncio.create_task(self._hold_lock(url), name="knowledge-indexer-lock")
 
     async def stop(self) -> None:
+        self._stopping.set()
         for timer in self._timers.values():
             timer.cancel()
         self._timers.clear()
+        if self._lock_task is not None:
+            self._lock_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await self._lock_task
+            self._lock_task = None
+        await self._stop_worker()
+
+    async def _hold_lock(self, url: str) -> None:
+        """Acquire the lock, run the worker while the lock connection is alive, repeat."""
+        try:
+            while not self._stopping.is_set():
+                if await asyncio.to_thread(self._acquire_lock, url):
+                    self._worker = asyncio.create_task(self._run(), name="knowledge-indexer")
+                    self.schedule_all()
+                    logger.info("Knowledge indexer started")
+                    await self._watch_lock()
+                    await self._stop_worker()
+                elif await self._sleep_or_stop():
+                    return
+        finally:
+            await self._stop_worker()
+
+    async def _watch_lock(self) -> None:
+        """Return when stopping, when the worker exits, or when the lock connection dies."""
+        while self._worker is not None and not self._worker.done():
+            if await self._sleep_or_stop():
+                return
+            if not await asyncio.to_thread(self._lock_alive):
+                logger.warning("Knowledge indexer lost its lock connection; stopping the worker")
+                return
+
+    async def _sleep_or_stop(self) -> bool:
+        """Wait ``lock_retry_seconds``; True if the indexer is stopping."""
+        try:
+            await asyncio.wait_for(self._stopping.wait(), timeout=self._lock_retry)
+        except TimeoutError:
+            return False
+        return True
+
+    async def _stop_worker(self) -> None:
         if self._worker is not None:
             self._worker.cancel()
             with suppress(asyncio.CancelledError):
@@ -162,18 +211,38 @@ class KnowledgeIndexer:
             self._worker = None
         if self._lock_conn is not None:
             conn, self._lock_conn = self._lock_conn, None
-            await asyncio.to_thread(conn.close)
+            with suppress(Exception):
+                await asyncio.to_thread(conn.close)
 
     def _acquire_lock(self, url: str) -> bool:
-        conn = psycopg.connect(url, autocommit=True)
-        row = conn.execute(
-            "SELECT pg_try_advisory_lock(hashtext(%s))", (_ADVISORY_LOCK_KEY,)
-        ).fetchone()
+        try:
+            conn = psycopg.connect(url, autocommit=True)
+        except psycopg.Error as exc:
+            logger.warning("Knowledge indexer could not connect for its lock: %s", exc)
+            return False
+        try:
+            row = conn.execute(
+                "SELECT pg_try_advisory_lock(hashtext(%s))", (self._lock_key,)
+            ).fetchone()
+        except psycopg.Error as exc:
+            logger.warning("Knowledge indexer lock query failed: %s", exc)
+            row = None
         if row and row[0]:
             self._lock_conn = conn
             return True
         conn.close()
         return False
+
+    def _lock_alive(self) -> bool:
+        """The session lock lives as long as its connection; probe the connection."""
+        conn = self._lock_conn
+        if conn is None:
+            return False
+        try:
+            conn.execute("SELECT 1")
+        except psycopg.Error:
+            return False
+        return True
 
     # ------------------------------------------------------------------ triggers
     def on_store_change(self, key: str | None) -> None:
@@ -203,6 +272,10 @@ class KnowledgeIndexer:
     async def _run(self) -> None:
         while True:
             item = await self._queue.get()
+            # Never write without the lock: another process may hold it by now.
+            if not await asyncio.to_thread(self._lock_alive):
+                logger.warning("Knowledge indexer lost its lock connection before %r", item)
+                return
             try:
                 if item == _ALL:
                     await self.reconcile_all()
@@ -279,7 +352,7 @@ class KnowledgeIndexer:
                     base_id,
                     path,
                     page_sha(live[path]),
-                    str(front_matter.get("title") or ""),
+                    front_matter,
                     chunks,
                     vectors,
                 )
@@ -323,12 +396,12 @@ class KnowledgeIndexer:
         base_id: str,
         path: str,
         sha: str,
-        title: str,
+        front_matter: Mapping[str, Any],
         chunks: list[PageChunk],
         vectors: list[list[float]],
     ) -> None:
         with psycopg.connect(self._database_url()) as conn:
-            replace_page_chunks(conn, base_id, path, sha, title, chunks, vectors)
+            replace_page_chunks(conn, base_id, path, sha, front_matter, chunks, vectors)
 
     def _finish_base(self, base_id: str, removed: list[str]) -> int:
         with psycopg.connect(self._database_url()) as conn:

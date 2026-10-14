@@ -26,6 +26,7 @@ from app.progenitor.knowledge.indexer_config import (
 )
 from app.progenitor.knowledge.pages import split_front_matter
 
+from .agent_store import object_agent_id
 from .chat_sessions import UiRequestAcknowledgement, acknowledgement_response
 from .document_store import PROGENITOR_STATE_PREFIX, get_default_document_store, store_database_url
 from .knowledge_service import load_bases
@@ -47,16 +48,6 @@ _REQUEST_ID_HEADER = Header(default=None, alias="X-Request-ID")
 def _build_text_result(kind, key: str, payload: Any, spec: SearchSpec) -> dict[str, Any] | None:
     """Turn one store row into a search result for the UI."""
     id_value = key.removeprefix(kind.key_prefix)
-
-    # Agents: only object-agent SYSTEM.md documents are searchable in v1.
-    if kind.key_prefix == AGENT_DOCUMENT_KEY_PREFIX:
-        parts = id_value.split("/")
-        if len(parts) == 3 and parts[-1] == "SYSTEM.md":
-            id_value = f"object-{parts[1]}"
-        else:
-            return None
-
-    to = spec.route.replace("{id}", quote(id_value, safe="/"))
 
     if spec.source == "front_matter":
         content = payload.get("content", "") if isinstance(payload, dict) else ""
@@ -80,6 +71,17 @@ def _build_text_result(kind, key: str, payload: Any, spec: SearchSpec) -> dict[s
         else:
             title = ""
             subtitle = ""
+
+    # Agents: only object-agent manifests (``<source>/<dir>/SYSTEM.md``) are
+    # searchable, and the Agents page knows them by the id built from the
+    # manifest name (the directory may differ, e.g. for marketplace agents).
+    if kind.key_prefix == AGENT_DOCUMENT_KEY_PREFIX:
+        parts = id_value.split("/")
+        if len(parts) != 3 or parts[-1] != "SYSTEM.md" or not title:
+            return None
+        id_value = object_agent_id(title)
+
+    to = spec.route.replace("{id}", quote(id_value, safe="/"))
 
     # Prompts have no title in the payload; fall back to the filename.
     if not title and kind.key_prefix == PROMPT_DOCUMENT_KEY_PREFIX:
@@ -181,7 +183,12 @@ async def _knowledge_provider(q: str, limit: int = 5) -> dict[str, Any]:
         title = row.get("title") or path
         subtitle_parts = filter(
             None,
-            [row.get("heading"), row.get("base_name"), row.get("snippet")],
+            [
+                "Deprecated" if row.get("deprecated") else None,
+                row.get("heading"),
+                row.get("base_name"),
+                row.get("snippet"),
+            ],
         )
         subtitle = " — ".join(str(p) for p in subtitle_parts)
         results.append(
@@ -220,7 +227,8 @@ def _tools_provider(q: str, limit: int = 5) -> dict[str, Any]:
                     "id": f"mcp:{name}",
                     "title": name,
                     "subtitle": server.get("description") or "MCP server",
-                    "to": f"/tools/{quote(name, safe='')}",
+                    # The Tools page knows servers by their ``mcp:<name>`` id.
+                    "to": f"/tools/{quote(f'mcp:{name}', safe='')}",
                 }
             )
 

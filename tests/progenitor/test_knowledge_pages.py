@@ -50,10 +50,15 @@ def test_render_index_groups_types_and_directories():
         ],
         subdirs=["notes"],
         is_base_root=True,
+        search_index={"status": "indexed", "pages": 2, "indexed_pages": 2},
     )
     assert output == (
         "---\n"
-        'okf_version: "0.2"\n'
+        "okf_version: '0.2'\n"
+        "search_index:\n"
+        "  status: indexed\n"
+        "  pages: 2\n"
+        "  indexed_pages: 2\n"
         "---\n"
         "\n"
         "# Engineering\n"

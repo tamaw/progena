@@ -1,6 +1,7 @@
 from deepagents.backends import CompositeBackend
 
 from app.progenitor.agent.knowledge_backend import KnowledgePageBackend
+from app.progenitor.knowledge.pages import split_front_matter
 
 PAGE = "---\ntype: Concept\ntitle: A\ndescription: First page\n---\nRetry budget is three.\n"
 
@@ -71,7 +72,9 @@ async def test_indexer_status_is_a_read_only_root_file_and_shown_in_indexes():
     assert "[Engineering](eng/index.md) · search: indexing 3/7" in root
     assert "[Ops](ops/index.md) · search: not indexed yet" in root
     base = (await backend.aread("/eng/index.md")).file_data["content"]
-    assert "# Engineering\n\nSearch index: indexing 3/7\n" in base
+    front_matter, body = split_front_matter(base)
+    assert front_matter["search_index"] == {"status": "indexing", "pages": 7, "indexed_pages": 3}
+    assert "Search index" not in body
 
 
 async def test_log_is_append_only_and_agents_cannot_delete():

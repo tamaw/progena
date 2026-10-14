@@ -94,6 +94,11 @@ def _slug(value: str) -> str:
     return slug or "agent"
 
 
+def object_agent_id(name: str) -> str:
+    """Catalog id of an object agent, derived from its manifest ``name``."""
+    return f"object-{_slug(name)}"
+
+
 def _first_sentence(text: str) -> str:
     text = (text or "").strip()
     if not text:
@@ -770,7 +775,7 @@ def _object_agent_profile(
         except ValueError:
             logger.warning("Failed to re-parse front matter for object agent %r", manifest.name)
     return {
-        "id": f"object-{_slug(manifest.name)}",
+        "id": object_agent_id(manifest.name),
         "kind": "object",
         "name": manifest.name,
         # ``handle``/``group``/``color`` are UI-only presentation fields with no

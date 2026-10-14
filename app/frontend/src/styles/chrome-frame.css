@@ -2182,13 +2182,18 @@ body,
   background: var(--color-info);
 }
 
+/* Input stays put; the results list takes the rest of the pane and scrolls. */
 .chrome-search-panel {
-  display: grid;
+  display: flex;
+  flex-direction: column;
   gap: 12px;
+  height: 100%;
+  min-height: 0;
 }
 
 .chrome-search-panel__input {
   display: flex;
+  flex: none;
   align-items: center;
   gap: 8px;
   padding: 10px 12px;
@@ -2225,7 +2230,8 @@ body,
 }
 
 .chrome-search-results {
-  max-height: 430px;
+  flex: 1 1 auto;
+  min-height: 0;
   overflow-y: auto;
 }
 
