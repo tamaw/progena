@@ -96,18 +96,23 @@ test.describe('structured inbox', () => {
       await expect(page.locator('.inbox-section__content pre code')).toContainText('def deep():');
       await expect(page.getByRole('button', { name: 'Select ### Inner section' })).toBeVisible();
       const nested = page.getByRole('button', { name: 'Select #### Deep section' }).locator('xpath=ancestor::section[contains(@class, "inbox-section")][1]');
+      const nestedContent = nested.locator(':scope > .inbox-section__content');
       const spacing = await nested.evaluate((section) => ({
-        left: parseFloat(getComputedStyle(section).paddingLeft),
+        left: parseFloat(getComputedStyle(section.querySelector(':scope > .inbox-section__content')).paddingLeft),
         top: parseFloat(getComputedStyle(section).marginTop),
+        headingBottom: section.querySelector(':scope > .inbox-section__head').getBoundingClientRect().bottom,
+        bracketTop: section.querySelector(':scope > .inbox-section__content').getBoundingClientRect().top,
       }));
       expect(spacing.left).toBeLessThanOrEqual(12);
       expect(spacing.top).toBeLessThanOrEqual(4);
+      expect(spacing.bracketTop).toBeGreaterThanOrEqual(spacing.headingBottom);
       const inner = page.getByRole('button', { name: 'Select ### Inner section' }).locator('xpath=ancestor::section[contains(@class, "inbox-section")][1]');
-      const beforeHover = await nested.evaluate((section) => getComputedStyle(section).borderLeftColor);
-      const parentBeforeHover = await inner.evaluate((section) => getComputedStyle(section).borderLeftColor);
+      const innerContent = inner.locator(':scope > .inbox-section__content');
+      const beforeHover = await nestedContent.evaluate((content) => getComputedStyle(content).borderLeftColor);
+      const parentBeforeHover = await innerContent.evaluate((content) => getComputedStyle(content).borderLeftColor);
       await nested.locator('pre code').hover();
-      await expect.poll(() => nested.evaluate((section) => getComputedStyle(section).borderLeftColor)).not.toBe(beforeHover);
-      await expect.poll(() => inner.evaluate((section) => getComputedStyle(section).borderLeftColor)).toBe(parentBeforeHover);
+      await expect.poll(() => nestedContent.evaluate((content) => getComputedStyle(content).borderLeftColor)).not.toBe(beforeHover);
+      await expect.poll(() => innerContent.evaluate((content) => getComputedStyle(content).borderLeftColor)).toBe(parentBeforeHover);
       const summary = page.getByRole('button', { name: 'Select ## Summary section' }).locator('xpath=ancestor::section[contains(@class, "inbox-section")][1]');
       const bottomGap = await summary.evaluate((section) => section.getBoundingClientRect().bottom
         - section.querySelector(':scope > .inbox-section__content').getBoundingClientRect().bottom);
@@ -199,7 +204,7 @@ test.describe('structured inbox', () => {
         probe.style.color = 'var(--color-text-primary)';
         const foreground = getComputedStyle(probe).color;
         probe.remove();
-        const section = getComputedStyle(document.querySelector('.inbox-section.is-selected'));
+        const section = getComputedStyle(document.querySelector('.inbox-section.is-selected > .inbox-section__content'));
         const ai = getComputedStyle(document.querySelector('.inbox-section__actions .msg-action-btn'));
         const remove = getComputedStyle(document.querySelector('.inbox-section__actions button[aria-label="Remove"]'));
         return {
