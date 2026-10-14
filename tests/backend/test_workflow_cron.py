@@ -14,10 +14,45 @@ from app.backend.workflow_service import (
     list_workflow_runs,
     save_workflow_definition,
 )
-from app.progenitor.workflows import WorkflowNodeCron, build_cron_trigger_output
-from tests.progenitor.test_workflows import cron_workflow
+from app.progenitor.workflows import (
+    WorkflowNodeCron,
+    build_cron_trigger_output,
+    default_workflow_definition,
+)
 
 START = datetime(2026, 10, 12, 8, 30, tzinfo=UTC)
+
+
+def cron_workflow(*, expression="0 9 * * 1-5", timezone="UTC", overlap="skip"):
+    """Cron trigger feeding ``scheduled_for`` into an agent template."""
+
+    payload = default_workflow_definition()
+    payload["graph"] = {
+        "nodes": {
+            "cron": {
+                "kind": "cron",
+                "title": "Weekdays",
+                "expression": expression,
+                "timezone": timezone,
+                "overlap": overlap,
+            },
+            "agent": {
+                "kind": "agent",
+                "title": "Digest",
+                "template": "Due at {scheduled_for}",
+                "input_schema": {"type": "object", "properties": {}},
+                "output_schema": {"type": "object", "properties": {}},
+            },
+        },
+        "edges": [
+            {
+                "from": {"node": "cron", "port": "scheduled_for"},
+                "to": {"node": "agent", "port": "scheduled_for"},
+            }
+        ],
+    }
+    payload["ui"] = {}
+    return payload
 
 
 class RecordingExecutor:
