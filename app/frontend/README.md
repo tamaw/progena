@@ -59,7 +59,7 @@ The canonical UI stream has bounded replay via `Last-Event-ID`; `connection.read
 
 ### Structured document content
 
-`src/components/common/StructuredDocumentBody.jsx` renders Markdown with nested XML-like sections from `content` using `parseStructuredContent` in `src/lib/structuredContent.js`. It owns section selection, question options, and the inline AI-instruction popover. Supply `onAskAgent(instruction, { draft, inline, clientId })` for section instructions and `onAnswerQuestion({ question, choice, content })` for interactive questions; unavailable actions are hidden. The caller owns agent prompts and event-driven document refreshes. Inbox uses `src/pages/StructuredInboxBody.jsx`; Tasks does not use this component yet. The viewer never merges agent writes or attributes an inbox snapshot to a particular prompt.
+`src/components/common/StructuredDocumentBody.jsx` renders Markdown with selectable heading sections (`##`–`######`) from `content` using `parseStructuredContent` in `src/lib/structuredContent.js`. It owns heading selection, question options, and the inline AI-instruction popover. Supply `onAskAgent(instruction, { draft, inline, clientId })` for section instructions and `onAnswerQuestion({ question, choice, content })` for interactive questions; unavailable actions are hidden. The caller owns agent prompts and event-driven document refreshes. Inbox uses `src/pages/StructuredInboxBody.jsx`; Tasks does not use this component yet. The viewer never merges agent writes or attributes an inbox snapshot to a particular prompt.
 
 ## Project Structure
 
