@@ -180,7 +180,7 @@ class TestSearchRoute:
         assert section is not None
         assert len(section["results"]) == 1
         assert section["results"][0]["title"] == "jina"
-        assert section["results"][0]["to"] == "/tools/jina"
+        assert section["results"][0]["to"] == "/tools/mcp%3Ajina"
 
     def test_schedules_provider(self, harness):
         client, store, events = harness
@@ -207,12 +207,14 @@ class TestSearchRoute:
         assert section["results"][0]["title"] == "Daily cleanup"
         assert section["results"][0]["to"] == "/schedules/sched_1"
 
-    def test_agent_object_mapping(self, harness):
+    def test_agent_links_use_the_manifest_name_id(self, harness):
+        # A marketplace agent's directory can differ from its manifest name; the
+        # Agents page knows it by the id built from the name.
         client, store, events = harness
         store.save_document(
             PROGENITOR_STATE_PREFIX,
-            "agent:user/my-agent/SYSTEM.md",
-            {"content": "---\nname: My Agent\ndescription: A test agent\n---\n"},
+            "agent:market__plugin/reviewer/SYSTEM.md",
+            {"content": "---\nname: Code Reviewer\ndescription: A test agent\n---\n"},
         )
         assert_acknowledged(
             client.get("/api/ui/search?q=agent"),
@@ -222,8 +224,8 @@ class TestSearchRoute:
         section = next((s for s in payload["sections"] if s["label"] == "Agents"), None)
         assert section is not None
         assert len(section["results"]) == 1
-        assert section["results"][0]["id"] == "object-my-agent"
-        assert section["results"][0]["to"] == "/agents/object-my-agent/details"
+        assert section["results"][0]["id"] == "object-code-reviewer"
+        assert section["results"][0]["to"] == "/agents/object-code-reviewer/details"
 
     def test_prompt_fallback_title(self, harness):
         client, store, events = harness

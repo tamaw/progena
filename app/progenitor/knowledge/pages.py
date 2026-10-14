@@ -105,14 +105,16 @@ def render_index(
     pages: list[tuple[str, dict[str, Any]]],
     subdirs: list[str],
     is_base_root: bool,
-    search_status: str = "",
+    search_index: Mapping[str, Any] | None = None,
 ) -> str:
     lines: list[str] = []
     if is_base_root:
-        lines.extend(["---", 'okf_version: "0.2"', "---", ""])
+        header: dict[str, Any] = {"okf_version": "0.2"}
+        if search_index is not None:
+            header["search_index"] = dict(search_index)
+        dumped = yaml.safe_dump(header, sort_keys=False, allow_unicode=True)
+        lines.extend(["---", *dumped.rstrip("\n").split("\n"), "---", ""])
     lines.append(f"# {title}")
-    if is_base_root and search_status:
-        lines.extend(["", f"Search index: {search_status}"])
     grouped: dict[str, list[tuple[str, dict[str, Any]]]] = {}
     for filename, front_matter in pages:
         grouped.setdefault(str(front_matter.get("type", "Concept")), []).append(
@@ -154,12 +156,13 @@ def render_root_index(
 def is_deprecated(front_matter: Mapping[str, Any] | None) -> bool:
     """Whether a page's front matter retires it (``status: deprecated``).
 
-    Deprecation stands in for deletion while agents have no delete tool
-    (deepagents < 0.7). deepagents 0.7 adds a ``delete`` filesystem tool backed
-    by ``adelete`` (``KnowledgePageBackend.adelete``); once we upgrade, let agents
-    delete pages there (revisions keep the history) and remove this rule and
-    its callers: the generated indexes, the backend page list, and search
-    indexing (``index.is_indexable``).
+    Deprecated pages are hidden from generated indexes and the backend page list,
+    and rank last in search (``index._DEPRECATED_SCORE_FACTOR``). Deprecation stands
+    in for deletion while agents have no delete tool (deepagents < 0.7).
+    deepagents 0.7 adds a ``delete`` filesystem tool backed by ``adelete``
+    (``KnowledgePageBackend.adelete``); once we upgrade, let agents delete pages
+    there (revisions keep the history) and remove this rule, its callers, and the
+    ``deprecated`` column/ranking in ``index.py``.
     """
     return (
         bool(front_matter) and str(front_matter.get("status", "")).strip().lower() == "deprecated"
@@ -167,7 +170,11 @@ def is_deprecated(front_matter: Mapping[str, Any] | None) -> bool:
 
 
 def render_directory_index(
-    *, title: str, directory: str, live_pages: list[tuple[str, str]], search_status: str = ""
+    *,
+    title: str,
+    directory: str,
+    live_pages: list[tuple[str, str]],
+    search_index: Mapping[str, Any] | None = None,
 ) -> str:
     """Render ``directory``'s index from ``(path, content)`` of a base's live pages.
 
@@ -199,5 +206,5 @@ def render_directory_index(
         pages=pages,
         subdirs=sorted(subdirs),
         is_base_root=not directory,
-        search_status=search_status,
+        search_index=search_index,
     )

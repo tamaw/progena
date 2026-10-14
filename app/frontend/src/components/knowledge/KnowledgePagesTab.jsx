@@ -172,15 +172,23 @@ export default function KnowledgePagesTab({ baseId, baseName, knowledgeUrl }) {
   const revisionContent = useSelector((state) => (viewingRevisionId ? selectKnowledgeRevisionContent(state, baseId, selectedPath, viewingRevisionId) : null));
   const selectedPageMeta = useMemo(() => pages.find((p) => p.path === selectedPath) || null, [pages, selectedPath]);
   const lastFetchedAtRef = useRef(null);
-  // Failed page load for a path (e.g. a link to a missing page); cleared when that path loads.
+  // Failed load of the open page (e.g. a link to a missing page), keyed by base and
+  // path. Only the latest request may set or clear it, so a slow response for a
+  // page or base the user already left can't overwrite the current one.
   const [loadError, setLoadError] = useState(null);
+  const latestLoadRef = useRef(0);
 
   useEffect(() => { dispatch(fetchKnowledgePages({ knowledgeUrl, baseId })); }, [dispatch, knowledgeUrl, baseId]);
 
   const loadPage = useCallback((path) => {
+    const request = latestLoadRef.current + 1;
+    latestLoadRef.current = request;
+    const key = `${baseId}/${path}`;
     dispatch(fetchKnowledgePage({ knowledgeUrl, baseId, path })).unwrap()
-      .then(() => setLoadError((current) => (current?.path === path ? null : current)))
-      .catch((error) => setLoadError({ path, message: error?.message || '' }));
+      .then(() => { if (latestLoadRef.current === request) setLoadError(null); })
+      .catch((error) => {
+        if (latestLoadRef.current === request) setLoadError({ key, message: error?.message || '' });
+      });
   }, [dispatch, knowledgeUrl, baseId]);
 
   useEffect(() => {
@@ -224,7 +232,7 @@ export default function KnowledgePagesTab({ baseId, baseName, knowledgeUrl }) {
     ? (revisionContent === null ? 'Loading…' : dropTitle(stripYamlFrontmatter(revisionContent)))
     : dropTitle(page?.body ?? page?.content ?? '');
   const sources = frontMatterSources(page?.front_matter);
-  const pageError = loadError?.path === selectedPath ? loadError.message : null;
+  const pageError = loadError?.key === `${baseId}/${selectedPath}` ? loadError.message : null;
 
   return (
     <div className="knowledge-pages-tab">

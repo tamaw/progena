@@ -47,6 +47,7 @@ from app.progenitor.document_kinds import (
     KNOWLEDGE_PAGE_KEY_PREFIX,
     key_prefix_for,
 )
+from app.progenitor.knowledge.indexer_config import INDEX_STATUS_DOC_KEY
 from app.progenitor.routines.store import ROUTINE_GRAPH_KEY_PREFIX
 from app.progenitor.schedule import Scheduler, default_timezone_name
 from app.progenitor.schedule.service import generate_schedule_id
@@ -4235,7 +4236,7 @@ def _queue_state_watch_status(snapshot, changed_key: str | None = None) -> None:
             broadcast_mcp_snapshot()
         if changed_key in (None, "schedule"):
             broadcast_schedule_snapshot()
-        if changed_key in (None, "knowledge"):
+        if changed_key in (None, "knowledge", INDEX_STATUS_DOC_KEY):
             broadcast_knowledge_snapshot()
         if changed_key is not None and changed_key.startswith(KNOWLEDGE_PAGE_KEY_PREFIX):
             base_id = changed_key.removeprefix(KNOWLEDGE_PAGE_KEY_PREFIX).split("/", 1)[0]

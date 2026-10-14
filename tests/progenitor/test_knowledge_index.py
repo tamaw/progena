@@ -59,7 +59,14 @@ def test_chunk_page_caps_chunk_size_and_keeps_empty_pages_searchable():
     assert [chunk.text for chunk in empty] == ["Empty — Nothing yet"]
 
 
-def test_pending_paths_lists_unindexed_or_changed_current_concept_pages_only():
+def test_chunk_page_keeps_headings_of_sections_without_text():
+    _, chunks = chunk_page("---\ntype: Concept\n---\n# Raft\n\n## Elections\n\nVotes.\n")
+    assert [(chunk.heading, chunk.text) for chunk in chunks] == [("Raft › Elections", "Votes.")]
+    _, only_headings = chunk_page("---\ntype: Concept\n---\n# Raft\n## Elections\n")
+    assert [chunk.heading for chunk in only_headings] == ["Raft › Elections"]
+
+
+def test_pending_paths_lists_unindexed_or_changed_concept_pages_including_deprecated():
     retired = "---\ntype: Concept\nstatus: deprecated\n---\nOld.\n"
     live = {
         "a.md": "A",
@@ -70,7 +77,7 @@ def test_pending_paths_lists_unindexed_or_changed_current_concept_pages_only():
         "index.md": "x",
     }
     indexed = {"a.md": page_sha("A"), "b.md": page_sha("B1")}
-    assert pending_paths(live, indexed) == ["b.md", "c.md"]
+    assert pending_paths(live, indexed) == ["b.md", "c.md", "d.md"]
 
 
 def test_indexer_settings_validate_profile_and_dimensions():

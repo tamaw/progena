@@ -19,7 +19,7 @@ from deepagents.backends.utils import (
     slice_read_response,
 )
 
-from ..knowledge.indexer_config import describe_index_status, index_record
+from ..knowledge.indexer_config import describe_index_status, index_front_matter, index_record
 from ..knowledge.pages import (
     INDEX_FILE,
     INDEXER_FILE,
@@ -89,7 +89,7 @@ class KnowledgePageBackend(_AsyncOnlyFileBackendMixin):
             title=title,
             directory=directory,
             live_pages=live,
-            search_status=describe_index_status(index_record(status, base_id)),
+            search_index=index_front_matter(index_record(status, base_id)),
         )
 
     async def _root_file(self, path: str) -> str:

@@ -106,8 +106,26 @@ def index_record(status_doc: Mapping[str, Any] | None, base_id: str) -> dict[str
     return record if isinstance(record, dict) else None
 
 
+def index_front_matter(record: Mapping[str, Any] | None) -> dict[str, Any]:
+    """A base's search-index state for the ``search_index`` front matter of its
+    generated root ``index.md``: status, page counts, and when it was indexed or why
+    it failed."""
+    if not record:
+        return {"status": "not_indexed"}
+    data: dict[str, Any] = {
+        "status": str(record.get("status") or "not_indexed"),
+        "pages": int(record.get("pages") or 0),
+        "indexed_pages": int(record.get("indexed_pages") or 0),
+    }
+    if record.get("indexed_at"):
+        data["indexed_at"] = str(record["indexed_at"])
+    if record.get("error"):
+        data["error"] = str(record["error"])
+    return data
+
+
 def describe_index_status(record: Mapping[str, Any] | None) -> str:
-    """One-line search-index status for generated indexes, e.g. ``indexing 3/7``."""
+    """One-line search-index status for the root ``/knowledge/index.md`` list, e.g. ``indexing 3/7``."""
     if not record:
         return "not indexed yet"
     status = str(record.get("status") or "")

@@ -26,7 +26,8 @@ logger = logging.getLogger(__name__)
 _NOTE = (
     "Read the pages before answering and cite their paths. Results only include pages that "
     "match by keyword or have similarity (0-1) at or above the min_similarity cut-off in "
-    "/config/indexer.json, so no results means nothing relevant was found. Pages listed as "
+    "/config/indexer.json, so no results means nothing relevant was found. Results marked "
+    "deprecated are retired pages ranked last; prefer current pages. Pages listed as "
     "pending are not searchable yet; read them directly if they may be relevant."
 )
 
@@ -122,7 +123,7 @@ class SearchTool(BaseSystemTool):
                 base_id in live
                 and isinstance(payload, dict)
                 and isinstance(payload.get("content"), str)
-                and is_indexable(path, payload["content"])
+                and is_indexable(path)
             ):
                 live[base_id][path] = payload["content"]
 
@@ -163,6 +164,7 @@ class SearchTool(BaseSystemTool):
                 "snippet": row.get("snippet") or "",
                 "similarity": round(float(row.get("similarity") or 0.0), 2),
                 "keyword_match": bool(row.get("keyword_match")),
+                **({"deprecated": True} if row.get("deprecated") else {}),
             }
             for row in rows
         ]
