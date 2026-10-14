@@ -71,7 +71,7 @@ Tooling:
   - /data/ maps to runtime data and is read-only.
   - /logs/ maps to runtime logs and is read-only.
   - /prompts/ maps to prompt files and is read-only.
-  - /conversations/ holds one IRC-style log per chat (past and current) and is read-only; see the reading-conversations skill.
+  - /sessions/ holds one IRC-style log per chat (past and current) backed by session documents; see the reading-sessions skill.
 - Conversation reset: if the user asks to start a new conversation or clear/reset chat history, invoke the new_conversation system tool to clear context.
 
 Hard limits — do NOT do these yourself; always delegate:

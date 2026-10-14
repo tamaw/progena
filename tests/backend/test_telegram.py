@@ -831,7 +831,10 @@ class TestTelegramConnectedMessage:
         sent_text = telegram.send_message.call_args.args[0]
         assert "👋" in sent_text
         assert "progenitor" in sent_text.lower()
-        assert progenitor.send_message.await_args.kwargs["metadata"] == {"thread_id": "tele_555"}
+        assert progenitor.send_message.await_args.kwargs["metadata"] == {
+            "thread_id": "tele_555",
+            "source": "telegram",
+        }
 
     @pytest.mark.asyncio
     async def test_no_exception_on_send_failure(self):
@@ -900,7 +903,8 @@ class TestTelegramBackendStreaming:
         telegram.stream_agent_response_to_chat.assert_awaited_once()
         assert telegram.stream_agent_response_to_chat.await_args.kwargs["message_thread_id"] == 123
         assert progenitor.send_message_stream_events.call_args.kwargs["metadata"] == {
-            "thread_id": "tele_987654321_123"
+            "thread_id": "tele_987654321_123",
+            "source": "telegram",
         }
 
     @pytest.mark.asyncio

@@ -226,11 +226,7 @@ class DocumentEventDispatcher:
             DOCUMENT_TYPE_KEY_PREFIX
         ):
             self._types = None
-        document_type = (
-            resolve_document_type(event.key, self.document_types())
-            if event.prefix == PROGENITOR_STATE_PREFIX
-            else None
-        )
+        document_type = resolve_document_type(event.key, self.document_types())
         output = (
             build_document_event_output(
                 event_id=event.seq,

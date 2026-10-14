@@ -165,8 +165,6 @@ export {
   fetchChatMessages,
   requestChatSessionDetail,
   requestChatSessionReconciliation,
-  createChatSession,
-  ensureDraftChatSession,
   updateChatSessionMetadata,
   deleteChatSession,
   selectChatSessions,

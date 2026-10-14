@@ -27,6 +27,7 @@ INBOX_MESSAGE_KEY_PREFIX = "inbox_message:"
 WORKFLOW_DEFINITION_KEY_PREFIX = "workflow:"
 WORKFLOW_RUN_KEY_PREFIX = "workflow_run:"
 DOCUMENT_TYPE_KEY_PREFIX = "document_type:"
+SESSION_KEY_PREFIX = "session:"
 
 # Internal-plumbing prefixes: real ``store`` key prefixes, centralized here to
 # avoid re-drift, but not registered as document types.

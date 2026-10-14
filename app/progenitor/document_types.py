@@ -29,6 +29,7 @@ from .document_kinds import (
     POLICY_KEY_PREFIX,
     PROMPT_DOCUMENT_KEY_PREFIX,
     ROUTINE_GRAPH_KEY_PREFIX,
+    SESSION_KEY_PREFIX,
     SKILL_DOCUMENT_KEY_PREFIX,
     WORKFLOW_DEFINITION_KEY_PREFIX,
     WORKFLOW_RUN_KEY_PREFIX,
@@ -51,6 +52,7 @@ class DocumentType(BaseModel):
     key_prefix: str | None = None
     key: str | None = None
     schema_name: str | None = Field(default=None, alias="schema")
+    writable: tuple[str, ...] = ()
 
     @model_validator(mode="after")
     def _exactly_one_selector(self) -> DocumentType:
@@ -125,6 +127,13 @@ BUILTIN_DOCUMENT_TYPES: tuple[DocumentType, ...] = (
     _single_type("marketplaces", "Marketplaces", "marketplaces", None),
     _single_type("knowledge", "Knowledge", "knowledge", None),
     _single_type("repos", "Repositories", "repos", None),
+    DocumentType(
+        id="session",
+        label="Session",
+        key_prefix=SESSION_KEY_PREFIX,
+        schema="session",
+        writable=("title", "pinned", "archived"),
+    ),
     _single_type("kanban_board", "Kanban Board", "kanban_board", None),
 )
 
@@ -150,7 +159,8 @@ def parse_document_types(payloads: Iterable[Any]) -> dict[str, DocumentType]:
 
 
 def resolve_document_type(
-    key: str, types: Iterable[DocumentType] | Mapping[str, DocumentType]
+    key: str,
+    types: Iterable[DocumentType] | Mapping[str, DocumentType],
 ) -> DocumentType | None:
     """Return the type owning ``key``: an exact key wins, else the longest prefix."""
 

@@ -18,13 +18,16 @@ Core rules:
 4. Do not add runtime execution fields to the definition file.
 5. Prefer `edit_file` for focused changes. Use `write_file` only when creating a new workflow or rewriting the whole document intentionally.
 6. Use `structured_output` against the complete definition schema whenever creating or reshaping nodes or edges — do not hand-assemble JSON from memory.
-7. Never hand-write `input_schema`/`output_schema` for `event`, `cron`, `document_read`, or `document_query` nodes: the server derives them on save. Wire edges to the port names listed below.
+7. Never hand-write `input_schema`/`output_schema` for `event`, `cron`, `document_read`, `document_query`, or `document_write` nodes: the server derives them on save. Wire edges to the port names listed below.
 
 Document events:
-- Every create/update/delete of a stored document is an event. An `event` node subscribes by `document_type` (a registered type id). Built-in ids: `kanban_card`, `kanban_task` (task body), `inbox_message`, `workflow`, `workflow_run`, `routine`, `policy`, `agent`, `skill`, `memory`, `prompt`, `preferences`, `schedule`, `mcp`, `plugins`, `marketplaces`, `knowledge`, `repos`, `kanban_board`. Writing a workflow with an unknown id fails with the list of registered ids.
+- Every create/update/delete of a stored document is an event. An `event` node subscribes by `document_type` (a registered type id). Built-in ids: `kanban_card`, `kanban_task` (task body), `inbox_message`, `workflow`, `workflow_run`, `routine`, `policy`, `agent`, `skill`, `memory`, `prompt`, `preferences`, `schedule`, `mcp`, `plugins`, `marketplaces`, `knowledge`, `repos`, `kanban_board`, and `session` (below). Writing a workflow with an unknown id fails with the list of registered ids.
 - Optional filters on the event node: `key` (exact document key), `operations` (subset of `created`/`updated`/`deleted`; empty = any), `changed_fields` (fire only if one of these top-level fields changed), `match` (equality at dotted output paths, e.g. `{"after.column_id": "done"}`; the path must exist).
 - Event output ports: `event_id`, `document_type`, `key`, `id` (key without prefix), `op`, `timestamp`, `changed_fields`, `before`, `after`. `before`/`after` are the whole document, typed with the document type's label (e.g. `Kanban Card`); wire them into an `unpack` node to reach individual fields. `before` is absent on created, `after` on deleted.
 - Example — "a card moved to Done": `{"kind": "event", "title": "Card done", "document_type": "kanban_card", "operations": ["updated"], "changed_fields": ["column_id"], "match": {"after.column_id": "done"}}`.
+- `session` is created when a user starts a new chat thread. It fires once per thread, with `op` `created`, when the first user message is checkpointed. `after` has `id`, `thread_id`, `source` (`ui`, `telegram`, `api`), `title` (initially `"New chat"`), `first_message` (capped at 4000 characters; `"* sends an image"` when there was no text), `pinned`, `archived`, `created_at`, `last_activity`, and `content` (empty until the first turn finishes). Use `document_write` to rename, pin, or archive it.
+  Example — "someone started a Telegram chat": `{"kind": "event", "title": "New Telegram chat", "document_type": "session", "operations": ["created"], "match": {"after.source": "telegram"}}`.
+  Example — auto-title workflow: `event(session, created)` → `extract` `{first_message}` → `document_write(session, id=thread_id, title)`.
 
 Node kinds:
 - `event` — entrypoint described above; no inbound edges.
@@ -34,6 +37,7 @@ Node kinds:
 - `document_read` — reads one document directly (no LLM). Fields `kind`, `title`, `document_type`. Input `id` for collection types (e.g. wire `event.id` → `read.id` to load a card's `kanban_task` body), or `trigger` (any value, for sequencing) for single-document types. Outputs `found`, `key`, `id`, `document` (typed with the document type).
 - `unpack` — pure step (no LLM) exposing one object's fields. Fields `kind`, `title`. Single input `value`: wire any object port (`event.after`, `read.document`, or another unpack's object field). Output ports are that object's properties, derived on save. Example — card column into a query: `event.after` → `card.value`, `card.column_id` → `peers.column_id`.
 - `document_query` — equality query over a collection type (no LLM). Fields `kind`, `title`, `document_type`, `filter_fields` (each becomes a required input port), `limit` (1–200). With no filters it takes a `trigger` input. Outputs `items`, `keys`, `count`.
+- `document_write` — atomic partial write of one document (no LLM). Fields `kind`, `title`, `document_type`. Input `id` for collection types, plus one optional input port per field the type declares as `writable`. Only provided (connected/non-null) fields are written; the document must already exist (never inserts). Outputs `found` and the written fields. Example — set a session title: `{"kind": "document_write", "title": "Rename chat", "document_type": "session"}`.
 - `extract` — fields `kind`, `title`, exactly one of `prompt` (a `/prompts/` path) or `template` (inline), optional `schema` (document type id, schema file name, or inline JSON schema). Inputs: one port per `{placeholder}` root, plus optional `thread_id`. Progenitor answers via `structured_output`; output `result` (typed by the schema) and `thread_id`. Schema comes from `schema`, else the template's front matter `output_schema`, else the typed input `result` is wired into; with none, saving fails.
 - `agent` — same template fields plus optional `subagent` (a registered sub-agent to delegate to). Outputs `message` (Progenitor's reply text) and `thread_id`.
 - Templates are markdown with optional front matter (`title`, `description`, `inputs` mapping placeholder roots to types, `output_schema`, `system`). Placeholders `{card}` / `{card.title}` become input ports; a missing value fails the step. All prompt steps in a run share one thread unless `thread_id` is wired.
@@ -63,5 +67,6 @@ Validation reminders:
 - edge ports must exist on both nodes and have compatible types
 - `match` keys must be dotted paths starting at an event output port (e.g. `after.column_id`); `changed_fields` must be document fields
 - `document_query` requires a collection document type
+- `document_write` requires a type with at least one `writable` field
 - the graph must be acyclic
 - a workflow's own run writes never re-trigger it (runs carry their ancestry)

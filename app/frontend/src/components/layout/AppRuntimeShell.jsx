@@ -3,7 +3,6 @@ import { createPortal } from 'react-dom';
 import { useDispatch, useSelector } from 'react-redux';
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import {
-  ensureDraftChatSession,
   fetchChatMessages,
   fetchPreferences,
   fetchWidgets,
@@ -859,7 +858,6 @@ function QuickChatPanel({
   const [error, setError] = useState('');
   const [composerSeed, setComposerSeed] = useState({ key: 0, message: '' });
   const sessionPromiseRef = useRef(null);
-  const pendingDraftRef = useRef(null);
   const pendingRehydrateRef = useRef(null);
   const lastPersistedThreadIdRef = useRef(null);
   const hasInitializedThreadRef = useRef(false);
@@ -874,31 +872,13 @@ function QuickChatPanel({
   useEffect(() => {
     scrollEndRef.current?.scrollIntoView({ behavior: 'auto', block: 'end' });
   }, [history, isSending]);
-  // A draft acknowledgement carries no session data. Resolve it only from the
-  // causal stream event with the same request ID, using that event's thread ID.
+  // A persisted quick-chat thread's messages arrive as a causal stream event
+  // with the rehydrate request's ID.
   useEffect(() => {
     eventSequenceRef.current = consumeUiEventQueue(
       uiEventQueue,
       eventSequenceRef.current,
       ({ event }) => {
-        const pendingDraft = pendingDraftRef.current;
-        const session = event?.payload?.session;
-        const threadId = session?.thread_id;
-        if (
-          pendingDraft
-          && event?.payload?.request_id === pendingDraft.requestId
-          && ['chat.session.created', 'chat.session.metadata.updated'].includes(event?.type)
-          && typeof threadId === 'string'
-          && threadId
-        ) {
-          pendingDraftRef.current = null;
-          sessionPromiseRef.current = Promise.resolve(threadId);
-          if (isQuickChatMountedRef.current) {
-            setScratchThreadId(threadId);
-          }
-          pendingDraft.resolve(threadId);
-          return false;
-        }
 
         // A persisted quick-chat thread's messages, fetched directly (not
         // through the shared `chats` slice, which would clobber the main
@@ -919,47 +899,16 @@ function QuickChatPanel({
     );
   }, [uiEventQueue]);
 
-  const startFreshQuickThread = useCallback(async () => {
+  // Local-only draft: the session document is created by Postgres when the
+  // first user message is checkpointed.
+  const startFreshQuickThread = useCallback(() => {
+    const threadId = createUuid();
+    sessionPromiseRef.current = Promise.resolve(threadId);
     if (isQuickChatMountedRef.current) {
-      setScratchThreadId(null);
+      setScratchThreadId(threadId);
     }
-    pendingDraftRef.current?.resolve(null);
-    pendingDraftRef.current = null;
-
-    const proposedThreadId = createUuid();
-    const requestId = createUuid();
-    let resolveSession;
-    const sessionPromise = new Promise((resolve) => {
-      resolveSession = resolve;
-    });
-    // Register the causal event waiter before dispatching. The backend may
-    // publish chat.session.created/metadata.updated before the 202 acknowledgement,
-    // so assigning this after dispatch can miss the event and leave submit
-    // waiting forever for a thread ID.
-    pendingDraftRef.current = { requestId, resolve: resolveSession };
-    sessionPromiseRef.current = sessionPromise;
-    const draftRequest = dispatch(ensureDraftChatSession({
-      chatsUrl: getApiUrl('chats'),
-      threadId: proposedThreadId,
-      requestId,
-    }));
-
-    try {
-      await draftRequest.unwrap();
-    } catch (sessionError) {
-      if (pendingDraftRef.current?.requestId === requestId) {
-        pendingDraftRef.current.resolve(null);
-        pendingDraftRef.current = null;
-        sessionPromiseRef.current = null;
-      }
-      if (isQuickChatMountedRef.current) {
-        setError(sessionError.message);
-      }
-      return null;
-    }
-
-    return sessionPromise;
-  }, [dispatch, getApiUrl]);
+    return threadId;
+  }, []);
 
   // Resume a thread persisted in preferences (see the mount effect below).
   // Returns true once resumed (even with zero messages, e.g. a thread that
@@ -1074,7 +1023,7 @@ function QuickChatPanel({
     }
     const threadId = sessionPromiseRef.current
       ? await sessionPromiseRef.current
-      : await startFreshQuickThread();
+      : startFreshQuickThread();
     if (!threadId) {
       throw new Error('Unable to create a quick chat thread.');
     }
@@ -1121,16 +1070,14 @@ function QuickChatPanel({
     isQuickChatMountedRef.current = true;
     return () => {
       activeAssistantIdRef.current = null;
-      // If a draft/rehydrate was still in flight, this abort leaves
+      // If a rehydrate was still in flight, this abort leaves
       // sessionPromiseRef resolved to null with nothing to retry it -- reset
       // the "already decided" guard below so a remount (a real popover
       // reopen, or React StrictMode's dev-only double-invoke of mount
       // effects) starts over instead of treating the aborted attempt as done.
-      if (pendingDraftRef.current || pendingRehydrateRef.current) {
+      if (pendingRehydrateRef.current) {
         hasInitializedThreadRef.current = false;
       }
-      pendingDraftRef.current?.resolve(null);
-      pendingDraftRef.current = null;
       pendingRehydrateRef.current?.resolve([]);
       pendingRehydrateRef.current = null;
       isQuickChatMountedRef.current = false;
@@ -1159,11 +1106,11 @@ function QuickChatPanel({
     if (normalizedConfig.mode === 'default' && preferences.quickChatThreadId) {
       void rehydrateFromPersistedThread(preferences.quickChatThreadId).then((resumed) => {
         if (!resumed && isQuickChatMountedRef.current) {
-          void startFreshQuickThread();
+          startFreshQuickThread();
         }
       });
     } else {
-      void startFreshQuickThread();
+      startFreshQuickThread();
     }
   }, [normalizedConfig.mode, preferences.loaded, preferences.quickChatThreadId, rehydrateFromPersistedThread, startFreshQuickThread]);
 
@@ -1334,14 +1281,11 @@ function QuickChatPanel({
     quickChatMemory.history = [];
     quickChatMemory.threadId = null;
     setHistory([]);
-    setScratchThreadId(null);
-    pendingDraftRef.current?.resolve(null);
-    pendingDraftRef.current = null;
     sessionPromiseRef.current = null;
     setIsSending(false);
     setError('');
     setComposerSeed((current) => ({ key: current.key + 1, message: '' }));
-    void startFreshQuickThread();
+    startFreshQuickThread();
   }, [cancelStream, startFreshQuickThread]);
 
   const selectPrompt = useCallback((prompt) => {

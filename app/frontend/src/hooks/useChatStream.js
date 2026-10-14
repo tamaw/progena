@@ -341,21 +341,20 @@ export function useChatStream({
     const attachmentIds = attachments.map((attachment) => attachment.id).filter(Boolean);
     const threadMetadata = {
       [FRONTEND_RESPONSE_OPTIONS_KEY]: { allowDesyncedCompletion: true },
-      ...(selectedBackendChat?.thread_id ? { thread_id: selectedBackendChat.thread_id } : {}),
+      ...(selectedBackendChat?.thread_id
+        ? { thread_id: selectedBackendChat.thread_id }
+        : threadId
+          ? { thread_id: threadId }
+          : {}),
       ...(attachmentIds.length > 0 ? { attachments: attachmentIds } : {}),
     };
 
     // The chat this stream belongs to, captured as a closure-local so
-    // background completion can update the right sidebar card later. Falls
-    // back to the local draft threadId when this chat hasn't been sent to
-    // the backend yet (selectedBackendChat is only set for chats already
-    // materialized as a backend card) -- switching away from a brand-new
-    // chat materializes it under this same threadId (see
-    // materializeCurrentChatCard), so without this fallback a background
-    // stream from an unmaterialized chat can never be matched back up:
-    // resolveBackgroundStreamOutcome always takes its `!originChatId`
-    // foreground branch, and the stale-foreground guard below then silently
-    // discards the finished reply instead of finalizing or backgrounding it.
+    // background completion can update the right sidebar card later. A local
+    // draft has no backend card until Postgres creates its session, so fall
+    // back to the draft's threadId (the session's id once it exists); without
+    // it resolveBackgroundStreamOutcome takes its `!originChatId` foreground
+    // branch and the stale-foreground guard discards the finished reply.
     const originChatId = selectedBackendChat?.thread_id ?? threadId ?? null;
     // Mirror the foreground stream's origin into the ref for selectSessionItem
     // (deciding which card shows the orange "generating in background" dot).

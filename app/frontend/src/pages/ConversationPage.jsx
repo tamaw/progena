@@ -14,9 +14,7 @@ import {
   clearChatGenerating,
   clearChatUnread,
   clearActiveChatSession,
-  createChatSession,
   deleteChatSession,
-  ensureDraftChatSession,
   fetchChatMessages,
   requestChatSessionDetail,
   requestChatSessionReconciliation,
@@ -77,7 +75,6 @@ import {
   compareSessionItems,
   findAdjacentSessionItem,
   normalizeBackendChatMessage,
-  shouldMaterializeBeforeSwitching,
   shouldLoadSelectedBackendChat,
   sidebarEmptyMessage,
   visibleGroupsForFilter,
@@ -99,12 +96,8 @@ import { buildDefaultAssistantTimeline } from '../components/chat/liveAssistantT
 import LiveAssistantTurn from '../components/chat/LiveAssistantTurn';
 import {
   ARCHIVED_CHAT_SESSIONS_KEY,
-  CUSTOM_CHAT_TITLE_KEY,
   loadQuickChatHandoff,
-  loadStoredCustomChatTitle,
-  persistCustomChatTitle,
   persistPinnedSessionIds,
-  persistSharedSessionIds,
 } from '../components/chat/chatStorage';
 import { useEntityUrlSync } from '../lib/routes';
 
@@ -243,7 +236,6 @@ const SIDEBAR_SORT_MODES = ['Recent', 'Name'];
 const CHAT_FILTERS = [
   { value: 'all', label: 'All' },
   { value: 'unread', label: 'Unread' },
-  { value: 'shared', label: 'Shared' },
   { value: 'archived', label: 'Archived' },
 ];
 
@@ -306,6 +298,7 @@ const LiveConversationHeader = memo(function LiveConversationHeader({
   startTitleEdit,
   chatActions,
   title,
+  canRename,
 }) {
   const liveHeaderSnapshot = useSyncExternalStore(
     liveTurnStore.subscribeHeader,
@@ -387,6 +380,7 @@ const LiveConversationHeader = memo(function LiveConversationHeader({
               className="chat-icon-button chat-detail-header__rename"
               data-tooltip={isEditingTitle ? 'Save conversation name' : 'Rename conversation'}
               aria-label={isEditingTitle ? 'Save conversation name' : 'Rename conversation'}
+              disabled={!canRename}
               onMouseDown={isEditingTitle ? (event) => event.preventDefault() : undefined}
               onClick={isEditingTitle ? saveTitleEdit : startTitleEdit}
             >
@@ -465,11 +459,6 @@ function ConversationPage() {
     initialQuickChatHandoffRef.current = loadQuickChatHandoff(config.storage.quickChatHandoff);
   }
   const initialQuickChatHandoff = initialQuickChatHandoffRef.current;
-  const initialStoredCustomTitleRef = useRef(undefined);
-  if (initialStoredCustomTitleRef.current === undefined) {
-    initialStoredCustomTitleRef.current = loadStoredCustomChatTitle();
-  }
-  const initialStoredCustomTitle = initialStoredCustomTitleRef.current;
 
   const [messages, setMessages] = useState(() => {
     if (Array.isArray(initialQuickChatHandoff?.messages) && initialQuickChatHandoff.messages.length > 0) {
@@ -504,8 +493,6 @@ function ConversationPage() {
     loadStreamFilters(config.storage.streamFilters),
   );
   const [showEventFilters, setShowEventFilters] = useState(false);
-  const [customChatTitle, setCustomChatTitle] = useState(() => initialStoredCustomTitle.title);
-  const [customChatTitleThreadId, setCustomChatTitleThreadId] = useState(() => initialStoredCustomTitle.threadId);
   const [sidebarFilter, setSidebarFilter] = useState('all');
   const [sidebarQuery, setSidebarQuery] = useState('');
   const [sidebarSort, setSidebarSort] = useState('Recent');
@@ -577,19 +564,13 @@ function ConversationPage() {
   const lastAppliedBackendChatRequestIdRef = useRef(null);
   const lastAppliedChatReconciliationRequestIdRef = useRef(null);
   // Draft creation is acknowledged separately from its causal session event.
-  // Register resolvers before dispatch so a fast stream event cannot be missed.
-  const pendingDraftSessionsRef = useRef(new Map());
   const hasAutoSelectedOnMountRef = useRef(false);
   // Current selection, mirrored into a ref so a stream that finishes in the
   // background can tell whether the user is now viewing its origin chat.
   const selectedBackendChatIdRef = useRef(null);
-  // Mirrors `backendChatSessions` so the draft-bootstrap effect below can
-  // read the current roster without depending on the array itself -- that
-  // array gets a new reference every time a draft session is created or
-  // updated, which is exactly what this effect's own bootstrap causes. Using
-  // it as a dependency turned the effect into a feedback loop: run ->
-  // acquire draft -> roster changes -> run again -> acquire another draft,
-  // hammering POST /chats/draft continuously even while the page sits idle.
+  // Mirrors `backendChatSessions` so the bootstrap effect and openBackendChat
+  // can read the current roster without depending on the array itself (it
+  // gets a new reference on every session snapshot, which would re-run them).
   const backendChatSessionsRef = useRef(backendChatSessions);
   const pendingOpenThreadIdRef = useRef(null);
   const selectionIntentRef = useRef(null);
@@ -641,10 +622,7 @@ function ConversationPage() {
     setArchivedSessions,
     pinnedSessionIds,
     setPinnedSessionIds,
-    sharedSessionIds,
-    setSharedSessionIds,
     togglePinnedSession,
-    toggleSharedSession,
   } = useChatSessionPrefs({ dispatch, getApiUrl, show });
 
   const {
@@ -685,6 +663,15 @@ function ConversationPage() {
     if (pendingOpenThreadIdRef.current === threadId) {
       return;
     }
+    // A thread with no session document is a local draft (nothing sent yet,
+    // or Postgres hasn't checkpointed its first message): open it locally
+    // instead of asking the backend for a session that doesn't exist.
+    if (!backendChatSessionsRef.current.some((session) => session.thread_id === threadId)) {
+      selectionIntentRef.current = { threadId };
+      setSelectedBackendChatId(null);
+      setThreadId(threadId);
+      return;
+    }
     pendingOpenThreadIdRef.current = threadId;
     // Every programmatic selection change must register its intent BEFORE the
     // route reconciler can observe the (still stale) URL. Without this, opening
@@ -723,48 +710,19 @@ function ConversationPage() {
     setIsGenerating,
   ]);
   const acquireDraftChat = useCallback(async (requestedThreadId = null) => {
-    const clientRequestId = createUuid();
-    let resolveSession;
-    const sessionEvent = new Promise((resolve) => {
-      resolveSession = resolve;
-    });
-
-    const draftRequest = dispatch(ensureDraftChatSession({
-      chatsUrl: getApiUrl('chats'),
-      threadId: requestedThreadId || createUuid(),
-      requestId: clientRequestId,
-    }));
-    pendingDraftSessionsRef.current.set(draftRequest.requestId, resolveSession);
-
-    try {
-      await draftRequest.unwrap();
-    } catch (error) {
-      pendingDraftSessionsRef.current.delete(draftRequest.requestId);
-      throw error;
-    }
-
-    return sessionEvent;
-  }, [dispatch, getApiUrl]);
-
-  const materializeCurrentChatCard = useCallback(async (title) => {
-    if (!threadId) {
-      return null;
-    }
-    const existingBackendCard = backendChatSessions.find((chat) => (
-      chat.thread_id === threadId
-    ));
-    if (existingBackendCard) {
-      return existingBackendCard;
-    }
-    await dispatch(createChatSession({
-      chatsUrl: getApiUrl('chats'),
-      title,
-      threadId,
-    })).unwrap();
-  }, [backendChatSessions, dispatch, getApiUrl, threadId]);
+    // Local-only draft; the backend creates the session document when the
+    // first user message is checkpointed.
+    return { thread_id: requestedThreadId || createUuid() };
+  }, []);
 
   const derivedChatTitle = useMemo(() => deriveChatTitle(messages), [messages]);
-  const chatTitle = customChatTitle || derivedChatTitle;
+  // The open thread's session document, once Postgres has created it. Its title
+  // is authoritative: anyone (the header, a workflow, Progenitor) may rename it.
+  const threadSession = useMemo(
+    () => backendChatSessions.find((session) => session.thread_id === threadId) ?? null,
+    [backendChatSessions, threadId],
+  );
+  const chatTitle = threadSession?.title || derivedChatTitle;
 
   const streamEventFilter = useCallback(
     (event) => isEventVisible(event, streamFilters),
@@ -793,30 +751,6 @@ function ConversationPage() {
     return undefined;
   }, [isEditingTitle]);
 
-  useEffect(() => {
-    if (!threadId) {
-      return;
-    }
-    if (!customChatTitle) {
-      if (customChatTitleThreadId && customChatTitleThreadId !== threadId) {
-        setCustomChatTitleThreadId(threadId);
-      }
-      return;
-    }
-    if (!customChatTitleThreadId) {
-      persistCustomChatTitle(threadId, customChatTitle);
-      setCustomChatTitleThreadId(threadId);
-      return;
-    }
-    if (customChatTitleThreadId !== threadId) {
-      setCustomChatTitle('');
-      setCustomChatTitleThreadId(threadId);
-      setTitleDraft('');
-      setIsEditingTitle(false);
-      localStorage.removeItem(CUSTOM_CHAT_TITLE_KEY);
-    }
-  }, [customChatTitle, customChatTitleThreadId, threadId]);
-
   const cancelTitleEdit = useCallback(() => {
     setTitleDraft(chatTitle);
     setIsEditingTitle(false);
@@ -827,25 +761,23 @@ function ConversationPage() {
     setIsEditingTitle(true);
   }, [chatTitle]);
 
-  const saveTitleEdit = useCallback(() => {
+  // Renames the session document; the sidebar and header follow its event.
+  const saveTitleEdit = useCallback(async () => {
     const normalizedTitle = titleDraft.replace(/\s+/g, ' ').trim();
-    if (!normalizedTitle) {
-      cancelTitleEdit();
+    setIsEditingTitle(false);
+    if (!normalizedTitle || !threadSession || normalizedTitle === threadSession.title) {
       return;
     }
-
-    const nextCustomTitle = normalizedTitle === derivedChatTitle ? '' : normalizedTitle;
-    setCustomChatTitle(nextCustomTitle);
-    setCustomChatTitleThreadId(threadId);
-    setTitleDraft(nextCustomTitle || derivedChatTitle);
-    setIsEditingTitle(false);
-
-    if (nextCustomTitle) {
-      persistCustomChatTitle(threadId, nextCustomTitle);
-    } else {
-      localStorage.removeItem(CUSTOM_CHAT_TITLE_KEY);
+    try {
+      await dispatch(updateChatSessionMetadata({
+        chatsUrl: getApiUrl('chats'),
+        threadId: threadSession.thread_id,
+        patch: { title: normalizedTitle },
+      })).unwrap();
+    } catch (error) {
+      show('error', 'Rename failed', error.message);
     }
-  }, [cancelTitleEdit, derivedChatTitle, threadId, titleDraft]);
+  }, [dispatch, getApiUrl, show, threadSession, titleDraft]);
 
   useEffect(() => {
     // A routed detail owns initialization. Do not create an unrelated draft
@@ -1102,8 +1034,6 @@ function ConversationPage() {
     // not here), so drop it rather than let it render under the new chat.
     setLiveAssistantTurn(null);
     setIsClearingSession(false);
-    setCustomChatTitle(activeBackendChat.title || '');
-    setCustomChatTitleThreadId(nextSessionId);
     setTitleDraft(activeBackendChat.title || '');
     setIsEditingTitle(false);
     setThreadId(nextSessionId);
@@ -1290,19 +1220,7 @@ function ConversationPage() {
   }, [show]);
 
   useEffect(() => subscribeUiEvent((event) => {
-    const payload = event?.payload;
-    if (
-      (event?.type === 'chat.session.created' || event?.type === 'chat.session.metadata.updated')
-      && typeof payload?.request_id === 'string'
-      && typeof payload?.session?.thread_id === 'string'
-    ) {
-      const resolveSession = pendingDraftSessionsRef.current.get(payload.request_id);
-      if (resolveSession) {
-        pendingDraftSessionsRef.current.delete(payload.request_id);
-        resolveSession(payload.session);
-      }
-    }
-    handleChatEvent({ type: event?.type, data: payload });
+    handleChatEvent({ type: event?.type, data: event?.payload });
   }), [handleChatEvent]);
 
   // Regenerate actions sit on every historical assistant card. Keep their
@@ -1361,16 +1279,19 @@ function ConversationPage() {
     setLiveAssistantTurn(null);
     setIsClearingSession(false);
     clearBackendSelection({ clearRoute });
-    setCustomChatTitle('');
-    setCustomChatTitleThreadId(null);
     setTitleDraft('');
     setIsEditingTitle(false);
     setThreadId(null);
     localStorage.removeItem(config.storage.chatHistory);
-    localStorage.removeItem(CUSTOM_CHAT_TITLE_KEY);
   }, [activeStreamIdRef, clearBackendSelection, config.storage.chatHistory, setIsGenerating, setLiveAssistantTurn]);
 
   useEffect(() => {
+    // An open request for this chat counts as loading even when this render's
+    // store snapshot predates its dispatch (StrictMode re-runs effects with the
+    // pre-dispatch render's values).
+    if (pendingOpenThreadIdRef.current === selectedBackendChatId) {
+      return;
+    }
     if (!shouldDismissEmptySelection({
       hasAutoSelectedOnMount: hasAutoSelectedOnMountRef.current,
       selectedBackendChatId,
@@ -1421,14 +1342,24 @@ function ConversationPage() {
     const draftThreadId = session.thread_id;
 
     setIsEditingTitle(false);
-    if (selectedBackendChatId !== draftThreadId) {
-      await openBackendChat(draftThreadId);
+    // Local draft: switch to it without calling the backend (the session
+    // document is created by Postgres once the first message is checkpointed).
+    // Register the intent first so the route reconciler doesn't reopen the
+    // chat the address bar still names.
+    selectionIntentRef.current = { threadId: draftThreadId };
+    if (selectedBackendChatId !== null) {
+      setSelectedBackendChatId(null);
+    }
+    if (threadId !== draftThreadId) {
+      setThreadId(draftThreadId);
+      setMessages([]);
     }
     return session;
-  }, [acquireDraftChat, openBackendChat, selectedBackendChatId, threadId]);
+  }, [acquireDraftChat, selectedBackendChatId, threadId, setMessages]);
 
   const startNewChatSession = useCallback(async ({ archive = false } = {}) => {
-    if (selectedBackendChatId && messages.length === 0 && chatTitle === DEFAULT_CHAT_TITLE) {
+    // Already on an empty local draft: nothing new to start.
+    if (!selectedBackendChatId && threadId && messages.length === 0) {
       setIsEditingTitle(false);
       focusComposer();
       return;
@@ -1446,11 +1377,6 @@ function ConversationPage() {
     recentScheduledContent.current.clear();
 
     try {
-      // materializeCurrentChatCard already no-ops if a backend card for
-      // previousThreadId exists, so no need to check for one here first.
-      if (previousThreadId && archivedMessages.length > 0) {
-        await materializeCurrentChatCard(chatTitle || 'Untitled chat');
-      }
       let archiveError = null;
       if (archive && archivedMessages.length > 0) {
         try {
@@ -1502,7 +1428,6 @@ function ConversationPage() {
     activeStreamIdRef,
     chatTitle,
     focusComposer,
-    materializeCurrentChatCard,
     messages,
     openDraftChat,
     preserveStreamInBackground,
@@ -1535,17 +1460,6 @@ function ConversationPage() {
       threadId: sessionItem.threadId,
     };
 
-    // If we're leaving a local-only conversation, materialize it first so it
-    // remains a distinct sidebar card instead of disappearing on selection.
-    if (shouldMaterializeBeforeSwitching({ selectedBackendChatId, threadId, messageCount: messages.length })) {
-      try {
-        await materializeCurrentChatCard(chatTitle || 'Untitled chat');
-      } catch (error) {
-        show('error', 'Chat save failed', error.message);
-        return;
-      }
-    }
-
     // If a stream is in progress for the chat we're leaving, keep it running
     // in the background and show an orange dot on that card.
     preserveStreamInBackground();
@@ -1558,14 +1472,9 @@ function ConversationPage() {
     activeBackendChat,
     activeBackendChatState,
     clearBackendSelection,
-    chatTitle,
-    materializeCurrentChatCard,
-    messages.length,
     openBackendChat,
     preserveStreamInBackground,
     selectionIntentRef,
-    selectedBackendChatId,
-    threadId,
     show,
   ]);
 
@@ -1616,10 +1525,10 @@ function ConversationPage() {
       firstMessageTime,
       archivedSessions,
       pinnedSessionIds,
-      sharedSessionIds,
       backendChatSessions,
       backendChatsLoaded: backendChatSessionsState.loaded,
-      selectedBackendChatId,
+      // A local draft becomes its session's card as soon as the session exists.
+      selectedBackendChatId: selectedBackendChatId || threadSession?.thread_id || null,
       unreadChatIds,
       backgroundGeneratingChatIds,
       backgroundErrorChatIds,
@@ -1637,8 +1546,8 @@ function ConversationPage() {
       messages,
       pinnedSessionIds,
       selectedBackendChatId,
+      threadSession,
       threadId,
-      sharedSessionIds,
       totalTokenCount,
       totalToolCount,
       unreadChatIds,
@@ -1690,14 +1599,6 @@ function ConversationPage() {
     sessionItems,
     show,
     errorTitle: 'Pinned chats sync failed',
-  });
-  usePrunedSelection({
-    ids: sharedSessionIds,
-    setIds: setSharedSessionIds,
-    persist: persistSharedSessionIds,
-    sessionItems,
-    show,
-    errorTitle: 'Shared chats sync failed',
   });
 
   // On mount, a URL that already names a thread (bookmark, reload, shared
@@ -1769,9 +1670,9 @@ function ConversationPage() {
     activeBackendChatState.threadId,
   ]);
 
-  // Keep the URL in sync with whichever session is actually selected (either
-  // a backend chat, or a local draft that already has messages). The title
-  // slug is cosmetic; only the id segment is ever read back.
+  // Keep the URL in sync with whichever session is actually selected (a
+  // backend chat, or the local draft, which has no session document until its
+  // first message). The title slug is cosmetic; only the id segment is read back.
   const activeRouteThreadId = getActiveRouteThreadId({
     selectedBackendChatId,
     messages,
@@ -1864,7 +1765,6 @@ function ConversationPage() {
   // Conversation actions, shared between the inline header icon row (desktop)
   // and the collapsed "⋮" dropdown (narrow / mobile widths).
   const isPinned = currentSessionItem?.pinned === true;
-  const isShared = currentSessionItem?.shared === true;
   const chatActions = [
     {
       key: 'filters',
@@ -1895,23 +1795,6 @@ function ConversationPage() {
           ) : (
             <path d="M5.1 2.75h5.8l-1.2 3.3 1.95 1.85v1.05H8.75v4.3l-.75-.65-.75.65v-4.3H4.35V7.9L6.3 6.05 5.1 2.75Z" fill="none" stroke="currentColor" strokeWidth="1.15" strokeLinejoin="round" />
           )}
-        </svg>
-      ),
-    },
-    {
-      key: 'share',
-      label: 'Share',
-      role: 'menuitemcheckbox',
-      checked: isShared,
-      active: isShared,
-      disabled: isClearingSession || !currentSessionItem,
-      onClick: () => toggleSharedSession(currentSessionItem),
-      icon: (
-        <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
-          <path d="M5.75 8.1 10.4 5.3M5.75 7.9l4.65 2.8" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
-          <circle cx="4" cy="8" r="1.6" fill="none" stroke="currentColor" strokeWidth="1.2" />
-          <circle cx="12" cy="4.4" r="1.6" fill="none" stroke="currentColor" strokeWidth="1.2" />
-          <circle cx="12" cy="11.6" r="1.6" fill="none" stroke="currentColor" strokeWidth="1.2" />
         </svg>
       ),
     },
@@ -2058,6 +1941,7 @@ function ConversationPage() {
           startTitleEdit={startTitleEdit}
           chatActions={chatActions}
           title={chatTitle}
+          canRename={Boolean(threadSession)}
         />
 
         <div

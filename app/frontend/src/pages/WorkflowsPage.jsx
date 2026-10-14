@@ -81,7 +81,6 @@ const DEFAULT_EDGE_OPTIONS = { type: 'smoothstep', animated: true };
 const MINIMAP_STYLE = { height: 100, width: 150 };
 const DEFAULT_VIEWPORT = { x: 0, y: 0, zoom: 1 };
 
-
 function canvasMenuAnchor(event, reactFlow) {
   return {
     screenPosition: { x: event.clientX, y: event.clientY },
@@ -129,6 +128,10 @@ const DEFAULT_NODE_SIZES = {
     data: { width: 320, height: 140 },
     settings: { width: 420, height: 300 },
   },
+  document_write: {
+    data: { width: 320, height: 140 },
+    settings: { width: 380, height: 280 },
+  },
   unpack: {
     data: { width: 280, height: 120 },
     settings: { width: 340, height: 240 },
@@ -147,6 +150,7 @@ const NODE_MENU_CATEGORIES = [
     { id: 'data', kind: 'data', label: 'Data', icon: 'D' },
     { id: 'document_read', kind: 'document_read', label: 'Read document', icon: 'R' },
     { id: 'document_query', kind: 'document_query', label: 'Query documents', icon: 'Q' },
+    { id: 'document_write', kind: 'document_write', label: 'Write document', icon: 'W' },
     { id: 'unpack', kind: 'unpack', label: 'Unpack', icon: 'U' },
     { id: 'extract', kind: 'extract', label: 'Extract', icon: 'X' },
   ]} ,
@@ -213,6 +217,15 @@ function defaultQueryNode() {
   };
 }
 
+function defaultWriteNode() {
+  return {
+    title: 'Write document',
+    documentType: '',
+    inputSchema: null,
+    outputSchema: null,
+  };
+}
+
 const DOCK_NODE_DEFAULTS = {
   event: defaultEventNode,
   agent: () => ({
@@ -259,6 +272,7 @@ const DOCK_NODE_DEFAULTS = {
   cron: defaultCronNode,
   document_read: defaultReadNode,
   document_query: defaultQueryNode,
+  document_write: defaultWriteNode,
   unpack: () => ({
     title: 'Unpack',
     inputSchema: { type: 'object', required: ['value'], properties: { value: { type: 'object' } } },
@@ -382,6 +396,7 @@ const NODE_MINIMAP_COLORS = {
   human_input: '#39c5cf',
   document_read: '#79c0ff',
   document_query: '#a5d6ff',
+  document_write: '#56d364',
   unpack: '#bc8cff',
 };
 
@@ -573,6 +588,20 @@ function buildNodeData(kind, node, callbacks, latestRun) {
       canDelete: true,
     };
   }
+  if (kind === 'document_write') {
+    return {
+      ...shared,
+      ...runState,
+      kind,
+      title: node.title || 'Write document',
+      documentType: node.document_type || '',
+      inputSchema: cloneValue(node.input_schema) || null,
+      outputSchema: cloneValue(node.output_schema) || null,
+      onChange: callbacks.onNodeChange,
+      onDelete: callbacks.onDeleteNode,
+      canDelete: true,
+    };
+  }
   if (kind === 'human_input') {
     return {
       ...shared,
@@ -643,7 +672,9 @@ function workflowToFlow(definition, callbacks, latestRun) {
           template: node.template ?? null,
           schema: node.schema ?? null,
         }
-      : kind === 'unpack'
+      : kind === 'document_read' || kind === 'document_query' || kind === 'document_write'
+        ? { ...node, documentType: node.document_type }
+        : kind === 'unpack'
         ? { ...node, show_all_fields: Boolean(uiNode.show_all_fields) }
         : node;
     return {
@@ -740,6 +771,14 @@ function flowToWorkflow(baseWorkflow, nodes, edges, viewport) {
         document_type: node.data?.documentType || '',
         filter_fields: Array.isArray(node.data?.filterFields) ? [...node.data.filterFields] : [],
         limit: Number.isFinite(node.data?.limit) ? node.data.limit : 50,
+        input_schema: cloneValue(node.data?.inputSchema) || null,
+        output_schema: cloneValue(node.data?.outputSchema) || null,
+      };
+    } else if (node.type === 'document_write') {
+      graphNodes[node.id] = {
+        kind: 'document_write',
+        title: String(node.data?.title || 'Write document'),
+        document_type: node.data?.documentType || '',
         input_schema: cloneValue(node.data?.inputSchema) || null,
         output_schema: cloneValue(node.data?.outputSchema) || null,
       };
@@ -1148,8 +1187,16 @@ function WorkflowNodeOptionsModal({ node, onChange, onClose }) {
     documentTypes.map((dt) => ({ value: dt.id, label: dt.label || dt.id })),
   [documentTypes]);
 
+  const readableTypeOptions = useMemo(() =>
+    documentTypes.map((dt) => ({ value: dt.id, label: dt.label || dt.id })),
+  [documentTypes]);
+
   const collectionTypeOptions = useMemo(() =>
     documentTypes.filter((dt) => dt.collection).map((dt) => ({ value: dt.id, label: dt.label || dt.id })),
+  [documentTypes]);
+
+  const writableTypeOptions = useMemo(() =>
+    documentTypes.filter((dt) => dt.writable?.length).map((dt) => ({ value: dt.id, label: dt.label || dt.id })),
   [documentTypes]);
 
   const selectedDocumentType = useMemo(() =>
@@ -1251,6 +1298,15 @@ function WorkflowNodeOptionsModal({ node, onChange, onClose }) {
   const handleQueryFilterFieldsChange = (filterFields) => {
     const nextInputSchema = buildQueryInputSchema(filterFields, selectedDocumentType?.document_schema);
     onChange(node.id, { filterFields, inputSchema: nextInputSchema });
+  };
+
+  const handleWriteTypeChange = (documentTypeId) => {
+    const dt = documentTypes.find((t) => t.id === documentTypeId);
+    onChange(node.id, {
+      documentType: documentTypeId,
+      inputSchema: cloneValue(dt?.write_input_schema) || null,
+      outputSchema: cloneValue(dt?.write_output_schema) || null,
+    });
   };
 
   return createPortal(
@@ -1400,7 +1456,7 @@ function WorkflowNodeOptionsModal({ node, onChange, onClose }) {
               <>
                 <label className="workflow-node-options__field">
                   Document type
-                  <Select value={node.data?.documentType || ''} onChange={handleReadTypeChange} options={documentTypeOptions} ariaLabel="Document type" />
+                  <Select value={node.data?.documentType || ''} onChange={handleReadTypeChange} options={readableTypeOptions} ariaLabel="Document type" />
                 </label>
               </>
             ) : null}
@@ -1451,6 +1507,14 @@ function WorkflowNodeOptionsModal({ node, onChange, onClose }) {
                       onChange(node.id, { limit: Number.isFinite(val) ? Math.max(1, Math.min(200, val)) : 50 });
                     }}
                   />
+                </label>
+              </>
+            ) : null}
+            {kind === 'document_write' ? (
+              <>
+                <label className="workflow-node-options__field">
+                  Document type
+                  <Select value={node.data?.documentType || ''} onChange={handleWriteTypeChange} options={writableTypeOptions} ariaLabel="Document type" />
                 </label>
               </>
             ) : null}
@@ -1770,6 +1834,7 @@ const NODE_TYPES = {
   approval: WorkflowControlNode,
   document_read: PromptNode,
   document_query: PromptNode,
+  document_write: PromptNode,
   unpack: UnpackNode,
 };
 

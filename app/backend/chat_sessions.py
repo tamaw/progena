@@ -1,4 +1,9 @@
-"""Backend chat session read model and UI metadata persistence."""
+"""Backend chat session read model backed by ``session:`` documents.
+
+The sidebar/list/detail read ``progenitor.state`` / ``session:<thread_id>``
+documents created by Postgres.  Messages still come from checkpoints through
+the runtime reader.
+"""
 
 from __future__ import annotations
 
@@ -14,25 +19,19 @@ from app.progenitor.a2a.payloads import (
 from app.progenitor.a2a.payloads import (
     _MAX_PROGRESS_MESSAGE_TEXT_LENGTH as _REPLAYED_PROGRESS_MESSAGE_TEXT_LIMIT,
 )
-from app.progenitor.conversations.sessions import (
-    CHAT_INDEX_KEY,
-    CHAT_METADATA_PREFIX,
-    DEFAULT_CHAT_TITLE,
-    display_title,
-)
+from app.progenitor.document_kinds import SESSION_KEY_PREFIX
 from app.progenitor.runtime.messages import (
-    attach_reasoning_trace,
     extract_cache_read_token_count,
     extract_display_metadata,
     extract_message_text,
     extract_reasoning_token_count,
     extract_reasoning_trace,
-    get_last_ai_message,
 )
+from app.progenitor.sessions.titles import display_title
 from app.progenitor.state.models import redact_secrets
 
 from .attachments import ATTACHMENT_CONTEXT_MARKER
-from .document_store import BackendDocumentStore, CheckpointThreadSnapshot
+from .document_store import PROGENITOR_STATE_PREFIX, BackendDocumentStore, CheckpointThreadSnapshot
 from .runtime_conversations import RuntimeUnavailable
 
 # History must not replay arbitrary tool artifacts (which may contain raw files,
@@ -144,12 +143,9 @@ class ChatMessage(BaseModel):
 class ChatSessionSummary(BaseModel):
     thread_id: str
     title: str
-    checkpoint_id: str | None = None
     pinned: bool = False
-    shared: bool = False
     archived: bool = False
     created_at: str | None = None
-    updated_at: str | None = None
     last_activity: str | None = None
     message_count: int = 0
     preview: str = ""
@@ -206,27 +202,14 @@ class ChatSessionsResponse(BaseModel):
     total: int
 
 
-class ChatCreateRequest(BaseModel):
-    title: str | None = None
-    thread_id: str | None = None
-    checkpoint_id: str | None = None
-
-
 class ChatPatchRequest(BaseModel):
     title: str | None = None
     pinned: bool | None = None
-    shared: bool | None = None
     archived: bool | None = None
-    touch: bool | None = None
 
 
 class ChatMutationResponse(BaseModel):
     session: ChatSessionDetail
-
-
-class ChatDraftRequest(BaseModel):
-    thread_id: str | None = None
-    checkpoint_id: str | None = None
 
 
 class UiEventEnvelope(BaseModel):
@@ -249,237 +232,6 @@ class UiRequestAcknowledgement(BaseModel):
 def acknowledgement_response(request_id: str, event_types: list[str]) -> UiRequestAcknowledgement:
     """Build an acknowledgement after dispatching causal UI event envelopes."""
     return UiRequestAcknowledgement(request_id=request_id, event_types=event_types)
-
-
-def _metadata_index(store: BackendDocumentStore) -> list[str]:
-    document = store.get_document(CHAT_METADATA_PREFIX, CHAT_INDEX_KEY, [])
-    if document is None or not isinstance(document.payload, list):
-        return []
-    return [str(item) for item in document.payload if item]
-
-
-def _save_metadata_index(store: BackendDocumentStore, ids: list[str]) -> None:
-    ordered = list(dict.fromkeys(ids))
-    store.save_document(CHAT_METADATA_PREFIX, CHAT_INDEX_KEY, ordered)
-
-
-def _get_metadata(store: BackendDocumentStore, thread_id: str) -> dict[str, Any] | None:
-    document = store.get_document(CHAT_METADATA_PREFIX, thread_id)
-    if document is None or not isinstance(document.payload, dict):
-        return None
-    return dict(document.payload)
-
-
-def _save_metadata(store: BackendDocumentStore, thread_id: str, metadata: dict[str, Any]) -> None:
-    store.save_document(CHAT_METADATA_PREFIX, thread_id, metadata)
-    ids = _metadata_index(store)
-    if thread_id not in ids:
-        ids.append(thread_id)
-        _save_metadata_index(store, ids)
-
-
-def _remove_metadata_index(store: BackendDocumentStore, key: str) -> None:
-    ids = [item for item in _metadata_index(store) if item != key]
-    _save_metadata_index(store, ids)
-
-
-def _delete_metadata(store: BackendDocumentStore, thread_id: str) -> None:
-    metadata = _get_metadata(store, thread_id) or {}
-    metadata["deleted"] = True
-    metadata["updated_at"] = _now_iso()
-    _save_metadata(store, thread_id, metadata)
-
-
-def _resolve_thread_id(
-    *,
-    thread_id: str | None = None,
-    fallback: str | None = None,
-) -> str | None:
-    if isinstance(thread_id, str) and thread_id:
-        return thread_id
-    if isinstance(fallback, str) and fallback:
-        return fallback
-    return None
-
-
-def _resolve_metadata_key(store: BackendDocumentStore, thread_id: str) -> str | None:
-    if _get_metadata(store, thread_id) is not None:
-        return thread_id
-    query_thread_id = _thread_id_from_session_id(thread_id)
-    for key in _metadata_index(store):
-        metadata = _get_metadata(store, key)
-        if metadata is None:
-            continue
-        candidate_thread_id = _thread_id_for_metadata(metadata)
-        if candidate_thread_id == thread_id or (
-            query_thread_id and candidate_thread_id == query_thread_id
-        ):
-            return key
-    return None
-
-
-def is_chat_deleted(store: BackendDocumentStore, thread_id: str) -> bool:
-    """Whether the user deleted this chat (its backend metadata is tombstoned)."""
-    metadata_key = _resolve_metadata_key(store, thread_id)
-    metadata = _get_metadata(store, metadata_key) if metadata_key is not None else None
-    return bool(metadata and metadata.get("deleted") is True)
-
-
-def create_chat_metadata(
-    store: BackendDocumentStore,
-    request: ChatCreateRequest,
-) -> dict[str, Any]:
-    thread_id = _resolve_thread_id(
-        thread_id=request.thread_id,
-    )
-    if not thread_id:
-        raise ValueError("thread_id is required to create chat metadata")
-    now = _now_iso()
-    existing_key = _resolve_metadata_key(store, thread_id)
-    if existing_key is not None:
-        existing = _get_metadata(store, existing_key)
-        if existing is not None:
-            existing["thread_id"] = thread_id
-            if request.checkpoint_id is not None:
-                existing["checkpoint_id"] = request.checkpoint_id
-            existing["title"] = (
-                request.title or existing.get("title") or DEFAULT_CHAT_TITLE
-            ).strip() or DEFAULT_CHAT_TITLE
-            existing["updated_at"] = now
-            existing["last_activity"] = now
-            existing["ui_owned"] = True
-            if existing_key != thread_id:
-                _remove_metadata_index(store, existing_key)
-            _save_metadata(store, thread_id, existing)
-            return existing
-    metadata = {
-        "title": (request.title or DEFAULT_CHAT_TITLE).strip() or DEFAULT_CHAT_TITLE,
-        "thread_id": thread_id,
-        "checkpoint_id": request.checkpoint_id,
-        "pinned": False,
-        "shared": False,
-        "archived": False,
-        "ui_owned": True,
-        "created_at": now,
-        "updated_at": now,
-        "last_activity": now,
-    }
-    _save_metadata(store, thread_id, metadata)
-    return metadata
-
-
-def _is_reusable_draft(session: ChatSessionSummary | ChatSessionDetail) -> bool:
-    return (
-        not session.archived and session.title == DEFAULT_CHAT_TITLE and session.message_count == 0
-    )
-
-
-def acquire_reusable_draft(
-    store: BackendDocumentStore,
-    request: ChatDraftRequest,
-) -> tuple[ChatSessionDetail, bool]:
-    thread_id = _resolve_thread_id(
-        thread_id=request.thread_id,
-    )
-    for session in list_chat_sessions(store, include_archived=False):
-        if not _is_reusable_draft(session):
-            continue
-        metadata_key = _resolve_metadata_key(store, session.thread_id)
-        if metadata_key is None:
-            continue
-        metadata = _get_metadata(store, metadata_key)
-        if metadata is None:
-            continue
-        metadata["title"] = DEFAULT_CHAT_TITLE
-        now = _now_iso()
-        metadata["updated_at"] = now
-        metadata["last_activity"] = now
-        metadata["ui_owned"] = True
-        _save_metadata(store, metadata_key, metadata)
-        detail = get_chat_detail(store, session.thread_id)
-        if detail is not None:
-            return detail, False
-
-    metadata = create_chat_metadata(
-        store,
-        ChatCreateRequest(
-            title=DEFAULT_CHAT_TITLE,
-            thread_id=thread_id,
-            checkpoint_id=request.checkpoint_id,
-        ),
-    )
-    detail = get_chat_detail(store, thread_id or metadata["thread_id"])
-    if detail is None:
-        raise RuntimeError("Created draft chat metadata could not be loaded")
-    return detail, True
-
-
-def materialize_chat_metadata(
-    store: BackendDocumentStore,
-    session: ChatSessionSummary | ChatSessionDetail,
-) -> dict[str, Any]:
-    """Persist backend UI metadata for a checkpoint-derived chat summary."""
-    thread_id = _resolve_thread_id(thread_id=session.thread_id)
-    if not thread_id:
-        raise ValueError("thread_id is required to materialize chat metadata")
-    metadata = {
-        "title": session.title,
-        "thread_id": thread_id,
-        "checkpoint_id": session.checkpoint_id,
-        "pinned": session.pinned,
-        "shared": session.shared,
-        "archived": session.archived,
-        "ui_owned": True,
-        "created_at": session.created_at or _now_iso(),
-        "updated_at": session.updated_at or _now_iso(),
-        "last_activity": session.last_activity or session.updated_at or _now_iso(),
-    }
-    existing_key = _resolve_metadata_key(store, thread_id)
-    if existing_key is not None and existing_key != thread_id:
-        _remove_metadata_index(store, existing_key)
-    _save_metadata(store, thread_id, metadata)
-    return metadata
-
-
-def patch_chat_metadata(
-    store: BackendDocumentStore,
-    thread_id: str,
-    request: ChatPatchRequest,
-) -> dict[str, Any] | None:
-    metadata_key = _resolve_metadata_key(store, thread_id)
-    if metadata_key is None:
-        return None
-    metadata = _get_metadata(store, metadata_key)
-    if metadata is None or metadata.get("deleted") is True:
-        return None
-    if request.title is not None:
-        title = request.title.strip()
-        if title:
-            metadata["title"] = title
-    if request.pinned is not None:
-        metadata["pinned"] = request.pinned
-    if request.shared is not None:
-        metadata["shared"] = request.shared
-    if request.archived is not None:
-        metadata["archived"] = request.archived
-    now = _now_iso()
-    metadata["updated_at"] = now
-    if request.touch:
-        metadata["last_activity"] = now
-    canonical_thread_id = _thread_id_for_metadata(metadata) or thread_id
-    metadata["thread_id"] = canonical_thread_id
-    if metadata_key != canonical_thread_id:
-        _remove_metadata_index(store, metadata_key)
-    _save_metadata(store, canonical_thread_id, metadata)
-    return metadata
-
-
-def delete_chat_metadata(store: BackendDocumentStore, thread_id: str) -> bool:
-    metadata_key = _resolve_metadata_key(store, thread_id)
-    if metadata_key is None:
-        return False
-    _delete_metadata(store, metadata_key)
-    return True
 
 
 def _message_text(value: Any) -> str:
@@ -507,58 +259,6 @@ def _strip_attachment_context(text: str) -> str:
     """
     marker_index = text.find(ATTACHMENT_CONTEXT_MARKER)
     return text[:marker_index].rstrip() if marker_index != -1 else text
-
-
-def _thread_id_from_session_id(session_id: str | None) -> str | None:
-    if not session_id:
-        return None
-    if session_id.startswith("thread_"):
-        return session_id
-    return f"thread_{session_id}"
-
-
-def _session_id_from_thread_id(thread_id: str | None) -> str | None:
-    if not thread_id:
-        return None
-    return thread_id.removeprefix("thread_")
-
-
-def _thread_id_candidates_for_thread_id(thread_id: str) -> list[str]:
-    candidates = [thread_id]
-    normalized_thread_id = _thread_id_from_session_id(thread_id)
-    if normalized_thread_id and normalized_thread_id not in candidates:
-        candidates.append(normalized_thread_id)
-    return candidates
-
-
-def _thread_id_for_metadata(metadata: dict[str, Any]) -> str | None:
-    thread_id = metadata.get("thread_id")
-    if isinstance(thread_id, str) and thread_id:
-        return thread_id
-    return None
-
-
-def _is_activity_message(message: ChatMessage) -> bool:
-    if message.role != "user":
-        return False
-    content = (message.content or "").strip()
-    return content.startswith(SCHEDULED_TASK_PREFIX) or content.startswith(BACKEND_ALERT_PREFIX)
-
-
-def _is_activity_only_session(
-    metadata: dict[str, Any],
-    messages: list[ChatMessage],
-) -> bool:
-    if not messages:
-        return False
-    first_user_message = next((message for message in messages if message.role == "user"), None)
-    if first_user_message is None:
-        return False
-    if not _is_activity_message(first_user_message):
-        return False
-    # Explicit UI chat cards should stay visible even if the first message looks
-    # system-generated; this keeps user-created cards in the main chat surface.
-    return not bool(metadata.get("ui_owned"))
 
 
 def _extract_images_from_content(content: Any) -> list[dict[str, str]]:
@@ -592,20 +292,11 @@ def _extract_progress_log_from_content(content: Any) -> list[dict[str, str]]:
     always cuts if off first."""
     if not isinstance(content, str) or not content.strip():
         return []
-    # Every tool result flows through here on every session load, but only
-    # call_agent's ever carries this key -- a cheap substring check skips the
-    # json.loads (and the risk of parsing an arbitrarily large/deeply nested
-    # blob) for every other tool's result instead of paying that cost only to
-    # find no progress_log at the end of it.
     if '"progress_log"' not in content:
         return []
     try:
         parsed = json.loads(content)
     except (ValueError, RecursionError):
-        # A deeply nested (but otherwise valid) raw `task` payload alongside
-        # progress_log makes json.loads raise RecursionError, not ValueError
-        # -- one such persisted tool result must not break chat-session
-        # hydration entirely, only this optional progress log.
         return []
     if not isinstance(parsed, dict):
         return []
@@ -668,9 +359,6 @@ def _raw_message_created_at(raw: Any) -> str | None:
         extra_kwargs = getattr(raw, "additional_kwargs", None)
     if created_at is None and isinstance(metadata, dict):
         created_at = metadata.get("created_at")
-    # HumanMessages carry no response_metadata (that's LLM-response-only) --
-    # the runtime stamps their receipt time onto additional_kwargs instead
-    # (see DeepAgentSSEStream.stream / chat_node).
     if created_at is None and isinstance(extra_kwargs, dict):
         created_at = extra_kwargs.get("created_at")
     if isinstance(created_at, int | float):
@@ -800,7 +488,6 @@ def _chat_message_from_raw(
             extract_message_text(raw) or _message_text(getattr(raw, "content", ""))
         )
     if role == "assistant" and _is_cancelled_reply(raw):
-        # Same suffix the live UI appends when a streaming turn is cancelled.
         content = f"{content}{CANCELLED_SUFFIX}" if content else CANCELLED_SUFFIX.strip()
     if not content and role == "assistant":
         return None
@@ -870,7 +557,6 @@ def _messages_from_checkpoint(
 
     audit_index = tool_call_audit if tool_call_audit is not None else _tool_call_audit_index(store)
 
-    # First pass: index ToolMessage results by tool_call_id.
     tool_results: dict[str, dict[str, Any]] = {}
     for raw in snapshot.messages:
         if _raw_message_role(raw) != "tool":
@@ -899,16 +585,6 @@ def _messages_from_checkpoint(
             result_entry["progress_log"] = progress_log
         tool_results[str(call_id)] = result_entry
 
-    # Second pass: build messages, accumulating tool calls from tool-only AIMessages
-    # and attaching them to the next AIMessage that produces visible text.
-    # Token usage folds the same way: tool-call-only AIMessages never become
-    # ChatMessages, so their per-call usage (output AND reasoning tokens) must
-    # roll into the text-bearing AIMessage that claims the turn — otherwise a
-    # multi-step turn reports only its final model call and the header totals
-    # undercount. Cache-read tokens are the one exception: each call reports
-    # the cache-hit depth of *that call's own* (largely repeated) input, not
-    # new cumulative work, so it's tracked as the latest observed value, not
-    # summed across calls.
     messages: list[ChatMessage] = []
     pending_tool_calls: list[dict[str, Any]] = []
     pending_token_count = 0
@@ -924,9 +600,6 @@ def _messages_from_checkpoint(
 
         if role == "user":
             if pending_tool_calls or pending_reasoning_parts:
-                # A new human turn ends the previous assistant turn. Preserve
-                # reasoning emitted before an interrupted/tool-only turn
-                # instead of dropping it with the unmaterialized AIMessage.
                 synthetic = _synthetic_pending_tool_call_message(pending_tool_calls, index)
                 synthetic.reasoning_text = "\n\n".join(pending_reasoning_parts)
                 synthetic.reasoning_timestamp = pending_reasoning_timestamp
@@ -985,9 +658,6 @@ def _messages_from_checkpoint(
             messages.append(message)
 
     if pending_tool_calls:
-        # The checkpoint's tip is itself a dangling tool-call-only AIMessage --
-        # same flush, just past the end of the loop instead of ahead of the
-        # next human turn.
         synthetic = _synthetic_pending_tool_call_message(pending_tool_calls, len(snapshot.messages))
         synthetic.token_count = pending_token_count
         synthetic.reasoning_token_count = pending_reasoning_token_count
@@ -999,100 +669,29 @@ def _messages_from_checkpoint(
     return messages
 
 
-def _summary_from_metadata(
-    metadata: dict[str, Any],
+def _summary_from_session(
+    payload: dict[str, Any],
     *,
-    fallback_messages: list[ChatMessage] | None = None,
+    messages: list[ChatMessage],
     history_unavailable: bool = False,
 ) -> ChatSessionSummary:
-    messages = fallback_messages or []
     preview = next((message.content for message in reversed(messages) if message.content), "")
-    raw_title = str(metadata.get("title") or "Untitled chat")
-    first_user_message = next(
-        (message.content for message in messages if message.role == "user"), ""
-    )
-    title = display_title(raw_title, first_user_message)
     return ChatSessionSummary(
-        thread_id=str(metadata["thread_id"]),
-        title=title,
-        checkpoint_id=metadata.get("checkpoint_id"),
-        pinned=bool(metadata.get("pinned", False)),
-        shared=bool(metadata.get("shared", False)),
-        archived=bool(metadata.get("archived", False)),
-        created_at=metadata.get("created_at"),
-        updated_at=metadata.get("updated_at"),
-        last_activity=metadata.get("last_activity") or metadata.get("updated_at"),
+        thread_id=payload["thread_id"],
+        title=display_title(payload["title"], payload["first_message"]),
+        pinned=payload["pinned"],
+        archived=payload["archived"],
+        created_at=payload["created_at"],
+        last_activity=payload["last_activity"],
         message_count=len(messages),
         preview=preview,
         history_unavailable=history_unavailable,
     )
 
 
-def _metadata_sort_key(metadata: dict[str, Any]) -> str:
-    return str(
-        metadata.get("last_activity")
-        or metadata.get("updated_at")
-        or metadata.get("created_at")
-        or ""
-    )
-
-
-def _checkpoint_snapshot_for_metadata(
-    store: BackendDocumentStore,
-    metadata: dict[str, Any],
-    *,
-    cached_snapshots: dict[str, CheckpointThreadSnapshot] | None = None,
-) -> CheckpointThreadSnapshot | None:
-    thread_id = _thread_id_for_metadata(metadata)
-    if thread_id is None:
-        return None
-    checkpoint_id = metadata.get("checkpoint_id")
-    checkpoint_id_str = str(checkpoint_id) if checkpoint_id else None
-    if cached_snapshots is not None:
-        cached = cached_snapshots.get(thread_id)
-        # A cache hit is only usable when the metadata doesn't pin a specific
-        # checkpoint, or that checkpoint happens to be the latest one anyway —
-        # otherwise this must fall through to a real fetch for that checkpoint.
-        if cached is not None and (
-            checkpoint_id_str is None or cached.checkpoint_id == checkpoint_id_str
-        ):
-            return cached
-    return store.get_checkpoint_thread_snapshot(
-        thread_id,
-        checkpoint_id=checkpoint_id_str,
-    )
-
-
-def _metadata_with_checkpoint(
-    metadata: dict[str, Any],
-    snapshot: CheckpointThreadSnapshot | None,
-) -> dict[str, Any]:
-    if snapshot is None:
-        return metadata
-    return {
-        **metadata,
-        "thread_id": snapshot.thread_id,
-        "checkpoint_id": snapshot.checkpoint_id or metadata.get("checkpoint_id"),
-        "updated_at": snapshot.checkpoint_ts or metadata.get("updated_at"),
-        "last_activity": snapshot.checkpoint_ts
-        or metadata.get("last_activity")
-        or metadata.get("updated_at"),
-    }
-
-
-def _checkpoint_metadata(snapshot: CheckpointThreadSnapshot) -> dict[str, Any]:
-    return {
-        "title": DEFAULT_CHAT_TITLE,
-        "thread_id": snapshot.thread_id,
-        "checkpoint_id": snapshot.checkpoint_id,
-        "created_at": snapshot.checkpoint_ts,
-        "updated_at": snapshot.checkpoint_ts,
-        "last_activity": snapshot.checkpoint_ts,
-        "pinned": False,
-        "shared": False,
-        "archived": False,
-        "ui_owned": False,
-    }
+def _session_payload(store: BackendDocumentStore, thread_id: str) -> dict[str, Any] | None:
+    document = store.get_document(PROGENITOR_STATE_PREFIX, f"{SESSION_KEY_PREFIX}{thread_id}")
+    return None if document is None else dict(document.payload)
 
 
 def list_chat_sessions(
@@ -1104,78 +703,30 @@ def list_chat_sessions(
     tool_call_audit = _tool_call_audit_index(store)
     checkpoint_snapshots = store.list_checkpoint_thread_snapshots(limit=100)
     snapshots_by_thread_id = {snapshot.thread_id: snapshot for snapshot in checkpoint_snapshots}
-    covered_threads: set[str] = set()
-    hidden_threads: set[str] = set()
-    metadata_records: list[dict[str, Any]] = []
-    for thread_id in _metadata_index(store):
-        metadata = _get_metadata(store, thread_id)
-        metadata_key = (
-            thread_id if metadata is not None else _resolve_metadata_key(store, thread_id)
-        )
-        metadata = _get_metadata(store, metadata_key) if metadata_key is not None else None
-        if metadata is None:
-            continue
-        metadata_records.append(metadata)
 
-    metadata_records.sort(key=_metadata_sort_key, reverse=True)
-    for metadata in metadata_records:
-        metadata_thread_id = _thread_id_for_metadata(metadata)
-        if metadata_thread_id and metadata_thread_id in covered_threads:
-            continue
-        if metadata.get("deleted") is True:
-            if metadata_thread_id:
-                hidden_threads.add(metadata_thread_id)
-            continue
-        if metadata.get("archived") is True and not include_archived:
+    for _key, document in store.list_documents(PROGENITOR_STATE_PREFIX, SESSION_KEY_PREFIX):
+        payload = document.payload
+        thread_id = payload["thread_id"]
+        if payload["archived"] and not include_archived:
             continue
         try:
-            snapshot = _checkpoint_snapshot_for_metadata(
-                store, metadata, cached_snapshots=snapshots_by_thread_id
-            )
+            snapshot = snapshots_by_thread_id.get(thread_id)
+            if snapshot is None:
+                snapshot = store.get_checkpoint_thread_snapshot(thread_id)
             history_unavailable = snapshot is not None and not snapshot.messages_available
         except RuntimeUnavailable:
-            # The list still renders with the metadata title while the runtime
-            # is down; detail views report the outage instead.
             snapshot = None
             history_unavailable = True
-        fallback_messages = _messages_from_checkpoint(snapshot, tool_call_audit=tool_call_audit)
-        if snapshot is not None:
-            covered_threads.add(snapshot.thread_id)
-            metadata = _metadata_with_checkpoint(metadata, snapshot)
-        elif metadata_thread_id:
-            covered_threads.add(metadata_thread_id)
-        if _is_activity_only_session(metadata, fallback_messages):
-            if metadata_thread_id:
-                hidden_threads.add(metadata_thread_id)
-            continue
+        messages = _messages_from_checkpoint(snapshot, tool_call_audit=tool_call_audit)
         sessions.append(
-            _summary_from_metadata(
-                metadata,
-                fallback_messages=fallback_messages,
+            _summary_from_session(
+                payload,
+                messages=messages,
                 history_unavailable=history_unavailable,
             )
         )
 
-    for snapshot in checkpoint_snapshots:
-        if snapshot.thread_id in covered_threads or snapshot.thread_id in hidden_threads:
-            continue
-        messages = _messages_from_checkpoint(snapshot, tool_call_audit=tool_call_audit)
-        if not messages and snapshot.messages_available:
-            continue
-        metadata = _checkpoint_metadata(snapshot)
-        if _is_activity_only_session(metadata, messages):
-            continue
-        summary = _summary_from_metadata(
-            metadata,
-            fallback_messages=messages,
-            history_unavailable=not snapshot.messages_available,
-        )
-        if include_archived or not summary.archived:
-            sessions.append(summary)
-
-    sessions.sort(
-        key=lambda item: (item.pinned, item.last_activity or item.updated_at or ""), reverse=True
-    )
+    sessions.sort(key=lambda item: (item.pinned, item.last_activity or ""), reverse=True)
     return sessions
 
 
@@ -1183,60 +734,46 @@ def get_chat_detail(
     store: BackendDocumentStore,
     thread_id: str,
 ) -> ChatSessionDetail | None:
-    metadata = _get_metadata(store, thread_id)
+    payload = _session_payload(store, thread_id)
+    if payload is None:
+        return None
     tool_call_audit = _tool_call_audit_index(store)
-    messages: list[ChatMessage] = []
-    snapshot: CheckpointThreadSnapshot | None = None
-    if metadata is not None:
-        snapshot = _checkpoint_snapshot_for_metadata(store, metadata)
-        messages = _messages_from_checkpoint(snapshot, tool_call_audit=tool_call_audit)
-        metadata = _metadata_with_checkpoint(metadata, snapshot)
-    else:
-        for candidate_thread_id in _thread_id_candidates_for_thread_id(thread_id):
-            snapshot = (
-                store.get_checkpoint_thread_snapshot(candidate_thread_id)
-                if candidate_thread_id
-                else None
-            )
-            if snapshot is not None:
-                break
-        if snapshot is not None:
-            messages = _messages_from_checkpoint(snapshot, tool_call_audit=tool_call_audit)
-            metadata = _checkpoint_metadata(snapshot)
-    if metadata is None or metadata.get("deleted") is True:
-        return None
-    summary = _summary_from_metadata(metadata, fallback_messages=messages)
+    snapshot = store.get_checkpoint_thread_snapshot(thread_id)
+    messages = _messages_from_checkpoint(snapshot, tool_call_audit=tool_call_audit)
+    summary = _summary_from_session(payload, messages=messages)
     return ChatSessionDetail(**summary.model_dump(), messages=messages)
 
 
-def current_state_chat_detail(state: dict[str, Any]) -> ChatSessionDetail | None:
-    """Build a chat detail for the live "current state" session (current_state.json).
+def patch_session_document(
+    store: BackendDocumentStore,
+    thread_id: str,
+    request: ChatPatchRequest,
+) -> dict[str, Any] | None:
+    payload = _session_payload(store, thread_id)
+    if payload is None:
+        return None
+    updates: dict[str, Any] = {}
+    if request.title is not None:
+        title = request.title.strip()
+        if title:
+            updates["title"] = title
+    if request.pinned is not None:
+        updates["pinned"] = request.pinned
+    if request.archived is not None:
+        updates["archived"] = request.archived
+    if not updates:
+        return payload
+    if not store.merge_document(
+        PROGENITOR_STATE_PREFIX, f"{SESSION_KEY_PREFIX}{thread_id}", updates
+    ):
+        return None
+    return {**payload, **updates}
 
-    Used to materialize backend UI metadata for the not-yet-persisted current
-    session when the user pins/archives/deletes its card.
-    """
-    if not isinstance(state, dict):
-        return None
-    thread_id = state.get("thread_id")
-    if not isinstance(thread_id, str) or not thread_id:
-        return None
-    attach_reasoning_trace(
-        get_last_ai_message(state.get("messages")),
-        state.get("last_reasoning_trace"),
-    )
-    messages = _messages_from_state(state)
-    now = _now_iso()
-    metadata = {
-        "title": str(state.get("title") or "Current chat"),
-        "thread_id": thread_id,
-        "checkpoint_id": None,
-        "pinned": False,
-        "shared": False,
-        "archived": False,
-        "ui_owned": True,
-        "created_at": now,
-        "updated_at": now,
-        "last_activity": now,
-    }
-    summary = _summary_from_metadata(metadata, fallback_messages=messages)
-    return ChatSessionDetail(**summary.model_dump(), messages=messages)
+
+def delete_session_document(store: BackendDocumentStore, thread_id: str) -> bool:
+    key = f"{SESSION_KEY_PREFIX}{thread_id}"
+    existing = store.get_document(PROGENITOR_STATE_PREFIX, key)
+    if existing is None:
+        return False
+    store.delete_document(PROGENITOR_STATE_PREFIX, key)
+    return True

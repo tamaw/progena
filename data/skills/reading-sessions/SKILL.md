@@ -1,25 +1,26 @@
 ---
-name: reading-conversations
-description: Browse, list, search, or read the user's past and current chats in the read-only /conversations/ directory (one IRC-style log per chat). Use whenever the user asks which chats or conversations exist or you can see, refers to an earlier or other chat, asks what they or you said or did before, or wants chat history summarised or searched.
+name: reading-sessions
+description: Browse, list, search, or read the user's past and current chats in the /sessions/ directory (one YAML-front-matter + IRC-style markdown file per chat). Use whenever the user asks which chats or conversations exist or you can see, refers to an earlier or other chat, asks what they or you said or did before, or wants chat history summarised or searched.
 allowed-tools: ls read_file grep glob
 ---
 
-# Reading past conversations
+# Reading past sessions
 
-`/conversations/` holds one read-only log per chat, generated from chat
-history:
+`/sessions/` holds one file per chat, backed by the `session:` documents in
+Postgres:
 
 ```
-/conversations/<date>_<title-slug>_<id8>.txt
+/sessions/<date>_<title-slug>_<id8>.md
 ```
 
 - `<date>` is the day the chat started (user's timezone), `<title-slug>` is the
   chat's sidebar title, `<id8>` is the first 8 characters of its thread id.
-- `ls` lists newest activity first, as of each chat's last read (a chat with
-  new turns you haven't read may sit lower). Archived chats have no file; a
-  renamed chat gets a new name, so `ls` again if a path stops resolving.
-- The chat you are in right now is included, up to its last completed step.
-- Files cannot be written, edited, or deleted.
+- `ls` lists newest activity first. Archived chats have no file.
+- The file text is YAML front matter (all fields except `content`, plus a
+  computed `display_title`) followed by a blank line and the IRC-style
+  `content`.
+- Only the `title`, `pinned`, and `archived` front-matter fields are editable;
+  the body is read-only.
 
 ## Line format
 
@@ -31,6 +32,7 @@ timezone, or `--:--:--` when the time is unknown.
 |---|---|
 | `<Tama> text` | The user said this (their display name, or `user`). |
 | `<@progenitor> text` | An agent said this. One line per line of the message. |
+| `* progenitor sends an image` | An image content block (human or AI). |
 | `* progenitor is checking the schedule` | Reasoning: what the agent was doing. |
 | `* progenitor reads /config/schedule.json` | A tool call. `can't read … (reason)` means it failed; `(exit 1)` after `runs` means the command failed. |
 | `-progenitor- [success] Title: body` | A notification, message, or question sent to the user outside the chat. |
@@ -47,8 +49,8 @@ back.
 
 ## Recipes
 
-- Find a chat: `ls /conversations/`, then narrow by date or title in the name.
-- Search everything: `grep` with a literal pattern over `/conversations/`, e.g.
+- Find a chat: `ls /sessions/`, then narrow by date or title in the name.
+- Search everything: `grep` with a literal pattern over `/sessions/`, e.g.
   `schedule` or `<Tama>`.
 - Search one period first: `grep` with `glob` set to a date prefix such as
   `2026-10-*` reads far fewer logs.
@@ -58,6 +60,6 @@ back.
 - Delegations: grep for `has joined`.
 - Read a long chat in pages with `read_file` offset/limit.
 
-Grep searches each chat as it was last read, so very recent turns in another
+Grep searches each chat as it was last rendered, so very recent turns in another
 chat can be missing from grep results; `read_file` on that chat is always
 current.

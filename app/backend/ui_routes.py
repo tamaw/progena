@@ -37,7 +37,11 @@ from pydantic import BaseModel, Field
 from app.progenitor.config import default_plugins_config_payload
 from app.progenitor.content_documents import AGENT_DOCUMENT_KEY_PREFIX, SKILL_DOCUMENT_KEY_PREFIX
 from app.progenitor.cron import cron_error, default_timezone_name, next_cron_time
-from app.progenitor.document_kinds import KANBAN_CARD_KEY_PREFIX, KANBAN_TASK_CONTENT_KEY_PREFIX
+from app.progenitor.document_kinds import (
+    KANBAN_CARD_KEY_PREFIX,
+    KANBAN_TASK_CONTENT_KEY_PREFIX,
+    SESSION_KEY_PREFIX,
+)
 from app.progenitor.document_types import DOCUMENT_OPERATIONS, DocumentType
 from app.progenitor.routines.store import ROUTINE_GRAPH_KEY_PREFIX
 from app.progenitor.schedule import Scheduler
@@ -58,6 +62,8 @@ from app.progenitor.workflows import (
     document_query_output_schema,
     document_read_input_schema,
     document_read_output_schema,
+    document_write_input_schema,
+    document_write_output_schema,
     parse_workflow_invoke_request_document,
     workflow_id_from_path,
 )
@@ -79,7 +85,12 @@ from .alerts import (
     create_alert as store_alert,
 )
 from .chat_routes import broadcast_chat_sessions_snapshot, create_chat_router
-from .chat_sessions import UiEventEnvelope, UiRequestAcknowledgement, acknowledgement_response
+from .chat_sessions import (
+    UiEventEnvelope,
+    UiRequestAcknowledgement,
+    acknowledgement_response,
+    get_chat_detail,
+)
 from .document_events import (
     DocumentEventDispatcher,
     TypedDocumentEvent,
@@ -120,6 +131,9 @@ from .workflow_service import (
     list_workflow_runs,
     save_workflow_definition,
 )
+
+SOURCE_UI = "ui"
+SOURCE_WORKFLOW = "workflow"
 
 logger = logging.getLogger(__name__)
 
@@ -560,6 +574,7 @@ def _build_action_metadata(
     widget_id: str | None,
     root_widget_id: str | None,
     action: str,
+    workflow_run_id: str | None = None,
 ) -> dict[str, str]:
     """Build metadata sent through the backend→Progenitor boundary."""
 
@@ -568,11 +583,14 @@ def _build_action_metadata(
         "invocation_type": invocation_type,
         "invocation_source": invocation_source or action,
         "action": action,
+        "source": SOURCE_WORKFLOW if invocation_type == "workflow_step" else SOURCE_UI,
     }
     if widget_id:
         metadata["widget_id"] = widget_id
     if root_widget_id:
         metadata["root_widget_id"] = root_widget_id
+    if workflow_run_id:
+        metadata["workflow_run_id"] = workflow_run_id
     return metadata
 
 
@@ -589,6 +607,7 @@ def _workflow_event_request_id(payload: Mapping[str, Any]) -> str | None:
 async def _workflow_prompt_runner(
     *,
     workflow: WorkflowDefinition,
+    run_id: str,
     node_id: str,
     node,
     input_text: str,
@@ -610,7 +629,9 @@ async def _workflow_prompt_runner(
         invocation_source=widget_id,
         root_widget_id=f"workflow:{workflow.id}",
     )
-    thread_id, _response_obj, response_text = await _execute_action_run(request)
+    thread_id, _response_obj, response_text = await _execute_action_run(
+        request, workflow_run_id=run_id
+    )
     return PromptExecutionResult(response=response_text, thread_id=thread_id)
 
 
@@ -1949,6 +1970,12 @@ def _document_type_snapshot_item(document_type: DocumentType) -> dict[str, Any]:
         "read_input_schema": document_read_input_schema(document_type),
         "read_output_schema": document_read_output_schema(document_type, document_schema),
         "query_output_schema": document_query_output_schema(document_type, document_schema),
+        "write_input_schema": document_write_input_schema(document_type, document_schema)
+        if document_type.writable
+        else None,
+        "write_output_schema": document_write_output_schema(document_type, document_schema)
+        if document_type.writable
+        else None,
     }
 
 
@@ -3145,7 +3172,9 @@ async def create_task_activity(
     return acknowledgement_response(request_id, ["task.activity.updated"])
 
 
-async def _execute_action_run(body: ActionRunRequest) -> tuple[str, Any, str]:
+async def _execute_action_run(
+    body: ActionRunRequest, *, workflow_run_id: str | None = None
+) -> tuple[str, Any, str]:
     """Run an action internally and return its thread ID, response, and text.
 
     Internal callers do not receive an HTTP acknowledgement envelope.
@@ -3179,6 +3208,7 @@ async def _execute_action_run(body: ActionRunRequest) -> tuple[str, Any, str]:
         widget_id=body.widget_id,
         root_widget_id=body.root_widget_id,
         action=body.invocation_source or body.language or "workspace.run",
+        workflow_run_id=workflow_run_id,
     )
     upsert_thread(
         thread_id,
@@ -4008,6 +4038,7 @@ def get_document_event_dispatcher() -> DocumentEventDispatcher:
         dispatcher.add_handler(_dispatch_document_event_workflows)
         dispatcher.add_handler(_apply_document_event_widgets)
         dispatcher.add_handler(_record_kanban_card_activity)
+        dispatcher.add_handler(_publish_chat_session_document_event)
         _document_event_dispatcher = dispatcher
     return _document_event_dispatcher
 
@@ -4045,6 +4076,34 @@ async def _record_kanban_card_activity(typed: TypedDocumentEvent) -> None:
         previous_card=event.before,
         refreshed_card=event.after,
         now=event.created_at.isoformat(),
+    )
+
+
+async def _publish_chat_session_document_event(typed: TypedDocumentEvent) -> None:
+    """Broadcast sidebar updates when a ``session:`` document changes."""
+
+    event = typed.event
+    if not event.key.startswith(SESSION_KEY_PREFIX):
+        return
+    thread_id = event.key[len(SESSION_KEY_PREFIX) :]
+    # Always push the refreshed roster so every client stays in sync.
+    await _broadcast_chat_sessions_snapshot()
+    if event.op == "deleted":
+        broadcast_ui_event(
+            "chat.session.deleted",
+            {"thread_id": thread_id},
+            scope="chat",
+            session_id=thread_id,
+        )
+        return
+    detail = await asyncio.to_thread(get_chat_detail, get_default_document_store(), thread_id)
+    if detail is None:
+        return
+    broadcast_ui_event(
+        "chat.session.created" if event.op == "created" else "chat.session.metadata.updated",
+        {"session": detail.model_dump(exclude={"messages"})},
+        scope="chat",
+        session_id=thread_id,
     )
 
 
@@ -4722,15 +4781,6 @@ def _get_active_request_id_for_thread(thread_id: str) -> str | None:
     return _main._active_request_id_for_thread(thread_id)
 
 
-async def _delete_conversation_via_client(thread_id: str) -> bool:
-    from . import main as _main
-
-    client = getattr(_main, "client", None)
-    if client is None or not hasattr(client, "delete_conversation"):
-        return False
-    return await client.delete_conversation(thread_id)
-
-
 router.include_router(
     create_chat_router(
         get_document_store=get_default_document_store,
@@ -4738,7 +4788,6 @@ router.include_router(
         get_current_state=lambda thread_id: get_state_reader().get_progenitor_state(thread_id),
         get_thread_messages=lambda thread_id: get_state_reader().get_thread_messages(thread_id),
         get_active_request_id=_get_active_request_id_for_thread,
-        delete_conversation=_delete_conversation_via_client,
     )
 )
 

@@ -30,6 +30,7 @@ from ..runtime.responses_api import (
     with_langchain_messages,
 )
 from ..runtime.thread_context import reset_current_thread_id, set_current_thread_id
+from ..sessions.render import merge_session_after_turn
 from ..sse.deepagent_stream import DeepAgentSSEStream
 from ..sse.stream_payloads import make_json_safe
 from ..state.models import ProgenitorState
@@ -118,6 +119,7 @@ class RuntimeChatService:
         self.loop_runner = loop_runner
         self._bridge_factory = bridge_factory or DeepAgentSSEStream
         self._inflight_by_thread: dict[str, asyncio.Task[Any]] = {}
+        self._session_renders: set[asyncio.Task[None]] = set()
         self._cancel_events: dict[str, asyncio.Event] = {}
         self._subscribers: set[asyncio.Queue[dict[str, Any] | None]] = set()
         self._drain_task: asyncio.Task[None] | None = None
@@ -164,6 +166,9 @@ class RuntimeChatService:
             return _json_error("input is required", "bad_request", 400)
 
         received_at = time.time()
+        source = str(metadata.get("source") or "").strip() if metadata else ""
+        if source not in ("ui", "telegram", "api"):
+            source = None
 
         if not self._can_run_deepagent_direct():
             return _json_error("DeepAgent graph is not available", "graph_unavailable", 503)
@@ -188,6 +193,7 @@ class RuntimeChatService:
                         metadata,
                         cancel_event,
                         received_at,
+                        source=source,
                     ),
                     on_queued=lambda: self._notify_queued_request(response_id, streaming=False),
                 )
@@ -236,6 +242,7 @@ class RuntimeChatService:
                     cancel_event,
                     received_at,
                     start_sequence=sequence,
+                    source=source,
                 )
 
             await self._run_serialized(thread_id, _turn, on_queued=_on_queued)
@@ -281,6 +288,7 @@ class RuntimeChatService:
         cancel_event: asyncio.Event,
         received_at: float,
         start_sequence: int,
+        source: str | None = None,
     ) -> None:
         bridge = self._create_direct_stream_bridge()
         cancelled = False
@@ -315,6 +323,7 @@ class RuntimeChatService:
                         thread_id=thread_id,
                         received_at=received_at,
                         attachments=_extract_attachments(metadata),
+                        source=source,
                     ):
                         await queue.put(("item", item))
                 except asyncio.CancelledError:
@@ -584,6 +593,7 @@ class RuntimeChatService:
                 )
         finally:
             reset_current_thread_id(token)
+            self._fire_and_forget_session_merge(thread_id)
 
     async def _run_turn(
         self,
@@ -594,6 +604,7 @@ class RuntimeChatService:
         metadata: dict[str, Any] | None,
         cancel_event: asyncio.Event,
         received_at: float,
+        source: str | None = None,
     ) -> dict[str, Any]:
         bridge = self._create_direct_stream_bridge()
         try:
@@ -611,6 +622,7 @@ class RuntimeChatService:
                     thread_id=thread_id,
                     received_at=received_at,
                     attachments=_extract_attachments(metadata),
+                    source=source,
                 )
                 # aclosing: a cancel must stop the graph run before the
                 # cancelled reply is written to the thread.
@@ -651,6 +663,7 @@ class RuntimeChatService:
             )
         finally:
             reset_current_thread_id(token)
+            self._fire_and_forget_session_merge(thread_id)
 
     async def _persist_cancelled_turn(
         self, thread_id: str, response_id: str, partial_text: str, before_count: int
@@ -678,6 +691,17 @@ class RuntimeChatService:
         except Exception as exc:
             logger.warning("Saving cancelled turn %s failed: %s", response_id, exc)
             return []
+
+    def _fire_and_forget_session_merge(self, thread_id: str) -> None:
+        """Re-render the thread and merge ``content``/``last_activity`` into the session row."""
+        context = getattr(self.loop_runner, "heartbeat_context", None)
+        state_manager = getattr(context, "state_manager", None)
+        checkpointer = getattr(self.loop_runner.graph, "checkpointer", None)
+        if state_manager is None or checkpointer is None:
+            return
+        task = asyncio.create_task(merge_session_after_turn(thread_id, checkpointer, state_manager))
+        self._session_renders.add(task)
+        task.add_done_callback(self._session_renders.discard)
 
     async def _message_count(self, thread_id: str) -> int:
         state = await self.loop_runner.graph.aget_state({"configurable": {"thread_id": thread_id}})

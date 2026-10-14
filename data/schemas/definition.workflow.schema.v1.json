@@ -23,6 +23,7 @@
             "operations": {"description": "Optional filter: operations to fire on. Empty/omitted means any.", "type": "array", "uniqueItems": true, "items": {"enum": ["created", "updated", "deleted"]}},
             "changed_fields": {"description": "Optional filter: fire only when at least one of these top-level document fields changed. Empty/omitted means any.", "type": "array", "items": {"type": "string", "minLength": 1}},
             "match": {"description": "Optional filter: equality at dotted output paths, e.g. {\"after.column_id\": \"done\"}.", "type": "object"},
+
             "output_schema": {"type": "object"}
           }},
           {"type": "object", "additionalProperties": false, "required": ["kind", "title", "expression", "timezone"], "properties": {
@@ -45,6 +46,11 @@
             "document_type": {"type": "string", "minLength": 1},
             "filter_fields": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
             "limit": {"type": "integer", "minimum": 1, "maximum": 200},
+            "input_schema": {"type": "object"}, "output_schema": {"type": "object"}
+          }},
+          {"type": "object", "additionalProperties": false, "required": ["kind", "title", "document_type"], "properties": {
+            "kind": {"const": "document_write"}, "title": {"type": "string", "minLength": 1},
+            "document_type": {"type": "string", "minLength": 1},
             "input_schema": {"type": "object"}, "output_schema": {"type": "object"}
           }},
           {"type": "object", "additionalProperties": false, "required": ["kind", "title"], "properties": {

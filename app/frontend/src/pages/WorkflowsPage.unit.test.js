@@ -246,6 +246,34 @@ describe('workflowToFlow', () => {
     });
   });
 
+  it('round-trips a document_write node', () => {
+    const workflow = {
+      graph: {
+        nodes: {
+          write_1: {
+            kind: 'document_write',
+            title: 'Rename',
+            document_type: 'session',
+            input_schema: { type: 'object', required: ['id'], properties: { id: { type: 'string' }, title: { type: 'string' } } },
+            output_schema: { type: 'object', required: ['found', 'title'], properties: { found: { type: 'boolean' }, title: { type: 'string' } } },
+          },
+        },
+        edges: [],
+      },
+      ui: { nodes: {} },
+    };
+    const flow = workflowToFlow(workflow, {}, null);
+    const node = flow.nodes.find((n) => n.id === 'write_1');
+    expect(node.type).toBe('document_write');
+    expect(node.data.documentType).toBe('session');
+
+    const persisted = flowToWorkflow(workflow, flow.nodes, flow.edges, flow.viewport);
+    expect(persisted.graph.nodes.write_1).toMatchObject({
+      kind: 'document_write',
+      document_type: 'session',
+    });
+  });
+
   it('round-trips a cron node', () => {
     const workflow = {
       graph: {
@@ -355,11 +383,11 @@ describe('workflowToFlow', () => {
 });
 
 describe('workflow node menu', () => {
-  it('exposes exactly the eleven V3 node kinds and no capability-specific kinds', () => {
+  it('exposes exactly the twelve V3 node kinds and no capability-specific kinds', () => {
     const addableKinds = NODE_MENU_CATEGORIES.flatMap((category) => category.items).map((item) => item.kind);
 
     expect(addableKinds.sort()).toEqual(
-      ['agent', 'approval', 'condition', 'cron', 'data', 'document_query', 'document_read', 'event', 'extract', 'human_input', 'unpack'].sort(),
+      ['agent', 'approval', 'condition', 'cron', 'data', 'document_query', 'document_read', 'document_write', 'event', 'extract', 'human_input', 'unpack'].sort(),
     );
   });
 });

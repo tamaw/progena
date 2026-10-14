@@ -6,7 +6,6 @@ import reducer, {
   clearChatUnread,
   clearActiveChatSession,
   deleteChatSession,
-  ensureDraftChatSession,
   kanbanSnapshotReceived,
   markChatErrored,
   markChatGenerating,
@@ -157,32 +156,6 @@ describe('applyUiEvent reducer', () => {
     }));
     expect(s.chats.order).toEqual(['c', 'a', 'b']);
     expect(s.chats.byId.c.title).toBe('New chat');
-  });
-
-  it('ensureDraftChatSession.fulfilled waits for the canonical snapshot to reorder the draft', () => {
-    let s = reducer(undefined, snapshot(['a', 'b', 'c']));
-    s = reducer(s, ensureDraftChatSession.fulfilled({
-      request_id: 'REQ1',
-      event_types: ['chat.session.metadata.updated', 'chat.sessions.snapshot'],
-    }, 'REQ1', {
-      chatsUrl: '/x',
-      threadId: 'b',
-    }));
-    expect(s.chats.order).toEqual(['a', 'b', 'c']);
-
-    s = reducer(s, applyUiEvent({
-      type: 'chat.sessions.snapshot',
-      payload: {
-        request_id: 'REQ1',
-        sessions: [
-          { thread_id: 'b', title: 'New chat', message_count: 0 },
-          { thread_id: 'a' },
-          { thread_id: 'c' },
-        ],
-      },
-    }));
-    expect(s.chats.order).toEqual(['b', 'a', 'c']);
-    expect(s.chats.byId.b.title).toBe('New chat');
   });
 
   it('selected applies matching detail with messages and preserves request identity for hydration', () => {
