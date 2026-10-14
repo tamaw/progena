@@ -636,10 +636,19 @@ async def test_inbox_adelete_removes_message():
 
 
 class _FakeWorkflowStateManager:
-    def __init__(self, workflows: list[dict[str, Any]] | None = None) -> None:
+    def __init__(
+        self,
+        workflows: list[dict[str, Any]] | None = None,
+        prompts: dict[str, str] | None = None,
+    ) -> None:
         self.workflows: dict[str, dict[str, Any]] = {
             workflow["id"]: copy.deepcopy(workflow) for workflow in workflows or []
         }
+        self.prompts = dict(prompts or {})
+
+    async def list_content_documents(self, kind: str) -> list[tuple[str, str]]:
+        assert kind == "prompt"
+        return sorted(self.prompts.items())
 
     async def get_workflow_definition(self, workflow_id: str) -> dict[str, Any] | None:
         workflow = self.workflows.get(workflow_id)
@@ -660,8 +669,10 @@ class _FakeWorkflowStateManager:
         return {t.id: t for t in BUILTIN_DOCUMENT_TYPES}
 
 
-def _workflow_backend(workflows=None) -> tuple[WorkflowDirectoryBackend, _FakeWorkflowStateManager]:
-    sm = _FakeWorkflowStateManager(workflows)
+def _workflow_backend(
+    workflows=None, prompts=None
+) -> tuple[WorkflowDirectoryBackend, _FakeWorkflowStateManager]:
+    sm = _FakeWorkflowStateManager(workflows, prompts)
     return WorkflowDirectoryBackend(sm), sm
 
 
@@ -685,6 +696,24 @@ async def test_workflow_awrite_persists_valid_definition():
     result = await backend.awrite("/customer-followup.json", json.dumps(workflow))
     assert result.error is None
     assert sm.workflows["customer-followup"]["title"] == "Customer follow-up"
+
+
+async def test_workflow_awrite_resolves_prompt_document_references():
+    workflow = default_workflow_definition(workflow_id="card-brief", title="Card brief")
+    agent_id = next(i for i, n in workflow["graph"]["nodes"].items() if n["kind"] == "agent")
+    agent = workflow["graph"]["nodes"][agent_id]
+    agent.pop("template")
+    agent["prompt"] = "workflows/brief.md"
+    backend, sm = _workflow_backend(prompts={"workflows/brief.md": "Brief the card {key}."})
+
+    result = await backend.awrite("/card-brief.json", json.dumps(workflow))
+
+    assert result.error is None
+    assert sm.workflows["card-brief"]["graph"]["nodes"][agent_id]["prompt"] == "workflows/brief.md"
+
+    agent["prompt"] = "/prompts/workflows/brief.md"
+    result = await backend.awrite("/card-brief.json", json.dumps(workflow))
+    assert result.error and "Invalid prompt path" in result.error
 
 
 async def test_workflow_awrite_rejects_filename_id_mismatch():

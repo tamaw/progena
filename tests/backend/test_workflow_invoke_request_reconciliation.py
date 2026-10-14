@@ -88,19 +88,45 @@ async def _wait_for_completed_run(store: InMemoryDocumentStore, workflow_id: str
     raise AssertionError(f"Timed out waiting for workflow run completion for {workflow_id}")
 
 
-async def test_invoke_request_starts_progenitor_sourced_run(workflow_env, backend_client):
+async def test_invoke_request_runs_the_connected_agent_with_typed_trigger_ports(
+    workflow_env, backend_client
+):
     store = workflow_env
     workflow_id = "workflow_progenitor_invoke"
-    save_workflow_definition(store, default_workflow_definition(workflow_id=workflow_id))
-    key = _write_invoke_request(store, "request-1", workflow_id, input={"value": 1})
+    definition = save_workflow_definition(
+        store, default_workflow_definition(workflow_id=workflow_id)
+    )
+    key = _write_invoke_request(
+        store, "request-1", workflow_id, input={"key": "kanban_card:a", "id": "a"}
+    )
 
     from app.backend.ui_routes import _reconcile_workflow_invoke_requests
 
     await _reconcile_workflow_invoke_requests(key)
     run = await _wait_for_completed_run(store, workflow_id)
+    assert run["status"] == "completed", run["last_error"]
     assert run["source"] == "progenitor"
     assert run["ancestry"] == []
-    assert run["trigger_event"]["input"] == {"value": 1}
+    assert run["trigger_event"]["key"] == "kanban_card:a"
+    # The agent consuming the event's ``key`` port actually ran.
+    backend_client.send_message.assert_awaited()
+    agent_ids = [nid for nid, node in definition.graph.nodes.items() if node.kind == "agent"]
+    assert agent_ids and all(nid in run["node_outputs"] for nid in agent_ids)
+    assert store.get_document(PROGENITOR_STATE_PREFIX, key, None) is None
+
+
+async def test_invoke_request_with_input_outside_trigger_ports_is_refused(
+    workflow_env, backend_client
+):
+    store = workflow_env
+    workflow_id = "workflow_bad_input"
+    save_workflow_definition(store, default_workflow_definition(workflow_id=workflow_id))
+    key = _write_invoke_request(store, "request-bad", workflow_id, input={"key": 42})
+
+    from app.backend.ui_routes import _reconcile_workflow_invoke_requests
+
+    await _reconcile_workflow_invoke_requests(key)
+    assert list_workflow_runs(store, workflow_id=workflow_id) == []
     assert store.get_document(PROGENITOR_STATE_PREFIX, key, None) is None
 
 
@@ -149,6 +175,7 @@ async def test_malformed_invoke_request_is_dropped(workflow_env, backend_client)
 
 async def test_failed_invoke_request_is_retained_for_retry(workflow_env, monkeypatch):
     store = workflow_env
+    save_workflow_definition(store, default_workflow_definition(workflow_id="workflow-transient"))
     key = _write_invoke_request(store, "request-retry", "workflow-transient")
 
     class FailingExecutor:

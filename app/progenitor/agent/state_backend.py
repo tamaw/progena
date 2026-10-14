@@ -44,7 +44,7 @@ from deepagents.backends.utils import (
 )
 from wcmatch import glob as wcglob
 
-from ..prompts.templates import parse_prompt_template
+from ..prompts.templates import parse_prompt_template, prompt_relative_path
 from ..routines.store import (
     parse_routine_graph_document,
     routine_file_name,
@@ -1142,8 +1142,20 @@ class WorkflowDirectoryBackend(_AsyncOnlyFileBackendMixin):
         if workflow_id is None:
             return WriteResult(error=f"Unknown workflow file '{file_path}' (expected <id>.json)")
         try:
+            # Validation is synchronous; snapshot the prompt documents the
+            # workflow may reference (by path relative to /prompts/).
+            prompts = dict(await self._sm.list_content_documents("prompt"))
+
+            def _prompt_loader(path: str) -> str:
+                text = prompts.get(prompt_relative_path(path))
+                if text is None:
+                    raise ValueError(f"prompt document '{path}' not found")
+                return text
+
             workflow = validate_workflow_definition_document(
-                content, await self._sm.list_document_types()
+                content,
+                await self._sm.list_document_types(),
+                prompt_loader=_prompt_loader,
             )
         except ValueError as exc:
             return WriteResult(error=f"Invalid workflow {name}: {exc}")
@@ -1647,7 +1659,8 @@ class PromptDocumentDirectoryBackend(ContentDocumentDirectoryBackend):
 
     async def awrite(self, file_path: str, content: str) -> WriteResult:
         try:
+            prompt_relative_path(self._name(file_path))
             parse_prompt_template(content)
         except ValueError as exc:
-            return WriteResult(error=f"Invalid prompt template: {exc}")
+            return WriteResult(error=f"Invalid prompt document: {exc}")
         return await super().awrite(file_path, content)

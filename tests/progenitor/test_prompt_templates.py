@@ -10,9 +10,12 @@ from app.progenitor.document_types import BUILTIN_DOCUMENT_TYPES
 from app.progenitor.prompts.templates import (
     PromptTemplate,
     parse_prompt_template,
+    prompt_relative_path,
     render_prompt_template,
     resolve_type_ref,
 )
+from app.progenitor.structured import validate_against_schema
+from app.progenitor.workflows import default_workflow_definition, derive_workflow_port_schemas
 
 
 class TestParsePromptTemplate:
@@ -247,18 +250,18 @@ class TestResolveTypeRef:
         return {dt.id: dt for dt in BUILTIN_DOCUMENT_TYPES}
 
     def test_document_type_id_titled_with_label(self, document_types):
-        schema = resolve_type_ref("kanban_card", document_types)
+        schema, _definitions = resolve_type_ref("kanban_card", document_types)
         assert schema.get("title") == "Kanban Card"
         assert schema.get("type") == "object"
 
     def test_schema_file_by_name(self, document_types):
-        schema = resolve_type_ref("schedule_entry", document_types)
+        schema, _definitions = resolve_type_ref("schedule_entry", document_types)
         assert schema.get("type") == "object"
         assert "properties" in schema
 
     def test_inline_dict(self, document_types):
         inline = {"type": "string", "enum": ["a", "b"]}
-        assert resolve_type_ref(inline, document_types) == inline
+        assert resolve_type_ref(inline, document_types) == (inline, {})
 
     def test_unknown_raises(self, document_types):
         with pytest.raises(ValueError, match="unknown type ref"):
@@ -266,9 +269,40 @@ class TestResolveTypeRef:
 
     def test_document_type_without_schema(self, document_types):
         # schedule has no schema_name
-        schema = resolve_type_ref("schedule", document_types)
+        schema, _definitions = resolve_type_ref("schedule", document_types)
         assert schema.get("title") == "Schedule"
         assert schema.get("type") == "object"
+
+    def test_typed_input_keeps_definitions_resolvable_at_the_port_root(self, document_types):
+        payload = default_workflow_definition()
+        agent_id = next(i for i, n in payload["graph"]["nodes"].items() if n["kind"] == "agent")
+        payload["graph"]["nodes"][agent_id]["template"] = (
+            "---\ninputs:\n  flow: workflow\n---\nReview {flow.title} for {key}."
+        )
+        derived = derive_workflow_port_schemas(payload, document_types)
+        input_schema = derived["graph"]["nodes"][agent_id]["input_schema"]
+        flow = default_workflow_definition()
+        assert flow["graph"]["edges"], "fixture must contain edges using #/$defs/edgeEndpoint"
+
+        assert validate_against_schema({"key": "k", "flow": flow}, input_schema) is None
+
+
+class TestFrontMatterKeys:
+    @pytest.mark.parametrize("front_matter", ["1: value", "title: t\n2: value", "true: x"])
+    def test_non_string_keys_are_validation_errors(self, front_matter):
+        with pytest.raises(ValueError, match="keys must be strings"):
+            parse_prompt_template(f"---\n{front_matter}\n---\nBody\n")
+
+
+class TestPromptRelativePath:
+    @pytest.mark.parametrize("path", ["workflows/card.md", "a.MD"])
+    def test_accepts_relative_markdown(self, path):
+        assert prompt_relative_path(path) == path
+
+    @pytest.mark.parametrize("path", ["/prompts/workflows/card.md", "../x.md", "x.txt", "dir/", ""])
+    def test_rejects_everything_else(self, path):
+        with pytest.raises(ValueError):
+            prompt_relative_path(path)
 
 
 class TestPromptDocumentDirectoryBackend:
@@ -310,6 +344,15 @@ class TestPromptDocumentDirectoryBackend:
         assert result.error is not None
         assert "unknown front matter key" in result.error
         assert sm._docs["prompt"] == {}
+
+    async def test_non_markdown_path_rejected(self):
+        from app.progenitor.agent.state_backend import PromptDocumentDirectoryBackend
+
+        sm = MagicMock()
+        backend = PromptDocumentDirectoryBackend(sm, "prompt")
+        result = await backend.awrite("/example.txt", "Body\n")
+        assert result.error is not None and ".md" in result.error
+        sm.save_content_document.assert_not_called()
 
 
 class TestEnsureContentDocumentsSeeded:

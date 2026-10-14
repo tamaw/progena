@@ -1,10 +1,15 @@
 import pytest
 
 from app.progenitor.document_types import BUILTIN_DOCUMENT_TYPES
+from app.progenitor.schemas import load_schema
+from app.progenitor.structured import validate_against_schema
 from app.progenitor.workflows import (
     WorkflowDefinition,
+    WorkflowNodeEvent,
+    coerce_workflow_run,
     default_workflow_definition,
     derive_workflow_port_schemas,
+    document_changed_fields,
     ordered_workflow_node_ids,
     validate_workflow_definition_payload,
 )
@@ -149,24 +154,34 @@ def test_cycle_of_connected_properties_is_rejected():
     event_id = _node_id(payload, "event")
     first_id = _node_id(payload, "agent")
     second_id = "agent_second"
-    schema = {"type": "object", "required": ["value"], "properties": {"value": {"type": "string"}}}
-    output = {"type": "object", "properties": {"value": {"type": "string"}}}
     payload["graph"]["nodes"][first_id] = _agent_node(
-        "First", input_schema=schema, output_schema=output
+        "First",
+        input_schema={
+            "type": "object",
+            "required": ["key", "value"],
+            "properties": {"key": {"type": "string"}, "value": {"type": "string"}},
+        },
+        output_schema={"type": "object", "properties": {"value": {"type": "string"}}},
     )
     payload["graph"]["nodes"][second_id] = _agent_node(
-        "Second", input_schema=schema, output_schema=output
+        "Second",
+        input_schema={
+            "type": "object",
+            "required": ["value"],
+            "properties": {"value": {"type": "string"}},
+        },
+        output_schema={"type": "object", "properties": {"value": {"type": "string"}}},
     )
     payload["graph"]["edges"] = [
         {
             "from": {"node": event_id, "port": "key"},
-            "to": {"node": first_id, "port": "value"},
+            "to": {"node": first_id, "port": "key"},
         },
         {"from": {"node": first_id, "port": "value"}, "to": {"node": second_id, "port": "value"}},
         {"from": {"node": second_id, "port": "value"}, "to": {"node": first_id, "port": "value"}},
     ]
 
-    with pytest.raises(ValueError, match="more than one edge|acyclic"):
+    with pytest.raises(ValueError, match="acyclic"):
         validate_workflow_definition_payload(payload)
 
 
@@ -458,3 +473,112 @@ def test_workflow_without_any_trigger_is_rejected():
     payload["graph"]["edges"] = []
     with pytest.raises(ValueError, match="at least one event or cron trigger"):
         validate_workflow_definition_payload(_derive(payload))
+
+
+_TYPES = {t.id: t for t in BUILTIN_DOCUMENT_TYPES}
+
+
+def _with_query(payload, query_id, document_type, filter_fields):
+    payload["graph"]["nodes"][query_id] = {
+        "kind": "document_query",
+        "title": "Query",
+        "document_type": document_type,
+        "filter_fields": filter_fields,
+    }
+    return payload
+
+
+def test_extract_feeding_a_query_port_keeps_the_ports_definitions():
+    payload = default_workflow_definition()
+    event_id = _node_id(payload, "event")
+    _with_query(payload, "query", "workflow", ["graph"])
+    payload["graph"]["nodes"]["extract"] = {
+        "kind": "extract",
+        "title": "Extract",
+        "template": "Pick a graph for {key}.",
+    }
+    payload["graph"]["edges"] += [
+        {"from": {"node": event_id, "port": "key"}, "to": {"node": "extract", "port": "key"}},
+        {"from": {"node": "extract", "port": "result"}, "to": {"node": "query", "port": "graph"}},
+    ]
+
+    derived = derive_workflow_port_schemas(payload, _TYPES)
+    extract = derived["graph"]["nodes"]["extract"]["output_schema"]
+
+    assert "edgeEndpoint" in extract["$defs"]
+    assert "edgeEndpoint" not in extract
+    validate_workflow_definition_payload(derived)
+
+
+def _data_into_project_filter(data_type):
+    payload = default_workflow_definition()
+    _with_query(payload, "query", "kanban_card", ["project_id"])
+    payload["graph"]["nodes"]["project"] = {
+        "kind": "data",
+        "title": "Project",
+        "value": "p1",
+        "output_schema": {"type": data_type},
+    }
+    payload["graph"]["edges"].append(
+        {
+            "from": {"node": "project", "port": "value"},
+            "to": {"node": "query", "port": "project_id"},
+        }
+    )
+    return derive_workflow_port_schemas(payload, _TYPES)
+
+
+def test_string_output_connects_to_a_nullable_string_input():
+    validate_workflow_definition_payload(_data_into_project_filter("string"))
+
+
+def test_output_type_outside_the_input_union_is_rejected():
+    with pytest.raises(ValueError, match="incompatible"):
+        validate_workflow_definition_payload(_data_into_project_filter("integer"))
+
+
+def test_changed_fields_follow_jsonb_equality():
+    assert document_changed_fields({"flag": True}, {"flag": 1}) == ["flag"]
+    assert document_changed_fields({"ok": False}, {"ok": 0}) == ["ok"]
+    assert document_changed_fields({"n": 1}, {"n": 1.0}) == []
+    assert document_changed_fields({"meta": {"a": [True]}}, {"meta": {"a": [1]}}) == ["meta"]
+
+
+def test_event_match_distinguishes_booleans_from_numbers():
+    node = WorkflowNodeEvent(document_type="kanban_card", match={"after.flag": True})
+    assert not node.matches({"document_type": "kanban_card", "after": {"flag": 1}})
+    assert node.matches({"document_type": "kanban_card", "after": {"flag": True}})
+
+
+@pytest.mark.parametrize("filter_fields", [42, "title", [1]])
+def test_query_filter_fields_must_be_a_list_of_strings(filter_fields):
+    payload = _with_query(default_workflow_definition(), "query", "kanban_card", filter_fields)
+    with pytest.raises(ValueError, match="filter_fields must be a list of strings"):
+        derive_workflow_port_schemas(payload, _TYPES)
+
+
+def test_query_without_filter_fields_derives_unfiltered_ports():
+    payload = default_workflow_definition()
+    payload["graph"]["nodes"]["query"] = {
+        "kind": "document_query",
+        "title": "Query",
+        "document_type": "kanban_card",
+    }
+    derived = derive_workflow_port_schemas(payload, _TYPES)
+    # No filter ports: the query only waits for its run trigger.
+    assert set(derived["graph"]["nodes"]["query"]["input_schema"]["properties"]) == {"trigger"}
+
+
+def test_cron_sourced_runs_satisfy_the_workflow_run_document_schema():
+    run = coerce_workflow_run(
+        {
+            "run_id": "run_1",
+            "workflow_id": "wf_1",
+            "status": "completed",
+            "source": "cron",
+            "queued_at": "2024-01-01T00:00:00Z",
+            "updated_at": "2024-01-01T00:00:00Z",
+        }
+    )
+    error = validate_against_schema(run.model_dump(mode="json"), load_schema("workflow_run"))
+    assert error is None

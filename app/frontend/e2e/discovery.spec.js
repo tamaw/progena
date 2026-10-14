@@ -67,13 +67,13 @@ test.describe('refactored surfaces — prove interactive behaviour', () => {
     expect(errors).toEqual([]);
   });
 
-  test('Agents opens a subagent draft without relying on live registry contents', async ({ page }) => {
+  test('Agents opens an object agent draft without relying on live registry contents', async ({ page }) => {
     const errors = trackPageErrors(page);
     await page.goto('/agents');
     await expect(page.locator('.agents-pane')).toBeVisible();
     await page.getByRole('button', { name: '+ New' }).click();
     await expect(page.getByRole('dialog', { name: 'New agent' })).toBeVisible();
-    await page.getByRole('button', { name: /^Subagent/ }).click();
+    await page.getByRole('button', { name: /^Object agent/ }).click();
 
     await expect(page.getByRole('textbox', { name: 'Agent name' })).toBeVisible();
     await expect(page.getByRole('heading', { name: 'System prompt' })).toBeVisible();

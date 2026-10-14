@@ -67,9 +67,32 @@ async function runCards(page, title) {
   return page.locator('.workflow-run-card');
 }
 
+function sqlRows(query) {
+  const out = sql(query);
+  return out ? out.split('\n') : [];
+}
+
+// Remove everything the tests created: the quick chats that asked Progenitor,
+// each workflow with its runs and run threads, and the kanban card (through the
+// card route, so board bookkeeping such as card_order is updated too).
 test.afterAll(async ({ request }) => {
-  for (const id of created) await request.delete(`/api/ui/workflows/${id}`);
-  sql(`delete from store where key like 'kanban_card:%' and value->'payload'->>'title' like 'pw-card-${RUN}%'`);
+  for (const threadId of sqlRows(`select value->'payload'->>'thread_id' from store where key like 'session:%' and value->'payload'->>'first_message' like '%pw-%-${RUN}%'`)) {
+    await request.delete(`/api/ui/chats/${threadId}`);
+  }
+  for (const id of created) {
+    const threads = runsOf(id).map((run) => run.thread_id).filter(Boolean);
+    await request.delete(`/api/ui/workflows/${id}`);
+    sql(`delete from store where key like 'workflow_run:%' and value->'payload'->>'workflow_id' = '${id}'`);
+    if (threads.length) {
+      const list = threads.map((thread) => `'${thread}'`).join(',');
+      for (const table of ['checkpoint_writes', 'checkpoint_blobs', 'checkpoints']) {
+        sql(`delete from ${table} where thread_id in (${list})`);
+      }
+    }
+  }
+  for (const cardId of sqlRows(`select value->'payload'->>'id' from store where key like 'kanban_card:%' and value->'payload'->>'title' like 'pw-card-${RUN}%'`)) {
+    await request.delete(`/api/ui/kanban/cards/${cardId}`);
+  }
 });
 
 test('Progenitor builds a cron workflow that runs on demand and on schedule', async ({ page, request }) => {
@@ -115,7 +138,8 @@ test('Progenitor builds a cron workflow that runs on demand and on schedule', as
 test('Progenitor builds an event workflow that extracts and reports on a new card', async ({ page, request }) => {
   const errors = trackPageErrors(page);
   await askProgenitor(page,
-    `Create a NEW workflow titled exactly "${EVENT_TITLE}". Trigger: an event node on document_type kanban_card, operations ["created"]. ` +
+    `Create a NEW workflow titled exactly "${EVENT_TITLE}". Trigger: an event node on document_type kanban_card, operations ["created"], ` +
+    `with match {"after.title": "${CARD_TITLE}"} so it only fires for that card. ` +
     'Unpack the event "after" document, then an extract node with an inline template that asks to rate the urgency of the card titled {title}, ' +
     'with an inline schema: an object with required string "priority" (enum low, medium, high) and required string "reason". ' +
     'Then an unpack of the extract result, then an agent node with inline template ' +
@@ -132,11 +156,15 @@ test('Progenitor builds an event workflow that extracts and reports on a new car
   const response = await request.post('/api/ui/kanban/cards', { data: { title: CARD_TITLE } });
   expect(response.status()).toBeLessThan(300);
 
-  await expect.poll(() => runsOf(workflow.id).map((run) => run.status).join(','),
+  // Only this test's card can trigger the workflow (match on after.title);
+  // still select its run explicitly rather than the oldest run.
+  const runForCard = () => runsOf(workflow.id).find((candidate) => candidate.trigger_event?.after?.title === CARD_TITLE);
+  await expect.poll(() => runForCard()?.status ?? '',
     { timeout: 240_000, intervals: [3000] }).toMatch(/completed|failed/);
-  const [run] = runsOf(workflow.id);
+  const run = runForCard();
   expect(run.status, run.last_error || '').toBe('completed');
   expect(run.source).toBe('document');
+  expect(workflow.graph.nodes[run.trigger_node_id]?.match).toEqual({ 'after.title': CARD_TITLE });
   const [extractId] = Object.entries(workflow.graph.nodes).find(([, node]) => node.kind === 'extract');
   const { priority } = run.node_outputs[extractId].result;
   expect(['low', 'medium', 'high']).toContain(priority);

@@ -3,6 +3,7 @@ import { useDispatch, useSelector } from 'react-redux';
 import { useConfig } from '../../context/ConfigContext';
 import { fetchAgentProfiles } from '../../store/uiData/agents';
 import { selectAgentProfiles, selectAgentProfilesState } from '../../store/uiDataSlice';
+import { selectRealtimeStreamReady } from '../../store/realtimeSlice';
 import { getAgentMentionContext } from './chatInputModel';
 import AttachmentFileIcon from './AttachmentFileIcon';
 import { describeAttachmentFileType, formatAttachmentSize } from './attachmentFileTypes';
@@ -68,6 +69,7 @@ const ChatInput = forwardRef(function ChatInput({
   const fileInputRef = useRef(null);
   const agentProfiles = useSelector(selectAgentProfiles);
   const agentProfilesState = useSelector(selectAgentProfilesState);
+  const streamReady = useSelector(selectRealtimeStreamReady);
   const agentProfilesRequestUrlRef = useRef(null);
   const slashQuery = enableSlashCommands ? getSlashQuery(message) : null;
   const mentionContext = getAgentMentionContext(message, selectionStart);
@@ -114,12 +116,18 @@ const ChatInput = forwardRef(function ChatInput({
     }
   }, [autoFocus, disabled, focusToken, isGenerating]);
 
+  // Request the roster once per stream session (the snapshot arrives on the
+  // stream). A reconnect starts a new session, so a failed request is retried
+  // then rather than suppressing @mentions until reload.
   useEffect(() => {
+    if (!streamReady) {
+      agentProfilesRequestUrlRef.current = null;
+      return;
+    }
     const agentsUrl = getApiUrl('agentProfiles');
     if (
       agentProfilesState.loaded
       || agentProfilesState.loading
-      || agentProfilesState.error
       || agentProfilesRequestUrlRef.current === agentsUrl
     ) {
       return;
@@ -127,11 +135,11 @@ const ChatInput = forwardRef(function ChatInput({
     agentProfilesRequestUrlRef.current = agentsUrl;
     dispatch(fetchAgentProfiles({ agentsUrl }));
   }, [
-    agentProfilesState.error,
     agentProfilesState.loaded,
     agentProfilesState.loading,
     dispatch,
     getApiUrl,
+    streamReady,
   ]);
 
   const executeSlashCommand = (command) => {

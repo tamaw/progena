@@ -44,14 +44,21 @@ def _safe_public_profile(name: str, profile: dict[str, Any]) -> dict[str, Any]:
     return public
 
 
-def _build_profiles_snapshot(store: BackendDocumentStore) -> dict[str, Any]:
-    document = store.get_document(PROGENITOR_STATE_PREFIX, MODEL_PROFILES_DOC_KEY)
-    raw = document.payload if document is not None else default_model_profiles_payload()
+def _public_profiles(raw: Any) -> dict[str, Any]:
+    """The validated public snapshot of one stored catalog (HTTP 422 if invalid)."""
+
     try:
         profiles = validate_model_profiles_payload(raw)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return {"profiles": [_safe_public_profile(name, profile) for name, profile in profiles.items()]}
+
+
+def _build_profiles_snapshot(store: BackendDocumentStore) -> dict[str, Any]:
+    document = store.get_document(PROGENITOR_STATE_PREFIX, MODEL_PROFILES_DOC_KEY)
+    return _public_profiles(
+        document.payload if document is not None else default_model_profiles_payload()
+    )
 
 
 async def broadcast_model_profiles_snapshot(
@@ -63,6 +70,42 @@ async def broadcast_model_profiles_snapshot(
     payload = await asyncio.to_thread(_build_profiles_snapshot, store)
     # asyncio subscriber queues and replay bookkeeping belong to the event loop.
     broadcast("profiles.snapshot", payload, request_id=request_id)
+
+
+def _mutate_profile(
+    store: BackendDocumentStore,
+    name: str,
+    change: Callable[[dict[str, Any]], dict[str, Any] | None],
+) -> None:
+    """Apply ``change`` to one profile under the document's lock.
+
+    ``change`` returns the replacement profile, or ``None`` to delete it. The
+    read, change and write are one transaction, so concurrent edits of any
+    profiles serialize instead of overwriting each other.
+    """
+
+    def mutator(payload: Any) -> Any:
+        raw = payload if payload is not None else default_model_profiles_payload()
+        if not isinstance(raw, dict):
+            raise HTTPException(status_code=422, detail="Stored profile document is malformed")
+        try:
+            profiles = validate_model_profiles_payload(dict(raw))
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        if name not in profiles:
+            raise HTTPException(status_code=404, detail=f"Profile {name!r} not found")
+        # Names are unique after whitespace normalization (the validator rejects
+        # ambiguity), so exactly one raw key holds this profile; keep its form.
+        stored_name = next(key for key in raw if key.strip() == name)
+        replacement = change(dict(profiles[name]))
+        updated = {key: value for key, value in raw.items() if key != stored_name}
+        if replacement is not None:
+            updated[stored_name] = replacement
+        # The acknowledged snapshot must be publishable before the write commits.
+        _public_profiles(updated)
+        return updated
+
+    store.mutate_document(PROGENITOR_STATE_PREFIX, MODEL_PROFILES_DOC_KEY, mutator)
 
 
 def create_model_profile_router(
@@ -98,68 +141,35 @@ def create_model_profile_router(
                 status_code=422, detail=f"Unsupported fields in patch body: {sorted(extra_keys)}"
             )
 
-        store = get_store()
-        document = await asyncio.to_thread(
-            store.get_document, PROGENITOR_STATE_PREFIX, MODEL_PROFILES_DOC_KEY
-        )
-        default = default_model_profiles_payload()
-        raw = document.payload if document else default
-        if not isinstance(raw, dict):
-            raise HTTPException(status_code=422, detail="Stored profile document is malformed")
-
-        # Validate the existing catalog so we know the profile exists and the
-        # store is in a consistent state.
-        try:
-            profiles = validate_model_profiles_payload(dict(raw))
-        except ValueError as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
-
-        if name not in profiles:
-            raise HTTPException(status_code=404, detail=f"Profile {name!r} not found")
-
-        profile = dict(profiles[name])
-
-        # Validate and apply dirty fields only.
-        if "deployment" in body:
-            deployment = body["deployment"]
-            if deployment is None or not isinstance(deployment, str) or not deployment.strip():
-                raise HTTPException(status_code=422, detail="deployment must be a non-empty string")
-            profile["deployment"] = deployment.strip()
-
-        for field in ("reasoning_enabled", "reasoning_effort", "reasoning_summary"):
-            if field not in body:
-                continue
-            value = body[field]
-            if value is None:
-                profile.pop(field, None)
-                continue
-            if field == "reasoning_enabled":
-                if not isinstance(value, bool):
-                    raise HTTPException(status_code=422, detail=f"{field} must be a boolean")
-                profile[field] = value
-            else:
-                if not isinstance(value, str) or not value.strip():
+        def patch(profile: dict[str, Any]) -> dict[str, Any] | None:
+            if "deployment" in body:
+                deployment = body["deployment"]
+                if not isinstance(deployment, str) or not deployment.strip():
                     raise HTTPException(
-                        status_code=422, detail=f"{field} must be a non-empty string"
+                        status_code=422, detail="deployment must be a non-empty string"
                     )
-                profile[field] = value.strip()
+                profile["deployment"] = deployment.strip()
+            for field in ("reasoning_enabled", "reasoning_effort", "reasoning_summary"):
+                if field not in body:
+                    continue
+                value = body[field]
+                if value is None:
+                    profile.pop(field, None)
+                elif field == "reasoning_enabled":
+                    if not isinstance(value, bool):
+                        raise HTTPException(status_code=422, detail=f"{field} must be a boolean")
+                    profile[field] = value
+                else:
+                    if not isinstance(value, str) or not value.strip():
+                        raise HTTPException(
+                            status_code=422, detail=f"{field} must be a non-empty string"
+                        )
+                    profile[field] = value.strip()
+            return profile
 
-        # Retain raw sibling entries and the original key's identity. The
-        # routing validator normalizes surrounding whitespace in public names.
-        stored_name = next(key for key in reversed(raw) if key.strip() == name)
-        updated_document = {**raw, stored_name: profile}
-        public_profiles = {**profiles, name: profile}
-        payload = {
-            "profiles": [
-                _safe_public_profile(profile_name, config)
-                for profile_name, config in public_profiles.items()
-            ]
-        }
-        # Validate the complete causal snapshot before the write can commit.
-        await asyncio.to_thread(
-            store.save_document, PROGENITOR_STATE_PREFIX, MODEL_PROFILES_DOC_KEY, updated_document
-        )
-        broadcast("profiles.snapshot", payload, request_id=request_id)
+        store = get_store()
+        await asyncio.to_thread(_mutate_profile, store, name, patch)
+        await broadcast_model_profiles_snapshot(store, broadcast, request_id=request_id)
         return acknowledgement_response(request_id, ["profiles.snapshot"])
 
     @router.delete(
@@ -168,34 +178,8 @@ def create_model_profile_router(
     async def delete_model_profile(name: str, request: Request) -> UiRequestAcknowledgement:
         request_id = request_correlation_id(request, request.headers.get("x-request-id"))
         store = get_store()
-        document = await asyncio.to_thread(
-            store.get_document, PROGENITOR_STATE_PREFIX, MODEL_PROFILES_DOC_KEY
-        )
-        raw = document.payload if document else default_model_profiles_payload()
-        if not isinstance(raw, dict):
-            raise HTTPException(status_code=422, detail="Stored profile document is malformed")
-        try:
-            profiles = validate_model_profiles_payload(dict(raw))
-        except ValueError as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
-        if name not in profiles:
-            raise HTTPException(status_code=404, detail=f"Profile {name!r} not found")
-
-        # Delete the original raw key, not its normalized public name. This
-        # matches PATCH and preserves the identity of unaffected siblings.
-        stored_name = next(key for key in reversed(raw) if key.strip() == name)
-        updated_document = {key: value for key, value in raw.items() if key != stored_name}
-        payload = {
-            "profiles": [
-                _safe_public_profile(profile_name, config)
-                for profile_name, config in profiles.items()
-                if profile_name != name
-            ]
-        }
-        await asyncio.to_thread(
-            store.save_document, PROGENITOR_STATE_PREFIX, MODEL_PROFILES_DOC_KEY, updated_document
-        )
-        broadcast("profiles.snapshot", payload, request_id=request_id)
+        await asyncio.to_thread(_mutate_profile, store, name, lambda _profile: None)
+        await broadcast_model_profiles_snapshot(store, broadcast, request_id=request_id)
         return acknowledgement_response(request_id, ["profiles.snapshot"])
 
     return router

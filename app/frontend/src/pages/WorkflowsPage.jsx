@@ -116,10 +116,6 @@ const DEFAULT_NODE_SIZES = {
     data: { width: 320, height: 130 },
     settings: { width: 400, height: 240 },
   },
-  human_input: {
-    data: { width: 320, height: 150 },
-    settings: { width: 400, height: 280 },
-  },
   document_read: {
     data: { width: 320, height: 140 },
     settings: { width: 380, height: 240 },
@@ -141,8 +137,8 @@ const DEFAULT_NODE_SIZES = {
     settings: { width: 380, height: 320 },
   },
 };
-// V3 node menu: generic agent, data, event, extract, condition, approval, and
-// human_input nodes only. No capability-specific kinds.
+// V3 node menu: generic agent, data, event, extract, condition and approval
+// nodes only. No capability-specific kinds.
 const NODE_MENU_CATEGORIES = [
   { id: 'triggers', label: 'Triggers', items: [{ id: 'event', kind: 'event', label: 'Event', icon: 'E' }, { id: 'cron', kind: 'cron', label: 'Cron', icon: 'C' }] },
   { id: 'agents', label: 'Agents', items: [{ id: 'agent', kind: 'agent', label: 'Agent', icon: 'A' }] },
@@ -160,7 +156,6 @@ const NODE_MENU_CATEGORIES = [
     items: [
       { id: 'condition', kind: 'condition', label: 'Condition', icon: '◇' },
       { id: 'approval', kind: 'approval', label: 'Approval', icon: '✓' },
-      { id: 'human_input', kind: 'human_input', label: 'Human Input', icon: 'H' },
     ],
   },
 ];
@@ -262,12 +257,6 @@ const DOCK_NODE_DEFAULTS = {
       type: 'object',
       properties: { approved: { type: 'boolean' }, rejected: { type: 'boolean' } },
     },
-  }),
-  human_input: () => ({
-    title: 'Human Input',
-    message: 'Provide a value to continue.',
-    inputSchema: { type: 'object', properties: {} },
-    outputSchema: { type: 'object', properties: {} },
   }),
   cron: defaultCronNode,
   document_read: defaultReadNode,
@@ -393,7 +382,6 @@ const NODE_MINIMAP_COLORS = {
   extract: '#a371f7',
   condition: '#d29922',
   approval: '#f85149',
-  human_input: '#39c5cf',
   document_read: '#79c0ff',
   document_query: '#a5d6ff',
   document_write: '#56d364',
@@ -523,7 +511,7 @@ function buildNodeData(kind, node, callbacks, latestRun) {
       ...runState,
       kind,
       title: node.title || 'Data',
-      value: cloneValue(node.value) || null,
+      value: cloneValue(node.value) ?? null,
       outputSchema: cloneValue(node.output_schema) || null,
       onChange: callbacks.onNodeChange,
       onDelete: callbacks.onDeleteNode,
@@ -602,20 +590,6 @@ function buildNodeData(kind, node, callbacks, latestRun) {
       canDelete: true,
     };
   }
-  if (kind === 'human_input') {
-    return {
-      ...shared,
-      ...runState,
-      kind,
-      title: node.title || 'Human Input',
-      message: node.message || '',
-      inputSchema: cloneValue(node.input_schema) || null,
-      outputSchema: cloneValue(node.output_schema) || null,
-      onChange: callbacks.onNodeChange,
-      onDelete: callbacks.onDeleteNode,
-      canDelete: true,
-    };
-  }
   if (kind === 'unpack') {
     return {
       ...shared,
@@ -677,6 +651,13 @@ function workflowToFlow(definition, callbacks, latestRun) {
         : kind === 'unpack'
         ? { ...node, show_all_fields: Boolean(uiNode.show_all_fields) }
         : node;
+    const data = buildNodeData(kind, nodeData, callbacks, latestRun);
+    // A stored size is a user resize: keep it in node data so serializing and
+    // Unpack auto-sizing treat the node as customized.
+    if (uiNode.size) {
+      data.dataSize = sizes.data;
+      data.settingsSize = sizes.settings;
+    }
     return {
       id: nodeId,
       type: kind,
@@ -684,7 +665,7 @@ function workflowToFlow(definition, callbacks, latestRun) {
       width: sizes.data.width,
       height: sizes.data.height,
       style: { width: sizes.data.width, height: sizes.data.height },
-      data: buildNodeData(kind, nodeData, callbacks, latestRun),
+      data,
     };
   });
   // A typed value connection is also the execution dependency. There are no
@@ -825,14 +806,6 @@ function flowToWorkflow(baseWorkflow, nodes, edges, viewport) {
         input_schema: cloneValue(node.data?.inputSchema) || { type: 'object', properties: {} },
         output_schema: cloneValue(node.data?.outputSchema) || { type: 'string', enum: ['approved', 'rejected'] },
       };
-    } else if (node.type === 'human_input') {
-      graphNodes[node.id] = {
-        kind: 'human_input',
-        title: String(node.data?.title || 'Human Input'),
-        message: String(node.data?.message || ''),
-        input_schema: cloneValue(node.data?.inputSchema) || { type: 'object', properties: {} },
-        output_schema: cloneValue(node.data?.outputSchema) || { type: 'object', properties: {} },
-      };
     } else if (node.type === 'unpack') {
       graphNodes[node.id] = {
         kind: 'unpack',
@@ -941,12 +914,13 @@ function schemaTypes(definition) {
   return typeof definition?.type === 'string' ? [definition.type] : [];
 }
 
-// Structural compatibility: same JSON type, and matching title if both
-// declare one. Mirrors _schema_types_compatible() in app/progenitor/workflows.py.
+// Structural compatibility: every type the source can produce is accepted by
+// the target, and matching title if both declare one. Mirrors
+// _schema_types_compatible() in app/progenitor/workflows.py.
 function schemasAreCompatible(sourceDefinition, targetDefinition) {
   const sourceTypes = schemaTypes(sourceDefinition);
   const targetTypes = schemaTypes(targetDefinition);
-  if (sourceTypes.length && targetTypes.length && !sourceTypes.some((type) => targetTypes.includes(type))) {
+  if (sourceTypes.length && targetTypes.length && !sourceTypes.every((type) => targetTypes.includes(type))) {
     return false;
   }
   const sourceTitle = sourceDefinition?.title;
@@ -1624,13 +1598,10 @@ function WorkflowNodeOptionsModal({ node, onChange, onClose }) {
                 <JsonFieldEditor label="Input schema" value={node.data?.inputSchema} onCommit={(inputSchema) => onChange(node.id, { inputSchema })} />
               </>
             ) : null}
-            {kind === 'approval' || kind === 'human_input' ? (
+            {kind === 'approval' ? (
               <>
                 <label className="workflow-node-options__field">Message<textarea value={node.data?.message || ''} onChange={(event) => onChange(node.id, { message: event.target.value })} rows={3} /></label>
                 <JsonFieldEditor label="Input schema" value={node.data?.inputSchema} onCommit={(inputSchema) => onChange(node.id, { inputSchema })} />
-                {kind === 'human_input' ? (
-                  <JsonFieldEditor label="Output schema" value={node.data?.outputSchema} onCommit={(outputSchema) => onChange(node.id, { outputSchema })} />
-                ) : null}
               </>
             ) : null}
           </section>
@@ -1828,7 +1799,6 @@ const NODE_TYPES = {
   cron: CronNode,
   agent: PromptNode,
   extract: PromptNode,
-  human_input: PromptNode,
   data: WorkflowDataNode,
   condition: WorkflowControlNode,
   approval: WorkflowControlNode,
@@ -2261,6 +2231,99 @@ function WorkflowsInner() {
   const hasUnsavedChanges = Boolean(localDraftDirty && selectedDetail?.workflow && draftHash && draftHash !== selectedHash);
   const nodeOptionsNode = graphNodes.find((node) => node.id === nodeOptionsId) || null;
 
+  const syncWorkflowFromGraph = useCallback((nextNodes, nextEdges, nextViewport = viewportRef.current, markDirty = true) => {
+    nodesRef.current = nextNodes;
+    edgesRef.current = nextEdges;
+    viewportRef.current = nextViewport;
+    if (markDirty) {
+      setLocalDraftDirty(true);
+    }
+    setDraftWorkflow((current) => (current ? flowToWorkflow(current, nextNodes, nextEdges, nextViewport) : current));
+  }, []);
+
+  // One callback set for every node, whichever path created it (hydration,
+  // JSON apply, palette, Unpack). Reads graph state through refs, so it is
+  // stable and never captures a stale graph.
+  const nodeCallbacks = useMemo(() => {
+    const commit = (nextNodes, nextEdges) => {
+      if (nextEdges !== edgesRef.current) setGraphEdges(nextEdges);
+      setGraphNodes(nextNodes);
+      syncWorkflowFromGraph(nextNodes, nextEdges, viewportRef.current, !hydratingGraphRef.current);
+    };
+    const resizeNode = (nodeId, sizeFor) => {
+      commit(nodesRef.current.map((node) => {
+        if (node.id !== nodeId) return node;
+        const { size, data } = sizeFor(node);
+        // React Flow's NodeResizer writes width/height as top-level node
+        // fields (taking precedence over style on later renders once a
+        // manual resize has happened), so both must be kept in sync here.
+        return {
+          ...node,
+          width: size.width,
+          height: size.height,
+          style: { ...node.style, width: size.width, height: size.height },
+          data: { ...node.data, ...data },
+        };
+      }), edgesRef.current);
+    };
+    return {
+      onNodeChange: (nodeId, patch) => {
+        const node = nodesRef.current.find((candidate) => candidate.id === nodeId);
+        if (!node) return;
+        const patched = nodesRef.current.map((candidate) => (
+          candidate.id === nodeId ? { ...candidate, data: { ...candidate.data, ...patch } } : candidate
+        ));
+        let nextEdges = edgesRef.current;
+        let nextNodes = patched;
+        const schemaChanged = patch.outputSchema !== undefined
+          && JSON.stringify(node.data?.outputSchema) !== JSON.stringify(patch.outputSchema);
+        if (schemaChanged && !hydratingGraphRef.current) {
+          nextNodes = recomputeUnpackSchemas(patched, nextEdges);
+          const lostEdges = computeLostEdgesForUnpackChange(nextEdges, nextNodes);
+          if (lostEdges.length > 0) {
+            const edgeList = lostEdges.map((e) => `${e.source} → ${e.target}`).join(', ');
+            if (!window.confirm(`This change will remove ${lostEdges.length} connection(s): ${edgeList}. Continue?`)) return;
+            nextEdges = nextEdges.filter((e) => !lostEdges.some((r) => r.id === e.id));
+          }
+        }
+        commit(sizeUnpackNodes(nextNodes, nextEdges), nextEdges);
+      },
+      onDeleteNode: (nodeId) => {
+        const nextEdges = edgesRef.current.filter((edge) => edge.source !== nodeId && edge.target !== nodeId);
+        const remaining = nodesRef.current.filter((node) => node.id !== nodeId);
+        commit(sizeUnpackNodes(recomputeUnpackSchemas(remaining, nextEdges), nextEdges), nextEdges);
+      },
+      onUnpack: (sourceNodeId, sourcePort) => {
+        const sourceNode = nodesRef.current.find((n) => n.id === sourceNodeId);
+        if (!sourceNode) return;
+        createUnpackNodeRef.current(sourceNodeId, sourcePort, {
+          x: sourceNode.position.x + (sourceNode.width || 320) + 40,
+          y: sourceNode.position.y,
+        });
+      },
+      onOpenOptions: setNodeOptionsId,
+      onToggleExpanded: (nodeId) => resizeNode(nodeId, (node) => {
+        const expanded = !node.data.expanded;
+        return { size: nodeCurrentSize(node, expanded), data: { expanded } };
+      }),
+      onResize: (nodeId, size) => resizeNode(nodeId, (node) => ({
+        size,
+        data: { [node.data.expanded ? 'settingsSize' : 'dataSize']: size },
+      })),
+    };
+  }, [setGraphEdges, setGraphNodes, syncWorkflowFromGraph]);
+
+  // Node data fields expected by the node components, for nodes built here
+  // rather than through workflowToFlow/buildNodeData.
+  const nodeDataCallbacks = useMemo(() => ({
+    onChange: nodeCallbacks.onNodeChange,
+    onDelete: nodeCallbacks.onDeleteNode,
+    onUnpack: nodeCallbacks.onUnpack,
+    onOpenOptions: nodeCallbacks.onOpenOptions,
+    onToggleExpanded: nodeCallbacks.onToggleExpanded,
+    onResize: nodeCallbacks.onResize,
+  }), [nodeCallbacks]);
+
   const syncDraftFromWorkflow = useCallback((workflow, latestRun, path, preserveDirty = false) => {
     if (!workflow) {
       setDraftWorkflow(null);
@@ -2279,111 +2342,7 @@ function WorkflowsInner() {
     setLocalDraftDirty(false);
     syncedHashRef.current = nextHash;
     const cloned = cloneValue(workflow);
-    const flow = workflowToFlow(cloned, {
-      onNodeChange: (nodeId, patch) => {
-        const node = nodesRef.current.find((n) => n.id === nodeId);
-        const nextOutputSchema = patch.outputSchema !== undefined ? patch.outputSchema : node?.data?.outputSchema;
-        if (!hydratingGraphRef.current && JSON.stringify(node?.data?.outputSchema) !== JSON.stringify(nextOutputSchema)) {
-          const nextNodes = nodesRef.current.map((n) => (
-            n.id === nodeId ? { ...n, data: { ...n.data, ...patch } } : n
-          ));
-          const recomputed = recomputeUnpackSchemas(nextNodes, edgesRef.current);
-          const lostEdges = computeLostEdgesForUnpackChange(edgesRef.current, recomputed);
-          if (lostEdges.length > 0) {
-            const edgeList = lostEdges.map((e) => `${e.source} → ${e.target}`).join(', ');
-            const confirmed = window.confirm(
-              `This change will remove ${lostEdges.length} connection(s): ${edgeList}. Continue?`,
-            );
-            if (!confirmed) return;
-            const finalEdges = edgesRef.current.filter((e) => !lostEdges.some((r) => r.id === e.id));
-            const prunedNodes = sizeUnpackNodes(recomputed, finalEdges);
-            setGraphNodes(prunedNodes);
-            setGraphEdges(finalEdges);
-            nodesRef.current = prunedNodes;
-            edgesRef.current = finalEdges;
-            setDraftWorkflow((current) => flowToWorkflow(current || cloned, prunedNodes, finalEdges, viewportRef.current));
-            return;
-          }
-          setGraphNodes(recomputed);
-          nodesRef.current = recomputed;
-          setDraftWorkflow((current) => flowToWorkflow(current || cloned, recomputed, edgesRef.current, viewportRef.current));
-          return;
-        }
-        setGraphNodes((currentNodes) => {
-          const nextNodes = sizeUnpackNodes(currentNodes.map((node) => (
-            node.id === nodeId ? { ...node, data: { ...node.data, ...patch } } : node
-          )), edgesRef.current);
-          nodesRef.current = nextNodes;
-          if (!hydratingGraphRef.current) setLocalDraftDirty(true);
-          setDraftWorkflow((current) => flowToWorkflow(current || cloned, nextNodes, edgesRef.current, viewportRef.current));
-          return nextNodes;
-        });
-      },
-      onDeleteNode: (nodeId) => {
-        setGraphNodes((currentNodes) => {
-          const nextNodes = currentNodes.filter((node) => node.id !== nodeId);
-          const nextEdges = edgesRef.current.filter((edge) => edge.source !== nodeId && edge.target !== nodeId);
-          nodesRef.current = nextNodes;
-          edgesRef.current = nextEdges;
-          setGraphEdges(nextEdges);
-          if (!hydratingGraphRef.current) setLocalDraftDirty(true);
-          setDraftWorkflow((current) => flowToWorkflow(current || cloned, nextNodes, nextEdges, viewportRef.current));
-          return nextNodes;
-        });
-      },
-      onUnpack: (sourceNodeId, sourcePort) => {
-        const sourceNode = nodesRef.current.find((n) => n.id === sourceNodeId);
-        if (!sourceNode) return;
-        const position = {
-          x: sourceNode.position.x + (sourceNode.width || 320) + 40,
-          y: sourceNode.position.y,
-        };
-        createUnpackNodeRef.current(sourceNodeId, sourcePort, position);
-      },
-      onOpenOptions: setNodeOptionsId,
-      onToggleExpanded: (nodeId) => {
-        setGraphNodes((currentNodes) => {
-          const nextNodes = currentNodes.map((node) => {
-            if (node.id !== nodeId) return node;
-            const nextExpanded = !node.data.expanded;
-            const nextSize = nodeCurrentSize(node, nextExpanded);
-            return {
-              ...node,
-              // React Flow's NodeResizer writes width/height as top-level node
-              // fields (taking precedence over style on later renders once a
-              // manual resize has happened), so both must be kept in sync here.
-              width: nextSize.width,
-              height: nextSize.height,
-              style: { ...node.style, width: nextSize.width, height: nextSize.height },
-              data: { ...node.data, expanded: nextExpanded },
-            };
-          });
-          nodesRef.current = nextNodes;
-          if (!hydratingGraphRef.current) setLocalDraftDirty(true);
-          setDraftWorkflow((current) => flowToWorkflow(current || cloned, nextNodes, edgesRef.current, viewportRef.current));
-          return nextNodes;
-        });
-      },
-      onResize: (nodeId, size) => {
-        setGraphNodes((currentNodes) => {
-          const nextNodes = currentNodes.map((node) => {
-            if (node.id !== nodeId) return node;
-            const sizeKey = node.data.expanded ? 'settingsSize' : 'dataSize';
-            return {
-              ...node,
-              width: size.width,
-              height: size.height,
-              style: { ...node.style, width: size.width, height: size.height },
-              data: { ...node.data, [sizeKey]: size },
-            };
-          });
-          nodesRef.current = nextNodes;
-          if (!hydratingGraphRef.current) setLocalDraftDirty(true);
-          setDraftWorkflow((current) => flowToWorkflow(current || cloned, nextNodes, edgesRef.current, viewportRef.current));
-          return nextNodes;
-        });
-      },
-    }, latestRun);
+    const flow = workflowToFlow(cloned, nodeCallbacks, latestRun);
     flow.nodes = sizeUnpackNodes(flow.nodes, flow.edges);
     nodesRef.current = flow.nodes;
     edgesRef.current = flow.edges;
@@ -2403,7 +2362,7 @@ function WorkflowsInner() {
         hydratingGraphRef.current = false;
       }, 250);
     });
-  }, [hasUnsavedChanges, reactFlow]);
+  }, [hasUnsavedChanges, nodeCallbacks, reactFlow]);
 
   useEffect(() => {
     if (!selectedDetail?.workflow || !selectedPath) {
@@ -2446,27 +2405,19 @@ function WorkflowsInner() {
     });
   }, []);
 
-  const syncWorkflowFromGraph = useCallback((nextNodes, nextEdges, nextViewport = viewportRef.current, markDirty = true) => {
-    nodesRef.current = nextNodes;
-    edgesRef.current = nextEdges;
-    viewportRef.current = nextViewport;
-    if (markDirty) {
-      setLocalDraftDirty(true);
-    }
-    setDraftWorkflow((current) => (current ? flowToWorkflow(current, nextNodes, nextEdges, nextViewport) : current));
-  }, []);
-
+  // Graph handlers compute from the refs synchronously and only then set
+  // state. Side effects inside a state updater run later, against the state
+  // of that moment: a queued selection change would re-sync a graph that a
+  // removal had already left (Cut put the edge back into the draft).
   const onNodesChange = useCallback((changes) => {
-    setGraphNodes((currentNodes) => {
-      const nextNodes = applyNodeChanges(changes, currentNodes);
-      if (!hydratingGraphRef.current) {
-        const marksDirty = changes.some((change) => (
-          change.type === 'add' || change.type === 'remove' || change.dragging === true
-        ));
-        syncWorkflowFromGraph(nextNodes, edgesRef.current, viewportRef.current, marksDirty);
-      }
-      return nextNodes;
-    });
+    const nextNodes = applyNodeChanges(changes, nodesRef.current);
+    nodesRef.current = nextNodes;
+    setGraphNodes(nextNodes);
+    if (hydratingGraphRef.current) return;
+    const marksDirty = changes.some((change) => (
+      change.type === 'add' || change.type === 'remove' || change.dragging === true
+    ));
+    syncWorkflowFromGraph(nextNodes, edgesRef.current, viewportRef.current, marksDirty);
   }, [syncWorkflowFromGraph]);
 
   const portFromHandle = useCallback((handleId) => (
@@ -2502,35 +2453,31 @@ function WorkflowsInner() {
         syncWorkflowFromGraph(prunedNodes, finalEdges);
         return;
       }
+      const sizedNodes = sizeUnpackNodes(nextNodes, nextEdges);
+      setGraphNodes(sizedNodes);
       setGraphEdges(nextEdges);
-      syncWorkflowFromGraph(nextNodes, nextEdges);
+      syncWorkflowFromGraph(sizedNodes, nextEdges);
       return;
     }
 
-    setGraphEdges((currentEdges) => {
-      const nextEdges = applyEdgeChanges(changes, currentEdges);
-      if (!hydratingGraphRef.current) {
-        const marksDirty = changes.some((change) => change.type === 'add' || change.type === 'remove');
-        const recomputed = recomputeUnpackSchemas(nodesRef.current, nextEdges);
-        if (recomputed !== nodesRef.current) {
-          setGraphNodes(recomputed);
-          syncWorkflowFromGraph(recomputed, nextEdges, viewportRef.current, marksDirty);
-        } else {
-          syncWorkflowFromGraph(nodesRef.current, nextEdges, viewportRef.current, marksDirty);
-        }
-      }
-      return nextEdges;
-    });
+    const nextEdges = applyEdgeChanges(changes, edgesRef.current);
+    edgesRef.current = nextEdges;
+    setGraphEdges(nextEdges);
+    if (hydratingGraphRef.current) return;
+    const marksDirty = changes.some((change) => change.type === 'add' || change.type === 'remove');
+    const recomputed = recomputeUnpackSchemas(nodesRef.current, nextEdges);
+    if (recomputed !== nodesRef.current) setGraphNodes(recomputed);
+    syncWorkflowFromGraph(recomputed, nextEdges, viewportRef.current, marksDirty);
   }, [syncWorkflowFromGraph, portFromHandle]);
 
   const handleEdgeClick = useCallback((event, edge) => {
     if (canvasTool !== 'cut') return;
     event.preventDefault();
     event.stopPropagation();
-    const nextEdges = edgesRef.current.filter((candidate) => candidate.id !== edge.id);
-    setGraphEdges(nextEdges);
-    syncWorkflowFromGraph(nodesRef.current, nextEdges, viewportRef.current);
-  }, [canvasTool, syncWorkflowFromGraph]);
+    // Same path as a keyboard/edge-menu removal, so Unpack schemas are
+    // recomputed and dependent edges confirmed and pruned.
+    onEdgesChange([{ type: 'remove', id: edge.id }]);
+  }, [canvasTool, onEdgesChange]);
 
   const validateConnection = useCallback((connection) => {
     const source = nodesRef.current.find((node) => node.id === connection.source);
@@ -2561,18 +2508,14 @@ function WorkflowsInner() {
       show('error', 'Invalid workflow connection', validationError);
       return;
     }
-    setGraphEdges((currentEdges) => {
-      const nextEdges = addEdge(
-        { ...connection, ...DEFAULT_EDGE_OPTIONS, className: 'workflow-edge--data' },
-        currentEdges,
-      );
-      const recomputed = recomputeUnpackSchemas(nodesRef.current, nextEdges);
-      if (recomputed !== nodesRef.current) {
-        setGraphNodes(recomputed);
-      }
-      syncWorkflowFromGraph(recomputed, nextEdges, viewportRef.current);
-      return nextEdges;
-    });
+    const nextEdges = addEdge(
+      { ...connection, ...DEFAULT_EDGE_OPTIONS, className: 'workflow-edge--data' },
+      edgesRef.current,
+    );
+    const recomputed = recomputeUnpackSchemas(nodesRef.current, nextEdges);
+    setGraphEdges(nextEdges);
+    if (recomputed !== nodesRef.current) setGraphNodes(recomputed);
+    syncWorkflowFromGraph(recomputed, nextEdges, viewportRef.current);
   }, [show, syncWorkflowFromGraph, validateConnection]);
 
   const onConnectStart = useCallback((_event, { nodeId, handleId, handleType }) => {
@@ -2644,70 +2587,7 @@ function WorkflowsInner() {
           currentNodeId: null,
           completedNodeIds: [],
           expanded: true,
-          onChange: (targetId, patch) => {
-            setGraphNodes((currentNodes) => {
-              const updated = currentNodes.map((node) => (
-                node.id === targetId ? { ...node, data: { ...node.data, ...patch } } : node
-              ));
-              syncWorkflowFromGraph(updated, edgesRef.current, viewportRef.current);
-              return updated;
-            });
-          },
-          onDelete: (targetId) => {
-            const updatedNodes = nodesRef.current.filter((node) => node.id !== targetId);
-            const updatedEdges = edgesRef.current.filter((edge) => edge.source !== targetId && edge.target !== targetId);
-            setGraphNodes(updatedNodes);
-            setGraphEdges(updatedEdges);
-            syncWorkflowFromGraph(updatedNodes, updatedEdges, viewportRef.current);
-          },
-          onOpenOptions: setNodeOptionsId,
-          onUnpack: (sourceNodeId, sourcePort) => {
-            const sourceNode = nodesRef.current.find((n) => n.id === sourceNodeId);
-            if (!sourceNode) return;
-            const pos = {
-              x: sourceNode.position.x + (sourceNode.width || 320) + 40,
-              y: sourceNode.position.y,
-            };
-            createUnpackNodeRef.current(sourceNodeId, sourcePort, pos);
-          },
-          onToggleExpanded: (targetId) => {
-            setGraphNodes((currentNodes) => {
-              const nextNodes = currentNodes.map((node) => {
-                if (node.id !== targetId) return node;
-                const nextExpanded = !node.data.expanded;
-                const nextSize = nodeCurrentSize(node, nextExpanded);
-                return {
-                  ...node,
-                  // React Flow's NodeResizer writes width/height as top-level node
-              // fields (taking precedence over style on later renders once a
-              // manual resize has happened), so both must be kept in sync here.
-              width: nextSize.width,
-              height: nextSize.height,
-              style: { ...node.style, width: nextSize.width, height: nextSize.height },
-                  data: { ...node.data, expanded: nextExpanded },
-                };
-              });
-              syncWorkflowFromGraph(nextNodes, edgesRef.current, viewportRef.current);
-              return nextNodes;
-            });
-          },
-          onResize: (targetId, size) => {
-            setGraphNodes((currentNodes) => {
-              const nextNodes = currentNodes.map((node) => {
-                if (node.id !== targetId) return node;
-                const sizeKey = node.data.expanded ? 'settingsSize' : 'dataSize';
-                return {
-                  ...node,
-                  width: size.width,
-              height: size.height,
-              style: { ...node.style, width: size.width, height: size.height },
-                  data: { ...node.data, [sizeKey]: size },
-                };
-              });
-              syncWorkflowFromGraph(nextNodes, edgesRef.current, viewportRef.current);
-              return nextNodes;
-            });
-          },
+          ...nodeDataCallbacks,
           canDelete: true,
         },
       },
@@ -2716,7 +2596,7 @@ function WorkflowsInner() {
     setGraphNodes(nextNodes);
     setGraphEdges(nextEdges);
     syncWorkflowFromGraph(nextNodes, nextEdges, viewportRef.current);
-  }, [draftWorkflow, documentTypes, setGraphEdges, setGraphNodes, setNodeOptionsId, syncWorkflowFromGraph]);
+  }, [draftWorkflow, documentTypes, nodeDataCallbacks, setGraphEdges, setGraphNodes, syncWorkflowFromGraph]);
 
   const createUnpackNode = useCallback((sourceNodeId, sourcePort, position) => {
     const nodeId = `unpack_${Math.random().toString(36).slice(2, 10)}`;
@@ -2736,60 +2616,7 @@ function WorkflowsInner() {
         currentNodeId: null,
         completedNodeIds: [],
         expanded: false,
-        onChange: (targetId, patch) => {
-          setGraphNodes((currentNodes) => {
-            const updated = currentNodes.map((node) => (
-              node.id === targetId ? { ...node, data: { ...node.data, ...patch } } : node
-            ));
-            const recomputed = recomputeUnpackSchemas(updated, edgesRef.current);
-            nodesRef.current = recomputed;
-            syncWorkflowFromGraph(recomputed, edgesRef.current);
-            return recomputed;
-          });
-        },
-        onDelete: (targetId) => {
-          const updatedNodes = nodesRef.current.filter((node) => node.id !== targetId);
-          const updatedEdges = edgesRef.current.filter((edge) => edge.source !== targetId && edge.target !== targetId);
-          setGraphNodes(updatedNodes);
-          setGraphEdges(updatedEdges);
-          syncWorkflowFromGraph(updatedNodes, updatedEdges);
-        },
-        onOpenOptions: setNodeOptionsId,
-        onToggleExpanded: (targetId) => {
-          setGraphNodes((currentNodes) => {
-            const nextNodes = currentNodes.map((node) => {
-              if (node.id !== targetId) return node;
-              const nextExpanded = !node.data.expanded;
-              const nextSize = nodeCurrentSize(node, nextExpanded);
-              return {
-                ...node,
-                width: nextSize.width,
-                height: nextSize.height,
-                style: { ...node.style, width: nextSize.width, height: nextSize.height },
-                data: { ...node.data, expanded: nextExpanded },
-              };
-            });
-            syncWorkflowFromGraph(nextNodes, edgesRef.current);
-            return nextNodes;
-          });
-        },
-        onResize: (targetId, size) => {
-          setGraphNodes((currentNodes) => {
-            const nextNodes = currentNodes.map((node) => {
-              if (node.id !== targetId) return node;
-              const sizeKey = node.data.expanded ? 'settingsSize' : 'dataSize';
-              return {
-                ...node,
-                width: size.width,
-                height: size.height,
-                style: { ...node.style, width: size.width, height: size.height },
-                data: { ...node.data, [sizeKey]: size },
-              };
-            });
-            syncWorkflowFromGraph(nextNodes, edgesRef.current);
-            return nextNodes;
-          });
-        },
+        ...nodeDataCallbacks,
         canDelete: true,
       },
     };
@@ -2808,9 +2635,9 @@ function WorkflowsInner() {
     setGraphNodes(recomputed);
     setGraphEdges(nextEdges);
     syncWorkflowFromGraph(recomputed, nextEdges);
-  }, [setGraphEdges, setGraphNodes, setNodeOptionsId, syncWorkflowFromGraph]);
-  // Callbacks declared above (graph hydration, palette add, drag-to-pane) call
-  // this through the ref: it depends on syncWorkflowFromGraph, declared later.
+  }, [nodeDataCallbacks, setGraphEdges, setGraphNodes, syncWorkflowFromGraph]);
+  // nodeCallbacks.onUnpack and drag-to-pane call this through the ref: it
+  // builds nodes with nodeDataCallbacks, so it is declared after them.
   createUnpackNodeRef.current = createUnpackNode;
 
   const onCanvasPaneClick = useCallback((event) => {
@@ -2879,68 +2706,15 @@ function WorkflowsInner() {
   const handleApplyJson = () => {
     try {
       const parsed = JSON.parse(jsonDraft);
-      const flow = workflowToFlow(parsed, {
-        onNodeChange: (nodeId, patch) => {
-          setGraphNodes((currentNodes) => {
-            const nextNodes = sizeUnpackNodes(currentNodes.map((node) => (
-              node.id === nodeId ? { ...node, data: { ...node.data, ...patch } } : node
-            )), edgesRef.current);
-            syncWorkflowFromGraph(nextNodes, edgesRef.current, viewportRef.current);
-            return nextNodes;
-          });
-        },
-        onDeleteNode: (nodeId) => {
-          const nextNodes = nodesRef.current.filter((node) => node.id !== nodeId);
-          const nextEdges = edgesRef.current.filter((edge) => edge.source !== nodeId && edge.target !== nodeId);
-          setGraphNodes(nextNodes);
-          setGraphEdges(nextEdges);
-          syncWorkflowFromGraph(nextNodes, nextEdges, viewportRef.current);
-        },
-        onToggleExpanded: (nodeId) => {
-          setGraphNodes((currentNodes) => {
-            const nextNodes = currentNodes.map((node) => {
-              if (node.id !== nodeId) return node;
-              const nextExpanded = !node.data.expanded;
-              const nextSize = nodeCurrentSize(node, nextExpanded);
-              return {
-                ...node,
-                // React Flow's NodeResizer writes width/height as top-level node
-              // fields (taking precedence over style on later renders once a
-              // manual resize has happened), so both must be kept in sync here.
-              width: nextSize.width,
-              height: nextSize.height,
-              style: { ...node.style, width: nextSize.width, height: nextSize.height },
-                data: { ...node.data, expanded: nextExpanded },
-              };
-            });
-            syncWorkflowFromGraph(nextNodes, edgesRef.current, viewportRef.current);
-            return nextNodes;
-          });
-        },
-        onResize: (nodeId, size) => {
-          setGraphNodes((currentNodes) => {
-            const nextNodes = currentNodes.map((node) => {
-              if (node.id !== nodeId) return node;
-              const sizeKey = node.data.expanded ? 'settingsSize' : 'dataSize';
-              return {
-                ...node,
-                width: size.width,
-              height: size.height,
-              style: { ...node.style, width: size.width, height: size.height },
-                data: { ...node.data, [sizeKey]: size },
-              };
-            });
-            syncWorkflowFromGraph(nextNodes, edgesRef.current, viewportRef.current);
-            return nextNodes;
-          });
-        },
-      }, selectedLatestRun);
+      const flow = workflowToFlow(parsed, nodeCallbacks, selectedLatestRun);
+      const nextNodes = sizeUnpackNodes(flow.nodes, flow.edges);
       setDraftWorkflow(parsed);
-      setGraphNodes(flow.nodes);
+      setGraphNodes(nextNodes);
       setGraphEdges(flow.edges);
-      nodesRef.current = flow.nodes;
+      nodesRef.current = nextNodes;
       edgesRef.current = flow.edges;
       viewportRef.current = flow.viewport;
+      setLocalDraftDirty(true);
       setJsonError('');
       setActiveSidePanel(null);
     } catch (error) {
@@ -3286,7 +3060,7 @@ function WorkflowsInner() {
 
 // This helper is exported for the focused workflow graph unit test.
 // eslint-disable-next-line react-refresh/only-export-components
-export { flowToWorkflow, workflowToFlow, NODE_MENU_CATEGORIES, schemaProperties, canvasMenuAnchor, visibleNodePortProperties, deriveUnpackSchemas, recomputeUnpackSchemas, computeLostEdgesForUnpackChange, isUnpackableSchema, parsePromptPlaceholders, derivePromptInputSchema, nodeInputPorts, nodeOutputPorts };
+export { flowToWorkflow, workflowToFlow, NODE_MENU_CATEGORIES, schemaProperties, canvasMenuAnchor, visibleNodePortProperties, deriveUnpackSchemas, recomputeUnpackSchemas, computeLostEdgesForUnpackChange, isUnpackableSchema, parsePromptPlaceholders, derivePromptInputSchema, nodeInputPorts, nodeOutputPorts, schemasAreCompatible };
 export default function WorkflowsPage() {
   return (
     <ReactFlowProvider>

@@ -110,6 +110,47 @@ async def test_paused_workflow_skips_due_times_and_does_not_replay_them_on_resum
 
 
 @pytest.mark.asyncio
+async def test_resume_after_a_tick_inside_the_pause_does_not_fire_paused_due_times():
+    store, definition, executor, clock = _setup(expression="*/5 * * * *")
+    await clock.at(START)
+    paused = definition.model_dump(mode="json", by_alias=True) | {"paused": True}
+    save_workflow_definition(store, paused)
+    # The pause wakes the clock before any due time passes.
+    await clock.at(START + timedelta(minutes=1))
+
+    save_workflow_definition(store, paused | {"paused": False})
+    next_due = await clock.at(START + timedelta(minutes=12))
+
+    assert executor.calls == []
+    assert next_due == START + timedelta(minutes=15)
+    await clock.at(START + timedelta(minutes=15, seconds=1))
+    assert [call["trigger"]["scheduled_for"] for call in executor.calls] == [
+        "2026-10-12T08:45:00+00:00"
+    ]
+
+
+def test_clock_restarted_under_a_new_event_loop_keeps_running():
+    store, _definition, executor, _clock = _setup(expression="*/5 * * * *")
+    clock = WorkflowCronClock(
+        store_getter=lambda: store,
+        definitions_getter=list_workflow_definitions,
+        executor_getter=lambda: executor,
+    )
+
+    async def lifespan():
+        await clock.start()
+        await asyncio.sleep(0.01)  # the run loop now waits on its wake event
+        clock.wake()
+        await asyncio.sleep(0.01)
+        task = clock._task
+        assert task is not None and not task.done()
+        await clock.stop()
+
+    asyncio.run(lifespan())
+    asyncio.run(lifespan())
+
+
+@pytest.mark.asyncio
 async def test_changing_the_expression_restarts_counting_from_now():
     store, definition, executor, clock = _setup(expression="0 9 * * *")
     await clock.at(START)

@@ -6,13 +6,14 @@ import asyncio
 import contextlib
 import copy
 import logging
+import threading
 from collections.abc import Callable, Iterable, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Any, Literal, LiteralString, Protocol, cast
+from typing import Any, Literal, LiteralString, NamedTuple, Protocol, cast
 
 import psycopg
 from psycopg import sql
@@ -21,6 +22,7 @@ from psycopg.types.json import Jsonb
 from psycopg_pool import ConnectionPool, PoolClosed
 
 from app.backend.runtime_conversations import RuntimeConversationReader, RuntimeUnavailable
+from app.progenitor.document_kinds import SESSION_KEY_PREFIX
 from app.progenitor.routines.store import ROUTINE_GRAPH_KEY_PREFIX
 
 PROGENITOR_STATE_PREFIX = "progenitor.state"
@@ -72,11 +74,28 @@ class StoredDocument:
     updated_at: datetime | None = None
 
 
+class DocumentEventPosition(NamedTuple):
+    """A point in commit order: ``(txid, seq)`` of the last processed event.
+
+    ``seq`` alone is allocated before commit, so a later-committing writer can
+    hold a lower ``seq`` than events already visible. Ordering by the writing
+    transaction id first, and only reading transactions older than every still
+    open one, makes the visible prefix of the log final.
+    """
+
+    txid: int
+    seq: int
+
+
+EVENT_LOG_START = DocumentEventPosition(0, 0)
+
+
 @dataclass(frozen=True)
 class DocumentEvent:
     """One row of the durable document event log."""
 
     seq: int
+    txid: int
     prefix: str
     key: str
     op: DocumentEventOp
@@ -84,6 +103,10 @@ class DocumentEvent:
     after: Any
     origin: str | None
     created_at: datetime
+
+    @property
+    def position(self) -> DocumentEventPosition:
+        return DocumentEventPosition(self.txid, self.seq)
 
 
 @dataclass(frozen=True)
@@ -152,15 +175,23 @@ class BackendDocumentStore(Protocol):
 
     def delete_document(self, prefix: str, key: str) -> None: ...
 
-    def read_document_events(self, after_seq: int, limit: int) -> list[DocumentEvent]: ...
+    def mutate_document(self, prefix: str, key: str, mutator: Callable[[Any], Any]) -> Any: ...
 
-    def latest_document_event_seq(self) -> int: ...
+    def read_document_events(
+        self, after: DocumentEventPosition, limit: int
+    ) -> list[DocumentEvent]: ...
 
-    def get_document_event_cursor(self, consumer: str) -> int | None: ...
+    def latest_document_event_position(self) -> DocumentEventPosition: ...
 
-    def save_document_event_cursor(self, consumer: str, seq: int) -> None: ...
+    def get_document_event_cursor(self, consumer: str) -> DocumentEventPosition | None: ...
 
-    def prune_document_events(self, *, through_seq: int, older_than: timedelta) -> int: ...
+    def save_document_event_cursor(
+        self, consumer: str, position: DocumentEventPosition
+    ) -> None: ...
+
+    def prune_document_events(
+        self, *, through: DocumentEventPosition, older_than: timedelta
+    ) -> int: ...
 
     def query_logs(
         self,
@@ -208,8 +239,12 @@ class InMemoryDocumentStore:
             tuple[str, str], tuple[RoutineRevisionSummary, dict[str, Any]]
         ] = {}
         self._events: list[DocumentEvent] = []
-        self._event_cursors: dict[str, int] = {}
+        # Allocation counter, independent of retained rows so pruning never
+        # makes a later event reuse a processed sequence number.
+        self._last_event_seq = 0
+        self._event_cursors: dict[str, DocumentEventPosition] = {}
         self._event_listeners: list[Callable[[int], None]] = []
+        self._lock = threading.Lock()
 
     def get_document(
         self, prefix: str, key: str, default: Any | None = None
@@ -247,6 +282,20 @@ class InMemoryDocumentStore:
         if previous is not None:
             self._record_event(prefix, key, "deleted", previous.payload, None)
 
+    def mutate_document(self, prefix: str, key: str, mutator: Callable[[Any], Any]) -> Any:
+        with self._lock:
+            document = self._documents.get((prefix, key))
+            payload = copy.deepcopy(document.payload) if document is not None else None
+            new_payload = mutator(payload)
+            stored = copy.deepcopy(new_payload)
+            previous = self._documents.get((prefix, key))
+            self._documents[(prefix, key)] = StoredDocument(stored, datetime.now(UTC))
+            if previous is None:
+                self._record_event(prefix, key, "created", None, stored)
+            elif previous.payload != stored:
+                self._record_event(prefix, key, "updated", previous.payload, stored)
+            return new_payload
+
     def merge_document(self, prefix: str, key: str, payload: Any) -> bool:
         previous = self._documents.get((prefix, key))
         if previous is None or not isinstance(previous.payload, dict):
@@ -272,10 +321,13 @@ class InMemoryDocumentStore:
     ) -> None:
         if prefix not in _STORE_CHANGE_PREFIXES:
             return
-        seq = self._events[-1].seq + 1 if self._events else 1
+        self._last_event_seq += 1
+        seq = self._last_event_seq
         self._events.append(
             DocumentEvent(
                 seq=seq,
+                # Every in-memory write commits immediately, in allocation order.
+                txid=seq,
                 prefix=prefix,
                 key=key,
                 op=op,
@@ -288,22 +340,26 @@ class InMemoryDocumentStore:
         for listener in list(self._event_listeners):
             listener(seq)
 
-    def read_document_events(self, after_seq: int, limit: int) -> list[DocumentEvent]:
-        return [event for event in self._events if event.seq > after_seq][:limit]
+    def read_document_events(self, after: DocumentEventPosition, limit: int) -> list[DocumentEvent]:
+        return [event for event in self._events if event.position > after][:limit]
 
-    def latest_document_event_seq(self) -> int:
-        return self._events[-1].seq if self._events else 0
+    def latest_document_event_position(self) -> DocumentEventPosition:
+        return DocumentEventPosition(self._last_event_seq, self._last_event_seq)
 
-    def get_document_event_cursor(self, consumer: str) -> int | None:
+    def get_document_event_cursor(self, consumer: str) -> DocumentEventPosition | None:
         return self._event_cursors.get(consumer)
 
-    def save_document_event_cursor(self, consumer: str, seq: int) -> None:
-        self._event_cursors[consumer] = seq
+    def save_document_event_cursor(self, consumer: str, position: DocumentEventPosition) -> None:
+        self._event_cursors[consumer] = position
 
-    def prune_document_events(self, *, through_seq: int, older_than: timedelta) -> int:
+    def prune_document_events(
+        self, *, through: DocumentEventPosition, older_than: timedelta
+    ) -> int:
         cutoff = datetime.now(UTC) - older_than
         kept = [
-            event for event in self._events if event.seq > through_seq or event.created_at >= cutoff
+            event
+            for event in self._events
+            if event.position > through or event.created_at >= cutoff
         ]
         removed = len(self._events) - len(kept)
         self._events = kept
@@ -589,11 +645,16 @@ class PostgresDocumentStore:
         ``store`` schema is never altered.
         """
         prefixes = ", ".join(f"'{prefix}'" for prefix in _STORE_CHANGE_PREFIXES)
-        with self._cursor() as cur:
+        with self._cursor() as cur, cur.connection.transaction():
+            # ``txid`` is the writing transaction (commit-order key, see
+            # ``DocumentEventPosition``). Added columns on existing tables are
+            # filled in this one transaction, so every pre-existing event and
+            # cursor shares one txid and keeps its relative ``seq`` order.
             cur.execute(
                 """
                 CREATE TABLE IF NOT EXISTS document_events (
                     seq BIGSERIAL PRIMARY KEY,
+                    txid XID8 NOT NULL DEFAULT pg_current_xact_id(),
                     prefix TEXT NOT NULL,
                     key TEXT NOT NULL,
                     op TEXT NOT NULL CHECK (op IN ('created', 'updated', 'deleted')),
@@ -605,18 +666,33 @@ class PostgresDocumentStore:
                 """
             )
             cur.execute(
+                "ALTER TABLE document_events ADD COLUMN IF NOT EXISTS "
+                "txid XID8 NOT NULL DEFAULT pg_current_xact_id()"
+            )
+            cur.execute(
                 "CREATE INDEX IF NOT EXISTS document_events_created_at_idx "
                 "ON document_events (created_at)"
+            )
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS document_events_position_idx "
+                "ON document_events (txid, seq)"
             )
             cur.execute(
                 """
                 CREATE TABLE IF NOT EXISTS document_event_cursors (
                     consumer TEXT PRIMARY KEY,
+                    txid XID8 NOT NULL,
                     seq BIGINT NOT NULL,
                     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
                 )
                 """
             )
+            cur.execute(
+                "ALTER TABLE document_event_cursors ADD COLUMN IF NOT EXISTS "
+                "txid XID8 NOT NULL DEFAULT pg_current_xact_id()"
+            )
+            cur.execute("ALTER TABLE document_event_cursors ALTER COLUMN txid DROP DEFAULT")
+            # Placeholders are filled from module constants only, never input.
             cur.execute(
                 """
                 CREATE OR REPLACE FUNCTION progenitor_record_document_event()
@@ -635,7 +711,7 @@ class PostgresDocumentStore:
                     -- do not log an event, because they happen on every turn.
                     IF TG_OP = 'UPDATE'
                         AND row_prefix = 'progenitor.state'
-                        AND COALESCE(NEW.key, OLD.key) LIKE 'session:%'
+                        AND COALESCE(NEW.key, OLD.key) LIKE '__SESSION_PREFIX__%'
                         AND (OLD.value -> 'payload') - 'content' - 'last_activity'
                             IS NOT DISTINCT FROM
                             (NEW.value -> 'payload') - 'content' - 'last_activity'
@@ -658,7 +734,9 @@ class PostgresDocumentStore:
                     RETURN NULL;
                 END;
                 $$ LANGUAGE plpgsql;
-                """.replace("__PREFIXES__", prefixes).replace("__CHANNEL__", DOCUMENT_EVENT_CHANNEL)  # nosec B608
+                """.replace("__PREFIXES__", prefixes)  # nosec B608
+                .replace("__CHANNEL__", DOCUMENT_EVENT_CHANNEL)
+                .replace("__SESSION_PREFIX__", SESSION_KEY_PREFIX)
             )
             cur.execute(
                 """
@@ -885,6 +963,47 @@ class PostgresDocumentStore:
             (prefix, key),
         )
 
+    def mutate_document(self, prefix: str, key: str, mutator: Callable[[Any], Any]) -> Any:
+        try:
+            return self._mutate_document_impl(prefix, key, mutator)
+        except PoolClosed:
+            logger.warning("Backend document store pool was closed; recreating it")
+            self._recreate_pool()
+            self._ensure_store_table()
+            return self._mutate_document_impl(prefix, key, mutator)
+
+    def _mutate_document_impl(self, prefix: str, key: str, mutator: Callable[[Any], Any]) -> Any:
+        origin = _document_write_origin.get()
+        with self._pool.connection() as conn:
+            with conn.transaction(), conn.cursor() as cur:
+                # A transaction-scoped lock on the key (not a row lock), so
+                # two first writes of a missing document serialize too.
+                cur.execute(
+                    "SELECT pg_advisory_xact_lock(hashtext(%s), hashtext(%s))",
+                    (prefix, key),
+                )
+                cur.execute(
+                    "SELECT value FROM store WHERE prefix = %s AND key = %s",
+                    (prefix, key),
+                )
+                row = cast(dict[str, Any] | None, cur.fetchone())
+                payload = row["value"]["payload"] if row is not None else None
+                new_payload = mutator(payload)
+                value = {"payload": new_payload}
+                if origin is not None:
+                    cur.execute("SELECT set_config('progenitor.origin', %s, true)", (origin,))
+                cur.execute(
+                    """
+                        INSERT INTO store (prefix, key, value, created_at, updated_at)
+                        VALUES (%s, %s, %s, now(), now())
+                        ON CONFLICT (prefix, key) DO UPDATE
+                            SET value = EXCLUDED.value,
+                                updated_at = now()
+                        """,
+                    (prefix, key, Jsonb(value)),
+                )
+            return new_payload
+
     def _write_with_origin(self, query: LiteralString, params: tuple[Any, ...]) -> int:
         """Run one store write, tagging it with the context's writer origin.
 
@@ -901,17 +1020,31 @@ class PostgresDocumentStore:
                 cur.execute(query, params)
             return cur.rowcount
 
-    def read_document_events(self, after_seq: int, limit: int) -> list[DocumentEvent]:
+    def read_document_events(self, after: DocumentEventPosition, limit: int) -> list[DocumentEvent]:
+        """Events after ``after`` from transactions older than every open one.
+
+        Every transaction below the snapshot xmin has committed or rolled back,
+        so this prefix of the ``(txid, seq)`` order can never gain a new row.
+        """
+
         with self._cursor() as cur:
             cur.execute(
-                "SELECT seq, prefix, key, op, before, after, origin, created_at "
-                "FROM document_events WHERE seq > %s ORDER BY seq LIMIT %s",
-                (after_seq, limit),
+                """
+                SELECT seq, txid::text::bigint AS txid, prefix, key, op, before, after,
+                       origin, created_at
+                FROM document_events
+                WHERE txid < pg_snapshot_xmin(pg_current_snapshot())
+                  AND (txid, seq) > (%s::text::xid8, %s)
+                ORDER BY txid, seq
+                LIMIT %s
+                """,
+                (str(after.txid), after.seq, limit),
             )
             rows = cast(list[dict[str, Any]], cur.fetchall())
         return [
             DocumentEvent(
                 seq=int(row["seq"]),
+                txid=int(row["txid"]),
                 prefix=str(row["prefix"]),
                 key=str(row["key"]),
                 op=cast(DocumentEventOp, row["op"]),
@@ -923,34 +1056,54 @@ class PostgresDocumentStore:
             for row in rows
         ]
 
-    def latest_document_event_seq(self) -> int:
-        with self._cursor() as cur:
-            cur.execute("SELECT COALESCE(MAX(seq), 0) AS seq FROM document_events")
-            row = cast(dict[str, Any], cur.fetchone())
-        return int(row["seq"])
-
-    def get_document_event_cursor(self, consumer: str) -> int | None:
-        with self._cursor() as cur:
-            cur.execute("SELECT seq FROM document_event_cursors WHERE consumer = %s", (consumer,))
-            row = cast(dict[str, Any] | None, cur.fetchone())
-        return int(row["seq"]) if row is not None else None
-
-    def save_document_event_cursor(self, consumer: str, seq: int) -> None:
+    def latest_document_event_position(self) -> DocumentEventPosition:
         with self._cursor() as cur:
             cur.execute(
                 """
-                INSERT INTO document_event_cursors (consumer, seq, updated_at)
-                VALUES (%s, %s, now())
-                ON CONFLICT (consumer) DO UPDATE SET seq = EXCLUDED.seq, updated_at = now()
-                """,
-                (consumer, seq),
+                SELECT txid::text::bigint AS txid, seq
+                FROM document_events
+                WHERE txid < pg_snapshot_xmin(pg_current_snapshot())
+                ORDER BY txid DESC, seq DESC
+                LIMIT 1
+                """
             )
+            row = cast(dict[str, Any] | None, cur.fetchone())
+        if row is None:
+            return EVENT_LOG_START
+        return DocumentEventPosition(int(row["txid"]), int(row["seq"]))
 
-    def prune_document_events(self, *, through_seq: int, older_than: timedelta) -> int:
+    def get_document_event_cursor(self, consumer: str) -> DocumentEventPosition | None:
         with self._cursor() as cur:
             cur.execute(
-                "DELETE FROM document_events WHERE seq <= %s AND created_at < now() - %s",
-                (through_seq, older_than),
+                "SELECT txid::text::bigint AS txid, seq FROM document_event_cursors "
+                "WHERE consumer = %s",
+                (consumer,),
+            )
+            row = cast(dict[str, Any] | None, cur.fetchone())
+        if row is None:
+            return None
+        return DocumentEventPosition(int(row["txid"]), int(row["seq"]))
+
+    def save_document_event_cursor(self, consumer: str, position: DocumentEventPosition) -> None:
+        with self._cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO document_event_cursors (consumer, txid, seq, updated_at)
+                VALUES (%s, %s::text::xid8, %s, now())
+                ON CONFLICT (consumer) DO UPDATE
+                    SET txid = EXCLUDED.txid, seq = EXCLUDED.seq, updated_at = now()
+                """,
+                (consumer, str(position.txid), position.seq),
+            )
+
+    def prune_document_events(
+        self, *, through: DocumentEventPosition, older_than: timedelta
+    ) -> int:
+        with self._cursor() as cur:
+            cur.execute(
+                "DELETE FROM document_events "
+                "WHERE (txid, seq) <= (%s::text::xid8, %s) AND created_at < now() - %s",
+                (str(through.txid), through.seq, older_than),
             )
             return cur.rowcount
 

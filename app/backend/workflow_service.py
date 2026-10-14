@@ -17,8 +17,13 @@ from app.backend.document_store import (
     BackendDocumentStore,
     document_write_origin,
 )
+from app.progenitor.content_documents import content_document_key
 from app.progenitor.document_types import DocumentType
-from app.progenitor.prompts.templates import parse_prompt_template, render_prompt_template
+from app.progenitor.prompts.templates import (
+    parse_prompt_template,
+    prompt_relative_path,
+    render_prompt_template,
+)
 from app.progenitor.structured import validate_against_schema
 from app.progenitor.utils import utcnow, utcnow_isoformat
 from app.progenitor.workflows import (
@@ -34,7 +39,6 @@ from app.progenitor.workflows import (
     WorkflowNodeDocumentWrite,
     WorkflowNodeEvent,
     WorkflowNodeExtract,
-    WorkflowNodeHumanInput,
     WorkflowNodeUnpack,
     WorkflowRun,
     WorkflowRunSource,
@@ -156,17 +160,17 @@ def get_workflow_definition(
 
 
 def _prompt_loader_from_store(store: BackendDocumentStore) -> Callable[[str], str]:
-    """Return a loader that reads prompt documents from the backend store."""
-    from app.progenitor.document_kinds import PROMPT_DOCUMENT_KEY_PREFIX
+    """Return a loader for prompt references (paths relative to the prompts root)."""
 
     def load(path: str) -> str:
         document = store.get_document(
-            PROGENITOR_STATE_PREFIX, f"{PROMPT_DOCUMENT_KEY_PREFIX}{path}", None
+            PROGENITOR_STATE_PREFIX,
+            content_document_key("prompt", prompt_relative_path(path)),
+            None,
         )
         if document is None:
             raise ValueError(f"prompt document '{path}' not found")
-        payload = getattr(document, "payload", document)
-        content = payload.get("content") if isinstance(payload, dict) else None
+        content = document.payload.get("content") if isinstance(document.payload, dict) else None
         if not isinstance(content, str):
             raise ValueError(f"prompt document '{path}' has no content")
         return content
@@ -735,13 +739,9 @@ class WorkflowExecutor:
             if not isinstance(trigger_node, WorkflowTriggerNode):
                 return None
             trigger_with_meta["_invocation"]["trigger_node_id"] = trigger_node_id
-            trigger_error = (
-                None
-                if source == "progenitor" and isinstance(trigger_node, WorkflowNodeEvent)
-                else validate_against_schema(
-                    trigger_with_meta,
-                    trigger_node.output_schema or {},
-                )
+            trigger_error = validate_against_schema(
+                trigger_with_meta,
+                trigger_node.output_schema or {},
             )
             if trigger_error:
                 logger.warning(
@@ -861,45 +861,6 @@ class WorkflowExecutor:
         self._start_task(workflow_id, run_id)
         return updated
 
-    async def resolve_human_input(
-        self,
-        workflow_id: str,
-        run_id: str,
-        *,
-        value: Mapping[str, Any],
-    ) -> WorkflowRun | None:
-        """Resolve a paused human_input node with its typed output value."""
-
-        async with self._lock_for(workflow_id):
-            store = self._store_getter()
-            run = get_workflow_run(store, run_id)
-            if (
-                run is None
-                or run.workflow_id != workflow_id
-                or run.status != "paused"
-                or run.waiting_node_id is None
-            ):
-                return None
-            definition = get_workflow_definition(store, workflow_id)
-            node = definition.graph.nodes.get(run.waiting_node_id) if definition else None
-            if not isinstance(node, WorkflowNodeHumanInput):
-                return None
-            _validate_node_output(node, value)
-            updated = run.model_copy(
-                update={
-                    "status": "queued",
-                    "pending_approval": {
-                        **(run.pending_approval or {}),
-                        "resolved_at": utcnow_isoformat(),
-                    },
-                    "node_outputs": {**run.node_outputs, run.waiting_node_id: dict(value)},
-                    "updated_at": utcnow_isoformat(),
-                }
-            )
-            save_workflow_run(store, updated)
-        self._start_task(workflow_id, run_id)
-        return updated
-
     def _lock_for(self, workflow_id: str) -> asyncio.Lock:
         lock = self._locks.get(workflow_id)
         if lock is None:
@@ -962,8 +923,8 @@ class WorkflowExecutor:
             self._emit_event("workflow.run.started", run.model_dump(mode="json"))
 
         # Node-output registry: every node's typed output object, keyed by
-        # node id. Data nodes are always available; event/agent/mcp/
-        # human_input outputs are populated as they complete.
+        # node id. Data nodes are always available; event/agent/extract
+        # outputs are populated as they complete.
         node_outputs: dict[str, dict[str, Any]] = dict(run.node_outputs)
         for node_id, node in definition.graph.nodes.items():
             immediate_output = workflow_node_output_object(node)
@@ -1017,7 +978,7 @@ class WorkflowExecutor:
                     output_object = {selected_port: True}
                     _validate_node_output(node, output_object)
                     output_text = selected_port
-                elif isinstance(node, WorkflowNodeApproval | WorkflowNodeHumanInput):
+                elif isinstance(node, WorkflowNodeApproval):
                     _validate_node_input(node, resolved_input)
                     pending = {
                         "node_id": node_id,
@@ -1166,9 +1127,12 @@ class WorkflowExecutor:
                     "output": output_text,
                 },
             ]
+            # Re-read after the awaited node: a pause requested meanwhile must
+            # survive this checkpoint (the loop head then stops the run).
+            persisted = get_workflow_run(store, run_id) or latest_run
             run = latest_run.model_copy(
                 update={
-                    "status": "running",
+                    "status": "paused" if persisted.status == "paused" else "running",
                     "current_node_id": node_id,
                     "completed_node_ids": [*latest_run.completed_node_ids, node_id],
                     "waiting_node_id": None,

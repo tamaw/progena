@@ -59,6 +59,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **E2E routine fixtures are self-contained**: `scripts/seed_e2e_fixtures.py` is removed. The connector, editing and sequences-redirect specs insert their own uniquely-suffixed copies of the graphs in `app/frontend/e2e/fixtures/routine-graphs.json` (`seedGraphFixtures` in `e2e/helpers/routineFixture.mjs`) and delete them afterwards, so the suite needs no seed step and leaves nothing behind. `tests/backend/test_e2e_routine_fixtures.py` keeps the graphs valid.
 - **Conversation Compressor**: Now uses tiktoken for accurate token estimation
 - **Exception Handling**: Added DEBUG logging to previously silent exception handlers (CQ-009)
+- **Document event log reads in commit order**: `document_events` and `document_event_cursors` carry the writing transaction id (`txid xid8`, added in place on existing tables, all pre-existing rows sharing one txid). The dispatcher reads `(txid, seq)` positions and only transactions older than every open one (`pg_snapshot_xmin`), so an event whose transaction commits late is never skipped; the 5-second sequence-gap timer is gone.
+- **Document event dispatch fails fast**: a handler exception stops the backend dispatcher (`DocumentEventDispatcher.stopped`) with the failing event unacknowledged, instead of logging it and moving past it; it resumes from that event on restart. Workflow failures are still recorded on the run and don't stop dispatch.
+- **`human_input` workflow node removed**: workflows keep `approval` as their only human step; human-in-the-loop work belongs in routines (`human` node).
+- **Prompt references are paths relative to `/prompts/`** (`workflows/card.md`), validated by one rule (`prompt_relative_path`) for the agent's `/prompts/` mount, the prompt API and workflow `prompt` fields: relative, no `..`, `.md` only.
+- **Model profile names must be unique after trimming whitespace**; a catalog with `" general "` and `"general"` is rejected.
 
 ### Fixed
 - Profile notifications now bypass unrelated state-snapshot diffs; profile queries and edits use `202` acknowledgements plus correlated `profiles.snapshot` events instead of successful HTTP response-body data.
@@ -66,6 +71,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Schedule and inbox document notifications now reach their collection subscribers even when a sibling document from the same transaction has already refreshed the shared state snapshot.
 - `/config/mcp_tools.json` rejected nothing outside `tools`: an agent edit that added its own top-level key (e.g. a `tool_overrides` map) was silently dropped and reported as success while no tool changed. Any change outside a tool's `enabled` flag is now rejected with a message pointing at the flag.
 - `grep` and `glob` on the agent's virtual folders (`/config`, `/tasks`, `/inbox`, `/workflows`, `/routines`, `/policies`, content documents) always returned nothing, so the agent was told text it had just read didn't exist (this is how it ended up inventing a `tool_overrides` key). They now search the documents as `read_file` renders them, with matching line numbers.
+- Progenitor-invoked event workflows now run their steps: the request input fills the trigger node's declared ports (`key`, `after`, …) and is validated against them, instead of completing with no node executed.
+- Resuming a paused cron workflow no longer fires a due time from the paused period; restarting the backend under a new event loop no longer kills the cron clock.
+- Pausing a workflow while one of its prompt steps runs now holds; the step's checkpoint no longer overwrites the pause.
+- Concurrent model profile edits/deletes no longer lose each other or bring a deleted profile back (`mutate_document` under a per-key transaction lock).
+- Workflow validation: `$defs` survive extract schema inference and typed template inputs/outputs (`inputs: {flow: workflow}`); a `string` output connects to a `["string", "null"]` input (editor and backend); `true` → `1` counts as a changed field and no longer matches an event filter on `true`; malformed `filter_fields` and non-string front matter keys are validation errors instead of 500s; `workflow_run` documents accept `source: "cron"`.
+- Progenitor can save workflows whose steps reference prompt documents.
+- Workflow editor: `false`/`0`/`""` data values, saved node sizes, schema edits (now enabling Save), Configure/Unpack after applying JSON, Cut on an Unpack input, and Unpack fields of palette-added nodes all behave like other edits; the node options dialog scrolls instead of clipping.
+- Quick chat closed mid-reply and reopened after it finished shows the reply instead of "Thinking" forever; a failed agent-roster fetch is retried on reconnect.
+- Prompt/profile saves time out 15s after acknowledgement even while other updates arrive, and a save cancelled by a disconnect can't report its error on the next selection.
 - Telemetry exception handlers now log at DEBUG level instead of silently passing
 
 ## [0.6.0] - 2026-01-29

@@ -36,7 +36,10 @@ def validate_model_profiles_payload(payload: Any) -> dict[str, Any]:
             raise ValueError(f"profile {name!r}: provider must be {AZURE_OPENAI_PROVIDER!r}")
         if not isinstance(deployment, str) or not deployment.strip():
             raise ValueError(f"profile {name!r}: deployment must be a non-empty string")
-        normalized[name.strip()] = {
+        stripped = name.strip()
+        if stripped in normalized:
+            raise ValueError(f"ambiguous profile names: {stripped!r} appears more than once")
+        normalized[stripped] = {
             **profile,
             "provider": provider,
             "deployment": deployment.strip(),

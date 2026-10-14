@@ -13,6 +13,7 @@ import {
   parsePromptPlaceholders,
   derivePromptInputSchema,
   nodeInputPorts,
+  schemasAreCompatible,
 } from './WorkflowsPage';
 import { canvasToolSettings } from './workflowCanvasTools';
 
@@ -152,7 +153,6 @@ describe('workflowToFlow', () => {
           extract: { kind: 'extract', title: 'Extract', prompt: null, template: '', schema: null, input_schema: { type: 'object', properties: {} }, output_schema: { type: 'object', properties: {} } },
           condition: { kind: 'condition', title: 'Condition', expression: 'ready', input_schema: { type: 'object', properties: {} } },
           approval: { kind: 'approval', title: 'Approval', message: 'Approve?', input_schema: { type: 'object', properties: {} } },
-          human_input: { kind: 'human_input', title: 'Human', message: 'Pick one', input_schema: { type: 'object', properties: {} }, output_schema: { type: 'object', properties: {} } },
           document_read: { kind: 'document_read', title: 'Read', document_type: 'kanban_card', input_schema: KANBAN_READ_SCHEMAS.read_input_schema, output_schema: KANBAN_READ_SCHEMAS.read_output_schema },
           document_query: { kind: 'document_query', title: 'Query', document_type: 'kanban_card', filter_fields: ['title'], limit: 50, input_schema: { type: 'object', required: ['title'], properties: { title: { type: 'string' } } }, output_schema: KANBAN_READ_SCHEMAS.query_output_schema },
         },
@@ -171,7 +171,6 @@ describe('workflowToFlow', () => {
       extract: 'extract',
       condition: 'condition',
       approval: 'approval',
-      human_input: 'human_input',
       document_read: 'document_read',
       document_query: 'document_query',
     });
@@ -383,11 +382,11 @@ describe('workflowToFlow', () => {
 });
 
 describe('workflow node menu', () => {
-  it('exposes exactly the twelve V3 node kinds and no capability-specific kinds', () => {
+  it('exposes exactly the eleven V3 node kinds and no capability-specific kinds', () => {
     const addableKinds = NODE_MENU_CATEGORIES.flatMap((category) => category.items).map((item) => item.kind);
 
     expect(addableKinds.sort()).toEqual(
-      ['agent', 'approval', 'condition', 'cron', 'data', 'document_query', 'document_read', 'document_write', 'event', 'extract', 'human_input', 'unpack'].sort(),
+      ['agent', 'approval', 'condition', 'cron', 'data', 'document_query', 'document_read', 'document_write', 'event', 'extract', 'unpack'].sort(),
     );
   });
 });
@@ -461,34 +460,49 @@ describe('canvas interaction tools', () => {
   });
 });
 
-describe('data edge diagnostics', () => {
-  it('flags an edge with incompatible source and target types as invalid', () => {
+describe('data edge compatibility', () => {
+  it('rejects a connection whose source type the target does not accept', () => {
+    expect(schemasAreCompatible({ type: 'string' }, { type: 'integer' })).toBe(false);
+    expect(schemasAreCompatible({ type: ['string', 'null'] }, { type: 'string' })).toBe(false);
+    expect(schemasAreCompatible({ type: 'object', title: 'Kanban Card' }, { type: 'object', title: 'Workflow' })).toBe(false);
+  });
+
+  it('accepts a source whose types the target accepts, including nullable unions', () => {
+    expect(schemasAreCompatible({ type: 'string' }, { type: 'string' })).toBe(true);
+    expect(schemasAreCompatible({ type: 'string' }, { type: ['string', 'null'] })).toBe(true);
+    expect(schemasAreCompatible({}, { type: 'integer' })).toBe(true);
+  });
+});
+
+describe('workflow hydration', () => {
+  it('keeps falsy data constants and stored node sizes through a round trip', () => {
     const workflow = {
       graph: {
         nodes: {
-          source: { kind: 'agent', title: 'Source', prompt: null, template: 'Go', subagent: null, input_schema: { type: 'object', properties: {} }, output_schema: { type: 'object', properties: { title: { type: 'string' } } } },
-          target: {
-            kind: 'agent',
-            title: 'Target',
-            prompt: null,
-            template: 'Go',
-            subagent: null,
-            input_schema: { type: 'object', properties: { count: { type: 'integer' } } },
-            output_schema: { type: 'object', properties: {} },
+          off: { kind: 'data', title: 'Off', value: false, output_schema: { type: 'boolean' } },
+          zero: { kind: 'data', title: 'Zero', value: 0, output_schema: { type: 'integer' } },
+          empty: { kind: 'data', title: 'Empty', value: '', output_schema: { type: 'string' } },
+        },
+        edges: [],
+      },
+      ui: {
+        nodes: {
+          off: {
+            position: { x: 0, y: 0 },
+            size: { data: { width: 500, height: 300 }, settings: { width: 600, height: 400 } },
           },
         },
-        edges: [{ kind: 'data', from: { node: 'source', port: 'title' }, to: { node: 'target', port: 'count' } }],
       },
-      ui: { nodes: {} },
     };
 
     const flow = workflowToFlow(workflow, {}, null);
-    const sourceOutput = flow.nodes.find((node) => node.id === 'source').data.outputSchema.properties.title;
-    const targetInput = flow.nodes.find((node) => node.id === 'target').data.inputSchema.properties.count;
+    const persisted = flowToWorkflow(workflow, flow.nodes, flow.edges, flow.viewport);
 
-    expect(sourceOutput.type).toBe('string');
-    expect(targetInput.type).toBe('integer');
-    expect(sourceOutput.type).not.toBe(targetInput.type);
+    expect(persisted.graph.nodes.off.value).toBe(false);
+    expect(persisted.graph.nodes.zero.value).toBe(0);
+    expect(persisted.graph.nodes.empty.value).toBe('');
+    expect(persisted.ui.nodes.off.size).toEqual(workflow.ui.nodes.off.size);
+    expect(persisted.ui.nodes.zero.size).toBeUndefined();
   });
 });
 

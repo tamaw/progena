@@ -27,6 +27,25 @@ export function useSnapshotSave({
   resolveSavedContent,
 }) {
   const latestSaveRequestId = useRef(null);
+  // The confirmation deadline belongs to one acknowledged request: unrelated
+  // collection refreshes or re-renders must not restart it.
+  const awaitingRequestId = pendingSave?.acknowledged ? pendingSave.requestId : null;
+  const awaitingPath = pendingSave?.acknowledged ? pendingSave.path : null;
+  useEffect(() => {
+    if (!awaitingRequestId) return undefined;
+    setStatusMessage(`Save acknowledged. Waiting for ${awaitingPath} to refresh.`);
+    const timeoutId = setTimeout(() => {
+      latestSaveRequestId.current = null;
+      setSaving(false);
+      setPendingSave(null);
+      setStatusMessage('');
+      setError(saveSnapshotTimeoutError(awaitingPath));
+    }, SNAPSHOT_EVENT_TIMEOUT_MS);
+    return () => clearTimeout(timeoutId);
+  }, [awaitingPath, awaitingRequestId, setError, setPendingSave, setSaving, setStatusMessage]);
+
+  // Declared before the completion effect: when the causal snapshot is
+  // already present, completion's status message runs last and wins.
   useEffect(() => {
     if (!pendingSave) return undefined;
     if (pendingSave.acknowledged && snapshotRequestId === pendingSave.requestId) {
@@ -42,23 +61,17 @@ export function useSnapshotSave({
       }
     }
     if (!realtimeConnected) {
+      // Cancelling the pending save also retires its request, so a late HTTP
+      // rejection cannot surface on whatever is selected next.
+      latestSaveRequestId.current = null;
       setSaving(false);
       setPendingSave(null);
       setStatusMessage('');
       setError(pendingSave.acknowledged
         ? saveSnapshotDisconnectedError(pendingSave.path)
         : saveInterruptedError(pendingSave.path));
-      return undefined;
     }
-    if (!pendingSave.acknowledged) return undefined;
-    setStatusMessage(`Save acknowledged. Waiting for ${pendingSave.path} to refresh.`);
-    const timeoutId = setTimeout(() => {
-      setSaving(false);
-      setPendingSave(null);
-      setStatusMessage('');
-      setError(saveSnapshotTimeoutError(pendingSave.path));
-    }, SNAPSHOT_EVENT_TIMEOUT_MS);
-    return () => clearTimeout(timeoutId);
+    return undefined;
   }, [items, pendingSave, realtimeConnected, resolveSavedContent, setDraftContent,
     setError, setPendingSave, setSaving, setStatusMessage, snapshotRequestId]);
 

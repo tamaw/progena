@@ -55,7 +55,6 @@ from app.progenitor.workflows import (
     WORKFLOW_RUN_KEY_PREFIX,
     WorkflowDefinition,
     WorkflowListItem,
-    WorkflowNodeCron,
     WorkflowRun,
     default_workflow_definition,
     document_event_output_schema,
@@ -123,7 +122,6 @@ from .workflow_service import (
     WorkflowExecutor,
     build_manual_trigger_event,
     delete_workflow_definition,
-    first_trigger_node_id,
     get_workflow_definition,
     get_workflow_run,
     list_workflow_definitions,
@@ -1784,27 +1782,18 @@ async def _reconcile_workflow_invoke_requests(changed_key: str | None = None) ->
                 logger.warning("Dropping malformed workflow invoke request %r", key, exc_info=True)
                 store.delete_document(PROGENITOR_STATE_PREFIX, key)
                 continue
-            trigger: dict[str, Any] = {
-                "event_type": "progenitor.invoke",
-                "timestamp": request.requested_at,
-                "input": request.input,
-                "source": "progenitor",
-            }
             try:
                 definition = get_workflow_definition(store, request.workflow_id)
-                first_trigger = (
-                    definition.graph.nodes.get(first_trigger_node_id(definition) or "")
-                    if definition is not None
-                    else None
-                )
-                if definition is not None and isinstance(first_trigger, WorkflowNodeCron):
-                    trigger = build_manual_trigger_event(definition)
-                await executor.trigger_workflow(
-                    request.workflow_id,
-                    trigger,
-                    source="progenitor",
-                    ancestry=request.ancestry,
-                )
+                if definition is not None:
+                    # The request input fills the trigger node's declared output
+                    # ports (e.g. an event node's ``key``/``after``), exactly
+                    # like an on-demand run, and is validated against them.
+                    await executor.trigger_workflow(
+                        request.workflow_id,
+                        build_manual_trigger_event(definition, payload=request.input),
+                        source="progenitor",
+                        ancestry=request.ancestry,
+                    )
             except Exception:
                 logger.exception(
                     "Workflow invoke request %r failed; retaining it for retry",

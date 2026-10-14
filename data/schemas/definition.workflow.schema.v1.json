@@ -68,9 +68,6 @@
           }},
           {"type": "object", "additionalProperties": false, "required": ["kind", "title", "message"], "properties": {
             "kind": {"const": "approval"}, "title": {"type": "string", "minLength": 1}, "message": {"type": "string", "minLength": 1}, "input_schema": {"type": "object"}, "output_schema": {"type": "object"}
-          }},
-          {"type": "object", "additionalProperties": false, "required": ["kind", "title", "message", "input_schema", "output_schema"], "properties": {
-            "kind": {"const": "human_input"}, "title": {"type": "string", "minLength": 1}, "message": {"type": "string", "minLength": 1}, "input_schema": {"type": "object"}, "output_schema": {"type": "object"}
           }}
         ]}},
         "edges": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["from", "to"], "properties": {
