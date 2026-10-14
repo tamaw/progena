@@ -84,7 +84,7 @@ def _live_pages(base_id: str) -> dict[str, str]:
         payload = document.payload if isinstance(document.payload, dict) else {}
         path = key[len(prefix) :]
         content = payload.get("content")
-        if not payload.get("deleted_at") and isinstance(content, str) and is_indexable(path):
+        if isinstance(content, str) and is_indexable(path, content):
             live[path] = content
     return live
 

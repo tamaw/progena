@@ -16,7 +16,7 @@ from pydantic import BaseModel, Field
 
 from ..knowledge.embedding import embedder_for
 from ..knowledge.index import indexed_shas_async, is_indexable, pending_paths, search_async
-from ..knowledge.indexer_config import index_record, resolve_embedding_target
+from ..knowledge.indexer_config import index_record, min_similarity, resolve_embedding_target
 from ..knowledge.pages import KNOWLEDGE_MOUNT
 from ..knowledge.schema import resolve_base_ref
 from .protocol import BaseSystemTool, ToolContext, ToolResult
@@ -24,8 +24,10 @@ from .protocol import BaseSystemTool, ToolContext, ToolResult
 logger = logging.getLogger(__name__)
 
 _NOTE = (
-    "Read the pages before answering and cite their paths. Pages listed as pending are "
-    "not searchable yet; read them directly if they may be relevant."
+    "Read the pages before answering and cite their paths. Results only include pages that "
+    "match by keyword or have similarity (0-1) at or above the min_similarity cut-off in "
+    "/config/indexer.json, so no results means nothing relevant was found. Pages listed as "
+    "pending are not searchable yet; read them directly if they may be relevant."
 )
 
 
@@ -104,10 +106,9 @@ class SearchTool(BaseSystemTool):
                 {"query": query, "results": [], "index": {}, "note": "No knowledge bases."}
             )
 
+        settings = await sm.get_indexer_config()
         try:
-            target = resolve_embedding_target(
-                await sm.get_indexer_config(), await sm.get_model_profiles_config()
-            )
+            target = resolve_embedding_target(settings, await sm.get_model_profiles_config())
             vector = (await embedder_for(target).embed([query]))[0]
         except ValueError as exc:
             return ToolResult.fail(str(exc))
@@ -120,9 +121,8 @@ class SearchTool(BaseSystemTool):
             if (
                 base_id in live
                 and isinstance(payload, dict)
-                and not payload.get("deleted_at")
                 and isinstance(payload.get("content"), str)
-                and is_indexable(path)
+                and is_indexable(path, payload["content"])
             ):
                 live[base_id][path] = payload["content"]
 
@@ -131,7 +131,14 @@ class SearchTool(BaseSystemTool):
                 database_url, autocommit=True
             ) as aconn:
                 try:
-                    rows = await search_async(aconn, query, vector, base_ids=base_ids, limit=limit)
+                    rows = await search_async(
+                        aconn,
+                        query,
+                        vector,
+                        min_similarity=min_similarity(settings),
+                        base_ids=base_ids,
+                        limit=limit,
+                    )
                     indexed = await indexed_shas_async(aconn, base_ids)
                 except psycopg.errors.UndefinedTable:
                     rows, indexed = [], {}
@@ -154,7 +161,8 @@ class SearchTool(BaseSystemTool):
                 "title": row.get("title") or "",
                 "heading": row.get("heading") or "",
                 "snippet": row.get("snippet") or "",
-                "score": round(float(row.get("score") or 0.0), 4),
+                "similarity": round(float(row.get("similarity") or 0.0), 2),
+                "keyword_match": bool(row.get("keyword_match")),
             }
             for row in rows
         ]

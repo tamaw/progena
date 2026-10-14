@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import uuid
+from urllib.parse import quote
 
 import psycopg
 import pytest
@@ -76,14 +77,26 @@ async def test_granted_agent_cannot_name_another_base(monkeypatch):
     assert not result.success and "granted: eng" in (result.error or "")
 
 
+@pytest.fixture
+def schema_url():
+    """A throwaway schema so the test never touches the dev ``knowledge_chunks`` table."""
+    schema = f"pytest_stool_{uuid.uuid4().hex[:8]}"
+    with psycopg.connect(DB_URL, autocommit=True) as conn:
+        conn.execute(f'CREATE SCHEMA "{schema}"')
+    separator = "&" if "?" in DB_URL else "?"
+    yield f"{DB_URL}{separator}options={quote(f'-c search_path={schema},public')}"
+    with psycopg.connect(DB_URL, autocommit=True) as conn:
+        conn.execute(f'DROP SCHEMA "{schema}" CASCADE')
+
+
 @pytest.mark.skipif(not DB_URL, reason="requires PROGENITOR_DATABASE_URL")
-async def test_search_ranks_pages_scopes_bases_and_reports_pending(monkeypatch):
-    run = uuid.uuid4().hex[:8]
-    eng, ops = f"pytest-search-eng-{run}", f"pytest-search-ops-{run}"
+async def test_search_ranks_pages_scopes_bases_and_reports_pending(monkeypatch, schema_url):
+    monkeypatch.setenv("PROGENITOR_DATABASE_URL", schema_url)
+    eng, ops = "eng", "ops"
     election = _page("Leader Election", "A candidate wins with a majority quorum.")
     replication = _page("Log Replication", "Followers append entries.")
     other = _page("Ops Majority", "Ops also mentions majority quorum.")
-    with psycopg.connect(DB_URL) as conn:
+    with psycopg.connect(schema_url) as conn:
         kindex.ensure_index_schema(conn, DIMS)
         for base, path, content, axis in (
             (eng, "election.md", election, 1),
@@ -108,19 +121,28 @@ async def test_search_ranks_pages_scopes_bases_and_reports_pending(monkeypatch):
     }
     sm = FakeStateManager([eng, ops], pages, profile="embeddings")
     monkeypatch.setattr(search_module, "embedder_for", lambda target: FakeEmbedder(1))
-    try:
-        everything = await _run(SearchTool(), sm, query="majority quorum")
-        assert everything.success
-        paths = [hit["path"] for hit in everything.data["results"]]
-        assert set(paths[:2]) == {f"/knowledge/{eng}/election.md", f"/knowledge/{ops}/majority.md"}
-        assert everything.data["index"][eng]["pending"] == ["new.md", "replication.md"]
-        assert everything.data["index"][ops]["pending"] == []
+    everything = await _run(SearchTool(), sm, query="majority quorum")
+    assert everything.success
+    paths = [hit["path"] for hit in everything.data["results"]]
+    assert set(paths[:2]) == {f"/knowledge/{eng}/election.md", f"/knowledge/{ops}/majority.md"}
+    assert everything.data["index"][eng]["pending"] == ["new.md", "replication.md"]
+    assert everything.data["index"][ops]["pending"] == []
+    # Below the similarity cut-off and no keyword match: left out.
+    assert f"/knowledge/{eng}/replication.md" not in paths
+    election_hit = everything.data["results"][paths.index(f"/knowledge/{eng}/election.md")]
+    assert election_hit["similarity"] == 1.0 and election_hit["keyword_match"] is True
 
-        scoped = await _run(SearchTool(allowed_bases=frozenset({eng})), sm, query="majority quorum")
-        assert scoped.success
-        assert {hit["path"].split("/")[2] for hit in scoped.data["results"]} == {eng}
-        assert set(scoped.data["index"]) == {eng}
-    finally:
-        with psycopg.connect(DB_URL) as conn:
-            kindex.delete_page_chunks(conn, eng, ["election.md", "replication.md"])
-            kindex.delete_page_chunks(conn, ops, ["majority.md"])
+    # A keyword match is kept even when its meaning is unrelated.
+    monkeypatch.setattr(search_module, "embedder_for", lambda target: FakeEmbedder(7))
+    keyword_only = await _run(SearchTool(), sm, query="followers")
+    assert [hit["path"] for hit in keyword_only.data["results"]] == [
+        f"/knowledge/{eng}/replication.md"
+    ]
+    nothing = await _run(SearchTool(), sm, query="pizza recipe")
+    assert nothing.success and nothing.data["results"] == []
+    monkeypatch.setattr(search_module, "embedder_for", lambda target: FakeEmbedder(1))
+
+    scoped = await _run(SearchTool(allowed_bases=frozenset({eng})), sm, query="majority quorum")
+    assert scoped.success
+    assert {hit["path"].split("/")[2] for hit in scoped.data["results"]} == {eng}
+    assert set(scoped.data["index"]) == {eng}

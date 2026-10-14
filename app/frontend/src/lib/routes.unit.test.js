@@ -74,10 +74,23 @@ describe('useEntityUrlSync hydration race', () => {
   it('hydrates a selected entity by syncing its canonical path once an id exists', () => {
     const navigate = vi.fn();
     useNavigate.mockReturnValue(navigate);
-    useLocation.mockReturnValue({ pathname: '/chat' });
+    useLocation.mockReturnValue({ pathname: '/chat', search: '' });
 
     useEntityUrlSync('/chat', 'thread-42', 'Loaded title');
 
-    expect(navigate).toHaveBeenCalledWith('/chat/thread-42/loaded-title', { replace: true });
+    expect(navigate).toHaveBeenCalledWith({ pathname: '/chat/thread-42/loaded-title', search: '' }, { replace: true });
+  });
+
+  it('keeps the query string when fixing up the slug', () => {
+    const navigate = vi.fn();
+    useNavigate.mockReturnValue(navigate);
+    useLocation.mockReturnValue({ pathname: '/knowledge/eng', search: '?page=reviewed%2Fa.md' });
+
+    useEntityUrlSync('/knowledge', 'eng', 'Engineering');
+
+    expect(navigate).toHaveBeenCalledWith(
+      { pathname: '/knowledge/eng/engineering', search: '?page=reviewed%2Fa.md' },
+      { replace: true },
+    );
   });
 });

@@ -19,7 +19,7 @@ import psycopg
 from psycopg import sql
 from psycopg.rows import dict_row
 
-from .pages import classify_page_path, split_front_matter
+from .pages import classify_page_path, is_deprecated, split_front_matter
 
 MAX_CHUNK_CHARS = 1500
 SNIPPET_CHARS = 300
@@ -41,11 +41,15 @@ def page_sha(content: str) -> str:
     return hashlib.sha256(content.encode("utf-8")).hexdigest()
 
 
-def is_indexable(path: str) -> bool:
+def is_indexable(path: str, content: str) -> bool:
+    """Concept pages are indexed unless their front matter deprecates them."""
     try:
-        return classify_page_path(path) == "concept"
+        if classify_page_path(path) != "concept":
+            return False
+        front_matter, _ = split_front_matter(content)
     except ValueError:
         return False
+    return not is_deprecated(front_matter)
 
 
 def _pack(paragraphs: list[str]) -> list[str]:
@@ -114,7 +118,7 @@ def pending_paths(live: Mapping[str, str], indexed: Mapping[str, str]) -> list[s
     return sorted(
         path
         for path, content in live.items()
-        if is_indexable(path) and indexed.get(path) != page_sha(content)
+        if is_indexable(path, content) and indexed.get(path) != page_sha(content)
     )
 
 
@@ -126,10 +130,14 @@ def to_pgvector(vector: Iterable[float]) -> str:
 # Schema
 # --------------------------------------------------------------------------- #
 def _column_dimensions(conn: psycopg.Connection) -> int | None:
+    # Look only in the connection's own schema: with a search_path such as
+    # "<schema>,public", an unqualified name would find (and the caller would
+    # then drop) another schema's table.
     row = conn.execute(
         """
         SELECT a.atttypmod FROM pg_attribute a
-        WHERE a.attrelid = to_regclass('knowledge_chunks') AND a.attname = 'embedding'
+        WHERE a.attrelid = to_regclass(quote_ident(current_schema()) || '.knowledge_chunks')
+          AND a.attname = 'embedding'
         """
     ).fetchone()
     return int(row[0]) if row else None
@@ -139,14 +147,20 @@ def ensure_index_schema(conn: psycopg.Connection, dimensions: int) -> bool:
     """Create ``knowledge_chunks`` at ``dimensions``; recreate it on a size change.
 
     Returns True when the table was (re)created empty. Also drops the retired
-    ``knowledge_documents`` table.
+    ``knowledge_documents`` table. Both act on the connection's current schema only.
     """
     conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
-    conn.execute("DROP TABLE IF EXISTS knowledge_documents")
+    schema_row = conn.execute("SELECT current_schema()").fetchone()
+    schema = str(schema_row[0]) if schema_row else "public"
+    conn.execute(
+        sql.SQL("DROP TABLE IF EXISTS {}").format(sql.Identifier(schema, "knowledge_documents"))
+    )
     if _column_dimensions(conn) == dimensions:
         conn.commit()
         return False
-    conn.execute("DROP TABLE IF EXISTS knowledge_chunks")
+    conn.execute(
+        sql.SQL("DROP TABLE IF EXISTS {}").format(sql.Identifier(schema, "knowledge_chunks"))
+    )
     conn.execute(
         sql.SQL(
             """
@@ -266,17 +280,31 @@ _SEARCH_SQL: LiteralString = """
         LIMIT %(candidates)s
     ),
     fused AS (
-        SELECT base_id, path, chunk_no, sum(1.0 / (%(rrf_k)s + r)) AS score
-        FROM (SELECT * FROM vec UNION ALL SELECT * FROM txt) ranked
+        SELECT base_id, path, chunk_no, sum(1.0 / (%(rrf_k)s + r)) AS score,
+               bool_or(keyword) AS keyword
+        FROM (
+            SELECT base_id, path, chunk_no, r, false AS keyword FROM vec
+            UNION ALL
+            SELECT base_id, path, chunk_no, r, true AS keyword FROM txt
+        ) ranked
         GROUP BY base_id, path, chunk_no
     ),
+    -- Keep a chunk only if it matched by keyword or is similar enough by meaning.
+    relevant AS (
+        SELECT f.base_id, f.path, f.chunk_no, f.score, f.keyword,
+               (1 - (c.embedding <=> q.v))::float AS similarity
+        FROM fused f
+        JOIN knowledge_chunks c USING (base_id, path, chunk_no), q
+        WHERE f.keyword OR 1 - (c.embedding <=> q.v) >= %(min_similarity)s
+    ),
     best AS (
-        SELECT DISTINCT ON (base_id, path) base_id, path, chunk_no, score
-        FROM fused
+        SELECT DISTINCT ON (base_id, path) base_id, path, chunk_no, score, keyword, similarity
+        FROM relevant
         ORDER BY base_id, path, score DESC
     )
     SELECT b.base_id, b.path, c.title, c.heading,
-           left(c.content, %(snippet)s) AS snippet, b.score::float AS score
+           left(c.content, %(snippet)s) AS snippet, b.score::float AS score,
+           b.similarity, b.keyword AS keyword_match
     FROM best b
     JOIN knowledge_chunks c USING (base_id, path, chunk_no)
     ORDER BY b.score DESC, b.base_id, b.path
@@ -285,7 +313,11 @@ _SEARCH_SQL: LiteralString = """
 
 
 def _search_params(
-    query: str, vector: list[float], base_ids: Iterable[str] | None, limit: int
+    query: str,
+    vector: list[float],
+    base_ids: Iterable[str] | None,
+    limit: int,
+    min_similarity: float,
 ) -> dict[str, Any]:
     return {
         "vec": to_pgvector(vector),
@@ -295,6 +327,7 @@ def _search_params(
         "rrf_k": _RRF_K,
         "snippet": SNIPPET_CHARS,
         "limit": limit,
+        "min_similarity": min_similarity,
     }
 
 
@@ -303,11 +336,13 @@ def search(
     query: str,
     vector: list[float],
     *,
+    min_similarity: float,
     base_ids: Iterable[str] | None = None,
     limit: int = 8,
 ) -> list[dict[str, Any]]:
+    params = _search_params(query, vector, base_ids, limit, min_similarity)
     with conn.cursor(row_factory=dict_row) as cur:
-        cur.execute(_SEARCH_SQL, _search_params(query, vector, base_ids, limit))
+        cur.execute(_SEARCH_SQL, params)
         rows = [dict(row) for row in cur.fetchall()]
     conn.commit()
     return rows
@@ -318,11 +353,13 @@ async def search_async(
     query: str,
     vector: list[float],
     *,
+    min_similarity: float,
     base_ids: Iterable[str] | None = None,
     limit: int = 8,
 ) -> list[dict[str, Any]]:
+    params = _search_params(query, vector, base_ids, limit, min_similarity)
     async with aconn.cursor(row_factory=dict_row) as cur:
-        await cur.execute(_SEARCH_SQL, _search_params(query, vector, base_ids, limit))
+        await cur.execute(_SEARCH_SQL, params)
         return [dict(row) for row in await cur.fetchall()]
 
 

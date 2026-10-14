@@ -110,17 +110,19 @@ async def test_new_pages_are_indexed_with_lifecycle_events(harness):
     assert state["events"] == []
 
 
-async def test_only_changed_pages_are_reembedded_and_deleted_pages_dropped(harness):
+async def test_only_changed_pages_are_reembedded_and_removed_or_deprecated_pages_dropped(harness):
     indexer, store, state, url = harness
     store.save_document(PROGENITOR_STATE_PREFIX, "knowledge:eng/a.md", _page("A", "Alpha."))
     store.save_document(PROGENITOR_STATE_PREFIX, "knowledge:eng/b.md", _page("B", "Beta."))
+    store.save_document(PROGENITOR_STATE_PREFIX, "knowledge:eng/c.md", _page("C", "Gamma."))
     await indexer.reconcile("eng")
     state["calls"].clear()
     store.save_document(PROGENITOR_STATE_PREFIX, "knowledge:eng/a.md", _page("A", "Alpha 2."))
+    store.delete_document(PROGENITOR_STATE_PREFIX, "knowledge:eng/b.md")
     store.save_document(
         PROGENITOR_STATE_PREFIX,
-        "knowledge:eng/b.md",
-        {**_page("B", "Beta."), "deleted_at": "2026-10-13T00:00:00Z"},
+        "knowledge:eng/c.md",
+        {"content": "---\ntype: Concept\ntitle: C\nstatus: deprecated\n---\nGamma.\n"},
     )
     await indexer.reconcile("eng")
     assert len(state["calls"]) == 1 and "Alpha 2." in state["calls"][0][0]

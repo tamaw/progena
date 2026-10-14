@@ -26,9 +26,11 @@ The persisted catalog keeps each base's name, description, owner, scope, and tag
 Pages are embedded for the `search` tool by the backend indexer. Its settings are `/config/indexer.json`:
 
 ```json
-{"profile": "embeddings", "dimensions": 1536}
+{"profile": "embeddings", "dimensions": 1536, "min_similarity": 0.25}
 ```
 
 `profile` must name an entry in `/config/profile.json` whose `deployment` is an Azure OpenAI embeddings model (e.g. `{"provider": "azure_openai", "deployment": "text-embedding-3-small"}`). `dimensions` is 1–2000. Changing either rebuilds the whole index. With no profile set, every base reports `failed` and `search` explains what to set.
+
+`min_similarity` (0–1, default 0.25) is the search cut-off: a page is returned only if it matches the query by keyword or its cosine similarity is at least this value. Raise it when searches return loosely related pages; lower it when relevant pages are missed. Changing it takes effect immediately and does not rebuild the index.
 
 Progress is read-only in `/knowledge/indexer.json` (per base: `indexing` / `indexed` / `failed`, page counts, pending pages, error) and summarized at the top of each base's `index.md`.

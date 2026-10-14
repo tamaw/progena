@@ -84,17 +84,6 @@ async def test_log_is_append_only_and_agents_cannot_delete():
     assert "cannot be deleted" in (await backend.adelete("/eng/a.md")).error
 
 
-async def test_soft_deleted_page_is_hidden_until_rewritten():
-    manager = FakeStateManager()
-    backend = KnowledgePageBackend(manager)
-    await backend.awrite("/eng/concepts/a.md", PAGE)
-    manager.pages[("eng", "concepts/a.md")]["deleted_at"] = "now"
-    assert (await backend.aread("/eng/concepts/a.md")).error
-    assert [e["path"] for e in (await backend.als("/eng/")).entries] == ["/eng/index.md"]
-    assert (await backend.awrite("/eng/concepts/a.md", PAGE)).error is None
-    assert (await backend.aread("/eng/concepts/a.md")).error is None
-
-
 async def test_invalid_legacy_rows_are_neither_listed_nor_readable():
     manager = FakeStateManager()
     backend = KnowledgePageBackend(manager)

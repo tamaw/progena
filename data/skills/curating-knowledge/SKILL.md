@@ -10,7 +10,7 @@ Read `/knowledge/index.md`, then the base's `index.md` before curating pages. Ea
 
 Concept pages use OKF v0.2 YAML front matter. `type` is required; use `title`, `description`, `tags`, and `sources` such as `/conversations/<file>.txt` or URLs. List sources only in front matter; don't repeat them in a body `Sources` section, since the UI already shows them under the page. `generated.at` is stamped automatically. Use relative markdown links and lowercase kebab-case `.md` paths. Use `##`/`###` headings for distinct topics: search indexes pages section by section.
 
-`log.md` is append-only. Add entries such as `## [YYYY-MM-DD] ingest | Title`. Agents cannot delete pages; mark obsolete pages with `status: deprecated`.
+`log.md` is append-only. Add entries such as `## [YYYY-MM-DD] ingest | Title`. Agents cannot delete or move pages; mark obsolete pages with `status: deprecated`. Deprecated pages drop out of the generated `index.md` files and `search` results but stay readable by path, so links to them still work. To rename a page, write it at the new path, deprecate the old one with a `Moved to [new title](relative/path.md)` line, and update links that point to it.
 
 ## Ingest
 

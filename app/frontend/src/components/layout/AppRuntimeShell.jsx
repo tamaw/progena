@@ -25,8 +25,8 @@ import {
   selectMarketplaces,
   fetchMarketplaces,
   saveMarketplaces,
-  searchKnowledge,
-  selectKnowledgeSearchResults,
+  searchAll,
+  selectSearchResults,
 } from '../../store/uiDataSlice';
 import { selectRealtime, selectUiEventQueue } from '../../store/realtimeSlice';
 import { consumeUiEventQueue } from '../../store/uiData/eventQueue';
@@ -94,7 +94,7 @@ import {
   normalizeQuickChatConfig,
 } from './quickChatConfig';
 import { derivePageContext, formatPageContextBlock, stripPageContextBlock } from '../../lib/pageContext';
-import { buildEntityPath } from '../../lib/routes';
+
 import PopupModal from '../common/PopupModal';
 
 // Grouped by owner/level (see the entity-relationship model):
@@ -1762,24 +1762,13 @@ function normalizeSearchText(value) {
     .toLowerCase();
 }
 
-function widgetSearchTarget(widget, title) {
-  const identity = String(widget.id || '').replace(/^[^:]+:/, '') || widget.name || title;
-  if (widget.type === 'agent') {
-    return buildEntityPath('/agents', identity, 'details');
-  }
-  if (widget.type === 'mcp') {
-    return buildEntityPath('/tools', identity, title);
-  }
-  return '/dashboard';
-}
-
-function SearchPanel({ query, widgets, onClose, isPinned, onTogglePin, isOpen }) {
+function SearchPanel({ query, onClose, isPinned, onTogglePin, isOpen }) {
   const dispatch = useDispatch();
   const { getApiUrl } = useConfig();
   const [search, setSearch] = useState(query);
   const [activeQuery, setActiveQuery] = useState('');
   const normalizedSearch = normalizeSearchText(search);
-  const knowledgeResults = useSelector((state) => selectKnowledgeSearchResults(state, activeQuery));
+  const searchData = useSelector((state) => selectSearchResults(state, activeQuery));
 
   useEffect(() => {
     if (normalizedSearch.length < 3) {
@@ -1788,7 +1777,7 @@ function SearchPanel({ query, widgets, onClose, isPinned, onTogglePin, isOpen })
       return;
     }
     const timer = setTimeout(() => {
-      dispatch(searchKnowledge({ knowledgeUrl: getApiUrl('/api/ui/knowledge'), query: normalizedSearch }));
+      dispatch(searchAll({ searchUrl: getApiUrl('/api/ui/search'), query: normalizedSearch }));
       setActiveQuery(normalizedSearch);
     }, 300);
     return () => clearTimeout(timer);
@@ -1799,28 +1788,14 @@ function SearchPanel({ query, widgets, onClose, isPinned, onTogglePin, isOpen })
     .map((item) => ({
       id: `route:${item.to}`,
       title: item.label,
-      description: item.to === '/chat' ? 'Open chat workspace' : `Open ${item.to}`,
+      subtitle: item.to === '/chat' ? 'Open chat workspace' : `Open ${item.to}`,
       to: item.to,
     }));
-  const widgetResults = widgets
-    .filter((widget) => {
-      const title = widget.title || widget.data?.title || widget.id;
-      const description = widget.summary || widget.data?.summaryState || widget.data?.description || '';
-      return normalizeSearchText(`${title} ${description} ${widget.id}`).includes(normalizedSearch);
-    })
-    .slice(0, 8)
-    .map((widget) => {
-      const title = widget.title || widget.data?.title || widget.id;
-      return {
-        id: `widget:${widget.id}`,
-        title,
-        description: widget.summary || widget.data?.summaryState || widget.data?.description || 'Runtime widget',
-        to: widgetSearchTarget(widget, title),
-      };
-    });
-  const results = normalizedSearch ? routeResults.concat(widgetResults) : [];
-  const knowledgeGroup = knowledgeResults && Array.isArray(knowledgeResults.results) ? knowledgeResults.results : [];
-  const isSearching = normalizedSearch.length >= 3 && (activeQuery !== normalizedSearch || !knowledgeResults);
+
+  const backendSections = searchData && Array.isArray(searchData.sections) ? searchData.sections : [];
+  const isSearching = normalizedSearch.length >= 3 && (activeQuery !== normalizedSearch || !searchData);
+  const hasAnyResults = routeResults.length > 0 || backendSections.some((s) => s.results && s.results.length > 0);
+  const hasAnyError = backendSections.some((s) => s.error);
 
   return (
     <TopNavPane title="Search" className="topnav-pane--search" onClose={onClose} isPinned={isPinned} onTogglePin={onTogglePin} isOpen={isOpen}>
@@ -1836,45 +1811,48 @@ function SearchPanel({ query, widgets, onClose, isPinned, onTogglePin, isOpen })
         </div>
         {normalizedSearch ? (
           <div className="topnav-list chrome-search-results">
-            {results.length === 0 && knowledgeGroup.length === 0 && !isSearching && !knowledgeResults?.error ? (
+            {!hasAnyResults && !isSearching && !hasAnyError ? (
               <div className="chrome-empty">No matches.</div>
             ) : null}
             {isSearching ? <div className="chrome-search-loading muted">Searching…</div> : null}
-            {results.map((result) => (
-              <NavLink key={result.id} to={result.to} className="topnav-list-item chrome-search-result" onClick={onClose}>
-                <span className="topnav-list-item__dot" />
-                <span>
-                  <strong>{result.title}</strong>
-                  <small>{result.description}</small>
-                </span>
-              </NavLink>
-            ))}
-            {knowledgeGroup.length > 0 ? (
+            {routeResults.length > 0 ? (
               <div className="chrome-search-group">
-                <div className="chrome-search-group__label">Knowledge</div>
-                {knowledgeGroup.map((result) => (
-                  <NavLink
-                    key={`knowledge:${result.base_id}:${result.path}`}
-                    to={`${buildEntityPath('/knowledge', result.base_id, result.base_name)}?page=${encodeURIComponent(result.path)}`}
-                    className="topnav-list-item chrome-search-result"
-                    onClick={onClose}
-                  >
+                <div className="chrome-search-group__label">Pages</div>
+                {routeResults.map((result) => (
+                  <NavLink key={result.id} to={result.to} className="topnav-list-item chrome-search-result" onClick={onClose}>
                     <span className="topnav-list-item__dot" />
                     <span>
-                      <strong>{result.title || result.path}</strong>
-                      <small>
-                        {result.heading ? `${result.heading} — ` : ''}
-                        {result.base_name}
-                        {result.snippet ? ` — ${result.snippet}` : ''}
-                      </small>
+                      <strong>{result.title}</strong>
+                      <small>{result.subtitle}</small>
                     </span>
                   </NavLink>
                 ))}
               </div>
             ) : null}
-            {knowledgeResults && knowledgeResults.error ? (
-              <div className="chrome-search-error muted">{knowledgeResults.error}</div>
-            ) : null}
+            {backendSections.map((section) => (
+              section.results && section.results.length > 0 ? (
+                <div key={section.id} className="chrome-search-group">
+                  <div className="chrome-search-group__label">{section.label}</div>
+                  {section.results.map((result) => (
+                    <NavLink key={`${section.id}:${result.id}`} to={result.to} className="topnav-list-item chrome-search-result" onClick={onClose}>
+                      <span className="topnav-list-item__dot" />
+                      <span>
+                        <strong>{result.title}</strong>
+                        <small>{result.subtitle}</small>
+                      </span>
+                    </NavLink>
+                  ))}
+                  {section.error ? (
+                    <div className="chrome-search-error muted">{section.error}</div>
+                  ) : null}
+                </div>
+              ) : section.error ? (
+                <div key={section.id} className="chrome-search-group">
+                  <div className="chrome-search-group__label">{section.label}</div>
+                  <div className="chrome-search-error muted">{section.error}</div>
+                </div>
+              ) : null
+            ))}
           </div>
         ) : null}
       </div>
@@ -2193,7 +2171,6 @@ function AccountPanel({ onClose, isPinned, onTogglePin, isOpen }) {
 const PANEL_EXIT_MS = 200;
 const PANEL_ENTER_DELAY_MS = 16; // one rAF tick
 function PanelHost({ activePanel, settingsOpen, quickChatConfig, quickChatSubmission, onQuickChatSubmissionConsumed, searchQuery, setActivePanel, setSettingsOpen, isPinned, onTogglePin, onResetLiveUiState }) {
-  const widgets = useSelector(selectUiWidgets);
   const closePanel = useCallback(() => setActivePanel(null), [setActivePanel]);
 
   // `displayed` = what is currently rendered in the DOM (may lag activePanel during transitions).
@@ -2297,7 +2274,7 @@ function PanelHost({ activePanel, settingsOpen, quickChatConfig, quickChatSubmis
   }
   if (displayed === 'settings') return settingsOverlay;
   if (displayed === 'account') return <>{accountOverlay}{settingsOverlay}</>;
-  if (displayed === 'search') return <>{scrim}<SearchPanel query={searchQuery} widgets={widgets} onClose={closePanel} {...shared} />{settingsOverlay}</>;
+  if (displayed === 'search') return <>{scrim}<SearchPanel query={searchQuery} onClose={closePanel} {...shared} />{settingsOverlay}</>;
   if (displayed === 'insights') return <>{scrim}<InsightsPanel onClose={closePanel} {...shared} />{settingsOverlay}</>;
   return null;
 }

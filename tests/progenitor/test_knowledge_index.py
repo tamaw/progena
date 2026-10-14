@@ -59,8 +59,16 @@ def test_chunk_page_caps_chunk_size_and_keeps_empty_pages_searchable():
     assert [chunk.text for chunk in empty] == ["Empty — Nothing yet"]
 
 
-def test_pending_paths_lists_unindexed_or_changed_concept_pages_only():
-    live = {"a.md": "A", "b.md": "B2", "c.md": "C", "log.md": "log", "index.md": "x"}
+def test_pending_paths_lists_unindexed_or_changed_current_concept_pages_only():
+    retired = "---\ntype: Concept\nstatus: deprecated\n---\nOld.\n"
+    live = {
+        "a.md": "A",
+        "b.md": "B2",
+        "c.md": "C",
+        "d.md": retired,
+        "log.md": "log",
+        "index.md": "x",
+    }
     indexed = {"a.md": page_sha("A"), "b.md": page_sha("B1")}
     assert pending_paths(live, indexed) == ["b.md", "c.md"]
 
@@ -69,6 +77,7 @@ def test_indexer_settings_validate_profile_and_dimensions():
     assert validate_indexer_payload({"profile": " embeddings "}, profile_names={"embeddings"}) == {
         "profile": "embeddings",
         "dimensions": 1536,
+        "min_similarity": 0.25,
     }
     with pytest.raises(ValueError, match="not in /config/profile.json"):
         validate_indexer_payload({"profile": "missing"}, profile_names={"general"})
@@ -76,6 +85,8 @@ def test_indexer_settings_validate_profile_and_dimensions():
         validate_indexer_payload({"profile": "", "dimensions": 4096})
     with pytest.raises(ValueError):
         validate_indexer_payload({"profile": "", "model": "x"})
+    with pytest.raises(ValueError):
+        validate_indexer_payload({"profile": "", "min_similarity": 1.5})
 
 
 def test_resolve_embedding_target_needs_a_profile_with_a_deployment():

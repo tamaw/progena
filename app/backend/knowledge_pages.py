@@ -13,10 +13,10 @@ from app.progenitor.knowledge.indexer_config import (
 from app.progenitor.knowledge.pages import (
     INDEX_FILE,
     classify_page_path,
+    is_deprecated,
     render_directory_index,
     split_front_matter,
 )
-from app.progenitor.utils import utcnow_isoformat
 
 from .document_store import PROGENITOR_STATE_PREFIX, get_default_document_store
 from .knowledge_service import load_bases
@@ -30,20 +30,9 @@ def _key(base_id: str, path: str) -> str:
     return f"knowledge:{base_id}/{path}"
 
 
-def _payload(base_id: str, path: str) -> dict[str, Any] | None:
-    row = _store().get_document(PROGENITOR_STATE_PREFIX, _key(base_id, path))
-    payload = row.payload if row is not None else None
-    return (
-        payload if isinstance(payload, dict) and isinstance(payload.get("content"), str) else None
-    )
-
-
-def _live(payload: dict[str, Any] | None) -> bool:
-    return (
-        isinstance(payload, dict)
-        and not payload.get("deleted_at")
-        and isinstance(payload.get("content"), str)
-    )
+def _content(payload: Any) -> str | None:
+    content = payload.get("content") if isinstance(payload, dict) else None
+    return content if isinstance(content, str) else None
 
 
 def _base(base_id: str) -> dict[str, Any] | None:
@@ -51,27 +40,31 @@ def _base(base_id: str) -> dict[str, Any] | None:
 
 
 def _rows(base_id: str) -> list[tuple[str, dict[str, Any]]]:
+    """``(path, payload)`` of every stored page in a base that has content."""
     return [
         (key[len(f"knowledge:{base_id}/") :], document.payload)
         for key, document in _store().list_documents(
             PROGENITOR_STATE_PREFIX, f"knowledge:{base_id}/"
         )
-        if isinstance(document.payload, dict)
+        if _content(document.payload) is not None
     ]
 
 
 def list_pages(base_id: str) -> list[dict[str, Any]]:
-    """Live pages in a base: concepts with front matter facts, plus ``log.md``."""
+    """Listed pages in a base: concepts with front matter facts, plus ``log.md``.
+
+    Deprecated concepts are left out, as in the generated indexes.
+    """
     pages: list[dict[str, Any]] = []
     for path, payload in _rows(base_id):
-        if not _live(payload):
-            continue
         try:
             kind = classify_page_path(path)
             front_matter = (
                 (split_front_matter(payload["content"])[0] or {}) if kind == "concept" else {}
             )
         except ValueError:
+            continue
+        if is_deprecated(front_matter):
             continue
         pages.append(
             {
@@ -92,7 +85,7 @@ def read_page(base_id: str, path: str) -> dict[str, Any] | None:
         return None
     if path == INDEX_FILE or path.endswith("/" + INDEX_FILE):
         directory = path[: -len(INDEX_FILE)].rstrip("/")
-        live = [(p, payload["content"]) for p, payload in _rows(base_id) if _live(payload)]
+        live = [(p, payload["content"]) for p, payload in _rows(base_id)]
         title = str(base.get("name") or base_id) if not directory else directory.rsplit("/", 1)[-1]
         row = _store().get_document(PROGENITOR_STATE_PREFIX, INDEX_STATUS_DOC_KEY)
         content = render_directory_index(
@@ -108,10 +101,12 @@ def read_page(base_id: str, path: str) -> dict[str, Any] | None:
         classify_page_path(path)
     except ValueError:
         return None
-    payload = _payload(base_id, path)
-    if payload is None or not _live(payload):
+    row = _store().get_document(PROGENITOR_STATE_PREFIX, _key(base_id, path))
+    payload = row.payload if row is not None else None
+    content = _content(payload)
+    if content is None or not isinstance(payload, dict):
         return None
-    return _page_view(path, payload["content"], payload.get("updated_at"))
+    return _page_view(path, content, payload.get("updated_at"))
 
 
 def _page_view(path: str, content: str, updated_at: Any) -> dict[str, Any]:
@@ -128,42 +123,6 @@ def _page_view(path: str, content: str, updated_at: Any) -> dict[str, Any]:
         "body": body,
         "updated_at": updated_at,
     }
-
-
-def _save(base_id: str, path: str, content: str, *, deleted_at: str | None = None) -> None:
-    payload: dict[str, Any] = {"content": content, "updated_at": utcnow_isoformat()}
-    if deleted_at:
-        payload["deleted_at"] = deleted_at
-    _store().save_document(PROGENITOR_STATE_PREFIX, _key(base_id, path), payload)
-
-
-def soft_delete_page(base_id: str, path: str) -> None:
-    if classify_page_path(path) != "concept":
-        raise ValueError("Only concept pages can be deleted")
-    payload = _payload(base_id, path)
-    if payload is None or not _live(payload):
-        raise FileNotFoundError(path)
-    _save(base_id, path, payload["content"], deleted_at=utcnow_isoformat())
-
-
-def rename_page(base_id: str, path: str, new_path: str) -> None:
-    if classify_page_path(path) != "concept" or classify_page_path(new_path) != "concept":
-        raise ValueError("Only concept pages can be renamed")
-    source = _payload(base_id, path)
-    if source is None or not _live(source):
-        raise FileNotFoundError(path)
-    if _live(_payload(base_id, new_path)):
-        raise FileExistsError(new_path)
-    _save(base_id, new_path, source["content"])
-    _save(base_id, path, source["content"], deleted_at=utcnow_isoformat())
-
-
-def restore_revision(base_id: str, path: str, revision_id: str) -> bool:
-    content = _store().get_knowledge_page_revision(base_id, path, revision_id)
-    if content is None:
-        return False
-    _save(base_id, path, content)
-    return True
 
 
 def live_page_counts() -> dict[str, int]:
