@@ -91,6 +91,37 @@ Ship after browser checks finish. **Do not** bypass the release checklist.
 2. Confirm the release window.
 ```
 
+Nested headings keep the larger section selectable while allowing a precise
+instruction for one subsection:
+
+```md
+# Deployment review
+
+## Implementation
+
+The rollout has two independent stages.
+
+### Database
+
+1. Apply the migration.
+2. Verify old readers still work.
+
+### API
+
+Deploy the new reader behind the feature flag.
+
+#### Validation
+
+| Check | Expected |
+| --- | --- |
+| Read consistency | No missing records |
+| Error rate | Below baseline |
+
+## Follow-up
+
+Review the metrics tomorrow.
+```
+
 A question can also appear among normal Markdown paragraphs without a
 surrounding heading:
 
