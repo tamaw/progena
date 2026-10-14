@@ -123,6 +123,9 @@ describe('StructuredDocumentBody', () => {
       ]),
     ]);
     const document = documentFor({ content: '<questions id="q1">Pick one:<options><option value="a">A</option><option value="b">B</option></options></questions>', onAskAgent: () => {}, onAnswerQuestion: () => {} });
+    const bracket = document.querySelector('.inbox-section > .inbox-section__content');
+    expect(bracket.querySelector('.markdown-content').textContent).toContain('Pick one:');
+    expect(bracket.querySelector('.inbox-section__options')).not.toBeNull();
     const options = document.querySelectorAll('.inbox-section__options button');
     expect(options.length).toBe(3); // A, B, Enter your own
     expect(options[0].textContent).toBe('A');

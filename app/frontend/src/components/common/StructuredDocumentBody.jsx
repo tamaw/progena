@@ -13,7 +13,6 @@ function Markdown({ content }) {
   return <div ref={ref} className="markdown-content" dangerouslySetInnerHTML={{ __html: html }} />;
 }
 
-
 function positionAiPopover(button) {
   const rect = button.getBoundingClientRect();
   const width = Math.min(390, window.innerWidth - 16);
@@ -95,7 +94,7 @@ export default function StructuredDocumentBody({ content = '', onAskAgent, onAns
       setMode(null);
       return;
     }
-    setSelected({ start: node.start, end: node.end, tag: node.tag, title: node.title, type: node.type, source: content });
+    setSelected({ start: node.start, end: node.end, level: node.level, tag: node.tag, title: node.title, type: node.type, source: content });
     setInstruction('');
     setMode(null);
   }
@@ -113,6 +112,46 @@ export default function StructuredDocumentBody({ content = '', onAskAgent, onAns
     if (value) onAnswerQuestion?.({ question, choice: value, content });
   }
 
+  function selectSectionContent(event, node) {
+    if (!onAskAgent) return;
+    if (event.target.closest('.inbox-section') !== event.currentTarget.closest('.inbox-section')) return;
+    if (event.target.closest('a, button, input, textarea, select, [contenteditable="true"]')) return;
+    select(node);
+  }
+
+  function renderSectionActions(node, active) {
+    if (!onAskAgent) return null;
+    const label = node.type === 'heading' ? `${'#'.repeat(node.level)} ${node.title}` : node.tag;
+    return (
+      <div className="inbox-section__actions" role="toolbar" aria-label={`${label} section actions`}>
+        <button
+          type="button"
+          ref={active && aiPopoverOpen ? aiTriggerRef : null}
+          className={`msg-action-btn${active && aiPopoverOpen ? ' is-active' : ''}`}
+          aria-label="Edit with AI"
+          aria-expanded={active && aiPopoverOpen}
+          onClick={(event) => {
+            if (active && aiPopoverOpen) { setMode(null); setSelected(null); setAiJob(null); return; }
+            if (!active) select(node);
+            setPopoverPosition(positionAiPopover(event.currentTarget));
+            setMode('ai');
+          }}
+        >
+          <ProgenitorAiIcon /><span className="msg-action-btn__label">Edit with AI</span>
+        </button>
+        <button type="button" className="msg-action-btn" aria-label="Explain" onClick={() => submitAgent(node, 'Explain this section to me in chat. Do not modify the file.')}>
+          <QuickChatIcon /><span className="msg-action-btn__label">Explain</span>
+        </button>
+        <button type="button" className="msg-action-btn" aria-label="Remove" onClick={() => {
+          if (window.confirm(`Ask Progenitor to remove the entire ${node.type === 'heading' ? label : `<${label}>`} section and its contents?`)) {
+            submitAgent(node, 'Remove this entire section and its contents from the document.');
+          }
+        }}>
+          <DeleteActionIcon /><span className="msg-action-btn__label">Remove</span>
+        </button>
+      </div>
+    );
+  }
 
   function renderNode(node) {
     if (node.type === 'text') {
@@ -130,42 +169,9 @@ export default function StructuredDocumentBody({ content = '', onAskAgent, onAns
         <section key={key} className={`inbox-section${active ? ' is-selected' : ''}`}>
           <div className="inbox-section__head">
             <HeadingTag className="inbox-section__title"><button type="button" className="inbox-section__select" aria-pressed={active} disabled={!onAskAgent} onClick={() => select(node)} aria-label={`Select ${levelPrefix} ${node.title} section`}>{node.title}</button></HeadingTag>
-            {onAskAgent && (
-              <div className="inbox-section__actions" role="toolbar" aria-label={`${levelPrefix} ${node.title} section actions`}>
-                <button
-                  type="button"
-                  ref={active && aiPopoverOpen ? aiTriggerRef : null}
-                  className={`msg-action-btn${active && aiPopoverOpen ? ' is-active' : ''}`}
-                  aria-label="Edit with AI"
-                  aria-expanded={active && aiPopoverOpen}
-                  onClick={(event) => {
-                    if (active && aiPopoverOpen) { setMode(null); setSelected(null); setAiJob(null); return; }
-                    if (!active) select(node);
-                    setPopoverPosition(positionAiPopover(event.currentTarget));
-                    setMode('ai');
-                  }}
-                >
-                  <ProgenitorAiIcon /><span className="msg-action-btn__label">Edit with AI</span>
-                </button>
-                <button type="button" className="msg-action-btn" aria-label="Explain" onClick={() => submitAgent(node, 'Explain this section to me in chat. Do not modify the file.')}> 
-                  <QuickChatIcon /><span className="msg-action-btn__label">Explain</span>
-                </button>
-                <button type="button" className="msg-action-btn" aria-label="Remove" onClick={() => {
-                  if (window.confirm(`Ask Progenitor to remove the entire ${levelPrefix} ${node.title} section and its contents?`)) {
-                    submitAgent(node, 'Remove this entire section and its contents from the inbox file.');
-                  }
-                }}>
-                  <DeleteActionIcon /><span className="msg-action-btn__label">Remove</span>
-                </button>
-              </div>
-            )}
+            {renderSectionActions(node, active)}
           </div>
-          <div className="inbox-section__content" onClick={(event) => {
-            if (!onAskAgent) return;
-            if (event.target.closest('.inbox-section') !== event.currentTarget.closest('.inbox-section')) return;
-            if (event.target.closest('a, button, input, textarea, select, [contenteditable="true"]')) return;
-            select(node);
-          }}>{node.children.map(renderNode)}</div>
+          <div className="inbox-section__content" onClick={(event) => selectSectionContent(event, node)}>{node.children.map(renderNode)}</div>
         </section>
       );
     }
@@ -181,69 +187,38 @@ export default function StructuredDocumentBody({ content = '', onAskAgent, onAns
       <section key={key} className={`inbox-section${active ? ' is-selected' : ''}`}>
         <div className="inbox-section__head">
           <button type="button" className="inbox-section__select" aria-pressed={active} disabled={!onAskAgent} onClick={() => select(node)} aria-label={`Select <${node.tag}> section`}>{node.tag}</button>
-          {onAskAgent && (
-            <div className="inbox-section__actions" role="toolbar" aria-label={`${node.tag} section actions`}>
-              <button
-                type="button"
-                ref={active && aiPopoverOpen ? aiTriggerRef : null}
-                className={`msg-action-btn${active && aiPopoverOpen ? ' is-active' : ''}`}
-                aria-label="Edit with AI"
-                aria-expanded={active && aiPopoverOpen}
-                onClick={(event) => {
-                  if (active && aiPopoverOpen) { setMode(null); setSelected(null); setAiJob(null); return; }
-                  if (!active) select(node);
-                  setPopoverPosition(positionAiPopover(event.currentTarget));
-                  setMode('ai');
-                }}
-              >
-                <ProgenitorAiIcon /><span className="msg-action-btn__label">Edit with AI</span>
-              </button>
-              <button type="button" className="msg-action-btn" aria-label="Explain" onClick={() => submitAgent(node, 'Explain this section to me in chat. Do not modify the file.')}> 
-                <QuickChatIcon /><span className="msg-action-btn__label">Explain</span>
-              </button>
-              <button type="button" className="msg-action-btn" aria-label="Remove" onClick={() => {
-                if (window.confirm(`Ask Progenitor to remove the entire <${node.tag}> section and its contents?`)) {
-                  submitAgent(node, 'Remove this entire section and its contents from the inbox file.');
-                }
-              }}>
-                <DeleteActionIcon /><span className="msg-action-btn__label">Remove</span>
-              </button>
-            </div>
-          )}
+          {renderSectionActions(node, active)}
         </div>
-        <div className="inbox-section__content" onClick={(event) => {
-          if (!onAskAgent) return;
-          if (event.target.closest('.inbox-section') !== event.currentTarget.closest('.inbox-section')) return;
-          if (event.target.closest('a, button, input, textarea, select, [contenteditable="true"]')) return;
-          select(node);
-        }}>{questionText.map(renderNode)}</div>
-        {isQuestion ? (
-          <div className="inbox-section__question">
-            <div className="inbox-section__options">
-              {(questionOptions?.children || []).filter((child) => child.type === 'section' && child.tag === 'option').map((option) => (
-                <button type="button" key={option.start} onClick={() => submitAnswer(node, content.slice(option.openEnd, option.closeStart))}>{content.slice(option.openEnd, option.closeStart)}</button>
-              ))}
-              <button
-                type="button"
-                className={openAnswers[questionKey] ? 'is-active' : ''}
-                aria-expanded={Boolean(openAnswers[questionKey])}
-                onClick={() => setOpenAnswers((current) => ({ ...current, [questionKey]: !current[questionKey] }))}
-              >Enter your own</button>
-              {openAnswers[questionKey] ? (
-                <form onSubmit={(event) => {
-                  event.preventDefault();
-                  if (answerDrafts[questionKey]?.trim()) {
-                    submitAnswer(node, answerDrafts[questionKey]);
-                    setOpenAnswers((current) => ({ ...current, [questionKey]: false }));
-                  }
-                }}>
-                  <input aria-label="Your own answer" autoFocus value={answerDrafts[questionKey] || ''} onChange={(event) => setAnswerDrafts((current) => ({ ...current, [questionKey]: event.target.value }))} placeholder="Your own answer" />
-                  <button type="submit" disabled={!answerDrafts[questionKey]?.trim()}>Send answer</button>
-                </form>
-              ) : null}
+        <div className="inbox-section__content" onClick={(event) => selectSectionContent(event, node)}>
+          {questionText.map(renderNode)}
+          {isQuestion ? (
+            <div className="inbox-section__question">
+              <div className="inbox-section__options">
+                {(questionOptions?.children || []).filter((child) => child.type === 'section' && child.tag === 'option').map((option) => (
+                  <button type="button" key={option.start} onClick={() => submitAnswer(node, content.slice(option.openEnd, option.closeStart))}>{content.slice(option.openEnd, option.closeStart)}</button>
+                ))}
+                <button
+                  type="button"
+                  className={openAnswers[questionKey] ? 'is-active' : ''}
+                  aria-expanded={Boolean(openAnswers[questionKey])}
+                  onClick={() => setOpenAnswers((current) => ({ ...current, [questionKey]: !current[questionKey] }))}
+                >Enter your own</button>
+                {openAnswers[questionKey] ? (
+                  <form onSubmit={(event) => {
+                    event.preventDefault();
+                    if (answerDrafts[questionKey]?.trim()) {
+                      submitAnswer(node, answerDrafts[questionKey]);
+                      setOpenAnswers((current) => ({ ...current, [questionKey]: false }));
+                    }
+                  }}>
+                    <input aria-label="Your own answer" autoFocus value={answerDrafts[questionKey] || ''} onChange={(event) => setAnswerDrafts((current) => ({ ...current, [questionKey]: event.target.value }))} placeholder="Your own answer" />
+                    <button type="submit" disabled={!answerDrafts[questionKey]?.trim()}>Send answer</button>
+                  </form>
+                ) : null}
+              </div>
             </div>
-          </div>
-        ) : null}
+          ) : null}
+        </div>
       </section>
     );
   }

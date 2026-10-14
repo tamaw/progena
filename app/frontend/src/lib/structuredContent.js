@@ -1,12 +1,10 @@
 /**
- * Structured-tag parser for Markdown document bodies.
+ * Parse selectable Markdown headings and interactive question tags.
  *
- * Parses Markdown headings (##–######) and a whitelist of XML-like tags
- * (<questions>, <options>, <option>) into a node tree.  Everything else
- * that looks like a tag is emitted as literal text.  Everything inside
- * fenced code blocks (```) or inline backticks (`) is left as literal text.
- * Malformed / unclosed constructs are emitted as literal text nodes so they
- * can never be executed as HTML.
+ * Headings (##–######) and <questions>/<options>/<option> form the section
+ * tree. Other markup stays in Markdown source for the renderer; code spans
+ * and fenced code never create sections. Malformed constructs remain text
+ * nodes rather than becoming interactive sections.
  *
  * Offsets are UTF-16 code-unit indices (standard JavaScript string indices).
  */

@@ -561,6 +561,21 @@ test.describe('structured inbox', () => {
       await expect(page.getByRole('button', { name: 'Select <questions> section' })).toHaveAttribute('aria-pressed', 'false');
       const ownAnswer = page.getByRole('button', { name: 'Enter your own' });
       await expect(page.getByRole('button', { name: 'None' })).toBeVisible();
+      const question = page.getByRole('button', { name: 'Select <questions> section' }).locator('xpath=ancestor::section[contains(@class, "inbox-section")][1]');
+      const bracket = question.locator(':scope > .inbox-section__content');
+      await expect(bracket.getByRole('button', { name: 'None' })).toBeVisible();
+      await expect(bracket.getByRole('button', { name: 'Enter your own' })).toBeVisible();
+      const grouping = await question.evaluate((section) => {
+        const content = section.querySelector(':scope > .inbox-section__content');
+        const questionText = content.querySelector('.markdown-content');
+        const choices = content.querySelector('.inbox-section__options');
+        return {
+          beginsAboveQuestion: content.getBoundingClientRect().top <= questionText.getBoundingClientRect().top,
+          endsBelowChoices: content.getBoundingClientRect().bottom >= choices.getBoundingClientRect().bottom,
+          hasBracket: getComputedStyle(content).borderLeftStyle === 'solid',
+        };
+      });
+      expect(grouping).toEqual({ beginsAboveQuestion: true, endsBelowChoices: true, hasBracket: true });
       await expect(page.getByRole('textbox', { name: 'Your own answer' })).toHaveCount(0);
       await ownAnswer.click();
       await expect(ownAnswer).toHaveAttribute('aria-expanded', 'true');
