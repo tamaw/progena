@@ -14,7 +14,7 @@
     "thread_id": {"type": ["string", "null"]},
     "trigger_event": {"type": "object"},
     "trigger_node_id": {"type": ["string", "null"]},
-    "source": {"type": "string", "enum": ["document", "manual", "progenitor"]},
+    "source": {"type": "string", "enum": ["document", "manual", "progenitor", "cron"]},
     "ancestry": {"type": "array", "items": {"type": "string"}},
     "node_outputs": {"type": "object"},
     "last_output": {"type": ["string", "null"]},

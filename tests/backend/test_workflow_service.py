@@ -117,6 +117,64 @@ async def test_connected_agent_output_schedules_its_consumer_without_control_edg
 
 
 @pytest.mark.asyncio
+async def test_pause_requested_while_an_agent_runs_stops_before_the_next_node():
+    store = InMemoryDocumentStore()
+    seed_document_types(store)
+    workflow = default_workflow_definition()
+    event_id = _node_id(workflow, "event")
+    first_id = _node_id(workflow, "agent")
+    second_id = "agent_consumer"
+    workflow["graph"]["nodes"][second_id] = {
+        "kind": "agent",
+        "title": "Consumer",
+        "template": "Consume: {summary}",
+        "input_schema": {
+            "type": "object",
+            "required": ["summary"],
+            "properties": {"summary": {"type": "string"}},
+        },
+        "output_schema": {"type": "object", "properties": {}},
+    }
+    workflow["graph"]["edges"] = [
+        {"from": {"node": event_id, "port": "key"}, "to": {"node": first_id, "port": "key"}},
+        {
+            "from": {"node": first_id, "port": "message"},
+            "to": {"node": second_id, "port": "summary"},
+        },
+    ]
+    definition = save_workflow_definition(store, workflow)
+    started = asyncio.Event()
+    release = asyncio.Event()
+    calls = []
+
+    async def runner(**kwargs):
+        calls.append(kwargs)
+        started.set()
+        await release.wait()
+        return PromptExecutionResult(response='{"summary": "done"}', thread_id=kwargs["thread_id"])
+
+    executor = _executor(store, runner)
+    run = await executor.trigger_workflow(definition.id, build_manual_trigger_event(definition))
+    await asyncio.wait_for(started.wait(), timeout=2)
+    await asyncio.wait_for(executor.pause_workflow(definition.id), timeout=2)
+    release.set()
+
+    paused = await _wait_for(
+        lambda: (
+            get_workflow_run(store, run.run_id)
+            if first_id in get_workflow_run(store, run.run_id).completed_node_ids
+            else None
+        )
+    )
+    await asyncio.sleep(0.05)
+
+    paused = get_workflow_run(store, run.run_id)
+    assert paused.status == "paused"
+    assert paused.completed_node_ids == [first_id]
+    assert len(calls) == 1
+
+
+@pytest.mark.asyncio
 async def test_selected_condition_port_schedules_its_consumer_as_dataflow():
     store = InMemoryDocumentStore()
     seed_document_types(store)

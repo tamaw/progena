@@ -1,12 +1,12 @@
 """Backend clock that fires workflow ``cron`` trigger nodes.
 
 Each cron node has one small state document (``workflow_cron:<workflow>:<node>``
-in the backend namespace) holding the last due time it handled, so restarts
-resume where they left off. A node seen for the first time, or whose expression
-or timezone changed, starts counting from now. When the backend was down across
-one or more due times, the node fires once for the latest missed one. Paused or
-disabled workflows advance their state silently, so resuming does not replay
-the paused period.
+in the backend namespace) holding the last due time it handled and whether the
+workflow was active, so restarts resume where they left off. A node seen for
+the first time, whose expression or timezone changed, or whose workflow was
+just resumed or re-enabled, starts counting from now. When the backend was down
+across one or more due times, the node fires once for the latest missed one.
+Due times while a workflow is paused or disabled never fire.
 
 The clock sleeps until the earliest due time; saving, pausing or deleting a
 workflow wakes it to replan. Sleeps are capped so a suspended host (whose
@@ -80,6 +80,9 @@ class WorkflowCronClock:
     async def start(self) -> None:
         if self._task is not None and not self._task.done():
             return
+        # The clock outlives app lifespans; bind the wake signal to this loop so
+        # a restart under a new loop does not await an Event from the old one.
+        self._wakeup = asyncio.Event()
         self._task = asyncio.create_task(self._run(), name="workflow-cron-clock")
 
     async def stop(self) -> None:
@@ -157,20 +160,26 @@ class WorkflowCronClock:
                 {
                     "expression": node.expression,
                     "timezone": node.timezone,
+                    "active": active,
                     "last_due": last_due.isoformat(),
                 },
             )
 
         anchor = None
+        # A new schedule, or a workflow coming back from paused/disabled,
+        # counts from now: due times inside the inactive period never fire.
         if (
             isinstance(state, dict)
             and state.get("expression") == node.expression
             and state.get("timezone") == node.timezone
+            and (state.get("active") is True or not active)
         ):
             anchor = parse_schedule_datetime(state.get("last_due"))
         if anchor is None:
             save(now)
             anchor = now
+        elif state.get("active") is not active:
+            save(anchor)
 
         due = next_cron_time(node.expression, anchor, node.timezone)
         if due > now:

@@ -10,6 +10,7 @@ from langgraph.store.memory import InMemoryStore
 
 from app.progenitor.agent.backends import create_progenitor_backend
 from app.progenitor.agent.session_backend import SessionDirectoryBackend
+from app.progenitor.document_kinds import SESSION_KEY_PREFIX
 from app.progenitor.state.langgraph_store import LangGraphRuntimeStore
 from app.progenitor.state.manager import StateManager
 
@@ -46,7 +47,9 @@ class _Sessions:
             "last_activity": "2026-10-12T01:05:00+00:00",
             "content": content,
         }
-        await self.store.aput(("progenitor", "state"), f"session:{thread_id}", {"payload": payload})
+        await self.store.aput(
+            ("progenitor", "state"), f"{SESSION_KEY_PREFIX}{thread_id}", {"payload": payload}
+        )
 
     async def names(self) -> list[str]:
         listing = await self.backend.als("/")
@@ -117,7 +120,9 @@ async def test_write_changes_title(sessions: _Sessions) -> None:
     result = await sessions.backend.awrite(name, new_text)
     assert result.error is None, result.error
 
-    session = await sessions.state_manager._runtime_store.peek_document("session:aaaaaaaa-live")
+    session = await sessions.state_manager._runtime_store.peek_document(
+        f"{SESSION_KEY_PREFIX}aaaaaaaa-live"
+    )
     assert isinstance(session, dict)
     assert session["title"] == "Renamed chat"
 
@@ -148,7 +153,9 @@ async def test_edit_changes_title(sessions: _Sessions) -> None:
     result = await sessions.backend.aedit(name, "title: New chat", "title: Edited chat")
     assert result.error is None, result.error
 
-    session = await sessions.state_manager._runtime_store.peek_document("session:aaaaaaaa-live")
+    session = await sessions.state_manager._runtime_store.peek_document(
+        f"{SESSION_KEY_PREFIX}aaaaaaaa-live"
+    )
     assert isinstance(session, dict)
     assert session["title"] == "Edited chat"
 

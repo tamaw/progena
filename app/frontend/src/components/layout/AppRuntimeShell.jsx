@@ -1096,7 +1096,23 @@ function QuickChatPanel({
     }
     if (quickChatMemory.threadId) {
       hasInitializedThreadRef.current = true;
-      sessionPromiseRef.current = Promise.resolve(quickChatMemory.threadId);
+      const threadId = quickChatMemory.threadId;
+      sessionPromiseRef.current = Promise.resolve(threadId);
+      // Closed mid-generation: the cached turn is still marked streaming but
+      // this mount owns no stream for it. A generation still running is picked
+      // up by the spectator effect; a finished one has its transcript reloaded.
+      const orphanedStream = quickChatMemory.history.some(
+        (turn) => turn.role === 'assistant' && turn.isStreaming,
+      );
+      if (orphanedStream && !generatingChatIds.includes(threadId)) {
+        void rehydrateFromPersistedThread(threadId).then((resumed) => {
+          if (!resumed && isQuickChatMountedRef.current) {
+            setHistory((current) => current.map((turn) => (
+              turn.isStreaming ? { ...turn, isStreaming: false } : turn
+            )));
+          }
+        });
+      }
       return;
     }
     if (normalizedConfig.mode === 'default' && !preferences.loaded) {
@@ -1112,7 +1128,7 @@ function QuickChatPanel({
     } else {
       startFreshQuickThread();
     }
-  }, [normalizedConfig.mode, preferences.loaded, preferences.quickChatThreadId, rehydrateFromPersistedThread, startFreshQuickThread]);
+  }, [generatingChatIds, normalizedConfig.mode, preferences.loaded, preferences.quickChatThreadId, rehydrateFromPersistedThread, startFreshQuickThread]);
 
 
   const submit = useCallback(async (message, attachments = []) => {

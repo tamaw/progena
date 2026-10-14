@@ -7,6 +7,7 @@ import pytest
 
 from app.backend import ui_routes
 from app.backend.document_store import (
+    EVENT_LOG_START,
     PROGENITOR_STATE_PREFIX,
     CheckpointThreadSnapshot,
     InMemoryDocumentStore,
@@ -52,7 +53,7 @@ async def test_global_lifecycle_survives_no_page_subscription(feed):
         }
         store.save_document(PROGENITOR_STATE_PREFIX, f"{RUN_EVENT_PREFIX}attempt:{status}", payload)
     store.delete_document(PROGENITOR_STATE_PREFIX, f"{RUN_EVENT_PREFIX}attempt:started")
-    logged = store.read_document_events(0, 100)
+    logged = store.read_document_events(EVENT_LOG_START, 100)
     # Replaying the log (e.g. dispatcher catch-up) must not re-announce a transition.
     for event in [*logged, *logged]:
         await listener.document_event(event)

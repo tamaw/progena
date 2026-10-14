@@ -9,6 +9,7 @@ from app.backend.document_events import (
     seed_document_types,
 )
 from app.backend.document_store import (
+    EVENT_LOG_START,
     PROGENITOR_STATE_PREFIX,
     InMemoryDocumentStore,
     document_write_origin,
@@ -19,6 +20,7 @@ from app.backend.workflow_service import (
     list_workflow_runs,
     save_workflow_definition,
 )
+from app.progenitor.document_kinds import SESSION_KEY_PREFIX
 from app.progenitor.document_types import BUILTIN_DOCUMENT_TYPES
 from app.progenitor.workflows import (
     WorkflowNodeEvent,
@@ -94,7 +96,7 @@ def test_store_event_log_records_each_operation_and_skips_identical_rewrites():
     store.delete_document(PROGENITOR_STATE_PREFIX, "kanban_card:a")
     store.save_document("progenitor.logs.tool_calls", "entry", {"ignored": True})
 
-    events = store.read_document_events(0, 10)
+    events = store.read_document_events(EVENT_LOG_START, 10)
     assert [(event.op, event.before, event.after, event.origin) for event in events] == [
         ("created", None, {"title": "One"}, None),
         ("updated", {"title": "One"}, {"title": "Two"}, "workflow_run_x"),
@@ -131,6 +133,54 @@ async def test_dispatcher_starts_at_head_and_catches_up_on_events_written_while_
     await second.stop()
 
     assert seen == [("created", "kanban_card:live"), ("deleted", "kanban_card:live")]
+
+
+@pytest.mark.asyncio
+async def test_handler_failure_stops_dispatch_without_acknowledging_the_event():
+    store = InMemoryDocumentStore()
+    seed_document_types(store)
+    seen: list[str] = []
+    failing = {"key": "kanban_card:bad"}
+
+    async def record(typed: TypedDocumentEvent) -> None:
+        if typed.event.key == failing["key"]:
+            raise RuntimeError("store unavailable")
+        seen.append(typed.event.key)
+
+    dispatcher = DocumentEventDispatcher(store_getter=lambda: store)
+    dispatcher.add_handler(record)
+    await dispatcher.start()
+    store.save_document(PROGENITOR_STATE_PREFIX, "kanban_card:bad", _card("bad", "plan"))
+    store.save_document(PROGENITOR_STATE_PREFIX, "kanban_card:after", _card("after", "plan"))
+    await _wait_for(lambda: dispatcher.stopped)
+    await dispatcher.stop()
+
+    # Nothing past the failing event ran, and the failing event is still pending.
+    assert seen == []
+    [pending, *_] = store.read_document_events(
+        store.get_document_event_cursor(dispatcher._consumer), 10
+    )
+    assert pending.key == "kanban_card:bad"
+
+    failing["key"] = None
+    await dispatcher.start()
+    await dispatcher.drain()
+    await dispatcher.stop()
+    assert seen == ["kanban_card:bad", "kanban_card:after"]
+
+
+def test_in_memory_event_seq_is_not_reused_after_pruning_everything():
+    from datetime import timedelta
+
+    store = InMemoryDocumentStore()
+    store.save_document(PROGENITOR_STATE_PREFIX, "kanban_card:a", {"title": "One"})
+    store.save_document(PROGENITOR_STATE_PREFIX, "kanban_card:b", {"title": "Two"})
+    cursor = store.latest_document_event_position()
+    assert store.prune_document_events(through=cursor, older_than=timedelta(0)) == 2
+
+    store.save_document(PROGENITOR_STATE_PREFIX, "kanban_card:c", {"title": "Three"})
+
+    assert [event.key for event in store.read_document_events(cursor, 10)] == ["kanban_card:c"]
 
 
 @pytest.mark.asyncio
@@ -383,7 +433,7 @@ async def test_document_write_node_executes_merge_and_sets_origin(store):
     definition = save_workflow_definition(store, workflow)
     store.save_document(
         PROGENITOR_STATE_PREFIX,
-        "session:t1",
+        f"{SESSION_KEY_PREFIX}t1",
         {
             "id": "t1",
             "thread_id": "t1",
@@ -404,11 +454,11 @@ async def test_document_write_node_executes_merge_and_sets_origin(store):
     [completed] = await _wait_for(lambda: _completed_runs(store, definition.id))
     assert completed.node_outputs["write"]["found"] is True
     assert completed.node_outputs["write"]["title"] == "Renamed"
-    updated = store.get_document(PROGENITOR_STATE_PREFIX, "session:t1")
+    updated = store.get_document(PROGENITOR_STATE_PREFIX, f"{SESSION_KEY_PREFIX}t1")
     assert updated.payload["title"] == "Renamed"
     # Verify origin was set to run id
-    events = store.read_document_events(0, 100)
-    session_events = [e for e in events if e.key == "session:t1" and e.op == "updated"]
+    events = store.read_document_events(EVENT_LOG_START, 100)
+    session_events = [e for e in events if e.key == f"{SESSION_KEY_PREFIX}t1" and e.op == "updated"]
     assert len(session_events) == 1
     assert session_events[0].origin == completed.run_id
 

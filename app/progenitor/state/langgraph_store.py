@@ -9,6 +9,8 @@ from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import Any, Protocol
 
+from app.progenitor.document_kinds import SESSION_KEY_PREFIX
+
 from .models import redact_secrets
 
 STATE_NAMESPACE = ("progenitor", "state")
@@ -86,7 +88,7 @@ class LangGraphRuntimeStore:
 
         Returns ``True`` when the row existed and was updated.
         """
-        key = f"session:{thread_id}"
+        key = f"{SESSION_KEY_PREFIX}{thread_id}"
         conn = getattr(self._store, "conn", None)
         if conn is None:
             item = await self._store.aget(STATE_NAMESPACE, key)

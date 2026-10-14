@@ -29,12 +29,13 @@ from app.backend.main import app
 from app.backend.models import AgentResponse
 from app.backend.state_reader import StateReader
 from app.backend.threads import clear_threads
+from app.progenitor.document_kinds import SESSION_KEY_PREFIX
 
 
 def _create_session_document(store, thread_id, title="New chat", **extra):
     store.save_document(
         PROGENITOR_STATE_PREFIX,
-        f"session:{thread_id}",
+        f"{SESSION_KEY_PREFIX}{thread_id}",
         {
             "id": thread_id,
             "thread_id": thread_id,
@@ -211,7 +212,9 @@ class TestUIRoutes:
             request_id=patch_request_id,
             check_request_id_header=True,
         )
-        stored = document_store.get_document(PROGENITOR_STATE_PREFIX, f"session:{thread_id}")
+        stored = document_store.get_document(
+            PROGENITOR_STATE_PREFIX, f"{SESSION_KEY_PREFIX}{thread_id}"
+        )
         assert stored is not None
         assert stored.payload["title"] == "Backend chat"
         assert stored.payload["pinned"] is True
@@ -491,7 +494,10 @@ class TestUIRoutes:
         delete_response = client.delete(f"/api/ui/chats/{thread_id}")
 
         assert delete_response.status_code == 202
-        assert document_store.get_document(PROGENITOR_STATE_PREFIX, f"session:{thread_id}") is None
+        assert (
+            document_store.get_document(PROGENITOR_STATE_PREFIX, f"{SESSION_KEY_PREFIX}{thread_id}")
+            is None
+        )
         list_response = client.get("/api/ui/chats?include_archived=true")
         assert list_response.status_code == 202
         from app.backend import ui_routes
@@ -529,7 +535,7 @@ class TestUIRoutes:
 
         assert patch_response.status_code == 202
         stored = document_store.get_document(
-            PROGENITOR_STATE_PREFIX, "session:thread_current-session-1"
+            PROGENITOR_STATE_PREFIX, f"{SESSION_KEY_PREFIX}thread_current-session-1"
         )
         assert stored is not None
         assert stored.payload["pinned"] is True
@@ -539,7 +545,9 @@ class TestUIRoutes:
 
         assert delete_response.status_code == 202
         assert (
-            document_store.get_document(PROGENITOR_STATE_PREFIX, "session:thread_current-session-1")
+            document_store.get_document(
+                PROGENITOR_STATE_PREFIX, f"{SESSION_KEY_PREFIX}thread_current-session-1"
+            )
             is None
         )
 

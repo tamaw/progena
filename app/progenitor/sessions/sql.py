@@ -4,7 +4,10 @@ Installed by ``open_langgraph_persistence`` right after ``saver.setup()``,
 under the same advisory-lock pattern as ``CHECKPOINT_TRIGGER_SQL``.
 """
 
-SESSION_TRIGGER_SQL = """
+from app.progenitor.document_kinds import SESSION_KEY_PREFIX
+
+# Only the SESSION_KEY_PREFIX constant is interpolated, never input.
+SESSION_TRIGGER_SQL = f"""
 SELECT pg_advisory_xact_lock(hashtext('progenitor_session_trigger'));
 
 CREATE OR REPLACE FUNCTION progenitor_skip_value(blob bytea, pos int) RETURNS int AS $$
@@ -254,7 +257,7 @@ BEGIN
     INSERT INTO store (prefix, key, value, created_at, updated_at)
     VALUES (
         'progenitor.state',
-        'session:' || _thread_id,
+        '{SESSION_KEY_PREFIX}' || _thread_id,
         jsonb_build_object('payload', jsonb_build_object(
             'id', _thread_id,
             'thread_id', _thread_id,
@@ -282,4 +285,4 @@ AFTER INSERT ON checkpoint_writes
 FOR EACH ROW
 WHEN (NEW.checkpoint_ns = '' AND NEW.channel = 'messages')
 EXECUTE FUNCTION progenitor_create_session();
-"""
+"""  # nosec B608

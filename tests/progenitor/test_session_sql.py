@@ -19,6 +19,7 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
 from app.progenitor.database.langgraph import _open_saver, _open_store
+from app.progenitor.document_kinds import SESSION_KEY_PREFIX
 
 DATABASE_URL = (os.getenv("PROGENITOR_TEST_DATABASE_URL") or "").strip() or None
 
@@ -70,7 +71,7 @@ async def _session(conn: Any, thread_id: str) -> dict[str, Any] | None:
         await conn.execute(
             "SELECT value->'payload' AS payload FROM store "
             "WHERE prefix = 'progenitor.state' AND key = %s",
-            [f"session:{thread_id}"],
+            [f"{SESSION_KEY_PREFIX}{thread_id}"],
         )
     ).fetchone()
     return None if row is None else row["payload"]

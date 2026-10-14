@@ -349,6 +349,23 @@ class TestDeleteProfiles:
         assert store.get_document(PROGENITOR_STATE_PREFIX, "profile").payload == original
         assert events == []
 
+    def test_whitespace_aliases_of_one_name_are_rejected_not_half_deleted(self):
+        store = InMemoryDocumentStore()
+        original = {
+            " general ": {"provider": "azure_openai", "deployment": "a"},
+            "general": {"provider": "azure_openai", "deployment": "b"},
+        }
+        store.save_document(PROGENITOR_STATE_PREFIX, "profile", original)
+        app, events = _make_app(store)
+
+        with TestClient(app) as client:
+            response = client.delete("/model-profiles/general")
+
+        assert response.status_code == 422
+        assert "ambiguous" in response.text
+        assert store.get_document(PROGENITOR_STATE_PREFIX, "profile").payload == original
+        assert events == []
+
 
 class TestNotificationSameTransactionDiffConsumption:
     """When an external edit commits in the same Postgres transaction as a

@@ -19,7 +19,7 @@ import logging
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import timedelta
 from typing import Any
 
 from app.progenitor.document_kinds import DOCUMENT_TYPE_KEY_PREFIX
@@ -33,9 +33,11 @@ from app.progenitor.workflows import build_document_event_output
 
 from .document_store import (
     DOCUMENT_EVENT_CHANNEL,
+    EVENT_LOG_START,
     PROGENITOR_STATE_PREFIX,
     BackendDocumentStore,
     DocumentEvent,
+    DocumentEventPosition,
     InMemoryDocumentStore,
     StoreChangeListener,
     store_database_url,
@@ -45,11 +47,6 @@ logger = logging.getLogger(__name__)
 
 DISPATCH_CONSUMER = "backend.dispatch"
 _BATCH_SIZE = 200
-# A missing sequence number is either a transaction that has not committed yet
-# or a rolled-back insert (a permanent gap). Wait this long for it before
-# moving past it.
-_SEQUENCE_GAP_GRACE = timedelta(seconds=5)
-_RETRY_DELAY_SECONDS = 1.0
 _EVENT_RETENTION = timedelta(days=1)
 _PRUNE_INTERVAL_SECONDS = 600.0
 
@@ -103,6 +100,7 @@ class DocumentEventDispatcher:
         self._listener: StoreChangeListener | None = None
         self._memory_store: InMemoryDocumentStore | None = None
         self._last_prune = 0.0
+        self._stopped = False
 
     def add_handler(self, handler: DocumentEventHandler) -> None:
         self._handlers.append(handler)
@@ -120,12 +118,13 @@ class DocumentEventDispatcher:
         if self._task is not None and not self._task.done():
             return
         self._loop = asyncio.get_running_loop()
+        self._stopped = False
         # Bind the wake signal to this loop; a dispatcher restarted under a new
         # loop (tests, app reload) must not await an Event from the old one.
         self._wake = asyncio.Event()
         store = self._store_getter()
         if store.get_document_event_cursor(self._consumer) is None:
-            store.save_document_event_cursor(self._consumer, store.latest_document_event_seq())
+            store.save_document_event_cursor(self._consumer, store.latest_document_event_position())
         database_url = store_database_url(store)
         if database_url is not None:
             self._listener = StoreChangeListener(
@@ -173,51 +172,52 @@ class DocumentEventDispatcher:
         else:
             loop.call_soon_threadsafe(self._wake.set)
 
+    @property
+    def stopped(self) -> bool:
+        """True once a dispatch failure has stopped this consumer."""
+
+        return self._stopped
+
     async def _run(self) -> None:
         while True:
             await self._wake.wait()
             self._wake.clear()
             try:
-                retry = await self.drain()
+                await self.drain()
             except Exception:
-                logger.exception("Document event dispatch failed; retrying")
-                retry = True
-            if retry:
-                await asyncio.sleep(_RETRY_DELAY_SECONDS)
-                self._wake.set()
+                # Fail fast: the failing event stays unacknowledged and nothing
+                # after it is dispatched until the backend is fixed/restarted.
+                logger.exception("Document event dispatch failed; dispatcher stopped")
+                self._stopped = True
+                return
 
-    async def drain(self) -> bool:
-        """Process every committed event after the cursor.
+    async def drain(self) -> None:
+        """Process every committed event after the cursor, in commit order.
 
-        Returns True when a sequence gap younger than the grace period stopped
-        the pass, so the caller should retry shortly.
+        Handler exceptions propagate; the cursor only advances past events
+        every handler accepted. Workflow-level failures are recorded by the
+        handler as failed runs and do not raise.
         """
 
         async with self._lock:
             store = self._store_getter()
-            cursor = store.get_document_event_cursor(self._consumer) or 0
+            cursor = store.get_document_event_cursor(self._consumer) or EVENT_LOG_START
             while True:
                 events = store.read_document_events(cursor, _BATCH_SIZE)
                 if not events:
                     break
                 for event in events:
-                    if (
-                        event.seq != cursor + 1
-                        and datetime.now(UTC) - event.created_at < _SEQUENCE_GAP_GRACE
-                    ):
-                        return True
                     await self._dispatch(event)
-                    cursor = event.seq
+                    cursor = event.position
                     store.save_document_event_cursor(self._consumer, cursor)
             self._maybe_prune(store, cursor)
-        return False
 
-    def _maybe_prune(self, store: BackendDocumentStore, cursor: int) -> None:
+    def _maybe_prune(self, store: BackendDocumentStore, cursor: DocumentEventPosition) -> None:
         now = time.monotonic()
         if now - self._last_prune < _PRUNE_INTERVAL_SECONDS:
             return
         self._last_prune = now
-        removed = store.prune_document_events(through_seq=cursor, older_than=_EVENT_RETENTION)
+        removed = store.prune_document_events(through=cursor, older_than=_EVENT_RETENTION)
         if removed:
             logger.info("Pruned %d processed document event(s)", removed)
 
@@ -242,12 +242,4 @@ class DocumentEventDispatcher:
         )
         typed = TypedDocumentEvent(event=event, document_type=document_type, output=output)
         for handler in list(self._handlers):
-            try:
-                await handler(typed)
-            except Exception:
-                logger.exception(
-                    "Document event handler failed for %s %s (seq %d)",
-                    event.op,
-                    event.key,
-                    event.seq,
-                )
+            await handler(typed)

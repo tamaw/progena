@@ -207,6 +207,22 @@ def document_write_output_schema(
     }
 
 
+def _json_equal(a: Any, b: Any) -> bool:
+    """Equality as JSONB sees it: ``true`` is not ``1``, but ``1`` is ``1.0``."""
+
+    if isinstance(a, bool) or isinstance(b, bool):
+        return type(a) is type(b) and a == b
+    if isinstance(a, int | float) and isinstance(b, int | float):
+        return a == b
+    if type(a) is not type(b):
+        return False
+    if isinstance(a, list):
+        return len(a) == len(b) and all(_json_equal(x, y) for x, y in zip(a, b, strict=True))
+    if isinstance(a, dict):
+        return set(a) == set(b) and all(_json_equal(a[k], b[k]) for k in a)
+    return a == b
+
+
 def document_changed_fields(before: Any, after: Any) -> list[str]:
     """Top-level fields whose value differs between two document payloads."""
 
@@ -215,7 +231,9 @@ def document_changed_fields(before: Any, after: Any) -> list[str]:
     return sorted(
         field
         for field in set(previous) | set(current)
-        if field not in previous or field not in current or previous[field] != current[field]
+        if field not in previous
+        or field not in current
+        or not _json_equal(previous[field], current[field])
     )
 
 
@@ -343,7 +361,7 @@ class WorkflowNodeEvent(BaseModel):
         ):
             return False
         return all(
-            value_at_path(event, path) == value and path_exists(event, path)
+            _json_equal(value_at_path(event, path), value) and path_exists(event, path)
             for path, value in self.match.items()
         )
 
@@ -558,18 +576,6 @@ class WorkflowNodeApproval(BaseModel):
     )
 
 
-class WorkflowNodeHumanInput(BaseModel):
-    """Pause gate that resumes with an arbitrary typed human-supplied value."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    kind: Literal["human_input"] = "human_input"
-    title: str = "Human Input"
-    message: str
-    input_schema: dict[str, Any] = Field(default_factory=lambda: dict(_JSON_OBJECT_SCHEMA))
-    output_schema: dict[str, Any] = Field(default_factory=lambda: dict(_JSON_OBJECT_SCHEMA))
-
-
 WorkflowNode = Annotated[
     WorkflowNodeEvent
     | WorkflowNodeCron
@@ -581,8 +587,7 @@ WorkflowNode = Annotated[
     | WorkflowNodeExtract
     | WorkflowNodeAgent
     | WorkflowNodeCondition
-    | WorkflowNodeApproval
-    | WorkflowNodeHumanInput,
+    | WorkflowNodeApproval,
     Field(discriminator="kind"),
 ]
 
@@ -859,15 +864,44 @@ def _derive_prompt_node_input_schema(
     text = _node_prompt_text(node, prompt_loader)
     template = parse_prompt_template(text)
     properties: dict[str, Any] = {}
+    definitions: dict[str, dict[str, Any]] = {}
     for root in template.roots:
         type_ref = template.inputs.get(root)
         if type_ref is not None:
-            properties[root] = resolve_type_ref(type_ref, document_types)
+            properties[root], root_definitions = resolve_type_ref(type_ref, document_types)
+            _merge_definitions(definitions, root_definitions)
         else:
             properties[root] = _ANY_VALUE_SCHEMA
     properties["thread_id"] = {"type": "string"}
     required = list(template.roots)
-    return {"type": "object", "required": required, "properties": properties}
+    return {"type": "object", "required": required, "properties": properties, **definitions}
+
+
+def _merge_definitions(
+    target: dict[str, dict[str, Any]], source: Mapping[str, Mapping[str, Any]]
+) -> None:
+    """Merge root definition maps; one name with two different schemas is an error."""
+
+    for key, defs in source.items():
+        bucket = target.setdefault(key, {})
+        for name, schema in defs.items():
+            if name in bucket and bucket[name] != schema:
+                raise ValueError(f"conflicting schema definitions for '{key}/{name}'")
+            bucket[name] = schema
+
+
+def _extract_result_schema(
+    result_schema: dict[str, Any], definitions: Mapping[str, Any]
+) -> dict[str, Any]:
+    return {
+        "type": "object",
+        "required": ["result", "thread_id"],
+        "properties": {
+            "result": result_schema,
+            "thread_id": {"type": "string"},
+        },
+        **definitions,
+    }
 
 
 def _derive_extract_output_schema(
@@ -882,32 +916,17 @@ def _derive_extract_output_schema(
     # 1. Node-level schema wins
     node_schema = node.get("schema")
     if node_schema is not None:
-        result_schema = resolve_type_ref(node_schema, document_types)
-        return {
-            "type": "object",
-            "required": ["result", "thread_id"],
-            "properties": {
-                "result": result_schema,
-                "thread_id": {"type": "string"},
-            },
-        }
+        return _extract_result_schema(*resolve_type_ref(node_schema, document_types))
 
     # 2. Template front matter output_schema
     text = _node_prompt_text(node, prompt_loader)
     template = parse_prompt_template(text)
     if template.output_schema is not None:
-        result_schema = resolve_type_ref(template.output_schema, document_types)
-        return {
-            "type": "object",
-            "required": ["result", "thread_id"],
-            "properties": {
-                "result": result_schema,
-                "thread_id": {"type": "string"},
-            },
-        }
+        return _extract_result_schema(*resolve_type_ref(template.output_schema, document_types))
 
     # 3. Infer from downstream non-unpack targets
     target_schemas: list[dict[str, Any]] = []
+    target_definitions: dict[str, dict[str, Any]] = {}
     for edge in edges:
         source = edge.get("from") if isinstance(edge, dict) else None
         target = edge.get("to") if isinstance(edge, dict) else None
@@ -933,6 +952,10 @@ def _derive_extract_output_schema(
             # to ask Progenitor for, so it never counts as an inferred schema.
             if target_schema:
                 target_schemas.append(target_schema)
+                for key in _SCHEMA_DEFINITION_KEYS:
+                    defs = target_input.get(key) if isinstance(target_input, Mapping) else None
+                    if isinstance(defs, dict):
+                        _merge_definitions(target_definitions, {key: defs})
 
     if not target_schemas:
         raise ValueError(f"extract node '{node_id}' needs a schema")
@@ -952,6 +975,7 @@ def _derive_extract_output_schema(
             "result": first,
             "thread_id": {"type": "string"},
         },
+        **target_definitions,
     }
 
 
@@ -1028,9 +1052,15 @@ def derive_workflow_port_schemas(
                     f"document_query node '{node_id}' needs a collection document type, "
                     f"not single document '{document_type.id}'"
                 )
-            filter_fields = node.get("filter_fields") or []
+            filter_fields = node.get("filter_fields", [])
+            if not isinstance(filter_fields, list) or not all(
+                isinstance(field, str) for field in filter_fields
+            ):
+                raise ValueError(
+                    f"document_query node '{node_id}' filter_fields must be a list of strings"
+                )
             node["input_schema"] = document_query_input_schema(
-                document_type, document_schema, [str(field) for field in filter_fields]
+                document_type, document_schema, filter_fields
             )
             node["output_schema"] = document_query_output_schema(document_type, document_schema)
     raw_edges = graph.get("edges") if isinstance(graph, dict) else None
@@ -1271,12 +1301,16 @@ def workflow_node_output_object(node: WorkflowNode) -> dict[str, Any] | None:
 
 
 def _schema_types_compatible(source: Mapping[str, Any], target: Mapping[str, Any]) -> bool:
-    """Structural compatibility: same JSON type, and matching title if both declare one."""
+    """Structural compatibility: source JSON types contained in target types,
+    and matching title if both declare one."""
 
     source_type = source.get("type")
     target_type = target.get("type")
-    if source_type and target_type and source_type != target_type:
-        return False
+    if source_type and target_type:
+        source_types = {source_type} if isinstance(source_type, str) else set(source_type)
+        target_types = {target_type} if isinstance(target_type, str) else set(target_type)
+        if not source_types <= target_types:
+            return False
     source_title = source.get("title")
     target_title = target.get("title")
     return not (source_title and target_title and source_title != target_title)
@@ -1300,8 +1334,6 @@ def _validate_workflow_graph(definition: WorkflowDefinition) -> None:
             raise ValueError(f"condition node '{node_id}' is missing an expression")
         elif isinstance(node, WorkflowNodeApproval) and not node.message.strip():
             raise ValueError(f"approval node '{node_id}' is missing a message")
-        elif isinstance(node, WorkflowNodeHumanInput) and not node.message.strip():
-            raise ValueError(f"human_input node '{node_id}' is missing a message")
         elif isinstance(node, WorkflowNodeExtract | WorkflowNodeAgent) and not (
             node.prompt or node.template
         ):

@@ -10,7 +10,7 @@ const items = [{ path: 'profile', content: 'canonical' }];
 const identity = (value) => value;
 const defaultDispatch = () => ({ unwrap: async () => ({}) });
 
-function Editor({ resolvedContent, resolveContent = false, pending, snapshotRequestId, dispatch = defaultDispatch }) {
+function Editor({ resolvedContent, resolveContent = false, pending, snapshotRequestId, dispatch = defaultDispatch, realtimeConnected = true }) {
   const [content, setContent] = useState('draft');
   const [saving, setSaving] = useState(Boolean(pending));
   const [pendingSave, setPendingSave] = useState(pending || null);
@@ -18,7 +18,7 @@ function Editor({ resolvedContent, resolveContent = false, pending, snapshotRequ
   const [error, setError] = useState(null);
   const save = useSnapshotSave({
     items, snapshotRequestId, pendingSave, dispatch, thunk: identity, buildArgs: identity,
-    path: 'profile', content, savedContent: 'original', saving, realtimeConnected: true,
+    path: 'profile', content, savedContent: 'original', saving, realtimeConnected,
     setDraftContent: setContent, setSaving, setPendingSave,
     setStatusMessage: setStatus, setError,
     resolveSavedContent: resolveContent ? () => resolvedContent : undefined,
@@ -78,5 +78,30 @@ describe('snapshot save observable state', () => {
     expect(container.querySelector('[role="alert"]').textContent).toBe('network unavailable');
     expect(container.querySelector('input').value).toBe('draft');
     expect(container.querySelector('button').disabled).toBe(false);
+  });
+
+  it('times out an unconfirmed save even while unrelated re-renders keep arriving', async () => {
+    for (let elapsed = 0; elapsed < SNAPSHOT_EVENT_TIMEOUT_MS + 5000; elapsed += 5000) {
+      // A new inline resolver each render, as PromptsPage passes one.
+      await render({ pending: completed, snapshotRequestId: 'other', resolveContent: true });
+      await act(async () => vi.advanceTimersByTime(5000));
+    }
+    expect(container.querySelector('[role="alert"]').textContent).toMatch(/did not arrive/);
+    expect(container.querySelector('button').disabled).toBe(false);
+  });
+
+  it('drops a late rejection from a save that the disconnect already cancelled', async () => {
+    let reject;
+    const dispatch = () => ({ unwrap: () => new Promise((_resolve, fail) => { reject = fail; }) });
+    await render({ dispatch });
+    await act(async () => container.querySelector('button').click());
+    await render({ dispatch, realtimeConnected: false });
+    const cancelled = container.querySelector('[role="alert"]').textContent;
+    expect(cancelled).toMatch(/realtime stream disconnected/);
+
+    await render({ dispatch, realtimeConnected: true });
+    await act(async () => reject(new Error('late failure')));
+
+    expect(container.querySelector('[role="alert"]').textContent).toBe(cancelled);
   });
 });

@@ -19,6 +19,7 @@ import json
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
+from pathlib import PurePosixPath
 from typing import Any
 
 import yaml
@@ -27,6 +28,22 @@ from app.progenitor.document_types import DocumentType
 from app.progenitor.schemas import load_schema
 
 _PLACEHOLDER_RE = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*)\}")
+
+
+def prompt_relative_path(path: str) -> str:
+    """Validate a prompt document path relative to the prompts root.
+
+    Prompt references, the prompt API and the agent's ``/prompts/`` mount all
+    name a prompt by this path (``workflows/card.md``): relative, no ``..``,
+    markdown only.
+    """
+
+    candidate = PurePosixPath(path)
+    if not path or path.endswith("/") or candidate.is_absolute() or ".." in candidate.parts:
+        raise ValueError(f"Invalid prompt path '{path}'")
+    if candidate.suffix.lower() != ".md":
+        raise ValueError(f"Prompt paths must be markdown (.md): '{path}'")
+    return candidate.as_posix()
 
 
 @dataclass(frozen=True)
@@ -69,6 +86,10 @@ def parse_prompt_template(text: str) -> PromptTemplate:
         that are never used as placeholder roots in the body.
     """
     frontmatter, body = _split_frontmatter(text)
+
+    for key in frontmatter:
+        if not isinstance(key, str):
+            raise ValueError(f"front matter keys must be strings, got {key!r}")
 
     allowed_keys = {"title", "description", "inputs", "output_schema", "system"}
     unknown = set(frontmatter.keys()) - allowed_keys
@@ -175,32 +196,51 @@ def render_prompt_template(template: PromptTemplate, values: Mapping[str, Any]) 
     return result
 
 
-def resolve_type_ref(ref: str | dict, document_types: Mapping[str, DocumentType]) -> dict:
-    """Return the JSON schema described by *ref*.
+_SCHEMA_DEFINITION_KEYS = ("$defs", "definitions")
+
+
+def _split_definitions(schema: Mapping[str, Any]) -> tuple[dict, dict[str, dict]]:
+    """Separate root ``$defs``/``definitions`` from an embeddable schema copy."""
+
+    embedded = {key: value for key, value in schema.items() if key not in ("$schema", "$id")}
+    definitions = {
+        key: embedded.pop(key)
+        for key in _SCHEMA_DEFINITION_KEYS
+        if isinstance(embedded.get(key), dict)
+    }
+    return embedded, definitions
+
+
+def resolve_type_ref(
+    ref: str | dict, document_types: Mapping[str, DocumentType]
+) -> tuple[dict, dict[str, dict]]:
+    """Return ``(schema, root definitions)`` for the type *ref* describes.
 
     A type ref is:
 
-    * a document type id (e.g. ``kanban_card``) – the returned schema is the
-      document type's schema with ``title`` set to the type's label;
+    * a document type id (e.g. ``kanban_card``) – the document type's schema
+      with ``title`` set to the type's label;
     * a schema file name under ``data/schemas/`` (e.g.
       ``schedule_entry.schema.v1.json`` or just ``schedule_entry``); or
-    * an inline JSON-schema dict (returned as-is).
+    * an inline JSON-schema dict.
+
+    The schema is embedded as a property of a composed port schema, where
+    ``#/$defs/...`` refers to the composed root, so its definitions are
+    returned separately for the caller to place there.
 
     Raises:
         ValueError: if the reference cannot be resolved.
     """
     if isinstance(ref, dict):
-        return dict(ref)
+        return _split_definitions(ref)
 
     if ref in document_types:
         doc_type = document_types[ref]
-        schema = doc_type.load_schema()
         from app.progenitor.workflows import _typed_document_schema
 
-        embedded, _definitions = _typed_document_schema(doc_type, schema)
-        return embedded
+        return _typed_document_schema(doc_type, doc_type.load_schema())
 
     try:
-        return load_schema(ref)
+        return _split_definitions(load_schema(ref))
     except FileNotFoundError:
         raise ValueError(f"unknown type ref: {ref!r}") from None
