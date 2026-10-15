@@ -9,6 +9,7 @@ Uses the LangChain model adapter plus Progenitor's wrapped tools, middleware,
 skills, memory files, and native DeepAgent subagents.
 """
 
+import json
 import logging
 from collections.abc import Callable
 from pathlib import Path
@@ -448,9 +449,16 @@ async def create_progenitor_agent(
         except (ValueError, KeyError) as exc:
             logger.warning("Skipping routine %r: invalid graph document: %s", routine_id, exc)
             continue
+        input_schema = graph_doc.get("input_schema")
         description = str(graph_doc.get("description") or "").strip() or (
             f"Runs the {graph_doc.get('name') or routine_id} routine graph."
         )
+        if input_schema:
+            description += (
+                " Invoke with task(subagent_type="
+                f"{routine_id!r}, description=<JSON object matching this input schema>). "
+                f"Input schema: {json.dumps(input_schema, separators=(',', ':'))}"
+            )
         routine_spec = create_routine_subagent(
             routine_id=routine_id,
             description=description,

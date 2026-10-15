@@ -25,7 +25,7 @@ from typing import Any, cast
 
 from deepagents.middleware.subagents import CompiledSubAgent
 from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.runnables import RunnableConfig, RunnableLambda
 from langchain_core.runnables.config import var_child_runnable_config
 from langgraph.cache.memory import InMemoryCache
@@ -33,6 +33,7 @@ from langgraph.errors import NodeTimeoutError
 from langgraph.types import Command
 
 from ..policies import PolicyValues, resolve_execution_policy
+from ..structured import validate_against_schema
 from ..utils import utcnow
 from .approvals import (
     approval_decision_id,
@@ -460,6 +461,44 @@ def create_routine_subagent(
     )
 
     async def _run(state: dict[str, Any]) -> dict[str, Any]:
+        pins = state.get(ROUTINE_REVISIONS_STATE_KEY) or {}
+        pinned = pins.get(routine_id)
+        graph = None
+        if pinned:
+            graph = await revision_reader.fetch(routine_id, pinned)
+            if graph is None:
+                latest = await revision_reader.fetch_latest(routine_id)
+                graph = latest[1] if latest is not None else None
+        if graph is None:
+            graph = await state_manager.get_routine_graph(routine_id)
+        input_schema = graph.get("input_schema") if isinstance(graph, dict) else None
+        if input_schema:
+            parameters = state.get("parameters")
+            if parameters is None:
+                messages = state.get("messages") or []
+                description = (
+                    messages[0].content
+                    if messages and isinstance(messages[0], HumanMessage)
+                    else None
+                )
+                try:
+                    parameters = json.loads(description) if isinstance(description, str) else None
+                except json.JSONDecodeError:
+                    parameters = None
+                if not isinstance(parameters, dict):
+                    return {
+                        "messages": [
+                            AIMessage(
+                                content=f"Routine '{routine_id}' requires a JSON object task description matching its input_schema."
+                            )
+                        ]
+                    }
+            error = validate_against_schema(parameters, input_schema)
+            if error is not None:
+                return {
+                    "messages": [AIMessage(content=f"Routine '{routine_id}' input error: {error}")]
+                }
+            state = {**state, "parameters": parameters}
         try:
             result = await executor.ainvoke(state)
         except (ValueError, KeyError, NotImplementedError) as exc:
@@ -486,6 +525,13 @@ def create_routine_subagent(
             }
 
         update: dict[str, Any] = {"messages": result.get("messages") or []}
+        if input_schema:
+            output = {
+                key: value
+                for key, value in result.get("data", {}).items()
+                if not key.startswith("_")
+            }
+            update["messages"] = [AIMessage(content=json.dumps({"output": output}, default=str))]
         if ROUTINE_REVISIONS_STATE_KEY in result:
             update[ROUTINE_REVISIONS_STATE_KEY] = result[ROUTINE_REVISIONS_STATE_KEY]
         return update
