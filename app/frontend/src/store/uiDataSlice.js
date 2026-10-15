@@ -30,8 +30,9 @@ import * as marketplaces from './uiData/marketplaces';
 import * as repos from './uiData/repos';
 import * as policies from './uiData/policies';
 import * as documentKinds from './uiData/documentKinds';
+import * as search from './uiData/search';
 
-const domains = [runtime, mcp, knowledge, prompts, tasks, workflows, agents, chats, inbox, logs, preferences, marketplaces, repos, documentKinds, policies];
+const domains = [runtime, mcp, knowledge, prompts, tasks, workflows, agents, chats, inbox, logs, preferences, marketplaces, repos, documentKinds, policies, search];
 
 const initialState = domains.reduce(
   (acc, domain) => ({ ...acc, ...domain.initialState }),
@@ -218,11 +219,22 @@ export {
 export {
   fetchKnowledge,
   saveKnowledge,
-  indexKnowledgeSource,
+  fetchKnowledgePages,
+  fetchKnowledgePage,
+  fetchKnowledgePageRevisions,
+  fetchKnowledgePageRevision,
   selectKnowledgeBases,
   selectKnowledgeState,
-  selectKnowledgeSearch,
+  selectKnowledgePages,
+  selectKnowledgePage,
+  selectKnowledgeRevisions,
+  selectKnowledgeRevision,
 } from './uiData/knowledge';
+
+export {
+  searchAll,
+  selectSearchResults,
+} from './uiData/search';
 
 export {
   fetchPrompts,

@@ -14,6 +14,13 @@ from ..content_documents import (
 )
 from ..conversations.sessions import CHAT_INDEX_KEY, CHAT_SESSIONS_NAMESPACE
 from ..document_kinds import INBOX_MESSAGE_KEY_PREFIX
+from ..knowledge.indexer_config import (
+    INDEX_STATUS_DOC_KEY,
+    INDEXER_DOC_KEY,
+    default_indexer_payload,
+    validate_indexer_payload,
+)
+from ..knowledge.pages import knowledge_page_key
 from ..routines.store import ROUTINE_GRAPH_KEY_PREFIX, routine_graph_key
 from ..utils import utcnow_isoformat
 from ..workflows import (
@@ -457,6 +464,23 @@ class StateManager:
         """Persist the knowledge document to the shared runtime store."""
         await self._save_runtime_document("knowledge", payload)
 
+    async def get_indexer_config(self) -> dict[str, Any]:
+        """Return the search-indexer settings behind ``/config/indexer.json``."""
+        default = default_indexer_payload()
+        payload = await self._runtime_store.get_document(INDEXER_DOC_KEY, default)
+        return payload if isinstance(payload, dict) else default
+
+    async def save_indexer_config(self, payload: dict[str, Any]) -> None:
+        """Persist indexer settings; the profile must name a ``/config/profile.json`` entry."""
+        profiles = await self.get_model_profiles_config()
+        validated = validate_indexer_payload(payload, profile_names=profiles.keys())
+        await self._save_runtime_document(INDEXER_DOC_KEY, validated)
+
+    async def get_knowledge_index(self) -> dict[str, Any]:
+        """Return the backend indexer's status document (``/knowledge/indexer.json``)."""
+        payload = await self._runtime_store.peek_document(INDEX_STATUS_DOC_KEY)
+        return payload if isinstance(payload, dict) else {"embedding": None, "bases": {}}
+
     # ==========================================================================
     # User preferences (profile)
     # ==========================================================================
@@ -802,6 +826,34 @@ class StateManager:
             if isinstance(payload, dict) and isinstance(payload.get("content"), str):
                 results.append((key[len(prefix) :], payload["content"]))
         return results
+
+    async def get_knowledge_page(self, base_id: str, path: str) -> dict[str, Any] | None:
+        payload = await self._runtime_store.peek_document(knowledge_page_key(base_id, path))
+        if isinstance(payload, dict) and isinstance(payload.get("content"), str):
+            return payload
+        return None
+
+    async def save_knowledge_page(self, base_id: str, path: str, content: str) -> None:
+        await self._save_runtime_document(
+            knowledge_page_key(base_id, path),
+            {"content": content, "updated_at": utcnow_isoformat()},
+        )
+
+    async def list_knowledge_pages(self) -> list[tuple[str, str, dict[str, Any]]]:
+        rows = await self._runtime_store.list_documents("knowledge:")
+        result: list[tuple[str, str, dict[str, Any]]] = []
+        for key, payload in rows:
+            remainder = key[len("knowledge:") :]
+            base_id, separator, path = remainder.partition("/")
+            if (
+                separator
+                and base_id
+                and path
+                and isinstance(payload, dict)
+                and isinstance(payload.get("content"), str)
+            ):
+                result.append((base_id, path, payload))
+        return result
 
     # ==========================================================================
     # MCP tools

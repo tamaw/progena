@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
 import logging
 from collections.abc import Callable, Iterable
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any, Protocol, cast
+from typing import Any, Literal, Protocol, cast
 
 import psycopg
 from psycopg import sql
@@ -95,6 +96,14 @@ class RoutineRevisionSummary:
     captured_at: str | None
 
 
+@dataclass(frozen=True)
+class KnowledgePageRevisionSummary:
+    revision_id: str
+    base_id: str
+    path: str
+    captured_at: str | None
+
+
 class BackendDocumentStore(Protocol):
     """Minimal document-store API used by backend routes."""
 
@@ -104,10 +113,20 @@ class BackendDocumentStore(Protocol):
 
     def list_documents(self, prefix: str, key_prefix: str) -> list[tuple[str, StoredDocument]]: ...
 
+    def search_documents(
+        self,
+        prefix: str,
+        key_prefix: str,
+        fields: tuple[str, ...],
+        source: Literal["json", "front_matter"],
+        q: str,
+        limit: int = 5,
+        key_suffix: str | None = None,
+    ) -> list[dict[str, Any]]: ...
+
     def save_document(self, prefix: str, key: str, payload: Any) -> None: ...
 
     def delete_document(self, prefix: str, key: str) -> None: ...
-
     def query_logs(
         self,
         *,
@@ -141,6 +160,13 @@ class BackendDocumentStore(Protocol):
 
     def get_routine_revision(self, routine_id: str, revision_id: str) -> dict[str, Any] | None: ...
 
+    def list_knowledge_page_revisions(
+        self, base_id: str, path: str, *, limit: int = 50
+    ) -> list[KnowledgePageRevisionSummary]: ...
+
+    def get_knowledge_page_revision(
+        self, base_id: str, path: str, revision_id: str
+    ) -> str | None: ...
     def close(self) -> None: ...
 
 
@@ -152,6 +178,9 @@ class InMemoryDocumentStore:
         self._checkpoint_threads: dict[str, CheckpointThreadSnapshot] = {}
         self._routine_revisions: dict[
             tuple[str, str], tuple[RoutineRevisionSummary, dict[str, Any]]
+        ] = {}
+        self._knowledge_revisions: dict[
+            tuple[str, str, str], tuple[KnowledgePageRevisionSummary, str]
         ] = {}
 
     def get_document(
@@ -174,8 +203,94 @@ class InMemoryDocumentStore:
             key=lambda entry: entry[0],
         )
 
+    def search_documents(
+        self,
+        prefix: str,
+        key_prefix: str,
+        fields: tuple[str, ...],
+        source: Literal["json", "front_matter"],
+        q: str,
+        limit: int = 5,
+        key_suffix: str | None = None,
+    ) -> list[dict[str, Any]]:
+        q_lower = q.lower()
+        rows: list[tuple[str, StoredDocument]] = []
+        for (doc_prefix, key), document in self._documents.items():
+            if doc_prefix != prefix or not key.startswith(key_prefix):
+                continue
+            if key_suffix is not None and not key.endswith(key_suffix):
+                continue
+            payload = document.payload if isinstance(document.payload, dict) else {}
+            if source == "front_matter":
+                content = str(payload.get("content", ""))
+                if q_lower in content.lower():
+                    rows.append((key, document))
+            else:
+                for field in fields:
+                    value = str(payload.get(field, ""))
+                    if q_lower in value.lower():
+                        rows.append((key, document))
+                        break
+
+        # Same order as Postgres: JSON kinds put title-prefix matches first, then
+        # newest; front-matter kinds are newest first.
+        rows.sort(
+            key=lambda entry: entry[1].updated_at or datetime.min.replace(tzinfo=UTC), reverse=True
+        )
+        if source == "json" and fields:
+            rows.sort(
+                key=lambda entry: (
+                    0
+                    if str(
+                        (entry[1].payload if isinstance(entry[1].payload, dict) else {}).get(
+                            fields[0], ""
+                        )
+                    )
+                    .lower()
+                    .startswith(q_lower)
+                    else 1
+                )
+            )
+        return [
+            {"key": key, "payload": document.payload, "updated_at": document.updated_at}
+            for key, document in rows[:limit]
+        ]
+
     def save_document(self, prefix: str, key: str, payload: Any) -> None:
         self._documents[(prefix, key)] = StoredDocument(payload, datetime.now(UTC))
+        if prefix == PROGENITOR_STATE_PREFIX and key.startswith("knowledge:"):
+            remainder = key[len("knowledge:") :]
+            base_id, separator, path = remainder.partition("/")
+            if separator and isinstance(payload, dict) and isinstance(payload.get("content"), str):
+                content = payload["content"]
+                revision_id = hashlib.sha256(content.encode("utf-8")).hexdigest()
+                summary = KnowledgePageRevisionSummary(
+                    revision_id=revision_id,
+                    base_id=base_id,
+                    path=path,
+                    captured_at=datetime.now(UTC).isoformat(),
+                )
+                self._knowledge_revisions.setdefault(
+                    (base_id, path, revision_id), (summary, content)
+                )
+
+    def list_knowledge_page_revisions(
+        self, base_id: str, path: str, *, limit: int = 50
+    ) -> list[KnowledgePageRevisionSummary]:
+        rows = [
+            summary
+            for (row_base, row_path, _), (summary, _) in self._knowledge_revisions.items()
+            if row_base == base_id and row_path == path
+        ]
+        return sorted(
+            rows,
+            key=lambda summary: (summary.captured_at or "", summary.revision_id),
+            reverse=True,
+        )[:limit]
+
+    def get_knowledge_page_revision(self, base_id: str, path: str, revision_id: str) -> str | None:
+        row = self._knowledge_revisions.get((base_id, path, revision_id))
+        return row[1] if row else None
 
     def delete_document(self, prefix: str, key: str) -> None:
         self._documents.pop((prefix, key), None)
@@ -348,6 +463,7 @@ class PostgresDocumentStore:
                 self._ensure_change_trigger()
                 self._ensure_routine_revision_history()
                 self._ensure_policy_revision_history()
+                self._ensure_knowledge_page_revision_history()
             finally:
                 conn.execute(
                     "SELECT pg_advisory_unlock(hashtext('progenitor_document_store_setup'))"
@@ -547,6 +663,68 @@ class PostgresDocumentStore:
                 """.replace("__STATE_PREFIX__", state_prefix).replace("__KEY_PREFIX__", key_prefix)  # nosec B608
             cur.execute(backfill_sql)
 
+    def _ensure_knowledge_page_revision_history(self) -> None:
+        state_prefix = PROGENITOR_STATE_PREFIX
+        with self._cursor() as cur:
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS knowledge_page_revisions (
+                    base_id TEXT NOT NULL, path TEXT NOT NULL, content TEXT NOT NULL,
+                    revision_id TEXT NOT NULL,
+                    captured_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    PRIMARY KEY (base_id, path, revision_id)
+                );
+                CREATE INDEX IF NOT EXISTS knowledge_page_revisions_latest
+                    ON knowledge_page_revisions (base_id, path, captured_at DESC, revision_id DESC);
+                CREATE OR REPLACE FUNCTION progenitor_capture_knowledge_page_revision()
+                RETURNS trigger AS $$
+                DECLARE source_row store%ROWTYPE; rest TEXT; slash INTEGER; page_content TEXT;
+                BEGIN
+                    IF TG_OP = 'DELETE' THEN source_row := OLD; ELSE source_row := NEW; END IF;
+                    rest := substring(source_row.key from 11);
+                    slash := position('/' in rest);
+                    page_content := source_row.value -> 'payload' ->> 'content';
+                    IF source_row.prefix = '__STATE_PREFIX__' AND source_row.key LIKE 'knowledge:%'
+                       AND slash > 1 AND page_content IS NOT NULL THEN
+                        INSERT INTO knowledge_page_revisions(base_id, path, content, revision_id)
+                        VALUES (
+                            split_part(rest, '/', 1),
+                            substring(rest from slash + 1),
+                            page_content,
+                            encode(sha256(convert_to(page_content, 'UTF8')), 'hex')
+                        ) ON CONFLICT DO NOTHING;
+                    END IF;
+                    RETURN source_row;
+                END;
+                $$ LANGUAGE plpgsql;
+                CREATE OR REPLACE TRIGGER progenitor_capture_knowledge_page_revision
+                    AFTER INSERT OR UPDATE ON store FOR EACH ROW
+                    EXECUTE FUNCTION progenitor_capture_knowledge_page_revision();
+                CREATE OR REPLACE TRIGGER progenitor_capture_deleted_knowledge_page_revision
+                    BEFORE DELETE ON store FOR EACH ROW
+                    EXECUTE FUNCTION progenitor_capture_knowledge_page_revision();
+                CREATE OR REPLACE FUNCTION progenitor_knowledge_page_revisions_immutable()
+                RETURNS trigger AS $$
+                BEGIN
+                    RAISE EXCEPTION 'knowledge_page_revisions rows are immutable';
+                END;
+                $$ LANGUAGE plpgsql;
+                CREATE OR REPLACE TRIGGER progenitor_knowledge_page_revisions_immutable
+                    BEFORE UPDATE OR DELETE ON knowledge_page_revisions FOR EACH ROW
+                    EXECUTE FUNCTION progenitor_knowledge_page_revisions_immutable();
+                INSERT INTO knowledge_page_revisions(base_id, path, content, revision_id)
+                SELECT split_part(substring(key from 11), '/', 1),
+                       substring(substring(key from 11) from position('/' in substring(key from 11)) + 1),
+                       value -> 'payload' ->> 'content',
+                       encode(sha256(convert_to(value -> 'payload' ->> 'content', 'UTF8')), 'hex')
+                FROM store
+                WHERE prefix = '__STATE_PREFIX__' AND key LIKE 'knowledge:%'
+                  AND position('/' in substring(key from 11)) > 1
+                  AND value -> 'payload' ->> 'content' IS NOT NULL
+                ON CONFLICT DO NOTHING;
+                """.replace("__STATE_PREFIX__", state_prefix)  # nosec B608
+            )
+
     def _ensure_policy_revision_history(self) -> None:
         from app.progenitor.policies import ExecutionPolicy
 
@@ -625,6 +803,75 @@ class PostgresDocumentStore:
             value = row.get("value")
             payload = value.get("payload") if isinstance(value, dict) else None
             results.append((str(row["key"]), StoredDocument(payload, row.get("updated_at"))))
+        return results
+
+    def search_documents(
+        self,
+        prefix: str,
+        key_prefix: str,
+        fields: tuple[str, ...],
+        source: Literal["json", "front_matter"],
+        q: str,
+        limit: int = 5,
+        key_suffix: str | None = None,
+    ) -> list[dict[str, Any]]:
+        like_prefix = _escape_like(key_prefix) + "%"
+        like_suffix = "%" + _escape_like(key_suffix) if key_suffix is not None else None
+        params: list[Any] = [prefix, like_prefix]
+        if like_suffix is not None:
+            params.append(like_suffix)
+
+        ilike_pattern = f"%{_escape_like(q)}%"
+
+        if source == "front_matter":
+            # Search inside the markdown content; front matter is parsed later.
+            match_sql = sql.SQL("value->'payload'->>'content' ILIKE %s")
+            params.append(ilike_pattern)
+        else:
+            # A row matches when any searched field contains the query.
+            match_sql = sql.SQL("({})").format(
+                sql.SQL(" OR ").join(
+                    sql.SQL("value->'payload'->>{} ILIKE %s").format(sql.Literal(field))
+                    for field in fields
+                )
+            )
+            params.extend(ilike_pattern for _ in fields)
+
+        key_clause = sql.SQL("key LIKE %s")
+        if like_suffix is not None:
+            key_clause = sql.SQL("key LIKE %s AND key LIKE %s")
+
+        where_sql = sql.SQL("prefix = %s AND {} AND {}").format(key_clause, match_sql)
+
+        # Order: title prefix match first, then updated_at desc.
+        if source == "json" and fields:
+            order_sql = sql.SQL(
+                "CASE WHEN value->'payload'->>{} ILIKE %s THEN 0 ELSE 1 END, updated_at DESC"
+            ).format(sql.Literal(fields[0]))
+            params.append(f"{_escape_like(q)}%")
+        else:
+            order_sql = sql.SQL("updated_at DESC")
+
+        query = sql.SQL(
+            "SELECT key, value, updated_at FROM store WHERE {} ORDER BY {} LIMIT %s"
+        ).format(where_sql, order_sql)
+        params.append(limit)
+
+        with self._cursor() as cur:
+            cur.execute(query, params)
+            rows = cast(list[dict[str, Any]], cur.fetchall())
+
+        results: list[dict[str, Any]] = []
+        for row in rows:
+            value = row.get("value")
+            payload = value.get("payload") if isinstance(value, dict) else None
+            results.append(
+                {
+                    "key": str(row["key"]),
+                    "payload": payload,
+                    "updated_at": row.get("updated_at"),
+                }
+            )
         return results
 
     def save_document(self, prefix: str, key: str, payload: Any) -> None:
@@ -978,6 +1225,37 @@ class PostgresDocumentStore:
             )
             row = cast(dict[str, Any] | None, cur.fetchone())
         return cast(dict[str, Any], row["graph"]) if row is not None else None
+
+    def list_knowledge_page_revisions(
+        self, base_id: str, path: str, *, limit: int = 50
+    ) -> list[KnowledgePageRevisionSummary]:
+        with self._cursor() as cur:
+            cur.execute(
+                "SELECT revision_id, captured_at FROM knowledge_page_revisions "
+                "WHERE base_id = %s AND path = %s "
+                "ORDER BY captured_at DESC, revision_id DESC LIMIT %s",
+                (base_id, path, limit),
+            )
+            rows = cast(list[dict[str, Any]], cur.fetchall())
+        return [
+            KnowledgePageRevisionSummary(
+                revision_id=row["revision_id"],
+                base_id=base_id,
+                path=path,
+                captured_at=str(row["captured_at"]) if row.get("captured_at") else None,
+            )
+            for row in rows
+        ]
+
+    def get_knowledge_page_revision(self, base_id: str, path: str, revision_id: str) -> str | None:
+        with self._cursor() as cur:
+            cur.execute(
+                "SELECT content FROM knowledge_page_revisions "
+                "WHERE base_id = %s AND path = %s AND revision_id = %s",
+                (base_id, path, revision_id),
+            )
+            row = cast(dict[str, Any] | None, cur.fetchone())
+        return str(row["content"]) if row is not None else None
 
 
 def store_database_url(store: BackendDocumentStore | None) -> str | None:
