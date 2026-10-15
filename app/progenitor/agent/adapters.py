@@ -215,7 +215,6 @@ def create_deepagent_tools(
                 tool_args=dict(kwargs),
                 tool_call_id=tool_call_id,
                 resume_routine=(late_bindings or {}).get("resume_routine"),
-                routine_runner=(late_bindings or {}).get("routine_runner"),
                 thread_state=(late_bindings or {}).get("thread_state"),
             )
             result = await system_tool.execute(ctx)
