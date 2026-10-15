@@ -30,8 +30,8 @@ Branch: `fix/pr349-review` (from `792b3c4b`, session documents).
 | Validated live (browser) | P1-9, P1-10, P1-11, P2-18, P2-20, P2-26, P1-5 (UI) | false value + stored size saved and reloaded; type change enables Save; Configure after Apply JSON; Unpack follows a palette node's schema change; dialog scrolls; palette has no Human Input |
 | Validated live after a second fix | P2-19, P2-21 | first fix did **not** resolve them (Cut left the edge in the draft and saved file). Cause: graph handlers ran side effects inside state updaters. Rewritten to compute from refs; canvas and draft now drop the edge and Unpack fields. Saving that graph is correctly refused (Unpack with no input) |
 | Validated by e2e | P2-28, P2-29, P2-30 | specs pass; no `pw-` workflows, cards or `card_order` refs left |
-| Partly validated | P1-12 | reopened quick chat shows the finished reply, but closing mid-stream wasn't confirmed |
-| Not validated | P2-17 | needs a failed roster fetch + reconnect; no test |
+| Validated live (browser, 2026-10-15) | P1-12 | real quick chat pane (not the main chat; the first attempt had used the main chat input). Closed mid-reply at 359 chars, before the end token, and the pane unmounted. The turn completed server-side 6 s later. Reopened: full 7,924-char reply with the end token, no "Thinking", New chat/Open in chat enabled, no Stop button, Send enables with text |
+| Validated live (browser, 2026-10-15) | P2-17 | roster request aborted on load, so `@` showed no agents; unblocking alone didn't retry. A backend restart dropped the stream; each new stream session re-requested the roster (one 500 while the backend started, then 202), and `@` listed all 4 agents again |
 | Deferred | P1-4 | known issue |
 
 ## P1
