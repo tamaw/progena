@@ -19,7 +19,7 @@ import * as chats from './uiData/chats';
 import * as agents from './uiData/agents';
 import * as tasks from './uiData/tasks';
 import * as knowledge from './uiData/knowledge';
-import * as prompts from './uiData/prompts';
+import * as instructions from './uiData/instructions';
 import * as mcp from './uiData/mcp';
 import * as runtime from './uiData/runtime';
 import * as inbox from './uiData/inbox';
@@ -32,7 +32,7 @@ import * as policies from './uiData/policies';
 import * as documentKinds from './uiData/documentKinds';
 import * as search from './uiData/search';
 
-const domains = [runtime, mcp, knowledge, prompts, tasks, workflows, agents, chats, inbox, logs, preferences, marketplaces, repos, documentKinds, policies, search];
+const domains = [runtime, mcp, knowledge, instructions, tasks, workflows, agents, chats, inbox, logs, preferences, marketplaces, repos, documentKinds, policies, search];
 
 const initialState = domains.reduce(
   (acc, domain) => ({ ...acc, ...domain.initialState }),
@@ -62,6 +62,7 @@ const NAV_ACTIVITY_EVENT_ROUTES = {
   'task.content.updated': '/tasks',
   'task.activity.updated': '/tasks',
   'agents.snapshot': '/agents',
+  'instructions.snapshot': '/instructions',
   'agent.upserted': '/agents',
   'agent.routine.run.started': '/routines',
   'agent.routine.run.completed': '/routines',
@@ -237,13 +238,18 @@ export {
 } from './uiData/search';
 
 export {
-  fetchPrompts,
-  savePrompt,
-  fetchPromptContent,
-  selectPrompts,
-  selectPromptsState,
-  selectPromptContentEntry,
-} from './uiData/prompts';
+  fetchInstructions,
+  fetchInstruction,
+  saveInstruction,
+  fetchInstructionRevisions,
+  fetchInstructionRevision,
+  restoreInstructionRevision,
+  selectInstructions,
+  selectInstructionsState,
+  selectInstruction,
+  selectInstructionRevisions,
+  selectInstructionRevision,
+} from './uiData/instructions';
 
 export {
   fetchDocumentKinds,

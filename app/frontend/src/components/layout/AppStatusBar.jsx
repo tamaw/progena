@@ -11,7 +11,6 @@ function getPageStatusContext(pathname, runtime, counts) {
     dashboard: ['Dashboard board', `${runtime.widgets.length} widgets`, `${runningCount} running`],
     knowledge: ['Knowledge graph', '8 bases', '214 links mapped'],
     logs: ['Runtime logs', 'Live tail ready', 'Errors grouped'],
-    prompts: ['Prompt editor', 'Internal route', 'Workspace deep links'],
     repositories: ['Repository map', '6 sources', 'Branches and commits'],
     schedules: ['Schedules', '6 mocked jobs', 'Next runs sorted'],
     sessions: ['Session history', '637 indexed', 'Pinned context ready'],

@@ -104,10 +104,10 @@ Important construction steps:
 create_progenitor_agent()  # async; requires state_manager
   -> create_langchain_model(config.llm)
   -> use injected Postgres checkpointer/store
-  -> ensure_content_documents_seeded(state_manager, "prompt"/"skill", ...)  # no-op once seeded
+  -> sync_instruction_documents(state_manager, data/instructions)  # every boot
   -> create_progenitor_backend(...)
        -> mount /config/* virtual documents over StateManager
-       -> mount Postgres-backed /prompts/, /skills/ (read-only), /memories/ (read-write)
+       -> mount Postgres-backed /instructions/, /skills/ (read-only), /memories/ (read-write)
        -> mount read-only /schemas/, /self/, /repos/, /logs/ (disk)
   -> create_deepagent_tools(...)
   -> [DynamicMCPToolMiddleware, SecretRedactionMiddleware,
@@ -164,7 +164,7 @@ DeepAgent backend map:
 | Virtual route | Backing store | Mode | Purpose |
 | --- | --- | --- | --- |
 | `/memories/` | Postgres content documents (`memory:`) | read-write | Durable agent memory. |
-| `/prompts/` | Postgres content documents (`prompt:`) | read-only | Prompt pack visibility. |
+| `/instructions/` | Postgres content documents (`instruction:`) | read-only | Agent instructions (front matter + body). |
 | `/skills/` | Postgres content documents (`skill:`) | read-only | Skill pack visibility. |
 | `/self/` | project `app/` (disk) | read-only | Self-inspection of application code. |
 | `/schemas/` | configured schemas dir (disk) | read-only | JSON Schema contracts for `structured_output`. |

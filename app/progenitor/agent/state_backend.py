@@ -1518,7 +1518,7 @@ def create_schedule_state_file(
 class ContentDocumentDirectoryBackend(_AsyncOnlyFileBackendMixin):
     """Async backend exposing Postgres-backed content documents as a directory.
 
-    Backs ``/prompts/`` and ``/memories/`` (whole-kind) plus one
+    Backs ``/instructions/`` and ``/memories/`` (whole-kind) plus one
     ``/skills/<marketplace>__<plugin>/`` mount per installed marketplace
     plugin (``path_prefix`` scopes the backend to just that segment of the
     ``"skill"`` kind, so the mount only ever sees that plugin's own rows).

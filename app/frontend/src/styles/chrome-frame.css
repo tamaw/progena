@@ -1726,17 +1726,9 @@ body,
   min-height: 0;
 }
 
-.app-shell .workspace-container,
-.app-shell .prompts-page {
+.app-shell .workspace-container {
   height: 100%;
   min-height: 0;
-}
-
-/* The Plugins page wraps .prompts-page in a flex column with a dismissible
-   banner above it, so its row must flex to the remaining space instead of
-   claiming the full page height like every other .prompts-page consumer. */
-.app-shell .plugins-page__row {
-  height: auto;
 }
 
 .app-shell .canvas-surface {
@@ -3332,8 +3324,7 @@ body,
 .task-card__button,
 .chat-session-card,
 .workspace-selector-row__button,
-.prompts-tree-toggle,
-.prompts-tree-leaf {
+.plugins-tree-leaf {
   background: transparent;
   border: 1px solid transparent;
   border-radius: 6px;
@@ -3343,15 +3334,14 @@ body,
 .task-card__button:hover,
 .chat-session-card:hover,
 .workspace-selector-row__button:hover,
-.prompts-tree-toggle:hover,
-.prompts-tree-leaf:hover {
+.plugins-tree-leaf:hover {
   background: var(--color-bg-hover);
 }
 
 .task-card.is-selected .task-card__button,
 .chat-session-card.is-selected,
 .workspace-selector-row.is-selected .workspace-selector-row__button,
-.prompts-tree-leaf.active {
+.plugins-tree-leaf.active {
   background: var(--color-accent-soft);
   border-color: color-mix(in oklab, var(--color-accent) 34%, var(--color-border));
 }

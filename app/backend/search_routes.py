@@ -14,9 +14,9 @@ from fastapi import APIRouter, Header, HTTPException, Query, Request
 from app.progenitor.document_kinds import (
     AGENT_DOCUMENT_KEY_PREFIX,
     DOCUMENT_KINDS,
-    PROMPT_DOCUMENT_KEY_PREFIX,
     SearchSpec,
 )
+from app.progenitor.front_matter import split_front_matter
 from app.progenitor.knowledge.embedding import embedder_for
 from app.progenitor.knowledge.index import search as index_search
 from app.progenitor.knowledge.indexer_config import (
@@ -24,7 +24,6 @@ from app.progenitor.knowledge.indexer_config import (
     min_similarity,
     resolve_embedding_target,
 )
-from app.progenitor.knowledge.pages import split_front_matter
 
 from .agent_store import object_agent_id
 from .chat_sessions import UiRequestAcknowledgement, acknowledgement_response
@@ -82,10 +81,6 @@ def _build_text_result(kind, key: str, payload: Any, spec: SearchSpec) -> dict[s
         id_value = object_agent_id(title)
 
     to = spec.route.replace("{id}", quote(id_value, safe="/"))
-
-    # Prompts have no title in the payload; fall back to the filename.
-    if not title and kind.key_prefix == PROMPT_DOCUMENT_KEY_PREFIX:
-        title = id_value.rsplit("/", 1)[-1] if "/" in id_value else id_value
 
     if not title:
         title = id_value

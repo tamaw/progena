@@ -27,7 +27,6 @@ import reducer, {
   selectRequestIdForThread,
   selectChatSessions,
   selectKanbanBoard,
-  selectPromptContentEntry,
   selectTaskActivityEntry,
   selectTaskContentEntry,
   selectUnreadChatIds,
@@ -436,15 +435,6 @@ describe('applyUiEvent reducer', () => {
     }));
     expect(selectTaskContentEntry({ uiData: s }, 'card_1')?.content).toBe('# Ship Tasks');
     expect(selectTaskActivityEntry({ uiData: s }, 'card_1')?.total).toBe(1);
-  });
-
-  it('prompt.content.updated caches the full body by path', () => {
-    const s = reducer(undefined, applyUiEvent({
-      type: 'prompt.content.updated',
-      payload: { path: 'builder_agent/think.md', content: '# Think prompt' },
-    }));
-    expect(selectPromptContentEntry({ uiData: s }, 'builder_agent/think.md')?.content).toBe('# Think prompt');
-    expect(selectPromptContentEntry({ uiData: s }, 'unknown.md')).toBeNull();
   });
 
   it('chat.session.selected caps hasMoreMessages and chat.messages.page.loaded prepends an older page', () => {

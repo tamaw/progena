@@ -199,7 +199,7 @@ async def _ensure_initialized() -> None:
     _llm_client = create_llm_client(
         config=config.llm,
         mcp_config=config.mcp,
-        prompts_dir=config.storage.prompts_dir,
+        instructions_dir=config.storage.instructions_dir,
     )
 
     _tool_registry = ToolRegistry(config.storage.state_dir.parent / "config" / "agents.json")

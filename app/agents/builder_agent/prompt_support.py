@@ -1,9 +1,8 @@
 """Local prompt-file loading helpers for builder_agent.
 
 Self-contained copy of the prompt loading semantics: builder_agent does
-not depend on app.progenitor. Behavior matches what app/progenitor/prompts/
-used to provide, but reuses this package's own path configuration
-(``config.DEFAULT_PROJECT_PROMPTS_DIR``) instead of a shared module.
+not depend on app.progenitor. Behavior matches app/progenitor/instructions/, but reuses this package's own path configuration
+(``config.DEFAULT_PROJECT_INSTRUCTIONS_DIR``) instead of a shared module.
 
 Skill *content* loading (``load_skill_context``) lives in
 ``postgres_skills.py`` instead -- skills are Postgres-backed marketplace-plugin
@@ -20,27 +19,28 @@ from . import config
 from .postgres_skills import load_skill_context, strip_skill_frontmatter
 
 __all__ = [
-    "DEFAULT_PROMPTS_DIR",
+    "DEFAULT_INSTRUCTIONS_DIR",
     "load_skill_context",
     "load_prompt",
     "render_prompt_template",
-    "resolve_prompts_dir",
+    "resolve_instructions_dir",
+    "strip_front_matter",
     "strip_skill_frontmatter",
 ]
 
-DEFAULT_PROMPTS_DIR = config.DEFAULT_PROJECT_PROMPTS_DIR
+DEFAULT_INSTRUCTIONS_DIR = config.DEFAULT_PROJECT_INSTRUCTIONS_DIR
 
 
-def resolve_prompts_dir(prompts_dir: Path | str | None = None) -> Path:
+def resolve_instructions_dir(instructions_dir: Path | str | None = None) -> Path:
     """Resolve the prompt directory from explicit override or the agent default."""
-    if prompts_dir is not None:
-        return Path(prompts_dir).expanduser().resolve()
-    if not DEFAULT_PROMPTS_DIR.exists():
+    if instructions_dir is not None:
+        return Path(instructions_dir).expanduser().resolve()
+    if not DEFAULT_INSTRUCTIONS_DIR.exists():
         raise FileNotFoundError(
-            f"Prompts directory not found: {DEFAULT_PROMPTS_DIR}. "
-            "Ensure the data/prompts/ directory exists at the project root."
+            f"Instructions directory not found: {DEFAULT_INSTRUCTIONS_DIR}. "
+            "Ensure the data/instructions/ directory exists at the project root."
         )
-    return DEFAULT_PROMPTS_DIR
+    return DEFAULT_INSTRUCTIONS_DIR
 
 
 def render_prompt_template(content: str, **replacements: object) -> str:
@@ -51,25 +51,33 @@ def render_prompt_template(content: str, **replacements: object) -> str:
     return rendered
 
 
+def strip_front_matter(content: str) -> str:
+    """Return an instruction's body without its leading YAML front matter block."""
+    if not content.startswith("---\n"):
+        return content
+    end = content.find("\n---\n", 3)
+    if end == -1:
+        raise ValueError("unclosed YAML front matter")
+    return content[end + 5 :]
+
+
 def load_prompt(
     filename: str,
     *,
-    prompts_dir: Path | str | None = None,
+    instructions_dir: Path | str | None = None,
     **replacements: object,
 ) -> str:
     """Load a prompt file and apply simple template replacements."""
-    prompt_root = resolve_prompts_dir(prompts_dir)
+    prompt_root = resolve_instructions_dir(instructions_dir)
     prompt_file = prompt_root / filename
     if not prompt_file.exists():
         searched_dirs = [str(prompt_root)]
-        if prompt_root != DEFAULT_PROMPTS_DIR:
-            searched_dirs.append(str(DEFAULT_PROMPTS_DIR))
+        if prompt_root != DEFAULT_INSTRUCTIONS_DIR:
+            searched_dirs.append(str(DEFAULT_INSTRUCTIONS_DIR))
         raise FileNotFoundError(
             f"Prompt file not found: {prompt_file}. "
-            f"Ensure data/prompts/{filename} exists. Searched prompt directories: {', '.join(searched_dirs)}"
+            f"Ensure data/instructions/{filename} exists. Searched prompt directories: {', '.join(searched_dirs)}"
         )
 
-    content = prompt_file.read_text(encoding="utf-8")
+    content = strip_front_matter(prompt_file.read_text(encoding="utf-8"))
     return render_prompt_template(content, **replacements)
-
-

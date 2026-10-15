@@ -1,7 +1,7 @@
 """Canonical registry of ``store`` table document key prefixes.
 
 Every Postgres-backed document kind (routines, agents, skills, memories,
-prompts, kanban cards, inbox messages, workflows, workflow runs, ...) is
+instructions, kanban cards, inbox messages, workflows, workflow runs, ...) is
 identified by a fixed prefix on its ``key`` column, e.g. ``"routine:"`` for
 ``routine:<id>``. Those prefixes used to be declared independently in each
 owning module (``content_documents.py``, ``workflows.py``,
@@ -34,7 +34,7 @@ ROUTINE_GRAPH_KEY_PREFIX = "routine:"
 AGENT_DOCUMENT_KEY_PREFIX = "agent:"
 SKILL_DOCUMENT_KEY_PREFIX = "skill:"
 MEMORY_DOCUMENT_KEY_PREFIX = "memory:"
-PROMPT_DOCUMENT_KEY_PREFIX = "prompt:"
+INSTRUCTION_DOCUMENT_KEY_PREFIX = "instruction:"
 KANBAN_CARD_KEY_PREFIX = "kanban_card:"
 INBOX_MESSAGE_KEY_PREFIX = "inbox_message:"
 WORKFLOW_DEFINITION_KEY_PREFIX = "workflow:"
@@ -106,13 +106,13 @@ DOCUMENT_KINDS: tuple[DocumentKind, ...] = (
     DocumentKind("Skill", SKILL_DOCUMENT_KEY_PREFIX, search=None),
     DocumentKind("Memory", MEMORY_DOCUMENT_KEY_PREFIX, search=None),
     DocumentKind(
-        "Prompt",
-        PROMPT_DOCUMENT_KEY_PREFIX,
+        "Instruction",
+        INSTRUCTION_DOCUMENT_KEY_PREFIX,
         search=SearchSpec(
-            section="Prompts",
-            route="/prompts?path={id}",
-            fields=("content",),
-            title_field="",
+            section="Instructions",
+            route="/instructions/{id}",
+            fields=("title", "description"),
+            source="front_matter",
         ),
     ),
     DocumentKind(

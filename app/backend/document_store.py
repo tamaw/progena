@@ -20,6 +20,7 @@ from psycopg.types.json import Jsonb
 from psycopg_pool import ConnectionPool, PoolClosed
 
 from app.backend.runtime_conversations import RuntimeConversationReader, RuntimeUnavailable
+from app.progenitor.document_kinds import INSTRUCTION_DOCUMENT_KEY_PREFIX
 from app.progenitor.routines.store import ROUTINE_GRAPH_KEY_PREFIX
 
 PROGENITOR_STATE_PREFIX = "progenitor.state"
@@ -104,6 +105,13 @@ class KnowledgePageRevisionSummary:
     captured_at: str | None
 
 
+@dataclass(frozen=True)
+class InstructionRevisionSummary:
+    revision_id: str
+    path: str
+    captured_at: str | None
+
+
 class BackendDocumentStore(Protocol):
     """Minimal document-store API used by backend routes."""
 
@@ -167,6 +175,12 @@ class BackendDocumentStore(Protocol):
     def get_knowledge_page_revision(
         self, base_id: str, path: str, revision_id: str
     ) -> str | None: ...
+
+    def list_instruction_revisions(
+        self, path: str, *, limit: int = 50
+    ) -> list[InstructionRevisionSummary]: ...
+
+    def get_instruction_revision(self, path: str, revision_id: str) -> str | None: ...
     def close(self) -> None: ...
 
 
@@ -181,6 +195,9 @@ class InMemoryDocumentStore:
         ] = {}
         self._knowledge_revisions: dict[
             tuple[str, str, str], tuple[KnowledgePageRevisionSummary, str]
+        ] = {}
+        self._instruction_revisions: dict[
+            tuple[str, str], tuple[InstructionRevisionSummary, str]
         ] = {}
 
     def get_document(
@@ -273,6 +290,44 @@ class InMemoryDocumentStore:
                 self._knowledge_revisions.setdefault(
                     (base_id, path, revision_id), (summary, content)
                 )
+        if (
+            prefix == PROGENITOR_STATE_PREFIX
+            and key.startswith(INSTRUCTION_DOCUMENT_KEY_PREFIX)
+            and isinstance(payload, dict)
+            and isinstance(payload.get("content"), str)
+        ):
+            path = key[len(INSTRUCTION_DOCUMENT_KEY_PREFIX) :]
+            content = payload["content"]
+            revision_id = hashlib.sha256(content.encode("utf-8")).hexdigest()
+            self._instruction_revisions.setdefault(
+                (path, revision_id),
+                (
+                    InstructionRevisionSummary(
+                        revision_id=revision_id,
+                        path=path,
+                        captured_at=datetime.now(UTC).isoformat(),
+                    ),
+                    content,
+                ),
+            )
+
+    def list_instruction_revisions(
+        self, path: str, *, limit: int = 50
+    ) -> list[InstructionRevisionSummary]:
+        rows = [
+            summary
+            for (row_path, _), (summary, _) in self._instruction_revisions.items()
+            if row_path == path
+        ]
+        return sorted(
+            rows,
+            key=lambda summary: (summary.captured_at or "", summary.revision_id),
+            reverse=True,
+        )[:limit]
+
+    def get_instruction_revision(self, path: str, revision_id: str) -> str | None:
+        row = self._instruction_revisions.get((path, revision_id))
+        return row[1] if row else None
 
     def list_knowledge_page_revisions(
         self, base_id: str, path: str, *, limit: int = 50
@@ -464,6 +519,7 @@ class PostgresDocumentStore:
                 self._ensure_routine_revision_history()
                 self._ensure_policy_revision_history()
                 self._ensure_knowledge_page_revision_history()
+                self._ensure_instruction_revision_history()
             finally:
                 conn.execute(
                     "SELECT pg_advisory_unlock(hashtext('progenitor_document_store_setup'))"
@@ -662,6 +718,63 @@ class PostgresDocumentStore:
                 ON CONFLICT (routine_id, revision_id) DO NOTHING
                 """.replace("__STATE_PREFIX__", state_prefix).replace("__KEY_PREFIX__", key_prefix)  # nosec B608
             cur.execute(backfill_sql)
+
+    def _ensure_instruction_revision_history(self) -> None:
+        state_prefix = PROGENITOR_STATE_PREFIX
+        key_prefix = INSTRUCTION_DOCUMENT_KEY_PREFIX
+        with self._cursor() as cur:
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS instruction_revisions (
+                    path TEXT NOT NULL, content TEXT NOT NULL, revision_id TEXT NOT NULL,
+                    captured_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    PRIMARY KEY (path, revision_id)
+                );
+                CREATE INDEX IF NOT EXISTS instruction_revisions_latest
+                    ON instruction_revisions (path, captured_at DESC, revision_id DESC);
+                CREATE OR REPLACE FUNCTION progenitor_capture_instruction_revision()
+                RETURNS trigger AS $$
+                DECLARE source_row store%ROWTYPE; body TEXT;
+                BEGIN
+                    IF TG_OP = 'DELETE' THEN source_row := OLD; ELSE source_row := NEW; END IF;
+                    body := source_row.value -> 'payload' ->> 'content';
+                    IF source_row.prefix = '__STATE_PREFIX__'
+                       AND source_row.key LIKE '__KEY_PREFIX__%' AND body IS NOT NULL THEN
+                        INSERT INTO instruction_revisions(path, content, revision_id)
+                        VALUES (
+                            substring(source_row.key from length('__KEY_PREFIX__') + 1),
+                            body,
+                            encode(sha256(convert_to(body, 'UTF8')), 'hex')
+                        ) ON CONFLICT DO NOTHING;
+                    END IF;
+                    RETURN source_row;
+                END;
+                $$ LANGUAGE plpgsql;
+                CREATE OR REPLACE TRIGGER progenitor_capture_instruction_revision
+                    AFTER INSERT OR UPDATE ON store FOR EACH ROW
+                    EXECUTE FUNCTION progenitor_capture_instruction_revision();
+                CREATE OR REPLACE TRIGGER progenitor_capture_deleted_instruction_revision
+                    BEFORE DELETE ON store FOR EACH ROW
+                    EXECUTE FUNCTION progenitor_capture_instruction_revision();
+                CREATE OR REPLACE FUNCTION progenitor_instruction_revisions_immutable()
+                RETURNS trigger AS $$
+                BEGIN
+                    RAISE EXCEPTION 'instruction_revisions rows are immutable';
+                END;
+                $$ LANGUAGE plpgsql;
+                CREATE OR REPLACE TRIGGER progenitor_instruction_revisions_immutable
+                    BEFORE UPDATE OR DELETE ON instruction_revisions FOR EACH ROW
+                    EXECUTE FUNCTION progenitor_instruction_revisions_immutable();
+                INSERT INTO instruction_revisions(path, content, revision_id)
+                SELECT substring(key from length('__KEY_PREFIX__') + 1),
+                       value -> 'payload' ->> 'content',
+                       encode(sha256(convert_to(value -> 'payload' ->> 'content', 'UTF8')), 'hex')
+                FROM store
+                WHERE prefix = '__STATE_PREFIX__' AND key LIKE '__KEY_PREFIX__%'
+                  AND value -> 'payload' ->> 'content' IS NOT NULL
+                ON CONFLICT DO NOTHING;
+                """.replace("__STATE_PREFIX__", state_prefix).replace("__KEY_PREFIX__", key_prefix)  # nosec B608
+            )
 
     def _ensure_knowledge_page_revision_history(self) -> None:
         state_prefix = PROGENITOR_STATE_PREFIX
@@ -1253,6 +1366,34 @@ class PostgresDocumentStore:
                 "SELECT content FROM knowledge_page_revisions "
                 "WHERE base_id = %s AND path = %s AND revision_id = %s",
                 (base_id, path, revision_id),
+            )
+            row = cast(dict[str, Any] | None, cur.fetchone())
+        return str(row["content"]) if row is not None else None
+
+    def list_instruction_revisions(
+        self, path: str, *, limit: int = 50
+    ) -> list[InstructionRevisionSummary]:
+        with self._cursor() as cur:
+            cur.execute(
+                "SELECT revision_id, captured_at FROM instruction_revisions "
+                "WHERE path = %s ORDER BY captured_at DESC, revision_id DESC LIMIT %s",
+                (path, limit),
+            )
+            rows = cast(list[dict[str, Any]], cur.fetchall())
+        return [
+            InstructionRevisionSummary(
+                revision_id=row["revision_id"],
+                path=path,
+                captured_at=str(row["captured_at"]) if row.get("captured_at") else None,
+            )
+            for row in rows
+        ]
+
+    def get_instruction_revision(self, path: str, revision_id: str) -> str | None:
+        with self._cursor() as cur:
+            cur.execute(
+                "SELECT content FROM instruction_revisions WHERE path = %s AND revision_id = %s",
+                (path, revision_id),
             )
             row = cast(dict[str, Any] | None, cur.fetchone())
         return str(row["content"]) if row is not None else None

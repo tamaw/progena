@@ -15,7 +15,8 @@ import './styles/logs-page.css';
 import './styles/kanban.css';
 import './styles/notifications.css';
 import './styles/status.css';
-import './styles/prompts.css';
+import './styles/plugins.css';
+import './styles/instructions.css';
 import './styles/chrome-frame.css';
 import './styles/detail-header.css';
 import './styles/forms.css';
@@ -26,7 +27,7 @@ const DashboardPage = lazy(() => import('./pages/DashboardPage'));
 const TasksPage = lazy(() => import('./pages/TasksPage'));
 const KanbanPage = lazy(() => import('./pages/KanbanPage'));
 const LogsPage = lazy(() => import('./pages/LogsPage'));
-const PromptsPage = lazy(() => import('./pages/PromptsPage'));
+const InstructionsPage = lazy(() => import('./pages/InstructionsPage'));
 const PluginsPage = lazy(() => import('./pages/PluginsPage'));
 const SessionsPage = lazy(() => import('./pages/SessionsPage'));
 const RepositoriesPage = lazy(() => import('./pages/RepositoriesPage'));
@@ -114,7 +115,7 @@ function WorkspaceScopedApp() {
                     <Route path="/solutions/:solutionId/projects/:projectId" element={<DeferredRoute Page={ProjectPage} fallback="Loading project..." />} />
                     <Route path="/logs" element={<DeferredRoute Page={LogsPage} fallback="Loading logs..." />} />
                     <Route path="/plugins/:marketplace?/:plugin?" element={<DeferredRoute Page={PluginsPage} fallback="Loading plugins..." />} />
-                    <Route path="/prompts" element={<DeferredRoute Page={PromptsPage} fallback="Loading prompts..." />} />
+                    <Route path="/instructions/*" element={<DeferredRoute Page={InstructionsPage} fallback="Loading instructions..." />} />
                     <Route path="/sessions" element={<DeferredRoute Page={SessionsPage} fallback="Loading sessions..." />} />
                     <Route path="/schedules/:scheduleId?/:titleSlug?" element={<DeferredRoute Page={SchedulesPage} fallback="Loading schedules..." />} />
                     <Route path="/repositories" element={<DeferredRoute Page={RepositoriesPage} fallback="Loading repositories..." />} />

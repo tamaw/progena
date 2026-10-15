@@ -131,7 +131,7 @@ data/
   state/                # File-backed state for non-runtime helpers/tests
   sessions/             # Session persistence
   attachments/          # Uploaded file cache/data
-  prompts/              # Prompt templates
+  instructions/         # Agent instructions (front matter + markdown body)
   skills/               # DeepAgent SKILL.md files (grouped by agent)
   repos/                # Git worktrees for builds (used by Builder Agent)
 logs/                   # File-backed logs for non-runtime helpers/tests

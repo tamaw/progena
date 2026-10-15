@@ -6,11 +6,11 @@ data_dir="${PROGENITOR_DATA_DIR:-/app/data}"
 log_dir="${PROGENITOR_LOG_DIR:-/app/logs}"
 state_dir="${PROGENITOR_STATE_DIR:-$data_dir/state}"
 worktrees_root="${PROGENITOR_WORKTREES_ROOT:-/app/worktrees}"
-prompts_dir="${PROGENITOR_PROMPTS_DIR:-$data_dir/prompts}"
+instructions_dir="${PROGENITOR_INSTRUCTIONS_DIR:-$data_dir/instructions}"
 skills_dir="${data_dir}/skills"
 
 ensure_runtime_dirs() {
-  mkdir -p "$data_dir" "$log_dir" "$log_dir/$agent_name" "$state_dir" "$worktrees_root" "$prompts_dir" "$skills_dir" /app/tmp /home/runner
+  mkdir -p "$data_dir" "$log_dir" "$log_dir/$agent_name" "$state_dir" "$worktrees_root" "$instructions_dir" "$skills_dir" /app/tmp /home/runner
 }
 
 if [ "$(id -u)" -eq 0 ]; then

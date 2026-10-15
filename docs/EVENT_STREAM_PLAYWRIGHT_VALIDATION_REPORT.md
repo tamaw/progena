@@ -15,11 +15,11 @@ Date: 2026-07-13
 - Production frontend preview rendered the full Progenitor shell and Chat page.
 - Browser-captured requests included one canonical `GET /api/ui/stream` EventSource request.
 - Homepage finite requests returned HTTP `202` acknowledgements; the shell eventually hydrated chat state from stream events.
-- Route checks rendered without uncaught page errors for Dashboard, Tasks, Logs, Prompts, Skills, Knowledge, Tools, Workflows, and Inbox.
+- Route checks rendered without uncaught page errors for Dashboard, Tasks, Logs, Instructions, Skills, Knowledge, Tools, Workflows, and Inbox.
 - Captured route request statuses were HTTP `202` for retained event-only requests:
   - `/api/ui/kanban`
   - `/api/ui/logs`
-  - `/api/ui/prompts`
+  - `/api/ui/instructions`
   - `/api/ui/skills`
   - `/api/ui/knowledge`
   - `/api/ui/mcp`

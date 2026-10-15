@@ -19,8 +19,8 @@ from app.progenitor.config import (
     get_config,
     reload_config,
 )
+from app.progenitor.instructions import DEFAULT_INSTRUCTIONS_DIR
 from app.progenitor.mcp.loader import load_mcp_servers, resolve_required_env_template
-from app.progenitor.prompts import DEFAULT_PROMPTS_DIR
 from app.progenitor.runtime.logging import setup_logging
 from app.progenitor.utils import env_bool, env_int
 
@@ -195,7 +195,7 @@ class TestStorageConfig:
             "PROGENITOR_LOG_DIR": "",
             "PROGENITOR_WORKTREE_DIR": "",
             "PROGENITOR_WORKTREES_ROOT": "",
-            "PROGENITOR_PROMPTS_DIR": "",
+            "PROGENITOR_INSTRUCTIONS_DIR": "",
         }
         with patch.dict(os.environ, env, clear=False):
             for key in env:
@@ -205,9 +205,9 @@ class TestStorageConfig:
         assert config.state_dir == project_root / "data" / "state"
         assert config.log_dir == project_root / "logs"
         assert config.worktree_dir == project_root / "data" / "repos"
-        assert config.prompts_dir == project_root / "data" / "prompts"
+        assert config.instructions_dir == project_root / "data" / "instructions"
 
-    def test_default_prompts_dir_uses_checked_in_repo_path(self):
+    def test_default_instructions_dir_uses_checked_in_repo_path(self):
         """Storage defaults should use the checked-in repo paths when env is unset."""
         with patch.dict(os.environ, {}, clear=False):
             os.environ.pop("PROGENITOR_DATA_DIR", None)
@@ -215,14 +215,14 @@ class TestStorageConfig:
             os.environ.pop("PROGENITOR_LOG_DIR", None)
             os.environ.pop("PROGENITOR_WORKTREE_DIR", None)
             os.environ.pop("PROGENITOR_WORKTREES_ROOT", None)
-            os.environ.pop("PROGENITOR_PROMPTS_DIR", None)
+            os.environ.pop("PROGENITOR_INSTRUCTIONS_DIR", None)
             config = StorageConfig.from_env()
         repo_root = Path(__file__).resolve().parents[2]
         assert config.data_dir == repo_root / "data"
         assert config.state_dir == repo_root / "data" / "state"
         assert config.log_dir == repo_root / "logs"
         assert config.worktree_dir == repo_root / "data" / "repos"
-        assert config.prompts_dir == DEFAULT_PROMPTS_DIR
+        assert config.instructions_dir == DEFAULT_INSTRUCTIONS_DIR
 
     def test_env_overrides(self):
         """Test environment variables override defaults."""
@@ -233,13 +233,13 @@ class TestStorageConfig:
         }
         with patch.dict(os.environ, env, clear=False):
             os.environ.pop("PROGENITOR_STATE_DIR", None)
-            os.environ.pop("PROGENITOR_PROMPTS_DIR", None)
+            os.environ.pop("PROGENITOR_INSTRUCTIONS_DIR", None)
             config = StorageConfig.from_env()
             assert config.data_dir == Path("/custom/data")
             assert config.state_dir == Path("/custom/data/state")
             assert config.log_dir == Path("/custom/logs")
             assert config.worktree_dir == Path("/custom/worktrees")
-            assert config.prompts_dir == Path("/custom/data/prompts")
+            assert config.instructions_dir == Path("/custom/data/instructions")
 
 
 class TestMCPConfig:
@@ -490,7 +490,7 @@ class TestLoggingSetup:
                 state_dir=tmp_path / "state",
                 log_dir=tmp_path,
                 worktree_dir=tmp_path / "worktrees",
-                prompts_dir=tmp_path / "prompts",
+                instructions_dir=tmp_path / "instructions",
             )
         )
 

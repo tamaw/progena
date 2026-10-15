@@ -38,10 +38,14 @@ class TestSubagentWiring:
             patch("app.progenitor.agent.agent.create_progenitor_backend") as mock_backend,
         ):
             mock_create.return_value = MagicMock()
-            mock_subagents.return_value = [{
-                "name": "researcher", "description": "Researches in the background.",
-                "graph_id": "researcher", "url": "http://unused.test/agent-protocol",
-            }]
+            mock_subagents.return_value = [
+                {
+                    "name": "researcher",
+                    "description": "Researches in the background.",
+                    "graph_id": "researcher",
+                    "url": "http://unused.test/agent-protocol",
+                }
+            ]
             mock_backend.return_value = MagicMock()
             with patch("app.progenitor.agent.agent.create_langchain_model") as mock_model:
                 mock_model.return_value = MagicMock()
@@ -51,7 +55,9 @@ class TestSubagentWiring:
                     def __init__(self):
                         self._runtime_store = _FakeRuntimeStore()
                         self._docs = {
-                            "prompt": {"progenitor/genesis.md": "Genesis"},
+                            "instruction": {
+                                "progenitor/genesis.md": "---\ntitle: Genesis\ndescription: Test\n---\nGenesis"
+                            },
                             "skill": {},
                             "memory": {},
                             "agent": {},
@@ -78,10 +84,13 @@ class TestSubagentWiring:
                 assert "subagents" in call_kwargs
                 assert call_kwargs["subagents"] == []
                 live_async = next(
-                    m for m in call_kwargs["middleware"] if isinstance(m, LiveAsyncSubagentMiddleware)
+                    m
+                    for m in call_kwargs["middleware"]
+                    if isinstance(m, LiveAsyncSubagentMiddleware)
                 )
                 assert [spec["name"] for spec in live_async.descriptors()] == [
-                    "researcher", "repo-manager",
+                    "researcher",
+                    "repo-manager",
                 ]
                 live = next(
                     m for m in call_kwargs["middleware"] if isinstance(m, LiveSubagentMiddleware)
