@@ -345,12 +345,25 @@ async def create_progenitor_agent(
     # each invocation rather than consulting an in-memory routine registry.
     reserved_names = {spec["name"] for spec in async_subagents}
 
+    class _LiveTools:
+        """Static tools plus the MCP tools loaded right now, re-read on every iteration.
+
+        Object agents compile per invocation, so a manifest can name an MCP
+        tool (e.g. ``jina_search_web``) added after startup.
+        """
+
+        def __iter__(self):
+            yield from tools
+            yield from create_dynamic_mcp_tools(llm_client)
+
+    live_tools = _LiveTools()
+
     def object_proxy(source):
         return create_object_agent_proxy(
             source,
             state_manager=state_manager,
             model=model,
-            tools=tools,
+            tools=live_tools,
             backend=backend,
             checkpointer=checkpointer,
             log_sink=log_sink,

@@ -330,6 +330,46 @@ async def test_dispatch_event_filters_by_from_and_to_column():
 
 
 @pytest.mark.asyncio
+async def test_dispatch_knowledge_index_event_filters_by_base_id():
+    store = InMemoryDocumentStore()
+    workflow = default_workflow_definition(
+        title="Index failure alert", event_type="knowledge.index.failed"
+    )
+    workflow["trigger"]["key"] = "raft-research"
+    definition = save_workflow_definition(store, workflow)
+
+    async def prompt_runner(**kwargs):
+        return PromptExecutionResult(response="ok", thread_id=kwargs["thread_id"] or "thread_1")
+
+    executor = WorkflowExecutor(
+        store_getter=lambda: store,
+        prompt_runner=prompt_runner,
+        emit_event=lambda *_args, **_kwargs: None,
+    )
+
+    def event(base_id):
+        return {
+            "event_type": "knowledge.index.failed",
+            "payload": {"key": base_id, "status": "failed", "error": "boom"},
+        }
+
+    assert await executor.dispatch_event("knowledge.index.failed", event("mcp-research")) == []
+    assert await executor.dispatch_event("knowledge.index.completed", event("raft-research")) == []
+    matching = await executor.dispatch_event("knowledge.index.failed", event("raft-research"))
+    assert [run.workflow_id for run in matching] == [definition.id]
+    await _wait_for(
+        lambda: next(
+            (
+                item
+                for item in list_workflow_runs(store)
+                if item.run_id == matching[0].run_id and item.status == "completed"
+            ),
+            None,
+        )
+    )
+
+
+@pytest.mark.asyncio
 async def test_executor_routes_condition_and_sends_inbox_message():
     store = InMemoryDocumentStore()
     workflow = default_workflow_definition(title="Condition inbox")

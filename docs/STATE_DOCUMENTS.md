@@ -81,7 +81,9 @@ document through `StateManager` into the Postgres store.
 The current `/config/` document views are:
 
 - `mcp.json` — MCP server configuration; agent-writable.
-- `knowledge.json` — knowledge-base settings; agent-writable.
+- `knowledge.json` — knowledge-base catalog; agent-writable. Pages live in
+  `knowledge:<base-id>/<path>.md` content documents, mounted at `/knowledge/`,
+  with immutable history in the `knowledge_page_revisions` table.
 - `schedule.json` — schedule entries keyed by ID; agent-writable with audit diffing.
 - `agents.json` — registry agents and runtime tools; agent-writable.
 - `health.json` — heartbeat status; read-only and runtime-owned.

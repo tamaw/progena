@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { selectRealtime } from '../store/realtimeSlice';
-import { useSearchParams } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
+import { buildEntityPath, useEntityUrlSync } from '../lib/routes';
 import {
   addEdge,
   applyEdgeChanges,
@@ -71,8 +72,28 @@ const WORKFLOW_EVENT_TYPES = [
   'kanban.card.deleted',
   'kanban.card.status_changed',
   'document.changed',
+  'knowledge.index.completed',
+  'knowledge.index.failed',
 ];
 const WORKFLOW_EVENT_TYPE_OPTIONS = WORKFLOW_EVENT_TYPES.map((eventType) => ({ value: eventType, label: eventType }));
+
+// Trigger filters only carry over between event types that read them the same way
+// (the two knowledge.index.* events share the base-id `key`); otherwise they are
+// cleared so a hidden filter can't fail validation or filter the wrong thing.
+function triggerFamily(eventType) {
+  return String(eventType || '').startsWith('knowledge.index.') ? 'knowledge.index' : eventType;
+}
+
+function keepsTriggerFilters(eventType, nextEventType) {
+  return triggerFamily(eventType) === triggerFamily(nextEventType);
+}
+
+function eventNodeTypeChange(data, nextEventType) {
+  return keepsTriggerFilters(data.eventType, nextEventType)
+    ? { eventType: nextEventType }
+    : { eventType: nextEventType, fromColumn: '', toColumn: '', keyPrefix: '', key: '', action: '' };
+}
+
 // Mirrors the fixed kanban pipeline from _kanban_default_columns() in
 // app/backend/ui_routes.py. Only meaningful for the kanban.card.moved trigger.
 const WORKFLOW_KANBAN_COLUMNS = [
@@ -200,19 +221,6 @@ function resolveNodeSizes(kind, storedSize) {
 
 function workflowPath(workflowId) {
   return workflowId ? `/workflows/${workflowId}.json` : '';
-}
-
-// The `.json` suffix on workflowPath() is the backing virtual-file extension
-// used internally (Redux cache keys, backend query params) — it has no
-// business showing up in the address bar, where `path` reads as a route
-// segment rather than a file reference. These two helpers convert only at
-// the URL-sync boundary; everything else keeps using the `.json` form.
-function stripJsonExtension(path) {
-  return path.endsWith('.json') ? path.slice(0, -'.json'.length) : path;
-}
-
-function withJsonExtension(path) {
-  return path && !path.endsWith('.json') ? `${path}.json` : path;
 }
 
 function cloneValue(value) {
@@ -581,7 +589,7 @@ function EventNode({ id, data, selected }) {
                 <Select
                   className="nodrag"
                   value={data.eventType}
-                  onChange={(next) => data.onChange(id, { eventType: next })}
+                  onChange={(next) => data.onChange(id, eventNodeTypeChange(data, next))}
                   options={WORKFLOW_EVENT_TYPE_OPTIONS}
                   ariaLabel="Trigger"
                   portal
@@ -649,6 +657,18 @@ function EventNode({ id, data, selected }) {
                   </label>
                 </>
               ) : null}
+              {data.eventType.startsWith('knowledge.index.') ? (
+                <label className="workflow-graph-node__field">
+                  <span>Knowledge base id</span>
+                  <input
+                    className="nodrag"
+                    type="text"
+                    value={data.key}
+                    onChange={(event) => data.onChange(id, { key: event.target.value })}
+                    placeholder="Any knowledge base"
+                  />
+                </label>
+              ) : null}
               <p className="workflow-graph-node__hint">
                 One event node starts the v1 workflow path.
               </p>
@@ -663,6 +683,7 @@ function EventNode({ id, data, selected }) {
                 {data.eventType === 'document.changed' && (data.keyPrefix || data.key || data.action)
                   ? ` (${data.keyPrefix || 'any kind'}${data.key ? `, key=${data.key}` : ''}${data.action ? `, ${data.action}` : ''})`
                   : ''}
+                {data.eventType.startsWith('knowledge.index.') && data.key ? ` (${data.key})` : ''}
               </div>
             </div>
           )}
@@ -1100,14 +1121,13 @@ function WorkflowSideDock({ onSelect }) {
   );
 }
 
-function WorkflowRow({ item, latestRun, selectedPath, onSelect }) {
-  const path = workflowPath(item.id);
+function WorkflowRow({ item, latestRun, selectedWorkflowId, onSelect }) {
   const dotTone = workflowDotTone(item, latestRun);
   return (
     <button
       type="button"
-      className={`pane-card-row ${selectedPath === path ? 'active' : ''}`}
-      onClick={() => onSelect(path)}
+      className={`pane-card-row ${selectedWorkflowId === item.id ? 'active' : ''}`}
+      onClick={() => onSelect(item.id)}
       title={item.description || item.title}
     >
       <span
@@ -1182,8 +1202,10 @@ function WorkflowsInner() {
   const workflowRuns = useSelector(selectWorkflowRuns);
   const { collapsed, setCollapsed, paneClassName } = usePaneCollapse('workflows-sidebar sess-list');
   const reactFlow = useReactFlow();
-  const [searchParams, setSearchParams] = useSearchParams();
-  const [selectedPath, setSelectedPath] = useState('');
+  const navigate = useNavigate();
+  const { workflowId: routeWorkflowId } = useParams();
+  const [selectedWorkflowId, setSelectedWorkflowId] = useState('');
+  const selectedPath = useMemo(() => workflowPath(selectedWorkflowId), [selectedWorkflowId]);
   const [filter, setFilter] = useState('all');
   const [query, setQuery] = useState('');
   const [sortMode, setSortMode] = useState('Recent');
@@ -1197,10 +1219,9 @@ function WorkflowsInner() {
   const [busyAction, setBusyAction] = useState('');
   const [localDraftDirty, setLocalDraftDirty] = useState(false);
   const [deleteConfirmationOpen, setDeleteConfirmationOpen] = useState(false);
-  const requestedPath = withJsonExtension(searchParams.get('path') || '');
   const selectedDetail = useSelector((state) => selectWorkflowDetailByPath(state, selectedPath));
   const selectedLatestRun = useSelector((state) => {
-    const workflowId = selectedDetail?.workflow?.id || selectedPath.replace(/^.*\/|\.json$/g, '');
+    const workflowId = selectedDetail?.workflow?.id || selectedWorkflowId;
     return selectWorkflowLatestRunById(state, workflowId);
   });
   const nodesRef = useRef([]);
@@ -1209,6 +1230,8 @@ function WorkflowsInner() {
   const syncedPathRef = useRef('');
   const syncedHashRef = useRef('');
   const hydratingGraphRef = useRef(false);
+
+  useEntityUrlSync('/workflows', selectedWorkflowId, selectedDetail?.workflow?.title);
 
   const loadWorkflows = useCallback(async () => {
     try {
@@ -1245,29 +1268,18 @@ function WorkflowsInner() {
 
   useEffect(() => {
     if (!workflows.length) {
-      setSelectedPath('');
+      setSelectedWorkflowId('');
       return;
     }
-    setSelectedPath((current) => {
-      const next = workflows.find((item) => workflowPath(item.id) === requestedPath)?.id
-        ? requestedPath
-        : workflows.find((item) => workflowPath(item.id) === current)?.id
+    setSelectedWorkflowId((current) => {
+      const next = workflows.find((item) => item.id === routeWorkflowId)?.id
+        ? routeWorkflowId
+        : workflows.find((item) => item.id === current)?.id
           ? current
-          : workflowPath(workflows[0].id);
+          : workflows[0].id;
       return next;
     });
-  }, [requestedPath, workflows]);
-
-  useEffect(() => {
-    const currentPath = searchParams.get('path') || '';
-    const nextUrlPath = stripJsonExtension(selectedPath);
-    if (!selectedPath || currentPath === nextUrlPath) {
-      return;
-    }
-    const nextParams = new URLSearchParams(searchParams);
-    nextParams.set('path', nextUrlPath);
-    setSearchParams(nextParams, { replace: true });
-  }, [searchParams, selectedPath, setSearchParams]);
+  }, [routeWorkflowId, workflows]);
 
   useEffect(() => {
     if (!realtime.connected || !selectedPath || selectedDetail) {
@@ -1533,10 +1545,11 @@ function WorkflowsInner() {
     }
   }, []);
 
-  const handleSelectWorkflow = (path) => {
+  const handleSelectWorkflow = useCallback((workflowId) => {
     setJsonError('');
-    setSelectedPath(path);
-  };
+    const workflow = workflows.find((w) => w.id === workflowId);
+    navigate(buildEntityPath('/workflows', workflowId, workflow?.title), { replace: true });
+  }, [navigate, workflows]);
 
   const openCreateWorkflowChat = () => {
     window.dispatchEvent(new CustomEvent('progenitor:open-quick-chat', {
@@ -1810,10 +1823,8 @@ function WorkflowsInner() {
     try {
       await dispatch(deleteWorkflow({ workflowsUrl, workflowId })).unwrap();
       setDeleteConfirmationOpen(false);
-      setSelectedPath('');
-      const nextParams = new URLSearchParams(searchParams);
-      nextParams.delete('path');
-      setSearchParams(nextParams, { replace: true });
+      setSelectedWorkflowId('');
+      navigate('/workflows', { replace: true });
     } catch (error) {
       show('error', 'Workflow delete failed', error.message);
     } finally {
@@ -1853,7 +1864,7 @@ function WorkflowsInner() {
                   <WorkflowRow
                     item={item}
                     latestRun={workflowRuns.find((run) => run.workflow_id === item.id) || null}
-                    selectedPath={selectedPath}
+                    selectedWorkflowId={selectedWorkflowId}
                     onSelect={handleSelectWorkflow}
                   />
                 )}
@@ -2001,11 +2012,14 @@ function WorkflowsInner() {
                                 ...draftWorkflow.trigger,
                                 type: 'event',
                                 event_type: nextEventType,
+                                ...(keepsTriggerFilters(draftWorkflow.trigger?.event_type, nextEventType)
+                                  ? {}
+                                  : { from_column: null, to_column: null, key_prefix: null, key: null, action: null }),
                               });
                               setGraphNodes((currentNodes) => {
                                 const nextNodes = currentNodes.map((node) => (
                                   node.type === 'event'
-                                    ? { ...node, data: { ...node.data, eventType: nextEventType } }
+                                    ? { ...node, data: { ...node.data, ...eventNodeTypeChange(node.data, nextEventType) } }
                                     : node
                                 ));
                                 syncWorkflowFromGraph(nextNodes, edgesRef.current, viewportRef.current);

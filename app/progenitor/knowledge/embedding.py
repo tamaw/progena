@@ -1,60 +1,67 @@
-"""Deterministic, dependency-free text embeddings for the knowledge store.
+"""Embedding clients for the knowledge search index.
 
-Real deployments would call an embeddings API (e.g. Azure OpenAI). For local
-development and tests we need embeddings that are:
-
-- deterministic, so the same text always maps to the same vector and the
-  ingestion path (backend) and the query path (runtime tool) agree;
-- dependency-free, so no embeddings deployment or API key is required;
-- cosine-friendly, so token/phrase overlap between a query and a stored
-  passage produces a high similarity score.
-
-We use signed feature hashing over unigrams and bigrams into a fixed-size
-vector, then L2-normalise. With normalised vectors, cosine similarity reduces
-to a dot product, and shared tokens push the vectors together — good enough to
-recall a stored fact phrased in similar words.
+Embeddings come from the Azure OpenAI deployment named by the indexer settings
+(``/config/indexer.json`` → a ``/config/profile.json`` entry). The endpoint and key
+are the ones the chat models already use; only the deployment differs.
 """
 
 from __future__ import annotations
 
-import hashlib
-import math
-import re
+from typing import Protocol
 
-EMBED_DIM = 256
-EMBED_MODEL_NAME = "progenitor-hash-256"
+from openai import AsyncOpenAI
 
-_TOKEN_RE = re.compile(r"[a-z0-9]+")
+from .indexer_config import EmbeddingTarget
 
-
-def _tokens(text: str) -> list[str]:
-    return _TOKEN_RE.findall(text.lower())
+EMBED_BATCH_SIZE = 64
 
 
-def embed_text(text: str) -> list[float]:
-    """Embed ``text`` into a unit-length ``EMBED_DIM`` vector."""
-    vec = [0.0] * EMBED_DIM
-    tokens = _tokens(text or "")
-    if not tokens:
-        return vec
+class Embedder(Protocol):
+    """Turns texts into vectors of the index's dimension, in input order."""
 
-    grams = list(tokens)
-    for first, second in zip(tokens, tokens[1:], strict=False):
-        grams.append(f"{first}_{second}")
-
-    for gram in grams:
-        # Feature hashing only — not security-sensitive.
-        digest = hashlib.md5(gram.encode("utf-8"), usedforsecurity=False).digest()
-        index = int.from_bytes(digest[:4], "big") % EMBED_DIM
-        sign = 1.0 if digest[4] & 1 else -1.0
-        vec[index] += sign
-
-    norm = math.sqrt(sum(value * value for value in vec))
-    if norm > 0.0:
-        vec = [value / norm for value in vec]
-    return vec
+    async def embed(self, texts: list[str]) -> list[list[float]]: ...
 
 
-def to_pgvector(vector: list[float]) -> str:
-    """Render a Python vector as a pgvector literal: ``[v1,v2,...]``."""
-    return "[" + ",".join(f"{value:.6f}" for value in vector) + "]"
+def embeddings_base_url(responses_base_url: str) -> str:
+    """Derive the OpenAI-compatible root from ``AZURE_OPENAI_BASE_URL``.
+
+    The configured URL targets the Responses API (``…/openai/v1/responses?…``);
+    embeddings live beside it at ``…/openai/v1/embeddings``.
+    """
+    url = responses_base_url.split("?", 1)[0].rstrip("/")
+    if url.endswith("/responses"):
+        url = url[: -len("/responses")]
+    return url
+
+
+class AzureEmbedder:
+    """Embeds through an Azure OpenAI embeddings deployment."""
+
+    def __init__(self, target: EmbeddingTarget, *, base_url: str, api_key: str) -> None:
+        self._target = target
+        self._client = AsyncOpenAI(
+            base_url=embeddings_base_url(base_url),
+            api_key=api_key or "not-needed",
+            default_headers={"api-key": api_key},
+        )
+
+    async def embed(self, texts: list[str]) -> list[list[float]]:
+        vectors: list[list[float]] = []
+        for start in range(0, len(texts), EMBED_BATCH_SIZE):
+            response = await self._client.embeddings.create(
+                model=self._target.deployment,
+                input=texts[start : start + EMBED_BATCH_SIZE],
+                dimensions=self._target.dimensions,
+            )
+            vectors.extend(item.embedding for item in sorted(response.data, key=lambda d: d.index))
+        return vectors
+
+
+def embedder_for(target: EmbeddingTarget) -> Embedder:
+    """Build the Azure embedder for ``target`` from the process LLM settings."""
+    from ..config import LLMConfig
+
+    config = LLMConfig.from_env()
+    if not config.base_url:
+        raise ValueError("AZURE_OPENAI_BASE_URL is not configured")
+    return AzureEmbedder(target, base_url=config.base_url, api_key=config.api_key or "")
