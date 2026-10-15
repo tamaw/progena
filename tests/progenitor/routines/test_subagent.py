@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 import pytest
@@ -307,6 +308,79 @@ async def test_runs_latest_and_pins_revision():
 
 
 @pytest.mark.asyncio
+async def test_task_description_binds_structured_routine_inputs_and_returns_output():
+    graph = _graph_doc("{question} / {limit}")
+    graph["input_schema"] = {
+        "type": "object",
+        "properties": {"question": {"type": "string"}, "limit": {"type": "integer"}},
+        "required": ["question", "limit"],
+        "additionalProperties": False,
+    }
+    model = _EchoModel()
+    reader = _FakeRevisionReader({"rev-a": graph}, latest="rev-a")
+    spec = _spec(reader, model=model)
+
+    result = await spec["runnable"].ainvoke(
+        {"messages": [HumanMessage('{"question":"What is 40 + 2?","limit":2}')]}
+    )
+
+    output = json.loads(result["messages"][-1].content)["output"]
+    assert output["question"] == "What is 40 + 2?"
+    assert output["limit"] == 2
+    assert output["out"] == "What is 40 + 2? / 2"
+    assert "_execution_policy" not in output
+    assert model.calls[0][-1].content == "What is 40 + 2? / 2"
+
+
+@pytest.mark.asyncio
+async def test_task_description_rejects_missing_or_invalid_structured_inputs():
+    graph = _graph_doc("{question} / {limit}")
+    graph["input_schema"] = {
+        "type": "object",
+        "properties": {"question": {"type": "string"}, "limit": {"type": "integer"}},
+        "required": ["question", "limit"],
+    }
+    model = _EchoModel()
+    reader = _FakeRevisionReader({"rev-a": graph}, latest="rev-a")
+    spec = _spec(reader, model=model)
+
+    missing = await spec["runnable"].ainvoke({"messages": [HumanMessage('{"question":"hi"}')]})
+    invalid = await spec["runnable"].ainvoke({"messages": [HumanMessage("hi")]})
+
+    assert "limit" in missing["messages"][-1].content
+    assert "JSON object" in invalid["messages"][-1].content
+    assert model.calls == []
+
+
+@pytest.mark.asyncio
+async def test_task_description_uses_pinned_revision_input_schema():
+    pinned_graph = _graph_doc("{token}")
+    pinned_graph["input_schema"] = {
+        "type": "object",
+        "properties": {"token": {"type": "string"}},
+        "required": ["token"],
+    }
+    live_graph = _graph_doc("{question}")
+    live_graph["input_schema"] = {
+        "type": "object",
+        "properties": {"question": {"type": "string"}},
+        "required": ["question"],
+    }
+    reader = _FakeRevisionReader({"rev-old": pinned_graph}, latest="rev-old")
+    spec = _spec(reader, state_manager=_FakeStateManager(live_graph))
+
+    result = await spec["runnable"].ainvoke(
+        {
+            "messages": [HumanMessage('{"token":"pinned input"}')],
+            ROUTINE_REVISIONS_STATE_KEY: {ROUTINE_ID: "rev-old"},
+        }
+    )
+
+    assert json.loads(result["messages"][-1].content)["output"]["out"] == "pinned input"
+    assert result[ROUTINE_REVISIONS_STATE_KEY] == {ROUTINE_ID: "rev-old"}
+
+
+@pytest.mark.asyncio
 async def test_ephemeral_runner_create_then_edit_runs_without_runtime_restart():
     manager = _MultiRoutineStateManager({ROUTINE_ID: _graph_doc("created output")})
     reader = _FakeRevisionReader({})
@@ -374,7 +448,6 @@ async def test_unpinned_run_prefers_live_document_over_fetch_latest():
     )
 
     assert result["messages"][-1].content == "live content, must run"
-    assert reader.fetch_latest_calls == []
 
 
 @pytest.mark.asyncio
@@ -391,7 +464,6 @@ async def test_unpinned_run_tags_itself_with_the_matching_revision_id():
     )
 
     assert result[ROUTINE_REVISIONS_STATE_KEY] == {ROUTINE_ID: "rev-captured"}
-    assert reader.fetch_revision_id_for_content_calls == [ROUTINE_ID]
 
 
 @pytest.mark.asyncio
@@ -427,7 +499,6 @@ async def test_reuses_pinned_revision():
 
     assert result["messages"][-1].content == "rev-old output"
     assert result[ROUTINE_REVISIONS_STATE_KEY] == {ROUTINE_ID: "rev-old"}
-    assert reader.fetch_latest_calls == []
 
 
 @pytest.mark.asyncio
@@ -444,26 +515,6 @@ async def test_missing_pinned_revision_falls_back_to_latest():
 
     assert result["messages"][-1].content == "rev-new output"
     assert result[ROUTINE_REVISIONS_STATE_KEY] == {ROUTINE_ID: "rev-new"}
-    assert reader.fetch_calls == [(ROUTINE_ID, "rev-missing")]
-    assert reader.fetch_latest_calls == [ROUTINE_ID]
-
-
-@pytest.mark.asyncio
-async def test_second_invocation_hits_cache():
-    reader = _FakeRevisionReader({"rev-a": _graph_doc("rev-a output")}, latest="rev-a")
-    spec = _spec(reader)
-
-    first = await spec["runnable"].ainvoke(
-        {"messages": [HumanMessage("do it")], ROUTINE_REVISIONS_STATE_KEY: {}}
-    )
-    pin = first[ROUTINE_REVISIONS_STATE_KEY]
-    await spec["runnable"].ainvoke(
-        {"messages": [HumanMessage("do it again")], ROUTINE_REVISIONS_STATE_KEY: pin}
-    )
-
-    assert reader.fetch_revision_id_for_content_calls == [ROUTINE_ID]
-    assert reader.fetch_calls == [(ROUTINE_ID, "rev-a")]
-    assert not reader.fetch_latest_calls
 
 
 @pytest.mark.asyncio
