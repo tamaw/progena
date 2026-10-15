@@ -13,7 +13,7 @@ import {
   fetchKnowledgePages,
   selectKnowledgePage,
   selectKnowledgePages,
-  selectKnowledgeRevisionContent,
+  selectKnowledgeRevision,
   selectKnowledgeRevisions,
 } from '../../store/uiDataSlice';
 import {
@@ -137,8 +137,29 @@ function frontMatterSources(frontMatter) {
   return (Array.isArray(sources) ? sources : sources ? [sources] : []).map(String);
 }
 
+// Reader URL (relative to the current base) for a page path.
+function pageHref(target) {
+  return target === 'index.md' ? '?' : `?${new URLSearchParams({ page: target })}`;
+}
+
+// Internal page links get a real reader URL so new-tab/middle-click open the
+// right page; the resolved path is kept on the anchor for in-place navigation.
+// Done on the HTML string (not the live DOM) so React re-renders keep it.
+function withReaderLinks(html, path) {
+  const template = document.createElement('template');
+  template.innerHTML = html;
+  template.content.querySelectorAll('a[href]').forEach((anchor) => {
+    const target = resolvePageLink(path, anchor.getAttribute('href'));
+    if (target) {
+      anchor.dataset.page = target;
+      anchor.setAttribute('href', pageHref(target));
+    }
+  });
+  return template.innerHTML;
+}
+
 function PageBody({ content, path, onNavigate }) {
-  const html = useMemo(() => renderSafeMarkdown(content), [content]);
+  const html = useMemo(() => withReaderLinks(renderSafeMarkdown(content), path), [content, path]);
   const containerRef = useRef(null);
   useMermaidRender(containerRef, content);
   // Links between pages load in place instead of reloading the app.
@@ -146,10 +167,9 @@ function PageBody({ content, path, onNavigate }) {
     const anchor = event.target.closest?.('a[href]');
     if (!anchor || event.metaKey || event.ctrlKey || event.shiftKey) return;
     const href = anchor.getAttribute('href');
-    const target = resolvePageLink(path, href);
-    if (target) {
+    if (anchor.dataset.page) {
       event.preventDefault();
-      onNavigate(target);
+      onNavigate(anchor.dataset.page);
     } else if (/^https?:\/\//i.test(href)) {
       // Web links leave the app in a new tab, like the Sources list.
       event.preventDefault();
@@ -169,7 +189,7 @@ export default function KnowledgePagesTab({ baseId, baseName, knowledgeUrl }) {
   const revisions = useSelector((state) => (selectedPath ? selectKnowledgeRevisions(state, baseId, selectedPath) : []));
   // The revision being previewed lives in ?revision= so the detail header can show it.
   const viewingRevisionId = params.get('revision');
-  const revisionContent = useSelector((state) => (viewingRevisionId ? selectKnowledgeRevisionContent(state, baseId, selectedPath, viewingRevisionId) : null));
+  const revision = useSelector((state) => (viewingRevisionId ? selectKnowledgeRevision(state, baseId, selectedPath, viewingRevisionId) : null));
   const selectedPageMeta = useMemo(() => pages.find((p) => p.path === selectedPath) || null, [pages, selectedPath]);
   const lastFetchedAtRef = useRef(null);
   // Failed load of the open page (e.g. a link to a missing page), keyed by base and
@@ -208,6 +228,19 @@ export default function KnowledgePagesTab({ baseId, baseName, knowledgeUrl }) {
     }
   }, [dispatch, loadPage, knowledgeUrl, baseId, selectedPath, selectedPageMeta?.updated_at]);
 
+  // A generated index.md isn't a stored page, so it has no updated_at of its own:
+  // refetch it whenever the base's pages snapshot changes (any page added,
+  // edited, deprecated or removed).
+  const pagesSignature = useMemo(() => pages.map((p) => `${p.path}@${p.updated_at}`).join('|'), [pages]);
+  const indexSignatureRef = useRef(null);
+  useEffect(() => {
+    if (selectedPath.split('/').at(-1) !== 'index.md') return;
+    if (indexSignatureRef.current !== null && indexSignatureRef.current !== pagesSignature) {
+      loadPage(selectedPath);
+    }
+    indexSignatureRef.current = pagesSignature;
+  }, [loadPage, pagesSignature, selectedPath]);
+
   useEffect(() => {
     if (viewingRevisionId) {
       dispatch(fetchKnowledgePageRevision({ knowledgeUrl, baseId, path: selectedPath, revisionId: viewingRevisionId }));
@@ -229,9 +262,10 @@ export default function KnowledgePagesTab({ baseId, baseName, knowledgeUrl }) {
   // The breadcrumb is the page heading, so the rendered body drops its leading H1; stored files keep it.
   const dropTitle = (text) => text.replace(/^\s*# [^\n]*\n*/, '');
   const displayContent = viewingRevisionId
-    ? (revisionContent === null ? 'Loading…' : dropTitle(stripYamlFrontmatter(revisionContent)))
+    ? (revision === null ? 'Loading…' : dropTitle(stripYamlFrontmatter(revision.content)))
     : dropTitle(page?.body ?? page?.content ?? '');
-  const sources = frontMatterSources(page?.front_matter);
+  // An open revision shows its own sources, not the current page's.
+  const sources = frontMatterSources(viewingRevisionId ? revision?.front_matter : page?.front_matter);
   const pageError = loadError?.key === `${baseId}/${selectedPath}` ? loadError.message : null;
 
   return (

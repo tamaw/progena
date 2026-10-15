@@ -90,7 +90,8 @@ async function chat(page, prompt) {
 
 async function openKnowledgeBase(page) {
   await page.goto('/knowledge');
-  await page.getByRole('button', { name: new RegExp(BASE_NAME) }).click();
+  // The list card; the open base's breadcrumbs also carry its name.
+  await page.locator('.task-card__button', { hasText: BASE_NAME }).click();
 }
 
 test.afterAll(() => {
@@ -165,7 +166,17 @@ test('research agent fills a knowledge base from the web and a second agent answ
     await expect(menu.getByRole('button', { name: 'Index' })).toHaveCount(0);
     await page.keyboard.press('Escape');
     await page.evaluate(() => { window.knowledgeE2eNoReload = true; });
-    await page.locator('.knowledge-pages-tab .markdown-content a[href$=".md"]:not([href$="index.md"]):not([href="log.md"])').first().click();
+    // Page links carry a real reader URL (new-tab safe). If every page sits in a
+    // folder, the root index only links folders: follow one first.
+    const index = page.locator('.knowledge-pages-tab .markdown-content');
+    const pageLinks = index.locator('a[data-page]:not([data-page$="index.md"]):not([data-page="log.md"])');
+    // log.md is always linked, so this waits for the index to render.
+    await expect(index.locator('a[data-page="log.md"]')).toBeVisible();
+    if (await pageLinks.count() === 0) {
+      await index.locator('a[data-page$="/index.md"]').first().click();
+    }
+    await expect(pageLinks.first()).toHaveAttribute('href', /^\?page=/);
+    await pageLinks.first().click();
     await expect(page).toHaveURL(/page=/);
     expect(await page.evaluate(() => window.knowledgeE2eNoReload)).toBe(true);
 
@@ -189,17 +200,21 @@ test('research agent fills a knowledge base from the web and a second agent answ
     await expect(page).not.toHaveURL(/revision=/);
     await expect(page.getByText(/^generated /)).toBeVisible();
 
-    // A curator retires another page: it leaves the index and the breadcrumb
-    // menu but still opens by path.
+    // A curator retires another page: the open index drops it live, and it
+    // leaves the breadcrumb menu but still opens by path.
     const retired = conceptPaths().find((path) => path !== keyPath && !path.includes('/'))
       || conceptPaths().find((path) => path !== keyPath);
+    const retiredIndex = retired.includes('/') ? `${retired.slice(0, retired.lastIndexOf('/'))}/index.md` : 'index.md';
+    await page.goto(retiredIndex === 'index.md'
+      ? page.url().split('?')[0]
+      : `${page.url().split('?')[0]}?page=${encodeURIComponent(retiredIndex)}`);
+    await expect(index.locator(`a[data-page="${retired}"]`)).toHaveCount(1);
     sql(`UPDATE store SET value = jsonb_set(value, '{payload,content}', to_jsonb(regexp_replace(
         value->'payload'->>'content', '^---\\n', E'---\\nstatus: deprecated\\n')))
       WHERE prefix = 'progenitor.state' AND key = ${quote(`knowledge:${BASE_ID}/${retired}`)}`);
+    await expect(index.locator(`a[data-page="${retired}"]`)).toHaveCount(0, { timeout: 30_000 });
     await page.goto(page.url().split('?')[0]);
-    const index = page.locator('.knowledge-pages-tab .markdown-content');
-    await expect(index.locator(`a[href="${retired}"]`)).toHaveCount(0, { timeout: 30_000 });
-    await expect(index.locator(`a[href="${keyPath}"]`)).toHaveCount(keyPath.includes('/') ? 0 : 1);
+    await expect(index.locator(`a[data-page="${keyPath}"]`)).toHaveCount(keyPath.includes('/') ? 0 : 1);
     await crumbs.getByRole('button', { name: `Files in ${BASE_NAME}` }).click();
     await expect(menu.locator('button', { hasText: contents[retired].match(/^title:\s*(.+)$/m)?.[1] || retired })).toHaveCount(0);
     await page.keyboard.press('Escape');
@@ -214,7 +229,11 @@ test('research agent fills a knowledge base from the web and a second agent answ
     await page.getByRole('button', { name: 'Search', exact: true }).click();
     const input = page.locator('.chrome-search-panel__input input');
     await input.fill(TOPIC.searchTerm);
-    const firstResult = page.locator('.chrome-search-group .chrome-search-result').first();
+    // Other sections (e.g. seeded prompts) can match the term too: take a Knowledge hit.
+    const knowledgeSection = page.locator('.chrome-search-group', {
+      has: page.locator('.chrome-search-group__label', { hasText: /^knowledge$/i }),
+    });
+    const firstResult = knowledgeSection.locator('.chrome-search-result').first();
     await expect(firstResult).toBeVisible({ timeout: 30_000 });
     await firstResult.click();
     await expect(page.locator('.knowledge-pages-tab article')).toBeVisible();

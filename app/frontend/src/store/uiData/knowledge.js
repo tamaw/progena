@@ -4,7 +4,7 @@ import { createAcknowledgedThunk, requestAcknowledged, addRequestLifecycle } fro
 export const initialState = {
   knowledge: {
     bases: [], loaded: false, loading: false, error: null, requestId: null,
-    pagesByBaseId: {}, pageByKey: {}, revisionsByKey: {}, revisionContentByKey: {},
+    pagesByBaseId: {}, pageByKey: {}, revisionsByKey: {}, revisionByKey: {},
   },
 };
 
@@ -46,7 +46,12 @@ export const eventHandlers = {
   'knowledge.pages.snapshot': (state, payload) => { state.knowledge.pagesByBaseId[payload.base_id] = Array.isArray(payload.pages) ? payload.pages : []; },
   'knowledge.page.loaded': (state, payload) => { state.knowledge.pageByKey[pageKey(payload.base_id, payload.path)] = payload; },
   'knowledge.page.revisions.loaded': (state, payload) => { state.knowledge.revisionsByKey[pageKey(payload.base_id, payload.path)] = Array.isArray(payload.revisions) ? payload.revisions : []; },
-  'knowledge.page.revision.loaded': (state, payload) => { state.knowledge.revisionContentByKey[revisionKey(payload.base_id, payload.path, payload.revision_id)] = payload.content; },
+  'knowledge.page.revision.loaded': (state, payload) => {
+    state.knowledge.revisionByKey[revisionKey(payload.base_id, payload.path, payload.revision_id)] = {
+      content: payload.content,
+      front_matter: payload.front_matter || null,
+    };
+  },
   'knowledge.index.started': patchBaseIndexStatus,
   'knowledge.index.progress': patchBaseIndexStatus,
   'knowledge.index.completed': patchBaseIndexStatus,
@@ -61,4 +66,5 @@ export const selectKnowledgeState = (state) => state.uiData.knowledge;
 export const selectKnowledgePages = (state, baseId) => state.uiData.knowledge.pagesByBaseId[baseId] || [];
 export const selectKnowledgePage = (state, baseId, path) => state.uiData.knowledge.pageByKey[pageKey(baseId, path)] || null;
 export const selectKnowledgeRevisions = (state, baseId, path) => state.uiData.knowledge.revisionsByKey[pageKey(baseId, path)] || [];
-export const selectKnowledgeRevisionContent = (state, baseId, path, revisionId) => state.uiData.knowledge.revisionContentByKey[revisionKey(baseId, path, revisionId)] || null;
+// One captured revision: `{ content, front_matter }`, or null until it has loaded.
+export const selectKnowledgeRevision = (state, baseId, path, revisionId) => state.uiData.knowledge.revisionByKey[revisionKey(baseId, path, revisionId)] || null;

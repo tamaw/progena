@@ -9,6 +9,7 @@ import {
   selectKnowledgeBases,
   selectKnowledgePage,
   selectKnowledgePages,
+  selectKnowledgeRevision,
   selectKnowledgeRevisions,
   selectKnowledgeState,
 } from '../store/uiDataSlice';
@@ -279,13 +280,18 @@ export default function KnowledgePage() {
     ? selectKnowledgePage(state, openBaseId, openPagePath)
     : null));
   const basePages = useSelector((state) => (openBaseId ? selectKnowledgePages(state, openBaseId) : null));
-  const pageFacts = openPage
-    ? pageHeaderFacts(openPagePath, openPage.front_matter, basePages || [], selectedBase)
-    : { type: null, tags: [], generatedAt: null, extra: [] };
   const viewingRevisionId = searchParams.get('revision');
   const viewingRevision = useSelector((state) => (openBaseId && viewingRevisionId
     ? selectKnowledgeRevisions(state, openBaseId, openPagePath).find((rev) => rev.revision_id === viewingRevisionId) || null
     : null));
+  const revisionDocument = useSelector((state) => (openBaseId && viewingRevisionId
+    ? selectKnowledgeRevision(state, openBaseId, openPagePath, viewingRevisionId)
+    : null));
+  // An open revision shows its own type and tags, not the current page's.
+  const headerFrontMatter = viewingRevisionId ? revisionDocument?.front_matter : openPage?.front_matter;
+  const pageFacts = openPage
+    ? pageHeaderFacts(openPagePath, headerFrontMatter, basePages || [], selectedBase)
+    : { type: null, tags: [], generatedAt: null, extra: [] };
   // An open revision reports when it was captured, in the same "generated" slot.
   const generatedAt = viewingRevisionId
     ? readableTime(Date.parse(viewingRevision?.captured_at))

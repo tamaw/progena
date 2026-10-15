@@ -1063,3 +1063,45 @@ async def test_proxy_skips_unknown_base_and_reports_warning(monkeypatch):
     assert last.text.startswith("done\n\nWarnings:\n- ")
     assert "does not exist in /config/knowledge.json" in last.text
     assert built
+
+
+async def test_proxy_runs_with_remaining_grants_when_a_granted_base_is_missing(monkeypatch):
+    from langchain_core.messages import AIMessage
+
+    from app.progenitor.agent.knowledge_backend import KnowledgePageBackend
+
+    # Permissions name both bases; the missing base's must not break the build.
+    system = _knowledge_system(
+        "  - base: eng\n    access: read\n  - base: nope\n    access: read\n",
+        perm_path="/knowledge/eng/, /knowledge/nope/",
+    )
+    sm = _KnowledgeStateManager({"user/reviewer/SYSTEM.md": system})
+    source = (await discover_object_agents(sm))[0]
+    built = []
+
+    def create(**kwargs):
+        built.append(kwargs)
+        return SimpleNamespace(
+            ainvoke=AsyncMock(return_value={"messages": [AIMessage(content="done")]})
+        )
+
+    monkeypatch.setattr("app.progenitor.agent.object_agents.create_agent", create)
+    monkeypatch.setattr(
+        "app.progenitor.agent.object_agents.SummarizationMiddleware", lambda **_kwargs: object()
+    )
+    proxy = create_object_agent_proxy(
+        source,
+        state_manager=sm,
+        model=object(),
+        tools=[SimpleNamespace(name="current_time")],
+        backend=CompositeBackend(
+            default=object(), routes={"/knowledge/": KnowledgePageBackend(sm), "/skills/": object()}
+        ),
+        checkpointer=None,
+    )
+    result = await proxy["runnable"].ainvoke({"messages": []})
+    assert "'nope'" in result["messages"][-1].text
+    filesystem = next(m for m in built[0]["middleware"] if isinstance(m, FilesystemMiddleware))
+    assert {route for route in filesystem.backend.routes if route.startswith("/knowledge/")} == {
+        "/knowledge/eng/"
+    }

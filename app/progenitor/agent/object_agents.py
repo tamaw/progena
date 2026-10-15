@@ -27,7 +27,7 @@ from deepagents.backends.utils import (
     perform_string_replacement,
     slice_read_response,
 )
-from deepagents.middleware.filesystem import FilesystemMiddleware
+from deepagents.middleware.filesystem import FilesystemMiddleware, FilesystemPermission
 from deepagents.middleware.memory import MemoryMiddleware
 from deepagents.middleware.skills import SkillsMiddleware
 from deepagents.middleware.subagents import CompiledSubAgent
@@ -176,6 +176,23 @@ class ScopedMountBackend:
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._backend, name)
+
+
+def _without_base_permissions(
+    permissions: Iterable[FilesystemPermission], bases: Iterable[str]
+) -> tuple[FilesystemPermission, ...]:
+    """``permissions`` minus paths inside ``/knowledge/<base>/`` for each skipped base."""
+    prefixes = tuple(f"/knowledge/{base}/" for base in bases)
+    kept: list[FilesystemPermission] = []
+    for rule in permissions:
+        paths = [path for path in rule.paths if not f"{path.rstrip('/')}/".startswith(prefixes)]
+        if len(paths) == len(rule.paths):
+            kept.append(rule)
+        elif paths:
+            kept.append(
+                FilesystemPermission(operations=rule.operations, paths=paths, mode=rule.mode)
+            )
+    return tuple(kept)
 
 
 def _tools_for_manifest(manifest: ObjectAgentManifest, all_tools: Iterable[Any]) -> list[Any]:
@@ -623,10 +640,12 @@ def create_object_agent_proxy(
                 if isinstance(base, dict) and base.get("id")
             }
             known = []
+            skipped = []
             for grant in manifest.knowledge:
                 if grant.base in catalog_ids:
                     known.append(grant)
                 else:
+                    skipped.append(grant.base)
                     warning = (
                         f"Manifest for '{manifest.name}' grants knowledge base '{grant.base}', "
                         "which does not exist in /config/knowledge.json; access was skipped. "
@@ -634,8 +653,14 @@ def create_object_agent_proxy(
                     )
                     warnings.append(warning)
                     logger.warning(warning)
-            if len(known) != len(manifest.knowledge):
-                manifest = replace(manifest, knowledge=tuple(known))
+            if skipped:
+                # Permissions for a skipped base would point outside the agent's
+                # mounts and fail the build; drop just those paths.
+                manifest = replace(
+                    manifest,
+                    knowledge=tuple(known),
+                    permissions=_without_base_permissions(manifest.permissions, skipped),
+                )
         profile = config.get("configurable", {}).get("model_profile")
         selected_model = model
         if profile:
