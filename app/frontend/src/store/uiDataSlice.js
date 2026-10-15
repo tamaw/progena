@@ -228,7 +228,7 @@ export {
   selectKnowledgePages,
   selectKnowledgePage,
   selectKnowledgeRevisions,
-  selectKnowledgeRevisionContent,
+  selectKnowledgeRevision,
 } from './uiData/knowledge';
 
 export {

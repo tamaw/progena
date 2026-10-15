@@ -113,7 +113,10 @@ def test_revisions_list_and_read(harness):
         if store.get_knowledge_page_revision("eng", "concepts/retry.md", r["revision_id"]) == PAGE_A
     )
     client.get(f"/api/ui/knowledge/eng/page/revisions/{original}", params=params)
-    assert _last(events, "knowledge.page.revision.loaded")["content"] == PAGE_A
+    loaded = _last(events, "knowledge.page.revision.loaded")
+    assert loaded["content"] == PAGE_A
+    # The revision's own metadata, so the reader doesn't show the live page's.
+    assert loaded["front_matter"]["title"] == "Retry policy"
     missing = client.get("/api/ui/knowledge/eng/page/revisions/missing", params=params)
     assert missing.status_code == 404
 

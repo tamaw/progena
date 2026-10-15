@@ -15,6 +15,7 @@ from typing import Any
 from fastapi import APIRouter, Header, HTTPException, Query, Request
 
 from app.progenitor.knowledge import find_base, validate_knowledge_payload
+from app.progenitor.knowledge.pages import split_front_matter
 
 from .chat_sessions import UiRequestAcknowledgement, acknowledgement_response
 from .document_store import get_default_document_store
@@ -154,9 +155,19 @@ async def get_knowledge_page_revision(
     content = await asyncio.to_thread(store.get_knowledge_page_revision, base_id, path, revision_id)
     if content is None:
         raise HTTPException(status_code=404, detail="Knowledge revision not found.")
+    try:
+        front_matter, _ = split_front_matter(content)
+    except ValueError:
+        front_matter = None
     broadcast_ui_event(
         "knowledge.page.revision.loaded",
-        {"base_id": base_id, "path": path, "revision_id": revision_id, "content": content},
+        {
+            "base_id": base_id,
+            "path": path,
+            "revision_id": revision_id,
+            "content": content,
+            "front_matter": front_matter,
+        },
         request_id=request_id,
     )
     return acknowledgement_response(request_id, ["knowledge.page.revision.loaded"])
