@@ -159,14 +159,14 @@ the routine and resumes the same thread after the user's response.
 
 ## Running a routine from chat
 
-Read the routine document first. For a graph with `input_schema`, call
-`run_routine` with its id and a `parameters` object containing the required
-named fields. A `task` subagent description is **not** mapped into those fields;
-for example, a prompt using `{question}` needs
-`run_routine(routine_id="...", parameters={"question": "..."})`.
-For graphs without `input_schema`, pass a natural-language `request` to
-`run_routine` if the graph reads `{request}`. The tool returns the output or
-the paused thread id; use `resume_routine` to answer a human step.
+Read the routine document first. Use its routine id as the `task` subagent
+type. If the graph has an `input_schema`, set the `task` description to **only**
+a JSON object satisfying that schema; the subagent validates and binds those
+fields before running the graph. For example, a prompt using `{question}` needs
+`task(subagent_type="...", description='{"question":"What is 40 + 2?"}')`.
+For a graph without `input_schema`, the description remains a natural-language
+request available to the graph as `{request}`. A human step returns its paused
+thread id; use `resume_routine` to answer it.
 
 ## Execution policy
 
