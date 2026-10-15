@@ -31,6 +31,9 @@ class ToolContext:
     # model/registries/checkpointer exist (see agent.py's resume_routine
     # closure). Only resume_routine.py's tool uses this.
     resume_routine: Any = None
+    # Bound async fn (routine_id, state) -> routine result. Unlike task(), this
+    # accepts named input_schema parameters from run_routine.
+    routine_runner: Any = None
     # Bound async fn (thread_id) -> LangGraph StateSnapshot of the Progenitor
     # agent graph (``graph.aget_state``), resolved once the compiled agent
     # exists (see agent.py). Used by schedule_results.py to read run threads.
