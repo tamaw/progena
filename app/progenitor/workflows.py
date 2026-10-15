@@ -20,6 +20,10 @@ from .schemas import load_schema
 from .structured import validate_against_schema
 from .utils import utcnow_isoformat
 
+# Knowledge indexer events, dispatched by the backend indexer when a base finishes
+# or fails indexing. Filtered by the trigger's key field (exact base id).
+KNOWLEDGE_INDEX_EVENT_TYPES = ("knowledge.index.completed", "knowledge.index.failed")
+
 WORKFLOW_ALLOWED_EVENT_TYPES = (
     "kanban.card.created",
     "kanban.card.updated",
@@ -31,6 +35,7 @@ WORKFLOW_ALLOWED_EVENT_TYPES = (
     # Filtered by the trigger's key_prefix/key/action fields below, not by
     # from_column/to_column (kanban-only).
     "document.changed",
+    *KNOWLEDGE_INDEX_EVENT_TYPES,
 )
 WORKFLOW_DOCUMENT_TRIGGER_ACTIONS = ("upserted", "deleted")
 WORKFLOW_DEFAULT_EVENT_TYPE = WORKFLOW_ALLOWED_EVENT_TYPES[0]
@@ -60,6 +65,7 @@ class WorkflowTrigger(BaseModel):
     # document.changed filters: each is a wildcard when unset. key_prefix
     # matches a document kind (see document_kinds.DOCUMENT_KINDS), key an
     # exact document key, action the write kind (upserted vs deleted).
+    # For knowledge.index.* events, key matches the base id (payload.key).
     key_prefix: str | None = None
     key: str | None = None
     action: Literal["upserted", "deleted"] | None = None
@@ -419,11 +425,15 @@ def validate_workflow_definition_payload(payload: Any) -> dict[str, Any]:
         raise ValueError(
             "from_column and to_column filters are only valid for kanban.card.moved triggers"
         )
-    if (
-        definition.trigger.key_prefix is not None
-        or definition.trigger.key is not None
-        or definition.trigger.action is not None
-    ) and definition.trigger.event_type != "document.changed":
+    trigger = definition.trigger
+    if trigger.event_type in KNOWLEDGE_INDEX_EVENT_TYPES:
+        if trigger.key_prefix is not None or trigger.action is not None:
+            raise ValueError(
+                "knowledge.index.* triggers filter only by key (the knowledge base id)"
+            )
+    elif trigger.event_type != "document.changed" and (
+        trigger.key_prefix is not None or trigger.key is not None or trigger.action is not None
+    ):
         raise ValueError(
             "key_prefix, key, and action filters are only valid for document.changed triggers"
         )

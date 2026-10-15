@@ -9,9 +9,11 @@ import {
   selectKnowledgeBases,
   selectKnowledgePage,
   selectKnowledgePages,
+  selectKnowledgeRevisions,
   selectKnowledgeState,
 } from '../store/uiDataSlice';
 import KnowledgePagesTab from '../components/knowledge/KnowledgePagesTab';
+import PopupModal from '../components/common/PopupModal';
 import { selectRealtime } from '../store/realtimeSlice';
 import PageShell from '../components/layout/PageShell';
 import DetailPane from '../components/layout/DetailPane';
@@ -50,35 +52,53 @@ const readableTime = (ms) => (Number.isFinite(ms)
   ? new Date(ms).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
   : null);
 
+// Search-index values for the base root, from the live base record (updated by
+// knowledge.index.* events), not the cached index.md front matter.
+function searchIndexFacts(base) {
+  if (!base) return [];
+  const pages = base.indexPages;
+  const at = readableTime(Date.parse(base.indexedAt));
+  return [
+    `${base.indexedPages}/${pages} page${pages === 1 ? '' : 's'} indexed`,
+    ...(at ? [`indexed ${at}`] : []),
+  ];
+}
+
 // Header facts for the open page. A concept page reports its front matter; a
 // generated index reports when the newest page in its folder (and subfolders)
-// changed, i.e. what the index is up to date with.
-function pageHeaderFacts(path, frontMatter, pages) {
+// changed, i.e. what the index is up to date with, plus (at the base root) the
+// base's search-index progress.
+function pageHeaderFacts(path, frontMatter, pages, base) {
+  const fm = frontMatter && typeof frontMatter === 'object' ? frontMatter : {};
   if (path.split('/').at(-1) === 'index.md') {
     const prefix = path.slice(0, -'index.md'.length);
     const newest = Math.max(...pages
       .filter((page) => page.kind === 'concept' && page.path.startsWith(prefix))
       .map((page) => Date.parse(page.updated_at))
       .filter(Number.isFinite));
-    return { type: 'index', tags: [], generatedAt: readableTime(newest) };
+    return {
+      type: 'index',
+      tags: [],
+      generatedAt: readableTime(newest),
+      extra: path === 'index.md' ? searchIndexFacts(base) : [],
+    };
   }
-  const fm = frontMatter && typeof frontMatter === 'object' ? frontMatter : {};
   return {
     type: fm.type ? String(fm.type) : null,
     tags: Array.isArray(fm.tags) ? fm.tags.map(String) : fm.tags ? [String(fm.tags)] : [],
     generatedAt: readableTime(fm.generated && typeof fm.generated === 'object' ? Date.parse(fm.generated.at) : NaN),
+    extra: [],
   };
 }
 
 function KnowledgeCard({ base, selected, onSelect }) {
-  const meta = statusMeta(base.status);
+  const meta = statusMeta(base.status, { indexedPages: base.indexedPages, indexPages: base.indexPages });
   return (
     <article className={`task-card ${selected ? 'is-selected' : ''}`}>
       <button type="button" className="task-card__button" onClick={() => onSelect(base.id)}>
         <div className="task-card__title kb-card__title">
           <span className={`kb-card__dot kb-card__dot--${meta.tone}`} title={meta.label} aria-label={meta.label} />
           <span className="kb-card__name">{base.name}</span>
-          <span className="kb-card__type">{base.storeType}</span>
         </div>
         <div className="task-card__meta">
           <span className="kb-card__desc">{base.description}</span>
@@ -172,7 +192,7 @@ export default function KnowledgePage() {
   }, [bases, loaded, navigate, selectedBaseId]);
 
 
-  const connectedCount = bases.filter((base) => base.status === 'connected').length;
+  const indexedCount = bases.filter((base) => base.status === 'indexed').length;
 
   const putBases = (nextRaw) => dispatch(saveKnowledge({ knowledgeUrl, bases: nextRaw })).unwrap();
   const patchSelected = (patch) => putBases(
@@ -190,15 +210,34 @@ export default function KnowledgePage() {
     );
   };
 
-  const deleteSelected = async () => {
+  const [deleteConfirmationOpen, setDeleteConfirmationOpen] = useState(false);
+  const [deleteBusy, setDeleteBusy] = useState(false);
+  const [deleteError, setDeleteError] = useState('');
+
+  const requestDelete = () => {
     if (!selectedBase) {
       return;
     }
-    const id = selectedBase.id;
-    if (selectedBaseId === id) {
-      navigate('/knowledge', { replace: true });
+    setDeleteError('');
+    setDeleteConfirmationOpen(true);
+  };
+
+  const confirmDelete = async () => {
+    if (!selectedBase) {
+      setDeleteConfirmationOpen(false);
+      return;
     }
-    await putBases(rawBases.filter((base) => base.id !== id));
+    const id = selectedBase.id;
+    setDeleteBusy(true);
+    try {
+      await putBases(rawBases.filter((base) => base.id !== id));
+      setDeleteConfirmationOpen(false);
+      navigate('/knowledge', { replace: true });
+    } catch (error) {
+      setDeleteError(error?.message || 'Failed to delete.');
+    } finally {
+      setDeleteBusy(false);
+    }
   };
 
   const startNameEdit = () => {
@@ -231,15 +270,26 @@ export default function KnowledgePage() {
     }
   };
 
-  const meta = selectedBase ? statusMeta(selectedBase.status) : null;
+  const meta = selectedBase
+    ? statusMeta(selectedBase.status, { indexedPages: selectedBase.indexedPages, indexPages: selectedBase.indexPages })
+    : null;
   const openPagePath = searchParams.get('page') || 'index.md';
-  const openPage = useSelector((state) => (selectedBaseId
-    ? selectKnowledgePage(state, selectedBaseId, openPagePath)
+  const openBaseId = selectedBase?.id || null;
+  const openPage = useSelector((state) => (openBaseId
+    ? selectKnowledgePage(state, openBaseId, openPagePath)
     : null));
-  const basePages = useSelector((state) => (selectedBaseId ? selectKnowledgePages(state, selectedBaseId) : null));
+  const basePages = useSelector((state) => (openBaseId ? selectKnowledgePages(state, openBaseId) : null));
   const pageFacts = openPage
-    ? pageHeaderFacts(openPagePath, openPage.front_matter, basePages || [])
-    : { type: null, tags: [], generatedAt: null };
+    ? pageHeaderFacts(openPagePath, openPage.front_matter, basePages || [], selectedBase)
+    : { type: null, tags: [], generatedAt: null, extra: [] };
+  const viewingRevisionId = searchParams.get('revision');
+  const viewingRevision = useSelector((state) => (openBaseId && viewingRevisionId
+    ? selectKnowledgeRevisions(state, openBaseId, openPagePath).find((rev) => rev.revision_id === viewingRevisionId) || null
+    : null));
+  // An open revision reports when it was captured, in the same "generated" slot.
+  const generatedAt = viewingRevisionId
+    ? readableTime(Date.parse(viewingRevision?.captured_at))
+    : pageFacts.generatedAt;
 
   return (
     <PageShell className="tasks-page knowledge-page">
@@ -286,8 +336,8 @@ export default function KnowledgePage() {
             ) : null}
 
             <PaneListFooter>
-              <span><span className="num">{bases.length}</span> stores</span>
-              <span>{connectedCount} connected</span>
+              <span><span className="num">{bases.length}</span> bases</span>
+              <span>{indexedCount} indexed</span>
             </PaneListFooter>
           </>
         )}
@@ -351,26 +401,45 @@ export default function KnowledgePage() {
                     tooltip="Delete knowledge base"
                     ariaLabel="Delete knowledge base"
                     variant="danger"
-                    onClick={deleteSelected}
+                    onClick={requestDelete}
                   />
                 </DetailHeaderActions>
               )}
               meta={[
-                <DetailStatus key="status" tone={meta.tone}>{meta.label}</DetailStatus>,
+                meta && meta.tone === 'error' ? (
+                  <span key="status" title={selectedBase.indexError || ''}>
+                    <DetailStatus tone={meta.tone}>{meta.label}</DetailStatus>
+                  </span>
+                ) : (
+                  <DetailStatus key="status" tone={meta.tone}>{meta.label}</DetailStatus>
+                ),
                 ...(pageFacts.type ? [<span key="type" className="muted">{pageFacts.type}</span>] : []),
                 ...(pageFacts.tags.length ? [<span key="tags" className="muted">{pageFacts.tags.join(', ')}</span>] : []),
-                ...(pageFacts.generatedAt ? [<span key="generated" className="muted">generated {pageFacts.generatedAt}</span>] : []),
+                ...(generatedAt ? [<span key="generated" className="muted">generated {generatedAt}</span>] : []),
+                ...(viewingRevisionId ? [] : pageFacts.extra.map((fact) => <span key={fact} className="muted">{fact}</span>)),
               ]}
             />
 
             <div className="task-detail__body">
-              <KnowledgePagesTab baseId={selectedBaseId} baseName={selectedBase.name} knowledgeUrl={knowledgeUrl} />
+              <KnowledgePagesTab baseId={selectedBase.id} baseName={selectedBase.name} knowledgeUrl={knowledgeUrl} />
             </div>
           </>
         ) : (
           <PaneEmptyState detail>Select a knowledge base to inspect details.</PaneEmptyState>
         )}
       </DetailPane>
+      {deleteConfirmationOpen && selectedBase ? (
+        <PopupModal
+          eyebrow="Delete knowledge base"
+          title={`Delete “${selectedBase.name}”?`}
+          message={deleteError || 'The base is removed from the catalog and its pages are hidden. Pages are kept and come back if a base with the same id is created again.'}
+          confirmLabel="Delete knowledge base"
+          busyLabel="Deleting…"
+          onClose={() => setDeleteConfirmationOpen(false)}
+          onConfirm={confirmDelete}
+          busy={deleteBusy}
+        />
+      ) : null}
     </PageShell>
   );
 }

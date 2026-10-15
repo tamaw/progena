@@ -2182,13 +2182,18 @@ body,
   background: var(--color-info);
 }
 
+/* Input stays put; the results list takes the rest of the pane and scrolls. */
 .chrome-search-panel {
-  display: grid;
+  display: flex;
+  flex-direction: column;
   gap: 12px;
+  height: 100%;
+  min-height: 0;
 }
 
 .chrome-search-panel__input {
   display: flex;
+  flex: none;
   align-items: center;
   gap: 8px;
   padding: 10px 12px;
@@ -2225,12 +2230,41 @@ body,
 }
 
 .chrome-search-results {
-  max-height: 430px;
+  flex: 1 1 auto;
+  min-height: 0;
   overflow-y: auto;
 }
 
 .chrome-search-result {
   grid-template-columns: 10px minmax(0, 1fr) 76px;
+}
+
+.chrome-search-group + .chrome-search-group {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--color-border);
+}
+
+.chrome-search-group__label {
+  padding: 2px 12px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--color-text-secondary);
+}
+
+.chrome-search-group .chrome-search-result small {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.chrome-search-loading,
+.chrome-search-error {
+  padding: 8px 12px;
+  font-size: 13px;
 }
 
 .alerts-pane__body {
@@ -9668,6 +9702,13 @@ body,
   padding: 3px 6px;
 }
 
+.knowledge-breadcrumbs > li > button,
+.knowledge-crumb-current {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
 .knowledge-breadcrumbs .knowledge-crumb-toggle {
   padding: 3px 4px;
   color: var(--color-text-muted);
@@ -9692,17 +9733,30 @@ body,
 }
 
 .knowledge-crumb-menu button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   width: 100%;
   font-size: 12.5px;
 }
 
-.knowledge-crumb-menu li.is-selected > button {
-  font-weight: 600;
+.knowledge-path-icon {
+  flex: none;
+  color: var(--color-text-muted);
 }
 
-.knowledge-page-actions {
-  display: flex;
-  gap: 8px;
+/* Clicking a crumb or its toggle leaves no focus ring; keyboard focus still shows a background. */
+.knowledge-breadcrumbs button:focus {
+  outline: none;
+  box-shadow: none;
+}
+
+.knowledge-breadcrumbs button:focus-visible {
+  background: var(--color-bg-secondary);
+}
+
+.knowledge-crumb-menu li.is-selected > button {
+  font-weight: 600;
 }
 
 .knowledge-page-sources,
@@ -9719,7 +9773,8 @@ body,
   font-weight: 600;
 }
 
-.knowledge-page-sources ul {
+.knowledge-page-sources ul,
+.knowledge-page-revisions ul {
   margin: 0;
   padding-left: 0;
   list-style: none;
@@ -9743,22 +9798,17 @@ body,
   color: var(--color-accent);
 }
 
-.knowledge-page-sources li + li {
+.knowledge-page-sources li + li,
+.knowledge-page-revisions li + li {
   margin-top: 4px;
 }
 
-.knowledge-page-revisions ul {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
+.knowledge-page-missing {
+  margin: 16px 0 0;
+  color: var(--color-text-secondary);
 }
 
-.knowledge-page-revisions li {
-  display: flex;
-  align-items: center;
-  gap: 6px;
+.knowledge-page-revisions a[aria-current='true'] {
+  font-weight: 600;
 }
 

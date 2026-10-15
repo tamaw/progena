@@ -7,8 +7,8 @@ import { attachJsonEvidence } from './helpers/routineFixture.mjs';
 //   1. Progenitor registers the Jina MCP server.
 //   2. Progenitor creates a knowledge base and a researcher object agent with
 //      write access to it, then the researcher fills it from web research.
-//   3. The pages are inspected and modified in the Knowledge UI (rename,
-//      delete).
+//   3. The pages are browsed in the Knowledge UI: index, breadcrumbs, revisions,
+//      and a page another curator marked deprecated.
 //   4. A second, read-only agent answers questions from the modified pages.
 // Set KEEP_KNOWLEDGE_E2E=1 to keep the created base/agents for manual viewing.
 // Pick the research topic with KNOWLEDGE_E2E_TOPIC=mcp|raft (default mcp).
@@ -16,8 +16,8 @@ import { attachJsonEvidence } from './helpers/routineFixture.mjs';
 const databaseUrl = process.env.PROGENITOR_DATABASE_URL
   || 'postgresql://progenitor:progenitor@127.0.0.1:15433/progenitor';
 const RUN = Date.now().toString(36).slice(-5);
-// Research topics. `keyPage` names the page the UI renames (the answerer must
-// find it in its new folder); `keyFact` must appear in that page and the answer.
+// Research topics. `keyPage` names the page the answerer should cite;
+// `keyFact` must appear in that page and the answer.
 const TOPICS = {
   mcp: {
     name: 'MCP Research',
@@ -26,6 +26,7 @@ const TOPICS = {
     scope: 'what it is, its architecture of hosts/clients/servers, and its transports',
     keyPage: /transport/,
     keyFact: /stdio/i,
+    searchTerm: 'stdio',
     question: 'what is the Model Context Protocol and which transports does it define?',
   },
   raft: {
@@ -35,6 +36,7 @@ const TOPICS = {
     scope: 'what it is, how leader election works, and how log replication works',
     keyPage: /elect/,
     keyFact: /majority/i,
+    searchTerm: 'majority',
     question: 'what is Raft and how does it elect a leader?',
   },
 };
@@ -53,16 +55,12 @@ function sql(query) {
 }
 const quote = (value) => `'${value.replaceAll("'", "''")}'`;
 
-function pageRows() {
-  const out = sql(`SELECT key || '|' || coalesce(value->'payload'->>'deleted_at', '') FROM store
+function storedPaths() {
+  const out = sql(`SELECT key FROM store
     WHERE prefix = 'progenitor.state' AND key LIKE ${quote(`knowledge:${BASE_ID}/%`)} ORDER BY key`);
-  return out ? out.split('\n').map((line) => {
-    const [key, deletedAt] = line.split('|');
-    return { path: key.slice(`knowledge:${BASE_ID}/`.length), deleted: Boolean(deletedAt) };
-  }) : [];
+  return out ? out.split('\n').map((key) => key.slice(`knowledge:${BASE_ID}/`.length)) : [];
 }
-const livePages = () => pageRows().filter((row) => !row.deleted);
-const conceptPaths = () => livePages().map((row) => row.path)
+const conceptPaths = () => storedPaths()
   .filter((path) => path !== 'log.md' && !path.endsWith('/index.md'));
 
 function agentManifest(name) {
@@ -148,19 +146,19 @@ test('research agent fills a knowledge base from the web and a second agent answ
     expect(sources).toMatch(/^sources:/m);
     expect(sources).toMatch(/https?:\/\//);
     expect(sources).toMatch(/generated:\s*\n\s*at:/);
-    expect(livePages().map((row) => row.path)).toContain('log.md');
+    expect(storedPaths()).toContain('log.md');
     evidence.researchedPages = conceptPaths();
   });
 
-  let renamedPath;
-  let deletedPath;
-  await test.step('the pages are browsable and editable in the Knowledge UI', async () => {
+  let keyPath;
+  await test.step('the pages are browsable in the Knowledge UI', async () => {
     await openKnowledgeBase(page);
+    await poll(() => page.locator('.task-card.is-selected .kb-card__dot--ok').isVisible(), 'base shows indexed status', 120_000);
     await expect(page.locator('.task-card.is-selected .kb-card__info')).toContainText(`${conceptPaths().length} pages`);
 
     // The base index loads by default; its page links open in place, without a reload.
     const crumbs = page.locator('.knowledge-breadcrumbs');
-    await expect(crumbs).toContainText(BASE_NAME);
+    await expect(crumbs.getByRole('button', { name: `${BASE_NAME} root` })).toBeVisible();
     await crumbs.getByRole('button', { name: `Files in ${BASE_NAME}` }).click();
     const menu = page.locator('.knowledge-crumb-menu');
     await expect(menu.getByRole('button', { name: 'log.md' })).toBeVisible();
@@ -170,40 +168,57 @@ test('research agent fills a knowledge base from the web and a second agent answ
     await page.locator('.knowledge-pages-tab .markdown-content a[href$=".md"]:not([href$="index.md"]):not([href="log.md"])').first().click();
     await expect(page).toHaveURL(/page=/);
     expect(await page.evaluate(() => window.knowledgeE2eNoReload)).toBe(true);
-    // Rename the page holding the key fact (the answerer must find it in its new
-    // folder) and delete a different one (the answerer must not cite it).
+
+    // The key page: front matter facts in the header, sources and revisions below the body.
     const contents = Object.fromEntries(conceptPaths().map((path) => [path, sql(`SELECT value->'payload'->>'content'
       FROM store WHERE key = ${quote(`knowledge:${BASE_ID}/${path}`)}`)]));
-    const mentionsTransports = (path) => TOPIC.keyFact.test(contents[path]);
-    const first = conceptPaths().find((path) => TOPIC.keyPage.test(path) && mentionsTransports(path))
-      || conceptPaths().find(mentionsTransports) || conceptPaths()[0];
-    const others = conceptPaths().filter((path) => path !== first);
-    const second = others.find((path) => !mentionsTransports(path)) || others[0];
-    await page.goto(`${page.url().split('?')[0]}?page=${encodeURIComponent(first)}`);
+    const hasKeyFact = (path) => TOPIC.keyFact.test(contents[path]);
+    keyPath = conceptPaths().find((path) => TOPIC.keyPage.test(path) && hasKeyFact(path))
+      || conceptPaths().find(hasKeyFact) || conceptPaths()[0];
+    await page.goto(`${page.url().split('?')[0]}?page=${encodeURIComponent(keyPath)}`);
     const reader = page.locator('.knowledge-pages-tab article');
     await expect(page.getByText(/^generated /)).toBeVisible();
     await expect(reader.getByRole('heading', { name: /^sources$/i })).toHaveCount(1);
     await expect(reader.locator('.markdown-content')).not.toContainText('generated:');
     await expect(reader.getByRole('heading', { name: 'Revisions' })).toBeVisible();
+    const revision = reader.locator('.knowledge-page-revisions a').first();
+    await revision.click();
+    await expect(page).toHaveURL(/revision=/);
+    await expect(page.getByText(/^generated /)).toBeVisible();
+    await revision.click();
+    await expect(page).not.toHaveURL(/revision=/);
+    await expect(page.getByText(/^generated /)).toBeVisible();
 
-    // Rename the key page into a folder and delete the other page.
-    renamedPath = `reviewed/${first.split('/').at(-1)}`;
-    await page.goto(`${page.url().split('?')[0]}?page=${encodeURIComponent(first)}`);
-    page.once('dialog', (dialog) => dialog.accept(renamedPath));
-    await reader.getByRole('button', { name: 'Rename' }).click();
-    await expect(page).toHaveURL(new RegExp(`page=${encodeURIComponent(renamedPath).replace(/[%]/g, '%')}`), { timeout: 30_000 });
-    await expect(crumbs).toContainText('reviewed', { timeout: 30_000 });
+    // A curator retires another page: it leaves the index and the breadcrumb
+    // menu but still opens by path.
+    const retired = conceptPaths().find((path) => path !== keyPath && !path.includes('/'))
+      || conceptPaths().find((path) => path !== keyPath);
+    sql(`UPDATE store SET value = jsonb_set(value, '{payload,content}', to_jsonb(regexp_replace(
+        value->'payload'->>'content', '^---\\n', E'---\\nstatus: deprecated\\n')))
+      WHERE prefix = 'progenitor.state' AND key = ${quote(`knowledge:${BASE_ID}/${retired}`)}`);
+    await page.goto(page.url().split('?')[0]);
+    const index = page.locator('.knowledge-pages-tab .markdown-content');
+    await expect(index.locator(`a[href="${retired}"]`)).toHaveCount(0, { timeout: 30_000 });
+    await expect(index.locator(`a[href="${keyPath}"]`)).toHaveCount(keyPath.includes('/') ? 0 : 1);
+    await crumbs.getByRole('button', { name: `Files in ${BASE_NAME}` }).click();
+    await expect(menu.locator('button', { hasText: contents[retired].match(/^title:\s*(.+)$/m)?.[1] || retired })).toHaveCount(0);
+    await page.keyboard.press('Escape');
+    await page.goto(`${page.url().split('?')[0]}?page=${encodeURIComponent(retired)}`);
+    await expect(reader.locator('.markdown-content')).toBeVisible();
+    await expect(page.locator('.knowledge-page-missing')).toHaveCount(0);
+    evidence.keyPage = keyPath;
+    evidence.deprecated = retired;
+  });
 
-    deletedPath = second;
-    await page.goto(`${page.url().split('?')[0]}?page=${encodeURIComponent(deletedPath)}`);
-    page.once('dialog', (dialog) => dialog.accept());
-    await reader.getByRole('button', { name: 'Delete' }).click();
-    await expect(page).not.toHaveURL(/page=/, { timeout: 30_000 });
-    expect(pageRows()).toEqual(expect.arrayContaining([
-      { path: first, deleted: true }, { path: renamedPath, deleted: false }, { path: deletedPath, deleted: true },
-    ]));
-    evidence.renamed = { from: first, to: renamedPath };
-    evidence.deleted = deletedPath;
+  await test.step('global search finds knowledge pages', async () => {
+    await page.getByRole('button', { name: 'Search', exact: true }).click();
+    const input = page.locator('.chrome-search-panel__input input');
+    await input.fill(TOPIC.searchTerm);
+    const firstResult = page.locator('.chrome-search-group .chrome-search-result').first();
+    await expect(firstResult).toBeVisible({ timeout: 30_000 });
+    await firstResult.click();
+    await expect(page.locator('.knowledge-pages-tab article')).toBeVisible();
+    await expect(page).toHaveURL(/page=/);
   });
 
   await test.step('a read-only agent answers from the modified knowledge base', async () => {
@@ -213,13 +228,13 @@ test('research agent fills a knowledge base from the web and a second agent answ
     expect(agentManifest(ANSWERER)).not.toMatch(/access:\s*write/);
 
     const answer = await chat(page, `Use the task tool with subagent_type "${ANSWERER}" (a user object agent) to ask: "Using only the knowledge base, ${TOPIC.question} `
+      + 'First use the search tool, then read the relevant pages. '
       + 'Cite the knowledge page path for every claim, and also '
       + 'try to add a page called notes/answerer.md and report whether that worked." Relay its full answer verbatim.');
     evidence.answer = answer;
-    expect(answer).toContain(`/knowledge/${BASE_ID}/${renamedPath}`);
+    expect(answer).toContain(`/knowledge/${BASE_ID}/${keyPath}`);
     expect(answer).toMatch(TOPIC.keyFact);
-    expect(answer).not.toContain(`/knowledge/${BASE_ID}/${deletedPath}`);
-    expect(livePages().map((row) => row.path)).not.toContain('notes/answerer.md');
+    expect(conceptPaths()).not.toContain('notes/answerer.md');
   });
 
   await attachJsonEvidence(testInfo, 'knowledge-research', evidence);

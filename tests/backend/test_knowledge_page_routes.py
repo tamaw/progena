@@ -81,40 +81,21 @@ def test_read_page_and_generated_index(harness):
     assert "- [concepts/](concepts/index.md)" in _last(events, "knowledge.page.loaded")["content"]
 
 
-def test_delete_soft_deletes_concepts_only(harness):
-    client, store, _ = harness
-    assert client.delete("/api/ui/knowledge/eng/page", params={"path": "log.md"}).status_code == 400
-    response = client.delete("/api/ui/knowledge/eng/page", params={"path": "concepts/retry.md"})
-    assert_acknowledged(response, ["knowledge.pages.snapshot", "knowledge.snapshot"])
-    payload = store.get_document(PROGENITOR_STATE_PREFIX, "knowledge:eng/concepts/retry.md").payload
-    assert payload["deleted_at"] and payload["content"] == PAGE_A
-    assert (
-        client.get("/api/ui/knowledge/eng/page", params={"path": "concepts/retry.md"}).status_code
-        == 404
+def test_deprecated_page_is_unlisted_but_readable(harness):
+    client, store, events = harness
+    deprecated = PAGE_A.replace("type: Concept\n", "type: Concept\nstatus: deprecated\n")
+    store.save_document(
+        PROGENITOR_STATE_PREFIX, "knowledge:eng/concepts/retry.md", {"content": deprecated}
     )
+    client.get("/api/ui/knowledge/eng/pages")
+    assert [p["path"] for p in _last(events, "knowledge.pages.snapshot")["pages"]] == ["log.md"]
+    client.get("/api/ui/knowledge/eng/page", params={"path": "index.md"})
+    assert "concepts/" not in _last(events, "knowledge.page.loaded")["content"]
+    client.get("/api/ui/knowledge/eng/page", params={"path": "concepts/retry.md"})
+    assert _last(events, "knowledge.page.loaded")["content"] == deprecated
 
 
-def test_rename_moves_page_and_rejects_existing_target(harness):
-    client, store, _ = harness
-    store.save_document(PROGENITOR_STATE_PREFIX, "knowledge:eng/other.md", {"content": PAGE_A})
-    body = {"path": "concepts/retry.md", "new_path": "other.md"}
-    assert client.post("/api/ui/knowledge/eng/page/rename", json=body).status_code == 409
-    body["new_path"] = "concepts/retries.md"
-    assert_acknowledged(
-        client.post("/api/ui/knowledge/eng/page/rename", json=body), ["knowledge.pages.snapshot"]
-    )
-    assert (
-        store.get_document(PROGENITOR_STATE_PREFIX, "knowledge:eng/concepts/retries.md").payload[
-            "content"
-        ]
-        == PAGE_A
-    )
-    assert store.get_document(PROGENITOR_STATE_PREFIX, "knowledge:eng/concepts/retry.md").payload[
-        "deleted_at"
-    ]
-
-
-def test_revisions_list_read_and_restore(harness):
+def test_revisions_list_and_read(harness):
     client, store, events = harness
     store.save_document(
         PROGENITOR_STATE_PREFIX, "knowledge:eng/concepts/retry.md", {"content": PAGE_A + "More.\n"}
@@ -133,40 +114,16 @@ def test_revisions_list_read_and_restore(harness):
     )
     client.get(f"/api/ui/knowledge/eng/page/revisions/{original}", params=params)
     assert _last(events, "knowledge.page.revision.loaded")["content"] == PAGE_A
-    response = client.post(
-        f"/api/ui/knowledge/eng/page/revisions/{original}/restore", params=params
-    )
-    assert_acknowledged(response, ["knowledge.page.loaded", "knowledge.pages.snapshot"])
-    assert (
-        store.get_document(PROGENITOR_STATE_PREFIX, "knowledge:eng/concepts/retry.md").payload[
-            "content"
-        ]
-        == PAGE_A
-    )
-    assert (
-        client.post(
-            "/api/ui/knowledge/eng/page/revisions/missing/restore", params=params
-        ).status_code
-        == 404
-    )
+    missing = client.get("/api/ui/knowledge/eng/page/revisions/missing", params=params)
+    assert missing.status_code == 404
 
 
 def test_new_base_id_avoids_orphaned_pages(harness, monkeypatch):
     client, store, _ = harness
     store.save_document(PROGENITOR_STATE_PREFIX, "knowledge:research/a.md", {"content": PAGE_A})
-    monkeypatch.setattr(routes, "_database_url", lambda: None)
-    monkeypatch.setattr(routes.psycopg, "connect", lambda _url: _NullConnection())
     response = client.put(
         "/api/ui/knowledge",
         json={"bases": [{"id": "eng", "name": "Engineering"}, {"name": "Research"}]},
     )
     assert response.status_code == 202
     assert [b["id"] for b in routes.load_bases()] == ["eng", "research-2"]
-
-
-class _NullConnection:
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *_exc):
-        return False

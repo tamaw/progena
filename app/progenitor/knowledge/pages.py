@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from typing import Any, Literal
 
 import yaml
 
 INDEX_FILE = "index.md"
 LOG_FILE = "log.md"
+INDEXER_FILE = "indexer.json"
 KNOWLEDGE_MOUNT = "/knowledge/"
 BASE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
 SEGMENT_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,79}$")
@@ -103,10 +105,15 @@ def render_index(
     pages: list[tuple[str, dict[str, Any]]],
     subdirs: list[str],
     is_base_root: bool,
+    search_index: Mapping[str, Any] | None = None,
 ) -> str:
     lines: list[str] = []
     if is_base_root:
-        lines.extend(["---", 'okf_version: "0.2"', "---", ""])
+        header: dict[str, Any] = {"okf_version": "0.2"}
+        if search_index is not None:
+            header["search_index"] = dict(search_index)
+        dumped = yaml.safe_dump(header, sort_keys=False, allow_unicode=True)
+        lines.extend(["---", *dumped.rstrip("\n").split("\n"), "---", ""])
     lines.append(f"# {title}")
     grouped: dict[str, list[tuple[str, dict[str, Any]]]] = {}
     for filename, front_matter in pages:
@@ -130,26 +137,55 @@ def render_index(
     return "\n".join(lines) + "\n"
 
 
-def render_root_index(bases: list[dict[str, Any]]) -> str:
+def render_root_index(
+    bases: list[dict[str, Any]], search_statuses: Mapping[str, str] | None = None
+) -> str:
+    statuses = search_statuses or {}
     lines = ["# Knowledge", ""]
     for base in sorted(bases, key=lambda item: str(item.get("name", "")).lower()):
         description = str(base.get("description") or "").strip()
         suffix = f" — {description}" if description else ""
+        status = statuses.get(str(base.get("id")))
+        if status:
+            suffix += f" · search: {status}"
         lines.append(f"- [{base.get('name', base.get('id'))}]({base.get('id')}/index.md){suffix}")
+    lines.extend(["", f"Search indexer status: [{INDEXER_FILE}]({INDEXER_FILE})"])
     return "\n".join(lines) + "\n"
 
 
-def render_directory_index(*, title: str, directory: str, live_pages: list[tuple[str, str]]) -> str:
-    """Render ``directory``'s index from ``(path, content)`` of a base's live pages."""
+def is_deprecated(front_matter: Mapping[str, Any] | None) -> bool:
+    """Whether a page's front matter retires it (``status: deprecated``).
+
+    Deprecated pages are hidden from generated indexes and the backend page list,
+    and rank last in search (``index._DEPRECATED_SCORE_FACTOR``). Deprecation stands
+    in for deletion while agents have no delete tool (deepagents < 0.7).
+    deepagents 0.7 adds a ``delete`` filesystem tool backed by ``adelete``
+    (``KnowledgePageBackend.adelete``); once we upgrade, let agents delete pages
+    there (revisions keep the history) and remove this rule, its callers, and the
+    ``deprecated`` column/ranking in ``index.py``.
+    """
+    return (
+        bool(front_matter) and str(front_matter.get("status", "")).strip().lower() == "deprecated"
+    )
+
+
+def render_directory_index(
+    *,
+    title: str,
+    directory: str,
+    live_pages: list[tuple[str, str]],
+    search_index: Mapping[str, Any] | None = None,
+) -> str:
+    """Render ``directory``'s index from ``(path, content)`` of a base's live pages.
+
+    Deprecated pages are left out (they stay readable by path), and so are
+    subdirectories that hold nothing else.
+    """
     dir_prefix = f"{directory}/" if directory else ""
     pages: list[tuple[str, dict[str, Any]]] = []
     subdirs: set[str] = set()
     for path, content in live_pages:
         if not path.startswith(dir_prefix):
-            continue
-        rest = path[len(dir_prefix) :]
-        if "/" in rest:
-            subdirs.add(rest.split("/", 1)[0])
             continue
         try:
             if classify_page_path(path) != "concept":
@@ -157,7 +193,12 @@ def render_directory_index(*, title: str, directory: str, live_pages: list[tuple
             front_matter, _ = split_front_matter(content)
         except ValueError:
             continue
-        if front_matter:
+        if not front_matter or is_deprecated(front_matter):
+            continue
+        rest = path[len(dir_prefix) :]
+        if "/" in rest:
+            subdirs.add(rest.split("/", 1)[0])
+        else:
             pages.append((rest, front_matter))
     return render_index(
         title=title,
@@ -165,4 +206,5 @@ def render_directory_index(*, title: str, directory: str, live_pages: list[tuple
         pages=pages,
         subdirs=sorted(subdirs),
         is_base_root=not directory,
+        search_index=search_index,
     )

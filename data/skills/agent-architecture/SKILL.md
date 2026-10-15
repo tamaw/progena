@@ -41,7 +41,9 @@ views backed by those documents:
 - `/config/mcp.json` — MCP server configuration.
 - `/config/mcp_tools.json` — discovered MCP tools; only each tool's `enabled` flag is editable.
 - `/config/knowledge.json` — knowledge-base catalog (one entry per base).
-- `/knowledge/<base-id>/` — knowledge-base pages (OKF markdown, generated `index.md`, append-only `log.md`); see the `curating-knowledge` skill.
+- `/config/indexer.json` — search-indexer settings: `profile` (an embeddings deployment in `/config/profile.json`), `dimensions`, and the search cut-off `min_similarity`.
+- `/knowledge/<base-id>/` — knowledge-base pages (OKF markdown, generated `index.md` with `search_index` front matter at the base root, append-only `log.md`); see the `curating-knowledge` skill.
+- `/knowledge/indexer.json` — read-only search-indexer status per base (indexing / indexed / failed, pending pages).
 - `/config/schedule.json` — scheduled tasks keyed by ID.
 - `/config/agents.json` — A2A registry agents and runtime tools.
 - `/config/preferences.json` — user profile and UI settings (display name, timezone, theme, nav/panel layout).

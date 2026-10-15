@@ -22,11 +22,24 @@ export const fetchKnowledge = createAcknowledgedThunk('uiData/fetchKnowledge', a
 export const saveKnowledge = createAcknowledgedThunk('uiData/saveKnowledge', async ({ knowledgeUrl, bases }, { requestId }) => requestAcknowledged(knowledgeUrl, { method: 'PUT', body: { bases }, requestId }));
 export const fetchKnowledgePages = createAcknowledgedThunk('uiData/fetchKnowledgePages', async ({ knowledgeUrl, baseId }, { requestId }) => requestAcknowledged(`${knowledgeUrl}/${encodeURIComponent(baseId)}/pages`, { requestId }));
 export const fetchKnowledgePage = createAcknowledgedThunk('uiData/fetchKnowledgePage', async ({ knowledgeUrl, baseId, path }, { requestId }) => requestAcknowledged(`${knowledgeUrl}/${encodeURIComponent(baseId)}/page?path=${encodeURIComponent(path)}`, { requestId }));
-export const deleteKnowledgePage = createAcknowledgedThunk('uiData/deleteKnowledgePage', async ({ knowledgeUrl, baseId, path }, { requestId }) => requestAcknowledged(`${knowledgeUrl}/${encodeURIComponent(baseId)}/page?path=${encodeURIComponent(path)}`, { method: 'DELETE', requestId }));
-export const renameKnowledgePage = createAcknowledgedThunk('uiData/renameKnowledgePage', async ({ knowledgeUrl, baseId, path, newPath }, { requestId }) => requestAcknowledged(`${knowledgeUrl}/${encodeURIComponent(baseId)}/page/rename`, { method: 'POST', body: { path, new_path: newPath }, requestId }));
 export const fetchKnowledgePageRevisions = createAcknowledgedThunk('uiData/fetchKnowledgePageRevisions', async ({ knowledgeUrl, baseId, path }, { requestId }) => requestAcknowledged(`${knowledgeUrl}/${encodeURIComponent(baseId)}/page/revisions?path=${encodeURIComponent(path)}`, { requestId }));
 export const fetchKnowledgePageRevision = createAcknowledgedThunk('uiData/fetchKnowledgePageRevision', async ({ knowledgeUrl, baseId, path, revisionId }, { requestId }) => requestAcknowledged(`${knowledgeUrl}/${encodeURIComponent(baseId)}/page/revisions/${encodeURIComponent(revisionId)}?path=${encodeURIComponent(path)}`, { requestId }));
-export const restoreKnowledgePageRevision = createAcknowledgedThunk('uiData/restoreKnowledgePageRevision', async ({ knowledgeUrl, baseId, path, revisionId }, { requestId }) => requestAcknowledged(`${knowledgeUrl}/${encodeURIComponent(baseId)}/page/revisions/${encodeURIComponent(revisionId)}/restore?path=${encodeURIComponent(path)}`, { method: 'POST', requestId }));
+
+function patchBaseIndexStatus(state, payload) {
+  const bases = state.knowledge.bases;
+  if (!Array.isArray(bases)) return;
+  const idx = bases.findIndex((b) => b.id === payload.base_id);
+  if (idx === -1) return;
+  const base = bases[idx];
+  bases[idx] = {
+    ...base,
+    index_status: payload.status !== undefined ? payload.status : base.index_status,
+    index_pages: payload.pages !== undefined ? payload.pages : base.index_pages,
+    indexed_pages: payload.indexed_pages !== undefined ? payload.indexed_pages : base.indexed_pages,
+    index_error: payload.error !== undefined ? payload.error : base.index_error,
+    indexed_at: payload.indexed_at !== undefined ? payload.indexed_at : base.indexed_at,
+  };
+}
 
 export const eventHandlers = {
   'knowledge.snapshot': (state, payload) => applyKnowledgeBases(state, payload),
@@ -34,6 +47,10 @@ export const eventHandlers = {
   'knowledge.page.loaded': (state, payload) => { state.knowledge.pageByKey[pageKey(payload.base_id, payload.path)] = payload; },
   'knowledge.page.revisions.loaded': (state, payload) => { state.knowledge.revisionsByKey[pageKey(payload.base_id, payload.path)] = Array.isArray(payload.revisions) ? payload.revisions : []; },
   'knowledge.page.revision.loaded': (state, payload) => { state.knowledge.revisionContentByKey[revisionKey(payload.base_id, payload.path, payload.revision_id)] = payload.content; },
+  'knowledge.index.started': patchBaseIndexStatus,
+  'knowledge.index.progress': patchBaseIndexStatus,
+  'knowledge.index.completed': patchBaseIndexStatus,
+  'knowledge.index.failed': patchBaseIndexStatus,
 };
 
 export function buildExtraReducers(builder) {
