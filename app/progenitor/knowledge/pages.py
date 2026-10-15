@@ -8,6 +8,8 @@ from typing import Any, Literal
 
 import yaml
 
+from ..front_matter import split_front_matter
+
 INDEX_FILE = "index.md"
 LOG_FILE = "log.md"
 INDEXER_FILE = "indexer.json"
@@ -44,25 +46,6 @@ def classify_page_path(path: str) -> PageKind:
     if not parts[-1].endswith(".md") or not SEGMENT_RE.fullmatch(parts[-1][:-3]):
         raise ValueError(_PATH_ERROR)
     return "concept"
-
-
-def split_front_matter(content: str) -> tuple[dict[str, Any] | None, str]:
-    if not content.startswith("---\n"):
-        return None, content
-    match = re.search(r"^---\s*$", content[4:], flags=re.MULTILINE)
-    if match is None:
-        raise ValueError("unclosed YAML front matter")
-    end = 4 + match.start()
-    body_start = 4 + match.end()
-    if content[body_start : body_start + 1] == "\n":
-        body_start += 1
-    try:
-        parsed = yaml.safe_load(content[4:end])
-    except yaml.YAMLError as exc:
-        raise ValueError(f"invalid YAML front matter: {exc}") from exc
-    if not isinstance(parsed, dict):
-        raise ValueError("YAML front matter must be a mapping")
-    return parsed, content[body_start:]
 
 
 def validate_concept_page(content: str) -> None:

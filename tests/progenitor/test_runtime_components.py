@@ -25,7 +25,7 @@ def _make_config(tmp_path: Path) -> ProgenitorConfig:
         state_dir=tmp_path / "data" / "state",
         log_dir=tmp_path / "logs",
         worktree_dir=tmp_path / "worktrees",
-        prompts_dir=tmp_path / "data" / "prompts",
+        instructions_dir=tmp_path / "data" / "instructions",
     )
     config.llm.api_key = ""
     config.llm.base_url = ""

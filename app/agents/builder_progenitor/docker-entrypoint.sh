@@ -16,7 +16,7 @@ log_dir="${PROGENITOR_LOG_DIR:-/app/logs}"
 data_dir="${PROGENITOR_DATA_DIR:-/app/data}"
 
 ensure_runtime_dirs() {
-  mkdir -p "$data_dir" "$data_dir/state" "$data_dir/prompts" "$data_dir/skills" "$log_dir" "$log_dir/$agent_name" "$base_dir" /app/tmp /home/runner
+  mkdir -p "$data_dir" "$data_dir/state" "$data_dir/instructions" "$data_dir/skills" "$log_dir" "$log_dir/$agent_name" "$base_dir" /app/tmp /home/runner
 }
 
 if [ "$(id -u)" -eq 0 ]; then

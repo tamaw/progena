@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field
 if TYPE_CHECKING:
     from ..llm.client import LLMClient
 
+from ..instructions import render_instruction
 from .protocol import BaseSystemTool, ToolContext, ToolResult, build_tool_spec
 
 logger = logging.getLogger(__name__)
@@ -517,20 +518,19 @@ class SelfReflection:
 
         file_content = self.read_file(relative_path, max_lines=300)
 
-        prompt_template = await self.state_manager.get_content_document(
-            "prompt", "progenitor/self_reflect_file_analysis.md"
+        instruction = await self.state_manager.get_content_document(
+            "instruction", "progenitor/self_reflect_file_analysis.md"
         )
-        if prompt_template is None:
+        if instruction is None:
             raise RuntimeError(
-                "Missing 'progenitor/self_reflect_file_analysis.md' prompt document in Postgres"
+                "Missing 'progenitor/self_reflect_file_analysis.md' instruction in Postgres"
             )
-        prompt = prompt_template
-        for key, value in {
-            "relative_path": relative_path,
-            "language": file_content.language,
-            "content": file_content.content,
-        }.items():
-            prompt = prompt.replace(f"{{{key}}}", str(value))
+        prompt = render_instruction(
+            instruction,
+            relative_path=relative_path,
+            language=file_content.language,
+            content=file_content.content,
+        )
 
         response = await self.llm_client.chat(
             prompt=prompt,

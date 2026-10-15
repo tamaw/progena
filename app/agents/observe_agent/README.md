@@ -6,7 +6,7 @@ Expected mounts:
 
 - State: `/app/data/state`
 - Logs: `/app/logs`
-- Prompts: `/app/prompts`
+- Instructions: `/app/data/instructions`
 - Worktrees: `/app/worktrees`
 
 Local build/run example:
@@ -22,7 +22,7 @@ docker run --rm -p 8080:8080 \
   -e AZURE_OPENAI_API_KEY=... \
   -v "$(pwd)/data:/app/data" \
   -v "$(pwd)/logs:/app/logs" \
-  -v "$(pwd)/data/prompts:/app/data/prompts:ro" \
+  -v "$(pwd)/data/instructions:/app/data/instructions:ro" \
   -v "$(pwd)/data/skills:/app/data/skills:ro" \
   -v "$(pwd)/worktrees:/app/worktrees" \
   observe-agent

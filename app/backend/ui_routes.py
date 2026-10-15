@@ -43,6 +43,7 @@ from app.progenitor.content_documents import (
 )
 from app.progenitor.document_kinds import (
     DOCUMENT_KINDS,
+    INSTRUCTION_DOCUMENT_KEY_PREFIX,
     KANBAN_CARD_KEY_PREFIX,
     KNOWLEDGE_PAGE_KEY_PREFIX,
     key_prefix_for,
@@ -100,7 +101,6 @@ from .knowledge_service import snapshot_bases as snapshot_knowledge_bases
 from .marketplace_service import load_marketplaces
 from .policy_routes import create_policy_router
 from .preferences_service import load_preferences
-from .prompt_service import PromptService
 from .repo_service import merged_repo_detail, merged_repo_rows, workspace_signal
 from .request_utils import request_correlation_id as _request_correlation_id
 from .routine_events import routine_events
@@ -226,49 +226,6 @@ class WidgetFieldOptionResponse(BaseModel):
 
     value: str
     label: str
-
-
-class PromptFileResponse(BaseModel):
-    """Workspace prompt metadata."""
-
-    path: str
-    filename: str
-    directory: str
-    category: str | None = None
-    primary_agent: str | None = None
-    associated_agents: list[str] = Field(default_factory=list)
-    size_bytes: int
-    updated_at: float
-    preview: str
-    content: str
-
-
-class PromptSummaryResponse(BaseModel):
-    """Workspace prompt metadata without the file body (list payload)."""
-
-    path: str
-    filename: str
-    directory: str
-    category: str | None = None
-    primary_agent: str | None = None
-    associated_agents: list[str] = Field(default_factory=list)
-    size_bytes: int
-    updated_at: float
-    preview: str
-
-
-class PromptsResponse(BaseModel):
-    """Response containing discovered prompts."""
-
-    prompts: list[PromptSummaryResponse]
-    total: int
-
-
-class PromptUpdateRequest(BaseModel):
-    """Prompt update payload."""
-
-    path: str
-    content: str
 
 
 class WidgetPatchRequest(BaseModel):
@@ -2570,7 +2527,7 @@ async def get_mcp_server_detail(
 ):
     """Acknowledge a request for one MCP server's full detail and publish it.
 
-    Mirrors ``GET /workflows/content``/``GET /prompts/content``: the list
+    Mirrors ``GET /workflows/content``/``GET /instructions/content``: the list
     (``mcp.snapshot``) omits per-tool schemas and log history; the selected
     server's full body (tools + logs) is fetched on demand here.
     """
@@ -3688,70 +3645,6 @@ async def respond_to_alert(
     return acknowledgement_response(request_id, ["alerts.updated"])
 
 
-@router.get("/prompts", status_code=202, response_model=UiRequestAcknowledgement)
-async def get_prompts(
-    request: Request,
-    agent: str | None = None,
-    x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
-):
-    """Publish the complete prompt catalogue; consumers filter locally."""
-    request_id = _request_correlation_id(request, x_request_id)
-    service = PromptService()
-    # A catalogue snapshot is global canonical state. Never publish a
-    # request-specific subset as a snapshot for all connected clients.
-    prompts = [
-        PromptSummaryResponse.model_validate(prompt, from_attributes=True)
-        for prompt in service.list_prompts()
-    ]
-    broadcast_prompts_snapshot(prompts, request_id=request_id)
-    return acknowledgement_response(request_id, ["prompts.snapshot"])
-
-
-@router.get("/prompts/content", status_code=202, response_model=UiRequestAcknowledgement)
-async def get_prompt_content(
-    request: Request,
-    path: str = Query(...),
-    x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
-):
-    """Acknowledge a prompt-content request and publish its canonical body."""
-    request_id = _request_correlation_id(request, x_request_id)
-    try:
-        record = PromptService().get_prompt(path)
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=f"Prompt '{path}' not found") from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    payload = PromptFileResponse.model_validate(record, from_attributes=True)
-    broadcast_ui_event(
-        "prompt.content.updated", payload.model_dump(mode="json"), request_id=request_id
-    )
-    return acknowledgement_response(request_id, ["prompt.content.updated"])
-
-
-@router.put("/prompts/content", status_code=202, response_model=UiRequestAcknowledgement)
-async def update_prompt_content(
-    body: PromptUpdateRequest,
-    request: Request,
-    x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
-):
-    """Persist edits to an existing prompt file."""
-    request_id = _request_correlation_id(request, x_request_id)
-    try:
-        saved = PromptFileResponse.model_validate(
-            PromptService().save_prompt(body.path, body.content),
-            from_attributes=True,
-        )
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=f"Prompt '{body.path}' not found") from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    broadcast_ui_event(
-        "prompt.content.updated", saved.model_dump(mode="json"), request_id=request_id
-    )
-    broadcast_prompts_snapshot(request_id=request_id)
-    return acknowledgement_response(request_id, ["prompt.content.updated", "prompts.snapshot"])
-
-
 @router.get("/logs", status_code=202, response_model=UiRequestAcknowledgement)
 async def get_logs(
     request: Request,
@@ -4243,6 +4136,8 @@ def _queue_state_watch_status(snapshot, changed_key: str | None = None) -> None:
             if base_id:
                 broadcast_knowledge_pages_snapshot(base_id)
             broadcast_knowledge_snapshot()
+        if changed_key is None or changed_key.startswith(INSTRUCTION_DOCUMENT_KEY_PREFIX):
+            broadcast_instructions_snapshot()
         if changed_key in (None, "preferences"):
             broadcast_preferences_snapshot()
         if changed_key in (None, "marketplaces"):
@@ -5008,23 +4903,21 @@ def broadcast_plugin_catalog_snapshot(
     )
 
 
-def broadcast_prompts_snapshot(
-    prompts: list[PromptSummaryResponse] | None = None, *, request_id: str | None = None
+def broadcast_instructions_snapshot(
+    instructions: list[dict[str, Any]] | None = None, *, request_id: str | None = None
 ) -> UiEventEnvelope:
-    """Broadcast the current prompt list to /api/ui/stream subscribers.
+    """Broadcast every instruction's summary to /api/ui/stream subscribers.
 
-    Emitted after the Prompts page requests the list and after UI-driven prompt
-    edits, so the Prompts page (and other open tabs) reflect changes live.
-    Callers that already built the list can pass it in to avoid a second
-    filesystem scan and keep the event consistent with the HTTP response.
+    Emitted after the Instructions page requests the list, after edits and
+    restores, and whenever an ``instruction:`` document changes (runtime boot
+    sync surfaced via the Postgres NOTIFY watcher).
     """
-    if prompts is None:
-        prompts = [
-            PromptSummaryResponse.model_validate(prompt, from_attributes=True)
-            for prompt in PromptService().list_prompts()
-        ]
-    payload = [item.model_dump(mode="json") for item in prompts]
-    return broadcast_ui_event("prompts.snapshot", {"prompts": payload}, request_id=request_id)
+    from .instruction_service import list_instructions
+
+    payload = list_instructions() if instructions is None else instructions
+    return broadcast_ui_event(
+        "instructions.snapshot", {"instructions": payload}, request_id=request_id
+    )
 
 
 def broadcast_workflows_snapshot(

@@ -18,7 +18,7 @@ ensure_runtime_dirs() {
   for target in \
     "$PROGENITOR_DATA_DIR" \
     "$PROGENITOR_DATA_DIR/state" \
-    "$PROGENITOR_DATA_DIR/prompts" \
+    "$PROGENITOR_DATA_DIR/instructions" \
     "$PROGENITOR_DATA_DIR/skills" \
     "$PROGENITOR_LOG_DIR" \
     "$PROGENITOR_WORKTREES_ROOT" \

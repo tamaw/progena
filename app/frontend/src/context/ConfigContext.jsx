@@ -20,7 +20,7 @@ const defaultConfig = {
       widgets: '/api/ui/widgets',
       mcp: '/api/ui/mcp',
       kanban: '/api/ui/kanban',
-      prompts: '/api/ui/prompts',
+      instructions: '/api/ui/instructions',
       marketplaces: '/api/ui/marketplaces',
       plugins: '/api/ui/plugins',
       schedules: '/api/ui/schedules',

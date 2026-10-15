@@ -22,7 +22,7 @@ const ROUTES = [
   ['Kanban', '/kanban'],
   ['Logs', '/logs'],
   ['Plugins', '/plugins'],
-  ['Prompts', '/prompts'],
+  ['Instructions', '/instructions'],
   ['Sessions', '/sessions'],
   ['Schedules', '/schedules'],
   ['Repositories', '/repositories'],

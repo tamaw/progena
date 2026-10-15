@@ -84,7 +84,7 @@ RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir . && \
     pip install --no-cache-dir -r "/app/app/agents/${AGENT_NAME}/requirements.txt"
 
-RUN mkdir -p /app/data/state /app/data/prompts /app/data/skills /app/logs /app/worktrees /app/tmp /home/runner/.copilot && \
+RUN mkdir -p /app/data/state /app/data/instructions /app/data/skills /app/logs /app/worktrees /app/tmp /home/runner/.copilot && \
     cp "/app/app/agents/${AGENT_NAME}/docker-entrypoint.sh" /usr/local/bin/agent-entrypoint.sh && \
     chmod +x /usr/local/bin/agent-entrypoint.sh && \
     if [ -f "/app/app/agents/${AGENT_NAME}/lsp-config.json" ]; then \

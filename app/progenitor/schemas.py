@@ -1,7 +1,7 @@
 """Loading helpers for JSON Schema documents under ``data/schemas/``.
 
 The ``structured_output`` tool drives schema-constrained structured-output LLM
-calls from JSON Schema files stored alongside prompts and skills. Schemas are
+calls from JSON Schema files stored alongside instructions and skills. Schemas are
 looked up by filename so the agent can pass a stable, human-authored contract
 instead of an inline schema.
 """
@@ -14,7 +14,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from .prompts.paths import resolve_data_dir
+from .instructions.paths import resolve_data_dir
 from .structured import validate_against_schema
 
 # Schema files follow the convention ``<name>.schema.v<n>.json`` so a document's
@@ -26,7 +26,7 @@ _VERSIONED_SCHEMA_RE = re.compile(r"^(?P<name>.+)\.schema\.v(?P<version>\d+)\.js
 def resolve_schemas_dir(schemas_dir: Path | str | None = None) -> Path:
     """Resolve the schema directory from explicit override, env, and default.
 
-    Mirrors :func:`app.progenitor.prompts.paths.resolve_prompts_dir`.
+    Mirrors :func:`app.progenitor.instructions.paths.resolve_instructions_dir`.
     """
     if schemas_dir is not None:
         return Path(schemas_dir).expanduser().resolve()
