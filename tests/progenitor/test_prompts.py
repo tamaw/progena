@@ -7,8 +7,10 @@ import pytest
 from app.progenitor.prompts import DEFAULT_PROMPTS_DIR, resolve_prompts_dir
 
 
-def test_prompt_utils_use_project_prompts_by_default():
+def test_prompt_utils_use_project_prompts_by_default(monkeypatch):
     """Default prompt resolution uses the checked-in data/prompts/ directory."""
+    monkeypatch.delenv("PROGENITOR_PROMPTS_DIR", raising=False)
+    monkeypatch.delenv("PROGENITOR_DATA_DIR", raising=False)
     prompts_dir = resolve_prompts_dir()
     assert prompts_dir == DEFAULT_PROMPTS_DIR
     assert prompts_dir.exists()
