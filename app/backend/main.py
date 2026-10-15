@@ -53,6 +53,7 @@ from .plugin_routes import router as plugins_router
 from .preferences_routes import router as preferences_router
 from .repo_routes import router as repos_router
 from .request_utils import request_correlation_id as _strict_request_correlation_id
+from .search_routes import router as search_router
 from .session import (
     SessionConfig,
     SessionManager,
@@ -1008,6 +1009,19 @@ async def lifespan(app: FastAPI):
         timeout=5.0,
     )
 
+    # Knowledge search indexer (Postgres only; idle if another process holds its lock).
+    from .knowledge_indexer import get_knowledge_indexer
+
+    indexer = get_knowledge_indexer()
+    await indexer.start()
+    if indexer.running:
+        graceful_shutdown.register_callback(
+            "stop_knowledge_indexer",
+            indexer.stop,
+            priority=35,
+            timeout=10.0,
+        )
+
     yield
 
     # Graceful Shutdown (OPS-002) - now using enhanced manager
@@ -1026,6 +1040,7 @@ app = FastAPI(
     lifespan=lifespan,
 )
 app.include_router(ui_router)
+app.include_router(search_router)
 app.include_router(knowledge_router)
 app.include_router(marketplaces_router)
 app.include_router(repos_router)

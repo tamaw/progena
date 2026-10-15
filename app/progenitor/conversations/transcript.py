@@ -379,7 +379,7 @@ def _tool_action(name: str, args: dict[str, Any]) -> tuple[str, str]:
             1 for todo in todos if isinstance(todo, dict) and todo.get("status") == "completed"
         )
         return f"updates the todo list ({done}/{len(todos)} done)", "update the todo list"
-    if name == "knowledge_search":
+    if name == "search":
         query = _clip(str(args.get("query", "")), _QUOTE_CHARS)
         return f'searches knowledge for "{query}"', f'search knowledge for "{query}"'
     if name == "list_agents":

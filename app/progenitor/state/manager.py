@@ -14,6 +14,12 @@ from ..content_documents import (
 )
 from ..conversations.sessions import CHAT_INDEX_KEY, CHAT_SESSIONS_NAMESPACE
 from ..document_kinds import INBOX_MESSAGE_KEY_PREFIX
+from ..knowledge.indexer_config import (
+    INDEX_STATUS_DOC_KEY,
+    INDEXER_DOC_KEY,
+    default_indexer_payload,
+    validate_indexer_payload,
+)
 from ..knowledge.pages import knowledge_page_key
 from ..routines.store import ROUTINE_GRAPH_KEY_PREFIX, routine_graph_key
 from ..utils import utcnow_isoformat
@@ -457,6 +463,23 @@ class StateManager:
     async def save_knowledge_config(self, payload: dict[str, Any]) -> None:
         """Persist the knowledge document to the shared runtime store."""
         await self._save_runtime_document("knowledge", payload)
+
+    async def get_indexer_config(self) -> dict[str, Any]:
+        """Return the search-indexer settings behind ``/config/indexer.json``."""
+        default = default_indexer_payload()
+        payload = await self._runtime_store.get_document(INDEXER_DOC_KEY, default)
+        return payload if isinstance(payload, dict) else default
+
+    async def save_indexer_config(self, payload: dict[str, Any]) -> None:
+        """Persist indexer settings; the profile must name a ``/config/profile.json`` entry."""
+        profiles = await self.get_model_profiles_config()
+        validated = validate_indexer_payload(payload, profile_names=profiles.keys())
+        await self._save_runtime_document(INDEXER_DOC_KEY, validated)
+
+    async def get_knowledge_index(self) -> dict[str, Any]:
+        """Return the backend indexer's status document (``/knowledge/indexer.json``)."""
+        payload = await self._runtime_store.peek_document(INDEX_STATUS_DOC_KEY)
+        return payload if isinstance(payload, dict) else {"embedding": None, "bases": {}}
 
     # ==========================================================================
     # User preferences (profile)

@@ -55,7 +55,9 @@
             "kanban.card.moved",
             "kanban.card.deleted",
             "kanban.card.status_changed",
-            "document.changed"
+            "document.changed",
+            "knowledge.index.completed",
+            "knowledge.index.failed"
           ]
         },
         "from_column": {
@@ -73,7 +75,7 @@
           "type": ["string", "null"]
         },
         "key": {
-          "description": "Optional document.changed filter: only trigger for this exact document key. Null/omitted means any key.",
+          "description": "Optional filter. document.changed: only trigger for this exact document key. knowledge.index.*: only trigger for this knowledge base id. Null/omitted means any.",
           "type": ["string", "null"]
         },
         "action": {

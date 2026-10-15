@@ -1,5 +1,5 @@
 import {
-  useEffect, useMemo, useRef, useState,
+  useCallback, useEffect, useMemo, useRef, useState,
 } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { useSearchParams } from 'react-router-dom';
@@ -7,19 +7,18 @@ import { useMermaidRender } from '../../hooks/useMermaidRender';
 import { stripYamlFrontmatter } from '../../lib/markdown';
 import { renderSafeMarkdown } from '../chat/messageRenderUtils';
 import {
-  deleteKnowledgePage,
   fetchKnowledgePage,
   fetchKnowledgePageRevision,
   fetchKnowledgePageRevisions,
   fetchKnowledgePages,
-  renameKnowledgePage,
-  restoreKnowledgePageRevision,
   selectKnowledgePage,
   selectKnowledgePages,
   selectKnowledgeRevisionContent,
   selectKnowledgeRevisions,
 } from '../../store/uiDataSlice';
-import { buildPageTree, dirOf, resolvePageLink } from '../../pages/knowledgePagesModel';
+import {
+  buildPageTree, dirOf, formatRevisionTime, resolvePageLink,
+} from '../../pages/knowledgePagesModel';
 
 function findDir(tree, dirPath) {
   let node = tree;
@@ -28,6 +27,20 @@ function findDir(tree, dirPath) {
     if (!node) return null;
   }
   return node;
+}
+
+// Kind marker for a folder or file, shown in the breadcrumb and its menus.
+function PathIcon({ kind }) {
+  const paths = {
+    folder: 'M2.5 4.5a1 1 0 0 1 1-1h3l1.5 1.5h4.5a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1h-9a1 1 0 0 1-1-1z',
+    log: 'M4 3.5h8v9H4zM6 6h4M6 8h4M6 10h2.5',
+    page: 'M4 2.5h5.5L12 5v8.5H4zM9.5 2.5V5H12',
+  };
+  return (
+    <svg className="knowledge-path-icon" viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
+      <path d={paths[kind]} fill="none" stroke="currentColor" strokeWidth="1.25" strokeLinejoin="round" strokeLinecap="round" />
+    </svg>
+  );
 }
 
 // Path crumbs (base, folders, page). Each opens a list of its folder's files.
@@ -45,7 +58,8 @@ function Breadcrumbs({ baseName, tree, selectedPath, onSelect }) {
   }, [openDir]);
 
   const dirs = dirOf(selectedPath).split('/').filter(Boolean);
-  const crumbs = [{ label: baseName, dir: '' }];
+  // The root crumb is the base's top folder: icon only, its name is in the header.
+  const crumbs = [{ label: '', name: baseName, dir: '' }];
   dirs.forEach((name, i) => crumbs.push({ label: name, dir: dirs.slice(0, i + 1).join('/') }));
   const fileName = selectedPath.split('/').at(-1);
   if (fileName !== 'index.md') {
@@ -59,20 +73,33 @@ function Breadcrumbs({ baseName, tree, selectedPath, onSelect }) {
     <ol className="knowledge-breadcrumbs" ref={ref} aria-label="Page path">
       {crumbs.map((crumb) => {
         if (crumb.key) {
-          return <li key={crumb.key}><span className="knowledge-crumb-current" aria-current="page">{crumb.label}</span></li>;
+          return (
+            <li key={crumb.key}>
+              <span className="knowledge-crumb-current" aria-current="page">
+                <PathIcon kind={fileName === 'log.md' ? 'log' : 'page'} />
+                {crumb.label}
+              </span>
+            </li>
+          );
         }
         const key = `dir:${crumb.dir}`;
         const index = crumb.dir ? `${crumb.dir}/index.md` : 'index.md';
         const node = openDir === key ? findDir(tree, crumb.dir) : null;
         return (
           <li key={key}>
-            <button type="button" aria-current={index === selectedPath ? 'page' : undefined} onClick={() => choose(index)}>
+            <button
+              type="button"
+              aria-label={crumb.dir ? undefined : `${baseName} root`}
+              aria-current={index === selectedPath ? 'page' : undefined}
+              onClick={() => choose(index)}
+            >
+              <PathIcon kind="folder" />
               {crumb.label}
             </button>
             <button
               type="button"
               className="knowledge-crumb-toggle"
-              aria-label={`Files in ${crumb.label}`}
+              aria-label={`Files in ${crumb.name || crumb.label}`}
               aria-expanded={openDir === key}
               onClick={() => setOpenDir(openDir === key ? null : key)}
             >
@@ -82,12 +109,18 @@ function Breadcrumbs({ baseName, tree, selectedPath, onSelect }) {
               <ul className="knowledge-crumb-menu">
                 {node.pages.filter((entry) => entry.name !== 'index.md').map((entry) => (
                   <li key={entry.path} className={entry.path === selectedPath ? 'is-selected' : ''}>
-                    <button type="button" onClick={() => choose(entry.path)}>{entry.title || entry.name}</button>
+                    <button type="button" onClick={() => choose(entry.path)}>
+                      <PathIcon kind={entry.name === 'log.md' ? 'log' : 'page'} />
+                      <span>{entry.title || entry.name}</span>
+                    </button>
                   </li>
                 ))}
                 {node.directories.map((dir) => (
                   <li key={dir.path}>
-                    <button type="button" onClick={() => choose(`${dir.path}/index.md`)}>{dir.name}/</button>
+                    <button type="button" onClick={() => choose(`${dir.path}/index.md`)}>
+                      <PathIcon kind="folder" />
+                      <span>{dir.name}/</span>
+                    </button>
                   </li>
                 ))}
               </ul>
@@ -134,32 +167,46 @@ export default function KnowledgePagesTab({ baseId, baseName, knowledgeUrl }) {
   const page = useSelector((state) => (selectedPath ? selectKnowledgePage(state, baseId, selectedPath) : null));
   const tree = useMemo(() => buildPageTree(pages), [pages]);
   const revisions = useSelector((state) => (selectedPath ? selectKnowledgeRevisions(state, baseId, selectedPath) : []));
-  // The revision being previewed, tied to its page so navigating away drops it.
-  const [viewingRevision, setViewingRevision] = useState(null);
-  const viewingRevisionId = viewingRevision?.path === selectedPath ? viewingRevision.id : null;
-  const setViewingRevisionId = (id) => setViewingRevision(id ? { path: selectedPath, id } : null);
+  // The revision being previewed lives in ?revision= so the detail header can show it.
+  const viewingRevisionId = params.get('revision');
   const revisionContent = useSelector((state) => (viewingRevisionId ? selectKnowledgeRevisionContent(state, baseId, selectedPath, viewingRevisionId) : null));
   const selectedPageMeta = useMemo(() => pages.find((p) => p.path === selectedPath) || null, [pages, selectedPath]);
   const lastFetchedAtRef = useRef(null);
+  // Failed load of the open page (e.g. a link to a missing page), keyed by base and
+  // path. Only the latest request may set or clear it, so a slow response for a
+  // page or base the user already left can't overwrite the current one.
+  const [loadError, setLoadError] = useState(null);
+  const latestLoadRef = useRef(0);
 
   useEffect(() => { dispatch(fetchKnowledgePages({ knowledgeUrl, baseId })); }, [dispatch, knowledgeUrl, baseId]);
 
+  const loadPage = useCallback((path) => {
+    const request = latestLoadRef.current + 1;
+    latestLoadRef.current = request;
+    const key = `${baseId}/${path}`;
+    dispatch(fetchKnowledgePage({ knowledgeUrl, baseId, path })).unwrap()
+      .then(() => { if (latestLoadRef.current === request) setLoadError(null); })
+      .catch((error) => {
+        if (latestLoadRef.current === request) setLoadError({ key, message: error?.message || '' });
+      });
+  }, [dispatch, knowledgeUrl, baseId]);
+
   useEffect(() => {
     if (selectedPath) {
-      dispatch(fetchKnowledgePage({ knowledgeUrl, baseId, path: selectedPath }));
+      loadPage(selectedPath);
       dispatch(fetchKnowledgePageRevisions({ knowledgeUrl, baseId, path: selectedPath }));
       lastFetchedAtRef.current = null;
     }
-  }, [dispatch, knowledgeUrl, baseId, selectedPath]);
+  }, [dispatch, loadPage, knowledgeUrl, baseId, selectedPath]);
 
   // Refetch the selected page and its revisions when its updated_at in the snapshot changes.
   useEffect(() => {
     if (selectedPath && selectedPageMeta?.updated_at && selectedPageMeta.updated_at !== lastFetchedAtRef.current) {
       lastFetchedAtRef.current = selectedPageMeta.updated_at;
-      dispatch(fetchKnowledgePage({ knowledgeUrl, baseId, path: selectedPath }));
+      loadPage(selectedPath);
       dispatch(fetchKnowledgePageRevisions({ knowledgeUrl, baseId, path: selectedPath }));
     }
-  }, [dispatch, knowledgeUrl, baseId, selectedPath, selectedPageMeta?.updated_at]);
+  }, [dispatch, loadPage, knowledgeUrl, baseId, selectedPath, selectedPageMeta?.updated_at]);
 
   useEffect(() => {
     if (viewingRevisionId) {
@@ -167,56 +214,42 @@ export default function KnowledgePagesTab({ baseId, baseName, knowledgeUrl }) {
     }
   }, [dispatch, knowledgeUrl, baseId, selectedPath, viewingRevisionId]);
 
-  const handleDelete = async () => {
-    if (!selectedPath) return;
-    if (!window.confirm(`Delete ${selectedPath}?`)) return;
-    try {
-      await dispatch(deleteKnowledgePage({ knowledgeUrl, baseId, path: selectedPath })).unwrap();
-      setParams({});
-    } catch (error) {
-      window.alert(error?.message || 'Delete failed.');
-    }
-  };
-
-  const handleRename = async () => {
-    if (!selectedPath) return;
-    const newPath = window.prompt('New path:', selectedPath)?.trim();
-    if (!newPath || newPath === selectedPath) return;
-    try {
-      await dispatch(renameKnowledgePage({ knowledgeUrl, baseId, path: selectedPath, newPath })).unwrap();
-      setParams({ page: newPath });
-    } catch (error) {
-      window.alert(error?.message || 'Rename failed.');
-    }
-  };
-
-  const handleRestore = (revisionId) => {
-    if (!window.confirm('Restoring saves this revision as the live page.')) return;
-    dispatch(restoreKnowledgePageRevision({ knowledgeUrl, baseId, path: selectedPath, revisionId }));
-    setViewingRevisionId(null);
-  };
-
   const selectPage = (path) => setParams(path === 'index.md' ? {} : { page: path });
+  const revisionParams = (revisionId) => {
+    const next = new URLSearchParams(params);
+    if (revisionId) next.set('revision', revisionId);
+    else next.delete('revision');
+    return next;
+  };
+  const toggleRevision = (event, revisionId) => {
+    event.preventDefault();
+    setParams(revisionParams(viewingRevisionId === revisionId ? null : revisionId));
+  };
 
-  const isConcept = selectedPageMeta?.kind === 'concept';
+  // The breadcrumb is the page heading, so the rendered body drops its leading H1; stored files keep it.
+  const dropTitle = (text) => text.replace(/^\s*# [^\n]*\n*/, '');
   const displayContent = viewingRevisionId
-    ? (revisionContent === null ? 'Loading…' : stripYamlFrontmatter(revisionContent))
-    : (page?.body ?? page?.content ?? '');
+    ? (revisionContent === null ? 'Loading…' : dropTitle(stripYamlFrontmatter(revisionContent)))
+    : dropTitle(page?.body ?? page?.content ?? '');
   const sources = frontMatterSources(page?.front_matter);
+  const pageError = loadError?.key === `${baseId}/${selectedPath}` ? loadError.message : null;
 
   return (
     <div className="knowledge-pages-tab">
       <article>
-        {!page ? <p>Loading…</p> : (
+        {pageError ? (
           <>
             <header className="knowledge-page-header">
               <Breadcrumbs baseName={baseName || baseId} tree={tree} selectedPath={selectedPath} onSelect={selectPage} />
-              {isConcept && (
-                <div className="knowledge-page-actions">
-                  <button type="button" className="repo-btn repo-btn--ghost" onClick={handleRename}>Rename</button>
-                  <button type="button" className="repo-btn repo-btn--ghost" onClick={handleDelete}>Delete</button>
-                </div>
-              )}
+            </header>
+            <p className="knowledge-page-missing" role="alert">
+              {/not found/i.test(pageError) ? 'Page not found.' : pageError}
+            </p>
+          </>
+        ) : !page ? <p>Loading…</p> : (
+          <>
+            <header className="knowledge-page-header">
+              <Breadcrumbs baseName={baseName || baseId} tree={tree} selectedPath={selectedPath} onSelect={selectPage} />
             </header>
             <PageBody content={displayContent} path={selectedPath} onNavigate={selectPage} />
             {sources.length > 0 && (
@@ -239,22 +272,16 @@ export default function KnowledgePagesTab({ baseId, baseName, knowledgeUrl }) {
                 <ul>
                   {revisions.map((rev) => (
                     <li key={rev.revision_id}>
-                      <button
-                        type="button"
-                        className={viewingRevisionId === rev.revision_id ? 'repo-btn' : 'repo-btn repo-btn--ghost'}
-                        onClick={() => setViewingRevisionId(viewingRevisionId === rev.revision_id ? null : rev.revision_id)}
+                      <a
+                        href={`?${revisionParams(viewingRevisionId === rev.revision_id ? null : rev.revision_id)}`}
+                        aria-current={viewingRevisionId === rev.revision_id ? 'true' : undefined}
+                        onClick={(event) => toggleRevision(event, rev.revision_id)}
                       >
-                        {rev.captured_at ? new Date(rev.captured_at).toLocaleString() : rev.revision_id.slice(0, 8)}
-                      </button>
-                      {viewingRevisionId === rev.revision_id && (
-                        <button type="button" className="repo-btn repo-btn--ghost" onClick={() => handleRestore(rev.revision_id)}>Restore</button>
-                      )}
+                        {formatRevisionTime(rev)}
+                      </a>
                     </li>
                   ))}
                 </ul>
-                {viewingRevisionId && revisionContent !== null && (
-                  <p className="task-meta-sub">Viewing revision {viewingRevisionId.slice(0, 8)} — click the revision again to return to the live page.</p>
-                )}
               </section>
             )}
           </>

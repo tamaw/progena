@@ -122,7 +122,9 @@ write its runtime state as JSON files under `data/state`.
 The DeepAgent receives a virtual filesystem view backed by those documents:
 - `/config/mcp.json`: MCP server configuration
 - `/config/knowledge.json`: Knowledge-base settings
-- `/knowledge/<base-id>/`: knowledge-base pages (OKF markdown; see the curating-knowledge skill)
+- `/config/indexer.json`: Search-indexer settings (`profile` names a `/config/profile.json` embeddings deployment; `dimensions`; `min_similarity` search cut-off)
+- `/knowledge/<base-id>/`: knowledge-base pages (OKF markdown; see the curating-knowledge skill); each base's generated root `index.md` has its search-index state in `search_index` front matter
+- `/knowledge/indexer.json`: Read-only search-indexer status per base, written by the backend indexer (`search` tool queries the index)
 - `/config/schedule.json`: Scheduled tasks
 - `/config/agents.json`: A2A agent registry and runtime tools
 - `/config/repos.json`: Declared repositories (name, remote, local worktree path, read/write access) — agent-editable

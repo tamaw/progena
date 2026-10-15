@@ -11,7 +11,7 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any, Protocol, cast
+from typing import Any, Literal, Protocol, cast
 
 import psycopg
 from psycopg import sql
@@ -113,6 +113,17 @@ class BackendDocumentStore(Protocol):
 
     def list_documents(self, prefix: str, key_prefix: str) -> list[tuple[str, StoredDocument]]: ...
 
+    def search_documents(
+        self,
+        prefix: str,
+        key_prefix: str,
+        fields: tuple[str, ...],
+        source: Literal["json", "front_matter"],
+        q: str,
+        limit: int = 5,
+        key_suffix: str | None = None,
+    ) -> list[dict[str, Any]]: ...
+
     def save_document(self, prefix: str, key: str, payload: Any) -> None: ...
 
     def delete_document(self, prefix: str, key: str) -> None: ...
@@ -191,6 +202,59 @@ class InMemoryDocumentStore:
             ),
             key=lambda entry: entry[0],
         )
+
+    def search_documents(
+        self,
+        prefix: str,
+        key_prefix: str,
+        fields: tuple[str, ...],
+        source: Literal["json", "front_matter"],
+        q: str,
+        limit: int = 5,
+        key_suffix: str | None = None,
+    ) -> list[dict[str, Any]]:
+        q_lower = q.lower()
+        rows: list[tuple[str, StoredDocument]] = []
+        for (doc_prefix, key), document in self._documents.items():
+            if doc_prefix != prefix or not key.startswith(key_prefix):
+                continue
+            if key_suffix is not None and not key.endswith(key_suffix):
+                continue
+            payload = document.payload if isinstance(document.payload, dict) else {}
+            if source == "front_matter":
+                content = str(payload.get("content", ""))
+                if q_lower in content.lower():
+                    rows.append((key, document))
+            else:
+                for field in fields:
+                    value = str(payload.get(field, ""))
+                    if q_lower in value.lower():
+                        rows.append((key, document))
+                        break
+
+        # Same order as Postgres: JSON kinds put title-prefix matches first, then
+        # newest; front-matter kinds are newest first.
+        rows.sort(
+            key=lambda entry: entry[1].updated_at or datetime.min.replace(tzinfo=UTC), reverse=True
+        )
+        if source == "json" and fields:
+            rows.sort(
+                key=lambda entry: (
+                    0
+                    if str(
+                        (entry[1].payload if isinstance(entry[1].payload, dict) else {}).get(
+                            fields[0], ""
+                        )
+                    )
+                    .lower()
+                    .startswith(q_lower)
+                    else 1
+                )
+            )
+        return [
+            {"key": key, "payload": document.payload, "updated_at": document.updated_at}
+            for key, document in rows[:limit]
+        ]
 
     def save_document(self, prefix: str, key: str, payload: Any) -> None:
         self._documents[(prefix, key)] = StoredDocument(payload, datetime.now(UTC))
@@ -739,6 +803,75 @@ class PostgresDocumentStore:
             value = row.get("value")
             payload = value.get("payload") if isinstance(value, dict) else None
             results.append((str(row["key"]), StoredDocument(payload, row.get("updated_at"))))
+        return results
+
+    def search_documents(
+        self,
+        prefix: str,
+        key_prefix: str,
+        fields: tuple[str, ...],
+        source: Literal["json", "front_matter"],
+        q: str,
+        limit: int = 5,
+        key_suffix: str | None = None,
+    ) -> list[dict[str, Any]]:
+        like_prefix = _escape_like(key_prefix) + "%"
+        like_suffix = "%" + _escape_like(key_suffix) if key_suffix is not None else None
+        params: list[Any] = [prefix, like_prefix]
+        if like_suffix is not None:
+            params.append(like_suffix)
+
+        ilike_pattern = f"%{_escape_like(q)}%"
+
+        if source == "front_matter":
+            # Search inside the markdown content; front matter is parsed later.
+            match_sql = sql.SQL("value->'payload'->>'content' ILIKE %s")
+            params.append(ilike_pattern)
+        else:
+            # A row matches when any searched field contains the query.
+            match_sql = sql.SQL("({})").format(
+                sql.SQL(" OR ").join(
+                    sql.SQL("value->'payload'->>{} ILIKE %s").format(sql.Literal(field))
+                    for field in fields
+                )
+            )
+            params.extend(ilike_pattern for _ in fields)
+
+        key_clause = sql.SQL("key LIKE %s")
+        if like_suffix is not None:
+            key_clause = sql.SQL("key LIKE %s AND key LIKE %s")
+
+        where_sql = sql.SQL("prefix = %s AND {} AND {}").format(key_clause, match_sql)
+
+        # Order: title prefix match first, then updated_at desc.
+        if source == "json" and fields:
+            order_sql = sql.SQL(
+                "CASE WHEN value->'payload'->>{} ILIKE %s THEN 0 ELSE 1 END, updated_at DESC"
+            ).format(sql.Literal(fields[0]))
+            params.append(f"{_escape_like(q)}%")
+        else:
+            order_sql = sql.SQL("updated_at DESC")
+
+        query = sql.SQL(
+            "SELECT key, value, updated_at FROM store WHERE {} ORDER BY {} LIMIT %s"
+        ).format(where_sql, order_sql)
+        params.append(limit)
+
+        with self._cursor() as cur:
+            cur.execute(query, params)
+            rows = cast(list[dict[str, Any]], cur.fetchall())
+
+        results: list[dict[str, Any]] = []
+        for row in rows:
+            value = row.get("value")
+            payload = value.get("payload") if isinstance(value, dict) else None
+            results.append(
+                {
+                    "key": str(row["key"]),
+                    "payload": payload,
+                    "updated_at": row.get("updated_at"),
+                }
+            )
         return results
 
     def save_document(self, prefix: str, key: str, payload: Any) -> None:

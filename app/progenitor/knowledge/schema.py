@@ -1,14 +1,13 @@
 """Validation schema for the knowledge state document (``/config/knowledge.json``).
 
-The knowledge document is the single source of truth for knowledge-base *settings*
-(the documents + their vectors live in the ``knowledge_documents`` SQL table). The
-same models validate **both** the backend ``PUT /api/ui/knowledge`` body and the
-agent's ``/config/knowledge.json`` virtual file, so the two write paths can never
-disagree on shape.
+The knowledge document is the catalog of knowledge bases; each base's pages live
+in ``knowledge:<base-id>/<path>`` documents. The same models validate **both** the
+backend ``PUT /api/ui/knowledge`` body and the agent's ``/config/knowledge.json``
+virtual file, so the two write paths can never disagree on shape.
 
 ``validate_knowledge_payload`` returns a normalized dict: ids and timestamps are
 filled in, tags are trimmed/deduped, and unknown/derived fields (e.g. the snapshot's
-``documents``/``collections`` counts) are dropped. That normalized form is what gets
+``page_count``/``index_status``) are dropped. That normalized form is what gets
 persisted to the document store.
 """
 
@@ -16,22 +15,13 @@ from __future__ import annotations
 
 import json
 import re
-import uuid
 from datetime import UTC, datetime
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from ..schemas import check_entry_schema
-from .embedding import EMBED_DIM, EMBED_MODEL_NAME
 from .pages import BASE_ID_RE
-
-VALID_METRICS = ("cosine", "l2", "inner_product")
-VALID_INDEX_TYPES = ("Flat", "HNSW", "IVFFlat")
-VALID_STATUSES = ("connected", "syncing", "error", "idle")
-VALID_SOURCE_STATUSES = ("pending", "indexed", "error")
-
-_INDEX_TYPE_CANON = {value.lower(): value for value in VALID_INDEX_TYPES}
 
 
 def slugify(value: str) -> str:
@@ -49,10 +39,6 @@ def generate_base_id(name: str, taken: set[str]) -> str:
     return f"{candidate}-{suffix}"
 
 
-def generate_source_id() -> str:
-    return f"src-{uuid.uuid4().hex[:10]}"
-
-
 def now_isoformat() -> str:
     return datetime.now(UTC).isoformat()
 
@@ -68,29 +54,8 @@ def _dedupe_tags(tags: list[str]) -> list[str]:
     return clean
 
 
-class KnowledgeSourceModel(BaseModel):
-    """One indexable folder source attached to a base."""
-
-    model_config = ConfigDict(extra="ignore")
-
-    id: str = Field(default="", max_length=80)
-    path: str = Field(min_length=1, max_length=1000)
-    status: str = Field(default="pending")
-    document_count: int = Field(default=0, ge=0)
-    error: str = Field(default="", max_length=2000)
-    last_indexed_at: str | None = None
-
-    @field_validator("status")
-    @classmethod
-    def _check_status(cls, value: str) -> str:
-        normalized = str(value or "pending").strip().lower()
-        if normalized not in VALID_SOURCE_STATUSES:
-            raise ValueError(f"source status must be one of {VALID_SOURCE_STATUSES}")
-        return normalized
-
-
 class KnowledgeBaseModel(BaseModel):
-    """One knowledge base's settings."""
+    """One knowledge base's catalog entry."""
 
     model_config = ConfigDict(extra="ignore")
 
@@ -99,40 +64,9 @@ class KnowledgeBaseModel(BaseModel):
     description: str = Field(default="", max_length=4000)
     owner: str = Field(default="user", max_length=80)
     scope: str = Field(default="Mine", max_length=40)
-    status: str = Field(default="connected")
-    embedding_model: str = Field(default=EMBED_MODEL_NAME, max_length=120)
-    dimensions: int = Field(default=EMBED_DIM, ge=1, le=4096)
-    metric: str = Field(default="cosine", max_length=40)
-    index_type: str = Field(default="Flat", max_length=40)
     tags: list[str] = Field(default_factory=list)
-    connection_string: str = Field(default="", max_length=500)
-    sources: list[KnowledgeSourceModel] = Field(default_factory=list)
     created_at: str | None = None
     updated_at: str | None = None
-
-    @field_validator("status")
-    @classmethod
-    def _check_status(cls, value: str) -> str:
-        normalized = str(value or "connected").strip().lower()
-        if normalized not in VALID_STATUSES:
-            raise ValueError(f"status must be one of {VALID_STATUSES}")
-        return normalized
-
-    @field_validator("metric")
-    @classmethod
-    def _check_metric(cls, value: str) -> str:
-        normalized = str(value or "cosine").strip().lower()
-        if normalized not in VALID_METRICS:
-            raise ValueError(f"metric must be one of {VALID_METRICS}")
-        return normalized
-
-    @field_validator("index_type")
-    @classmethod
-    def _check_index_type(cls, value: str) -> str:
-        canon = _INDEX_TYPE_CANON.get(str(value or "Flat").strip().lower())
-        if canon is None:
-            raise ValueError(f"index_type must be one of {VALID_INDEX_TYPES}")
-        return canon
 
     @field_validator("tags")
     @classmethod
@@ -191,17 +125,6 @@ def validate_knowledge_payload(
         entry["id"] = base_id
         entry["created_at"] = entry.get("created_at") or timestamp
         entry["updated_at"] = entry.get("updated_at") or timestamp
-
-        source_ids: set[str] = set()
-        sources: list[dict[str, Any]] = []
-        for source in entry.get("sources", []):
-            source_id = str(source.get("id") or "").strip() or generate_source_id()
-            while source_id in source_ids:
-                source_id = generate_source_id()
-            source_ids.add(source_id)
-            source["id"] = source_id
-            sources.append(source)
-        entry["sources"] = sources
         check_entry_schema(f"base '{base_id}'", entry, "knowledge_base_entry")
         bases.append(entry)
     return {"bases": bases}
@@ -214,3 +137,26 @@ def validate_knowledge_document(content: str) -> dict[str, Any]:
     except json.JSONDecodeError as exc:
         raise ValueError(f"not valid JSON: {exc}") from exc
     return validate_knowledge_payload(data)
+
+
+def find_base(bases: list[dict[str, Any]], base_id: str) -> dict[str, Any] | None:
+    """Return the base with ``base_id`` from a bases list, or None."""
+    for base in bases:
+        if str(base.get("id")) == base_id:
+            return base
+    return None
+
+
+def resolve_base_ref(bases: list[dict[str, Any]], ref: str) -> str | None:
+    """Resolve a base reference (exact id, else case-insensitive name) to an id."""
+    needle = str(ref or "").strip()
+    if not needle:
+        return None
+    for base in bases:
+        if str(base.get("id")) == needle:
+            return str(base["id"])
+    lowered = needle.lower()
+    for base in bases:
+        if str(base.get("name", "")).strip().lower() == lowered:
+            return str(base["id"])
+    return None

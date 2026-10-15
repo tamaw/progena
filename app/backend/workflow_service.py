@@ -13,6 +13,7 @@ from typing import Any, Protocol
 from app.backend.document_store import PROGENITOR_STATE_PREFIX, BackendDocumentStore
 from app.progenitor.utils import utcnow_isoformat
 from app.progenitor.workflows import (
+    KNOWLEDGE_INDEX_EVENT_TYPES,
     MAX_WORKFLOW_INVOKE_DEPTH,
     WORKFLOW_ALLOWED_EVENT_TYPES,
     WorkflowDefinition,
@@ -475,11 +476,26 @@ def _document_trigger_filter_matches(trigger: WorkflowTrigger, event: Mapping[st
     )
 
 
+def _knowledge_index_trigger_filter_matches(
+    trigger: WorkflowTrigger, event: Mapping[str, Any]
+) -> bool:
+    """Check a trigger's optional key filter against a knowledge.index.* payload."""
+
+    if not trigger.key:
+        return True
+    payload = event.get("payload")
+    if not isinstance(payload, dict):
+        return False
+    return trigger.key == payload.get("key")
+
+
 def _trigger_matches(event_type: str, trigger: WorkflowTrigger, event: Mapping[str, Any]) -> bool:
     """Pick the right filter matcher for the trigger's event type."""
 
     if event_type == "document.changed":
         return _document_trigger_filter_matches(trigger, event)
+    if event_type in KNOWLEDGE_INDEX_EVENT_TYPES:
+        return _knowledge_index_trigger_filter_matches(trigger, event)
     return _trigger_column_filter_matches(trigger, event)
 
 

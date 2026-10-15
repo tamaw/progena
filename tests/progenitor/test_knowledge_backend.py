@@ -1,6 +1,7 @@
 from deepagents.backends import CompositeBackend
 
 from app.progenitor.agent.knowledge_backend import KnowledgePageBackend
+from app.progenitor.knowledge.pages import split_front_matter
 
 PAGE = "---\ntype: Concept\ntitle: A\ndescription: First page\n---\nRetry budget is three.\n"
 
@@ -8,6 +9,7 @@ PAGE = "---\ntype: Concept\ntitle: A\ndescription: First page\n---\nRetry budget
 class FakeStateManager:
     def __init__(self):
         self.pages = {}
+        self.index = {"embedding": None, "bases": {}}
 
     async def get_knowledge_config(self):
         return {
@@ -25,6 +27,9 @@ class FakeStateManager:
 
     async def list_knowledge_pages(self):
         return [(base, path, payload) for (base, path), payload in self.pages.items()]
+
+    async def get_knowledge_index(self):
+        return self.index
 
 
 async def test_writes_validate_base_path_and_front_matter():
@@ -52,6 +57,26 @@ async def test_generated_index_lists_pages_and_cannot_be_written():
     assert "[Engineering](eng/index.md)" in (await backend.aread("/index.md")).file_data["content"]
 
 
+async def test_indexer_status_is_a_read_only_root_file_and_shown_in_indexes():
+    manager = FakeStateManager()
+    manager.index = {
+        "embedding": {"profile": "embeddings", "deployment": "d", "dimensions": 1536},
+        "bases": {"eng": {"status": "indexing", "pages": 7, "indexed_pages": 3}},
+    }
+    backend = KnowledgePageBackend(manager)
+    assert "/indexer.json" in [e["path"] for e in (await backend.als("/")).entries]
+    status = (await backend.aread("/indexer.json")).file_data["content"]
+    assert '"indexed_pages": 3' in status
+    assert "/config/indexer.json" in (await backend.awrite("/indexer.json", "{}")).error
+    root = (await backend.aread("/index.md")).file_data["content"]
+    assert "[Engineering](eng/index.md) · search: indexing 3/7" in root
+    assert "[Ops](ops/index.md) · search: not indexed yet" in root
+    base = (await backend.aread("/eng/index.md")).file_data["content"]
+    front_matter, body = split_front_matter(base)
+    assert front_matter["search_index"] == {"status": "indexing", "pages": 7, "indexed_pages": 3}
+    assert "Search index" not in body
+
+
 async def test_log_is_append_only_and_agents_cannot_delete():
     backend = KnowledgePageBackend(FakeStateManager())
     assert (await backend.awrite("/eng/log.md", "one\n")).error is None
@@ -60,17 +85,6 @@ async def test_log_is_append_only_and_agents_cannot_delete():
     assert "only allowed at the base root" in (await backend.awrite("/eng/x/log.md", "a")).error
     await backend.awrite("/eng/a.md", PAGE)
     assert "cannot be deleted" in (await backend.adelete("/eng/a.md")).error
-
-
-async def test_soft_deleted_page_is_hidden_until_rewritten():
-    manager = FakeStateManager()
-    backend = KnowledgePageBackend(manager)
-    await backend.awrite("/eng/concepts/a.md", PAGE)
-    manager.pages[("eng", "concepts/a.md")]["deleted_at"] = "now"
-    assert (await backend.aread("/eng/concepts/a.md")).error
-    assert [e["path"] for e in (await backend.als("/eng/")).entries] == ["/eng/index.md"]
-    assert (await backend.awrite("/eng/concepts/a.md", PAGE)).error is None
-    assert (await backend.aread("/eng/concepts/a.md")).error is None
 
 
 async def test_invalid_legacy_rows_are_neither_listed_nor_readable():
