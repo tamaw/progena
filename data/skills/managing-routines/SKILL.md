@@ -157,6 +157,17 @@ the routine and resumes the same thread after the user's response.
 8. Report the routine id and changes; do not imply UI navigation or execution
    unless it actually occurred.
 
+## Running a routine from chat
+
+Read the routine document first. For a graph with `input_schema`, call
+`run_routine` with its id and a `parameters` object containing the required
+named fields. A `task` subagent description is **not** mapped into those fields;
+for example, a prompt using `{question}` needs
+`run_routine(routine_id="...", parameters={"question": "..."})`.
+For graphs without `input_schema`, pass a natural-language `request` to
+`run_routine` if the graph reads `{request}`. The tool returns the output or
+the paused thread id; use `resume_routine` to answer a human step.
+
 ## Execution policy
 
 Select one existing execution policy with `policy_id` (default `default`).
