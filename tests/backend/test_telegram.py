@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from app.backend.config import ChatServerConfig
+from app.backend.document_store import PROGENITOR_STATE_PREFIX, InMemoryDocumentStore
 from app.backend.models import AgentResponse
 from app.backend.telegram_client import (
     TelegramClient,
@@ -825,7 +826,9 @@ class TestTelegramConnectedMessage:
             reasoning_tokens=None,
         )
 
-        await backend_main._send_telegram_connected_message(telegram, progenitor)
+        await backend_main._send_telegram_connected_message(
+            telegram, progenitor, InMemoryDocumentStore()
+        )
 
         telegram.send_message.assert_awaited_once()
         sent_text = telegram.send_message.call_args.args[0]
@@ -835,6 +838,23 @@ class TestTelegramConnectedMessage:
             "thread_id": "tele_555",
             "source": "telegram",
         }
+
+    @pytest.mark.asyncio
+    async def test_existing_session_is_not_greeted_again(self):
+        """A restart must not greet a Telegram chat that already exists."""
+        from app.backend import main as backend_main
+
+        telegram = AsyncMock()
+        telegram.config.chat_id = "555"
+        progenitor = AsyncMock()
+        progenitor.is_running = True
+        store = InMemoryDocumentStore()
+        store.save_document(PROGENITOR_STATE_PREFIX, "session:tele_555", {"title": "Telegram"})
+
+        await backend_main._send_telegram_connected_message(telegram, progenitor, store)
+
+        progenitor.send_message.assert_not_awaited()
+        telegram.send_message.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_no_exception_on_send_failure(self):
@@ -851,7 +871,9 @@ class TestTelegramConnectedMessage:
             reasoning_tokens=None,
         )
 
-        await backend_main._send_telegram_connected_message(telegram, progenitor)
+        await backend_main._send_telegram_connected_message(
+            telegram, progenitor, InMemoryDocumentStore()
+        )
 
     @pytest.mark.asyncio
     async def test_sends_failure_message_if_agent_greeting_fails(self):
@@ -864,7 +886,9 @@ class TestTelegramConnectedMessage:
         progenitor.is_running = True
         progenitor.send_message.side_effect = RuntimeError("SSE down")
 
-        await backend_main._send_telegram_connected_message(telegram, progenitor)
+        await backend_main._send_telegram_connected_message(
+            telegram, progenitor, InMemoryDocumentStore()
+        )
 
         telegram.send_message.assert_awaited_once()
         sent_text = telegram.send_message.call_args.args[0]
