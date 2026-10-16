@@ -1,12 +1,14 @@
-"""notify_user writes alert documents; resolve_workflow_approval respects the approver."""
+"""Alert file writes and workflow approval resolution."""
 
 from unittest.mock import AsyncMock
 
 import pytest
 
+from app.progenitor.agent.state_backend import AlertDirectoryBackend
+from app.progenitor.schemas import load_schema
+from app.progenitor.structured import validate_against_schema
 from app.progenitor.tools.protocol import ToolContext
 from app.progenitor.tools.resolve_workflow_approval import ResolveWorkflowApprovalTool
-from app.progenitor.tools.user_communication import NotifyUserTool
 
 
 def _context(state_manager, **args):
@@ -16,18 +18,27 @@ def _context(state_manager, **args):
 
 
 @pytest.mark.asyncio
-async def test_notify_user_saves_an_alert_document():
+async def test_alert_file_write_stamps_and_validates_an_alert():
     manager = AsyncMock()
-    result = await NotifyUserTool().execute(
-        _context(manager, title="Build", body="Tests failed", level="error")
+    manager.list_alerts.return_value = []
+
+    result = await AlertDirectoryBackend(manager).awrite(
+        "/build-failed.json",
+        '{"title": "Build failed", "message": "Tests failed"}',
     )
 
-    assert result.success
+    assert result.error is None
     [alert] = manager.save_alert.await_args.args
-    assert alert["id"] == result.data["alert_id"]
-    assert (alert["title"], alert["message"], alert["type"]) == ("Build", "Tests failed", "error")
-    assert alert["urgent"] is True and alert["viewed"] is False
-    assert alert["source"] == "notify_user"
+    assert alert["id"] == "build-failed"
+    assert alert["source"] == "progenitor"
+    assert alert["timestamp"] > 0
+    assert (alert["type"], alert["urgent"], alert["requires_response"], alert["viewed"]) == (
+        "info",
+        False,
+        False,
+        False,
+    )
+    assert validate_against_schema(alert, load_schema("alert")) is None
 
 
 def _manager(pending):

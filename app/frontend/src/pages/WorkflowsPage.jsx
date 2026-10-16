@@ -116,6 +116,10 @@ const DEFAULT_NODE_SIZES = {
     data: { width: 340, height: 160 },
     settings: { width: 440, height: 320 },
   },
+  format: {
+    data: { width: 340, height: 160 },
+    settings: { width: 440, height: 280 },
+  },
   condition: {
     data: { width: 300, height: 130 },
     settings: { width: 380, height: 220 },
@@ -123,10 +127,6 @@ const DEFAULT_NODE_SIZES = {
   approval: {
     data: { width: 320, height: 130 },
     settings: { width: 400, height: 240 },
-  },
-  notify: {
-    data: { width: 320, height: 140 },
-    settings: { width: 400, height: 280 },
   },
   document_read: {
     data: { width: 320, height: 140 },
@@ -180,8 +180,8 @@ const NODE_MENU_CATEGORIES = [
     label: 'Logic',
     items: [
       { id: 'condition', kind: 'condition', label: 'Condition', icon: '◇' },
+      { id: 'format', kind: 'format', label: 'Format', icon: 'F' },
       { id: 'approval', kind: 'approval', label: 'Approval', icon: '✓' },
-      { id: 'notify', kind: 'notify', label: 'Notify', icon: '!' },
     ],
   },
 ];
@@ -319,6 +319,13 @@ const DOCK_NODE_DEFAULTS = {
     inputSchema: { type: 'object', properties: {} },
     outputSchema: { type: 'object', required: ['result', 'thread_id'], properties: { result: {}, thread_id: { type: 'string' } } },
   }),
+  format: () => ({
+    title: 'Format',
+    template: '{value}',
+    inputSchema: { type: 'object', required: ['value'], properties: { value: {} } },
+    outputSchema: { type: 'object', required: ['text'], properties: { text: { type: 'string' } } },
+  }),
+
   condition: () => ({
     title: 'Condition',
     expression: 'ready',
@@ -336,14 +343,6 @@ const DOCK_NODE_DEFAULTS = {
       type: 'object',
       properties: { approved: { type: 'boolean' }, rejected: { type: 'boolean' } },
     },
-  }),
-  notify: () => ({
-    title: 'Notify',
-    alertTitle: 'Workflow update',
-    template: 'Done: {message}',
-    level: 'info',
-    inputSchema: deriveNotifyInputSchema('Done: {message}'),
-    outputSchema: { type: 'object', required: ['alert_id'], properties: { alert_id: { type: 'string' } } },
   }),
   cron: defaultCronNode,
   document_read: defaultReadNode,
@@ -435,8 +434,9 @@ function cloneValue(value) {
 // Mirrors the server-side placeholder grammar: {root} or {root.a.b} where each
 // segment matches [A-Za-z_][A-Za-z0-9_]*. JSON literals like {"a": 1} are ignored.
 // thread_id is reserved and never treated as a placeholder root.
-function parsePromptPlaceholders(text) {
-  if (!text || typeof text !== 'string') return { roots: [], placeholders: [] };
+// `excludeThreadId` preserves prompt nodes' implicit thread behavior while
+// letting format nodes expose every placeholder root as a real input port.
+function parsePromptPlaceholders(text, excludeThreadId = true) {
   const roots = [];
   const placeholders = [];
   const seen = new Set();
@@ -445,7 +445,7 @@ function parsePromptPlaceholders(text) {
   while ((match = regex.exec(text)) !== null) {
     const full = match[1];
     const root = full.split('.')[0];
-    if (root === 'thread_id') continue;
+    if (root === 'thread_id' && excludeThreadId) continue;
     placeholders.push(full);
     if (!seen.has(root)) {
       seen.add(root);
@@ -468,10 +468,8 @@ function derivePromptInputSchema(text) {
   };
 }
 
-// Notify messages are plain text: one input per placeholder root, no
-// thread_id. Mirrors _derive_notify_input_schema() in app/progenitor/workflows.py.
-function deriveNotifyInputSchema(text) {
-  const { roots } = parsePromptPlaceholders(text);
+function deriveFormatInputSchema(text) {
+  const { roots } = parsePromptPlaceholders(text, false);
   return {
     type: 'object',
     ...(roots.length ? { required: roots } : {}),
@@ -479,6 +477,9 @@ function deriveNotifyInputSchema(text) {
   };
 }
 
+function formatTemplatePatch(text) {
+  return { template: text, inputSchema: deriveFormatInputSchema(text) };
+}
 function promptTemplatePatch(text) {
   return { template: text, inputSchema: derivePromptInputSchema(text) };
 }
@@ -498,7 +499,6 @@ const NODE_MINIMAP_COLORS = {
   extract: '#a371f7',
   condition: '#d29922',
   approval: '#f85149',
-  notify: '#3fb950',
   document_read: '#79c0ff',
   document_query: '#a5d6ff',
   routine: '#db61a2',
@@ -625,6 +625,21 @@ function buildNodeData(kind, node, callbacks, latestRun) {
       canDelete: true,
     };
   }
+  if (kind === 'format') {
+    return {
+      ...shared,
+      ...runState,
+      kind,
+      title: node.title || 'Format',
+      template: node.template || '',
+      inputSchema: cloneValue(node.input_schema) || null,
+      outputSchema: cloneValue(node.output_schema) || null,
+      onChange: callbacks.onNodeChange,
+      onDelete: callbacks.onDeleteNode,
+      canDelete: true,
+    };
+  }
+
   if (kind === 'data') {
     return {
       ...shared,
@@ -662,22 +677,6 @@ function buildNodeData(kind, node, callbacks, latestRun) {
       approver: node.approver || 'any',
       inputSchema: cloneValue(node.input_schema) || null,
       outputSchema: cloneValue(node.output_schema) || { type: 'string', enum: ['approved', 'rejected'] },
-      onChange: callbacks.onNodeChange,
-      onDelete: callbacks.onDeleteNode,
-      canDelete: true,
-    };
-  }
-  if (kind === 'notify') {
-    return {
-      ...shared,
-      ...runState,
-      kind,
-      title: node.title || 'Notify',
-      alertTitle: node.alert_title || '',
-      template: node.template || '',
-      level: node.level || 'info',
-      inputSchema: cloneValue(node.input_schema) || deriveNotifyInputSchema(node.template || ''),
-      outputSchema: cloneValue(node.output_schema) || null,
       onChange: callbacks.onNodeChange,
       onDelete: callbacks.onDeleteNode,
       canDelete: true,
@@ -803,6 +802,11 @@ function workflowToFlow(definition, callbacks, latestRun) {
           prompt: node.prompt ?? null,
           template: node.template ?? null,
           schema: node.schema ?? null,
+        }
+        : kind === 'format'
+        ? {
+          ...node,
+          template: node.template || '',
         }
       : kind === 'document_read' || kind === 'document_query' || kind === 'document_write'
         ? { ...node, documentType: node.document_type }
@@ -953,6 +957,14 @@ function flowToWorkflow(baseWorkflow, nodes, edges, viewport) {
         input_schema: cloneValue(node.data?.inputSchema) || { type: 'object', properties: {} },
         output_schema: cloneValue(node.data?.outputSchema) || { type: 'object', required: ['message', 'thread_id'], properties: { message: { type: 'string' }, thread_id: { type: 'string' } } },
       };
+    } else if (node.type === 'format') {
+      graphNodes[node.id] = {
+        kind: 'format',
+        title: String(node.data?.title || 'Format'),
+        template: node.data?.template || '',
+        input_schema: cloneValue(node.data?.inputSchema) || { type: 'object', properties: {} },
+        output_schema: cloneValue(node.data?.outputSchema) || { type: 'object', required: ['text'], properties: { text: { type: 'string' } } },
+      };
     } else if (node.type === 'extract') {
       graphNodes[node.id] = {
         kind: 'extract',
@@ -979,16 +991,6 @@ function flowToWorkflow(baseWorkflow, nodes, edges, viewport) {
         approver: node.data?.approver === 'human' ? 'human' : 'any',
         input_schema: cloneValue(node.data?.inputSchema) || { type: 'object', properties: {} },
         output_schema: cloneValue(node.data?.outputSchema) || { type: 'string', enum: ['approved', 'rejected'] },
-      };
-    } else if (node.type === 'notify') {
-      graphNodes[node.id] = {
-        kind: 'notify',
-        title: String(node.data?.title || 'Notify'),
-        alert_title: String(node.data?.alertTitle || ''),
-        template: String(node.data?.template || ''),
-        level: node.data?.level || 'info',
-        input_schema: cloneValue(node.data?.inputSchema) || deriveNotifyInputSchema(node.data?.template || ''),
-        output_schema: cloneValue(node.data?.outputSchema) || null,
       };
     } else if (node.type === 'unpack') {
       graphNodes[node.id] = {
@@ -1854,6 +1856,16 @@ function WorkflowNodeOptionsModal({ node, onChange, onClose }) {
                 )}
               </>
             ) : null}
+            {kind === 'format' ? (
+              <label className="workflow-node-options__field">
+                Template
+                <textarea
+                  value={node.data?.template || ''}
+                  onChange={(event) => onChange(node.id, formatTemplatePatch(event.target.value))}
+                  rows={6}
+                />
+              </label>
+            ) : null}
             {kind === 'agent' ? (
               <label className="workflow-node-options__field">
                 Subagent
@@ -1919,21 +1931,6 @@ function WorkflowNodeOptionsModal({ node, onChange, onClose }) {
                   />
                 </label>
                 <JsonFieldEditor label="Input schema" value={node.data?.inputSchema} onCommit={(inputSchema) => onChange(node.id, { inputSchema })} />
-              </>
-            ) : null}
-            {kind === 'notify' ? (
-              <>
-                <label className="workflow-node-options__field">Alert title<input value={node.data?.alertTitle || ''} onChange={(event) => onChange(node.id, { alertTitle: event.target.value })} /></label>
-                <label className="workflow-node-options__field">Message<textarea value={node.data?.template || ''} onChange={(event) => onChange(node.id, { template: event.target.value, inputSchema: deriveNotifyInputSchema(event.target.value) })} rows={4} /></label>
-                <label className="workflow-node-options__field">
-                  Level
-                  <Select
-                    value={node.data?.level || 'info'}
-                    onChange={(level) => onChange(node.id, { level })}
-                    options={[{ value: 'info', label: 'Info' }, { value: 'warning', label: 'Warning' }, { value: 'error', label: 'Error' }]}
-                    ariaLabel="Level"
-                  />
-                </label>
               </>
             ) : null}
           </section>
@@ -2131,10 +2128,10 @@ const NODE_TYPES = {
   cron: CronNode,
   agent: PromptNode,
   extract: PromptNode,
+  format: PromptNode,
   data: WorkflowDataNode,
   condition: WorkflowControlNode,
   approval: WorkflowControlNode,
-  notify: PromptNode,
   document_read: PromptNode,
   document_query: PromptNode,
   document_write: PromptNode,
@@ -2323,7 +2320,6 @@ const DOCK_ITEM_META = {
   routine: { icon: 'R', label: 'Routine' },
   condition: { icon: '◇', label: 'Condition' },
   approval: { icon: '✓', label: 'Approval' },
-  notify: { icon: '!', label: 'Notify' },
 };
 
 function WorkflowSideDock({ onSelect }) {
@@ -3408,7 +3404,7 @@ function WorkflowsInner() {
 
 // This helper is exported for the focused workflow graph unit test.
 // eslint-disable-next-line react-refresh/only-export-components
-export { flowToWorkflow, workflowToFlow, NODE_MENU_CATEGORIES, schemaProperties, canvasMenuAnchor, visibleNodePortProperties, deriveUnpackSchemas, recomputeUnpackSchemas, computeLostEdgesForUnpackChange, pruneLostUnpackEdges, isUnpackableSchema, parsePromptPlaceholders, derivePromptInputSchema, promptTemplatePatch, promptDocumentPatch, createPaletteNode, nodeInputPorts, nodeOutputPorts, schemasAreCompatible };
+export { flowToWorkflow, workflowToFlow, NODE_MENU_CATEGORIES, schemaProperties, canvasMenuAnchor, visibleNodePortProperties, deriveUnpackSchemas, recomputeUnpackSchemas, computeLostEdgesForUnpackChange, pruneLostUnpackEdges, isUnpackableSchema, parsePromptPlaceholders, derivePromptInputSchema, promptTemplatePatch, promptDocumentPatch, createPaletteNode, nodeInputPorts, nodeOutputPorts, schemasAreCompatible, deriveFormatInputSchema, formatTemplatePatch };
 export default function WorkflowsPage() {
   return (
     <ReactFlowProvider>

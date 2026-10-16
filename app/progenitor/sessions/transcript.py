@@ -44,7 +44,7 @@ _QUOTE_CHARS = 80
 _DIRECT_FAILED_PREFIX = "Direct agent call failed:"
 _A2A_FAILED_STATUSES = {"failed", "canceled", "cancelled", "rejected"}
 _DELEGATION_TOOLS = {"task", "start_async_task", "call_agent"}
-_NOTICE_TOOLS = {"notify_user", "say_to_user", "ask_user"}
+_NOTICE_TOOLS = {"say_to_user", "ask_user"}
 
 
 @dataclass(frozen=True)
@@ -398,9 +398,6 @@ def _tool_action(name: str, args: dict[str, Any]) -> tuple[str, str]:
 
 
 def _notice_text(name: str, args: dict[str, Any]) -> str:
-    if name == "notify_user":
-        level = args.get("level") or "info"
-        return f"[{level}] {args.get('title', '')}: {args.get('body', '')}"
     if name == "ask_user":
         options = args.get("options") or []
         suffix = f" [{' / '.join(map(str, options))}]" if options else ""

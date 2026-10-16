@@ -1,4 +1,5 @@
 import asyncio
+from datetime import UTC, datetime
 
 import pytest
 
@@ -11,6 +12,7 @@ from app.backend.document_events import (
 from app.backend.document_store import (
     EVENT_LOG_START,
     PROGENITOR_STATE_PREFIX,
+    DocumentEvent,
     InMemoryDocumentStore,
     document_write_origin,
     set_default_document_store,
@@ -29,6 +31,7 @@ from app.progenitor.workflows import (
     WorkflowNodeDocumentCreate,
     WorkflowNodeDocumentDelete,
     WorkflowNodeDocumentQuery,
+    WorkflowNodeDocumentWrite,
     WorkflowNodeEvent,
     default_workflow_definition,
     derive_workflow_port_schemas,
@@ -139,6 +142,50 @@ async def test_dispatcher_starts_at_head_and_catches_up_on_events_written_while_
     await second.stop()
 
     assert seen == [("created", "kanban_card:live"), ("deleted", "kanban_card:live")]
+
+
+@pytest.mark.asyncio
+async def test_new_alert_document_is_relayed_to_the_user(monkeypatch):
+    relayed = []
+
+    async def relay(alert):
+        relayed.append(alert)
+
+    monkeypatch.setattr(ui_routes, "broadcast_alerts_state", lambda: None)
+    monkeypatch.setattr(ui_routes, "broadcast_alert", lambda _alert: None)
+    ui_routes.set_alert_relay(relay)
+    try:
+        await ui_routes._publish_alert_document(
+            TypedDocumentEvent(
+                event=DocumentEvent(
+                    seq=1,
+                    txid=1,
+                    prefix=PROGENITOR_STATE_PREFIX,
+                    key="alert:agent-alert",
+                    op="created",
+                    before=None,
+                    after={
+                        "id": "agent-alert",
+                        "type": "info",
+                        "title": "Build complete",
+                        "message": "Tests passed",
+                        "timestamp": 1.0,
+                        "urgent": False,
+                        "requires_response": False,
+                        "viewed": False,
+                    },
+                    origin=None,
+                    created_at=datetime.now(UTC),
+                ),
+                document_type=None,
+                output=None,
+            )
+        )
+        await _wait_for(lambda: relayed)
+    finally:
+        ui_routes.set_alert_relay(None)
+
+    assert relayed[0].id == "agent-alert"
 
 
 @pytest.mark.asyncio
@@ -664,6 +711,88 @@ def test_document_create_stamps_creation_times_by_field_type(store, monkeypatch)
 
     assert before <= created["timestamp"] <= time.time()
     assert created["created_at"].startswith(time.strftime("%Y-", time.gmtime()))
+
+
+def test_document_create_alert_with_title_and_message_applies_defaults_and_timestamp(store):
+    import time
+
+    before = time.time()
+    created = _execute_document_create_node(
+        store,
+        WorkflowNodeDocumentCreate(document_type="alert"),
+        {"title": "Build complete", "message": "Everything passed."},
+        "run-alert",
+    )["document"]
+
+    assert created["type"] == "info"
+    assert created["urgent"] is False
+    assert created["requires_response"] is False
+    assert created["viewed"] is False
+    assert before <= created["timestamp"] <= time.time()
+
+
+def test_document_create_applies_and_copies_schema_defaults(store, monkeypatch):
+    from app.progenitor.document_types import DocumentType
+
+    schema = {
+        "type": "object",
+        "required": ["id", "title", "status", "metadata"],
+        "properties": {
+            "id": {"type": "string", "readOnly": True},
+            "title": {"type": "string"},
+            "status": {"type": "string", "default": "draft"},
+            "metadata": {"type": "object", "default": {"labels": []}},
+        },
+    }
+    monkeypatch.setattr(DocumentType, "load_schema", lambda self: schema)
+    create = WorkflowNodeDocumentCreate(document_type="kanban_card")
+
+    defaulted = _execute_document_create_node(store, create, {"title": "Default"}, "run")
+    null_defaulted = _execute_document_create_node(
+        store, create, {"title": "Null", "status": None}, "run"
+    )
+    overridden = _execute_document_create_node(
+        store,
+        create,
+        {"title": "Override", "status": "published", "metadata": {"labels": ["x"]}},
+        "run",
+    )
+    defaulted["document"]["metadata"]["labels"].append("changed")
+
+    assert defaulted["document"]["status"] == "draft"
+    assert null_defaulted["document"]["status"] == "draft"
+    assert overridden["document"]["status"] == "published"
+    assert overridden["document"]["metadata"] == {"labels": ["x"]}
+    assert null_defaulted["document"]["metadata"] == {"labels": []}
+    assert schema["properties"]["metadata"]["default"] == {"labels": []}
+
+
+def test_document_write_never_applies_schema_defaults(store, monkeypatch):
+    from app.progenitor.document_types import DocumentType
+
+    schema = {
+        "type": "object",
+        "properties": {
+            "id": {"type": "string", "readOnly": True},
+            "status": {"type": "string", "default": "draft"},
+        },
+    }
+    monkeypatch.setattr(DocumentType, "load_schema", lambda self: schema)
+    store.save_document(PROGENITOR_STATE_PREFIX, "kanban_card:existing", {"id": "existing"})
+
+    from app.backend.workflow_service import _execute_document_write_node
+
+    result = _execute_document_write_node(
+        store,
+        WorkflowNodeDocumentWrite(document_type="kanban_card"),
+        {"id": "existing", "status": None},
+        "run",
+    )
+
+    assert result == {"found": True}
+    assert store.get_document(PROGENITOR_STATE_PREFIX, "kanban_card:existing").payload == {
+        "id": "existing"
+    }
 
 
 def test_document_delete_returns_before_and_tags_origin(store):

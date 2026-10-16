@@ -1,4 +1,4 @@
-"""Alert documents, workflow notify nodes, pause alerts and who may approve."""
+"""Alert documents, pause alerts, and approval behavior."""
 
 import asyncio
 
@@ -77,42 +77,6 @@ def test_alerts_are_durable_documents_and_prune_oldest(store, monkeypatch):
     assert alert_store.mark_alerts_viewed([first.id]) == 0
     created = [e.key for e in store.read_document_events(EVENT_LOG_START, 50) if e.op == "created"]
     assert f"alert:{third.id}" in created
-
-
-@pytest.mark.asyncio
-async def test_notify_node_sends_its_rendered_message(store):
-    definition = save_workflow_definition(
-        store,
-        _workflow(
-            {
-                "tell": {
-                    "kind": "notify",
-                    "title": "Tell",
-                    "alert_title": "Card created",
-                    "template": "New card {key}",
-                    "level": "warning",
-                }
-            },
-            [("tell", "key", "key")],
-        ),
-    )
-    assert set(definition.graph.nodes["tell"].input_schema["properties"]) == {"key"}
-
-    run = await _executor(store).trigger_workflow(
-        definition.id, build_manual_trigger_event(definition, payload={"key": "kanban_card:a"})
-    )
-    done = await _wait_for(
-        lambda: (r := get_workflow_run(store, run.run_id)).status == "completed" and r
-    )
-
-    [alert] = alert_store.list_alerts()
-    assert (alert.title, alert.message, alert.type) == (
-        "Card created",
-        "New card kanban_card:a",
-        "warning",
-    )
-    assert alert.context["run_id"] == run.run_id
-    assert done.node_outputs["tell"] == {"alert_id": alert.id}
 
 
 def _approval_workflow(store, *, notify_on_pause, approver="any"):
