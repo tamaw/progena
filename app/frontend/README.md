@@ -57,6 +57,10 @@ Application data uses a canonical lifecycle transport and a request-scoped chat-
 
 The canonical UI stream has bounded replay via `Last-Event-ID`; `connection.ready` follows available replay. The dedicated response stream has its own bounded content replay. On `chat.response.resync_required`, stop appending live content and reconcile from persisted chat data after the canonical terminal lifecycle event. There is no `/api/ui/events` or `/api/ui/status` EventSource and no HTTP-body fallback.
 
+### Structured document content
+
+`src/components/common/StructuredDocumentBody.jsx` renders Markdown with selectable heading sections (`##`–`######`) from `content` using `parseStructuredContent` in `src/lib/structuredContent.js`. It owns section selection, the inline AI-instruction popover, and optional question controls; both question text and answer buttons share one section bracket. Supply `onAskAgent(instruction, { draft, inline, clientId })` for section instructions and `onAnswerQuestion({ question, choice, content })` for interactive questions; unavailable actions are hidden. The shared component refers to a document, not an Inbox file: its caller owns agent prompts and event-driven document refreshes. Inbox uses `src/pages/StructuredInboxBody.jsx`; Tasks does not use this component yet. The viewer never merges agent writes or attributes an inbox snapshot to a particular prompt.
+
 ## Project Structure
 
 ```
