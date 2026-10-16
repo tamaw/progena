@@ -107,18 +107,17 @@ function ToolIcon() {
 
 function ToolToggle({ checked, disabled, onChange }) {
   return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={checked}
-      aria-label={checked ? 'Disable tool' : 'Enable tool'}
-      title={checked ? 'Disable tool' : 'Enable tool'}
-      className={`tools-toggle ${checked ? 'is-on' : 'is-off'}`}
-      disabled={disabled}
-      onClick={onChange}
-    >
-      <span />
-    </button>
+    <label className={`set-switch ${checked ? 'is-on' : ''}`}>
+      <input
+        type="checkbox"
+        checked={checked}
+        disabled={disabled}
+        aria-label={checked ? 'Disable tool' : 'Enable tool'}
+        title={checked ? 'Disable tool' : 'Enable tool'}
+        onChange={onChange}
+      />
+      <span className="set-switch__knob" aria-hidden="true" />
+    </label>
   );
 }
 

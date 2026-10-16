@@ -19,6 +19,8 @@ import DetailHeader, {
 } from '../components/layout/DetailHeader';
 import PageShell from '../components/layout/PageShell';
 import DetailPane from '../components/layout/DetailPane';
+import Select from '../components/common/Select';
+
 import { useConfig } from '../context/ConfigContext';
 import { selectRealtimeConnected } from '../store/realtimeSlice';
 import {
@@ -133,11 +135,12 @@ function RepoCreateForm({ onCancel, onCreate, submitting, error }) {
       </label>
       <label className="repo-create-form__field">
         <span>Access</span>
-        <select value={access} onChange={(e) => setAccess(e.target.value)}>
-          {ACCESS_OPTIONS.map((option) => (
-            <option key={option.value} value={option.value}>{option.label}</option>
-          ))}
-        </select>
+        <Select
+          value={access}
+          onChange={setAccess}
+          options={ACCESS_OPTIONS}
+          ariaLabel="Repository access"
+        />
       </label>
       {error ? <div className="repo-create-form__error">{error}</div> : null}
       <div className="repo-create-form__actions">

@@ -11,6 +11,7 @@ import DetailPane from '../components/layout/DetailPane';
 import DetailHeader, {
   DeleteActionIcon, DetailHeaderActions, DetailHeaderAction,
 } from '../components/layout/DetailHeader';
+import Select from '../components/common/Select';
 import PopupModal from '../components/common/PopupModal';
 import { useConfig } from '../context/ConfigContext';
 import {
@@ -23,6 +24,12 @@ import '../styles/profiles.css';
 const FILTERS = ['All', 'Inherited', 'Customized'];
 const EDITABLE_FIELDS = ['deployment', 'reasoning_enabled', 'reasoning_effort', 'reasoning_summary'];
 const providerLabel = (provider) => provider === 'azure_openai' ? 'Azure OpenAI' : provider;
+const REASONING_ENABLED_OPTIONS = [
+  { value: '', label: 'Inherit' },
+  { value: 'true', label: 'Enabled' },
+  { value: 'false', label: 'Disabled' },
+];
+
 const isCustomized = (profile) => EDITABLE_FIELDS.slice(1).some((field) => profile[field] != null);
 
 function toDraft(profile) {
@@ -170,9 +177,13 @@ function ProfileDetails({ profile, profiles, catalogue, url, connected }) {
               </label>
               <label className="agents-draft-field profiles-field">
                 <span className="agents-draft-field__label">Reasoning enabled</span>
-                <select value={draft.reasoning_enabled} onChange={(event) => updateDraft('reasoning_enabled', event.target.value)} disabled={saving}>
-                  <option value="">Inherit</option><option value="true">Enabled</option><option value="false">Disabled</option>
-                </select>
+                <Select
+                  value={draft.reasoning_enabled}
+                  onChange={(value) => updateDraft('reasoning_enabled', value)}
+                  options={REASONING_ENABLED_OPTIONS}
+                  ariaLabel="Reasoning enabled"
+                  disabled={saving}
+                />
               </label>
               {['reasoning_effort', 'reasoning_summary'].map((field) => (
                 <label className="agents-draft-field profiles-field" key={field}>

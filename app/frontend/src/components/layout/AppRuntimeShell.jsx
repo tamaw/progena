@@ -36,6 +36,7 @@ import { useNotifications } from '../../context/NotificationContext';
 import { playNotificationSound } from '../../lib/notificationSound';
 import { CHAT_STATUS } from '../../lib/chatStatus';
 import { useTheme } from '../../hooks/useTheme';
+import { localDesignLibraryEnabled } from '../../lib/localDesignLibrary';
 import { useChatApi } from '../../hooks/api/useChatApi';
 import { renderMarkdownToHtml } from '../../lib/markdown';
 import { createUuid } from '../../lib/uuid';
@@ -176,6 +177,7 @@ const breadcrumbRoutes = [
   ...navItems,
   { to: '/sessions', label: 'Sessions' },
   { to: '/logs', label: 'Logs' },
+  ...(localDesignLibraryEnabled ? [{ to: '/design', label: 'Design library' }] : []),
 ];
 
 // Panels PanelHost actually grants isPinned/onTogglePin to (Settings/Account

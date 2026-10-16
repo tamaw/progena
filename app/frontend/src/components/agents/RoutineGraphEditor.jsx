@@ -1860,7 +1860,8 @@ function ParameterControl({ name, def, value, onChange }) {
         options={def.enum.map((option) => ({ value: String(option), label: String(option) }))}
         placeholder="Select…"
         ariaLabel={name}
-        className="agents-graph-parameters__input"
+        portal
+        className="agents-graph-parameters__select nodrag nowheel"
       />
     );
   }
@@ -1869,16 +1870,15 @@ function ParameterControl({ name, def, value, onChange }) {
   }
   if (def?.type === 'boolean') {
     return (
-      <button
-        type="button"
-        role="switch"
-        aria-checked={value === true}
-        aria-label={name}
-        className={`tools-toggle ${value === true ? 'is-on' : 'is-off'}`}
-        onClick={() => onChange(value !== true)}
-      >
-        <span />
-      </button>
+      <label className={`set-switch ${value === true ? 'is-on' : ''}`}>
+        <input
+          type="checkbox"
+          aria-label={name}
+          checked={value === true}
+          onChange={(event) => onChange(event.target.checked)}
+        />
+        <span className="set-switch__knob" aria-hidden="true" />
+      </label>
     );
   }
   if (def?.type === 'number' || def?.type === 'integer') {

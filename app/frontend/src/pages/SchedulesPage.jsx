@@ -15,10 +15,13 @@ import {
 } from '../components/layout/PaneList';
 import PageShell from '../components/layout/PageShell';
 import DetailPane from '../components/layout/DetailPane';
+import { MetricCard } from '../components/common/DetailCards';
 import DetailHeader, {
+  ApproveActionIcon,
   DeleteActionIcon,
   DetailHeaderAction,
   DetailHeaderActions,
+  EditActionIcon,
   PauseActionIcon,
   PlayActionIcon,
 } from '../components/layout/DetailHeader';
@@ -260,16 +263,6 @@ function ScheduleStatusPill({ status }) {
       <span className="adot" />
       {status}
     </span>
-  );
-}
-
-function MetricCard({ label, value, detail }) {
-  return (
-    <div className="agents-metric-card">
-      <span>{label}</span>
-      <strong>{value}</strong>
-      <small>{detail}</small>
-    </div>
   );
 }
 
@@ -706,15 +699,7 @@ function SchedulesPage() {
                     onMouseDown={isEditingTitle ? (event) => event.preventDefault() : undefined}
                     onClick={isEditingTitle ? saveTitleEdit : startTitleEdit}
                   >
-                    {isEditingTitle ? (
-                      <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
-                        <path d="M3.25 8.25 6.5 11.5l6.25-6.75" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-                      </svg>
-                    ) : (
-                      <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
-                        <path d="M2 14h3l8-8-3-3-8 8z" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" />
-                      </svg>
-                    )}
+                    {isEditingTitle ? <ApproveActionIcon /> : <EditActionIcon />}
                   </button>
                 </>
               )}
@@ -786,7 +771,7 @@ function SchedulesPage() {
                       <>
                         <button
                           type="button"
-                          className="repo-btn repo-btn--ghost"
+                          className="task-btn task-btn--secondary"
                           onClick={cancelIntentEdit}
                           disabled={mutating}
                         >
@@ -794,7 +779,7 @@ function SchedulesPage() {
                         </button>
                         <button
                           type="button"
-                          className="repo-btn"
+                          className="task-btn task-btn--primary"
                           onClick={saveIntentEdit}
                           disabled={mutating}
                         >
@@ -804,7 +789,7 @@ function SchedulesPage() {
                     ) : (
                       <button
                         type="button"
-                        className="repo-btn repo-btn--ghost"
+                        className="task-btn task-btn--secondary"
                         onClick={startIntentEdit}
                       >
                         Edit
@@ -844,7 +829,7 @@ function SchedulesPage() {
                       <>
                         <button
                           type="button"
-                          className="repo-btn repo-btn--ghost"
+                          className="task-btn task-btn--secondary"
                           onClick={cancelTriggerEdit}
                           disabled={mutating}
                         >
@@ -852,7 +837,7 @@ function SchedulesPage() {
                         </button>
                         <button
                           type="button"
-                          className="repo-btn"
+                          className="task-btn task-btn--primary"
                           onClick={saveTriggerEdit}
                           disabled={mutating}
                         >
@@ -862,7 +847,7 @@ function SchedulesPage() {
                     ) : (
                       <button
                         type="button"
-                        className="repo-btn repo-btn--ghost"
+                        className="task-btn task-btn--secondary"
                         onClick={startTriggerEdit}
                       >
                         Edit
