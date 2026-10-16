@@ -1,18 +1,18 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Workflow Definition",
-  "description": "A graph-native workflow contains document-event and literal-value sources plus typed value connections. Every connection supplies data and establishes execution dependency. Event, document_read, and document_query port schemas are derived from the node's document type (document_type:<id> rows) on save.",
+  "description": "A graph-native workflow contains document-event and literal-value sources plus typed value connections. Every connection supplies data and establishes execution dependency. Event and direct document-node port schemas are derived from the node's document type (document_type:<id> rows) on save.",
   "type": "object",
   "additionalProperties": false,
   "required": ["id", "title", "description", "enabled", "paused", "version", "graph", "ui", "updated_at", "created_at"],
   "properties": {
-    "id": {"type": "string", "minLength": 1},
+    "id": {"type": "string", "minLength": 1, "readOnly": true},
     "title": {"type": "string", "minLength": 1},
     "description": {"type": "string"},
     "enabled": {"type": "boolean"},
     "paused": {"type": "boolean"},
     "notify_on_pause": {"description": "Raise an alert (relayed to the user) whenever a run pauses for an approval node or a routine's human step.", "type": "boolean"},
-    "version": {"const": 3},
+    "version": {"const": 3, "readOnly": true},
     "graph": {
       "type": "object", "additionalProperties": false, "required": ["nodes", "edges"],
       "properties": {
@@ -45,12 +45,24 @@
           {"type": "object", "additionalProperties": false, "required": ["kind", "title", "document_type"], "properties": {
             "kind": {"const": "document_query"}, "title": {"type": "string", "minLength": 1},
             "document_type": {"type": "string", "minLength": 1},
-            "filter_fields": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
+            "filters": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["field", "op"], "properties": {"field": {"type": "string", "minLength": 1}, "op": {"enum": ["eq", "ne", "lt", "lte", "gt", "gte", "in", "contains", "exists"]}}}},
+            "order_by": {"type": ["string", "null"]},
+            "order": {"enum": ["asc", "desc"]},
             "limit": {"type": "integer", "minimum": 1, "maximum": 200},
             "input_schema": {"type": "object"}, "output_schema": {"type": "object"}
           }},
           {"type": "object", "additionalProperties": false, "required": ["kind", "title", "document_type"], "properties": {
             "kind": {"const": "document_write"}, "title": {"type": "string", "minLength": 1},
+            "document_type": {"type": "string", "minLength": 1},
+            "input_schema": {"type": "object"}, "output_schema": {"type": "object"}
+          }},
+          {"type": "object", "additionalProperties": false, "required": ["kind", "title", "document_type"], "properties": {
+            "kind": {"const": "document_create"}, "title": {"type": "string", "minLength": 1},
+            "document_type": {"type": "string", "minLength": 1},
+            "input_schema": {"type": "object"}, "output_schema": {"type": "object"}
+          }},
+          {"type": "object", "additionalProperties": false, "required": ["kind", "title", "document_type"], "properties": {
+            "kind": {"const": "document_delete"}, "title": {"type": "string", "minLength": 1},
             "document_type": {"type": "string", "minLength": 1},
             "input_schema": {"type": "object"}, "output_schema": {"type": "object"}
           }},
@@ -90,7 +102,7 @@
         }}}
       }
     },
-    "ui": {"type": "object"}, "updated_at": {"type": "string", "minLength": 1}, "created_at": {"type": "string", "minLength": 1}
+    "ui": {"type": "object"}, "updated_at": {"type": "string", "minLength": 1, "readOnly": true}, "created_at": {"type": "string", "minLength": 1, "readOnly": true}
   },
   "$defs": {"edgeEndpoint": {"type": "object", "additionalProperties": false, "required": ["node", "port"], "properties": {"node": {"type": "string", "minLength": 1}, "port": {"type": "string", "minLength": 1}}}}
 }

@@ -149,9 +149,12 @@ class SessionDirectoryBackend(_AsyncOnlyFileBackendMixin):
             if key == "display_title":
                 continue
             if session.get(key) != value:
-                if key not in _SESSION_TYPE.writable:
+                if key not in _SESSION_TYPE.writable_fields:
                     return WriteResult(
-                        error=f"Field '{key}' is not editable. Allowed fields: {', '.join(sorted(_SESSION_TYPE.writable))}"
+                        error=(
+                            f"Field '{key}' is not editable. Allowed fields: "
+                            f"{', '.join(sorted(_SESSION_TYPE.writable_fields))}"
+                        )
                     )
                 changed[key] = value
 

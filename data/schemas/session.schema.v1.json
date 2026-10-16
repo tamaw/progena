@@ -7,14 +7,17 @@
   "properties": {
     "id": {
       "type": "string",
+      "readOnly": true,
       "description": "Same as thread_id."
     },
     "thread_id": {
       "type": "string",
+      "readOnly": true,
       "description": "The conversation (LangGraph thread) id."
     },
     "source": {
       "type": "string",
+      "readOnly": true,
       "enum": ["ui", "telegram", "api"],
       "description": "Where the conversation started: the app, Telegram, or a direct Responses API caller."
     },
@@ -24,6 +27,7 @@
     },
     "first_message": {
       "type": "string",
+      "readOnly": true,
       "description": "Text of the user's opening message without the machine-only attachment note, capped at 4000 characters. \"* sends an attachment\" when it was only attachments, \"* sends an image\" when it was only images."
     },
     "pinned": {
@@ -35,15 +39,18 @@
     "created_at": {
       "type": "string",
       "format": "date-time",
+      "readOnly": true,
       "description": "When the first message was checkpointed."
     },
     "last_activity": {
       "type": "string",
       "format": "date-time",
+      "readOnly": true,
       "description": "When the latest turn finished (created_at until then)."
     },
     "content": {
       "type": "string",
+      "readOnly": true,
       "description": "IRC-style transcript, rendered by the runtime after each turn. Empty until the first turn finishes."
     }
   },
