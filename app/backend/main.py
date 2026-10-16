@@ -31,6 +31,7 @@ from fastapi.responses import JSONResponse
 from fastapi.sse import EventSourceResponse, format_sse_event
 from starlette.middleware.gzip import GZipMiddleware
 
+from app.progenitor.document_kinds import SESSION_KEY_PREFIX
 from app.progenitor.sessions.titles import ATTACHMENT_CONTEXT_MARKER
 
 from .agent_store import configure_agent_store
@@ -43,7 +44,11 @@ from .chat_sessions import UiRequestAcknowledgement, acknowledgement_response
 from .client import ProgenitorClient
 from .config import ChatServerConfig
 from .document_events import seed_document_types
-from .document_store import configure_default_document_store
+from .document_store import (
+    PROGENITOR_STATE_PREFIX,
+    BackendDocumentStore,
+    configure_default_document_store,
+)
 from .instruction_routes import router as instruction_router
 from .knowledge_routes import router as knowledge_router
 from .marketplace_routes import router as marketplaces_router
@@ -550,12 +555,24 @@ def _telegram_conversation_id(chat_id: Any, message_thread_id: Any = None) -> st
 async def _send_telegram_connected_message(
     telegram: TelegramClient,
     progenitor: ProgenitorClient | SSEProgenitorClient,
+    document_store: BackendDocumentStore,
 ) -> None:
-    """Trigger an agent-generated greeting after Telegram is initialized.
+    """Trigger an agent-generated greeting the first time Telegram connects.
 
     This routes through the same backend -> Progenitor SSE request/response
-    path as a normal user message, but is auto-invoked on connection.
+    path as a normal user message, but is auto-invoked on connection. A chat
+    that already has a session document has been greeted, so restarts stay quiet.
     """
+    conversation_id = _telegram_conversation_id(telegram.config.chat_id)
+    session = await asyncio.to_thread(
+        document_store.get_document,
+        PROGENITOR_STATE_PREFIX,
+        f"{SESSION_KEY_PREFIX}{conversation_id}",
+    )
+    if session is not None:
+        logger.info("Telegram chat %s already has a session; skipping greeting", conversation_id)
+        return
+
     prompt = (
         "Hi! I just connected to you on Telegram. "
         "Please reply with a short, friendly greeting and invite me to send a message."
@@ -566,7 +583,6 @@ async def _send_telegram_connected_message(
         # Ensure the client is started/connected (we normally lazy-start).
         if not progenitor.is_running:
             await progenitor.start()
-        conversation_id = _telegram_conversation_id(telegram.config.chat_id)
         response_text = (
             await progenitor.send_message(
                 prompt,
@@ -964,8 +980,10 @@ async def lifespan(app: FastAPI):
         await telegram_client.start_polling()
         logger.info("Telegram polling started with message handler")
 
-        # Send a one-time agent-generated greeting now that Telegram + SSE are wired.
-        _spawn_background_task(_send_telegram_connected_message(telegram_client, client))
+        # Greet once: only a Telegram chat without a session gets the greeting.
+        _spawn_background_task(
+            _send_telegram_connected_message(telegram_client, client, document_store)
+        )
 
     # Don't auto-start Progenitor - let it start on first request
     # This allows the server to start even if Progenitor has issues

@@ -115,32 +115,44 @@ jobs:
           clean: false
           fetch-depth: 0
 
+      # Compare against the commit last deployed, not just this push: a push whose
+      # tests failed (or that only touched CI files) must not leave production
+      # behind for good. The commit is recorded after the liveness checks pass.
       - name: Detect deploy-affecting changes
         id: changes
         if: ${{ github.event_name != 'workflow_dispatch' }}
-        uses: dorny/paths-filter@v3
-        with:
-          filters: |
-            progenitor_image:
-              - 'app/progenitor/**'
-              - 'docker/progenitor/**'
-              - 'pyproject.toml'
-            backend_image:
-              - 'app/backend/**'
-              - 'docker/backend/**'
-              - 'pyproject.toml'
-            frontend_image:
-              - 'app/frontend/**'
-              - 'docker/frontend/**'
-            redeploy:
-              - 'app/backend/**'
-              - 'app/progenitor/**'
-              - 'app/frontend/**'
-              - 'docker/**'
-              - 'pyproject.toml'
-              - 'data/instructions/**'
-              - 'data/skills/**'
-              - '.github/workflows/ci.yml'
+        shell: bash
+        run: |
+          set -euo pipefail
+          DEPLOYED="$(docker run --rm -v progenitor-deploy-state:/state --entrypoint sh \
+            ghcr.io/tamaw/progenitor:latest -c 'cat /state/deployed_commit 2>/dev/null' || true)"
+          DEPLOYED="$(tr -d '[:space:]' <<< "$DEPLOYED")"
+          if [ -z "$DEPLOYED" ] || ! git merge-base --is-ancestor "$DEPLOYED" HEAD 2>/dev/null; then
+            echo "No usable deployed commit (${DEPLOYED:-none}); rebuilding and redeploying everything."
+            for output in progenitor_image backend_image frontend_image redeploy; do
+              echo "${output}=true" >> "$GITHUB_OUTPUT"
+            done
+            exit 0
+          fi
+          echo "Deployed commit: $DEPLOYED"
+          changed() { [ -n "$(git diff --name-only "$DEPLOYED" HEAD -- "$@")" ] && echo true || echo false; }
+          # Both Python images copy all of app/ (the backend imports app.progenitor).
+          PYTHON_COMMON=(app ':!app/frontend' pyproject.toml README.md scripts data/schemas .dockerignore)
+          PROGENITOR="$(changed "${PYTHON_COMMON[@]}" docker/progenitor data/instructions data/skills data/agents data/shims)"
+          BACKEND="$(changed "${PYTHON_COMMON[@]}" docker/backend data/agents/objects)"
+          FRONTEND="$(changed app/frontend docker/frontend)"
+          # The stack also restarts for compose/deploy-step changes (schemas are bind-mounted).
+          STACK="$(changed docker/docker-compose.progenitor.yml .github/workflows/ci.yml data/schemas)"
+          REDEPLOY=false
+          for flag in "$PROGENITOR" "$BACKEND" "$FRONTEND" "$STACK"; do
+            if [ "$flag" = true ]; then REDEPLOY=true; fi
+          done
+          {
+            echo "progenitor_image=$PROGENITOR"
+            echo "backend_image=$BACKEND"
+            echo "frontend_image=$FRONTEND"
+            echo "redeploy=$REDEPLOY"
+          } | tee -a "$GITHUB_OUTPUT"
 
       - uses: docker/setup-buildx-action@v3
 
@@ -268,3 +280,9 @@ jobs:
           wait_healthy progenitor-backend 90
           wait_healthy progenitor 120
           wait_healthy progenitor-frontend 60
+
+      - name: Record deployed commit
+        if: ${{ github.event_name == 'workflow_dispatch' || steps.changes.outputs.redeploy == 'true' }}
+        run: |
+          docker run --rm --user 0 -v progenitor-deploy-state:/state --entrypoint sh \
+            ghcr.io/tamaw/progenitor:latest -c 'echo "$1" > /state/deployed_commit' sh "${{ github.sha }}"
