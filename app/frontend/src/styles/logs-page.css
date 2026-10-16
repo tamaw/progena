@@ -248,7 +248,7 @@
 
 .logs-source-select .app-listbox__trigger {
     min-width: 0;
-    font: 600 12px/1.2 var(--font-mono);
+    font: 600 12px/1.2 var(--font-family-mono);
 }
 
 .logs-toolbar-stats {

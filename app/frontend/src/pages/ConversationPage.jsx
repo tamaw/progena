@@ -33,7 +33,7 @@ import { Message } from '../components/chat/Message';
 import { RegenerateDisabledContext } from '../components/chat/RegenerateDisabledContext';
 import QuickActions from '../components/chat/QuickActions';
 import StreamFilterMenu from '../components/chat/StreamFilterMenu';
-import DetailHeader, { DetailHeaderAction, DetailHeaderActions } from '../components/layout/DetailHeader';
+import DetailHeader, { ApproveActionIcon, DetailHeaderAction, DetailHeaderActions, EditActionIcon } from '../components/layout/DetailHeader';
 import {
   PaneCollapseSeam,
   PaneEmptyState,
@@ -386,15 +386,7 @@ const LiveConversationHeader = memo(function LiveConversationHeader({
               onMouseDown={isEditingTitle ? (event) => event.preventDefault() : undefined}
               onClick={isEditingTitle ? saveTitleEdit : startTitleEdit}
             >
-              {isEditingTitle ? (
-                <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
-                  <path d="M3.25 8.25 6.5 11.5l6.25-6.75" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-                </svg>
-              ) : (
-                <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
-                  <path d="M2 14h3l8-8-3-3-8 8z" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" />
-                </svg>
-              )}
+              {isEditingTitle ? <ApproveActionIcon /> : <EditActionIcon />}
             </button>
           </>
         )}

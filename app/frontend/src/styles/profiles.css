@@ -117,12 +117,16 @@
   min-width: 0;
 }
 
+.profiles-field .app-listbox,
+.profiles-field .app-listbox__trigger {
+  width: 100%;
+}
+
 .profiles-field__required {
   color: var(--color-error);
 }
 
-.profiles-field input:disabled,
-.profiles-field select:disabled {
+.profiles-field input:disabled {
   opacity: 0.6;
   cursor: not-allowed;
 }

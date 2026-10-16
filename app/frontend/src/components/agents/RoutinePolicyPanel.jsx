@@ -3,6 +3,7 @@ import { useDispatch, useSelector } from 'react-redux';
 import { useConfig } from '../../context/ConfigContext';
 import { fetchPolicies, savePolicy, selectPolicies } from '../../store/uiDataSlice';
 import styles from './RoutinePolicyPanel.module.css';
+import Select from '../common/Select';
 
 const fields = [
   ['attempt_timeout', 'Attempt timeout (seconds)'], ['idle_timeout', 'Idle timeout (seconds)'],
@@ -41,10 +42,17 @@ export function RoutinePolicyPanel({ policyId, onSelect, onClose, recordedPolicy
   return <aside className={`agents-graph-editor ${styles.panel}`} aria-label="Routine policy">
     <header className="agents-graph-editor__header"><h3>Policy</h3><button type="button" aria-label="Close policy" onClick={onClose}>×</button></header>
     <div className={styles.body}>
-      {!historical && <label>Selected policy<select aria-label="Selected policy" value={policyId} onChange={(event) => { setDirty(false); setStatus(''); onSelect(event.target.value); }}>
-        {!selected && <option value={policyId}>{policyId} (unavailable)</option>}
-        {catalog.items.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
-      </select></label>}
+      {!historical && <label>Selected policy<Select
+        ariaLabel="Selected policy"
+        value={policyId}
+        onChange={(next) => { setDirty(false); setStatus(''); onSelect(next); }}
+        options={[
+          ...(!selected ? [{ value: policyId, label: `${policyId} (unavailable)` }] : []),
+          ...catalog.items.map((item) => ({ value: item.id, label: item.name })),
+        ]}
+        portal
+        className="routine-policy-panel__select nodrag nowheel"
+      /></label>}
       {historical && <p>Recorded policy: {recordedPolicy?.id || 'Unavailable'}<br /><small>{recordedPolicy?.revision_id}</small></p>}
       {!historical && <p>Changes apply to new runs of every routine using this policy.</p>}
       {!values ? <p>{catalog.loaded ? 'Policy unavailable.' : 'Loading policy…'}</p> : <fieldset disabled={historical}>
@@ -55,7 +63,19 @@ export function RoutinePolicyPanel({ policyId, onSelect, onClose, recordedPolicy
         <h4>Retries</h4>
         {Object.entries({ max_retries: 'Maximum retries', initial_interval: 'Initial delay (seconds)', backoff_factor: 'Backoff multiplier', max_interval: 'Maximum delay (seconds)' }).map(([key, label]) => <label key={key}>{label}<input aria-label={label} type="number" step="any" min={key === 'backoff_factor' ? 1 : 0} value={values.retry[key]} onChange={(event) => update(key, Number(event.target.value), true)} /></label>)}
         <label className={styles.check}><input aria-label="Retry jitter" type="checkbox" checked={values.retry.jitter} onChange={(event) => update('jitter', event.target.checked, true)} />Retry jitter</label>
-        <label>Retryable errors<select aria-label="Retryable errors" value={values.retry.retry_on} onChange={(event) => update('retry_on', event.target.value, true)}><option value="transient">Transient errors</option><option value="model_response">Transient and model response errors</option><option value="all">All node errors</option></select></label>
+        <label>Retryable errors<Select
+          ariaLabel="Retryable errors"
+          value={values.retry.retry_on}
+          onChange={(next) => update('retry_on', next, true)}
+          options={[
+            { value: 'transient', label: 'Transient errors' },
+            { value: 'model_response', label: 'Transient and model response errors' },
+            { value: 'all', label: 'All node errors' },
+          ]}
+          disabled={historical}
+          portal
+          className="routine-policy-panel__select nodrag nowheel"
+        /></label>
       </fieldset>}
       {(error || catalog.error) && <p role="alert">{error || catalog.error}</p>}
       {status && <p role="status">{status}</p>}

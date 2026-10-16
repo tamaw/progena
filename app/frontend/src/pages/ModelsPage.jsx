@@ -18,6 +18,8 @@ import DetailHeader, {
   DuplicateActionIcon,
   PlayActionIcon,
 } from '../components/layout/DetailHeader';
+import { CapabilityChip, CardFact, MetricCard } from '../components/common/DetailCards';
+
 
 // Static catalogue of the LLM models agents can be assigned. Grouped by provider
 // in the list, mirroring the Agents page layout.
@@ -136,32 +138,6 @@ function matchesModel(model, filter, search) {
   return true;
 }
 
-function MetricCard({ label, value, detail }) {
-  return (
-    <div className="agents-metric-card">
-      <span>{label}</span>
-      <strong>{value}</strong>
-      <small>{detail}</small>
-    </div>
-  );
-}
-
-function CardFact({ label, children }) {
-  return (
-    <div className="agents-card-fact">
-      <span className="agents-card-fact__label">{label}</span>
-      <span className="agents-card-fact__value">{children}</span>
-    </div>
-  );
-}
-
-function CapabilityChip({ label, on }) {
-  return (
-    <span className={`agents-chip ${on ? 'agents-chip--ok' : 'agents-chip--muted'}`}>
-      {label}: {on ? 'yes' : 'no'}
-    </span>
-  );
-}
 
 function ModelRow({ model, selected, onSelect }) {
   return (

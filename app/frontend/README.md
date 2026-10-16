@@ -23,6 +23,22 @@ npm run dev
 
 The dev server runs at `http://localhost:5173/`. Its built-in proxy forwards only `/api/*` and `/v1/*` requests to the backend, defaulting to `http://localhost:8000`. Set `VITE_BACKEND_BASE_URL` in `.env` or `.env.local` to point the standalone Vite server at a different backend.
 
+### Local design library
+
+Open `/design` directly on the local Vite development server; it is intentionally absent from navigation and navigation search. The route requires a development build and the browser hostname `localhost`, `127.0.0.1`, or `[::1]`. It is unavailable on LAN/public hostnames, and the catalogue module and its styles are excluded from production builds, including `vite preview`.
+
+The catalogue shows the current theme tokens, typography, branding, controls, list/detail layouts, navigation, feedback and data/chat patterns. Source captions distinguish shared React components from existing markup patterns. Demos use local fixture state and do not submit cloud or application changes. The surrounding app shell still performs its normal backend reads.
+
+Use this page to review the existing UI before extracting or migrating more shared components. It is not a new component framework. Catalogue code lives in `src/pages/DesignLibraryPage.jsx` and `src/pages/design-library/`.
+
+Primitive reuse conventions:
+- Use `components/common/Select` for themed choices; pass `portal` inside transformed graph nodes or clipped panels. Portal menus stay within the viewport and close on outside wheel/resize.
+- Use `NumberStepper` only for bounded, non-null numeric values with a defined step. Keep native number fields where blank means inherited/unset, decimals are unrestricted, or parsing semantics differ.
+- Reuse `DetailCards` and `DetailHeader` action icons rather than copying their markup. Use the existing `task-btn`, `set-text-input` and `set-switch` patterns when they fit the control; switches retain native checkbox behavior, keyboard focus and disabled styling.
+- Use `--font-family`, `--font-family-mono` and the defined `--color-*` theme tokens. Keep intentional handwritten branding and data-driven agent/chart colors.
+
+The first consistency pass aligns small controls and presentation primitives only; sidebar, list-pane and editor consolidation remains separate.
+
 ### Production Build
 
 ```bash

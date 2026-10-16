@@ -4,10 +4,12 @@ import { useDispatch, useSelector } from 'react-redux';
 import { useNavigate, useParams } from 'react-router-dom';
 import { buildEntityPath, useEntityUrlSync } from '../lib/routes';
 import DetailHeader, {
+  ApproveActionIcon,
   DeleteActionIcon,
   DetailHeaderAction,
   DetailHeaderActions,
   DetailStatus,
+  EditActionIcon,
   PlayActionIcon,
   SaveActionIcon,
 } from '../components/layout/DetailHeader';
@@ -58,6 +60,12 @@ const TASK_FILTERS = [
   { value: 'mine', label: 'My tasks' },
   { value: 'watching', label: 'Watching' },
 ];
+const ACTIVITY_AVATAR_COLORS = {
+  user: agentColors[0],
+  status: agentColors[3],
+  system: agentColors[2],
+};
+
 // agentColors, formatRelativeTime, formatAgentName, normalizePriority,
 // priorityLabel, isArchivedCard, cardTags, getCardService, getCardAssignee,
 // buildCardBadges, sortCards, and groupVisibleCards were extracted to
@@ -72,21 +80,6 @@ function ChevronRightIcon() {
   );
 }
 
-function PencilIcon() {
-  return (
-    <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
-      <path d="M2 14h3l8-8-3-3-8 8z" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" />
-    </svg>
-  );
-}
-
-function CheckIcon() {
-  return (
-    <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
-      <path d="M3.25 8.25 6.5 11.5l6.25-6.75" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  );
-}
 
 // "Jump to the blocking task" — a small launch arrow leaping out of its corner.
 function DependencyOpenIcon() {
@@ -1015,7 +1008,7 @@ export default function TasksPage({ context = null }) {
                     onMouseDown={isEditingTitle ? (event) => event.preventDefault() : undefined}
                     onClick={isEditingTitle ? saveTitleEdit : startTitleEdit}
                   >
-                    {isEditingTitle ? <CheckIcon /> : <PencilIcon />}
+                    {isEditingTitle ? <ApproveActionIcon /> : <EditActionIcon />}
                   </button>
                 </>
               )}
@@ -1260,14 +1253,16 @@ export default function TasksPage({ context = null }) {
                 <DetailSection title="Activity">
                   <div className="task-activity">
                     <div className="task-act">
-                      <span className="task-act-avatar" style={{ background: '#22a06b' }}>S</span>
+                      <span className="task-act-avatar" style={{ background: ACTIVITY_AVATAR_COLORS.system }}>S</span>
                       <div className="task-act-body"><strong>System</strong> created the card <span className="muted">{formatRelativeTime(selectedCard.created_at)} ago</span></div>
                     </div>
                     {taskActivityLoading ? <div className="task-meta-sub">Loading activity…</div> : null}
                     {!taskActivityLoading && taskActivity.map((entry) => {
                       const actorName = formatAgentName(entry.actor || 'system');
                       const initial = actorName.charAt(0).toUpperCase() || 'S';
-                      const avatarColor = entry.actor === 'user' ? '#2f6ff6' : entry.kind === 'status' ? '#ef6c2a' : '#22a06b';
+                      const avatarColor = entry.actor === 'user'
+                        ? ACTIVITY_AVATAR_COLORS.user
+                        : entry.kind === 'status' ? ACTIVITY_AVATAR_COLORS.status : ACTIVITY_AVATAR_COLORS.system;
                       return (
                         <div key={entry.id} className="task-act">
                           <span className="task-act-avatar" style={{ background: avatarColor }}>{initial}</span>
