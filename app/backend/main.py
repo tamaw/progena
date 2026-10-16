@@ -31,12 +31,14 @@ from fastapi.responses import JSONResponse
 from fastapi.sse import EventSourceResponse, format_sse_event
 from starlette.middleware.gzip import GZipMiddleware
 
+from app.progenitor.sessions.titles import ATTACHMENT_CONTEXT_MARKER
+
 from .agent_store import configure_agent_store
 from .alerts import AlertInfo
 from .attachment_blob_store import configure_attachment_blob_store, get_attachment_blob_store
 from .attachment_routes import get_attachment_manager
 from .attachment_routes import router as attachments_router
-from .attachments import ATTACHMENT_CONTEXT_MARKER, format_attachments_for_context
+from .attachments import format_attachments_for_context
 from .chat_sessions import UiRequestAcknowledgement, acknowledgement_response
 from .client import ProgenitorClient
 from .config import ChatServerConfig

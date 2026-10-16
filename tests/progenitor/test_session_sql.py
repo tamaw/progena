@@ -20,6 +20,7 @@ from psycopg.types.json import Jsonb
 
 from app.progenitor.database.langgraph import _open_saver, _open_store
 from app.progenitor.document_kinds import SESSION_KEY_PREFIX
+from app.progenitor.sessions.titles import ATTACHMENT_CONTEXT_MARKER
 
 DATABASE_URL = (os.getenv("PROGENITOR_TEST_DATABASE_URL") or "").strip() or None
 
@@ -141,6 +142,18 @@ async def test_first_message_is_capped_and_image_only_reads_as_an_action(conn: A
     image_session = await _session(conn, "t-image")
     assert long_session is not None and len(long_session["first_message"]) == 4000
     assert image_session is not None and image_session["first_message"] == "* sends an image"
+
+
+async def test_first_message_drops_the_attachment_note(conn: Any) -> None:
+    tagged = {"source": "input", "progenitor_source": "ui"}
+    note = f"{ATTACHMENT_CONTEXT_MARKER}\nAttached: /uploads/report.pdf (application/pdf)"
+    await _write(conn, "t-caption", "cp1", tagged, _blob(HumanMessage(f"summarise this\n\n{note}")))
+    await _write(conn, "t-file", "cp1", tagged, _blob(HumanMessage(note)))
+
+    caption = await _session(conn, "t-caption")
+    file_only = await _session(conn, "t-file")
+    assert caption is not None and caption["first_message"] == "summarise this"
+    assert file_only is not None and file_only["first_message"] == "* sends an attachment"
 
 
 @pytest.mark.parametrize(

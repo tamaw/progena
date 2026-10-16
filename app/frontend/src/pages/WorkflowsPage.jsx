@@ -24,6 +24,8 @@ import { useNotifications } from '../context/NotificationContext';
 import {
   deleteWorkflow,
   fetchDocumentTypes,
+  fetchPromptContent,
+  fetchPrompts,
   fetchWorkflowContent,
   fetchWorkflows,
   fetchWorkflowRuns,
@@ -32,6 +34,7 @@ import {
   saveWorkflow,
   selectAgentProfiles,
   selectDocumentTypes,
+  selectPromptContentEntry,
   selectPrompts,
   selectWorkflowDetailByPath,
   selectWorkflowLatestRunById,
@@ -269,6 +272,32 @@ const DOCK_NODE_DEFAULTS = {
   }),
 };
 
+function createPaletteNode(kind, nodeId, position, documentTypes, callbacks) {
+  const sizes = DEFAULT_NODE_SIZES[kind] || DEFAULT_NODE_SIZES.agent;
+  const defaultData = DOCK_NODE_DEFAULTS[kind](documentTypes);
+  const inputPortCount = nodeInputPorts(kind, defaultData.inputSchema).length;
+  const outputPortCount = nodeOutputPorts(kind, defaultData.outputSchema).length;
+  const maxPorts = Math.max(inputPortCount, outputPortCount);
+  const height = Math.max(sizes.data.height, maxPorts > 0 ? 69 + (maxPorts - 1) * 28 : sizes.data.height);
+  return {
+    id: nodeId,
+    type: kind,
+    width: sizes.data.width,
+    height,
+    style: { width: sizes.data.width, height },
+    position,
+    data: {
+      kind,
+      ...defaultData,
+      currentNodeId: null,
+      completedNodeIds: [],
+      expanded: false,
+      ...callbacks,
+      canDelete: true,
+    },
+  };
+}
+
 function resolveNodeSizes(kind, storedSize, inputSchema, outputSchema) {
   const defaults = DEFAULT_NODE_SIZES[kind] || DEFAULT_NODE_SIZES.agent;
   const inputPortCount = nodeInputPorts(kind, inputSchema).length;
@@ -342,37 +371,27 @@ function parsePromptPlaceholders(text) {
 
 function derivePromptInputSchema(text) {
   const { roots } = parsePromptPlaceholders(text);
-  if (roots.length === 0) return { type: 'object', properties: {} };
-  const properties = {};
+  const properties = { thread_id: { type: 'string' } };
   roots.forEach((root) => {
     properties[root] = {};
   });
-  return { type: 'object', required: roots, properties };
+  return {
+    type: 'object',
+    ...(roots.length ? { required: roots } : {}),
+    properties,
+  };
 }
 
-function derivePromptNodeSchemas(kind, text) {
-  const inputSchema = derivePromptInputSchema(text);
-  if (kind === 'agent') {
-    return {
-      inputSchema,
-      outputSchema: {
-        type: 'object',
-        required: ['message', 'thread_id'],
-        properties: { message: { type: 'string' }, thread_id: { type: 'string' } },
-      },
-    };
-  }
-  if (kind === 'extract') {
-    return {
-      inputSchema,
-      outputSchema: {
-        type: 'object',
-        required: ['result', 'thread_id'],
-        properties: { result: {}, thread_id: { type: 'string' } },
-      },
-    };
-  }
-  return { inputSchema: null, outputSchema: null };
+function promptTemplatePatch(text) {
+  return { template: text, inputSchema: derivePromptInputSchema(text) };
+}
+
+function promptDocumentPatch(path, text) {
+  return {
+    prompt: path || null,
+    template: null,
+    inputSchema: derivePromptInputSchema(text),
+  };
 }
 
 const NODE_MINIMAP_COLORS = {
@@ -919,8 +938,9 @@ function schemaTypes(definition) {
 // _schema_types_compatible() in app/progenitor/workflows.py.
 function schemasAreCompatible(sourceDefinition, targetDefinition) {
   const sourceTypes = schemaTypes(sourceDefinition);
-  const targetTypes = schemaTypes(targetDefinition);
-  if (sourceTypes.length && targetTypes.length && !sourceTypes.every((type) => targetTypes.includes(type))) {
+  const targetTypes = new Set(schemaTypes(targetDefinition));
+  if (targetTypes.has('number')) targetTypes.add('integer');
+  if (sourceTypes.length && targetTypes.size && !sourceTypes.every((type) => targetTypes.has(type))) {
     return false;
   }
   const sourceTitle = sourceDefinition?.title;
@@ -933,7 +953,7 @@ function portFromHandle(handle) {
 }
 
 function isUnpackableSchema(definition) {
-  return definition?.type === 'object' && definition.properties && Object.keys(definition.properties).length > 0;
+  return schemaTypes(definition).includes('object') && definition?.properties && Object.keys(definition.properties).length > 0;
 }
 
 function hoistDefinitions(target, source) {
@@ -946,6 +966,22 @@ function hoistDefinitions(target, source) {
   } else {
     target.definitions = merged;
   }
+}
+
+function resolveLocalSchemaRef(schema, rootSchema) {
+  const seen = new Set();
+  let resolved = schema;
+  while (resolved && typeof resolved === 'object' && typeof resolved.$ref === 'string') {
+    const ref = resolved.$ref;
+    const [, container, name] = ref.match(/^#\/([^/]+)\/([^/]+)$/) || [];
+    const target = (container === '$defs' || container === 'definitions')
+      ? rootSchema?.[container]?.[name]
+      : null;
+    if (seen.has(ref) || !target || typeof target !== 'object') return resolved;
+    seen.add(ref);
+    resolved = target;
+  }
+  return resolved;
 }
 
 function deriveUnpackSchemas(nodeId, nodes, edges) {
@@ -963,6 +999,7 @@ function deriveUnpackSchemas(nodeId, nodes, edges) {
     .find((p) => p.name === sourcePort);
 
   const sourceDef = sourceProperty?.definition || { type: 'object' };
+  const resolvedSourceDef = resolveLocalSchemaRef(sourceDef, sourceSchema);
   const inputSchema = {
     type: 'object',
     required: ['value'],
@@ -972,8 +1009,8 @@ function deriveUnpackSchemas(nodeId, nodes, edges) {
 
   const outputSchema = {
     type: 'object',
-    properties: cloneValue(sourceDef.properties || {}),
-    required: cloneValue(sourceDef.required || []),
+    properties: cloneValue(resolvedSourceDef?.properties || {}),
+    required: cloneValue(resolvedSourceDef?.required || []),
   };
   hoistDefinitions(outputSchema, sourceDef);
   hoistDefinitions(outputSchema, sourceSchema);
@@ -1047,6 +1084,21 @@ function visibleNodePortProperties(properties, nodeHeight, connectedNames = [], 
   const maxPorts = Math.max(0, Math.floor((nodeHeight - 8 - 61) / 28) + 1);
   const remainingSlots = Math.max(0, maxPorts - connected.length);
   return [...connected, ...unconnected.slice(0, remainingSlots)];
+}
+
+function pruneLostUnpackEdges(nodes, edges) {
+  let nextEdges = edges;
+  let nextNodes = recomputeUnpackSchemas(nodes, nextEdges);
+  const lostEdges = [];
+  while (true) {
+    const newlyLost = computeLostEdgesForUnpackChange(nextEdges, nextNodes);
+    if (newlyLost.length === 0) break;
+    lostEdges.push(...newlyLost);
+    const lostIds = new Set(newlyLost.map((edge) => edge.id));
+    nextEdges = nextEdges.filter((edge) => !lostIds.has(edge.id));
+    nextNodes = recomputeUnpackSchemas(nodes, nextEdges);
+  }
+  return { nodes: nextNodes, edges: nextEdges, lostEdges };
 }
 
 function WorkflowNodeHandles({ kind, inputSchema, outputSchema, nodeHeight, connectedInputPorts = [], connectedOutputPorts = [], showAllFields = null }) {
@@ -1155,6 +1207,39 @@ function WorkflowNodeOptionsModal({ node, onChange, onClose }) {
   }, [onClose]);
 
   const kind = node.data?.kind || node.type;
+  const dispatch = useDispatch();
+  const { getApiUrl } = useConfig();
+  const promptsUrl = getApiUrl('prompts');
+  const promptPath = node.data?.prompt || '';
+  const promptContentEntry = useSelector((state) => selectPromptContentEntry(state, promptPath));
+
+  // Fetch the selected document once, then derive its input ports once per
+  // loaded text: `onChange` is a fresh function every render and the graph
+  // may normalise the stored schema, so neither may drive a re-apply.
+  const requestedPromptPathRef = useRef(null);
+  const appliedPromptContentRef = useRef(null);
+  const onChangeRef = useRef(onChange);
+  useLayoutEffect(() => {
+    onChangeRef.current = onChange;
+  });
+  useEffect(() => {
+    if ((kind !== 'agent' && kind !== 'extract') || !promptPath) return;
+    if (promptContentEntry?.path === promptPath) {
+      const content = promptContentEntry.content || '';
+      const applied = appliedPromptContentRef.current;
+      if (applied?.path === promptPath && applied.content === content) return;
+      appliedPromptContentRef.current = { path: promptPath, content };
+      const patch = promptDocumentPatch(promptPath, content);
+      if (JSON.stringify(node.data?.inputSchema) !== JSON.stringify(patch.inputSchema)) {
+        onChangeRef.current(node.id, patch);
+      }
+      return;
+    }
+    if (requestedPromptPathRef.current === promptPath) return;
+    requestedPromptPathRef.current = promptPath;
+    void dispatch(fetchPromptContent({ promptsUrl, path: promptPath })).unwrap().catch(() => {});
+  }, [dispatch, kind, node.data?.inputSchema, node.id, promptContentEntry, promptPath, promptsUrl]);
+
   const documentTypes = useSelector(selectDocumentTypes);
 
   const documentTypeOptions = useMemo(() =>
@@ -1503,8 +1588,8 @@ function WorkflowNodeOptionsModal({ node, onChange, onClose }) {
                         name={`prompt-source-${node.id}`}
                         checked={node.data?.prompt != null}
                         onChange={() => {
-                          const firstPath = prompts[0]?.path || '';
-                          onChange(node.id, { prompt: firstPath, template: null });
+                          // An empty path selects document mode with no prompt chosen yet.
+                          onChange(node.id, { prompt: prompts[0]?.path || '', template: null });
                         }}
                       />
                       Prompt document
@@ -1525,7 +1610,7 @@ function WorkflowNodeOptionsModal({ node, onChange, onClose }) {
                     Prompt
                     <Select
                       value={node.data?.prompt || ''}
-                      onChange={(path) => onChange(node.id, { prompt: path || null })}
+                      onChange={(path) => onChange(node.id, { prompt: path || null, template: null })}
                       options={[{ value: '', label: 'Select prompt…' }, ...promptOptions]}
                       ariaLabel="Prompt document"
                     />
@@ -1535,11 +1620,7 @@ function WorkflowNodeOptionsModal({ node, onChange, onClose }) {
                     Template
                     <textarea
                       value={node.data?.template || ''}
-                      onChange={(event) => {
-                        const text = event.target.value;
-                        const schemas = derivePromptNodeSchemas(kind, text);
-                        onChange(node.id, { template: text, inputSchema: schemas.inputSchema, outputSchema: schemas.outputSchema });
-                      }}
+                      onChange={(event) => onChange(node.id, promptTemplatePatch(event.target.value))}
                       rows={6}
                     />
                   </label>
@@ -2085,6 +2166,7 @@ function WorkflowsInner() {
   const workflowsUrl = getApiUrl('workflows');
   const workflowRunsUrl = getApiUrl('workflowRuns');
   const documentTypesUrl = getApiUrl('documentTypes');
+  const promptsUrl = getApiUrl('prompts');
   const realtime = useSelector(selectRealtime);
   const workflows = useSelector(selectWorkflows);
   const workflowsState = useSelector(selectWorkflowsState);
@@ -2153,6 +2235,15 @@ function WorkflowsInner() {
     }
   }, [dispatch, show, documentTypesUrl]);
 
+  // Agent/Extract nodes pick from the prompt catalogue.
+  const loadPrompts = useCallback(async () => {
+    try {
+      await dispatch(fetchPrompts({ promptsUrl })).unwrap();
+    } catch (error) {
+      show('error', 'Prompts load failed', error.message);
+    }
+  }, [dispatch, show, promptsUrl]);
+
   useEffect(() => {
     if (!realtime.connected) {
       return;
@@ -2160,7 +2251,8 @@ function WorkflowsInner() {
     void loadWorkflows();
     void loadRuns();
     void loadDocumentTypes();
-  }, [loadDocumentTypes, loadRuns, loadWorkflows, realtime.connected]);
+    void loadPrompts();
+  }, [loadDocumentTypes, loadPrompts, loadRuns, loadWorkflows, realtime.connected]);
 
   useEffect(() => {
     if (!workflows.length) {
@@ -2278,20 +2370,25 @@ function WorkflowsInner() {
         const schemaChanged = patch.outputSchema !== undefined
           && JSON.stringify(node.data?.outputSchema) !== JSON.stringify(patch.outputSchema);
         if (schemaChanged && !hydratingGraphRef.current) {
-          nextNodes = recomputeUnpackSchemas(patched, nextEdges);
-          const lostEdges = computeLostEdgesForUnpackChange(nextEdges, nextNodes);
-          if (lostEdges.length > 0) {
-            const edgeList = lostEdges.map((e) => `${e.source} → ${e.target}`).join(', ');
-            if (!window.confirm(`This change will remove ${lostEdges.length} connection(s): ${edgeList}. Continue?`)) return;
-            nextEdges = nextEdges.filter((e) => !lostEdges.some((r) => r.id === e.id));
+          const pruned = pruneLostUnpackEdges(patched, nextEdges);
+          if (pruned.lostEdges.length > 0) {
+            const edgeList = pruned.lostEdges.map((e) => `${e.source} → ${e.target}`).join(', ');
+            if (!window.confirm(`This change will remove ${pruned.lostEdges.length} connection(s): ${edgeList}. Continue?`)) return;
           }
+          nextNodes = pruned.nodes;
+          nextEdges = pruned.edges;
         }
         commit(sizeUnpackNodes(nextNodes, nextEdges), nextEdges);
       },
       onDeleteNode: (nodeId) => {
-        const nextEdges = edgesRef.current.filter((edge) => edge.source !== nodeId && edge.target !== nodeId);
+        const directEdges = edgesRef.current.filter((edge) => edge.source !== nodeId && edge.target !== nodeId);
         const remaining = nodesRef.current.filter((node) => node.id !== nodeId);
-        commit(sizeUnpackNodes(recomputeUnpackSchemas(remaining, nextEdges), nextEdges), nextEdges);
+        const pruned = pruneLostUnpackEdges(remaining, directEdges);
+        if (pruned.lostEdges.length > 0) {
+          const edgeList = pruned.lostEdges.map((edge) => `${edge.source} → ${edge.target}`).join(', ');
+          if (!window.confirm(`Removing this node will disconnect ${pruned.lostEdges.length} connection(s): ${edgeList}. Continue?`)) return;
+        }
+        commit(sizeUnpackNodes(pruned.nodes, pruned.edges), pruned.edges);
       },
       onUnpack: (sourceNodeId, sourcePort) => {
         const sourceNode = nodesRef.current.find((n) => n.id === sourceNodeId);
@@ -2438,25 +2535,18 @@ function WorkflowsInner() {
 
     if (removingValueEdges.length > 0 && !hydratingGraphRef.current) {
       const nextEdges = applyEdgeChanges(changes, edgesRef.current);
-      const nextNodes = recomputeUnpackSchemas(nodesRef.current, nextEdges);
-      const lostEdges = computeLostEdgesForUnpackChange(edgesRef.current, nextNodes);
-      if (lostEdges.length > 0) {
-        const edgeList = lostEdges.map((e) => `${e.source} → ${e.target}`).join(', ');
+      const pruned = pruneLostUnpackEdges(nodesRef.current, nextEdges);
+      if (pruned.lostEdges.length > 0) {
+        const edgeList = pruned.lostEdges.map((e) => `${e.source} → ${e.target}`).join(', ');
         const confirmed = window.confirm(
-          `Removing the value input will disconnect ${lostEdges.length} connection(s): ${edgeList}. Continue?`,
+          `Removing the value input will disconnect ${pruned.lostEdges.length} connection(s): ${edgeList}. Continue?`,
         );
         if (!confirmed) return;
-        const finalEdges = nextEdges.filter((e) => !lostEdges.some((r) => r.id === e.id));
-        const prunedNodes = sizeUnpackNodes(nextNodes, finalEdges);
-        setGraphNodes(prunedNodes);
-        setGraphEdges(finalEdges);
-        syncWorkflowFromGraph(prunedNodes, finalEdges);
-        return;
       }
-      const sizedNodes = sizeUnpackNodes(nextNodes, nextEdges);
+      const sizedNodes = sizeUnpackNodes(pruned.nodes, pruned.edges);
       setGraphNodes(sizedNodes);
-      setGraphEdges(nextEdges);
-      syncWorkflowFromGraph(sizedNodes, nextEdges);
+      setGraphEdges(pruned.edges);
+      syncWorkflowFromGraph(sizedNodes, pruned.edges);
       return;
     }
 
@@ -2562,35 +2652,11 @@ function WorkflowsInner() {
     if (!draftWorkflow || !DOCK_NODE_DEFAULTS[kind]) {
       return;
     }
-    const nodeType = kind;
-    const nodeId = `${nodeType}_${Math.random().toString(36).slice(2, 10)}`;
+    const nodeId = `${kind}_${Math.random().toString(36).slice(2, 10)}`;
     const position = dropPosition || nextDockNodePosition(nodesRef.current);
-    const sizes = DEFAULT_NODE_SIZES[nodeType] || DEFAULT_NODE_SIZES.agent;
-    const defaultData = DOCK_NODE_DEFAULTS[kind](documentTypes);
-    const inputPortCount = nodeInputPorts(kind, defaultData.inputSchema).length;
-    const outputPortCount = nodeOutputPorts(kind, defaultData.outputSchema).length;
-    const maxPorts = Math.max(inputPortCount, outputPortCount);
-    const autoHeight = maxPorts > 0 ? 69 + (maxPorts - 1) * 28 : sizes.data.height;
-    const initialHeight = Math.max(sizes.data.height, autoHeight);
     const nextNodes = [
       ...nodesRef.current,
-      {
-        id: nodeId,
-        type: nodeType,
-        width: sizes.data.width,
-        height: initialHeight,
-        style: { width: sizes.data.width, height: initialHeight },
-        position,
-        data: {
-          kind: nodeType,
-          ...DOCK_NODE_DEFAULTS[kind](documentTypes),
-          currentNodeId: null,
-          completedNodeIds: [],
-          expanded: true,
-          ...nodeDataCallbacks,
-          canDelete: true,
-        },
-      },
+      createPaletteNode(kind, nodeId, position, documentTypes, nodeDataCallbacks),
     ];
     const nextEdges = edgesRef.current;
     setGraphNodes(nextNodes);
@@ -3060,7 +3126,7 @@ function WorkflowsInner() {
 
 // This helper is exported for the focused workflow graph unit test.
 // eslint-disable-next-line react-refresh/only-export-components
-export { flowToWorkflow, workflowToFlow, NODE_MENU_CATEGORIES, schemaProperties, canvasMenuAnchor, visibleNodePortProperties, deriveUnpackSchemas, recomputeUnpackSchemas, computeLostEdgesForUnpackChange, isUnpackableSchema, parsePromptPlaceholders, derivePromptInputSchema, nodeInputPorts, nodeOutputPorts, schemasAreCompatible };
+export { flowToWorkflow, workflowToFlow, NODE_MENU_CATEGORIES, schemaProperties, canvasMenuAnchor, visibleNodePortProperties, deriveUnpackSchemas, recomputeUnpackSchemas, computeLostEdgesForUnpackChange, pruneLostUnpackEdges, isUnpackableSchema, parsePromptPlaceholders, derivePromptInputSchema, promptTemplatePatch, promptDocumentPatch, createPaletteNode, nodeInputPorts, nodeOutputPorts, schemasAreCompatible };
 export default function WorkflowsPage() {
   return (
     <ReactFlowProvider>

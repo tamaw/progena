@@ -439,6 +439,70 @@ class TestUIRoutes:
         # The list still renders (metadata title) while the runtime is down.
         assert client.get("/api/ui/chats").status_code == 202
 
+    def test_rename_is_accepted_while_the_runtime_is_down(
+        self, client, document_store, monkeypatch
+    ):
+        from app.backend.runtime_conversations import RuntimeUnavailable
+
+        _create_session_document(document_store, "thread-rename", "Old")
+
+        def _unavailable(*_args: Any, **_kwargs: Any) -> Any:
+            raise RuntimeUnavailable("runtime unreachable")
+
+        monkeypatch.setattr(document_store, "get_checkpoint_thread_snapshot", _unavailable)
+
+        response = client.patch("/api/ui/chats/thread-rename", json={"title": "New"})
+
+        assert response.status_code == 202
+        stored = document_store.get_document(
+            PROGENITOR_STATE_PREFIX, f"{SESSION_KEY_PREFIX}thread-rename"
+        )
+        assert stored.payload["title"] == "New"
+        assert client.patch("/api/ui/chats/missing", json={"title": "x"}).status_code == 404
+
+    async def test_session_event_publishes_metadata_while_runtime_is_down(
+        self, document_store, monkeypatch
+    ):
+        """A rename during a runtime outage still reaches the sidebar, and the
+        handler does not raise (a raise would stop the event dispatcher)."""
+        from app.backend import ui_routes
+        from app.backend.document_events import TypedDocumentEvent
+        from app.backend.document_store import DocumentEvent
+        from app.backend.runtime_conversations import RuntimeUnavailable
+
+        _create_session_document(document_store, "thread-down", "Renamed")
+
+        def _unavailable(*_args: Any, **_kwargs: Any) -> Any:
+            raise RuntimeUnavailable("runtime unreachable")
+
+        monkeypatch.setattr(document_store, "get_checkpoint_thread_snapshot", _unavailable)
+        key = f"{SESSION_KEY_PREFIX}thread-down"
+        payload = document_store.get_document(PROGENITOR_STATE_PREFIX, key).payload
+        event = DocumentEvent(
+            seq=1,
+            txid=1,
+            prefix=PROGENITOR_STATE_PREFIX,
+            key=key,
+            op="updated",
+            before=payload,
+            after=payload,
+            origin=None,
+            created_at=datetime.now(UTC),
+        )
+        event_start = len(ui_routes._ui_event_replay)
+        await ui_routes._publish_chat_session_document_event(
+            TypedDocumentEvent(event=event, document_type=None, output=None)
+        )
+        updated = [
+            envelope
+            for envelope in ui_routes._ui_event_replay[event_start:]
+            if envelope.type == "chat.session.metadata.updated"
+        ]
+        assert len(updated) == 1
+        session = updated[0].payload["session"]
+        assert session["title"] == "Renamed"
+        assert session["history_unavailable"] is True
+
     async def test_slow_chat_read_does_not_block_other_requests(self, document_store, monkeypatch):
         import time
 

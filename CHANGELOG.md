@@ -66,6 +66,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Model profile names must be unique after trimming whitespace**; a catalog with `" general "` and `"general"` is rejected.
 
 ### Fixed
+- Document event dispatch no longer stalls when an event is held back by an older open transaction that then ends without writing an event; the dispatcher re-checks every second while events are deferred.
+- Renaming a chat while the runtime is down succeeds (was a 503 although the rename applied) and updates the sidebar instead of stopping document event dispatch.
+- The agent's `/sessions/` folder supports `glob`, rejects session field values the schema forbids (e.g. a numeric title) and ambiguous `edit_file` matches; transcript renders of one chat no longer race.
+- Session `first_message` and derived titles no longer include the machine-only attachment note or unredacted secrets.
+- Cron workflows fire each due time once across backends sharing a database, don't replay a pause+resume that happened between ticks, and keep separate state for ids containing `:`.
+- `mutate_document` locks the existing row, so plain writes can't be lost under it; the in-memory store publishes events atomically and filters session noise like Postgres.
+- Workflows: a `document_write` with nothing to write no longer fails; `{thread_id}` renders the run thread and `thread_id` outputs the thread actually used; mid-run data edits reach later nodes; query filters tell `true` from `1`; Unpack handles `$ref`'d and nullable objects; integer outputs connect to number inputs; prompt front matter needs an exact `---`; inline input schemas referencing their own properties stay valid when embedded.
+- A routine subagent validates its input against the same graph it runs.
+- Chat: + New while a reply streams leaves the new chat usable; a new chat owns its reconciliation once saved; opening another unsaved thread clears the previous transcript; reopening quick chat mid-reply no longer duplicates text.
+- Workflow editor: editing an Extract prompt keeps its typed result and Unpack edges; the prompt document picker lists prompts without first visiting the Prompts page, and choosing one creates its input ports; deleting a node prunes dependent Unpack edges; palette node resizes persist; prompt nodes keep the optional `thread_id` input; the node menu no longer clips on short screens.
 - Profile notifications now bypass unrelated state-snapshot diffs; profile queries and edits use `202` acknowledgements plus correlated `profiles.snapshot` events instead of successful HTTP response-body data.
 - Snapshot-confirmed saves no longer have their success status overwritten by the acknowledgement-waiting effect; request failures preserve the draft and show the error.
 - Schedule and inbox document notifications now reach their collection subscribers even when a sibling document from the same transaction has already refreshed the shared state snapshot.

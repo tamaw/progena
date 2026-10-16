@@ -480,3 +480,122 @@ async def test_agent_subagent_instruction_present():
 
     assert "specialist" in runner.calls[0]["input_text"]
     assert "sub-agent" in runner.calls[0]["input_text"]
+
+
+async def _completed(store, run_id):
+    return await _wait_for(
+        lambda: (
+            get_workflow_run(store, run_id)
+            if get_workflow_run(store, run_id).status in {"completed", "failed"}
+            else None
+        )
+    )
+
+
+@pytest.mark.asyncio
+async def test_unwired_thread_id_placeholder_renders_the_run_thread():
+    store = InMemoryDocumentStore()
+    seed_document_types(store)
+    workflow = default_workflow_definition()
+    agent_id = _node_id(workflow, "agent")
+    workflow["graph"]["nodes"][agent_id]["template"] = "Process {key} in {thread_id}"
+    definition = save_workflow_definition(store, workflow)
+    runner = RecordingRunner(["done"])
+
+    run = await _executor(store, runner).trigger_workflow(
+        definition.id, build_manual_trigger_event(definition)
+    )
+    completed = await _completed(store, run.run_id)
+
+    assert completed.status == "completed", completed.error
+    assert runner.calls[0]["input_text"].endswith(f" in {completed.thread_id}")
+
+
+@pytest.mark.asyncio
+async def test_agent_output_carries_the_thread_the_runner_used():
+    store = InMemoryDocumentStore()
+    seed_document_types(store)
+    workflow = default_workflow_definition()
+    agent_id = _node_id(workflow, "agent")
+    definition = save_workflow_definition(store, workflow)
+
+    async def allocating_runner(**kwargs):
+        return PromptExecutionResult(response="ok", thread_id="allocated_thread")
+
+    run = await _executor(store, allocating_runner).trigger_workflow(
+        definition.id, build_manual_trigger_event(definition)
+    )
+    completed = await _completed(store, run.run_id)
+
+    assert completed.node_outputs[agent_id]["thread_id"] == "allocated_thread"
+
+
+@pytest.mark.asyncio
+async def test_data_value_edited_mid_run_reaches_later_nodes():
+    store = InMemoryDocumentStore()
+    seed_document_types(store)
+    workflow = default_workflow_definition()
+    event_id = _node_id(workflow, "event")
+    first_id = _node_id(workflow, "agent")
+    workflow["graph"]["nodes"]["note"] = {
+        "kind": "data",
+        "title": "Note",
+        "value": "old",
+        "output_schema": {"type": "string"},
+    }
+    workflow["graph"]["nodes"]["second"] = {
+        "kind": "agent",
+        "title": "Second",
+        "template": "After {ready}: {note}",
+        "input_schema": {"type": "object", "properties": {}},
+        "output_schema": {"type": "object", "properties": {}},
+    }
+    workflow["graph"]["edges"] = [
+        {"from": {"node": event_id, "port": "key"}, "to": {"node": first_id, "port": "key"}},
+        {"from": {"node": first_id, "port": "message"}, "to": {"node": "second", "port": "ready"}},
+        {"from": {"node": "note", "port": "value"}, "to": {"node": "second", "port": "note"}},
+    ]
+    definition = save_workflow_definition(store, workflow)
+    release = asyncio.Event()
+    calls = []
+
+    async def gated_runner(**kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            await release.wait()
+        return PromptExecutionResult(response="ok", thread_id=kwargs["thread_id"])
+
+    run = await _executor(store, gated_runner).trigger_workflow(
+        definition.id, build_manual_trigger_event(definition)
+    )
+    await _wait_for(lambda: calls)
+    edited = definition.model_dump(mode="json", by_alias=True)
+    edited["graph"]["nodes"]["note"]["value"] = "new"
+    save_workflow_definition(store, edited)
+    release.set()
+    completed = await _completed(store, run.run_id)
+
+    assert completed.status == "completed", completed.error
+    assert calls[1]["input_text"] == "After ok: new"
+
+
+def test_query_filter_tells_json_true_from_1():
+    from app.backend.workflow_service import _execute_document_node
+    from app.progenitor.workflows import WorkflowNodeDocumentQuery
+
+    store = InMemoryDocumentStore()
+    seed_document_types(store)
+    store.save_document("progenitor.state", "kanban_card:yes", {"metadata": {"ready": True}})
+    store.save_document("progenitor.state", "kanban_card:one", {"metadata": {"ready": 1}})
+    node = WorkflowNodeDocumentQuery.model_validate(
+        {
+            "kind": "document_query",
+            "title": "Ready",
+            "document_type": "kanban_card",
+            "filter_fields": ["metadata"],
+        }
+    )
+
+    output = _execute_document_node(store, node, {"metadata": {"ready": True}})
+
+    assert output["keys"] == ["kanban_card:yes"]
