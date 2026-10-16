@@ -242,6 +242,34 @@ class TestStateManager:
         assert dequeued.content == "Reply exactly BG_TOKEN"
         assert await manager.get_background_tasks() == []
 
+    @pytest.mark.asyncio
+    async def test_backend_written_documents_are_seen_without_notifications(self):
+        """Repos, repo scan and the background queue are written by the backend
+        too; the runtime must see those writes and never flush stale copies."""
+        store = _FakeRuntimeStore()
+        manager = StateManager(runtime_store=store)
+        await manager.initialize()
+        assert await manager.get_background_tasks() == []
+        assert await manager.get_repos() in ({}, {"repos": {}})
+
+        backend_task = BackgroundTaskEntry(id="be-1", content="from backend", metadata={})
+        await store.save_document("background_tasks", [backend_task.model_dump(mode="json")])
+        await store.save_document("repos", {"repos": {"r1": {"path": "/tmp/r1"}}})
+        await store.save_document("repo_scan", {"scanned_at": "now", "repos": {}})
+
+        assert [task.id for task in await manager.get_background_tasks()] == ["be-1"]
+        assert (await manager.get_repos())["repos"] == {"r1": {"path": "/tmp/r1"}}
+        assert (await manager.get_repo_scan())["scanned_at"] == "now"
+        dequeued = await manager.dequeue_background_task()
+        assert dequeued is not None and dequeued.id == "be-1"
+
+        await store.save_document("background_tasks", [backend_task.model_dump(mode="json")])
+        await manager.commit_state()
+        await manager.close()
+        assert await store.get_document("background_tasks", []) == [
+            backend_task.model_dump(mode="json")
+        ]
+
     # ------------------------------------------------------------------
     # Schedule runs
     # ------------------------------------------------------------------

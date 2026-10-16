@@ -322,7 +322,7 @@ export function normalizeBackendChatMessage(message, index) {
 }
 
 function buildBackendSessionItem(chat, selectedBackendChatId, unreadChatIds, backgroundGeneratingChatIds, backgroundErrorChatIds, isGenerating) {
-  const activityAt = toValidTimestamp(chat.last_activity || chat.updated_at)
+  const activityAt = toValidTimestamp(chat.last_activity)
     ?? toValidTimestamp(chat.created_at)
     ?? 0;
   const messageCount = Number.isFinite(chat.message_count) ? chat.message_count : 0;
@@ -337,7 +337,7 @@ function buildBackendSessionItem(chat, selectedBackendChatId, unreadChatIds, bac
     pinKey: chat.thread_id,
     title: chat.title || 'Untitled chat',
     meta: formatRelativeAge(activityAt) || formatRelativeAge(chat.created_at) || '',
-    detail: chat.archived ? 'Archived' : (chat.shared ? 'Shared' : ''),
+    detail: chat.archived ? 'Archived' : '',
     summary,
     activityAt,
     bucket: getTimeBucket(activityAt),
@@ -363,7 +363,6 @@ function buildBackendSessionItem(chat, selectedBackendChatId, unreadChatIds, bac
       unread: unreadChatIds instanceof Set ? unreadChatIds.has(chat.thread_id) : false,
     }),
     pinned: Boolean(chat.pinned),
-    shared: Boolean(chat.shared),
     archived: Boolean(chat.archived),
     source: 'backend',
     threadId: chat.thread_id,
@@ -397,46 +396,6 @@ export function shouldLoadSelectedBackendChat({
   );
 }
 
-// An empty draft ("New chat", zero messages) is a real backend row created
-// eagerly so a thread exists before the first send, but it isn't a
-// conversation yet — keep it out of the sidebar until it has content.
-// Exceptions that force the card visible:
-// - it's the selected chat and the local transcript already has messages
-//   (first send settling before the server bumps message_count),
-// - it carries runtime flags (unread/generating/errored — something is
-//   happening in it that the user must be able to see),
-// - the user pinned or renamed it (deliberate acts that make it theirs),
-// - its history is unavailable (runtime unreachable), so its emptiness is
-//   unknown, not real.
-export function isHiddenEmptyDraft(chat, {
-  selectedBackendChatId,
-  localMessageCount,
-  unreadChatIds,
-  backgroundGeneratingChatIds,
-  backgroundErrorChatIds,
-}) {
-  const messageCount = Number.isFinite(chat.message_count) ? chat.message_count : 0;
-  if (messageCount > 0 || chat.archived || chat.pinned || chat.history_unavailable) {
-    return false;
-  }
-  if ((chat.title || DEFAULT_CHAT_TITLE) !== DEFAULT_CHAT_TITLE) {
-    return false;
-  }
-  if (chat.thread_id === selectedBackendChatId && localMessageCount > 0) {
-    return false;
-  }
-  if (unreadChatIds instanceof Set && unreadChatIds.has(chat.thread_id)) {
-    return false;
-  }
-  if (backgroundGeneratingChatIds instanceof Set && backgroundGeneratingChatIds.has(chat.thread_id)) {
-    return false;
-  }
-  if (backgroundErrorChatIds instanceof Set && backgroundErrorChatIds.has(chat.thread_id)) {
-    return false;
-  }
-  return true;
-}
-
 export function buildChatSessionItems({
   messages,
   threadId,
@@ -446,7 +405,6 @@ export function buildChatSessionItems({
   firstMessageTime,
   archivedSessions,
   pinnedSessionIds,
-  sharedSessionIds,
   backendChatSessions,
   selectedBackendChatId,
   unreadChatIds,
@@ -470,7 +428,6 @@ export function buildChatSessionItems({
     firstMessageTime,
     archivedSessions,
     pinnedSessionIds,
-    sharedSessionIds,
     includeCurrentSession: shouldShowLocalCurrentSession,
   })
     .map((item) => ({
@@ -486,17 +443,7 @@ export function buildChatSessionItems({
 
   const localIds = new Set(localItems.map((item) => item.pinKey));
   const backendItems = backendChatSessions
-    .filter((chat) => (
-      chat.thread_id
-      && !localIds.has(chat.thread_id)
-      && !isHiddenEmptyDraft(chat, {
-        selectedBackendChatId,
-        localMessageCount: messages.length,
-        unreadChatIds,
-        backgroundGeneratingChatIds,
-        backgroundErrorChatIds,
-      })
-    ))
+    .filter((chat) => !localIds.has(chat.thread_id))
     .map((chat) => buildBackendSessionItem(chat, selectedBackendChatId, unreadChatIds, backgroundGeneratingChatIds, backgroundErrorChatIds, isGenerating));
 
   return [...localItems, ...backendItems];
@@ -505,10 +452,6 @@ export function buildChatSessionItems({
 export function visibleGroupsForFilter({ sessionItems, sidebarFilter, groupSessionItems }) {
   if (sidebarFilter === 'unread') {
     return [{ key: 'unread', label: 'Unread', items: sessionItems.filter((item) => item.unread && !item.archived) }]
-      .filter((group) => group.items.length > 0);
-  }
-  if (sidebarFilter === 'shared') {
-    return [{ key: 'shared', label: 'Shared', items: sessionItems.filter((item) => item.shared && !item.archived) }]
       .filter((group) => group.items.length > 0);
   }
   if (sidebarFilter === 'archived') {
@@ -529,22 +472,12 @@ export function findAdjacentSessionItem(visibleSessionItems, removedItemId) {
   return visibleSessionItems[visibleIndex + 1] ?? visibleSessionItems[visibleIndex - 1] ?? null;
 }
 
-// Whether the local-only "current session" (not yet a backend chat card)
-// needs to be persisted as its own sidebar card before switching away from
-// it -- otherwise it would simply disappear once selection moves elsewhere.
-export function shouldMaterializeBeforeSwitching({ selectedBackendChatId, threadId, messageCount }) {
-  return !selectedBackendChatId && Boolean(threadId) && messageCount > 0;
-}
-
 export function sidebarEmptyMessage({ sidebarFilter, backendChatsLoaded, backendChatsLoading }) {
   if (!backendChatsLoaded || backendChatsLoading) {
     return 'Loading chats...';
   }
   if (sidebarFilter === 'unread') {
     return 'No unread chats.';
-  }
-  if (sidebarFilter === 'shared') {
-    return 'No shared chats yet.';
   }
   if (sidebarFilter === 'archived') {
     return 'No archived chats yet.';

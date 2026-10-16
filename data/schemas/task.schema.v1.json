@@ -6,6 +6,7 @@
   "properties": {
     "id": {
       "type": "string",
+      "readOnly": true,
       "description": "Unique card identifier (matches the document suffix)."
     },
     "title": {
@@ -49,12 +50,48 @@
       "description": "Ordering position within the column.",
       "default": 0
     },
+    "project_id": {
+      "type": ["string", "null"],
+      "description": "Project the card belongs to, or null for an unscoped card."
+    },
+    "spec_path": {
+      "type": ["string", "null"],
+      "description": "Path to the linked spec, if any."
+    },
+    "branch_name": {
+      "type": ["string", "null"],
+      "description": "Linked git branch, if any."
+    },
+    "pr_url": {
+      "type": ["string", "null"],
+      "description": "Linked pull request URL, if any."
+    },
+    "started_at": {
+      "type": ["string", "null"],
+      "readOnly": true,
+      "description": "ISO8601 timestamp when work started."
+    },
+    "completed_at": {
+      "type": ["string", "null"],
+      "readOnly": true,
+      "description": "ISO8601 timestamp when work completed."
+    },
+    "last_error": {
+      "type": ["string", "null"],
+      "description": "Most recent error reported for the card."
+    },
+    "metadata": {
+      "type": "object",
+      "description": "Free-form card metadata."
+    },
     "created_at": {
       "type": "string",
+      "readOnly": true,
       "description": "ISO8601 creation timestamp."
     },
     "updated_at": {
       "type": "string",
+      "readOnly": true,
       "description": "ISO8601 last-update timestamp."
     }
   },

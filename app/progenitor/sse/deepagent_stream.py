@@ -170,6 +170,7 @@ class DeepAgentSSEStream:
         thread_id: str,
         received_at: float | None = None,
         attachments: list[dict[str, Any]] | None = None,
+        source: str | None = None,
     ) -> AsyncGenerator[dict[str, Any]]:
         """Yield SSE stream items from ``graph.astream``."""
 
@@ -183,8 +184,11 @@ class DeepAgentSSEStream:
         self._trace_begin(thread_id=thread_id)
         self.state["current_input"] = message
         self.state["cycle_count"] = int(self.state.get("cycle_count") or 0) + 1
+        configurable: dict[str, Any] = {"thread_id": thread_id}
+        if source is not None:
+            configurable["progenitor_source"] = source
         astream_kwargs: dict[str, Any] = {
-            "config": {"configurable": {"thread_id": thread_id}},
+            "config": {"configurable": configurable},
         }
         if self._graph_accepts_kwarg("stream_mode"):
             astream_kwargs["stream_mode"] = ["messages", "updates", "custom", "tasks"]
@@ -226,11 +230,13 @@ class DeepAgentSSEStream:
         finally:
             self._trace_end()
 
-    async def collect_response(self, message: str, *, thread_id: str) -> str:
+    async def collect_response(
+        self, message: str, *, thread_id: str, source: str | None = None
+    ) -> str:
         """Run the stream and return only assistant text."""
 
         response = ""
-        async for item in self.stream(message, thread_id=thread_id):
+        async for item in self.stream(message, thread_id=thread_id, source=source):
             if item.get("type") != "stream_chunk":
                 continue
             if item.get("is_final"):
