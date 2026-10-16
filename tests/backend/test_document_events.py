@@ -639,6 +639,33 @@ def test_document_create_generates_or_uses_id_and_rejects_duplicate(store):
     assert next(event for event in events if event.key == explicit["key"]).origin == "run-create"
 
 
+def test_document_create_stamps_creation_times_by_field_type(store, monkeypatch):
+    """`timestamp` and friends are always the real creation time: Unix seconds
+    for a number field (alerts), ISO text otherwise."""
+    import time
+
+    from app.progenitor.document_types import DocumentType
+
+    schema = {
+        "type": "object",
+        "required": ["id", "note", "timestamp", "created_at"],
+        "properties": {
+            "id": {"type": "string", "readOnly": True},
+            "note": {"type": "string"},
+            "timestamp": {"type": "number", "readOnly": True},
+            "created_at": {"type": "string", "readOnly": True},
+        },
+    }
+    monkeypatch.setattr(DocumentType, "load_schema", lambda self: schema)
+    before = time.time()
+    created = _execute_document_create_node(
+        store, WorkflowNodeDocumentCreate(document_type="kanban_card"), {"note": "n"}, "run"
+    )["document"]
+
+    assert before <= created["timestamp"] <= time.time()
+    assert created["created_at"].startswith(time.strftime("%Y-", time.gmtime()))
+
+
 def test_document_delete_returns_before_and_tags_origin(store):
     store.save_document(PROGENITOR_STATE_PREFIX, "kanban_card:gone", _card("gone", "todo"))
     node = WorkflowNodeDocumentDelete(document_type="kanban_card")

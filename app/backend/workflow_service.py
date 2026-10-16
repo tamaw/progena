@@ -711,10 +711,14 @@ def _execute_document_create_node(
     properties = schema.get("properties", {})
     if "id" in properties:
         payload["id"] = document_id
-    now = utcnow_isoformat()
-    for field in ("created_at", "updated_at"):
+    # Creation-time fields are always the real time: a number field gets Unix
+    # seconds, any other the ISO timestamp.
+    now = utcnow()
+    for field in ("created_at", "updated_at", "timestamp"):
         if field in properties:
-            payload[field] = now
+            field_type = properties[field].get("type")
+            types = {field_type} if isinstance(field_type, str) else set(field_type or ())
+            payload[field] = now.timestamp() if types & {"number", "integer"} else now.isoformat()
     error = validate_against_schema(payload, schema)
     if error:
         raise ValueError(
