@@ -222,6 +222,9 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           PROGENITOR_HOST_SCHEMAS_DIR: ${{ github.workspace }}/data/schemas
           PROGENITOR_HOST_LOGS_DIR: /var/lib/progenitor/logs
+          # Outside the runner checkout: the runtime's managed clones must survive
+          # a clean checkout, and a root-owned folder there breaks other jobs.
+          PROGENITOR_HOST_REPOS_DIR: /var/lib/progenitor/repos
         run: |
           # If a manual/dev container exists with the same name, docker compose will fail.
           # Removing containers keeps bind-mounted state (logs/repos, plus Postgres) intact.
@@ -232,10 +235,11 @@ jobs:
           docker image inspect ghcr.io/tamaw/progenitor-frontend:${PROGENITOR_IMAGE_TAG} >/dev/null
           test -d "$PROGENITOR_HOST_SCHEMAS_DIR"
           # The runtime runs as UID 10001; log files left by the old root container
-          # are not appendable, so hand its log folder over before starting it.
-          docker run --rm --user 0 --entrypoint sh -v "$PROGENITOR_HOST_LOGS_DIR:/logs" \
+          # are not appendable, so hand its log and repos folders over before starting it.
+          docker run --rm --user 0 --entrypoint sh \
+            -v "$PROGENITOR_HOST_LOGS_DIR:/logs" -v "$PROGENITOR_HOST_REPOS_DIR:/repos" \
             ghcr.io/tamaw/progenitor:${PROGENITOR_IMAGE_TAG} \
-            -c 'mkdir -p /logs/progenitor && chown -R 10001:10001 /logs/progenitor'
+            -c 'mkdir -p /logs/progenitor && chown -R 10001:10001 /logs/progenitor /repos'
           docker compose -f docker/docker-compose.progenitor.yml up -d --no-build --pull never
           docker compose -f docker/docker-compose.progenitor.yml ps
 
