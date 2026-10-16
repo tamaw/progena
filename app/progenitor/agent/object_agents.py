@@ -27,7 +27,7 @@ from deepagents.backends.utils import (
     perform_string_replacement,
     slice_read_response,
 )
-from deepagents.middleware.filesystem import FilesystemMiddleware
+from deepagents.middleware.filesystem import FilesystemMiddleware, FilesystemPermission
 from deepagents.middleware.memory import MemoryMiddleware
 from deepagents.middleware.skills import SkillsMiddleware
 from deepagents.middleware.subagents import CompiledSubAgent
@@ -37,6 +37,7 @@ from langchain.agents.middleware import (
     InterruptOnConfig,
     SummarizationMiddleware,
 )
+from langchain_core.messages import AIMessage
 from langchain_core.runnables import RunnableConfig, RunnableLambda
 
 from ..config import LLMConfig
@@ -175,6 +176,23 @@ class ScopedMountBackend:
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._backend, name)
+
+
+def _without_base_permissions(
+    permissions: Iterable[FilesystemPermission], bases: Iterable[str]
+) -> tuple[FilesystemPermission, ...]:
+    """``permissions`` minus paths inside ``/knowledge/<base>/`` for each skipped base."""
+    prefixes = tuple(f"/knowledge/{base}/" for base in bases)
+    kept: list[FilesystemPermission] = []
+    for rule in permissions:
+        paths = [path for path in rule.paths if not f"{path.rstrip('/')}/".startswith(prefixes)]
+        if len(paths) == len(rule.paths):
+            kept.append(rule)
+        elif paths:
+            kept.append(
+                FilesystemPermission(operations=rule.operations, paths=paths, mode=rule.mode)
+            )
+    return tuple(kept)
 
 
 def _tools_for_manifest(manifest: ObjectAgentManifest, all_tools: Iterable[Any]) -> list[Any]:
@@ -391,6 +409,7 @@ def _model_for_manifest(manifest: ObjectAgentManifest, parent_model: Any) -> Any
 AGENT_MEMORY_FILE = "AGENTS.md"
 # What a memory: true agent sees; backed by its private documents only.
 AGENT_MEMORY_MOUNT = "/memories/"
+CURATING_KNOWLEDGE_SKILL = "/skills/curating-knowledge"
 
 
 def object_agent_memory_prefix(name: str) -> str:
@@ -466,11 +485,32 @@ def build_object_agent(
     Callers own manifest loading and invocation. The model field remains a
     deployment override through the existing adapter, not a named profile.
     """
-    selected_tools = _tools_for_manifest(manifest, tools)
-    if manifest.mounts:
+    if manifest.knowledge and CURATING_KNOWLEDGE_SKILL not in manifest.skills:
+        manifest = replace(manifest, skills=manifest.skills + (CURATING_KNOWLEDGE_SKILL,))
+    # The parent's `search` covers every base; an object agent only ever gets it
+    # scoped to its knowledge grants, and not at all without grants.
+    selected_tools = [
+        tool
+        for tool in _tools_for_manifest(manifest, tools)
+        if getattr(tool, "name", "") != "search"
+    ]
+    if manifest.knowledge:
+        from ..tools.search import SearchTool
+        from .adapters import wrap_system_tool
+
+        granted = frozenset(grant.base for grant in manifest.knowledge)
+        selected_tools.append(
+            wrap_system_tool(SearchTool(allowed_bases=granted), state_manager=state_manager)
+        )
+    if manifest.mounts or manifest.knowledge:
         _validate_permissions_within_mounts(
             manifest.permissions,
-            (*manifest.mounts, *implicit_mounts(manifest.skills, memory=manifest.memory)),
+            (
+                *manifest.mounts,
+                *implicit_mounts(
+                    manifest.skills, memory=manifest.memory, knowledge=manifest.knowledge
+                ),
+            ),
             source=f"object agent {manifest.name!r}",
         )
     child_model = _model_for_manifest(manifest, model)
@@ -493,6 +533,18 @@ def build_object_agent(
         routes[AGENT_MEMORY_MOUNT] = ScopedMountBackend(
             parent_memories, "/" + object_agent_memory_prefix(manifest.name)
         )
+    if manifest.knowledge:
+        parent_knowledge = dict(getattr(backend, "routes", {})).get("/knowledge/")
+        if parent_knowledge is None:
+            raise ValueError(
+                f"object agent {manifest.name!r} declares knowledge but the runtime has no "
+                "/knowledge/ route"
+            )
+        for grant in manifest.knowledge:
+            scoped = ScopedMountBackend(parent_knowledge, f"/{grant.base}")
+            routes[f"/knowledge/{grant.base}/"] = (
+                scoped if grant.access == "write" else ReadOnlyBackend(scoped)
+            )
     if manifest.shell is None:
         self_backend = CompositeBackend(default=StateBackend(), routes=routes)
         workspace = None
@@ -529,7 +581,7 @@ def build_object_agent(
                 cast("dict[str, bool | InterruptOnConfig]", manifest.interrupt_on)
             )
         )
-    if manifest.mounts or manifest.memory or workspace is not None:
+    if manifest.mounts or manifest.memory or manifest.knowledge or workspace is not None:
         middleware.append(
             FilesystemMiddleware(
                 backend=self_backend,
@@ -579,6 +631,36 @@ def create_object_agent_proxy(
 
     async def run(state: Any, config: RunnableConfig) -> dict[str, Any]:
         manifest = await load_manifest()
+        warnings: list[str] = []
+        if manifest.knowledge:
+            catalog = await state_manager.get_knowledge_config()
+            catalog_ids = {
+                str(base.get("id"))
+                for base in catalog.get("bases", [])
+                if isinstance(base, dict) and base.get("id")
+            }
+            known = []
+            skipped = []
+            for grant in manifest.knowledge:
+                if grant.base in catalog_ids:
+                    known.append(grant)
+                else:
+                    skipped.append(grant.base)
+                    warning = (
+                        f"Manifest for '{manifest.name}' grants knowledge base '{grant.base}', "
+                        "which does not exist in /config/knowledge.json; access was skipped. "
+                        "Fix the agent's SYSTEM.md 'knowledge' list or create the base."
+                    )
+                    warnings.append(warning)
+                    logger.warning(warning)
+            if skipped:
+                # Permissions for a skipped base would point outside the agent's
+                # mounts and fail the build; drop just those paths.
+                manifest = replace(
+                    manifest,
+                    knowledge=tuple(known),
+                    permissions=_without_base_permissions(manifest.permissions, skipped),
+                )
         profile = config.get("configurable", {}).get("model_profile")
         selected_model = model
         if profile:
@@ -604,13 +686,24 @@ def create_object_agent_proxy(
             memory_sources=memory_sources,
         )
         thread_id = config.get("configurable", {}).get("object_agent_thread_id")
-        if thread_id:
-            # Agent Protocol requests run on their own durable checkpoint thread.
-            return await agent.ainvoke(
-                state,
-                config={"configurable": {"thread_id": thread_id}},
-            )
-        return await agent.ainvoke({"messages": state.get("messages") or []})
+        result = (
+            await agent.ainvoke(state, config={"configurable": {"thread_id": thread_id}})
+            if thread_id
+            else await agent.ainvoke({"messages": state.get("messages") or []})
+        )
+        if warnings and isinstance(result, dict):
+            messages = list(result.get("messages") or [])
+            for index in range(len(messages) - 1, -1, -1):
+                message = messages[index]
+                if isinstance(message, AIMessage) and message.text:
+                    messages.append(
+                        AIMessage(
+                            content=f"{message.text}\n\nWarnings:\n- " + "\n- ".join(warnings)
+                        )
+                    )
+                    result["messages"] = messages
+                    break
+        return result
 
     return {
         "name": source.name,

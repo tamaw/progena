@@ -50,6 +50,7 @@ from deepagents.backends import (
 from deepagents.backends.protocol import EditResult, FileUploadResponse, WriteResult
 
 from .attachment_backend import AttachmentDirectoryBackend
+from .knowledge_backend import KnowledgePageBackend
 from .session_backend import SessionDirectoryBackend
 from .state_backend import (
     ContentDocumentDirectoryBackend,
@@ -63,6 +64,7 @@ from .state_backend import (
     UserAgentDirectoryBackend,
     WorkflowDirectoryBackend,
     create_health_state_file,
+    create_indexer_state_file,
     create_knowledge_state_file,
     create_marketplaces_state_file,
     create_mcp_state_file,
@@ -236,6 +238,7 @@ def create_progenitor_backend(
         )
         routes["/memories/"] = ContentDocumentDirectoryBackend(state_manager, "memory")
         routes["/prompts/"] = PromptDocumentDirectoryBackend(state_manager, "prompt")
+        routes["/knowledge/"] = KnowledgePageBackend(state_manager)
         for segment in plugin_skill_segments or []:
             routes[f"/skills/{segment}/"] = ReadOnlyBackend(
                 ContentDocumentDirectoryBackend(state_manager, "skill", path_prefix=segment)
@@ -256,6 +259,7 @@ def create_progenitor_backend(
             create_plugins_state_file,
             create_marketplaces_state_file,
             create_knowledge_state_file,
+            create_indexer_state_file,
             create_schedule_state_file,
             create_registry_state_file,
             create_repos_state_file,

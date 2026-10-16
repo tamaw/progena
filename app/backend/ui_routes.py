@@ -40,9 +40,11 @@ from app.progenitor.cron import cron_error, default_timezone_name, next_cron_tim
 from app.progenitor.document_kinds import (
     KANBAN_CARD_KEY_PREFIX,
     KANBAN_TASK_CONTENT_KEY_PREFIX,
+    KNOWLEDGE_PAGE_KEY_PREFIX,
     SESSION_KEY_PREFIX,
 )
 from app.progenitor.document_types import DOCUMENT_OPERATIONS, DocumentType
+from app.progenitor.knowledge.indexer_config import INDEX_STATUS_DOC_KEY
 from app.progenitor.routines.store import ROUTINE_GRAPH_KEY_PREFIX
 from app.progenitor.schedule import Scheduler
 from app.progenitor.schedule.service import generate_schedule_id
@@ -3966,7 +3968,12 @@ def _queue_state_watch_status(snapshot, changed_key: str | None = None) -> None:
             broadcast_mcp_snapshot()
         if changed_key in (None, "schedule"):
             broadcast_schedule_snapshot()
-        if changed_key in (None, "knowledge"):
+        if changed_key in (None, "knowledge", INDEX_STATUS_DOC_KEY):
+            broadcast_knowledge_snapshot()
+        if changed_key is not None and changed_key.startswith(KNOWLEDGE_PAGE_KEY_PREFIX):
+            base_id = changed_key.removeprefix(KNOWLEDGE_PAGE_KEY_PREFIX).split("/", 1)[0]
+            if base_id:
+                broadcast_knowledge_pages_snapshot(base_id)
             broadcast_knowledge_snapshot()
         if changed_key in (None, "preferences"):
             broadcast_preferences_snapshot()
@@ -4156,6 +4163,19 @@ async def _publish_chat_session_document_event(typed: TypedDocumentEvent) -> Non
     )
 
 
+# --------------------------------------------------------------------------- #
+# Knowledge indexer watchers
+# --------------------------------------------------------------------------- #
+_knowledge_index_watch_callback = None
+
+
+def _queue_knowledge_index_resync(_snapshot, changed_key: str | None = None) -> None:
+    """Route state changes to the knowledge indexer."""
+    from .knowledge_indexer import get_knowledge_indexer
+
+    get_knowledge_indexer().on_store_change(changed_key)
+
+
 _routine_agent_watch_callback = None
 _active_routine_agent_tasks: set[asyncio.Task] = set()
 
@@ -4281,6 +4301,7 @@ async def _reconcile_routine_agent(changed_key: str | None) -> None:
 async def start_state_status_watcher(reconnect_delay: float = 2.0) -> None:
     global _state_watch_callback
     global _workflow_invoke_watch_callback, _routine_agent_watch_callback
+    global _knowledge_index_watch_callback
     state_reader = get_state_reader()
     if _state_watch_callback is None:
         _state_watch_callback = _queue_state_watch_status
@@ -4291,6 +4312,9 @@ async def start_state_status_watcher(reconnect_delay: float = 2.0) -> None:
     if _routine_agent_watch_callback is None:
         _routine_agent_watch_callback = _queue_routine_agent_reconciliation
         state_reader.add_watcher(_routine_agent_watch_callback)
+    if _knowledge_index_watch_callback is None:
+        _knowledge_index_watch_callback = _queue_knowledge_index_resync
+        state_reader.add_watcher(_knowledge_index_watch_callback)
     await routine_events.start()
     await get_document_event_dispatcher().start(reconnect_delay)
     await get_workflow_cron_clock().start()
@@ -4300,6 +4324,7 @@ async def start_state_status_watcher(reconnect_delay: float = 2.0) -> None:
 async def stop_state_status_watcher() -> None:
     global _state_watch_callback
     global _workflow_invoke_watch_callback, _routine_agent_watch_callback
+    global _knowledge_index_watch_callback
     state_reader = get_state_reader()
     if _state_watch_callback is not None:
         state_reader.remove_watcher(_state_watch_callback)
@@ -4310,6 +4335,9 @@ async def stop_state_status_watcher() -> None:
     if _routine_agent_watch_callback is not None:
         state_reader.remove_watcher(_routine_agent_watch_callback)
         _routine_agent_watch_callback = None
+    if _knowledge_index_watch_callback is not None:
+        state_reader.remove_watcher(_knowledge_index_watch_callback)
+        _knowledge_index_watch_callback = None
     await routine_events.stop()
     await get_workflow_cron_clock().stop()
     await get_document_event_dispatcher().stop()
@@ -4650,6 +4678,18 @@ def broadcast_knowledge_snapshot(
     """
     payload = snapshot_knowledge_bases() if bases is None else bases
     return broadcast_ui_event("knowledge.snapshot", {"bases": payload}, request_id=request_id)
+
+
+def broadcast_knowledge_pages_snapshot(
+    base_id: str, *, request_id: str | None = None
+) -> UiEventEnvelope:
+    from .knowledge_pages import list_pages
+
+    return broadcast_ui_event(
+        "knowledge.pages.snapshot",
+        {"base_id": base_id, "pages": list_pages(base_id)},
+        request_id=request_id,
+    )
 
 
 def broadcast_preferences_snapshot(
