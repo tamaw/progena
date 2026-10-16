@@ -18,7 +18,6 @@ not backend-owned files in the current runtime.
 
 import asyncio
 import contextlib
-import json
 import logging
 import os
 import re
@@ -36,28 +35,40 @@ from fastapi.sse import EventSourceResponse, ServerSentEvent
 from pydantic import BaseModel, Field
 
 from app.progenitor.config import default_plugins_config_payload
-from app.progenitor.content_documents import (
-    AGENT_DOCUMENT_KEY_PREFIX,
-    AGENT_SELF_EDIT_TOUCH_KEY_PREFIX,
-    SKILL_DOCUMENT_KEY_PREFIX,
+from app.progenitor.content_documents import AGENT_DOCUMENT_KEY_PREFIX, SKILL_DOCUMENT_KEY_PREFIX
+from app.progenitor.cron import cron_error, default_timezone_name, next_cron_time
+from app.progenitor.document_kinds import (
+    KANBAN_CARD_KEY_PREFIX,
+    KANBAN_TASK_CONTENT_KEY_PREFIX,
+    KNOWLEDGE_PAGE_KEY_PREFIX,
+    SESSION_KEY_PREFIX,
 )
-from app.progenitor.document_kinds import DOCUMENT_KINDS, KANBAN_CARD_KEY_PREFIX, key_prefix_for
+from app.progenitor.document_types import DOCUMENT_OPERATIONS, DocumentType
+from app.progenitor.knowledge.indexer_config import INDEX_STATUS_DOC_KEY
 from app.progenitor.routines.store import ROUTINE_GRAPH_KEY_PREFIX
-from app.progenitor.schedule import Scheduler, default_timezone_name
+from app.progenitor.schedule import Scheduler
 from app.progenitor.schedule.service import generate_schedule_id
 from app.progenitor.utils import utcnow
 from app.progenitor.workflows import (
-    WORKFLOW_ALLOWED_EVENT_TYPES,
+    WORKFLOW_DEFAULT_DOCUMENT_TYPE,
     WORKFLOW_DEFINITION_KEY_PREFIX,
     WORKFLOW_INVOKE_REQUEST_KEY_PREFIX,
     WORKFLOW_QUEUE_KEY_PREFIX,
     WORKFLOW_RUN_KEY_PREFIX,
     WorkflowDefinition,
     WorkflowListItem,
-    WorkflowNodeCode,
-    WorkflowNodeUser,
     WorkflowRun,
     default_workflow_definition,
+    document_create_input_schema,
+    document_create_output_schema,
+    document_delete_input_schema,
+    document_delete_output_schema,
+    document_event_output_schema,
+    document_query_output_schema,
+    document_read_input_schema,
+    document_read_output_schema,
+    document_write_input_schema,
+    document_write_output_schema,
     parse_workflow_invoke_request_document,
     workflow_id_from_path,
 )
@@ -79,10 +90,22 @@ from .alerts import (
     create_alert as store_alert,
 )
 from .chat_routes import broadcast_chat_sessions_snapshot, create_chat_router
-from .chat_sessions import UiEventEnvelope, UiRequestAcknowledgement, acknowledgement_response
+from .chat_sessions import (
+    UiEventEnvelope,
+    UiRequestAcknowledgement,
+    acknowledgement_response,
+    get_chat_summary,
+)
+from .document_events import (
+    DocumentEventDispatcher,
+    TypedDocumentEvent,
+    list_document_types,
+)
 from .document_store import (
     BACKEND_STATE_PREFIX,
     PROGENITOR_STATE_PREFIX,
+    DocumentEvent,
+    document_write_origin,
     get_default_document_store,
 )
 from .inbox_routes import (
@@ -92,6 +115,7 @@ from .inbox_routes import (
 )
 from .knowledge_service import snapshot_bases as snapshot_knowledge_bases
 from .marketplace_service import load_marketplaces
+from .model_profile_routes import create_model_profile_router
 from .policy_routes import create_policy_router
 from .preferences_service import load_preferences
 from .prompt_service import PromptService
@@ -100,56 +124,46 @@ from .request_utils import request_correlation_id as _request_correlation_id
 from .routine_events import routine_events
 from .state_reader import StateReader, get_state_reader
 from .threads import complete_thread, fail_thread, upsert_thread
+from .workflow_cron import WorkflowCronClock
 from .workflow_service import (
     PromptExecutionResult,
     WorkflowExecutor,
-    build_agent_node_instruction,
     build_manual_trigger_event,
-    build_user_node_instruction,
     delete_workflow_definition,
     get_workflow_definition,
     get_workflow_run,
+    list_workflow_definitions,
     list_workflow_list_items,
     list_workflow_runs,
     save_workflow_definition,
 )
+
+SOURCE_UI = "ui"
+SOURCE_WORKFLOW = "workflow"
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/ui", tags=["ui"])
 
 
-@router.get("/model-profiles")
-async def get_model_profiles() -> dict[str, Any]:
-    """Return public selector metadata, never credentials or arbitrary config."""
-    from app.progenitor.state.model_profiles import (
-        default_model_profiles_payload,
-        validate_model_profiles_payload,
-    )
-
-    default = default_model_profiles_payload()
-    document = await asyncio.to_thread(
-        get_default_document_store().get_document, PROGENITOR_STATE_PREFIX, "profile", default
-    )
-    try:
-        profiles = validate_model_profiles_payload(document.payload if document else default)
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    return {
-        "profiles": [
-            {"name": name, "deployment": profile["deployment"]}
-            for name, profile in profiles.items()
-        ]
-    }
+@router.get("/workflows/cron-preview")
+async def preview_workflow_cron(
+    expression: str,
+    timezone: str,
+    count: int = Query(default=3, ge=1, le=10),
+) -> dict[str, Any]:
+    """Next due times of a cron trigger, computed exactly as the backend clock fires them."""
+    error = cron_error(expression, timezone)
+    if error:
+        raise HTTPException(status_code=400, detail=error)
+    runs: list[str] = []
+    cursor = utcnow()
+    for _ in range(count):
+        cursor = next_cron_time(expression, cursor, timezone)
+        runs.append(cursor.isoformat())
+    return {"next_runs": runs}
 
 
-KANBAN_EVENT_TYPE_LABELS = {
-    "kanban.card.created": "Card created",
-    "kanban.card.updated": "Card updated",
-    "kanban.card.moved": "Card moved",
-    "kanban.card.deleted": "Card deleted",
-    "kanban.card.status_changed": "Status changed",
-}
 MAX_EVENT_WIDGET_LOGS = 20
 
 
@@ -500,7 +514,7 @@ class WorkflowCreateRequest(BaseModel):
 
     title: str = "Untitled workflow"
     description: str = ""
-    event_type: str = WORKFLOW_ALLOWED_EVENT_TYPES[0]
+    document_type: str = WORKFLOW_DEFAULT_DOCUMENT_TYPE
 
 
 class WorkflowContentPutRequest(BaseModel):
@@ -511,9 +525,8 @@ class WorkflowContentPutRequest(BaseModel):
 
 
 class WorkflowManualTriggerRequest(BaseModel):
-    """Manual trigger payload for operator testing."""
+    """Manual trigger payload for operator testing, merged over neutral event defaults."""
 
-    event_type: str | None = None
     payload: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -567,6 +580,7 @@ def _build_action_metadata(
     widget_id: str | None,
     root_widget_id: str | None,
     action: str,
+    workflow_run_id: str | None = None,
 ) -> dict[str, str]:
     """Build metadata sent through the backend→Progenitor boundary."""
 
@@ -575,11 +589,14 @@ def _build_action_metadata(
         "invocation_type": invocation_type,
         "invocation_source": invocation_source or action,
         "action": action,
+        "source": SOURCE_WORKFLOW if invocation_type == "workflow_step" else SOURCE_UI,
     }
     if widget_id:
         metadata["widget_id"] = widget_id
     if root_widget_id:
         metadata["root_widget_id"] = root_widget_id
+    if workflow_run_id:
+        metadata["workflow_run_id"] = workflow_run_id
     return metadata
 
 
@@ -596,67 +613,36 @@ def _workflow_event_request_id(payload: Mapping[str, Any]) -> str | None:
 async def _workflow_prompt_runner(
     *,
     workflow: WorkflowDefinition,
+    run_id: str,
     node_id: str,
     node,
     input_text: str,
     thread_id: str | None,
 ) -> PromptExecutionResult:
+    """Execute every agent/extract workflow step through one normal prompt path.
+
+    ``input_text`` is the rendered prompt (plus any appended instructions);
+    it is the sole instruction sent to the model.
+    """
+
     widget_id = f"workflow:{workflow.id}:{node_id}"
-    root_widget_id = f"workflow:{workflow.id}"
-    if isinstance(node, WorkflowNodeCode):
-        # Code nodes have no dedicated sandboxed executor (same as the old
-        # Workspace canvas): the agent is asked to run the snippet itself
-        # through the normal SSE prompt path.
-        request = ActionRunRequest(
-            widget_id=widget_id,
-            code=node.content,
-            language=node.language,
-            input=input_text,
-            broadcast_response=False,
-            thread_id=thread_id,
-            invocation_type="workflow_step",
-            invocation_source=widget_id,
-            root_widget_id=root_widget_id,
-        )
-    elif isinstance(node, WorkflowNodeUser):
-        request = ActionRunRequest(
-            widget_id=widget_id,
-            prompt=build_user_node_instruction(node, input_text),
-            broadcast_response=False,
-            thread_id=thread_id,
-            invocation_type="workflow_step",
-            invocation_source=widget_id,
-            root_widget_id=root_widget_id,
-        )
-    elif getattr(node, "kind", "") == "agent":
-        request = ActionRunRequest(
-            widget_id=widget_id,
-            prompt=build_agent_node_instruction(node, input_text),
-            input=input_text,
-            broadcast_response=False,
-            thread_id=thread_id,
-            invocation_type="workflow_step",
-            invocation_source=widget_id,
-            root_widget_id=root_widget_id,
-        )
-    else:
-        request = ActionRunRequest(
-            widget_id=widget_id,
-            prompt=node.prompt,
-            input=input_text,
-            broadcast_response=False,
-            thread_id=thread_id,
-            invocation_type="workflow_step",
-            invocation_source=widget_id,
-            root_widget_id=root_widget_id,
-        )
-    thread_id, response_obj, response_text = await _execute_action_run(request)
+    request = ActionRunRequest(
+        widget_id=widget_id,
+        input=input_text,
+        broadcast_response=False,
+        thread_id=thread_id,
+        invocation_type="workflow_step",
+        invocation_source=widget_id,
+        root_widget_id=f"workflow:{workflow.id}",
+    )
+    thread_id, _response_obj, response_text = await _execute_action_run(
+        request, workflow_run_id=run_id
+    )
     return PromptExecutionResult(response=response_text, thread_id=thread_id)
 
 
 def get_workflow_executor() -> WorkflowExecutor:
     """Return the singleton backend workflow executor."""
-
     global _workflow_executor
     if _workflow_executor is None:
         _workflow_executor = WorkflowExecutor(
@@ -669,6 +655,21 @@ def get_workflow_executor() -> WorkflowExecutor:
             ),
         )
     return _workflow_executor
+
+
+_workflow_cron_clock: WorkflowCronClock | None = None
+
+
+def get_workflow_cron_clock() -> WorkflowCronClock:
+    """Return the singleton clock firing workflow cron trigger nodes."""
+    global _workflow_cron_clock
+    if _workflow_cron_clock is None:
+        _workflow_cron_clock = WorkflowCronClock(
+            store_getter=get_default_document_store,
+            definitions_getter=list_workflow_definitions,
+            executor_getter=get_workflow_executor,
+        )
+    return _workflow_cron_clock
 
 
 def _schedule_item_to_info(item) -> ScheduleItemInfo:
@@ -1024,141 +1025,17 @@ def _kanban_card_store_key(card_id: str) -> str:
     return f"{_KANBAN_CARD_KEY_PREFIX}{card_id}"
 
 
-# Fields whose change fires a `kanban.card.updated` trigger. Keys are also the
-# values: kept as a set-like map for symmetry with the historical body-field
-# names, which happen to match the normalized card's own field names.
-_KANBAN_CARD_CONTENT_FIELDS = (
-    "title",
-    "summary",
-    "description",
-    "agent_name",
-    "owner",
-    "labels",
-    "spec_path",
-    "branch_name",
-    "pr_url",
-    "started_at",
-    "completed_at",
-    "last_error",
-    "metadata",
-)
-
-# Last-dispatched state per card id, used to detect kanban.card.* changes that
-# didn't go through the REST routes below (an agent writing
-# /tasks/<id>.md directly bypasses them entirely). Guarded by
-# _kanban_card_trigger_lock wherever it's read-then-written, so a REST-driven
-# change and the store-change reconciler picking up its own resulting NOTIFY
-# can't both decide to dispatch the same change.
-_last_known_kanban_cards: dict[str, dict] = {}
-_kanban_card_trigger_lock = asyncio.Lock()
-_kanban_card_cache_seeded = False
-
-
-def _remember_kanban_card_state(card_id: str, card: dict | None) -> None:
-    if card is None:
-        _last_known_kanban_cards.pop(card_id, None)
-    else:
-        _last_known_kanban_cards[card_id] = dict(card)
-
-
-def _kanban_card_change_triggers(previous_card: dict, refreshed_card: dict, now: str) -> list[dict]:
-    """Diff a kanban card's before/after state into kanban.card.* triggers.
-
-    Shared by the REST kanban routes and the generic store-change reconciler
-    (_reconcile_kanban_card_triggers) so a card edit fires the same triggers
-    whether it came from the UI or an agent writing /tasks/<id>.md
-    directly.
-    """
-    triggers: list[dict] = []
-    changed_fields = [
-        field
-        for field in _KANBAN_CARD_CONTENT_FIELDS
-        if previous_card.get(field) != refreshed_card.get(field)
-    ]
-    if changed_fields:
-        triggers.append(
-            {
-                "event_type": "kanban.card.updated",
-                "timestamp": now,
-                "payload": {
-                    "event_type": "kanban.card.updated",
-                    "card": refreshed_card,
-                    "previous_card": previous_card,
-                    "changed_fields": changed_fields,
-                },
-            }
-        )
-    if previous_card.get("column_id") != refreshed_card.get("column_id") or previous_card.get(
-        "position"
-    ) != refreshed_card.get("position"):
-        triggers.append(
-            {
-                "event_type": "kanban.card.moved",
-                "timestamp": now,
-                "payload": {
-                    "event_type": "kanban.card.moved",
-                    "card": refreshed_card,
-                    "previous_card": previous_card,
-                    "from": {
-                        "column_id": previous_card.get("column_id"),
-                        "position": previous_card.get("position"),
-                    },
-                    "to": {
-                        "column_id": refreshed_card.get("column_id"),
-                        "position": refreshed_card.get("position"),
-                    },
-                },
-            }
-        )
-    if previous_card.get("status") != refreshed_card.get("status"):
-        triggers.append(
-            {
-                "event_type": "kanban.card.status_changed",
-                "timestamp": now,
-                "payload": {
-                    "event_type": "kanban.card.status_changed",
-                    "card": refreshed_card,
-                    "previous_card": previous_card,
-                    "from_status": previous_card.get("status"),
-                    "to_status": refreshed_card.get("status"),
-                },
-            }
-        )
-    return triggers
-
-
-def _enrich_kanban_workflow_triggers(triggers: list[dict], now: str) -> list[dict]:
-    return [
-        {
-            **trigger,
-            "payload": {
-                **(trigger.get("payload") or {}),
-                "timestamp": trigger.get("timestamp") or now,
-                "source": "kanban",
-            },
-        }
-        for trigger in triggers
-    ]
-
-
-async def _apply_kanban_card_diff_effects(
+def _append_kanban_card_diff_activity(
     state_reader: StateReader,
     *,
     previous_card: dict,
     refreshed_card: dict,
     now: str,
-    request_id: str | None = None,
 ) -> None:
-    """Fire event-widget triggers, workflow triggers, task-activity entries,
-    and the activity broadcast for one card's before/after diff.
-    """
+    """Record task-activity entries and broadcast them for one card's before/after diff."""
     card_id = str(refreshed_card.get("id") or "").strip()
-    triggers = _kanban_card_change_triggers(previous_card, refreshed_card, now)
-    _apply_event_widget_triggers(state_reader, triggers, request_id=request_id)
-    await _dispatch_workflow_triggers(
-        _enrich_kanban_workflow_triggers(triggers, now),
-        request_id=request_id,
-    )
+    if not card_id:
+        return
     if previous_card.get("status") != refreshed_card.get("status"):
         _append_task_activity_entry(
             state_reader,
@@ -1206,98 +1083,12 @@ async def _apply_kanban_card_diff_effects(
         or previous_card.get("column_id") != refreshed_card.get("column_id")
         or previous_card.get("title") != refreshed_card.get("title")
     ):
-        broadcast_task_activity(card_id, request_id=request_id)
-
-
-async def _reconcile_kanban_card_triggers(changed_key: str | None) -> None:
-    """Catch kanban card changes that bypassed the REST routes below.
-
-    The REST routes (create/patch/delete) dispatch triggers inline and then
-    record the resulting state via _remember_kanban_card_state. But the
-    runtime agent's actual day-to-day mechanism for touching cards is
-    writing straight to /tasks/<id>.md, which persists via
-    StateManager straight to Postgres -- it never goes through these routes.
-    This reconciler runs off the same store-change watcher that already
-    pushes kanban.snapshot live (see _queue_state_watch_status), diffing the
-    current board against the last state we dispatched triggers for and
-    firing whatever a REST-driven edit would have fired, so an agent marking
-    a card done fires kanban.card.moved (and any workflow watching for it)
-    exactly like a drag-and-drop move does.
-
-    Guarded by _kanban_card_trigger_lock so this can't double-fire against a
-    REST route handling the same underlying change concurrently: whichever
-    one observes the pre-change state first dispatches and updates the
-    cache; the other then sees no diff and no-ops.
-    """
-    global _kanban_card_cache_seeded
-    if not (
-        changed_key is None
-        or changed_key == _kanban_board_store_key()
-        or changed_key.startswith(_KANBAN_CARD_KEY_PREFIX)
-    ):
-        return
-    state_reader = get_state_reader()
-    try:
-        board = _read_kanban_board(state_reader)
-    except Exception:
-        logger.debug("Failed to read kanban board for trigger reconciliation", exc_info=True)
-        return
-    current_by_id = {
-        str(card["id"]): card for card in board["cards"] if str(card.get("id") or "").strip()
-    }
-    now = utcnow().isoformat()
-    async with _kanban_card_trigger_lock:
-        if not _kanban_card_cache_seeded:
-            # First run since backend startup: the in-memory cache has no
-            # history, so treat the current board as the known baseline
-            # rather than firing a false "created" trigger for every
-            # pre-existing card.
-            for card_id, card in current_by_id.items():
-                _remember_kanban_card_state(card_id, card)
-            _kanban_card_cache_seeded = True
-            return
-
-        known_ids = set(_last_known_kanban_cards)
-        current_ids = set(current_by_id)
-
-        for card_id in current_ids - known_ids:
-            card = current_by_id[card_id]
-            _remember_kanban_card_state(card_id, card)
-            trigger = {
-                "event_type": "kanban.card.created",
-                "timestamp": now,
-                "payload": {"event_type": "kanban.card.created", "card": card},
-            }
-            _apply_event_widget_triggers(state_reader, [trigger])
-            await _dispatch_workflow_triggers(_enrich_kanban_workflow_triggers([trigger], now))
-
-        for card_id in known_ids - current_ids:
-            previous = _last_known_kanban_cards.get(card_id)
-            _remember_kanban_card_state(card_id, None)
-            if previous is None:
-                continue
-            trigger = {
-                "event_type": "kanban.card.deleted",
-                "timestamp": now,
-                "payload": {"event_type": "kanban.card.deleted", "card": previous},
-            }
-            _apply_event_widget_triggers(state_reader, [trigger])
-            await _dispatch_workflow_triggers(_enrich_kanban_workflow_triggers([trigger], now))
-
-        for card_id in current_ids & known_ids:
-            previous = _last_known_kanban_cards.get(card_id)
-            refreshed = current_by_id[card_id]
-            if previous is None or previous == refreshed:
-                continue
-            _remember_kanban_card_state(card_id, refreshed)
-            await _apply_kanban_card_diff_effects(
-                state_reader, previous_card=previous, refreshed_card=refreshed, now=now
-            )
+        broadcast_task_activity(card_id)
 
 
 def _task_content_store_key(card_id: str) -> str:
     """Return the shared-store key for one task body."""
-    return f"kanban_task_content:{card_id}"
+    return f"{KANBAN_TASK_CONTENT_KEY_PREFIX}{card_id}"
 
 
 def _task_content_public_path(card_id: str) -> str:
@@ -1637,7 +1428,7 @@ def _normalize_event_widget_logs(data: object) -> list[dict]:
                 "time": entry.get("time") or entry.get("timestamp"),
                 "timestamp": entry.get("timestamp") or entry.get("time"),
                 "level": entry.get("level", "info"),
-                "source": entry.get("source", "kanban"),
+                "source": entry.get("source", "document"),
                 "message": entry.get("message") or "",
             }
         )
@@ -1645,7 +1436,7 @@ def _normalize_event_widget_logs(data: object) -> list[dict]:
 
 
 def _normalize_event_widget_record(entry: dict) -> dict:
-    event_type = str(entry.get("event_type") or "kanban.card.created").strip().lower()
+    event_type = str(entry.get("event_type") or "kanban_card.created").strip().lower()
     name = str(entry.get("name") or event_type or "Event").strip()
     last_payload = entry.get("last_payload")
     logs = _normalize_event_widget_logs(entry.get("logs"))
@@ -1695,10 +1486,15 @@ def _write_event_widget_records(
 
 
 def _validate_event_type(value: str) -> str:
+    """Validate an event widget name: ``<document_type>.<op>``."""
+
     normalized = (value or "").strip().lower()
     if not normalized:
         raise HTTPException(status_code=400, detail="Event type is required")
-    if normalized not in KANBAN_EVENT_TYPE_LABELS:
+    type_id, _, op = normalized.rpartition(".")
+    if op not in DOCUMENT_OPERATIONS or type_id not in list_document_types(
+        get_default_document_store()
+    ):
         raise HTTPException(status_code=400, detail=f"Unsupported event type: {value}")
     return normalized
 
@@ -1916,80 +1712,60 @@ async def _inspect_agent_widget(
     }
 
 
-def _summarize_event_trigger(event_type: str, payload: dict) -> str:
-    label = KANBAN_EVENT_TYPE_LABELS.get(event_type, event_type)
-    card = payload.get("card") if isinstance(payload, dict) else None
-    if isinstance(card, dict):
-        title = str(card.get("title") or "").strip()
-        if title:
-            return f"{label} fired for {title}"
-    return f"{label} fired"
+def document_event_name(document_type_id: str, op: str) -> str:
+    """Event widget name for one document event, e.g. ``kanban_card.created``."""
+
+    return f"{document_type_id}.{op}"
 
 
-def _apply_event_widget_triggers(
-    state_reader: StateReader,
-    triggers: list[dict],
-    *,
-    request_id: str | None = None,
-) -> None:
-    if not triggers:
+def _summarize_document_event(typed: TypedDocumentEvent) -> str:
+    label = typed.document_type.label if typed.document_type else typed.event.key
+    document = typed.event.after if typed.event.after is not None else typed.event.before
+    title = str(document.get("title") or "").strip() if isinstance(document, dict) else ""
+    suffix = f" for {title}" if title else ""
+    return f"{label} {typed.event.op}{suffix}"
+
+
+async def _apply_document_event_widgets(typed: TypedDocumentEvent) -> None:
+    """Count document events on every enabled event widget subscribed to them."""
+
+    if typed.document_type is None or typed.output is None:
         return
-
+    state_reader = get_state_reader()
     event_widgets = _read_event_widget_records(state_reader)
     if not event_widgets:
         return
-
+    name = document_event_name(typed.document_type.id, typed.event.op)
+    timestamp = typed.event.created_at.isoformat()
+    summary = _summarize_document_event(typed)
+    payload = {
+        field: typed.output[field]
+        for field in ("event_id", "document_type", "key", "id", "op", "changed_fields")
+    }
     changed = False
     for widget in event_widgets.values():
-        if not widget.get("enabled", True):
+        if not widget.get("enabled", True) or widget.get("event_type") != name:
             continue
-
-        for trigger in triggers:
-            event_type = trigger.get("event_type")
-            if not isinstance(event_type, str) or widget.get("event_type") != event_type:
-                continue
-
-            timestamp = str(trigger.get("timestamp") or utcnow().isoformat())
-            payload = trigger.get("payload")
-            normalized_payload = payload if isinstance(payload, dict) else {}
-            summary = str(
-                trigger.get("summary") or _summarize_event_trigger(event_type, normalized_payload)
-            )
-            widget["trigger_count"] = int(widget.get("trigger_count", 0) or 0) + 1
-            widget["last_triggered_at"] = timestamp
-            widget["last_run_status"] = "success"
-            widget["last_payload"] = normalized_payload
-            widget["summary"] = summary
-            widget["updated_at"] = timestamp
-            widget["logs"] = [
-                {
-                    "time": timestamp,
-                    "timestamp": timestamp,
-                    "level": "info",
-                    "source": "kanban",
-                    "message": summary,
-                },
-                *_normalize_event_widget_logs(widget.get("logs")),
-            ][:MAX_EVENT_WIDGET_LOGS]
-            changed = True
-
+        widget["trigger_count"] = int(widget.get("trigger_count", 0) or 0) + 1
+        widget["last_triggered_at"] = timestamp
+        widget["last_run_status"] = "success"
+        widget["last_payload"] = payload
+        widget["summary"] = summary
+        widget["updated_at"] = timestamp
+        widget["logs"] = [
+            {
+                "time": timestamp,
+                "timestamp": timestamp,
+                "level": "info",
+                "source": typed.document_type.id,
+                "message": summary,
+            },
+            *_normalize_event_widget_logs(widget.get("logs")),
+        ][:MAX_EVENT_WIDGET_LOGS]
+        changed = True
     if changed:
         _write_event_widget_records(state_reader, event_widgets)
-        _broadcast_widget_refresh(state_reader, request_id=request_id)
-
-
-async def _dispatch_workflow_triggers(
-    triggers: list[dict],
-    *,
-    request_id: str | None = None,
-) -> None:
-    if not triggers:
-        return
-    correlated_triggers = [
-        {**trigger, "request_id": request_id} if request_id is not None else trigger
-        for trigger in triggers
-    ]
-    await get_workflow_executor().dispatch_triggers(correlated_triggers)
+        _broadcast_widget_refresh(state_reader)
 
 
 _workflow_invoke_lock = asyncio.Lock()
@@ -2014,22 +1790,18 @@ async def _reconcile_workflow_invoke_requests(changed_key: str | None = None) ->
                 logger.warning("Dropping malformed workflow invoke request %r", key, exc_info=True)
                 store.delete_document(PROGENITOR_STATE_PREFIX, key)
                 continue
-            trigger = {
-                "event_type": "progenitor.invoke",
-                "timestamp": request.requested_at,
-                "payload": {
-                    "event_type": "progenitor.invoke",
-                    "input": request.input,
-                    "source": "progenitor",
-                },
-            }
             try:
-                await executor.trigger_workflow(
-                    request.workflow_id,
-                    trigger,
-                    source="progenitor",
-                    ancestry=request.ancestry,
-                )
+                definition = get_workflow_definition(store, request.workflow_id)
+                if definition is not None:
+                    # The request input fills the trigger node's declared output
+                    # ports (e.g. an event node's ``key``/``after``), exactly
+                    # like an on-demand run, and is validated against them.
+                    await executor.trigger_workflow(
+                        request.workflow_id,
+                        build_manual_trigger_event(definition, payload=request.input),
+                        source="progenitor",
+                        ancestry=request.ancestry,
+                    )
             except Exception:
                 logger.exception(
                     "Workflow invoke request %r failed; retaining it for retry",
@@ -2179,25 +1951,62 @@ async def get_workflows(
     return acknowledgement_response(request_id, ["workflows.snapshot"])
 
 
-@router.get("/document-kinds", status_code=202, response_model=UiRequestAcknowledgement)
-async def get_document_kinds(
+def _document_type_snapshot_item(document_type: DocumentType) -> dict[str, Any]:
+    """Describe one document type with every port schema a workflow editor needs."""
+
+    document_schema = document_type.load_schema()
+    return {
+        "id": document_type.id,
+        "label": document_type.label,
+        "key_prefix": document_type.key_prefix,
+        "key": document_type.key,
+        "collection": document_type.collection,
+        "schema": document_type.schema_name,
+        "document_schema": document_schema,
+        "event_output_schema": document_event_output_schema(document_type, document_schema),
+        "read_input_schema": document_read_input_schema(document_type),
+        "read_output_schema": document_read_output_schema(document_type, document_schema),
+        "query_output_schema": document_query_output_schema(document_type, document_schema),
+        "writable_fields": list(document_type.writable_fields),
+        "write_input_schema": document_write_input_schema(document_type, document_schema)
+        if document_type.writable_fields
+        else None,
+        "write_output_schema": document_write_output_schema(document_type, document_schema)
+        if document_type.writable_fields
+        else None,
+        "create_input_schema": document_create_input_schema(document_type, document_schema)
+        if document_type.collection and document_schema is not None
+        else None,
+        "create_output_schema": document_create_output_schema(document_type, document_schema)
+        if document_type.collection and document_schema is not None
+        else None,
+        "delete_input_schema": document_delete_input_schema()
+        if document_type.collection and document_schema is not None
+        else None,
+        "delete_output_schema": document_delete_output_schema(document_type, document_schema)
+        if document_type.collection and document_schema is not None
+        else None,
+    }
+
+
+@router.get("/document-types", status_code=202, response_model=UiRequestAcknowledgement)
+async def get_document_types(
     request: Request,
     x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
 ):
-    """Return the canonical document-kind registry (label + key_prefix pairs).
+    """Publish the document type registry (``document_type:<id>`` rows).
 
-    Backs the workflow event trigger's document-kind picker (see
-    ``app.progenitor.document_kinds``) -- the same list every ``document.changed``
-    trigger's ``key_prefix`` filter is validated against.
+    Backs the workflow editor's document type pickers; each item carries the
+    exact port schemas the server derives for event/read/query nodes on save.
     """
     request_id = _request_correlation_id(request, x_request_id)
-    kinds = [{"label": kind.label, "key_prefix": kind.key_prefix} for kind in DOCUMENT_KINDS]
-    broadcast_ui_event(
-        "document_kinds.snapshot",
-        {"items": kinds},
-        request_id=request_id,
-    )
-    return acknowledgement_response(request_id, ["document_kinds.snapshot"])
+    types = list_document_types(get_default_document_store())
+    items = [
+        _document_type_snapshot_item(item)
+        for item in sorted(types.values(), key=lambda item: item.label.lower())
+    ]
+    broadcast_ui_event("document_types.snapshot", {"items": items}, request_id=request_id)
+    return acknowledgement_response(request_id, ["document_types.snapshot"])
 
 
 @router.get("/workflows/content", status_code=202, response_model=UiRequestAcknowledgement)
@@ -2268,15 +2077,13 @@ async def create_workflow(
 ):
     """Create a new workflow definition with the minimal valid scaffold."""
     request_id = _request_correlation_id(request, x_request_id)
-    if body.event_type not in WORKFLOW_ALLOWED_EVENT_TYPES:
-        raise HTTPException(status_code=400, detail="Unsupported workflow event type")
     try:
         definition = save_workflow_definition(
             get_default_document_store(),
             default_workflow_definition(
                 title=body.title.strip() or "Untitled workflow",
                 description=body.description,
-                event_type=body.event_type,
+                document_type=body.document_type,
             ),
         )
     except ValueError as exc:
@@ -2418,11 +2225,7 @@ async def trigger_workflow(
     if definition is None:
         raise HTTPException(status_code=404, detail="Workflow not found")
     try:
-        trigger = build_manual_trigger_event(
-            definition,
-            event_type=body.event_type,
-            payload=body.payload,
-        )
+        trigger = build_manual_trigger_event(definition, payload=body.payload)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     trigger = {**trigger, "request_id": request_id}
@@ -3185,38 +2988,6 @@ async def create_kanban_card(
     )
     board["cards"].append(card)
     board = _write_kanban_board(state_reader, board)
-    created = next((item for item in board["cards"] if item["id"] == card["id"]), card)
-    _apply_event_widget_triggers(
-        state_reader,
-        [
-            {
-                "event_type": "kanban.card.created",
-                "timestamp": now,
-                "payload": {
-                    "event_type": "kanban.card.created",
-                    "card": created,
-                },
-            }
-        ],
-        request_id=request_id,
-    )
-    await _dispatch_workflow_triggers(
-        [
-            {
-                "event_type": "kanban.card.created",
-                "timestamp": now,
-                "payload": {
-                    "event_type": "kanban.card.created",
-                    "card": created,
-                    "timestamp": now,
-                    "source": "kanban",
-                },
-            }
-        ],
-        request_id=request_id,
-    )
-    async with _kanban_card_trigger_lock:
-        _remember_kanban_card_state(created["id"], created)
     broadcast_kanban_snapshot(_kanban_board_response(state_reader, board), request_id=request_id)
     return acknowledgement_response(request_id, ["kanban.snapshot"])
 
@@ -3237,12 +3008,10 @@ async def patch_kanban_card(
     now = utcnow().isoformat()
 
     updated_card = None
-    previous_card = None
     for card in board["cards"]:
         if card["id"] != card_id:
             continue
 
-        previous_card = json.loads(json.dumps(card))
         if body.title is not None:
             title = body.title.strip()
             if not title:
@@ -3309,17 +3078,6 @@ async def patch_kanban_card(
         target_position,
     )
     board = _write_kanban_board(state_reader, board)
-    refreshed = next((item for item in board["cards"] if item["id"] == card_id), updated_card)
-    if previous_card is not None:
-        await _apply_kanban_card_diff_effects(
-            state_reader,
-            previous_card=previous_card,
-            refreshed_card=refreshed,
-            now=now,
-            request_id=request_id,
-        )
-    async with _kanban_card_trigger_lock:
-        _remember_kanban_card_state(card_id, refreshed)
     broadcast_kanban_snapshot(_kanban_board_response(state_reader, board), request_id=request_id)
     return acknowledgement_response(request_id, ["kanban.snapshot"])
 
@@ -3335,45 +3093,11 @@ async def delete_kanban_card(
     state_reader = get_state_reader()
     board = _read_kanban_board(state_reader)
     original_count = len(board["cards"])
-    deleted_card = next((card for card in board["cards"] if card["id"] == card_id), None)
     board["cards"] = [card for card in board["cards"] if card["id"] != card_id]
     if len(board["cards"]) == original_count:
         raise HTTPException(status_code=404, detail="Kanban card not found")
 
     board = _write_kanban_board(state_reader, board)
-    if deleted_card is not None:
-        timestamp = utcnow().isoformat()
-        _apply_event_widget_triggers(
-            state_reader,
-            [
-                {
-                    "event_type": "kanban.card.deleted",
-                    "timestamp": timestamp,
-                    "payload": {
-                        "event_type": "kanban.card.deleted",
-                        "card": deleted_card,
-                    },
-                }
-            ],
-            request_id=request_id,
-        )
-        await _dispatch_workflow_triggers(
-            [
-                {
-                    "event_type": "kanban.card.deleted",
-                    "timestamp": timestamp,
-                    "payload": {
-                        "event_type": "kanban.card.deleted",
-                        "card": deleted_card,
-                        "timestamp": timestamp,
-                        "source": "kanban",
-                    },
-                }
-            ],
-            request_id=request_id,
-        )
-        async with _kanban_card_trigger_lock:
-            _remember_kanban_card_state(card_id, None)
     broadcast_kanban_snapshot(_kanban_board_response(state_reader, board), request_id=request_id)
     return acknowledgement_response(request_id, ["kanban.snapshot"])
 
@@ -3458,7 +3182,9 @@ async def create_task_activity(
     return acknowledgement_response(request_id, ["task.activity.updated"])
 
 
-async def _execute_action_run(body: ActionRunRequest) -> tuple[str, Any, str]:
+async def _execute_action_run(
+    body: ActionRunRequest, *, workflow_run_id: str | None = None
+) -> tuple[str, Any, str]:
     """Run an action internally and return its thread ID, response, and text.
 
     Internal callers do not receive an HTTP acknowledgement envelope.
@@ -3492,6 +3218,7 @@ async def _execute_action_run(body: ActionRunRequest) -> tuple[str, Any, str]:
         widget_id=body.widget_id,
         root_widget_id=body.root_widget_id,
         action=body.invocation_source or body.language or "workspace.run",
+        workflow_run_id=workflow_run_id,
     )
     upsert_thread(
         thread_id,
@@ -4008,6 +3735,8 @@ _active_ui_stream_tasks: set[asyncio.Task] = set()
 # Keep a strong reference to fire-and-forget agent-profile broadcasts so the
 # event loop's weak task reference can't let one get garbage-collected mid-run.
 _active_agent_profile_broadcast_tasks: set[asyncio.Task] = set()
+# Same for model-profile broadcasts.
+_active_model_profile_broadcast_tasks: set[asyncio.Task] = set()
 
 
 def has_active_ui_stream_subscribers() -> bool:
@@ -4213,6 +3942,15 @@ async def _broadcast_agent_profiles_safe() -> None:
         logger.debug("Failed to broadcast agent profiles snapshot", exc_info=True)
 
 
+async def _broadcast_model_profiles_safe() -> None:
+    try:
+        from .model_profile_routes import broadcast_model_profiles_snapshot
+
+        await broadcast_model_profiles_snapshot(get_default_document_store(), broadcast_ui_event)
+    except Exception:
+        logger.debug("Failed to broadcast model profiles snapshot", exc_info=True)
+
+
 def _queue_state_watch_status(snapshot, changed_key: str | None = None) -> None:
     global _state_watch_push_task
     if not _ui_stream_subscribers:
@@ -4230,7 +3968,12 @@ def _queue_state_watch_status(snapshot, changed_key: str | None = None) -> None:
             broadcast_mcp_snapshot()
         if changed_key in (None, "schedule"):
             broadcast_schedule_snapshot()
-        if changed_key in (None, "knowledge"):
+        if changed_key in (None, "knowledge", INDEX_STATUS_DOC_KEY):
+            broadcast_knowledge_snapshot()
+        if changed_key is not None and changed_key.startswith(KNOWLEDGE_PAGE_KEY_PREFIX):
+            base_id = changed_key.removeprefix(KNOWLEDGE_PAGE_KEY_PREFIX).split("/", 1)[0]
+            if base_id:
+                broadcast_knowledge_pages_snapshot(base_id)
             broadcast_knowledge_snapshot()
         if changed_key in (None, "preferences"):
             broadcast_preferences_snapshot()
@@ -4238,12 +3981,15 @@ def _queue_state_watch_status(snapshot, changed_key: str | None = None) -> None:
             broadcast_marketplaces_snapshot()
         if changed_key in (None, "plugins"):
             broadcast_plugins_snapshot()
+        if changed_key in (None, "profile"):
+            profile_task = asyncio.create_task(_broadcast_model_profiles_safe())
+            _active_model_profile_broadcast_tasks.add(profile_task)
+            profile_task.add_done_callback(_active_model_profile_broadcast_tasks.discard)
         if (
             changed_key is None
             or changed_key == "registry"
             or changed_key.startswith(AGENT_DOCUMENT_KEY_PREFIX)
             or changed_key.startswith(SKILL_DOCUMENT_KEY_PREFIX)
-            or changed_key.startswith(AGENT_SELF_EDIT_TOUCH_KEY_PREFIX)
         ):
             profile_task = asyncio.create_task(_broadcast_agent_profiles_safe())
             _active_agent_profile_broadcast_tasks.add(profile_task)
@@ -4294,61 +4040,140 @@ def _queue_workflow_invoke_reconciliation(_snapshot, changed_key: str | None = N
     task.add_done_callback(_active_workflow_invoke_tasks.discard)
 
 
-_document_change_watch_callback = None
-_active_document_change_tasks: set[asyncio.Task] = set()
+_document_event_dispatcher: DocumentEventDispatcher | None = None
 
 
-def _queue_document_change_dispatch(key: str | None, action: str | None) -> None:
-    """Raw store-change watcher: dispatch a document.changed workflow trigger
-    for every tracked-document write, independent of whether any UI client
-    is connected or whether the coarse StateSnapshot diff moved.
+def get_document_event_dispatcher() -> DocumentEventDispatcher:
+    """Return the backend's single document event log consumer."""
 
-    Registered via ``add_raw_watcher`` (not ``add_watcher``/
-    ``_queue_state_watch_status``) so it also fires for document kinds that
-    carry no signal in ``StateSnapshot``'s tracked fields, mirroring
-    ``_queue_kanban_trigger_reconciliation``'s "must keep firing whether or
-    not anyone has the frontend open" requirement.
+    global _document_event_dispatcher
+    if _document_event_dispatcher is None:
+        dispatcher = DocumentEventDispatcher(store_getter=get_default_document_store)
+        dispatcher.add_handler(_publish_routine_run_lifecycle)
+        dispatcher.add_handler(_dispatch_document_event_workflows)
+        dispatcher.add_handler(_apply_document_event_widgets)
+        dispatcher.add_handler(_record_kanban_card_activity)
+        dispatcher.add_handler(_sync_kanban_card_order)
+        dispatcher.add_handler(_publish_chat_session_document_event)
+        _document_event_dispatcher = dispatcher
+    return _document_event_dispatcher
+
+
+async def _publish_routine_run_lifecycle(typed: TypedDocumentEvent) -> None:
+    """Broadcast routine run lifecycle transitions logged as ``routine_run_event:`` rows."""
+
+    await routine_events.document_event(typed.event)
+
+
+async def _dispatch_document_event_workflows(typed: TypedDocumentEvent) -> None:
+    """Start workflows subscribed to this event's document type."""
+
+    executor = get_workflow_executor()
+    if typed.event.key.startswith(WORKFLOW_DEFINITION_KEY_PREFIX):
+        executor.invalidate_subscriptions()
+        get_workflow_cron_clock().workflow_changed(typed.event.after)
+    if typed.output is None:
+        return
+    await executor.dispatch_document_event(typed.output, origin=typed.event.origin)
+
+
+async def _record_kanban_card_activity(typed: TypedDocumentEvent) -> None:
+    """Derive task-activity timeline entries from kanban card updates."""
+
+    event = typed.event
+    if typed.document_type is None or typed.document_type.id != "kanban_card":
+        return
+    if event.op != "updated" or not isinstance(event.before, dict):
+        return
+    if not isinstance(event.after, dict):
+        return
+    _append_kanban_card_diff_activity(
+        get_state_reader(),
+        previous_card=event.before,
+        refreshed_card=event.after,
+        now=event.created_at.isoformat(),
+    )
+
+
+async def _sync_kanban_card_order(typed: TypedDocumentEvent) -> None:
+    """Keep the board's ``card_order`` in step with the card documents.
+
+    The board lists only cards in ``card_order``. The card routes and the
+    agent's ``/tasks/`` mount maintain it themselves; this covers every other
+    writer (workflow ``document_create``/``document_delete``, extensions), so a
+    created card appears on the board and a deleted one leaves no stale id.
+    The update carries the card event's origin, keeping run ancestry intact.
     """
-    if key is None:
-        return
-    key_prefix = key_prefix_for(key)
-    if key_prefix is None:
-        return
-    task = asyncio.create_task(_dispatch_document_change_trigger(key, key_prefix, action))
-    _active_document_change_tasks.add(task)
-    task.add_done_callback(_active_document_change_tasks.discard)
+
+    await asyncio.to_thread(_apply_kanban_card_order_event, typed.event)
 
 
-async def _dispatch_document_change_trigger(key: str, key_prefix: str, action: str | None) -> None:
-    trigger_payload = {
-        "event_type": "document.changed",
-        "payload": {"key_prefix": key_prefix, "key": key, "action": action},
-    }
-    try:
-        await get_workflow_executor().dispatch_event("document.changed", trigger_payload)
-    except Exception:
-        logger.debug(
-            "Failed to dispatch document.changed workflow trigger for %r", key, exc_info=True
+def _apply_kanban_card_order_event(event: DocumentEvent) -> None:
+    if not event.key.startswith(_KANBAN_CARD_KEY_PREFIX) or event.op == "updated":
+        return
+    card_id = event.key[len(_KANBAN_CARD_KEY_PREFIX) :]
+    store = get_default_document_store()
+    board = store.get_document(PROGENITOR_STATE_PREFIX, _kanban_board_store_key(), None)
+    order = board.payload.get("card_order") if board and isinstance(board.payload, dict) else None
+    listed = isinstance(order, list) and card_id in order
+    if listed == (event.op == "created"):
+        return
+
+    def update(payload: Any) -> Any:
+        structure = dict(payload) if isinstance(payload, dict) else {}
+        current = structure.get("card_order")
+        ids = [str(cid) for cid in current] if isinstance(current, list) else []
+        if event.op == "created" and card_id not in ids:
+            ids.append(card_id)
+        elif event.op == "deleted":
+            ids = [cid for cid in ids if cid != card_id]
+        structure["card_order"] = ids
+        return structure
+
+    origin = document_write_origin(event.origin) if event.origin else contextlib.nullcontext()
+    with origin:
+        store.mutate_document(PROGENITOR_STATE_PREFIX, _kanban_board_store_key(), update)
+
+
+async def _publish_chat_session_document_event(typed: TypedDocumentEvent) -> None:
+    """Broadcast sidebar updates when a ``session:`` document changes."""
+
+    event = typed.event
+    if not event.key.startswith(SESSION_KEY_PREFIX):
+        return
+    thread_id = event.key[len(SESSION_KEY_PREFIX) :]
+    # Always push the refreshed roster so every client stays in sync.
+    await _broadcast_chat_sessions_snapshot()
+    if event.op == "deleted":
+        broadcast_ui_event(
+            "chat.session.deleted",
+            {"thread_id": thread_id},
+            scope="chat",
+            session_id=thread_id,
         )
+        return
+    summary = await asyncio.to_thread(get_chat_summary, get_default_document_store(), thread_id)
+    if summary is None:
+        return
+    broadcast_ui_event(
+        "chat.session.created" if event.op == "created" else "chat.session.metadata.updated",
+        {"session": summary.model_dump()},
+        scope="chat",
+        session_id=thread_id,
+    )
 
 
-_kanban_trigger_watch_callback = None
-_active_kanban_reconcile_tasks: set[asyncio.Task] = set()
+# --------------------------------------------------------------------------- #
+# Knowledge indexer watchers
+# --------------------------------------------------------------------------- #
+_knowledge_index_watch_callback = None
 
 
-def _queue_kanban_trigger_reconciliation(_snapshot, changed_key: str | None = None) -> None:
-    """Always-on watcher that reconciles kanban.card.* workflow triggers for
-    changes made outside the REST kanban routes -- chiefly the runtime agent
-    writing /tasks/<id>.md directly.
+def _queue_knowledge_index_resync(_snapshot, changed_key: str | None = None) -> None:
+    """Route state changes to the knowledge indexer."""
+    from .knowledge_indexer import get_knowledge_indexer
 
-    Registered separately from _queue_state_watch_status, which returns
-    immediately when no UI client is connected (fine for UI-push
-    optimization, wrong here: workflows must keep firing whether or not
-    anyone has the frontend open).
-    """
-    task = asyncio.create_task(_reconcile_kanban_card_triggers(changed_key))
-    _active_kanban_reconcile_tasks.add(task)
-    task.add_done_callback(_active_kanban_reconcile_tasks.discard)
+    get_knowledge_indexer().on_store_change(changed_key)
 
 
 _routine_agent_watch_callback = None
@@ -4474,52 +4299,48 @@ async def _reconcile_routine_agent(changed_key: str | None) -> None:
 
 
 async def start_state_status_watcher(reconnect_delay: float = 2.0) -> None:
-    global _state_watch_callback, _kanban_trigger_watch_callback
+    global _state_watch_callback
     global _workflow_invoke_watch_callback, _routine_agent_watch_callback
-    global _document_change_watch_callback
+    global _knowledge_index_watch_callback
     state_reader = get_state_reader()
     if _state_watch_callback is None:
         _state_watch_callback = _queue_state_watch_status
         state_reader.add_watcher(_state_watch_callback)
-    if _kanban_trigger_watch_callback is None:
-        _kanban_trigger_watch_callback = _queue_kanban_trigger_reconciliation
-        state_reader.add_watcher(_kanban_trigger_watch_callback)
     if _workflow_invoke_watch_callback is None:
         _workflow_invoke_watch_callback = _queue_workflow_invoke_reconciliation
         state_reader.add_watcher(_workflow_invoke_watch_callback)
     if _routine_agent_watch_callback is None:
         _routine_agent_watch_callback = _queue_routine_agent_reconciliation
         state_reader.add_watcher(_routine_agent_watch_callback)
-    if _document_change_watch_callback is None:
-        _document_change_watch_callback = _queue_document_change_dispatch
-        state_reader.add_raw_watcher(_document_change_watch_callback)
-        state_reader.add_raw_watcher(routine_events.document_changed)
+    if _knowledge_index_watch_callback is None:
+        _knowledge_index_watch_callback = _queue_knowledge_index_resync
+        state_reader.add_watcher(_knowledge_index_watch_callback)
     await routine_events.start()
+    await get_document_event_dispatcher().start(reconnect_delay)
+    await get_workflow_cron_clock().start()
     await state_reader.start_watching(reconnect_delay)
 
 
 async def stop_state_status_watcher() -> None:
-    global _state_watch_callback, _kanban_trigger_watch_callback
+    global _state_watch_callback
     global _workflow_invoke_watch_callback, _routine_agent_watch_callback
-    global _document_change_watch_callback
+    global _knowledge_index_watch_callback
     state_reader = get_state_reader()
     if _state_watch_callback is not None:
         state_reader.remove_watcher(_state_watch_callback)
         _state_watch_callback = None
-    if _kanban_trigger_watch_callback is not None:
-        state_reader.remove_watcher(_kanban_trigger_watch_callback)
-        _kanban_trigger_watch_callback = None
     if _workflow_invoke_watch_callback is not None:
         state_reader.remove_watcher(_workflow_invoke_watch_callback)
         _workflow_invoke_watch_callback = None
     if _routine_agent_watch_callback is not None:
         state_reader.remove_watcher(_routine_agent_watch_callback)
         _routine_agent_watch_callback = None
-    if _document_change_watch_callback is not None:
-        state_reader.remove_raw_watcher(_document_change_watch_callback)
-        _document_change_watch_callback = None
-        state_reader.remove_raw_watcher(routine_events.document_changed)
+    if _knowledge_index_watch_callback is not None:
+        state_reader.remove_watcher(_knowledge_index_watch_callback)
+        _knowledge_index_watch_callback = None
     await routine_events.stop()
+    await get_workflow_cron_clock().stop()
+    await get_document_event_dispatcher().stop()
     await state_reader.stop_watching()
 
 
@@ -4859,6 +4680,18 @@ def broadcast_knowledge_snapshot(
     return broadcast_ui_event("knowledge.snapshot", {"bases": payload}, request_id=request_id)
 
 
+def broadcast_knowledge_pages_snapshot(
+    base_id: str, *, request_id: str | None = None
+) -> UiEventEnvelope:
+    from .knowledge_pages import list_pages
+
+    return broadcast_ui_event(
+        "knowledge.pages.snapshot",
+        {"base_id": base_id, "pages": list_pages(base_id)},
+        request_id=request_id,
+    )
+
+
 def broadcast_preferences_snapshot(
     preferences: dict[str, Any] | None = None,
     *,
@@ -5037,15 +4870,6 @@ def _get_active_request_id_for_thread(thread_id: str) -> str | None:
     return _main._active_request_id_for_thread(thread_id)
 
 
-async def _delete_conversation_via_client(thread_id: str) -> bool:
-    from . import main as _main
-
-    client = getattr(_main, "client", None)
-    if client is None or not hasattr(client, "delete_conversation"):
-        return False
-    return await client.delete_conversation(thread_id)
-
-
 router.include_router(
     create_chat_router(
         get_document_store=get_default_document_store,
@@ -5053,7 +4877,6 @@ router.include_router(
         get_current_state=lambda thread_id: get_state_reader().get_progenitor_state(thread_id),
         get_thread_messages=lambda thread_id: get_state_reader().get_thread_messages(thread_id),
         get_active_request_id=_get_active_request_id_for_thread,
-        delete_conversation=_delete_conversation_via_client,
     )
 )
 
@@ -5110,3 +4933,10 @@ def broadcast_alerts_state(*, request_id: str | None = None) -> None:
 
 
 router.include_router(create_policy_router(get_default_document_store, broadcast_ui_event))
+
+router.include_router(
+    create_model_profile_router(
+        get_store=get_default_document_store,
+        broadcast=broadcast_ui_event,
+    )
+)

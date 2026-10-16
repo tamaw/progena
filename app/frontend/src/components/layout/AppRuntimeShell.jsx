@@ -3,7 +3,6 @@ import { createPortal } from 'react-dom';
 import { useDispatch, useSelector } from 'react-redux';
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import {
-  ensureDraftChatSession,
   fetchChatMessages,
   fetchPreferences,
   fetchWidgets,
@@ -25,6 +24,8 @@ import {
   selectMarketplaces,
   fetchMarketplaces,
   saveMarketplaces,
+  searchAll,
+  selectSearchResults,
 } from '../../store/uiDataSlice';
 import { selectRealtime, selectUiEventQueue } from '../../store/realtimeSlice';
 import { consumeUiEventQueue } from '../../store/uiData/eventQueue';
@@ -80,6 +81,7 @@ import {
   SettingsMarketplacesIcon,
   SettingsTeamIcon,
   PluginsNavIcon,
+  ProfilesNavIcon,
   SunIcon,
   TasksNavIcon,
   ToolsNavIcon,
@@ -92,8 +94,9 @@ import {
   normalizeQuickChatConfig,
 } from './quickChatConfig';
 import { derivePageContext, formatPageContextBlock, stripPageContextBlock } from '../../lib/pageContext';
-import { buildEntityPath } from '../../lib/routes';
+
 import PopupModal from '../common/PopupModal';
+import { createSpectatorReplayState } from './quickChatStreamModel';
 
 // Grouped by owner/level (see the entity-relationship model):
 //   Operate  — the surfaces you work in (Progenitor chat, overview, projects)
@@ -144,6 +147,7 @@ const navGroups = [
     label: 'Facilitate',
     items: [
       { to: '/plugins', icon: <PluginsNavIcon />, label: 'Plugins', trackActivity: true },
+      { to: '/profiles', icon: <ProfilesNavIcon />, label: 'Profiles', trackActivity: true },
       { to: '/tools', icon: <ToolsNavIcon />, label: 'Tools', trackActivity: true },
       { to: '/knowledge', icon: <KnowledgeNavIcon />, label: 'Knowledge', trackActivity: true },
       { to: '/schedules', icon: <SchedulesNavIcon />, label: 'Schedules', trackActivity: true },
@@ -864,7 +868,6 @@ function QuickChatPanel({
   const [error, setError] = useState('');
   const [composerSeed, setComposerSeed] = useState({ key: 0, message: '' });
   const sessionPromiseRef = useRef(null);
-  const pendingDraftRef = useRef(null);
   const pendingRehydrateRef = useRef(null);
   const lastPersistedThreadIdRef = useRef(null);
   const hasInitializedThreadRef = useRef(false);
@@ -880,31 +883,13 @@ function QuickChatPanel({
   useEffect(() => {
     scrollEndRef.current?.scrollIntoView({ behavior: 'auto', block: 'end' });
   }, [history, isSending]);
-  // A draft acknowledgement carries no session data. Resolve it only from the
-  // causal stream event with the same request ID, using that event's thread ID.
+  // A persisted quick-chat thread's messages arrive as a causal stream event
+  // with the rehydrate request's ID.
   useEffect(() => {
     eventSequenceRef.current = consumeUiEventQueue(
       uiEventQueue,
       eventSequenceRef.current,
       ({ event }) => {
-        const pendingDraft = pendingDraftRef.current;
-        const session = event?.payload?.session;
-        const threadId = session?.thread_id;
-        if (
-          pendingDraft
-          && event?.payload?.request_id === pendingDraft.requestId
-          && ['chat.session.created', 'chat.session.metadata.updated'].includes(event?.type)
-          && typeof threadId === 'string'
-          && threadId
-        ) {
-          pendingDraftRef.current = null;
-          sessionPromiseRef.current = Promise.resolve(threadId);
-          if (isQuickChatMountedRef.current) {
-            setScratchThreadId(threadId);
-          }
-          pendingDraft.resolve(threadId);
-          return false;
-        }
 
         // A persisted quick-chat thread's messages, fetched directly (not
         // through the shared `chats` slice, which would clobber the main
@@ -925,47 +910,16 @@ function QuickChatPanel({
     );
   }, [uiEventQueue]);
 
-  const startFreshQuickThread = useCallback(async () => {
+  // Local-only draft: the session document is created by Postgres when the
+  // first user message is checkpointed.
+  const startFreshQuickThread = useCallback(() => {
+    const threadId = createUuid();
+    sessionPromiseRef.current = Promise.resolve(threadId);
     if (isQuickChatMountedRef.current) {
-      setScratchThreadId(null);
+      setScratchThreadId(threadId);
     }
-    pendingDraftRef.current?.resolve(null);
-    pendingDraftRef.current = null;
-
-    const proposedThreadId = createUuid();
-    const requestId = createUuid();
-    let resolveSession;
-    const sessionPromise = new Promise((resolve) => {
-      resolveSession = resolve;
-    });
-    // Register the causal event waiter before dispatching. The backend may
-    // publish chat.session.created/metadata.updated before the 202 acknowledgement,
-    // so assigning this after dispatch can miss the event and leave submit
-    // waiting forever for a thread ID.
-    pendingDraftRef.current = { requestId, resolve: resolveSession };
-    sessionPromiseRef.current = sessionPromise;
-    const draftRequest = dispatch(ensureDraftChatSession({
-      chatsUrl: getApiUrl('chats'),
-      threadId: proposedThreadId,
-      requestId,
-    }));
-
-    try {
-      await draftRequest.unwrap();
-    } catch (sessionError) {
-      if (pendingDraftRef.current?.requestId === requestId) {
-        pendingDraftRef.current.resolve(null);
-        pendingDraftRef.current = null;
-        sessionPromiseRef.current = null;
-      }
-      if (isQuickChatMountedRef.current) {
-        setError(sessionError.message);
-      }
-      return null;
-    }
-
-    return sessionPromise;
-  }, [dispatch, getApiUrl]);
+    return threadId;
+  }, []);
 
   // Resume a thread persisted in preferences (see the mount effect below).
   // Returns true once resumed (even with zero messages, e.g. a thread that
@@ -1043,16 +997,24 @@ function QuickChatPanel({
     }
     spectatorCleanupRef.current?.();
 
-    const assistantId = `qchat_spectate_${requestId}`;
-    let assistantContent = '';
+    const existingAssistant = [...history].reverse().find(
+      (turn) => turn.role === 'assistant' && turn.isStreaming,
+    );
+    const { assistantId, assistantContent: initialAssistantContent } = createSpectatorReplayState(
+      existingAssistant,
+      requestId,
+    );
+    let assistantContent = initialAssistantContent;
     spectatedRequestIdRef.current = requestId;
-    setHistory((currentHistory) => currentHistory.concat({
-      id: assistantId,
-      role: 'assistant',
-      content: '',
-      timestamp: Date.now(),
-      isStreaming: true,
-    }));
+    if (!existingAssistant) {
+      setHistory((currentHistory) => currentHistory.concat({
+        id: assistantId,
+        role: 'assistant',
+        content: '',
+        timestamp: Date.now(),
+        isStreaming: true,
+      }));
+    }
 
     spectatorCleanupRef.current = observeResponseStream(requestId, {
       onChunk: (chunk) => {
@@ -1063,7 +1025,7 @@ function QuickChatPanel({
         )));
       },
     });
-  }, [scratchThreadId, isSending, generatingChatIds, requestIdByThreadId, observeResponseStream, rehydrateFromPersistedThread]);
+  }, [scratchThreadId, isSending, generatingChatIds, requestIdByThreadId, history, observeResponseStream, rehydrateFromPersistedThread]);
 
   useEffect(() => () => {
     spectatorCleanupRef.current?.();
@@ -1073,28 +1035,19 @@ function QuickChatPanel({
     if (scratchThreadId) {
       return scratchThreadId;
     }
-    // StrictMode can unmount the first draft waiter while submit is awaiting
-    // it, then mount a replacement. Use the replacement rather than failing
-    // the user's send because the obsolete waiter resolved to null.
-    const pending = sessionPromiseRef.current;
-    let threadId = pending ? await pending : await startFreshQuickThread();
-    if (!threadId && pending && sessionPromiseRef.current !== pending) {
-      threadId = sessionPromiseRef.current
-        ? await sessionPromiseRef.current
-        : await startFreshQuickThread();
-    }
+    const threadId = sessionPromiseRef.current
+      ? await sessionPromiseRef.current
+      : startFreshQuickThread();
     if (!threadId) {
       throw new Error('Unable to create a quick chat thread.');
     }
     return threadId;
   }, [scratchThreadId, startFreshQuickThread]);
 
-
-  // Mirror conversation state into module-level memory so it survives the
-  // panel unmounting on close. Streaming turns are stored as settled so a
-  // mid-stream close doesn't resume as a stuck "Thinking…" bubble.
+  // Mirror the transcript and its active streaming turn into module-level
+  // memory so closing the panel does not discard an in-flight response.
   useEffect(() => {
-    quickChatMemory.history = history.map((turn) => (turn.isStreaming ? { ...turn, isStreaming: false } : turn));
+    quickChatMemory.history = history;
   }, [history]);
   useEffect(() => {
     quickChatMemory.threadId = scratchThreadId;
@@ -1131,22 +1084,19 @@ function QuickChatPanel({
     isQuickChatMountedRef.current = true;
     return () => {
       activeAssistantIdRef.current = null;
-      // If a draft/rehydrate was still in flight, this abort leaves
+      // If a rehydrate was still in flight, this abort leaves
       // sessionPromiseRef resolved to null with nothing to retry it -- reset
       // the "already decided" guard below so a remount (a real popover
       // reopen, or React StrictMode's dev-only double-invoke of mount
       // effects) starts over instead of treating the aborted attempt as done.
-      if (pendingDraftRef.current || pendingRehydrateRef.current) {
+      if (pendingRehydrateRef.current) {
         hasInitializedThreadRef.current = false;
       }
-      pendingDraftRef.current?.resolve(null);
-      pendingDraftRef.current = null;
       pendingRehydrateRef.current?.resolve([]);
       pendingRehydrateRef.current = null;
       isQuickChatMountedRef.current = false;
-      void cancelStream();
     };
-  }, [cancelStream]);
+  }, []);
 
   // Decide the thread once per mount. A pinned quick chat's QuickChatPanel
   // mounts as soon as the shell adopts the pinned panel from its fast
@@ -1160,7 +1110,23 @@ function QuickChatPanel({
     }
     if (quickChatMemory.threadId) {
       hasInitializedThreadRef.current = true;
-      sessionPromiseRef.current = Promise.resolve(quickChatMemory.threadId);
+      const threadId = quickChatMemory.threadId;
+      sessionPromiseRef.current = Promise.resolve(threadId);
+      // Closed mid-generation: the cached turn is still marked streaming but
+      // this mount owns no stream for it. A generation still running is picked
+      // up by the spectator effect; a finished one has its transcript reloaded.
+      const orphanedStream = quickChatMemory.history.some(
+        (turn) => turn.role === 'assistant' && turn.isStreaming,
+      );
+      if (orphanedStream && !generatingChatIds.includes(threadId)) {
+        void rehydrateFromPersistedThread(threadId).then((resumed) => {
+          if (!resumed && isQuickChatMountedRef.current) {
+            setHistory((current) => current.map((turn) => (
+              turn.isStreaming ? { ...turn, isStreaming: false } : turn
+            )));
+          }
+        });
+      }
       return;
     }
     if (normalizedConfig.mode === 'default' && !preferences.loaded) {
@@ -1170,13 +1136,13 @@ function QuickChatPanel({
     if (normalizedConfig.mode === 'default' && preferences.quickChatThreadId) {
       void rehydrateFromPersistedThread(preferences.quickChatThreadId).then((resumed) => {
         if (!resumed && isQuickChatMountedRef.current) {
-          void startFreshQuickThread();
+          startFreshQuickThread();
         }
       });
     } else {
-      void startFreshQuickThread();
+      startFreshQuickThread();
     }
-  }, [normalizedConfig.mode, preferences.loaded, preferences.quickChatThreadId, rehydrateFromPersistedThread, startFreshQuickThread]);
+  }, [generatingChatIds, normalizedConfig.mode, preferences.loaded, preferences.quickChatThreadId, rehydrateFromPersistedThread, startFreshQuickThread]);
 
 
   const submit = useCallback(async (message, attachments = [], onSettled) => {
@@ -1367,14 +1333,11 @@ function QuickChatPanel({
     quickChatMemory.history = [];
     quickChatMemory.threadId = null;
     setHistory([]);
-    setScratchThreadId(null);
-    pendingDraftRef.current?.resolve(null);
-    pendingDraftRef.current = null;
     sessionPromiseRef.current = null;
     setIsSending(false);
     setError('');
     setComposerSeed((current) => ({ key: current.key + 1, message: '' }));
-    void startFreshQuickThread();
+    startFreshQuickThread();
   }, [cancelStream, startFreshQuickThread]);
 
   const selectPrompt = useCallback((prompt) => {
@@ -1798,45 +1761,49 @@ function normalizeSearchText(value) {
     .toLowerCase();
 }
 
-function widgetSearchTarget(widget, title) {
-  const identity = String(widget.id || '').replace(/^[^:]+:/, '') || widget.name || title;
-  if (widget.type === 'agent') {
-    return buildEntityPath('/agents', identity, 'details');
-  }
-  if (widget.type === 'mcp') {
-    return buildEntityPath('/tools', identity, title);
-  }
-  return '/dashboard';
-}
-
-function SearchPanel({ query, widgets, onClose, isPinned, onTogglePin, isOpen }) {
+function SearchPanel({ query, onClose, isPinned, onTogglePin, isOpen }) {
+  const dispatch = useDispatch();
+  const { getApiUrl } = useConfig();
   const [search, setSearch] = useState(query);
+  const [activeQuery, setActiveQuery] = useState('');
+  // A rejected request (network/non-202) for a query; no results event will come.
+  const [requestError, setRequestError] = useState(null);
+  // The backend matches literal text, so it gets the query as typed (trimmed);
+  // the punctuation-insensitive form is only for matching sidebar pages here.
+  const backendQuery = search.trim();
   const normalizedSearch = normalizeSearchText(search);
+  const searchData = useSelector((state) => selectSearchResults(state, activeQuery));
+
+  useEffect(() => {
+    if (backendQuery.length < 3) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- clearing search results when query is too short
+      setActiveQuery('');
+      return;
+    }
+    const timer = setTimeout(() => {
+      setActiveQuery(backendQuery);
+      setRequestError(null);
+      dispatch(searchAll({ searchUrl: getApiUrl('/api/ui/search'), query: backendQuery }))
+        .unwrap()
+        .catch((error) => setRequestError({ query: backendQuery, message: error?.message || 'Search failed' }));
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [backendQuery, dispatch, getApiUrl]);
+
   const routeResults = navItems
     .filter((item) => normalizeSearchText(`${item.label} ${item.to}`).includes(normalizedSearch))
     .map((item) => ({
       id: `route:${item.to}`,
       title: item.label,
-      description: item.to === '/chat' ? 'Open chat workspace' : `Open ${item.to}`,
+      subtitle: item.to === '/chat' ? 'Open chat workspace' : `Open ${item.to}`,
       to: item.to,
     }));
-  const widgetResults = widgets
-    .filter((widget) => {
-      const title = widget.title || widget.data?.title || widget.id;
-      const description = widget.summary || widget.data?.summaryState || widget.data?.description || '';
-      return normalizeSearchText(`${title} ${description} ${widget.id}`).includes(normalizedSearch);
-    })
-    .slice(0, 8)
-    .map((widget) => {
-      const title = widget.title || widget.data?.title || widget.id;
-      return {
-        id: `widget:${widget.id}`,
-        title,
-        description: widget.summary || widget.data?.summaryState || widget.data?.description || 'Runtime widget',
-        to: widgetSearchTarget(widget, title),
-      };
-    });
-  const results = normalizedSearch ? routeResults.concat(widgetResults) : [];
+
+  const failedRequest = requestError && requestError.query === backendQuery && !searchData ? requestError.message : null;
+  const backendSections = searchData && Array.isArray(searchData.sections) ? searchData.sections : [];
+  const isSearching = backendQuery.length >= 3 && !failedRequest && (activeQuery !== backendQuery || !searchData);
+  const hasAnyResults = routeResults.length > 0 || backendSections.some((s) => s.results && s.results.length > 0);
+  const hasAnyError = Boolean(failedRequest) || backendSections.some((s) => s.error);
 
   return (
     <TopNavPane title="Search" className="topnav-pane--search" onClose={onClose} isPinned={isPinned} onTogglePin={onTogglePin} isOpen={isOpen}>
@@ -1852,15 +1819,48 @@ function SearchPanel({ query, widgets, onClose, isPinned, onTogglePin, isOpen })
         </div>
         {normalizedSearch ? (
           <div className="topnav-list chrome-search-results">
-            {results.length === 0 ? <div className="chrome-empty">No matches.</div> : null}
-            {results.map((result) => (
-              <NavLink key={result.id} to={result.to} className="topnav-list-item chrome-search-result" onClick={onClose}>
-                <span className="topnav-list-item__dot" />
-                <span>
-                  <strong>{result.title}</strong>
-                  <small>{result.description}</small>
-                </span>
-              </NavLink>
+            {!hasAnyResults && !isSearching && !hasAnyError ? (
+              <div className="chrome-empty">No matches.</div>
+            ) : null}
+            {isSearching ? <div className="chrome-search-loading muted">Searching…</div> : null}
+            {failedRequest ? <div className="chrome-search-error muted">{failedRequest}</div> : null}
+            {routeResults.length > 0 ? (
+              <div className="chrome-search-group">
+                <div className="chrome-search-group__label">Pages</div>
+                {routeResults.map((result) => (
+                  <NavLink key={result.id} to={result.to} className="topnav-list-item chrome-search-result" onClick={onClose}>
+                    <span className="topnav-list-item__dot" />
+                    <span>
+                      <strong>{result.title}</strong>
+                      <small>{result.subtitle}</small>
+                    </span>
+                  </NavLink>
+                ))}
+              </div>
+            ) : null}
+            {backendSections.map((section) => (
+              section.results && section.results.length > 0 ? (
+                <div key={section.id} className="chrome-search-group">
+                  <div className="chrome-search-group__label">{section.label}</div>
+                  {section.results.map((result) => (
+                    <NavLink key={`${section.id}:${result.id}`} to={result.to} className="topnav-list-item chrome-search-result" onClick={onClose}>
+                      <span className="topnav-list-item__dot" />
+                      <span>
+                        <strong>{result.title}</strong>
+                        <small>{result.subtitle}</small>
+                      </span>
+                    </NavLink>
+                  ))}
+                  {section.error ? (
+                    <div className="chrome-search-error muted">{section.error}</div>
+                  ) : null}
+                </div>
+              ) : section.error ? (
+                <div key={section.id} className="chrome-search-group">
+                  <div className="chrome-search-group__label">{section.label}</div>
+                  <div className="chrome-search-error muted">{section.error}</div>
+                </div>
+              ) : null
             ))}
           </div>
         ) : null}
@@ -2180,7 +2180,6 @@ function AccountPanel({ onClose, isPinned, onTogglePin, isOpen }) {
 const PANEL_EXIT_MS = 200;
 const PANEL_ENTER_DELAY_MS = 16; // one rAF tick
 function PanelHost({ activePanel, settingsOpen, quickChatConfig, quickChatSubmission, quickChatDraft, quickChatInlineActive, onQuickChatSubmissionConsumed, onQuickChatDraftConsumed, onQuickChatInlineSettled, searchQuery, setActivePanel, setSettingsOpen, isPinned, onTogglePin, onResetLiveUiState }) {
-  const widgets = useSelector(selectUiWidgets);
   const closePanel = useCallback(() => setActivePanel(null), [setActivePanel]);
 
   // `displayed` = what is currently rendered in the DOM (may lag activePanel during transitions).
@@ -2283,7 +2282,7 @@ function PanelHost({ activePanel, settingsOpen, quickChatConfig, quickChatSubmis
 
   let panelContent = null;
   if (displayed === 'alerts') panelContent = <AlertsPanel onClose={closePanel} {...shared} />;
-  if (displayed === 'search') panelContent = <SearchPanel query={searchQuery} widgets={widgets} onClose={closePanel} {...shared} />;
+  if (displayed === 'search') panelContent = <SearchPanel query={searchQuery} onClose={closePanel} {...shared} />;
   if (displayed === 'insights') panelContent = <InsightsPanel onClose={closePanel} {...shared} />;
   const showScrim = ['alerts', 'quickChat', 'search', 'insights'].includes(displayed);
   return (

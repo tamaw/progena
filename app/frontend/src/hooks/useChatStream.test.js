@@ -259,6 +259,40 @@ describe('useChatStream', () => {
     });
   });
 
+  it('releases the foreground turn after preserving its stream in the background', () => {
+    const dispatch = vi.fn();
+    const cancelStream = vi.fn();
+    let onChunk;
+    const hook = useChatStream({
+      messages: [],
+      setMessages: vi.fn(),
+      activeBackendChat: { thread_id: 'thread-a' },
+      selectedBackendChatId: 'thread-a',
+      threadId: 'thread-a',
+      sendMessageStream: vi.fn((content, history, nextOnChunk) => {
+        onChunk = nextOnChunk;
+        return new Promise(() => {});
+      }),
+      cancelStream,
+      dispatch,
+      getApiUrl: vi.fn(),
+      show: vi.fn(),
+      selectedBackendChatIdRef: { current: 'thread-a' },
+      reloadOpenChat: vi.fn(),
+      onForegroundStreamStarted: vi.fn(),
+    });
+
+    void hook.handleSend('Keep running');
+    onChunk('Partial reply');
+    hook.preserveStreamInBackground();
+    hook.retireForegroundStream();
+
+    expect(dispatch).toHaveBeenCalledWith(markChatGenerating('thread-a'));
+    expect(hook.activeStreamIdRef.current).toBeNull();
+    expect(hook.liveTurnStore.getSnapshot()).toBeNull();
+    expect(cancelStream).not.toHaveBeenCalled();
+  });
+
   it('marks the superseded origin chat as generating when a replacement stream starts', () => {
     const dispatch = vi.fn();
     const hook = useChatStream({

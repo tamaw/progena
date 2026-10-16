@@ -559,10 +559,14 @@ export function useChatApi() {
     };
 
     connect();
+    activeStreamRequestIdRef.current = requestId;
 
     return () => {
       stopped = true;
       cleanup();
+      if (activeStreamRequestIdRef.current === requestId) {
+        activeStreamRequestIdRef.current = null;
+      }
     };
   }, [getApiUrl]);
 

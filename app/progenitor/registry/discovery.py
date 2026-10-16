@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, Field
 
-from ..prompts import render_prompt_template
+from ..prompts import render_simple_template
 from .refresh import refresh_agent_metadata
 
 if TYPE_CHECKING:
@@ -173,7 +173,7 @@ class AgentDiscovery:
             )
             if system_prompt is None or user_prompt_template is None:
                 raise RuntimeError("Missing agent discovery prompt document(s) in Postgres")
-            user_prompt = render_prompt_template(
+            user_prompt = render_simple_template(
                 user_prompt_template, folder_descriptions=folder_descriptions
             )
             return await self.llm_client.chat_structured(

@@ -44,6 +44,8 @@ from deepagents.backends.utils import (
 )
 from wcmatch import glob as wcglob
 
+from ..knowledge.indexer_config import default_indexer_payload, validate_indexer_document
+from ..prompts.templates import parse_prompt_template, prompt_relative_path
 from ..routines.store import (
     parse_routine_graph_document,
     routine_file_name,
@@ -765,6 +767,21 @@ def create_knowledge_state_file(
     )
 
 
+def create_indexer_state_file(state_manager: Any) -> StateFile:
+    """Build ``/config/indexer.json``: which model profile embeds knowledge pages.
+
+    ``profile`` must name a ``/config/profile.json`` entry (checked on save);
+    progress is reported separately in the read-only ``/knowledge/indexer.json``.
+    """
+    return _simple_state_file(
+        "indexer.json",
+        get=state_manager.get_indexer_config,
+        save=state_manager.save_indexer_config,
+        validate=validate_indexer_document,
+        default=default_indexer_payload(),
+    )
+
+
 def create_preferences_state_file(
     state_manager: Any,
     *,
@@ -788,9 +805,9 @@ def create_preferences_state_file(
 
 
 def create_model_profiles_state_file(state_manager: Any) -> StateFile:
-    """Build the provider/deployment map exposed as ``/config/profile.json``."""
+    """Build the provider/deployment map exposed as ``/config/profiles.json``."""
     return _simple_state_file(
-        "profile.json",
+        "profiles.json",
         get=state_manager.get_model_profiles_config,
         save=state_manager.save_model_profiles_config,
         validate=validate_model_profiles_document,
@@ -1141,7 +1158,21 @@ class WorkflowDirectoryBackend(_AsyncOnlyFileBackendMixin):
         if workflow_id is None:
             return WriteResult(error=f"Unknown workflow file '{file_path}' (expected <id>.json)")
         try:
-            workflow = validate_workflow_definition_document(content)
+            # Validation is synchronous; snapshot the prompt documents the
+            # workflow may reference (by path relative to /prompts/).
+            prompts = dict(await self._sm.list_content_documents("prompt"))
+
+            def _prompt_loader(path: str) -> str:
+                text = prompts.get(prompt_relative_path(path))
+                if text is None:
+                    raise ValueError(f"prompt document '{path}' not found")
+                return text
+
+            workflow = validate_workflow_definition_document(
+                content,
+                await self._sm.list_document_types(),
+                prompt_loader=_prompt_loader,
+            )
         except ValueError as exc:
             return WriteResult(error=f"Invalid workflow {name}: {exc}")
         if workflow.get("id") != workflow_id:
@@ -1632,4 +1663,20 @@ class UserAgentDirectoryBackend(ContentDocumentDirectoryBackend):
                     )
         except ValueError as exc:
             return WriteResult(error=f"Invalid agent manifest: {exc}")
+        return await super().awrite(file_path, content)
+
+
+class PromptDocumentDirectoryBackend(ContentDocumentDirectoryBackend):
+    """Validated read/write prompt documents mounted at ``/prompts/``.
+
+    Every write is validated with :func:`parse_prompt_template`; failures
+    surface as a ``WriteResult.error`` so the agent sees the reason.
+    """
+
+    async def awrite(self, file_path: str, content: str) -> WriteResult:
+        try:
+            prompt_relative_path(self._name(file_path))
+            parse_prompt_template(content)
+        except ValueError as exc:
+            return WriteResult(error=f"Invalid prompt document: {exc}")
         return await super().awrite(file_path, content)

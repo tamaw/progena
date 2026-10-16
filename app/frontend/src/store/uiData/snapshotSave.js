@@ -1,4 +1,4 @@
-import { useCallback, useEffect } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import { createUuid } from '../../lib/uuid';
 
 export const SNAPSHOT_EVENT_TIMEOUT_MS = 15000;
@@ -26,45 +26,54 @@ export function useSnapshotSave({
   setDraftContent, setSaving, setPendingSave, setStatusMessage, setError,
   resolveSavedContent,
 }) {
+  const latestSaveRequestId = useRef(null);
+  // The confirmation deadline belongs to one acknowledged request: unrelated
+  // collection refreshes or re-renders must not restart it.
+  const awaitingRequestId = pendingSave?.acknowledged ? pendingSave.requestId : null;
+  const awaitingPath = pendingSave?.acknowledged ? pendingSave.path : null;
   useEffect(() => {
-    if (!pendingSave?.acknowledged || snapshotRequestId !== pendingSave.requestId) return;
-    const updatedItem = items.find((item) => item.path === pendingSave.path);
-    if (!updatedItem) return;
-    const resolvedContent = resolveSavedContent ? resolveSavedContent(pendingSave.path) : updatedItem.content;
-    if (resolvedContent === undefined) return; // content cache hasn't caught up yet; effect re-runs when it does
-    setDraftContent(resolvedContent || '');
-    setSaving(false);
-    setPendingSave(null);
-    setStatusMessage(`Saved ${updatedItem.path}.`);
-  }, [items, pendingSave, resolveSavedContent, setDraftContent, setPendingSave, setSaving, setStatusMessage, snapshotRequestId]);
-
-  useEffect(() => {
-    if (!pendingSave || realtimeConnected) {
-      return;
-    }
-    setSaving(false);
-    setPendingSave(null);
-    setStatusMessage('');
-    setError(
-      pendingSave.acknowledged
-        ? saveSnapshotDisconnectedError(pendingSave.path)
-        : saveInterruptedError(pendingSave.path),
-    );
-  }, [pendingSave, realtimeConnected, setError, setPendingSave, setSaving, setStatusMessage]);
-
-  useEffect(() => {
-    if (!pendingSave?.acknowledged || !realtimeConnected) {
-      return undefined;
-    }
-    setStatusMessage(`Save acknowledged. Waiting for ${pendingSave.path} to refresh.`);
+    if (!awaitingRequestId) return undefined;
+    setStatusMessage(`Save acknowledged. Waiting for ${awaitingPath} to refresh.`);
     const timeoutId = setTimeout(() => {
+      latestSaveRequestId.current = null;
       setSaving(false);
       setPendingSave(null);
       setStatusMessage('');
-      setError(saveSnapshotTimeoutError(pendingSave.path));
+      setError(saveSnapshotTimeoutError(awaitingPath));
     }, SNAPSHOT_EVENT_TIMEOUT_MS);
     return () => clearTimeout(timeoutId);
-  }, [pendingSave, realtimeConnected, setError, setPendingSave, setSaving, setStatusMessage]);
+  }, [awaitingPath, awaitingRequestId, setError, setPendingSave, setSaving, setStatusMessage]);
+
+  // Declared before the completion effect: when the causal snapshot is
+  // already present, completion's status message runs last and wins.
+  useEffect(() => {
+    if (!pendingSave) return undefined;
+    if (pendingSave.acknowledged && snapshotRequestId === pendingSave.requestId) {
+      const updatedItem = items.find((item) => item.path === pendingSave.path);
+      const resolvedContent = updatedItem && (resolveSavedContent
+        ? resolveSavedContent(pendingSave.path) : updatedItem.content);
+      if (updatedItem && resolvedContent !== undefined) {
+        setDraftContent(resolvedContent || '');
+        setSaving(false);
+        setPendingSave(null);
+        setStatusMessage(`Saved ${updatedItem.path}.`);
+        return undefined;
+      }
+    }
+    if (!realtimeConnected) {
+      // Cancelling the pending save also retires its request, so a late HTTP
+      // rejection cannot surface on whatever is selected next.
+      latestSaveRequestId.current = null;
+      setSaving(false);
+      setPendingSave(null);
+      setStatusMessage('');
+      setError(pendingSave.acknowledged
+        ? saveSnapshotDisconnectedError(pendingSave.path)
+        : saveInterruptedError(pendingSave.path));
+    }
+    return undefined;
+  }, [items, pendingSave, realtimeConnected, resolveSavedContent, setDraftContent,
+    setError, setPendingSave, setSaving, setStatusMessage, snapshotRequestId]);
 
   return useCallback(async () => {
     if (!path || content === savedContent || saving) return false;
@@ -74,6 +83,7 @@ export function useSnapshotSave({
       return false;
     }
     const requestId = createUuid();
+    latestSaveRequestId.current = requestId;
     setSaving(true);
     setPendingSave({ requestId, path, acknowledged: false });
     setError(null);
@@ -84,15 +94,10 @@ export function useSnapshotSave({
         ? { ...current, acknowledged: true } : current);
       return true;
     } catch (saveError) {
-      let failedCurrentSave = false;
-      setPendingSave((current) => {
-        failedCurrentSave = current?.requestId === requestId;
-        return failedCurrentSave ? null : current;
-      });
+      if (latestSaveRequestId.current !== requestId) return false;
+      setPendingSave((current) => current?.requestId === requestId ? null : current);
       setSaving(false);
-      if (failedCurrentSave) {
-        setError(saveError);
-      }
+      setError(saveError);
       return false;
     }
   }, [buildArgs, content, dispatch, path, realtimeConnected, savedContent, saving, setError, setPendingSave, setSaving, setStatusMessage, thunk]);

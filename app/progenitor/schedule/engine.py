@@ -3,37 +3,13 @@
 from __future__ import annotations
 
 import logging
-import os
-from datetime import UTC, datetime, tzinfo
-from typing import Any, cast
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+from datetime import datetime
+from typing import Any
 
-from croniter import croniter
-
+from ..cron import default_timezone_name, next_cron_time, resolve_timezone
 from ..utils import utcnow
 
 logger = logging.getLogger(__name__)
-
-
-def default_timezone_name() -> str:
-    """Resolve the default schedule timezone (env var, then config default)."""
-    name = os.getenv("PROGENITOR_TIMEZONE")
-    if name:
-        return name
-    from ..config import DEFAULT_TIMEZONE
-
-    return DEFAULT_TIMEZONE
-
-
-def resolve_timezone(name: str | None) -> tzinfo:
-    """Resolve a timezone name to a tzinfo, falling back to UTC if invalid."""
-    if not name:
-        return UTC
-    try:
-        return ZoneInfo(name)
-    except (ZoneInfoNotFoundError, ValueError):
-        logger.warning("Unknown schedule timezone %r; falling back to UTC", name)
-        return UTC
 
 
 def parse_schedule_datetime(value: Any) -> datetime | None:
@@ -88,15 +64,12 @@ class Scheduler:
             return None
         created_at = parse_schedule_datetime(item.get("created_at"))
         reference = last_run or created_at or utcnow()
-        # Evaluate cron fields against wall-clock time in the entry's timezone
-        # (croniter honours the reference datetime's tzinfo). Fall back to the
-        # configured default zone when the entry does not specify one.
+        # Evaluate cron fields against wall-clock time in the entry's timezone.
+        # Fall back to the configured default zone when the entry does not
+        # specify one.
         zone = resolve_timezone(item.get("timezone") or default_timezone_name())
-        if reference.tzinfo is None:
-            reference = reference.replace(tzinfo=UTC)
-        reference = reference.astimezone(zone)
         try:
-            return cast(datetime, croniter(cron_expression, reference).get_next(datetime))
+            return next_cron_time(cron_expression, reference, zone)
         except Exception:
             return None
 

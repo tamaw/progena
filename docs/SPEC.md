@@ -199,11 +199,13 @@ documents, not files in `data/state` or `data/config`. State-document changes ar
 broadcast to the canonical UI stream after the write succeeds; details are in
 [STATE_DOCUMENTS.md](STATE_DOCUMENTS.md).
 
-Chat history is exposed the same way, read-only: `/conversations/` lists one
-IRC-style `<date>_<title-slug>_<id8>.txt` per non-archived chat, rendered from the
-LangGraph checkpointer and cached in the store under `progenitor.conversations`
-(`app/progenitor/conversations/`). Listing and grep use the cache; reading a file
-re-renders that chat first if a newer checkpoint exists.
+Chat history is exposed through `/sessions/`: one
+`<date>_<title-slug>_<id8>.md` per non-archived chat, backed by `session:`
+documents in Postgres (`app/progenitor/sessions/`). Each file is YAML front
+matter (all payload fields except `content`, plus `display_title`) followed by
+a blank line and the IRC-style `content`. Only the `title`, `pinned`, and
+`archived` front-matter fields are editable; the body is read-only. Listing,
+grep, and read operate directly on the store documents (no cache).
 
 ## Public interfaces
 

@@ -13,6 +13,7 @@ from app.progenitor.routines.events import CHECKPOINT_CHANNEL, RUN_EVENT_PREFIX
 
 from .document_store import (
     PROGENITOR_STATE_PREFIX,
+    DocumentEvent,
     StoreChangeListener,
     store_database_url,
 )
@@ -124,23 +125,19 @@ class RoutineEvents:
         self.connections.discard(client_id)
         self.interests.pop(client_id, None)
 
-    def document_changed(self, key: str | None, action: str | None) -> None:
-        if key and key.startswith(RUN_EVENT_PREFIX) and action != "deleted":
-            self.spawn(self.publish_lifecycle(key))
+    async def document_event(self, event: DocumentEvent) -> None:
+        """Publish a routine run lifecycle transition recorded in the document event log."""
+        if event.key.startswith(RUN_EVENT_PREFIX) and isinstance(event.after, dict):
+            self.publish_lifecycle(event.after)
 
-    async def publish_lifecycle(self, key: str) -> None:
+    def publish_lifecycle(self, payload: dict[str, Any]) -> None:
         from .ui_routes import broadcast_ui_event
 
-        document = await asyncio.to_thread(
-            get_document_store().get_document, PROGENITOR_STATE_PREFIX, key
-        )
-        if document and isinstance(document.payload, dict):
-            payload = document.payload
-            if self.claim_lifecycle(payload):
-                broadcast_ui_event(f"agent.routine.run.{payload['status']}", payload)
-            agent_id = payload["agent_id"]
-            if any(i["agent_id"] == agent_id for i in self.interests.values()):
-                self.schedule(agent_id)
+        if self.claim_lifecycle(payload):
+            broadcast_ui_event(f"agent.routine.run.{payload['status']}", payload)
+        agent_id = payload["agent_id"]
+        if any(i["agent_id"] == agent_id for i in self.interests.values()):
+            self.schedule(agent_id)
 
     def checkpoint_changed(self, notification: str) -> None:
         try:

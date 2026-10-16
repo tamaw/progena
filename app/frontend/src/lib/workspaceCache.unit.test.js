@@ -2,17 +2,13 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { clearWorkspaceScopedCaches } from './workspaceCache';
 import {
   ARCHIVED_CHAT_SESSIONS_KEY,
-  CUSTOM_CHAT_TITLE_KEY,
   PINNED_CHAT_SESSIONS_KEY,
-  SHARED_CHAT_SESSIONS_KEY,
 } from '../components/chat/chatStorage';
 import { SOLUTIONS_STORAGE_KEY } from '../data/solutions';
 
 const WORKSPACE_SCOPED_KEYS = [
   ARCHIVED_CHAT_SESSIONS_KEY,
-  CUSTOM_CHAT_TITLE_KEY,
   PINNED_CHAT_SESSIONS_KEY,
-  SHARED_CHAT_SESSIONS_KEY,
   SOLUTIONS_STORAGE_KEY,
   'progenitor_chat_history',
   'progenitor_quick_chat_handoff',

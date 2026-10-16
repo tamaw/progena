@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from ..config import ProgenitorConfig, get_config
-from ..document_kinds import AGENT_SELF_EDIT_TOUCH_KEY_PREFIX
+from ..document_kinds import AGENT_DOCUMENT_KEY_PREFIX
 from ..llm.client import LLMClient
 from ..mcp import MCPRuntime
 from ..registry import AgentRegistryRuntime
@@ -66,45 +66,29 @@ class Progenitor:
         self._agent_scheduler: AgentSyncScheduler | None = None
 
     def _on_store_change(self, payload: str) -> None:
-        """Route a ``store`` NOTIFY to the appropriate live registry scheduler.
+        """Refresh the chat-facing live registries a ``store`` NOTIFY touches.
 
-        Runs in the listener task; routes by key onto the coalescing scheduler:
-        ``mcp`` (server config: add/remove/enable/disable/url) needs a full
-        re-discovery; ``mcp_tools`` (a per-tool enable toggle) only needs the
-        disabled set re-applied. ``plugins`` triggers the plugin reconciler.
-        ``agent:`` documents and agent self-edit markers refresh object task
-        descriptors and the shared routine delegation map without rebuilding
-        the conversation graph.
-        ``repos`` drops the cached declared-repos document so the next
-        heartbeat scan sees backend-side create/update/delete calls instead
-        of a stale in-process snapshot. ``repo_scan`` does the same for the
-        heartbeat-derived git-state document -- the backend's on-demand
-        "Fetch" action (``repo_service.fetch_and_rescan_repo``) writes it
-        directly too now, alongside the heartbeat. ``background_tasks`` does
-        the same for the background-task queue -- the backend's routine
-        "Run" endpoint (``POST /agent-profiles/{id}/run``) enqueues onto it
-        directly, and without this the heartbeat's cached copy (seeded once
-        at boot) would never see backend-enqueued entries for the life of
-        the process. This is the single path for both UI-driven and
-        agent-driven config changes -- there is no separate write-hook.
+        The runtime only listens for what chat calls into: ``mcp`` (server
+        config) needs a full re-discovery, ``mcp_tools`` (a per-tool toggle)
+        only re-applies the disabled set, ``plugins`` runs the plugin
+        reconciler, and ``agent:`` documents refresh the sub-agent registry.
+        Each routes onto a coalescing scheduler. Documents the backend also
+        writes (repos, repo scan, background tasks) are read through from the
+        store by ``StateManager`` instead, so they need no notification here.
         """
         try:
             data = json.loads(payload) if payload else {}
             key = data.get("key") if isinstance(data, dict) else None
         except (ValueError, TypeError):
             key = None
-        if key in ("repos", "repo_scan", "background_tasks") and self.state_manager is not None:
-            self.state_manager.invalidate_document(key)
-        if (
-            isinstance(key, str)
-            and key.startswith(("agent:", AGENT_SELF_EDIT_TOUCH_KEY_PREFIX))
-            and self._agent_scheduler is not None
-        ):
-            self._agent_scheduler.request()
-        if key == "mcp" and self._mcp_scheduler is not None:
-            self._mcp_scheduler.request(full=True)
-        elif key == "mcp_tools" and self._mcp_scheduler is not None:
-            self._mcp_scheduler.request(full=False)
+        if not isinstance(key, str):
+            return
+        if key.startswith(AGENT_DOCUMENT_KEY_PREFIX):
+            if self._agent_scheduler is not None:
+                self._agent_scheduler.request()
+        elif key in ("mcp", "mcp_tools"):
+            if self._mcp_scheduler is not None:
+                self._mcp_scheduler.request(full=key == "mcp")
         elif key == "plugins" and self._plugin_scheduler is not None:
             self._plugin_scheduler.request()
 

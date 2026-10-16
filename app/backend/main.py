@@ -31,15 +31,18 @@ from fastapi.responses import JSONResponse
 from fastapi.sse import EventSourceResponse, format_sse_event
 from starlette.middleware.gzip import GZipMiddleware
 
+from app.progenitor.sessions.titles import ATTACHMENT_CONTEXT_MARKER
+
 from .agent_store import configure_agent_store
 from .alerts import AlertInfo
 from .attachment_blob_store import configure_attachment_blob_store, get_attachment_blob_store
 from .attachment_routes import get_attachment_manager
 from .attachment_routes import router as attachments_router
-from .attachments import ATTACHMENT_CONTEXT_MARKER, format_attachments_for_context
+from .attachments import format_attachments_for_context
 from .chat_sessions import UiRequestAcknowledgement, acknowledgement_response
 from .client import ProgenitorClient
 from .config import ChatServerConfig
+from .document_events import seed_document_types
 from .document_store import configure_default_document_store
 from .knowledge_routes import router as knowledge_router
 from .marketplace_routes import router as marketplaces_router
@@ -53,6 +56,7 @@ from .plugin_routes import router as plugins_router
 from .preferences_routes import router as preferences_router
 from .repo_routes import router as repos_router
 from .request_utils import request_correlation_id as _strict_request_correlation_id
+from .search_routes import router as search_router
 from .session import (
     SessionConfig,
     SessionManager,
@@ -82,6 +86,9 @@ from .ui_routes import (
     stop_state_status_watcher,
 )
 from .ui_routes import router as ui_router
+
+SOURCE_TELEGRAM = "telegram"
+SOURCE_UI = "ui"
 
 logger = logging.getLogger(__name__)
 
@@ -561,7 +568,9 @@ async def _send_telegram_connected_message(
         conversation_id = _telegram_conversation_id(telegram.config.chat_id)
         response_text = (
             await progenitor.send_message(
-                prompt, request_id=request_id, metadata={"thread_id": conversation_id}
+                prompt,
+                request_id=request_id,
+                metadata={"thread_id": conversation_id, "source": SOURCE_TELEGRAM},
             )
         ).response.strip()
         if not response_text:
@@ -710,7 +719,9 @@ async def _handle_telegram_agent_message(
                 chat_id,
                 _stream_text_chunks(
                     progenitor.send_message_stream_events(
-                        message, request_id=request_id, metadata={"thread_id": conversation_id}
+                        message,
+                        request_id=request_id,
+                        metadata={"thread_id": conversation_id, "source": SOURCE_TELEGRAM},
                     )
                 ),
                 message_thread_id=metadata.get("message_thread_id"),
@@ -767,6 +778,7 @@ async def lifespan(app: FastAPI):
     document_store = configure_default_document_store(
         config.database_url, runtime_url=config.progenitor_runtime_url
     )
+    seed_document_types(document_store)
     attachment_blob_store = configure_attachment_blob_store(config.database_url)
 
     async def close_document_store() -> None:
@@ -1008,6 +1020,19 @@ async def lifespan(app: FastAPI):
         timeout=5.0,
     )
 
+    # Knowledge search indexer (Postgres only; idle if another process holds its lock).
+    from .knowledge_indexer import get_knowledge_indexer
+
+    indexer = get_knowledge_indexer()
+    await indexer.start()
+    if indexer.running:
+        graceful_shutdown.register_callback(
+            "stop_knowledge_indexer",
+            indexer.stop,
+            priority=35,
+            timeout=10.0,
+        )
+
     yield
 
     # Graceful Shutdown (OPS-002) - now using enhanced manager
@@ -1026,6 +1051,7 @@ app = FastAPI(
     lifespan=lifespan,
 )
 app.include_router(ui_router)
+app.include_router(search_router)
 app.include_router(knowledge_router)
 app.include_router(marketplaces_router)
 app.include_router(repos_router)
@@ -1551,6 +1577,7 @@ def _build_chat_request_metadata(
     ).strip()
     thread_id = requested_thread_id or _default_conversation_id(session)
     metadata["thread_id"] = thread_id
+    metadata["source"] = SOURCE_UI
     return thread_id, metadata
 
 

@@ -157,6 +157,17 @@ the routine and resumes the same thread after the user's response.
 8. Report the routine id and changes; do not imply UI navigation or execution
    unless it actually occurred.
 
+## Running a routine from chat
+
+Read the routine document first. Use its routine id as the `task` subagent
+type. If the graph has an `input_schema`, set the `task` description to **only**
+a JSON object satisfying that schema; the subagent validates and binds those
+fields before running the graph. For example, a prompt using `{question}` needs
+`task(subagent_type="...", description='{"question":"What is 40 + 2?"}')`.
+For a graph without `input_schema`, the description remains a natural-language
+request available to the graph as `{request}`. A human step returns its paused
+thread id; use `resume_routine` to answer it.
+
 ## Execution policy
 
 Select one existing execution policy with `policy_id` (default `default`).

@@ -3,9 +3,7 @@ import {
   compareSessionItems,
   normalizeBackendChatMessage,
   buildChatSessionItems,
-  isHiddenEmptyDraft,
   findAdjacentSessionItem,
-  shouldMaterializeBeforeSwitching,
   shouldLoadSelectedBackendChat,
   visibleGroupsForFilter,
   sidebarEmptyMessage,
@@ -511,7 +509,6 @@ describe('buildChatSessionItems', () => {
     firstMessageTime: undefined,
     archivedSessions: [],
     pinnedSessionIds: [],
-    sharedSessionIds: [],
     backendChatsLoaded: true,
     unreadChatIds: new Set(),
     backgroundGeneratingChatIds: new Set(),
@@ -616,67 +613,6 @@ describe('buildChatSessionItems', () => {
     // The transient current-draft card is still correctly hidden.
     expect(items.some((i) => i.source === 'local' && i.id === 'sess1')).toBe(false);
   });
-
-  // An empty backend draft ("New chat", zero messages) is infrastructure,
-  // not a conversation — it must not render a sidebar card until it has
-  // content (or the user has deliberately interacted with it).
-  it('hides empty backend drafts until they have content', () => {
-    const items = buildChatSessionItems({
-      ...base,
-      selectedBackendChatId: null,
-      backendChatSessions: [
-        { thread_id: 'draft-1', title: 'New chat', message_count: 0 },
-        { thread_id: 'real-1', title: 'Real chat', message_count: 3 },
-      ],
-    });
-    expect(items.map((i) => i.id)).toEqual(['real-1']);
-  });
-
-  it('shows the selected draft card as soon as the local transcript has messages', () => {
-    const items = buildChatSessionItems({
-      ...base,
-      messages: [{ role: 'user', content: 'first message', timestamp: 1 }],
-      selectedBackendChatId: 'draft-1',
-      backendChatSessions: [
-        { thread_id: 'draft-1', title: 'New chat', message_count: 0 },
-      ],
-    });
-    expect(items.map((i) => i.id)).toEqual(['draft-1']);
-  });
-});
-
-describe('isHiddenEmptyDraft', () => {
-  const emptyDraft = { thread_id: 'd1', title: 'New chat', message_count: 0 };
-  const ctx = {
-    selectedBackendChatId: null,
-    localMessageCount: 0,
-    unreadChatIds: new Set(),
-    backgroundGeneratingChatIds: new Set(),
-    backgroundErrorChatIds: new Set(),
-  };
-
-  it('hides a plain empty draft', () => {
-    expect(isHiddenEmptyDraft(emptyDraft, ctx)).toBe(true);
-  });
-
-  it('shows drafts the user made theirs (renamed or pinned)', () => {
-    expect(isHiddenEmptyDraft({ ...emptyDraft, title: 'My plan' }, ctx)).toBe(false);
-    expect(isHiddenEmptyDraft({ ...emptyDraft, pinned: true }, ctx)).toBe(false);
-  });
-
-  it('shows drafts with runtime activity flags', () => {
-    expect(isHiddenEmptyDraft(emptyDraft, { ...ctx, unreadChatIds: new Set(['d1']) })).toBe(false);
-    expect(isHiddenEmptyDraft(emptyDraft, { ...ctx, backgroundGeneratingChatIds: new Set(['d1']) })).toBe(false);
-    expect(isHiddenEmptyDraft(emptyDraft, { ...ctx, backgroundErrorChatIds: new Set(['d1']) })).toBe(false);
-  });
-
-  it('never hides sessions with persisted messages', () => {
-    expect(isHiddenEmptyDraft({ ...emptyDraft, message_count: 1 }, ctx)).toBe(false);
-  });
-
-  it('never hides sessions whose history is unavailable', () => {
-    expect(isHiddenEmptyDraft({ ...emptyDraft, history_unavailable: true }, ctx)).toBe(false);
-  });
 });
 
 describe('shouldLoadSelectedBackendChat', () => {
@@ -771,11 +707,10 @@ describe('formatDisplayToolCalls', () => {
 describe('visibleGroupsForFilter', () => {
   const mk = (o) => ({
     id: o.id, title: o.id, summary: '', bucket: 'today', pinned: false,
-    unread: !!o.unread, shared: !!o.shared, archived: !!o.archived,
+    unread: !!o.unread, archived: !!o.archived,
   });
   const items = [
     mk({ id: 'u', unread: true }),
-    mk({ id: 's', shared: true }),
     mk({ id: 'ar', archived: true }),
     mk({ id: 'uar', unread: true, archived: true }),
   ];
@@ -791,7 +726,7 @@ describe('visibleGroupsForFilter', () => {
   it('all filter groups non-archived by time bucket', () => {
     const groups = visibleGroupsForFilter({ sessionItems: items, sidebarFilter: 'all', groupSessionItems });
     const today = groups.find((g) => g.key === 'today');
-    expect(today.items.map((i) => i.id).sort()).toEqual(['s', 'u']);
+    expect(today.items.map((i) => i.id).sort()).toEqual(['u']);
   });
 });
 
@@ -815,45 +750,10 @@ describe('findAdjacentSessionItem', () => {
   });
 });
 
-describe('shouldMaterializeBeforeSwitching', () => {
-  it('materializes a local session with messages that has no backend selection yet', () => {
-    expect(shouldMaterializeBeforeSwitching({
-      selectedBackendChatId: null,
-      threadId: 'sess1',
-      messageCount: 2,
-    })).toBe(true);
-  });
-
-  it('does not materialize once a backend chat is already selected', () => {
-    expect(shouldMaterializeBeforeSwitching({
-      selectedBackendChatId: 'c1',
-      threadId: 'sess1',
-      messageCount: 2,
-    })).toBe(false);
-  });
-
-  it('does not materialize an empty session', () => {
-    expect(shouldMaterializeBeforeSwitching({
-      selectedBackendChatId: null,
-      threadId: 'sess1',
-      messageCount: 0,
-    })).toBe(false);
-  });
-
-  it('does not materialize without a thread id', () => {
-    expect(shouldMaterializeBeforeSwitching({
-      selectedBackendChatId: null,
-      threadId: null,
-      messageCount: 2,
-    })).toBe(false);
-  });
-});
-
 describe('sidebarEmptyMessage', () => {
   it('returns the right message per state', () => {
     expect(sidebarEmptyMessage({ sidebarFilter: 'all', backendChatsLoaded: false, backendChatsLoading: false })).toBe('Loading chats...');
     expect(sidebarEmptyMessage({ sidebarFilter: 'unread', backendChatsLoaded: true, backendChatsLoading: false })).toBe('No unread chats.');
-    expect(sidebarEmptyMessage({ sidebarFilter: 'shared', backendChatsLoaded: true, backendChatsLoading: false })).toBe('No shared chats yet.');
     expect(sidebarEmptyMessage({ sidebarFilter: 'archived', backendChatsLoaded: true, backendChatsLoading: false })).toBe('No archived chats yet.');
     expect(sidebarEmptyMessage({ sidebarFilter: 'all', backendChatsLoaded: true, backendChatsLoading: false })).toBe('No conversations.');
   });
