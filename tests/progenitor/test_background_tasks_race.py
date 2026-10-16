@@ -43,13 +43,11 @@ async def pg_stores():
     # Start from an empty queue, restoring whatever the database held afterwards.
     original = doc_store.get_document(PROGENITOR_STATE_PREFIX, "background_tasks", [])
     doc_store.save_document(PROGENITOR_STATE_PREFIX, "background_tasks", [])
-    state_manager.invalidate_document("background_tasks")
 
     yield doc_store, state_manager
 
     restored = list(original.payload) if original is not None else []
     doc_store.save_document(PROGENITOR_STATE_PREFIX, "background_tasks", restored)
-    state_manager.invalidate_document("background_tasks")
     await state_manager.close()
     await pool.close()
     doc_store.close()
@@ -132,7 +130,6 @@ async def test_concurrent_enqueue_and_dequeue_no_duplicates_or_loss(pg_stores):
     # Seed with 10 backend tasks
     for i in range(10):
         backend_enqueue(i)
-    state_manager.invalidate_document("background_tasks")
 
     # Concurrently enqueue 5 runtime tasks and dequeue 5 tasks
     with ThreadPoolExecutor(max_workers=5) as executor:

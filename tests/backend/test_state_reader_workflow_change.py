@@ -8,6 +8,10 @@ kanban/inbox, no other snapshot field changes on a workflow-only write, so
 
 from __future__ import annotations
 
+import json
+
+import pytest
+
 from app.backend.document_store import PROGENITOR_STATE_PREFIX, InMemoryDocumentStore
 from app.backend.state_reader import StateReader
 
@@ -122,3 +126,26 @@ def test_workflow_notify_reaches_watchers_even_when_snapshot_is_unchanged():
     reader._on_store_change('{"prefix": "progenitor.state", "key": "workflow:wf_a"}')
 
     assert seen == ["workflow:wf_a"]
+
+
+@pytest.mark.parametrize("key", ["schedule", "inbox_message:review"])
+def test_collection_notify_survives_snapshot_consumed_by_sibling_document(key):
+    reader, store = _reader()
+    store.save_document(PROGENITOR_STATE_PREFIX, key, {"title": "Updated review"})
+    # Another key from the same committed transaction already refreshed the
+    # coarse snapshot; this key still needs its dedicated collection snapshot.
+    reader._last_snapshot = reader.get_snapshot()
+    seen: list[str | None] = []
+    reader.add_watcher(lambda _snapshot, changed_key: seen.append(changed_key))
+
+    reader._on_store_change(
+        json.dumps(
+            {
+                "prefix": PROGENITOR_STATE_PREFIX,
+                "key": key,
+                "action": "UPDATE",
+            }
+        )
+    )
+
+    assert seen == [key]

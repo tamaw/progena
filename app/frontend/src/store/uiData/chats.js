@@ -181,21 +181,6 @@ export const requestChatSessionReconciliation = createAcknowledgedThunk('uiData/
   );
   return { ...acknowledgement, threadId };
 });
-export const createChatSession = createAcknowledgedThunk('uiData/createChatSession', async ({ chatsUrl, title, threadId }, { requestId }) => {
-  const acknowledgement = await requestAcknowledged(chatsUrl, {
-    method: 'POST',
-    body: { title, thread_id: threadId },
-    requestId,
-  });
-  return { ...acknowledgement, threadId };
-});
-export const ensureDraftChatSession = createAcknowledgedThunk('uiData/ensureDraftChatSession', async ({ chatsUrl, threadId }, { requestId }) => {
-  const acknowledgement = await requestAcknowledged(
-    `${chatsUrl.replace(/\/$/, '')}/draft`,
-    { method: 'POST', body: { thread_id: threadId }, requestId },
-  );
-  return { ...acknowledgement, threadId };
-});
 export const updateChatSessionMetadata = createAcknowledgedThunk('uiData/updateChatSessionMetadata', async ({ chatsUrl, threadId, patch }, { requestId }) => {
   const acknowledgement = await requestAcknowledged(
     `${chatsUrl}/${encodeURIComponent(threadId)}`,

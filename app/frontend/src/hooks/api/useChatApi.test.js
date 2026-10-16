@@ -349,4 +349,22 @@ describe('useChatApi dedicated response transport', () => {
     expect(onComplete).toHaveBeenCalledOnce();
     expect(onComplete).toHaveBeenCalledWith('cancelled');
   });
+
+  it('allows a reopened panel to explicitly cancel an observed active stream', async () => {
+    const hook = useChatApi();
+    const cleanup = hook.observeResponseStream(REQUEST_ID);
+    await flushMicrotasks();
+
+    expect(MockEventSource.instances).toHaveLength(1);
+    globalThis.crypto.randomUUID.mockReturnValueOnce(CANCEL_REQUEST_ID);
+    await hook.cancelStream();
+
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      `${RESPONSES_URL}/${REQUEST_ID}/cancel`,
+      expect.objectContaining({ method: 'PUT' }),
+    );
+
+    cleanup();
+    expect(MockEventSource.instances[0].closed).toBe(true);
+  });
 });

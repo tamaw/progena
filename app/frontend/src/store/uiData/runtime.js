@@ -3,7 +3,8 @@
  * schedule list. These are kept live by `status.updated` / `alerts.updated` /
  * `widgets.updated` / `schedule.snapshot` frames on the realtime stream.
  */
-import { createAcknowledgedThunk, requestAcknowledged } from './async';
+import { createSelector } from '@reduxjs/toolkit';
+import { createAcknowledgedThunk, requestAcknowledged, addRequestLifecycle } from './async';
 
 export const initialState = {
   status: null,
@@ -12,6 +13,10 @@ export const initialState = {
   // Schedule list, kept live by `schedule.snapshot` events on /api/ui/stream
   // and seeded once via REST when the Schedules page mounts.
   schedule: [],
+  scheduleLoaded: false,
+  scheduleLoading: false,
+  scheduleError: null,
+  scheduleRequestId: null,
   // Bumped (with a monotonic `seq`) on every single-new-`alert` event, for a
   // global toast+sound side effect (see AppRuntimeShell) - distinct from
   // `alerts`/`alerts.updated`, which is the durable list, not "just arrived".
@@ -51,6 +56,12 @@ export const fetchWidgets = createAcknowledgedThunk('uiData/fetchWidgets', async
   return requestAcknowledged(widgetsUrl, { requestId });
 });
 
+// Acknowledge a schedule-list request; the snapshot arrives on the realtime
+// stream as `schedule.snapshot` (the GET just triggers the broadcast).
+export const fetchSchedules = createAcknowledgedThunk('uiData/fetchSchedules', async ({ schedulesUrl }, { requestId }) => {
+  return requestAcknowledged(schedulesUrl, { requestId });
+});
+
 // Alert read acknowledgements deliberately carry no alert data. The correlated
 // `alerts.updated` stream frame below is the sole owner of the alert list and
 // its unread/viewed state.
@@ -66,6 +77,10 @@ export const markAlertsViewed = createAcknowledgedThunk('uiData/markAlertsViewed
 export const reducers = {
   scheduleSnapshotReceived(state, action) {
     state.schedule = Array.isArray(action.payload) ? action.payload : [];
+    state.scheduleLoaded = true;
+    // This array action has no correlation ID, so it cannot complete a
+    // pending request whose authoritative snapshot has not arrived yet.
+    if (!state.scheduleLoading) state.scheduleError = null;
   },
 };
 
@@ -110,11 +125,39 @@ export const eventHandlers = {
   },
   'schedule.snapshot': (state, payload) => {
     state.schedule = Array.isArray(payload.items) ? payload.items : [];
+    state.scheduleLoaded = true;
+    if (!state.scheduleLoading || payload.request_id === state.scheduleRequestId) {
+      state.scheduleLoading = false;
+      state.scheduleError = null;
+      state.scheduleRequestId = null;
+    }
   },
 };
+
+export function buildExtraReducers(builder) {
+  return addRequestLifecycle(builder, fetchSchedules, {
+    select: (state) => state,
+    loadingKey: 'scheduleLoading',
+    errorKey: 'scheduleError',
+    requestIdKey: 'scheduleRequestId',
+    errorMessage: 'Failed to load schedules',
+  });
+}
 
 export const selectUiStatus = (state) => state.uiData.status;
 export const selectUiAlerts = (state) => state.uiData.alerts;
 export const selectUiWidgets = (state) => state.uiData.widgets;
 export const selectSchedules = (state) => state.uiData.schedule;
+export const selectSchedulesState = createSelector(
+  [
+    selectSchedules,
+    (state) => state.uiData.scheduleLoaded,
+    (state) => state.uiData.scheduleLoading,
+    (state) => state.uiData.scheduleError,
+    (state) => state.uiData.scheduleRequestId,
+  ],
+  (items, loaded, loading, error, requestId) => ({
+    items, loaded, loading, error, requestId,
+  }),
+);
 export const selectLastReceivedAlert = (state) => state.uiData.lastReceivedAlert;

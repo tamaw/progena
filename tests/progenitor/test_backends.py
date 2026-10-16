@@ -105,7 +105,9 @@ class TestBackendFactory:
             assert isinstance(backend.routes["/logs/"], ReadOnlyBackend)
             assert isinstance(backend.routes["/schemas/"], ReadOnlyBackend)
             assert isinstance(backend.routes["/schemas/"]._backend, FilesystemBackend)
-            assert isinstance(backend.routes["/prompts/"], ReadOnlyBackend)
+            from app.progenitor.agent.state_backend import PromptDocumentDirectoryBackend
+
+            assert isinstance(backend.routes["/prompts/"], PromptDocumentDirectoryBackend)
             # /skills/ is disk-backed now (like /schemas/), not Postgres-backed.
             assert isinstance(backend.routes["/skills/"], ReadOnlyBackend)
             assert isinstance(backend.routes["/skills/"]._backend, FilesystemBackend)
@@ -170,8 +172,10 @@ class TestBackendFactory:
             assert schema_read.error is None
             assert json.loads(schema_read.file_data["content"]) == schema
 
-    async def test_prompts_are_read_only(self, monkeypatch):
-        """/prompts/ reads Postgres content and is wrapped read-only."""
+    async def test_prompts_are_writable_with_validation(self, monkeypatch):
+        """/prompts/ reads Postgres content and validates writes."""
+        from app.progenitor.agent.state_backend import PromptDocumentDirectoryBackend
+
         self._patch_runtime_free_state_backend(monkeypatch)
         state_manager = FakeContentStateManager()
         state_manager._docs["prompt"]["progenitor/genesis.md"] = "# Genesis\n"
@@ -182,7 +186,18 @@ class TestBackendFactory:
         assert prompt_read.error is None
         assert prompt_read.file_data["content"] == "# Genesis\n"
 
-        assert isinstance(backend.routes["/prompts/"], ReadOnlyBackend)
+        assert isinstance(backend.routes["/prompts/"], PromptDocumentDirectoryBackend)
+
+        valid = await backend.awrite("/prompts/progenitor/genesis.md", "# Updated\n")
+        assert valid.error is None
+        assert state_manager._docs["prompt"]["progenitor/genesis.md"] == "# Updated\n"
+
+        invalid = await backend.awrite(
+            "/prompts/progenitor/genesis.md",
+            "---\nunknown_key: 1\n---\n# Body\n",
+        )
+        assert invalid.error is not None
+        assert "unknown front matter key" in invalid.error
 
     async def test_plugin_skill_segment_is_read_only_and_scoped(self, monkeypatch):
         """/skills/<segment>/ reads only that plugin's own Postgres skill rows."""

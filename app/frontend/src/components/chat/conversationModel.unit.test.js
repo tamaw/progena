@@ -23,6 +23,8 @@ import {
   shouldRetireLiveOwnerAfterCanonicalReconciliation,
   mergeCanonicalMessages,
   excludeLiveOwnedMessage,
+  isReopeningCurrentLocalDraft,
+  shouldAdoptMaterializedDraft,
 } from './conversationModel';
 
 describe('chat selection race guards', () => {
@@ -134,6 +136,42 @@ describe('chat selection race guards', () => {
     expect(shouldDismissEmptySelection({ ...emptySelection, hasAutoSelectedOnMount: true, activeError: 'boom' })).toBe(false);
     // No selection at all.
     expect(shouldDismissEmptySelection({ ...emptySelection, hasAutoSelectedOnMount: true, selectedBackendChatId: null })).toBe(false);
+    expect(shouldDismissEmptySelection({
+      ...emptySelection,
+      hasAutoSelectedOnMount: true,
+      hasMaterializedDraft: true,
+    })).toBe(false);
+  });
+
+  it('retains local state only when reopening the same local draft', () => {
+    expect(isReopeningCurrentLocalDraft({
+      selectedBackendChatId: null,
+      currentThreadId: 'draft-a',
+      requestedThreadId: 'draft-a',
+    })).toBe(true);
+    expect(isReopeningCurrentLocalDraft({
+      selectedBackendChatId: null,
+      currentThreadId: 'draft-a',
+      requestedThreadId: 'draft-b',
+    })).toBe(false);
+    expect(isReopeningCurrentLocalDraft({
+      selectedBackendChatId: 'chat-a',
+      currentThreadId: 'draft-a',
+      requestedThreadId: 'draft-a',
+    })).toBe(false);
+  });
+
+  it('adopts a local draft when its session materializes in the roster', () => {
+    expect(shouldAdoptMaterializedDraft({
+      selectedBackendChatId: null,
+      threadId: 'draft-a',
+      sessionThreadId: 'draft-a',
+    })).toBe(true);
+    expect(shouldAdoptMaterializedDraft({
+      selectedBackendChatId: null,
+      threadId: 'draft-a',
+      sessionThreadId: 'draft-b',
+    })).toBe(false);
   });
 });
 
@@ -459,6 +497,16 @@ describe('getActiveRouteThreadId', () => {
       urlThreadId: 'url-thread',
       initialSelectionPending: true,
     })).toBe('url-thread');
+  });
+
+  it('routes an empty local draft once initial selection completes', () => {
+    expect(getActiveRouteThreadId({
+      selectedBackendChatId: null,
+      messages: [],
+      threadId: 'draft-thread',
+      urlThreadId: 'previous-chat',
+      initialSelectionPending: false,
+    })).toBe('draft-thread');
   });
 });
 

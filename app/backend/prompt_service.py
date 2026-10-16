@@ -19,6 +19,7 @@ from pathlib import Path
 
 from app.progenitor.content_documents import content_document_key, content_document_prefix
 from app.progenitor.prompts import resolve_project_root, resolve_prompts_dir
+from app.progenitor.prompts.templates import prompt_relative_path
 
 from .document_store import (
     PROGENITOR_STATE_PREFIX,
@@ -126,14 +127,6 @@ class PromptService:
             return "progenitor"
         return None
 
-    def _sanitize_relative_path(self, relative_path: str) -> str:
-        candidate = Path(relative_path)
-        if candidate.is_absolute() or ".." in candidate.parts:
-            raise ValueError("Invalid prompt path")
-        if candidate.suffix.lower() != ".md":
-            raise ValueError("Only markdown prompt files can be accessed")
-        return candidate.as_posix()
-
     def _infer_agents(self, relative_path: Path) -> tuple[str | None, list[str]]:
         agents: set[str] = set(self._usage_index.get(relative_path.as_posix(), set()))
 
@@ -207,7 +200,7 @@ class PromptService:
         ]
 
     def get_prompt(self, relative_path: str) -> PromptRecord:
-        sanitized = self._sanitize_relative_path(relative_path)
+        sanitized = prompt_relative_path(relative_path)
         document = self.store.get_document(
             PROGENITOR_STATE_PREFIX, content_document_key(_PROMPT_KIND, sanitized), None
         )
@@ -220,11 +213,17 @@ class PromptService:
         return self._build_record(sanitized, document.payload["content"], document.updated_at)
 
     def save_prompt(self, relative_path: str, content: str) -> PromptRecord:
-        sanitized = self._sanitize_relative_path(relative_path)
+        from app.progenitor.prompts.templates import parse_prompt_template
+
+        sanitized = prompt_relative_path(relative_path)
         key = content_document_key(_PROMPT_KIND, sanitized)
         existing = self.store.get_document(PROGENITOR_STATE_PREFIX, key, None)
         if existing is None or not isinstance(existing.payload, dict):
             raise FileNotFoundError(relative_path)
+        try:
+            parse_prompt_template(content)
+        except ValueError as exc:
+            raise ValueError(str(exc)) from exc
         self.store.save_document(
             PROGENITOR_STATE_PREFIX,
             key,

@@ -39,16 +39,8 @@ from .document_kinds import (
     PROMPT_DOCUMENT_KEY_PREFIX,
     SKILL_DOCUMENT_KEY_PREFIX,
 )
-from .document_kinds import (
-    AGENT_SELF_EDIT_TOUCH_KEY_PREFIX as AGENT_SELF_EDIT_TOUCH_KEY_PREFIX,
-)
 
 logger = logging.getLogger(__name__)
-
-# AGENT_SELF_EDIT_TOUCH_KEY_PREFIX: not a content-document kind itself -- a
-# legacy self-edit notification key. All manifests now persist as agent:
-# documents, whose writes directly trigger Postgres NOTIFY. Kept exported
-# for compatibility with older runtime writers and notification consumers.
 
 _KIND_PREFIXES: dict[str, str] = {
     "prompt": PROMPT_DOCUMENT_KEY_PREFIX,
@@ -77,18 +69,14 @@ async def ensure_content_documents_seeded(
     kind: str,
     source_dir: Path | str,
 ) -> None:
-    """Bulk-load ``source_dir``'s ``*.md`` files into Postgres if none exist yet.
+    """Bulk-load ``source_dir``'s ``*.md`` files into Postgres when missing.
 
     Idempotent and cheap to call on every startup: it only touches disk and
-    writes when the store has zero documents of this kind (fresh database).
-    Once seeded, this is a no-op forever after — the database is the source
-    of truth and further edits happen through the virtual mount / backend
-    API, never by re-reading disk.
+    writes for keys that do not already exist in the store. Existing documents
+    are never overwritten — the database is the source of truth and further
+    edits happen through the virtual mount / backend API, never by re-reading
+    disk.
     """
-    existing = await state_manager.list_content_documents(kind)
-    if existing:
-        return
-
     root = Path(source_dir)
     if not root.is_dir():
         logger.warning("Skipping %s seed: source directory missing: %s", kind, root)
@@ -99,6 +87,9 @@ async def ensure_content_documents_seeded(
         if not file_path.is_file():
             continue
         relative_path = file_path.relative_to(root).as_posix()
+        existing = await state_manager.get_content_document(kind, relative_path)
+        if existing is not None:
+            continue
         content = file_path.read_text(encoding="utf-8")
         await state_manager.save_content_document(kind, relative_path, content)
         seeded += 1

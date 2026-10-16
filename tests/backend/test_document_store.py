@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 
 import psycopg
 from psycopg_pool import PoolClosed
@@ -19,6 +20,10 @@ class _FakeCursor:
     def __init__(self, row):
         self._row = row
         self.executed: list[tuple[object, object]] = []
+        self.connection = self
+
+    def transaction(self):
+        return contextlib.nullcontext()
 
     def execute(self, query, params=None):
         self.executed.append((query, params))
@@ -199,6 +204,7 @@ def test_document_store_open_preserves_documents_and_installs_revision_history()
                 "SELECT pg_advisory_lock",
                 "SELECT pg_advisory_unlock",
                 "CREATE INDEX",
+                "ALTER TABLE document_event",
                 "CREATE OR REPLACE FUNCTION",
                 "CREATE OR REPLACE TRIGGER",
                 "INSERT INTO routine_graph_revisions",

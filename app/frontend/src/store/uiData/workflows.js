@@ -41,6 +41,14 @@ function upsertWorkflowListItem(state, workflow) {
   if (!workflow?.id) {
     return;
   }
+  const nodes = Object.values(workflow.graph?.nodes || {});
+  const firstEvent = nodes.find((node) => node?.kind === 'event');
+  // Same summary rule as the server's build_workflow_list_item.
+  const triggers = nodes.flatMap((node) => {
+    if (node?.kind === 'event') return [node.document_type || ''];
+    if (node?.kind === 'cron') return [`cron ${node.expression || ''}`];
+    return [];
+  });
   const listItem = {
     id: workflow.id,
     title: workflow.title || 'Untitled workflow',
@@ -48,8 +56,9 @@ function upsertWorkflowListItem(state, workflow) {
     enabled: workflow.enabled !== false,
     paused: Boolean(workflow.paused),
     version: Number.isFinite(workflow.version) ? workflow.version : 1,
-    event_type: workflow.trigger?.event_type || '',
-    node_count: Object.keys(workflow.graph?.nodes || {}).length,
+    document_type: firstEvent?.document_type || '',
+    triggers,
+    node_count: nodes.length,
     updated_at: workflow.updated_at || '',
     created_at: workflow.created_at || '',
   };
@@ -132,13 +141,13 @@ export const saveWorkflow = createAcknowledgedThunk('uiData/saveWorkflow', async
   });
 });
 
-export const createWorkflow = createAcknowledgedThunk('uiData/createWorkflow', async ({ workflowsUrl, title, description, eventType }, { requestId }) => {
+export const createWorkflow = createAcknowledgedThunk('uiData/createWorkflow', async ({ workflowsUrl, title, description, documentType }, { requestId }) => {
   return requestAcknowledged(workflowsUrl, {
     method: 'POST',
     body: {
       title,
       description,
-      event_type: eventType,
+      document_type: documentType,
     },
     requestId,
   });
@@ -165,13 +174,12 @@ export const resumeWorkflow = createAcknowledgedThunk('uiData/resumeWorkflow', a
   );
 });
 
-export const triggerWorkflow = createAcknowledgedThunk('uiData/triggerWorkflow', async ({ workflowsUrl, workflowId, eventType, payload }, { requestId }) => {
+export const triggerWorkflow = createAcknowledgedThunk('uiData/triggerWorkflow', async ({ workflowsUrl, workflowId, payload }, { requestId }) => {
   return requestAcknowledged(
     `${workflowsUrl}/${encodeURIComponent(workflowId)}/trigger`,
     {
       method: 'POST',
       body: {
-        ...(eventType ? { event_type: eventType } : {}),
         ...(payload ? { payload } : {}),
       },
       requestId,

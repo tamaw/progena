@@ -5,15 +5,14 @@ changes, listener resync) with a short per-base debounce, processed by one
 asyncio worker. A Postgres advisory lock held for the indexer's lifetime keeps a
 single indexer across backend processes. Only pages whose content hash differs
 from the index are embedded. Progress goes to the ``knowledge_index`` status
-document (``/knowledge/indexer.json``), the UI (``knowledge.index.*`` events),
-and workflows (``knowledge.index.completed|failed`` triggers).
+document (``/knowledge/indexer.json``) and the UI (``knowledge.index.*`` events).
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Callable, Mapping
 from contextlib import suppress
 from typing import Any
 
@@ -56,7 +55,6 @@ SETTINGS_KEYS = frozenset({"knowledge", INDEXER_DOC_KEY, "profile"})
 
 EmbedderFactory = Callable[[EmbeddingTarget], Embedder]
 Publisher = Callable[[str, dict[str, Any]], None]
-Dispatcher = Callable[[str, dict[str, Any]], Awaitable[None]]
 
 
 def _payload(key: str) -> Any:
@@ -96,14 +94,6 @@ def _default_publish(event_type: str, payload: dict[str, Any]) -> None:
     broadcast_ui_event(event_type, payload)
 
 
-async def _default_dispatch(event_type: str, payload: dict[str, Any]) -> None:
-    from .ui_routes import get_workflow_executor
-
-    await get_workflow_executor().dispatch_event(
-        event_type, {"event_type": event_type, "payload": payload}
-    )
-
-
 class KnowledgeIndexer:
     """Reconcile live knowledge pages with the ``knowledge_chunks`` search index."""
 
@@ -113,7 +103,6 @@ class KnowledgeIndexer:
         database_url: str | None = None,
         embedder_factory: EmbedderFactory = embedder_for,
         publish: Publisher = _default_publish,
-        dispatch: Dispatcher = _default_dispatch,
         debounce_seconds: float = _DEBOUNCE_SECONDS,
         lock_retry_seconds: float = _LOCK_RETRY_SECONDS,
         lock_key: str = _ADVISORY_LOCK_KEY,
@@ -121,7 +110,6 @@ class KnowledgeIndexer:
         self._url = database_url
         self._embedder_factory = embedder_factory
         self._publish = publish
-        self._dispatch = dispatch
         self._debounce = debounce_seconds
         self._lock_retry = lock_retry_seconds
         self._lock_key = lock_key
@@ -447,10 +435,6 @@ class KnowledgeIndexer:
             else "knowledge.index.failed"
         )
         await self._write(base_id, record, event_type)
-        try:
-            await self._dispatch(event_type, {"key": base_id, **record})
-        except Exception:
-            logger.warning("Workflow dispatch for %s failed", event_type, exc_info=True)
 
 
 _indexer: KnowledgeIndexer | None = None
