@@ -501,7 +501,12 @@ async def create_progenitor_agent(
             **kwargs,
         )
 
-    late_bindings["resume_routine"] = _resume_routine
+    # Progenitor's resume_routine tool answers as the agent, so human-only
+    # steps refuse it; the UI path (agent.routine_resumer) answers as a person.
+    async def _resume_routine_as_agent(thread_id: str, answer: Any) -> dict[str, Any]:
+        return await _resume_routine(thread_id, answer, answered_by="agent")
+
+    late_bindings["resume_routine"] = _resume_routine_as_agent
 
     all_subagents: list[AsyncSubAgent | CompiledSubAgent] = [
         *async_subagents,

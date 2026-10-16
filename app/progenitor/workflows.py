@@ -705,6 +705,23 @@ class WorkflowNodeAgent(BaseModel):
     output_schema: dict[str, Any] = Field(default_factory=lambda: dict(_JSON_OBJECT_SCHEMA))
 
 
+class WorkflowNodeRoutine(BaseModel):
+    """Deterministic run of one routine; no LLM decides whether it runs.
+
+    Ports are derived from the routine graph on save (see
+    ``routine_node_port_schemas``). A routine that pauses at a human node
+    pauses the workflow run until the routine is resumed.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["routine"] = "routine"
+    title: str = "Routine"
+    routine: str = Field(min_length=1)
+    input_schema: dict[str, Any] = Field(default_factory=lambda: dict(_JSON_OBJECT_SCHEMA))
+    output_schema: dict[str, Any] = Field(default_factory=lambda: dict(_JSON_OBJECT_SCHEMA))
+
+
 class WorkflowNodeCondition(BaseModel):
     """Branch node that emits the selected branch as a typed value."""
 
@@ -730,6 +747,8 @@ class WorkflowNodeApproval(BaseModel):
     kind: Literal["approval"] = "approval"
     title: str = "Approval"
     message: str
+    # "human": only a person may decide (the UI); "any": Progenitor may too.
+    approver: Literal["human", "any"] = "any"
     input_schema: dict[str, Any] = Field(default_factory=lambda: dict(_JSON_OBJECT_SCHEMA))
     output_schema: dict[str, Any] = Field(
         default_factory=lambda: {
@@ -755,6 +774,7 @@ WorkflowNode = Annotated[
     | WorkflowNodeUnpack
     | WorkflowNodeExtract
     | WorkflowNodeAgent
+    | WorkflowNodeRoutine
     | WorkflowNodeCondition
     | WorkflowNodeApproval,
     Field(discriminator="kind"),
@@ -798,6 +818,8 @@ class WorkflowDefinition(BaseModel):
     description: str = ""
     enabled: bool = True
     paused: bool = False
+    # Raise an alert whenever a run pauses for an approval or a routine's human step.
+    notify_on_pause: bool = False
     version: int = WORKFLOW_VERSION
     graph: WorkflowGraph
     ui: dict[str, Any] = Field(default_factory=dict)
@@ -835,6 +857,10 @@ class WorkflowRun(BaseModel):
     completed_node_ids: list[str] = Field(default_factory=list)
     waiting_node_id: str | None = None
     pending_approval: dict[str, Any] | None = None
+    # The routine run a routine node is waiting on: node_id, routine_id,
+    # session_id (matches the routine's lifecycle events), request_id, the
+    # routine thread_id once known, and status (running|paused).
+    pending_routine: dict[str, Any] | None = None
     thread_id: str | None = None
     trigger_event: dict[str, Any] = Field(default_factory=dict)
     trigger_node_id: str | None = None
@@ -1185,10 +1211,76 @@ def _derive_agent_output_schema() -> dict[str, Any]:
     }
 
 
+# Looks up one routine's graph document by id; None when no such routine exists.
+RoutineLoader = Callable[[str], Mapping[str, Any] | None]
+
+ROUTINE_MESSAGE_INPUT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "required": ["message"],
+    "properties": {"message": {"type": "string"}},
+}
+
+
+def routine_declared_schema(schema: Any) -> dict[str, Any] | None:
+    """A routine input/output schema, if it declares fields.
+
+    Same rule the routine compiler uses: only ``properties`` names count, so an
+    absent or property-less schema means the routine takes and returns a
+    conversational message instead.
+    """
+
+    properties = schema.get("properties") if isinstance(schema, Mapping) else None
+    if isinstance(properties, Mapping) and properties:
+        return copy.deepcopy(dict(schema))
+    return None
+
+
+def routine_node_port_schemas(
+    routine_id: str, graph: Mapping[str, Any]
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Return (input schema, output schema) for a routine node running ``graph``.
+
+    Inputs are the routine's ``input_schema`` fields, else one ``message``
+    string. Outputs are its ``output_schema`` fields, else ``message`` (its
+    final reply), plus the routine run's ``thread_id``. The graph's ``$defs``
+    are hoisted to both roots so ``#/$defs/...`` refs keep resolving.
+    """
+
+    raw_defs = graph.get("$defs")
+    definitions = (
+        {"$defs": copy.deepcopy(dict(raw_defs))}
+        if isinstance(raw_defs, Mapping) and raw_defs
+        else {}
+    )
+    declared_input = routine_declared_schema(graph.get("input_schema"))
+    input_schema = (
+        declared_input | definitions
+        if declared_input is not None
+        else copy.deepcopy(ROUTINE_MESSAGE_INPUT_SCHEMA)
+    )
+    declared_output = routine_declared_schema(graph.get("output_schema"))
+    if declared_output is None:
+        return input_schema, _derive_agent_output_schema()
+    properties = dict(declared_output["properties"])
+    if "thread_id" in properties:
+        raise ValueError(
+            f"routine '{routine_id}' output_schema field 'thread_id' is reserved for the "
+            "routine run's thread"
+        )
+    properties["thread_id"] = {"type": "string"}
+    output_schema = {
+        **declared_output,
+        "properties": properties,
+        "required": [*declared_output.get("required", []), "thread_id"],
+    } | definitions
+    return input_schema, output_schema
+
+
 def derive_workflow_port_schemas(
     payload: Mapping[str, Any],
     document_types: Mapping[str, DocumentType],
     instruction_loader: Callable[[str], str] | None = None,
+    routine_loader: RoutineLoader | None = None,
 ) -> dict[str, Any]:
     """Return ``payload`` with every derived node's port schemas recomputed.
 
@@ -1196,8 +1288,9 @@ def derive_workflow_port_schemas(
     schemas from the registered type schema; Unpack nodes take theirs from the
     port feeding their ``value``
     input, so Unpack chains resolve in dependency order. Extract/agent nodes
-    take theirs from their prompt template placeholders. Run on every save
-    path so ports never reflect whatever schemas the writer sent.
+    take theirs from their prompt template placeholders, routine nodes from
+    the routine graph. Run on every save path so ports never reflect whatever
+    schemas the writer sent.
     """
 
     result = copy.deepcopy(dict(payload))
@@ -1294,6 +1387,21 @@ def derive_workflow_port_schemas(
                 document_type, document_schema, filters
             )
             node["output_schema"] = document_query_output_schema(document_type, document_schema)
+    # Before prompt nodes: an Extract may infer its result from a routine input.
+    for node_id, node in nodes.items():
+        if not isinstance(node, dict) or node.get("kind") != "routine":
+            continue
+        routine_id = node.get("routine")
+        routine_graph = (
+            routine_loader(routine_id)
+            if routine_loader is not None and isinstance(routine_id, str)
+            else None
+        )
+        if not isinstance(routine_id, str) or routine_graph is None:
+            raise ValueError(f"routine node '{node_id}' references unknown routine '{routine_id}'")
+        node["input_schema"], node["output_schema"] = routine_node_port_schemas(
+            routine_id, routine_graph
+        )
     raw_edges = graph.get("edges") if isinstance(graph, dict) else None
     edges: list[Any] = raw_edges if isinstance(raw_edges, list) else []
     format_nodes = {
@@ -1388,6 +1496,7 @@ def validate_workflow_definition_document(
     content: str,
     document_types: Mapping[str, DocumentType],
     instruction_loader: Callable[[str], str] | None = None,
+    routine_loader: RoutineLoader | None = None,
 ) -> dict[str, Any]:
     """Parse a workflow definition JSON document, derive its port schemas, and validate it."""
 
@@ -1398,7 +1507,12 @@ def validate_workflow_definition_document(
     if not isinstance(parsed, dict):
         raise ValueError("workflow definition must be a JSON object")
     return validate_workflow_definition_payload(
-        derive_workflow_port_schemas(parsed, document_types, instruction_loader=instruction_loader)
+        derive_workflow_port_schemas(
+            parsed,
+            document_types,
+            instruction_loader=instruction_loader,
+            routine_loader=routine_loader,
+        )
     )
 
 

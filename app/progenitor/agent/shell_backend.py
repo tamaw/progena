@@ -42,6 +42,7 @@ def build_shell_env(
     agent_home: Path,
     config: ObjectAgentShellConfig,
     parent_env: Mapping[str, str],
+    repos_dir: Path | None = None,
 ) -> dict[str, str]:
     """Build the minimal child environment for an object-agent shell."""
     environment = {
@@ -56,6 +57,12 @@ def build_shell_env(
         "GH_PAGER": "cat",
         "PROGENITOR_SHIM_SYSTEM_PATH": config.system_path,
     }
+    if config.git_write:
+        # Read by data/shims/bin/{git,gh}: unlocks repository setup commands.
+        environment["PROGENITOR_SHIM_GIT_WRITE"] = "1"
+    if repos_dir is not None:
+        # Where declared repos with a relative local_path live on disk.
+        environment["PROGENITOR_REPOS_DIR"] = str(repos_dir)
     if timezone := parent_env.get("TZ"):
         environment["TZ"] = timezone
     for name in config.env_passthrough:
@@ -81,6 +88,7 @@ class ProgenitorShellBackend(LocalShellBackend):
         shim_bin: Path,
         agent_home: Path,
         parent_env: Mapping[str, str] | None = None,
+        repos_dir: Path | None = None,
     ) -> None:
         workspace.mkdir(parents=True, exist_ok=True)
         agent_home.mkdir(parents=True, exist_ok=True)
@@ -98,6 +106,7 @@ class ProgenitorShellBackend(LocalShellBackend):
                 agent_home=agent_home,
                 config=config,
                 parent_env=parent_env or {},
+                repos_dir=repos_dir,
             ),
             inherit_env=False,
         )

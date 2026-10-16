@@ -650,6 +650,9 @@ class _FakeWorkflowStateManager:
         assert kind == "instruction"
         return sorted(self.prompts.items())
 
+    async def list_routine_graphs(self) -> list[dict[str, Any]]:
+        return []
+
     async def get_workflow_definition(self, workflow_id: str) -> dict[str, Any] | None:
         workflow = self.workflows.get(workflow_id)
         return copy.deepcopy(workflow) if workflow is not None else None

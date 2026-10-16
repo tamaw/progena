@@ -1,4 +1,4 @@
-"""Git worktree/branch scan domain logic for declared repos.json entries.
+"""Git worktree/branch scan domain logic for declared repo:<id> entries.
 
 Pure, no Postgres access here - ``nodes/repo_scan.py`` is the heartbeat
 adapter that reads declared entries, calls into this module, and persists the

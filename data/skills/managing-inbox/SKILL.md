@@ -15,8 +15,8 @@ write appears in the user's Inbox page live, with an unread badge.
 Use the inbox for content the user should read on their own time: reports,
 digests, research results, long-form summaries. For quick conversational
 replies, just answer in chat as usual. If a message is genuinely urgent, you
-may additionally raise an alert (`notify_user`) pointing the user at it — the
-alert is only a pointer; the message itself lives in the inbox.
+may additionally raise an alert by writing `/alerts/<id>.json` pointing the
+user at it — the alert is only a pointer; the message itself lives in the inbox.
 
 ## Message file shape
 

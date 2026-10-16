@@ -95,11 +95,6 @@ def default_marketplaces_config_payload() -> dict[str, Any]:
     return {"marketplaces": {}}
 
 
-def default_repos_config_payload() -> dict[str, Any]:
-    """Return the default repos configuration stored in the shared state document."""
-    return {"repos": {}}
-
-
 def default_schedule_config_payload() -> dict[str, Any]:
     """Return the default (empty) schedule document persisted in Postgres."""
     return {}
@@ -152,7 +147,7 @@ class RuntimeConfig:
     # Refresh cadence for agent cards + /health. Kept at 900s to avoid hammering
     # each agent's health endpoint; the read-through Agents page tolerates this.
     registry_refresh_seconds: int = 900
-    # Cadence for the heartbeat's git-status scan of declared repos.json
+    # Cadence for the heartbeat's git-status scan of declared repo:<id>
     # entries (branch, dirty count, commits, contributors, worktrees).
     # Local-only subprocess calls (no network -- see repos/scan.py's
     # module docstring for the separate on-demand "Fetch" action), but each

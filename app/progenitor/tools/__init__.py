@@ -8,6 +8,7 @@ if TYPE_CHECKING:
     from .list_agents import ListAgentsTool
     from .list_tools import ListToolsTool
     from .new_conversation import NewConversationTool
+    from .resolve_workflow_approval import ResolveWorkflowApprovalTool
     from .resume_routine import ResumeRoutineTool
     from .run_workflow import RunWorkflowTool
     from .schedule_results import GetScheduleRunResultTool, ListScheduleRunsTool
@@ -31,6 +32,7 @@ def __getattr__(name: str):
         "GetScheduleRunResultTool": "schedule_results",
         "RunWorkflowTool": "run_workflow",
         "ResumeRoutineTool": "resume_routine",
+        "ResolveWorkflowApprovalTool": "resolve_workflow_approval",
     }
     if name in _tool_modules:
         import importlib
@@ -55,4 +57,5 @@ __all__ = [
     "GetScheduleRunResultTool",
     "RunWorkflowTool",
     "ResumeRoutineTool",
+    "ResolveWorkflowApprovalTool",
 ]

@@ -240,6 +240,8 @@ class HumanNodeConfig(BaseModel):
 
     message: str = Field(min_length=1)
     allowed_responses: list[str] | None = None
+    # "human": only a person may answer (the UI); "any": Progenitor may too.
+    approver: Literal["human", "any"] = "any"
     retry: RetryPolicyConfig | None = None
     timeout: float | None = Field(default=None, ge=0)
 

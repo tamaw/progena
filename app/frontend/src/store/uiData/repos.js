@@ -1,5 +1,5 @@
 /**
- * Repos domain: declared repositories (repos.json) merged with the
+ * Repos domain: declared repositories (repo:<id> documents) merged with the
  * heartbeat-derived git scan, kept live by `repositories.snapshot` and
  * `repo.detail.updated` events on /api/ui/stream. The list carries each
  * entry's declared fields (name/local_path/access/...) plus its latest scan

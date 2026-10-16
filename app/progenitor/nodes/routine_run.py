@@ -20,6 +20,7 @@ import logging
 import uuid
 from typing import Any
 
+from langchain_core.messages import HumanMessage
 from langgraph.runtime import Runtime
 
 from ..routines.events import persist_run_event
@@ -46,7 +47,8 @@ async def routine_run_node(
     ``{name: value}`` object matching the routine's declared
     ``input_schema.properties`` -- passed straight through to the runnable,
     which threads it into the seed node's top-level invoke keys (see
-    subagent.py's ``_run``).
+    subagent.py's ``_run``). ``metadata.message`` (optional) is the human
+    turn for a routine that declares no inputs (a workflow routine node).
     """
     metadata = state.get("current_input_metadata") or {}
     routine_id = str(metadata.get("routine_id") or "").strip()
@@ -99,10 +101,12 @@ async def routine_run_node(
     session_id = str(metadata.get("session_id") or "").strip() or None
     target_node = str(metadata.get("target_node") or "").strip() or None
     parameters = metadata.get("parameters")
+    message = metadata.get("message")
 
     try:
         invoke_input: dict[str, Any] = {
-            "messages": [],
+            # A routine without declared inputs is driven by one human turn.
+            "messages": [HumanMessage(content=message)] if isinstance(message, str) else [],
             "_interactive_session_id": session_id,
             "_interactive_target_node": target_node,
             "_routine_request_id": metadata.get("request_id"),

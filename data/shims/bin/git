@@ -1,9 +1,17 @@
 #!/usr/bin/env bash
 # Guardrail only: absolute paths can bypass this shim; the container is the boundary.
+#
+# Read-only git for every shell agent. Agents whose manifest sets
+# git_write: true (PROGENITOR_SHIM_GIT_WRITE=1) may also run repository setup:
+# clone, fetch, pull --ff-only, switch, worktree, submodule, branch create,
+# remote add/set-url. Push, commit, and anything that rewrites history or
+# discards work stays refused for everyone.
 set -euo pipefail
 
 REAL_PATH="${PROGENITOR_SHIM_SYSTEM_PATH:-/usr/bin:/bin}"
+WRITE="${PROGENITOR_SHIM_GIT_WRITE:-}"
 deny() { printf 'progenitor-shim: refused: %s\n' "$*" >&2; exit 2; }
+need_write() { [[ "$WRITE" == "1" ]] || deny "$*"; }
 
 args=("$@")
 index=0
@@ -47,13 +55,16 @@ case "$sub" in
   branch)
     for arg in "${remaining[@]}"; do
       case "$arg" in
-        -d|-D|-m|-M|-c|-C|-f|--delete|--move|--copy|--force|--set-upstream|--set-upstream-to|--unset-upstream|--edit-description)
+        -d|-D|-m|-M|-c|-C|-f|--delete|--move|--copy|--force|--edit-description)
           deny "branch option: $arg"
+          ;;
+        --set-upstream|--set-upstream-to|--set-upstream-to=*|-u|--unset-upstream|--track|--track=*|--no-track)
+          need_write "branch option: $arg"
           ;;
         -*)
           ;;
         *)
-          deny "branch argument: $arg"
+          need_write "branch argument: $arg"
           ;;
       esac
     done
@@ -75,6 +86,7 @@ case "$sub" in
   remote)
     case "${remaining[0]:-}" in
       -v|--verbose|show|get-url) ;;
+      add|set-url) need_write "remote command: ${remaining[0]}" ;;
       *) deny "remote command: ${remaining[0]:-}" ;;
     esac
     ;;
@@ -91,7 +103,47 @@ case "$sub" in
     esac
     ;;
   worktree)
-    [[ "${remaining[0]:-}" == "list" ]] || deny "worktree command: ${remaining[0]:-}"
+    case "${remaining[0]:-}" in
+      list) ;;
+      add|prune|lock|unlock|repair) need_write "worktree command: ${remaining[0]}" ;;
+      *) deny "worktree command: ${remaining[0]:-}" ;;
+    esac
+    for arg in "${remaining[@]}"; do
+      case "$arg" in
+        -f|--force) deny "worktree option: $arg" ;;
+      esac
+    done
+    ;;
+  clone|fetch|submodule)
+    need_write "subcommand: $sub"
+    for arg in "${remaining[@]}"; do
+      case "$arg" in
+        -f|--force|--prune-tags|--upload-pack|--upload-pack=*|-u|--config|--config=*|-c) deny "$sub option: $arg" ;;
+        deinit|foreach|set-url|set-branch) deny "submodule command: $arg" ;;
+      esac
+    done
+    ;;
+  pull)
+    need_write "subcommand: pull"
+    ff_only=0
+    for arg in "${remaining[@]}"; do
+      case "$arg" in
+        --ff-only) ff_only=1 ;;
+        --rebase|--rebase=*|-r|--no-ff|--squash|--force|-f) deny "pull option: $arg" ;;
+      esac
+    done
+    (( ff_only == 1 )) || deny "pull requires --ff-only"
+    ;;
+  switch)
+    need_write "subcommand: switch"
+    for arg in "${remaining[@]}"; do
+      case "$arg" in
+        -f|--force|--discard-changes|-C|--force-create|--orphan|--merge|-m) deny "switch option: $arg" ;;
+      esac
+    done
+    ;;
+  checkout)
+    deny "checkout can discard local changes; use git switch"
     ;;
   *)
     deny "subcommand: $sub"

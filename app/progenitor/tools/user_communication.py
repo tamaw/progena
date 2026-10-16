@@ -41,17 +41,6 @@ class AskUserArgs(BaseModel):
     )
 
 
-class NotifyUserArgs(BaseModel):
-    """Structured arguments for backend-managed user notifications."""
-
-    title: str = Field(description="Short notification title")
-    body: str = Field(description="Notification body/details")
-    level: str = Field(
-        default="info",
-        description="Notification level: info, warning, error, success",
-    )
-
-
 class SayToUserTool(BaseSystemTool):
     """Send a one-way agent_message event via SSE."""
 
@@ -123,41 +112,3 @@ class AskUserTool(BaseSystemTool):
             },
         )
         return ToolResult.ok({"status": "sent", "question": question, "options": options_out})
-
-
-class NotifyUserTool(BaseSystemTool):
-    """Request a backend-managed alert via SSE."""
-
-    @property
-    def args_model(self) -> type[BaseModel]:
-        return NotifyUserArgs
-
-    @property
-    def name(self) -> str:
-        return "notify_user"
-
-    @property
-    def description(self) -> str:
-        return "Create a backend-managed alert and let the backend drive user-facing delivery"
-
-    async def execute(self, context: ToolContext) -> ToolResult:
-        args = context.tool_args if isinstance(context.tool_args, dict) else {}
-        title = str(args.get("title") or "").strip()
-        body = str(args.get("body") or context.user_input or "").strip()
-        level = str(args.get("level") or "info").strip() or "info"
-
-        if not title:
-            return ToolResult.fail("Missing 'title'")
-        if not body:
-            return ToolResult.fail("Missing 'body'")
-
-        push = getattr(context.llm_client, "_push_event", None)
-        if not callable(push):
-            return ToolResult.fail("LLM client has no SSE event pusher configured")
-
-        await cast(EventPusher, push)(
-            "alert_request",
-            body,
-            {"tool": "notify_user", "title": title, "level": level},
-        )
-        return ToolResult.ok({"status": "sent", "title": title, "level": level})

@@ -1,5 +1,5 @@
-"""Repositories page API routes — the agent-editable ``repos`` document plus
-the heartbeat-derived ``repo_scan`` read-through (and on-demand write, via
+"""Repositories page API routes — the agent-editable ``repo:<id>`` documents
+plus the heartbeat-derived ``repo_scan`` read-through (and on-demand write, via
 ``/fetch``, for the "Fetch" action)."""
 
 from __future__ import annotations

@@ -15,17 +15,22 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-def _environment() -> dict[str, str]:
+def _environment(*, write: bool = False) -> dict[str, str]:
     environment = os.environ.copy()
     environment["PROGENITOR_SHIM_SYSTEM_PATH"] = "/usr/bin:/bin"
+    environment.pop("PROGENITOR_SHIM_GIT_WRITE", None)
+    if write:
+        environment["PROGENITOR_SHIM_GIT_WRITE"] = "1"
     return environment
 
 
-def _run(shim: Path, *args: str, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
+def _run(
+    shim: Path, *args: str, cwd: Path | None = None, write: bool = False
+) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [str(shim), *args],
         cwd=cwd,
-        env=_environment(),
+        env=_environment(write=write),
         text=True,
         capture_output=True,
         check=False,
@@ -116,3 +121,56 @@ def test_gh_shim_refuses_equals_form(flag: str) -> None:
     result = _run(GH_SHIM, "auth", "status", flag)
     assert result.returncode == 2
     assert "progenitor-shim: refused:" in result.stderr
+
+
+def test_setup_commands_need_git_write(tmp_path: Path):
+    origin = tmp_path / "origin"
+    origin.mkdir()
+    _seed_repository(origin)
+
+    refused = _run(GIT_SHIM, "clone", str(origin), str(tmp_path / "read-only"))
+    assert refused.returncode == 2
+    assert not (tmp_path / "read-only").exists()
+    gh_refused = _run(GH_SHIM, "repo", "clone", "org/repo")
+    assert gh_refused.returncode == 2
+
+    clone = tmp_path / "clone"
+    assert _run(GIT_SHIM, "clone", str(origin), str(clone), write=True).returncode == 0
+    for arguments in (
+        ("fetch",),
+        ("pull", "--ff-only"),
+        ("switch", "-c", "feature"),
+        ("worktree", "add", str(tmp_path / "wt"), "-b", "wt-branch"),
+        ("branch", "spare"),
+    ):
+        result = _run(GIT_SHIM, "-C", str(clone), *arguments, write=True)
+        assert result.returncode == 0, (arguments, result.stderr)
+    assert (tmp_path / "wt" / "tracked.txt").exists()
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        ("push",),
+        ("commit", "-m", "x"),
+        ("reset", "--hard"),
+        ("checkout", "tracked.txt"),
+        ("pull",),
+        ("pull", "--ff-only", "--rebase"),
+        ("switch", "--discard-changes", "master"),
+        ("branch", "-D", "master"),
+        ("worktree", "remove", "--force", "x"),
+        ("clean", "-fd"),
+    ],
+)
+def test_git_write_still_refuses_work_losing_or_publishing_commands(
+    tmp_path: Path, arguments: tuple[str, ...]
+):
+    _seed_repository(tmp_path)
+    (tmp_path / "tracked.txt").write_text("local edit\n", encoding="utf-8")
+
+    result = _run(GIT_SHIM, "-C", str(tmp_path), *arguments, write=True)
+
+    assert result.returncode == 2
+    assert "progenitor-shim: refused:" in result.stderr
+    assert (tmp_path / "tracked.txt").read_text(encoding="utf-8") == "local edit\n"
