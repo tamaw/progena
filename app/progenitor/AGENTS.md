@@ -111,7 +111,7 @@ pytest tests/progenitor/ --cov=app.progenitor
 - `OPENAI_API_KEY`: OpenAI API key
 - `PROGENITOR_MOCK_LLM`: Enable mock mode
 - `PROGENITOR_DATABASE_URL`: PostgreSQL URL for the LangGraph checkpointer/store
-- `PROGENITOR_DATA_DIR`: Read-only runtime data root for the JSON Schema contracts under `schemas/` (prompts, skills, and memories are Postgres-backed content documents now, see `content_documents.py`)
+- `PROGENITOR_DATA_DIR`: Read-only runtime data root for the JSON Schema contracts under `schemas/` (instructions and memories are Postgres-backed content documents, see `content_documents.py`)
 
 #### Runtime Persistence and Virtual Files
 The normal Progenitor runtime stores state and structured logs in the LangGraph
@@ -133,6 +133,7 @@ The DeepAgent receives a virtual filesystem view backed by those documents:
 - `/config/health.json`: Read-only heartbeat status
 - `/tasks/board.json` and `/tasks/<id>.md`: Kanban structure and cards
 - `/workflows/<id>.json`: Workflow definitions
+- `/instructions/<group>/<file>.md`: Read-only agent instructions (front matter `title`/`description`/`variables` + body); only `progenitor/` ones are read by this runtime and editable on the Instructions page
 - `/routines/<id>.json`: Routine graph definitions
 - `/policies/<id>.json`: Validated routine execution policies
 
@@ -164,14 +165,14 @@ Postgres checkpointer and store.
 
 #### LLM Calls
 ```python
-# Conversation graph (async: seeds prompts/skills into Postgres on first boot)
+# Conversation graph (async: syncs data/instructions/ into Postgres on boot)
 graph = await create_conversation_graph(config=config, state_manager=state_manager)
 
 # Heartbeat/background graph
 background = create_heartbeat_graph(state_manager=state_manager)
 
-# Direct prompt loading (Postgres-backed; see content_documents.py)
-prompt = await state_manager.get_content_document("prompt", "progenitor/genesis.md")
+# Direct instruction loading (Postgres-backed; render_instruction drops the front matter)
+prompt = render_instruction(await state_manager.get_content_document("instruction", "progenitor/genesis.md"))
 ```
 
 #### Secret Redaction

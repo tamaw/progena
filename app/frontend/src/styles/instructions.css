@@ -1,0 +1,108 @@
+/* Instructions page: list cards, reader, and the raw-file editor. */
+
+.instructions-card__desc {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.instructions-card__info {
+  gap: 10px;
+  font-size: 11px;
+  color: var(--color-text-muted);
+}
+
+.instructions-card__path {
+  font-family: var(--font-family-mono);
+}
+
+.instructions-detail__body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px 20px 24px;
+}
+
+.instructions-reader__description {
+  margin: 0 0 12px;
+  color: var(--color-text-secondary);
+}
+
+.instructions-detail__body .task-alert {
+  padding: 8px 12px;
+  border-radius: 6px;
+  white-space: pre-wrap;
+}
+
+.instructions-section {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--color-border);
+}
+
+.instructions-section h3 {
+  margin: 0 0 8px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.instructions-section p {
+  margin: 0 0 8px;
+  font-size: 12.5px;
+}
+
+.instructions-section ul {
+  margin: 0;
+  padding-left: 0;
+  list-style: none;
+  font-size: 12.5px;
+}
+
+.instructions-section li + li {
+  margin-top: 4px;
+}
+
+.instructions-variables {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.instructions-variables li + li {
+  margin-top: 0;
+}
+
+.instructions-revisions a {
+  color: var(--color-accent);
+  text-decoration: none;
+}
+
+.instructions-revisions a:hover {
+  color: var(--color-accent-hover);
+  text-decoration: underline;
+}
+
+.instructions-revisions a[aria-current='true'] {
+  font-weight: 600;
+}
+
+.instructions-editor {
+  flex: 1;
+  min-height: 420px;
+  width: 100%;
+  resize: none;
+  padding: 12px 14px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-bg-secondary);
+  color: var(--color-text-primary);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-sm);
+  line-height: 1.6;
+}
+
+.instructions-editor:focus {
+  outline: none;
+  border-color: var(--color-accent);
+}

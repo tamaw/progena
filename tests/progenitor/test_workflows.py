@@ -365,7 +365,7 @@ def test_derive_extract_ports_from_prompt_document():
     payload["graph"]["nodes"][extract_id] = {
         "kind": "extract",
         "title": "Extract",
-        "prompt": "workflows/test.md",
+        "instruction": "workflows/test.md",
     }
     agent_id = next(nid for nid, n in payload["graph"]["nodes"].items() if n["kind"] == "agent")
     payload["graph"]["nodes"][agent_id]["template"] = "Hello {name}"
@@ -378,7 +378,7 @@ def test_derive_extract_ports_from_prompt_document():
     typed = derive_workflow_port_schemas(
         payload,
         {t.id: t for t in BUILTIN_DOCUMENT_TYPES},
-        prompt_loader=fake_loader,
+        instruction_loader=fake_loader,
     )
     extract = typed["graph"]["nodes"][extract_id]
     assert extract["input_schema"]["required"] == ["name"]

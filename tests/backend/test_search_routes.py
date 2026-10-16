@@ -227,23 +227,27 @@ class TestSearchRoute:
         assert section["results"][0]["id"] == "object-code-reviewer"
         assert section["results"][0]["to"] == "/agents/object-code-reviewer/details"
 
-    def test_prompt_fallback_title(self, harness):
+    def test_instruction_results_use_front_matter_and_path_links(self, harness):
         client, store, events = harness
         store.save_document(
             PROGENITOR_STATE_PREFIX,
-            "prompt:progenitor/system.md",
-            {"content": "You are a helpful assistant."},
+            "instruction:progenitor/genesis.md",
+            {
+                "content": "---\ntitle: Progenitor system prompt\n"
+                "description: Main prompt\n---\nYou are a helpful assistant.\n"
+            },
         )
         assert_acknowledged(
             client.get("/api/ui/search?q=assistant"),
             ["search.results"],
         )
         payload = _last(events, "search.results")
-        section = next((s for s in payload["sections"] if s["label"] == "Prompts"), None)
+        section = next((s for s in payload["sections"] if s["label"] == "Instructions"), None)
         assert section is not None
         assert len(section["results"]) == 1
-        assert section["results"][0]["title"] == "system.md"
-        assert section["results"][0]["to"] == "/prompts?path=progenitor/system.md"
+        assert section["results"][0]["title"] == "Progenitor system prompt"
+        assert section["results"][0]["subtitle"] == "Main prompt"
+        assert section["results"][0]["to"] == "/instructions/progenitor/genesis.md"
 
     def test_empty_sections_omitted(self, harness, monkeypatch):
         client, _, events = harness

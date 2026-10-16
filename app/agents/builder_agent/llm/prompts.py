@@ -6,20 +6,20 @@ from typing import Any
 
 from ..prompt_support import load_prompt as load_repo_prompt
 from ..prompt_support import load_skill_context as load_repo_skill_context
-from ..prompt_support import render_prompt_template, resolve_prompts_dir
+from ..prompt_support import render_prompt_template, resolve_instructions_dir
 
 
 class PromptTemplates:
     """Manages prompt templates for Progenitor.
 
-    All prompts are loaded from data/prompts/*.md files.
+    All prompts are loaded from data/instructions/<group>/*.md files (front matter stripped).
     """
 
     VERSION = "1.0.0"
 
-    def __init__(self, prompts_dir: Path | str | None = None):
+    def __init__(self, instructions_dir: Path | str | None = None):
         """Initialize with optional custom prompts directory."""
-        self.prompts_dir = resolve_prompts_dir(prompts_dir)
+        self.instructions_dir = resolve_instructions_dir(instructions_dir)
 
     def _load_prompt(self, filename: str) -> str:
         """Load a prompt from file.
@@ -33,12 +33,12 @@ class PromptTemplates:
         Raises:
             FileNotFoundError: If the prompt file doesn't exist.
         """
-        return load_repo_prompt(filename, prompts_dir=self.prompts_dir)
+        return load_repo_prompt(filename, instructions_dir=self.instructions_dir)
 
     def get(self, filename: str, **replacements: str) -> str:
         """Load a prompt template and apply optional replacements.
 
-        Generic loader for any prompt file in data/prompts/.
+        Generic loader for any prompt file in data/instructions/.
         Template variables use {placeholder} syntax.
 
         Args:
@@ -57,7 +57,7 @@ class PromptTemplates:
 
     def get_decide_prompt(self, tool_context: str) -> str:
         """Get the decision routing prompt with full tool/agent context."""
-        template = self._load_prompt("progenitor/decide.md")
+        template = self._load_prompt("builder_agent/decide.md")
         return template.replace("{tool_context}", tool_context)
 
     async def get_planner_prompt(self) -> str:

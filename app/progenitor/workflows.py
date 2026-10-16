@@ -20,7 +20,11 @@ from .document_kinds import (
     WORKFLOW_RUN_KEY_PREFIX,
 )
 from .document_types import DOCUMENT_OPERATIONS, DocumentOperation, DocumentType
-from .prompts.templates import parse_format_template, parse_prompt_template, resolve_type_ref
+from .instructions.templates import (
+    parse_format_template,
+    parse_instruction_template,
+    resolve_type_ref,
+)
 from .schemas import load_schema
 from .structured import validate_against_schema
 from .utils import utcnow_isoformat
@@ -680,7 +684,7 @@ class WorkflowNodeExtract(BaseModel):
 
     kind: Literal["extract"] = "extract"
     title: str = "Extract"
-    prompt: str | None = None
+    instruction: str | None = None
     template: str | None = None
     schema_ref: str | dict | None = Field(default=None, alias="schema")
     input_schema: dict[str, Any] = Field(default_factory=lambda: dict(_JSON_OBJECT_SCHEMA))
@@ -694,7 +698,7 @@ class WorkflowNodeAgent(BaseModel):
 
     kind: Literal["agent"] = "agent"
     title: str = "Agent"
-    prompt: str | None = None
+    instruction: str | None = None
     template: str | None = None
     subagent: str | None = None
     input_schema: dict[str, Any] = Field(default_factory=lambda: dict(_JSON_OBJECT_SCHEMA))
@@ -1030,30 +1034,32 @@ def default_workflow_definition(
     }
 
 
-def _node_prompt_text(node: dict[str, Any], prompt_loader: Callable[[str], str] | None) -> str:
-    """Return the prompt template text for an extract/agent node."""
-    prompt_path = node.get("prompt")
-    if prompt_path:
-        if prompt_loader is None:
+def _node_instruction_text(
+    node: dict[str, Any], instruction_loader: Callable[[str], str] | None
+) -> str:
+    """Return the instruction template text for an extract/agent node."""
+    instruction_path = node.get("instruction")
+    if instruction_path:
+        if instruction_loader is None:
             raise ValueError(
-                f"node '{node.get('title')}' references prompt '{prompt_path}' but "
-                f"no prompt loader is available"
+                f"node '{node.get('title')}' references instruction '{instruction_path}' but "
+                f"no instruction loader is available"
             )
-        return prompt_loader(prompt_path)
+        return instruction_loader(instruction_path)
     template = node.get("template")
     if isinstance(template, str):
         return template
-    raise ValueError("extract/agent node must have either 'prompt' or 'template'")
+    raise ValueError("extract/agent node must have either 'instruction' or 'template'")
 
 
 def _derive_prompt_node_input_schema(
     node: dict[str, Any],
     document_types: Mapping[str, DocumentType],
-    prompt_loader: Callable[[str], str] | None,
+    instruction_loader: Callable[[str], str] | None,
 ) -> dict[str, Any]:
     """Derive input schema for an extract/agent node from its prompt template."""
-    text = _node_prompt_text(node, prompt_loader)
-    template = parse_prompt_template(text)
+    text = _node_instruction_text(node, instruction_loader)
+    template = parse_instruction_template(text)
     properties: dict[str, Any] = {}
     definitions: dict[str, dict[str, Any]] = {}
     for root in template.roots:
@@ -1125,7 +1131,7 @@ def _derive_extract_output_schema(
     nodes: dict[str, Any],
     edges: list[Any],
     document_types: Mapping[str, DocumentType],
-    prompt_loader: Callable[[str], str] | None,
+    instruction_loader: Callable[[str], str] | None,
 ) -> dict[str, Any]:
     """Derive the result schema for an extract node with precedence rules."""
     # 1. Node-level schema wins
@@ -1134,8 +1140,8 @@ def _derive_extract_output_schema(
         return _extract_result_schema(*resolve_type_ref(node_schema, document_types))
 
     # 2. Template front matter output_schema
-    text = _node_prompt_text(node, prompt_loader)
-    template = parse_prompt_template(text)
+    text = _node_instruction_text(node, instruction_loader)
+    template = parse_instruction_template(text)
     if template.output_schema is not None:
         return _extract_result_schema(*resolve_type_ref(template.output_schema, document_types))
 
@@ -1273,7 +1279,7 @@ def routine_node_port_schemas(
 def derive_workflow_port_schemas(
     payload: Mapping[str, Any],
     document_types: Mapping[str, DocumentType],
-    prompt_loader: Callable[[str], str] | None = None,
+    instruction_loader: Callable[[str], str] | None = None,
     routine_loader: RoutineLoader | None = None,
 ) -> dict[str, Any]:
     """Return ``payload`` with every derived node's port schemas recomputed.
@@ -1415,11 +1421,13 @@ def derive_workflow_port_schemas(
     # from the inputs it feeds), then Extract results, then Unpack (which may
     # unpack an Extract result; an Unpack value never constrains an Extract).
     for node in prompt_nodes.values():
-        node["input_schema"] = _derive_prompt_node_input_schema(node, document_types, prompt_loader)
+        node["input_schema"] = _derive_prompt_node_input_schema(
+            node, document_types, instruction_loader
+        )
     for node_id, node in prompt_nodes.items():
         if node["kind"] == "extract":
             node["output_schema"] = _derive_extract_output_schema(
-                node, node_id, nodes, edges, document_types, prompt_loader
+                node, node_id, nodes, edges, document_types, instruction_loader
             )
         else:
             node["output_schema"] = _derive_agent_output_schema()
@@ -1487,7 +1495,7 @@ def _derive_unpack_schemas(nodes: dict[str, Any], edges: Any) -> None:
 def validate_workflow_definition_document(
     content: str,
     document_types: Mapping[str, DocumentType],
-    prompt_loader: Callable[[str], str] | None = None,
+    instruction_loader: Callable[[str], str] | None = None,
     routine_loader: RoutineLoader | None = None,
 ) -> dict[str, Any]:
     """Parse a workflow definition JSON document, derive its port schemas, and validate it."""
@@ -1500,7 +1508,10 @@ def validate_workflow_definition_document(
         raise ValueError("workflow definition must be a JSON object")
     return validate_workflow_definition_payload(
         derive_workflow_port_schemas(
-            parsed, document_types, prompt_loader=prompt_loader, routine_loader=routine_loader
+            parsed,
+            document_types,
+            instruction_loader=instruction_loader,
+            routine_loader=routine_loader,
         )
     )
 
@@ -1683,9 +1694,9 @@ def _validate_workflow_graph(definition: WorkflowDefinition) -> None:
         elif isinstance(node, WorkflowNodeFormat) and not node.template.strip():
             raise ValueError(f"format node '{node_id}' is missing a template")
         elif isinstance(node, WorkflowNodeExtract | WorkflowNodeAgent) and not (
-            node.prompt or node.template
+            node.instruction or node.template
         ):
-            raise ValueError(f"{node.kind} node '{node_id}' is missing a prompt or template")
+            raise ValueError(f"{node.kind} node '{node_id}' is missing an instruction or template")
 
 
 def _validate_data_edges(definition: WorkflowDefinition) -> None:

@@ -31,7 +31,7 @@ DEFAULT_PROJECT_DATA_DIR = Path(__file__).resolve().parents[2] / "data"
 DEFAULT_PROJECT_STATE_DIR = DEFAULT_PROJECT_DATA_DIR / "state"
 DEFAULT_PROJECT_LOG_DIR = Path(__file__).resolve().parents[2] / "logs"
 DEFAULT_PROJECT_WORKTREE_DIR = DEFAULT_PROJECT_DATA_DIR / "repos"
-DEFAULT_PROJECT_PROMPTS_DIR = DEFAULT_PROJECT_DATA_DIR / "prompts"
+DEFAULT_PROJECT_INSTRUCTIONS_DIR = DEFAULT_PROJECT_DATA_DIR / "instructions"
 
 
 def _default_data_dir(project_root: Path | None = None) -> Path:
@@ -60,9 +60,9 @@ def _default_worktree_dir(
     return DEFAULT_PROJECT_WORKTREE_DIR if project_root is None else project_root / "data" / "repos"
 
 
-def _default_prompts_dir(project_root: Path | None = None) -> Path:
+def _default_instructions_dir(project_root: Path | None = None) -> Path:
     """Return the checked-in prompt root unless an explicit project root is provided."""
-    return _default_data_dir(project_root) / "prompts"
+    return _default_data_dir(project_root) / "instructions"
 
 
 def _default_shim_bin_dir(project_root: Path | None = None) -> Path:
@@ -200,7 +200,7 @@ class StorageConfig:
     state_dir: Path = field(default_factory=_default_state_dir)
     log_dir: Path = field(default_factory=_default_log_dir)
     worktree_dir: Path = field(default_factory=_default_worktree_dir)
-    prompts_dir: Path = field(default_factory=_default_prompts_dir)
+    instructions_dir: Path = field(default_factory=_default_instructions_dir)
     shim_bin_dir: Path = field(default_factory=_default_shim_bin_dir)
     shell_home_dir: Path = field(default_factory=_default_shell_home_dir)
     shell_workspace_dir: Path = field(default_factory=_default_shell_workspace_dir)
@@ -218,7 +218,7 @@ class StorageConfig:
                 str(_default_worktree_dir(project_root, worktrees_root=worktrees_root or None)),
             )
         )
-        default_prompts = default_data / "prompts"
+        default_instructions = default_data / "instructions"
         default_shim_bin = default_data / "shims" / "bin"
         default_shell_home = default_data / "shell-home"
 
@@ -227,7 +227,9 @@ class StorageConfig:
             state_dir=Path(os.getenv("PROGENITOR_STATE_DIR", str(default_state))),
             log_dir=default_logs,
             worktree_dir=default_worktrees,
-            prompts_dir=Path(os.getenv("PROGENITOR_PROMPTS_DIR", str(default_prompts))),
+            instructions_dir=Path(
+                os.getenv("PROGENITOR_INSTRUCTIONS_DIR", str(default_instructions))
+            ),
             shim_bin_dir=Path(os.getenv("PROGENITOR_SHELL_SHIM_BIN", str(default_shim_bin))),
             shell_home_dir=Path(os.getenv("PROGENITOR_SHELL_HOME", str(default_shell_home))),
             shell_workspace_dir=Path(
@@ -488,7 +490,7 @@ def _collect_validation_issues(config: ProgenitorConfig) -> list[str]:
         ("state_dir", config.storage.state_dir),
         ("log_dir", config.storage.log_dir),
         ("worktree_dir", config.storage.worktree_dir),
-        ("prompts_dir", config.storage.prompts_dir),
+        ("instructions_dir", config.storage.instructions_dir),
     ]
     for field_name, value in storage_rules:
         if not isinstance(value, Path):

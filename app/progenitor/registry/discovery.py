@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, Field
 
-from ..prompts import render_simple_template
+from ..instructions import render_instruction
 from .refresh import refresh_agent_metadata
 
 if TYPE_CHECKING:
@@ -164,17 +164,18 @@ class AgentDiscovery:
         folder_descriptions = "\n\n".join(folder.to_prompt_string() for folder in folders)
         try:
             if self.state_manager is None:
-                raise RuntimeError("state_manager unavailable; cannot load discovery prompts")
-            system_prompt = await self.state_manager.get_content_document(
-                "prompt", "progenitor/agent_discovery_analysis_system.md"
+                raise RuntimeError("state_manager unavailable; cannot load discovery instructions")
+            system_instruction = await self.state_manager.get_content_document(
+                "instruction", "progenitor/agent_discovery_analysis_system.md"
             )
-            user_prompt_template = await self.state_manager.get_content_document(
-                "prompt", "agent_discovery.analysis.md"
+            user_instruction = await self.state_manager.get_content_document(
+                "instruction", "progenitor/agent_discovery_analysis.md"
             )
-            if system_prompt is None or user_prompt_template is None:
-                raise RuntimeError("Missing agent discovery prompt document(s) in Postgres")
-            user_prompt = render_simple_template(
-                user_prompt_template, folder_descriptions=folder_descriptions
+            if system_instruction is None or user_instruction is None:
+                raise RuntimeError("Missing agent discovery instruction(s) in Postgres")
+            system_prompt = render_instruction(system_instruction)
+            user_prompt = render_instruction(
+                user_instruction, folder_descriptions=folder_descriptions
             )
             return await self.llm_client.chat_structured(
                 prompt=user_prompt,

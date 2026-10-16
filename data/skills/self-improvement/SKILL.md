@@ -38,7 +38,7 @@ Store lessons as category-based Markdown files under `/memories/` so they stay
 easy to scan with `ls`, `glob`, `grep`, and `read_file`.
 
 `/memories/` is the writable persistent-memory mount. It is separate from the
-read-only `/self/`, `/data/`, `/logs/`, and `/prompts/` mounts.
+read-only `/self/`, `/data/`, `/logs/`, and `/instructions/` mounts.
 
 - `/memories/patterns/code_quality.md`
 - `/memories/patterns/testing.md`

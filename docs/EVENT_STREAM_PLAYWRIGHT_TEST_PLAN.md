@@ -41,7 +41,7 @@ chat:
   acknowledged.
 
 ### 2. Event-owned catalogue hydration
-For `/dashboard`, `/tasks`, `/logs`, `/prompts`, `/skills`, `/schedules`,
+For `/dashboard`, `/tasks`, `/logs`, `/instructions`, `/skills`, `/schedules`,
 `/knowledge`, `/tools`, and `/workflows`:
 
 - Load the route.

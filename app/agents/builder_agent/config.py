@@ -66,8 +66,8 @@ DEFAULT_PROJECT_LOG_DIR = Path(
 DEFAULT_PROJECT_WORKTREE_DIR = Path(
     _first_env("PROGENITOR_WORKTREE_DIR") or str(DEFAULT_PROJECT_DATA_DIR / "repos")
 )
-DEFAULT_PROJECT_PROMPTS_DIR = Path(
-    _first_env("PROGENITOR_PROMPTS_DIR") or str(DEFAULT_PROJECT_DATA_DIR / "prompts")
+DEFAULT_PROJECT_INSTRUCTIONS_DIR = Path(
+    _first_env("PROGENITOR_INSTRUCTIONS_DIR") or str(DEFAULT_PROJECT_DATA_DIR / "instructions")
 )
 
 
@@ -97,9 +97,9 @@ def _default_worktree_dir(
     return DEFAULT_PROJECT_WORKTREE_DIR if project_root is None else project_root / "data" / "repos"
 
 
-def _default_prompts_dir(project_root: Path | None = None) -> Path:
+def _default_instructions_dir(project_root: Path | None = None) -> Path:
     """Return the checked-in prompt root unless an explicit project root is provided."""
-    return _default_data_dir(project_root) / "prompts"
+    return _default_data_dir(project_root) / "instructions"
 
 
 @dataclass
@@ -264,7 +264,7 @@ class StorageConfig:
     state_dir: Path = field(default_factory=_default_state_dir)
     log_dir: Path = field(default_factory=_default_log_dir)
     worktree_dir: Path = field(default_factory=_default_worktree_dir)
-    prompts_dir: Path = field(default_factory=_default_prompts_dir)
+    instructions_dir: Path = field(default_factory=_default_instructions_dir)
     state_lock_timeout_seconds: int = 10
 
     @classmethod
@@ -280,14 +280,16 @@ class StorageConfig:
                 str(_default_worktree_dir(project_root, worktrees_root=worktrees_root or None)),
             )
         )
-        default_prompts = default_data / "prompts"
+        default_instructions = default_data / "instructions"
 
         return cls(
             data_dir=default_data,
             state_dir=Path(os.getenv("PROGENITOR_STATE_DIR", str(default_state))),
             log_dir=default_logs,
             worktree_dir=default_worktrees,
-            prompts_dir=Path(os.getenv("PROGENITOR_PROMPTS_DIR", str(default_prompts))),
+            instructions_dir=Path(
+                os.getenv("PROGENITOR_INSTRUCTIONS_DIR", str(default_instructions))
+            ),
             state_lock_timeout_seconds=env_int("PROGENITOR_STATE_LOCK_TIMEOUT_SECONDS", 10),
         )
 

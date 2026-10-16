@@ -26,8 +26,8 @@ import {
   deleteWorkflow,
   fetchAgentProfiles,
   fetchDocumentTypes,
-  fetchPromptContent,
-  fetchPrompts,
+  fetchInstruction,
+  fetchInstructions,
   fetchWorkflowContent,
   fetchWorkflows,
   fetchWorkflowRuns,
@@ -36,8 +36,8 @@ import {
   saveWorkflow,
   selectAgentProfiles,
   selectDocumentTypes,
-  selectPromptContentEntry,
-  selectPrompts,
+  selectInstruction,
+  selectInstructions,
   selectWorkflowDetailByPath,
   selectWorkflowLatestRunById,
   selectWorkflowRuns,
@@ -301,7 +301,7 @@ const DOCK_NODE_DEFAULTS = {
   event: defaultEventNode,
   agent: () => ({
     title: 'Agent',
-    prompt: null,
+    instruction: null,
     template: '',
     subagent: null,
     inputSchema: { type: 'object', properties: {} },
@@ -315,7 +315,7 @@ const DOCK_NODE_DEFAULTS = {
   data: () => ({ title: 'Data', value: null, outputSchema: { type: 'object' } }),
   extract: () => ({
     title: 'Extract',
-    prompt: null,
+    instruction: null,
     template: '',
     schema: null,
     inputSchema: { type: 'object', properties: {} },
@@ -473,9 +473,9 @@ function promptTemplatePatch(text) {
   return { template: text, inputSchema: derivePromptInputSchema(text) };
 }
 
-function promptDocumentPatch(path, text) {
+function instructionPatch(path, text) {
   return {
-    prompt: path || null,
+    instruction: path || null,
     template: null,
     inputSchema: derivePromptInputSchema(text),
   };
@@ -588,7 +588,7 @@ function buildNodeData(kind, node, callbacks, latestRun) {
       ...runState,
       kind,
       title: node.title || 'Agent',
-      prompt: node.prompt ?? null,
+      instruction: node.instruction ?? null,
       template: node.template ?? null,
       subagent: node.subagent ?? null,
       inputSchema: cloneValue(node.input_schema) || null,
@@ -604,7 +604,7 @@ function buildNodeData(kind, node, callbacks, latestRun) {
       ...runState,
       kind,
       title: node.title || 'Extract',
-      prompt: node.prompt ?? null,
+      instruction: node.instruction ?? null,
       template: node.template ?? null,
       schema: node.schema ?? null,
       inputSchema: cloneValue(node.input_schema) || null,
@@ -781,14 +781,14 @@ function workflowToFlow(definition, callbacks, latestRun) {
         : kind === 'agent'
         ? {
           ...node,
-          prompt: node.prompt ?? null,
+          instruction: node.instruction ?? null,
           template: node.template ?? null,
           subagent: node.subagent ?? null,
         }
       : kind === 'extract'
         ? {
           ...node,
-          prompt: node.prompt ?? null,
+          instruction: node.instruction ?? null,
           template: node.template ?? null,
           schema: node.schema ?? null,
         }
@@ -940,7 +940,7 @@ function flowToWorkflow(baseWorkflow, nodes, edges, viewport) {
       graphNodes[node.id] = {
         kind: 'agent',
         title: String(node.data?.title || 'Agent'),
-        prompt: node.data?.prompt ?? null,
+        instruction: node.data?.instruction ?? null,
         template: node.data?.template ?? null,
         subagent: node.data?.subagent ?? null,
         input_schema: cloneValue(node.data?.inputSchema) || { type: 'object', properties: {} },
@@ -958,7 +958,7 @@ function flowToWorkflow(baseWorkflow, nodes, edges, viewport) {
       graphNodes[node.id] = {
         kind: 'extract',
         title: String(node.data?.title || 'Extract'),
-        prompt: node.data?.prompt ?? null,
+        instruction: node.data?.instruction ?? null,
         template: node.data?.template ?? null,
         schema: node.data?.schema ?? null,
         input_schema: cloneValue(node.data?.inputSchema) || { type: 'object', properties: {} },
@@ -992,7 +992,7 @@ function flowToWorkflow(baseWorkflow, nodes, edges, viewport) {
       graphNodes[node.id] = {
         kind: 'agent',
         title: String(node.data?.title || 'Agent'),
-        prompt: node.data?.prompt ?? null,
+        instruction: node.data?.instruction ?? null,
         template: node.data?.template ?? null,
         subagent: node.data?.subagent ?? null,
         input_schema: cloneValue(node.data?.inputSchema) || { type: 'object', properties: {} },
@@ -1388,36 +1388,36 @@ function WorkflowNodeOptionsModal({ node, onChange, onClose }) {
   const kind = node.data?.kind || node.type;
   const dispatch = useDispatch();
   const { getApiUrl } = useConfig();
-  const promptsUrl = getApiUrl('prompts');
-  const promptPath = node.data?.prompt || '';
-  const promptContentEntry = useSelector((state) => selectPromptContentEntry(state, promptPath));
+  const instructionsUrl = getApiUrl('instructions');
+  const instructionPath = node.data?.instruction || '';
+  const loadedInstruction = useSelector((state) => selectInstruction(state, instructionPath));
 
   // Fetch the selected document once, then derive its input ports once per
   // loaded text: `onChange` is a fresh function every render and the graph
   // may normalise the stored schema, so neither may drive a re-apply.
-  const requestedPromptPathRef = useRef(null);
-  const appliedPromptContentRef = useRef(null);
+  const requestedInstructionPathRef = useRef(null);
+  const appliedInstructionRef = useRef(null);
   const onChangeRef = useRef(onChange);
   useLayoutEffect(() => {
     onChangeRef.current = onChange;
   });
   useEffect(() => {
-    if ((kind !== 'agent' && kind !== 'extract') || !promptPath) return;
-    if (promptContentEntry?.path === promptPath) {
-      const content = promptContentEntry.content || '';
-      const applied = appliedPromptContentRef.current;
-      if (applied?.path === promptPath && applied.content === content) return;
-      appliedPromptContentRef.current = { path: promptPath, content };
-      const patch = promptDocumentPatch(promptPath, content);
+    if ((kind !== 'agent' && kind !== 'extract') || !instructionPath) return;
+    if (loadedInstruction?.path === instructionPath) {
+      const content = loadedInstruction.content || '';
+      const applied = appliedInstructionRef.current;
+      if (applied?.path === instructionPath && applied.content === content) return;
+      appliedInstructionRef.current = { path: instructionPath, content };
+      const patch = instructionPatch(instructionPath, content);
       if (JSON.stringify(node.data?.inputSchema) !== JSON.stringify(patch.inputSchema)) {
         onChangeRef.current(node.id, patch);
       }
       return;
     }
-    if (requestedPromptPathRef.current === promptPath) return;
-    requestedPromptPathRef.current = promptPath;
-    void dispatch(fetchPromptContent({ promptsUrl, path: promptPath })).unwrap().catch(() => {});
-  }, [dispatch, kind, node.data?.inputSchema, node.id, promptContentEntry, promptPath, promptsUrl]);
+    if (requestedInstructionPathRef.current === instructionPath) return;
+    requestedInstructionPathRef.current = instructionPath;
+    void dispatch(fetchInstruction({ instructionsUrl, path: instructionPath })).unwrap().catch(() => {});
+  }, [dispatch, kind, node.data?.inputSchema, node.id, loadedInstruction, instructionPath, instructionsUrl]);
 
   const documentTypes = useSelector(selectDocumentTypes);
 
@@ -1451,10 +1451,13 @@ function WorkflowNodeOptionsModal({ node, onChange, onClose }) {
     return Object.keys(props).map((key) => ({ value: key, label: key }));
   }, [selectedDocumentType]);
 
-  const prompts = useSelector(selectPrompts);
-  const promptOptions = useMemo(() =>
-    prompts.map((p) => ({ value: p.path, label: p.title || p.path })),
-  [prompts]);
+  // Bundled agent instructions are filled by their agent's code, not by workflows.
+  const instructions = useSelector(selectInstructions);
+  const instructionOptions = useMemo(() =>
+    instructions
+      .filter((item) => item.editable)
+      .map((item) => ({ value: item.path, label: item.title || item.path })),
+  [instructions]);
 
   const agentProfiles = useSelector(selectAgentProfiles);
   const subagentOptions = useMemo(() => {
@@ -1798,39 +1801,39 @@ function WorkflowNodeOptionsModal({ node, onChange, onClose }) {
             {kind === 'agent' || kind === 'extract' ? (
               <>
                 <div className="workflow-node-options__field">
-                  <span>Prompt source</span>
+                  <span>Template source</span>
                   <div className="workflow-node-options__checkboxes">
                     <label className="workflow-node-options__checkbox">
                       <input
                         type="radio"
-                        name={`prompt-source-${node.id}`}
-                        checked={node.data?.prompt != null}
+                        name={`template-source-${node.id}`}
+                        checked={node.data?.instruction != null}
                         onChange={() => {
-                          // An empty path selects document mode with no prompt chosen yet.
-                          onChange(node.id, { prompt: prompts[0]?.path || '', template: null });
+                          // An empty path selects instruction mode with none chosen yet.
+                          onChange(node.id, { instruction: instructionOptions[0]?.value || '', template: null });
                         }}
                       />
-                      Prompt document
+                      Instruction
                     </label>
                     <label className="workflow-node-options__checkbox">
                       <input
                         type="radio"
-                        name={`prompt-source-${node.id}`}
-                        checked={node.data?.prompt == null}
-                        onChange={() => onChange(node.id, { prompt: null, template: '' })}
+                        name={`template-source-${node.id}`}
+                        checked={node.data?.instruction == null}
+                        onChange={() => onChange(node.id, { instruction: null, template: '' })}
                       />
                       Inline template
                     </label>
                   </div>
                 </div>
-                {node.data?.prompt != null ? (
+                {node.data?.instruction != null ? (
                   <label className="workflow-node-options__field">
-                    Prompt
+                    Instruction
                     <Select
-                      value={node.data?.prompt || ''}
-                      onChange={(path) => onChange(node.id, { prompt: path || null, template: null })}
-                      options={[{ value: '', label: 'Select prompt…' }, ...promptOptions]}
-                      ariaLabel="Prompt document"
+                      value={node.data?.instruction || ''}
+                      onChange={(path) => onChange(node.id, { instruction: path || null, template: null })}
+                      options={[{ value: '', label: 'Select instruction…' }, ...instructionOptions]}
+                      ariaLabel="Instruction"
                     />
                   </label>
                 ) : (
@@ -2407,7 +2410,7 @@ function WorkflowsInner() {
   const workflowRunsUrl = getApiUrl('workflowRuns');
   const documentTypesUrl = getApiUrl('documentTypes');
   const agentsUrl = getApiUrl('agentProfiles');
-  const promptsUrl = getApiUrl('prompts');
+  const instructionsUrl = getApiUrl('instructions');
   const realtime = useSelector(selectRealtime);
   const workflows = useSelector(selectWorkflows);
   const workflowsState = useSelector(selectWorkflowsState);
@@ -2488,13 +2491,13 @@ function WorkflowsInner() {
     }
   }, [agentsUrl, dispatch, show]);
   // Agent/Extract nodes pick from the prompt catalogue.
-  const loadPrompts = useCallback(async () => {
+  const loadInstructions = useCallback(async () => {
     try {
-      await dispatch(fetchPrompts({ promptsUrl })).unwrap();
+      await dispatch(fetchInstructions({ instructionsUrl })).unwrap();
     } catch (error) {
-      show('error', 'Prompts load failed', error.message);
+      show('error', 'Instructions load failed', error.message);
     }
-  }, [dispatch, show, promptsUrl]);
+  }, [dispatch, show, instructionsUrl]);
 
   useEffect(() => {
     if (!realtime.connected) {
@@ -2504,8 +2507,8 @@ function WorkflowsInner() {
     void loadRuns();
     void loadDocumentTypes();
     void loadAgentProfiles();
-    void loadPrompts();
-  }, [loadAgentProfiles, loadDocumentTypes, loadPrompts, loadRuns, loadWorkflows, realtime.connected]);
+    void loadInstructions();
+  }, [loadAgentProfiles, loadDocumentTypes, loadInstructions, loadRuns, loadWorkflows, realtime.connected]);
 
   useEffect(() => {
     if (!workflows.length) {
@@ -3384,7 +3387,7 @@ function WorkflowsInner() {
 
 // This helper is exported for the focused workflow graph unit test.
 // eslint-disable-next-line react-refresh/only-export-components
-export { flowToWorkflow, workflowToFlow, NODE_MENU_CATEGORIES, schemaProperties, canvasMenuAnchor, visibleNodePortProperties, deriveUnpackSchemas, recomputeUnpackSchemas, computeLostEdgesForUnpackChange, pruneLostUnpackEdges, isUnpackableSchema, parsePromptPlaceholders, derivePromptInputSchema, promptTemplatePatch, promptDocumentPatch, createPaletteNode, nodeInputPorts, nodeOutputPorts, schemasAreCompatible, deriveFormatInputSchema, formatTemplatePatch };
+export { flowToWorkflow, workflowToFlow, NODE_MENU_CATEGORIES, schemaProperties, canvasMenuAnchor, visibleNodePortProperties, deriveUnpackSchemas, recomputeUnpackSchemas, computeLostEdgesForUnpackChange, pruneLostUnpackEdges, isUnpackableSchema, parsePromptPlaceholders, derivePromptInputSchema, promptTemplatePatch, instructionPatch, createPaletteNode, nodeInputPorts, nodeOutputPorts, schemasAreCompatible, deriveFormatInputSchema, formatTemplatePatch };
 export default function WorkflowsPage() {
   return (
     <ReactFlowProvider>

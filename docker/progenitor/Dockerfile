@@ -34,13 +34,13 @@ WORKDIR /app
 # Copy project metadata and source (including app.chat_server and app.progenitor)
 COPY pyproject.toml README.md ./
 COPY app/ ./app/
-# One-time Postgres seed source for prompts/skills (see content_documents.py) --
-# not a runtime read path once the store has rows.
-COPY data/prompts/ ./data/prompts/
+# Synced into Postgres on every boot (see content_documents.sync_instruction_documents).
+COPY data/instructions/ ./data/instructions/
+# Progenitor's own skills: the read-only /skills/ mount.
 COPY data/skills/ ./data/skills/
 # data/schemas/ is a static, git-checked-in contract (JSON Schemas for
-# preferences, workflow nodes, MCP entries, ...), unlike prompts/skills --
-# it's read from disk on every load_schema() call, not seeded once.
+# preferences, workflow nodes, MCP entries, ...), read from disk on every
+# load_schema() call.
 COPY data/schemas/ ./data/schemas/
 # Native manifests are read-only runtime files, never imported into Postgres.
 COPY data/agents/ ./data/agents/
