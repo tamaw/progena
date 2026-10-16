@@ -31,6 +31,8 @@ class ObjectAgentShellConfig:
     max_output_bytes: int
     env_passthrough: tuple[str, ...]
     system_path: str
+    # Lets the git/gh shims run repository setup commands (see data/shims/bin).
+    git_write: bool = False
 
 
 @dataclass(frozen=True)
@@ -202,6 +204,7 @@ def _parse_shell(
     *,
     env_passthrough_value: Any,
     has_env_passthrough: bool,
+    git_write_value: Any,
     source: str,
     source_kind: str | None = None,
 ) -> ObjectAgentShellConfig | None:
@@ -211,6 +214,12 @@ def _parse_shell(
         enabled = value
     else:
         raise ValueError(f"{source}: 'shell' must be a boolean")
+    if git_write_value is None:
+        git_write = False
+    elif isinstance(git_write_value, bool):
+        git_write = git_write_value
+    else:
+        raise ValueError(f"{source}: 'git_write' must be a boolean")
 
     env_passthrough = _string_list(env_passthrough_value, field="env_passthrough", source=source)
     if any(_SHELL_ENV_NAME.fullmatch(name) is None for name in env_passthrough):
@@ -218,20 +227,23 @@ def _parse_shell(
             f"{source}: env_passthrough entries must be upper-case environment variable names"
         )
     if source_kind is not None and source_kind != "native":
-        if enabled or has_env_passthrough:
+        if enabled or has_env_passthrough or git_write:
             raise ValueError(
-                f"{source}: shell and env_passthrough are only allowed for native agents"
+                f"{source}: shell, env_passthrough and git_write are only allowed for native agents"
             )
         return None
     if not enabled:
         if has_env_passthrough:
             raise ValueError(f"{source}: env_passthrough requires shell: true")
+        if git_write:
+            raise ValueError(f"{source}: git_write requires shell: true")
         return None
 
     return ObjectAgentShellConfig(
         max_output_bytes=DEFAULT_SHELL_MAX_OUTPUT_BYTES,
         env_passthrough=env_passthrough,
         system_path=DEFAULT_SHELL_SYSTEM_PATH,
+        git_write=git_write,
     )
 
 
@@ -349,6 +361,7 @@ def parse_object_agent_manifest(
             raw.get("shell"),
             env_passthrough_value=raw.get("env_passthrough"),
             has_env_passthrough="env_passthrough" in raw,
+            git_write_value=raw.get("git_write"),
             source=source,
             source_kind=source_kind,
         ),

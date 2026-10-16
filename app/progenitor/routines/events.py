@@ -37,3 +37,35 @@ async def persist_run_event(state_manager: Any, payload: dict[str, Any], status:
     if callable(writer):
         save_event = cast(Callable[[dict[str, Any]], Awaitable[None]], writer)
         await save_event({**payload, "status": status, "timestamp": utcnow_isoformat()})
+
+
+def _message_text(message: Any) -> str:
+    content = getattr(message, "content", message)
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "".join(
+            block.get("text", "")
+            for block in content
+            if isinstance(block, dict) and block.get("type") == "text"
+        )
+    return str(content)
+
+
+def routine_run_output(output_schema: Any, result: Any) -> dict[str, Any]:
+    """The value a completed run hands back to its caller (e.g. a workflow).
+
+    A routine whose ``output_schema`` declares properties returns those fields
+    (the compiler's output projector puts them at the result's top level);
+    otherwise it returns ``message``, the text of its final AI message.
+    """
+    properties = output_schema.get("properties") if isinstance(output_schema, dict) else None
+    values = result if isinstance(result, dict) else {}
+    if isinstance(properties, dict) and properties:
+        return {name: values[name] for name in properties if name in values}
+    messages = values.get("messages") or []
+    final = next(
+        (m for m in reversed(messages) if getattr(m, "type", None) == "ai"),
+        None,
+    )
+    return {"message": _message_text(final) if final is not None else ""}

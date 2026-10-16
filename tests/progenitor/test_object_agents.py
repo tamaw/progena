@@ -268,7 +268,7 @@ def test_user_manifest_rejects_shell():
         "tools: [current_time]", "tools: []\nshell: true\nenv_passthrough: [GH_TOKEN]"
     )
     with pytest.raises(
-        ValueError, match="shell and env_passthrough are only allowed for native agents"
+        ValueError, match="shell, env_passthrough and git_write are only allowed for native agents"
     ):
         parse_object_agent_manifest(content, source="test", source_kind="user")
 
@@ -278,7 +278,7 @@ def test_marketplace_manifest_rejects_shell():
         "tools: [current_time]", "tools: []\nshell: true\nenv_passthrough: [GH_TOKEN]"
     )
     with pytest.raises(
-        ValueError, match="shell and env_passthrough are only allowed for native agents"
+        ValueError, match="shell, env_passthrough and git_write are only allowed for native agents"
     ):
         parse_object_agent_manifest(content, source="test", source_kind="marketplace")
 

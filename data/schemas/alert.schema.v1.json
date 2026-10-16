@@ -1,0 +1,24 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Alert",
+  "description": "One user alert: the payload of an alert:<id> document. Created by notify_user, workflow notify nodes and workflow pauses; the backend shows it in the alert center and asks Progenitor to relay it to the user.",
+  "type": "object",
+  "required": ["id", "type", "title", "message", "timestamp", "urgent", "requires_response", "viewed"],
+  "properties": {
+    "id": {"type": "string", "minLength": 1},
+    "type": {"type": "string", "description": "Severity: info, warning, error, critical."},
+    "title": {"type": "string", "minLength": 1},
+    "message": {"type": "string"},
+    "timestamp": {"type": "number", "description": "Unix seconds when created."},
+    "urgent": {"type": "boolean"},
+    "requires_response": {"type": "boolean"},
+    "viewed": {"type": "boolean"},
+    "viewed_at": {"type": ["number", "null"]},
+    "source": {"type": "string", "description": "What raised it, e.g. notify_user, workflow:<id>."},
+    "context": {
+      "type": "object",
+      "description": "Machine-readable details for answering it, e.g. a paused workflow run or routine thread and who may answer (approver)."
+    }
+  },
+  "additionalProperties": false
+}

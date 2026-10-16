@@ -250,15 +250,16 @@ class TestStateManager:
         manager = StateManager(runtime_store=store)
         await manager.initialize()
         assert await manager.get_background_tasks() == []
-        assert await manager.get_repos() in ({}, {"repos": {}})
+        assert await manager.list_repos() == {}
 
         backend_task = BackgroundTaskEntry(id="be-1", content="from backend", metadata={})
         await store.save_document("background_tasks", [backend_task.model_dump(mode="json")])
-        await store.save_document("repos", {"repos": {"r1": {"path": "/tmp/r1"}}})
+        await store.save_document("repo:r1", {"path": "/tmp/r1"})
         await store.save_document("repo_scan", {"scanned_at": "now", "repos": {}})
 
         assert [task.id for task in await manager.get_background_tasks()] == ["be-1"]
-        assert (await manager.get_repos())["repos"] == {"r1": {"path": "/tmp/r1"}}
+        assert await manager.list_repos() == {"r1": {"path": "/tmp/r1"}}
+        assert await manager.get_repo("r1") == {"path": "/tmp/r1"}
         assert (await manager.get_repo_scan())["scanned_at"] == "now"
         dequeued = await manager.dequeue_background_task()
         assert dequeued is not None and dequeued.id == "be-1"

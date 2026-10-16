@@ -11,6 +11,7 @@
     "description": {"type": "string"},
     "enabled": {"type": "boolean"},
     "paused": {"type": "boolean"},
+    "notify_on_pause": {"description": "Raise an alert (relayed to the user) whenever a run pauses for an approval node or a routine's human step.", "type": "boolean"},
     "version": {"const": 3},
     "graph": {
       "type": "object", "additionalProperties": false, "required": ["nodes", "edges"],
@@ -63,11 +64,25 @@
           {"type": "object", "additionalProperties": false, "required": ["kind", "title"], "properties": {
             "kind": {"const": "agent"}, "title": {"type": "string", "minLength": 1}, "prompt": {"type": ["string", "null"]}, "template": {"type": ["string", "null"]}, "subagent": {"type": ["string", "null"]}, "input_schema": {"type": "object"}, "output_schema": {"type": "object"}
           }},
+          {"type": "object", "additionalProperties": false, "required": ["kind", "title", "routine"], "properties": {
+            "kind": {"const": "routine"}, "title": {"type": "string", "minLength": 1},
+            "routine": {"description": "Routine id to run. Inputs are the routine's input_schema fields (else one 'message' string); outputs its output_schema fields (else 'message') plus 'thread_id'.", "type": "string", "minLength": 1},
+            "input_schema": {"type": "object"}, "output_schema": {"type": "object"}
+          }},
           {"type": "object", "additionalProperties": false, "required": ["kind", "title", "expression"], "properties": {
             "kind": {"const": "condition"}, "title": {"type": "string", "minLength": 1}, "expression": {"type": "string", "minLength": 1}, "input_schema": {"type": "object"}, "output_schema": {"type": "object"}
           }},
           {"type": "object", "additionalProperties": false, "required": ["kind", "title", "message"], "properties": {
-            "kind": {"const": "approval"}, "title": {"type": "string", "minLength": 1}, "message": {"type": "string", "minLength": 1}, "input_schema": {"type": "object"}, "output_schema": {"type": "object"}
+            "kind": {"const": "approval"}, "title": {"type": "string", "minLength": 1}, "message": {"type": "string", "minLength": 1},
+            "approver": {"description": "Who may decide: 'human' only in the Progenitor UI, 'any' also lets Progenitor decide (resolve_workflow_approval).", "enum": ["human", "any"]},
+            "input_schema": {"type": "object"}, "output_schema": {"type": "object"}
+          }},
+          {"type": "object", "additionalProperties": false, "required": ["kind", "title", "alert_title", "template"], "properties": {
+            "kind": {"const": "notify"}, "title": {"type": "string", "minLength": 1},
+            "alert_title": {"description": "The alert's title.", "type": "string", "minLength": 1},
+            "template": {"description": "The alert message; {placeholders} become input ports.", "type": "string", "minLength": 1},
+            "level": {"enum": ["info", "warning", "error"]},
+            "input_schema": {"type": "object"}, "output_schema": {"type": "object"}
           }}
         ]}},
         "edges": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["from", "to"], "properties": {

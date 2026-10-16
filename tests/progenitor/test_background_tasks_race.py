@@ -11,8 +11,8 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
-from app.backend.agent_catalog_routes import _append_background_task_locked
 from app.backend.document_store import PROGENITOR_STATE_PREFIX, PostgresDocumentStore
+from app.backend.routine_runs import append_background_task
 from app.progenitor.database.langgraph import _open_store
 from app.progenitor.state.langgraph_store import LangGraphRuntimeStore
 from app.progenitor.state.manager import StateManager
@@ -59,7 +59,7 @@ async def test_concurrent_backend_and_runtime_enqueues_no_lost_updates(pg_stores
     doc_store, state_manager = pg_stores
 
     def backend_enqueue(i: int) -> None:
-        _append_background_task_locked(
+        append_background_task(
             doc_store,
             {
                 "id": f"be-{i}",
@@ -103,7 +103,7 @@ async def test_concurrent_enqueue_and_dequeue_no_duplicates_or_loss(pg_stores):
     doc_store, state_manager = pg_stores
 
     def backend_enqueue(i: int) -> None:
-        _append_background_task_locked(
+        append_background_task(
             doc_store,
             {
                 "id": f"be-{i}",

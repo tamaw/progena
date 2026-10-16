@@ -11,6 +11,10 @@
     "completed_node_ids": {"type": "array", "items": {"type": "string"}},
     "waiting_node_id": {"type": ["string", "null"]},
     "pending_approval": {"type": ["object", "null"]},
+    "pending_routine": {
+      "description": "The routine run a routine node is waiting on; status 'paused' means the routine is waiting for a human answer at its thread_id.",
+      "type": ["object", "null"]
+    },
     "thread_id": {"type": ["string", "null"]},
     "trigger_event": {"type": "object"},
     "trigger_node_id": {"type": ["string", "null"]},

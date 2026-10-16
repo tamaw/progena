@@ -102,6 +102,8 @@ def test_absent_or_disabled_shell_is_not_enabled(shell: str):
     [
         ("shell:\n  enabled: true\nenv_passthrough: []\n", "shell.*boolean"),
         ("shell: false\nenv_passthrough: []\n", "env_passthrough requires shell"),
+        ("shell: false\ngit_write: true\n", "git_write requires shell"),
+        ("shell: true\ngit_write: yes please\n", "git_write.*boolean"),
     ],
 )
 def test_shell_rejects_nested_or_disabled_environment_settings(shell_block: str, match: str):
@@ -207,6 +209,34 @@ def test_shell_environment_is_scrubbed_and_explicit():
     assert "AZURE_OPENAI_API_KEY" not in environment
     assert "GH_HOST" not in environment
     assert "GIT_DIR" not in environment
+
+
+def test_git_write_is_opt_in_and_exposes_the_repos_dir():
+    read_only = parse_object_agent_manifest(SHELL_SYSTEM, source="test").shell
+    writer = parse_object_agent_manifest(
+        SHELL_SYSTEM.replace("shell: true\n", "shell: true\ngit_write: true\n"), source="test"
+    ).shell
+    assert read_only is not None and writer is not None
+
+    def env(config):
+        return build_shell_env(
+            shim_bin=Path("/shims"),
+            agent_home=Path("/home/agent"),
+            config=config,
+            parent_env={"PROGENITOR_SHIM_GIT_WRITE": "1"},
+            repos_dir=Path("/data/repos"),
+        )
+
+    # The parent's value never leaks in; only the manifest grants write.
+    assert "PROGENITOR_SHIM_GIT_WRITE" not in env(read_only)
+    assert env(writer)["PROGENITOR_SHIM_GIT_WRITE"] == "1"
+    assert env(read_only)["PROGENITOR_REPOS_DIR"] == "/data/repos"
+
+
+def test_git_write_is_reserved_for_native_agents():
+    content = SHELL_SYSTEM.replace("shell: true\nenv_passthrough: []\n", "git_write: true\n")
+    with pytest.raises(ValueError, match="only allowed for native agents"):
+        parse_object_agent_manifest(content, source="test", source_kind="user")
 
 
 def test_shell_timeout_comes_from_environment(monkeypatch):

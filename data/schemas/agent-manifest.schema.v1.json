@@ -71,6 +71,10 @@
     "memory": {
       "type": "boolean",
       "description": "Give the agent private, writable memory: its /memories/ is its own folder (stored under /memories/agents/<name>/), and every file there is loaded into its prompt. Cannot be combined with a /memories/ mount."
+    },
+    "git_write": {
+      "type": "boolean",
+      "description": "Bundled agents with shell: true only. Lets the wrapped git/gh run repository setup commands (clone, fetch, pull --ff-only, switch, worktree, submodule, branch create, remote add/set-url, gh repo clone); push, commit and history-rewriting or work-discarding commands stay refused. The shell also gets PROGENITOR_REPOS_DIR, the managed repos directory."
     }
   }
 }

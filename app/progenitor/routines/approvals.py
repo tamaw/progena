@@ -68,6 +68,13 @@ def decision_key(thread_id: str, interrupt_id: str) -> str:
     return f"{DECISION_PREFIX}{thread_id}:{interrupt_id}"
 
 
+def _approver(value: Any) -> str:
+    """Who may answer: a nested routine's pause carries its own human node's rule."""
+    if isinstance(value, dict) and value.get("child_approval"):
+        return _approver(value["child_approval"])
+    return value.get("approver", "any") if isinstance(value, dict) else "any"
+
+
 def pending_approvals(interrupts: Iterable[Any]) -> list[dict[str, Any]]:
     approvals = {}
     for interrupt in interrupts:
@@ -82,6 +89,7 @@ def pending_approvals(interrupts: Iterable[Any]) -> list[dict[str, Any]]:
             "node_id": value["node"],
             "message": value.get("message", ""),
             "allowed_responses": value.get("allowed_responses"),
+            "approver": _approver(value),
         }
     return list(approvals.values())
 

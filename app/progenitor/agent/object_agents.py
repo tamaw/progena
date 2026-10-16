@@ -304,10 +304,21 @@ class SelfManifestBackend(_AsyncOnlyFileBackendMixin):  # pragma: no cover
 SHELL_PROMPT_NOTE = (
     "\n\nYou have an `execute` tool running a real shell with its working "
     "directory at {workspace}. Paths from the file tools are host paths — use "
-    "them directly in shell commands. `git` and `gh` are available but wrapped: "
-    "read-only subcommands succeed, mutating ones are refused with exit code 2. "
+    "them directly in shell commands. Declared repos with a relative "
+    "`local_path` live under `$PROGENITOR_REPOS_DIR`. {git_access} "
     "Report what the commands actually returned; never claim a repository state "
     "you did not observe."
+)
+GIT_READ_ONLY_NOTE = (
+    "`git` and `gh` are available but wrapped: read-only subcommands succeed, "
+    "mutating ones are refused with exit code 2."
+)
+GIT_WRITE_NOTE = (
+    "`git` and `gh` are available but wrapped: read-only subcommands plus "
+    "repository setup succeed (clone, fetch, pull --ff-only, switch, worktree, "
+    "submodule, branch create, remote add/set-url, gh repo clone); push, commit "
+    "and history-rewriting or work-discarding commands (reset, rebase, merge, "
+    "clean, rm, checkout, forced switch, branch delete) are refused with exit code 2."
 )
 
 
@@ -344,6 +355,7 @@ def _build_shell_backend(
                 shim_bin=shell_paths.shim_bin,
                 agent_home=shell_paths.agent_home / agent_home_slug(manifest.name),
                 parent_env=os.environ,
+                repos_dir=worktree_dir,
             ),
             routes={},
         ),
@@ -538,7 +550,11 @@ def build_object_agent(
         )
     system_prompt = manifest.system_prompt
     if workspace is not None:
-        system_prompt += SHELL_PROMPT_NOTE.format(workspace=workspace)
+        git_write = manifest.shell is not None and manifest.shell.git_write
+        system_prompt += SHELL_PROMPT_NOTE.format(
+            workspace=workspace,
+            git_access=GIT_WRITE_NOTE if git_write else GIT_READ_ONLY_NOTE,
+        )
     return create_agent(
         name=manifest.name,
         model=child_model,

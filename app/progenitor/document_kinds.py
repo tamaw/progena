@@ -28,8 +28,11 @@ WORKFLOW_DEFINITION_KEY_PREFIX = "workflow:"
 WORKFLOW_RUN_KEY_PREFIX = "workflow_run:"
 DOCUMENT_TYPE_KEY_PREFIX = "document_type:"
 SESSION_KEY_PREFIX = "session:"
+REPO_KEY_PREFIX = "repo:"
+ALERT_KEY_PREFIX = "alert:"
 
 # Internal-plumbing prefixes: real ``store`` key prefixes, centralized here to
 # avoid re-drift, but not registered as document types.
 WORKFLOW_QUEUE_KEY_PREFIX = "workflow_queue:"
 WORKFLOW_INVOKE_REQUEST_KEY_PREFIX = "workflow_invoke_request:"
+WORKFLOW_APPROVAL_REQUEST_KEY_PREFIX = "workflow_approval_request:"

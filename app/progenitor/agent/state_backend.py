@@ -45,6 +45,7 @@ from deepagents.backends.utils import (
 from wcmatch import glob as wcglob
 
 from ..prompts.templates import parse_prompt_template, prompt_relative_path
+from ..repos.schema import validate_repo_document
 from ..routines.store import (
     parse_routine_graph_document,
     routine_file_name,
@@ -174,21 +175,6 @@ def validate_registry_document(content: str) -> JsonDoc:
         raise ValueError("missing 'tools' array")
 
     return data
-
-
-def validate_repos_document(content: str) -> JsonDoc:
-    """Parse + validate a ``repos.json`` payload (the ``repos`` document).
-
-    Shape: ``{"repos": {"<id>": {...}}}``, no other top-level keys. Each entry
-    declares a repository the operator wants tracked; git state (branches,
-    commits, worktrees) is scanned separately by the heartbeat and never lives
-    in this document. Delegates to :mod:`..repos.schema` -- the same function
-    the backend's ``/api/ui/repos`` routes call directly on already-parsed
-    payloads, so both write paths enforce identical rules.
-    """
-    from ..repos.schema import validate_repos_document as _validate
-
-    return _validate(content)
 
 
 def validate_knowledge_document(content: str) -> JsonDoc:
@@ -686,35 +672,6 @@ def create_registry_state_file(
     )
 
 
-def create_repos_state_file(
-    state_manager: Any,
-    *,
-    on_change: Callable[[], Awaitable[None]] | None = None,
-) -> StateFile:
-    """Build the ``repos.json`` state file backed by the StateManager.
-
-    Backs the ``repos`` document (``{"repos": {"<id>": {...}}}``); the operator
-    declares repositories here (name, remote, local worktree path, read/write
-    access) via the Repositories page or the agent directly. Live git state
-    (branches, commits, worktrees) is scanned by the heartbeat into a separate
-    ``repo_scan`` document, never written through this file.
-    """
-
-    async def save(doc: JsonDoc) -> None:
-        if not isinstance(doc, dict):
-            raise ValueError("repos.json must be a JSON object")
-        await state_manager.save_repos(doc)
-
-    return _simple_state_file(
-        "repos.json",
-        get=state_manager.get_repos,
-        save=save,
-        validate=validate_repos_document,
-        default={"repos": {}},
-        on_change=on_change,
-    )
-
-
 def _reject_repo_scan_write(_content: Any) -> JsonDoc:
     raise ValueError(
         "repo_scan.json is read-only - it's written by the heartbeat's repo-scan tick, not the agent"
@@ -1142,9 +1099,14 @@ class WorkflowDirectoryBackend(_AsyncOnlyFileBackendMixin):
         if workflow_id is None:
             return WriteResult(error=f"Unknown workflow file '{file_path}' (expected <id>.json)")
         try:
-            # Validation is synchronous; snapshot the prompt documents the
-            # workflow may reference (by path relative to /prompts/).
+            # Validation is synchronous; snapshot the prompt documents (by path
+            # relative to /prompts/) and routine graphs the workflow may reference.
             prompts = dict(await self._sm.list_content_documents("prompt"))
+            routines = {
+                str(graph["id"]): graph
+                for graph in await self._sm.list_routine_graphs()
+                if graph.get("id")
+            }
 
             def _prompt_loader(path: str) -> str:
                 text = prompts.get(prompt_relative_path(path))
@@ -1156,6 +1118,7 @@ class WorkflowDirectoryBackend(_AsyncOnlyFileBackendMixin):
                 content,
                 await self._sm.list_document_types(),
                 prompt_loader=_prompt_loader,
+                routine_loader=routines.get,
             )
         except ValueError as exc:
             return WriteResult(error=f"Invalid workflow {name}: {exc}")
@@ -1212,6 +1175,141 @@ class WorkflowDirectoryBackend(_AsyncOnlyFileBackendMixin):
             for workflow in ordered
         ]
         return LsResult(entries=entries)
+
+
+class RepoDirectoryBackend(_AsyncOnlyFileBackendMixin):
+    """Async backend exposing declared repositories as ``/config/repos/<id>.json``.
+
+    One ``repo:<id>`` document per file, validated against
+    ``repo_entry.schema.v1.json`` on write (the same rule the backend's
+    ``/api/ui/repos`` routes use). Live git state is scanned by the heartbeat
+    into the read-only ``/config/repo_scan.json``, never written here.
+    """
+
+    _ASYNC_ONLY = "RepoDirectoryBackend is async-only; use the async file tools."
+
+    def __init__(self, state_manager: Any) -> None:
+        self._sm = state_manager
+
+    @staticmethod
+    def _repo_id(file_path: str) -> str | None:
+        name = file_path.lstrip("/")
+        if "/" in name or not name.endswith(".json"):
+            return None
+        return name.removesuffix(".json") or None
+
+    async def aread(self, file_path: str, offset: int = 0, limit: int = 2000) -> ReadResult:
+        repo_id = self._repo_id(file_path)
+        entry = await self._sm.get_repo(repo_id) if repo_id else None
+        if entry is None:
+            return ReadResult(error=f"File '{file_path}' not found")
+        file_data = create_file_data(_doc_to_text(entry))
+        sliced = slice_read_response(file_data, offset, limit)
+        if isinstance(sliced, ReadResult):
+            return sliced
+        return ReadResult(
+            file_data=FileData(content=sliced, encoding=file_data.get("encoding", "utf-8"))
+        )
+
+    async def awrite(self, file_path: str, content: str) -> WriteResult:
+        repo_id = self._repo_id(file_path)
+        if repo_id is None:
+            return WriteResult(error=f"Unknown repo file '{file_path}' (expected <id>.json)")
+        try:
+            existing = await self._sm.get_repo(repo_id)
+            entry = validate_repo_document(
+                repo_id, content, created_at=(existing or {}).get("created_at")
+            )
+        except ValueError as exc:
+            return WriteResult(error=f"Invalid repo {repo_id}.json: {exc}")
+        await self._sm.save_repo(repo_id, entry)
+        return WriteResult(path=file_path)
+
+    async def aedit(
+        self,
+        file_path: str,
+        old_string: str,
+        new_string: str,
+        replace_all: bool = False,
+    ) -> EditResult:
+        read = await self.aread(file_path, 0, 10_000_000)
+        if read.error is not None:
+            return EditResult(error=f"Error: {read.error}")
+        current = read.file_data["content"] if read.file_data else ""
+        result = perform_string_replacement(current, old_string, new_string, replace_all)
+        if isinstance(result, str):
+            return EditResult(error=result)
+        new_content, occurrences = result
+        written = await self.awrite(file_path, new_content)
+        if written.error is not None:
+            return EditResult(error=f"Error: {written.error}")
+        return EditResult(path=file_path, occurrences=int(occurrences))
+
+    async def adelete(self, file_path: str) -> WriteResult:
+        repo_id = self._repo_id(file_path)
+        if repo_id is None or await self._sm.get_repo(repo_id) is None:
+            return WriteResult(error=f"File '{file_path}' not found")
+        await self._sm.delete_repo(repo_id)
+        return WriteResult(path=file_path)
+
+    async def als(self, path: str) -> LsResult:
+        repos = await self._sm.list_repos()
+        return LsResult(
+            entries=[FileInfo(path=f"/{repo_id}.json", is_dir=False) for repo_id in sorted(repos)]
+        )
+
+
+class AlertDirectoryBackend(_AsyncOnlyFileBackendMixin):
+    """Read-only ``/alerts/<id>.json``: the user's alerts, newest first in ``ls``.
+
+    An alert that ``requires_response`` carries a ``context`` saying what is
+    waiting (a paused workflow run or routine thread) and who may answer it
+    (``approver``). Alerts are created with ``notify_user``, never written here.
+    """
+
+    _ASYNC_ONLY = "AlertDirectoryBackend is async-only; use the async file tools."
+
+    def __init__(self, state_manager: Any) -> None:
+        self._sm = state_manager
+
+    async def _alert(self, file_path: str) -> dict[str, Any] | None:
+        name = file_path.lstrip("/")
+        if "/" in name or not name.endswith(".json"):
+            return None
+        alert_id = name.removesuffix(".json")
+        return next((a for a in await self._sm.list_alerts() if a.get("id") == alert_id), None)
+
+    async def aread(self, file_path: str, offset: int = 0, limit: int = 2000) -> ReadResult:
+        alert = await self._alert(file_path)
+        if alert is None:
+            return ReadResult(error=f"File '{file_path}' not found")
+        file_data = create_file_data(_doc_to_text(alert))
+        sliced = slice_read_response(file_data, offset, limit)
+        if isinstance(sliced, ReadResult):
+            return sliced
+        return ReadResult(
+            file_data=FileData(content=sliced, encoding=file_data.get("encoding", "utf-8"))
+        )
+
+    async def awrite(self, file_path: str, content: str) -> WriteResult:
+        return WriteResult(error="/alerts/ is read-only; create alerts with notify_user")
+
+    async def aedit(
+        self, file_path: str, old_string: str, new_string: str, replace_all: bool = False
+    ) -> EditResult:
+        return EditResult(error="/alerts/ is read-only")
+
+    async def adelete(self, file_path: str) -> WriteResult:
+        return WriteResult(error="/alerts/ is read-only")
+
+    async def als(self, path: str) -> LsResult:
+        return LsResult(
+            entries=[
+                FileInfo(path=f"/{alert['id']}.json", is_dir=False)
+                for alert in await self._sm.list_alerts()
+                if alert.get("id")
+            ]
+        )
 
 
 class RoutineDirectoryBackend(_AsyncOnlyFileBackendMixin):
