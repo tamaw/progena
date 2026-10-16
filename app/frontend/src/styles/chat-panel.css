@@ -1473,26 +1473,6 @@ pre.mermaid svg {
    Search Input (shared with other pages)
    ============================================================================ */
 
-.search-input {
-    flex: 1;
-    padding: var(--spacing-sm) var(--spacing-md);
-    border: 1px solid var(--color-border);
-    border-radius: var(--border-radius-md);
-    background-color: var(--color-bg-tertiary);
-    color: var(--color-text-primary);
-    font-size: var(--font-size-sm);
-    outline: none;
-    transition: border-color var(--transition-fast);
-}
-
-.search-input:focus {
-    border-color: var(--color-accent);
-}
-
-.search-input::placeholder {
-    color: var(--color-text-muted);
-}
-
 /* ============================================================================
    Syntax Highlighting Styles
    ============================================================================ */
@@ -1516,185 +1496,11 @@ pre.mermaid svg {
 }
 
 /* Syntax highlighting colors */
-.hl-keyword {
-    color: #c678dd;
-    font-weight: 500;
-}
-
-.hl-string {
-    color: #98c379;
-}
-
-.hl-number {
-    color: #d19a66;
-}
-
-.hl-comment {
-    color: #5c6370;
-    font-style: italic;
-}
-
-.hl-function {
-    color: #61afef;
-}
-
-.hl-builtin {
-    color: #e5c07b;
-}
-
-.hl-variable {
-    color: #e06c75;
-}
-
-.hl-property {
-    color: #e06c75;
-}
-
-.hl-type {
-    color: #e5c07b;
-}
-
-.hl-decorator {
-    color: #c678dd;
-}
-
-.hl-tag {
-    color: #e06c75;
-}
-
-.hl-attribute {
-    color: #d19a66;
-}
-
-.hl-selector {
-    color: #e06c75;
-}
-
-.hl-value {
-    color: #98c379;
-}
-
-.hl-color {
-    color: #56b6c2;
-}
-
-.hl-link {
-    color: #61afef;
-    text-decoration: underline;
-}
-
-.hl-strong {
-    font-weight: bold;
-}
-
-.hl-emphasis {
-    font-style: italic;
-}
-
-.hl-code {
-    background-color: var(--color-bg-tertiary);
-    padding: 2px 4px;
-    border-radius: 3px;
-}
 
 /* Light theme overrides */
-[data-theme="light"] .hl-keyword {
-    color: #a626a4;
-}
-
-[data-theme="light"] .hl-string {
-    color: #50a14f;
-}
-
-[data-theme="light"] .hl-number {
-    color: #986801;
-}
-
-[data-theme="light"] .hl-comment {
-    color: #a0a1a7;
-}
-
-[data-theme="light"] .hl-function {
-    color: #4078f2;
-}
-
-[data-theme="light"] .hl-builtin {
-    color: #c18401;
-}
-
-[data-theme="light"] .hl-variable,
-[data-theme="light"] .hl-property {
-    color: #e45649;
-}
-
-[data-theme="light"] .hl-tag {
-    color: #e45649;
-}
 
 
 /* Context Menu */
-.context-menu {
-    position: fixed;
-    z-index: 1000;
-    min-width: 200px;
-    background-color: var(--color-bg-secondary);
-    border: 1px solid var(--color-border);
-    border-radius: var(--border-radius-md);
-    box-shadow: var(--shadow-lg);
-    padding: var(--spacing-xs) 0;
-    animation: fadeIn 0.15s ease;
-}
-
-.context-menu.hidden {
-    display: none;
-}
-
-.context-menu-item {
-    display: flex;
-    align-items: center;
-    gap: var(--spacing-sm);
-    padding: var(--spacing-sm) var(--spacing-md);
-    cursor: pointer;
-    transition: background-color var(--transition-fast);
-}
-
-.context-menu-item:hover {
-    background-color: var(--color-bg-hover);
-}
-
-.context-menu-item.hidden {
-    display: none;
-}
-
-.context-menu-item[data-danger="true"] {
-    color: var(--color-error);
-}
-
-.context-menu-item[data-danger="true"]:hover {
-    background-color: rgba(248, 81, 73, 0.1);
-}
-
-.context-menu-icon {
-    font-size: 14px;
-    width: 20px;
-    text-align: center;
-}
-
-.context-menu-label {
-    flex: 1;
-    font-size: var(--font-size-sm);
-}
-
-.context-menu-shortcut {
-    font-size: var(--font-size-xs);
-    color: var(--color-text-muted);
-}
-
-.context-menu-divider {
-    height: 1px;
-    background-color: var(--color-border);
-    margin: var(--spacing-xs) 0;
-}
 
 /* ============================================================================
    Prototype chat composition
@@ -1721,20 +1527,6 @@ pre.mermaid svg {
     flex-direction: column;
     border-right: 1px solid var(--color-border);
     background: var(--chat-pane-subtle-bg);
-}
-
-.chat-sessions-pane__head {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 10px;
-    padding: 12px 14px 8px;
-}
-
-.chat-sessions-pane__title {
-    font-size: 14px;
-    font-weight: 600;
-    color: var(--color-text-primary);
 }
 
 .muted {
@@ -1795,9 +1587,6 @@ pre.mermaid svg {
 
 /* .chat-pane-group is still used by the workspace sidebar; its __head styling
    is shared with .task-group__head / .sess-group__head in chrome-frame.css. */
-.chat-pane-group {
-    margin-top: 10px;
-}
 
 
 
@@ -1932,18 +1721,6 @@ pre.mermaid svg {
     text-transform: uppercase;
 }
 
-.agent-dot {
-    width: 7px;
-    height: 7px;
-    flex: none;
-    border-radius: 50%;
-    background: var(--color-success);
-}
-
-.agent-dot.is-error {
-    background: var(--color-error);
-}
-
 .agent-dot--purple {
     background: #a78bfa;
 }
@@ -2028,7 +1805,7 @@ pre.mermaid svg {
     white-space: nowrap;
 }
 
-.chat-separator,
+
 .dot-sep {
     color: var(--color-border-strong);
 }
@@ -2123,26 +1900,6 @@ pre.mermaid svg {
 
 .chat-icon-button.is-active {
     color: var(--color-accent);
-}
-
-.chat-chip {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    flex: none;
-    padding: 4px 10px;
-    border: 1px solid var(--color-border);
-    border-radius: 999px;
-    background: var(--color-bg-secondary);
-    color: var(--color-text-secondary);
-    font-size: 11.5px;
-    font-weight: 500;
-    transition: background var(--transition-fast), border-color var(--transition-fast);
-}
-
-.chat-chip:hover {
-    border-color: var(--color-border-strong);
-    background: var(--color-bg-hover);
 }
 
 .chat-events-filters {
