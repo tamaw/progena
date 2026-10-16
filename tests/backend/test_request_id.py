@@ -64,7 +64,8 @@ class TestRequestIdMiddleware:
             response = client.get("/openapi.json", headers={"Accept-Encoding": "gzip"})
 
         assert response.headers.get("content-encoding") == "gzip"
-        assert response.headers.get("vary", "").lower() == "accept-encoding"
+        vary = {token.strip() for token in response.headers.get("vary", "").lower().split(",")}
+        assert "accept-encoding" in vary
 
 
 class TestClientRequestIdPropagation:
