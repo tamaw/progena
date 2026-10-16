@@ -38,6 +38,11 @@ source .venv/bin/activate
 PROGENITOR_MOCK_LLM=true PORT=8109 python -m uvicorn app.agents.greetings_agent.agent:app --host 127.0.0.1 --port 8109
 ```
 
+Deployed like the other container agents: the `agents` workflow builds
+`ghcr.io/tamaw/progenitor-agent-greetings_agent` from `docker/agents/Dockerfile` (with the
+Copilot CLI for `probe_copilot`) and runs it as `progenitor-agent-greetings_agent` on
+`progenitor_network`, reachable at `http://progenitor-agent-greetings_agent:8109`.
+
 Health and card:
 
 ```bash
