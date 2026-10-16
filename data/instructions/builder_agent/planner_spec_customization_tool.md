@@ -1,7 +1,6 @@
 ---
 title: Tool spec customisation
 description: Customises the tool structure template into a spec for the requested tool.
-variables: [entity_name, primary_function, task_description, template_content, tool_class, tool_name]
 ---
 You are generating a build specification for a FastMCP tool.
 

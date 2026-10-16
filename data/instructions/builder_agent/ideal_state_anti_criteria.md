@@ -1,7 +1,6 @@
 ---
 title: Anti-criteria from violations
 description: Generalises observed violations into anti-criteria that prevent recurrence.
-variables: [existing_anti_criteria, task_description, violations]
 ---
 # Anti-Criteria Extraction from Violations
 

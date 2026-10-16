@@ -186,7 +186,7 @@ export function PaneListSearch({ value, placeholder, onChange }) {
   return (
     <label className="sess-search">
       <SearchIcon />
-      <input value={value} type="text" placeholder={placeholder} onChange={(event) => onChange(event.target.value)} />
+      <input value={value} type="text" aria-label={placeholder} placeholder={placeholder} onChange={(event) => onChange(event.target.value)} />
     </label>
   );
 }

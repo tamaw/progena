@@ -1,7 +1,6 @@
 ---
 title: Task teardown
 description: Brief for wrapping up a build task after execution.
-variables: [branch_name, context_json, description, planned_at_utc, reasoning, request_text, skill_context, task_name, work_item_id]
 ---
 Task metadata:
 - Task name: {task_name}

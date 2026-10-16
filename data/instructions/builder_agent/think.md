@@ -1,7 +1,6 @@
 ---
 title: Approach analysis
 description: Proposes distinct approaches to reach the ideal state.
-variables: [anti_criteria, constraints_context, criteria, dependencies_context, focus_items, iteration_context, lessons_context, task_description, tools_context]
 ---
 Analyze approaches to reach this ideal state:
 

@@ -1,7 +1,6 @@
 ---
 title: Copilot build task
 description: Task handed to Copilot to build a component without asking for clarification.
-variables: [agent_name, capabilities, description, implementation_notes, kind, structure_guidance]
 ---
 # Copilot Build Task
 

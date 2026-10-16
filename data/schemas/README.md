@@ -28,11 +28,14 @@ the native `write`/`edit` file tools.
 | `inbox_message.schema.v1.json` | A single inbox message (`inbox_message:<id>`) | object | `managing-inbox` |
 | `preferences.schema.v1.json` | The whole `preferences` document | object | `managing-preferences` |
 | `definition.workflow.schema.v1.json` | A whole `workflow:<id>` document | object | `managing-workflows` |
-| `trigger.workflow.schema.v1.json` | The `trigger` object within a workflow definition | object | `managing-workflows` |
-| `node_event.workflow.schema.v1.json` | One `event` node within a workflow definition | object | `managing-workflows` |
-| `node_prompt.workflow.schema.v1.json` | One `prompt` node within a workflow definition | object | `managing-workflows` |
-| `node_user.workflow.schema.v1.json` | One `user` node within a workflow definition | object | `managing-workflows` |
-| `node_code.workflow.schema.v1.json` | One `code` node within a workflow definition | object | `managing-workflows` |
+| `workflow_run.schema.v1.json` | A whole `workflow_run:<id>` document | object | `workflow_run` document type |
+| `content_document.schema.v1.json` | A whole text document (`agent:`/`skill:`/`memory:`/`instruction:`/`kanban_task_content:`) | object | content document types |
+
+Whole-document schemas also back **document types** (`document_type:<id>` rows
+in Postgres, see `app/progenitor/document_types.py`): a type's `schema` names
+the file here that types its documents. Workflow event/read/query nodes expose
+each document as one port typed with the document type's label (e.g. `after:
+Kanban Card`); an Unpack node exposes its top-level properties as ports.
 
 **Most schemas here describe one entry, not a whole document** — that's the
 default for `mcp.json`/`schedule.json` (objects keyed by name/id: adding is

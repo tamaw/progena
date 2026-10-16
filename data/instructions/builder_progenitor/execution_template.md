@@ -1,7 +1,6 @@
 ---
 title: Execution brief
 description: Task metadata and goals for executing a planned build.
-variables: [branch_name, context_json, copilot_goal, description, planned_at_utc, reasoning, request_text, skill_context, success_criteria, task_name, validation_targets, work_item_id]
 ---
 Task metadata:
 - Task name: {task_name}

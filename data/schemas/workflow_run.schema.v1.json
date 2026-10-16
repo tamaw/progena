@@ -1,0 +1,30 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Workflow run",
+  "description": "One execution of a workflow, stored as the 'workflow_run:<run_id>' document.",
+  "type": "object",
+  "properties": {
+    "run_id": {"type": "string", "readOnly": true},
+    "workflow_id": {"type": "string", "readOnly": true},
+    "status": {"type": "string", "enum": ["queued", "running", "paused", "completed", "failed"], "readOnly": true},
+    "current_node_id": {"type": ["string", "null"], "readOnly": true},
+    "completed_node_ids": {"type": "array", "items": {"type": "string"}, "readOnly": true},
+    "waiting_node_id": {"type": ["string", "null"], "readOnly": true},
+    "pending_approval": {"type": ["object", "null"], "readOnly": true},
+    "thread_id": {"type": ["string", "null"], "readOnly": true},
+    "trigger_event": {"type": "object", "readOnly": true},
+    "trigger_node_id": {"type": ["string", "null"], "readOnly": true},
+    "source": {"type": "string", "enum": ["document", "manual", "progenitor", "cron"], "readOnly": true},
+    "ancestry": {"type": "array", "items": {"type": "string"}, "readOnly": true},
+    "node_outputs": {"type": "object", "readOnly": true},
+    "last_output": {"type": ["string", "null"], "readOnly": true},
+    "last_error": {"type": ["string", "null"], "readOnly": true},
+    "step_audit": {"type": "array", "items": {"type": "object"}, "readOnly": true},
+    "queued_at": {"type": "string", "readOnly": true},
+    "started_at": {"type": ["string", "null"], "readOnly": true},
+    "updated_at": {"type": "string", "readOnly": true},
+    "completed_at": {"type": ["string", "null"], "readOnly": true}
+  },
+  "required": ["run_id", "workflow_id", "status"],
+  "additionalProperties": true
+}

@@ -137,7 +137,8 @@
     "id": {
       "pattern": "^[a-zA-Z0-9_-]+$",
       "title": "Id",
-      "type": "string"
+      "type": "string",
+      "readOnly": true
     },
     "name": {
       "minLength": 1,

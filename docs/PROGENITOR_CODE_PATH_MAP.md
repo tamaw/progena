@@ -115,7 +115,7 @@ create_progenitor_agent()  # async; requires state_manager
   -> auto-discover skills from Postgres "skill" content documents
   -> _ensure_default_runtime_memory(state_manager)
   -> _resolve_runtime_memory_paths(state_manager, memory_paths)
-  -> state_manager.get_content_document("prompt", "progenitor/genesis.md")
+  -> state_manager.get_content_document("instruction", "progenitor/genesis.md")
   -> create_progenitor_async_subagents()
   -> create_deep_agent(...)
 ```
@@ -222,7 +222,7 @@ scoped tools, mounts and permissions; the awaited proxy reloads the manifest
 from Postgres on each invocation. Native manifests are read-only bundled files,
 loaded at startup without importing them into Postgres; restart after dev edits.
 Routine Prompt, Classify, and Agent nodes can select `config.model_profile`
-from `/config/profile.json`. The profile resolver reads the current document
+from `/config/profiles.json`. The profile resolver reads the current document
 at execution time, builds the Azure model adapter with its deployment and
 optional reasoning settings, and reports unknown profiles as execution errors.
 Agent-node overrides take precedence over the manifest model for that invocation,

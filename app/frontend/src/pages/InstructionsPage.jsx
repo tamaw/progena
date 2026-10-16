@@ -44,7 +44,7 @@ import { usePaneCollapse } from '../components/layout/usePaneCollapse';
 import { formatRelativeTime } from './knowledgePageModel';
 import { formatRevisionTime } from './knowledgePagesModel';
 import {
-  INSTRUCTION_FILTERS, groupInstructions, groupLabel, instructionHref,
+  INSTRUCTION_FILTERS, groupInstructions, groupLabel, instructionHref, placeholderNote, placeholderRoots,
 } from './instructionsPageModel';
 
 function InstructionCard({ instruction, selected, onSelect }) {
@@ -187,9 +187,8 @@ export default function InstructionsPage() {
 
   const viewingCurrent = revisions.find((rev) => rev.revision_id === viewingRevisionId)?.current;
   const shown = viewingRevisionId ? revision : instruction;
-  const variables = viewingRevisionId
-    ? (Array.isArray(revision?.front_matter?.variables) ? revision.front_matter.variables.map(String) : [])
-    : selected?.variables || [];
+  const placeholders = viewingRevisionId ? placeholderRoots(revision?.body || '') : selected?.placeholders || [];
+  const inputTypes = shown?.front_matter?.inputs || {};
   const editableCount = instructions.filter((item) => item.editable).length;
 
   const actions = !selected?.editable ? null : editing ? (
@@ -229,7 +228,15 @@ export default function InstructionsPage() {
           <>
             <PaneCollapseSeam label="Instructions" onCollapse={() => setCollapsed(true)} />
             <button type="button" className="pane-mobile-scrim" aria-label="Close instructions list" onClick={() => setCollapsed(true)} />
-            <PaneListFilters filters={INSTRUCTION_FILTERS} activeFilter={filter} onFilterChange={setFilter} />
+            <PaneListFilters
+              filters={INSTRUCTION_FILTERS}
+              activeFilter={filter}
+              onFilterChange={setFilter}
+              actionLabel="+ New"
+              onAction={() => window.dispatchEvent(
+                new CustomEvent('progenitor:open-quick-chat', { detail: { mode: 'instruction-create' } }),
+              )}
+            />
             <PaneListToolbar>
               <PaneListSearch value={query} placeholder="Search instructions" onChange={setQuery} />
             </PaneListToolbar>
@@ -294,12 +301,17 @@ export default function InstructionsPage() {
                 <article className="instructions-reader">
                   <p className="instructions-reader__description">{shown.front_matter?.description}</p>
                   <InstructionBody body={shown.body} />
-                  {variables.length > 0 && (
+                  {placeholders.length > 0 && (
                     <section className="instructions-section">
-                      <h3>Variables</h3>
-                      <p className="muted">Filled in by the code that sends this instruction.</p>
+                      <h3>Placeholders</h3>
+                      <p className="muted">{placeholderNote(selected)}</p>
                       <ul className="instructions-variables">
-                        {variables.map((name) => <li key={name}><code>{`{${name}}`}</code></li>)}
+                        {placeholders.map((name) => (
+                          <li key={name}>
+                            <code>{`{${name}}`}</code>
+                            {typeof inputTypes[name] === 'string' ? <span className="muted"> {inputTypes[name]}</span> : null}
+                          </li>
+                        ))}
                       </ul>
                     </section>
                   )}

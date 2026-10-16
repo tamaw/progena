@@ -1,73 +1,66 @@
-"""Pure rules for instruction documents (front matter, ownership, rendering).
+"""Who owns an instruction, and what an edit may change.
 
-Instructions are markdown files under ``data/instructions/<group>/``. Each starts
-with YAML front matter::
+Instructions are ``instruction:<group>/<file>.md`` documents in the
+:mod:`templates` format (optional ``title``/``description``/``inputs``/
+``output_schema``/``system`` front matter, ``{placeholder}`` body). The first
+path segment is the group:
 
-    ---
-    title: Progenitor system prompt
-    description: What the instruction is for.
-    variables: [tool_context]      # optional: {placeholders} the code fills in
-    ---
-
-The first path segment is the group: the agent that reads the instruction. The
-Progenitor runtime reads the ``progenitor`` group from Postgres, so those are
-editable. Every other group is bundled with its A2A agent, which reads its own
-copy from disk; the stored copy is a read-only mirror of that file.
+* ``progenitor/`` is read by the runtime, which fills each placeholder from
+  code, so edits must keep the same placeholders;
+* bundled groups (:data:`BUNDLED_INSTRUCTION_GROUPS`) belong to A2A agents that
+  read their own copy from ``data/instructions/``; the stored copy mirrors that
+  file and cannot be edited;
+* any other group (e.g. ``workflows/``) is a template that workflow nodes
+  reference, freely editable by the user and the agent.
 """
 
 from __future__ import annotations
 
-import re
-from typing import Any
-
-from ..front_matter import split_front_matter
+from .templates import instruction_relative_path, parse_instruction_template
 
 RUNTIME_INSTRUCTION_GROUP = "progenitor"
 GENESIS_INSTRUCTION = "progenitor/genesis.md"
-_VARIABLE_RE = re.compile(r"^[a-z_][a-z0-9_]*$")
-_FRONT_MATTER_ERROR = (
-    "instructions need YAML front matter with a non-empty 'title' and 'description', e.g.\n"
-    "---\ntitle: ...\ndescription: ...\nvariables: [name]\n---"
-)
+BUNDLED_INSTRUCTION_GROUPS = frozenset({"builder_agent", "builder_progenitor", "observe_agent"})
 
 
 def instruction_group(path: str) -> str:
-    """Return the agent group an instruction path belongs to (its first segment)."""
+    """The group an instruction path belongs to (its first segment, or ``""``)."""
     return path.split("/", 1)[0] if "/" in path else ""
 
 
 def is_runtime_instruction(path: str) -> bool:
-    """Whether the Progenitor runtime reads this instruction from Postgres."""
+    """Whether the Progenitor runtime reads this instruction and fills it from code."""
     return instruction_group(path) == RUNTIME_INSTRUCTION_GROUP
 
 
-def parse_instruction(content: str) -> tuple[dict[str, Any], str]:
-    """Return ``(front_matter, body)`` for a valid instruction; raise ``ValueError`` otherwise."""
-    front_matter, body = split_front_matter(content)
-    if front_matter is None:
-        raise ValueError(_FRONT_MATTER_ERROR)
-    for field in ("title", "description"):
-        value = front_matter.get(field)
-        if not isinstance(value, str) or not value.strip():
-            raise ValueError(_FRONT_MATTER_ERROR)
-    variables = front_matter.get("variables", [])
-    if not isinstance(variables, list) or not all(
-        isinstance(name, str) and _VARIABLE_RE.fullmatch(name) for name in variables
-    ):
-        raise ValueError("'variables' must be a list of lowercase snake_case placeholder names")
-    missing = [name for name in variables if f"{{{name}}}" not in body]
-    if missing:
-        raise ValueError(
-            "the body no longer contains "
-            + ", ".join(f"{{{name}}}" for name in missing)
-            + "; keep every declared variable (the code fills it in) or remove it from 'variables'"
+def is_bundled_instruction(path: str) -> bool:
+    """Whether an A2A agent reads this instruction from its own disk copy."""
+    return instruction_group(path) in BUNDLED_INSTRUCTION_GROUPS
+
+
+def check_instruction_write(path: str, previous: str | None, content: str) -> None:
+    """Raise ``ValueError`` unless ``content`` may replace ``previous`` at ``path``."""
+    instruction_relative_path(path)
+    if is_bundled_instruction(path):
+        raise PermissionError(
+            f"'{path}' is bundled with {instruction_group(path)}, which reads it from disk; "
+            "change it in data/instructions/ instead"
         )
-    return front_matter, body
+    roots = parse_instruction_template(content).roots
+    if is_runtime_instruction(path) and previous is not None:
+        expected = parse_instruction_template(previous).roots
+        if sorted(roots) != sorted(expected):
+            raise ValueError(
+                "the runtime fills this instruction's placeholders from code; keep exactly "
+                + ", ".join(f"{{{name}}}" for name in sorted(expected))
+                if expected
+                else "the runtime fills this instruction from code; it takes no {placeholders}"
+            )
 
 
 def render_instruction(instruction: str, /, **replacements: object) -> str:
-    """Return the instruction body with ``{placeholder}`` replacements applied."""
-    _, body = parse_instruction(instruction)
+    """The instruction body with ``{name}`` placeholders replaced by ``replacements``."""
+    body = parse_instruction_template(instruction).body
     for key, value in replacements.items():
         body = body.replace(f"{{{key}}}", str(value))
     return body

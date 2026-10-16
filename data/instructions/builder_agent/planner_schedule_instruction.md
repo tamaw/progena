@@ -1,7 +1,6 @@
 ---
 title: Scheduled task instruction
 description: Converts a scheduling request into the instruction run at the scheduled time.
-variables: [time_expression, user_input]
 ---
 The user wants to schedule a task. Convert their request into an instruction that will be executed at the scheduled time.
 

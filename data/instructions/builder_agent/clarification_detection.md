@@ -1,7 +1,6 @@
 ---
 title: Clarification detection
 description: Checks Copilot CLI output for questions that need the user's input.
-variables: [heuristic_confidence, heuristic_context, heuristic_needs, ideal_state_summary, output_tail, task_description]
 ---
 Analyze this Copilot CLI output and determine if clarification from the user is needed.
 

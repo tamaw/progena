@@ -1,7 +1,6 @@
 ---
 title: Output verification
 description: Scores an output against a criterion and its measurement.
-variables: [context, criterion_description, measurement, output]
 ---
 Score this output against the criterion:
 

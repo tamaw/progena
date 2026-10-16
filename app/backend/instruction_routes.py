@@ -51,6 +51,8 @@ async def get_instruction(
         instruction = await asyncio.to_thread(instruction_service.get_instruction, path)
     except FileNotFoundError as exc:
         raise _not_found(path) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     broadcast_ui_event("instruction.loaded", instruction, request_id=request_id)
     return acknowledgement_response(request_id, ["instruction.loaded"])
 
@@ -69,7 +71,7 @@ async def update_instruction(
         )
     except FileNotFoundError as exc:
         raise _not_found(body.path) from exc
-    except instruction_service.ReadOnlyInstructionError as exc:
+    except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -88,6 +90,8 @@ async def list_instruction_revisions(
         revisions = await asyncio.to_thread(instruction_service.list_revisions, path)
     except FileNotFoundError as exc:
         raise _not_found(path) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     broadcast_ui_event(
         "instruction.revisions.loaded",
         {"path": path, "revisions": revisions},
@@ -130,7 +134,7 @@ async def restore_instruction_revision(
         restored = await asyncio.to_thread(instruction_service.restore_revision, path, revision_id)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Instruction revision not found.") from exc
-    except instruction_service.ReadOnlyInstructionError as exc:
+    except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

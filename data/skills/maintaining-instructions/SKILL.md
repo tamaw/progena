@@ -1,46 +1,44 @@
 ---
 name: maintaining-instructions
-description: Read and propose changes to agent instructions under /instructions/ (front matter + markdown bodies that Progenitor and the A2A agents send to their models), with minimal, auditable edits that keep their variables intact
-allowed-tools: ls read_file grep glob
+description: Read, create and edit instructions under /instructions/ — the markdown templates Progenitor, the A2A agents and workflow steps send to models — keeping front matter valid and placeholders intact
+allowed-tools: ls read_file write_file edit_file grep glob
 ---
 
 # Maintaining Instructions
 
 ## When to Use
+- A workflow `extract`/`agent` step needs a reusable template
 - The user asks why Progenitor or an agent behaves a certain way, or to change that behaviour
-- An instruction contradicts what the runtime can actually do
-- The user asks what an instruction is for or what fills its variables
+- The user asks what an instruction is for or what fills its placeholders
 
 ## Layout
-- `/instructions/<group>/<file>.md` is read-only for you. The group is the agent that reads it.
-- `progenitor/` instructions are read by this runtime: `genesis.md` is your own system prompt.
-  The user edits them on the Instructions page; an edit applies on the next model call.
-- Every other group (`builder_agent/`, `builder_progenitor/`, `observe_agent/`) is bundled with
-  that A2A agent, which reads its own copy from disk. They change only through the git-tracked
-  `data/instructions/` directory (a code change).
+`/instructions/<group>/<file>.md`. The group decides who fills the placeholders and who may edit:
 
-Each file starts with front matter:
+| Group | Read by | Editable | Placeholders |
+|---|---|---|---|
+| `progenitor/` | this runtime (`genesis.md` is your own system prompt) | yes; applies on the next model call | fixed by code: keep exactly the same `{names}` |
+| `builder_agent/`, `builder_progenitor/`, `observe_agent/` | that A2A agent, from its own disk copy | no (writes fail); change `data/instructions/` in git | fixed by that agent's code |
+| anything else, e.g. `workflows/` | workflow steps that reference the path | yes | free; each root becomes an input port |
 
-```yaml
+## Format
+
+```markdown
 ---
-title: Short name
-description: What the instruction is for.
-variables: [tool_context]   # {placeholders} the code fills in; omit when none
+title: Card summary
+description: Summarises a kanban card for the team.
+inputs:
+  card: kanban_card          # optional: type a placeholder root (document type id, schema file, or inline schema)
+output_schema: kanban_card   # optional: what an extract step returns
+system: You are terse.       # optional: prepended as its own section
 ---
+Summarise "{card.title}" in two sentences.
 ```
 
-`variables` is fixed by the code that sends the instruction: every listed `{name}` must stay in
-the body, and none can be added or removed.
-
-## Proposing a change
-1. Read the instruction and quote the part that causes the behaviour.
-2. Propose the smallest replacement text; keep the existing voice, constraints and variables.
-3. For `progenitor/` instructions, give the user the exact text to paste on the Instructions page.
-   For bundled ones, propose the patch to `data/instructions/<group>/<file>.md`.
+All front matter keys are optional and no others are allowed. `{name}` and `{name.path}` are placeholders; every
+`inputs` key must be used in the body. Writes are validated and rejected with the reason.
 
 ## Editing Rules
-1. Preserve existing voice and constraints.
-2. Add concrete, testable instructions.
-3. Prefer additive edits over broad rewrites.
-4. Keep safety boundaries explicit (what is allowed vs delegated).
-5. Match what the runtime can actually do.
+1. Read the instruction first; quote the part you change.
+2. Make the smallest change; keep the existing voice, constraints and placeholders.
+3. New workflow templates go under `/instructions/workflows/` with a `title` and `description`.
+4. Match what the runtime can actually do.

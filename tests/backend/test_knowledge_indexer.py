@@ -56,26 +56,18 @@ def harness():
     store.save_document(
         PROGENITOR_STATE_PREFIX, "indexer", {"profile": "embeddings", "dimensions": 8}
     )
-    state: dict[str, Any] = {"events": [], "dispatched": [], "calls": [], "fail": False}
+    state: dict[str, Any] = {"events": [], "calls": [], "fail": False}
     indexer = KnowledgeIndexer(
         database_url=url,
         embedder_factory=lambda target: FakeEmbedder(
             target.dimensions, state["calls"], state["fail"]
         ),
         publish=lambda event_type, payload: state["events"].append((event_type, payload)),
-        dispatch=_collect(state["dispatched"]),
     )
     yield indexer, store, state, url
     set_default_document_store(InMemoryDocumentStore())
     with psycopg.connect(DB_URL, autocommit=True) as conn:
         conn.execute(f'DROP SCHEMA "{schema}" CASCADE')
-
-
-def _collect(sink: list):
-    async def dispatch(event_type: str, payload: dict[str, Any]) -> None:
-        sink.append((event_type, payload))
-
-    return dispatch
 
 
 def _record(store, base_id: str) -> dict[str, Any] | None:
@@ -103,7 +95,6 @@ async def test_new_pages_are_indexed_with_lifecycle_events(harness):
     ]
     record = _record(store, "eng")
     assert record["status"] == "indexed" and record["pages"] == 1 and record["chunks"] == 1
-    assert state["dispatched"] == [("knowledge.index.completed", {"key": "eng", **record})]
     assert _chunk_paths(url, "eng") == {"a.md"}
     # Nothing changed: no work, no events.
     state["events"].clear()
@@ -163,7 +154,6 @@ async def test_embedding_failure_reports_once_and_keeps_existing_chunks(harness)
     assert record["status"] == "failed" and "embedding service down" in record["error"]
     assert record["pending"] == ["a.md"]
     assert state["events"][-1][0] == "knowledge.index.failed"
-    assert state["dispatched"][-1][0] == "knowledge.index.failed"
     assert _chunk_paths(url, "eng") == {"a.md"}  # previous version stays searchable
 
 
@@ -199,14 +189,11 @@ async def test_dimension_change_rebuilds_the_index(harness):
 
 
 def _competing_indexer(url: str, lock_key: str) -> KnowledgeIndexer:
-    async def no_dispatch(event_type: str, payload: dict[str, Any]) -> None:
-        return None
 
     return KnowledgeIndexer(
         database_url=url,
         embedder_factory=lambda target: FakeEmbedder(target.dimensions, []),
         publish=lambda event_type, payload: None,
-        dispatch=no_dispatch,
         lock_retry_seconds=0.05,
         lock_key=lock_key,
     )

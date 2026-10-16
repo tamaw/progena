@@ -1,7 +1,6 @@
 ---
 title: Build completed event
 description: Lifecycle hook input sent when a build completes.
-variables: [metadata_json, planned_build_json, request_context_json, request_text, result_text, task_id]
 ---
 Lifecycle event: build_completed
 

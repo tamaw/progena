@@ -1,8 +1,6 @@
 import {
   ARCHIVED_CHAT_SESSIONS_KEY,
-  CUSTOM_CHAT_TITLE_KEY,
   PINNED_CHAT_SESSIONS_KEY,
-  SHARED_CHAT_SESSIONS_KEY,
 } from '../components/chat/chatStorage';
 import { SOLUTIONS_STORAGE_KEY } from '../data/solutions';
 
@@ -17,9 +15,7 @@ import { SOLUTIONS_STORAGE_KEY } from '../data/solutions';
 // per-backend data, and should survive a switch.
 const WORKSPACE_SCOPED_STORAGE_KEYS = [
   ARCHIVED_CHAT_SESSIONS_KEY,
-  CUSTOM_CHAT_TITLE_KEY,
   PINNED_CHAT_SESSIONS_KEY,
-  SHARED_CHAT_SESSIONS_KEY,
   SOLUTIONS_STORAGE_KEY,
   'progenitor_chat_history',
   'progenitor_quick_chat_handoff',

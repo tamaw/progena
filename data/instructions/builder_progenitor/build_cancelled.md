@@ -1,7 +1,6 @@
 ---
 title: Build cancelled event
 description: Lifecycle hook input sent when a build is cancelled.
-variables: [error, metadata_json, planned_build_json, request_context_json, request_text, task_id]
 ---
 Lifecycle event: build_cancelled
 

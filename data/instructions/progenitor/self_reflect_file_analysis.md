@@ -1,7 +1,6 @@
 ---
 title: Source file analysis
 description: Summarises one Progenitor source file for self-reflection.
-variables: [content, language, relative_path]
 ---
 Analyze this Python source file from an AI agent system called "Progenitor".
 Provide a concise summary of:

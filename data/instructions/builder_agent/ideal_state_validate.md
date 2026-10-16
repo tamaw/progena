@@ -1,7 +1,6 @@
 ---
 title: Success criteria validation
 description: Checks that success criteria are well formed, measurable and sufficient.
-variables: [anti_criteria, criteria, task_description]
 ---
 # Success Criteria Validation
 

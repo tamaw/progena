@@ -19,7 +19,7 @@ PREFERENCES_DOC_KEY = "preferences"
 
 def default_preferences_payload() -> dict[str, Any]:
     """Return the empty-profile default (used to seed a fresh document)."""
-    from ..schedule import default_timezone_name
+    from ..cron import default_timezone_name
 
     return {
         "display_name": "",

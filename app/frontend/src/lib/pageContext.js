@@ -14,6 +14,7 @@ const PAGE_ROUTES = [
   { basePath: '/routines', page: 'routines' },
   { basePath: '/agents', page: 'agents' },
   { basePath: '/instructions', page: 'instructions', idIsRest: true }, // /instructions/<group>/<file>.md
+  { basePath: '/profiles', page: 'profiles' },
   { basePath: '/plugins', page: 'plugins', idSegmentIndex: 1 }, // /plugins/:marketplace/:plugin
   { basePath: '/tools', page: 'tools' },
   { basePath: '/knowledge', page: 'knowledge' },

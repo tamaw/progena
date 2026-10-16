@@ -1,13 +1,9 @@
-"""Kanban workflow triggers fire for changes made outside the REST routes.
+"""Kanban workflow triggers fire via the generic document event dispatcher.
 
-The runtime agent's actual mechanism for touching kanban cards is writing
-straight to /state/tasks/<id>.md, which persists via StateManager directly to
-the shared Postgres store -- it never goes through POST/PATCH/DELETE
-/api/ui/kanban/cards. These tests simulate that by writing store documents
-directly (bypassing the REST routes) and driving the same store-change
-notification the runtime's write would produce, then asserting the
-now-generic _reconcile_kanban_card_triggers watcher fires the workflow the
-REST-driven path already covers in test_workflow_routes.py.
+A card write (direct store write simulating the agent, or REST route) appends a
+DocumentEvent to the log.  The DocumentEventDispatcher drains the log and
+starts matching workflows.  These tests verify the end-to-end path without
+peeking at deleted cache/reconciler internals.
 """
 
 import asyncio
@@ -17,6 +13,7 @@ from unittest.mock import AsyncMock
 import pytest
 from fastapi.testclient import TestClient
 
+from app.backend.document_events import seed_document_types
 from app.backend.document_store import (
     PROGENITOR_STATE_PREFIX,
     InMemoryDocumentStore,
@@ -33,6 +30,7 @@ from app.progenitor.workflows import default_workflow_definition
 def workflow_env(tmp_path, monkeypatch):
     store = InMemoryDocumentStore()
     set_default_document_store(store)
+    seed_document_types(store)
     monkeypatch.setattr(
         "app.backend.main.configure_default_document_store", lambda *_a, **_k: store
     )
@@ -43,18 +41,12 @@ def workflow_env(tmp_path, monkeypatch):
     import app.backend.ui_routes as ui_routes
 
     ui_routes._workflow_executor = None
+    ui_routes._document_event_dispatcher = None
     ui_routes._ui_event_replay.clear()
-    ui_routes._last_known_kanban_cards.clear()
-    ui_routes._kanban_card_cache_seeded = False
-    ui_routes._state_watch_callback = None
-    ui_routes._kanban_trigger_watch_callback = None
     yield store, state_reader
     ui_routes._workflow_executor = None
+    ui_routes._document_event_dispatcher = None
     ui_routes._ui_event_replay.clear()
-    ui_routes._last_known_kanban_cards.clear()
-    ui_routes._kanban_card_cache_seeded = False
-    ui_routes._state_watch_callback = None
-    ui_routes._kanban_trigger_watch_callback = None
     set_default_document_store(InMemoryDocumentStore())
 
 
@@ -64,7 +56,7 @@ def backend_client(monkeypatch):
 
     mock_client = AsyncMock()
     mock_client.send_message.return_value = AgentResponse(
-        response="workflow response",
+        response="{}",
         reasoning=None,
         reasoning_tokens=None,
     )
@@ -73,28 +65,18 @@ def backend_client(monkeypatch):
     yield mock_client
 
 
-def _write_agent_card(store: InMemoryDocumentStore, card_id: str, **fields) -> dict:
-    """Write a kanban_card:<id> row + board card_order the way StateManager's
-    save_kanban_card does -- i.e. the runtime agent's actual write path, not
-    the REST routes.
-    """
-    card = {
-        "id": card_id,
-        "title": "Agent-authored card",
-        "column_id": "backlog",
-        "status": "idle",
-        "owner": "user",
-        **fields,
-    }
-    store.save_document(PROGENITOR_STATE_PREFIX, f"kanban_card:{card_id}", card)
-    board = store.get_document(PROGENITOR_STATE_PREFIX, "kanban_board", None)
-    structure = dict(board.payload) if board is not None and isinstance(board.payload, dict) else {}
-    order = list(structure.get("card_order") or [])
-    if card_id not in order:
-        order.append(card_id)
-    structure["card_order"] = order
-    store.save_document(PROGENITOR_STATE_PREFIX, "kanban_board", structure)
-    return card
+def _matching_workflow_definition(workflow_id: str, title: str) -> dict:
+    """Return a workflow that fires when a kanban card is moved to the 'done' column."""
+    workflow = default_workflow_definition(workflow_id=workflow_id, title=title)
+    event_id = next(
+        node_id for node_id, node in workflow["graph"]["nodes"].items() if node["kind"] == "event"
+    )
+    workflow["graph"]["nodes"][event_id].update(
+        operations=["updated"],
+        changed_fields=["column_id"],
+        match={"after.column_id": "done"},
+    )
+    return workflow
 
 
 async def _wait_for_completed_run(
@@ -110,45 +92,59 @@ async def _wait_for_completed_run(
     raise AssertionError(f"Timed out waiting for workflow run completion for {workflow_id}")
 
 
+@pytest.mark.asyncio
 async def test_agent_card_move_fires_matching_workflow(workflow_env, backend_client):
-    store, state_reader = workflow_env
+    store, _state_reader = workflow_env
     workflow_id = "workflow_agent_move"
     save_workflow_definition(
-        store,
-        default_workflow_definition(
-            workflow_id=workflow_id,
-            title="Agent move workflow",
-            event_type="kanban.card.moved",
-        ),
+        store, _matching_workflow_definition(workflow_id, "Agent move workflow")
     )
 
-    # Directly import the reconciler and seed the cache
-    # to avoid async task scheduling issues inside TestClient.
-    from app.backend import ui_routes as _ui_routes
-    from app.backend.ui_routes import _reconcile_kanban_card_triggers
+    from app.backend.ui_routes import get_document_event_dispatcher
 
-    _write_agent_card(store, "card_agent_1", column_id="backlog")
-    await _reconcile_kanban_card_triggers("kanban_card:card_agent_1")
-    assert _ui_routes._kanban_card_cache_seeded is True
+    # Direct store write simulating the runtime agent's filesystem tool.
+    store.save_document(
+        PROGENITOR_STATE_PREFIX,
+        "kanban_card:card_agent_1",
+        {
+            "id": "card_agent_1",
+            "title": "Agent-authored card",
+            "summary": "Do the thing",
+            "column_id": "backlog",
+            "status": "idle",
+            "owner": "user",
+        },
+    )
+    await get_document_event_dispatcher().drain()
+    # Non-matching creation should not start the workflow.
     assert list_workflow_runs(store, workflow_id=workflow_id) == []
 
-    # Second write: the agent moves the card to done, still via a direct
-    # store write -- this is the case that used to never fire triggers.
-    _write_agent_card(store, "card_agent_1", column_id="done")
-    await _reconcile_kanban_card_triggers("kanban_card:card_agent_1")
+    # Move the card to done — this must match the workflow event node.
+    store.save_document(
+        PROGENITOR_STATE_PREFIX,
+        "kanban_card:card_agent_1",
+        {
+            "id": "card_agent_1",
+            "title": "Agent-authored card",
+            "summary": "Do the thing",
+            "column_id": "done",
+            "status": "idle",
+            "owner": "user",
+        },
+    )
+    await get_document_event_dispatcher().drain()
 
     run = await _wait_for_completed_run(store, workflow_id)
-    assert run["status"] == "completed"
-    assert run["trigger_event"]["event_type"] == "kanban.card.moved"
-    payload = run["trigger_event"]["payload"]
-    assert payload["from"]["column_id"] == "backlog"
-    assert payload["to"]["column_id"] == "done"
+    assert run["status"] == "completed", run["last_error"]
+    event = run["trigger_event"]
+    assert event["document_type"] == "kanban_card"
+    assert event["op"] == "updated"
+    assert event["after"]["column_id"] == "done"
 
 
-async def test_rest_driven_move_is_not_double_dispatched_by_reconciler(
-    workflow_env, backend_client
-):
-    """A persisted REST move emits its snapshot once and watcher replay cannot rerun it."""
+@pytest.mark.asyncio
+async def test_rest_driven_move_is_not_double_dispatched(workflow_env, backend_client):
+    """A persisted REST move emits its event once; draining again cannot rerun it."""
     store, state_reader = workflow_env
     from app.backend import ui_routes
 
@@ -158,16 +154,35 @@ async def test_rest_driven_move_is_not_double_dispatched_by_reconciler(
         with TestClient(app) as client:
             workflow_id = "workflow_rest_move"
             save_workflow_definition(
-                store,
-                default_workflow_definition(
-                    workflow_id=workflow_id,
-                    title="REST move workflow",
-                    event_type="kanban.card.moved",
-                ),
+                store, _matching_workflow_definition(workflow_id, "REST move workflow")
             )
 
             card_id = "card_rest_1"
-            _write_agent_card(store, card_id, column_id="backlog")
+            store.save_document(
+                PROGENITOR_STATE_PREFIX,
+                f"kanban_card:{card_id}",
+                {
+                    "id": card_id,
+                    "title": "REST card",
+                    "summary": "Rest summary",
+                    "column_id": "backlog",
+                    "status": "idle",
+                    "owner": "user",
+                },
+            )
+            board = store.get_document(PROGENITOR_STATE_PREFIX, "kanban_board", None)
+            structure = (
+                dict(board.payload) if board is not None and isinstance(board.payload, dict) else {}
+            )
+            order = list(structure.get("card_order") or [])
+            if card_id not in order:
+                order.append(card_id)
+            structure["card_order"] = order
+            store.save_document(PROGENITOR_STATE_PREFIX, "kanban_board", structure)
+            # The app's own dispatcher drains on the TestClient loop; draining
+            # from this loop too would share its lock across event loops.
+            await asyncio.sleep(0.3)
+            assert list_workflow_runs(store, workflow_id=workflow_id) == []
 
             request_id = "rest-kanban-move"
             patched = client.patch(
@@ -182,21 +197,62 @@ async def test_rest_driven_move_is_not_double_dispatched_by_reconciler(
             }
             events = [queue.get_nowait()["envelope"] for _ in range(queue.qsize())]
             assert events
-            assert all(event.payload["request_id"] == request_id for event in events)
-            snapshot = next(event for event in events if event.type == "kanban.snapshot")
+            snapshot_events = [event for event in events if event.type == "kanban.snapshot"]
+            assert snapshot_events
+            assert all(event.payload.get("request_id") == request_id for event in snapshot_events)
+            snapshot = snapshot_events[0]
             card = next(card for card in snapshot.payload["cards"] if card["id"] == card_id)
             assert card["column_id"] == "done"
 
             await _wait_for_completed_run(store, workflow_id)
 
-            # Replay the notification the REST write itself would have produced.
-            state_reader._on_store_change(
-                f'{{"prefix": "progenitor.state", "key": "kanban_card:{card_id}"}}'
-            )
-            await asyncio.sleep(0.1)
+            # The app's live dispatcher (running on the TestClient loop) keeps
+            # draining; the persisted cursor means the move never runs twice.
+            await asyncio.sleep(0.3)
 
             items = list_workflow_runs(store, workflow_id=workflow_id)
             matches = [item.model_dump(mode="json") for item in items]
             assert len(matches) == 1
     finally:
         ui_routes._ui_stream_subscribers.pop(queue, None)
+
+
+@pytest.mark.asyncio
+async def test_non_matching_move_does_not_fire_workflow(workflow_env, backend_client):
+    """A card update that does not satisfy the event node's match must not start a run."""
+    store, _state_reader = workflow_env
+    workflow_id = "workflow_no_match"
+    save_workflow_definition(store, _matching_workflow_definition(workflow_id, "No match workflow"))
+
+    from app.backend.ui_routes import get_document_event_dispatcher
+
+    store.save_document(
+        PROGENITOR_STATE_PREFIX,
+        "kanban_card:card_no_match",
+        {
+            "id": "card_no_match",
+            "title": "No match card",
+            "summary": "No match summary",
+            "column_id": "backlog",
+            "status": "idle",
+            "owner": "user",
+        },
+    )
+    await get_document_event_dispatcher().drain()
+
+    # Update a field other than column_id — match requires after.column_id == done.
+    store.save_document(
+        PROGENITOR_STATE_PREFIX,
+        "kanban_card:card_no_match",
+        {
+            "id": "card_no_match",
+            "title": "No match card updated",
+            "summary": "No match summary",
+            "column_id": "backlog",
+            "status": "running",
+            "owner": "user",
+        },
+    )
+    await get_document_event_dispatcher().drain()
+
+    assert list_workflow_runs(store, workflow_id=workflow_id) == []

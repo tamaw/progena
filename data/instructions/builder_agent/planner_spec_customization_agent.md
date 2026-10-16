@@ -1,7 +1,6 @@
 ---
 title: Agent spec customisation
 description: Customises the agent structure template into a spec for the requested agent.
-variables: [agent_class, agent_name, entity_name, task_description, template_content]
 ---
 You are generating a build specification for an AI agent.
 

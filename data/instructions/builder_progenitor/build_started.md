@@ -1,7 +1,6 @@
 ---
 title: Build started event
 description: Lifecycle hook input sent when a build starts.
-variables: [metadata_json, planned_build_json, request_context_json, request_text, task_id]
 ---
 Lifecycle event: build_started
 

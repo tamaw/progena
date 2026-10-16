@@ -1,4 +1,4 @@
-"""IRC rendering of chat messages for the /conversations/ mount."""
+"""IRC rendering of chat messages for the /sessions/ mount."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from zoneinfo import ZoneInfo
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 
-from app.progenitor.conversations.transcript import (
+from app.progenitor.sessions.transcript import (
     ThreadMessages,
     format_log,
     render_transcript,
@@ -267,4 +267,30 @@ def test_log_header_lists_participants_and_marks_day_changes_in_the_users_timezo
         "23:59:00 <Tama> late night",
         "--- Day changed Tue Oct 13 2026",
         "00:01:00 <@progenitor> good morning",
+    ]
+
+
+def test_image_blocks_render_as_sends_an_image() -> None:
+    root = _thread(
+        HumanMessage(
+            content=[
+                {"type": "image_url", "image_url": {"url": "http://example.com/img.png"}},
+                {"type": "text", "text": "what is this"},
+            ]
+        ),
+        AIMessage(
+            content=[
+                {"type": "image_url", "image_url": {"url": "http://example.com/ai.png"}},
+                {"type": "text", "text": "a cat"},
+            ],
+            response_metadata=MODEL,
+        ),
+    )
+    transcript = render_transcript(root, subagents={}, channel="abcd1234", user_nick="Tama")
+    lines = [line.text for line in transcript.lines]
+    assert lines == [
+        "<Tama> what is this",
+        "* Tama sends an image",
+        "* progenitor sends an image",
+        "<@progenitor> a cat",
     ]

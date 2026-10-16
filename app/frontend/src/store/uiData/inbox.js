@@ -66,6 +66,7 @@ export const archiveInboxMessage = createAcknowledgedThunk('uiData/archiveInboxM
   { method: 'POST', body: { archived }, requestId },
 ));
 
+
 export const eventHandlers = {
   'inbox.snapshot': (state, payload) => {
     applyInboxSnapshot(state.inbox, payload);

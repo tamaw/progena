@@ -35,17 +35,10 @@ from .document_kinds import (
     MEMORY_DOCUMENT_KEY_PREFIX,
     SKILL_DOCUMENT_KEY_PREFIX,
 )
-from .document_kinds import (
-    AGENT_SELF_EDIT_TOUCH_KEY_PREFIX as AGENT_SELF_EDIT_TOUCH_KEY_PREFIX,
-)
-from .instructions.documents import is_runtime_instruction, parse_instruction
+from .instructions.documents import is_bundled_instruction, is_runtime_instruction
+from .instructions.templates import parse_instruction_template
 
 logger = logging.getLogger(__name__)
-
-# AGENT_SELF_EDIT_TOUCH_KEY_PREFIX: not a content-document kind itself -- a
-# legacy self-edit notification key. All manifests now persist as agent:
-# documents, whose writes directly trigger Postgres NOTIFY. Kept exported
-# for compatibility with older runtime writers and notification consumers.
 
 _KIND_PREFIXES: dict[str, str] = {
     "instruction": INSTRUCTION_DOCUMENT_KEY_PREFIX,
@@ -74,7 +67,8 @@ async def sync_instruction_documents(state_manager: Any, source_dir: Path | str)
 
     Runtime instructions (the ``progenitor`` group) are added when missing and
     otherwise left alone, since they are edited in place. Bundled instructions
-    mirror their file. Stored instructions with no file are removed.
+    mirror their file, and bundled ones with no file are removed. Instructions
+    in any other group (workflow templates) are never touched.
     """
     root = Path(source_dir)
     if not root.is_dir():
@@ -86,7 +80,7 @@ async def sync_instruction_documents(state_manager: Any, source_dir: Path | str)
     }
     for relative_path, content in files.items():
         try:
-            parse_instruction(content)
+            parse_instruction_template(content)
         except ValueError as exc:
             raise ValueError(f"{root / relative_path}: {exc}") from exc
     stored = dict(await state_manager.list_content_documents("instruction"))
@@ -97,7 +91,7 @@ async def sync_instruction_documents(state_manager: Any, source_dir: Path | str)
             continue
         await state_manager.save_content_document("instruction", relative_path, content)
         written += 1
-    removed = [path for path in stored if path not in files]
+    removed = [path for path in stored if is_bundled_instruction(path) and path not in files]
     for relative_path in removed:
         await state_manager.delete_content_document("instruction", relative_path)
     if written or removed:
