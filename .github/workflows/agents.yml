@@ -268,17 +268,22 @@ jobs:
 
       - name: Read agent runtime spec
         id: runtime-spec
-        uses: mikefarah/yq@v4.44.3
-        with:
-          cmd: >-
-            yq -o=json -I=0 '
-              .runtime as $runtime |
-              {
-                "port": $runtime.port,
-                "mounts": (($runtime.mounts // []) | map(.host_path + ":" + .container_path)),
-                "env_keys": ((["AZURE_OPENAI_BASE_URL", "AZURE_OPENAI_API_KEY", "AGENT_MODEL_DEFAULT"] + ($runtime.additional_env_keys // [])) | unique)
-              }
-            ' "app/agents/${{ matrix.agent }}/agent.yml"
+        # Pipe the manifest on stdin: container actions bind-mount the workspace by
+        # host path, which a containerized self-hosted runner does not share, so
+        # their outputs came back empty.
+        shell: bash
+        run: |
+          set -euo pipefail
+          SPEC="$(docker run --rm -i mikefarah/yq:4.44.3 -o=json -I=0 '
+                .runtime as $runtime |
+                {
+                  "port": $runtime.port,
+                  "mounts": (($runtime.mounts // []) | map(.host_path + ":" + .container_path)),
+                  "env_keys": ((["AZURE_OPENAI_BASE_URL", "AZURE_OPENAI_API_KEY", "AGENT_MODEL_DEFAULT"] + ($runtime.additional_env_keys // [])) | unique)
+                }
+          ' < "app/agents/${{ matrix.agent }}/agent.yml")"
+          [[ "$SPEC" =~ \"port\":[0-9]+ ]] || { echo "Invalid runtime spec: $SPEC"; exit 1; }
+          echo "result=$SPEC" >> "$GITHUB_OUTPUT"
 
       - uses: docker/setup-buildx-action@v3
 
@@ -334,17 +339,22 @@ jobs:
 
       - name: Read agent runtime spec
         id: runtime-spec
-        uses: mikefarah/yq@v4.44.3
-        with:
-          cmd: >-
-            yq -o=json -I=0 '
-              .runtime as $runtime |
-              {
-                "port": $runtime.port,
-                "mounts": (($runtime.mounts // []) | map(.host_path + ":" + .container_path)),
-                "env_keys": ((["AZURE_OPENAI_BASE_URL", "AZURE_OPENAI_API_KEY", "AGENT_MODEL_DEFAULT"] + ($runtime.additional_env_keys // [])) | unique)
-              }
-            ' "app/agents/${{ matrix.agent }}/agent.yml"
+        # Pipe the manifest on stdin: container actions bind-mount the workspace by
+        # host path, which a containerized self-hosted runner does not share, so
+        # their outputs came back empty.
+        shell: bash
+        run: |
+          set -euo pipefail
+          SPEC="$(docker run --rm -i mikefarah/yq:4.44.3 -o=json -I=0 '
+                .runtime as $runtime |
+                {
+                  "port": $runtime.port,
+                  "mounts": (($runtime.mounts // []) | map(.host_path + ":" + .container_path)),
+                  "env_keys": ((["AZURE_OPENAI_BASE_URL", "AZURE_OPENAI_API_KEY", "AGENT_MODEL_DEFAULT"] + ($runtime.additional_env_keys // [])) | unique)
+                }
+          ' < "app/agents/${{ matrix.agent }}/agent.yml")"
+          [[ "$SPEC" =~ \"port\":[0-9]+ ]] || { echo "Invalid runtime spec: $SPEC"; exit 1; }
+          echo "result=$SPEC" >> "$GITHUB_OUTPUT"
 
       - name: Ensure external network
         run: docker network inspect progenitor_network >/dev/null 2>&1 || docker network create progenitor_network
