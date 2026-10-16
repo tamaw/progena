@@ -119,7 +119,8 @@ class RuntimeChatService:
         self.loop_runner = loop_runner
         self._bridge_factory = bridge_factory or DeepAgentSSEStream
         self._inflight_by_thread: dict[str, asyncio.Task[Any]] = {}
-        self._session_renders: set[asyncio.Task[None]] = set()
+        self._session_renders: dict[str, asyncio.Task[None]] = {}
+        self._session_renders_pending: set[str] = set()
         self._cancel_events: dict[str, asyncio.Event] = {}
         self._subscribers: set[asyncio.Queue[dict[str, Any] | None]] = set()
         self._drain_task: asyncio.Task[None] | None = None
@@ -693,15 +694,36 @@ class RuntimeChatService:
             return []
 
     def _fire_and_forget_session_merge(self, thread_id: str) -> None:
-        """Re-render the thread and merge ``content``/``last_activity`` into the session row."""
+        """Re-render the thread and merge ``content``/``last_activity`` into the session row.
+
+        Renders of one thread never overlap: a turn finishing while its thread
+        renders queues one more render, so the last merge reflects the last turn.
+        """
         context = getattr(self.loop_runner, "heartbeat_context", None)
         state_manager = getattr(context, "state_manager", None)
         checkpointer = getattr(self.loop_runner.graph, "checkpointer", None)
         if state_manager is None or checkpointer is None:
             return
-        task = asyncio.create_task(merge_session_after_turn(thread_id, checkpointer, state_manager))
-        self._session_renders.add(task)
-        task.add_done_callback(self._session_renders.discard)
+        if thread_id in self._session_renders:
+            self._session_renders_pending.add(thread_id)
+            return
+        self._session_renders[thread_id] = asyncio.create_task(
+            self._render_session_until_current(thread_id, checkpointer, state_manager)
+        )
+
+    async def _render_session_until_current(
+        self, thread_id: str, checkpointer: Any, state_manager: Any
+    ) -> None:
+        try:
+            while True:
+                self._session_renders_pending.discard(thread_id)
+                await merge_session_after_turn(thread_id, checkpointer, state_manager)
+                if thread_id not in self._session_renders_pending:
+                    return
+        finally:
+            # No await between the pending check and this: a later turn either
+            # re-ran the loop above or starts a fresh render.
+            self._session_renders.pop(thread_id, None)
 
     async def _message_count(self, thread_id: str) -> int:
         state = await self.loop_runner.graph.aget_state({"configurable": {"thread_id": thread_id}})

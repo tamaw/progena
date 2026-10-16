@@ -390,6 +390,37 @@ async def test_task_description_rejects_missing_or_invalid_structured_inputs():
 
 
 @pytest.mark.asyncio
+async def test_unpinned_input_is_validated_against_the_graph_that_runs():
+    """A save between validation and execution must not swap the graph."""
+    old = _graph_doc("topic: {topic}")
+    old["input_schema"] = {
+        "type": "object",
+        "properties": {"topic": {"type": "string"}},
+        "required": ["topic"],
+    }
+    new = _graph_doc("subject: {subject}")
+    new["input_schema"] = {
+        "type": "object",
+        "properties": {"subject": {"type": "string"}},
+        "required": ["subject"],
+    }
+
+    class _SavedMidInvocation(_FakeStateManager):
+        async def get_routine_graph(self, routine_id):
+            self.calls += 1
+            return old if self.calls == 1 else new
+
+    model = _EchoModel()
+    state_manager = _SavedMidInvocation()
+    spec = _spec(_FakeRevisionReader({}), state_manager=state_manager, model=model)
+
+    await spec["runnable"].ainvoke({"messages": [HumanMessage('{"topic": "tides"}')]})
+
+    assert state_manager.calls == 1
+    assert model.calls[0][-1].content == "topic: tides"
+
+
+@pytest.mark.asyncio
 async def test_task_description_uses_pinned_revision_input_schema():
     pinned_graph = _graph_doc("{token}")
     pinned_graph["input_schema"] = {

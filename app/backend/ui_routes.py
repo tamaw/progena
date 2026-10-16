@@ -89,7 +89,7 @@ from .chat_sessions import (
     UiEventEnvelope,
     UiRequestAcknowledgement,
     acknowledgement_response,
-    get_chat_detail,
+    get_chat_summary,
 )
 from .document_events import (
     DocumentEventDispatcher,
@@ -4112,7 +4112,7 @@ async def _dispatch_document_event_workflows(typed: TypedDocumentEvent) -> None:
     executor = get_workflow_executor()
     if typed.event.key.startswith(WORKFLOW_DEFINITION_KEY_PREFIX):
         executor.invalidate_subscriptions()
-        get_workflow_cron_clock().wake()
+        get_workflow_cron_clock().workflow_changed(typed.event.after)
     if typed.output is None:
         return
     await executor.dispatch_document_event(typed.output, origin=typed.event.origin)
@@ -4153,12 +4153,12 @@ async def _publish_chat_session_document_event(typed: TypedDocumentEvent) -> Non
             session_id=thread_id,
         )
         return
-    detail = await asyncio.to_thread(get_chat_detail, get_default_document_store(), thread_id)
-    if detail is None:
+    summary = await asyncio.to_thread(get_chat_summary, get_default_document_store(), thread_id)
+    if summary is None:
         return
     broadcast_ui_event(
         "chat.session.created" if event.op == "created" else "chat.session.metadata.updated",
-        {"session": detail.model_dump(exclude={"messages"})},
+        {"session": summary.model_dump()},
         scope="chat",
         session_id=thread_id,
     )

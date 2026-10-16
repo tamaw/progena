@@ -86,3 +86,53 @@ def test_rolled_back_transaction_leaves_no_event_and_does_not_block(store):
         _insert(conn, f"kanban_card:{tag}:kept")
 
     assert _keys(store, cursor, tag) == [f"kanban_card:{tag}:kept"]
+
+
+def test_events_behind_an_open_transaction_are_reported_deferred(store):
+    """An older transaction that writes no document event still holds events
+    back; its end announces nothing, so the dispatcher must know to re-check."""
+    assert DATABASE_URL is not None
+    tag = uuid.uuid4().hex
+    cursor = store.latest_document_event_position()
+    blocker = psycopg.connect(DATABASE_URL)
+    try:
+        blocker.execute("SELECT pg_current_xact_id()")  # holds the snapshot xmin
+        with psycopg.connect(DATABASE_URL, autocommit=True) as conn:
+            _insert(conn, f"kanban_card:{tag}:waiting")
+
+        assert _keys(store, cursor, tag) == []
+        assert store.has_deferred_document_events(cursor) is True
+    finally:
+        blocker.rollback()
+        blocker.close()
+
+    assert _keys(store, cursor, tag) == [f"kanban_card:{tag}:waiting"]
+
+
+def test_mutate_document_is_not_overwritten_by_a_concurrent_merge(store):
+    """A plain merge landing while a mutator runs waits for it, rather than
+    committing in between and then being overwritten by the stale mutation."""
+    import threading
+    import time
+
+    key = f"kanban_card:{uuid.uuid4().hex}:locked"
+    store.save_document(PROGENITOR_STATE_PREFIX, key, {"a": 0, "b": 0})
+    merged = threading.Event()
+
+    def concurrent_merge() -> None:
+        store.merge_document(PROGENITOR_STATE_PREFIX, key, {"b": 1})
+        merged.set()
+
+    def mutator(payload):
+        merger = threading.Thread(target=concurrent_merge)
+        merger.start()
+        time.sleep(0.3)  # the merge would commit here without a row lock
+        assert not merged.is_set()
+        return {**payload, "a": 1}
+
+    try:
+        store.mutate_document(PROGENITOR_STATE_PREFIX, key, mutator)
+        assert merged.wait(5)
+        assert store.get_document(PROGENITOR_STATE_PREFIX, key).payload == {"a": 1, "b": 1}
+    finally:
+        store.delete_document(PROGENITOR_STATE_PREFIX, key)
