@@ -238,14 +238,18 @@ jobs:
           # a clean checkout, and a root-owned folder there breaks other jobs.
           PROGENITOR_HOST_REPOS_DIR: /var/lib/progenitor/repos
         run: |
-          # If a manual/dev container exists with the same name, docker compose will fail.
-          # Removing containers keeps bind-mounted state (logs/repos, plus Postgres) intact.
-          docker rm -f progenitor progenitor-backend progenitor-frontend 2>/dev/null || true
-          docker volume inspect progenitor-postgres-data >/dev/null 2>&1 || docker volume create progenitor-postgres-data >/dev/null
+          # Check every image before touching the running stack, so a missing image
+          # fails the deploy without taking production down. Postgres comes from a
+          # registry (compose runs with --pull never), so pull it first.
+          docker compose -f docker/docker-compose.progenitor.yml pull postgres
           docker image inspect ghcr.io/tamaw/progenitor:${PROGENITOR_IMAGE_TAG} >/dev/null
           docker image inspect ghcr.io/tamaw/progenitor-backend:${PROGENITOR_IMAGE_TAG} >/dev/null
           docker image inspect ghcr.io/tamaw/progenitor-frontend:${PROGENITOR_IMAGE_TAG} >/dev/null
           test -d "$PROGENITOR_HOST_SCHEMAS_DIR"
+          # If a manual/dev container exists with the same name, docker compose will fail.
+          # Removing containers keeps bind-mounted state (logs/repos, plus Postgres) intact.
+          docker rm -f progenitor progenitor-backend progenitor-frontend 2>/dev/null || true
+          docker volume inspect progenitor-postgres-data >/dev/null 2>&1 || docker volume create progenitor-postgres-data >/dev/null
           # The runtime runs as UID 10001; log files left by the old root container
           # are not appendable, so hand its log and repos folders over before starting it.
           docker run --rm --user 0 --entrypoint sh \
