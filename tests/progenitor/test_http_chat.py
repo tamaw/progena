@@ -947,3 +947,35 @@ async def test_cancelled_turn_keeps_partial_reply_and_next_turn_continues() -> N
             assert state.values["messages"][-1].content == "continued"
     finally:
         await _stop_chat_server(server)
+
+
+async def test_session_renders_of_one_thread_run_in_order(monkeypatch) -> None:
+    """A turn finishing mid-render queues one more render instead of racing it,
+    so the last merge always reflects the last turn."""
+    from app.progenitor.runtime import http_chat
+
+    service = RuntimeChatService(FakeLoopRunner())
+    release = asyncio.Event()
+    active = 0
+    calls: list[str] = []
+
+    async def fake_merge(thread_id: str, _checkpointer: Any, _state_manager: Any) -> None:
+        nonlocal active
+        active += 1
+        assert active == 1, "renders of one thread overlapped"
+        calls.append(thread_id)
+        await release.wait()
+        active -= 1
+
+    monkeypatch.setattr(http_chat, "merge_session_after_turn", fake_merge)
+
+    service._fire_and_forget_session_merge("t1")
+    await asyncio.sleep(0)
+    service._fire_and_forget_session_merge("t1")  # turn 2 finishes mid-render
+    service._fire_and_forget_session_merge("t1")  # turn 3 too: coalesced
+    release.set()
+    task = service._session_renders["t1"]
+    await asyncio.wait_for(task, 1)
+
+    assert calls == ["t1", "t1"]
+    assert service._session_renders == {}

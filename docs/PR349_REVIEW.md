@@ -100,3 +100,72 @@ Branch: `fix/pr349-review` (from `792b3c4b`, session documents).
 ## Cleanup — session key literals
 
 - [x] **C-1 Use `SESSION_KEY_PREFIX` instead of `"session:"` literals.** Done; the SQL bodies substitute the constant (the event trigger uses the file's existing `.replace` placeholder style, the session trigger an f-string). Type ids stay literals.
+
+# Round 2 (2026-10-16)
+
+Second review of the PR head `d45780b1` (16 reviewers; model profiles and store/dashboard came back clean). Fixed on `fix/pr349-review-2`. Each item has a test that fails before the fix unless noted.
+
+## P1
+
+- [x] **R2-1 Dispatcher stalls behind the xmin watermark** — `document_events.py`, `document_store.py`. A committed event held back by an older open transaction was never re-read once that transaction ended without an event of its own. `has_deferred_document_events(after)` reports such events; the dispatcher then re-checks every second (`_DEFERRED_RETRY_SECONDS`) instead of waiting only for NOTIFY. Tests: Postgres `test_events_behind_an_open_transaction_are_reported_deferred`, dispatcher `test_dispatcher_rechecks_while_events_are_deferred`.
+- [x] **R2-2 Session event handler loaded the transcript** — `ui_routes._publish_chat_session_document_event` now builds the sidebar event from `chat_sessions.get_chat_summary`, which reads history best-effort (runtime down → `history_unavailable`), so a rename during an outage reaches the sidebar and can't stop the dispatcher. Found in the live check: `PATCH /api/ui/chats/{id}` also loaded the transcript just to check the chat exists, so that rename applied but answered 503; it now checks the session document only.
+- [x] **R2-3 `/sessions/` mount had no `aglob`** — `SessionDirectoryBackend` inherits `_AsyncOnlyFileBackendMixin` (glob, grep, download); its own grep is gone.
+- [x] **R2-4 Session field values unvalidated** — writable fields are checked against the session schema (`DocumentType.validate_write`, shared with the `document_write` node) before merging; `title: 123` is rejected.
+- [x] **R2-5 + New during streaming left the new chat disabled** — `startNewChatSession` backgrounds the old response and retires the foreground turn (`useChatStream.retireForegroundStream`) without cancelling it.
+- [x] **R2-6 Cron fires once per backend** — each due time is claimed with `mutate_document` (re-evaluated against the stored state under the row/advisory lock); only the claimant fires.
+
+## P2 — backend
+
+- [x] **R2-7** `mutate_document` reads with `SELECT … FOR UPDATE` (advisory lock kept), so plain saves/merges can't commit between its read and write. Postgres interleaving test; fails without `FOR UPDATE`.
+- [x] **R2-8** In-memory store: writes, event allocation/append and event reads share one reentrant lock. No deterministic test (thread interleaving inside a deep copy); covered by the existing suite.
+- [x] **R2-9** In-memory store applies the Postgres session noise filter (updates touching only `content`/`last_activity` log no event) on save, merge and mutate.
+- [x] **R2-10** A `document_write` with nothing connected to write outputs `{"found": …}` only.
+- [x] **R2-11** `{thread_id}` in an Agent/Extract template renders the run's thread when the port isn't wired.
+- [x] **R2-12** Agent/Extract `thread_id` outputs the thread the runner actually used.
+- [x] **R2-13** Data-node values are refreshed from each reload of the definition, so a mid-run edit reaches later nodes.
+- [x] **R2-14** `document_query` filters use JSON equality (`json_equal`, formerly `_json_equal`): `true` ≠ `1`.
+- [x] **R2-15** Unpack resolves a local `$ref` (`#/$defs/…`, `#/definitions/…`) before deriving its ports.
+- [x] **R2-16** A nullable object (`["object", "null"]`) is unpackable.
+- [x] **R2-17** An `integer` output connects to a `number` (or `["number", "null"]`) input.
+- [x] **R2-18** Pausing/disabling a workflow marks its cron state inactive from the workflow's document event (`WorkflowCronClock.workflow_changed`), so a pause and resume between two ticks still counts from the resume.
+- [x] **R2-19** Cron state keys percent-encode the workflow and node ids (`a:b`/`c` ≠ `a`/`b:c`). State under an old key is removed by the clock and the node starts counting from now.
+- [x] **R2-20** Only an exact `---` first line opens prompt front matter (`----` is body text).
+- [x] **R2-21** Embedding a type ref hoists the targets of other local refs (e.g. `#/properties/name`) into `$defs` and rewrites the refs; a self-reference to the root is rejected.
+- [x] **R2-22** `first_message` drops the attachment note (new SQL `progenitor_session_first_message`, used by the trigger and `scripts/migrate_sessions.py`; an attachment-only opener reads `* sends an attachment`), and the fallback title is secret-redacted (`display_title`). `ATTACHMENT_CONTEXT_MARKER` moved to `app/progenitor/sessions/titles.py`. Sessions created before this keep their stored `first_message`.
+- [x] **R2-23** Transcript renders of one thread never overlap: a turn finishing mid-render queues one more render (`RuntimeChatService._render_session_until_current`).
+- [x] **R2-24** Session `edit_file` uses `perform_string_replacement`: an ambiguous match fails unless `replace_all`.
+- [x] **R2-25** A routine subagent resolves one graph snapshot (`resolve_routine_graph`) and passes it to the executor, so input validation and execution use the same graph.
+
+## P2 — frontend
+
+- [x] **R2-26** A local draft becomes the selected owner once its session appears, so reconciliation runs for it.
+- [x] **R2-27** Reopened quick chat rebuilds the streaming reply from an empty replay accumulator (no duplicated prefix).
+- [x] **R2-28** Opening a different unknown thread clears the transcript and releases the foreground stream; only reopening the same draft keeps it.
+- [x] **R2-29** Editing an Extract template changes only its inputs; the typed result and its Unpack edges stay.
+- [x] **R2-30** Selecting a prompt document (including via the radio) loads it and derives its input ports. The Workflows page now loads the prompt catalogue (before, the picker was empty unless the Prompts page had been opened), and the content fetch/derive runs once per path and text: the first version re-dispatched on every render and crashed the page with "Maximum update depth exceeded" (found in the browser check).
+- [x] **R2-31** Deleting a node prunes dependent Unpack edges down the chain (with the same confirmation as removing the edge).
+- [x] **R2-32** Palette nodes start compact, so a resize persists.
+- [x] **R2-33** Derived prompt inputs keep an optional `thread_id`.
+- [x] **R2-34** The node menu is a flex column whose category list shrinks and scrolls (no clipped last items on short screens). CSS only.
+- Editor parity with R2-15–17: Unpack derivation and connection type checks accept nullable objects, `$ref`'d objects and integer→number.
+
+## P2 — e2e
+
+- [x] **R2-35** The title workflow matches `after.first_message`, so only the test's chat fires it.
+- [x] **R2-36** Teardown removes the session, runs and checkpoint rows, also on failure.
+- [x] **R2-37** The title assertion targets the session row in the sidebar, before and after reload.
+- [x] **R2-38** Workflow-author teardown deletes the quick-chat threads' checkpoints.
+
+## Validation (2026-10-16)
+
+| Status | Items | Evidence |
+|---|---|---|
+| Validated by test | R2-1–R2-4, R2-6, R2-7, R2-9–R2-33 | Python 2088 passed / 20 skipped (scratch DB set); vitest 924 passed; ruff, pyright `app/` (0 errors), eslint clean. Regression tests fail on the old code (checked by reverting for R2-7 and R2-15–17) |
+| Validated live | R2-2 | runtime stopped: rename `PATCH` → 202 (was 503), `chat.session.metadata.updated` with the new title and `history_unavailable: true` on `/api/ui/stream` |
+| Validated live (browser) | R2-5 | streaming a 500-word reply, + New: empty new chat, composer enabled, no Stop button; the old chat finished in the background (582 words on reopen) |
+| Validated live (browser) | R2-26 | a new chat's card is selected from the first send through completion; transcript after reload matches |
+| Validated live | R2-3 | Progenitor's `glob("*.md", "/sessions/")` returned 67 matches |
+| Validated live (browser) | R2-30, R2-33, R2-34 | Prompt document radio picks the first prompt and the node shows its `agent_name`, `log_dir`, `name` ports plus `thread_id`; at 500 px high the node menu's last item (Approval) is reachable |
+| Validated live | R2-19 | the dev clock removed a deleted workflow's cron state |
+| Validated by e2e | R2-35–R2-38 | `conversation-title`, `workflow-author`, `discovery` pass (27 tests). The first `workflow-author` run failed on the new cleanup query (unquoted `'`, then quick chat's page-context prefix); fixed. No `pw-` workflows, cards or test chats left from these runs |
+| Not exercised live | R2-8, R2-18, R2-22 (attachment), R2-23, R2-25, R2-27, R2-28, R2-29, R2-31, R2-32 | unit/integration tests only |
