@@ -713,3 +713,30 @@ def test_document_query_datetime_order_total_and_unwired_filter(store):
     unwired = _execute_document_node(store, node, {})
     assert unwired["keys"] == ["kanban_card:a", "kanban_card:b"]
     assert unwired["count"] == 2 and unwired["total"] == 3
+
+
+@pytest.mark.asyncio
+async def test_card_documents_written_by_any_writer_keep_the_board_order(store):
+    """A card created or deleted outside the card routes (e.g. by a workflow
+    document node) appears on, and leaves, the board."""
+    from app.backend.document_store import document_write_origin
+
+    dispatcher = ui_routes.get_document_event_dispatcher()
+    store.save_document(
+        PROGENITOR_STATE_PREFIX, "kanban_board", {"columns": [], "card_order": ["old"]}
+    )
+    with document_write_origin("workflow_run_x"):
+        store.save_document(PROGENITOR_STATE_PREFIX, "kanban_card:new", _card("new", "plan"))
+    await dispatcher.drain()
+
+    board = store.get_document(PROGENITOR_STATE_PREFIX, "kanban_board")
+    assert board.payload["card_order"] == ["old", "new"]
+    board_events = [
+        e for e in store.read_document_events(EVENT_LOG_START, 100) if e.key == "kanban_board"
+    ]
+    assert board_events[-1].origin == "workflow_run_x"
+
+    store.delete_document(PROGENITOR_STATE_PREFIX, "kanban_card:new")
+    await dispatcher.drain()
+    board = store.get_document(PROGENITOR_STATE_PREFIX, "kanban_board")
+    assert board.payload["card_order"] == ["old"]

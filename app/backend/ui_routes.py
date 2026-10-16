@@ -103,6 +103,8 @@ from .document_events import (
 from .document_store import (
     BACKEND_STATE_PREFIX,
     PROGENITOR_STATE_PREFIX,
+    DocumentEvent,
+    document_write_origin,
     get_default_document_store,
 )
 from .inbox_routes import (
@@ -4068,6 +4070,7 @@ def get_document_event_dispatcher() -> DocumentEventDispatcher:
         dispatcher.add_handler(_dispatch_document_event_workflows)
         dispatcher.add_handler(_apply_document_event_widgets)
         dispatcher.add_handler(_record_kanban_card_activity)
+        dispatcher.add_handler(_sync_kanban_card_order)
         dispatcher.add_handler(_publish_chat_session_document_event)
         _document_event_dispatcher = dispatcher
     return _document_event_dispatcher
@@ -4151,6 +4154,46 @@ async def _record_kanban_card_activity(typed: TypedDocumentEvent) -> None:
         refreshed_card=event.after,
         now=event.created_at.isoformat(),
     )
+
+
+async def _sync_kanban_card_order(typed: TypedDocumentEvent) -> None:
+    """Keep the board's ``card_order`` in step with the card documents.
+
+    The board lists only cards in ``card_order``. The card routes and the
+    agent's ``/tasks/`` mount maintain it themselves; this covers every other
+    writer (workflow ``document_create``/``document_delete``, extensions), so a
+    created card appears on the board and a deleted one leaves no stale id.
+    The update carries the card event's origin, keeping run ancestry intact.
+    """
+
+    await asyncio.to_thread(_apply_kanban_card_order_event, typed.event)
+
+
+def _apply_kanban_card_order_event(event: DocumentEvent) -> None:
+    if not event.key.startswith(_KANBAN_CARD_KEY_PREFIX) or event.op == "updated":
+        return
+    card_id = event.key[len(_KANBAN_CARD_KEY_PREFIX) :]
+    store = get_default_document_store()
+    board = store.get_document(PROGENITOR_STATE_PREFIX, _kanban_board_store_key(), None)
+    order = board.payload.get("card_order") if board and isinstance(board.payload, dict) else None
+    listed = isinstance(order, list) and card_id in order
+    if listed == (event.op == "created"):
+        return
+
+    def update(payload: Any) -> Any:
+        structure = dict(payload) if isinstance(payload, dict) else {}
+        current = structure.get("card_order")
+        ids = [str(cid) for cid in current] if isinstance(current, list) else []
+        if event.op == "created" and card_id not in ids:
+            ids.append(card_id)
+        elif event.op == "deleted":
+            ids = [cid for cid in ids if cid != card_id]
+        structure["card_order"] = ids
+        return structure
+
+    origin = document_write_origin(event.origin) if event.origin else contextlib.nullcontext()
+    with origin:
+        store.mutate_document(PROGENITOR_STATE_PREFIX, _kanban_board_store_key(), update)
 
 
 async def _publish_chat_session_document_event(typed: TypedDocumentEvent) -> None:
