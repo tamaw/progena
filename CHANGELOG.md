@@ -95,7 +95,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Model profile names must be unique after trimming whitespace**; a catalog with `" general "` and `"general"` is rejected.
 
 ### Fixed
-- **CI on `main`**: the agents workflow reads each agent's runtime spec with a `docker run` step fed on stdin instead of the `mikefarah/yq` container action, whose output came back empty on the self-hosted runner and failed every image build. The gzip test accepts `Vary: Origin, Accept-Encoding`.
+- **CI on `main`**: the agents workflow reads each agent's runtime spec with a `docker run` step fed on stdin instead of the `mikefarah/yq` container action, whose output came back empty on the self-hosted runner and failed every image build; the build/deploy matrix holds only container agents (those with a `docker-entrypoint.sh`), so the in-process `greetings_agent` no longer fails the build. The gzip test accepts `Vary: Origin, Accept-Encoding`.
 - Inbox AI edits no longer show the hand-edit conflict warning when Progenitor's document update arrives before its chat response finishes.
 - An open manual inbox edit now follows live document updates instead of freezing the old message. Its unsaved draft remains visible but becomes read-only with Save disabled until the user closes it; the backend's 409 compare-and-swap still protects in-flight saves.
 - `document_create` sets a schema-declared `timestamp` to the creation time (Unix seconds when the field is numeric), so alerts can be created from workflows.
