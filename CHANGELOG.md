@@ -97,6 +97,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Model profile names must be unique after trimming whitespace**; a catalog with `" general "` and `"general"` is rejected.
 
 ### Fixed
+- **Production knowledge index**: the production Postgres runs `pgvector/pgvector:pg16` instead of `postgres:16-alpine`, which lacked the `vector` extension, so the knowledge indexer failed on every start.
 - **Deploys catch up**: `build-and-deploy` compares `main` with the commit last deployed (recorded in the `progenitor-deploy-state` volume after the liveness checks pass) instead of only the current push, so a push whose tests failed, or that only touched CI files, no longer leaves production behind until someone runs a manual deploy. The Python images now rebuild for any change they copy in (all of `app/` except the frontend, `scripts/`, `data/schemas/`, …): the backend imports `app.progenitor` but used to rebuild only for `app/backend/` changes.
 - **The Telegram "I just connected" greeting is sent once**: only a Telegram chat without a session document is greeted, instead of the same greeting being added to the chat on every backend restart.
 - **Production deploy**: the Progenitor image builds again (`.dockerignore` still allowed `data/prompts/` after the Instructions rename, so `COPY data/instructions/` failed), and the runtime's `/app/repos` now lives at `/var/lib/progenitor/repos` instead of inside the runner checkout, where a clean checkout wiped it and its root-owned folder broke the agent builds.
