@@ -93,7 +93,14 @@ test.afterAll(async ({ request }) => {
     await request.delete(`/api/ui/chats/${threadId}`);
   }
   const threads = [...quickChatThreadIds];
-  for (const id of created) {
+  // A turn that outlives its test still creates the workflow, after `created`
+  // was last updated, so look the titles up too (the cron one fires every minute).
+  const workflowIds = new Set(created);
+  for (const title of [CRON_TITLE, EVENT_TITLE]) {
+    const workflow = workflowByTitle(title);
+    if (workflow) workflowIds.add(workflow.id);
+  }
+  for (const id of workflowIds) {
     threads.push(...runsOf(id).map((run) => run.thread_id).filter(Boolean));
     await request.delete(`/api/ui/workflows/${id}`);
     sql(`delete from store where key like 'workflow_run:%' and value->'payload'->>'workflow_id' = '${id}'`);
