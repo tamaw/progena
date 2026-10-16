@@ -44,6 +44,7 @@ from deepagents.backends.utils import (
 )
 from wcmatch import glob as wcglob
 
+from ..knowledge.indexer_config import default_indexer_payload, validate_indexer_document
 from ..prompts.templates import parse_prompt_template, prompt_relative_path
 from ..routines.store import (
     parse_routine_graph_document,
@@ -763,6 +764,21 @@ def create_knowledge_state_file(
         validate=validate_knowledge_document,
         default={"bases": []},
         on_change=on_change,
+    )
+
+
+def create_indexer_state_file(state_manager: Any) -> StateFile:
+    """Build ``/config/indexer.json``: which model profile embeds knowledge pages.
+
+    ``profile`` must name a ``/config/profile.json`` entry (checked on save);
+    progress is reported separately in the read-only ``/knowledge/indexer.json``.
+    """
+    return _simple_state_file(
+        "indexer.json",
+        get=state_manager.get_indexer_config,
+        save=state_manager.save_indexer_config,
+        validate=validate_indexer_document,
+        default=default_indexer_payload(),
     )
 
 

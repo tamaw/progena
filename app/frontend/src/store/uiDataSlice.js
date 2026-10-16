@@ -32,7 +32,9 @@ import * as policies from './uiData/policies';
 import * as documentTypes from './uiData/documentTypes';
 import * as modelProfiles from './uiData/modelProfiles';
 
-const domains = [runtime, mcp, knowledge, prompts, tasks, workflows, agents, chats, inbox, logs, preferences, marketplaces, repos, documentTypes, policies, modelProfiles];
+import * as search from './uiData/search';
+
+const domains = [runtime, mcp, knowledge, prompts, tasks, workflows, agents, chats, inbox, logs, preferences, marketplaces, repos, documentTypes, policies, modelProfiles, search];
 
 const initialState = domains.reduce(
   (acc, domain) => ({ ...acc, ...domain.initialState }),
@@ -222,11 +224,22 @@ export {
 export {
   fetchKnowledge,
   saveKnowledge,
-  indexKnowledgeSource,
+  fetchKnowledgePages,
+  fetchKnowledgePage,
+  fetchKnowledgePageRevisions,
+  fetchKnowledgePageRevision,
   selectKnowledgeBases,
   selectKnowledgeState,
-  selectKnowledgeSearch,
+  selectKnowledgePages,
+  selectKnowledgePage,
+  selectKnowledgeRevisions,
+  selectKnowledgeRevision,
 } from './uiData/knowledge';
+
+export {
+  searchAll,
+  selectSearchResults,
+} from './uiData/search';
 
 export {
   fetchPrompts,

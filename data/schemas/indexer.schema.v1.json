@@ -1,0 +1,28 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Search indexer settings",
+  "description": "The whole 'indexer' state document (/config/indexer.json): which model profile embeds knowledge pages for search, and at what dimension. Indexing status is reported separately in /knowledge/indexer.json.",
+  "type": "object",
+  "properties": {
+    "profile": {
+      "type": "string",
+      "description": "Name of an embeddings deployment profile in /config/profile.json (e.g. 'embeddings'). Empty disables indexing.",
+      "default": ""
+    },
+    "dimensions": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 2000,
+      "description": "Embedding vector size. Changing it (or the profile's deployment) rebuilds the whole index.",
+      "default": 1536
+    },
+    "min_similarity": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "description": "Search cut-off: a page is returned only if it matches the query by keyword or its cosine similarity is at least this (0-1). Lower shows more loosely related pages; higher shows fewer. Changing it does not reindex.",
+      "default": 0.25
+    }
+  },
+  "additionalProperties": false
+}
