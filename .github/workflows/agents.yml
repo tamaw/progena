@@ -451,14 +451,11 @@ jobs:
           docker run "${DOCKER_ARGS[@]}" "ghcr.io/tamaw/progenitor-agent-${{ matrix.agent }}:latest"
 
       - name: Wait for agent to become healthy
-        id: health
         env:
           AGENT_NAME: ${{ matrix.agent }}
         shell: bash
         run: |
           CONTAINER_NAME="progenitor-agent-${AGENT_NAME}"
-          echo "registry_host=${CONTAINER_NAME}" >> "$GITHUB_OUTPUT"
-
           echo "Waiting for agent ${{ matrix.agent }} to become healthy..."
           for _ in $(seq 1 30); do
             STATE="$(docker inspect -f '{{.State.Status}}' "$CONTAINER_NAME" 2>/dev/null || true)"
@@ -478,18 +475,3 @@ jobs:
           docker logs "$CONTAINER_NAME" --tail 50 || true
           echo "Agent ${{ matrix.agent }} failed health check" >&2
           exit 1
-
-      - name: Register agent via backend API
-        if: success()
-        env:
-          AGENT_NAME: ${{ matrix.agent }}
-          RUNTIME_SPEC: ${{ steps.runtime-spec.outputs.result }}
-          DOCKER_HOSTNAME: ${{ steps.health.outputs.registry_host }}
-        shell: bash
-        run: |
-          PORT="$(jq -r '.port' <<< "$RUNTIME_SPEC")"
-          PAYLOAD=$(printf '{"name":"%s","url":"http://%s:%s"}' "$AGENT_NAME" "$DOCKER_HOSTNAME" "$PORT")
-          docker exec progenitor-backend \
-            curl -fsS -X POST http://127.0.0.1:8000/agents/register \
-              -H 'content-type: application/json' \
-              --data "$PAYLOAD"
