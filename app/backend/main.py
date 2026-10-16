@@ -44,6 +44,7 @@ from .client import ProgenitorClient
 from .config import ChatServerConfig
 from .document_events import seed_document_types
 from .document_store import configure_default_document_store
+from .instruction_routes import router as instruction_router
 from .knowledge_routes import router as knowledge_router
 from .marketplace_routes import router as marketplaces_router
 from .models import (
@@ -1053,6 +1054,7 @@ app = FastAPI(
 app.include_router(ui_router)
 app.include_router(search_router)
 app.include_router(knowledge_router)
+app.include_router(instruction_router)
 app.include_router(marketplaces_router)
 app.include_router(repos_router)
 app.include_router(plugins_router)

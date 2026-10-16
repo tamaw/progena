@@ -352,7 +352,7 @@ jobs:
       - name: Validate agent manifest
         env:
           RUNTIME_SPEC: ${{ steps.runtime-spec.outputs.result }}
-          PROGENITOR_HOST_PROMPTS_DIR: ${{ github.workspace }}/data/prompts
+          PROGENITOR_HOST_INSTRUCTIONS_DIR: ${{ github.workspace }}/data/instructions
           PROGENITOR_HOST_SKILLS_DIR: ${{ github.workspace }}/data/skills
         shell: bash
         run: |
@@ -362,7 +362,7 @@ jobs:
           [[ "$PORT" =~ ^[0-9]+$ ]] || { echo "Invalid manifest port: $PORT"; exit 1; }
           [ "$MOUNT_COUNT" -gt 0 ] || { echo "No mounts declared in agent manifest"; exit 1; }
           [ "$ENV_COUNT" -gt 0 ] || { echo "No runtime env keys resolved for agent"; exit 1; }
-          test -d "$PROGENITOR_HOST_PROMPTS_DIR" || { echo "Prompts directory not found: $PROGENITOR_HOST_PROMPTS_DIR"; exit 1; }
+          test -d "$PROGENITOR_HOST_INSTRUCTIONS_DIR" || { echo "Instructions directory not found: $PROGENITOR_HOST_INSTRUCTIONS_DIR"; exit 1; }
           test -d "$PROGENITOR_HOST_SKILLS_DIR" || { echo "Skills directory not found: $PROGENITOR_HOST_SKILLS_DIR"; exit 1; }
 
       - name: Docker login (GHCR)
@@ -392,7 +392,7 @@ jobs:
           GIT_AUTHOR_NAME: ${{ vars['GIT_AUTHOR_NAME'] }}
           GIT_AUTHOR_EMAIL: ${{ vars['GIT_AUTHOR_EMAIL'] }}
           PROGENITOR_REPO_URL: https://github.com/tamaw/progenitor.git
-          PROGENITOR_HOST_PROMPTS_DIR: ${{ github.workspace }}/data/prompts
+          PROGENITOR_HOST_INSTRUCTIONS_DIR: ${{ github.workspace }}/data/instructions
           PROGENITOR_HOST_SKILLS_DIR: ${{ github.workspace }}/data/skills
         shell: bash
         run: |
@@ -410,12 +410,12 @@ jobs:
             -e "A2A_PUBLIC_HOST=${CONTAINER_NAME}"
             -e "PROGENITOR_DATA_DIR=/app/data"
             -e "PROGENITOR_STATE_DIR=/app/data/state"
-            -e "PROGENITOR_PROMPTS_DIR=/app/data/prompts"
+            -e "PROGENITOR_INSTRUCTIONS_DIR=/app/data/instructions"
             -e "PROGENITOR_LOG_DIR=/app/logs"
             -e "PROGENITOR_PROJECT_ROOT=/app/worktrees"
             -e "PROGENITOR_WORKTREE_DIR=/app/worktrees/worktrees"
             -e "PROGENITOR_WORKTREES_ROOT=/app/worktrees"
-            -v "${PROGENITOR_HOST_PROMPTS_DIR}:/app/data/prompts:ro"
+            -v "${PROGENITOR_HOST_INSTRUCTIONS_DIR}:/app/data/instructions:ro"
             -v "${PROGENITOR_HOST_SKILLS_DIR}:/app/data/skills:ro"
           )
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from app.progenitor.front_matter import split_front_matter
 from app.progenitor.knowledge.indexer_config import (
     INDEX_STATUS_DOC_KEY,
     index_front_matter,
@@ -15,7 +16,6 @@ from app.progenitor.knowledge.pages import (
     classify_page_path,
     is_deprecated,
     render_directory_index,
-    split_front_matter,
 )
 
 from .document_store import PROGENITOR_STATE_PREFIX, get_default_document_store

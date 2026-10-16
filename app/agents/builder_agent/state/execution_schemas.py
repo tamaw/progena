@@ -985,7 +985,7 @@ class SpecDoc(BaseModel):
 
     # Provenance
     source_seed_path: str = Field(
-        description="Path to the original seed template (e.g., 'data/prompts/agent_structure.md')"
+        description="Path to the original seed template (e.g., 'data/instructions/agent_structure.md')"
     )
 
     # Versioning

@@ -267,7 +267,9 @@ class FakeContentStateManager:
 
     def __init__(self, *, prompt: str = "GENESIS") -> None:
         self._docs: dict[str, dict[str, str]] = {
-            "prompt": {"progenitor/genesis.md": prompt},
+            "instruction": {
+                "progenitor/genesis.md": f"---\ntitle: Genesis\ndescription: Test\n---\n{prompt}"
+            },
             "skill": {},
             "agent": {},
             "memory": {},

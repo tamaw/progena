@@ -13,6 +13,7 @@ const PAGE_ROUTES = [
   { basePath: '/workflows', page: 'workflows' },
   { basePath: '/routines', page: 'routines' },
   { basePath: '/agents', page: 'agents' },
+  { basePath: '/instructions', page: 'instructions', idIsRest: true }, // /instructions/<group>/<file>.md
   { basePath: '/profiles', page: 'profiles' },
   { basePath: '/plugins', page: 'plugins', idSegmentIndex: 1 }, // /plugins/:marketplace/:plugin
   { basePath: '/tools', page: 'tools' },
@@ -35,7 +36,7 @@ export function derivePageContext(pathname) {
     return null;
   }
   const segments = pathname.slice(route.basePath.length).split('/').filter(Boolean);
-  const rawId = segments[route.idSegmentIndex ?? 0];
+  const rawId = route.idIsRest ? segments.join('/') : segments[route.idSegmentIndex ?? 0];
   return { page: route.page, id: rawId ? decodeURIComponent(rawId) : null };
 }
 

@@ -21,11 +21,11 @@ from app.backend.document_store import (
 )
 from app.progenitor.content_documents import content_document_key
 from app.progenitor.document_types import DocumentType
-from app.progenitor.prompts.templates import (
+from app.progenitor.instructions.templates import (
+    instruction_relative_path,
     parse_format_template,
-    parse_prompt_template,
-    prompt_relative_path,
-    render_prompt_template,
+    parse_instruction_template,
+    render_instruction_template,
 )
 from app.progenitor.structured import validate_against_schema
 from app.progenitor.utils import utcnow, utcnow_isoformat
@@ -167,20 +167,20 @@ def get_workflow_definition(
     return _coerce_stored_workflow_definition(store, workflow_definition_key(workflow_id), document)
 
 
-def _prompt_loader_from_store(store: BackendDocumentStore) -> Callable[[str], str]:
-    """Return a loader for prompt references (paths relative to the prompts root)."""
+def _instruction_loader_from_store(store: BackendDocumentStore) -> Callable[[str], str]:
+    """Return a loader for instruction references (paths relative to /instructions/)."""
 
     def load(path: str) -> str:
         document = store.get_document(
             PROGENITOR_STATE_PREFIX,
-            content_document_key("prompt", prompt_relative_path(path)),
+            content_document_key("instruction", instruction_relative_path(path)),
             None,
         )
         if document is None:
-            raise ValueError(f"prompt document '{path}' not found")
+            raise ValueError(f"instruction '{path}' not found")
         content = document.payload.get("content") if isinstance(document.payload, dict) else None
         if not isinstance(content, str):
-            raise ValueError(f"prompt document '{path}' has no content")
+            raise ValueError(f"instruction '{path}' has no content")
         return content
 
     return load
@@ -189,24 +189,24 @@ def _prompt_loader_from_store(store: BackendDocumentStore) -> Callable[[str], st
 def _node_template_text(
     store: BackendDocumentStore, node: WorkflowNodeExtract | WorkflowNodeAgent
 ) -> str:
-    """The node's template: its referenced ``prompt:`` document, else its inline text."""
+    """The node's template: its referenced ``instruction:`` document, else its inline text."""
 
-    if node.prompt:
-        return _prompt_loader_from_store(store)(node.prompt)
+    if node.instruction:
+        return _instruction_loader_from_store(store)(node.instruction)
     return node.template or ""
 
 
 def save_workflow_definition(
     store: BackendDocumentStore,
     payload: Mapping[str, Any],
-    prompt_loader: Callable[[str], str] | None = None,
+    instruction_loader: Callable[[str], str] | None = None,
 ) -> WorkflowDefinition:
     """Derive document port schemas, validate, and persist one workflow definition."""
 
-    if prompt_loader is None:
-        prompt_loader = _prompt_loader_from_store(store)
+    if instruction_loader is None:
+        instruction_loader = _instruction_loader_from_store(store)
     typed = derive_workflow_port_schemas(
-        payload, list_document_types(store), prompt_loader=prompt_loader
+        payload, list_document_types(store), instruction_loader=instruction_loader
     )
     normalized = validate_workflow_definition_payload(typed)
     definition = WorkflowDefinition.model_validate(normalized)
@@ -1183,7 +1183,7 @@ class WorkflowExecutor:
                 elif isinstance(node, WorkflowNodeFormat):
                     _validate_node_input(node, resolved_input)
                     output_object = {
-                        "text": render_prompt_template(
+                        "text": render_instruction_template(
                             parse_format_template(node.template), resolved_input
                         )
                     }
@@ -1203,8 +1203,8 @@ class WorkflowExecutor:
                 elif isinstance(node, WorkflowNodeExtract):
                     _validate_node_input(node, resolved_input)
                     thread_id = self._resolve_thread_id(resolved_input, latest_run) or ""
-                    template = parse_prompt_template(_node_template_text(store, node))
-                    input_text = render_prompt_template(
+                    template = parse_instruction_template(_node_template_text(store, node))
+                    input_text = render_instruction_template(
                         template, {**resolved_input, "thread_id": thread_id}
                     )
                     result_schema = node.output_schema.get("properties", {}).get("result")
@@ -1266,8 +1266,8 @@ class WorkflowExecutor:
                 elif isinstance(node, WorkflowNodeAgent):
                     _validate_node_input(node, resolved_input)
                     thread_id = self._resolve_thread_id(resolved_input, latest_run)
-                    template = parse_prompt_template(_node_template_text(store, node))
-                    input_text = render_prompt_template(
+                    template = parse_instruction_template(_node_template_text(store, node))
+                    input_text = render_instruction_template(
                         template, {**resolved_input, "thread_id": thread_id or ""}
                     )
                     if node.subagent:

@@ -1064,14 +1064,9 @@ async def _seed_spec_doc_from_template(
         template_name = "builder_agent/agent_structure.md"
         entity_type = "agent"
 
-    # Resolve template from the prompts directory (fail fast if missing)
-    template_path = _prompts.prompts_dir / template_name
-    if not template_path.exists():
-        raise FileNotFoundError(
-            f"Spec template not found: {template_path}. Ensure data/prompts/{template_name} exists."
-        )
-    template_content = template_path.read_text(encoding="utf-8")
-    seed_path = f"data/prompts/{template_name}"
+    # Load the template body from the instructions directory (fails fast if missing)
+    template_content = _prompts.get(template_name)
+    seed_path = f"data/instructions/{template_name}"
 
     # Use LLM to customize the template with user's task
     if llm_client:

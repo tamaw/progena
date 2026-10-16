@@ -106,7 +106,9 @@ class FakeContentStateManager:
 
     def __init__(self, *, prompt: str = "GENESIS") -> None:
         self._docs: dict[str, dict[str, str]] = {
-            "prompt": {"progenitor/genesis.md": prompt},
+            "instruction": {
+                "progenitor/genesis.md": f"---\ntitle: Genesis\ndescription: Test\n---\n{prompt}"
+            },
             "skill": {},
             "agent": {},
             "memory": {},
@@ -137,7 +139,7 @@ class TestSkillsWiring:
             llm=SimpleNamespace(model_default="test-model"),
             storage=SimpleNamespace(
                 state_dir=Path("data/state"),
-                prompts_dir=Path("data/prompts"),
+                instructions_dir=Path("data/instructions"),
                 shim_bin_dir=Path("data/shims/bin"),
                 shell_home_dir=Path("data/shell-home"),
                 shell_workspace_dir=Path("data/shell-workspaces"),
@@ -172,7 +174,7 @@ class TestSkillsWiring:
             llm=SimpleNamespace(model_default="test-model"),
             storage=SimpleNamespace(
                 state_dir=Path("data/state"),
-                prompts_dir=Path("data/prompts"),
+                instructions_dir=Path("data/instructions"),
                 shim_bin_dir=Path("data/shims/bin"),
                 shell_home_dir=Path("data/shell-home"),
                 shell_workspace_dir=Path("data/shell-workspaces"),
@@ -209,7 +211,7 @@ class TestSkillsWiring:
             llm=SimpleNamespace(model_default="test-model"),
             storage=SimpleNamespace(
                 state_dir=Path("data/state"),
-                prompts_dir=Path("data/prompts"),
+                instructions_dir=Path("data/instructions"),
                 shim_bin_dir=Path("data/shims/bin"),
                 shell_home_dir=Path("data/shell-home"),
                 shell_workspace_dir=Path("data/shell-workspaces"),
@@ -256,7 +258,7 @@ class TestSkillsWiring:
             llm=SimpleNamespace(model_default="test-model"),
             storage=SimpleNamespace(
                 state_dir=Path("data/state"),
-                prompts_dir=Path("data/prompts"),
+                instructions_dir=Path("data/instructions"),
                 shim_bin_dir=Path("data/shims/bin"),
                 shell_home_dir=Path("data/shell-home"),
                 shell_workspace_dir=Path("data/shell-workspaces"),

@@ -647,7 +647,7 @@ class _FakeWorkflowStateManager:
         self.prompts = dict(prompts or {})
 
     async def list_content_documents(self, kind: str) -> list[tuple[str, str]]:
-        assert kind == "prompt"
+        assert kind == "instruction"
         return sorted(self.prompts.items())
 
     async def get_workflow_definition(self, workflow_id: str) -> dict[str, Any] | None:
@@ -703,17 +703,20 @@ async def test_workflow_awrite_resolves_prompt_document_references():
     agent_id = next(i for i, n in workflow["graph"]["nodes"].items() if n["kind"] == "agent")
     agent = workflow["graph"]["nodes"][agent_id]
     agent.pop("template")
-    agent["prompt"] = "workflows/brief.md"
+    agent["instruction"] = "workflows/brief.md"
     backend, sm = _workflow_backend(prompts={"workflows/brief.md": "Brief the card {key}."})
 
     result = await backend.awrite("/card-brief.json", json.dumps(workflow))
 
     assert result.error is None
-    assert sm.workflows["card-brief"]["graph"]["nodes"][agent_id]["prompt"] == "workflows/brief.md"
+    assert (
+        sm.workflows["card-brief"]["graph"]["nodes"][agent_id]["instruction"]
+        == "workflows/brief.md"
+    )
 
-    agent["prompt"] = "/prompts/workflows/brief.md"
+    agent["instruction"] = "/instructions/workflows/brief.md"
     result = await backend.awrite("/card-brief.json", json.dumps(workflow))
-    assert result.error and "Invalid prompt path" in result.error
+    assert result.error and "Invalid instruction path" in result.error
 
 
 async def test_workflow_awrite_rejects_filename_id_mismatch():
