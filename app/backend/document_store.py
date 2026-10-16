@@ -175,6 +175,8 @@ class BackendDocumentStore(Protocol):
 
     def delete_document(self, prefix: str, key: str) -> None: ...
 
+    def pop_document(self, prefix: str, key: str) -> Any | None: ...
+
     def mutate_document(self, prefix: str, key: str, mutator: Callable[[Any], Any]) -> Any: ...
 
     def read_document_events(
@@ -309,6 +311,16 @@ class InMemoryDocumentStore:
             previous = self._documents.pop((prefix, key), None)
             if previous is not None:
                 self._record_event(prefix, key, "deleted", previous.payload, None)
+
+    def pop_document(self, prefix: str, key: str) -> Any | None:
+        """Atomically remove a document and return its previous payload."""
+
+        with self._lock:
+            previous = self._documents.pop((prefix, key), None)
+            if previous is None:
+                return None
+            self._record_event(prefix, key, "deleted", previous.payload, None)
+            return copy.deepcopy(previous.payload)
 
     def mutate_document(self, prefix: str, key: str, mutator: Callable[[Any], Any]) -> Any:
         with self._lock:
@@ -1000,6 +1012,29 @@ class PostgresDocumentStore:
             "DELETE FROM store WHERE prefix = %s AND key = %s",
             (prefix, key),
         )
+
+    def pop_document(self, prefix: str, key: str) -> Any | None:
+        """Atomically remove a document and return its previous payload."""
+
+        origin = _document_write_origin.get()
+        with self._cursor() as cur:
+            if origin is None:
+                cur.execute(
+                    "DELETE FROM store WHERE prefix = %s AND key = %s RETURNING value",
+                    (prefix, key),
+                )
+            else:
+                with cur.connection.transaction():
+                    cur.execute("SELECT set_config('progenitor.origin', %s, true)", (origin,))
+                    cur.execute(
+                        "DELETE FROM store WHERE prefix = %s AND key = %s RETURNING value",
+                        (prefix, key),
+                    )
+            row = cast(dict[str, Any] | None, cur.fetchone())
+        if row is None:
+            return None
+        value = row.get("value")
+        return value.get("payload") if isinstance(value, dict) else None
 
     def mutate_document(self, prefix: str, key: str, mutator: Callable[[Any], Any]) -> Any:
         try:

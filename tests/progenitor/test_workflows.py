@@ -346,7 +346,7 @@ _COLUMN_QUERY = {
     "kind": "document_query",
     "title": "Cards in column",
     "document_type": "kanban_card",
-    "filter_fields": ["column_id"],
+    "filters": [{"field": "column_id", "op": "eq"}],
 }
 _TYPED_CARD_AGENT = _agent_node(
     "Card agent", template="---\ninputs:\n  card: kanban_card\n---\nLook at {card.title}."
@@ -478,12 +478,12 @@ def test_workflow_without_any_trigger_is_rejected():
 _TYPES = {t.id: t for t in BUILTIN_DOCUMENT_TYPES}
 
 
-def _with_query(payload, query_id, document_type, filter_fields):
+def _with_query(payload, query_id, document_type, filters):
     payload["graph"]["nodes"][query_id] = {
         "kind": "document_query",
         "title": "Query",
         "document_type": document_type,
-        "filter_fields": filter_fields,
+        "filters": filters,
     }
     return payload
 
@@ -491,7 +491,7 @@ def _with_query(payload, query_id, document_type, filter_fields):
 def test_extract_feeding_a_query_port_keeps_the_ports_definitions():
     payload = default_workflow_definition()
     event_id = _node_id(payload, "event")
-    _with_query(payload, "query", "workflow", ["graph"])
+    _with_query(payload, "query", "workflow", [{"field": "graph", "op": "eq"}])
     payload["graph"]["nodes"]["extract"] = {
         "kind": "extract",
         "title": "Extract",
@@ -512,7 +512,7 @@ def test_extract_feeding_a_query_port_keeps_the_ports_definitions():
 
 def _data_into_project_filter(data_type):
     payload = default_workflow_definition()
-    _with_query(payload, "query", "kanban_card", ["project_id"])
+    _with_query(payload, "query", "kanban_card", [{"field": "project_id", "op": "eq"}])
     payload["graph"]["nodes"]["project"] = {
         "kind": "data",
         "title": "Project",
@@ -550,14 +550,14 @@ def test_event_match_distinguishes_booleans_from_numbers():
     assert node.matches({"document_type": "kanban_card", "after": {"flag": True}})
 
 
-@pytest.mark.parametrize("filter_fields", [42, "title", [1]])
-def test_query_filter_fields_must_be_a_list_of_strings(filter_fields):
-    payload = _with_query(default_workflow_definition(), "query", "kanban_card", filter_fields)
-    with pytest.raises(ValueError, match="filter_fields must be a list of strings"):
+@pytest.mark.parametrize("filters", [42, {"field": "title"}, [{"field": 1, "op": "eq"}]])
+def test_query_filters_must_be_a_list_of_filter_objects(filters):
+    payload = _with_query(default_workflow_definition(), "query", "kanban_card", filters)
+    with pytest.raises(ValueError, match="filter"):
         derive_workflow_port_schemas(payload, _TYPES)
 
 
-def test_query_without_filter_fields_derives_unfiltered_ports():
+def test_query_without_filters_derives_unfiltered_ports():
     payload = default_workflow_definition()
     payload["graph"]["nodes"]["query"] = {
         "kind": "document_query",
@@ -565,7 +565,6 @@ def test_query_without_filter_fields_derives_unfiltered_ports():
         "document_type": "kanban_card",
     }
     derived = derive_workflow_port_schemas(payload, _TYPES)
-    # No filter ports: the query only waits for its run trigger.
     assert set(derived["graph"]["nodes"]["query"]["input_schema"]["properties"]) == {"trigger"}
 
 

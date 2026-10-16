@@ -131,27 +131,70 @@ def document_read_output_schema(
     }
 
 
+DocumentQueryOperator = Literal["eq", "ne", "lt", "lte", "gt", "gte", "in", "contains", "exists"]
+
+
+class DocumentQueryFilter(BaseModel):
+    """One top-level document predicate and its derived input-port name."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    field: str = Field(min_length=1)
+    op: DocumentQueryOperator = "eq"
+
+
+def document_query_filter_port_names(filters: list[DocumentQueryFilter]) -> list[str]:
+    """Return stable input port names, suffixing repeated document fields."""
+
+    counts = {item.field: sum(other.field == item.field for other in filters) for item in filters}
+    return [
+        item.field if counts[item.field] == 1 else f"{item.field}_{item.op}" for item in filters
+    ]
+
+
+def _query_filter_input_schema(
+    field_schema: Mapping[str, Any], op: DocumentQueryOperator
+) -> dict[str, Any]:
+    if op == "in":
+        return {"type": "array", "items": copy.deepcopy(dict(field_schema))}
+    if op == "contains":
+        raw_item_schema = field_schema.get("items")
+        item_schema: Mapping[str, Any] = (
+            raw_item_schema if isinstance(raw_item_schema, Mapping) else {}
+        )
+        return {
+            "anyOf": [
+                {"type": "string"},
+                copy.deepcopy(dict(item_schema)),
+            ]
+        }
+    if op == "exists":
+        return {"type": "boolean"}
+    return copy.deepcopy(dict(field_schema))
+
+
 def document_query_input_schema(
     document_type: DocumentType,
     document_schema: Mapping[str, Any] | None,
-    filter_fields: list[str],
+    filters: list[DocumentQueryFilter],
 ) -> dict[str, Any]:
-    if not filter_fields:
+    if not filters:
         return copy.deepcopy(_TRIGGER_INPUT_SCHEMA)
     embedded, definitions = _typed_document_schema(document_type, document_schema)
     properties = unpackable_properties(embedded)
-    if properties:
-        unknown = [field for field in filter_fields if field not in properties]
-        if unknown:
-            raise ValueError(
-                f"document type '{document_type.id}' has no field(s) {', '.join(unknown)}"
-            )
+    unknown = [item.field for item in filters if item.field not in properties]
+    if unknown:
+        raise ValueError(
+            f"document type '{document_type.id}' has no field(s) {', '.join(sorted(set(unknown)))}"
+        )
+    port_names = document_query_filter_port_names(filters)
+    if len(set(port_names)) != len(port_names):
+        raise ValueError("document_query filters duplicate the same field and operator")
     return {
         "type": "object",
-        "required": list(filter_fields),
         "properties": {
-            field: copy.deepcopy(properties.get(field, _ANY_VALUE_SCHEMA))
-            for field in filter_fields
+            port: _query_filter_input_schema(properties[item.field], item.op)
+            for item, port in zip(filters, port_names, strict=True)
         },
         **definitions,
     }
@@ -164,11 +207,12 @@ def document_query_output_schema(
     return {
         "title": f"{document_type.label} query",
         "type": "object",
-        "required": ["items", "keys", "count"],
+        "required": ["items", "keys", "count", "total"],
         "properties": {
             "items": {"type": "array", "items": embedded},
             "keys": {"type": "array", "items": {"type": "string"}},
             "count": {"type": "integer"},
+            "total": {"type": "integer"},
         },
         **definitions,
     }
@@ -183,7 +227,7 @@ def document_write_input_schema(
     if document_type.collection:
         properties["id"] = {"type": "string"}
     writable_props = unpackable_properties(embedded)
-    for field in document_type.writable:
+    for field in document_type.writable_fields:
         properties[field] = copy.deepcopy(writable_props.get(field, _ANY_VALUE_SCHEMA))
     required = ["id"] if document_type.collection else []
     return {"type": "object", "required": required, "properties": properties, **definitions}
@@ -196,13 +240,67 @@ def document_write_output_schema(
     embedded, definitions = _typed_document_schema(document_type, document_schema)
     writable_props = unpackable_properties(embedded)
     properties: dict[str, Any] = {"found": {"type": "boolean"}}
-    for field in document_type.writable:
+    for field in document_type.writable_fields:
         properties[field] = copy.deepcopy(writable_props.get(field, _ANY_VALUE_SCHEMA))
     return {
         "title": f"{document_type.label} write",
         "type": "object",
         "required": ["found"],
         "properties": properties,
+        **definitions,
+    }
+
+
+def document_create_input_schema(
+    document_type: DocumentType, document_schema: Mapping[str, Any] | None
+) -> dict[str, Any]:
+    """Input ports for a collection insertion, including optional caller id."""
+
+    embedded, definitions = _typed_document_schema(document_type, document_schema)
+    writable_props = unpackable_properties(embedded)
+    schema_required = (
+        document_schema.get("required", []) if isinstance(document_schema, Mapping) else []
+    )
+    properties: dict[str, Any] = {"id": {"type": "string"}}
+    for field in document_type.writable_fields:
+        properties[field] = copy.deepcopy(writable_props.get(field, _ANY_VALUE_SCHEMA))
+    required = [field for field in schema_required if field in document_type.writable_fields]
+    return {"type": "object", "required": required, "properties": properties, **definitions}
+
+
+def document_create_output_schema(
+    document_type: DocumentType, document_schema: Mapping[str, Any] | None
+) -> dict[str, Any]:
+    embedded, definitions = _typed_document_schema(document_type, document_schema)
+    return {
+        "title": f"{document_type.label} create",
+        "type": "object",
+        "required": ["id", "key", "document"],
+        "properties": {
+            "id": {"type": "string"},
+            "key": {"type": "string"},
+            "document": embedded,
+        },
+        **definitions,
+    }
+
+
+def document_delete_input_schema() -> dict[str, Any]:
+    return {"type": "object", "required": ["id"], "properties": {"id": {"type": "string"}}}
+
+
+def document_delete_output_schema(
+    document_type: DocumentType, document_schema: Mapping[str, Any] | None
+) -> dict[str, Any]:
+    embedded, definitions = _typed_document_schema(document_type, document_schema)
+    return {
+        "title": f"{document_type.label} delete",
+        "type": "object",
+        "required": ["found", "before"],
+        "properties": {
+            "found": {"type": "boolean"},
+            "before": {"anyOf": [embedded, {"type": "null"}]},
+        },
         **definitions,
     }
 
@@ -466,34 +564,52 @@ class WorkflowNodeDocumentRead(BaseModel):
 
 
 class WorkflowNodeDocumentQuery(BaseModel):
-    """Deterministic equality query over a collection document type.
-
-    Each ``filter_fields`` entry becomes a required input port whose value must
-    equal that top-level document field; results are ordered by key.
-    """
+    """Deterministic filtered query over a collection document type."""
 
     model_config = ConfigDict(extra="forbid")
 
     kind: Literal["document_query"] = "document_query"
     title: str = "Query documents"
     document_type: str = Field(min_length=1)
-    filter_fields: list[str] = Field(default_factory=list)
+    filters: list[DocumentQueryFilter] = Field(default_factory=list)
+    order_by: str | None = None
+    order: Literal["asc", "desc"] = "asc"
     limit: int = Field(default=50, ge=1, le=MAX_WORKFLOW_QUERY_LIMIT)
     input_schema: dict[str, Any] = Field(default_factory=lambda: dict(_JSON_OBJECT_SCHEMA))
     output_schema: dict[str, Any] = Field(default_factory=lambda: dict(_JSON_OBJECT_SCHEMA))
 
 
 class WorkflowNodeDocumentWrite(BaseModel):
-    """Atomic partial write of one document of a type; no LLM involved.
-
-    Only fields declared in the type's ``writable`` tuple may be written.
-    Schemas are derived from the document type on save.
-    """
+    """Atomic partial write of one document; schemas decide writable fields."""
 
     model_config = ConfigDict(extra="forbid")
 
     kind: Literal["document_write"] = "document_write"
     title: str = "Write document"
+    document_type: str = Field(min_length=1)
+    input_schema: dict[str, Any] = Field(default_factory=lambda: dict(_JSON_OBJECT_SCHEMA))
+    output_schema: dict[str, Any] = Field(default_factory=lambda: dict(_JSON_OBJECT_SCHEMA))
+
+
+class WorkflowNodeDocumentCreate(BaseModel):
+    """Atomic insertion of one document into a collection."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["document_create"] = "document_create"
+    title: str = "Create document"
+    document_type: str = Field(min_length=1)
+    input_schema: dict[str, Any] = Field(default_factory=lambda: dict(_JSON_OBJECT_SCHEMA))
+    output_schema: dict[str, Any] = Field(default_factory=lambda: dict(_JSON_OBJECT_SCHEMA))
+
+
+class WorkflowNodeDocumentDelete(BaseModel):
+    """Atomic deletion of one document from a collection."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["document_delete"] = "document_delete"
+    title: str = "Delete document"
     document_type: str = Field(min_length=1)
     input_schema: dict[str, Any] = Field(default_factory=lambda: dict(_JSON_OBJECT_SCHEMA))
     output_schema: dict[str, Any] = Field(default_factory=lambda: dict(_JSON_OBJECT_SCHEMA))
@@ -655,6 +771,8 @@ WorkflowNode = Annotated[
     | WorkflowNodeDocumentRead
     | WorkflowNodeDocumentQuery
     | WorkflowNodeDocumentWrite
+    | WorkflowNodeDocumentCreate
+    | WorkflowNodeDocumentDelete
     | WorkflowNodeUnpack
     | WorkflowNodeExtract
     | WorkflowNodeAgent
@@ -1155,9 +1273,9 @@ def derive_workflow_port_schemas(
 ) -> dict[str, Any]:
     """Return ``payload`` with every derived node's port schemas recomputed.
 
-    Cron nodes get the fixed cron output schema. Document nodes
-    (event/read/query) take theirs from the registered type schema; Unpack
-    nodes take theirs from the port feeding their ``value``
+    Cron nodes get the fixed cron output schema. Document nodes take their
+    schemas from the registered type schema; Unpack nodes take theirs from the
+    port feeding their ``value``
     input, so Unpack chains resolve in dependency order. Extract/agent nodes
     take theirs from their prompt template placeholders, routine nodes from
     the routine graph. Run on every save path so ports never reflect whatever
@@ -1179,6 +1297,8 @@ def derive_workflow_port_schemas(
             "document_read",
             "document_query",
             "document_write",
+            "document_create",
+            "document_delete",
         }:
             continue
         type_id = node.get("document_type")
@@ -1198,28 +1318,62 @@ def derive_workflow_port_schemas(
             node["input_schema"] = document_read_input_schema(document_type)
             node["output_schema"] = document_read_output_schema(document_type, document_schema)
         elif kind == "document_write":
-            if not document_type.writable:
+            if not document_type.writable_fields:
                 raise ValueError(
                     f"document_write node '{node_id}' cannot use '{document_type.id}': "
                     f"it has no writable fields"
                 )
             node["input_schema"] = document_write_input_schema(document_type, document_schema)
             node["output_schema"] = document_write_output_schema(document_type, document_schema)
+        elif kind == "document_create":
+            if not document_type.collection:
+                raise ValueError(
+                    f"document_create node '{node_id}' needs a collection document type, "
+                    f"not single document '{document_type.id}'"
+                )
+            if document_schema is None:
+                raise ValueError(
+                    f"document_create node '{node_id}' needs document type '{document_type.id}' "
+                    "to have a schema"
+                )
+            node["input_schema"] = document_create_input_schema(document_type, document_schema)
+            node["output_schema"] = document_create_output_schema(document_type, document_schema)
+        elif kind == "document_delete":
+            if not document_type.collection:
+                raise ValueError(
+                    f"document_delete node '{node_id}' needs a collection document type, "
+                    f"not single document '{document_type.id}'"
+                )
+            node["input_schema"] = document_delete_input_schema()
+            node["output_schema"] = document_delete_output_schema(document_type, document_schema)
         else:
             if not document_type.collection:
                 raise ValueError(
                     f"document_query node '{node_id}' needs a collection document type, "
                     f"not single document '{document_type.id}'"
                 )
-            filter_fields = node.get("filter_fields", [])
-            if not isinstance(filter_fields, list) or not all(
-                isinstance(field, str) for field in filter_fields
+            raw_filters = node.get("filters", [])
+            if not isinstance(raw_filters, list):
+                raise ValueError(f"document_query node '{node_id}' filters must be a list")
+            try:
+                filters = [DocumentQueryFilter.model_validate(item) for item in raw_filters]
+            except Exception as exc:
+                raise ValueError(f"document_query node '{node_id}' has an invalid filter") from exc
+            order_by = node.get("order_by")
+            if order_by is not None and (
+                not isinstance(order_by, str)
+                or order_by
+                not in unpackable_properties(
+                    _typed_document_schema(document_type, document_schema)[0]
+                )
             ):
                 raise ValueError(
-                    f"document_query node '{node_id}' filter_fields must be a list of strings"
+                    f"document_query node '{node_id}' has no order_by field '{order_by}'"
                 )
+            if node.get("order", "asc") not in {"asc", "desc"}:
+                raise ValueError(f"document_query node '{node_id}' order must be 'asc' or 'desc'")
             node["input_schema"] = document_query_input_schema(
-                document_type, document_schema, filter_fields
+                document_type, document_schema, filters
             )
             node["output_schema"] = document_query_output_schema(document_type, document_schema)
     # Before prompt nodes: an Extract may infer its result from a routine input.

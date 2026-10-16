@@ -54,7 +54,6 @@ class DocumentType(BaseModel):
     key_prefix: str | None = None
     key: str | None = None
     schema_name: str | None = Field(default=None, alias="schema")
-    writable: tuple[str, ...] = ()
 
     @model_validator(mode="after")
     def _exactly_one_selector(self) -> DocumentType:
@@ -96,13 +95,30 @@ class DocumentType(BaseModel):
             return None
         return load_schema(self.schema_name)
 
-    def validate_write(self, fields: Mapping[str, Any]) -> str | None:
-        """Check a partial write of writable fields against this type's schema.
-
-        Returns the validation error message, or None when valid (or schemaless).
-        """
+    @property
+    def writable_fields(self) -> tuple[str, ...]:
+        """Top-level schema properties workflow writes may change."""
 
         schema = self.load_schema()
+        properties = schema.get("properties") if isinstance(schema, Mapping) else None
+        if not isinstance(properties, Mapping):
+            return ()
+        return tuple(
+            name
+            for name, definition in properties.items()
+            if isinstance(name, str)
+            and isinstance(definition, Mapping)
+            and definition.get("readOnly") is not True
+        )
+
+    def validate_write(self, fields: Mapping[str, Any]) -> str | None:
+        """Check a partial write against writable schema properties."""
+
+        schema = self.load_schema()
+        writable = self.writable_fields
+        unknown = sorted(set(fields) - set(writable))
+        if unknown:
+            return f"Fields are not writable: {', '.join(unknown)}"
         if schema is None:
             return None
         from .structured import validate_against_schema
@@ -110,7 +126,8 @@ class DocumentType(BaseModel):
         properties = schema.get("properties", {})
         partial = {
             "type": "object",
-            "properties": {field: properties.get(field, {}) for field in self.writable},
+            "properties": {field: properties[field] for field in writable},
+            "additionalProperties": False,
             **{name: schema[name] for name in ("$defs", "definitions") if name in schema},
         }
         return validate_against_schema(dict(fields), partial)
@@ -149,13 +166,7 @@ BUILTIN_DOCUMENT_TYPES: tuple[DocumentType, ...] = (
     _single_type("knowledge", "Knowledge", "knowledge", None),
     _prefix_type("repo", "Repository", REPO_KEY_PREFIX, "repo_entry"),
     _prefix_type("alert", "Alert", ALERT_KEY_PREFIX, "alert"),
-    DocumentType(
-        id="session",
-        label="Session",
-        key_prefix=SESSION_KEY_PREFIX,
-        schema="session",
-        writable=("title", "pinned", "archived"),
-    ),
+    _prefix_type("session", "Session", SESSION_KEY_PREFIX, "session"),
     _single_type("kanban_board", "Kanban Board", "kanban_board", None),
 )
 

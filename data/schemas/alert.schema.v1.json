@@ -5,19 +5,20 @@
   "type": "object",
   "required": ["id", "type", "title", "message", "timestamp", "urgent", "requires_response", "viewed"],
   "properties": {
-    "id": {"type": "string", "minLength": 1},
+    "id": {"type": "string", "minLength": 1, "readOnly": true},
     "type": {"type": "string", "description": "Severity: info, warning, error, critical."},
     "title": {"type": "string", "minLength": 1},
     "message": {"type": "string"},
-    "timestamp": {"type": "number", "description": "Unix seconds when created."},
+    "timestamp": {"type": "number", "description": "Unix seconds when created.", "readOnly": true},
     "urgent": {"type": "boolean"},
     "requires_response": {"type": "boolean"},
     "viewed": {"type": "boolean"},
-    "viewed_at": {"type": ["number", "null"]},
-    "source": {"type": "string", "description": "What raised it, e.g. notify_user, workflow:<id>."},
+    "viewed_at": {"type": ["number", "null"], "readOnly": true},
+    "source": {"type": "string", "description": "What raised it, e.g. notify_user, workflow:<id>.", "readOnly": true},
     "context": {
       "type": "object",
-      "description": "Machine-readable details for answering it, e.g. a paused workflow run or routine thread and who may answer (approver)."
+      "description": "Machine-readable details for answering it, e.g. a paused workflow run or routine thread and who may answer (approver).",
+      "readOnly": true
     }
   },
   "additionalProperties": false
