@@ -29,6 +29,7 @@ from app.progenitor.workflows import (
     WorkflowNodeDocumentCreate,
     WorkflowNodeDocumentDelete,
     WorkflowNodeDocumentQuery,
+    WorkflowNodeDocumentWrite,
     WorkflowNodeEvent,
     default_workflow_definition,
     derive_workflow_port_schemas,
@@ -664,6 +665,70 @@ def test_document_create_stamps_creation_times_by_field_type(store, monkeypatch)
 
     assert before <= created["timestamp"] <= time.time()
     assert created["created_at"].startswith(time.strftime("%Y-", time.gmtime()))
+
+
+def test_document_create_applies_and_copies_schema_defaults(store, monkeypatch):
+    from app.progenitor.document_types import DocumentType
+
+    schema = {
+        "type": "object",
+        "required": ["id", "title", "status", "metadata"],
+        "properties": {
+            "id": {"type": "string", "readOnly": True},
+            "title": {"type": "string"},
+            "status": {"type": "string", "default": "draft"},
+            "metadata": {"type": "object", "default": {"labels": []}},
+        },
+    }
+    monkeypatch.setattr(DocumentType, "load_schema", lambda self: schema)
+    create = WorkflowNodeDocumentCreate(document_type="kanban_card")
+
+    defaulted = _execute_document_create_node(store, create, {"title": "Default"}, "run")
+    null_defaulted = _execute_document_create_node(
+        store, create, {"title": "Null", "status": None}, "run"
+    )
+    overridden = _execute_document_create_node(
+        store,
+        create,
+        {"title": "Override", "status": "published", "metadata": {"labels": ["x"]}},
+        "run",
+    )
+    defaulted["document"]["metadata"]["labels"].append("changed")
+
+    assert defaulted["document"]["status"] == "draft"
+    assert null_defaulted["document"]["status"] == "draft"
+    assert overridden["document"]["status"] == "published"
+    assert overridden["document"]["metadata"] == {"labels": ["x"]}
+    assert null_defaulted["document"]["metadata"] == {"labels": []}
+    assert schema["properties"]["metadata"]["default"] == {"labels": []}
+
+
+def test_document_write_never_applies_schema_defaults(store, monkeypatch):
+    from app.progenitor.document_types import DocumentType
+
+    schema = {
+        "type": "object",
+        "properties": {
+            "id": {"type": "string", "readOnly": True},
+            "status": {"type": "string", "default": "draft"},
+        },
+    }
+    monkeypatch.setattr(DocumentType, "load_schema", lambda self: schema)
+    store.save_document(PROGENITOR_STATE_PREFIX, "kanban_card:existing", {"id": "existing"})
+
+    from app.backend.workflow_service import _execute_document_write_node
+
+    result = _execute_document_write_node(
+        store,
+        WorkflowNodeDocumentWrite(document_type="kanban_card"),
+        {"id": "existing", "status": None},
+        "run",
+    )
+
+    assert result == {"found": True}
+    assert store.get_document(PROGENITOR_STATE_PREFIX, "kanban_card:existing").payload == {
+        "id": "existing"
+    }
 
 
 def test_document_delete_returns_before_and_tags_origin(store):

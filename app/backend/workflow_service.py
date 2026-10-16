@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 import logging
 import re
@@ -21,6 +22,7 @@ from app.backend.document_store import (
 from app.progenitor.content_documents import content_document_key
 from app.progenitor.document_types import DocumentType
 from app.progenitor.prompts.templates import (
+    parse_format_template,
     parse_prompt_template,
     prompt_relative_path,
     render_prompt_template,
@@ -42,6 +44,7 @@ from app.progenitor.workflows import (
     WorkflowNodeDocumentWrite,
     WorkflowNodeEvent,
     WorkflowNodeExtract,
+    WorkflowNodeFormat,
     WorkflowNodeUnpack,
     WorkflowRun,
     WorkflowRunSource,
@@ -700,15 +703,18 @@ def _execute_document_create_node(
         raise ValueError(f"node '{node.title}' needs a collection document type")
     document_id = str(resolved_input.get("id") or uuid.uuid4().hex)
     key = document_type.document_key(document_id)
-    payload = {
-        field: resolved_input[field]
-        for field in document_type.writable_fields
-        if field in resolved_input
-    }
     schema = document_type.load_schema()
     if schema is None:
         raise ValueError(f"document_create node '{node.title}' needs a document schema")
     properties = schema.get("properties", {})
+    payload: dict[str, Any] = {}
+    for field in document_type.writable_fields:
+        definition = properties.get(field, {})
+        value = resolved_input.get(field)
+        if value is None and isinstance(definition, Mapping) and "default" in definition:
+            payload[field] = copy.deepcopy(definition["default"])
+        elif field in resolved_input:
+            payload[field] = value
     if "id" in properties:
         payload["id"] = document_id
     # Creation-time fields are always the real time: a number field gets Unix
@@ -1174,6 +1180,15 @@ class WorkflowExecutor:
                     )
                     _validate_node_output(node, output_object)
                     output_text = _bounded_text(json.dumps(output_object, default=str))
+                elif isinstance(node, WorkflowNodeFormat):
+                    _validate_node_input(node, resolved_input)
+                    output_object = {
+                        "text": render_prompt_template(
+                            parse_format_template(node.template), resolved_input
+                        )
+                    }
+                    _validate_node_output(node, output_object)
+                    output_text = _bounded_text(output_object["text"])
                 elif isinstance(node, WorkflowNodeUnpack):
                     _validate_node_input(node, resolved_input)
                     value = resolved_input.get("value")

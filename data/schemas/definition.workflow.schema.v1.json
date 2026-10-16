@@ -69,6 +69,11 @@
             "kind": {"const": "unpack"}, "title": {"type": "string", "minLength": 1},
             "input_schema": {"type": "object"}, "output_schema": {"type": "object"}
           }},
+          {"type": "object", "additionalProperties": false, "required": ["kind", "title", "template"], "properties": {
+            "kind": {"const": "format"}, "title": {"type": "string", "minLength": 1},
+            "template": {"description": "Plain-text template without front matter. Each {placeholder} root becomes a required input port.", "type": "string", "minLength": 1},
+            "input_schema": {"type": "object"}, "output_schema": {"type": "object"}
+          }},
           {"type": "object", "additionalProperties": false, "required": ["kind", "title"], "properties": {
             "kind": {"const": "extract"}, "title": {"type": "string", "minLength": 1}, "prompt": {"type": ["string", "null"]}, "template": {"type": ["string", "null"]}, "schema": {}, "input_schema": {"type": "object"}, "output_schema": {"type": "object"}
           }},

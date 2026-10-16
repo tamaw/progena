@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Workflow format nodes and create defaults**: `format` deterministically renders a plain-text template without an LLM, with required input ports derived from placeholders and a string `text` output. `document_create` now treats writable schema properties with `default` values as optional ports and deep-copies their defaults when unwired or `null`.
 - **Document events for workflows**: every create/update/delete of a state document is appended to a durable `document_events` log (before/after payloads, writer origin) by a Postgres trigger; the backend consumes it from a persisted cursor, so events written while it is down are dispatched on restart
   - Document types are registered as `document_type:<id>` rows in Postgres (built-ins seeded at startup) and map key prefixes/keys to schemas under `data/schemas/`
   - Workflow event nodes subscribe by `document_type` with optional `key`, `operations`, `changed_fields`, and `match` (dotted paths such as `after.column_id`) filters, and expose `before`/`after` as whole-document ports typed with the document type's label

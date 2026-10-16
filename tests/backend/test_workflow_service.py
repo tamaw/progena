@@ -579,6 +579,46 @@ async def test_data_value_edited_mid_run_reaches_later_nodes():
     assert calls[1]["input_text"] == "After ok: new"
 
 
+@pytest.mark.asyncio
+async def test_format_node_renders_nested_and_non_string_values_without_a_runner():
+    store = InMemoryDocumentStore()
+    seed_document_types(store)
+    workflow = default_workflow_definition()
+    del workflow["graph"]["nodes"][_node_id(workflow, "agent")]
+    workflow["graph"]["nodes"]["data"] = {
+        "kind": "data",
+        "title": "Input",
+        "value": {"name": "Ada", "metadata": {"priority": 2, "tags": ["new"]}},
+        "output_schema": {"type": "object"},
+    }
+    workflow["graph"]["nodes"]["format"] = {
+        "kind": "format",
+        "title": "Format",
+        "template": "Hello {value.name}: {value.metadata}",
+    }
+    workflow["graph"]["edges"] = [
+        {
+            "from": {"node": "data", "port": "value"},
+            "to": {"node": "format", "port": "value"},
+        }
+    ]
+    definition = save_workflow_definition(store, workflow)
+    executor = _executor(store, RecordingRunner([]))
+
+    run = await executor.trigger_workflow(definition.id, build_manual_trigger_event(definition))
+    completed = await _wait_for(
+        lambda: (
+            get_workflow_run(store, run.run_id)
+            if get_workflow_run(store, run.run_id).status == "completed"
+            else None
+        )
+    )
+
+    assert completed.node_outputs["format"] == {
+        "text": 'Hello Ada: {\n  "priority": 2,\n  "tags": [\n    "new"\n  ]\n}',
+    }
+
+
 def test_query_filter_tells_json_true_from_1():
     from app.backend.workflow_service import _execute_document_node
     from app.progenitor.workflows import WorkflowNodeDocumentQuery

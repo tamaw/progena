@@ -111,6 +111,10 @@ const DEFAULT_NODE_SIZES = {
     data: { width: 340, height: 160 },
     settings: { width: 440, height: 320 },
   },
+  format: {
+    data: { width: 340, height: 160 },
+    settings: { width: 440, height: 280 },
+  },
   condition: {
     data: { width: 300, height: 130 },
     settings: { width: 380, height: 220 },
@@ -167,6 +171,7 @@ const NODE_MENU_CATEGORIES = [
     label: 'Logic',
     items: [
       { id: 'condition', kind: 'condition', label: 'Condition', icon: '◇' },
+      { id: 'format', kind: 'format', label: 'Format', icon: 'F' },
       { id: 'approval', kind: 'approval', label: 'Approval', icon: '✓' },
     ],
   },
@@ -272,6 +277,13 @@ const DOCK_NODE_DEFAULTS = {
     inputSchema: { type: 'object', properties: {} },
     outputSchema: { type: 'object', required: ['result', 'thread_id'], properties: { result: {}, thread_id: { type: 'string' } } },
   }),
+  format: () => ({
+    title: 'Format',
+    template: '{value}',
+    inputSchema: { type: 'object', required: ['value'], properties: { value: {} } },
+    outputSchema: { type: 'object', required: ['text'], properties: { text: { type: 'string' } } },
+  }),
+
   condition: () => ({
     title: 'Condition',
     expression: 'ready',
@@ -380,8 +392,9 @@ function cloneValue(value) {
 // Mirrors the server-side placeholder grammar: {root} or {root.a.b} where each
 // segment matches [A-Za-z_][A-Za-z0-9_]*. JSON literals like {"a": 1} are ignored.
 // thread_id is reserved and never treated as a placeholder root.
-function parsePromptPlaceholders(text) {
-  if (!text || typeof text !== 'string') return { roots: [], placeholders: [] };
+// `excludeThreadId` preserves prompt nodes' implicit thread behavior while
+// letting format nodes expose every placeholder root as a real input port.
+function parsePromptPlaceholders(text, excludeThreadId = true) {
   const roots = [];
   const placeholders = [];
   const seen = new Set();
@@ -390,7 +403,7 @@ function parsePromptPlaceholders(text) {
   while ((match = regex.exec(text)) !== null) {
     const full = match[1];
     const root = full.split('.')[0];
-    if (root === 'thread_id') continue;
+    if (root === 'thread_id' && excludeThreadId) continue;
     placeholders.push(full);
     if (!seen.has(root)) {
       seen.add(root);
@@ -411,6 +424,19 @@ function derivePromptInputSchema(text) {
     ...(roots.length ? { required: roots } : {}),
     properties,
   };
+}
+
+function deriveFormatInputSchema(text) {
+  const { roots } = parsePromptPlaceholders(text, false);
+  return {
+    type: 'object',
+    ...(roots.length ? { required: roots } : {}),
+    properties: Object.fromEntries(roots.map((root) => [root, {}])),
+  };
+}
+
+function formatTemplatePatch(text) {
+  return { template: text, inputSchema: deriveFormatInputSchema(text) };
 }
 
 function promptTemplatePatch(text) {
@@ -557,6 +583,21 @@ function buildNodeData(kind, node, callbacks, latestRun) {
       canDelete: true,
     };
   }
+  if (kind === 'format') {
+    return {
+      ...shared,
+      ...runState,
+      kind,
+      title: node.title || 'Format',
+      template: node.template || '',
+      inputSchema: cloneValue(node.input_schema) || null,
+      outputSchema: cloneValue(node.output_schema) || null,
+      onChange: callbacks.onNodeChange,
+      onDelete: callbacks.onDeleteNode,
+      canDelete: true,
+    };
+  }
+
   if (kind === 'data') {
     return {
       ...shared,
@@ -705,6 +746,11 @@ function workflowToFlow(definition, callbacks, latestRun) {
           template: node.template ?? null,
           schema: node.schema ?? null,
         }
+        : kind === 'format'
+        ? {
+          ...node,
+          template: node.template || '',
+        }
       : kind === 'document_read' || kind === 'document_query' || kind === 'document_write'
         ? { ...node, documentType: node.document_type }
         : kind === 'unpack'
@@ -845,6 +891,14 @@ function flowToWorkflow(baseWorkflow, nodes, edges, viewport) {
         subagent: node.data?.subagent ?? null,
         input_schema: cloneValue(node.data?.inputSchema) || { type: 'object', properties: {} },
         output_schema: cloneValue(node.data?.outputSchema) || { type: 'object', required: ['message', 'thread_id'], properties: { message: { type: 'string' }, thread_id: { type: 'string' } } },
+      };
+    } else if (node.type === 'format') {
+      graphNodes[node.id] = {
+        kind: 'format',
+        title: String(node.data?.title || 'Format'),
+        template: node.data?.template || '',
+        input_schema: cloneValue(node.data?.inputSchema) || { type: 'object', properties: {} },
+        output_schema: cloneValue(node.data?.outputSchema) || { type: 'object', required: ['text'], properties: { text: { type: 'string' } } },
       };
     } else if (node.type === 'extract') {
       graphNodes[node.id] = {
@@ -1705,6 +1759,16 @@ function WorkflowNodeOptionsModal({ node, onChange, onClose }) {
                 )}
               </>
             ) : null}
+            {kind === 'format' ? (
+              <label className="workflow-node-options__field">
+                Template
+                <textarea
+                  value={node.data?.template || ''}
+                  onChange={(event) => onChange(node.id, formatTemplatePatch(event.target.value))}
+                  rows={6}
+                />
+              </label>
+            ) : null}
             {kind === 'agent' ? (
               <label className="workflow-node-options__field">
                 Subagent
@@ -1958,6 +2022,7 @@ const NODE_TYPES = {
   cron: CronNode,
   agent: PromptNode,
   extract: PromptNode,
+  format: PromptNode,
   data: WorkflowDataNode,
   condition: WorkflowControlNode,
   approval: WorkflowControlNode,
@@ -3206,7 +3271,7 @@ function WorkflowsInner() {
 
 // This helper is exported for the focused workflow graph unit test.
 // eslint-disable-next-line react-refresh/only-export-components
-export { flowToWorkflow, workflowToFlow, NODE_MENU_CATEGORIES, schemaProperties, canvasMenuAnchor, visibleNodePortProperties, deriveUnpackSchemas, recomputeUnpackSchemas, computeLostEdgesForUnpackChange, pruneLostUnpackEdges, isUnpackableSchema, parsePromptPlaceholders, derivePromptInputSchema, promptTemplatePatch, promptDocumentPatch, createPaletteNode, nodeInputPorts, nodeOutputPorts, schemasAreCompatible };
+export { flowToWorkflow, workflowToFlow, NODE_MENU_CATEGORIES, schemaProperties, canvasMenuAnchor, visibleNodePortProperties, deriveUnpackSchemas, recomputeUnpackSchemas, computeLostEdgesForUnpackChange, pruneLostUnpackEdges, isUnpackableSchema, parsePromptPlaceholders, derivePromptInputSchema, promptTemplatePatch, promptDocumentPatch, createPaletteNode, nodeInputPorts, nodeOutputPorts, schemasAreCompatible, deriveFormatInputSchema, formatTemplatePatch };
 export default function WorkflowsPage() {
   return (
     <ReactFlowProvider>
