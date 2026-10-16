@@ -26,6 +26,7 @@ from .document_kinds import (
     INBOX_MESSAGE_KEY_PREFIX,
     KANBAN_CARD_KEY_PREFIX,
     KANBAN_TASK_CONTENT_KEY_PREFIX,
+    KNOWLEDGE_PAGE_KEY_PREFIX,
     MEMORY_DOCUMENT_KEY_PREFIX,
     POLICY_KEY_PREFIX,
     PROMPT_DOCUMENT_KEY_PREFIX,
@@ -166,6 +167,13 @@ BUILTIN_DOCUMENT_TYPES: tuple[DocumentType, ...] = (
     _single_type("knowledge", "Knowledge", "knowledge", None),
     _prefix_type("repo", "Repository", REPO_KEY_PREFIX, "repo_entry"),
     _prefix_type("alert", "Alert", ALERT_KEY_PREFIX, "alert"),
+    _prefix_type("knowledge_page", "Knowledge Page", KNOWLEDGE_PAGE_KEY_PREFIX, "content_document"),
+    _single_type(
+        "knowledge_index",
+        "Knowledge Search Index",
+        "knowledge_index",
+        "knowledge_index",
+    ),
     _prefix_type("session", "Session", SESSION_KEY_PREFIX, "session"),
     _single_type("kanban_board", "Kanban Board", "kanban_board", None),
 )

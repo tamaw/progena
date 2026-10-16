@@ -34,6 +34,7 @@ from typing import Any
 
 from .document_kinds import (
     AGENT_DOCUMENT_KEY_PREFIX,
+    KNOWLEDGE_PAGE_KEY_PREFIX,
     MEMORY_DOCUMENT_KEY_PREFIX,
     PROMPT_DOCUMENT_KEY_PREFIX,
     SKILL_DOCUMENT_KEY_PREFIX,
@@ -46,6 +47,7 @@ _KIND_PREFIXES: dict[str, str] = {
     "skill": SKILL_DOCUMENT_KEY_PREFIX,
     "memory": MEMORY_DOCUMENT_KEY_PREFIX,
     "agent": AGENT_DOCUMENT_KEY_PREFIX,
+    "knowledge": KNOWLEDGE_PAGE_KEY_PREFIX,
 }
 
 

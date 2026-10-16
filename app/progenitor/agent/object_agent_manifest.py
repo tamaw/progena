@@ -12,6 +12,8 @@ from typing import Any, Final
 import yaml
 from deepagents.middleware.filesystem import FilesystemPermission
 
+from ..knowledge.pages import BASE_ID_RE
+
 logger = logging.getLogger(__name__)
 
 OBJECT_AGENT_KIND = "object"
@@ -43,6 +45,12 @@ class ObjectAgentMount:
     access: str
 
 
+@dataclass(frozen=True)
+class ObjectAgentKnowledge:
+    base: str
+    access: str
+
+
 _SHELL_ENV_NAME = re.compile(r"^[A-Z][A-Z0-9_]*$")
 
 
@@ -63,6 +71,7 @@ class ObjectAgentManifest:
     shell: ObjectAgentShellConfig | None = None
     # Opt-in private memory at /memories/agents/<slug>/AGENTS.md.
     memory: bool = False
+    knowledge: tuple[ObjectAgentKnowledge, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -193,10 +202,22 @@ def skill_mounts(skills: Iterable[str]) -> tuple[ObjectAgentMount, ...]:
     )
 
 
-def implicit_mounts(skills: Iterable[str], *, memory: bool) -> tuple[ObjectAgentMount, ...]:
-    """Mounts an agent gets without declaring them: its skills, and its memory."""
+def implicit_mounts(
+    skills: Iterable[str],
+    *,
+    memory: bool,
+    knowledge: Iterable[ObjectAgentKnowledge] = (),
+) -> tuple[ObjectAgentMount, ...]:
+    """Mounts an agent gets without declaring them."""
     memory_mount = (ObjectAgentMount(path="/memories/", access="read-write"),) if memory else ()
-    return (*skill_mounts(skills), *memory_mount)
+    knowledge_mounts = tuple(
+        ObjectAgentMount(
+            path=f"/knowledge/{grant.base}/",
+            access="read-write" if grant.access == "write" else "read",
+        )
+        for grant in knowledge
+    )
+    return (*skill_mounts(skills), *memory_mount, *knowledge_mounts)
 
 
 def _parse_shell(
@@ -293,6 +314,27 @@ def _parse_memory(value: Any, *, source: str) -> bool:
     return value
 
 
+def _parse_knowledge(value: Any, *, source: str) -> tuple[ObjectAgentKnowledge, ...]:
+    if value is None:
+        return ()
+    if not isinstance(value, list):
+        raise ValueError(f"{source}: 'knowledge' must be an array")
+    grants: list[ObjectAgentKnowledge] = []
+    for index, entry in enumerate(value):
+        if not isinstance(entry, Mapping):
+            raise ValueError(f"{source}: knowledge[{index}] must be an object")
+        base = entry.get("base")
+        access = entry.get("access")
+        if not isinstance(base, str) or BASE_ID_RE.fullmatch(base) is None:
+            raise ValueError(f"{source}: knowledge[{index}].base must be a lowercase kebab-case id")
+        if access not in {"read", "write"}:
+            raise ValueError(f"{source}: knowledge[{index}].access must be read or write")
+        grants.append(ObjectAgentKnowledge(base=base, access=access))
+    if len({grant.base for grant in grants}) != len(grants):
+        raise ValueError(f"{source}: knowledge must not contain duplicate bases")
+    return tuple(grants)
+
+
 def parse_object_agent_manifest(
     content: str, *, source: str, source_kind: str | None = None
 ) -> ObjectAgentManifest:
@@ -321,6 +363,8 @@ def parse_object_agent_manifest(
         )
 
     mounts = _parse_mounts(raw.get("mounts"), source=source)
+    if any(m.path.startswith("/knowledge/") for m in mounts):
+        raise ValueError(f"{source}: grant knowledge bases with the 'knowledge' field, not mounts")
     # /config/ holds runtime configuration (mcp.json adds MCP servers, agents.json
     # the A2A registry); only bundled agents may change it, as with shell.
     writable_config = any(
@@ -329,6 +373,7 @@ def parse_object_agent_manifest(
     if writable_config and source_kind is not None and source_kind != "native":
         raise ValueError(f"{source}: read-write /config/ mounts are only allowed for native agents")
     memory = _parse_memory(raw.get("memory"), source=source)
+    knowledge = _parse_knowledge(raw.get("knowledge"), source=source)
     # memory: true makes /memories/ the agent's private folder, so it can't
     # also mount the shared one.
     if memory and any(m.path.startswith("/memories/") for m in mounts):
@@ -341,9 +386,11 @@ def parse_object_agent_manifest(
     # no filesystem surface now; once a manifest declares mounts every
     # operation-level permission must be contained by one of them (each
     # listed skill counts as a read mount of its folder, memory as /memories/).
-    if mounts:
+    if mounts or knowledge:
         _validate_permissions_within_mounts(
-            permissions, (*mounts, *implicit_mounts(skills, memory=memory)), source=source
+            permissions,
+            (*mounts, *implicit_mounts(skills, memory=memory, knowledge=knowledge)),
+            source=source,
         )
 
     return ObjectAgentManifest(
@@ -366,6 +413,7 @@ def parse_object_agent_manifest(
             source_kind=source_kind,
         ),
         memory=memory,
+        knowledge=knowledge,
     )
 
 

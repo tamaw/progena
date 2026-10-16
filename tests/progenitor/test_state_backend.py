@@ -227,7 +227,7 @@ async def test_invalid_knowledge_virtual_file_does_not_persist() -> None:
     backend, sm, reloads = _knowledge_backend()
     result = await backend.awrite(
         "/knowledge.json",
-        json.dumps({"bases": [{"name": "Docs", "metric": "invalid"}]}),
+        json.dumps({"bases": [{"id": "Not A Slug", "name": "Docs"}]}),
     )
     assert result.error and "Invalid" in result.error
     assert sm.saved == []

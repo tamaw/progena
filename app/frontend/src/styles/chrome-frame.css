@@ -1555,6 +1555,12 @@ body,
   white-space: nowrap;
 }
 
+.kb-card__info {
+  gap: 10px;
+  font-size: 11px;
+  color: var(--color-text-muted);
+}
+
 .kb-card__dot {
   display: inline-block;
   flex-shrink: 0;
@@ -1582,268 +1588,6 @@ body,
 
 .kb-card__dot--muted {
   background: var(--color-text-muted);
-}
-
-.kb-source-form {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  margin-bottom: 12px;
-  padding: 12px;
-  border: 1px solid var(--color-border);
-  border-radius: 8px;
-  background: var(--color-bg-secondary);
-}
-
-.kb-source-form__input,
-.kb-source-form__textarea {
-  width: 100%;
-  padding: 8px 11px;
-  border: 1px solid var(--color-border);
-  border-radius: 7px;
-  background: var(--color-bg-primary, var(--color-bg-secondary));
-  color: var(--color-text-primary);
-  font-size: 13px;
-  font-family: inherit;
-}
-
-.kb-source-form__textarea {
-  resize: vertical;
-  line-height: 1.5;
-}
-
-.kb-source-form__input:focus,
-.kb-source-form__textarea:focus {
-  border-color: var(--color-accent, #2f7dff);
-  outline: none;
-}
-
-.kb-source-form__actions {
-  display: flex;
-  justify-content: flex-end;
-}
-
-.kb-conn {
-  display: flex;
-  gap: 8px;
-  margin-bottom: 10px;
-}
-
-.kb-conn__input {
-  flex: 1;
-  min-width: 0;
-  padding: 8px 11px;
-  border: 1px solid var(--color-border);
-  border-radius: 7px;
-  background: var(--color-bg-primary, var(--color-bg-secondary));
-  color: var(--color-text-primary);
-  font-family: var(--font-family-mono);
-  font-size: 12.5px;
-}
-
-.kb-conn__input:focus {
-  border-color: var(--color-accent, #2f7dff);
-  outline: none;
-}
-
-.kb-src-row__actions {
-  display: inline-flex;
-  gap: 6px;
-  align-items: center;
-}
-
-/* Knowledge rows without the leading icon badge — drop the icon grid column. */
-.agents-connection-row.kb-noicon,
-.agents-mini-row.kb-noicon {
-  grid-template-columns: minmax(0, 1fr) auto;
-}
-
-/* Two side-by-side sections (e.g. Search settings + Embedding on Configure). */
-.kb-two-col {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 18px;
-}
-
-.kb-two-col > .agents-section {
-  min-width: 0;
-}
-
-@media (max-width: 720px) {
-  .kb-two-col {
-    grid-template-columns: minmax(0, 1fr);
-  }
-}
-
-.kb-tag-form {
-  display: flex;
-  gap: 8px;
-  margin-bottom: 10px;
-}
-
-.kb-tag-form__input {
-  flex: 1;
-  min-width: 0;
-  padding: 8px 11px;
-  border: 1px solid var(--color-border);
-  border-radius: 7px;
-  background: var(--color-bg-primary, var(--color-bg-secondary));
-  color: var(--color-text-primary);
-  font-size: 13px;
-}
-
-.kb-tag-form__input:focus {
-  border-color: var(--color-accent, #2f7dff);
-  outline: none;
-}
-
-.kb-tag {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-}
-
-.kb-tag__remove {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 15px;
-  height: 15px;
-  padding: 0;
-  border: none;
-  border-radius: 50%;
-  background: transparent;
-  color: inherit;
-  font-size: 14px;
-  line-height: 1;
-  cursor: pointer;
-  opacity: 0.55;
-  transition: opacity 0.12s ease;
-}
-
-.kb-tag__remove:hover:not(:disabled) {
-  opacity: 1;
-}
-
-.kb-tag__remove:disabled {
-  cursor: default;
-  opacity: 0.3;
-}
-
-.kb-test {
-  display: flex;
-  gap: 8px;
-  margin-bottom: 10px;
-}
-
-.kb-test__input {
-  flex: 1;
-  min-width: 0;
-  padding: 8px 11px;
-  border: 1px solid var(--color-border);
-  border-radius: 7px;
-  background: var(--color-bg-secondary);
-  color: var(--color-text-primary);
-  font-size: 13px;
-}
-
-.kb-test__input:focus {
-  border-color: var(--color-accent, #2f7dff);
-  outline: none;
-}
-
-.kb-test__run {
-  flex-shrink: 0;
-  padding: 8px 14px;
-  border: 1px solid var(--color-border);
-  border-radius: 7px;
-  background: var(--color-bg-tertiary, var(--color-bg-secondary));
-  color: var(--color-text-primary);
-  font-size: 12.5px;
-  font-weight: 550;
-  cursor: pointer;
-}
-
-.kb-test__run:disabled {
-  opacity: 0.5;
-  cursor: default;
-}
-
-.kb-test__results {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.kb-test__result {
-  padding: 10px 12px;
-  border: 1px solid var(--color-border);
-  border-radius: 8px;
-  background: var(--color-bg-secondary);
-}
-
-.kb-test__result-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  margin-bottom: 4px;
-}
-
-.kb-test__result-title {
-  color: var(--color-text-primary);
-  font-size: 12.5px;
-  font-weight: 600;
-}
-
-.kb-test__score {
-  flex-shrink: 0;
-  color: var(--color-text-muted);
-  font-size: 10.5px;
-  font-variant-numeric: tabular-nums;
-}
-
-.kb-test__result-body {
-  margin: 0;
-  color: var(--color-text-secondary);
-  font-size: 12.5px;
-  line-height: 1.5;
-}
-
-.kb-config {
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  border: 1px solid var(--color-border);
-  border-radius: 8px;
-}
-
-.kb-config__row {
-  display: flex;
-  gap: 12px;
-  align-items: center;
-  justify-content: space-between;
-  padding: 11px 12px;
-  background: var(--color-bg-secondary);
-}
-
-.kb-config__row + .kb-config__row {
-  border-top: 1px solid var(--color-border);
-}
-
-.kb-config__label {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  color: var(--color-text-primary);
-  font-size: 13px;
-  font-weight: 550;
-}
-
-.kb-config__hint {
-  color: var(--color-text-muted);
-  font-size: 10.5px;
-  font-weight: 400;
 }
 
 .mock-kv-row {
@@ -2438,13 +2182,18 @@ body,
   background: var(--color-info);
 }
 
+/* Input stays put; the results list takes the rest of the pane and scrolls. */
 .chrome-search-panel {
-  display: grid;
+  display: flex;
+  flex-direction: column;
   gap: 12px;
+  height: 100%;
+  min-height: 0;
 }
 
 .chrome-search-panel__input {
   display: flex;
+  flex: none;
   align-items: center;
   gap: 8px;
   padding: 10px 12px;
@@ -2481,12 +2230,41 @@ body,
 }
 
 .chrome-search-results {
-  max-height: 430px;
+  flex: 1 1 auto;
+  min-height: 0;
   overflow-y: auto;
 }
 
 .chrome-search-result {
   grid-template-columns: 10px minmax(0, 1fr) 76px;
+}
+
+.chrome-search-group + .chrome-search-group {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--color-border);
+}
+
+.chrome-search-group__label {
+  padding: 2px 12px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--color-text-secondary);
+}
+
+.chrome-search-group .chrome-search-result small {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.chrome-search-loading,
+.chrome-search-error {
+  padding: 8px 12px;
+  font-size: 13px;
 }
 
 .alerts-pane__body {
@@ -9847,4 +9625,189 @@ body,
   .set-seg {
     flex-wrap: wrap;
   }
+}
+
+/* ─── Knowledge pages tab ─────────────────────────────────────────────── */
+
+.knowledge-pages-tab {
+  height: 100%;
+  overflow: hidden;
+}
+
+.knowledge-page .task-detail__body {
+  padding: 6px 16px;
+}
+
+.knowledge-pages-tab article {
+  height: 100%;
+  overflow-y: auto;
+  padding: 0;
+}
+
+.knowledge-page-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.knowledge-breadcrumbs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 13px;
+}
+
+.knowledge-breadcrumbs > li {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.knowledge-breadcrumbs > li + li::before {
+  content: '/';
+  color: var(--color-text-muted);
+  padding: 0 2px;
+}
+
+.knowledge-breadcrumbs button,
+.knowledge-crumb-menu button {
+  background: none;
+  border: none;
+  padding: 3px 6px;
+  border-radius: 6px;
+  cursor: pointer;
+  color: var(--color-text-primary);
+  font: inherit;
+  text-align: left;
+}
+
+.knowledge-breadcrumbs button:hover,
+.knowledge-crumb-menu button:hover,
+.knowledge-breadcrumbs button[aria-expanded='true'] {
+  background: var(--color-bg-secondary);
+}
+
+.knowledge-breadcrumbs [aria-current='page'] {
+  font-weight: 600;
+}
+
+.knowledge-crumb-current {
+  padding: 3px 6px;
+}
+
+.knowledge-breadcrumbs > li > button,
+.knowledge-crumb-current {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.knowledge-breadcrumbs .knowledge-crumb-toggle {
+  padding: 3px 4px;
+  color: var(--color-text-muted);
+  font-size: 11px;
+}
+
+.knowledge-crumb-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 20;
+  min-width: 220px;
+  max-height: 50vh;
+  overflow-y: auto;
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-bg-primary, var(--color-bg-secondary));
+  box-shadow: 0 6px 18px rgb(0 0 0 / 12%);
+}
+
+.knowledge-crumb-menu button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  font-size: 12.5px;
+}
+
+.knowledge-path-icon {
+  flex: none;
+  color: var(--color-text-muted);
+}
+
+/* Clicking a crumb or its toggle leaves no focus ring; keyboard focus still shows a background. */
+.knowledge-breadcrumbs button:focus {
+  outline: none;
+  box-shadow: none;
+}
+
+.knowledge-breadcrumbs button:focus-visible {
+  background: var(--color-bg-secondary);
+}
+
+.knowledge-crumb-menu li.is-selected > button {
+  font-weight: 600;
+}
+
+.knowledge-page-sources,
+.knowledge-page-revisions {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--color-border);
+}
+
+.knowledge-page-sources h3,
+.knowledge-page-revisions h3 {
+  margin: 0 0 8px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.knowledge-page-sources ul,
+.knowledge-page-revisions ul {
+  margin: 0;
+  padding-left: 0;
+  list-style: none;
+  font-size: 12.5px;
+  overflow-wrap: anywhere;
+}
+
+.knowledge-pages-tab article a {
+  color: var(--color-accent);
+  text-decoration: none;
+  border-bottom: 1px solid color-mix(in srgb, var(--color-accent) 35%, transparent);
+  transition: color 0.12s ease, border-color 0.12s ease;
+}
+
+.knowledge-pages-tab article a:hover {
+  color: var(--color-accent-hover);
+  border-bottom-color: currentColor;
+}
+
+.knowledge-pages-tab article a:visited {
+  color: var(--color-accent);
+}
+
+.knowledge-page-sources li + li,
+.knowledge-page-revisions li + li {
+  margin-top: 4px;
+}
+
+.knowledge-page-missing {
+  margin: 16px 0 0;
+  color: var(--color-text-secondary);
+}
+
+.knowledge-page-revisions a[aria-current='true'] {
+  font-weight: 600;
 }

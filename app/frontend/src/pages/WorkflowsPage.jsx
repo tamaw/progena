@@ -2,7 +2,8 @@ import { createPortal } from 'react-dom';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { selectRealtime } from '../store/realtimeSlice';
-import { useSearchParams } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
+import { buildEntityPath, useEntityUrlSync } from '../lib/routes';
 import {
   addEdge,
   applyEdgeChanges,
@@ -74,6 +75,7 @@ import PopupModal from '../components/common/PopupModal';
 import '../styles/canvas.css';
 import { canvasToolSettings } from './workflowCanvasTools';
 import '../styles/nodes.css';
+
 
 const FILTERS = [
   { value: 'all', label: 'All' },
@@ -412,19 +414,6 @@ function nodeCurrentSize(node, expanded) {
 
 function workflowPath(workflowId) {
   return workflowId ? `/workflows/${workflowId}.json` : '';
-}
-
-// The `.json` suffix on workflowPath() is the backing virtual-file extension
-// used internally (Redux cache keys, backend query params) — it has no
-// business showing up in the address bar, where `path` reads as a route
-// segment rather than a file reference. These two helpers convert only at
-// the URL-sync boundary; everything else keeps using the `.json` form.
-function stripJsonExtension(path) {
-  return path.endsWith('.json') ? path.slice(0, -'.json'.length) : path;
-}
-
-function withJsonExtension(path) {
-  return path && !path.endsWith('.json') ? `${path}.json` : path;
 }
 
 function cloneValue(value) {
@@ -2342,14 +2331,13 @@ function WorkflowSideDock({ onSelect }) {
   );
 }
 
-function WorkflowRow({ item, latestRun, selectedPath, onSelect }) {
-  const path = workflowPath(item.id);
+function WorkflowRow({ item, latestRun, selectedWorkflowId, onSelect }) {
   const dotTone = workflowDotTone(item, latestRun);
   return (
     <button
       type="button"
-      className={`pane-card-row ${selectedPath === path ? 'active' : ''}`}
-      onClick={() => onSelect(path)}
+      className={`pane-card-row ${selectedWorkflowId === item.id ? 'active' : ''}`}
+      onClick={() => onSelect(item.id)}
       title={item.description || item.title}
     >
       <span className={`pane-card-row__dot${dotTone ? ` pane-card-row__dot--${dotTone}` : ''}`} aria-hidden="true" />
@@ -2427,8 +2415,10 @@ function WorkflowsInner() {
   const documentTypes = useSelector(selectDocumentTypes);
   const { collapsed, setCollapsed, paneClassName } = usePaneCollapse('workflows-sidebar sess-list');
   const reactFlow = useReactFlow();
-  const [searchParams, setSearchParams] = useSearchParams();
-  const [selectedPath, setSelectedPath] = useState('');
+  const navigate = useNavigate();
+  const { workflowId: routeWorkflowId } = useParams();
+  const [selectedWorkflowId, setSelectedWorkflowId] = useState('');
+  const selectedPath = useMemo(() => workflowPath(selectedWorkflowId), [selectedWorkflowId]);
   const [filter, setFilter] = useState('all');
   const [query, setQuery] = useState('');
   const [sortMode, setSortMode] = useState('Recent');
@@ -2442,7 +2432,6 @@ function WorkflowsInner() {
   const [busyAction, setBusyAction] = useState('');
   const [localDraftDirty, setLocalDraftDirty] = useState(false);
   const [deleteConfirmationOpen, setDeleteConfirmationOpen] = useState(false);
-  const requestedPath = withJsonExtension(searchParams.get('path') || '');
   const selectedDetail = useSelector((state) => selectWorkflowDetailByPath(state, selectedPath));
   const [nodeMenuAnchor, setNodeMenuAnchor] = useState(null);
   const [nodeOptionsId, setNodeOptionsId] = useState(null);
@@ -2453,7 +2442,7 @@ function WorkflowsInner() {
   const connectingRef = useRef(null);
   const didConnectRef = useRef(false);
   const selectedLatestRun = useSelector((state) => {
-    const workflowId = selectedDetail?.workflow?.id || selectedPath.replace(/^.*\/|\.json$/g, '');
+    const workflowId = selectedDetail?.workflow?.id || selectedWorkflowId;
     return selectWorkflowLatestRunById(state, workflowId);
   });
   const nodesRef = useRef([]);
@@ -2463,6 +2452,8 @@ function WorkflowsInner() {
   const syncedPathRef = useRef('');
   const syncedHashRef = useRef('');
   const hydratingGraphRef = useRef(false);
+
+  useEntityUrlSync('/workflows', selectedWorkflowId, selectedDetail?.workflow?.title);
 
   const loadWorkflows = useCallback(async () => {
     try {
@@ -2518,29 +2509,18 @@ function WorkflowsInner() {
 
   useEffect(() => {
     if (!workflows.length) {
-      setSelectedPath('');
+      setSelectedWorkflowId('');
       return;
     }
-    setSelectedPath((current) => {
-      const next = workflows.find((item) => workflowPath(item.id) === requestedPath)?.id
-        ? requestedPath
-        : workflows.find((item) => workflowPath(item.id) === current)?.id
+    setSelectedWorkflowId((current) => {
+      const next = workflows.find((item) => item.id === routeWorkflowId)?.id
+        ? routeWorkflowId
+        : workflows.find((item) => item.id === current)?.id
           ? current
-          : workflowPath(workflows[0].id);
+          : workflows[0].id;
       return next;
     });
-  }, [requestedPath, workflows]);
-
-  useEffect(() => {
-    const currentPath = searchParams.get('path') || '';
-    const nextUrlPath = stripJsonExtension(selectedPath);
-    if (!selectedPath || currentPath === nextUrlPath) {
-      return;
-    }
-    const nextParams = new URLSearchParams(searchParams);
-    nextParams.set('path', nextUrlPath);
-    setSearchParams(nextParams, { replace: true });
-  }, [searchParams, selectedPath, setSearchParams]);
+  }, [routeWorkflowId, workflows]);
 
   useEffect(() => {
     if (!realtime.connected || !selectedPath || selectedDetail) {
@@ -2906,10 +2886,11 @@ function WorkflowsInner() {
     }
   }, []);
 
-  const handleSelectWorkflow = (path) => {
+  const handleSelectWorkflow = useCallback((workflowId) => {
     setJsonError('');
-    setSelectedPath(path);
-  };
+    const workflow = workflows.find((w) => w.id === workflowId);
+    navigate(buildEntityPath('/workflows', workflowId, workflow?.title), { replace: true });
+  }, [navigate, workflows]);
 
   const openCreateWorkflowChat = () => {
     window.dispatchEvent(new CustomEvent('progenitor:open-quick-chat', {
@@ -3133,10 +3114,8 @@ function WorkflowsInner() {
     try {
       await dispatch(deleteWorkflow({ workflowsUrl, workflowId })).unwrap();
       setDeleteConfirmationOpen(false);
-      setSelectedPath('');
-      const nextParams = new URLSearchParams(searchParams);
-      nextParams.delete('path');
-      setSearchParams(nextParams, { replace: true });
+      setSelectedWorkflowId('');
+      navigate('/workflows', { replace: true });
     } catch (error) {
       show('error', 'Workflow delete failed', error.message);
     } finally {
@@ -3176,7 +3155,7 @@ function WorkflowsInner() {
                   <WorkflowRow
                     item={item}
                     latestRun={workflowRuns.find((run) => run.workflow_id === item.id) || null}
-                    selectedPath={selectedPath}
+                    selectedWorkflowId={selectedWorkflowId}
                     onSelect={handleSelectWorkflow}
                   />
                 )}
@@ -3339,6 +3318,7 @@ function WorkflowsInner() {
                             placeholder="Workflow title"
                           />
                         </label>
+
                         <label className="workflow-form__toggle">
                           <span>Enabled</span>
                           <input

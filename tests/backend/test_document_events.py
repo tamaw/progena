@@ -25,8 +25,8 @@ from app.backend.workflow_service import (
     list_workflow_runs,
     save_workflow_definition,
 )
-from app.progenitor.document_kinds import SESSION_KEY_PREFIX
-from app.progenitor.document_types import BUILTIN_DOCUMENT_TYPES
+from app.progenitor.document_kinds import KNOWLEDGE_PAGE_KEY_PREFIX, SESSION_KEY_PREFIX
+from app.progenitor.document_types import BUILTIN_DOCUMENT_TYPES, resolve_document_type
 from app.progenitor.workflows import (
     WorkflowNodeDocumentCreate,
     WorkflowNodeDocumentDelete,
@@ -309,6 +309,59 @@ async def test_card_move_to_done_starts_filtered_workflow_once_with_document_por
     assert run.trigger_event["changed_fields"] == ["column_id"]
     assert run.node_outputs["body"]["found"] is True
     assert run.node_outputs["body"]["document"]["content"] == "# Brief"
+
+
+@pytest.mark.asyncio
+async def test_knowledge_page_and_index_events_start_typed_workflows(store):
+    page_workflow = save_workflow_definition(
+        store,
+        _workflow(
+            {"document_type": "knowledge_page", "operations": ["created"]},
+            {},
+            [],
+        ),
+    )
+    index_workflow = save_workflow_definition(
+        store,
+        _workflow(
+            {"document_type": "knowledge_index", "operations": ["updated"]},
+            {},
+            [],
+        ),
+    )
+    knowledge_workflow = save_workflow_definition(
+        store,
+        _workflow(
+            {"document_type": "knowledge", "operations": ["updated"]},
+            {},
+            [],
+        ),
+    )
+    dispatcher = ui_routes.get_document_event_dispatcher()
+    store.save_document(PROGENITOR_STATE_PREFIX, "knowledge_index", {"bases": {}})
+    store.save_document(PROGENITOR_STATE_PREFIX, "knowledge", {"bases": []})
+    await dispatcher.drain()
+
+    store.save_document(
+        PROGENITOR_STATE_PREFIX,
+        f"{KNOWLEDGE_PAGE_KEY_PREFIX}engineering/overview.md",
+        {"content": "---\ntype: Concept\ntitle: Overview\n---\n"},
+    )
+    store.save_document(
+        PROGENITOR_STATE_PREFIX,
+        "knowledge_index",
+        {"bases": {"engineering": {"status": "indexed", "pages": 1}}},
+    )
+    store.save_document(PROGENITOR_STATE_PREFIX, "knowledge", {"bases": [{"id": "engineering"}]})
+    await dispatcher.drain()
+
+    page_run = await _wait_for(lambda: _completed_runs(store, page_workflow.id))
+    index_run = await _wait_for(lambda: _completed_runs(store, index_workflow.id))
+    knowledge_run = await _wait_for(lambda: _completed_runs(store, knowledge_workflow.id))
+    assert page_run[0].trigger_event["document_type"] == "knowledge_page"
+    assert index_run[0].trigger_event["document_type"] == "knowledge_index"
+    assert knowledge_run[0].trigger_event["document_type"] == "knowledge"
+    assert resolve_document_type("knowledge", BUILTIN_TYPES).id == "knowledge"
 
 
 @pytest.mark.asyncio
