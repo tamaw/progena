@@ -1,11 +1,12 @@
-"""Backend access to the ``repos``/``repo_scan`` state documents.
+"""Backend access to ``repo:<id>`` documents and the ``repo_scan`` document.
 
-Declared repositories live in the ``repos`` document under the
+Each declared repository is one ``repo:<id>`` document under the
 ``progenitor.state`` namespace -- the same shared Postgres ``store`` table
-Progenitor's own runtime reads and writes, and the same document the agent can
-edit directly at ``/config/repos.json`` (see
-``app/progenitor/agent/state_backend.py``). The backend reads/writes it with
-straight SQL through ``PostgresDocumentStore``, same as ``marketplaces``/``mcp``.
+Progenitor's own runtime reads and writes, and the same documents the agent
+edits as ``/config/repos/<id>.json`` (see ``app/progenitor/agent/state_backend.py``).
+Every write touches one repo's row under that key's lock, so concurrent edits
+of different repos never overwrite each other, and each create/update/delete
+is its own typed ``repo`` document event.
 
 Live git state (branches, commits, worktrees) lives in the separate
 ``repo_scan`` document. The heartbeat's ``refresh_repo_scan_node`` (see
@@ -16,8 +17,7 @@ it never does network I/O, so it can't tell a stale clone from a fresh one.
 the heartbeat batch) and merges a fresh single-repo scan into the same
 document, so a manual "Fetch" click doesn't wait out the heartbeat interval.
 Both writers persist through the same ``save_document`` call the heartbeat
-uses, so the runtime's cached copy is invalidated the same way ``repos``
-writes already are (see ``_on_store_change`` in
+uses, so the runtime's cached copy is invalidated (see ``_on_store_change`` in
 ``app/progenitor/runtime/progenitor.py``).
 """
 
@@ -26,19 +26,19 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from app.progenitor.config import default_repos_config_payload, get_config
+from app.progenitor.config import get_config
+from app.progenitor.document_kinds import REPO_KEY_PREFIX
 from app.progenitor.repos.scan import (
     RepoScanResult,
     aggregate_workspace_signal,
     fetch_repo,
     scan_repo,
 )
-from app.progenitor.repos.schema import validate_repos_payload
+from app.progenitor.repos.schema import validate_repo_entry
 from app.progenitor.utils import utcnow_isoformat
 
 from .document_store import PROGENITOR_STATE_PREFIX, get_default_document_store
 
-REPOS_DOC_KEY = "repos"
 REPO_SCAN_DOC_KEY = "repo_scan"
 
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
@@ -48,36 +48,37 @@ class RepoNotFoundError(LookupError):
     """Raised when a declared repo id has no matching entry."""
 
 
+class _RepoIdTaken(Exception):
+    """A create's candidate id already belongs to another repo."""
+
+
 def _slug(name: str) -> str:
     slug = _SLUG_RE.sub("-", name.strip().lower()).strip("-")
     return slug or "repo"
 
 
-def _unique_repo_id(name: str, existing: dict[str, Any]) -> str:
-    base = _slug(name)
-    candidate = base
-    suffix = 2
-    while candidate in existing:
-        candidate = f"{base}-{suffix}"
-        suffix += 1
-    return candidate
+def repo_key(repo_id: str) -> str:
+    return f"{REPO_KEY_PREFIX}{repo_id}"
 
 
-def load_repos() -> dict[str, Any]:
-    """Return the declared-repositories document."""
-    default = default_repos_config_payload()
+def load_repo(repo_id: str) -> dict[str, Any] | None:
+    """Return one declared repo entry, or ``None`` if it isn't declared."""
     document = get_default_document_store().get_document(
-        PROGENITOR_STATE_PREFIX, REPOS_DOC_KEY, default
+        PROGENITOR_STATE_PREFIX, repo_key(repo_id), None
     )
-    payload = document.payload if document is not None else default
-    return payload if isinstance(payload, dict) else default
+    payload = document.payload if document is not None else None
+    return payload if isinstance(payload, dict) else None
 
 
-def save_repos(repos: dict[str, Any]) -> dict[str, Any]:
-    """Persist the declared-repositories document and return it."""
-    payload = validate_repos_payload({"repos": repos})
-    get_default_document_store().save_document(PROGENITOR_STATE_PREFIX, REPOS_DOC_KEY, payload)
-    return payload
+def load_repos() -> dict[str, dict[str, Any]]:
+    """Return every declared repo entry, keyed by repo id."""
+    return {
+        key.removeprefix(REPO_KEY_PREFIX): document.payload
+        for key, document in get_default_document_store().list_documents(
+            PROGENITOR_STATE_PREFIX, REPO_KEY_PREFIX
+        )
+        if isinstance(document.payload, dict)
+    }
 
 
 def load_repo_scan() -> dict[str, Any]:
@@ -104,9 +105,8 @@ async def fetch_and_rescan_repo(repo_id: str) -> dict[str, Any]:
     a manual click doesn't wait out the heartbeat interval to show whether
     the repo is stale relative to its upstream.
     """
-    declared = load_repos().get("repos") or {}
-    entry = declared.get(repo_id)
-    if not isinstance(entry, dict):
+    entry = load_repo(repo_id)
+    if entry is None:
         raise RepoNotFoundError(repo_id)
     local_path = entry.get("local_path") or ""
     worktree_dir = get_config().storage.worktree_dir
@@ -151,7 +151,12 @@ def create_repo(
     summary: str | None = None,
     owner: str | None = None,
 ) -> tuple[str, dict[str, Any]]:
-    """Add one declared repo entry. Returns ``(repo_id, entry)``."""
+    """Add one declared repo entry. Returns ``(repo_id, entry)``.
+
+    The id is the name's slug, suffixed ``-2``, ``-3``... until free; each
+    candidate is claimed under its key's lock, so two concurrent creates of
+    the same name get different ids.
+    """
     if not name.strip():
         raise ValueError("name is required")
     if not local_path.strip():
@@ -159,15 +164,10 @@ def create_repo(
     if access not in {"read", "write"}:
         raise ValueError("access must be 'read' or 'write'")
 
-    document = load_repos()
-    repos = dict(document.get("repos") or {})
-    repo_id = _unique_repo_id(name, repos)
     entry: dict[str, Any] = {
         "name": name.strip(),
         "local_path": local_path.strip(),
         "access": access,
-        "created_at": utcnow_isoformat(),
-        "updated_at": utcnow_isoformat(),
     }
     if remote_url:
         entry["remote_url"] = remote_url.strip()
@@ -176,43 +176,53 @@ def create_repo(
     if owner:
         entry["owner"] = owner.strip()
 
-    repos[repo_id] = entry
-    saved = save_repos(repos)
-    return repo_id, saved["repos"][repo_id]
+    base = _slug(name)
+    store = get_default_document_store()
+    for suffix in range(1, 1000):
+        repo_id = base if suffix == 1 else f"{base}-{suffix}"
+
+        def claim(existing: Any, repo_id: str = repo_id) -> dict[str, Any]:
+            if existing is not None:
+                raise _RepoIdTaken
+            return validate_repo_entry(repo_id, entry)
+
+        try:
+            saved = store.mutate_document(PROGENITOR_STATE_PREFIX, repo_key(repo_id), claim)
+        except _RepoIdTaken:
+            continue
+        return repo_id, saved
+    raise ValueError(f"no free repo id for name {name!r}")
 
 
 def update_repo(repo_id: str, updates: dict[str, Any]) -> dict[str, Any]:
     """Patch one declared repo entry's mutable fields."""
-    document = load_repos()
-    repos = dict(document.get("repos") or {})
-    entry = repos.get(repo_id)
-    if not isinstance(entry, dict):
-        raise RepoNotFoundError(repo_id)
 
-    merged = dict(entry)
-    for field_name in ("name", "local_path", "access", "remote_url", "summary", "owner"):
-        if field_name in updates:
-            merged[field_name] = updates[field_name]
-    repos[repo_id] = merged
-    saved = save_repos(repos)
-    entry_out: dict[str, Any] = saved["repos"][repo_id]
-    return entry_out
+    def patch(existing: Any) -> dict[str, Any]:
+        if not isinstance(existing, dict):
+            raise RepoNotFoundError(repo_id)
+        merged = dict(existing)
+        for field_name in ("name", "local_path", "access", "remote_url", "summary", "owner"):
+            if field_name in updates:
+                merged[field_name] = updates[field_name]
+        return validate_repo_entry(repo_id, merged, created_at=existing.get("created_at"))
+
+    saved: dict[str, Any] = get_default_document_store().mutate_document(
+        PROGENITOR_STATE_PREFIX, repo_key(repo_id), patch
+    )
+    return saved
 
 
 def delete_repo(repo_id: str) -> bool:
     """Remove one declared repo entry. Returns ``False`` if it wasn't present."""
-    document = load_repos()
-    repos = dict(document.get("repos") or {})
-    if repo_id not in repos:
+    if load_repo(repo_id) is None:
         return False
-    del repos[repo_id]
-    save_repos(repos)
+    get_default_document_store().delete_document(PROGENITOR_STATE_PREFIX, repo_key(repo_id))
     return True
 
 
 def merged_repo_rows() -> list[dict[str, Any]]:
     """Merge declared entries with their latest scan for the list view."""
-    declared = load_repos().get("repos") or {}
+    declared = load_repos()
     scan_doc = load_repo_scan()
     scans = scan_doc.get("repos") or {}
     rows: list[dict[str, Any]] = []
@@ -232,9 +242,8 @@ def merged_repo_rows() -> list[dict[str, Any]]:
 
 def merged_repo_detail(repo_id: str) -> dict[str, Any]:
     """Merge one declared entry with its latest scan for the detail pane."""
-    declared = load_repos().get("repos") or {}
-    entry = declared.get(repo_id)
-    if not isinstance(entry, dict):
+    entry = load_repo(repo_id)
+    if entry is None:
         raise RepoNotFoundError(repo_id)
     scan_doc = load_repo_scan()
     scans = scan_doc.get("repos") or {}

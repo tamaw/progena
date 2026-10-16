@@ -23,7 +23,7 @@ import os
 import re
 import time
 import uuid
-from collections.abc import AsyncGenerator, Callable, Mapping
+from collections.abc import AsyncGenerator, Callable, Coroutine, Mapping
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal, cast
 
@@ -38,14 +38,18 @@ from app.progenitor.config import default_plugins_config_payload
 from app.progenitor.content_documents import AGENT_DOCUMENT_KEY_PREFIX, SKILL_DOCUMENT_KEY_PREFIX
 from app.progenitor.cron import cron_error, default_timezone_name, next_cron_time
 from app.progenitor.document_kinds import (
+    ALERT_KEY_PREFIX,
     INSTRUCTION_DOCUMENT_KEY_PREFIX,
     KANBAN_CARD_KEY_PREFIX,
     KANBAN_TASK_CONTENT_KEY_PREFIX,
     KNOWLEDGE_PAGE_KEY_PREFIX,
+    REPO_KEY_PREFIX,
     SESSION_KEY_PREFIX,
+    WORKFLOW_APPROVAL_REQUEST_KEY_PREFIX,
 )
 from app.progenitor.document_types import DOCUMENT_OPERATIONS, DocumentType
 from app.progenitor.knowledge.indexer_config import INDEX_STATUS_DOC_KEY
+from app.progenitor.routines.events import RUN_EVENT_PREFIX
 from app.progenitor.routines.store import ROUTINE_GRAPH_KEY_PREFIX
 from app.progenitor.schedule import Scheduler
 from app.progenitor.schedule.service import generate_schedule_id
@@ -87,9 +91,6 @@ from .alerts import (
     get_alerts_response,
     mark_alerts_viewed,
 )
-from .alerts import (
-    create_alert as store_alert,
-)
 from .chat_routes import broadcast_chat_sessions_snapshot, create_chat_router
 from .chat_sessions import (
     UiEventEnvelope,
@@ -119,7 +120,7 @@ from .marketplace_service import load_marketplaces
 from .model_profile_routes import create_model_profile_router
 from .policy_routes import create_policy_router
 from .preferences_service import load_preferences
-from .repo_service import merged_repo_detail, merged_repo_rows, workspace_signal
+from .repo_service import load_repo, merged_repo_detail, merged_repo_rows, workspace_signal
 from .request_utils import request_correlation_id as _request_correlation_id
 from .routine_events import routine_events
 from .state_reader import StateReader, get_state_reader
@@ -1766,6 +1767,35 @@ async def _reconcile_workflow_invoke_requests(changed_key: str | None = None) ->
                 )
                 continue
             store.delete_document(PROGENITOR_STATE_PREFIX, key)
+
+
+async def _apply_workflow_approval_request(typed: TypedDocumentEvent) -> None:
+    """Apply Progenitor's answer to a workflow approval, then drop the request.
+
+    Progenitor answers as the agent, so a human-only approval is refused (and
+    logged) rather than applied. The request is single-use either way.
+    """
+
+    event = typed.event
+    if event.op != "created" or not event.key.startswith(WORKFLOW_APPROVAL_REQUEST_KEY_PREFIX):
+        return
+    request = event.after if isinstance(event.after, dict) else {}
+    workflow_id, run_id = request.get("workflow_id"), request.get("run_id")
+    approved = request.get("approved")
+    store = get_default_document_store()
+    if isinstance(workflow_id, str) and isinstance(run_id, str) and isinstance(approved, bool):
+        try:
+            resolved = await get_workflow_executor().resolve_approval(
+                workflow_id, run_id, approved=approved, answered_by="agent"
+            )
+        except PermissionError as exc:
+            logger.warning("Refused Progenitor approval for %s/%s: %s", workflow_id, run_id, exc)
+        else:
+            if resolved is None:
+                logger.info("Approval request for %s/%s no longer applies", workflow_id, run_id)
+    else:
+        logger.warning("Dropping malformed workflow approval request %r", event.key)
+    store.delete_document(PROGENITOR_STATE_PREFIX, event.key)
 
 
 def _parse_once_datetime(expression: str) -> datetime:
@@ -3569,19 +3599,6 @@ async def export_logs(
     return acknowledgement_response(request_id, event_types)
 
 
-def create_alert(
-    type: str, title: str, message: str, urgent: bool = False, requires_response: bool = False
-) -> AlertInfo:
-    """Create and store a backend-managed alert record."""
-    return store_alert(
-        type=type,
-        title=title,
-        message=message,
-        urgent=urgent,
-        requires_response=requires_response,
-    )
-
-
 # SSE heartbeat interval in seconds.  The SSE connection itself is the primary
 # liveness signal; heartbeats exist only to prevent TCP-level timeouts on idle
 # streams.  Override with SSE_HEARTBEAT_INTERVAL env var.
@@ -3912,8 +3929,12 @@ def _queue_state_watch_status(snapshot, changed_key: str | None = None) -> None:
             or changed_key.startswith(WORKFLOW_QUEUE_KEY_PREFIX)
         ):
             broadcast_workflow_runs_snapshot()
-        if changed_key in (None, "repos", "repo_scan"):
+        if changed_key in (None, "repo_scan") or changed_key.startswith(REPO_KEY_PREFIX):
             broadcast_repositories_snapshot()
+            repo_id = (changed_key or "").removeprefix(REPO_KEY_PREFIX)
+            # A deleted repo has no detail left to show.
+            if changed_key and changed_key != repo_id and load_repo(repo_id) is not None:
+                broadcast_repo_detail(repo_id)
         if changed_key is None or changed_key in _WIDGET_KEYS:
             broadcast_widgets_snapshot()
     except Exception:
@@ -3945,6 +3966,9 @@ def get_document_event_dispatcher() -> DocumentEventDispatcher:
     if _document_event_dispatcher is None:
         dispatcher = DocumentEventDispatcher(store_getter=get_default_document_store)
         dispatcher.add_handler(_publish_routine_run_lifecycle)
+        dispatcher.add_handler(_advance_workflows_on_routine_event)
+        dispatcher.add_handler(_publish_alert_document)
+        dispatcher.add_handler(_apply_workflow_approval_request)
         dispatcher.add_handler(_dispatch_document_event_workflows)
         dispatcher.add_handler(_apply_document_event_widgets)
         dispatcher.add_handler(_record_kanban_card_activity)
@@ -3958,6 +3982,50 @@ async def _publish_routine_run_lifecycle(typed: TypedDocumentEvent) -> None:
     """Broadcast routine run lifecycle transitions logged as ``routine_run_event:`` rows."""
 
     await routine_events.document_event(typed.event)
+
+
+# Set by the app at startup: asks Progenitor to relay a new alert to the user.
+_alert_relay: Callable[[AlertInfo], Coroutine[Any, Any, None]] | None = None
+# Keeps relay tasks referenced until they finish (asyncio holds only weak refs).
+_background_tasks: set[asyncio.Task[None]] = set()
+
+
+def set_alert_relay(relay: Callable[[AlertInfo], Coroutine[Any, Any, None]] | None) -> None:
+    global _alert_relay
+    _alert_relay = relay
+
+
+async def _publish_alert_document(typed: TypedDocumentEvent) -> None:
+    """Show alert changes in the alert center; relay new alerts to the user.
+
+    Every producer writes an ``alert:<id>`` document, so this is the one
+    delivery path.
+    The relay is an LLM turn, so it runs in the background: a slow or failed
+    relay never holds up document event dispatch.
+    """
+
+    event = typed.event
+    if not event.key.startswith(ALERT_KEY_PREFIX):
+        return
+    broadcast_alerts_state()
+    if event.op != "created" or not isinstance(event.after, dict):
+        return
+    alert = AlertInfo.model_validate(event.after)
+    broadcast_alert(alert)
+    if _alert_relay is not None:
+        task = asyncio.create_task(_alert_relay(alert), name=f"alert-relay-{alert.id}")
+        _background_tasks.add(task)
+        task.add_done_callback(_background_tasks.discard)
+
+
+async def _advance_workflows_on_routine_event(typed: TypedDocumentEvent) -> None:
+    """Hand routine lifecycle transitions to workflow runs waiting on a routine node."""
+
+    event = typed.event
+    if event.op == "deleted" or not event.key.startswith(RUN_EVENT_PREFIX):
+        return
+    if isinstance(event.after, dict):
+        await get_workflow_executor().handle_routine_run_event(event.after)
 
 
 async def _dispatch_document_event_workflows(typed: TypedDocumentEvent) -> None:
@@ -4628,8 +4696,8 @@ def broadcast_repositories_snapshot(
     """Broadcast the merged declared+scanned repository list to /api/ui/stream
     subscribers.
 
-    Emitted after backend-side repo CRUD, whenever the ``repos`` document
-    changes (agent edits via ``/config/repos.json``), and whenever the
+    Emitted after backend-side repo CRUD, whenever a ``repo:<id>`` document
+    changes (agent edits via ``/config/repos/<id>.json``), and whenever the
     heartbeat's ``repo_scan`` document changes (surfaced via the Postgres
     NOTIFY watcher), so the Repositories page reflects both kinds of change
     live without refetching.

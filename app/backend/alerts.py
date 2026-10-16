@@ -1,17 +1,27 @@
-"""Backend-managed alert records and helpers."""
+"""Backend access to ``alert:<id>`` documents (the alert center).
+
+Alerts are durable documents (see :mod:`app.progenitor.alerts`); this module
+reads them for the alert center, marks them viewed, creates backend-side ones
+(workflow notifications) and keeps only the newest :data:`MAX_ALERTS`.
+"""
 
 from __future__ import annotations
 
 import time
-from typing import TypedDict
+from typing import Any, TypedDict
 
 from pydantic import BaseModel
+
+from app.progenitor.alerts import alert_key, build_alert
+from app.progenitor.document_kinds import ALERT_KEY_PREFIX
+
+from .document_store import PROGENITOR_STATE_PREFIX, get_default_document_store
 
 MAX_ALERTS = 100
 
 
 class AlertInfo(BaseModel):
-    """Alert information stored by the backend."""
+    """One alert as the alert center shows it."""
 
     id: str
     type: str
@@ -22,6 +32,8 @@ class AlertInfo(BaseModel):
     requires_response: bool = False
     viewed: bool = False
     viewed_at: float | None = None
+    source: str | None = None
+    context: dict[str, Any] | None = None
 
 
 class AlertsResponse(BaseModel):
@@ -38,13 +50,6 @@ class MarkAlertsViewedRequest(BaseModel):
     alert_ids: list[str] | None = None
 
 
-class MarkAlertsViewedResponse(BaseModel):
-    """Response payload after marking alerts viewed."""
-
-    updated: int
-    unread: int
-
-
 class AlertSummary(TypedDict):
     """Aggregate alert data for status payloads."""
 
@@ -53,100 +58,110 @@ class AlertSummary(TypedDict):
     latest_timestamp: float | None
 
 
-_alerts: list[AlertInfo] = []
-_alert_id_counter = 0
-
-
-def generate_alert_id() -> str:
-    """Generate a unique alert ID."""
-    global _alert_id_counter
-    _alert_id_counter += 1
-    return f"alert-{int(time.time())}-{_alert_id_counter}"
-
-
-def normalize_alert_type(value: str | None) -> str:
-    """Normalize alert severity/type for storage and UI display."""
-    normalized = str(value or "info").strip().lower()
-    return normalized or "info"
-
-
 def create_alert(
     *,
     type: str,
     title: str,
     message: str,
-    urgent: bool = False,
+    urgent: bool | None = None,
     requires_response: bool = False,
+    source: str | None = None,
+    context: dict[str, Any] | None = None,
 ) -> AlertInfo:
-    """Create and store a new backend-managed alert."""
-    alert = AlertInfo(
-        id=generate_alert_id(),
-        type=normalize_alert_type(type),
+    """Write a new alert document; its document event drives display and relay."""
+    payload = build_alert(
         title=title,
         message=message,
-        timestamp=time.time(),
+        level=type,
         urgent=urgent,
         requires_response=requires_response,
+        source=source,
+        context=context,
     )
-    _alerts.append(alert)
+    store = get_default_document_store()
+    store.save_document(PROGENITOR_STATE_PREFIX, alert_key(payload["id"]), payload)
+    _prune(store)
+    return AlertInfo.model_validate(payload)
 
-    while len(_alerts) > MAX_ALERTS:
-        _alerts.pop(0)
 
-    return alert
+def _all_alerts() -> list[AlertInfo]:
+    alerts = [
+        AlertInfo.model_validate(document.payload)
+        for _key, document in get_default_document_store().list_documents(
+            PROGENITOR_STATE_PREFIX, ALERT_KEY_PREFIX
+        )
+        if isinstance(document.payload, dict)
+    ]
+    return sorted(alerts, key=lambda alert: alert.timestamp, reverse=True)
+
+
+def _prune(store: Any) -> None:
+    for stale in _all_alerts()[MAX_ALERTS:]:
+        store.delete_document(PROGENITOR_STATE_PREFIX, alert_key(stale.id))
 
 
 def list_alerts() -> list[AlertInfo]:
     """Return alert history with newest alerts first."""
-    return list(reversed(_alerts))
+    return _all_alerts()
 
 
 def get_alert(alert_id: str) -> AlertInfo | None:
     """Return a single alert by ID."""
-    return next((alert for alert in _alerts if alert.id == alert_id), None)
-
-
-def unread_alert_count() -> int:
-    """Return the number of unread alerts."""
-    return sum(1 for alert in _alerts if not alert.viewed)
+    document = get_default_document_store().get_document(
+        PROGENITOR_STATE_PREFIX, alert_key(alert_id), None
+    )
+    if document is None or not isinstance(document.payload, dict):
+        return None
+    return AlertInfo.model_validate(document.payload)
 
 
 def get_alerts_response() -> AlertsResponse:
     """Build the API response payload for alert history."""
     alerts = list_alerts()
-    return AlertsResponse(alerts=alerts, total=len(alerts), unread=unread_alert_count())
+    return AlertsResponse(
+        alerts=alerts, total=len(alerts), unread=sum(1 for a in alerts if not a.viewed)
+    )
 
 
 def alert_summary() -> AlertSummary:
     """Return aggregate alert data for status endpoints."""
-    latest = _alerts[-1].timestamp if _alerts else None
+    alerts = list_alerts()
     return {
-        "total": len(_alerts),
-        "unread": unread_alert_count(),
-        "latest_timestamp": latest,
+        "total": len(alerts),
+        "unread": sum(1 for alert in alerts if not alert.viewed),
+        "latest_timestamp": alerts[0].timestamp if alerts else None,
     }
+
+
+class _AlertGone(Exception):
+    """The alert was deleted (pruned) between listing and marking it."""
 
 
 def mark_alerts_viewed(alert_ids: list[str] | None = None) -> int:
     """Mark matching alerts viewed. If no IDs are provided, mark all alerts viewed."""
-    target_ids = set(alert_ids or [])
-    updated = 0
+    store = get_default_document_store()
+    targets = set(alert_ids or [])
     viewed_at = time.time()
 
-    for alert in _alerts:
-        if alert.viewed:
-            continue
-        if target_ids and alert.id not in target_ids:
-            continue
-        alert.viewed = True
-        alert.viewed_at = viewed_at
-        updated += 1
+    def mark(payload: Any) -> Any:
+        if not isinstance(payload, dict):
+            raise _AlertGone
+        return {**payload, "viewed": True, "viewed_at": viewed_at}
 
+    updated = 0
+    for alert in list_alerts():
+        if alert.viewed or (targets and alert.id not in targets):
+            continue
+        try:
+            store.mutate_document(PROGENITOR_STATE_PREFIX, alert_key(alert.id), mark)
+        except _AlertGone:
+            continue
+        updated += 1
     return updated
 
 
 def clear_alerts() -> None:
-    """Reset in-memory alert storage for tests."""
-    global _alert_id_counter
-    _alerts.clear()
-    _alert_id_counter = 0
+    """Delete every alert document (tests)."""
+    store = get_default_document_store()
+    for alert in list_alerts():
+        store.delete_document(PROGENITOR_STATE_PREFIX, alert_key(alert.id))

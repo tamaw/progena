@@ -279,6 +279,50 @@ describe('workflowToFlow', () => {
     });
   });
 
+  it('round-trips a routine node with its routine id and ports', () => {
+    const inputSchema = { type: 'object', required: ['message'], properties: { message: { type: 'string' } } };
+    const workflow = {
+      graph: {
+        nodes: {
+          run_1: { kind: 'routine', title: 'Triage', routine: 'triage', input_schema: inputSchema, output_schema: { type: 'object' } },
+        },
+        edges: [],
+      },
+      ui: { nodes: {} },
+    };
+    const flow = workflowToFlow(workflow, {}, null);
+    const node = flow.nodes.find((n) => n.id === 'run_1');
+    expect(node.type).toBe('routine');
+    expect(node.data.routine).toBe('triage');
+
+    const persisted = flowToWorkflow(workflow, flow.nodes, flow.edges, flow.viewport);
+    expect(persisted.graph.nodes.run_1).toEqual({
+      kind: 'routine',
+      title: 'Triage',
+      routine: 'triage',
+      input_schema: inputSchema,
+      output_schema: { type: 'object' },
+    });
+  });
+
+  it('round-trips approval approvers and notify_on_pause', () => {
+    const workflow = {
+      notify_on_pause: true,
+      graph: {
+        nodes: {
+          gate: { kind: 'approval', title: 'Gate', message: 'Ship?', approver: 'human' },
+        },
+        edges: [],
+      },
+      ui: { nodes: {} },
+    };
+    const flow = workflowToFlow(workflow, {}, null);
+    const persisted = flowToWorkflow(workflow, flow.nodes, flow.edges, flow.viewport);
+
+    expect(persisted.notify_on_pause).toBe(true);
+    expect(persisted.graph.nodes.gate.approver).toBe('human');
+  });
+
   it('round-trips a cron node', () => {
     const workflow = {
       graph: {
@@ -413,11 +457,11 @@ describe('workflowToFlow', () => {
 });
 
 describe('workflow node menu', () => {
-  it('exposes document create and delete alongside other workflow nodes', () => {
+  it('exposes every workflow node kind and no capability-specific kinds', () => {
     const addableKinds = NODE_MENU_CATEGORIES.flatMap((category) => category.items).map((item) => item.kind);
 
     expect(addableKinds.sort()).toEqual(
-      ['agent', 'approval', 'condition', 'cron', 'data', 'document_create', 'document_delete', 'document_query', 'document_read', 'document_write', 'event', 'extract', 'format', 'unpack'].sort(),
+      ['agent', 'approval', 'condition', 'cron', 'data', 'document_create', 'document_delete', 'document_query', 'document_read', 'document_write', 'event', 'extract', 'format', 'routine', 'unpack'].sort(),
     );
   });
 });

@@ -20,7 +20,7 @@ import logging
 import time
 import uuid
 from collections import defaultdict
-from collections.abc import AsyncGenerator, AsyncIterator, Callable, Coroutine
+from collections.abc import AsyncGenerator, AsyncIterator, Coroutine
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass
 from typing import Any, cast
@@ -615,67 +615,52 @@ async def _send_telegram_message(telegram: TelegramClient, content: str, event_t
 
 def _build_alert_summary_prompt(alert: AlertInfo) -> str:
     """Build the follow-up prompt that turns an alert into a normal user-facing message."""
-    return "\n".join(
-        [
-            "A backend alert was just created for the user.",
-            "Use the `say_to_user` tool exactly once.",
-            "Do not call `notify_user`, `ask_user`, or any other tools.",
-            "Write a short alert-style summary for the user on their current platform.",
-            "Keep the message faithful to the alert details, but summarize it clearly and naturally.",
-            "After the tool call, reply with exactly: sent",
-            "```json",
-            json.dumps(
-                {
-                    "id": alert.id,
-                    "type": alert.type,
-                    "title": alert.title,
-                    "message": alert.message,
-                    "urgent": alert.urgent,
-                    "requires_response": alert.requires_response,
-                },
-                indent=2,
-            ),
-            "```",
-        ]
-    )
-
-
-async def _handle_alert_request(
-    progenitor: ProgenitorClient | SSEProgenitorClient | None,
-    *,
-    title: str,
-    body: str,
-    level: str,
-    urgent: bool,
-    requires_response: bool,
-    create_alert_record: Callable[..., AlertInfo],
-    broadcast_alert_record: Callable[[AlertInfo], None],
-    broadcast_alert_state: Callable[[], None],
-) -> None:
-    """Store an alert and ask Progenitor to summarize it through the normal user-message path."""
-    if not body:
-        return
-
-    alert = create_alert_record(
-        type=level,
-        title=title,
-        message=body,
-        urgent=urgent,
-        requires_response=requires_response,
-    )
-    broadcast_alert_record(alert)
-    broadcast_alert_state()
-
-    if progenitor is None:
-        logger.warning(
-            "Dropping alert summary request for %s because backend client is unavailable", alert.id
+    details: dict[str, Any] = {
+        "id": alert.id,
+        "type": alert.type,
+        "title": alert.title,
+        "message": alert.message,
+        "urgent": alert.urgent,
+        "requires_response": alert.requires_response,
+    }
+    if alert.context:
+        details["context"] = alert.context
+    lines = [
+        "A backend alert was just created for the user.",
+        "Use the `say_to_user` tool exactly once.",
+        "Do not call `ask_user` or any other tools.",
+        "Write a short alert-style summary for the user on their current platform.",
+        "Keep the message faithful to the alert details, but summarize it clearly and naturally.",
+    ]
+    approver = (alert.context or {}).get("approver")
+    if alert.requires_response and approver == "human":
+        lines.append(
+            "This needs a person's decision in the Progenitor UI; say where to answer it "
+            "and that you cannot answer it for them."
         )
-        return
+    elif alert.requires_response:
+        lines.append(
+            "Tell the user they can answer by replying to you (you will find it under /alerts/)."
+        )
+    lines += [
+        "After the tool call, reply with exactly: sent",
+        "```json",
+        json.dumps(details, indent=2),
+        "```",
+    ]
+    return "\n".join(lines)
 
+
+async def _relay_alert(
+    progenitor: ProgenitorClient | SSEProgenitorClient | None, alert: AlertInfo
+) -> None:
+    """Ask Progenitor to deliver a new alert through the normal user-message path."""
+    if progenitor is None:
+        logger.warning("Not relaying alert %s: backend client is unavailable", alert.id)
+        return
     try:
         if not progenitor.is_running:
             await progenitor.start()
-
         response_text = (
             await progenitor.send_message(
                 _build_alert_summary_prompt(alert),
@@ -689,7 +674,7 @@ async def _handle_alert_request(
                 response_text,
             )
     except Exception as e:
-        logger.warning("Failed to enqueue alert summary for %s: %s", alert.id, e)
+        logger.warning("Failed to relay alert %s: %s", alert.id, e)
 
 
 async def _handle_telegram_agent_message(
@@ -865,14 +850,15 @@ async def lifespan(app: FastAPI):
 
     # Initialize the Progenitor runtime HTTP client
     logger.info("Using Progenitor runtime client (base_url=%s)", config.progenitor_runtime_url)
-    # Import broadcast helpers for runtime events and alert state.
+    # Import broadcast helpers for runtime events.
     from .ui_routes import (
-        broadcast_alert,
-        broadcast_alerts_state,
         broadcast_schedule_snapshot,
         broadcast_ui_event,
-        create_alert,
+        set_alert_relay,
     )
+
+    # New alert documents are relayed to the user by Progenitor.
+    set_alert_relay(lambda alert: _relay_alert(client, alert))
 
     # Runtime events that imply the schedule document changed (a task fired and
     # was removed/restamped, or a schedule was created/edited from a chat).
@@ -886,28 +872,6 @@ async def lifespan(app: FastAPI):
         - If no web clients connected, also sends to Telegram
         - Only forwards certain event types to Telegram (agent_message, agent_question, scheduled_response)
         """
-        if event_type == "alert_request":
-            metadata = data.get("metadata") or {}
-            title = str(metadata.get("title") or "Alert").strip() or "Alert"
-            body = str(data.get("content") or "").strip()
-            level = str(metadata.get("level") or "info").strip().lower() or "info"
-            urgent = bool(metadata.get("urgent")) or level in {"warning", "error"}
-            requires_response = bool(metadata.get("requires_response"))
-
-            _spawn_background_task(
-                _handle_alert_request(
-                    client,
-                    title=title,
-                    body=body,
-                    level=level,
-                    urgent=urgent,
-                    requires_response=requires_response,
-                    create_alert_record=create_alert,
-                    broadcast_alert_record=broadcast_alert,
-                    broadcast_alert_state=broadcast_alerts_state,
-                )
-            )
-            return
 
         # Always broadcast to SSE
         metadata = data.get("metadata") or {}

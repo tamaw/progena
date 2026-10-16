@@ -10,6 +10,7 @@ from app.progenitor.agent.backends import (
     create_object_agent_plugin_skill_routes,
     create_progenitor_backend,
 )
+from app.progenitor.agent.state_backend import RepoDirectoryBackend
 
 
 class FakeContentStateManager(MagicMock):
@@ -102,6 +103,7 @@ class TestBackendFactory:
             assert "/schemas/" in backend.routes
             assert isinstance(backend.routes["/self/"], ReadOnlyBackend)
             assert isinstance(backend.routes["/repos/"], ReadOnlyBackend)
+            assert isinstance(backend.routes["/config/repos/"], RepoDirectoryBackend)
             assert isinstance(backend.routes["/logs/"], ReadOnlyBackend)
             assert isinstance(backend.routes["/schemas/"], ReadOnlyBackend)
             assert isinstance(backend.routes["/schemas/"]._backend, FilesystemBackend)

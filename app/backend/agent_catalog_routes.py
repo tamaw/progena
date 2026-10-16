@@ -34,6 +34,7 @@ from .chat_sessions import UiRequestAcknowledgement, acknowledgement_response
 from .document_store import PROGENITOR_STATE_PREFIX, BackendDocumentStore, store_database_url
 from .request_utils import BroadcastUiEvent
 from .request_utils import request_correlation_id as _request_correlation_id
+from .routine_runs import append_background_task, enqueue_routine_run
 
 
 class AgentGraphModel(BaseModel):
@@ -232,36 +233,6 @@ def build_agent_profiles(store: AgentStore | None) -> AgentProfilesResponse:
     records = editable + a2a_profiles_from_registry() + acp_profiles_from_registry()
     agents = [AgentProfile(**record) for record in records]
     return AgentProfilesResponse(agents=agents, total=len(agents))
-
-
-def _append_background_task_locked(
-    doc_store: BackendDocumentStore,
-    task: dict[str, Any],
-) -> None:
-    """Atomically append a task to the shared background_tasks document.
-
-    Uses a Postgres advisory lock so concurrent backend enqueues and runtime
-    dequeues cannot lose or duplicate tasks.
-    """
-    url = store_database_url(doc_store)
-    if not url:
-        existing = doc_store.get_document(PROGENITOR_STATE_PREFIX, "background_tasks", [])
-        tasks = list(existing.payload) if existing is not None else []
-        tasks.append(task)
-        doc_store.save_document(PROGENITOR_STATE_PREFIX, "background_tasks", tasks)
-        return
-
-    import psycopg
-
-    with psycopg.connect(url, autocommit=True) as conn:
-        conn.execute("SELECT pg_advisory_lock(hashtextextended('background_tasks', 0))")
-        try:
-            existing = doc_store.get_document(PROGENITOR_STATE_PREFIX, "background_tasks", [])
-            tasks = list(existing.payload) if existing is not None else []
-            tasks.append(task)
-            doc_store.save_document(PROGENITOR_STATE_PREFIX, "background_tasks", tasks)
-        finally:
-            conn.execute("SELECT pg_advisory_unlock(hashtextextended('background_tasks', 0))")
 
 
 def object_agent_system_markdown(payload: ObjectAgentCreateRequest) -> str:
@@ -645,39 +616,13 @@ def create_agent_profile_router(
                     detail=f"Run parameters failed validation: {validation_error}",
                 )
 
-        doc_store = get_document_store()
-        session_id = body.session_id or uuid.uuid4().hex
-        metadata: dict[str, Any] = {
-            "kind": "routine_run",
-            "routine_id": agent_id,
-            "session_id": session_id,
-            "request_id": request_id,
-        }
-        if body.target_node:
-            metadata["target_node"] = body.target_node
-        if body.parameters:
-            metadata["parameters"] = body.parameters
-        queued_at = utcnow_isoformat()
-        _append_background_task_locked(
-            doc_store,
-            {
-                "id": f"routine-run-{uuid.uuid4().hex}",
-                "content": f'Run the "{agent_id}" routine graph.',
-                "metadata": metadata,
-                "created_at": queued_at,
-            },
-        )
-        from app.progenitor.routines.events import RUN_EVENT_PREFIX
-
-        lifecycle = {
-            "agent_id": agent_id,
-            "session_id": session_id,
-            "request_id": request_id,
-            "status": "enqueued",
-            "timestamp": queued_at,
-        }
-        doc_store.save_document(
-            PROGENITOR_STATE_PREFIX, f"{RUN_EVENT_PREFIX}{request_id}:enqueued", lifecycle
+        lifecycle = enqueue_routine_run(
+            get_document_store(),
+            agent_id,
+            request_id=request_id,
+            session_id=body.session_id,
+            parameters=body.parameters,
+            target_node=body.target_node,
         )
         from .routine_events import routine_events
 
@@ -730,7 +675,7 @@ def create_agent_profile_router(
                 queued_at = utcnow_isoformat()
                 doc_store.save_document(PROGENITOR_STATE_PREFIX, claim_key, metadata)
                 try:
-                    _append_background_task_locked(
+                    append_background_task(
                         doc_store,
                         {
                             "id": f"routine-answer-{uuid.uuid4().hex}",

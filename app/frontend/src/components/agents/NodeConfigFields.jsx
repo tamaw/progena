@@ -535,6 +535,18 @@ export function NodeConfigBody({ id, kind, config, updateNodeConfig, replaceNode
       <>
         <ConfigField id={id} config={config} field="message" label="Approval message" placeholder="What should a person approve?" multiline updateNodeConfig={updateNodeConfig} />
         <StringListField id={id} config={config} field="allowed_responses" label="Allowed responses (comma-separated)" placeholder="approve, reject" updateNodeConfig={updateNodeConfig} />
+        <label className="agents-graph-node__field">
+          <span className="agents-graph-node__field-label">Who can answer</span>
+          <select
+            className="agents-graph-node__toolinput"
+            aria-label="Who can answer"
+            value={config?.approver || 'any'}
+            onChange={(event) => updateNodeConfig(id, { approver: event.target.value })}
+          >
+            <option value="any">A person or Progenitor</option>
+            <option value="human">Only a person</option>
+          </select>
+        </label>
       </>
     );
   }

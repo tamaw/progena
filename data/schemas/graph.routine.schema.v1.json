@@ -273,6 +273,7 @@
       "properties": {
         "message": { "type": "string", "minLength": 1 },
         "allowed_responses": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "string", "minLength": 1 } },
+        "approver": { "enum": ["human", "any"], "default": "any", "description": "Who may answer: 'human' only through the Progenitor UI, 'any' also lets Progenitor answer (resume_routine)." },
         "retry": { "$ref": "#/$defs/retryPolicy" },
         "timeout": { "type": "number", "minimum": 0, "description": "Seconds before this node is abandoned, overriding the execution policy attempt timeout. 0 disables the limit." }
       }

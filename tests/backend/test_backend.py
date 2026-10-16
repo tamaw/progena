@@ -12,7 +12,7 @@ import pytest
 from app.backend.alerts import AlertInfo
 from app.backend.client import ProgenitorClient
 from app.backend.config import ChatServerConfig
-from app.backend.main import _build_alert_summary_prompt, _handle_alert_request
+from app.backend.main import _build_alert_summary_prompt, _relay_alert
 from app.backend.models import AgentResponse, ResponseRequest
 from app.backend.sse_client import start_sse_client_with_retry
 
@@ -138,100 +138,66 @@ class TestSSEEventForwardingStartup:
         sleep.assert_awaited_once_with(0.25)
 
 
-class TestAlertRequestHandling:
-    """Tests for backend-managed notify_user alert processing."""
+class TestAlertRelay:
+    """New alert documents are relayed to the user through Progenitor."""
 
-    def test_build_alert_summary_prompt_constrains_tool_use(self):
-        alert = AlertInfo(
-            id="alert-1",
-            type="warning",
-            title="Build failed",
-            message="Tests failed in CI",
-            timestamp=123.0,
-            urgent=True,
-            requires_response=False,
+    def _alert(self, **overrides):
+        return AlertInfo(
+            **{
+                "id": "alert-1",
+                "type": "warning",
+                "title": "Build failed",
+                "message": "Tests failed in CI",
+                "timestamp": 123.0,
+                "urgent": True,
+                "requires_response": False,
+                **overrides,
+            }
         )
 
-        prompt = _build_alert_summary_prompt(alert)
+    def test_build_alert_summary_prompt_constrains_tool_use(self):
+        prompt = _build_alert_summary_prompt(self._alert())
 
         assert "Use the `say_to_user` tool exactly once." in prompt
-        assert "Do not call `notify_user`, `ask_user`, or any other tools." in prompt
+        assert "Do not call `ask_user` or any other tools." in prompt
         assert '"title": "Build failed"' in prompt
         assert '"message": "Tests failed in CI"' in prompt
 
-    @pytest.mark.asyncio
-    async def test_handle_alert_request_stores_and_summarizes(self):
-        alert = AlertInfo(
-            id="alert-42",
-            type="error",
-            title="Build failed",
-            message="Tests failed in CI",
-            timestamp=123.0,
-            urgent=True,
-            requires_response=False,
+    def test_prompt_says_who_may_answer_a_pause(self):
+        human_only = _build_alert_summary_prompt(
+            self._alert(requires_response=True, context={"approver": "human"})
         )
+        anyone = _build_alert_summary_prompt(
+            self._alert(requires_response=True, context={"approver": "any"})
+        )
+
+        assert "cannot answer it for them" in human_only
+        assert "replying to you" not in human_only
+        assert "replying to you" in anyone
+
+    @pytest.mark.asyncio
+    async def test_relay_sends_one_summary_turn(self):
         progenitor = AsyncMock()
         progenitor.is_running = True
         progenitor.send_message = AsyncMock(
             return_value=AgentResponse(response="sent", reasoning=None, reasoning_tokens=None)
         )
-        create_alert_record = MagicMock(return_value=alert)
-        broadcast_alert_record = MagicMock()
-        broadcast_alert_state = MagicMock()
 
-        await _handle_alert_request(
-            progenitor,
-            title="Build failed",
-            body="Tests failed in CI",
-            level="error",
-            urgent=True,
-            requires_response=False,
-            create_alert_record=create_alert_record,
-            broadcast_alert_record=broadcast_alert_record,
-            broadcast_alert_state=broadcast_alert_state,
-        )
+        await _relay_alert(progenitor, self._alert(id="alert-42"))
 
-        create_alert_record.assert_called_once_with(
-            type="error",
-            title="Build failed",
-            message="Tests failed in CI",
-            urgent=True,
-            requires_response=False,
-        )
-        broadcast_alert_record.assert_called_once_with(alert)
-        broadcast_alert_state.assert_called_once_with()
         progenitor.start.assert_not_awaited()
         progenitor.send_message.assert_awaited_once()
         assert progenitor.send_message.await_args.kwargs["request_id"] == "alert-summary-alert-42"
 
     @pytest.mark.asyncio
-    async def test_handle_alert_request_starts_client_when_needed(self):
-        alert = AlertInfo(
-            id="alert-7",
-            type="info",
-            title="Reminder",
-            message="Check logs",
-            timestamp=123.0,
-            urgent=False,
-            requires_response=False,
-        )
+    async def test_relay_starts_client_when_needed(self):
         progenitor = AsyncMock()
         progenitor.is_running = False
         progenitor.send_message = AsyncMock(
             return_value=AgentResponse(response="sent", reasoning=None, reasoning_tokens=None)
         )
 
-        await _handle_alert_request(
-            progenitor,
-            title="Reminder",
-            body="Check logs",
-            level="info",
-            urgent=False,
-            requires_response=False,
-            create_alert_record=MagicMock(return_value=alert),
-            broadcast_alert_record=MagicMock(),
-            broadcast_alert_state=MagicMock(),
-        )
+        await _relay_alert(progenitor, self._alert())
 
         progenitor.start.assert_awaited_once()
 

@@ -21,7 +21,7 @@ import logging
 import uuid
 from collections.abc import Awaitable, Callable, Mapping
 from datetime import timedelta
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 from deepagents.middleware.subagents import CompiledSubAgent
 from langchain_core.language_models import BaseChatModel
@@ -44,7 +44,7 @@ from .approvals import (
     pending_approvals,
     validate_answer,
 )
-from .events import persist_run_event
+from .events import persist_run_event, routine_run_output
 from .factory import compile_routine_graph
 from .graph import RoutineContext, validate_routine_graph_payload
 from .revisions import RoutineRevisionReader
@@ -392,11 +392,14 @@ def create_routine_executor(
 
         update: dict[str, Any] = dict(result)
         update["_routine_thread_id"] = run_thread_id
+        update["_routine_output"] = routine_run_output(selected_graph.output_schema, result)
         if checkpointer is not None:
             snapshot = await compiled.aget_state(run_config)
             update["_routine_paused"] = bool(snapshot.next or snapshot.interrupts)
+            update["_routine_pause"] = _pause_details(snapshot.interrupts)
         else:
             update["_routine_paused"] = bool(result.get("__interrupt__"))
+            update["_routine_pause"] = _pause_details(result.get("__interrupt__") or ())
         if revision_id is not None:
             update[ROUTINE_REVISIONS_STATE_KEY] = {routine_id: revision_id}
         return update
@@ -439,8 +442,13 @@ def create_routine_executor(
             raise
         finally:
             var_child_runnable_config.reset(token)
+        paused = bool(result.get("_routine_paused"))
         await persist_run_event(
-            state_manager, execution, "paused" if result.get("_routine_paused") else "completed"
+            state_manager,
+            {**execution, **(result.get("_routine_pause") or {})}
+            if paused
+            else {**execution, "output": result.get("_routine_output")},
+            "paused" if paused else "completed",
         )
         # Execution provenance, not a dependency pin. The caller checkpoints
         # this alongside that node's output; the next call still resolves live.
@@ -570,6 +578,24 @@ def _parse_routine_thread_id(thread_id: str) -> tuple[str, str | None]:
     return routine_id, (None if revision_id == "unpinned" else revision_id)
 
 
+def _pause_details(interrupts: Any) -> dict[str, Any]:
+    """What a paused run's lifecycle event says it is waiting for.
+
+    The first pending human step's question, allowed answers and approver, so
+    a caller (e.g. a workflow raising a pause alert) can tell the user what to
+    answer and whether Progenitor may answer it.
+    """
+    approvals = pending_approvals(interrupts or ())
+    if not approvals:
+        return {}
+    first = approvals[0]
+    return {
+        "question": first["message"],
+        "allowed_responses": first["allowed_responses"],
+        "approver": first["approver"],
+    }
+
+
 async def resume_routine_thread(
     *, thread_id: str, answer: Any, database_url: str | None = None, **kwargs: Any
 ) -> dict[str, Any]:
@@ -594,6 +620,7 @@ async def _resume_routine_thread(
     checkpointer: Any | None = None,
     interrupt_id: str | None = None,
     request_id: str | None = None,
+    answered_by: Literal["human", "agent"] = "human",
 ) -> dict[str, Any]:
     """Resume a routine run paused at a human node, given its exact thread_id.
 
@@ -645,6 +672,11 @@ async def _resume_routine_thread(
         model_profiles=await state_manager.get_model_profiles_config(),
     )
     approval = validate_answer(pending_approvals(checkpoint.interrupts), answer, interrupt_id)
+    if answered_by == "agent" and approval["approver"] == "human":
+        raise ValueError(
+            "This step needs a person's answer: answer it in the Progenitor UI "
+            "(Routines page or the alert), not through Progenitor."
+        )
     get_decision = getattr(state_manager, "get_routine_approval_decision", None)
     if callable(get_decision):
         read_decision = cast(Callable[..., Awaitable[Any]], get_decision)
@@ -683,7 +715,13 @@ async def _resume_routine_thread(
         cast(Any, exc).routine_lifecycle_reported = True
         raise
     interrupts = result.get("__interrupt__") if isinstance(result, dict) else None
-    await persist_run_event(state_manager, execution, "paused" if interrupts else "completed")
+    await persist_run_event(
+        state_manager,
+        {**execution, **_pause_details(interrupts)}
+        if interrupts
+        else {**execution, "output": routine_run_output(graph.output_schema, result)},
+        "paused" if interrupts else "completed",
+    )
     if interrupts:
         payload = interrupts[0].value if hasattr(interrupts[0], "value") else interrupts[0]
         question = payload.get("message") if isinstance(payload, dict) else str(payload)

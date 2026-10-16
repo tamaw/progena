@@ -162,6 +162,7 @@ def _build_human_node(node: RoutineNode) -> Any:
             {
                 "node": node.id,
                 "message": message,
+                "approver": config.get("approver", "any"),
                 **(
                     {"allowed_responses": allowed_responses}
                     if allowed_responses is not None

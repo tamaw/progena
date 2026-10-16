@@ -73,7 +73,7 @@ class Progenitor:
         only re-applies the disabled set, ``plugins`` runs the plugin
         reconciler, and ``agent:`` documents refresh the sub-agent registry.
         Each routes onto a coalescing scheduler. Documents the backend also
-        writes (repos, repo scan, background tasks) are read through from the
+        writes (``repo:<id>`` documents, repo scan, background tasks) are read through from the
         store by ``StateManager`` instead, so they need no notification here.
         """
         try:

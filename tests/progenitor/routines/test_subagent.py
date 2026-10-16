@@ -332,6 +332,43 @@ async def test_task_description_binds_structured_routine_inputs_and_returns_outp
     assert model.calls[0][-1].content == "What is 40 + 2? / 2"
 
 
+class _RecordingEventsStateManager(_MultiRoutineStateManager):
+    def __init__(self, graphs):
+        super().__init__(graphs)
+        self.events: list[dict[str, Any]] = []
+
+    async def save_routine_run_event(self, payload):
+        self.events.append(payload)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("output_schema", "expected"),
+    [
+        (None, {"message": "hello output"}),
+        (
+            {"type": "object", "properties": {"out": {"type": "string"}}},
+            {"out": "hello output"},
+        ),
+    ],
+)
+async def test_completed_event_carries_the_routine_output(output_schema, expected):
+    graph = _graph_doc("hello output")
+    if output_schema:
+        graph["output_schema"] = output_schema
+    manager = _RecordingEventsStateManager({ROUTINE_ID: graph})
+    runner = _ephemeral_runner(manager, _FakeRevisionReader({}), _EchoModel())
+
+    await runner(ROUTINE_ID, {"messages": [HumanMessage("go")], "_interactive_session_id": "s1"})
+
+    started, completed = manager.events
+    assert (started["status"], completed["status"]) == ("started", "completed")
+    assert completed["session_id"] == "s1"
+    assert completed["thread_id"].endswith(":s1")
+    assert completed["output"] == expected
+    assert "output" not in started
+
+
 @pytest.mark.asyncio
 async def test_task_description_rejects_missing_or_invalid_structured_inputs():
     graph = _graph_doc("{question} / {limit}")
@@ -700,6 +737,51 @@ async def test_resume_routine_thread_completes_after_interrupt():
 
     assert resumed["status"] == "completed"
     assert resumed["thread_id"] == thread_id
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("approver", "agent_allowed"), [("human", False), ("any", True)])
+async def test_agent_answers_respect_the_human_node_approver(approver, agent_allowed):
+    import re
+
+    from langgraph.checkpoint.memory import MemorySaver
+
+    graph_doc = _graph_doc_with_human()
+    graph_doc["nodes"][0]["config"]["approver"] = approver
+    checkpointer = MemorySaver()
+    reader = _FakeRevisionReader({"rev-a": graph_doc}, latest="rev-a")
+    spec = create_routine_subagent(
+        routine_id=ROUTINE_ID,
+        description="test routine",
+        model=_EchoModel(),
+        state_manager=_FakeStateManager(graph_doc),
+        revision_reader=reader,
+        agent_registry={},
+        routine_registry={},
+        checkpointer=checkpointer,
+    )
+    first = await spec["runnable"].ainvoke({"messages": [HumanMessage(content="go")]})
+    match = re.search(r"thread_id=('routine:[^']+')", first["messages"][-1].content)
+    assert match is not None
+    kwargs = {
+        "thread_id": match.group(1).strip("'"),
+        "answer": "blue",
+        "model": _EchoModel(),
+        "state_manager": _FakeStateManager(graph_doc),
+        "revision_reader": reader,
+        "agent_registry": {},
+        "routine_registry": {},
+        "checkpointer": checkpointer,
+    }
+
+    if agent_allowed:
+        resumed = await resume_routine_thread(**kwargs, answered_by="agent")
+        assert resumed["status"] == "completed"
+    else:
+        with pytest.raises(ValueError, match="needs a person's answer"):
+            await resume_routine_thread(**kwargs, answered_by="agent")
+        # A person (the UI path) can still answer it.
+        assert (await resume_routine_thread(**kwargs))["status"] == "completed"
 
 
 @pytest.mark.asyncio
