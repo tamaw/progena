@@ -18,7 +18,8 @@ x-progenitor-database-env: &progenitor-database-env
 
 services:
   postgres:
-    image: postgres:16-alpine
+    # pgvector: the knowledge index needs the `vector` extension.
+    image: pgvector/pgvector:pg16
     container_name: progenitor-postgres
     restart: unless-stopped
     environment:
