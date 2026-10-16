@@ -1,0 +1,66 @@
+"""Who owns an instruction, and what an edit may change.
+
+Instructions are ``instruction:<group>/<file>.md`` documents in the
+:mod:`templates` format (optional ``title``/``description``/``inputs``/
+``output_schema``/``system`` front matter, ``{placeholder}`` body). The first
+path segment is the group:
+
+* ``progenitor/`` is read by the runtime, which fills each placeholder from
+  code, so edits must keep the same placeholders;
+* bundled groups (:data:`BUNDLED_INSTRUCTION_GROUPS`) belong to A2A agents that
+  read their own copy from ``data/instructions/``; the stored copy mirrors that
+  file and cannot be edited;
+* any other group (e.g. ``workflows/``) is a template that workflow nodes
+  reference, freely editable by the user and the agent.
+"""
+
+from __future__ import annotations
+
+from .templates import instruction_relative_path, parse_instruction_template
+
+RUNTIME_INSTRUCTION_GROUP = "progenitor"
+GENESIS_INSTRUCTION = "progenitor/genesis.md"
+BUNDLED_INSTRUCTION_GROUPS = frozenset({"builder_agent", "builder_progenitor", "observe_agent"})
+
+
+def instruction_group(path: str) -> str:
+    """The group an instruction path belongs to (its first segment, or ``""``)."""
+    return path.split("/", 1)[0] if "/" in path else ""
+
+
+def is_runtime_instruction(path: str) -> bool:
+    """Whether the Progenitor runtime reads this instruction and fills it from code."""
+    return instruction_group(path) == RUNTIME_INSTRUCTION_GROUP
+
+
+def is_bundled_instruction(path: str) -> bool:
+    """Whether an A2A agent reads this instruction from its own disk copy."""
+    return instruction_group(path) in BUNDLED_INSTRUCTION_GROUPS
+
+
+def check_instruction_write(path: str, previous: str | None, content: str) -> None:
+    """Raise ``ValueError`` unless ``content`` may replace ``previous`` at ``path``."""
+    instruction_relative_path(path)
+    if is_bundled_instruction(path):
+        raise PermissionError(
+            f"'{path}' is bundled with {instruction_group(path)}, which reads it from disk; "
+            "change it in data/instructions/ instead"
+        )
+    roots = parse_instruction_template(content).roots
+    if is_runtime_instruction(path) and previous is not None:
+        expected = parse_instruction_template(previous).roots
+        if sorted(roots) != sorted(expected):
+            raise ValueError(
+                "the runtime fills this instruction's placeholders from code; keep exactly "
+                + ", ".join(f"{{{name}}}" for name in sorted(expected))
+                if expected
+                else "the runtime fills this instruction from code; it takes no {placeholders}"
+            )
+
+
+def render_instruction(instruction: str, /, **replacements: object) -> str:
+    """The instruction body with ``{name}`` placeholders replaced by ``replacements``."""
+    body = parse_instruction_template(instruction).body
+    for key, value in replacements.items():
+        body = body.replace(f"{{{key}}}", str(value))
+    return body

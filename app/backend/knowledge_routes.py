@@ -14,8 +14,8 @@ from typing import Any
 
 from fastapi import APIRouter, Header, HTTPException, Query, Request
 
+from app.progenitor.front_matter import split_front_matter
 from app.progenitor.knowledge import find_base, validate_knowledge_payload
-from app.progenitor.knowledge.pages import split_front_matter
 
 from .chat_sessions import UiRequestAcknowledgement, acknowledgement_response
 from .document_store import get_default_document_store

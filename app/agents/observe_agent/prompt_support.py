@@ -11,29 +11,29 @@ from pathlib import Path
 
 # prompt_support.py -> observe_agent/ -> agents/ -> app/ -> project_root/
 _PROJECT_ROOT = Path(__file__).resolve().parents[3]
-DEFAULT_PROMPTS_DIR = _PROJECT_ROOT / "data" / "prompts"
+DEFAULT_INSTRUCTIONS_DIR = _PROJECT_ROOT / "data" / "instructions"
 
 
-def resolve_prompts_dir(prompts_dir: Path | str | None = None) -> Path:
+def resolve_instructions_dir(instructions_dir: Path | str | None = None) -> Path:
     """Resolve prompt directory from explicit override, env, and project default."""
-    if prompts_dir is not None:
-        return Path(prompts_dir).expanduser().resolve()
+    if instructions_dir is not None:
+        return Path(instructions_dir).expanduser().resolve()
 
-    env_prompts_dir = os.getenv("PROGENITOR_PROMPTS_DIR", "").strip()
-    if env_prompts_dir:
-        resolved_env_dir = Path(env_prompts_dir).expanduser().resolve()
+    env_instructions_dir = os.getenv("PROGENITOR_INSTRUCTIONS_DIR", "").strip()
+    if env_instructions_dir:
+        resolved_env_dir = Path(env_instructions_dir).expanduser().resolve()
         if not resolved_env_dir.exists():
             raise FileNotFoundError(
-                f"PROGENITOR_PROMPTS_DIR points to missing directory: {resolved_env_dir}"
+                f"PROGENITOR_INSTRUCTIONS_DIR points to missing directory: {resolved_env_dir}"
             )
         return resolved_env_dir
 
-    if not DEFAULT_PROMPTS_DIR.exists():
+    if not DEFAULT_INSTRUCTIONS_DIR.exists():
         raise FileNotFoundError(
-            f"Prompts directory not found: {DEFAULT_PROMPTS_DIR}. "
-            "Ensure the data/prompts/ directory exists at the project root."
+            f"Instructions directory not found: {DEFAULT_INSTRUCTIONS_DIR}. "
+            "Ensure the data/instructions/ directory exists at the project root."
         )
-    return DEFAULT_PROMPTS_DIR
+    return DEFAULT_INSTRUCTIONS_DIR
 
 
 def render_prompt_template(content: str, **replacements: object) -> str:
@@ -44,23 +44,33 @@ def render_prompt_template(content: str, **replacements: object) -> str:
     return rendered
 
 
+def strip_front_matter(content: str) -> str:
+    """Return an instruction's body without its leading YAML front matter block."""
+    if not content.startswith("---\n"):
+        return content
+    end = content.find("\n---\n", 3)
+    if end == -1:
+        raise ValueError("unclosed YAML front matter")
+    return content[end + 5 :]
+
+
 def load_prompt(
     filename: str,
     *,
-    prompts_dir: Path | str | None = None,
+    instructions_dir: Path | str | None = None,
     **replacements: object,
 ) -> str:
     """Load a prompt file and apply simple template replacements."""
-    prompt_root = resolve_prompts_dir(prompts_dir)
+    prompt_root = resolve_instructions_dir(instructions_dir)
     prompt_file = prompt_root / filename
     if not prompt_file.exists():
         searched_dirs = [str(prompt_root)]
-        if prompt_root != DEFAULT_PROMPTS_DIR:
-            searched_dirs.append(str(DEFAULT_PROMPTS_DIR))
+        if prompt_root != DEFAULT_INSTRUCTIONS_DIR:
+            searched_dirs.append(str(DEFAULT_INSTRUCTIONS_DIR))
         raise FileNotFoundError(
             f"Prompt file not found: {prompt_file}. "
-            f"Ensure data/prompts/{filename} exists. Searched prompt directories: {', '.join(searched_dirs)}"
+            f"Ensure data/instructions/{filename} exists. Searched prompt directories: {', '.join(searched_dirs)}"
         )
 
-    content = prompt_file.read_text(encoding="utf-8")
+    content = strip_front_matter(prompt_file.read_text(encoding="utf-8"))
     return render_prompt_template(content, **replacements)

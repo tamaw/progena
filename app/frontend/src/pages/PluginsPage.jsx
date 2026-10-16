@@ -61,16 +61,16 @@ function PluginRow({ plugin, entry, selected, onSelect }) {
   return (
     <button
       key={plugin.name}
-      className={`prompts-tree-leaf plugins-tree-leaf ${selected ? 'active' : ''}`}
+      className={`plugins-tree-leaf ${selected ? 'active' : ''}`}
       onClick={() => onSelect(plugin)}
       type="button"
       title={plugin.name}
     >
-      <span className="prompts-tree-file pane-row-title">
+      <span className="plugins-tree-file pane-row-title">
         <span className={`plugins-status-dot plugins-status-dot--${status}`} />
         {plugin.displayName || plugin.name}
       </span>
-      <span className="prompts-tree-file-path pane-row-caption">{plugin.description || plugin.name}</span>
+      <span className="plugins-tree-file-path pane-row-caption">{plugin.description || plugin.name}</span>
     </button>
   );
 }
@@ -86,7 +86,7 @@ export default function PluginsPage() {
   const realtime = useSelector(selectRealtime);
   const marketplaces = useSelector(selectMarketplaces);
   const installedPlugins = useSelector(selectPlugins);
-  const { collapsed, setCollapsed, paneClassName } = usePaneCollapse('plugins-sidebar prompts-sidebar sess-list');
+  const { collapsed, setCollapsed, paneClassName } = usePaneCollapse('plugins-sidebar sess-list');
   const [selectedMarketplace, setSelectedMarketplace] = useState('');
   const [selectedPlugin, setSelectedPlugin] = useState(null);
   const [query, setQuery] = useState('');
@@ -435,7 +435,7 @@ export default function PluginsPage() {
           <button type="button" onClick={() => setNeedsNewConversation(false)} aria-label="Dismiss">×</button>
         </div>
       ) : null}
-      <div className="plugins-page__row prompts-page">
+      <div className="plugins-page__row">
       <PaneSection as="aside" className={paneClassName} aria-label="Plugins" onItemSelect={() => setCollapsed(true)}>
         {collapsed ? (
           <PaneExpandRail label="Plugins" onExpand={() => setCollapsed(false)} />
@@ -477,7 +477,7 @@ export default function PluginsPage() {
         )}
         {pluginTree.length ? (
           <PaneListRows
-            className="prompts-sidebar-body"
+            className="plugins-sidebar-body"
             groups={pluginTree.map((group) => ({ ...group, items: group.skills }))}
             getItemKey={(plugin) => plugin.name}
             renderItem={(plugin) => (
@@ -494,7 +494,7 @@ export default function PluginsPage() {
         )}
       </PaneSection>
 
-      <main className="plugins-editor prompts-editor">
+      <main className="plugins-editor">
         {!selectedPlugin && (
           <PaneEmptyState>Select a plugin to view details and install.</PaneEmptyState>
         )}
@@ -639,7 +639,7 @@ export default function PluginsPage() {
               </section>
             </div>
 
-            <div className="prompts-editor-footer">
+            <div className="plugins-editor-footer">
               <span>{statusMessage || error?.message || (!realtime.connected ? 'Reconnect the realtime stream to install or uninstall plugins.' : '')}</span>
             </div>
           </>

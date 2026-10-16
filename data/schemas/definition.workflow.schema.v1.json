@@ -76,10 +76,10 @@
             "input_schema": {"type": "object"}, "output_schema": {"type": "object"}
           }},
           {"type": "object", "additionalProperties": false, "required": ["kind", "title"], "properties": {
-            "kind": {"const": "extract"}, "title": {"type": "string", "minLength": 1}, "prompt": {"type": ["string", "null"]}, "template": {"type": ["string", "null"]}, "schema": {}, "input_schema": {"type": "object"}, "output_schema": {"type": "object"}
+            "kind": {"const": "extract"}, "title": {"type": "string", "minLength": 1}, "instruction": {"type": ["string", "null"]}, "template": {"type": ["string", "null"]}, "schema": {}, "input_schema": {"type": "object"}, "output_schema": {"type": "object"}
           }},
           {"type": "object", "additionalProperties": false, "required": ["kind", "title"], "properties": {
-            "kind": {"const": "agent"}, "title": {"type": "string", "minLength": 1}, "prompt": {"type": ["string", "null"]}, "template": {"type": ["string", "null"]}, "subagent": {"type": ["string", "null"]}, "input_schema": {"type": "object"}, "output_schema": {"type": "object"}
+            "kind": {"const": "agent"}, "title": {"type": "string", "minLength": 1}, "instruction": {"type": ["string", "null"]}, "template": {"type": ["string", "null"]}, "subagent": {"type": ["string", "null"]}, "input_schema": {"type": "object"}, "output_schema": {"type": "object"}
           }},
           {"type": "object", "additionalProperties": false, "required": ["kind", "title", "routine"], "properties": {
             "kind": {"const": "routine"}, "title": {"type": "string", "minLength": 1},

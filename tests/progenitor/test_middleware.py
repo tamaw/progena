@@ -20,6 +20,7 @@ from app.progenitor.agent.middleware import (
     DynamicMCPToolMiddleware,
     SecretRedactionMiddleware,
 )
+from app.progenitor.instructions import DEFAULT_INSTRUCTIONS_DIR
 from app.progenitor.state.models import AsyncSubagentTaskRecord
 
 
@@ -407,7 +408,9 @@ class TestMiddlewareIntegration:
                 class _FakeStateManager:
                     def __init__(self):
                         self._docs = {
-                            "prompt": {"progenitor/genesis.md": "Genesis"},
+                            "instruction": {
+                                "progenitor/genesis.md": "---\ntitle: Genesis\ndescription: Test\n---\nGenesis"
+                            },
                             "skill": {},
                             "agent": {},
                             "memory": {},
@@ -429,12 +432,10 @@ class TestMiddlewareIntegration:
                         return []
 
                 with tempfile.TemporaryDirectory() as tmpdir:
-                    prompts_dir = Path(tmpdir) / "prompts"
-                    prompts_dir.mkdir()
                     fake_config = SimpleNamespace(
                         llm=SimpleNamespace(model_default="gpt-chat-latest"),
                         storage=SimpleNamespace(
-                            prompts_dir=prompts_dir,
+                            instructions_dir=DEFAULT_INSTRUCTIONS_DIR,
                             shim_bin_dir=Path(tmpdir) / "shims" / "bin",
                             shell_home_dir=Path(tmpdir) / "shell-home",
                             shell_workspace_dir=Path(tmpdir) / "shell-workspaces",

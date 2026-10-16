@@ -14,8 +14,8 @@ COPY app/ ./app/
 COPY scripts/ ./scripts/
 # data/schemas/ is a static, git-checked-in contract (JSON Schemas for
 # preferences, workflow nodes, MCP entries, ...) baked into the image --
-# unlike prompts/skills (Postgres-backed, seeded once), schemas are read
-# from disk on every load_schema() call, so this directory must exist.
+# schemas are read from disk on every load_schema() call, so this directory
+# must exist.
 COPY data/schemas/ ./data/schemas/
 # Bundled object agents are read-only files, shared with the runtime image.
 COPY data/agents/objects/ ./data/agents/objects/

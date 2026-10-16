@@ -6,6 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+from app.progenitor.instructions import DEFAULT_INSTRUCTIONS_DIR
 from tests.progenitor.conftest import _FakeRuntimeStore
 
 
@@ -15,7 +16,9 @@ class FakeContentStateManager:
     def __init__(self, *, prompt: str = "GENESIS") -> None:
         self._runtime_store = _FakeRuntimeStore()
         self._docs: dict[str, dict[str, str]] = {
-            "prompt": {"progenitor/genesis.md": prompt},
+            "instruction": {
+                "progenitor/genesis.md": f"---\ntitle: Genesis\ndescription: Test\n---\n{prompt}"
+            },
             "skill": {},
             "agent": {},
             "memory": {},
@@ -39,10 +42,9 @@ class FakeContentStateManager:
 
 def _fake_config(base_dir: Path) -> SimpleNamespace:
     data_dir = base_dir / "data"
-    prompts_dir = data_dir / "prompts"
     state_dir = data_dir / "state"
     log_dir = base_dir / "logs"
-    for path in (data_dir, prompts_dir, state_dir, log_dir):
+    for path in (data_dir, state_dir, log_dir):
         path.mkdir(parents=True, exist_ok=True)
 
     return SimpleNamespace(
@@ -51,7 +53,7 @@ def _fake_config(base_dir: Path) -> SimpleNamespace:
             data_dir=data_dir,
             state_dir=state_dir,
             log_dir=log_dir,
-            prompts_dir=prompts_dir,
+            instructions_dir=DEFAULT_INSTRUCTIONS_DIR,
         ),
     )
 

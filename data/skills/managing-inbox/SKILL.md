@@ -54,6 +54,124 @@ Full message body in **markdown** — headings, lists, links, code blocks, and
 `/schemas/inbox_message.schema.v1.json` documents the full message shape
 (useful as a reference; not required reading to send one).
 
+## Structured sections and questions
+
+When a message needs individually selectable parts, use Markdown headings
+`##`–`######`. Each heading starts a selectable section that continues until
+the next same-or-higher heading, a `<questions>` block, or the end of the
+document. The `#` title heading is not selectable.
+No section starts selected. Hover a section to reveal its icon actions; each
+icon expands to its full label on hover or keyboard focus. AI Edit opens a
+small prompt below its icon: Send instructs the agent through quick chat;
+Pop out moves the unsent draft into quick chat. Clicking away or pressing Escape
+dismisses it. Click a heading or rendered Markdown to select a section.
+Remove asks the agent to delete the section; the UI does not edit message
+content directly. Literal examples belong in Markdown code spans or fenced
+blocks.
+
+Most of a message can stay ordinary Markdown. Add sub-headings only around
+content that users may want to ask the agent to change independently. For
+example:
+
+```md
+# Release brief
+
+The candidate is ready for review. See the [test report](https://example.com/report).
+
+- API checks passed
+- Browser checks are in progress
+
+## Decision
+
+Ship after browser checks finish. **Do not** bypass the release checklist.
+
+## Next steps
+
+1. Review the report.
+2. Confirm the release window.
+```
+
+Nested headings keep the larger section selectable while allowing a precise
+instruction for one subsection:
+
+```md
+# Deployment review
+
+## Implementation
+
+The rollout has two independent stages.
+
+### Database
+
+1. Apply the migration.
+2. Verify old readers still work.
+
+### API
+
+Deploy the new reader behind the feature flag.
+
+#### Validation
+
+| Check | Expected |
+| --- | --- |
+| Read consistency | No missing records |
+| Error rate | Below baseline |
+
+## Follow-up
+
+Review the metrics tomorrow.
+```
+
+A question can also appear among normal Markdown paragraphs without a
+surrounding heading:
+
+```md
+# Migration note
+
+The current data remains available while we switch the reader.
+
+<questions id="migration-window">
+When should we switch traffic?
+<options>
+<option>During the next maintenance window</option>
+<option>After a week of shadow reads</option>
+</options>
+</questions>
+
+## Rollback
+
+Restore the previous reader if validation fails.
+```
+
+For a choice, put one question and its options in each `<questions>` block:
+
+```md
+## Implementation
+
+Choose an approach:
+
+<questions id="implementation">
+Which approach should we use?
+<options>
+<option>Use the existing API</option>
+<option>Add a dedicated endpoint</option>
+</options>
+</questions>
+```
+
+The listed options appear directly below the question without a show/hide
+step. The UI adds an "Enter your own" choice that opens a free-text answer
+field; do not include that choice in the message's `<options>` data.
+
+Use a stable `id` per question so the selected block is unambiguous. Multiple
+`<questions>` blocks can appear in a section. When the user chooses an option
+or enters their own answer, the quick-chat request identifies the question and
+asks you to read its latest version, then rewrite that `<questions>` section in
+your own words to include both the question and answer. Keep its wrapper, `id`,
+and `<options>` list so the user can revise their choice. Do not insert an
+`<answer>` tag or append the selected text verbatim. Preserve all unrelated
+sections and user-owned frontmatter.
+
 ## Common operations
 
 ### Send a message (recommended — schema-validated)

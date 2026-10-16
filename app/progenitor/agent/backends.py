@@ -10,7 +10,8 @@ Profile:
   - /self/ -> <project_root>/app (read-only)
   - /repos/ -> configured repo/worktree directory (read-only)
   - /logs/ -> configured log dir (read-only)
-  - /prompts/ -> Postgres content documents, kind="prompt" (read-only)
+  - /instructions/ -> Postgres content documents, kind="instruction" (validated writes;
+    bundled agent instructions read-only)
   - /skills/ -> <project_root>/data/skills (read-only, disk-mounted): progenitor's
     own native skills, static and baked into the image, same shape as /schemas/
   - /skills/<marketplace>__<plugin>/ -> Postgres content documents, kind="skill",
@@ -61,9 +62,9 @@ from .state_backend import (
     AlertDirectoryBackend,
     ContentDocumentDirectoryBackend,
     InboxDirectoryBackend,
+    InstructionDocumentDirectoryBackend,
     KanbanTaskDirectoryBackend,
     PolicyDirectoryBackend,
-    PromptDocumentDirectoryBackend,
     RepoDirectoryBackend,
     RoutineDirectoryBackend,
     StateDocumentBackend,
@@ -180,7 +181,7 @@ def create_progenitor_backend(
         agents_dir: Bundled agent directory, read-only at /agents/objects/
             and /agents/native/. Defaults to <project_root>/data/agents/objects.
         worktree_dir: Repository/worktree directory. Defaults to ``<project_root>/data/repos``.
-        state_manager: Required for prompts/memories/config mounts and for
+        state_manager: Required for instructions/memories/config mounts and for
             installed marketplace-plugin skill mounts (all Postgres-backed);
             without it those routes are omitted entirely.
         database_url: Required for the ``/attachments/`` mount (raw SQL over the
@@ -243,7 +244,7 @@ def create_progenitor_backend(
             state_manager, native_root=resolved_agents_dir
         )
         routes["/memories/"] = ContentDocumentDirectoryBackend(state_manager, "memory")
-        routes["/prompts/"] = PromptDocumentDirectoryBackend(state_manager, "prompt")
+        routes["/instructions/"] = InstructionDocumentDirectoryBackend(state_manager, "instruction")
         routes["/knowledge/"] = KnowledgePageBackend(state_manager)
         for segment in plugin_skill_segments or []:
             routes[f"/skills/{segment}/"] = ReadOnlyBackend(

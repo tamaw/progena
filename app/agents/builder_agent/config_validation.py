@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 
 class ConfigValidationError(Exception):
     """Raised when configuration validation fails."""
+
     pass
 
 
@@ -59,10 +60,10 @@ class StorageConfigValidator(BaseModel):
     state_dir: Path
     log_dir: Path
     worktree_dir: Path
-    prompts_dir: Path
+    instructions_dir: Path
     state_lock_timeout_seconds: int = Field(gt=0, le=300)
 
-    @field_validator('state_dir', 'log_dir', 'worktree_dir', 'prompts_dir', mode='after')
+    @field_validator("state_dir", "log_dir", "worktree_dir", "instructions_dir", mode="after")
     @classmethod
     def validate_path_is_absolute_or_relative(cls, v: Path) -> Path:
         """Ensure paths are valid."""
@@ -142,7 +143,7 @@ def validate_storage_config(config) -> list[str]:
             state_dir=config.state_dir,
             log_dir=config.log_dir,
             worktree_dir=config.worktree_dir,
-            prompts_dir=config.prompts_dir,
+            instructions_dir=config.instructions_dir,
             state_lock_timeout_seconds=config.state_lock_timeout_seconds,
         )
     except Exception as e:
@@ -220,6 +221,6 @@ def validate_config_or_raise(config) -> None:
 
     if not is_valid:
         raise ConfigValidationError(
-            f"Configuration validation failed with {len(issues)} error(s):\n" +
-            "\n".join(f"  - {issue}" for issue in issues)
+            f"Configuration validation failed with {len(issues)} error(s):\n"
+            + "\n".join(f"  - {issue}" for issue in issues)
         )

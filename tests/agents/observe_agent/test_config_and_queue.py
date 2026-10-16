@@ -23,7 +23,7 @@ def test_observe_config_prefers_agent_model(monkeypatch) -> None:
     monkeypatch.setenv("PROGENITOR_MODEL_DEFAULT", "gpt-5.1")
     monkeypatch.setenv("PROGENITOR_LOG_DIR", "/tmp/logs")
     monkeypatch.delenv("PROGENITOR_DATA_DIR", raising=False)
-    monkeypatch.delenv("PROGENITOR_PROMPTS_DIR", raising=False)
+    monkeypatch.delenv("PROGENITOR_INSTRUCTIONS_DIR", raising=False)
     # Asserts the built-in default below, so the overrides that would displace
     # it have to go too -- a developer .env commonly sets PROGENITOR_WORKTREE_DIR.
     monkeypatch.delenv("PROGENITOR_WORKTREE_DIR", raising=False)
@@ -36,7 +36,7 @@ def test_observe_config_prefers_agent_model(monkeypatch) -> None:
     assert config.storage.state_dir == repo_root / "data" / "state"
     assert config.storage.log_dir == Path("/tmp/logs")
     assert config.storage.worktree_dir == repo_root / "worktrees"
-    assert config.storage.prompts_dir == repo_root / "data" / "prompts"
+    assert config.storage.instructions_dir == repo_root / "data" / "instructions"
 
 
 def test_observe_task_log_path_defaults_to_repo_logs(monkeypatch) -> None:

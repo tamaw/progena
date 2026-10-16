@@ -90,7 +90,7 @@ Most list/detail pages compose the same primitives instead of re-rolling layout:
 `PaneList*` (left list), `DetailHeader` + `DetailPane` (right detail),
 `DetailCards` (metric/fact/chip cards), and `useListSelection` (filter/group/select).
 Examples: `ChannelsPage`, `ModelsPage`, `RepositoriesPage`, `SessionsPage`,
-`PluginsPage`, `PromptsPage`, `KnowledgePage`, `TasksPage`.
+`PluginsPage`, `InstructionsPage`, `KnowledgePage`, `TasksPage`.
 Don't build a generic `<MasterDetailPage>` — the primitives are the abstraction.
 
 ### Keep components thin — extract pure logic

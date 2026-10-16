@@ -23,7 +23,8 @@ from langgraph.graph.state import CompiledStateGraph
 
 from ..async_subagents.tasks import create_agent_background_runner
 from ..config import ProgenitorConfig, get_config
-from ..content_documents import ensure_content_documents_seeded
+from ..content_documents import sync_instruction_documents
+from ..instructions import GENESIS_INSTRUCTION, render_instruction
 from ..routines.approvals import approval_lock
 from ..routines.graph import validate_routine_graph_payload
 from ..routines.revisions import (
@@ -50,6 +51,7 @@ from .middleware import (
     AuditLoggingMiddleware,
     DirectA2AFastPathMiddleware,
     DynamicMCPToolMiddleware,
+    LiveInstructionMiddleware,
     SchemaCompactionMiddleware,
     SecretRedactionMiddleware,
     ToolErrorMiddleware,
@@ -161,11 +163,11 @@ async def create_progenitor_agent(
                       If None, uses in-memory checkpointer (dev mode).
         tool_registry: Progenitor's tool/agent registry (for tool context).
         llm_client: Progenitor's LLM client (for tools that need AI).
-        state_manager: Progenitor's StateManager. Required: prompts and runtime
-                       memories are Postgres-backed content documents (see
-                       ``content_documents.py``), installed marketplace-plugin
+        state_manager: Progenitor's StateManager. Required: instructions and
+                       runtime memories are Postgres-backed content documents
+                       (see ``content_documents.py``), installed marketplace-plugin
                        skills are Postgres-backed too, and the genesis system
-                       prompt is loaded from there.
+                       instruction is loaded from there.
         store: Optional LangGraph BaseStore for DeepAgent features that need one.
                If None, no store is configured by default.
         project_root: Root directory for filesystem backend. Defaults to cwd.
@@ -187,7 +189,7 @@ async def create_progenitor_agent(
     """
     if state_manager is None:
         raise ValueError(
-            "create_progenitor_agent requires state_manager: prompts and runtime "
+            "create_progenitor_agent requires state_manager: instructions and runtime "
             "memories are Postgres-backed content documents with no filesystem "
             "fallback, and installed marketplace-plugin skills are Postgres-backed too."
         )
@@ -207,11 +209,13 @@ async def create_progenitor_agent(
     state_dir = (
         Path(getattr(config.storage, "state_dir", data_dir / "state")).expanduser().resolve()
     )
-    # Not a runtime mount -- only the one-time Postgres seed source (see
-    # content_documents.ensure_content_documents_seeded), baked into the
-    # container image via `COPY data/prompts/``.
-    prompts_seed_dir = (
-        Path(getattr(config.storage, "prompts_dir", data_dir / "prompts")).expanduser().resolve()
+    # Not a runtime mount -- the source of the stored instructions, synced on
+    # every boot (see content_documents.sync_instruction_documents) and baked
+    # into the container image via ``COPY data/instructions/``.
+    instructions_dir = (
+        Path(getattr(config.storage, "instructions_dir", data_dir / "instructions"))
+        .expanduser()
+        .resolve()
     )
     # A real runtime mount (/skills/, see backends.py) -- progenitor's own
     # skills are static, baked into the image, and never seeded into Postgres.
@@ -290,11 +294,10 @@ async def create_progenitor_agent(
         AuditLoggingMiddleware(log_sink=log_sink),
     ]
 
-    # One-time bootstrap: populate Postgres from the image's baked-in prompt
-    # files if the store is empty (fresh database). No-op afterward. Skills
-    # are never seeded -- progenitor's own are a disk mount (see backends.py)
-    # and marketplace-plugin skills are written directly by plugins/install.py.
-    await ensure_content_documents_seeded(state_manager, "prompt", prompts_seed_dir)
+    # Bring the stored instructions in line with the image's data/instructions/.
+    # Skills are never stored this way -- progenitor's own are a disk mount (see
+    # backends.py) and marketplace-plugin skills are written by plugins/install.py.
+    await sync_instruction_documents(state_manager, instructions_dir)
 
     # Auto-discover skills through the DeepAgent backend mount. Progenitor's
     # own skills are flat under /skills/<skill-name>/SKILL.md (disk-backed, no
@@ -319,14 +322,18 @@ async def create_progenitor_agent(
         await _ensure_default_runtime_memory(state_manager)
     memory_paths = await _resolve_runtime_memory_paths(state_manager, memory_paths)
 
-    # Use the canonical genesis prompt so every conversation starts with it.
-    genesis_prompt = await state_manager.get_content_document("prompt", "progenitor/genesis.md")
-    if genesis_prompt is None:
+    # Every conversation starts with the genesis instruction; edits made on the
+    # Instructions page apply on the next model call (LiveInstructionMiddleware).
+    genesis = await state_manager.get_content_document("instruction", GENESIS_INSTRUCTION)
+    if genesis is None:
         raise RuntimeError(
-            "Missing 'progenitor/genesis.md' prompt document in Postgres after seeding. "
-            f"Checked seed source: {prompts_seed_dir / 'progenitor' / 'genesis.md'}"
+            f"Missing '{GENESIS_INSTRUCTION}' instruction in Postgres after syncing "
+            f"{instructions_dir}"
         )
-    system_prompt = genesis_prompt.strip()
+    system_prompt = render_instruction(genesis).strip()
+    custom_middleware.append(
+        LiveInstructionMiddleware(state_manager, GENESIS_INSTRUCTION, system_prompt)
+    )
     runtime_config = getattr(config, "runtime", None)
     http_host = getattr(runtime_config, "http_host", "127.0.0.1")
     if http_host in {"0.0.0.0", "::"}:  # nosec B104 - normalize wildcard binds to loopback for local callbacks

@@ -125,6 +125,18 @@ const routineQuickChatConfig = {
   prompts: routineQuickPrompts,
 };
 
+const instructionQuickPrompts = [
+  'Create a workflow instruction that summarises a kanban card for the team, with the card as a typed input.',
+  'Create an instruction that turns an inbox message into a short reply draft.',
+  'Create an instruction that extracts action items from a chat transcript as a JSON list.',
+];
+const instructionQuickChatConfig = {
+  ...defaultQuickChatConfig,
+  mode: 'instruction-create',
+  title: 'Create an instruction',
+  placeholder: 'Describe the instruction you want...',
+  prompts: instructionQuickPrompts,
+};
 
 const QUICK_CHAT_CONFIGS_BY_MODE = {
   'schedule-create': scheduleQuickChatConfig,
@@ -136,6 +148,7 @@ const QUICK_CHAT_CONFIGS_BY_MODE = {
   'inbox-edit': inboxEditQuickChatConfig,
   'workflow-create': workflowQuickChatConfig,
   'routine-create': routineQuickChatConfig,
+  'instruction-create': instructionQuickChatConfig,
 };
 
 export function normalizeQuickChatConfig(config) {

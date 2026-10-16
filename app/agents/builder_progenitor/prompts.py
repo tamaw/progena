@@ -7,20 +7,20 @@ from pathlib import Path
 
 from .prompt_support import load_prompt as load_repo_prompt
 from .prompt_support import load_skill_context as load_repo_skill_context
-from .prompt_support import resolve_prompts_dir
+from .prompt_support import resolve_instructions_dir
 
 
 @lru_cache(maxsize=1)
-def get_prompts_dir() -> Path:
+def get_instructions_dir() -> Path:
     """Return the builder_progenitor prompt directory."""
-    return resolve_prompts_dir() / "builder_progenitor"
+    return resolve_instructions_dir() / "builder_progenitor"
 
 
 def load_prompt(filename: str, **replacements: str) -> str:
     """Load a builder_progenitor prompt file and apply simple replacements."""
     return load_repo_prompt(
         f"builder_progenitor/{filename}",
-        prompts_dir=resolve_prompts_dir(),
+        instructions_dir=resolve_instructions_dir(),
         **replacements,
     )
 
