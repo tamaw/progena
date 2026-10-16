@@ -1,7 +1,6 @@
 ---
 title: Clarification incorporation
 description: Updates the ideal state with a user's clarification.
-variables: [clarification, current_state, original_task, trigger]
 ---
 # Ideal State Clarification Incorporation
 

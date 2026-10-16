@@ -19,6 +19,7 @@ from app.progenitor.agent.state_backend import (
     create_knowledge_state_file,
     create_mcp_state_file,
     create_mcp_tools_state_file,
+    create_model_profiles_state_file,
     create_registry_state_file,
     create_schedule_state_file,
     inbox_message_to_markdown,
@@ -82,6 +83,51 @@ def _knowledge_backend(
 
     backend = StateDocumentBackend([create_knowledge_state_file(sm, on_change=on_change)])
     return backend, sm, reloads
+
+
+class _FakeModelProfilesStateManager:
+    def __init__(self) -> None:
+        self.payload = {"general": {"provider": "azure_openai", "deployment": "general-v1"}}
+        self.saved: list[dict[str, Any]] = []
+
+    async def get_model_profiles_config(self) -> dict[str, Any]:
+        return copy.deepcopy(self.payload)
+
+    async def save_model_profiles_config(self, payload: dict[str, Any]) -> None:
+        self.payload = copy.deepcopy(payload)
+        self.saved.append(copy.deepcopy(payload))
+
+
+@pytest.mark.asyncio
+async def test_model_profiles_file_adds_edits_and_removes_profiles_for_the_agent():
+    state_manager = _FakeModelProfilesStateManager()
+    backend = StateDocumentBackend([create_model_profiles_state_file(state_manager)])
+
+    assert (await backend.aread("/profile.json")).error is not None
+
+    created = await backend.awrite(
+        "/profiles.json",
+        json.dumps(
+            {
+                "general": {"provider": "azure_openai", "deployment": "general-v1"},
+                "review": {"provider": "azure_openai", "deployment": "review-v1"},
+            }
+        ),
+    )
+    assert created.error is None
+    assert state_manager.saved[-1]["review"]["deployment"] == "review-v1"
+
+    edited = await backend.aedit("/profiles.json", "review-v1", "review-v2")
+    assert edited.error is None
+    assert edited.occurrences == 1
+    assert state_manager.payload["review"]["deployment"] == "review-v2"
+
+    removed = await backend.awrite(
+        "/profiles.json",
+        json.dumps({"general": {"provider": "azure_openai", "deployment": "general-v1"}}),
+    )
+    assert removed.error is None
+    assert "review" not in state_manager.payload
 
 
 # ---- validation ------------------------------------------------------------
@@ -590,10 +636,19 @@ async def test_inbox_adelete_removes_message():
 
 
 class _FakeWorkflowStateManager:
-    def __init__(self, workflows: list[dict[str, Any]] | None = None) -> None:
+    def __init__(
+        self,
+        workflows: list[dict[str, Any]] | None = None,
+        prompts: dict[str, str] | None = None,
+    ) -> None:
         self.workflows: dict[str, dict[str, Any]] = {
             workflow["id"]: copy.deepcopy(workflow) for workflow in workflows or []
         }
+        self.prompts = dict(prompts or {})
+
+    async def list_content_documents(self, kind: str) -> list[tuple[str, str]]:
+        assert kind == "instruction"
+        return sorted(self.prompts.items())
 
     async def get_workflow_definition(self, workflow_id: str) -> dict[str, Any] | None:
         workflow = self.workflows.get(workflow_id)
@@ -608,9 +663,16 @@ class _FakeWorkflowStateManager:
     async def list_workflow_definitions(self) -> list[dict[str, Any]]:
         return [copy.deepcopy(workflow) for workflow in self.workflows.values()]
 
+    async def list_document_types(self) -> dict[str, Any]:
+        from app.progenitor.document_types import BUILTIN_DOCUMENT_TYPES
 
-def _workflow_backend(workflows=None) -> tuple[WorkflowDirectoryBackend, _FakeWorkflowStateManager]:
-    sm = _FakeWorkflowStateManager(workflows)
+        return {t.id: t for t in BUILTIN_DOCUMENT_TYPES}
+
+
+def _workflow_backend(
+    workflows=None, prompts=None
+) -> tuple[WorkflowDirectoryBackend, _FakeWorkflowStateManager]:
+    sm = _FakeWorkflowStateManager(workflows, prompts)
     return WorkflowDirectoryBackend(sm), sm
 
 
@@ -634,6 +696,27 @@ async def test_workflow_awrite_persists_valid_definition():
     result = await backend.awrite("/customer-followup.json", json.dumps(workflow))
     assert result.error is None
     assert sm.workflows["customer-followup"]["title"] == "Customer follow-up"
+
+
+async def test_workflow_awrite_resolves_prompt_document_references():
+    workflow = default_workflow_definition(workflow_id="card-brief", title="Card brief")
+    agent_id = next(i for i, n in workflow["graph"]["nodes"].items() if n["kind"] == "agent")
+    agent = workflow["graph"]["nodes"][agent_id]
+    agent.pop("template")
+    agent["instruction"] = "workflows/brief.md"
+    backend, sm = _workflow_backend(prompts={"workflows/brief.md": "Brief the card {key}."})
+
+    result = await backend.awrite("/card-brief.json", json.dumps(workflow))
+
+    assert result.error is None
+    assert (
+        sm.workflows["card-brief"]["graph"]["nodes"][agent_id]["instruction"]
+        == "workflows/brief.md"
+    )
+
+    agent["instruction"] = "/instructions/workflows/brief.md"
+    result = await backend.awrite("/card-brief.json", json.dumps(workflow))
+    assert result.error and "Invalid instruction path" in result.error
 
 
 async def test_workflow_awrite_rejects_filename_id_mismatch():

@@ -1,7 +1,6 @@
 ---
 title: Ideal state refinement
 description: Tightens or adds success criteria from iteration results.
-variables: [current_state, results]
 ---
 # Ideal State Refinement
 

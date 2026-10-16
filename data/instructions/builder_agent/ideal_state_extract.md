@@ -1,7 +1,6 @@
 ---
 title: Ideal state extraction
 description: Decomposes a task into measurable success criteria and anti-criteria.
-variables: [context, task]
 ---
 # Ideal State Extraction
 

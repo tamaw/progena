@@ -6,7 +6,6 @@ import reducer, {
   clearChatUnread,
   clearActiveChatSession,
   deleteChatSession,
-  ensureDraftChatSession,
   kanbanSnapshotReceived,
   markChatErrored,
   markChatGenerating,
@@ -31,6 +30,8 @@ import reducer, {
   selectTaskContentEntry,
   selectUnreadChatIds,
   fetchInbox,
+  fetchSchedules,
+  selectSchedulesState,
   selectWorkflowDetailByPath,
   selectWorkflowLatestRunById,
   selectWorkflowRuns,
@@ -154,32 +155,6 @@ describe('applyUiEvent reducer', () => {
     }));
     expect(s.chats.order).toEqual(['c', 'a', 'b']);
     expect(s.chats.byId.c.title).toBe('New chat');
-  });
-
-  it('ensureDraftChatSession.fulfilled waits for the canonical snapshot to reorder the draft', () => {
-    let s = reducer(undefined, snapshot(['a', 'b', 'c']));
-    s = reducer(s, ensureDraftChatSession.fulfilled({
-      request_id: 'REQ1',
-      event_types: ['chat.session.metadata.updated', 'chat.sessions.snapshot'],
-    }, 'REQ1', {
-      chatsUrl: '/x',
-      threadId: 'b',
-    }));
-    expect(s.chats.order).toEqual(['a', 'b', 'c']);
-
-    s = reducer(s, applyUiEvent({
-      type: 'chat.sessions.snapshot',
-      payload: {
-        request_id: 'REQ1',
-        sessions: [
-          { thread_id: 'b', title: 'New chat', message_count: 0 },
-          { thread_id: 'a' },
-          { thread_id: 'c' },
-        ],
-      },
-    }));
-    expect(s.chats.order).toEqual(['b', 'a', 'c']);
-    expect(s.chats.byId.b.title).toBe('New chat');
   });
 
   it('selected applies matching detail with messages and preserves request identity for hydration', () => {
@@ -482,6 +457,16 @@ describe('applyUiEvent reducer', () => {
     expect(selectActiveChatSessionState({ uiData: s }).pendingOlderPage).toBeNull();
   });
 
+  it('document_types.snapshot replaces the document type list and marks loaded', () => {
+    const items = [
+      { id: 'kanban_card', label: 'Kanban Card', collection: true, document_schema: { type: 'object', properties: { title: { type: 'string' } } } },
+      { id: 'inbox_message', label: 'Inbox Message', collection: false, document_schema: { type: 'object', properties: { subject: { type: 'string' } } } },
+    ];
+    const s = reducer(undefined, applyUiEvent({ type: 'document_types.snapshot', payload: { items } }));
+    expect(s.documentTypes.items).toEqual(items);
+    expect(s.documentTypes.loaded).toBe(true);
+  });
+
   it('workflow snapshot/detail/run events populate the workflows domain', () => {
     let s = reducer(undefined, applyUiEvent({
       type: 'workflows.snapshot',
@@ -494,7 +479,7 @@ describe('applyUiEvent reducer', () => {
             enabled: true,
             paused: false,
             version: 1,
-            event_type: 'kanban.card.created',
+            document_type: 'kanban_card',
             node_count: 2,
             updated_at: '2026-07-06T00:00:00Z',
             created_at: '2026-07-06T00:00:00Z',
@@ -516,10 +501,10 @@ describe('applyUiEvent reducer', () => {
           enabled: true,
           paused: false,
           version: 1,
-          trigger: { type: 'event', event_type: 'kanban.card.created' },
+          document_type: 'kanban_card',
           graph: {
             nodes: {
-              event_a: { kind: 'event', title: 'Event' },
+              event_a: { kind: 'event', title: 'Event', document_type: 'kanban_card' },
               prompt_a: { kind: 'prompt', title: 'Prompt', prompt: 'Handle it', agent_name: 'progenitor', role: null },
             },
             edges: [{ from: { node: 'event_a', port: 'default' }, to: { node: 'prompt_a', port: 'default' } }],
@@ -541,7 +526,7 @@ describe('applyUiEvent reducer', () => {
         current_node_id: null,
         completed_node_ids: ['event_a', 'prompt_a'],
         thread_id: 'thread_1',
-        trigger_event: { event_type: 'kanban.card.created' },
+        trigger_event: { document_type: 'kanban_card', op: 'created', key: 'kanban_card:1', id: '1' },
         last_output: 'done',
         last_error: null,
         queued_at: '2026-07-06T00:00:00Z',
@@ -552,6 +537,30 @@ describe('applyUiEvent reducer', () => {
     }));
     expect(selectWorkflowRuns({ uiData: s })).toHaveLength(1);
     expect(selectWorkflowLatestRunById({ uiData: s }, 'wf_1')?.run_id).toBe('run_1');
+  });
+
+  it('workflow.updated summarises every trigger on the list row from the saved graph', () => {
+    const s = reducer(undefined, applyUiEvent({
+      type: 'workflow.updated',
+      payload: {
+        path: '/workflows/wf_2.json',
+        workflow: {
+          id: 'wf_2',
+          title: 'Digest',
+          graph: {
+            nodes: {
+              tick: { kind: 'cron', title: 'Weekdays', expression: '0 9 * * 1-5', timezone: 'UTC' },
+              card: { kind: 'event', title: 'Card', document_type: 'kanban_card' },
+              say: { kind: 'agent', title: 'Say', template: 'Hi' },
+            },
+            edges: [],
+          },
+        },
+      },
+    }));
+    const row = s.workflows.items.find((item) => item.id === 'wf_2');
+    expect(row.triggers).toEqual(['cron 0 9 * * 1-5', 'kanban_card']);
+    expect(row.document_type).toBe('kanban_card');
   });
 });
 
@@ -918,8 +927,8 @@ describe('nav activity tracking (unseen-page dots)', () => {
           enabled: true,
           paused: false,
           version: 1,
-          trigger: { type: 'event', event_type: 'kanban.card.created' },
-          graph: { nodes: { event_a: { kind: 'event', title: 'Event' } }, edges: [] },
+          document_type: 'kanban_card',
+          graph: { nodes: { event_a: { kind: 'event', title: 'Event', document_type: 'kanban_card' } }, edges: [] },
           ui: {},
           updated_at: '2026-07-06T00:00:00Z',
           created_at: '2026-07-06T00:00:00Z',
@@ -932,5 +941,57 @@ describe('nav activity tracking (unseen-page dots)', () => {
   it('unmapped event types are ignored', () => {
     const s = reducer(undefined, applyUiEvent({ type: 'not.a.tracked.event', payload: {} }));
     expect(selectUnseenNavRoutes({ uiData: s })).toEqual({});
+  });
+});
+
+describe('schedule snapshot recovery', () => {
+  const args = { schedulesUrl: '/api/ui/schedules' };
+  const schedule = { id: 'daily', name: 'Daily review', enabled: true, next_run: '2026-10-12T09:00:00Z' };
+
+  it('keeps the list pending until its causal snapshot, including snapshot-before-ack ordering', () => {
+    let state = reducer(undefined, fetchSchedules.pending('first', args));
+    state = reducer(state, fetchSchedules.fulfilled({
+      request_id: 'first', event_types: ['schedule.snapshot'],
+    }, 'first', args));
+    expect(selectSchedulesState({ uiData: state })).toMatchObject({
+      items: [], loaded: false, loading: true, requestId: 'first',
+    });
+
+    state = reducer(state, applyUiEvent({
+      type: 'schedule.snapshot', payload: { items: [schedule], request_id: 'first' },
+    }));
+    expect(selectSchedulesState({ uiData: state })).toMatchObject({
+      items: [schedule], loaded: true, loading: false, error: null, requestId: null,
+    });
+
+    state = reducer(state, fetchSchedules.pending('recovery', args));
+    state = reducer(state, applyUiEvent({
+      type: 'schedule.snapshot', payload: { items: [], request_id: 'recovery' },
+    }));
+    state = reducer(state, fetchSchedules.fulfilled({
+      request_id: 'recovery', event_types: ['schedule.snapshot'],
+    }, 'recovery', args));
+    expect(selectSchedulesState({ uiData: state })).toMatchObject({
+      items: [], loaded: true, loading: false, error: null, requestId: null,
+    });
+  });
+
+  it('does not let a disconnected request failure cancel a newer recovery request', () => {
+    let state = reducer(undefined, fetchSchedules.pending('disconnected', args));
+    state = reducer(state, fetchSchedules.pending('reconnected', args));
+    state = reducer(state, fetchSchedules.rejected(new Error('Old connection failed'), 'disconnected', args));
+    expect(selectSchedulesState({ uiData: state })).toMatchObject({
+      loading: true, error: null, requestId: 'reconnected',
+    });
+    state = reducer(state, fetchSchedules.rejected(new Error('Recovery failed'), 'reconnected', args));
+    expect(selectSchedulesState({ uiData: state })).toMatchObject({
+      loading: false, error: 'Recovery failed', requestId: null,
+    });
+    state = reducer(state, applyUiEvent({
+      type: 'schedule.snapshot', payload: { items: [schedule] },
+    }));
+    expect(selectSchedulesState({ uiData: state })).toMatchObject({
+      items: [schedule], loaded: true, error: null,
+    });
   });
 });

@@ -57,6 +57,10 @@ Application data uses a canonical lifecycle transport and a request-scoped chat-
 
 The canonical UI stream has bounded replay via `Last-Event-ID`; `connection.ready` follows available replay. The dedicated response stream has its own bounded content replay. On `chat.response.resync_required`, stop appending live content and reconcile from persisted chat data after the canonical terminal lifecycle event. There is no `/api/ui/events` or `/api/ui/status` EventSource and no HTTP-body fallback.
 
+### Structured document content
+
+`src/components/common/StructuredDocumentBody.jsx` renders Markdown with selectable heading sections (`##`–`######`) from `content` using `parseStructuredContent` in `src/lib/structuredContent.js`. It owns section selection, the inline AI-instruction popover, and optional question controls; both question text and answer buttons share one section bracket. Supply `onAskAgent(instruction, { draft, inline, clientId })` for section instructions and `onAnswerQuestion({ question, choice, content })` for interactive questions; unavailable actions are hidden. The shared component refers to a document, not an Inbox file: its caller owns agent prompts and event-driven document refreshes. Inbox uses `src/pages/StructuredInboxBody.jsx`; Tasks does not use this component yet. The viewer never merges agent writes or attributes an inbox snapshot to a particular prompt.
+
 ## Project Structure
 
 ```
@@ -96,6 +100,18 @@ src/
 - `PUT /api/ui/responses/{generation_id}/cancel` - accepts cancellation with HTTP `202`; `chat.response.cancel_requested` acknowledges the operation and the target's canonical terminal event completes it
 - `GET/POST /api/ui/chats`, `GET/PATCH/DELETE /api/ui/chats/{id}` - HTTP `202` acknowledgements; chat data arrives as `chat.*` events
 - `GET /api/ui/agent-profiles`, `/api/ui/knowledge`, `/api/ui/inbox`, and other retained UI routes - HTTP `202` acknowledgements; their typed snapshot/mutation events hydrate Redux
+- `GET /api/ui/model-profiles`, `PATCH/DELETE /api/ui/model-profiles/{name}` - HTTP `202` acknowledgements; `profiles.snapshot` hydrates the shared profile catalogue and confirms edits or deletion. Profile names are URL-encoded, including embedded slashes.
+
+The **Profiles** page (`/profiles`) manages the model configurations stored in
+`/config/profiles.json`; it is separate from the Models catalogue. Deployment,
+reasoning enabled, effort, and summary are editable. Name and provider are
+read-only. Inherit/cleared optional fields remove the override and use runtime
+environment defaults. Only supported public fields are sent to the browser.
+The canonical stream also keeps routine profile selectors current. On a remote
+change, an open draft is retained and must be restarted or cancelled before
+saving. Offline edits cannot be submitted; reconnect refreshes the catalogue.
+Progenitor can add, edit, or remove entries by writing its agent-writable
+`/config/profiles.json` virtual file; those Postgres writes update the page live.
 
 Browser generation uses `/api/ui/responses`. The backend-to-runtime `/v1/responses`
 and `/v1/events` protocols are internal and are not frontend APIs.

@@ -1,7 +1,6 @@
 ---
 title: Verification methods
 description: Suggests how to verify each success criterion, preferring automated checks.
-variables: [context, criteria, task_description]
 ---
 # Verification Method Suggestion
 

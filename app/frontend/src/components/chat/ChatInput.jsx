@@ -3,6 +3,7 @@ import { useDispatch, useSelector } from 'react-redux';
 import { useConfig } from '../../context/ConfigContext';
 import { fetchAgentProfiles } from '../../store/uiData/agents';
 import { selectAgentProfiles, selectAgentProfilesState } from '../../store/uiDataSlice';
+import { selectRealtimeStreamReady } from '../../store/realtimeSlice';
 import { getAgentMentionContext } from './chatInputModel';
 import AttachmentFileIcon from './AttachmentFileIcon';
 import { describeAttachmentFileType, formatAttachmentSize } from './attachmentFileTypes';
@@ -68,6 +69,8 @@ const ChatInput = forwardRef(function ChatInput({
   const fileInputRef = useRef(null);
   const agentProfiles = useSelector(selectAgentProfiles);
   const agentProfilesState = useSelector(selectAgentProfilesState);
+  const streamReady = useSelector(selectRealtimeStreamReady);
+  const agentProfilesRequestUrlRef = useRef(null);
   const slashQuery = enableSlashCommands ? getSlashQuery(message) : null;
   const mentionContext = getAgentMentionContext(message, selectionStart);
   const filteredSlashCommands = useMemo(() => {
@@ -113,12 +116,31 @@ const ChatInput = forwardRef(function ChatInput({
     }
   }, [autoFocus, disabled, focusToken, isGenerating]);
 
+  // Request the roster once per stream session (the snapshot arrives on the
+  // stream). A reconnect starts a new session, so a failed request is retried
+  // then rather than suppressing @mentions until reload.
   useEffect(() => {
-    if (agentProfilesState.loaded || agentProfilesState.loading) {
+    if (!streamReady) {
+      agentProfilesRequestUrlRef.current = null;
       return;
     }
-    dispatch(fetchAgentProfiles({ agentsUrl: getApiUrl('agentProfiles') }));
-  }, [agentProfilesState.loaded, agentProfilesState.loading, dispatch, getApiUrl]);
+    const agentsUrl = getApiUrl('agentProfiles');
+    if (
+      agentProfilesState.loaded
+      || agentProfilesState.loading
+      || agentProfilesRequestUrlRef.current === agentsUrl
+    ) {
+      return;
+    }
+    agentProfilesRequestUrlRef.current = agentsUrl;
+    dispatch(fetchAgentProfiles({ agentsUrl }));
+  }, [
+    agentProfilesState.loaded,
+    agentProfilesState.loading,
+    dispatch,
+    getApiUrl,
+    streamReady,
+  ]);
 
   const executeSlashCommand = (command) => {
     if (command.requiresArguments) {

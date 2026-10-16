@@ -7,12 +7,13 @@ import pytest
 from app.progenitor.content_documents import sync_instruction_documents
 from app.progenitor.instructions import (
     DEFAULT_INSTRUCTIONS_DIR,
-    parse_instruction,
+    check_instruction_write,
     render_instruction,
     resolve_instructions_dir,
 )
+from app.progenitor.instructions.templates import parse_instruction_template
 
-VALID = "---\ntitle: T\ndescription: D\nvariables: [name]\n---\nHello {name}.\n"
+VALID = "---\ntitle: T\ndescription: D\n---\nHello {name}.\n"
 
 
 class FakeStateManager:
@@ -56,7 +57,7 @@ def test_every_checked_in_instruction_is_valid():
     paths = sorted(DEFAULT_INSTRUCTIONS_DIR.rglob("*.md"))
     assert paths
     for path in paths:
-        parse_instruction(path.read_text(encoding="utf-8"))
+        parse_instruction_template(path.read_text(encoding="utf-8"))
 
 
 def test_render_drops_front_matter_and_fills_variables():
@@ -64,17 +65,22 @@ def test_render_drops_front_matter_and_fills_variables():
 
 
 @pytest.mark.parametrize(
-    ("content", "error"),
+    ("path", "content", "error"),
     [
-        ("Hello.\n", "front matter"),
-        ("---\ntitle: T\n---\nHello.\n", "front matter"),
-        ("---\ntitle: T\ndescription: D\nvariables: [Bad-Name]\n---\nx\n", "snake_case"),
-        ("---\ntitle: T\ndescription: D\nvariables: [name]\n---\nHello.\n", "{name}"),
+        ("progenitor/genesis.md", "Hello {other}.\n", "{name}"),
+        ("progenitor/genesis.md", "Hello.\n", "{name}"),
+        ("builder_agent/think.md", VALID, "bundled with builder_agent"),
+        ("workflows/card.md", "---\nvariables: [x]\n---\nx\n", "unknown front matter key"),
     ],
+    ids=["runtime-placeholder-renamed", "runtime-placeholder-dropped", "bundled", "unknown-key"],
 )
-def test_invalid_instructions_are_rejected(content, error):
-    with pytest.raises(ValueError, match=error):
-        parse_instruction(content)
+def test_rejected_instruction_writes(path, content, error):
+    with pytest.raises((ValueError, PermissionError), match=error):
+        check_instruction_write(path, VALID, content)
+
+
+def test_workflow_templates_may_change_placeholders():
+    check_instruction_write("workflows/card.md", VALID, "Card {card.title}\n")
 
 
 async def test_sync_keeps_edited_runtime_instructions_and_mirrors_bundled_ones(tmp_path):
@@ -87,6 +93,7 @@ async def test_sync_keeps_edited_runtime_instructions_and_mirrors_bundled_ones(t
             "progenitor/genesis.md": edited,
             "builder_agent/think.md": edited,
             "builder_agent/removed.md": VALID,
+            "workflows/card.md": VALID,
         }
     )
 
@@ -96,10 +103,11 @@ async def test_sync_keeps_edited_runtime_instructions_and_mirrors_bundled_ones(t
         "progenitor/genesis.md": edited,
         "progenitor/new.md": VALID,
         "builder_agent/think.md": VALID,
+        "workflows/card.md": VALID,
     }
 
 
 async def test_sync_rejects_an_invalid_file(tmp_path):
-    _write(tmp_path, "progenitor/genesis.md", "no front matter\n")
+    _write(tmp_path, "progenitor/genesis.md", "---\nunknown: 1\n---\nBody\n")
     with pytest.raises(ValueError, match="genesis.md"):
         await sync_instruction_documents(FakeStateManager(), tmp_path)

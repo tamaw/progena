@@ -17,10 +17,8 @@ from app.backend.document_store import (
 )
 
 GENESIS = "---\ntitle: System\ndescription: Main prompt\n---\nYou are Progenitor.\n"
-DISCOVERY = (
-    "---\ntitle: Discovery\ndescription: Analyse folders\nvariables: [folders]\n---\n"
-    "Analyse {folders}.\n"
-)
+DISCOVERY = "---\ntitle: Discovery\ndescription: Analyse folders\n---\nAnalyse {folders}.\n"
+CARD = "---\ntitle: Card\ninputs:\n  card: kanban_card\n---\nSummarise {card.title}.\n"
 THINK = "---\ntitle: Think\ndescription: Approaches\n---\nThink hard.\n"
 
 
@@ -32,6 +30,7 @@ def harness(monkeypatch):
         ("progenitor/genesis.md", GENESIS),
         ("progenitor/discovery.md", DISCOVERY),
         ("builder_agent/think.md", THINK),
+        ("workflows/card.md", CARD),
     ):
         store.save_document(PROGENITOR_STATE_PREFIX, f"instruction:{path}", {"content": content})
     events: list[tuple[str, dict[str, Any]]] = []
@@ -66,7 +65,8 @@ def test_list_reports_front_matter_and_which_instructions_are_editable(harness):
     assert_acknowledged(client.get("/api/ui/instructions"), ["instructions.snapshot"])
     listed = {item["path"]: item for item in _last(events, "instructions.snapshot")["instructions"]}
     assert listed["progenitor/discovery.md"]["title"] == "Discovery"
-    assert listed["progenitor/discovery.md"]["variables"] == ["folders"]
+    assert listed["progenitor/discovery.md"]["placeholders"] == ["folders"]
+    assert listed["workflows/card.md"]["editable"] is True
     assert listed["progenitor/genesis.md"]["editable"] is True
     assert listed["builder_agent/think.md"]["editable"] is False
     assert listed["builder_agent/think.md"]["group"] == "builder_agent"
@@ -98,12 +98,12 @@ def test_edit_saves_a_runtime_instruction(harness):
     ("path", "content", "status"),
     [
         ("builder_agent/think.md", THINK.replace("hard", "soft"), 403),
-        ("progenitor/genesis.md", "You are Progenitor.\n", 400),
+        ("progenitor/genesis.md", "---\nunknown: 1\n---\nYou are Progenitor.\n", 400),
         ("progenitor/discovery.md", DISCOVERY.replace("{folders}", "the folders"), 400),
-        ("progenitor/discovery.md", DISCOVERY.replace("[folders]", "[]"), 400),
+        ("progenitor/discovery.md", DISCOVERY.replace("{folders}", "{dirs}"), 400),
         ("progenitor/missing.md", GENESIS, 404),
     ],
-    ids=["bundled", "no-front-matter", "variable-dropped", "variables-changed", "missing"],
+    ids=["bundled", "unknown-key", "placeholder-dropped", "placeholder-renamed", "missing"],
 )
 def test_rejected_edits_leave_the_instruction_unchanged(harness, path, content, status):
     client, store, _ = harness
@@ -150,3 +150,13 @@ def test_unknown_revision_is_404(harness):
         "/api/ui/instructions/revisions/nope", params={"path": "progenitor/genesis.md"}
     )
     assert response.status_code == 404
+
+
+def test_workflow_instruction_may_change_its_placeholders(harness):
+    client, store, _ = harness
+    edited = CARD.replace("{card.title}", "{card.title} for {audience}")
+    response = client.put(
+        "/api/ui/instructions/content", json={"path": "workflows/card.md", "content": edited}
+    )
+    assert response.status_code == 202
+    assert _stored(store, "workflows/card.md") == edited

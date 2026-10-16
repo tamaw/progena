@@ -105,7 +105,9 @@ class TestBackendFactory:
             assert isinstance(backend.routes["/logs/"], ReadOnlyBackend)
             assert isinstance(backend.routes["/schemas/"], ReadOnlyBackend)
             assert isinstance(backend.routes["/schemas/"]._backend, FilesystemBackend)
-            assert isinstance(backend.routes["/instructions/"], ReadOnlyBackend)
+            from app.progenitor.agent.state_backend import InstructionDocumentDirectoryBackend
+
+            assert isinstance(backend.routes["/instructions/"], InstructionDocumentDirectoryBackend)
             # /skills/ is disk-backed now (like /schemas/), not Postgres-backed.
             assert isinstance(backend.routes["/skills/"], ReadOnlyBackend)
             assert isinstance(backend.routes["/skills/"]._backend, FilesystemBackend)
@@ -170,8 +172,10 @@ class TestBackendFactory:
             assert schema_read.error is None
             assert json.loads(schema_read.file_data["content"]) == schema
 
-    async def test_instructions_are_read_only(self, monkeypatch):
-        """/instructions/ reads Postgres content and is wrapped read-only."""
+    async def test_instructions_mount_reads_and_validates_writes(self, monkeypatch):
+        """/instructions/ reads Postgres content and validates writes."""
+        from app.progenitor.agent.state_backend import InstructionDocumentDirectoryBackend
+
         self._patch_runtime_free_state_backend(monkeypatch)
         state_manager = FakeContentStateManager()
         state_manager._docs["instruction"]["progenitor/genesis.md"] = "# Genesis\n"
@@ -182,7 +186,18 @@ class TestBackendFactory:
         assert instruction_read.error is None
         assert instruction_read.file_data["content"] == "# Genesis\n"
 
-        assert isinstance(backend.routes["/instructions/"], ReadOnlyBackend)
+        assert isinstance(backend.routes["/instructions/"], InstructionDocumentDirectoryBackend)
+
+        valid = await backend.awrite("/instructions/progenitor/genesis.md", "# Updated\n")
+        assert valid.error is None
+        assert state_manager._docs["instruction"]["progenitor/genesis.md"] == "# Updated\n"
+
+        invalid = await backend.awrite(
+            "/instructions/progenitor/genesis.md",
+            "---\nunknown_key: 1\n---\n# Body\n",
+        )
+        assert invalid.error is not None
+        assert "unknown front matter key" in invalid.error
 
     async def test_plugin_skill_segment_is_read_only_and_scoped(self, monkeypatch):
         """/skills/<segment>/ reads only that plugin's own Postgres skill rows."""

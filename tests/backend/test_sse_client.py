@@ -58,6 +58,7 @@ class ScriptedBridge:
         *,
         thread_id: str,
         received_at: float | None = None,
+        source: str | None = None,
         attachments: list[dict[str, Any]] | None = None,
     ):
         items = self._script(message) if callable(self._script) else self._script

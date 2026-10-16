@@ -1,7 +1,6 @@
 ---
 title: Validation severity
 description: Rates the severity of build validation findings.
-variables: [findings_json, iteration, project_directory]
 ---
 # Validation Severity Assessment
 

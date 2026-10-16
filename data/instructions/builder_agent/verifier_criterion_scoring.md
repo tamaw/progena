@@ -1,7 +1,6 @@
 ---
 title: Criterion scoring
 description: Scores one success criterion from 0.00 to 1.00 against the evidence.
-variables: [context_parts]
 ---
 Score this criterion from 0.00 to 1.00 based on the evidence:
 

@@ -44,6 +44,8 @@ from deepagents.backends.utils import (
 )
 from wcmatch import glob as wcglob
 
+from ..instructions import check_instruction_write
+from ..instructions.templates import instruction_relative_path
 from ..knowledge.indexer_config import default_indexer_payload, validate_indexer_document
 from ..routines.store import (
     parse_routine_graph_document,
@@ -804,9 +806,9 @@ def create_preferences_state_file(
 
 
 def create_model_profiles_state_file(state_manager: Any) -> StateFile:
-    """Build the provider/deployment map exposed as ``/config/profile.json``."""
+    """Build the provider/deployment map exposed as ``/config/profiles.json``."""
     return _simple_state_file(
-        "profile.json",
+        "profiles.json",
         get=state_manager.get_model_profiles_config,
         save=state_manager.save_model_profiles_config,
         validate=validate_model_profiles_document,
@@ -1157,7 +1159,21 @@ class WorkflowDirectoryBackend(_AsyncOnlyFileBackendMixin):
         if workflow_id is None:
             return WriteResult(error=f"Unknown workflow file '{file_path}' (expected <id>.json)")
         try:
-            workflow = validate_workflow_definition_document(content)
+            # Validation is synchronous; snapshot the instructions the workflow
+            # may reference (by path relative to /instructions/).
+            instructions = dict(await self._sm.list_content_documents("instruction"))
+
+            def _instruction_loader(path: str) -> str:
+                text = instructions.get(instruction_relative_path(path))
+                if text is None:
+                    raise ValueError(f"instruction '{path}' not found")
+                return text
+
+            workflow = validate_workflow_definition_document(
+                content,
+                await self._sm.list_document_types(),
+                instruction_loader=_instruction_loader,
+            )
         except ValueError as exc:
             return WriteResult(error=f"Invalid workflow {name}: {exc}")
         if workflow.get("id") != workflow_id:
@@ -1648,4 +1664,23 @@ class UserAgentDirectoryBackend(ContentDocumentDirectoryBackend):
                     )
         except ValueError as exc:
             return WriteResult(error=f"Invalid agent manifest: {exc}")
+        return await super().awrite(file_path, content)
+
+
+class InstructionDocumentDirectoryBackend(ContentDocumentDirectoryBackend):
+    """Instructions mounted at ``/instructions/``, with validated writes.
+
+    Every write must parse as an instruction template; bundled agent
+    instructions are read-only and runtime instructions keep their
+    placeholders (:func:`check_instruction_write`). Failures surface as a
+    ``WriteResult.error`` so the agent sees the reason.
+    """
+
+    async def awrite(self, file_path: str, content: str) -> WriteResult:
+        name = self._name(file_path)
+        try:
+            previous = await self._sm.get_content_document(self._kind, name)
+            check_instruction_write(name, previous, content)
+        except (ValueError, PermissionError) as exc:
+            return WriteResult(error=f"Invalid instruction: {exc}")
         return await super().awrite(file_path, content)

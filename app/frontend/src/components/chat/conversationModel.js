@@ -52,6 +52,8 @@ export function getActiveRouteThreadId({
     selectedBackendChatId
     || (Array.isArray(messages) && messages.length > 0 ? threadId : null)
     || (initialSelectionPending ? urlThreadId : null)
+    || threadId
+    || null
   );
 }
 
@@ -75,6 +77,26 @@ export function shouldDeferRouteSelection({
     || (selectionIntentThreadId && selectionIntentThreadId !== urlThreadId)
     || selectedBackendChatId === urlThreadId,
   );
+}
+
+export function isReopeningCurrentLocalDraft({
+  selectedBackendChatId,
+  currentThreadId,
+  requestedThreadId,
+}) {
+  return selectedBackendChatId === null
+    && Boolean(requestedThreadId)
+    && currentThreadId === requestedThreadId;
+}
+
+export function shouldAdoptMaterializedDraft({
+  selectedBackendChatId,
+  threadId,
+  sessionThreadId,
+}) {
+  return selectedBackendChatId === null
+    && Boolean(threadId)
+    && sessionThreadId === threadId;
 }
 
 // On mount, a routed URL must always end up with a real detail request behind
@@ -111,13 +133,15 @@ export function shouldDismissEmptySelection({
   activeLoading,
   activeDetail,
   activeError,
+  hasMaterializedDraft = false,
 }) {
   return Boolean(
     hasAutoSelectedOnMount
     && selectedBackendChatId
     && !activeLoading
     && !activeDetail
-    && !activeError,
+    && !activeError
+    && !hasMaterializedDraft,
   );
 }
 
@@ -569,19 +593,10 @@ function buildArchivedSessionItem(entry, pinnedKeys) {
 export function buildArchivedSessionItems({
   archivedSessions = [],
   pinnedSessionIds = [],
-  sharedSessionIds = [],
 }) {
   const pinnedKeys = new Set(Array.isArray(pinnedSessionIds) ? pinnedSessionIds : []);
-  const sharedKeys = new Set(Array.isArray(sharedSessionIds) ? sharedSessionIds : []);
   return Array.isArray(archivedSessions)
-    ? archivedSessions.map((entry) => ({
-      ...buildArchivedSessionItem(entry, pinnedKeys),
-      shared: sharedKeys.has(
-        (typeof entry?.threadId === 'string' && entry.threadId)
-          ? entry.threadId
-          : (typeof entry?.id === 'string' ? entry.id : ''),
-      ),
-    }))
+    ? archivedSessions.map((entry) => buildArchivedSessionItem(entry, pinnedKeys))
     : [];
 }
 
@@ -602,11 +617,9 @@ export function buildSessionItems({
   firstMessageTime,
   archivedSessions = [],
   pinnedSessionIds = [],
-  sharedSessionIds = [],
   includeCurrentSession = true,
 }) {
   const pinnedKeys = new Set(Array.isArray(pinnedSessionIds) ? pinnedSessionIds : []);
-  const sharedKeys = new Set(Array.isArray(sharedSessionIds) ? sharedSessionIds : []);
   const currentSession = includeCurrentSession ? {
     id: threadId || 'current-session',
     pinKey: threadId || 'current-session',
@@ -623,13 +636,12 @@ export function buildSessionItems({
     preview: formatPreview(lastMessageContent(messages)),
     selected: true,
     pinned: pinnedKeys.has(threadId || 'current-session'),
-    shared: sharedKeys.has(threadId || 'current-session'),
     messageCount: messages.length,
     toolCount: totalToolCount,
     errorCount: 0,
   } : null;
 
-  const archivedItems = buildArchivedSessionItems({ archivedSessions, pinnedSessionIds, sharedSessionIds });
+  const archivedItems = buildArchivedSessionItems({ archivedSessions, pinnedSessionIds });
 
   return [...(currentSession ? [currentSession] : []), ...archivedItems]
     .sort((left, right) => right.activityAt - left.activityAt);

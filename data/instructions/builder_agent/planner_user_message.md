@@ -1,7 +1,6 @@
 ---
 title: Planner request
 description: User message carrying the request, routing decision and current backlog.
-variables: [current_backlog, decision, user_input]
 ---
 User Request: {user_input}
 

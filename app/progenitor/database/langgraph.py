@@ -40,8 +40,10 @@ async def _open_saver(
         if setup:
             await saver.setup()
             from ..routines.events import CHECKPOINT_TRIGGER_SQL
+            from ..sessions.sql import SESSION_TRIGGER_SQL
 
             await conn.execute(CHECKPOINT_TRIGGER_SQL, prepare=False)
+            await conn.execute(SESSION_TRIGGER_SQL, prepare=False)
         return saver, conn
     except BaseException:
         await conn.close()

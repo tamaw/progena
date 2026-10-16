@@ -1,7 +1,6 @@
 ---
 title: Experiment plan
 description: Designs an experiment with concrete test prompts for one approach.
-variables: [approach_description, approach_name, gaps_section, success_criteria, task_description]
 ---
 Generate an experiment plan to test this approach:
 

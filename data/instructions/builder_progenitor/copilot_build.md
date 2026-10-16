@@ -1,7 +1,6 @@
 ---
 title: Copilot build
 description: Task handed to Copilot to implement a build inside its worktree.
-variables: [branch_name, context_json, copilot_goal, description, planned_at_utc, request_text, skill_context, success_criteria, task_name, validation_targets, work_item_id]
 ---
 Implement the following build task inside the provided worktree.
 

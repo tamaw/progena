@@ -1,7 +1,6 @@
 ---
 title: Build from spec file
 description: Tells Copilot to create or update an entity from its spec file.
-variables: [action_details, action_verb, entity_type, iteration_context, rel_path_str]
 ---
 {action_verb} a {entity_type} based on the specification file.
 

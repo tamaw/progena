@@ -1,7 +1,6 @@
 ---
 title: Iteration learning
 description: Assesses an iteration against its plan and the ideal state, and extracts lessons.
-variables: [best_result, execution_result, experiment_plan, ideal_state, iteration, previous_lessons, think_phase, user_request, verification_report]
 ---
 Analyze this iteration and determine:
 

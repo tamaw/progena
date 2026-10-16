@@ -1,7 +1,6 @@
 ---
 title: Build specification
 description: Turns a build request into a detailed specification for an agent or tool.
-variables: [item_type]
 ---
 # Build Specification Prompt
 

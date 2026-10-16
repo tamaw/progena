@@ -211,11 +211,14 @@ def validate_agent_graph_document(
     validate_routine_graph_payload(document)
 
 
-def build_agent_profiles(store: AgentStore) -> AgentProfilesResponse:
-    """Build the internal-agent catalog from backend graph and manifest sources."""
+def build_agent_profiles(store: AgentStore | None) -> AgentProfilesResponse:
+    """Build the internal-agent catalog from backend graph and manifest sources.
+
+    Without an editable store only the runtime registry's A2A/ACP agents are listed.
+    """
     # Metadata can briefly outlive its live graph while DELETE notifications
     # are reconciled. Reads must hide these rows without recreating documents.
-    records = (
+    editable = (
         [
             record
             for record in store.list_agents()
@@ -223,9 +226,10 @@ def build_agent_profiles(store: AgentStore) -> AgentProfilesResponse:
             or store.get_routine_document(record["id"]) is not None
         ]
         + store.list_object_agents()
-        + a2a_profiles_from_registry()
-        + acp_profiles_from_registry()
+        if store is not None
+        else []
     )
+    records = editable + a2a_profiles_from_registry() + acp_profiles_from_registry()
     agents = [AgentProfile(**record) for record in records]
     return AgentProfilesResponse(agents=agents, total=len(agents))
 
@@ -350,8 +354,7 @@ def create_agent_profile_router(
         view (status + agent card) without the backend fetching cards itself.
         """
         request_id = _request_correlation_id(request, x_request_id)
-        store = _require_store()
-        response = await asyncio.to_thread(build_agent_profiles, store)
+        response = await asyncio.to_thread(build_agent_profiles, get_agent_store())
         broadcast_ui_event(
             "agents.snapshot", response.model_dump(by_alias=True), request_id=request_id
         )

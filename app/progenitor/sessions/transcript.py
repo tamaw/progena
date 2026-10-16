@@ -5,6 +5,7 @@ the text goes. Every line starts ``HH:MM:SS`` and has one of these shapes::
 
     <nick> text / <@agent> text    something said; ``@`` marks agents
     * nick does something          reasoning title or tool use
+    * nick sends an image          an image content block (human or AI)
     -nick- text                    one-way notice to the user (notify/say/ask)
     -> *agent* text                delegated request, sent privately to an agent
     -!- event                      join/part/quit, failed direct agent calls
@@ -157,9 +158,14 @@ class _Renderer:
             at = _message_time(message, thread.committed_at) or last
             last = at or last
             if isinstance(message, HumanMessage):
-                text = _message_text(message)
+                blocks = _content_blocks(message)
+                text_parts = [b.get("text", "") for b in blocks if b.get("type") == "text"]
+                image_count = sum(1 for b in blocks if b.get("type") == "image_url")
+                text = "\n".join(text_parts)
                 if parent_nick is not None:
                     lines += [Line(at, f"-> *{thread.nick}* {row}") for row in _rows(text)]
+                    for _ in range(image_count):
+                        lines.append(Line(at, f"* {thread.nick} sends an image"))
                     continue
                 self.user_spoke = True
                 self.first_user_text = self.first_user_text or text
@@ -170,6 +176,8 @@ class _Renderer:
                 addressed = (mention[0], len(lines)) if mention else None
                 spoken = f"{mention[0]}: {mention[1]}" if mention else text
                 lines += _say(at, self.user_nick, spoken)
+                for _ in range(image_count):
+                    lines.append(Line(at, f"* {self.user_nick} sends an image"))
             elif isinstance(message, AIMessage):
                 if addressed is not None and _is_direct_reply(message):
                     present = self._direct_reply(message, at, addressed, present, lines)
@@ -227,6 +235,8 @@ class _Renderer:
                         out.append(Line(at, f"* {nick} {thought}"))
             elif kind == "text":
                 out += _say(at, f"@{nick}", block.get("text", ""))
+            elif kind == "image_url":
+                out.append(Line(at, f"* {nick} sends an image"))
         if message.response_metadata.get("status") == CANCELLED_STATUS:
             out.append(Line(at, f"-!- {nick} has quit [cancelled by {self.user_nick}]"))
         for call in message.tool_calls:
@@ -425,7 +435,7 @@ def _is_direct_reply(message: AIMessage) -> bool:
 def _reasoning_action(summary: str) -> str:
     """``**Checking available agents**\\n\\n...`` -> ``is checking available agents``."""
     stripped = summary.strip()
-    title = stripped.splitlines()[0].strip("*").strip().rstrip(".:") if stripped else ""
+    title = stripped.splitlines()[0].strip("*").strip().rstrip(".:").lower() if stripped else ""
     if not title:
         return ""
     phrase = title[0].lower() + title[1:]

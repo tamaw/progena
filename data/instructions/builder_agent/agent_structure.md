@@ -1,7 +1,6 @@
 ---
 title: Agent structure
 description: Canonical layout and code conventions for a new A2A agent; seeds the agent build spec.
-variables: [agent_name]
 ---
 # Agent Structure Specification
 

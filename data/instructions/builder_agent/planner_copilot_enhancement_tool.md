@@ -1,7 +1,6 @@
 ---
 title: Copilot instruction for a tool
 description: Produces a focused Copilot instruction for building a FastMCP tool.
-variables: [entity_name, spec_rel_path, task_description]
 ---
 Given this build task, generate a focused instruction for Copilot to build a FastMCP tool.
 

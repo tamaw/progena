@@ -169,7 +169,9 @@ class TestInboxRoutes:
             PROGENITOR_STATE_PREFIX,
             "inbox_message:msg_plan",
             {
-                **_message_payload("msg_plan", title="Plan", created_at="2026-07-06T00:00:00+00:00"),
+                **_message_payload(
+                    "msg_plan", title="Plan", created_at="2026-07-06T00:00:00+00:00"
+                ),
                 "requires_approval": True,
                 "task_id": "card_1",
             },

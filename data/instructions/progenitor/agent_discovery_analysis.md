@@ -1,7 +1,6 @@
 ---
 title: Agent discovery analysis
 description: Asks the model to describe each discovered agent folder.
-variables: [folder_descriptions]
 ---
 Analyze these agent folders and extract structured information for each valid agent:
 

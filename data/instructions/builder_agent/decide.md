@@ -1,7 +1,6 @@
 ---
 title: Decision routing
 description: Routes a user request to answer, build, schedule or delegate, given the available tools and agents.
-variables: [tool_context]
 ---
 # Decision Routing Prompt
 

@@ -1,7 +1,6 @@
 ---
 title: Plan request
 description: User request and execution context for the structured planning pass.
-variables: [context_json, current_datetime_utc, request_text]
 ---
 User request:
 {request_text}

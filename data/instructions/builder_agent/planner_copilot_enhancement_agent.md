@@ -1,7 +1,6 @@
 ---
 title: Copilot instruction for an agent
 description: Produces a focused Copilot instruction for building an agent.
-variables: [entity_name, spec_rel_path, task_description]
 ---
 Given this build task, generate a focused instruction for Copilot.
 

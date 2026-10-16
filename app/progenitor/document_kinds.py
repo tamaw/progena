@@ -1,20 +1,13 @@
-"""Canonical registry of ``store`` table document key prefixes.
+"""Canonical ``store`` table document key prefixes.
 
 Every Postgres-backed document kind (routines, agents, skills, memories,
 instructions, kanban cards, inbox messages, workflows, workflow runs, ...) is
 identified by a fixed prefix on its ``key`` column, e.g. ``"routine:"`` for
-``routine:<id>``. Those prefixes used to be declared independently in each
-owning module (``content_documents.py``, ``workflows.py``,
-``routines/store.py``, ``state/manager.py``, ``inbox_routes.py``,
-``ui_routes.py``) with no shared source of truth -- ``INBOX_MESSAGE_KEY_PREFIX``
-had drifted into two separate declarations (``state/manager.py`` and
-``app/backend/inbox_routes.py``) before this module existed.
+``routine:<id>``. Owning modules import their prefix constant from here instead
+of declaring their own literal, so the prefixes cannot drift apart.
 
-This module is the single source of truth: every owning module now imports
-its prefix constant from here instead of declaring its own literal, and
-``DOCUMENT_KINDS`` is the canonical, user-facing list consumed by anything
-that needs to present "pick a document kind" (e.g. a workflow event
-trigger's ``key_prefix`` filter).
+Which prefixes form a user-facing *document type* (label + schema) is data, not
+code: see ``document_types`` and its ``document_type:<id>`` rows in Postgres.
 
 Pure constants module -- no imports from the rest of the codebase, so every
 other module can safely depend on it without risking an import cycle.
@@ -36,14 +29,16 @@ SKILL_DOCUMENT_KEY_PREFIX = "skill:"
 MEMORY_DOCUMENT_KEY_PREFIX = "memory:"
 INSTRUCTION_DOCUMENT_KEY_PREFIX = "instruction:"
 KANBAN_CARD_KEY_PREFIX = "kanban_card:"
+KANBAN_TASK_CONTENT_KEY_PREFIX = "kanban_task_content:"
 INBOX_MESSAGE_KEY_PREFIX = "inbox_message:"
 WORKFLOW_DEFINITION_KEY_PREFIX = "workflow:"
 WORKFLOW_RUN_KEY_PREFIX = "workflow_run:"
+DOCUMENT_TYPE_KEY_PREFIX = "document_type:"
+SESSION_KEY_PREFIX = "session:"
 KNOWLEDGE_PAGE_KEY_PREFIX = "knowledge:"
 
-# Internal-plumbing prefixes: real ``store`` key prefixes, still centralized
-# here to avoid re-drift, but deliberately left out of ``DOCUMENT_KINDS``
-# since they are not document kinds a user would pick.
+# Internal-plumbing prefixes: real ``store`` key prefixes, centralized here to
+# avoid re-drift, but not registered as document types.
 WORKFLOW_QUEUE_KEY_PREFIX = "workflow_queue:"
 WORKFLOW_INVOKE_REQUEST_KEY_PREFIX = "workflow_invoke_request:"
 AGENT_SELF_EDIT_TOUCH_KEY_PREFIX = "agent-touch:"

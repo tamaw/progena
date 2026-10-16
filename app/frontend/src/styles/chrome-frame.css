@@ -1787,6 +1787,12 @@ body,
   transform: translateX(0);
 }
 
+.topnav-pane.is-background {
+  visibility: hidden;
+  pointer-events: none;
+  transition: none;
+}
+
 
 /* Pinned: exits fixed positioning and occupies the third grid column */
 .topnav-pane.is-pinned {
@@ -5899,7 +5905,281 @@ body,
   min-height: 0;
   display: flex;
   flex-direction: column;
+  padding: 8px 20px 12px;
 }
+
+.structured-document-body {
+  width: 100%;
+  min-width: 0;
+}
+
+.structured-document-body > .markdown-content:first-child > :first-child {
+  margin-top: 0;
+}
+
+.structured-document-body .markdown-content table {
+  width: 100%;
+  margin: var(--spacing-sm) 0;
+  border-collapse: collapse;
+  font-size: var(--font-size-sm);
+}
+
+.structured-document-body .markdown-content th,
+.structured-document-body .markdown-content td {
+  padding: var(--spacing-sm);
+  border: 1px solid var(--color-border);
+  text-align: left;
+}
+
+.structured-document-body .markdown-content th {
+  background: var(--color-bg-tertiary);
+  font-weight: 600;
+}
+
+.inbox-section {
+  margin: 4px 0 6px 4px;
+  min-width: 0;
+}
+
+.inbox-section:hover:not(:has(.inbox-section:hover)):not(.is-selected) > .inbox-section__content {
+  border-left-color: color-mix(in oklab, var(--color-accent) 45%, var(--color-border));
+}
+
+.inbox-section.is-selected > .inbox-section__content {
+  border-left-color: var(--color-accent, var(--color-text-primary));
+}
+
+.inbox-section__head {
+  display: flex;
+  min-height: 30px;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: nowrap;
+}
+
+.inbox-section__title {
+  min-width: 0;
+  margin: 0;
+  line-height: 1.35;
+  color: var(--color-text-primary);
+}
+
+.inbox-section__title:is(h2, h3) {
+  font-weight: 650;
+}
+
+.inbox-section__title:is(h2) { font-size: 1.35rem; }
+.inbox-section__title:is(h3) { font-size: 1.2rem; }
+.inbox-section__title:is(h4) { font-size: 1.08rem; }
+.inbox-section__title:is(h5) { font-size: 1rem; }
+.inbox-section__title:is(h6) { font-size: .94rem; }
+
+.inbox-section__select {
+  padding: 0 4px;
+  background: transparent;
+  border: 0;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.inbox-section__content {
+  padding-left: 12px;
+  border-left: 2px solid var(--color-border);
+  cursor: pointer;
+}
+
+.inbox-section__actions,
+.inbox-section__options {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.inbox-section__actions {
+  min-width: 0;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.inbox-section__actions::-webkit-scrollbar {
+  display: none;
+}
+
+.inbox-section__actions > button {
+  flex: none;
+  white-space: nowrap;
+}
+
+.inbox-section__actions button,
+.inbox-section__question button {
+  cursor: pointer;
+  border: 1px solid var(--color-border);
+  border-radius: 5px;
+  padding: 4px 8px;
+  background: var(--color-bg-secondary);
+  color: var(--color-text-primary);
+}
+
+.inbox-section__actions {
+  visibility: hidden;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.inbox-section:hover:not(:has(.inbox-section:hover)) > .inbox-section__head > .inbox-section__actions,
+.inbox-section:focus-within:not(:has(.inbox-section:focus-within)) > .inbox-section__head > .inbox-section__actions,
+.inbox-section.is-selected:not(:has(.inbox-section:hover)) > .inbox-section__head > .inbox-section__actions {
+  visibility: visible;
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.inbox-section__actions .msg-action-btn {
+  height: 26px;
+  max-width: 26px;
+  padding: 0 6px;
+  border: 0;
+  background: transparent;
+  color: var(--color-text-secondary);
+}
+
+.inbox-section__actions .msg-action-btn:hover,
+.inbox-section__actions .msg-action-btn:focus-visible {
+  max-width: 120px;
+  padding: 0 7px;
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+
+.inbox-section__actions .msg-action-btn.is-active {
+  max-width: 120px;
+  padding: 0 7px;
+  background: var(--color-accent-soft);
+  color: var(--color-accent);
+}
+
+.inbox-ai-popover {
+  position: fixed;
+  z-index: 999;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  box-sizing: border-box;
+  padding: 8px;
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  background: var(--color-bg-secondary);
+  box-shadow: var(--shadow-lg);
+}
+
+.inbox-ai-popover > svg {
+  flex: none;
+  color: var(--color-accent);
+}
+
+.inbox-ai-popover input {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 2px;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--color-text-primary);
+  font: inherit;
+}
+
+.inbox-ai-popover input:focus-visible {
+  box-shadow: inset 0 -1px var(--color-accent);
+}
+
+.inbox-ai-popover button:not(.btn-send) {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 30px;
+  height: 30px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+}
+
+.inbox-ai-popover button:not(.btn-send):hover,
+.inbox-ai-popover button:not(.btn-send):focus-visible {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+
+.inbox-ai-popover .btn-send {
+  flex: none;
+}
+
+.inbox-ai-popover__error {
+  flex-basis: 100%;
+  color: var(--color-error);
+  font-size: 12px;
+}
+
+.inbox-section__actions .msg-action-btn.is-active .msg-action-btn__label {
+  max-width: 80px;
+  opacity: 1;
+}
+
+.inbox-section__options input {
+  border: 1px solid var(--color-border);
+  border-radius: 5px;
+  padding: 7px;
+  background: var(--color-bg-primary);
+  color: var(--color-text-primary);
+}
+
+
+.inbox-section__question {
+  margin: 4px 0 0;
+}
+
+.inbox-section__options {
+  margin-top: 6px;
+  align-items: stretch;
+  flex-direction: row;
+}
+
+.inbox-section__options > button {
+  flex: 0 1 auto;
+  max-width: 100%;
+}
+
+.inbox-section__options form {
+  flex: 1 0 100%;
+  display: flex;
+  gap: 6px;
+}
+
+.inbox-section__options > button:hover,
+.inbox-section__options > button:focus-visible {
+  border-color: var(--color-accent);
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+
+.inbox-section__options .is-active {
+  border-color: var(--color-accent);
+  background: var(--color-accent-soft);
+}
+
+.inbox-section__options form input {
+  flex: 1;
+  min-width: 0;
+}
+
 
 /* Dense meta row: items fit on one line (Agents/Models/Channels/Schedules), so
    widen the gap vs the wrapping chat/tasks rows. */
@@ -9513,6 +9793,10 @@ body,
     padding: 16px;
   }
 
+  .detail-pane__body.inbox-detail__body {
+    padding: 8px 12px 12px;
+  }
+
   .detail-pane__body--graph {
     padding: 0;
   }
@@ -9801,4 +10085,3 @@ body,
 .knowledge-page-revisions a[aria-current='true'] {
   font-weight: 600;
 }
-

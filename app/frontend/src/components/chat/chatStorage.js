@@ -3,9 +3,7 @@
 // lives in exactly one place.
 
 export const ARCHIVED_CHAT_SESSIONS_KEY = 'progenitor:archived-chat-sessions';
-export const CUSTOM_CHAT_TITLE_KEY = 'progenitor:chat-custom-title';
 export const PINNED_CHAT_SESSIONS_KEY = 'progenitor:pinned-chat-sessions';
-export const SHARED_CHAT_SESSIONS_KEY = 'progenitor:shared-chat-sessions';
 
 export function readJson(key, fallback = null, warnLabel = null) {
   const saved = localStorage.getItem(key);
@@ -50,38 +48,6 @@ export function persistPinnedSessionIds(pinnedSessionIds) {
     PINNED_CHAT_SESSIONS_KEY,
     pinnedSessionIds,
     !Array.isArray(pinnedSessionIds) || pinnedSessionIds.length === 0,
-  );
-}
-
-export function loadStoredSharedSessionIds() {
-  return toStringIds(readJson(SHARED_CHAT_SESSIONS_KEY, null, 'Failed to load shared chat sessions:'));
-}
-
-export function persistSharedSessionIds(sharedSessionIds) {
-  writeJsonOrRemove(
-    SHARED_CHAT_SESSIONS_KEY,
-    sharedSessionIds,
-    !Array.isArray(sharedSessionIds) || sharedSessionIds.length === 0,
-  );
-}
-
-export function loadStoredCustomChatTitle() {
-  const parsed = readJson(CUSTOM_CHAT_TITLE_KEY, null, 'Failed to load custom chat title:');
-  if (!parsed || typeof parsed !== 'object') {
-    return { threadId: null, title: '' };
-  }
-  return {
-    threadId: typeof parsed.threadId === 'string' ? parsed.threadId : null,
-    title: typeof parsed.title === 'string' ? parsed.title : '',
-  };
-}
-
-export function persistCustomChatTitle(threadId, title) {
-  const normalizedTitle = typeof title === 'string' ? title.trim() : '';
-  writeJsonOrRemove(
-    CUSTOM_CHAT_TITLE_KEY,
-    { threadId: typeof threadId === 'string' ? threadId : null, title: normalizedTitle },
-    !normalizedTitle,
   );
 }
 

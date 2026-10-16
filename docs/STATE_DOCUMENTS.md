@@ -69,7 +69,20 @@ state — it does not necessarily extend to user-facing data without checking
 first.
 
 The one deliberate exception left in the codebase is kanban's
-`_migrate_inline_cards` (`ui_routes.py`) — a precedent from before this rule
+`_migrate_inline_cards` (`ui_routes.py`) — a precedent from before this rule.
+
+## Inbox message revisions
+
+Each `/inbox/<id>.md` message is a separate `progenitor.state` /
+`inbox_message:<id>` store row. Backend startup installs a trigger that captures
+its complete JSON payload into `inbox_message_revisions` on insert, update, and
+delete, and backfills currently stored messages. Like `routine_graph_revisions`,
+each revision is immutable and keyed by message ID plus a content hash. The
+payload includes the body and frontmatter fields, so user-owned read, archive,
+and decision changes can also produce revisions; writing identical content
+again does not. History is stored only; the inbox has no revision browser or
+restore action.
+
 ## Surface 1: agent-facing virtual files (`app/progenitor/agent/state_backend.py`)
 
 `StateFile` is the unit: a virtual file backed by `load`/`save`/`validate`
@@ -86,15 +99,16 @@ The current `/config/` document views are:
   with immutable history in the `knowledge_page_revisions` table.
 - `schedule.json` — schedule entries keyed by ID; agent-writable with audit diffing.
 - `agents.json` — registry agents and runtime tools; agent-writable.
+- `profiles.json` — model-profile map keyed by name; agent-writable.
 - `health.json` — heartbeat status; read-only and runtime-owned.
 
 The JSON suffix describes the virtual view. It does not imply a local file under
 `data/state`.
 
-Four documents (`mcp.json`, `knowledge.json`, `agents.json`, and `health.json`)
-use the simple get/save shape. Schedule has unique semantics that a generic
-factory would have to special-case: `id` lives in the dict key, exactly one of
-`cron_expression`/`scheduled_at` is required, and changes emit the same
+Five documents (`mcp.json`, `knowledge.json`, `agents.json`, `profiles.json`, and
+`health.json`) use the simple get/save shape. Schedule has unique semantics that
+a generic factory would have to special-case: `id` lives in the dict key, exactly
+one of `cron_expression`/`scheduled_at` is required, and changes emit the same
 `entry_added`/`entry_removed`/`entry_updated` audit events as direct
 `StateManager` mutations.
 
@@ -106,6 +120,7 @@ state_file_factories = [
     create_knowledge_state_file,
     create_schedule_state_file,
     create_registry_state_file,
+    create_model_profiles_state_file,
     create_health_state_file,
 ]
 routes["/config/"] = StateDocumentBackend(
@@ -125,9 +140,23 @@ definitions. The state backend also performs semantic validation such as cron
 parsing and timestamp checks; schema validation is an enforced floor, not a
 replacement for document-specific rules.
 
+### Document types and document events
+
+`document_type:<id>` rows (seeded from `BUILTIN_DOCUMENT_TYPES` in
+`app/progenitor/document_types.py` by both the backend and the runtime) map an
+exact key or key prefix to a label and a schema file here. Every
+create/update/delete of a `progenitor.state`/`backend.state` row is appended
+by a Postgres trigger to `document_events` with before/after payloads and the
+writer origin (`progenitor.origin`, set by `document_write_origin`); identical
+rewrites are skipped. The backend's `DocumentEventDispatcher`
+(`app/backend/document_events.py`) consumes the log from a cursor in
+`document_event_cursors`, resolves each key to its type, and feeds workflow
+event nodes, event widgets, and task activity. Processed events older than a
+day are pruned.
+
 ## Surface 2: backend acknowledgement routes (`app/backend/ui_routes.py`)
 
-The retained widget, schedule, event-widget, MCP, kanban, and task routes are
+The retained widget, schedule, event-widget, MCP, kanban, task, and model-profile routes are
 finite command/query routes. Each browser request carries `X-Request-ID`,
 persists its document change or builds its snapshot, enqueues the causal
 canonical `/api/ui/stream` event, and then returns only an HTTP `202 Accepted`
@@ -160,6 +189,33 @@ Schedule, event-widget, and MCP entries retain their own validation and save
 closures because their document shapes differ. Kanban is deliberately separate:
 it is one document per card and maintains card order and task activity; it is
 not a candidate for dict-entry helper reuse.
+
+### Model profiles
+
+`GET /api/ui/model-profiles`, `PATCH /api/ui/model-profiles/{name}`, and
+`DELETE /api/ui/model-profiles/{name}` publish `profiles.snapshot` with
+`{profiles, request_id}` before returning the standard `202` acknowledgement.
+Each public entry contains `name`, `provider`, `deployment`, and any supported
+reasoning overrides; unrelated private fields are never published. PATCH accepts
+only deployment and `reasoning_enabled`, `reasoning_effort`, or
+`reasoning_summary`. A null optional field removes its override (runtime
+environment inheritance); deployment remains required. DELETE removes the named
+raw entry while retaining raw sibling configuration. Unsupported fields and
+malformed configuration produce `422`; unknown profiles produce `404`. The full
+public snapshot is validated before persistence, and unchanged raw
+siblings/private properties are retained.
+
+`profiles.json` is also an agent-writable `/config/` virtual file. Progenitor can
+write the complete validated map to add, edit, or remove profiles; its
+`StateManager` write lands in the same Postgres row as the UI route.
+
+Postgres changes to the `progenitor.state` / `profile` document trigger an
+unsolicited `profiles.snapshot`. This key bypasses coarse `StateSnapshot` diff
+filtering because profiles are not runtime-health fields. The existing canonical
+stream is reused: no profile-specific stream or polling. On `connection.ready`
+and reconnect, the frontend hydrates the shared catalogue consumed by the
+Profiles page and routine model-profile fields.
+
 
 ### Publish after persistence
 
