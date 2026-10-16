@@ -233,7 +233,16 @@ jobs:
         with:
           result-encoding: string
           script: |
-            return process.env.ALL_AGENTS || process.env.CHANGED_AGENTS || '[]';
+            // Only container agents (with an entrypoint) are built and deployed;
+            // in-process agents such as greetings_agent have no image.
+            const fs = require('fs');
+            const path = require('path');
+            const agents = JSON.parse(process.env.ALL_AGENTS || process.env.CHANGED_AGENTS || '[]');
+            return JSON.stringify(
+              agents.filter((name) =>
+                fs.existsSync(path.join(process.env.GITHUB_WORKSPACE, 'app', 'agents', name, 'docker-entrypoint.sh')),
+              ),
+            );
 
   # ------------------------------------------------------------------ build + push agents
   build-agent:
