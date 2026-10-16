@@ -233,8 +233,8 @@ jobs:
         with:
           result-encoding: string
           script: |
-            // Only container agents (with an entrypoint) are built and deployed;
-            // in-process agents such as greetings_agent have no image.
+            // Only container agents (those with a docker-entrypoint.sh) are built
+            // and deployed.
             const fs = require('fs');
             const path = require('path');
             const agents = JSON.parse(process.env.ALL_AGENTS || process.env.CHANGED_AGENTS || '[]');
