@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 from uuid import uuid4
 
@@ -24,6 +25,10 @@ class _FakeCursor:
     def __init__(self, row):
         self._row = row
         self.executed: list[tuple[object, object]] = []
+        self.connection = self
+
+    def transaction(self):
+        return contextlib.nullcontext()
 
     def execute(self, query, params=None):
         self.executed.append((query, params))

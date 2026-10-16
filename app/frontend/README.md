@@ -100,6 +100,18 @@ src/
 - `PUT /api/ui/responses/{generation_id}/cancel` - accepts cancellation with HTTP `202`; `chat.response.cancel_requested` acknowledges the operation and the target's canonical terminal event completes it
 - `GET/POST /api/ui/chats`, `GET/PATCH/DELETE /api/ui/chats/{id}` - HTTP `202` acknowledgements; chat data arrives as `chat.*` events
 - `GET /api/ui/agent-profiles`, `/api/ui/knowledge`, `/api/ui/inbox`, and other retained UI routes - HTTP `202` acknowledgements; their typed snapshot/mutation events hydrate Redux
+- `GET /api/ui/model-profiles`, `PATCH/DELETE /api/ui/model-profiles/{name}` - HTTP `202` acknowledgements; `profiles.snapshot` hydrates the shared profile catalogue and confirms edits or deletion. Profile names are URL-encoded, including embedded slashes.
+
+The **Profiles** page (`/profiles`) manages the model configurations stored in
+`/config/profiles.json`; it is separate from the Models catalogue. Deployment,
+reasoning enabled, effort, and summary are editable. Name and provider are
+read-only. Inherit/cleared optional fields remove the override and use runtime
+environment defaults. Only supported public fields are sent to the browser.
+The canonical stream also keeps routine profile selectors current. On a remote
+change, an open draft is retained and must be restarted or cancelled before
+saving. Offline edits cannot be submitted; reconnect refreshes the catalogue.
+Progenitor can add, edit, or remove entries by writing its agent-writable
+`/config/profiles.json` virtual file; those Postgres writes update the page live.
 
 Browser generation uses `/api/ui/responses`. The backend-to-runtime `/v1/responses`
 and `/v1/events` protocols are internal and are not frontend APIs.

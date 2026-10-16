@@ -16,6 +16,7 @@ const bridge = vi.hoisted(() => {
     dispatch: vi.fn(),
     fetchChatSessions: vi.fn((payload) => ({ type: 'ui/fetchChatSessions', payload })),
     fetchInbox: vi.fn((payload) => ({ type: 'ui/fetchInbox', payload })),
+    fetchModelProfiles: vi.fn((payload) => ({ type: 'ui/fetchModelProfiles', payload })),
     getApiUrl: vi.fn((path) => `/api/ui/${path}`),
     hooks,
     resetHooks() {
@@ -74,11 +75,13 @@ vi.mock('./realtimeListener', () => ({
 
 vi.mock('./realtimeSlice', () => ({
   selectRealtimeConnected: vi.fn(() => bridge.connected),
+  selectRealtimeStreamReady: vi.fn(() => bridge.connected),
 }));
 
 vi.mock('./uiDataSlice', () => ({
   fetchChatSessions: bridge.fetchChatSessions,
   fetchInbox: bridge.fetchInbox,
+  fetchModelProfiles: bridge.fetchModelProfiles,
   selectGeneratingChatIds: vi.fn((state) => state?.uiData?.chatRuntime?.generatingChatIds || []),
 }));
 
@@ -103,6 +106,7 @@ describe('RealtimeBridge reconnect recovery', () => {
     bridge.state.uiData.chatRuntime.responseThreadsByRequestId = {};
     bridge.fetchChatSessions.mockClear();
     bridge.fetchInbox.mockClear();
+    bridge.fetchModelProfiles.mockClear();
     bridge.getApiUrl.mockClear();
   });
 

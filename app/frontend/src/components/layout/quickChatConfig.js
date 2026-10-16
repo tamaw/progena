@@ -50,7 +50,7 @@ const taskQuickChatConfig = {
 const knowledgeQuickPrompts = [
   'Create a knowledge base called Release Notes for changelog snippets, tagged release.',
   'Add a knowledge base named Runbooks with the tags ops, oncall.',
-  'Create a knowledge base "Research Notes" and add the folder /data/research as a source.',
+  'Create a knowledge base "Research Notes" for durable findings, tagged research.',
 ];
 // Looks like the default quick chat (icon + header, no descriptive text block) —
 // just seeded with knowledge-create example prompts.
@@ -58,6 +58,19 @@ const knowledgeQuickChatConfig = {
   ...defaultQuickChatConfig,
   mode: 'knowledge-create',
   prompts: knowledgeQuickPrompts,
+};
+
+const profileQuickPrompts = [
+  'Add an Azure OpenAI model profile named fast-chat using deployment gpt-5-mini.',
+  'Create a model profile named deep-reasoning with high reasoning effort.',
+  'Add a profile for deployment gpt-5.3-chat and enable reasoning summaries.',
+];
+const profileQuickChatConfig = {
+  ...defaultQuickChatConfig,
+  mode: 'profile-create',
+  title: 'Add a model profile',
+  placeholder: 'Describe the model profile you want...',
+  prompts: profileQuickPrompts,
 };
 
 const inboxQuickPrompts = [
@@ -118,6 +131,7 @@ const QUICK_CHAT_CONFIGS_BY_MODE = {
   'mcp-create': mcpQuickChatConfig,
   'task-create': taskQuickChatConfig,
   'knowledge-create': knowledgeQuickChatConfig,
+  'profile-create': profileQuickChatConfig,
   'inbox-compose': inboxQuickChatConfig,
   'inbox-edit': inboxEditQuickChatConfig,
   'workflow-create': workflowQuickChatConfig,

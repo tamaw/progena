@@ -1,25 +1,33 @@
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { describe, expect, it } from 'vitest';
+import { Provider } from 'react-redux';
+import { describe, expect, it, vi } from 'vitest';
 import { JSDOM } from 'jsdom';
+import { store } from '../../store/store';
 import { GraphEditContext } from './graphEditorContext';
 import { NodeInspector } from './NodeInspector';
 import { RoutineChain } from './RoutineChain';
 
+vi.mock('../../context/ConfigContext', () => ({
+  useConfig: () => ({ getApiUrl: (name) => `/api/ui/${name}` }),
+}));
+
 function renderWithGraph(component, nodes, edges, overrides = {}) {
   return renderToStaticMarkup(
-    <GraphEditContext.Provider value={{
-      nodes,
-      edges,
-      runMeta: {},
-      runData: {},
-      runStatus: 'idle',
-      loopMembership: new Map(),
-      loopIterations: {},
-      ...overrides,
-    }}>
-      {component}
-    </GraphEditContext.Provider>,
+    <Provider store={store}>
+      <GraphEditContext.Provider value={{
+        nodes,
+        edges,
+        runMeta: {},
+        runData: {},
+        runStatus: 'idle',
+        loopMembership: new Map(),
+        loopIterations: {},
+        ...overrides,
+      }}>
+        {component}
+      </GraphEditContext.Provider>
+    </Provider>,
   );
 }
 

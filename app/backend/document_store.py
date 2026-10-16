@@ -4,13 +4,17 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import copy
+import hashlib
 import logging
-from collections.abc import Callable, Iterable
+import threading
+from collections.abc import Callable, Iterable, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
-from datetime import UTC, datetime
-from typing import Any, Protocol, cast
+from datetime import UTC, datetime, timedelta
+from typing import Any, Literal, LiteralString, NamedTuple, Protocol, cast
 
 import psycopg
 from psycopg import sql
@@ -19,7 +23,7 @@ from psycopg.types.json import Jsonb
 from psycopg_pool import ConnectionPool, PoolClosed
 
 from app.backend.runtime_conversations import RuntimeConversationReader, RuntimeUnavailable
-from app.progenitor.document_kinds import INBOX_MESSAGE_KEY_PREFIX
+from app.progenitor.document_kinds import INBOX_MESSAGE_KEY_PREFIX, SESSION_KEY_PREFIX
 from app.progenitor.routines.store import ROUTINE_GRAPH_KEY_PREFIX
 
 PROGENITOR_STATE_PREFIX = "progenitor.state"
@@ -34,6 +38,32 @@ _STORE_CHANGE_PREFIXES = (PROGENITOR_STATE_PREFIX, BACKEND_STATE_PREFIX)
 # Parallel runtime reads when the chat list needs messages for many threads.
 CONVERSATION_FETCH_CONCURRENCY = 8
 
+# Durable document event log: every create/update/delete of a state-namespace
+# document appends one ``document_events`` row (with before/after payloads and
+# the writer's origin) and NOTIFYs its sequence number on this channel.
+DOCUMENT_EVENT_CHANNEL = "document_events"
+
+DocumentEventOp = Literal["created", "updated", "deleted"]
+
+# Session-scoped writer identity recorded on each document event. A workflow
+# run sets it to its run id so events caused by its own writes carry their
+# ancestry and cannot re-trigger the workflow that produced them.
+_document_write_origin: ContextVar[str | None] = ContextVar(
+    "progenitor_document_write_origin", default=None
+)
+
+
+@contextmanager
+def document_write_origin(origin: str) -> Iterator[None]:
+    """Tag every document write in this context with ``origin``."""
+
+    token = _document_write_origin.set(origin)
+    try:
+        yield
+    finally:
+        _document_write_origin.reset(token)
+
+
 logger = logging.getLogger(__name__)
 
 
@@ -43,6 +73,41 @@ class StoredDocument:
 
     payload: Any
     updated_at: datetime | None = None
+
+
+class DocumentEventPosition(NamedTuple):
+    """A point in commit order: ``(txid, seq)`` of the last processed event.
+
+    ``seq`` alone is allocated before commit, so a later-committing writer can
+    hold a lower ``seq`` than events already visible. Ordering by the writing
+    transaction id first, and only reading transactions older than every still
+    open one, makes the visible prefix of the log final.
+    """
+
+    txid: int
+    seq: int
+
+
+EVENT_LOG_START = DocumentEventPosition(0, 0)
+
+
+@dataclass(frozen=True)
+class DocumentEvent:
+    """One row of the durable document event log."""
+
+    seq: int
+    txid: int
+    prefix: str
+    key: str
+    op: DocumentEventOp
+    before: Any
+    after: Any
+    origin: str | None
+    created_at: datetime
+
+    @property
+    def position(self) -> DocumentEventPosition:
+        return DocumentEventPosition(self.txid, self.seq)
 
 
 @dataclass(frozen=True)
@@ -96,6 +161,14 @@ class RoutineRevisionSummary:
     captured_at: str | None
 
 
+@dataclass(frozen=True)
+class KnowledgePageRevisionSummary:
+    revision_id: str
+    base_id: str
+    path: str
+    captured_at: str | None
+
+
 class BackendDocumentStore(Protocol):
     """Minimal document-store API used by backend routes."""
 
@@ -105,10 +178,50 @@ class BackendDocumentStore(Protocol):
 
     def list_documents(self, prefix: str, key_prefix: str) -> list[tuple[str, StoredDocument]]: ...
 
+    def search_documents(
+        self,
+        prefix: str,
+        key_prefix: str,
+        fields: tuple[str, ...],
+        source: Literal["json", "front_matter"],
+        q: str,
+        limit: int = 5,
+        key_suffix: str | None = None,
+    ) -> list[dict[str, Any]]: ...
+
     def save_document(self, prefix: str, key: str, payload: Any) -> None: ...
+
+    def merge_document(self, prefix: str, key: str, payload: Any) -> bool: ...
 
     def delete_document(self, prefix: str, key: str) -> None: ...
 
+    def pop_document(self, prefix: str, key: str) -> Any | None: ...
+
+    def mutate_document(self, prefix: str, key: str, mutator: Callable[[Any], Any]) -> Any: ...
+
+    def read_document_events(
+        self, after: DocumentEventPosition, limit: int
+    ) -> list[DocumentEvent]: ...
+
+    def has_deferred_document_events(self, after: DocumentEventPosition) -> bool:
+        """True when committed events after ``after`` are not yet readable.
+
+        They wait behind a still-open older transaction; once it ends they
+        become readable without any new event (or NOTIFY) announcing it.
+        """
+        ...
+
+    def latest_document_event_position(self) -> DocumentEventPosition: ...
+
+    def get_document_event_cursor(self, consumer: str) -> DocumentEventPosition | None: ...
+
+    def save_document_event_cursor(
+        self, consumer: str, position: DocumentEventPosition
+    ) -> None: ...
+
+    def prune_document_events(
+        self, *, through: DocumentEventPosition, older_than: timedelta
+    ) -> int: ...
     def query_logs(
         self,
         *,
@@ -142,7 +255,29 @@ class BackendDocumentStore(Protocol):
 
     def get_routine_revision(self, routine_id: str, revision_id: str) -> dict[str, Any] | None: ...
 
+    def list_knowledge_page_revisions(
+        self, base_id: str, path: str, *, limit: int = 50
+    ) -> list[KnowledgePageRevisionSummary]: ...
+
+    def get_knowledge_page_revision(
+        self, base_id: str, path: str, revision_id: str
+    ) -> str | None: ...
     def close(self) -> None: ...
+
+
+def _is_session_noise(prefix: str, key: str, before: Any, after: Any) -> bool:
+    """A session update touching only ``content``/``last_activity`` (every turn).
+
+    Mirrors the Postgres capture trigger's noise filter: such updates log no event.
+    """
+    if prefix != PROGENITOR_STATE_PREFIX or not key.startswith(SESSION_KEY_PREFIX):
+        return False
+    if not isinstance(before, dict) or not isinstance(after, dict):
+        return False
+    noise = ("content", "last_activity")
+    return {k: v for k, v in before.items() if k not in noise} == {
+        k: v for k, v in after.items() if k not in noise
+    }
 
 
 class InMemoryDocumentStore:
@@ -154,13 +289,26 @@ class InMemoryDocumentStore:
         self._routine_revisions: dict[
             tuple[str, str], tuple[RoutineRevisionSummary, dict[str, Any]]
         ] = {}
+        self._events: list[DocumentEvent] = []
+        # Allocation counter, independent of retained rows so pruning never
+        # makes a later event reuse a processed sequence number.
+        self._last_event_seq = 0
+        self._event_cursors: dict[str, DocumentEventPosition] = {}
+        self._event_listeners: list[Callable[[int], None]] = []
+        # Serializes every write with its event publication, and event reads
+        # with both, so a reader never sees a sequence number past one that is
+        # allocated but not yet appended. Reentrant: mutators may read.
+        self._lock = threading.RLock()
+        self._knowledge_revisions: dict[
+            tuple[str, str, str], tuple[KnowledgePageRevisionSummary, str]
+        ] = {}
 
     def get_document(
         self, prefix: str, key: str, default: Any | None = None
     ) -> StoredDocument | None:
         document = self._documents.get((prefix, key))
         if document is not None:
-            return document
+            return StoredDocument(copy.deepcopy(document.payload), document.updated_at)
         if default is None:
             return None
         return StoredDocument(default, None)
@@ -168,18 +316,223 @@ class InMemoryDocumentStore:
     def list_documents(self, prefix: str, key_prefix: str) -> list[tuple[str, StoredDocument]]:
         return sorted(
             (
-                (key, document)
+                (key, StoredDocument(copy.deepcopy(document.payload), document.updated_at))
                 for (doc_prefix, key), document in self._documents.items()
                 if doc_prefix == prefix and key.startswith(key_prefix)
             ),
             key=lambda entry: entry[0],
         )
 
+    def search_documents(
+        self,
+        prefix: str,
+        key_prefix: str,
+        fields: tuple[str, ...],
+        source: Literal["json", "front_matter"],
+        q: str,
+        limit: int = 5,
+        key_suffix: str | None = None,
+    ) -> list[dict[str, Any]]:
+        q_lower = q.lower()
+        rows: list[tuple[str, StoredDocument]] = []
+        for (doc_prefix, key), document in self._documents.items():
+            if doc_prefix != prefix or not key.startswith(key_prefix):
+                continue
+            if key_suffix is not None and not key.endswith(key_suffix):
+                continue
+            payload = document.payload if isinstance(document.payload, dict) else {}
+            if source == "front_matter":
+                content = str(payload.get("content", ""))
+                if q_lower in content.lower():
+                    rows.append((key, document))
+            else:
+                for field in fields:
+                    value = str(payload.get(field, ""))
+                    if q_lower in value.lower():
+                        rows.append((key, document))
+                        break
+
+        # Same order as Postgres: JSON kinds put title-prefix matches first, then
+        # newest; front-matter kinds are newest first.
+        rows.sort(
+            key=lambda entry: entry[1].updated_at or datetime.min.replace(tzinfo=UTC), reverse=True
+        )
+        if source == "json" and fields:
+            rows.sort(
+                key=lambda entry: (
+                    0
+                    if str(
+                        (entry[1].payload if isinstance(entry[1].payload, dict) else {}).get(
+                            fields[0], ""
+                        )
+                    )
+                    .lower()
+                    .startswith(q_lower)
+                    else 1
+                )
+            )
+        return [
+            {"key": key, "payload": document.payload, "updated_at": document.updated_at}
+            for key, document in rows[:limit]
+        ]
+
     def save_document(self, prefix: str, key: str, payload: Any) -> None:
-        self._documents[(prefix, key)] = StoredDocument(payload, datetime.now(UTC))
+        # Copy like Postgres serialization does, so later in-place edits by the
+        # caller cannot rewrite the stored value (or an event's before/after).
+        stored = copy.deepcopy(payload)
+        with self._lock:
+            previous = self._documents.get((prefix, key))
+            self._documents[(prefix, key)] = StoredDocument(stored, datetime.now(UTC))
+            if previous is None:
+                self._record_event(prefix, key, "created", None, stored)
+            elif previous.payload != stored:
+                self._record_event(prefix, key, "updated", previous.payload, stored)
+            if prefix == PROGENITOR_STATE_PREFIX and key.startswith("knowledge:"):
+                remainder = key[len("knowledge:") :]
+                base_id, separator, path = remainder.partition("/")
+                if (
+                    separator
+                    and isinstance(stored, dict)
+                    and isinstance(stored.get("content"), str)
+                ):
+                    content = stored["content"]
+                    revision_id = hashlib.sha256(content.encode("utf-8")).hexdigest()
+                    summary = KnowledgePageRevisionSummary(
+                        revision_id=revision_id,
+                        base_id=base_id,
+                        path=path,
+                        captured_at=datetime.now(UTC).isoformat(),
+                    )
+                    self._knowledge_revisions.setdefault(
+                        (base_id, path, revision_id), (summary, content)
+                    )
+
+    def list_knowledge_page_revisions(
+        self, base_id: str, path: str, *, limit: int = 50
+    ) -> list[KnowledgePageRevisionSummary]:
+        rows = [
+            summary
+            for (row_base, row_path, _), (summary, _) in self._knowledge_revisions.items()
+            if row_base == base_id and row_path == path
+        ]
+        return sorted(
+            rows,
+            key=lambda summary: (summary.captured_at or "", summary.revision_id),
+            reverse=True,
+        )[:limit]
+
+    def get_knowledge_page_revision(self, base_id: str, path: str, revision_id: str) -> str | None:
+        row = self._knowledge_revisions.get((base_id, path, revision_id))
+        return row[1] if row else None
 
     def delete_document(self, prefix: str, key: str) -> None:
-        self._documents.pop((prefix, key), None)
+        with self._lock:
+            previous = self._documents.pop((prefix, key), None)
+            if previous is not None:
+                self._record_event(prefix, key, "deleted", previous.payload, None)
+
+    def pop_document(self, prefix: str, key: str) -> Any | None:
+        """Atomically remove a document and return its previous payload."""
+
+        with self._lock:
+            previous = self._documents.pop((prefix, key), None)
+            if previous is None:
+                return None
+            self._record_event(prefix, key, "deleted", previous.payload, None)
+            return copy.deepcopy(previous.payload)
+
+    def mutate_document(self, prefix: str, key: str, mutator: Callable[[Any], Any]) -> Any:
+        with self._lock:
+            document = self._documents.get((prefix, key))
+            payload = copy.deepcopy(document.payload) if document is not None else None
+            new_payload = mutator(payload)
+            stored = copy.deepcopy(new_payload)
+            previous = self._documents.get((prefix, key))
+            self._documents[(prefix, key)] = StoredDocument(stored, datetime.now(UTC))
+            if previous is None:
+                self._record_event(prefix, key, "created", None, stored)
+            elif previous.payload != stored:
+                self._record_event(prefix, key, "updated", previous.payload, stored)
+            return new_payload
+
+    def merge_document(self, prefix: str, key: str, payload: Any) -> bool:
+        with self._lock:
+            previous = self._documents.get((prefix, key))
+            if previous is None or not isinstance(previous.payload, dict):
+                return False
+            stored = copy.deepcopy({**previous.payload, **payload})
+            self._documents[(prefix, key)] = StoredDocument(stored, datetime.now(UTC))
+            if previous.payload != stored:
+                self._record_event(prefix, key, "updated", previous.payload, stored)
+            return True
+
+    def add_document_event_listener(self, listener: Callable[[int], None]) -> None:
+        """Call ``listener(seq)`` after each recorded event (the in-memory NOTIFY)."""
+
+        self._event_listeners.append(listener)
+
+    def remove_document_event_listener(self, listener: Callable[[int], None]) -> None:
+        if listener in self._event_listeners:
+            self._event_listeners.remove(listener)
+
+    def _record_event(
+        self, prefix: str, key: str, op: DocumentEventOp, before: Any, after: Any
+    ) -> None:
+        """Append one event; the caller holds ``self._lock``."""
+        if prefix not in _STORE_CHANGE_PREFIXES:
+            return
+        if op == "updated" and _is_session_noise(prefix, key, before, after):
+            return
+        self._last_event_seq += 1
+        seq = self._last_event_seq
+        self._events.append(
+            DocumentEvent(
+                seq=seq,
+                # Every in-memory write commits immediately, in allocation order.
+                txid=seq,
+                prefix=prefix,
+                key=key,
+                op=op,
+                before=copy.deepcopy(before),
+                after=copy.deepcopy(after),
+                origin=_document_write_origin.get(),
+                created_at=datetime.now(UTC),
+            )
+        )
+        for listener in list(self._event_listeners):
+            listener(seq)
+
+    def read_document_events(self, after: DocumentEventPosition, limit: int) -> list[DocumentEvent]:
+        with self._lock:
+            return [event for event in self._events if event.position > after][:limit]
+
+    def has_deferred_document_events(self, after: DocumentEventPosition) -> bool:
+        # In-memory writes are readable the moment they are recorded.
+        return False
+
+    def latest_document_event_position(self) -> DocumentEventPosition:
+        with self._lock:
+            return DocumentEventPosition(self._last_event_seq, self._last_event_seq)
+
+    def get_document_event_cursor(self, consumer: str) -> DocumentEventPosition | None:
+        return self._event_cursors.get(consumer)
+
+    def save_document_event_cursor(self, consumer: str, position: DocumentEventPosition) -> None:
+        self._event_cursors[consumer] = position
+
+    def prune_document_events(
+        self, *, through: DocumentEventPosition, older_than: timedelta
+    ) -> int:
+        cutoff = datetime.now(UTC) - older_than
+        with self._lock:
+            kept = [
+                event
+                for event in self._events
+                if event.position > through or event.created_at >= cutoff
+            ]
+            removed = len(self._events) - len(kept)
+            self._events = kept
+        return removed
 
     def query_logs(
         self,
@@ -347,9 +700,11 @@ class PostgresDocumentStore:
             try:
                 self._ensure_store_table()
                 self._ensure_change_trigger()
+                self._ensure_document_event_log()
                 self._ensure_routine_revision_history()
                 self._ensure_inbox_revision_history()
                 self._ensure_policy_revision_history()
+                self._ensure_knowledge_page_revision_history()
             finally:
                 conn.execute(
                     "SELECT pg_advisory_unlock(hashtext('progenitor_document_store_setup'))"
@@ -444,6 +799,121 @@ class PostgresDocumentStore:
                 CREATE OR REPLACE TRIGGER progenitor_store_change
                 AFTER INSERT OR UPDATE OR DELETE ON store
                 FOR EACH ROW EXECUTE FUNCTION progenitor_notify_store_change()
+                """
+            )
+
+    def _ensure_document_event_log(self) -> None:
+        """Install the durable document event log and its capture trigger.
+
+        Every INSERT/UPDATE/DELETE of a state-namespace ``store`` row appends one
+        ``document_events`` row carrying ``created``/``updated``/``deleted``, the
+        before/after payloads, and the writer origin (``progenitor.origin``,
+        set transaction-locally by ``document_write_origin``). Rewrites of an
+        identical value are skipped. The row's sequence number is NOTIFYed on
+        ``document_events`` so consumers wake up, then catch up from their
+        stored cursor -- missed notifications never lose events. Like the
+        revision histories, this lives in separate tables so LangGraph's own
+        ``store`` schema is never altered.
+        """
+        prefixes = ", ".join(f"'{prefix}'" for prefix in _STORE_CHANGE_PREFIXES)
+        with self._cursor() as cur, cur.connection.transaction():
+            # ``txid`` is the writing transaction (commit-order key, see
+            # ``DocumentEventPosition``). Added columns on existing tables are
+            # filled in this one transaction, so every pre-existing event and
+            # cursor shares one txid and keeps its relative ``seq`` order.
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS document_events (
+                    seq BIGSERIAL PRIMARY KEY,
+                    txid XID8 NOT NULL DEFAULT pg_current_xact_id(),
+                    prefix TEXT NOT NULL,
+                    key TEXT NOT NULL,
+                    op TEXT NOT NULL CHECK (op IN ('created', 'updated', 'deleted')),
+                    before JSONB,
+                    after JSONB,
+                    origin TEXT,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                )
+                """
+            )
+            cur.execute(
+                "ALTER TABLE document_events ADD COLUMN IF NOT EXISTS "
+                "txid XID8 NOT NULL DEFAULT pg_current_xact_id()"
+            )
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS document_events_created_at_idx "
+                "ON document_events (created_at)"
+            )
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS document_events_position_idx "
+                "ON document_events (txid, seq)"
+            )
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS document_event_cursors (
+                    consumer TEXT PRIMARY KEY,
+                    txid XID8 NOT NULL,
+                    seq BIGINT NOT NULL,
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                )
+                """
+            )
+            cur.execute(
+                "ALTER TABLE document_event_cursors ADD COLUMN IF NOT EXISTS "
+                "txid XID8 NOT NULL DEFAULT pg_current_xact_id()"
+            )
+            cur.execute("ALTER TABLE document_event_cursors ALTER COLUMN txid DROP DEFAULT")
+            # Placeholders are filled from module constants only, never input.
+            cur.execute(
+                """
+                CREATE OR REPLACE FUNCTION progenitor_record_document_event()
+                RETURNS trigger AS $$
+                DECLARE
+                    row_prefix TEXT := COALESCE(NEW.prefix, OLD.prefix);
+                    event_seq BIGINT;
+                BEGIN
+                    IF row_prefix NOT IN (__PREFIXES__) THEN
+                        RETURN NULL;
+                    END IF;
+                    IF TG_OP = 'UPDATE' AND OLD.value IS NOT DISTINCT FROM NEW.value THEN
+                        RETURN NULL;
+                    END IF;
+                    -- Noise filter: content/last_activity-only updates on session docs
+                    -- do not log an event, because they happen on every turn.
+                    IF TG_OP = 'UPDATE'
+                        AND row_prefix = 'progenitor.state'
+                        AND COALESCE(NEW.key, OLD.key) LIKE '__SESSION_PREFIX__%'
+                        AND (OLD.value -> 'payload') - 'content' - 'last_activity'
+                            IS NOT DISTINCT FROM
+                            (NEW.value -> 'payload') - 'content' - 'last_activity'
+                    THEN
+                        RETURN NULL;
+                    END IF;
+                    INSERT INTO document_events (prefix, key, op, before, after, origin)
+                    VALUES (
+                        row_prefix,
+                        COALESCE(NEW.key, OLD.key),
+                        CASE TG_OP WHEN 'INSERT' THEN 'created'
+                                   WHEN 'UPDATE' THEN 'updated'
+                                   ELSE 'deleted' END,
+                        CASE WHEN TG_OP = 'INSERT' THEN NULL ELSE OLD.value -> 'payload' END,
+                        CASE WHEN TG_OP = 'DELETE' THEN NULL ELSE NEW.value -> 'payload' END,
+                        NULLIF(current_setting('progenitor.origin', true), '')
+                    )
+                    RETURNING seq INTO event_seq;
+                    PERFORM pg_notify('__CHANNEL__', event_seq::text);
+                    RETURN NULL;
+                END;
+                $$ LANGUAGE plpgsql;
+                """.replace("__PREFIXES__", prefixes)  # nosec B608
+                .replace("__CHANNEL__", DOCUMENT_EVENT_CHANNEL)
+                .replace("__SESSION_PREFIX__", SESSION_KEY_PREFIX)
+            )
+            cur.execute(
+                """
+                CREATE OR REPLACE TRIGGER progenitor_document_event
+                AFTER INSERT OR UPDATE OR DELETE ON store
+                FOR EACH ROW EXECUTE FUNCTION progenitor_record_document_event()
                 """
             )
 
@@ -548,6 +1018,68 @@ class PostgresDocumentStore:
                 ON CONFLICT (routine_id, revision_id) DO NOTHING
                 """.replace("__STATE_PREFIX__", state_prefix).replace("__KEY_PREFIX__", key_prefix)  # nosec B608
             cur.execute(backfill_sql)
+
+    def _ensure_knowledge_page_revision_history(self) -> None:
+        state_prefix = PROGENITOR_STATE_PREFIX
+        with self._cursor() as cur:
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS knowledge_page_revisions (
+                    base_id TEXT NOT NULL, path TEXT NOT NULL, content TEXT NOT NULL,
+                    revision_id TEXT NOT NULL,
+                    captured_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    PRIMARY KEY (base_id, path, revision_id)
+                );
+                CREATE INDEX IF NOT EXISTS knowledge_page_revisions_latest
+                    ON knowledge_page_revisions (base_id, path, captured_at DESC, revision_id DESC);
+                CREATE OR REPLACE FUNCTION progenitor_capture_knowledge_page_revision()
+                RETURNS trigger AS $$
+                DECLARE source_row store%ROWTYPE; rest TEXT; slash INTEGER; page_content TEXT;
+                BEGIN
+                    IF TG_OP = 'DELETE' THEN source_row := OLD; ELSE source_row := NEW; END IF;
+                    rest := substring(source_row.key from 11);
+                    slash := position('/' in rest);
+                    page_content := source_row.value -> 'payload' ->> 'content';
+                    IF source_row.prefix = '__STATE_PREFIX__' AND source_row.key LIKE 'knowledge:%'
+                       AND slash > 1 AND page_content IS NOT NULL THEN
+                        INSERT INTO knowledge_page_revisions(base_id, path, content, revision_id)
+                        VALUES (
+                            split_part(rest, '/', 1),
+                            substring(rest from slash + 1),
+                            page_content,
+                            encode(sha256(convert_to(page_content, 'UTF8')), 'hex')
+                        ) ON CONFLICT DO NOTHING;
+                    END IF;
+                    RETURN source_row;
+                END;
+                $$ LANGUAGE plpgsql;
+                CREATE OR REPLACE TRIGGER progenitor_capture_knowledge_page_revision
+                    AFTER INSERT OR UPDATE ON store FOR EACH ROW
+                    EXECUTE FUNCTION progenitor_capture_knowledge_page_revision();
+                CREATE OR REPLACE TRIGGER progenitor_capture_deleted_knowledge_page_revision
+                    BEFORE DELETE ON store FOR EACH ROW
+                    EXECUTE FUNCTION progenitor_capture_knowledge_page_revision();
+                CREATE OR REPLACE FUNCTION progenitor_knowledge_page_revisions_immutable()
+                RETURNS trigger AS $$
+                BEGIN
+                    RAISE EXCEPTION 'knowledge_page_revisions rows are immutable';
+                END;
+                $$ LANGUAGE plpgsql;
+                CREATE OR REPLACE TRIGGER progenitor_knowledge_page_revisions_immutable
+                    BEFORE UPDATE OR DELETE ON knowledge_page_revisions FOR EACH ROW
+                    EXECUTE FUNCTION progenitor_knowledge_page_revisions_immutable();
+                INSERT INTO knowledge_page_revisions(base_id, path, content, revision_id)
+                SELECT split_part(substring(key from 11), '/', 1),
+                       substring(substring(key from 11) from position('/' in substring(key from 11)) + 1),
+                       value -> 'payload' ->> 'content',
+                       encode(sha256(convert_to(value -> 'payload' ->> 'content', 'UTF8')), 'hex')
+                FROM store
+                WHERE prefix = '__STATE_PREFIX__' AND key LIKE 'knowledge:%'
+                  AND position('/' in substring(key from 11)) > 1
+                  AND value -> 'payload' ->> 'content' IS NOT NULL
+                ON CONFLICT DO NOTHING;
+                """.replace("__STATE_PREFIX__", state_prefix)  # nosec B608
+            )
 
     def _ensure_inbox_revision_history(self) -> None:
         """Capture full inbox payloads, including frontmatter, on every store write.
@@ -724,26 +1256,293 @@ class PostgresDocumentStore:
             results.append((str(row["key"]), StoredDocument(payload, row.get("updated_at"))))
         return results
 
+    def search_documents(
+        self,
+        prefix: str,
+        key_prefix: str,
+        fields: tuple[str, ...],
+        source: Literal["json", "front_matter"],
+        q: str,
+        limit: int = 5,
+        key_suffix: str | None = None,
+    ) -> list[dict[str, Any]]:
+        like_prefix = _escape_like(key_prefix) + "%"
+        like_suffix = "%" + _escape_like(key_suffix) if key_suffix is not None else None
+        params: list[Any] = [prefix, like_prefix]
+        if like_suffix is not None:
+            params.append(like_suffix)
+
+        ilike_pattern = f"%{_escape_like(q)}%"
+
+        if source == "front_matter":
+            # Search inside the markdown content; front matter is parsed later.
+            match_sql = sql.SQL("value->'payload'->>'content' ILIKE %s")
+            params.append(ilike_pattern)
+        else:
+            # A row matches when any searched field contains the query.
+            match_sql = sql.SQL("({})").format(
+                sql.SQL(" OR ").join(
+                    sql.SQL("value->'payload'->>{} ILIKE %s").format(sql.Literal(field))
+                    for field in fields
+                )
+            )
+            params.extend(ilike_pattern for _ in fields)
+
+        key_clause = sql.SQL("key LIKE %s")
+        if like_suffix is not None:
+            key_clause = sql.SQL("key LIKE %s AND key LIKE %s")
+
+        where_sql = sql.SQL("prefix = %s AND {} AND {}").format(key_clause, match_sql)
+
+        # Order: title prefix match first, then updated_at desc.
+        if source == "json" and fields:
+            order_sql = sql.SQL(
+                "CASE WHEN value->'payload'->>{} ILIKE %s THEN 0 ELSE 1 END, updated_at DESC"
+            ).format(sql.Literal(fields[0]))
+            params.append(f"{_escape_like(q)}%")
+        else:
+            order_sql = sql.SQL("updated_at DESC")
+
+        query = sql.SQL(
+            "SELECT key, value, updated_at FROM store WHERE {} ORDER BY {} LIMIT %s"
+        ).format(where_sql, order_sql)
+        params.append(limit)
+
+        with self._cursor() as cur:
+            cur.execute(query, params)
+            rows = cast(list[dict[str, Any]], cur.fetchall())
+
+        results: list[dict[str, Any]] = []
+        for row in rows:
+            value = row.get("value")
+            payload = value.get("payload") if isinstance(value, dict) else None
+            results.append(
+                {
+                    "key": str(row["key"]),
+                    "payload": payload,
+                    "updated_at": row.get("updated_at"),
+                }
+            )
+        return results
+
     def save_document(self, prefix: str, key: str, payload: Any) -> None:
         value = {"payload": payload}
+        self._write_with_origin(
+            """
+            INSERT INTO store (prefix, key, value, created_at, updated_at)
+            VALUES (%s, %s, %s, now(), now())
+            ON CONFLICT (prefix, key) DO UPDATE
+                SET value = EXCLUDED.value,
+                    updated_at = now()
+            """,
+            (prefix, key, Jsonb(value)),
+        )
+
+    def merge_document(self, prefix: str, key: str, payload: Any) -> bool:
+        """Merge ``payload`` into an existing document's payload; ``False`` if it is missing."""
+
+        return (
+            self._write_with_origin(
+                """
+            UPDATE store
+            SET value = jsonb_set(value, '{payload}', (value->'payload') || %s::jsonb),
+                updated_at = now()
+            WHERE prefix = %s AND key = %s
+            """,
+                (Jsonb(payload), prefix, key),
+            )
+            > 0
+        )
+
+    def delete_document(self, prefix: str, key: str) -> None:
+        self._write_with_origin(
+            "DELETE FROM store WHERE prefix = %s AND key = %s",
+            (prefix, key),
+        )
+
+    def pop_document(self, prefix: str, key: str) -> Any | None:
+        """Atomically remove a document and return its previous payload."""
+
+        origin = _document_write_origin.get()
+        with self._cursor() as cur:
+            if origin is None:
+                cur.execute(
+                    "DELETE FROM store WHERE prefix = %s AND key = %s RETURNING value",
+                    (prefix, key),
+                )
+            else:
+                with cur.connection.transaction():
+                    cur.execute("SELECT set_config('progenitor.origin', %s, true)", (origin,))
+                    cur.execute(
+                        "DELETE FROM store WHERE prefix = %s AND key = %s RETURNING value",
+                        (prefix, key),
+                    )
+            row = cast(dict[str, Any] | None, cur.fetchone())
+        if row is None:
+            return None
+        value = row.get("value")
+        return value.get("payload") if isinstance(value, dict) else None
+
+    def mutate_document(self, prefix: str, key: str, mutator: Callable[[Any], Any]) -> Any:
+        try:
+            return self._mutate_document_impl(prefix, key, mutator)
+        except PoolClosed:
+            logger.warning("Backend document store pool was closed; recreating it")
+            self._recreate_pool()
+            self._ensure_store_table()
+            return self._mutate_document_impl(prefix, key, mutator)
+
+    def _mutate_document_impl(self, prefix: str, key: str, mutator: Callable[[Any], Any]) -> Any:
+        origin = _document_write_origin.get()
+        with self._pool.connection() as conn:
+            with conn.transaction(), conn.cursor() as cur:
+                # A transaction-scoped lock on the key, so two first writes of
+                # a missing document serialize; plus a row lock on an existing
+                # document, so plain saves/merges (which skip the advisory
+                # lock) cannot commit between this read and the write below.
+                cur.execute(
+                    "SELECT pg_advisory_xact_lock(hashtext(%s), hashtext(%s))",
+                    (prefix, key),
+                )
+                cur.execute(
+                    "SELECT value FROM store WHERE prefix = %s AND key = %s FOR UPDATE",
+                    (prefix, key),
+                )
+                row = cast(dict[str, Any] | None, cur.fetchone())
+                payload = row["value"]["payload"] if row is not None else None
+                new_payload = mutator(payload)
+                value = {"payload": new_payload}
+                if origin is not None:
+                    cur.execute("SELECT set_config('progenitor.origin', %s, true)", (origin,))
+                cur.execute(
+                    """
+                        INSERT INTO store (prefix, key, value, created_at, updated_at)
+                        VALUES (%s, %s, %s, now(), now())
+                        ON CONFLICT (prefix, key) DO UPDATE
+                            SET value = EXCLUDED.value,
+                                updated_at = now()
+                        """,
+                    (prefix, key, Jsonb(value)),
+                )
+            return new_payload
+
+    def _write_with_origin(self, query: LiteralString, params: tuple[Any, ...]) -> int:
+        """Run one store write, tagging it with the context's writer origin.
+
+        ``set_config(..., true)`` is transaction-local, so the tagged write runs
+        in an explicit transaction where the event-log trigger can read it.
+        """
+        origin = _document_write_origin.get()
+        with self._cursor() as cur:
+            if origin is None:
+                cur.execute(query, params)
+                return cur.rowcount
+            with cur.connection.transaction():
+                cur.execute("SELECT set_config('progenitor.origin', %s, true)", (origin,))
+                cur.execute(query, params)
+            return cur.rowcount
+
+    def read_document_events(self, after: DocumentEventPosition, limit: int) -> list[DocumentEvent]:
+        """Events after ``after`` from transactions older than every open one.
+
+        Every transaction below the snapshot xmin has committed or rolled back,
+        so this prefix of the ``(txid, seq)`` order can never gain a new row.
+        """
+
         with self._cursor() as cur:
             cur.execute(
                 """
-                INSERT INTO store (prefix, key, value, created_at, updated_at)
-                VALUES (%s, %s, %s, now(), now())
-                ON CONFLICT (prefix, key) DO UPDATE
-                    SET value = EXCLUDED.value,
-                        updated_at = now()
+                SELECT seq, txid::text::bigint AS txid, prefix, key, op, before, after,
+                       origin, created_at
+                FROM document_events
+                WHERE txid < pg_snapshot_xmin(pg_current_snapshot())
+                  AND (txid, seq) > (%s::text::xid8, %s)
+                ORDER BY txid, seq
+                LIMIT %s
                 """,
-                (prefix, key, Jsonb(value)),
+                (str(after.txid), after.seq, limit),
             )
+            rows = cast(list[dict[str, Any]], cur.fetchall())
+        return [
+            DocumentEvent(
+                seq=int(row["seq"]),
+                txid=int(row["txid"]),
+                prefix=str(row["prefix"]),
+                key=str(row["key"]),
+                op=cast(DocumentEventOp, row["op"]),
+                before=row.get("before"),
+                after=row.get("after"),
+                origin=row.get("origin"),
+                created_at=row["created_at"].astimezone(UTC),
+            )
+            for row in rows
+        ]
 
-    def delete_document(self, prefix: str, key: str) -> None:
+    def has_deferred_document_events(self, after: DocumentEventPosition) -> bool:
         with self._cursor() as cur:
             cur.execute(
-                "DELETE FROM store WHERE prefix = %s AND key = %s",
-                (prefix, key),
+                """
+                SELECT EXISTS (
+                    SELECT 1 FROM document_events
+                    WHERE (txid, seq) > (%s::text::xid8, %s)
+                      AND txid >= pg_snapshot_xmin(pg_current_snapshot())
+                ) AS deferred
+                """,
+                (str(after.txid), after.seq),
             )
+            row = cast(dict[str, Any] | None, cur.fetchone())
+        return bool(row and row["deferred"])
+
+    def latest_document_event_position(self) -> DocumentEventPosition:
+        with self._cursor() as cur:
+            cur.execute(
+                """
+                SELECT txid::text::bigint AS txid, seq
+                FROM document_events
+                WHERE txid < pg_snapshot_xmin(pg_current_snapshot())
+                ORDER BY txid DESC, seq DESC
+                LIMIT 1
+                """
+            )
+            row = cast(dict[str, Any] | None, cur.fetchone())
+        if row is None:
+            return EVENT_LOG_START
+        return DocumentEventPosition(int(row["txid"]), int(row["seq"]))
+
+    def get_document_event_cursor(self, consumer: str) -> DocumentEventPosition | None:
+        with self._cursor() as cur:
+            cur.execute(
+                "SELECT txid::text::bigint AS txid, seq FROM document_event_cursors "
+                "WHERE consumer = %s",
+                (consumer,),
+            )
+            row = cast(dict[str, Any] | None, cur.fetchone())
+        if row is None:
+            return None
+        return DocumentEventPosition(int(row["txid"]), int(row["seq"]))
+
+    def save_document_event_cursor(self, consumer: str, position: DocumentEventPosition) -> None:
+        with self._cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO document_event_cursors (consumer, txid, seq, updated_at)
+                VALUES (%s, %s::text::xid8, %s, now())
+                ON CONFLICT (consumer) DO UPDATE
+                    SET txid = EXCLUDED.txid, seq = EXCLUDED.seq, updated_at = now()
+                """,
+                (consumer, str(position.txid), position.seq),
+            )
+
+    def prune_document_events(
+        self, *, through: DocumentEventPosition, older_than: timedelta
+    ) -> int:
+        with self._cursor() as cur:
+            cur.execute(
+                "DELETE FROM document_events "
+                "WHERE (txid, seq) <= (%s::text::xid8, %s) AND created_at < now() - %s",
+                (str(through.txid), through.seq, older_than),
+            )
+            return cur.rowcount
 
     def query_logs(
         self,
@@ -1075,6 +1874,37 @@ class PostgresDocumentStore:
             )
             row = cast(dict[str, Any] | None, cur.fetchone())
         return cast(dict[str, Any], row["graph"]) if row is not None else None
+
+    def list_knowledge_page_revisions(
+        self, base_id: str, path: str, *, limit: int = 50
+    ) -> list[KnowledgePageRevisionSummary]:
+        with self._cursor() as cur:
+            cur.execute(
+                "SELECT revision_id, captured_at FROM knowledge_page_revisions "
+                "WHERE base_id = %s AND path = %s "
+                "ORDER BY captured_at DESC, revision_id DESC LIMIT %s",
+                (base_id, path, limit),
+            )
+            rows = cast(list[dict[str, Any]], cur.fetchall())
+        return [
+            KnowledgePageRevisionSummary(
+                revision_id=row["revision_id"],
+                base_id=base_id,
+                path=path,
+                captured_at=str(row["captured_at"]) if row.get("captured_at") else None,
+            )
+            for row in rows
+        ]
+
+    def get_knowledge_page_revision(self, base_id: str, path: str, revision_id: str) -> str | None:
+        with self._cursor() as cur:
+            cur.execute(
+                "SELECT content FROM knowledge_page_revisions "
+                "WHERE base_id = %s AND path = %s AND revision_id = %s",
+                (base_id, path, revision_id),
+            )
+            row = cast(dict[str, Any] | None, cur.fetchone())
+        return str(row["content"]) if row is not None else None
 
 
 def store_database_url(store: BackendDocumentStore | None) -> str | None:

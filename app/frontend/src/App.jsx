@@ -35,6 +35,7 @@ const ToolsPage = lazy(() => import('./pages/ToolsPage'));
 const SchedulesPage = lazy(() => import('./pages/SchedulesPage'));
 const ProjectPage = lazy(() => import('./pages/ProjectPage'));
 const ModelsPage = lazy(() => import('./pages/ModelsPage'));
+const ProfilesPage = lazy(() => import('./pages/ProfilesPage'));
 const ChannelsPage = lazy(() => import('./pages/ChannelsPage'));
 const WorkflowsPage = lazy(() => import('./pages/WorkflowsPage'));
 const AgentsPage = lazy(() => import('./pages/AgentsPage'));
@@ -103,6 +104,7 @@ function WorkspaceScopedApp() {
                     <Route path="/inbox/:messageId?/:titleSlug?" element={<DeferredRoute Page={InboxPage} fallback="Loading inbox..." />} />
                     <Route path="/dashboard" element={<DeferredRoute Page={DashboardPage} fallback="Loading dashboard..." />} />
                     <Route path="/models" element={<DeferredRoute Page={ModelsPage} fallback="Loading models..." />} />
+                    <Route path="/profiles/:profileName?/:titleSlug?" element={<DeferredRoute Page={ProfilesPage} fallback="Loading profiles..." />} />
                     <Route path="/channels" element={<DeferredRoute Page={ChannelsPage} fallback="Loading channels..." />} />
                     <Route path="/agents/:agentId?/:tab?" element={<DeferredRoute Page={AgentsPage} fallback="Loading agents..." />} />
                     <Route path="/routines/:agentId?" element={<DeferredRoute Page={RoutinesPage} fallback="Loading routines..." />} />
@@ -119,7 +121,7 @@ function WorkspaceScopedApp() {
                     <Route path="/schedules/:scheduleId?/:titleSlug?" element={<DeferredRoute Page={SchedulesPage} fallback="Loading schedules..." />} />
                     <Route path="/repositories" element={<DeferredRoute Page={RepositoriesPage} fallback="Loading repositories..." />} />
                     <Route path="/knowledge/:baseId?/:titleSlug?" element={<DeferredRoute Page={KnowledgePage} fallback="Loading knowledge..." />} />
-                    <Route path="/workflows" element={<DeferredRoute Page={WorkflowsPage} fallback="Loading workflows..." />} />
+                    <Route path="/workflows/:workflowId?/:slug?" element={<DeferredRoute Page={WorkflowsPage} fallback="Loading workflows..." />} />
                   </Route>
                   <Route path="*" element={<Navigate to="/chat" replace />} />
                 </Routes>

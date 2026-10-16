@@ -642,18 +642,33 @@ def test_run_state_remains_readable_without_live_catalog_entry(harness):
     assert events[-1][1]["found"] is False
 
 
-def test_store_unavailable_returns_503():
+def test_list_without_editable_store_publishes_registry_profiles(monkeypatch):
+    events: list[tuple[str, dict[str, Any]]] = []
+    import app.backend.agent_catalog_routes as routes
+
+    monkeypatch.setattr(routes, "a2a_profiles_from_registry", lambda: [_a2a_profile()])
+    monkeypatch.setattr(routes, "acp_profiles_from_registry", lambda: [])
+
     app = FastAPI()
     _install_request_id_middleware(app)
     app.include_router(
         create_agent_profile_router(
             get_agent_store=lambda: None,
             get_document_store=lambda: InMemoryDocumentStore(),
-            broadcast_ui_event=lambda *a, **k: None,
+            broadcast_ui_event=lambda event_type, payload, **_kwargs: events.append(
+                (event_type, payload)
+            ),
         ),
         prefix="/api/ui",
     )
-    assert TestClient(app).get("/api/ui/agent-profiles").status_code == 503
+
+    response = TestClient(app).get("/api/ui/agent-profiles")
+    assert_acknowledged(response, ["agents.snapshot"])
+    assert len(events) == 1
+    event_type, snapshot = events[0]
+    assert event_type == "agents.snapshot"
+    assert snapshot["total"] == 1
+    assert snapshot["agents"][0]["id"] == "a2a-observe"
 
 
 class TestBroadcastAgentProfilesSnapshot:

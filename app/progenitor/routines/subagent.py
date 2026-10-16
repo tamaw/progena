@@ -19,13 +19,13 @@ from __future__ import annotations
 import json
 import logging
 import uuid
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from datetime import timedelta
 from typing import Any, cast
 
 from deepagents.middleware.subagents import CompiledSubAgent
 from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.runnables import RunnableConfig, RunnableLambda
 from langchain_core.runnables.config import var_child_runnable_config
 from langgraph.cache.memory import InMemoryCache
@@ -33,6 +33,7 @@ from langgraph.errors import NodeTimeoutError
 from langgraph.types import Command
 
 from ..policies import PolicyValues, resolve_execution_policy
+from ..structured import validate_against_schema
 from ..utils import utcnow
 from .approvals import (
     approval_decision_id,
@@ -51,6 +52,8 @@ from .revisions import RoutineRevisionReader
 logger = logging.getLogger(__name__)
 
 ROUTINE_REVISIONS_STATE_KEY = "routine_revisions"
+# Private input key: the (revision_id, graph) a caller already resolved for this invocation.
+ROUTINE_GRAPH_SNAPSHOT_STATE_KEY = "_routine_graph_snapshot"
 _RUNTIME_NODE_CACHE = InMemoryCache()
 
 
@@ -87,6 +90,64 @@ async def resolve_routine_document(
     return None
 
 
+async def resolve_routine_graph(
+    routine_id: str,
+    state: Mapping[str, Any],
+    *,
+    revision_reader: RoutineRevisionReader,
+    state_manager: Any,
+) -> tuple[str | None, dict[str, Any] | None]:
+    """The ``(revision_id, graph document)`` one routine invocation runs against."""
+
+    pins = state.get(ROUTINE_REVISIONS_STATE_KEY) or {}
+    pinned = pins.get(routine_id)
+
+    revision_id: str | None = None
+    graph_doc: dict[str, Any] | None = None
+
+    if pinned:
+        fetched = await revision_reader.fetch(routine_id, pinned)
+        if fetched is not None:
+            revision_id = pinned
+            graph_doc = fetched
+        else:
+            logger.warning(
+                "Routine %r pinned revision %r not found; falling back to latest",
+                routine_id,
+                pinned,
+            )
+            row = await revision_reader.fetch_latest(routine_id)
+            if row is not None:
+                revision_id, graph_doc = row
+            if revision_id is None and graph_doc is None:
+                graph_doc = await state_manager.get_routine_graph(routine_id)
+    else:
+        # Unpinned: run against the LIVE document, not whichever
+        # revision `routine_graph_revisions` happens to have captured
+        # most recently. Revision capture is a content-hash-
+        # deduplicated audit log (`ON CONFLICT (routine_id,
+        # revision_id) DO NOTHING` -- see document_store.py's trigger):
+        # if the live content ever reverts to any exact byte-identical
+        # prior state (e.g. via the Revisions panel's own Restore
+        # action, or simply editing a field back to its original
+        # value), that revert produces NO new row and leaves the old
+        # row's `captured_at` untouched -- so `fetch_latest`
+        # (`ORDER BY captured_at DESC`) can return a revision that is
+        # no longer what is actually live, and a run would silently
+        # compile and execute against superseded content. The live
+        # document is always the source of truth for an unpinned run;
+        # `fetch_revision_id_for_content` below only *tags* the run
+        # (thread_id / ROUTINE_REVISIONS_STATE_KEY) with whichever
+        # revision_id, if any, matches this exact content -- for the
+        # Runs panel and the canvas's run-staleness diffing -- it is
+        # never used to decide what gets compiled.
+        graph_doc = await state_manager.get_routine_graph(routine_id)
+        if graph_doc is not None:
+            revision_id = await revision_reader.fetch_revision_id_for_content(routine_id, graph_doc)
+
+    return revision_id, graph_doc
+
+
 def create_routine_executor(
     *,
     routine_id: str,
@@ -107,53 +168,13 @@ def create_routine_executor(
     cache: dict[str, Any] = {}
 
     async def _run(state: dict) -> dict:
-        pins = state.get(ROUTINE_REVISIONS_STATE_KEY) or {}
-        pinned = pins.get(routine_id)
-
-        revision_id: str | None = None
-        graph_doc: dict[str, Any] | None = None
-
-        if pinned:
-            fetched = await revision_reader.fetch(routine_id, pinned)
-            if fetched is not None:
-                revision_id = pinned
-                graph_doc = fetched
-            else:
-                logger.warning(
-                    "Routine %r pinned revision %r not found; falling back to latest",
-                    routine_id,
-                    pinned,
-                )
-                row = await revision_reader.fetch_latest(routine_id)
-                if row is not None:
-                    revision_id, graph_doc = row
-                if revision_id is None and graph_doc is None:
-                    graph_doc = await state_manager.get_routine_graph(routine_id)
+        snapshot = state.get(ROUTINE_GRAPH_SNAPSHOT_STATE_KEY)
+        if snapshot is not None:
+            revision_id, graph_doc = snapshot
         else:
-            # Unpinned: run against the LIVE document, not whichever
-            # revision `routine_graph_revisions` happens to have captured
-            # most recently. Revision capture is a content-hash-
-            # deduplicated audit log (`ON CONFLICT (routine_id,
-            # revision_id) DO NOTHING` -- see document_store.py's trigger):
-            # if the live content ever reverts to any exact byte-identical
-            # prior state (e.g. via the Revisions panel's own Restore
-            # action, or simply editing a field back to its original
-            # value), that revert produces NO new row and leaves the old
-            # row's `captured_at` untouched -- so `fetch_latest`
-            # (`ORDER BY captured_at DESC`) can return a revision that is
-            # no longer what is actually live, and a run would silently
-            # compile and execute against superseded content. The live
-            # document is always the source of truth for an unpinned run;
-            # `fetch_revision_id_for_content` below only *tags* the run
-            # (thread_id / ROUTINE_REVISIONS_STATE_KEY) with whichever
-            # revision_id, if any, matches this exact content -- for the
-            # Runs panel and the canvas's run-staleness diffing -- it is
-            # never used to decide what gets compiled.
-            graph_doc = await state_manager.get_routine_graph(routine_id)
-            if graph_doc is not None:
-                revision_id = await revision_reader.fetch_revision_id_for_content(
-                    routine_id, graph_doc
-                )
+            revision_id, graph_doc = await resolve_routine_graph(
+                routine_id, state, revision_reader=revision_reader, state_manager=state_manager
+            )
 
         if revision_id is None and graph_doc is None:
             raise KeyError(f"Routine '{routine_id}' has no stored graph.")
@@ -460,6 +481,41 @@ def create_routine_subagent(
     )
 
     async def _run(state: dict[str, Any]) -> dict[str, Any]:
+        # One snapshot validates the input and runs: a save in between must
+        # not validate against one graph and execute another.
+        snapshot = await resolve_routine_graph(
+            routine_id, state, revision_reader=revision_reader, state_manager=state_manager
+        )
+        state = {**state, ROUTINE_GRAPH_SNAPSHOT_STATE_KEY: snapshot}
+        graph = snapshot[1]
+        input_schema = graph.get("input_schema") if isinstance(graph, dict) else None
+        if input_schema:
+            parameters = state.get("parameters")
+            if parameters is None:
+                messages = state.get("messages") or []
+                description = (
+                    messages[0].content
+                    if messages and isinstance(messages[0], HumanMessage)
+                    else None
+                )
+                try:
+                    parameters = json.loads(description) if isinstance(description, str) else None
+                except json.JSONDecodeError:
+                    parameters = None
+                if not isinstance(parameters, dict):
+                    return {
+                        "messages": [
+                            AIMessage(
+                                content=f"Routine '{routine_id}' requires a JSON object task description matching its input_schema."
+                            )
+                        ]
+                    }
+            error = validate_against_schema(parameters, input_schema)
+            if error is not None:
+                return {
+                    "messages": [AIMessage(content=f"Routine '{routine_id}' input error: {error}")]
+                }
+            state = {**state, "parameters": parameters}
         try:
             result = await executor.ainvoke(state)
         except (ValueError, KeyError, NotImplementedError) as exc:
@@ -486,6 +542,13 @@ def create_routine_subagent(
             }
 
         update: dict[str, Any] = {"messages": result.get("messages") or []}
+        if input_schema:
+            output = {
+                key: value
+                for key, value in result.get("data", {}).items()
+                if not key.startswith("_")
+            }
+            update["messages"] = [AIMessage(content=json.dumps({"output": output}, default=str))]
         if ROUTINE_REVISIONS_STATE_KEY in result:
             update[ROUTINE_REVISIONS_STATE_KEY] = result[ROUTINE_REVISIONS_STATE_KEY]
         return update

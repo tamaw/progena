@@ -1,7 +1,9 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { selectRealtime } from '../store/realtimeSlice';
-import { useSearchParams } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
+import { buildEntityPath, useEntityUrlSync } from '../lib/routes';
 import {
   addEdge,
   applyEdgeChanges,
@@ -14,6 +16,7 @@ import {
   Position,
   ReactFlow,
   ReactFlowProvider,
+  useEdges,
   useReactFlow,
 } from '@xyflow/react';
 import { useConfig } from '../context/ConfigContext';
@@ -21,14 +24,19 @@ import Select from '../components/common/Select';
 import { useNotifications } from '../context/NotificationContext';
 import {
   deleteWorkflow,
-  fetchDocumentKinds,
+  fetchDocumentTypes,
+  fetchPromptContent,
+  fetchPrompts,
   fetchWorkflowContent,
   fetchWorkflows,
   fetchWorkflowRuns,
   pauseWorkflow,
   resumeWorkflow,
   saveWorkflow,
-  selectDocumentKinds,
+  selectAgentProfiles,
+  selectDocumentTypes,
+  selectPromptContentEntry,
+  selectPrompts,
   selectWorkflowDetailByPath,
   selectWorkflowLatestRunById,
   selectWorkflowRuns,
@@ -52,6 +60,7 @@ import { usePaneCollapse } from '../components/layout/usePaneCollapse';
 import PageShell from '../components/layout/PageShell';
 import DetailPane from '../components/layout/DetailPane';
 import {
+  ConfigureActionIcon,
   DeleteActionIcon,
   DetailHeaderAction,
   DetailHeaderActions,
@@ -60,36 +69,13 @@ import {
   SaveActionIcon,
 } from '../components/layout/DetailHeader';
 import { JsonCodeEditor } from '../components/canvas/WorkflowJsonPanel';
+import WorkflowNodeTitle from '../components/canvas/WorkflowNodeTitle';
 import PopupModal from '../components/common/PopupModal';
 import '../styles/canvas.css';
+import { canvasToolSettings } from './workflowCanvasTools';
 import '../styles/nodes.css';
 
-const WORKFLOW_EVENT_TYPES = [
-  'kanban.card.created',
-  'kanban.card.updated',
-  'kanban.card.moved',
-  'kanban.card.deleted',
-  'kanban.card.status_changed',
-  'document.changed',
-];
-const WORKFLOW_EVENT_TYPE_OPTIONS = WORKFLOW_EVENT_TYPES.map((eventType) => ({ value: eventType, label: eventType }));
-// Mirrors the fixed kanban pipeline from _kanban_default_columns() in
-// app/backend/ui_routes.py. Only meaningful for the kanban.card.moved trigger.
-const WORKFLOW_KANBAN_COLUMNS = [
-  { value: '', label: 'Any column' },
-  { value: 'backlog', label: 'Backlog' },
-  { value: 'plan', label: 'Plan' },
-  { value: 'build', label: 'Build' },
-  { value: 'validate', label: 'Validate' },
-  { value: 'done', label: 'Done' },
-];
-// Only meaningful for the document.changed trigger. Mirrors
-// WorkflowTrigger.action in app/progenitor/workflows.py.
-const WORKFLOW_DOCUMENT_ACTIONS = [
-  { value: '', label: 'Any action' },
-  { value: 'upserted', label: 'Upserted (created/updated)' },
-  { value: 'deleted', label: 'Deleted' },
-];
+
 const FILTERS = [
   { value: 'all', label: 'All' },
   { value: 'enabled', label: 'Enabled' },
@@ -99,26 +85,37 @@ const SORTS = ['Recent', 'Name'];
 const DEFAULT_EDGE_OPTIONS = { type: 'smoothstep', animated: true };
 const MINIMAP_STYLE = { height: 100, width: 150 };
 const DEFAULT_VIEWPORT = { x: 0, y: 0, zoom: 1 };
+
+function canvasMenuAnchor(event, reactFlow) {
+  return {
+    screenPosition: { x: event.clientX, y: event.clientY },
+    flowPosition: reactFlow.screenToFlowPosition({ x: event.clientX, y: event.clientY }),
+  };
+}
 // Each node kind remembers two independent sizes: the compact "data" view
 // (just a read-only preview) and the "settings" view (the full editable
 // form). Switching views resizes the node to whichever one the user last
 // left it at, instead of forcing one fixed rectangle for both.
 const DEFAULT_NODE_SIZES = {
   event: {
-    data: { width: 320, height: 120 },
-    settings: { width: 320, height: 190 },
+    data: { width: 320, height: 220 },
+    settings: { width: 340, height: 260 },
   },
-  prompt: {
+  agent: {
     data: { width: 340, height: 160 },
-    settings: { width: 340, height: 280 },
+    settings: { width: 440, height: 320 },
   },
-  user: {
-    data: { width: 320, height: 130 },
-    settings: { width: 340, height: 280 },
+  data: {
+    data: { width: 320, height: 140 },
+    settings: { width: 380, height: 280 },
   },
-  code: {
-    data: { width: 360, height: 160 },
-    settings: { width: 460, height: 340 },
+  extract: {
+    data: { width: 340, height: 160 },
+    settings: { width: 440, height: 320 },
+  },
+  format: {
+    data: { width: 340, height: 160 },
+    settings: { width: 440, height: 280 },
   },
   condition: {
     data: { width: 300, height: 130 },
@@ -128,68 +125,236 @@ const DEFAULT_NODE_SIZES = {
     data: { width: 320, height: 130 },
     settings: { width: 400, height: 240 },
   },
-  inbox: {
-    data: { width: 320, height: 130 },
-    settings: { width: 400, height: 260 },
+  document_read: {
+    data: { width: 320, height: 140 },
+    settings: { width: 380, height: 240 },
   },
-  agent: {
-    data: { width: 340, height: 140 },
-    settings: { width: 440, height: 280 },
+  document_query: {
+    data: { width: 320, height: 140 },
+    settings: { width: 420, height: 300 },
+  },
+  document_write: {
+    data: { width: 320, height: 140 },
+    settings: { width: 380, height: 280 },
+  },
+  document_create: {
+    data: { width: 320, height: 140 },
+    settings: { width: 380, height: 280 },
+  },
+  document_delete: {
+    data: { width: 320, height: 140 },
+    settings: { width: 380, height: 240 },
+  },
+  unpack: {
+    data: { width: 280, height: 120 },
+    settings: { width: 340, height: 240 },
+  },
+  cron: {
+    data: { width: 320, height: 220 },
+    settings: { width: 380, height: 320 },
   },
 };
-// Node kinds addable from the dock/JSON editor beyond the fixed event start
-// node. Order here drives the dock's button order.
-const DOCK_NODE_KINDS = ['prompt', 'user', 'code', 'condition', 'approval', 'inbox', 'agent'];
-const USER_MESSAGE_TYPES = [
-  { value: 'say_to_user', label: 'say_to_user' },
-  { value: 'notify_user', label: 'notify_user' },
-  { value: 'ask_user', label: 'ask_user' },
+// Workflow nodes are grouped by what they do, including direct document operations.
+const NODE_MENU_CATEGORIES = [
+  { id: 'triggers', label: 'Triggers', items: [{ id: 'event', kind: 'event', label: 'Event', icon: 'E' }, { id: 'cron', kind: 'cron', label: 'Cron', icon: 'C' }] },
+  { id: 'agents', label: 'Agents', items: [{ id: 'agent', kind: 'agent', label: 'Agent', icon: 'A' }] },
+  { id: 'data', label: 'Data', items: [
+    { id: 'data', kind: 'data', label: 'Data', icon: 'D' },
+    { id: 'document_read', kind: 'document_read', label: 'Read document', icon: 'R' },
+    { id: 'document_query', kind: 'document_query', label: 'Query documents', icon: 'Q' },
+    { id: 'document_write', kind: 'document_write', label: 'Write document', icon: 'W' },
+    { id: 'document_create', kind: 'document_create', label: 'Create document', icon: '+' },
+    { id: 'document_delete', kind: 'document_delete', label: 'Delete document', icon: '×' },
+    { id: 'unpack', kind: 'unpack', label: 'Unpack', icon: 'U' },
+    { id: 'extract', kind: 'extract', label: 'Extract', icon: 'X' },
+  ]} ,
+  {
+    id: 'logic',
+    label: 'Logic',
+    items: [
+      { id: 'condition', kind: 'condition', label: 'Condition', icon: '◇' },
+      { id: 'format', kind: 'format', label: 'Format', icon: 'F' },
+      { id: 'approval', kind: 'approval', label: 'Approval', icon: '✓' },
+    ],
+  },
 ];
-const USER_NOTIFICATION_LEVELS = ['info', 'warning', 'error', 'success'];
-const USER_NOTIFICATION_LEVEL_OPTIONS = USER_NOTIFICATION_LEVELS.map((level) => ({ value: level, label: level }));
-const CODE_LANGUAGES = [
-  'javascript', 'python', 'html', 'css', 'bash',
-  'json', 'yaml', 'markdown', 'typescript', 'sql',
-];
-const CODE_LANGUAGE_OPTIONS = CODE_LANGUAGES.map((lang) => ({ value: lang, label: lang }));
-const AGENT_NODE_TRANSPORT_OPTIONS = [
-  { value: 'a2a', label: 'A2A' },
-  { value: 'acp', label: 'ACP' },
-];
-// Default editable-field values for a freshly dock-added node, keyed by kind.
+
+function defaultEventNode(documentTypes) {
+  const firstType = documentTypes?.find((t) => t.id === 'kanban_card') || documentTypes?.[0] || null;
+  return {
+    title: 'Document event',
+    documentType: firstType?.id || '',
+    key: null,
+    operations: [],
+    changedFields: [],
+    match: {},
+    outputSchema: cloneValue(firstType?.event_output_schema) || null,
+  };
+}
+
+function defaultCronNode() {
+  const tz = typeof Intl !== 'undefined' ? Intl.DateTimeFormat().resolvedOptions().timeZone : 'UTC';
+  return {
+    title: 'Cron',
+    expression: '*/5 * * * *',
+    timezone: tz,
+    overlap: 'skip',
+    outputSchema: {
+      type: 'object',
+      required: ['scheduled_for', 'fired_at', 'timezone'],
+      properties: {
+        scheduled_for: { type: 'string', format: 'date-time' },
+        fired_at: { type: 'string', format: 'date-time' },
+        timezone: { type: 'string' },
+      },
+    },
+  };
+}
+
+function defaultReadNode() {
+  return {
+    title: 'Read document',
+    documentType: '',
+    inputSchema: null,
+    outputSchema: null,
+  };
+}
+
+function defaultQueryNode() {
+  return {
+    title: 'Query documents',
+    documentType: '',
+    filters: [],
+    orderBy: null,
+    order: 'asc',
+    limit: 50,
+    inputSchema: null,
+    outputSchema: null,
+  };
+}
+
+function defaultWriteNode() {
+  return {
+    title: 'Write document',
+    documentType: '',
+    inputSchema: null,
+    outputSchema: null,
+  };
+}
+
+function defaultCreateNode() {
+  return {
+    title: 'Create document',
+    documentType: '',
+    inputSchema: null,
+    outputSchema: null,
+  };
+}
+
+function defaultDeleteNode() {
+  return {
+    title: 'Delete document',
+    documentType: '',
+    inputSchema: null,
+    outputSchema: null,
+  };
+}
+
 const DOCK_NODE_DEFAULTS = {
-  prompt: () => ({
-    title: 'Prompt', prompt: 'Handle this workflow event.', agentName: 'progenitor', role: '',
-  }),
-  user: () => ({
-    title: 'User', messageType: 'say_to_user', message: 'Summarize the workflow result for the user.', notificationTitle: '', level: 'info',
-  }),
-  code: () => ({
-    title: 'Code', language: 'javascript', content: '// Write code for the agent to run',
-  }),
-  condition: () => ({ title: 'Condition', expression: 'payload.card.status == "done"' }),
-  approval: () => ({ title: 'Approval', message: 'Approve this workflow action.' }),
-  inbox: () => ({
-    title: 'Send to Inbox',
-    messageTitle: 'Workflow message',
-    message: 'Workflow completed an action.',
-    level: 'info',
-  }),
+  event: defaultEventNode,
   agent: () => ({
-    title: 'Call Agent',
-    transport: 'a2a',
-    agentName: '',
-    request: 'Handle this workflow input.',
-    timeoutSeconds: 300,
+    title: 'Agent',
+    prompt: null,
+    template: '',
+    subagent: null,
+    inputSchema: { type: 'object', properties: {} },
+    outputSchema: { type: 'object', required: ['message', 'thread_id'], properties: { message: { type: 'string' }, thread_id: { type: 'string' } } },
+  }),
+  data: () => ({ title: 'Data', value: null, outputSchema: { type: 'object' } }),
+  extract: () => ({
+    title: 'Extract',
+    prompt: null,
+    template: '',
+    schema: null,
+    inputSchema: { type: 'object', properties: {} },
+    outputSchema: { type: 'object', required: ['result', 'thread_id'], properties: { result: {}, thread_id: { type: 'string' } } },
+  }),
+  format: () => ({
+    title: 'Format',
+    template: '{value}',
+    inputSchema: { type: 'object', required: ['value'], properties: { value: {} } },
+    outputSchema: { type: 'object', required: ['text'], properties: { text: { type: 'string' } } },
+  }),
+
+  condition: () => ({
+    title: 'Condition',
+    expression: 'ready',
+    inputSchema: { type: 'object', properties: {} },
+    outputSchema: {
+      type: 'object',
+      properties: { true: { type: 'boolean' }, false: { type: 'boolean' } },
+    },
+  }),
+  approval: () => ({
+    title: 'Approval',
+    message: 'Approve this workflow action.',
+    inputSchema: { type: 'object', properties: {} },
+    outputSchema: {
+      type: 'object',
+      properties: { approved: { type: 'boolean' }, rejected: { type: 'boolean' } },
+    },
+  }),
+  cron: defaultCronNode,
+  document_read: defaultReadNode,
+  document_query: defaultQueryNode,
+  document_write: defaultWriteNode,
+  document_create: defaultCreateNode,
+  document_delete: defaultDeleteNode,
+  unpack: () => ({
+    title: 'Unpack',
+    inputSchema: { type: 'object', required: ['value'], properties: { value: { type: 'object' } } },
+    outputSchema: { type: 'object', properties: {} },
   }),
 };
 
-function resolveNodeSizes(kind, storedSize) {
-  const defaults = DEFAULT_NODE_SIZES[kind];
+function createPaletteNode(kind, nodeId, position, documentTypes, callbacks) {
+  const sizes = DEFAULT_NODE_SIZES[kind] || DEFAULT_NODE_SIZES.agent;
+  const defaultData = DOCK_NODE_DEFAULTS[kind](documentTypes);
+  const inputPortCount = nodeInputPorts(kind, defaultData.inputSchema).length;
+  const outputPortCount = nodeOutputPorts(kind, defaultData.outputSchema).length;
+  const maxPorts = Math.max(inputPortCount, outputPortCount);
+  const height = Math.max(sizes.data.height, maxPorts > 0 ? 69 + (maxPorts - 1) * 28 : sizes.data.height);
+  return {
+    id: nodeId,
+    type: kind,
+    width: sizes.data.width,
+    height,
+    style: { width: sizes.data.width, height },
+    position,
+    data: {
+      kind,
+      ...defaultData,
+      currentNodeId: null,
+      completedNodeIds: [],
+      expanded: false,
+      ...callbacks,
+      canDelete: true,
+    },
+  };
+}
+
+function resolveNodeSizes(kind, storedSize, inputSchema, outputSchema) {
+  const defaults = DEFAULT_NODE_SIZES[kind] || DEFAULT_NODE_SIZES.agent;
+  const inputPortCount = nodeInputPorts(kind, inputSchema).length;
+  // Unpack outputs are sized by the ports it shows (sizeUnpackNodes), not by
+  // every property of the object it unpacks.
+  const outputPortCount = kind === 'unpack' ? 0 : nodeOutputPorts(kind, outputSchema).length;
+  const maxPorts = Math.max(inputPortCount, outputPortCount);
+  const autoHeight = maxPorts > 0 ? 69 + (maxPorts - 1) * 28 : defaults.data.height;
   return {
     data: {
       width: storedSize?.data?.width || defaults.data.width,
-      height: storedSize?.data?.height || defaults.data.height,
+      height: storedSize?.data?.height || Math.max(defaults.data.height, autoHeight),
     },
     settings: {
       width: storedSize?.settings?.width || defaults.settings.width,
@@ -198,36 +363,100 @@ function resolveNodeSizes(kind, storedSize) {
   };
 }
 
+function nodeCurrentSize(node, expanded) {
+  const sizeKey = expanded ? 'settingsSize' : 'dataSize';
+  if (node.data?.[sizeKey]) return node.data[sizeKey];
+  const sizes = resolveNodeSizes(node.type, null, node.data?.inputSchema, node.data?.outputSchema);
+  return expanded ? sizes.settings : sizes.data;
+}
+
 function workflowPath(workflowId) {
   return workflowId ? `/workflows/${workflowId}.json` : '';
-}
-
-// The `.json` suffix on workflowPath() is the backing virtual-file extension
-// used internally (Redux cache keys, backend query params) — it has no
-// business showing up in the address bar, where `path` reads as a route
-// segment rather than a file reference. These two helpers convert only at
-// the URL-sync boundary; everything else keeps using the `.json` form.
-function stripJsonExtension(path) {
-  return path.endsWith('.json') ? path.slice(0, -'.json'.length) : path;
-}
-
-function withJsonExtension(path) {
-  return path && !path.endsWith('.json') ? `${path}.json` : path;
 }
 
 function cloneValue(value) {
   return value ? JSON.parse(JSON.stringify(value)) : value;
 }
 
+// Mirrors the server-side placeholder grammar: {root} or {root.a.b} where each
+// segment matches [A-Za-z_][A-Za-z0-9_]*. JSON literals like {"a": 1} are ignored.
+// thread_id is reserved and never treated as a placeholder root.
+// `excludeThreadId` preserves prompt nodes' implicit thread behavior while
+// letting format nodes expose every placeholder root as a real input port.
+function parsePromptPlaceholders(text, excludeThreadId = true) {
+  const roots = [];
+  const placeholders = [];
+  const seen = new Set();
+  const regex = /\{([A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*)\}/g;
+  let match;
+  while ((match = regex.exec(text)) !== null) {
+    const full = match[1];
+    const root = full.split('.')[0];
+    if (root === 'thread_id' && excludeThreadId) continue;
+    placeholders.push(full);
+    if (!seen.has(root)) {
+      seen.add(root);
+      roots.push(root);
+    }
+  }
+  return { roots, placeholders };
+}
+
+function derivePromptInputSchema(text) {
+  const { roots } = parsePromptPlaceholders(text);
+  const properties = { thread_id: { type: 'string' } };
+  roots.forEach((root) => {
+    properties[root] = {};
+  });
+  return {
+    type: 'object',
+    ...(roots.length ? { required: roots } : {}),
+    properties,
+  };
+}
+
+function deriveFormatInputSchema(text) {
+  const { roots } = parsePromptPlaceholders(text, false);
+  return {
+    type: 'object',
+    ...(roots.length ? { required: roots } : {}),
+    properties: Object.fromEntries(roots.map((root) => [root, {}])),
+  };
+}
+
+function formatTemplatePatch(text) {
+  return { template: text, inputSchema: deriveFormatInputSchema(text) };
+}
+
+function promptTemplatePatch(text) {
+  return { template: text, inputSchema: derivePromptInputSchema(text) };
+}
+
+function promptDocumentPatch(path, text) {
+  return {
+    prompt: path || null,
+    template: null,
+    inputSchema: derivePromptInputSchema(text),
+  };
+}
+
 const NODE_MINIMAP_COLORS = {
   event: '#ffa657',
-  prompt: '#58a6ff',
-  user: '#39c5cf',
-  code: '#3fb950',
+  agent: '#58a6ff',
+  data: '#3fb950',
+  extract: '#a371f7',
+  condition: '#d29922',
+  approval: '#f85149',
+  document_read: '#79c0ff',
+  document_query: '#a5d6ff',
+  document_write: '#56d364',
+  document_create: '#56d364',
+  document_delete: '#ff7b72',
+  unpack: '#bc8cff',
 };
 
 function nodeColor(node) {
-  return NODE_MINIMAP_COLORS[node.type] || NODE_MINIMAP_COLORS.prompt;
+  return NODE_MINIMAP_COLORS[node.type] || NODE_MINIMAP_COLORS.agent;
 }
 
 function formatRelativeTime(timestamp) {
@@ -264,59 +493,108 @@ function nextDockNodePosition(nodes) {
   }
   return { x: anchor.position.x + 360, y: anchor.position.y };
 }
+function workflowRunState(latestRun) {
+  return {
+    currentNodeId: latestRun?.status === 'running' ? latestRun.current_node_id || null : null,
+    completedNodeIds: latestRun?.completed_node_ids || [],
+  };
+}
 
-function buildNodeData(kind, node, callbacks, latestRun, sizes) {
+
+function buildNodeData(kind, node, callbacks, latestRun) {
   const shared = {
     expanded: false,
-    dataSize: sizes.data,
-    settingsSize: sizes.settings,
     onToggleExpanded: callbacks.onToggleExpanded,
+    onOpenOptions: callbacks.onOpenOptions,
     onResize: callbacks.onResize,
+    onUnpack: callbacks.onUnpack,
   };
+  const runState = workflowRunState(latestRun);
   if (kind === 'event') {
     return {
       ...shared,
       kind,
-      title: node.title || 'Event',
-      eventType: node.eventType || WORKFLOW_EVENT_TYPES[0],
-      fromColumn: node.fromColumn || '',
-      toColumn: node.toColumn || '',
-      keyPrefix: node.keyPrefix || '',
-      key: node.key || '',
-      action: node.action || '',
-      currentNodeId: latestRun?.current_node_id || null,
+      title: node.title || 'Document event',
+      documentType: node.document_type || '',
+      key: node.key || null,
+      operations: Array.isArray(node.operations) ? [...node.operations] : [],
+      changedFields: Array.isArray(node.changed_fields) ? [...node.changed_fields] : [],
+      match: cloneValue(node.match) || {},
+      outputSchema: cloneValue(node.output_schema) || null,
       onChange: callbacks.onNodeChange,
       onDelete: callbacks.onDeleteNode,
       canDelete: false,
     };
   }
-  const runState = {
-    currentNodeId: latestRun?.current_node_id || null,
-    completedNodeIds: latestRun?.completed_node_ids || [],
-  };
-  if (kind === 'user') {
+  if (kind === 'cron') {
+    return {
+      ...shared,
+      kind,
+      title: node.title || 'Cron',
+      expression: node.expression || '*/5 * * * *',
+      timezone: node.timezone || 'UTC',
+      overlap: node.overlap || 'skip',
+      outputSchema: cloneValue(node.output_schema) || null,
+      onChange: callbacks.onNodeChange,
+      onDelete: callbacks.onDeleteNode,
+      canDelete: false,
+    };
+  }
+  if (kind === 'agent') {
     return {
       ...shared,
       ...runState,
       kind,
-      title: node.title || 'User',
-      messageType: node.message_type || 'say_to_user',
-      message: node.message || '',
-      notificationTitle: node.notification_title || '',
-      level: node.level || 'info',
+      title: node.title || 'Agent',
+      prompt: node.prompt ?? null,
+      template: node.template ?? null,
+      subagent: node.subagent ?? null,
+      inputSchema: cloneValue(node.input_schema) || null,
+      outputSchema: cloneValue(node.output_schema) || null,
       onChange: callbacks.onNodeChange,
       onDelete: callbacks.onDeleteNode,
       canDelete: true,
     };
   }
-  if (kind === 'code') {
+  if (kind === 'extract') {
     return {
       ...shared,
       ...runState,
       kind,
-      title: node.title || 'Code',
-      language: node.language || 'javascript',
-      content: node.content || '',
+      title: node.title || 'Extract',
+      prompt: node.prompt ?? null,
+      template: node.template ?? null,
+      schema: node.schema ?? null,
+      inputSchema: cloneValue(node.input_schema) || null,
+      outputSchema: cloneValue(node.output_schema) || null,
+      onChange: callbacks.onNodeChange,
+      onDelete: callbacks.onDeleteNode,
+      canDelete: true,
+    };
+  }
+  if (kind === 'format') {
+    return {
+      ...shared,
+      ...runState,
+      kind,
+      title: node.title || 'Format',
+      template: node.template || '',
+      inputSchema: cloneValue(node.input_schema) || null,
+      outputSchema: cloneValue(node.output_schema) || null,
+      onChange: callbacks.onNodeChange,
+      onDelete: callbacks.onDeleteNode,
+      canDelete: true,
+    };
+  }
+
+  if (kind === 'data') {
+    return {
+      ...shared,
+      ...runState,
+      kind,
+      title: node.title || 'Data',
+      value: cloneValue(node.value) ?? null,
+      outputSchema: cloneValue(node.output_schema) || null,
       onChange: callbacks.onNodeChange,
       onDelete: callbacks.onDeleteNode,
       canDelete: true,
@@ -324,109 +602,209 @@ function buildNodeData(kind, node, callbacks, latestRun, sizes) {
   }
   if (kind === 'condition') {
     return {
-      ...shared, ...runState, kind, title: node.title || 'Condition',
+      ...shared,
+      ...runState,
+      kind,
+      title: node.title || 'Condition',
       expression: node.expression || '',
-      onChange: callbacks.onNodeChange, onDelete: callbacks.onDeleteNode, canDelete: true,
+      inputSchema: cloneValue(node.input_schema) || null,
+      outputSchema: cloneValue(node.output_schema) || { type: 'string', enum: ['true', 'false'] },
+      onChange: callbacks.onNodeChange,
+      onDelete: callbacks.onDeleteNode,
+      canDelete: true,
     };
   }
   if (kind === 'approval') {
     return {
-      ...shared, ...runState, kind, title: node.title || 'Approval',
+      ...shared,
+      ...runState,
+      kind,
+      title: node.title || 'Approval',
       message: node.message || '',
-      onChange: callbacks.onNodeChange, onDelete: callbacks.onDeleteNode, canDelete: true,
+      inputSchema: cloneValue(node.input_schema) || null,
+      outputSchema: cloneValue(node.output_schema) || { type: 'string', enum: ['approved', 'rejected'] },
+      onChange: callbacks.onNodeChange,
+      onDelete: callbacks.onDeleteNode,
+      canDelete: true,
     };
   }
-  if (kind === 'inbox') {
+  if (kind === 'document_read') {
     return {
-      ...shared, ...runState, kind, title: node.title || 'Send to Inbox',
-      messageTitle: node.message_title || 'Workflow message',
-      message: node.message || '', level: node.level || 'info',
-      onChange: callbacks.onNodeChange, onDelete: callbacks.onDeleteNode, canDelete: true,
+      ...shared,
+      ...runState,
+      kind,
+      title: node.title || 'Read document',
+      documentType: node.document_type || '',
+      inputSchema: cloneValue(node.input_schema) || null,
+      outputSchema: cloneValue(node.output_schema) || null,
+      onChange: callbacks.onNodeChange,
+      onDelete: callbacks.onDeleteNode,
+      canDelete: true,
     };
   }
-  if (kind === 'agent') {
+  if (kind === 'document_query') {
     return {
-      ...shared, ...runState, kind, title: node.title || 'Call Agent',
-      transport: node.transport || 'a2a', agentName: node.agent_name || '',
-      request: node.request || '', timeoutSeconds: node.timeout_seconds || 300,
-      onChange: callbacks.onNodeChange, onDelete: callbacks.onDeleteNode, canDelete: true,
+      ...shared,
+      ...runState,
+      kind,
+      title: node.title || 'Query documents',
+      documentType: node.document_type || '',
+      filters: Array.isArray(node.filters) ? cloneValue(node.filters) : [],
+      orderBy: node.order_by || null,
+      order: node.order || 'asc',
+      limit: Number.isFinite(node.limit) ? node.limit : 50,
+      inputSchema: cloneValue(node.input_schema) || null,
+      outputSchema: cloneValue(node.output_schema) || null,
+      onChange: callbacks.onNodeChange,
+      onDelete: callbacks.onDeleteNode,
+      canDelete: true,
     };
   }
-  return {
-    ...shared,
-    ...runState,
-    kind,
-    title: node.title || 'Prompt',
-    prompt: node.prompt || '',
-    agentName: node.agent_name || 'progenitor',
-    role: node.role || '',
-    onChange: callbacks.onNodeChange,
-    onDelete: callbacks.onDeleteNode,
-    canDelete: true,
-  };
+  if (kind === 'document_write' || kind === 'document_create' || kind === 'document_delete') {
+    const labels = {
+      document_write: 'Write document',
+      document_create: 'Create document',
+      document_delete: 'Delete document',
+    };
+    return {
+      ...shared,
+      ...runState,
+      kind,
+      title: node.title || labels[kind],
+      documentType: node.document_type || '',
+      inputSchema: cloneValue(node.input_schema) || null,
+      outputSchema: cloneValue(node.output_schema) || null,
+      onChange: callbacks.onNodeChange,
+      onDelete: callbacks.onDeleteNode,
+      canDelete: true,
+    };
+  }
+  if (kind === 'unpack') {
+    return {
+      ...shared,
+      ...runState,
+      kind,
+      title: node.title || 'Unpack',
+      showAllFields: Boolean(node.show_all_fields),
+      inputSchema: cloneValue(node.input_schema) || { type: 'object', required: ['value'], properties: { value: { type: 'object' } } },
+      outputSchema: cloneValue(node.output_schema) || { type: 'object', properties: {} },
+      onChange: callbacks.onNodeChange,
+      onDelete: callbacks.onDeleteNode,
+      canDelete: true,
+    };
+  }
+  return { ...shared, ...runState, kind, title: node.title || 'Node', onChange: callbacks.onNodeChange, onDelete: callbacks.onDeleteNode, canDelete: true };
 }
 
 function workflowToFlow(definition, callbacks, latestRun) {
   const uiNodes = definition?.ui?.nodes || {};
-  const nodes = Object.entries(definition?.graph?.nodes || {}).map(([nodeId, node]) => {
-    const kind = DEFAULT_NODE_SIZES[node.kind] ? node.kind : 'prompt';
+  const graphNodes = Object.entries(definition?.graph?.nodes || {}).map(([nodeId, node]) => {
+    const kind = DEFAULT_NODE_SIZES[node.kind] ? node.kind : 'agent';
     const uiNode = uiNodes[nodeId] || {};
-    const sizes = resolveNodeSizes(kind, uiNode.size);
-    const position = uiNode.position || (kind === 'event' ? { x: 96, y: 160 } : { x: 456, y: 160 });
-    const enriched = kind === 'event'
+    const sizes = resolveNodeSizes(kind, uiNode.size, node.input_schema, node.output_schema);
+    const position = uiNode.position || { x: 456, y: 160 };
+    const nodeData = kind === 'event'
       ? {
-        ...node,
-        eventType: definition.trigger?.event_type || WORKFLOW_EVENT_TYPES[0],
-        fromColumn: definition.trigger?.from_column || '',
-        toColumn: definition.trigger?.to_column || '',
-        keyPrefix: definition.trigger?.key_prefix || '',
-        key: definition.trigger?.key || '',
-        action: definition.trigger?.action || '',
-      }
-      : node;
+          ...node,
+          documentType: node.document_type,
+          key: node.key,
+          operations: node.operations,
+          changedFields: node.changed_fields,
+          match: node.match,
+          outputSchema: cloneValue(node.output_schema) || null,
+        }
+      : kind === 'cron'
+        ? {
+            ...node,
+            expression: node.expression,
+            timezone: node.timezone,
+            overlap: node.overlap,
+            outputSchema: cloneValue(node.output_schema) || null,
+          }
+        : kind === 'agent'
+        ? {
+          ...node,
+          prompt: node.prompt ?? null,
+          template: node.template ?? null,
+          subagent: node.subagent ?? null,
+        }
+      : kind === 'extract'
+        ? {
+          ...node,
+          prompt: node.prompt ?? null,
+          template: node.template ?? null,
+          schema: node.schema ?? null,
+        }
+        : kind === 'format'
+        ? {
+          ...node,
+          template: node.template || '',
+        }
+      : kind === 'document_read' || kind === 'document_query' || kind === 'document_write'
+        ? { ...node, documentType: node.document_type }
+        : kind === 'unpack'
+        ? { ...node, show_all_fields: Boolean(uiNode.show_all_fields) }
+        : node;
+    const data = buildNodeData(kind, nodeData, callbacks, latestRun);
+    // A stored size is a user resize: keep it in node data so serializing and
+    // Unpack auto-sizing treat the node as customized.
+    if (uiNode.size) {
+      data.dataSize = sizes.data;
+      data.settingsSize = sizes.settings;
+    }
     return {
       id: nodeId,
       type: kind,
       position,
-      // Nodes always load in the compact "data" view, so the rendered size
-      // starts at sizes.data; toggling to settings swaps to sizes.settings.
-      // Both the top-level width/height and style must be set: React Flow's
-      // NodeResizer reads/writes the top-level fields once a node has been
-      // manually resized, and those then take precedence over style.
       width: sizes.data.width,
       height: sizes.data.height,
       style: { width: sizes.data.width, height: sizes.data.height },
-      data: buildNodeData(kind, enriched, callbacks, latestRun, sizes),
+      data,
     };
   });
-  const edges = (definition?.graph?.edges || []).map((edge) => ({
-    id: `edge_${edge.from.node}_${edge.to.node}_${edge.from.port || 'default'}`,
-    source: edge.from.node,
-    ...(edge.from.port && edge.from.port !== 'default' ? { sourceHandle: edge.from.port } : {}),
-    target: edge.to.node,
-    ...(edge.to.port && edge.to.port !== 'default' ? { targetHandle: edge.to.port } : {}),
-    type: 'smoothstep',
-    animated: true,
-  }));
+  // A typed value connection is also the execution dependency. There are no
+  // separate control edges or connector handles.
+  const graphEdges = (definition?.graph?.edges || []).map((edge) => {
+    const fromPort = edge.from.port || 'default';
+    const toPort = edge.to.port || 'default';
+    return {
+      id: `edge_${edge.from.node}_${fromPort}_${edge.to.node}_${toPort}`,
+      source: edge.from.node,
+      sourceHandle: `out:${fromPort}`,
+      target: edge.to.node,
+      targetHandle: `in:${toPort}`,
+      ...DEFAULT_EDGE_OPTIONS,
+      className: 'workflow-edge--data',
+    };
+  });
   return {
-    nodes,
-    edges,
+    nodes: graphNodes,
+    edges: graphEdges,
     viewport: definition?.ui?.viewport || DEFAULT_VIEWPORT,
   };
 }
 
+function isTriggerKind(kind) {
+  return kind === 'event' || kind === 'cron';
+}
+
 function applyRunStateToNodes(nodes, latestRun) {
-  const currentNodeId = latestRun?.current_node_id || null;
-  const completedNodeIds = latestRun?.completed_node_ids || [];
+  const { currentNodeId, completedNodeIds } = workflowRunState(latestRun);
   return nodes.map((node) => {
-    const nextData = node.type === 'event'
-      ? { ...node.data, currentNodeId }
+    const nextData = isTriggerKind(node.type)
+      ? node.data
       : { ...node.data, currentNodeId, completedNodeIds };
     if (nextData === node.data) {
       return node;
     }
     return { ...node, data: nextData };
   });
+}
+
+function edgeEndpointFromHandle(handle) {
+  return handle && (handle.startsWith('out:') || handle.startsWith('in:'))
+    ? handle.slice(handle.indexOf(':') + 1)
+    : 'default';
 }
 
 function flowToWorkflow(baseWorkflow, nodes, edges, viewport) {
@@ -436,96 +814,153 @@ function flowToWorkflow(baseWorkflow, nodes, edges, viewport) {
     if (node.type === 'event') {
       graphNodes[node.id] = {
         kind: 'event',
-        title: String(node.data?.title || 'Event'),
+        title: String(node.data?.title || 'Document event'),
+        document_type: node.data?.documentType || '',
+        key: node.data?.key || null,
+        operations: Array.isArray(node.data?.operations) ? [...node.data.operations] : [],
+        changed_fields: Array.isArray(node.data?.changedFields) ? [...node.data.changedFields] : [],
+        match: cloneValue(node.data?.match) || {},
+        output_schema: cloneValue(node.data?.outputSchema) || null,
       };
-    } else if (node.type === 'user') {
+    } else if (node.type === 'cron') {
       graphNodes[node.id] = {
-        kind: 'user',
-        title: String(node.data?.title || 'User'),
-        message_type: node.data?.messageType || 'say_to_user',
-        message: String(node.data?.message || ''),
-        notification_title: node.data?.notificationTitle ? String(node.data.notificationTitle) : null,
-        level: node.data?.level || 'info',
+        kind: 'cron',
+        title: String(node.data?.title || 'Cron'),
+        expression: node.data?.expression || '*/5 * * * *',
+        timezone: node.data?.timezone || 'UTC',
+        overlap: node.data?.overlap || 'skip',
+        output_schema: cloneValue(node.data?.outputSchema) || null,
       };
-    } else if (node.type === 'code') {
+    } else if (node.type === 'document_read') {
       graphNodes[node.id] = {
-        kind: 'code',
-        title: String(node.data?.title || 'Code'),
-        language: String(node.data?.language || 'javascript'),
-        content: String(node.data?.content || ''),
+        kind: 'document_read',
+        title: String(node.data?.title || 'Read document'),
+        document_type: node.data?.documentType || '',
+        input_schema: cloneValue(node.data?.inputSchema) || null,
+        output_schema: cloneValue(node.data?.outputSchema) || null,
+      };
+    } else if (node.type === 'document_query') {
+      graphNodes[node.id] = {
+        kind: 'document_query',
+        title: String(node.data?.title || 'Query documents'),
+        document_type: node.data?.documentType || '',
+        filters: Array.isArray(node.data?.filters) ? cloneValue(node.data.filters) : [],
+        order_by: node.data?.orderBy || null,
+        order: node.data?.order || 'asc',
+        limit: Number.isFinite(node.data?.limit) ? node.data.limit : 50,
+        input_schema: cloneValue(node.data?.inputSchema) || null,
+        output_schema: cloneValue(node.data?.outputSchema) || null,
+      };
+    } else if (['document_write', 'document_create', 'document_delete'].includes(node.type)) {
+      const titles = {
+        document_write: 'Write document',
+        document_create: 'Create document',
+        document_delete: 'Delete document',
+      };
+      graphNodes[node.id] = {
+        kind: node.type,
+        title: String(node.data?.title || titles[node.type]),
+        document_type: node.data?.documentType || '',
+        input_schema: cloneValue(node.data?.inputSchema) || null,
+        output_schema: cloneValue(node.data?.outputSchema) || null,
+      };
+    } else if (node.type === 'data') {
+      graphNodes[node.id] = {
+        kind: 'data',
+        title: String(node.data?.title || 'Data'),
+        value: cloneValue(node.data?.value) ?? null,
+        output_schema: cloneValue(node.data?.outputSchema) || { type: 'object' },
+      };
+    } else if (node.type === 'agent') {
+      graphNodes[node.id] = {
+        kind: 'agent',
+        title: String(node.data?.title || 'Agent'),
+        prompt: node.data?.prompt ?? null,
+        template: node.data?.template ?? null,
+        subagent: node.data?.subagent ?? null,
+        input_schema: cloneValue(node.data?.inputSchema) || { type: 'object', properties: {} },
+        output_schema: cloneValue(node.data?.outputSchema) || { type: 'object', required: ['message', 'thread_id'], properties: { message: { type: 'string' }, thread_id: { type: 'string' } } },
+      };
+    } else if (node.type === 'format') {
+      graphNodes[node.id] = {
+        kind: 'format',
+        title: String(node.data?.title || 'Format'),
+        template: node.data?.template || '',
+        input_schema: cloneValue(node.data?.inputSchema) || { type: 'object', properties: {} },
+        output_schema: cloneValue(node.data?.outputSchema) || { type: 'object', required: ['text'], properties: { text: { type: 'string' } } },
+      };
+    } else if (node.type === 'extract') {
+      graphNodes[node.id] = {
+        kind: 'extract',
+        title: String(node.data?.title || 'Extract'),
+        prompt: node.data?.prompt ?? null,
+        template: node.data?.template ?? null,
+        schema: node.data?.schema ?? null,
+        input_schema: cloneValue(node.data?.inputSchema) || { type: 'object', properties: {} },
+        output_schema: cloneValue(node.data?.outputSchema) || { type: 'object', required: ['result', 'thread_id'], properties: { result: {}, thread_id: { type: 'string' } } },
       };
     } else if (node.type === 'condition') {
       graphNodes[node.id] = {
         kind: 'condition',
         title: String(node.data?.title || 'Condition'),
         expression: String(node.data?.expression || ''),
+        input_schema: cloneValue(node.data?.inputSchema) || { type: 'object', properties: {} },
+        output_schema: cloneValue(node.data?.outputSchema) || { type: 'string', enum: ['true', 'false'] },
       };
     } else if (node.type === 'approval') {
       graphNodes[node.id] = {
         kind: 'approval',
         title: String(node.data?.title || 'Approval'),
         message: String(node.data?.message || ''),
+        input_schema: cloneValue(node.data?.inputSchema) || { type: 'object', properties: {} },
+        output_schema: cloneValue(node.data?.outputSchema) || { type: 'string', enum: ['approved', 'rejected'] },
       };
-    } else if (node.type === 'inbox') {
+    } else if (node.type === 'unpack') {
       graphNodes[node.id] = {
-        kind: 'inbox',
-        title: String(node.data?.title || 'Send to Inbox'),
-        message_title: String(node.data?.messageTitle || 'Workflow message'),
-        message: String(node.data?.message || ''),
-        level: node.data?.level || 'info',
-      };
-    } else if (node.type === 'agent') {
-      graphNodes[node.id] = {
-        kind: 'agent',
-        title: String(node.data?.title || 'Call Agent'),
-        transport: node.data?.transport || 'a2a',
-        agent_name: String(node.data?.agentName || ''),
-        request: String(node.data?.request || ''),
-        timeout_seconds: Number(node.data?.timeoutSeconds || 300),
+        kind: 'unpack',
+        title: String(node.data?.title || 'Unpack'),
+        input_schema: cloneValue(node.data?.inputSchema) || { type: 'object', required: ['value'], properties: { value: { type: 'object' } } },
+        output_schema: cloneValue(node.data?.outputSchema) || { type: 'object', properties: {} },
       };
     } else {
       graphNodes[node.id] = {
-        kind: 'prompt',
-        title: String(node.data?.title || 'Prompt'),
-        prompt: String(node.data?.prompt || ''),
-        agent_name: String(node.data?.agentName || 'progenitor'),
-        role: node.data?.role ? String(node.data.role) : null,
+        kind: 'agent',
+        title: String(node.data?.title || 'Agent'),
+        prompt: node.data?.prompt ?? null,
+        template: node.data?.template ?? null,
+        subagent: node.data?.subagent ?? null,
+        input_schema: cloneValue(node.data?.inputSchema) || { type: 'object', properties: {} },
+        output_schema: cloneValue(node.data?.outputSchema) || { type: 'object', required: ['message', 'thread_id'], properties: { message: { type: 'string' }, thread_id: { type: 'string' } } },
       };
     }
-    const sizes = resolveNodeSizes(node.type, {
+    const hasCustomSize = node.data?.dataSize || node.data?.settingsSize;
+    const sizes = resolveNodeSizes(node.type, hasCustomSize ? {
       data: node.data?.dataSize,
       settings: node.data?.settingsSize,
-    });
+    } : null, graphNodes[node.id].input_schema, graphNodes[node.id].output_schema);
     uiNodes[node.id] = {
       position: {
         x: Math.round(node.position?.x || 0),
         y: Math.round(node.position?.y || 0),
       },
-      size: {
-        data: { width: Math.round(sizes.data.width), height: Math.round(sizes.data.height) },
-        settings: { width: Math.round(sizes.settings.width), height: Math.round(sizes.settings.height) },
-      },
+      ...(hasCustomSize ? {
+        size: {
+          data: { width: Math.round(sizes.data.width), height: Math.round(sizes.data.height) },
+          settings: { width: Math.round(sizes.settings.width), height: Math.round(sizes.settings.height) },
+        },
+      } : {}),
+      // View state only: whether an Unpack node lists every field.
+      ...(node.type === 'unpack' && node.data?.showAllFields ? { show_all_fields: true } : {}),
     };
   });
-
-  const eventNode = nodes.find((node) => node.type === 'event');
   return {
     ...baseWorkflow,
-    trigger: {
-      ...baseWorkflow.trigger,
-      type: 'event',
-      event_type: eventNode?.data?.eventType || baseWorkflow.trigger?.event_type || WORKFLOW_EVENT_TYPES[0],
-      from_column: eventNode?.data?.fromColumn || null,
-      to_column: eventNode?.data?.toColumn || null,
-      key_prefix: eventNode?.data?.keyPrefix || null,
-      key: eventNode?.data?.key || null,
-      action: eventNode?.data?.action || null,
-    },
+    version: 3,
     graph: {
       nodes: graphNodes,
       edges: edges.map((edge) => ({
-        from: { node: edge.source, port: edge.sourceHandle || 'default' },
-        to: { node: edge.target, port: edge.targetHandle || 'default' },
+        from: { node: edge.source, port: edgeEndpointFromHandle(edge.sourceHandle) },
+        to: { node: edge.target, port: edgeEndpointFromHandle(edge.targetHandle) },
       })),
     },
     ui: {
@@ -535,479 +970,1057 @@ function flowToWorkflow(baseWorkflow, nodes, edges, viewport) {
     },
   };
 }
+function schemaProperties(schema) {
+  if (!schema || typeof schema !== 'object') {
+    return [];
+  }
+  const variants = Array.isArray(schema.oneOf) ? schema.oneOf : [schema];
+  const properties = new Map();
+  variants.forEach((variant) => {
+    if (variant?.type !== 'object' || !variant.properties || typeof variant.properties !== 'object') {
+      return;
+    }
+    const required = new Set(Array.isArray(variant.required) ? variant.required : []);
+    Object.entries(variant.properties).forEach(([name, definition]) => {
+      const existing = properties.get(name);
+      properties.set(name, {
+        name,
+        definition: definition && typeof definition === 'object' ? definition : {},
+        required: Boolean(existing?.required || required.has(name)),
+      });
+    });
+  });
+  return [...properties.values()];
+}
 
-function EventNode({ id, data, selected }) {
-  const isRunning = data.currentNodeId === id;
+function schemaType(definition) {
+  if (typeof definition?.title === 'string' && definition.title) return definition.title;
+  if (Array.isArray(definition?.type)) return definition.type.join(' | ');
+  if (typeof definition?.type === 'string') return definition.type;
+  if (Array.isArray(definition?.enum)) return definition.enum.join(' | ');
+  return 'any';
+}
+
+// Mirrors app/progenitor/workflows.py: workflow_node_output_ports /
+// workflow_node_input_ports. A data edge connects one existing output port
+// to one existing input port; it never mutates either schema.
+function nodeOutputPorts(kind, outputSchema) {
+  if (kind === 'data') {
+    return [{ name: 'value', definition: outputSchema && typeof outputSchema === 'object' ? outputSchema : {}, required: false }];
+  }
+  return schemaProperties(outputSchema);
+}
+
+function nodeInputPorts(kind, inputSchema) {
+  if (kind === 'data' || kind === 'event' || kind === 'cron') {
+    return [];
+  }
+  return schemaProperties(inputSchema);
+}
+
+function schemaTypes(definition) {
+  if (Array.isArray(definition?.type)) return definition.type;
+  return typeof definition?.type === 'string' ? [definition.type] : [];
+}
+
+// Structural compatibility: every type the source can produce is accepted by
+// the target, and matching title if both declare one. Mirrors
+// _schema_types_compatible() in app/progenitor/workflows.py.
+function schemasAreCompatible(sourceDefinition, targetDefinition) {
+  const sourceTypes = schemaTypes(sourceDefinition);
+  const targetTypes = new Set(schemaTypes(targetDefinition));
+  if (targetTypes.has('number')) targetTypes.add('integer');
+  if (sourceTypes.length && targetTypes.size && !sourceTypes.every((type) => targetTypes.has(type))) {
+    return false;
+  }
+  const sourceTitle = sourceDefinition?.title;
+  const targetTitle = targetDefinition?.title;
+  return !(sourceTitle && targetTitle && sourceTitle !== targetTitle);
+}
+
+function portFromHandle(handle) {
+  return handle?.includes(':') ? handle.slice(handle.indexOf(':') + 1) : handle;
+}
+
+function isUnpackableSchema(definition) {
+  return schemaTypes(definition).includes('object') && definition?.properties && Object.keys(definition.properties).length > 0;
+}
+
+function hoistDefinitions(target, source) {
+  const sourceDefs = source?.$defs || source?.definitions;
+  if (!sourceDefs || typeof sourceDefs !== 'object') return;
+  const targetDefs = target.$defs || target.definitions;
+  const merged = { ...targetDefs, ...cloneValue(sourceDefs) };
+  if (source.$defs !== undefined || (target.$defs === undefined && target.definitions === undefined)) {
+    target.$defs = merged;
+  } else {
+    target.definitions = merged;
+  }
+}
+
+function resolveLocalSchemaRef(schema, rootSchema) {
+  const seen = new Set();
+  let resolved = schema;
+  while (resolved && typeof resolved === 'object' && typeof resolved.$ref === 'string') {
+    const ref = resolved.$ref;
+    const [, container, name] = ref.match(/^#\/([^/]+)\/([^/]+)$/) || [];
+    const target = (container === '$defs' || container === 'definitions')
+      ? rootSchema?.[container]?.[name]
+      : null;
+    if (seen.has(ref) || !target || typeof target !== 'object') return resolved;
+    seen.add(ref);
+    resolved = target;
+  }
+  return resolved;
+}
+
+function deriveUnpackSchemas(nodeId, nodes, edges) {
+  const valueEdge = edges.find((e) => e.target === nodeId && portFromHandle(e.targetHandle) === 'value');
+  if (!valueEdge) {
+    return {
+      inputSchema: { type: 'object', required: ['value'], properties: { value: { type: 'object' } } },
+      outputSchema: { type: 'object', properties: {} },
+    };
+  }
+  const sourceNode = nodes.find((n) => n.id === valueEdge.source);
+  const sourcePort = portFromHandle(valueEdge.sourceHandle);
+  const sourceSchema = sourceNode?.data?.outputSchema;
+  const sourceProperty = nodeOutputPorts(sourceNode?.data?.kind, sourceSchema)
+    .find((p) => p.name === sourcePort);
+
+  const sourceDef = sourceProperty?.definition || { type: 'object' };
+  const resolvedSourceDef = resolveLocalSchemaRef(sourceDef, sourceSchema);
+  const inputSchema = {
+    type: 'object',
+    required: ['value'],
+    properties: { value: cloneValue(sourceDef) },
+  };
+  hoistDefinitions(inputSchema, sourceSchema);
+
+  const outputSchema = {
+    type: 'object',
+    properties: cloneValue(resolvedSourceDef?.properties || {}),
+    required: cloneValue(resolvedSourceDef?.required || []),
+  };
+  hoistDefinitions(outputSchema, sourceDef);
+  hoistDefinitions(outputSchema, sourceSchema);
+
+  return { inputSchema, outputSchema };
+}
+
+function recomputeUnpackSchemas(nodes, edges) {
+  const unpackIds = nodes.filter((n) => n.data?.kind === 'unpack').map((n) => n.id);
+  if (!unpackIds.length) return nodes;
+
+  const nodesById = Object.fromEntries(nodes.map((n) => [n.id, n]));
+  // Each pass settles one more link of an Unpack chain; a cycle (rejected on
+  // save) must not spin forever, so the pass count is bounded like the server.
+  for (let pass = 0; pass <= unpackIds.length; pass += 1) {
+    let changed = false;
+    for (const unpackId of unpackIds) {
+      const unpack = nodesById[unpackId];
+      const { inputSchema, outputSchema } = deriveUnpackSchemas(unpackId, Object.values(nodesById), edges);
+      const currentInput = JSON.stringify(unpack.data?.inputSchema);
+      const currentOutput = JSON.stringify(unpack.data?.outputSchema);
+      const nextInput = JSON.stringify(inputSchema);
+      const nextOutput = JSON.stringify(outputSchema);
+      if (currentInput !== nextInput || currentOutput !== nextOutput) {
+        nodesById[unpackId] = { ...unpack, data: { ...unpack.data, inputSchema, outputSchema } };
+        changed = true;
+      }
+    }
+    if (!changed) break;
+  }
+  return sizeUnpackNodes(Object.values(nodesById), edges);
+}
+
+// Until the user resizes it, an Unpack node is exactly tall enough for its
+// shown ports plus the show/hide-fields toggle row.
+function sizeUnpackNodes(nodes, edges) {
+  return nodes.map((node) => {
+    if (node.data?.kind !== 'unpack' || node.data?.dataSize || node.data?.expanded) return node;
+    const connected = edges.filter((edge) => edge.source === node.id).map((edge) => portFromHandle(edge.sourceHandle));
+    const shown = visibleNodePortProperties(nodeOutputPorts('unpack', node.data?.outputSchema), node.height, connected, Boolean(node.data?.showAllFields)).length;
+    const height = Math.max(DEFAULT_NODE_SIZES.unpack.data.height, 69 + shown * 28);
+    return node.height === height ? node : { ...node, height, style: { ...node.style, height } };
+  });
+}
+
+function computeLostEdgesForUnpackChange(currentEdges, nextNodes) {
+  const nextNodesById = Object.fromEntries(nextNodes.map((n) => [n.id, n]));
+  const lostEdges = [];
+  for (const edge of currentEdges) {
+    const sourceNode = nextNodesById[edge.source];
+    if (sourceNode?.data?.kind !== 'unpack') continue;
+    const portName = portFromHandle(edge.sourceHandle);
+    const outputProps = sourceNode.data?.outputSchema?.properties || {};
+    if (!outputProps[portName]) {
+      lostEdges.push(edge);
+    }
+  }
+  return lostEdges;
+}
+
+// ``showAllFields`` is only passed for Unpack nodes (null otherwise): collapsed
+// they show just the connected outputs, expanded every property.
+function visibleNodePortProperties(properties, nodeHeight, connectedNames = [], showAllFields = null) {
+  const connectedSet = new Set(connectedNames);
+  if (showAllFields !== null) {
+    return showAllFields ? properties : properties.filter((p) => connectedSet.has(p.name));
+  }
+  if (!Number.isFinite(nodeHeight)) return properties;
+  const connected = properties.filter((p) => connectedSet.has(p.name));
+  const unconnected = properties.filter((p) => !connectedSet.has(p.name));
+  const maxPorts = Math.max(0, Math.floor((nodeHeight - 8 - 61) / 28) + 1);
+  const remainingSlots = Math.max(0, maxPorts - connected.length);
+  return [...connected, ...unconnected.slice(0, remainingSlots)];
+}
+
+function pruneLostUnpackEdges(nodes, edges) {
+  let nextEdges = edges;
+  let nextNodes = recomputeUnpackSchemas(nodes, nextEdges);
+  const lostEdges = [];
+  while (true) {
+    const newlyLost = computeLostEdgesForUnpackChange(nextEdges, nextNodes);
+    if (newlyLost.length === 0) break;
+    lostEdges.push(...newlyLost);
+    const lostIds = new Set(newlyLost.map((edge) => edge.id));
+    nextEdges = nextEdges.filter((edge) => !lostIds.has(edge.id));
+    nextNodes = recomputeUnpackSchemas(nodes, nextEdges);
+  }
+  return { nodes: nextNodes, edges: nextEdges, lostEdges };
+}
+
+function WorkflowNodeHandles({ kind, inputSchema, outputSchema, nodeHeight, connectedInputPorts = [], connectedOutputPorts = [], showAllFields = null }) {
+  const inputProperties = visibleNodePortProperties(nodeInputPorts(kind, inputSchema), nodeHeight, connectedInputPorts);
+  const outputProperties = visibleNodePortProperties(nodeOutputPorts(kind, outputSchema), nodeHeight, connectedOutputPorts, showAllFields);
+  const top = (index) => `${61 + index * 28}px`;
+  return (
+    <>
+      {inputProperties.map(({ name }, index) => (
+        <Handle key={`input-${name}`} type="target" position={Position.Left} id={`in:${name}`} className="canvas-handle workflow-node-external-handle" style={{ top: top(index) }} />
+      ))}
+      {outputProperties.map(({ name }, index) => (
+        <Handle key={`output-${name}`} type="source" position={Position.Right} id={`out:${name}`} className="canvas-handle workflow-node-external-handle" style={{ top: top(index) }} />
+      ))}
+    </>
+  );
+}
+
+// Renders port labels in exactly the order and subset WorkflowNodeHandles
+// places handles, so every handle (and its edge) lines up with its label.
+function WorkflowNodePorts({ kind, inputSchema, outputSchema, nodeHeight, connectedInputPorts = [], connectedOutputPorts = [], showAllFields = null, onToggleShowAllFields, onUnpack }) {
+  const inputProperties = visibleNodePortProperties(nodeInputPorts(kind, inputSchema), nodeHeight, connectedInputPorts);
+  const outputProperties = visibleNodePortProperties(nodeOutputPorts(kind, outputSchema), nodeHeight, connectedOutputPorts, showAllFields);
+  const unconnectedCount = showAllFields !== null
+    ? nodeOutputPorts(kind, outputSchema).filter((p) => !connectedOutputPorts.includes(p.name)).length
+    : 0;
+  return (
+    <div className="workflow-node-ports">
+      <div className="workflow-node-ports__column workflow-node-ports__column--inputs">
+        {inputProperties.length ? inputProperties.map(({ name, definition }) => (
+          <div className="workflow-node-port" key={`input-${name}`}>
+            <span>{name}</span>
+            <small>{schemaType(definition)}</small>
+          </div>
+        )) : <span className="workflow-node-ports__empty">No inputs</span>}
+      </div>
+      <div className="workflow-node-ports__column workflow-node-ports__column--outputs">
+        {outputProperties.map(({ name, definition }) => (
+          <div className="workflow-node-port" key={`output-${name}`}>
+            {onUnpack && isUnpackableSchema(definition) ? (
+              <button type="button" className="workflow-node-port__unpack" onClick={() => onUnpack(name)} aria-label={`Unpack ${name}`}>▸</button>
+            ) : null}
+            <small>{schemaType(definition)}</small>
+            <span>{name}</span>
+          </div>
+        ))}
+        {unconnectedCount > 0 ? (
+          <button type="button" className="workflow-node-port workflow-node-port--toggle nodrag" onClick={onToggleShowAllFields} aria-expanded={Boolean(showAllFields)}>
+            {showAllFields ? 'Hide unused fields' : `+ ${unconnectedCount} field${unconnectedCount === 1 ? '' : 's'}`}
+          </button>
+        ) : null}
+        {!outputProperties.length && !unconnectedCount ? <span className="workflow-node-ports__empty">No outputs</span> : null}
+      </div>
+    </div>
+  );
+}
+
+
+
+// Remounted per-node via `key={node.id}` on WorkflowNodeOptionsModal, so
+// lazy initial state is sufficient -- no effect-driven resync needed.
+function JsonFieldEditor({ label, value, onCommit }) {
+  const [text, setText] = useState(() => JSON.stringify(value ?? {}, null, 2));
+  const [error, setError] = useState('');
+  return (
+    <label className="workflow-node-options__field">
+      {label}
+      <textarea
+        value={text}
+        rows={6}
+        onChange={(event) => {
+          const nextText = event.target.value;
+          setText(nextText);
+          try {
+            const parsed = JSON.parse(nextText);
+            setError('');
+            onCommit(parsed);
+          } catch {
+            setError('Invalid JSON');
+          }
+        }}
+      />
+      {error ? <small className="workflow-node-options__error">{error}</small> : null}
+    </label>
+  );
+}
+
+function buildQueryInputSchema(filters, documentSchema) {
+  if (!filters || filters.length === 0) {
+    return { type: 'object', required: ['trigger'], properties: { trigger: {} } };
+  }
+  const occurrences = filters.reduce((counts, filter) => ({
+    ...counts,
+    [filter.field]: (counts[filter.field] || 0) + 1,
+  }), {});
+  const properties = {};
+  filters.forEach((filter) => {
+    const fieldSchema = documentSchema?.properties?.[filter.field] || {};
+    const port = occurrences[filter.field] === 1 ? filter.field : `${filter.field}_${filter.op}`;
+    if (filter.op === 'in') properties[port] = { type: 'array', items: cloneValue(fieldSchema) };
+    else if (filter.op === 'exists') properties[port] = { type: 'boolean' };
+    else if (filter.op === 'contains') properties[port] = { anyOf: [{ type: 'string' }, cloneValue(fieldSchema.items) || {}] };
+    else properties[port] = cloneValue(fieldSchema);
+  });
+  return { type: 'object', properties };
+}
+
+function WorkflowNodeOptionsModal({ node, onChange, onClose }) {
+  useEffect(() => {
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape') onClose();
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [onClose]);
+
+  const kind = node.data?.kind || node.type;
+  const dispatch = useDispatch();
+  const { getApiUrl } = useConfig();
+  const promptsUrl = getApiUrl('prompts');
+  const promptPath = node.data?.prompt || '';
+  const promptContentEntry = useSelector((state) => selectPromptContentEntry(state, promptPath));
+
+  // Fetch the selected document once, then derive its input ports once per
+  // loaded text: `onChange` is a fresh function every render and the graph
+  // may normalise the stored schema, so neither may drive a re-apply.
+  const requestedPromptPathRef = useRef(null);
+  const appliedPromptContentRef = useRef(null);
+  const onChangeRef = useRef(onChange);
+  useLayoutEffect(() => {
+    onChangeRef.current = onChange;
+  });
+  useEffect(() => {
+    if ((kind !== 'agent' && kind !== 'extract') || !promptPath) return;
+    if (promptContentEntry?.path === promptPath) {
+      const content = promptContentEntry.content || '';
+      const applied = appliedPromptContentRef.current;
+      if (applied?.path === promptPath && applied.content === content) return;
+      appliedPromptContentRef.current = { path: promptPath, content };
+      const patch = promptDocumentPatch(promptPath, content);
+      if (JSON.stringify(node.data?.inputSchema) !== JSON.stringify(patch.inputSchema)) {
+        onChangeRef.current(node.id, patch);
+      }
+      return;
+    }
+    if (requestedPromptPathRef.current === promptPath) return;
+    requestedPromptPathRef.current = promptPath;
+    void dispatch(fetchPromptContent({ promptsUrl, path: promptPath })).unwrap().catch(() => {});
+  }, [dispatch, kind, node.data?.inputSchema, node.id, promptContentEntry, promptPath, promptsUrl]);
+
+  const documentTypes = useSelector(selectDocumentTypes);
+
+  const documentTypeOptions = useMemo(() =>
+    documentTypes.map((dt) => ({ value: dt.id, label: dt.label || dt.id })),
+  [documentTypes]);
+
+  const readableTypeOptions = useMemo(() =>
+    documentTypes.map((dt) => ({ value: dt.id, label: dt.label || dt.id })),
+  [documentTypes]);
+
+  const collectionTypeOptions = useMemo(() =>
+    documentTypes.filter((dt) => dt.collection).map((dt) => ({ value: dt.id, label: dt.label || dt.id })),
+  [documentTypes]);
+
+  const schemaCollectionTypeOptions = useMemo(() =>
+    documentTypes.filter((dt) => dt.collection && dt.document_schema).map((dt) => ({ value: dt.id, label: dt.label || dt.id })),
+  [documentTypes]);
+
+  const writableTypeOptions = useMemo(() =>
+    documentTypes.filter((dt) => dt.writable_fields?.length).map((dt) => ({ value: dt.id, label: dt.label || dt.id })),
+  [documentTypes]);
+
+  const selectedDocumentType = useMemo(() =>
+    documentTypes.find((dt) => dt.id === node.data?.documentType) || null,
+  [documentTypes, node.data?.documentType]);
+
+  const fieldOptions = useMemo(() => {
+    const props = selectedDocumentType?.document_schema?.properties;
+    if (!props || typeof props !== 'object') return [];
+    return Object.keys(props).map((key) => ({ value: key, label: key }));
+  }, [selectedDocumentType]);
+
+  const prompts = useSelector(selectPrompts);
+  const promptOptions = useMemo(() =>
+    prompts.map((p) => ({ value: p.path, label: p.title || p.path })),
+  [prompts]);
+
+  const agentProfiles = useSelector(selectAgentProfiles);
+  const subagentOptions = useMemo(() => {
+    const names = agentProfiles.map((a) => a.name).filter(Boolean);
+    return [...new Set(names)].sort().map((name) => ({ value: name, label: name }));
+  }, [agentProfiles]);
+
+  const knownSchema = useMemo(() =>
+    documentTypeOptions.some((o) => o.value === node.data?.schema),
+  [documentTypeOptions, node.data?.schema]);
+
+  const [cronPreview, setCronPreview] = useState({ nextRuns: [], error: '' });
+  const cronAbortRef = useRef(null);
+  const cronDebounceRef = useRef(null);
+
+  useEffect(() => {
+    if (kind !== 'cron') return undefined;
+    const expression = node.data?.expression || '';
+    const timezone = node.data?.timezone || '';
+    clearTimeout(cronDebounceRef.current);
+    if (!expression || !timezone) {
+      return () => clearTimeout(cronDebounceRef.current);
+    }
+    cronDebounceRef.current = setTimeout(() => {
+      cronAbortRef.current?.abort();
+      const controller = new AbortController();
+      cronAbortRef.current = controller;
+      fetch(`/api/ui/workflows/cron-preview?expression=${encodeURIComponent(expression)}&timezone=${encodeURIComponent(timezone)}&count=3`, {
+        signal: controller.signal,
+      })
+        .then(async (res) => {
+          if (res.status === 200) {
+            const data = await res.json();
+            setCronPreview({ nextRuns: data.next_runs || [], error: '' });
+          } else if (res.status === 400) {
+            const data = await res.json();
+            setCronPreview({ nextRuns: [], error: data.detail || 'Invalid expression' });
+          } else {
+            setCronPreview({ nextRuns: [], error: `HTTP ${res.status}` });
+          }
+        })
+        .catch((err) => {
+          if (err.name !== 'AbortError') {
+            setCronPreview({ nextRuns: [], error: err.message });
+          }
+        });
+    }, 300);
+    return () => {
+      clearTimeout(cronDebounceRef.current);
+    };
+  }, [kind, node.data?.expression, node.data?.timezone]);
+
+  const handleEventTypeChange = (documentTypeId) => {
+    const dt = documentTypes.find((t) => t.id === documentTypeId);
+    onChange(node.id, {
+      documentType: documentTypeId,
+      outputSchema: cloneValue(dt?.event_output_schema) || null,
+      changedFields: [],
+    });
+  };
+
+  const handleReadTypeChange = (documentTypeId) => {
+    const dt = documentTypes.find((t) => t.id === documentTypeId);
+    onChange(node.id, {
+      documentType: documentTypeId,
+      inputSchema: cloneValue(dt?.read_input_schema) || null,
+      outputSchema: cloneValue(dt?.read_output_schema) || null,
+    });
+  };
+
+  const handleQueryTypeChange = (documentTypeId) => {
+    const dt = documentTypes.find((t) => t.id === documentTypeId);
+    const filters = [];
+    onChange(node.id, {
+      documentType: documentTypeId,
+      filters,
+      orderBy: null,
+      order: 'asc',
+      inputSchema: buildQueryInputSchema(filters, dt?.document_schema),
+      outputSchema: cloneValue(dt?.query_output_schema) || null,
+    });
+  };
+
+  const handleQueryFiltersChange = (filters) => {
+    onChange(node.id, {
+      filters,
+      inputSchema: buildQueryInputSchema(filters, selectedDocumentType?.document_schema),
+    });
+  };
+
+  const handleDocumentOperationTypeChange = (documentTypeId, operation) => {
+    const dt = documentTypes.find((t) => t.id === documentTypeId);
+    onChange(node.id, {
+      documentType: documentTypeId,
+      inputSchema: cloneValue(dt?.[`${operation}_input_schema`]) || null,
+      outputSchema: cloneValue(dt?.[`${operation}_output_schema`]) || null,
+    });
+  };
+
+  return createPortal(
+    <div className="workflow-node-options-backdrop" role="presentation" onMouseDown={onClose}>
+      <section className="workflow-node-options" role="dialog" aria-modal="true" aria-labelledby="workflow-node-options-title" onMouseDown={(event) => event.stopPropagation()}>
+        <header className="workflow-node-options__head">
+          <div>
+            <span className="sidebar-modal__eyebrow">Node options</span>
+            <h2 id="workflow-node-options-title">{node.data?.title || 'Workflow node'}</h2>
+          </div>
+          <button type="button" className="sidebar-modal__close" aria-label="Close node options" onClick={onClose}>×</button>
+        </header>
+        <div className="workflow-node-options__body">
+          <section>
+            <h3>Configuration</h3>
+            <div className="workflow-node-options__mapping-form">
+              <label>Title<input value={node.data?.title || ''} onChange={(event) => onChange(node.id, { title: event.target.value })} /></label>
+            </div>
+            {kind === 'event' ? (
+              <>
+                <label className="workflow-node-options__field">
+                  Document type
+                  <Select value={node.data?.documentType || ''} onChange={handleEventTypeChange} options={documentTypeOptions} ariaLabel="Document type" />
+                </label>
+                <label className="workflow-node-options__field">
+                  Key
+                  <input
+                    value={node.data?.key || ''}
+                    onChange={(event) => onChange(node.id, { key: event.target.value || null })}
+                    placeholder="Any key"
+                  />
+                </label>
+                <div className="workflow-node-options__field">
+                  <span>Operations</span>
+                  <div className="workflow-node-options__checkboxes">
+                    {['created', 'updated', 'deleted'].map((op) => (
+                      <label key={op} className="workflow-node-options__checkbox">
+                        <input
+                          type="checkbox"
+                          checked={node.data?.operations?.includes(op) || false}
+                          onChange={(event) => {
+                            const current = new Set(node.data?.operations || []);
+                            if (event.target.checked) current.add(op);
+                            else current.delete(op);
+                            onChange(node.id, { operations: Array.from(current) });
+                          }}
+                        />
+                        {op}
+                      </label>
+                    ))}
+                  </div>
+                </div>
+                <label className="workflow-node-options__field">
+                  Changed fields
+                  <Select
+                    value=""
+                    onChange={(field) => {
+                      if (!field) return;
+                      const current = new Set(node.data?.changedFields || []);
+                      current.add(field);
+                      onChange(node.id, { changedFields: Array.from(current) });
+                    }}
+                    options={[{ value: '', label: 'Add field…' }, ...fieldOptions]}
+                    ariaLabel="Add changed field"
+                  />
+                  <div className="workflow-node-options__tags">
+                    {(node.data?.changedFields || []).map((field) => (
+                      <span key={field} className="workflow-node-options__tag">
+                        {field}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const next = (node.data?.changedFields || []).filter((f) => f !== field);
+                            onChange(node.id, { changedFields: next });
+                          }}
+                          aria-label={`Remove ${field}`}
+                        >×</button>
+                      </span>
+                    ))}
+                  </div>
+                </label>
+                <JsonFieldEditor label="Match" value={node.data?.match} onCommit={(match) => onChange(node.id, { match })} />
+              </>
+            ) : null}
+            {kind === 'cron' ? (
+              <>
+                <label className="workflow-node-options__field">
+                  Expression
+                  <input
+                    value={node.data?.expression || ''}
+                    onChange={(event) => onChange(node.id, { expression: event.target.value })}
+                    placeholder="*/5 * * * *"
+                  />
+                </label>
+                <div className="workflow-node-options__field">
+                  <span>Presets</span>
+                  <div className="workflow-node-options__checkboxes">
+                    {[
+                      { label: 'Every 5 min', expr: '*/5 * * * *' },
+                      { label: 'Hourly', expr: '0 * * * *' },
+                      { label: 'Daily 9:00', expr: '0 9 * * *' },
+                      { label: 'Weekdays 9:00', expr: '0 9 * * 1-5' },
+                    ].map((preset) => (
+                      <button
+                        key={preset.expr}
+                        type="button"
+                        className="node-action-btn"
+                        onClick={() => onChange(node.id, { expression: preset.expr })}
+                      >
+                        {preset.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <label className="workflow-node-options__field">
+                  Timezone
+                  <input
+                    value={node.data?.timezone || ''}
+                    onChange={(event) => onChange(node.id, { timezone: event.target.value })}
+                    placeholder="Australia/Melbourne"
+                  />
+                </label>
+                <label className="workflow-node-options__field">
+                  Overlap
+                  <Select
+                    value={node.data?.overlap || 'skip'}
+                    onChange={(val) => onChange(node.id, { overlap: val })}
+                    options={[{ value: 'skip', label: 'Skip if still running' }, { value: 'queue', label: 'Queue' }]}
+                    ariaLabel="Overlap behaviour"
+                  />
+                </label>
+                <div className="workflow-node-options__field">
+                  <span>Next runs</span>
+                  {cronPreview.error ? (
+                    <small className="workflow-node-options__error">{cronPreview.error}</small>
+                  ) : (
+                    <ul className="workflow-node-options__next-runs">
+                      {cronPreview.nextRuns.map((run, i) => (
+                        <li key={i}>{run}</li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              </>
+            ) : null}
+            {kind === 'document_read' ? (
+              <>
+                <label className="workflow-node-options__field">
+                  Document type
+                  <Select value={node.data?.documentType || ''} onChange={handleReadTypeChange} options={readableTypeOptions} ariaLabel="Document type" />
+                </label>
+              </>
+            ) : null}
+            {kind === 'document_query' ? (
+              <>
+                <label className="workflow-node-options__field">
+                  Document type
+                  <Select value={node.data?.documentType || ''} onChange={handleQueryTypeChange} options={collectionTypeOptions} ariaLabel="Document type" />
+                </label>
+                <div className="workflow-node-options__field">
+                  <span>Filters</span>
+                  {(node.data?.filters || []).map((filter, index) => (
+                    <div key={`${filter.field}-${filter.op}-${index}`} className="workflow-node-options__mapping-form">
+                      <Select
+                        value={filter.field}
+                        onChange={(field) => {
+                          const next = cloneValue(node.data?.filters) || [];
+                          next[index] = { ...next[index], field };
+                          handleQueryFiltersChange(next);
+                        }}
+                        options={fieldOptions}
+                        ariaLabel={`Filter ${index + 1} field`}
+                      />
+                      <Select
+                        value={filter.op}
+                        onChange={(op) => {
+                          const next = cloneValue(node.data?.filters) || [];
+                          next[index] = { ...next[index], op };
+                          handleQueryFiltersChange(next);
+                        }}
+                        options={['eq', 'ne', 'lt', 'lte', 'gt', 'gte', 'in', 'contains', 'exists'].map((op) => ({ value: op, label: op }))}
+                        ariaLabel={`Filter ${index + 1} operator`}
+                      />
+                      <button type="button" className="node-action-btn" onClick={() => {
+                        handleQueryFiltersChange((node.data?.filters || []).filter((_, itemIndex) => itemIndex !== index));
+                      }}>Remove</button>
+                    </div>
+                  ))}
+                  <button type="button" className="node-action-btn" disabled={!fieldOptions.length} onClick={() => {
+                    handleQueryFiltersChange([...(node.data?.filters || []), { field: fieldOptions[0].value, op: 'eq' }]);
+                  }}>Add filter</button>
+                </div>
+                <label className="workflow-node-options__field">
+                  Order by
+                  <Select
+                    value={node.data?.orderBy || ''}
+                    onChange={(orderBy) => onChange(node.id, { orderBy: orderBy || null })}
+                    options={[{ value: '', label: 'Document key' }, ...fieldOptions]}
+                    ariaLabel="Order by field"
+                  />
+                </label>
+                <label className="workflow-node-options__field">
+                  Order
+                  <Select value={node.data?.order || 'asc'} onChange={(order) => onChange(node.id, { order })} options={[{ value: 'asc', label: 'Ascending' }, { value: 'desc', label: 'Descending' }]} ariaLabel="Order direction" />
+                </label>
+                <label className="workflow-node-options__field">
+                  Limit
+                  <input type="number" min={1} max={200} value={node.data?.limit || 50} onChange={(event) => {
+                    const val = parseInt(event.target.value, 10);
+                    onChange(node.id, { limit: Number.isFinite(val) ? Math.max(1, Math.min(200, val)) : 50 });
+                  }} />
+                </label>
+              </>
+            ) : null}
+            {kind === 'document_write' ? (
+              <label className="workflow-node-options__field">
+                Document type
+                <Select value={node.data?.documentType || ''} onChange={(documentTypeId) => handleDocumentOperationTypeChange(documentTypeId, 'write')} options={writableTypeOptions} ariaLabel="Document type" />
+              </label>
+            ) : null}
+            {kind === 'document_create' || kind === 'document_delete' ? (
+              <label className="workflow-node-options__field">
+                Document type
+                <Select value={node.data?.documentType || ''} onChange={(documentTypeId) => handleDocumentOperationTypeChange(documentTypeId, kind === 'document_create' ? 'create' : 'delete')} options={schemaCollectionTypeOptions} ariaLabel="Document type" />
+              </label>
+            ) : null}
+            {kind === 'agent' || kind === 'extract' ? (
+              <>
+                <div className="workflow-node-options__field">
+                  <span>Prompt source</span>
+                  <div className="workflow-node-options__checkboxes">
+                    <label className="workflow-node-options__checkbox">
+                      <input
+                        type="radio"
+                        name={`prompt-source-${node.id}`}
+                        checked={node.data?.prompt != null}
+                        onChange={() => {
+                          // An empty path selects document mode with no prompt chosen yet.
+                          onChange(node.id, { prompt: prompts[0]?.path || '', template: null });
+                        }}
+                      />
+                      Prompt document
+                    </label>
+                    <label className="workflow-node-options__checkbox">
+                      <input
+                        type="radio"
+                        name={`prompt-source-${node.id}`}
+                        checked={node.data?.prompt == null}
+                        onChange={() => onChange(node.id, { prompt: null, template: '' })}
+                      />
+                      Inline template
+                    </label>
+                  </div>
+                </div>
+                {node.data?.prompt != null ? (
+                  <label className="workflow-node-options__field">
+                    Prompt
+                    <Select
+                      value={node.data?.prompt || ''}
+                      onChange={(path) => onChange(node.id, { prompt: path || null, template: null })}
+                      options={[{ value: '', label: 'Select prompt…' }, ...promptOptions]}
+                      ariaLabel="Prompt document"
+                    />
+                  </label>
+                ) : (
+                  <label className="workflow-node-options__field">
+                    Template
+                    <textarea
+                      value={node.data?.template || ''}
+                      onChange={(event) => onChange(node.id, promptTemplatePatch(event.target.value))}
+                      rows={6}
+                    />
+                  </label>
+                )}
+              </>
+            ) : null}
+            {kind === 'format' ? (
+              <label className="workflow-node-options__field">
+                Template
+                <textarea
+                  value={node.data?.template || ''}
+                  onChange={(event) => onChange(node.id, formatTemplatePatch(event.target.value))}
+                  rows={6}
+                />
+              </label>
+            ) : null}
+            {kind === 'agent' ? (
+              <label className="workflow-node-options__field">
+                Subagent
+                <Select
+                  value={node.data?.subagent || ''}
+                  onChange={(val) => onChange(node.id, { subagent: val || null })}
+                  options={[{ value: '', label: 'Progenitor' }, ...subagentOptions]}
+                  ariaLabel="Subagent"
+                />
+              </label>
+            ) : null}
+            {kind === 'extract' ? (
+              <>
+                <label className="workflow-node-options__field">
+                  Result schema
+                  <Select
+                    value={knownSchema ? (node.data?.schema || '') : '__custom__'}
+                    onChange={(val) => {
+                      if (val === '__custom__') {
+                        onChange(node.id, { schema: '' });
+                      } else {
+                        onChange(node.id, { schema: val || null });
+                      }
+                    }}
+                    options={[{ value: '', label: 'Infer' }, ...documentTypeOptions, { value: '__custom__', label: 'Other…' }]}
+                    ariaLabel="Result schema"
+                  />
+                </label>
+                {!knownSchema ? (
+                  <label className="workflow-node-options__field">
+                    Schema name
+                    <input
+                      value={node.data?.schema || ''}
+                      onChange={(event) => onChange(node.id, { schema: event.target.value || null })}
+                      placeholder="Type a schema name"
+                    />
+                  </label>
+                ) : null}
+              </>
+            ) : null}
+            {kind === 'data' ? (
+              <>
+                <JsonFieldEditor label="Value" value={node.data?.value} onCommit={(value) => onChange(node.id, { value })} />
+                <JsonFieldEditor label="Output schema" value={node.data?.outputSchema} onCommit={(outputSchema) => onChange(node.id, { outputSchema })} />
+              </>
+            ) : null}
+            {kind === 'condition' ? (
+              <>
+                <label className="workflow-node-options__field">Expression<textarea value={node.data?.expression || ''} onChange={(event) => onChange(node.id, { expression: event.target.value })} rows={3} /></label>
+                <JsonFieldEditor label="Input schema" value={node.data?.inputSchema} onCommit={(inputSchema) => onChange(node.id, { inputSchema })} />
+              </>
+            ) : null}
+            {kind === 'approval' ? (
+              <>
+                <label className="workflow-node-options__field">Message<textarea value={node.data?.message || ''} onChange={(event) => onChange(node.id, { message: event.target.value })} rows={3} /></label>
+                <JsonFieldEditor label="Input schema" value={node.data?.inputSchema} onCommit={(inputSchema) => onChange(node.id, { inputSchema })} />
+              </>
+            ) : null}
+          </section>
+        </div>
+      </section>
+    </div>,
+    document.body,
+  );
+}
+
+function PromptNode({ id, data, selected, height }) {
   const expanded = data.expanded;
-  const documentKinds = useSelector(selectDocumentKinds);
-  const documentKindOptions = useMemo(() => [
-    { value: '', label: 'Any document kind' },
-    ...documentKinds.map((kind) => ({ value: kind.key_prefix, label: kind.label })),
-  ], [documentKinds]);
+  const edges = useEdges();
+  const connectedInputPorts = useMemo(() => edges.filter((e) => e.target === id).map((e) => portFromHandle(e.targetHandle)), [edges, id]);
+  const connectedOutputPorts = useMemo(() => edges.filter((e) => e.source === id).map((e) => portFromHandle(e.sourceHandle)), [edges, id]);
+
   return (
     <>
       <NodeResizer
-        minWidth={220}
-        minHeight={expanded ? 140 : 80}
+        minWidth={240}
+        minHeight={expanded ? 200 : 100}
         isVisible={selected}
         onResizeEnd={(_event, params) => data.onResize(id, { width: params.width, height: params.height })}
       />
-      <div className={`canvas-node workflow-graph-node workflow-graph-node--event ${selected ? 'selected' : ''}`}>
-        <Handle type="source" position={Position.Right} className="canvas-handle" />
+      <div className={`canvas-node workflow-graph-node workflow-graph-node--${data.kind} ${selected ? 'selected' : ''}`}>
+        <div className="node-title-bar drag-handle">
+          <span className={`node-type-icon ${data.kind}`}>{data.kind[0].toUpperCase()}</span>
+          <WorkflowNodeTitle
+            expanded={expanded}
+            title={data.title}
+            placeholder="Node title"
+            onChange={(event) => data.onChange(id, { title: event.target.value })}
+          />
+          <button
+            type="button"
+            className="node-options-btn nodrag"
+            onClick={() => data.onOpenOptions(id)}
+            aria-label="Configure node"
+            data-tooltip="Configure node"
+          >
+            <ConfigureActionIcon />
+          </button>
+          {data.canDelete ? (
+            <button
+              type="button"
+              className="node-remove-btn"
+              aria-label="Delete node"
+              onClick={() => data.onDelete(id)}
+            >
+              ×
+            </button>
+          ) : null}
+        </div>
+        <div className="node-body">
+          <WorkflowNodePorts kind={data.kind} inputSchema={data.inputSchema} outputSchema={data.outputSchema} nodeHeight={height} connectedInputPorts={connectedInputPorts} connectedOutputPorts={connectedOutputPorts} onUnpack={data.onUnpack ? (port) => data.onUnpack(id, port) : undefined} />
+        </div>
+      </div>
+      <WorkflowNodeHandles kind={data.kind} inputSchema={data.inputSchema} outputSchema={data.outputSchema} nodeHeight={height} connectedInputPorts={connectedInputPorts} connectedOutputPorts={connectedOutputPorts} />
+    </>
+  );
+}
+
+function DocumentEventNode({ id, data, selected, height }) {
+  const edges = useEdges();
+  const connectedOutputPorts = useMemo(() => edges.filter((e) => e.source === id).map((e) => portFromHandle(e.sourceHandle)), [edges, id]);
+
+  return (
+    <>
+      <NodeResizer minWidth={280} minHeight={110} isVisible={selected} onResizeEnd={(_event, params) => data.onResize(id, { width: params.width, height: params.height })} />
+      <div className={`canvas-node workflow-graph-node workflow-graph-node--trigger ${selected ? 'selected' : ''}`}>
         <div className="node-title-bar drag-handle">
           <span className="node-type-icon event">E</span>
-          <input
-            className="node-title-input"
-            value={data.title}
-            onChange={(event) => data.onChange(id, { title: event.target.value })}
-            placeholder="Event title"
-          />
-          <span className={`node-status-badge ${isRunning ? 'running' : 'idle'}`}>{isRunning ? 'Live' : 'Start'}</span>
-          <button
-            type="button"
-            className="node-expand-btn nodrag"
-            onClick={() => data.onToggleExpanded(id)}
-            title={expanded ? 'Show data' : 'Show settings'}
-            aria-label={expanded ? 'Show data' : 'Show settings'}
-          >
-            {expanded ? '▲' : '▼'}
-          </button>
+          <WorkflowNodeTitle expanded={false} title={data.title} placeholder="Event title" onChange={(event) => data.onChange(id, { title: event.target.value })} />
+          <button type="button" className="node-options-btn nodrag" onClick={() => data.onOpenOptions(id)} aria-label="Configure node" data-tooltip="Configure node"><ConfigureActionIcon /></button>
+          {data.canDelete ? <button type="button" className="node-remove-btn" onClick={() => data.onDelete(id)} aria-label="Delete event">×</button> : null}
         </div>
         <div className="node-body">
-          {expanded ? (
-            <div className="node-body-expanded workflow-graph-node__body">
-              <label className="workflow-graph-node__field">
-                <span>Trigger</span>
-                <Select
-                  className="nodrag"
-                  value={data.eventType}
-                  onChange={(next) => data.onChange(id, { eventType: next })}
-                  options={WORKFLOW_EVENT_TYPE_OPTIONS}
-                  ariaLabel="Trigger"
-                  portal
-                />
-              </label>
-              {data.eventType === 'kanban.card.moved' ? (
-                <>
-                  <label className="workflow-graph-node__field">
-                    <span>From column</span>
-                    <Select
-                      className="nodrag"
-                      value={data.fromColumn}
-                      onChange={(next) => data.onChange(id, { fromColumn: next })}
-                      options={WORKFLOW_KANBAN_COLUMNS}
-                      ariaLabel="From column"
-                      portal
-                    />
-                  </label>
-                  <label className="workflow-graph-node__field">
-                    <span>To column</span>
-                    <Select
-                      className="nodrag"
-                      value={data.toColumn}
-                      onChange={(next) => data.onChange(id, { toColumn: next })}
-                      options={WORKFLOW_KANBAN_COLUMNS}
-                      ariaLabel="To column"
-                      portal
-                    />
-                  </label>
-                </>
-              ) : null}
-              {data.eventType === 'document.changed' ? (
-                <>
-                  <label className="workflow-graph-node__field">
-                    <span>Document kind</span>
-                    <Select
-                      className="nodrag"
-                      value={data.keyPrefix}
-                      onChange={(next) => data.onChange(id, { keyPrefix: next })}
-                      options={documentKindOptions}
-                      ariaLabel="Document kind"
-                      portal
-                    />
-                  </label>
-                  <label className="workflow-graph-node__field">
-                    <span>Key</span>
-                    <input
-                      className="nodrag"
-                      type="text"
-                      value={data.key}
-                      onChange={(event) => data.onChange(id, { key: event.target.value })}
-                      placeholder="Any key"
-                    />
-                  </label>
-                  <label className="workflow-graph-node__field">
-                    <span>Action</span>
-                    <Select
-                      className="nodrag"
-                      value={data.action}
-                      onChange={(next) => data.onChange(id, { action: next })}
-                      options={WORKFLOW_DOCUMENT_ACTIONS}
-                      ariaLabel="Action"
-                      portal
-                    />
-                  </label>
-                </>
-              ) : null}
-              <p className="workflow-graph-node__hint">
-                One event node starts the v1 workflow path.
-              </p>
-            </div>
-          ) : (
-            <div className="node-body-compact">
-              <div className="prompt-preview">
-                {data.eventType}
-                {data.eventType === 'kanban.card.moved' && (data.fromColumn || data.toColumn)
-                  ? ` (${data.fromColumn || 'any'} → ${data.toColumn || 'any'})`
-                  : ''}
-                {data.eventType === 'document.changed' && (data.keyPrefix || data.key || data.action)
-                  ? ` (${data.keyPrefix || 'any kind'}${data.key ? `, key=${data.key}` : ''}${data.action ? `, ${data.action}` : ''})`
-                  : ''}
-              </div>
-            </div>
-          )}
+          <WorkflowNodePorts kind="event" inputSchema={null} outputSchema={data.outputSchema} nodeHeight={height} connectedOutputPorts={connectedOutputPorts} onUnpack={data.onUnpack ? (port) => data.onUnpack(id, port) : undefined} />
         </div>
       </div>
+      <WorkflowNodeHandles kind="event" inputSchema={null} outputSchema={data.outputSchema} nodeHeight={height} connectedOutputPorts={connectedOutputPorts} />
     </>
   );
 }
 
-function PromptNode({ id, data, selected }) {
-  const isRunning = data.currentNodeId === id;
-  const isCompleted = Array.isArray(data.completedNodeIds) && data.completedNodeIds.includes(id);
-  const statusClass = isRunning ? 'running' : (isCompleted ? 'completed' : 'idle');
-  const statusLabel = isRunning ? 'Running' : (isCompleted ? 'Done' : 'Prompt');
-  const expanded = data.expanded;
+function CronNode({ id, data, selected, height }) {
+  const edges = useEdges();
+  const connectedOutputPorts = useMemo(() => edges.filter((e) => e.source === id).map((e) => portFromHandle(e.sourceHandle)), [edges, id]);
+
   return (
     <>
-      <NodeResizer
-        minWidth={240}
-        minHeight={expanded ? 200 : 100}
-        isVisible={selected}
-        onResizeEnd={(_event, params) => data.onResize(id, { width: params.width, height: params.height })}
-      />
-      <div className={`canvas-node workflow-graph-node workflow-graph-node--prompt ${selected ? 'selected' : ''}`}>
-        <Handle type="target" position={Position.Left} className="canvas-handle" />
-        <Handle type="source" position={Position.Right} className="canvas-handle" />
+      <NodeResizer minWidth={280} minHeight={110} isVisible={selected} onResizeEnd={(_event, params) => data.onResize(id, { width: params.width, height: params.height })} />
+      <div className={`canvas-node workflow-graph-node workflow-graph-node--cron ${selected ? 'selected' : ''}`}>
         <div className="node-title-bar drag-handle">
-          <span className="node-type-icon prompt">P</span>
-          <input
-            className="node-title-input"
-            value={data.title}
-            onChange={(event) => data.onChange(id, { title: event.target.value })}
-            placeholder="Prompt title"
-          />
-          <span className={`node-status-badge ${statusClass}`}>{statusLabel}</span>
-          <button
-            type="button"
-            className="node-expand-btn nodrag"
-            onClick={() => data.onToggleExpanded(id)}
-            title={expanded ? 'Show data' : 'Show settings'}
-            aria-label={expanded ? 'Show data' : 'Show settings'}
-          >
-            {expanded ? '▲' : '▼'}
-          </button>
-          {data.canDelete ? (
-            <button
-              type="button"
-              className="node-remove-btn"
-              aria-label="Delete prompt node"
-              onClick={() => data.onDelete(id)}
-            >
-              ×
-            </button>
-          ) : null}
+          <span className="node-type-icon cron">C</span>
+          <WorkflowNodeTitle expanded={false} title={data.title} placeholder="Cron title" onChange={(event) => data.onChange(id, { title: event.target.value })} />
+          <button type="button" className="node-options-btn nodrag" onClick={() => data.onOpenOptions(id)} aria-label="Configure node" data-tooltip="Configure node"><ConfigureActionIcon /></button>
+          {data.canDelete ? <button type="button" className="node-remove-btn" onClick={() => data.onDelete(id)} aria-label="Delete cron">×</button> : null}
         </div>
         <div className="node-body">
-          {expanded ? (
-            <div className="node-body-expanded workflow-graph-node__body">
-              <label className="workflow-graph-node__field">
-                <span>Agent</span>
-                <input
-                  value={data.agentName}
-                  onChange={(event) => data.onChange(id, { agentName: event.target.value })}
-                  placeholder="progenitor"
-                />
-              </label>
-              <label className="workflow-graph-node__field">
-                <span>Role</span>
-                <input
-                  value={data.role}
-                  onChange={(event) => data.onChange(id, { role: event.target.value })}
-                  placeholder="Optional role"
-                />
-              </label>
-              <label className="workflow-graph-node__field">
-                <span>Prompt</span>
-                <textarea
-                  value={data.prompt}
-                  onChange={(event) => data.onChange(id, { prompt: event.target.value })}
-                  placeholder="Handle this workflow event."
-                />
-              </label>
-            </div>
-          ) : (
-            <div className="node-body-compact">
-              {data.agentName ? <span className="node-meta-chip prompt-agent">{data.agentName}</span> : null}
-              <div className="prompt-preview">{data.prompt || 'Empty prompt'}</div>
-            </div>
-          )}
+          <div className="workflow-graph-node__field">
+            <span>{data.expression || '*/5 * * * *'}</span>
+          </div>
+          <WorkflowNodePorts kind="cron" inputSchema={null} outputSchema={data.outputSchema} nodeHeight={height} connectedOutputPorts={connectedOutputPorts} onUnpack={data.onUnpack ? (port) => data.onUnpack(id, port) : undefined} />
         </div>
       </div>
+      <WorkflowNodeHandles kind="cron" inputSchema={null} outputSchema={data.outputSchema} nodeHeight={height} connectedOutputPorts={connectedOutputPorts} />
     </>
   );
 }
 
-function UserNode({ id, data, selected }) {
-  const isRunning = data.currentNodeId === id;
-  const isCompleted = Array.isArray(data.completedNodeIds) && data.completedNodeIds.includes(id);
-  const statusClass = isRunning ? 'running' : (isCompleted ? 'completed' : 'idle');
-  const statusLabel = isRunning ? 'Running' : (isCompleted ? 'Done' : 'User');
-  const expanded = data.expanded;
+function WorkflowDataNode({ id, data, selected, height }) {
+  const edges = useEdges();
+  const connectedOutputPorts = useMemo(() => edges.filter((e) => e.source === id).map((e) => portFromHandle(e.sourceHandle)), [edges, id]);
+
   return (
     <>
-      <NodeResizer
-        minWidth={240}
-        minHeight={expanded ? 200 : 100}
-        isVisible={selected}
-        onResizeEnd={(_event, params) => data.onResize(id, { width: params.width, height: params.height })}
-      />
-      <div className={`canvas-node workflow-graph-node workflow-graph-node--user ${selected ? 'selected' : ''}`}>
-        <Handle type="target" position={Position.Left} className="canvas-handle" />
-        <Handle type="source" position={Position.Right} className="canvas-handle" />
+      <NodeResizer minWidth={240} minHeight={110} isVisible={selected} onResizeEnd={(_event, params) => data.onResize(id, { width: params.width, height: params.height })} />
+      <div className={`canvas-node workflow-graph-node workflow-graph-node--data ${selected ? 'selected' : ''}`}>
         <div className="node-title-bar drag-handle">
-          <span className="node-type-icon user">U</span>
-          <input
-            className="node-title-input"
-            value={data.title}
-            onChange={(event) => data.onChange(id, { title: event.target.value })}
-            placeholder="User title"
-          />
-          <span className={`node-status-badge ${statusClass}`}>{statusLabel}</span>
-          <button
-            type="button"
-            className="node-expand-btn nodrag"
-            onClick={() => data.onToggleExpanded(id)}
-            title={expanded ? 'Show data' : 'Show settings'}
-            aria-label={expanded ? 'Show data' : 'Show settings'}
-          >
-            {expanded ? '▲' : '▼'}
-          </button>
-          {data.canDelete ? (
-            <button
-              type="button"
-              className="node-remove-btn"
-              aria-label="Delete user node"
-              onClick={() => data.onDelete(id)}
-            >
-              ×
-            </button>
-          ) : null}
+          <span className="node-type-icon data">D</span>
+          <WorkflowNodeTitle expanded={false} title={data.title} placeholder="Data title" onChange={(event) => data.onChange(id, { title: event.target.value })} />
+          <button type="button" className="node-options-btn nodrag" onClick={() => data.onOpenOptions(id)} aria-label="Configure node" data-tooltip="Configure node"><ConfigureActionIcon /></button>
+          <button type="button" className="node-remove-btn" onClick={() => data.onDelete(id)} aria-label="Delete data node">×</button>
         </div>
         <div className="node-body">
-          {expanded ? (
-            <div className="node-body-expanded workflow-graph-node__body">
-              <label className="workflow-graph-node__field">
-                <span>Delivery</span>
-                <Select
-                  className="nodrag"
-                  value={data.messageType}
-                  onChange={(next) => data.onChange(id, { messageType: next })}
-                  options={USER_MESSAGE_TYPES}
-                  ariaLabel="Delivery"
-                  portal
-                />
-              </label>
-              {data.messageType === 'notify_user' ? (
-                <>
-                  <label className="workflow-graph-node__field">
-                    <span>Notification title</span>
-                    <input
-                      value={data.notificationTitle}
-                      onChange={(event) => data.onChange(id, { notificationTitle: event.target.value })}
-                      placeholder="Notification title"
-                    />
-                  </label>
-                  <label className="workflow-graph-node__field">
-                    <span>Level</span>
-                    <Select
-                      className="nodrag"
-                      value={data.level}
-                      onChange={(next) => data.onChange(id, { level: next })}
-                      options={USER_NOTIFICATION_LEVEL_OPTIONS}
-                      ariaLabel="Level"
-                      portal
-                    />
-                  </label>
-                </>
-              ) : null}
-              <label className="workflow-graph-node__field">
-                <span>Message</span>
-                <textarea
-                  value={data.message}
-                  onChange={(event) => data.onChange(id, { message: event.target.value })}
-                  placeholder="Message to send to the user"
-                />
-              </label>
-            </div>
-          ) : (
-            <div className="node-body-compact">
-              <span className="node-meta-chip prompt-agent">{data.messageType}</span>
-              <div className="prompt-preview">{data.message || 'Empty message'}</div>
-            </div>
-          )}
+          <WorkflowNodePorts kind="data" inputSchema={null} outputSchema={data.outputSchema} nodeHeight={height} connectedOutputPorts={connectedOutputPorts} onUnpack={data.onUnpack ? (port) => data.onUnpack(id, port) : undefined} />
         </div>
       </div>
+      <WorkflowNodeHandles kind="data" inputSchema={null} outputSchema={data.outputSchema} nodeHeight={height} connectedOutputPorts={connectedOutputPorts} />
     </>
   );
 }
 
-function CodeNode({ id, data, selected }) {
-  const isRunning = data.currentNodeId === id;
-  const isCompleted = Array.isArray(data.completedNodeIds) && data.completedNodeIds.includes(id);
-  const statusClass = isRunning ? 'running' : (isCompleted ? 'completed' : 'idle');
-  const statusLabel = isRunning ? 'Running' : (isCompleted ? 'Done' : 'Code');
-  const expanded = data.expanded;
-  return (
-    <>
-      <NodeResizer
-        minWidth={260}
-        minHeight={expanded ? 220 : 110}
-        isVisible={selected}
-        onResizeEnd={(_event, params) => data.onResize(id, { width: params.width, height: params.height })}
-      />
-      <div className={`canvas-node workflow-graph-node workflow-graph-node--code ${selected ? 'selected' : ''}`}>
-        <Handle type="target" position={Position.Left} className="canvas-handle" />
-        <Handle type="source" position={Position.Right} className="canvas-handle" />
-        <div className="node-title-bar drag-handle">
-          <span className="node-type-icon code">{'<>'}</span>
-          <input
-            className="node-title-input"
-            value={data.title}
-            onChange={(event) => data.onChange(id, { title: event.target.value })}
-            placeholder="Code title"
-          />
-          <span className="code-language-badge">{data.language}</span>
-          <span className={`node-status-badge ${statusClass}`}>{statusLabel}</span>
-          <button
-            type="button"
-            className="node-expand-btn nodrag"
-            onClick={() => data.onToggleExpanded(id)}
-            title={expanded ? 'Show data' : 'Show settings'}
-            aria-label={expanded ? 'Show data' : 'Show settings'}
-          >
-            {expanded ? '▲' : '▼'}
-          </button>
-          {data.canDelete ? (
-            <button
-              type="button"
-              className="node-remove-btn"
-              aria-label="Delete code node"
-              onClick={() => data.onDelete(id)}
-            >
-              ×
-            </button>
-          ) : null}
-        </div>
-        <div className="node-body">
-          {expanded ? (
-            <div className="node-body-expanded workflow-graph-node__body">
-              <label className="workflow-graph-node__field">
-                <span>Language</span>
-                <Select
-                  className="nodrag"
-                  value={data.language}
-                  onChange={(next) => data.onChange(id, { language: next })}
-                  options={CODE_LANGUAGE_OPTIONS}
-                  ariaLabel="Language"
-                  portal
-                />
-              </label>
-              <label className="workflow-graph-node__field">
-                <span>Code</span>
-                <textarea
-                  className="code-editor nodrag nowheel"
-                  value={data.content}
-                  onChange={(event) => data.onChange(id, { content: event.target.value })}
-                  placeholder="// Write code for the agent to run"
-                  spellCheck={false}
-                />
-              </label>
-            </div>
-          ) : (
-            <div className="node-body-compact">
-              <pre className="code-preview">{data.content || '// empty'}</pre>
-            </div>
-          )}
-        </div>
-      </div>
-    </>
-  );
-}
+function WorkflowControlNode({ id, data, selected, height }) {
+  const label = data.kind === 'condition' ? 'Condition' : 'Approval';
+  const edges = useEdges();
+  const connectedInputPorts = useMemo(() => edges.filter((e) => e.target === id).map((e) => portFromHandle(e.targetHandle)), [edges, id]);
+  const connectedOutputPorts = useMemo(() => edges.filter((e) => e.source === id).map((e) => portFromHandle(e.sourceHandle)), [edges, id]);
 
-function WorkflowControlNode({ id, data, selected }) {
-  const labels = {
-    condition: 'Condition',
-    approval: 'Approval',
-    inbox: 'Send to Inbox',
-    agent: data.transport === 'acp' ? 'Call ACP Agent' : 'Call A2A Agent',
-  };
-  const label = labels[data.kind] || data.kind;
-  const field = data.kind === 'condition' ? 'expression'
-    : data.kind === 'approval' ? 'message'
-      : data.kind === 'inbox' ? 'message'
-        : 'request';
-  const value = data[field] || '';
   return (
     <>
       <NodeResizer minWidth={260} minHeight={110} isVisible={selected} onResizeEnd={(_event, params) => data.onResize(id, { width: params.width, height: params.height })} />
       <div className={`canvas-node workflow-graph-node workflow-graph-node--${data.kind} ${selected ? 'selected' : ''}`}>
-        <Handle type="target" position={Position.Left} className="canvas-handle" />
         <div className="node-title-bar drag-handle">
-          <span className={`node-type-icon ${data.kind}`}>{data.kind === 'agent' ? 'A' : data.kind[0].toUpperCase()}</span>
-          <input className="node-title-input" value={data.title} onChange={(event) => data.onChange(id, { title: event.target.value })} />
-          <button type="button" className="node-delete-btn" onClick={() => data.onDelete(id)} aria-label={`Delete ${label}`}>×</button>
+          <span className={`node-type-icon ${data.kind}`}>{data.kind[0].toUpperCase()}</span>
+          <WorkflowNodeTitle expanded={false} title={data.title} placeholder={`${label} title`} onChange={(event) => data.onChange(id, { title: event.target.value })} />
+          <button type="button" className="node-options-btn nodrag" onClick={() => data.onOpenOptions(id)} aria-label="Configure node" data-tooltip="Configure node"><ConfigureActionIcon /></button>
+          <button type="button" className="node-remove-btn" onClick={() => data.onDelete(id)} aria-label={`Delete ${label}`}>×</button>
         </div>
         <div className="node-body">
-          {data.kind === 'inbox' && <input className="node-field-input" value={data.messageTitle} onChange={(event) => data.onChange(id, { messageTitle: event.target.value })} placeholder="Inbox title" />}
-          {data.kind === 'agent' && (
-            <Select
-              className="nodrag node-field-input"
-              value={data.transport}
-              onChange={(next) => data.onChange(id, { transport: next })}
-              options={AGENT_NODE_TRANSPORT_OPTIONS}
-              ariaLabel="Transport"
-              portal
-            />
-          )}
-          {data.kind === 'agent' && <input className="node-field-input" value={data.agentName} onChange={(event) => data.onChange(id, { agentName: event.target.value })} placeholder="Agent name" />}
-          <textarea className="node-field-textarea" value={value} onChange={(event) => data.onChange(id, { [field]: event.target.value })} placeholder={label} rows={3} />
+          <WorkflowNodePorts kind={data.kind} inputSchema={data.inputSchema} outputSchema={data.outputSchema} nodeHeight={height} connectedInputPorts={connectedInputPorts} connectedOutputPorts={connectedOutputPorts} />
         </div>
-        {data.kind === 'condition' ? (
-          <>
-            <Handle type="source" position={Position.Right} id="true" style={{ top: '35%' }} className="canvas-handle" />
-            <Handle type="source" position={Position.Right} id="false" style={{ top: '65%' }} className="canvas-handle" />
-          </>
-        ) : data.kind === 'approval' ? (
-          <>
-            <Handle type="source" position={Position.Right} id="approved" style={{ top: '35%' }} className="canvas-handle" />
-            <Handle type="source" position={Position.Right} id="rejected" style={{ top: '65%' }} className="canvas-handle" />
-          </>
-        ) : <Handle type="source" position={Position.Right} className="canvas-handle" />}
       </div>
+      <WorkflowNodeHandles kind={data.kind} inputSchema={data.inputSchema} outputSchema={data.outputSchema} nodeHeight={height} connectedInputPorts={connectedInputPorts} connectedOutputPorts={connectedOutputPorts} />
+    </>
+  );
+}
+
+function UnpackNode({ id, data, selected, height }) {
+  const edges = useEdges();
+  const connectedInputPorts = useMemo(() => edges.filter((e) => e.target === id).map((e) => portFromHandle(e.targetHandle)), [edges, id]);
+  const connectedOutputPorts = useMemo(() => edges.filter((e) => e.source === id).map((e) => portFromHandle(e.sourceHandle)), [edges, id]);
+
+  return (
+    <>
+      <NodeResizer minWidth={260} minHeight={110} isVisible={selected} onResizeEnd={(_event, params) => data.onResize(id, { width: params.width, height: params.height })} />
+      <div className={`canvas-node workflow-graph-node workflow-graph-node--data ${selected ? 'selected' : ''}`}>
+        <div className="node-title-bar drag-handle">
+          <span className="node-type-icon unpack">U</span>
+          <WorkflowNodeTitle expanded={false} title={data.title} placeholder="Unpack" onChange={(event) => data.onChange(id, { title: event.target.value })} />
+          <button type="button" className="node-options-btn nodrag" onClick={() => data.onOpenOptions(id)} aria-label="Configure node" data-tooltip="Configure node"><ConfigureActionIcon /></button>
+          <button type="button" className="node-remove-btn" onClick={() => data.onDelete(id)} aria-label="Delete unpack node">×</button>
+        </div>
+        <div className="node-body">
+          <WorkflowNodePorts
+            kind={data.kind}
+            inputSchema={data.inputSchema}
+            outputSchema={data.outputSchema}
+            nodeHeight={height}
+            connectedInputPorts={connectedInputPorts}
+            connectedOutputPorts={connectedOutputPorts}
+            showAllFields={Boolean(data.showAllFields)}
+            onToggleShowAllFields={() => data.onChange(id, { showAllFields: !data.showAllFields })}
+          />
+        </div>
+      </div>
+      <WorkflowNodeHandles kind={data.kind} inputSchema={data.inputSchema} outputSchema={data.outputSchema} nodeHeight={height} connectedInputPorts={connectedInputPorts} connectedOutputPorts={connectedOutputPorts} showAllFields={Boolean(data.showAllFields)} />
     </>
   );
 }
 
 const NODE_TYPES = {
-  event: EventNode,
-  prompt: PromptNode,
-  user: UserNode,
-  code: CodeNode,
+  event: DocumentEventNode,
+  cron: CronNode,
+  agent: PromptNode,
+  extract: PromptNode,
+  format: PromptNode,
+  data: WorkflowDataNode,
   condition: WorkflowControlNode,
   approval: WorkflowControlNode,
-  inbox: WorkflowControlNode,
-  agent: WorkflowControlNode,
+  document_read: PromptNode,
+  document_query: PromptNode,
+  document_write: PromptNode,
+  document_create: PromptNode,
+  document_delete: PromptNode,
+  unpack: UnpackNode,
 };
 
 // Chevrons for the right tools dock / collapse seam (point toward the action:
@@ -1021,6 +2034,16 @@ function ChevronLeftSmall() {
   );
 }
 
+function CanvasToolIcon({ tool }) {
+  if (tool === 'grab') {
+    return <svg viewBox="0 0 16 16" width="17" height="17" aria-hidden="true"><path d="M4.5 8V4.2a1 1 0 0 1 2 0V7m0-3.6a1 1 0 0 1 2 0V7m0-2.8a1 1 0 0 1 2 0V7m0-1.7a1 1 0 0 1 2 0v3.2a4.5 4.5 0 0 1-9 0V8a1 1 0 0 1 2 0Z" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.2" /></svg>;
+  }
+  if (tool === 'cut') {
+    return <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><circle cx="4" cy="12" r="1.7" fill="none" stroke="currentColor" strokeWidth="1.3" /><circle cx="12" cy="12" r="1.7" fill="none" stroke="currentColor" strokeWidth="1.3" /><path d="m5.3 10.7 5.4-7.4M10.7 10.7 5.3 3.3" fill="none" stroke="currentColor" strokeLinecap="round" strokeWidth="1.3" /></svg>;
+  }
+  return <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><path d="m3 2 9.5 5.6-5 1.3L6.2 14Z" fill="none" stroke="currentColor" strokeLinejoin="round" strokeWidth="1.3" /></svg>;
+}
+
 function ChevronRightSmall() {
   return (
     <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
@@ -1029,42 +2052,130 @@ function ChevronRightSmall() {
   );
 }
 
-const DOCK_ITEM_META = {
-  prompt: { icon: 'P', label: 'Prompt', title: 'Add a prompt step' },
-  user: { icon: 'U', label: 'User', title: 'Add a user message step' },
-  code: { icon: '<>', label: 'Code', title: 'Add a code step' },
-  condition: { icon: '◇', label: 'Condition', title: 'Add a condition branch' },
-  approval: { icon: '✓', label: 'Approval', title: 'Add an approval gate' },
-  inbox: { icon: '↓', label: 'Inbox', title: 'Send a message to Inbox' },
-  agent: { icon: 'A', label: 'Agent', title: 'Call an A2A or ACP agent' },
-};
 
 // Bottom-center floating dock for adding nodes to the canvas — ported directly
 // from the Agents/Routines canvas's GraphDock: drag onto the canvas or click
 // to add at the next slot. The event node is the fixed start and isn't
 // dock-addable.
-function WorkflowDock({ onAdd }) {
-  const onDragStart = (kind) => (event) => {
-    event.dataTransfer.setData('application/workflow-node', kind);
-    event.dataTransfer.effectAllowed = 'move';
+
+
+function WorkflowDock({ menuAnchor, onOpenMenu, onCloseMenu, onAdd, tool, onToolChange }) {
+  const [filter, setFilter] = useState('');
+  const filterRef = useRef(null);
+  const dockRef = useRef(null);
+  const addButtonRef = useRef(null);
+  const menuRef = useRef(null);
+  const menuOpen = Boolean(menuAnchor);
+  const normalizedFilter = filter.trim().toLowerCase();
+  const categories = NODE_MENU_CATEGORIES
+    .map((category) => ({
+      ...category,
+      items: category.items.filter((item) => !normalizedFilter || item.label.toLowerCase().includes(normalizedFilter)),
+    }))
+    .filter((category) => category.items.length);
+
+  useEffect(() => {
+    if (menuOpen) {
+      filterRef.current?.focus();
+    }
+  }, [menuOpen]);
+
+  useEffect(() => {
+    if (!menuOpen) return undefined;
+    const closeFromOutside = (event) => {
+      if (!dockRef.current?.contains(event.target)) {
+        setFilter('');
+        onCloseMenu();
+      }
+    };
+    const closeFromEscape = (event) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        setFilter('');
+        onCloseMenu();
+        addButtonRef.current?.focus();
+      }
+    };
+    document.addEventListener('pointerdown', closeFromOutside);
+    document.addEventListener('keydown', closeFromEscape);
+    return () => {
+      document.removeEventListener('pointerdown', closeFromOutside);
+      document.removeEventListener('keydown', closeFromEscape);
+    };
+  }, [menuOpen, onCloseMenu]);
+
+  const handleAdd = (kind) => {
+    onAdd(kind, menuAnchor?.flowPosition);
+    setFilter('');
+    onCloseMenu();
   };
+
+  const screenPosition = menuAnchor?.screenPosition;
+  useLayoutEffect(() => {
+    const menu = menuRef.current;
+    if (!menu) return;
+    if (!screenPosition) {
+      menu.style.left = '';
+      menu.style.top = '';
+      return;
+    }
+    const dockRect = dockRef.current?.getBoundingClientRect();
+    const left = Math.max(16, Math.min(screenPosition.x, window.innerWidth - 346));
+    const top = Math.max(16, Math.min(screenPosition.y, window.innerHeight - 510));
+    menu.style.left = `${left - (dockRect?.left || 0)}px`;
+    menu.style.top = `${top - (dockRect?.top || 0)}px`;
+  }, [menuOpen, screenPosition]);
+
   return (
-    <div className="canvas-dock">
-      <div className="canvas-dock-shell">
-        {DOCK_NODE_KINDS.map((kind) => (
-          <button
-            key={kind}
-            type="button"
-            className="canvas-dock-item"
-            draggable
-            onDragStart={onDragStart(kind)}
-            onClick={() => onAdd(kind)}
-            title={DOCK_ITEM_META[kind].title}
-          >
-            <span className={`canvas-dock-icon ${kind}`}>{DOCK_ITEM_META[kind].icon}</span>
-            <span className="canvas-dock-tooltip">{DOCK_ITEM_META[kind].label}</span>
-          </button>
-        ))}
+    <div ref={dockRef} className="canvas-dock workflow-canvas-dock">
+      {menuOpen ? (
+        <div ref={menuRef} className={`workflow-node-menu${screenPosition ? ' workflow-node-menu--cursor' : ''}`} role="menu" aria-label="Add workflow node">
+          <label className="workflow-node-menu__filter">
+            <span className="sr-only">Filter nodes</span>
+            <input ref={filterRef} type="search" value={filter} onChange={(event) => setFilter(event.target.value)} placeholder="Filter nodes…" />
+          </label>
+          <div className="workflow-node-menu__categories">
+            {categories.map((category) => (
+              <section key={category.id} className="workflow-node-menu__category" aria-labelledby={`node-menu-${category.id}`}>
+                <h3 id={`node-menu-${category.id}`}>{category.label}</h3>
+                {category.items.map((item) => (
+                  <button
+                    key={item.id}
+                    type="button"
+                    className="workflow-node-menu__item"
+                    role="menuitem"
+                    disabled={item.disabled}
+                    title={item.detail}
+                    onClick={() => handleAdd(item.kind)}
+                  >
+                    <span className={`canvas-dock-icon ${item.kind || 'event'}`}>{item.icon}</span>
+                    <span>{item.label}</span>
+                    {item.detail ? <small>{item.detail}</small> : null}
+                  </button>
+                ))}
+              </section>
+            ))}
+            {!categories.length ? <p className="workflow-node-menu__empty">No matching nodes.</p> : null}
+          </div>
+        </div>
+      ) : null}
+      <div className="canvas-dock-shell" aria-label="Canvas toolbar">
+        <button type="button" className={`canvas-toolbar-button canvas-toolbar-button--tool ${tool === 'pointer' ? 'is-active' : ''}`} onClick={() => onToolChange('pointer')} aria-pressed={tool === 'pointer'} title="Pointer: select, move, and connect">
+          <CanvasToolIcon tool="pointer" />
+          <span className="canvas-dock-tooltip">Pointer</span>
+        </button>
+        <button type="button" className={`canvas-toolbar-button canvas-toolbar-button--tool ${tool === 'grab' ? 'is-active' : ''}`} onClick={() => onToolChange('grab')} aria-pressed={tool === 'grab'} title="Grab: pan with the primary button">
+          <CanvasToolIcon tool="grab" />
+          <span className="canvas-dock-tooltip">Grab</span>
+        </button>
+        <button type="button" className={`canvas-toolbar-button canvas-toolbar-button--tool ${tool === 'cut' ? 'is-active' : ''}`} onClick={() => onToolChange('cut')} aria-pressed={tool === 'cut'} title="Cut: click a connection to remove it">
+          <CanvasToolIcon tool="cut" />
+          <span className="canvas-dock-tooltip">Cut connection</span>
+        </button>
+        <button ref={addButtonRef} type="button" className={`canvas-toolbar-button canvas-toolbar-button--add ${menuOpen && !menuAnchor?.screenPosition ? 'is-active' : ''}`} onClick={() => onOpenMenu({})} aria-expanded={menuOpen} aria-haspopup="menu" title="Add workflow node">
+          <span aria-hidden="true">+</span>
+          <span className="canvas-dock-tooltip">Add node</span>
+        </button>
       </div>
     </div>
   );
@@ -1079,6 +2190,19 @@ const WORKFLOW_SIDE_ITEMS = [
   { id: 'json', label: 'JSON', title: 'Edit as JSON' },
   { id: 'runs', label: 'Runs', title: 'Run history' },
 ];
+
+const DOCK_ITEM_META = {
+  prompt: { icon: 'P', label: 'Prompt' },
+  'call-agent': { icon: 'A', label: 'Agent' },
+  'knowledge-search': { icon: 'K', label: 'Knowledge' },
+  'kanban-task': { icon: 'T', label: 'Kanban' },
+  extract: { icon: 'X', label: 'Extract' },
+  'ask-user': { icon: 'U', label: 'Ask' },
+  'inbox-message': { icon: 'I', label: 'Inbox' },
+  routine: { icon: 'R', label: 'Routine' },
+  condition: { icon: '◇', label: 'Condition' },
+  approval: { icon: '✓', label: 'Approval' },
+};
 
 function WorkflowSideDock({ onSelect }) {
   return (
@@ -1100,26 +2224,25 @@ function WorkflowSideDock({ onSelect }) {
   );
 }
 
-function WorkflowRow({ item, latestRun, selectedPath, onSelect }) {
-  const path = workflowPath(item.id);
+function WorkflowRow({ item, latestRun, selectedWorkflowId, onSelect }) {
   const dotTone = workflowDotTone(item, latestRun);
   return (
     <button
       type="button"
-      className={`pane-card-row ${selectedPath === path ? 'active' : ''}`}
-      onClick={() => onSelect(path)}
+      className={`pane-card-row ${selectedWorkflowId === item.id ? 'active' : ''}`}
+      onClick={() => onSelect(item.id)}
       title={item.description || item.title}
     >
-      <span
-        className={`pane-card-row__dot${dotTone ? ` pane-card-row__dot--${dotTone}` : ''}`}
-        aria-hidden="true"
-      />
+      <span className={`pane-card-row__dot${dotTone ? ` pane-card-row__dot--${dotTone}` : ''}`} aria-hidden="true" />
       <div className="pane-card-row__body">
         <div className="pane-card-row__top">
           <span className="pane-card-row__title">{item.title}</span>
           <span className="pane-card-row__age">{formatRelativeTime(latestRun?.updated_at)}</span>
         </div>
         <div className="pane-card-row__preview">{item.description || 'No description yet.'}</div>
+        {(item.triggers || []).length > 0 ? (
+          <div className="pane-card-row__meta">{item.triggers.join(' · ')}</div>
+        ) : null}
       </div>
     </button>
   );
@@ -1175,15 +2298,19 @@ function WorkflowsInner() {
   const { show } = useNotifications();
   const workflowsUrl = getApiUrl('workflows');
   const workflowRunsUrl = getApiUrl('workflowRuns');
-  const documentKindsUrl = getApiUrl('documentKinds');
+  const documentTypesUrl = getApiUrl('documentTypes');
+  const promptsUrl = getApiUrl('prompts');
   const realtime = useSelector(selectRealtime);
   const workflows = useSelector(selectWorkflows);
   const workflowsState = useSelector(selectWorkflowsState);
   const workflowRuns = useSelector(selectWorkflowRuns);
+  const documentTypes = useSelector(selectDocumentTypes);
   const { collapsed, setCollapsed, paneClassName } = usePaneCollapse('workflows-sidebar sess-list');
   const reactFlow = useReactFlow();
-  const [searchParams, setSearchParams] = useSearchParams();
-  const [selectedPath, setSelectedPath] = useState('');
+  const navigate = useNavigate();
+  const { workflowId: routeWorkflowId } = useParams();
+  const [selectedWorkflowId, setSelectedWorkflowId] = useState('');
+  const selectedPath = useMemo(() => workflowPath(selectedWorkflowId), [selectedWorkflowId]);
   const [filter, setFilter] = useState('all');
   const [query, setQuery] = useState('');
   const [sortMode, setSortMode] = useState('Recent');
@@ -1197,18 +2324,28 @@ function WorkflowsInner() {
   const [busyAction, setBusyAction] = useState('');
   const [localDraftDirty, setLocalDraftDirty] = useState(false);
   const [deleteConfirmationOpen, setDeleteConfirmationOpen] = useState(false);
-  const requestedPath = withJsonExtension(searchParams.get('path') || '');
   const selectedDetail = useSelector((state) => selectWorkflowDetailByPath(state, selectedPath));
+  const [nodeMenuAnchor, setNodeMenuAnchor] = useState(null);
+  const [nodeOptionsId, setNodeOptionsId] = useState(null);
+  const [canvasTool, setCanvasTool] = useState('pointer');
+  const canvasInteraction = canvasToolSettings(canvasTool);
+  const rightPointerRef = useRef(null);
+  const [rightPanning, setRightPanning] = useState(false);
+  const connectingRef = useRef(null);
+  const didConnectRef = useRef(false);
   const selectedLatestRun = useSelector((state) => {
-    const workflowId = selectedDetail?.workflow?.id || selectedPath.replace(/^.*\/|\.json$/g, '');
+    const workflowId = selectedDetail?.workflow?.id || selectedWorkflowId;
     return selectWorkflowLatestRunById(state, workflowId);
   });
   const nodesRef = useRef([]);
   const edgesRef = useRef([]);
+  const createUnpackNodeRef = useRef(() => {});
   const viewportRef = useRef(DEFAULT_VIEWPORT);
   const syncedPathRef = useRef('');
   const syncedHashRef = useRef('');
   const hydratingGraphRef = useRef(false);
+
+  useEntityUrlSync('/workflows', selectedWorkflowId, selectedDetail?.workflow?.title);
 
   const loadWorkflows = useCallback(async () => {
     try {
@@ -1222,17 +2359,26 @@ function WorkflowsInner() {
     try {
       await dispatch(fetchWorkflowRuns({ workflowRunsUrl })).unwrap();
     } catch (error) {
-      show('error', 'Workflow runs load failed', error.message);
+      show('error', 'Workflow runs failed', error.message);
     }
   }, [dispatch, show, workflowRunsUrl]);
 
-  const loadDocumentKinds = useCallback(async () => {
+  const loadDocumentTypes = useCallback(async () => {
     try {
-      await dispatch(fetchDocumentKinds({ documentKindsUrl })).unwrap();
+      await dispatch(fetchDocumentTypes({ documentTypesUrl })).unwrap();
     } catch (error) {
-      show('error', 'Document kinds load failed', error.message);
+      show('error', 'Document types load failed', error.message);
     }
-  }, [dispatch, show, documentKindsUrl]);
+  }, [dispatch, show, documentTypesUrl]);
+
+  // Agent/Extract nodes pick from the prompt catalogue.
+  const loadPrompts = useCallback(async () => {
+    try {
+      await dispatch(fetchPrompts({ promptsUrl })).unwrap();
+    } catch (error) {
+      show('error', 'Prompts load failed', error.message);
+    }
+  }, [dispatch, show, promptsUrl]);
 
   useEffect(() => {
     if (!realtime.connected) {
@@ -1240,34 +2386,24 @@ function WorkflowsInner() {
     }
     void loadWorkflows();
     void loadRuns();
-    void loadDocumentKinds();
-  }, [loadDocumentKinds, loadRuns, loadWorkflows, realtime.connected]);
+    void loadDocumentTypes();
+    void loadPrompts();
+  }, [loadDocumentTypes, loadPrompts, loadRuns, loadWorkflows, realtime.connected]);
 
   useEffect(() => {
     if (!workflows.length) {
-      setSelectedPath('');
+      setSelectedWorkflowId('');
       return;
     }
-    setSelectedPath((current) => {
-      const next = workflows.find((item) => workflowPath(item.id) === requestedPath)?.id
-        ? requestedPath
-        : workflows.find((item) => workflowPath(item.id) === current)?.id
+    setSelectedWorkflowId((current) => {
+      const next = workflows.find((item) => item.id === routeWorkflowId)?.id
+        ? routeWorkflowId
+        : workflows.find((item) => item.id === current)?.id
           ? current
-          : workflowPath(workflows[0].id);
+          : workflows[0].id;
       return next;
     });
-  }, [requestedPath, workflows]);
-
-  useEffect(() => {
-    const currentPath = searchParams.get('path') || '';
-    const nextUrlPath = stripJsonExtension(selectedPath);
-    if (!selectedPath || currentPath === nextUrlPath) {
-      return;
-    }
-    const nextParams = new URLSearchParams(searchParams);
-    nextParams.set('path', nextUrlPath);
-    setSearchParams(nextParams, { replace: true });
-  }, [searchParams, selectedPath, setSearchParams]);
+  }, [routeWorkflowId, workflows]);
 
   useEffect(() => {
     if (!realtime.connected || !selectedPath || selectedDetail) {
@@ -1282,7 +2418,8 @@ function WorkflowsInner() {
     const filtered = workflows.filter((item) => {
       if (filter === 'enabled' && item.enabled === false) return false;
       if (filter === 'paused' && !item.paused) return false;
-      const searchable = `${item.title} ${item.description} ${item.event_type}`.toLowerCase();
+      const triggerText = (item.triggers || []).join(' ');
+      const searchable = `${item.title} ${item.description} ${triggerText}`.toLowerCase();
       return !normalizedQuery || searchable.includes(normalizedQuery);
     });
     return [...filtered].sort((left, right) => {
@@ -1309,6 +2446,105 @@ function WorkflowsInner() {
     [selectedDetail],
   );
   const hasUnsavedChanges = Boolean(localDraftDirty && selectedDetail?.workflow && draftHash && draftHash !== selectedHash);
+  const nodeOptionsNode = graphNodes.find((node) => node.id === nodeOptionsId) || null;
+
+  const syncWorkflowFromGraph = useCallback((nextNodes, nextEdges, nextViewport = viewportRef.current, markDirty = true) => {
+    nodesRef.current = nextNodes;
+    edgesRef.current = nextEdges;
+    viewportRef.current = nextViewport;
+    if (markDirty) {
+      setLocalDraftDirty(true);
+    }
+    setDraftWorkflow((current) => (current ? flowToWorkflow(current, nextNodes, nextEdges, nextViewport) : current));
+  }, []);
+
+  // One callback set for every node, whichever path created it (hydration,
+  // JSON apply, palette, Unpack). Reads graph state through refs, so it is
+  // stable and never captures a stale graph.
+  const nodeCallbacks = useMemo(() => {
+    const commit = (nextNodes, nextEdges) => {
+      if (nextEdges !== edgesRef.current) setGraphEdges(nextEdges);
+      setGraphNodes(nextNodes);
+      syncWorkflowFromGraph(nextNodes, nextEdges, viewportRef.current, !hydratingGraphRef.current);
+    };
+    const resizeNode = (nodeId, sizeFor) => {
+      commit(nodesRef.current.map((node) => {
+        if (node.id !== nodeId) return node;
+        const { size, data } = sizeFor(node);
+        // React Flow's NodeResizer writes width/height as top-level node
+        // fields (taking precedence over style on later renders once a
+        // manual resize has happened), so both must be kept in sync here.
+        return {
+          ...node,
+          width: size.width,
+          height: size.height,
+          style: { ...node.style, width: size.width, height: size.height },
+          data: { ...node.data, ...data },
+        };
+      }), edgesRef.current);
+    };
+    return {
+      onNodeChange: (nodeId, patch) => {
+        const node = nodesRef.current.find((candidate) => candidate.id === nodeId);
+        if (!node) return;
+        const patched = nodesRef.current.map((candidate) => (
+          candidate.id === nodeId ? { ...candidate, data: { ...candidate.data, ...patch } } : candidate
+        ));
+        let nextEdges = edgesRef.current;
+        let nextNodes = patched;
+        const schemaChanged = patch.outputSchema !== undefined
+          && JSON.stringify(node.data?.outputSchema) !== JSON.stringify(patch.outputSchema);
+        if (schemaChanged && !hydratingGraphRef.current) {
+          const pruned = pruneLostUnpackEdges(patched, nextEdges);
+          if (pruned.lostEdges.length > 0) {
+            const edgeList = pruned.lostEdges.map((e) => `${e.source} → ${e.target}`).join(', ');
+            if (!window.confirm(`This change will remove ${pruned.lostEdges.length} connection(s): ${edgeList}. Continue?`)) return;
+          }
+          nextNodes = pruned.nodes;
+          nextEdges = pruned.edges;
+        }
+        commit(sizeUnpackNodes(nextNodes, nextEdges), nextEdges);
+      },
+      onDeleteNode: (nodeId) => {
+        const directEdges = edgesRef.current.filter((edge) => edge.source !== nodeId && edge.target !== nodeId);
+        const remaining = nodesRef.current.filter((node) => node.id !== nodeId);
+        const pruned = pruneLostUnpackEdges(remaining, directEdges);
+        if (pruned.lostEdges.length > 0) {
+          const edgeList = pruned.lostEdges.map((edge) => `${edge.source} → ${edge.target}`).join(', ');
+          if (!window.confirm(`Removing this node will disconnect ${pruned.lostEdges.length} connection(s): ${edgeList}. Continue?`)) return;
+        }
+        commit(sizeUnpackNodes(pruned.nodes, pruned.edges), pruned.edges);
+      },
+      onUnpack: (sourceNodeId, sourcePort) => {
+        const sourceNode = nodesRef.current.find((n) => n.id === sourceNodeId);
+        if (!sourceNode) return;
+        createUnpackNodeRef.current(sourceNodeId, sourcePort, {
+          x: sourceNode.position.x + (sourceNode.width || 320) + 40,
+          y: sourceNode.position.y,
+        });
+      },
+      onOpenOptions: setNodeOptionsId,
+      onToggleExpanded: (nodeId) => resizeNode(nodeId, (node) => {
+        const expanded = !node.data.expanded;
+        return { size: nodeCurrentSize(node, expanded), data: { expanded } };
+      }),
+      onResize: (nodeId, size) => resizeNode(nodeId, (node) => ({
+        size,
+        data: { [node.data.expanded ? 'settingsSize' : 'dataSize']: size },
+      })),
+    };
+  }, [setGraphEdges, setGraphNodes, syncWorkflowFromGraph]);
+
+  // Node data fields expected by the node components, for nodes built here
+  // rather than through workflowToFlow/buildNodeData.
+  const nodeDataCallbacks = useMemo(() => ({
+    onChange: nodeCallbacks.onNodeChange,
+    onDelete: nodeCallbacks.onDeleteNode,
+    onUnpack: nodeCallbacks.onUnpack,
+    onOpenOptions: nodeCallbacks.onOpenOptions,
+    onToggleExpanded: nodeCallbacks.onToggleExpanded,
+    onResize: nodeCallbacks.onResize,
+  }), [nodeCallbacks]);
 
   const syncDraftFromWorkflow = useCallback((workflow, latestRun, path, preserveDirty = false) => {
     if (!workflow) {
@@ -1328,73 +2564,8 @@ function WorkflowsInner() {
     setLocalDraftDirty(false);
     syncedHashRef.current = nextHash;
     const cloned = cloneValue(workflow);
-    const flow = workflowToFlow(cloned, {
-      onNodeChange: (nodeId, patch) => {
-        setGraphNodes((currentNodes) => {
-          const nextNodes = currentNodes.map((node) => (
-            node.id === nodeId ? { ...node, data: { ...node.data, ...patch } } : node
-          ));
-          nodesRef.current = nextNodes;
-          if (!hydratingGraphRef.current) setLocalDraftDirty(true);
-          setDraftWorkflow((current) => flowToWorkflow(current || cloned, nextNodes, edgesRef.current, viewportRef.current));
-          return nextNodes;
-        });
-      },
-      onDeleteNode: (nodeId) => {
-        setGraphNodes((currentNodes) => {
-          const nextNodes = currentNodes.filter((node) => node.id !== nodeId);
-          const nextEdges = edgesRef.current.filter((edge) => edge.source !== nodeId && edge.target !== nodeId);
-          nodesRef.current = nextNodes;
-          edgesRef.current = nextEdges;
-          setGraphEdges(nextEdges);
-          if (!hydratingGraphRef.current) setLocalDraftDirty(true);
-          setDraftWorkflow((current) => flowToWorkflow(current || cloned, nextNodes, nextEdges, viewportRef.current));
-          return nextNodes;
-        });
-      },
-      onToggleExpanded: (nodeId) => {
-        setGraphNodes((currentNodes) => {
-          const nextNodes = currentNodes.map((node) => {
-            if (node.id !== nodeId) return node;
-            const nextExpanded = !node.data.expanded;
-            const nextSize = nextExpanded ? node.data.settingsSize : node.data.dataSize;
-            return {
-              ...node,
-              // React Flow's NodeResizer writes width/height as top-level node
-              // fields (taking precedence over style on later renders once a
-              // manual resize has happened), so both must be kept in sync here.
-              width: nextSize.width,
-              height: nextSize.height,
-              style: { ...node.style, width: nextSize.width, height: nextSize.height },
-              data: { ...node.data, expanded: nextExpanded },
-            };
-          });
-          nodesRef.current = nextNodes;
-          if (!hydratingGraphRef.current) setLocalDraftDirty(true);
-          setDraftWorkflow((current) => flowToWorkflow(current || cloned, nextNodes, edgesRef.current, viewportRef.current));
-          return nextNodes;
-        });
-      },
-      onResize: (nodeId, size) => {
-        setGraphNodes((currentNodes) => {
-          const nextNodes = currentNodes.map((node) => {
-            if (node.id !== nodeId) return node;
-            const sizeKey = node.data.expanded ? 'settingsSize' : 'dataSize';
-            return {
-              ...node,
-              width: size.width,
-              height: size.height,
-              style: { ...node.style, width: size.width, height: size.height },
-              data: { ...node.data, [sizeKey]: size },
-            };
-          });
-          nodesRef.current = nextNodes;
-          if (!hydratingGraphRef.current) setLocalDraftDirty(true);
-          setDraftWorkflow((current) => flowToWorkflow(current || cloned, nextNodes, edgesRef.current, viewportRef.current));
-          return nextNodes;
-        });
-      },
-    }, latestRun);
+    const flow = workflowToFlow(cloned, nodeCallbacks, latestRun);
+    flow.nodes = sizeUnpackNodes(flow.nodes, flow.edges);
     nodesRef.current = flow.nodes;
     edgesRef.current = flow.edges;
     viewportRef.current = flow.viewport;
@@ -1413,7 +2584,7 @@ function WorkflowsInner() {
         hydratingGraphRef.current = false;
       }, 250);
     });
-  }, [hasUnsavedChanges, reactFlow]);
+  }, [hasUnsavedChanges, nodeCallbacks, reactFlow]);
 
   useEffect(() => {
     if (!selectedDetail?.workflow || !selectedPath) {
@@ -1456,75 +2627,133 @@ function WorkflowsInner() {
     });
   }, []);
 
-  const syncWorkflowFromGraph = useCallback((nextNodes, nextEdges, nextViewport = viewportRef.current, markDirty = true) => {
-    nodesRef.current = nextNodes;
-    edgesRef.current = nextEdges;
-    viewportRef.current = nextViewport;
-    if (markDirty) {
-      setLocalDraftDirty(true);
-    }
-    setDraftWorkflow((current) => (current ? flowToWorkflow(current, nextNodes, nextEdges, nextViewport) : current));
-  }, []);
-
+  // Graph handlers compute from the refs synchronously and only then set
+  // state. Side effects inside a state updater run later, against the state
+  // of that moment: a queued selection change would re-sync a graph that a
+  // removal had already left (Cut put the edge back into the draft).
   const onNodesChange = useCallback((changes) => {
-    setGraphNodes((currentNodes) => {
-      const nextNodes = applyNodeChanges(changes, currentNodes);
-      if (!hydratingGraphRef.current) {
-        const marksDirty = changes.some((change) => (
-          change.type === 'add' || change.type === 'remove' || change.dragging === true
-        ));
-        syncWorkflowFromGraph(nextNodes, edgesRef.current, viewportRef.current, marksDirty);
-      }
-      return nextNodes;
-    });
+    const nextNodes = applyNodeChanges(changes, nodesRef.current);
+    nodesRef.current = nextNodes;
+    setGraphNodes(nextNodes);
+    if (hydratingGraphRef.current) return;
+    const marksDirty = changes.some((change) => (
+      change.type === 'add' || change.type === 'remove' || change.dragging === true
+    ));
+    syncWorkflowFromGraph(nextNodes, edgesRef.current, viewportRef.current, marksDirty);
   }, [syncWorkflowFromGraph]);
+
+  const portFromHandle = useCallback((handleId) => (
+    handleId?.startsWith('out:') || handleId?.startsWith('in:')
+      ? handleId.slice(handleId.indexOf(':') + 1)
+      : ''
+  ), []);
 
   const onEdgesChange = useCallback((changes) => {
-    setGraphEdges((currentEdges) => {
-      const nextEdges = applyEdgeChanges(changes, currentEdges);
-      if (!hydratingGraphRef.current) {
-        const marksDirty = changes.some((change) => change.type === 'add' || change.type === 'remove');
-        syncWorkflowFromGraph(nodesRef.current, nextEdges, viewportRef.current, marksDirty);
+    const removingValueEdges = changes
+      .filter((c) => c.type === 'remove')
+      .map((c) => edgesRef.current.find((e) => e.id === c.id))
+      .filter((edge) => {
+        if (!edge) return false;
+        const targetNode = nodesRef.current.find((n) => n.id === edge.target);
+        return targetNode?.data?.kind === 'unpack' && portFromHandle(edge.targetHandle) === 'value';
+      });
+
+    if (removingValueEdges.length > 0 && !hydratingGraphRef.current) {
+      const nextEdges = applyEdgeChanges(changes, edgesRef.current);
+      const pruned = pruneLostUnpackEdges(nodesRef.current, nextEdges);
+      if (pruned.lostEdges.length > 0) {
+        const edgeList = pruned.lostEdges.map((e) => `${e.source} → ${e.target}`).join(', ');
+        const confirmed = window.confirm(
+          `Removing the value input will disconnect ${pruned.lostEdges.length} connection(s): ${edgeList}. Continue?`,
+        );
+        if (!confirmed) return;
       }
-      return nextEdges;
-    });
-  }, [syncWorkflowFromGraph]);
+      const sizedNodes = sizeUnpackNodes(pruned.nodes, pruned.edges);
+      setGraphNodes(sizedNodes);
+      setGraphEdges(pruned.edges);
+      syncWorkflowFromGraph(sizedNodes, pruned.edges);
+      return;
+    }
+
+    const nextEdges = applyEdgeChanges(changes, edgesRef.current);
+    edgesRef.current = nextEdges;
+    setGraphEdges(nextEdges);
+    if (hydratingGraphRef.current) return;
+    const marksDirty = changes.some((change) => change.type === 'add' || change.type === 'remove');
+    const recomputed = recomputeUnpackSchemas(nodesRef.current, nextEdges);
+    if (recomputed !== nodesRef.current) setGraphNodes(recomputed);
+    syncWorkflowFromGraph(recomputed, nextEdges, viewportRef.current, marksDirty);
+  }, [syncWorkflowFromGraph, portFromHandle]);
+
+  const handleEdgeClick = useCallback((event, edge) => {
+    if (canvasTool !== 'cut') return;
+    event.preventDefault();
+    event.stopPropagation();
+    // Same path as a keyboard/edge-menu removal, so Unpack schemas are
+    // recomputed and dependent edges confirmed and pruned.
+    onEdgesChange([{ type: 'remove', id: edge.id }]);
+  }, [canvasTool, onEdgesChange]);
 
   const validateConnection = useCallback((connection) => {
     const source = nodesRef.current.find((node) => node.id === connection.source);
     const target = nodesRef.current.find((node) => node.id === connection.target);
-    if (!source || !target) {
-      return 'Both workflow nodes must exist before connecting them.';
+    if (!source || !target) return 'Both workflow nodes must exist before connecting them.';
+    if (source.id === target.id) return 'A workflow node cannot connect to itself.';
+    const sourcePort = portFromHandle(connection.sourceHandle);
+    const targetPort = portFromHandle(connection.targetHandle);
+    const sourceProperty = nodeOutputPorts(source.data?.kind, source.data?.outputSchema)
+      .find((property) => property.name === sourcePort);
+    const targetProperty = nodeInputPorts(target.data?.kind, target.data?.inputSchema)
+      .find((property) => property.name === targetPort);
+    if (!sourceProperty) return `Source node has no output port '${sourcePort}'.`;
+    if (!targetProperty) return `Target node has no input port '${targetPort}'.`;
+    if (edgesRef.current.some((edge) => edge.target === target.id && edge.targetHandle === connection.targetHandle)) {
+      return `Input port '${targetPort}' already has a source.`;
     }
-    if (source.id === target.id) {
-      return 'A workflow node cannot connect to itself.';
-    }
-    if (target.type === 'event') {
-      return 'Event nodes cannot accept inbound edges in v1 workflows.';
-    }
-    const existingOutgoing = edgesRef.current.filter((edge) => edge.source === source.id && edge.target !== target.id);
-    if (existingOutgoing.length > 0) {
-      return 'Each workflow node may have only one outgoing edge in v1 workflows.';
-    }
-    const existingInbound = edgesRef.current.filter((edge) => edge.target === target.id && edge.source !== source.id);
-    if (existingInbound.length > 0) {
-      return 'Each workflow node may have only one inbound edge in v1 workflows.';
+    if (!schemasAreCompatible(sourceProperty.definition, targetProperty.definition)) {
+      return `Cannot connect ${schemaType(sourceProperty.definition)} output '${sourceProperty.name}' to ${schemaType(targetProperty.definition)} input '${targetPort}'.`;
     }
     return '';
-  }, []);
+  }, [portFromHandle]);
 
   const onConnect = useCallback((connection) => {
+    didConnectRef.current = true;
     const validationError = validateConnection(connection);
     if (validationError) {
       show('error', 'Invalid workflow connection', validationError);
       return;
     }
-    setGraphEdges((currentEdges) => {
-      const nextEdges = addEdge({ ...connection, ...DEFAULT_EDGE_OPTIONS }, currentEdges);
-      syncWorkflowFromGraph(nodesRef.current, nextEdges, viewportRef.current);
-      return nextEdges;
-    });
+    const nextEdges = addEdge(
+      { ...connection, ...DEFAULT_EDGE_OPTIONS, className: 'workflow-edge--data' },
+      edgesRef.current,
+    );
+    const recomputed = recomputeUnpackSchemas(nodesRef.current, nextEdges);
+    setGraphEdges(nextEdges);
+    if (recomputed !== nodesRef.current) setGraphNodes(recomputed);
+    syncWorkflowFromGraph(recomputed, nextEdges, viewportRef.current);
   }, [show, syncWorkflowFromGraph, validateConnection]);
+
+  const onConnectStart = useCallback((_event, { nodeId, handleId, handleType }) => {
+    if (handleType === 'source') {
+      const node = nodesRef.current.find((n) => n.id === nodeId);
+      const port = portFromHandle(handleId);
+      const prop = nodeOutputPorts(node?.data?.kind, node?.data?.outputSchema).find((p) => p.name === port);
+      if (isUnpackableSchema(prop?.definition)) {
+        connectingRef.current = { nodeId, handleId, port };
+        didConnectRef.current = false;
+      }
+    }
+  }, [portFromHandle]);
+
+  const onConnectEnd = useCallback((event) => {
+    if (!connectingRef.current) return;
+    if (!didConnectRef.current) {
+      const position = reactFlow.screenToFlowPosition({ x: event.clientX, y: event.clientY });
+      createUnpackNodeRef.current(connectingRef.current.nodeId, connectingRef.current.port, position);
+    }
+    connectingRef.current = null;
+    didConnectRef.current = false;
+  }, [reactFlow]);
 
   const handleViewportChange = useCallback((_event, viewport) => {
     viewportRef.current = viewport;
@@ -1533,10 +2762,11 @@ function WorkflowsInner() {
     }
   }, []);
 
-  const handleSelectWorkflow = (path) => {
+  const handleSelectWorkflow = useCallback((workflowId) => {
     setJsonError('');
-    setSelectedPath(path);
-  };
+    const workflow = workflows.find((w) => w.id === workflowId);
+    navigate(buildEntityPath('/workflows', workflowId, workflow?.title), { replace: true });
+  }, [navigate, workflows]);
 
   const openCreateWorkflowChat = () => {
     window.dispatchEvent(new CustomEvent('progenitor:open-quick-chat', {
@@ -1550,97 +2780,101 @@ function WorkflowsInner() {
     }
     const nodeId = `${kind}_${Math.random().toString(36).slice(2, 10)}`;
     const position = dropPosition || nextDockNodePosition(nodesRef.current);
-    const sizes = DEFAULT_NODE_SIZES[kind];
     const nextNodes = [
       ...nodesRef.current,
-      {
-        id: nodeId,
-        type: kind,
-        // New nodes start in the settings view (sized accordingly) so their
-        // fields are immediately editable.
-        width: sizes.settings.width,
-        height: sizes.settings.height,
-        style: { ...sizes.settings },
-        position,
-        data: {
-          kind,
-          ...DOCK_NODE_DEFAULTS[kind](),
-          currentNodeId: null,
-          completedNodeIds: [],
-          expanded: true,
-          dataSize: { ...sizes.data },
-          settingsSize: { ...sizes.settings },
-          onChange: (targetId, patch) => {
-            setGraphNodes((currentNodes) => {
-              const updated = currentNodes.map((node) => (
-                node.id === targetId ? { ...node, data: { ...node.data, ...patch } } : node
-              ));
-              syncWorkflowFromGraph(updated, edgesRef.current, viewportRef.current);
-              return updated;
-            });
-          },
-          onDelete: (targetId) => {
-            const updatedNodes = nodesRef.current.filter((node) => node.id !== targetId);
-            const updatedEdges = edgesRef.current.filter((edge) => edge.source !== targetId && edge.target !== targetId);
-            setGraphNodes(updatedNodes);
-            setGraphEdges(updatedEdges);
-            syncWorkflowFromGraph(updatedNodes, updatedEdges, viewportRef.current);
-          },
-          onToggleExpanded: (targetId) => {
-            setGraphNodes((currentNodes) => {
-              const nextNodes = currentNodes.map((node) => {
-                if (node.id !== targetId) return node;
-                const nextExpanded = !node.data.expanded;
-                const nextSize = nextExpanded ? node.data.settingsSize : node.data.dataSize;
-                return {
-                  ...node,
-                  // React Flow's NodeResizer writes width/height as top-level node
-              // fields (taking precedence over style on later renders once a
-              // manual resize has happened), so both must be kept in sync here.
-              width: nextSize.width,
-              height: nextSize.height,
-              style: { ...node.style, width: nextSize.width, height: nextSize.height },
-                  data: { ...node.data, expanded: nextExpanded },
-                };
-              });
-              syncWorkflowFromGraph(nextNodes, edgesRef.current, viewportRef.current);
-              return nextNodes;
-            });
-          },
-          onResize: (targetId, size) => {
-            setGraphNodes((currentNodes) => {
-              const nextNodes = currentNodes.map((node) => {
-                if (node.id !== targetId) return node;
-                const sizeKey = node.data.expanded ? 'settingsSize' : 'dataSize';
-                return {
-                  ...node,
-                  width: size.width,
-              height: size.height,
-              style: { ...node.style, width: size.width, height: size.height },
-                  data: { ...node.data, [sizeKey]: size },
-                };
-              });
-              syncWorkflowFromGraph(nextNodes, edgesRef.current, viewportRef.current);
-              return nextNodes;
-            });
-          },
-          canDelete: true,
-        },
-      },
+      createPaletteNode(kind, nodeId, position, documentTypes, nodeDataCallbacks),
     ];
-    const anchor = [...nodesRef.current]
-      .sort((left, right) => left.position.x - right.position.x)
-      .at(-1);
-    const nextEdges = anchor ? [...edgesRef.current, {
-      id: `edge_${anchor.id}_${nodeId}`,
-      source: anchor.id,
-      target: nodeId,
-      ...DEFAULT_EDGE_OPTIONS,
-    }] : edgesRef.current;
+    const nextEdges = edgesRef.current;
     setGraphNodes(nextNodes);
     setGraphEdges(nextEdges);
     syncWorkflowFromGraph(nextNodes, nextEdges, viewportRef.current);
-  }, [draftWorkflow, setGraphEdges, setGraphNodes, syncWorkflowFromGraph]);
+  }, [draftWorkflow, documentTypes, nodeDataCallbacks, setGraphEdges, setGraphNodes, syncWorkflowFromGraph]);
+
+  const createUnpackNode = useCallback((sourceNodeId, sourcePort, position) => {
+    const nodeId = `unpack_${Math.random().toString(36).slice(2, 10)}`;
+    const sizes = DEFAULT_NODE_SIZES.unpack;
+    const newNode = {
+      id: nodeId,
+      type: 'unpack',
+      width: sizes.data.width,
+      height: sizes.data.height,
+      style: { width: sizes.data.width, height: sizes.data.height },
+      position,
+      data: {
+        kind: 'unpack',
+        title: 'Unpack',
+        inputSchema: { type: 'object', required: ['value'], properties: { value: { type: 'object' } } },
+        outputSchema: { type: 'object', properties: {} },
+        currentNodeId: null,
+        completedNodeIds: [],
+        expanded: false,
+        ...nodeDataCallbacks,
+        canDelete: true,
+      },
+    };
+    const newEdge = {
+      id: `edge_${sourceNodeId}_${sourcePort}_${nodeId}_value`,
+      source: sourceNodeId,
+      sourceHandle: `out:${sourcePort}`,
+      target: nodeId,
+      targetHandle: 'in:value',
+      ...DEFAULT_EDGE_OPTIONS,
+      className: 'workflow-edge--data',
+    };
+    const nextNodes = [...nodesRef.current, newNode];
+    const nextEdges = [...edgesRef.current, newEdge];
+    const recomputed = recomputeUnpackSchemas(nextNodes, nextEdges);
+    setGraphNodes(recomputed);
+    setGraphEdges(nextEdges);
+    syncWorkflowFromGraph(recomputed, nextEdges);
+  }, [nodeDataCallbacks, setGraphEdges, setGraphNodes, syncWorkflowFromGraph]);
+  // nodeCallbacks.onUnpack and drag-to-pane call this through the ref: it
+  // builds nodes with nodeDataCallbacks, so it is declared after them.
+  createUnpackNodeRef.current = createUnpackNode;
+
+  const onCanvasPaneClick = useCallback((event) => {
+    if (event.button === 0) {
+      setNodeMenuAnchor(null);
+    }
+  }, []);
+
+  const onCanvasPointerDown = useCallback((event) => {
+    if (event.button === 2) {
+      rightPointerRef.current = { x: event.clientX, y: event.clientY, moved: false };
+      setRightPanning(true);
+    }
+  }, []);
+
+  // Right-drag pans the canvas; show the grab cursor for as long as the right
+  // button is held, wherever it is released.
+  useEffect(() => {
+    if (!rightPanning) return undefined;
+    const release = (event) => {
+      if (event.type === 'blur' || !(event.buttons & 2)) setRightPanning(false);
+    };
+    window.addEventListener('pointerup', release);
+    window.addEventListener('blur', release);
+    return () => {
+      window.removeEventListener('pointerup', release);
+      window.removeEventListener('blur', release);
+    };
+  }, [rightPanning]);
+
+  const onCanvasPointerMove = useCallback((event) => {
+    const pointer = rightPointerRef.current;
+    if (!pointer || event.buttons !== 2) return;
+    if (Math.hypot(event.clientX - pointer.x, event.clientY - pointer.y) > 4) {
+      pointer.moved = true;
+    }
+  }, []);
+
+  const onCanvasPaneContextMenu = useCallback((event) => {
+    event.preventDefault();
+    const pointer = rightPointerRef.current;
+    rightPointerRef.current = null;
+    if (pointer?.moved) return;
+    setNodeMenuAnchor(canvasMenuAnchor(event, reactFlow));
+  }, [reactFlow]);
 
   const onCanvasDragOver = useCallback((event) => {
     event.preventDefault();
@@ -1664,68 +2898,15 @@ function WorkflowsInner() {
   const handleApplyJson = () => {
     try {
       const parsed = JSON.parse(jsonDraft);
-      const flow = workflowToFlow(parsed, {
-        onNodeChange: (nodeId, patch) => {
-          setGraphNodes((currentNodes) => {
-            const nextNodes = currentNodes.map((node) => (
-              node.id === nodeId ? { ...node, data: { ...node.data, ...patch } } : node
-            ));
-            syncWorkflowFromGraph(nextNodes, edgesRef.current, viewportRef.current);
-            return nextNodes;
-          });
-        },
-        onDeleteNode: (nodeId) => {
-          const nextNodes = nodesRef.current.filter((node) => node.id !== nodeId);
-          const nextEdges = edgesRef.current.filter((edge) => edge.source !== nodeId && edge.target !== nodeId);
-          setGraphNodes(nextNodes);
-          setGraphEdges(nextEdges);
-          syncWorkflowFromGraph(nextNodes, nextEdges, viewportRef.current);
-        },
-        onToggleExpanded: (nodeId) => {
-          setGraphNodes((currentNodes) => {
-            const nextNodes = currentNodes.map((node) => {
-              if (node.id !== nodeId) return node;
-              const nextExpanded = !node.data.expanded;
-              const nextSize = nextExpanded ? node.data.settingsSize : node.data.dataSize;
-              return {
-                ...node,
-                // React Flow's NodeResizer writes width/height as top-level node
-              // fields (taking precedence over style on later renders once a
-              // manual resize has happened), so both must be kept in sync here.
-              width: nextSize.width,
-              height: nextSize.height,
-              style: { ...node.style, width: nextSize.width, height: nextSize.height },
-                data: { ...node.data, expanded: nextExpanded },
-              };
-            });
-            syncWorkflowFromGraph(nextNodes, edgesRef.current, viewportRef.current);
-            return nextNodes;
-          });
-        },
-        onResize: (nodeId, size) => {
-          setGraphNodes((currentNodes) => {
-            const nextNodes = currentNodes.map((node) => {
-              if (node.id !== nodeId) return node;
-              const sizeKey = node.data.expanded ? 'settingsSize' : 'dataSize';
-              return {
-                ...node,
-                width: size.width,
-              height: size.height,
-              style: { ...node.style, width: size.width, height: size.height },
-                data: { ...node.data, [sizeKey]: size },
-              };
-            });
-            syncWorkflowFromGraph(nextNodes, edgesRef.current, viewportRef.current);
-            return nextNodes;
-          });
-        },
-      }, selectedLatestRun);
+      const flow = workflowToFlow(parsed, nodeCallbacks, selectedLatestRun);
+      const nextNodes = sizeUnpackNodes(flow.nodes, flow.edges);
       setDraftWorkflow(parsed);
-      setGraphNodes(flow.nodes);
+      setGraphNodes(nextNodes);
       setGraphEdges(flow.edges);
-      nodesRef.current = flow.nodes;
+      nodesRef.current = nextNodes;
       edgesRef.current = flow.edges;
       viewportRef.current = flow.viewport;
+      setLocalDraftDirty(true);
       setJsonError('');
       setActiveSidePanel(null);
     } catch (error) {
@@ -1785,7 +2966,6 @@ function WorkflowsInner() {
       await dispatch(triggerWorkflow({
         workflowsUrl,
         workflowId,
-        eventType: draftWorkflow?.trigger?.event_type,
       })).unwrap();
     } catch (error) {
       show('error', 'Workflow trigger failed', error.message);
@@ -1810,10 +2990,8 @@ function WorkflowsInner() {
     try {
       await dispatch(deleteWorkflow({ workflowsUrl, workflowId })).unwrap();
       setDeleteConfirmationOpen(false);
-      setSelectedPath('');
-      const nextParams = new URLSearchParams(searchParams);
-      nextParams.delete('path');
-      setSearchParams(nextParams, { replace: true });
+      setSelectedWorkflowId('');
+      navigate('/workflows', { replace: true });
     } catch (error) {
       show('error', 'Workflow delete failed', error.message);
     } finally {
@@ -1853,7 +3031,7 @@ function WorkflowsInner() {
                   <WorkflowRow
                     item={item}
                     latestRun={workflowRuns.find((run) => run.workflow_id === item.id) || null}
-                    selectedPath={selectedPath}
+                    selectedWorkflowId={selectedWorkflowId}
                     onSelect={handleSelectWorkflow}
                   />
                 )}
@@ -1872,10 +3050,10 @@ function WorkflowsInner() {
           message="This workflow and its configuration will be permanently deleted."
           confirmLabel="Delete workflow"
           busyLabel="Deleting…"
-          onClose={() => setDeleteConfirmationOpen(false)}
-          onConfirm={confirmDeleteWorkflow}
-          busy={busyAction === 'delete'}
-        />
+        onClose={() => setDeleteConfirmationOpen(false)}
+        onConfirm={confirmDeleteWorkflow}
+        busy={busyAction === 'delete'}
+      />
       ) : null}
 
       <DetailPane flush className={`workflow-detail ${selectedDetail?.workflow ? 'is-graph-mode' : ''}`} label="Workflow detail">
@@ -1893,9 +3071,11 @@ function WorkflowsInner() {
               <section className="agents-graph-panel">
                 <div className="agents-graph-shell">
                   <div
-                    className="canvas-surface workflow-canvas"
+                    className={`canvas-surface workflow-canvas workflow-canvas--${canvasTool}${rightPanning ? ' workflow-canvas--right-panning' : ''}`}
                     onDrop={onCanvasDrop}
                     onDragOver={onCanvasDragOver}
+                    onPointerDown={onCanvasPointerDown}
+                    onPointerMove={onCanvasPointerMove}
                   >
                     <div className="agents-graph-floating">
                       <DetailHeaderActions menuLabel="Workflow actions">
@@ -1941,6 +3121,20 @@ function WorkflowsInner() {
                       onNodesChange={onNodesChange}
                       onEdgesChange={onEdgesChange}
                       onConnect={onConnect}
+                      onConnectStart={onConnectStart}
+                      onConnectEnd={onConnectEnd}
+                      onEdgeClick={handleEdgeClick}
+                      panOnDrag={canvasInteraction.panOnDrag}
+                      selectionOnDrag={canvasInteraction.selectionOnDrag}
+                      nodesDraggable={canvasInteraction.nodesDraggable}
+                      nodesConnectable={canvasInteraction.nodesConnectable}
+                      nodesFocusable
+                      deleteKeyCode={['Backspace', 'Delete']}
+                      onPaneClick={onCanvasPaneClick}
+                      onPaneContextMenu={onCanvasPaneContextMenu}
+                      onNodeDragStart={() => setNodeMenuAnchor(null)}
+                      snapToGrid
+                      snapGrid={[16, 16]}
                       onMoveEnd={handleViewportChange}
                       defaultEdgeOptions={DEFAULT_EDGE_OPTIONS}
                       defaultViewport={DEFAULT_VIEWPORT}
@@ -1958,7 +3152,15 @@ function WorkflowsInner() {
                         zoomable
                       />
                     </ReactFlow>
-                    <WorkflowDock onAdd={handleAddNode} />
+                    {nodeOptionsNode ? (
+                      <WorkflowNodeOptionsModal
+                        key={nodeOptionsNode.id}
+                        node={nodeOptionsNode}
+                        onChange={(nodeId, patch) => nodeOptionsNode.data.onChange(nodeId, patch)}
+                        onClose={() => setNodeOptionsId(null)}
+                      />
+                    ) : null}
+                    <WorkflowDock menuAnchor={nodeMenuAnchor} onOpenMenu={setNodeMenuAnchor} onCloseMenu={() => setNodeMenuAnchor(null)} onAdd={handleAddNode} tool={canvasTool} onToolChange={setCanvasTool} />
                   </div>
                 </div>
               </section>
@@ -1992,30 +3194,7 @@ function WorkflowsInner() {
                             placeholder="Workflow title"
                           />
                         </label>
-                        <label>
-                          <span>Event type</span>
-                          <Select
-                            value={draftWorkflow.trigger?.event_type || WORKFLOW_EVENT_TYPES[0]}
-                            onChange={(nextEventType) => {
-                              handleFieldChange('trigger', {
-                                ...draftWorkflow.trigger,
-                                type: 'event',
-                                event_type: nextEventType,
-                              });
-                              setGraphNodes((currentNodes) => {
-                                const nextNodes = currentNodes.map((node) => (
-                                  node.type === 'event'
-                                    ? { ...node, data: { ...node.data, eventType: nextEventType } }
-                                    : node
-                                ));
-                                syncWorkflowFromGraph(nextNodes, edgesRef.current, viewportRef.current);
-                                return nextNodes;
-                              });
-                            }}
-                            options={WORKFLOW_EVENT_TYPE_OPTIONS}
-                            ariaLabel="Event type"
-                          />
-                        </label>
+
                         <label className="workflow-form__toggle">
                           <span>Enabled</span>
                           <input
@@ -2072,7 +3251,7 @@ function WorkflowsInner() {
 
 // This helper is exported for the focused workflow graph unit test.
 // eslint-disable-next-line react-refresh/only-export-components
-export { workflowToFlow };
+export { flowToWorkflow, workflowToFlow, NODE_MENU_CATEGORIES, schemaProperties, canvasMenuAnchor, visibleNodePortProperties, deriveUnpackSchemas, recomputeUnpackSchemas, computeLostEdgesForUnpackChange, pruneLostUnpackEdges, isUnpackableSchema, parsePromptPlaceholders, derivePromptInputSchema, promptTemplatePatch, promptDocumentPatch, createPaletteNode, nodeInputPorts, nodeOutputPorts, schemasAreCompatible, deriveFormatInputSchema, formatTemplatePatch };
 export default function WorkflowsPage() {
   return (
     <ReactFlowProvider>

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 
-def render_prompt_template(content: str, **replacements: object) -> str:
+def render_simple_template(content: str, **replacements: object) -> str:
     """Apply simple {placeholder} replacements to prompt content."""
     rendered = content
     for key, value in replacements.items():

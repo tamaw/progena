@@ -6,6 +6,7 @@
   "properties": {
     "id": {
       "type": "string",
+      "readOnly": true,
       "description": "Unique message identifier (matches the document suffix)."
     },
     "title": {
@@ -27,15 +28,18 @@
     },
     "read_at": {
       "type": ["string", "null"],
+      "readOnly": true,
       "description": "ISO8601 timestamp of when the user opened the message. User-owned -- leave unset.",
       "default": null
     },
     "created_at": {
       "type": "string",
+      "readOnly": true,
       "description": "ISO8601 creation timestamp. Stamped automatically on first write if omitted."
     },
     "thread_id": {
       "type": "string",
+      "readOnly": true,
       "description": "The conversation thread this message was composed in. System-owned -- stamped automatically from the current request context on first write, never set by the author. Lets an attachment mentioned in the body be resolved later with the same thread scoping the attachments API already enforces (GET /api/attachments/{id}?thread_id=...)."
     },
     "requires_approval": {

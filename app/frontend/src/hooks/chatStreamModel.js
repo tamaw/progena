@@ -19,8 +19,8 @@ export function shouldPreserveStreamInBackground({ streamingOriginId, activeStre
 //
 // - `isStale`: true once the caller has navigated away from the chat that
 //   owns this stream (a newer send, a chat switch, or an unmount).
-// - `originChatId`: the backend thread_id the stream belongs to, or null for
-//   a chat that was never materialized into a backend chat card.
+// - `originChatId`: the thread_id the stream belongs to (the session's id, or
+//   the local draft's id before Postgres creates the session), or null.
 // - `isViewingOrigin`: true if the user is (still/again) looking at that
 //   exact chat right now.
 // - `resultType`: 'completed' | 'cancelled' | 'error'.

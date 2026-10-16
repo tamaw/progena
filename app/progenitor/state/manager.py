@@ -7,13 +7,20 @@ from collections.abc import Callable
 from contextlib import asynccontextmanager
 from typing import Any
 
-from ..content_documents import (
-    AGENT_SELF_EDIT_TOUCH_KEY_PREFIX,
-    content_document_key,
-    content_document_prefix,
+from ..content_documents import content_document_key, content_document_prefix
+from ..document_kinds import (
+    DOCUMENT_TYPE_KEY_PREFIX,
+    INBOX_MESSAGE_KEY_PREFIX,
+    SESSION_KEY_PREFIX,
 )
-from ..conversations.sessions import CHAT_INDEX_KEY, CHAT_SESSIONS_NAMESPACE
-from ..document_kinds import INBOX_MESSAGE_KEY_PREFIX
+from ..document_types import DocumentType, builtin_document_type_rows, parse_document_types
+from ..knowledge.indexer_config import (
+    INDEX_STATUS_DOC_KEY,
+    INDEXER_DOC_KEY,
+    default_indexer_payload,
+    validate_indexer_payload,
+)
+from ..knowledge.pages import knowledge_page_key
 from ..routines.store import ROUTINE_GRAPH_KEY_PREFIX, routine_graph_key
 from ..utils import utcnow_isoformat
 from ..workflows import (
@@ -28,11 +35,7 @@ from . import (
     async_subagent_store,
     background_store,
 )
-from .langgraph_store import (
-    CONVERSATION_LOGS_NAMESPACE,
-    CONVERSATION_META_NAMESPACE,
-    LangGraphRuntimeStore,
-)
+from .langgraph_store import LangGraphRuntimeStore
 from .model_profiles import default_model_profiles_payload
 from .models import (
     A2ATaskRecord,
@@ -73,6 +76,12 @@ class StateManager:
         "background_tasks": "background_tasks.json",
         "registry": "agents.json",
     }
+
+    # Documents the backend also writes directly to Postgres (repo "Fetch",
+    # routine "Run" enqueues, UI repo edits). They are never cached, so this
+    # process needs no change notifications to stay coherent and a flush on
+    # close/commit can never overwrite another writer's update.
+    READ_THROUGH_DOCUMENTS: frozenset[str] = frozenset({"repos", "repo_scan", "background_tasks"})
 
     def __init__(
         self,
@@ -170,26 +179,26 @@ class StateManager:
                 payload, migrated = self._normalize_schedule_payload(payload)
                 if migrated:
                     await self._runtime_store.save_document(name, payload)
-            self._state_cache[name] = payload
+            if name not in self.READ_THROUGH_DOCUMENTS:
+                self._state_cache[name] = payload
+        await self._seed_document_types()
 
     async def _get_runtime_document(self, name: str) -> Any:
-        """Return a cached native-store-backed state document."""
+        """Return a native-store-backed state document.
+
+        Documents other processes also write (``READ_THROUGH_DOCUMENTS``) are
+        always read from the store; the rest are cached.
+        """
+        if name in self.READ_THROUGH_DOCUMENTS:
+            return await self._runtime_store.get_document(name, {})
         if name not in self._state_cache:
             self._state_cache[name] = await self._runtime_store.get_document(name, {})
         return self._state_cache[name]
 
-    def invalidate_document(self, name: str) -> None:
-        """Drop a cached document so the next read re-fetches from the store.
-
-        Needed when another process (the backend, via a direct Postgres
-        write) mutates a document this instance has already cached — the
-        runtime store listener calls this on the matching NOTIFY key.
-        """
-        self._state_cache.pop(name, None)
-
     async def _save_runtime_document(self, name: str, payload: Any) -> None:
-        """Save and cache a native-store-backed state document."""
-        self._state_cache[name] = payload
+        """Save a native-store-backed state document (caching it unless read-through)."""
+        if name not in self.READ_THROUGH_DOCUMENTS:
+            self._state_cache[name] = payload
         await self._runtime_store.save_document(name, payload)
 
     async def save_routine_run_event(self, payload: dict[str, Any]) -> None:
@@ -457,6 +466,23 @@ class StateManager:
         """Persist the knowledge document to the shared runtime store."""
         await self._save_runtime_document("knowledge", payload)
 
+    async def get_indexer_config(self) -> dict[str, Any]:
+        """Return the search-indexer settings behind ``/config/indexer.json``."""
+        default = default_indexer_payload()
+        payload = await self._runtime_store.get_document(INDEXER_DOC_KEY, default)
+        return payload if isinstance(payload, dict) else default
+
+    async def save_indexer_config(self, payload: dict[str, Any]) -> None:
+        """Persist indexer settings; the profile must name a ``/config/profile.json`` entry."""
+        profiles = await self.get_model_profiles_config()
+        validated = validate_indexer_payload(payload, profile_names=profiles.keys())
+        await self._save_runtime_document(INDEXER_DOC_KEY, validated)
+
+    async def get_knowledge_index(self) -> dict[str, Any]:
+        """Return the backend indexer's status document (``/knowledge/indexer.json``)."""
+        payload = await self._runtime_store.peek_document(INDEX_STATUS_DOC_KEY)
+        return payload if isinstance(payload, dict) else {"embedding": None, "bases": {}}
+
     # ==========================================================================
     # User preferences (profile)
     # ==========================================================================
@@ -479,7 +505,7 @@ class StateManager:
     # Model profiles
     # ==========================================================================
     async def get_model_profiles_config(self) -> dict[str, Any]:
-        """Return the shared model profile map behind ``/config/profile.json``."""
+        """Return the shared model profile map behind ``/config/profiles.json``."""
         default = default_model_profiles_payload()
         payload = await self._runtime_store.get_document("profile", default)
         return payload if isinstance(payload, dict) else default
@@ -609,51 +635,24 @@ class StateManager:
         return [payload for _, payload in rows if isinstance(payload, dict)]
 
     # ==========================================================================
-    # Chat sessions (backend-owned, read-only here) and rendered transcripts
+    # Session documents
     # ==========================================================================
-    async def list_chat_sessions(self) -> list[dict[str, Any]]:
-        """Return the backend's chat session documents in index order.
+    async def get_session(self, thread_id: str) -> dict[str, Any] | None:
+        """Return ``session:<thread_id>``'s payload, or ``None`` if the thread has none."""
+        return await self._runtime_store.peek_document(f"{SESSION_KEY_PREFIX}{thread_id}")
 
-        One read of the whole namespace; each payload gains its ``thread_id``.
-        Reads straight from the shared store: the backend writes these on
-        create, rename, and archive.
+    async def list_sessions(self) -> list[dict[str, Any]]:
+        """Return every session document payload (unsorted)."""
+        return [
+            payload for _, payload in await self._runtime_store.list_documents(SESSION_KEY_PREFIX)
+        ]
+
+    async def merge_session(self, thread_id: str, fields: dict[str, Any]) -> bool:
+        """Atomically merge ``fields`` into ``session:<thread_id>`` payload.
+
+        Returns ``True`` when the row existed.
         """
-        rows = dict(await self._runtime_store.list_items(CHAT_SESSIONS_NAMESPACE))
-        thread_ids = (rows.get(CHAT_INDEX_KEY) or {}).get("payload") or []
-        sessions: list[dict[str, Any]] = []
-        for thread_id in thread_ids:
-            payload = (rows.get(str(thread_id)) or {}).get("payload")
-            if isinstance(payload, dict):
-                sessions.append({**payload, "thread_id": str(thread_id)})
-        return sessions
-
-    async def list_conversation_transcripts(self) -> dict[str, dict[str, Any]]:
-        """Return cached transcript metadata keyed by thread id (no text)."""
-        rows = await self._runtime_store.list_items(CONVERSATION_META_NAMESPACE)
-        return dict(rows)
-
-    async def get_conversation_log(self, thread_id: str) -> str | None:
-        """Return one chat's cached transcript text, or ``None``."""
-        item = await self._runtime_store.get_item(CONVERSATION_LOGS_NAMESPACE, thread_id)
-        text = (item or {}).get("text")
-        return text if isinstance(text, str) else None
-
-    async def save_conversation_transcript(
-        self, thread_id: str, meta: dict[str, Any], text: str | None
-    ) -> None:
-        """Persist one chat's transcript metadata and, when it has messages, its text."""
-        if text is None:
-            await self._runtime_store.delete_item(CONVERSATION_LOGS_NAMESPACE, thread_id)
-        else:
-            await self._runtime_store.put_item(
-                CONVERSATION_LOGS_NAMESPACE, thread_id, {"text": text}
-            )
-        await self._runtime_store.put_item(CONVERSATION_META_NAMESPACE, thread_id, meta)
-
-    async def delete_conversation_transcript(self, thread_id: str) -> None:
-        """Drop one chat's cached transcript metadata and text."""
-        await self._runtime_store.delete_item(CONVERSATION_META_NAMESPACE, thread_id)
-        await self._runtime_store.delete_item(CONVERSATION_LOGS_NAMESPACE, thread_id)
+        return await self._runtime_store.merge_session(thread_id, fields)
 
     # ==========================================================================
     # Workflow definitions
@@ -678,6 +677,20 @@ class StateManager:
         """Return all workflow definition documents."""
         rows = await self._runtime_store.list_documents(WORKFLOW_DEFINITION_KEY_PREFIX)
         return [payload for _, payload in rows if isinstance(payload, dict)]
+
+    # ==========================================================================
+    # Document types
+    # ==========================================================================
+    async def list_document_types(self) -> dict[str, DocumentType]:
+        """Return the ``document_type:<id>`` registry, keyed by type id."""
+        rows = await self._runtime_store.list_documents(DOCUMENT_TYPE_KEY_PREFIX)
+        return parse_document_types(payload for _, payload in rows)
+
+    async def _seed_document_types(self) -> None:
+        """Write the built-in document types, touching only rows that differ."""
+        for key, payload in builtin_document_type_rows():
+            if await self._runtime_store.peek_document(key) != payload:
+                await self._runtime_store.save_document(key, payload)
 
     # ==========================================================================
     # Routine graphs
@@ -778,21 +791,6 @@ class StateManager:
         key = content_document_key(kind, relative_path)
         await self._runtime_store.delete_document(key)
 
-    async def touch_object_agent(self, name: str) -> None:
-        """Record a marker so the backend's Postgres LISTEN/NOTIFY watcher
-        rebroadcasts this agent's profile to the Agents page.
-
-        Only needed for *native* agents, whose ``SelfManifestBackend`` writes
-        land on disk and never touch the ``store`` table on their own (unlike
-        a marketplace/user agent's ``save_content_document`` call, which
-        already produces a NOTIFY via its own row write). Called
-        unconditionally after every self-edit so the propagation path is one
-        mechanism regardless of source.
-        """
-        await self._save_runtime_document(
-            f"{AGENT_SELF_EDIT_TOUCH_KEY_PREFIX}{name}", {"at": utcnow_isoformat()}
-        )
-
     async def list_content_documents(self, kind: str) -> list[tuple[str, str]]:
         """Return ``(relative_path, content)`` for every document of one kind."""
         prefix = content_document_prefix(kind)
@@ -802,6 +800,34 @@ class StateManager:
             if isinstance(payload, dict) and isinstance(payload.get("content"), str):
                 results.append((key[len(prefix) :], payload["content"]))
         return results
+
+    async def get_knowledge_page(self, base_id: str, path: str) -> dict[str, Any] | None:
+        payload = await self._runtime_store.peek_document(knowledge_page_key(base_id, path))
+        if isinstance(payload, dict) and isinstance(payload.get("content"), str):
+            return payload
+        return None
+
+    async def save_knowledge_page(self, base_id: str, path: str, content: str) -> None:
+        await self._save_runtime_document(
+            knowledge_page_key(base_id, path),
+            {"content": content, "updated_at": utcnow_isoformat()},
+        )
+
+    async def list_knowledge_pages(self) -> list[tuple[str, str, dict[str, Any]]]:
+        rows = await self._runtime_store.list_documents("knowledge:")
+        result: list[tuple[str, str, dict[str, Any]]] = []
+        for key, payload in rows:
+            remainder = key[len("knowledge:") :]
+            base_id, separator, path = remainder.partition("/")
+            if (
+                separator
+                and base_id
+                and path
+                and isinstance(payload, dict)
+                and isinstance(payload.get("content"), str)
+            ):
+                result.append((base_id, path, payload))
+        return result
 
     # ==========================================================================
     # MCP tools
@@ -1009,7 +1035,6 @@ class StateManager:
     async def enqueue_background_task(self, task: BackgroundTaskEntry) -> None:
         """Add a background task to the queue."""
         async with self._with_background_tasks_lock():
-            self.invalidate_document("background_tasks")
             await background_store.enqueue_background_task(
                 task=task,
                 get_background_tasks_fn=self.get_background_tasks,
@@ -1019,7 +1044,6 @@ class StateManager:
     async def dequeue_background_task(self) -> BackgroundTaskEntry | None:
         """Remove and return the next background task, or ``None`` if empty."""
         async with self._with_background_tasks_lock():
-            self.invalidate_document("background_tasks")
             return await background_store.dequeue_background_task(
                 get_background_tasks_fn=self.get_background_tasks,
                 save_background_tasks_fn=self.save_background_tasks,

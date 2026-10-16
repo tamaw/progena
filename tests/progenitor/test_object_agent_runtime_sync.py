@@ -13,7 +13,7 @@ from app.progenitor.runtime.progenitor import Progenitor
 
 def runtime():
     instance = object.__new__(Progenitor)
-    instance.state_manager = SimpleNamespace(invalidate_document=Mock())
+    instance.state_manager = SimpleNamespace()
     instance._agent_scheduler = Mock()
     instance._mcp_scheduler = Mock()
     instance._plugin_scheduler = Mock()
@@ -26,10 +26,9 @@ def runtime():
         "agent:user/helper/SYSTEM.md",
         "agent:native/helper/SYSTEM.md",
         "agent:market__plugin/helper/SYSTEM.md",
-        "agent-touch:helper",
     ],
 )
-def test_listener_routes_object_documents_and_self_edits(key):
+def test_listener_routes_object_documents(key):
     instance = runtime()
     instance._on_store_change(json.dumps({"key": key}))
     instance._agent_scheduler.request.assert_called_once_with()
@@ -38,11 +37,31 @@ def test_listener_routes_object_documents_and_self_edits(key):
 
 
 @pytest.mark.parametrize(
-    "payload", ["", "garbage", "[]", '{"key": 1}', '{"key":"prompt:genesis.md"}']
+    "payload",
+    [
+        "",
+        "garbage",
+        "[]",
+        '{"key": 1}',
+        '{"key":"prompt:genesis.md"}',
+        '{"key":"repos"}',
+        '{"key":"repo_scan"}',
+        '{"key":"background_tasks"}',
+    ],
 )
-def test_listener_ignores_unrelated_and_malformed_notifications(payload):
+def test_listener_ignores_non_chat_and_malformed_notifications(payload):
     instance = runtime()
     instance._on_store_change(payload)
+    instance._agent_scheduler.request.assert_not_called()
+    instance._mcp_scheduler.request.assert_not_called()
+    instance._plugin_scheduler.request.assert_not_called()
+
+
+@pytest.mark.parametrize(("key", "full"), [("mcp", True), ("mcp_tools", False)])
+def test_listener_routes_mcp_changes(key, full):
+    instance = runtime()
+    instance._on_store_change(json.dumps({"key": key}))
+    instance._mcp_scheduler.request.assert_called_once_with(full=full)
     instance._agent_scheduler.request.assert_not_called()
 
 
