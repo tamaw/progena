@@ -10,7 +10,7 @@ from .scan import (
     scan_declared_repos,
     scan_repo,
 )
-from .schema import validate_repos_document, validate_repos_payload
+from .schema import validate_repo_document, validate_repo_entry, validate_repo_id
 
 __all__ = [
     "RepoScanResult",
@@ -19,6 +19,7 @@ __all__ = [
     "fetch_repo",
     "scan_declared_repos",
     "scan_repo",
-    "validate_repos_document",
-    "validate_repos_payload",
+    "validate_repo_document",
+    "validate_repo_entry",
+    "validate_repo_id",
 ]

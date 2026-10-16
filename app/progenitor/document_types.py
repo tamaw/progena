@@ -21,6 +21,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .document_kinds import (
     AGENT_DOCUMENT_KEY_PREFIX,
+    ALERT_KEY_PREFIX,
     DOCUMENT_TYPE_KEY_PREFIX,
     INBOX_MESSAGE_KEY_PREFIX,
     KANBAN_CARD_KEY_PREFIX,
@@ -28,6 +29,7 @@ from .document_kinds import (
     MEMORY_DOCUMENT_KEY_PREFIX,
     POLICY_KEY_PREFIX,
     PROMPT_DOCUMENT_KEY_PREFIX,
+    REPO_KEY_PREFIX,
     ROUTINE_GRAPH_KEY_PREFIX,
     SESSION_KEY_PREFIX,
     SKILL_DOCUMENT_KEY_PREFIX,
@@ -126,7 +128,8 @@ BUILTIN_DOCUMENT_TYPES: tuple[DocumentType, ...] = (
     _single_type("plugins", "Plugins", "plugins", None),
     _single_type("marketplaces", "Marketplaces", "marketplaces", None),
     _single_type("knowledge", "Knowledge", "knowledge", None),
-    _single_type("repos", "Repositories", "repos", None),
+    _prefix_type("repo", "Repository", REPO_KEY_PREFIX, "repo_entry"),
+    _prefix_type("alert", "Alert", ALERT_KEY_PREFIX, "alert"),
     DocumentType(
         id="session",
         label="Session",

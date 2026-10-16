@@ -9,9 +9,12 @@ from typing import Any
 
 from ..content_documents import content_document_key, content_document_prefix
 from ..document_kinds import (
+    ALERT_KEY_PREFIX,
     DOCUMENT_TYPE_KEY_PREFIX,
     INBOX_MESSAGE_KEY_PREFIX,
+    REPO_KEY_PREFIX,
     SESSION_KEY_PREFIX,
+    WORKFLOW_APPROVAL_REQUEST_KEY_PREFIX,
 )
 from ..document_types import DocumentType, builtin_document_type_rows, parse_document_types
 from ..routines.store import ROUTINE_GRAPH_KEY_PREFIX, routine_graph_key
@@ -71,10 +74,11 @@ class StateManager:
     }
 
     # Documents the backend also writes directly to Postgres (repo "Fetch",
-    # routine "Run" enqueues, UI repo edits). They are never cached, so this
-    # process needs no change notifications to stay coherent and a flush on
-    # close/commit can never overwrite another writer's update.
-    READ_THROUGH_DOCUMENTS: frozenset[str] = frozenset({"repos", "repo_scan", "background_tasks"})
+    # routine "Run" enqueues). They are never cached, so this process needs no
+    # change notifications to stay coherent and a flush on close/commit can
+    # never overwrite another writer's update. ``repo:<id>`` documents are
+    # likewise always read from and written straight to the store.
+    READ_THROUGH_DOCUMENTS: frozenset[str] = frozenset({"repo_scan", "background_tasks"})
 
     def __init__(
         self,
@@ -330,16 +334,29 @@ class StateManager:
         await self._save_runtime_document("registry", registry)
 
     # ==========================================================================
-    # Repos management (declared repositories, agent-editable)
+    # Repos (declared repositories, one ``repo:<id>`` document each)
     # ==========================================================================
-    async def get_repos(self) -> dict[str, Any]:
-        """Return the declared-repositories document."""
-        repos = await self._get_runtime_document("repos")
-        return dict(repos) if isinstance(repos, dict) else {}
+    async def get_repo(self, repo_id: str) -> dict[str, Any] | None:
+        """Return one declared repo entry, or ``None`` if it isn't declared."""
+        payload = await self._runtime_store.peek_document(f"{REPO_KEY_PREFIX}{repo_id}")
+        return dict(payload) if isinstance(payload, dict) else None
 
-    async def save_repos(self, repos: dict[str, Any]) -> None:
-        """Persist the declared-repositories document."""
-        await self._save_runtime_document("repos", repos)
+    async def list_repos(self) -> dict[str, dict[str, Any]]:
+        """Return every declared repo entry, keyed by repo id."""
+        rows = await self._runtime_store.list_documents(REPO_KEY_PREFIX)
+        return {
+            key.removeprefix(REPO_KEY_PREFIX): dict(payload)
+            for key, payload in rows
+            if isinstance(payload, dict)
+        }
+
+    async def save_repo(self, repo_id: str, entry: dict[str, Any]) -> None:
+        """Persist one declared repo entry (uncached; the backend writes these too)."""
+        await self._runtime_store.save_document(f"{REPO_KEY_PREFIX}{repo_id}", entry)
+
+    async def delete_repo(self, repo_id: str) -> None:
+        """Remove one declared repo entry."""
+        await self._runtime_store.delete_document(f"{REPO_KEY_PREFIX}{repo_id}")
 
     # ==========================================================================
     # Repo scan (heartbeat-derived git state, read-only for the agent)
@@ -740,6 +757,34 @@ class StateManager:
                 "workflow_id": workflow_id,
                 "input": input,
                 "ancestry": ancestry,
+                "requested_at": utcnow_isoformat(),
+            },
+        )
+
+    # ==========================================================================
+    # Alerts (one ``alert:<id>`` document each; the backend relays new ones)
+    # ==========================================================================
+    async def save_alert(self, alert: dict[str, Any]) -> None:
+        """Persist one new alert document (see ``app.progenitor.alerts``)."""
+        await self._runtime_store.save_document(f"{ALERT_KEY_PREFIX}{alert['id']}", alert)
+
+    async def list_alerts(self) -> list[dict[str, Any]]:
+        """Return every alert document, newest first."""
+        rows = await self._runtime_store.list_documents(ALERT_KEY_PREFIX)
+        alerts = [payload for _, payload in rows if isinstance(payload, dict)]
+        return sorted(alerts, key=lambda alert: alert.get("timestamp") or 0, reverse=True)
+
+    async def request_workflow_approval(
+        self, *, request_id: str, workflow_id: str, run_id: str, approved: bool
+    ) -> None:
+        """Persist Progenitor's answer to a workflow approval for the backend to apply."""
+        await self._save_runtime_document(
+            f"{WORKFLOW_APPROVAL_REQUEST_KEY_PREFIX}{request_id}",
+            {
+                "request_id": request_id,
+                "workflow_id": workflow_id,
+                "run_id": run_id,
+                "approved": approved,
                 "requested_at": utcnow_isoformat(),
             },
         )

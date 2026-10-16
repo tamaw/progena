@@ -23,6 +23,7 @@ import Select from '../components/common/Select';
 import { useNotifications } from '../context/NotificationContext';
 import {
   deleteWorkflow,
+  fetchAgentProfiles,
   fetchDocumentTypes,
   fetchWorkflowContent,
   fetchWorkflows,
@@ -100,6 +101,10 @@ const DEFAULT_NODE_SIZES = {
     data: { width: 340, height: 160 },
     settings: { width: 440, height: 320 },
   },
+  routine: {
+    data: { width: 340, height: 160 },
+    settings: { width: 400, height: 260 },
+  },
   data: {
     data: { width: 320, height: 140 },
     settings: { width: 380, height: 280 },
@@ -115,6 +120,10 @@ const DEFAULT_NODE_SIZES = {
   approval: {
     data: { width: 320, height: 130 },
     settings: { width: 400, height: 240 },
+  },
+  notify: {
+    data: { width: 320, height: 140 },
+    settings: { width: 400, height: 280 },
   },
   document_read: {
     data: { width: 320, height: 140 },
@@ -137,11 +146,14 @@ const DEFAULT_NODE_SIZES = {
     settings: { width: 380, height: 320 },
   },
 };
-// V3 node menu: generic agent, data, event, extract, condition and approval
-// nodes only. No capability-specific kinds.
+// V3 node menu: generic agent, data, event, extract, condition, approval and
+// notify nodes only. No capability-specific kinds.
 const NODE_MENU_CATEGORIES = [
   { id: 'triggers', label: 'Triggers', items: [{ id: 'event', kind: 'event', label: 'Event', icon: 'E' }, { id: 'cron', kind: 'cron', label: 'Cron', icon: 'C' }] },
-  { id: 'agents', label: 'Agents', items: [{ id: 'agent', kind: 'agent', label: 'Agent', icon: 'A' }] },
+  { id: 'agents', label: 'Agents', items: [
+    { id: 'agent', kind: 'agent', label: 'Agent', icon: 'A' },
+    { id: 'routine', kind: 'routine', label: 'Routine', icon: 'R' },
+  ] },
   { id: 'data', label: 'Data', items: [
     { id: 'data', kind: 'data', label: 'Data', icon: 'D' },
     { id: 'document_read', kind: 'document_read', label: 'Read document', icon: 'R' },
@@ -156,6 +168,7 @@ const NODE_MENU_CATEGORIES = [
     items: [
       { id: 'condition', kind: 'condition', label: 'Condition', icon: '◇' },
       { id: 'approval', kind: 'approval', label: 'Approval', icon: '✓' },
+      { id: 'notify', kind: 'notify', label: 'Notify', icon: '!' },
     ],
   },
 ];
@@ -221,6 +234,34 @@ function defaultWriteNode() {
   };
 }
 
+// Mirrors routine_node_port_schemas() in app/progenitor/workflows.py (the
+// backend recomputes these on save): a routine's declared input_schema /
+// output_schema fields, else one `message` string, plus the run's thread_id.
+function declaredRoutineSchema(schema) {
+  const properties = schema?.properties;
+  return properties && typeof properties === 'object' && Object.keys(properties).length
+    ? cloneValue(schema)
+    : null;
+}
+
+function routineNodeSchemas(graph) {
+  const definitions = graph?.$defs && Object.keys(graph.$defs).length ? { $defs: cloneValue(graph.$defs) } : {};
+  const declaredInput = declaredRoutineSchema(graph?.input_schema);
+  const inputSchema = declaredInput
+    ? { ...declaredInput, ...definitions }
+    : { type: 'object', required: ['message'], properties: { message: { type: 'string' } } };
+  const declaredOutput = declaredRoutineSchema(graph?.output_schema);
+  const outputSchema = declaredOutput
+    ? {
+      ...declaredOutput,
+      properties: { ...declaredOutput.properties, thread_id: { type: 'string' } },
+      required: [...(declaredOutput.required || []), 'thread_id'],
+      ...definitions,
+    }
+    : { type: 'object', required: ['message', 'thread_id'], properties: { message: { type: 'string' }, thread_id: { type: 'string' } } };
+  return { inputSchema, outputSchema };
+}
+
 const DOCK_NODE_DEFAULTS = {
   event: defaultEventNode,
   agent: () => ({
@@ -230,6 +271,11 @@ const DOCK_NODE_DEFAULTS = {
     subagent: null,
     inputSchema: { type: 'object', properties: {} },
     outputSchema: { type: 'object', required: ['message', 'thread_id'], properties: { message: { type: 'string' }, thread_id: { type: 'string' } } },
+  }),
+  routine: () => ({
+    title: 'Routine',
+    routine: '',
+    ...routineNodeSchemas(null),
   }),
   data: () => ({ title: 'Data', value: null, outputSchema: { type: 'object' } }),
   extract: () => ({
@@ -257,6 +303,14 @@ const DOCK_NODE_DEFAULTS = {
       type: 'object',
       properties: { approved: { type: 'boolean' }, rejected: { type: 'boolean' } },
     },
+  }),
+  notify: () => ({
+    title: 'Notify',
+    alertTitle: 'Workflow update',
+    template: 'Done: {message}',
+    level: 'info',
+    inputSchema: derivePromptInputSchema('Done: {message}'),
+    outputSchema: { type: 'object', required: ['alert_id'], properties: { alert_id: { type: 'string' } } },
   }),
   cron: defaultCronNode,
   document_read: defaultReadNode,
@@ -382,8 +436,10 @@ const NODE_MINIMAP_COLORS = {
   extract: '#a371f7',
   condition: '#d29922',
   approval: '#f85149',
+  notify: '#3fb950',
   document_read: '#79c0ff',
   document_query: '#a5d6ff',
+  routine: '#db61a2',
   document_write: '#56d364',
   unpack: '#bc8cff',
 };
@@ -539,8 +595,25 @@ function buildNodeData(kind, node, callbacks, latestRun) {
       kind,
       title: node.title || 'Approval',
       message: node.message || '',
+      approver: node.approver || 'any',
       inputSchema: cloneValue(node.input_schema) || null,
       outputSchema: cloneValue(node.output_schema) || { type: 'string', enum: ['approved', 'rejected'] },
+      onChange: callbacks.onNodeChange,
+      onDelete: callbacks.onDeleteNode,
+      canDelete: true,
+    };
+  }
+  if (kind === 'notify') {
+    return {
+      ...shared,
+      ...runState,
+      kind,
+      title: node.title || 'Notify',
+      alertTitle: node.alert_title || '',
+      template: node.template || '',
+      level: node.level || 'info',
+      inputSchema: cloneValue(node.input_schema) || derivePromptInputSchema(node.template || ''),
+      outputSchema: cloneValue(node.output_schema) || null,
       onChange: callbacks.onNodeChange,
       onDelete: callbacks.onDeleteNode,
       canDelete: true,
@@ -583,6 +656,20 @@ function buildNodeData(kind, node, callbacks, latestRun) {
       kind,
       title: node.title || 'Write document',
       documentType: node.document_type || '',
+      inputSchema: cloneValue(node.input_schema) || null,
+      outputSchema: cloneValue(node.output_schema) || null,
+      onChange: callbacks.onNodeChange,
+      onDelete: callbacks.onDeleteNode,
+      canDelete: true,
+    };
+  }
+  if (kind === 'routine') {
+    return {
+      ...shared,
+      ...runState,
+      kind,
+      title: node.title || 'Routine',
+      routine: node.routine || '',
       inputSchema: cloneValue(node.input_schema) || null,
       outputSchema: cloneValue(node.output_schema) || null,
       onChange: callbacks.onNodeChange,
@@ -763,6 +850,14 @@ function flowToWorkflow(baseWorkflow, nodes, edges, viewport) {
         input_schema: cloneValue(node.data?.inputSchema) || null,
         output_schema: cloneValue(node.data?.outputSchema) || null,
       };
+    } else if (node.type === 'routine') {
+      graphNodes[node.id] = {
+        kind: 'routine',
+        title: String(node.data?.title || 'Routine'),
+        routine: node.data?.routine || '',
+        input_schema: cloneValue(node.data?.inputSchema) || null,
+        output_schema: cloneValue(node.data?.outputSchema) || null,
+      };
     } else if (node.type === 'data') {
       graphNodes[node.id] = {
         kind: 'data',
@@ -803,8 +898,19 @@ function flowToWorkflow(baseWorkflow, nodes, edges, viewport) {
         kind: 'approval',
         title: String(node.data?.title || 'Approval'),
         message: String(node.data?.message || ''),
+        approver: node.data?.approver === 'human' ? 'human' : 'any',
         input_schema: cloneValue(node.data?.inputSchema) || { type: 'object', properties: {} },
         output_schema: cloneValue(node.data?.outputSchema) || { type: 'string', enum: ['approved', 'rejected'] },
+      };
+    } else if (node.type === 'notify') {
+      graphNodes[node.id] = {
+        kind: 'notify',
+        title: String(node.data?.title || 'Notify'),
+        alert_title: String(node.data?.alertTitle || ''),
+        template: String(node.data?.template || ''),
+        level: node.data?.level || 'info',
+        input_schema: cloneValue(node.data?.inputSchema) || derivePromptInputSchema(node.data?.template || ''),
+        output_schema: cloneValue(node.data?.outputSchema) || null,
       };
     } else if (node.type === 'unpack') {
       graphNodes[node.id] = {
@@ -907,6 +1013,20 @@ function nodeInputPorts(kind, inputSchema) {
     return [];
   }
   return schemaProperties(inputSchema);
+}
+
+// Edges attached to ports a node no longer has after its schemas changed
+// (e.g. a routine node pointed at a different routine).
+function edgesToRemovedPorts(edges, node) {
+  if (!node) return [];
+  const kind = node.data?.kind || node.type;
+  const inputs = new Set(nodeInputPorts(kind, node.data?.inputSchema).map((port) => port.name));
+  const outputs = new Set(nodeOutputPorts(kind, node.data?.outputSchema).map((port) => port.name));
+  const port = (handle) => String(handle || '').replace(/^(in|out):/, '');
+  return edges.filter((edge) => (
+    (edge.target === node.id && !inputs.has(port(edge.targetHandle)))
+    || (edge.source === node.id && !outputs.has(port(edge.sourceHandle)))
+  ));
 }
 
 function schemaTypes(definition) {
@@ -1193,6 +1313,17 @@ function WorkflowNodeOptionsModal({ node, onChange, onClose }) {
     const names = agentProfiles.map((a) => a.name).filter(Boolean);
     return [...new Set(names)].sort().map((name) => ({ value: name, label: name }));
   }, [agentProfiles]);
+
+  const routineOptions = useMemo(() =>
+    agentProfiles
+      .filter((agent) => agent.kind === 'routine')
+      .map((agent) => ({ value: agent.id, label: agent.name || agent.id })),
+  [agentProfiles]);
+
+  const handleRoutineChange = (routineId) => {
+    const routine = agentProfiles.find((agent) => agent.kind === 'routine' && agent.id === routineId);
+    onChange(node.id, { routine: routineId, ...routineNodeSchemas(routine?.graph) });
+  };
 
   const knownSchema = useMemo(() =>
     documentTypeOptions.some((o) => o.value === node.data?.schema),
@@ -1492,6 +1623,12 @@ function WorkflowNodeOptionsModal({ node, onChange, onClose }) {
                 </label>
               </>
             ) : null}
+            {kind === 'routine' ? (
+              <label className="workflow-node-options__field">
+                Routine
+                <Select value={node.data?.routine || ''} onChange={handleRoutineChange} options={routineOptions} ariaLabel="Routine" />
+              </label>
+            ) : null}
             {kind === 'agent' || kind === 'extract' ? (
               <>
                 <div className="workflow-node-options__field">
@@ -1601,7 +1738,31 @@ function WorkflowNodeOptionsModal({ node, onChange, onClose }) {
             {kind === 'approval' ? (
               <>
                 <label className="workflow-node-options__field">Message<textarea value={node.data?.message || ''} onChange={(event) => onChange(node.id, { message: event.target.value })} rows={3} /></label>
+                <label className="workflow-node-options__field">
+                  Who can decide
+                  <Select
+                    value={node.data?.approver || 'any'}
+                    onChange={(approver) => onChange(node.id, { approver })}
+                    options={[{ value: 'any', label: 'A person or Progenitor' }, { value: 'human', label: 'Only a person' }]}
+                    ariaLabel="Who can decide"
+                  />
+                </label>
                 <JsonFieldEditor label="Input schema" value={node.data?.inputSchema} onCommit={(inputSchema) => onChange(node.id, { inputSchema })} />
+              </>
+            ) : null}
+            {kind === 'notify' ? (
+              <>
+                <label className="workflow-node-options__field">Alert title<input value={node.data?.alertTitle || ''} onChange={(event) => onChange(node.id, { alertTitle: event.target.value })} /></label>
+                <label className="workflow-node-options__field">Message<textarea value={node.data?.template || ''} onChange={(event) => onChange(node.id, { template: event.target.value, inputSchema: derivePromptInputSchema(event.target.value) })} rows={4} /></label>
+                <label className="workflow-node-options__field">
+                  Level
+                  <Select
+                    value={node.data?.level || 'info'}
+                    onChange={(level) => onChange(node.id, { level })}
+                    options={[{ value: 'info', label: 'Info' }, { value: 'warning', label: 'Warning' }, { value: 'error', label: 'Error' }]}
+                    ariaLabel="Level"
+                  />
+                </label>
               </>
             ) : null}
           </section>
@@ -1802,9 +1963,11 @@ const NODE_TYPES = {
   data: WorkflowDataNode,
   condition: WorkflowControlNode,
   approval: WorkflowControlNode,
+  notify: PromptNode,
   document_read: PromptNode,
   document_query: PromptNode,
   document_write: PromptNode,
+  routine: PromptNode,
   unpack: UnpackNode,
 };
 
@@ -1987,6 +2150,7 @@ const DOCK_ITEM_META = {
   routine: { icon: 'R', label: 'Routine' },
   condition: { icon: '◇', label: 'Condition' },
   approval: { icon: '✓', label: 'Approval' },
+  notify: { icon: '!', label: 'Notify' },
 };
 
 function WorkflowSideDock({ onSelect }) {
@@ -2085,6 +2249,7 @@ function WorkflowsInner() {
   const workflowsUrl = getApiUrl('workflows');
   const workflowRunsUrl = getApiUrl('workflowRuns');
   const documentTypesUrl = getApiUrl('documentTypes');
+  const agentsUrl = getApiUrl('agentProfiles');
   const realtime = useSelector(selectRealtime);
   const workflows = useSelector(selectWorkflows);
   const workflowsState = useSelector(selectWorkflowsState);
@@ -2153,6 +2318,15 @@ function WorkflowsInner() {
     }
   }, [dispatch, show, documentTypesUrl]);
 
+  // Routine nodes read their ports from the routine graphs in the roster.
+  const loadAgentProfiles = useCallback(async () => {
+    try {
+      await dispatch(fetchAgentProfiles({ agentsUrl })).unwrap();
+    } catch (error) {
+      show('error', 'Routines load failed', error.message);
+    }
+  }, [agentsUrl, dispatch, show]);
+
   useEffect(() => {
     if (!realtime.connected) {
       return;
@@ -2160,7 +2334,8 @@ function WorkflowsInner() {
     void loadWorkflows();
     void loadRuns();
     void loadDocumentTypes();
-  }, [loadDocumentTypes, loadRuns, loadWorkflows, realtime.connected]);
+    void loadAgentProfiles();
+  }, [loadAgentProfiles, loadDocumentTypes, loadRuns, loadWorkflows, realtime.connected]);
 
   useEffect(() => {
     if (!workflows.length) {
@@ -2277,9 +2452,15 @@ function WorkflowsInner() {
         let nextNodes = patched;
         const schemaChanged = patch.outputSchema !== undefined
           && JSON.stringify(node.data?.outputSchema) !== JSON.stringify(patch.outputSchema);
-        if (schemaChanged && !hydratingGraphRef.current) {
-          nextNodes = recomputeUnpackSchemas(patched, nextEdges);
-          const lostEdges = computeLostEdgesForUnpackChange(nextEdges, nextNodes);
+        const portsChanged = schemaChanged || (patch.inputSchema !== undefined
+          && JSON.stringify(node.data?.inputSchema) !== JSON.stringify(patch.inputSchema));
+        if (portsChanged && !hydratingGraphRef.current) {
+          nextNodes = schemaChanged ? recomputeUnpackSchemas(patched, nextEdges) : patched;
+          const changed = nextNodes.find((candidate) => candidate.id === nodeId);
+          const lostEdges = [
+            ...(schemaChanged ? computeLostEdgesForUnpackChange(nextEdges, nextNodes) : []),
+            ...edgesToRemovedPorts(nextEdges, changed),
+          ].filter((edge, index, all) => all.findIndex((other) => other.id === edge.id) === index);
           if (lostEdges.length > 0) {
             const edgeList = lostEdges.map((e) => `${e.source} → ${e.target}`).join(', ');
             if (!window.confirm(`This change will remove ${lostEdges.length} connection(s): ${edgeList}. Continue?`)) return;
@@ -3010,6 +3191,15 @@ function WorkflowsInner() {
                             type="checkbox"
                             checked={draftWorkflow.enabled !== false}
                             onChange={(event) => handleFieldChange('enabled', event.target.checked)}
+                          />
+                        </label>
+                        <label className="workflow-form__toggle">
+                          <span>Notify when paused</span>
+                          <input
+                            type="checkbox"
+                            aria-label="Notify when paused"
+                            checked={draftWorkflow.notify_on_pause === true}
+                            onChange={(event) => handleFieldChange('notify_on_pause', event.target.checked)}
                           />
                         </label>
                         <label className="workflow-form__full">

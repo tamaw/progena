@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "Repo entry",
-  "description": "One repo object under 'repos' in the 'repos' state document (repos.json). Declares a repository the operator wants tracked; live git state (branch, dirty count, commits) is scanned separately by the heartbeat and never lives here.",
+  "description": "One declared repository: the payload of a repo:<id> document (the agent's /config/repos/<id>.json). Declares a repository the operator wants tracked; live git state (branch, dirty count, commits) is scanned separately by the heartbeat and never lives here.",
   "type": "object",
   "properties": {
     "name": {

@@ -1,16 +1,12 @@
-"""Validation for the ``repos`` state document (``repos.json``).
+"""Validation for ``repo:<id>`` documents (one declared repository each).
 
-Declares repositories the operator wants tracked (name, local path, access);
+Declares a repository the operator wants tracked (name, local path, access);
 live git state is scanned separately by the heartbeat into ``repo_scan`` and
 never lives here (see :mod:`app.progenitor.repos.scan`).
 
-The payload-native :func:`validate_repos_payload` is the single
-implementation both write paths converge on: the agent's virtual
-``/config/repos.json`` file (via :func:`validate_repos_document`, a thin
-``json.loads`` wrapper) and the backend's ``/api/ui/repos`` REST routes
-(which already hold a parsed dict from FastAPI). Keeping one canonical
-dict-in/dict-out function means both paths enforce the exact same rules
-without a serialize/deserialize round trip between them.
+:func:`validate_repo_entry` is the single implementation both write paths
+converge on: the agent's ``/config/repos/<id>.json`` files (via
+:func:`validate_repo_document`) and the backend's ``/api/ui/repos`` routes.
 """
 
 from __future__ import annotations
@@ -25,46 +21,40 @@ from ..utils import utcnow_isoformat
 _REPO_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 
 
-def validate_repos_payload(data: Any) -> dict[str, Any]:
-    """Validate a decoded ``repos`` payload (``{"repos": {"<id>": {...}}}``).
+def validate_repo_id(repo_id: str) -> str:
+    """Return ``repo_id`` if it is kebab-case, else raise ``ValueError``."""
+    if not isinstance(repo_id, str) or not _REPO_ID_RE.match(repo_id):
+        raise ValueError(f"repo id '{repo_id}' must be kebab-case (lowercase, digits, hyphens)")
+    return repo_id
 
-    Shape: no other top-level keys; each key is a kebab-case repo id, each
-    value validated against ``data/schemas/repo_entry.schema.v1.json`` (the
-    enforced floor — name/local_path/access, plus optional remote_url/summary/
-    owner/created_at/updated_at). Stamps ``created_at``/``updated_at`` before
-    the schema check, same as the schema permits, so edits that already carry
-    them (round-tripped from storage) still validate.
 
-    Raises ``ValueError`` (never a raw ``TypeError``/``KeyError``) on anything
-    malformed, so both call sites surface one consistent error message.
+def validate_repo_entry(
+    repo_id: str, entry: Any, *, created_at: str | None = None
+) -> dict[str, Any]:
+    """Validate one repo entry against ``repo_entry.schema.v1.json``.
+
+    Stamps ``updated_at`` on every write and ``created_at`` when absent;
+    ``created_at`` (the stored value) wins over whatever the writer sent, so an
+    edit never rewrites when the repo was declared. Raises ``ValueError`` on
+    anything malformed.
     """
-    if not isinstance(data, dict):
-        raise ValueError("top level must be a JSON object")
-    extra_keys = set(data) - {"repos"}
-    if extra_keys:
-        raise ValueError(f"unexpected top-level key(s): {', '.join(sorted(extra_keys))}")
-
-    repos = data.get("repos")
-    if not isinstance(repos, dict):
-        raise ValueError("missing 'repos' object")
-
-    for repo_id, entry in repos.items():
-        if not _REPO_ID_RE.match(repo_id):
-            raise ValueError(f"repo id '{repo_id}' must be kebab-case (lowercase, digits, hyphens)")
-        if not isinstance(entry, dict):
-            raise ValueError(f"repo '{repo_id}' must be an object")
-        if "created_at" not in entry:
-            entry["created_at"] = utcnow_isoformat()
-        entry["updated_at"] = utcnow_isoformat()
-        check_entry_schema(f"repo '{repo_id}'", entry, "repo_entry")
-
-    return data
+    validate_repo_id(repo_id)
+    if not isinstance(entry, dict):
+        raise ValueError(f"repo '{repo_id}' must be a JSON object")
+    validated = dict(entry)
+    now = utcnow_isoformat()
+    validated["created_at"] = created_at or validated.get("created_at") or now
+    validated["updated_at"] = now
+    check_entry_schema(f"repo '{repo_id}'", validated, "repo_entry")
+    return validated
 
 
-def validate_repos_document(content: str) -> dict[str, Any]:
-    """Parse + validate ``/config/repos.json`` text into a normalized payload."""
+def validate_repo_document(
+    repo_id: str, content: str, *, created_at: str | None = None
+) -> dict[str, Any]:
+    """Parse + validate ``/config/repos/<id>.json`` text into a repo entry."""
     try:
         data = json.loads(content)
     except json.JSONDecodeError as exc:
         raise ValueError(f"not valid JSON: {exc}") from exc
-    return validate_repos_payload(data)
+    return validate_repo_entry(repo_id, data, created_at=created_at)

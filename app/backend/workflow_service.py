@@ -9,14 +9,16 @@ import re
 import uuid
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
+from app.backend.alerts import create_alert
 from app.backend.document_events import list_document_types
 from app.backend.document_store import (
     PROGENITOR_STATE_PREFIX,
     BackendDocumentStore,
     document_write_origin,
 )
+from app.backend.routine_runs import enqueue_routine_run
 from app.progenitor.content_documents import content_document_key
 from app.progenitor.document_types import DocumentType
 from app.progenitor.prompts.templates import (
@@ -24,10 +26,12 @@ from app.progenitor.prompts.templates import (
     prompt_relative_path,
     render_prompt_template,
 )
+from app.progenitor.routines.store import routine_graph_key
 from app.progenitor.structured import validate_against_schema
 from app.progenitor.utils import utcnow, utcnow_isoformat
 from app.progenitor.workflows import (
     MAX_WORKFLOW_INVOKE_DEPTH,
+    RoutineLoader,
     WorkflowDefinition,
     WorkflowListItem,
     WorkflowNodeAgent,
@@ -39,6 +43,8 @@ from app.progenitor.workflows import (
     WorkflowNodeDocumentWrite,
     WorkflowNodeEvent,
     WorkflowNodeExtract,
+    WorkflowNodeNotify,
+    WorkflowNodeRoutine,
     WorkflowNodeUnpack,
     WorkflowRun,
     WorkflowRunSource,
@@ -49,6 +55,7 @@ from app.progenitor.workflows import (
     coerce_workflow_definition,
     coerce_workflow_run,
     derive_workflow_port_schemas,
+    routine_declared_schema,
     validate_workflow_definition_payload,
     workflow_definition_key,
     workflow_id_from_path,
@@ -88,6 +95,9 @@ def _bounded_text(value: str, *, limit: int = MAX_WORKFLOW_AUDIT_OUTPUT_CHARS) -
 
 
 _ACTIVE_RUN_STATUSES = frozenset({"queued", "running", "paused"})
+# Session id of a routine run started by a routine node: ``<run_id>_<8 hex>``,
+# so a lifecycle event names the workflow run it belongs to.
+_ROUTINE_SESSION_RE = re.compile(r"^(workflow_run_[0-9a-f]{12})_[0-9a-f]{8}$")
 
 
 @dataclass(frozen=True)
@@ -188,6 +198,20 @@ def _node_template_text(
     return node.template or ""
 
 
+def _routine_loader_from_store(store: BackendDocumentStore) -> RoutineLoader:
+    """Return a loader for the routine graphs routine nodes reference."""
+
+    def load(routine_id: str) -> Mapping[str, Any] | None:
+        document = store.get_document(PROGENITOR_STATE_PREFIX, routine_graph_key(routine_id), None)
+        return (
+            document.payload
+            if document is not None and isinstance(document.payload, dict)
+            else None
+        )
+
+    return load
+
+
 def save_workflow_definition(
     store: BackendDocumentStore,
     payload: Mapping[str, Any],
@@ -198,7 +222,10 @@ def save_workflow_definition(
     if prompt_loader is None:
         prompt_loader = _prompt_loader_from_store(store)
     typed = derive_workflow_port_schemas(
-        payload, list_document_types(store), prompt_loader=prompt_loader
+        payload,
+        list_document_types(store),
+        prompt_loader=prompt_loader,
+        routine_loader=_routine_loader_from_store(store),
     )
     normalized = validate_workflow_definition_payload(typed)
     definition = WorkflowDefinition.model_validate(normalized)
@@ -482,6 +509,32 @@ def _parse_json_reply(node_title: str, reply: str) -> Any:
         raise ValueError(
             f"extract node '{node_title}': Progenitor's reply was not the JSON result"
         ) from exc
+
+
+def _alert_pause(
+    definition: WorkflowDefinition,
+    run: WorkflowRun,
+    *,
+    title: str,
+    message: str,
+    context: dict[str, Any],
+) -> None:
+    """Raise the alert a ``notify_on_pause`` workflow sends when a run pauses.
+
+    Written with the run as its origin, so a workflow triggered by alerts
+    never re-triggers itself from its own pause.
+    """
+
+    with document_write_origin(run.run_id):
+        create_alert(
+            type="warning",
+            title=title,
+            message=message,
+            urgent=False,
+            requires_response=True,
+            source=f"workflow:{definition.id}",
+            context=context,
+        )
 
 
 def _validate_node_output(node: Any, output: Mapping[str, Any]) -> None:
@@ -802,6 +855,21 @@ class WorkflowExecutor:
         async with self._lock_for(workflow_id):
             store = self._store_getter()
             active_run = find_active_workflow_run(store, workflow_id)
+            if (
+                active_run is not None
+                and active_run.status == "paused"
+                and active_run.pending_routine is not None
+            ):
+                # A routine still running continues to wait; one paused at a
+                # human node continues only once the routine is answered.
+                if active_run.pending_routine.get("status") == "running":
+                    resumed = active_run.model_copy(
+                        update={"status": "running", "updated_at": utcnow_isoformat()}
+                    )
+                    save_workflow_run(store, resumed)
+                    self._emit_event("workflow.run.updated", resumed.model_dump(mode="json"))
+                    return resumed
+                return active_run
             if active_run is not None and active_run.status == "paused":
                 candidate = active_run.model_copy(
                     update={
@@ -821,14 +889,42 @@ class WorkflowExecutor:
             self._start_task(workflow_id, candidate.run_id)
         return candidate
 
+    def _alert_routine_pause(
+        self, store: BackendDocumentStore, run: WorkflowRun, event: Mapping[str, Any]
+    ) -> None:
+        definition = get_workflow_definition(store, run.workflow_id)
+        if definition is None or not definition.notify_on_pause or run.pending_routine is None:
+            return
+        question = str(event.get("question") or "The routine is waiting for an answer.")
+        _alert_pause(
+            definition,
+            run,
+            title=f"Answer needed: {definition.title}",
+            message=question,
+            context={
+                "kind": "routine_human",
+                "workflow_id": definition.id,
+                "run_id": run.run_id,
+                "routine_id": run.pending_routine["routine_id"],
+                "thread_id": run.pending_routine.get("thread_id"),
+                "approver": event.get("approver") or "any",
+                "answers": event.get("allowed_responses"),
+            },
+        )
+
     async def resolve_approval(
         self,
         workflow_id: str,
         run_id: str,
         *,
         approved: bool,
+        answered_by: Literal["human", "agent"] = "human",
     ) -> WorkflowRun | None:
-        """Resolve a paused approval node and continue its run."""
+        """Resolve a paused approval node and continue its run.
+
+        Returns ``None`` when the run isn't waiting on an approval. Raises
+        ``PermissionError`` when Progenitor answers a human-only approval.
+        """
 
         async with self._lock_for(workflow_id):
             store = self._store_getter()
@@ -838,8 +934,13 @@ class WorkflowExecutor:
                 or run.workflow_id != workflow_id
                 or run.status != "paused"
                 or run.waiting_node_id is None
+                or run.pending_routine is not None
             ):
                 return None
+            if answered_by == "agent" and (run.pending_approval or {}).get("approver") == "human":
+                raise PermissionError(
+                    "This approval needs a person's decision in the Progenitor UI."
+                )
             selected_port = "approved" if approved else "rejected"
             updated = run.model_copy(
                 update={
@@ -860,6 +961,173 @@ class WorkflowExecutor:
             save_workflow_run(store, updated)
         self._start_task(workflow_id, run_id)
         return updated
+
+    async def _start_routine_node(
+        self,
+        store: BackendDocumentStore,
+        run: WorkflowRun,
+        node_id: str,
+        node: WorkflowNodeRoutine,
+        resolved_input: Mapping[str, Any],
+        node_outputs: Mapping[str, Any],
+    ) -> None:
+        """Record the wait, then queue the routine run it waits on.
+
+        The wait is saved first so a lifecycle event can never arrive for a
+        run that does not yet know it is waiting.
+        """
+
+        graph = _routine_loader_from_store(store)(node.routine)
+        if graph is None:
+            raise ValueError(f"routine '{node.routine}' no longer exists")
+        declared = routine_declared_schema(graph.get("input_schema"))
+        session_id = f"{run.run_id}_{uuid.uuid4().hex[:8]}"
+        request_id = f"workflow-{session_id}"
+        now = utcnow_isoformat()
+        waiting = run.model_copy(
+            update={
+                "current_node_id": node_id,
+                "waiting_node_id": node_id,
+                "pending_routine": {
+                    "node_id": node_id,
+                    "routine_id": node.routine,
+                    "session_id": session_id,
+                    "request_id": request_id,
+                    "status": "running",
+                    "requested_at": now,
+                },
+                "node_outputs": dict(node_outputs),
+                "updated_at": now,
+            }
+        )
+        save_workflow_run(store, waiting)
+        self._emit_event("workflow.run.updated", waiting.model_dump(mode="json"))
+        if declared is not None:
+            parameters = {
+                name: resolved_input[name]
+                for name in declared["properties"]
+                if name in resolved_input
+            }
+            enqueue_routine_run(
+                store,
+                node.routine,
+                request_id=request_id,
+                session_id=session_id,
+                parameters=parameters,
+            )
+        else:
+            enqueue_routine_run(
+                store,
+                node.routine,
+                request_id=request_id,
+                session_id=session_id,
+                message=str(resolved_input["message"]),
+            )
+
+    async def handle_routine_run_event(self, event: Mapping[str, Any]) -> None:
+        """Advance a run waiting on a routine node from one lifecycle event.
+
+        ``started`` after a human pause sets the run running again,
+        ``paused`` pauses it until the routine is answered, ``failed`` fails
+        it, and ``completed`` stores the routine output as the node's output
+        and continues the run (unless the user paused it meanwhile).
+        """
+
+        session_id = str(event.get("session_id") or "")
+        match = _ROUTINE_SESSION_RE.match(session_id)
+        status = event.get("status")
+        if match is None or status not in {"started", "paused", "completed", "failed"}:
+            return
+        store = self._store_getter()
+        run = get_workflow_run(store, match.group(1))
+        if run is None:
+            return
+        workflow_id = run.workflow_id
+        failed = False
+        continue_run = False
+        async with self._lock_for(workflow_id):
+            run = get_workflow_run(store, run.run_id)
+            pending = run.pending_routine if run is not None else None
+            if run is None or pending is None or pending.get("session_id") != session_id:
+                return
+            now = utcnow_isoformat()
+            thread_id = str(event.get("thread_id") or pending.get("thread_id") or "")
+            node_id = str(pending["node_id"])
+            if status == "failed":
+                error = event.get("error") or "routine failed"
+                self._mark_failed(
+                    store,
+                    run.model_copy(update={"pending_routine": None}),
+                    error=f"routine '{pending['routine_id']}' failed: {error}",
+                )
+                failed = True
+            elif status in {"started", "paused"}:
+                paused = status == "paused"
+                updated = run.model_copy(
+                    update={
+                        "status": "paused"
+                        if paused
+                        else ("running" if pending.get("status") == "paused" else run.status),
+                        "pending_routine": {
+                            **pending,
+                            "status": "paused" if paused else "running",
+                            "thread_id": thread_id,
+                        },
+                        "updated_at": now,
+                    }
+                )
+                save_workflow_run(store, updated)
+                self._emit_event("workflow.run.updated", updated.model_dump(mode="json"))
+                if paused:
+                    self._alert_routine_pause(store, updated, event)
+            else:
+                definition = get_workflow_definition(store, workflow_id)
+                node = definition.graph.nodes.get(node_id) if definition is not None else None
+                output = {**(event.get("output") or {}), "thread_id": thread_id}
+                try:
+                    if not isinstance(node, WorkflowNodeRoutine):
+                        raise ValueError(f"routine node '{node_id}' is no longer in the workflow")
+                    _validate_node_output(node, output)
+                except ValueError as exc:
+                    self._mark_failed(
+                        store, run.model_copy(update={"pending_routine": None}), error=str(exc)
+                    )
+                    failed = True
+                else:
+                    output_text = _bounded_text(json.dumps(output, default=str))
+                    # A user pause while the routine ran still holds.
+                    continue_run = run.status != "paused"
+                    updated = run.model_copy(
+                        update={
+                            "status": "queued" if continue_run else "paused",
+                            "current_node_id": node_id,
+                            "completed_node_ids": [*run.completed_node_ids, node_id],
+                            "waiting_node_id": None,
+                            "pending_routine": None,
+                            "node_outputs": {**run.node_outputs, node_id: output},
+                            "last_output": output_text,
+                            "step_audit": [
+                                *run.step_audit,
+                                {
+                                    "node_id": node_id,
+                                    "kind": "routine",
+                                    "completed_at": now,
+                                    "output": output_text,
+                                },
+                            ],
+                            "updated_at": now,
+                        }
+                    )
+                    save_workflow_run(store, updated)
+                    self._emit_event("workflow.run.updated", updated.model_dump(mode="json"))
+        if failed:
+            await self._maybe_start_next_run_locked(store, workflow_id)
+        elif continue_run:
+            existing = self._tasks.get(workflow_id)
+            if existing is not None and not existing.done():
+                # The task that queued the routine is finishing its return.
+                await asyncio.wait({existing}, timeout=5)
+            self._start_task(workflow_id, run.run_id)
 
     def _lock_for(self, workflow_id: str) -> asyncio.Lock:
         lock = self._locks.get(workflow_id)
@@ -947,6 +1215,10 @@ class WorkflowExecutor:
                 save_workflow_run(store, paused_run)
                 self._emit_event("workflow.run.updated", paused_run.model_dump(mode="json"))
                 return
+            if latest_run.pending_routine is not None:
+                # Waiting on a routine run; its lifecycle events continue the
+                # run (see handle_routine_run_event).
+                return
 
             completed = set(latest_run.completed_node_ids)
             node_id = next(
@@ -984,6 +1256,7 @@ class WorkflowExecutor:
                         "node_id": node_id,
                         "title": node.title,
                         "message": node.message,
+                        "approver": node.approver,
                         "requested_at": utcnow_isoformat(),
                     }
                     paused_run = latest_run.model_copy(
@@ -1002,7 +1275,43 @@ class WorkflowExecutor:
                     )
                     save_workflow_run(store, paused_run)
                     self._emit_event("workflow.run.updated", paused_run.model_dump(mode="json"))
+                    if definition.notify_on_pause:
+                        _alert_pause(
+                            definition,
+                            paused_run,
+                            title=f"Approval needed: {definition.title}",
+                            message=node.message,
+                            context={
+                                "kind": "workflow_approval",
+                                "workflow_id": definition.id,
+                                "run_id": paused_run.run_id,
+                                "node_id": node_id,
+                                "approver": node.approver,
+                                "answers": ["approve", "reject"],
+                            },
+                        )
                     return
+                elif isinstance(node, WorkflowNodeNotify):
+                    _validate_node_input(node, resolved_input)
+                    message = render_prompt_template(
+                        parse_prompt_template(node.template), resolved_input
+                    )
+                    with document_write_origin(latest_run.run_id):
+                        alert = create_alert(
+                            type=node.level,
+                            title=node.alert_title,
+                            message=message,
+                            source=f"workflow:{definition.id}",
+                            context={
+                                "kind": "workflow_notify",
+                                "workflow_id": definition.id,
+                                "run_id": latest_run.run_id,
+                                "node_id": node_id,
+                            },
+                        )
+                    output_object = {"alert_id": alert.id}
+                    _validate_node_output(node, output_object)
+                    output_text = message
                 elif isinstance(node, WorkflowNodeDocumentRead | WorkflowNodeDocumentQuery):
                     _validate_node_input(node, resolved_input)
                     output_object = _execute_document_node(store, node, resolved_input)
@@ -1108,6 +1417,12 @@ class WorkflowExecutor:
                     }
                     _validate_node_output(node, output_object)
                     output_text = _bounded_text(prompt_result.response)
+                elif isinstance(node, WorkflowNodeRoutine):
+                    _validate_node_input(node, resolved_input)
+                    await self._start_routine_node(
+                        store, latest_run, node_id, node, resolved_input, node_outputs
+                    )
+                    return
                 else:
                     raise TypeError(f"node '{node_id}' has unsupported kind '{node.kind}'")
             except Exception as exc:

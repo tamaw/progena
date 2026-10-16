@@ -141,8 +141,10 @@ conditional loops, and ensure every loop has a safe exit.
 
 Use a `human` node before a consequential `agent`, `routine`, file-writing, or
 external-call step. Give it a clear `message` and, when useful, an
-`allowed_responses` list such as `approve` and `reject`. The runtime checkpoints
-the routine and resumes the same thread after the user's response.
+`allowed_responses` list such as `approve` and `reject`. Set `approver` to
+`human` when only a person may answer (the UI; `resume_routine` refuses it), or
+leave the default `any`. The runtime checkpoints the routine and resumes the
+same thread after the response.
 
 ## Standard workflow
 

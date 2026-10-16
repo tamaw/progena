@@ -273,6 +273,55 @@ describe('workflowToFlow', () => {
     });
   });
 
+  it('round-trips a routine node with its routine id and ports', () => {
+    const inputSchema = { type: 'object', required: ['message'], properties: { message: { type: 'string' } } };
+    const workflow = {
+      graph: {
+        nodes: {
+          run_1: { kind: 'routine', title: 'Triage', routine: 'triage', input_schema: inputSchema, output_schema: { type: 'object' } },
+        },
+        edges: [],
+      },
+      ui: { nodes: {} },
+    };
+    const flow = workflowToFlow(workflow, {}, null);
+    const node = flow.nodes.find((n) => n.id === 'run_1');
+    expect(node.type).toBe('routine');
+    expect(node.data.routine).toBe('triage');
+
+    const persisted = flowToWorkflow(workflow, flow.nodes, flow.edges, flow.viewport);
+    expect(persisted.graph.nodes.run_1).toEqual({
+      kind: 'routine',
+      title: 'Triage',
+      routine: 'triage',
+      input_schema: inputSchema,
+      output_schema: { type: 'object' },
+    });
+  });
+
+  it('round-trips notify nodes, approval approvers and notify_on_pause', () => {
+    const workflow = {
+      notify_on_pause: true,
+      graph: {
+        nodes: {
+          tell: { kind: 'notify', title: 'Tell', alert_title: 'Done', template: 'Card {key} ready', level: 'warning' },
+          gate: { kind: 'approval', title: 'Gate', message: 'Ship?', approver: 'human' },
+        },
+        edges: [],
+      },
+      ui: { nodes: {} },
+    };
+    const flow = workflowToFlow(workflow, {}, null);
+    const persisted = flowToWorkflow(workflow, flow.nodes, flow.edges, flow.viewport);
+
+    expect(persisted.notify_on_pause).toBe(true);
+    expect(persisted.graph.nodes.tell).toMatchObject({
+      kind: 'notify', alert_title: 'Done', template: 'Card {key} ready', level: 'warning',
+    });
+    expect(Object.keys(persisted.graph.nodes.tell.input_schema.properties)).toEqual(['key']);
+    expect(persisted.graph.nodes.gate.approver).toBe('human');
+  });
+
   it('round-trips a cron node', () => {
     const workflow = {
       graph: {
@@ -382,11 +431,11 @@ describe('workflowToFlow', () => {
 });
 
 describe('workflow node menu', () => {
-  it('exposes exactly the eleven V3 node kinds and no capability-specific kinds', () => {
+  it('exposes exactly the thirteen V3 node kinds and no capability-specific kinds', () => {
     const addableKinds = NODE_MENU_CATEGORIES.flatMap((category) => category.items).map((item) => item.kind);
 
     expect(addableKinds.sort()).toEqual(
-      ['agent', 'approval', 'condition', 'cron', 'data', 'document_query', 'document_read', 'document_write', 'event', 'extract', 'unpack'].sort(),
+      ['agent', 'approval', 'condition', 'cron', 'data', 'document_query', 'document_read', 'document_write', 'event', 'extract', 'notify', 'routine', 'unpack'].sort(),
     );
   });
 });

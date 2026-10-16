@@ -21,13 +21,18 @@ Profile:
     skill reads before calling structured_output
   - /config/ -> Postgres state documents the agent can read/edit as files,
     including mcp.json, plugins.json, marketplaces.json, schedule.json,
-    agents.json, repos.json, preferences.json, and profiles.json, plus the /tasks/
+    agents.json, preferences.json, and profiles.json, plus the /tasks/
     task directory (board.json and per-task <id>.md files). Writes persist via
     the StateManager; the Postgres listener publishes the corresponding live UI
     snapshot.
   - /sessions/ -> chat sessions as YAML-front-matter + IRC-style markdown,
     one <date>_<title-slug>_<id8>.md per non-archived chat, backed by the
     ``session:`` documents in the store (front matter editable, body read-only)
+  - /config/repos/ -> declared repositories, one <id>.json per ``repo:<id>``
+    document (live git state stays in the read-only /config/repo_scan.json;
+    /repos/ is the read-only checked-out source of managed repos)
+  - /alerts/ -> the user's alerts, read-only <id>.json each (``alert:<id>``
+    documents); ones that need an answer say what is waiting and who may answer
 
 Prompts and memories used to be plain files bind-mounted from the host (see
 ``content_documents.py`` for why); they're Postgres documents now. Progenitor's
@@ -52,11 +57,13 @@ from deepagents.backends.protocol import EditResult, FileUploadResponse, WriteRe
 from .attachment_backend import AttachmentDirectoryBackend
 from .session_backend import SessionDirectoryBackend
 from .state_backend import (
+    AlertDirectoryBackend,
     ContentDocumentDirectoryBackend,
     InboxDirectoryBackend,
     KanbanTaskDirectoryBackend,
     PolicyDirectoryBackend,
     PromptDocumentDirectoryBackend,
+    RepoDirectoryBackend,
     RoutineDirectoryBackend,
     StateDocumentBackend,
     StateFile,
@@ -72,7 +79,6 @@ from .state_backend import (
     create_preferences_state_file,
     create_registry_state_file,
     create_repo_scan_state_file,
-    create_repos_state_file,
     create_schedule_state_file,
 )
 
@@ -258,7 +264,6 @@ def create_progenitor_backend(
             create_knowledge_state_file,
             create_schedule_state_file,
             create_registry_state_file,
-            create_repos_state_file,
             create_repo_scan_state_file,
             create_health_state_file,
             create_preferences_state_file,
@@ -269,6 +274,9 @@ def create_progenitor_backend(
         )
         routes["/tasks/"] = KanbanTaskDirectoryBackend(state_manager)
         routes["/workflows/"] = WorkflowDirectoryBackend(state_manager)
+        # Longest prefix wins, so this shadows /config/ for repos/ only.
+        routes["/config/repos/"] = RepoDirectoryBackend(state_manager)
+        routes["/alerts/"] = AlertDirectoryBackend(state_manager)
         routes["/routines/"] = RoutineDirectoryBackend(state_manager)
         routes["/policies/"] = PolicyDirectoryBackend(state_manager)
         # User inbox: a directory of per-message files (/inbox/<id>.md) the

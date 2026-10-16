@@ -70,6 +70,8 @@
 .node-type-icon.event { background: rgba(255, 166, 87, 0.2); color: #ffa657; }
 .node-type-icon.group { background: rgba(110, 118, 129, 0.2); color: #6e7681; }
 .node-type-icon.agent { background: rgba(248, 81, 73, 0.2); color: #f85149; }
+.node-type-icon.routine { background: rgba(219, 97, 162, 0.2); color: #db61a2; }
+.node-type-icon.notify { background: rgba(63, 185, 80, 0.2); color: #3fb950; }
 
 .node-title {
   flex: 1;
