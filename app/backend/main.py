@@ -626,7 +626,7 @@ def _build_alert_summary_prompt(alert: AlertInfo) -> str:
     lines = [
         "A backend alert was just created for the user.",
         "Use the `say_to_user` tool exactly once.",
-        "Do not call `notify_user`, `ask_user`, or any other tools.",
+        "Do not call `ask_user` or any other tools.",
         "Write a short alert-style summary for the user on their current platform.",
         "Keep the message faithful to the alert details, but summarize it clearly and naturally.",
     ]

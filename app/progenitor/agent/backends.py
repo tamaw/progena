@@ -31,8 +31,8 @@ Profile:
   - /config/repos/ -> declared repositories, one <id>.json per ``repo:<id>``
     document (live git state stays in the read-only /config/repo_scan.json;
     /repos/ is the read-only checked-out source of managed repos)
-  - /alerts/ -> the user's alerts, read-only <id>.json each (``alert:<id>``
-    documents); ones that need an answer say what is waiting and who may answer
+  - /alerts/ -> writable alert request files (`<id>.json`); the backend stamps
+    the server-managed fields and persists each as an ``alert:<id>`` document
 
 Prompts and memories used to be plain files bind-mounted from the host (see
 ``content_documents.py`` for why); they're Postgres documents now. Progenitor's

@@ -159,7 +159,7 @@ class TestAlertRelay:
         prompt = _build_alert_summary_prompt(self._alert())
 
         assert "Use the `say_to_user` tool exactly once." in prompt
-        assert "Do not call `notify_user`, `ask_user`, or any other tools." in prompt
+        assert "Do not call `ask_user` or any other tools." in prompt
         assert '"title": "Build failed"' in prompt
         assert '"message": "Tests failed in CI"' in prompt
 

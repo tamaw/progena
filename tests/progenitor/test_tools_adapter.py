@@ -66,7 +66,6 @@ def test_core_only_tools_present() -> None:
     assert {
         "say_to_user",
         "ask_user",
-        "notify_user",
         "list_agents",
         "call_agent",
         "enqueue_background_task",
@@ -99,7 +98,6 @@ def test_user_communication_tools_expose_structured_parameters() -> None:
 
     say_schema = _tool_by_name(tools, "say_to_user").args_schema.model_json_schema()
     ask_schema = _tool_by_name(tools, "ask_user").args_schema.model_json_schema()
-    notify_schema = _tool_by_name(tools, "notify_user").args_schema.model_json_schema()
 
     assert "message" in say_schema.get("properties", {})
     assert say_schema.get("required") == ["message"]
@@ -107,10 +105,6 @@ def test_user_communication_tools_expose_structured_parameters() -> None:
     ask_properties = ask_schema.get("properties", {})
     assert {"question", "context", "options"} <= set(ask_properties)
     assert ask_schema.get("required") == ["question"]
-
-    notify_properties = notify_schema.get("properties", {})
-    assert {"title", "body", "level"} <= set(notify_properties)
-    assert notify_schema.get("required") == ["title", "body"]
 
 
 def test_reflection_tool_exposes_structured_parameters() -> None:

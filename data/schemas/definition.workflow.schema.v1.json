@@ -70,6 +70,11 @@
             "kind": {"const": "unpack"}, "title": {"type": "string", "minLength": 1},
             "input_schema": {"type": "object"}, "output_schema": {"type": "object"}
           }},
+          {"type": "object", "additionalProperties": false, "required": ["kind", "title", "template"], "properties": {
+            "kind": {"const": "format"}, "title": {"type": "string", "minLength": 1},
+            "template": {"description": "Plain-text template without front matter. Each {placeholder} root becomes a required input port.", "type": "string", "minLength": 1},
+            "input_schema": {"type": "object"}, "output_schema": {"type": "object"}
+          }},
           {"type": "object", "additionalProperties": false, "required": ["kind", "title"], "properties": {
             "kind": {"const": "extract"}, "title": {"type": "string", "minLength": 1}, "prompt": {"type": ["string", "null"]}, "template": {"type": ["string", "null"]}, "schema": {}, "input_schema": {"type": "object"}, "output_schema": {"type": "object"}
           }},
@@ -87,13 +92,6 @@
           {"type": "object", "additionalProperties": false, "required": ["kind", "title", "message"], "properties": {
             "kind": {"const": "approval"}, "title": {"type": "string", "minLength": 1}, "message": {"type": "string", "minLength": 1},
             "approver": {"description": "Who may decide: 'human' only in the Progenitor UI, 'any' also lets Progenitor decide (resolve_workflow_approval).", "enum": ["human", "any"]},
-            "input_schema": {"type": "object"}, "output_schema": {"type": "object"}
-          }},
-          {"type": "object", "additionalProperties": false, "required": ["kind", "title", "alert_title", "template"], "properties": {
-            "kind": {"const": "notify"}, "title": {"type": "string", "minLength": 1},
-            "alert_title": {"description": "The alert's title.", "type": "string", "minLength": 1},
-            "template": {"description": "The alert message; {placeholders} become input ports.", "type": "string", "minLength": 1},
-            "level": {"enum": ["info", "warning", "error"]},
             "input_schema": {"type": "object"}, "output_schema": {"type": "object"}
           }}
         ]}},

@@ -160,6 +160,15 @@ def parse_prompt_template(text: str) -> PromptTemplate:
     )
 
 
+def parse_format_template(text: str) -> PromptTemplate:
+    """Parse a plain-text format template without allowing front matter."""
+
+    template = parse_prompt_template(text)
+    if template.body != text:
+        raise ValueError("format template must not contain front matter")
+    return template
+
+
 def render_prompt_template(template: PromptTemplate, values: Mapping[str, Any]) -> str:
     """Render *template* by replacing each placeholder with the value at its
     dotted path in *values*.

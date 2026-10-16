@@ -1,9 +1,8 @@
 """User alerts: one ``alert:<id>`` document each.
 
-Every producer - Progenitor's ``notify_user`` tool, workflow ``notify`` nodes and
-workflow pause notifications - writes an alert document built here. The backend
-consumes the ``alert`` document events: it shows the alert in the alert center
-and asks Progenitor to relay it to the user (chat, or Telegram when away).
+Every producer writes an alert document built here. The backend consumes the
+``alert`` document events: it shows the alert in the alert center and asks
+Progenitor to relay it to the user (chat, or Telegram when away).
 """
 
 from __future__ import annotations

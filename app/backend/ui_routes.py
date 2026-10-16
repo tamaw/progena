@@ -4096,8 +4096,8 @@ def set_alert_relay(relay: Callable[[AlertInfo], Coroutine[Any, Any, None]] | No
 async def _publish_alert_document(typed: TypedDocumentEvent) -> None:
     """Show alert changes in the alert center; relay new alerts to the user.
 
-    Every producer (``notify_user``, workflow notify nodes, pause notifications)
-    only writes an ``alert:<id>`` document, so this is the one delivery path.
+    Every producer writes an ``alert:<id>`` document, so this is the one
+    delivery path.
     The relay is an LLM turn, so it runs in the background: a slow or failed
     relay never holds up document event dispatch.
     """

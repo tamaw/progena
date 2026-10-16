@@ -20,7 +20,7 @@ from .document_kinds import (
     WORKFLOW_RUN_KEY_PREFIX,
 )
 from .document_types import DOCUMENT_OPERATIONS, DocumentOperation, DocumentType
-from .prompts.templates import parse_prompt_template, resolve_type_ref
+from .prompts.templates import parse_format_template, parse_prompt_template, resolve_type_ref
 from .schemas import load_schema
 from .structured import validate_against_schema
 from .utils import utcnow_isoformat
@@ -264,7 +264,12 @@ def document_create_input_schema(
     properties: dict[str, Any] = {"id": {"type": "string"}}
     for field in document_type.writable_fields:
         properties[field] = copy.deepcopy(writable_props.get(field, _ANY_VALUE_SCHEMA))
-    required = [field for field in schema_required if field in document_type.writable_fields]
+    required = [
+        field
+        for field in schema_required
+        if field in document_type.writable_fields
+        and "default" not in writable_props.get(field, _ANY_VALUE_SCHEMA)
+    ]
     return {"type": "object", "required": required, "properties": properties, **definitions}
 
 
@@ -656,6 +661,18 @@ def _unpack_output_schema(
     }
 
 
+class WorkflowNodeFormat(BaseModel):
+    """Deterministic plain-text template rendering step."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["format"] = "format"
+    title: str = "Format"
+    template: str = Field(min_length=1)
+    input_schema: dict[str, Any] = Field(default_factory=lambda: dict(_JSON_OBJECT_SCHEMA))
+    output_schema: dict[str, Any] = Field(default_factory=lambda: dict(_JSON_OBJECT_SCHEMA))
+
+
 class WorkflowNodeExtract(BaseModel):
     """Prompt-backed extraction step with structured output."""
 
@@ -740,30 +757,6 @@ class WorkflowNodeApproval(BaseModel):
     )
 
 
-class WorkflowNodeNotify(BaseModel):
-    """Send the user an alert (alert center, relayed to chat or Telegram).
-
-    ``template`` is the message body; its ``{placeholders}`` become input
-    ports, like a prompt node's. Outputs the created ``alert_id``.
-    """
-
-    model_config = ConfigDict(extra="forbid")
-
-    kind: Literal["notify"] = "notify"
-    title: str = "Notify"
-    alert_title: str = Field(min_length=1)
-    template: str = Field(min_length=1)
-    level: Literal["info", "warning", "error"] = "info"
-    input_schema: dict[str, Any] = Field(default_factory=lambda: dict(_JSON_OBJECT_SCHEMA))
-    output_schema: dict[str, Any] = Field(
-        default_factory=lambda: {
-            "type": "object",
-            "required": ["alert_id"],
-            "properties": {"alert_id": {"type": "string"}},
-        }
-    )
-
-
 WorkflowNode = Annotated[
     WorkflowNodeEvent
     | WorkflowNodeCron
@@ -773,13 +766,13 @@ WorkflowNode = Annotated[
     | WorkflowNodeDocumentWrite
     | WorkflowNodeDocumentCreate
     | WorkflowNodeDocumentDelete
+    | WorkflowNodeFormat
     | WorkflowNodeUnpack
     | WorkflowNodeExtract
     | WorkflowNodeAgent
     | WorkflowNodeRoutine
     | WorkflowNodeCondition
-    | WorkflowNodeApproval
-    | WorkflowNodeNotify,
+    | WorkflowNodeApproval,
     Field(discriminator="kind"),
 ]
 
@@ -1075,15 +1068,27 @@ def _derive_prompt_node_input_schema(
     return {"type": "object", "required": required, "properties": properties, **definitions}
 
 
-def _derive_notify_input_schema(node: dict[str, Any]) -> dict[str, Any]:
-    template = node.get("template")
-    if not isinstance(template, str) or not template.strip():
-        raise ValueError(f"notify node '{node.get('title')}' needs a non-empty 'template'")
-    roots = parse_prompt_template(template).roots
+def _derive_format_node_input_schema(node: dict[str, Any]) -> dict[str, Any]:
+    """Derive one required untyped input port per format placeholder root."""
+
+    template = parse_format_template(str(node.get("template") or ""))
+    roots: list[str] = []
+    for placeholder in template.placeholders:
+        root = placeholder.split(".", 1)[0]
+        if root not in roots:
+            roots.append(root)
     return {
         "type": "object",
-        "required": list(roots),
-        "properties": dict.fromkeys(roots, _ANY_VALUE_SCHEMA),
+        "required": roots,
+        "properties": {root: {} for root in roots},
+    }
+
+
+def _derive_format_node_output_schema() -> dict[str, Any]:
+    return {
+        "type": "object",
+        "required": ["text"],
+        "properties": {"text": {"type": "string"}},
     }
 
 
@@ -1393,6 +1398,14 @@ def derive_workflow_port_schemas(
         )
     raw_edges = graph.get("edges") if isinstance(graph, dict) else None
     edges: list[Any] = raw_edges if isinstance(raw_edges, list) else []
+    format_nodes = {
+        node_id: node
+        for node_id, node in nodes.items()
+        if isinstance(node, dict) and node.get("kind") == "format"
+    }
+    for node in format_nodes.values():
+        node["input_schema"] = _derive_format_node_input_schema(node)
+        node["output_schema"] = _derive_format_node_output_schema()
     prompt_nodes = {
         node_id: node
         for node_id, node in nodes.items()
@@ -1403,13 +1416,6 @@ def derive_workflow_port_schemas(
     # unpack an Extract result; an Unpack value never constrains an Extract).
     for node in prompt_nodes.values():
         node["input_schema"] = _derive_prompt_node_input_schema(node, document_types, prompt_loader)
-    for node in nodes.values():
-        if isinstance(node, dict) and node.get("kind") == "notify":
-            # A notify message is plain text: placeholders only, no front matter types.
-            node["input_schema"] = _derive_notify_input_schema(node)
-            node["output_schema"] = WorkflowNodeNotify.model_fields["output_schema"].get_default(
-                call_default_factory=True
-            )
     for node_id, node in prompt_nodes.items():
         if node["kind"] == "extract":
             node["output_schema"] = _derive_extract_output_schema(
@@ -1674,6 +1680,8 @@ def _validate_workflow_graph(definition: WorkflowDefinition) -> None:
             raise ValueError(f"condition node '{node_id}' is missing an expression")
         elif isinstance(node, WorkflowNodeApproval) and not node.message.strip():
             raise ValueError(f"approval node '{node_id}' is missing a message")
+        elif isinstance(node, WorkflowNodeFormat) and not node.template.strip():
+            raise ValueError(f"format node '{node_id}' is missing a template")
         elif isinstance(node, WorkflowNodeExtract | WorkflowNodeAgent) and not (
             node.prompt or node.template
         ):

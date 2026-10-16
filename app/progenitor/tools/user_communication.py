@@ -11,7 +11,6 @@ from typing import Any, cast
 
 from pydantic import BaseModel, Field
 
-from ..alerts import build_alert
 from .protocol import BaseSystemTool, ToolContext, ToolResult
 
 # Type alias for event pusher callback
@@ -39,17 +38,6 @@ class AskUserArgs(BaseModel):
     options: list[str] | None = Field(
         default=None,
         description="Optional list of suggested answers/options",
-    )
-
-
-class NotifyUserArgs(BaseModel):
-    """Structured arguments for backend-managed user notifications."""
-
-    title: str = Field(description="Short notification title")
-    body: str = Field(description="Notification body/details")
-    level: str = Field(
-        default="info",
-        description="Notification level: info, warning, error, critical",
     )
 
 
@@ -124,38 +112,3 @@ class AskUserTool(BaseSystemTool):
             },
         )
         return ToolResult.ok({"status": "sent", "question": question, "options": options_out})
-
-
-class NotifyUserTool(BaseSystemTool):
-    """Create an alert document; the backend shows it and relays it to the user."""
-
-    @property
-    def args_model(self) -> type[BaseModel]:
-        return NotifyUserArgs
-
-    @property
-    def name(self) -> str:
-        return "notify_user"
-
-    @property
-    def description(self) -> str:
-        return "Create a durable alert; the backend shows it and delivers it to the user"
-
-    async def execute(self, context: ToolContext) -> ToolResult:
-        args = context.tool_args if isinstance(context.tool_args, dict) else {}
-        title = str(args.get("title") or "").strip()
-        body = str(args.get("body") or context.user_input or "").strip()
-        level = str(args.get("level") or "info").strip() or "info"
-
-        if not title:
-            return ToolResult.fail("Missing 'title'")
-        if not body:
-            return ToolResult.fail("Missing 'body'")
-        if context.state_manager is None:
-            return ToolResult.fail("State manager is not available.")
-
-        alert = build_alert(title=title, message=body, level=level, source="notify_user")
-        await context.state_manager.save_alert(alert)
-        return ToolResult.ok(
-            {"status": "sent", "alert_id": alert["id"], "title": title, "level": alert["type"]}
-        )
