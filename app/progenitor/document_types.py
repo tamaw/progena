@@ -96,6 +96,25 @@ class DocumentType(BaseModel):
             return None
         return load_schema(self.schema_name)
 
+    def validate_write(self, fields: Mapping[str, Any]) -> str | None:
+        """Check a partial write of writable fields against this type's schema.
+
+        Returns the validation error message, or None when valid (or schemaless).
+        """
+
+        schema = self.load_schema()
+        if schema is None:
+            return None
+        from .structured import validate_against_schema
+
+        properties = schema.get("properties", {})
+        partial = {
+            "type": "object",
+            "properties": {field: properties.get(field, {}) for field in self.writable},
+            **{name: schema[name] for name in ("$defs", "definitions") if name in schema},
+        }
+        return validate_against_schema(dict(fields), partial)
+
     def payload(self) -> dict[str, Any]:
         return self.model_dump(mode="json", by_alias=True)
 

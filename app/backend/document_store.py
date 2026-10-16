@@ -181,6 +181,14 @@ class BackendDocumentStore(Protocol):
         self, after: DocumentEventPosition, limit: int
     ) -> list[DocumentEvent]: ...
 
+    def has_deferred_document_events(self, after: DocumentEventPosition) -> bool:
+        """True when committed events after ``after`` are not yet readable.
+
+        They wait behind a still-open older transaction; once it ends they
+        become readable without any new event (or NOTIFY) announcing it.
+        """
+        ...
+
     def latest_document_event_position(self) -> DocumentEventPosition: ...
 
     def get_document_event_cursor(self, consumer: str) -> DocumentEventPosition | None: ...
@@ -229,6 +237,21 @@ class BackendDocumentStore(Protocol):
     def close(self) -> None: ...
 
 
+def _is_session_noise(prefix: str, key: str, before: Any, after: Any) -> bool:
+    """A session update touching only ``content``/``last_activity`` (every turn).
+
+    Mirrors the Postgres capture trigger's noise filter: such updates log no event.
+    """
+    if prefix != PROGENITOR_STATE_PREFIX or not key.startswith(SESSION_KEY_PREFIX):
+        return False
+    if not isinstance(before, dict) or not isinstance(after, dict):
+        return False
+    noise = ("content", "last_activity")
+    return {k: v for k, v in before.items() if k not in noise} == {
+        k: v for k, v in after.items() if k not in noise
+    }
+
+
 class InMemoryDocumentStore:
     """Small test/local implementation with the same payload shape as Postgres."""
 
@@ -244,7 +267,10 @@ class InMemoryDocumentStore:
         self._last_event_seq = 0
         self._event_cursors: dict[str, DocumentEventPosition] = {}
         self._event_listeners: list[Callable[[int], None]] = []
-        self._lock = threading.Lock()
+        # Serializes every write with its event publication, and event reads
+        # with both, so a reader never sees a sequence number past one that is
+        # allocated but not yet appended. Reentrant: mutators may read.
+        self._lock = threading.RLock()
 
     def get_document(
         self, prefix: str, key: str, default: Any | None = None
@@ -270,17 +296,19 @@ class InMemoryDocumentStore:
         # Copy like Postgres serialization does, so later in-place edits by the
         # caller cannot rewrite the stored value (or an event's before/after).
         stored = copy.deepcopy(payload)
-        previous = self._documents.get((prefix, key))
-        self._documents[(prefix, key)] = StoredDocument(stored, datetime.now(UTC))
-        if previous is None:
-            self._record_event(prefix, key, "created", None, stored)
-        elif previous.payload != stored:
-            self._record_event(prefix, key, "updated", previous.payload, stored)
+        with self._lock:
+            previous = self._documents.get((prefix, key))
+            self._documents[(prefix, key)] = StoredDocument(stored, datetime.now(UTC))
+            if previous is None:
+                self._record_event(prefix, key, "created", None, stored)
+            elif previous.payload != stored:
+                self._record_event(prefix, key, "updated", previous.payload, stored)
 
     def delete_document(self, prefix: str, key: str) -> None:
-        previous = self._documents.pop((prefix, key), None)
-        if previous is not None:
-            self._record_event(prefix, key, "deleted", previous.payload, None)
+        with self._lock:
+            previous = self._documents.pop((prefix, key), None)
+            if previous is not None:
+                self._record_event(prefix, key, "deleted", previous.payload, None)
 
     def mutate_document(self, prefix: str, key: str, mutator: Callable[[Any], Any]) -> Any:
         with self._lock:
@@ -297,15 +325,15 @@ class InMemoryDocumentStore:
             return new_payload
 
     def merge_document(self, prefix: str, key: str, payload: Any) -> bool:
-        previous = self._documents.get((prefix, key))
-        if previous is None or not isinstance(previous.payload, dict):
-            return False
-        merged = {**previous.payload, **payload}
-        stored = copy.deepcopy(merged)
-        self._documents[(prefix, key)] = StoredDocument(stored, datetime.now(UTC))
-        if previous.payload != stored:
-            self._record_event(prefix, key, "updated", previous.payload, stored)
-        return True
+        with self._lock:
+            previous = self._documents.get((prefix, key))
+            if previous is None or not isinstance(previous.payload, dict):
+                return False
+            stored = copy.deepcopy({**previous.payload, **payload})
+            self._documents[(prefix, key)] = StoredDocument(stored, datetime.now(UTC))
+            if previous.payload != stored:
+                self._record_event(prefix, key, "updated", previous.payload, stored)
+            return True
 
     def add_document_event_listener(self, listener: Callable[[int], None]) -> None:
         """Call ``listener(seq)`` after each recorded event (the in-memory NOTIFY)."""
@@ -319,7 +347,10 @@ class InMemoryDocumentStore:
     def _record_event(
         self, prefix: str, key: str, op: DocumentEventOp, before: Any, after: Any
     ) -> None:
+        """Append one event; the caller holds ``self._lock``."""
         if prefix not in _STORE_CHANGE_PREFIXES:
+            return
+        if op == "updated" and _is_session_noise(prefix, key, before, after):
             return
         self._last_event_seq += 1
         seq = self._last_event_seq
@@ -341,10 +372,16 @@ class InMemoryDocumentStore:
             listener(seq)
 
     def read_document_events(self, after: DocumentEventPosition, limit: int) -> list[DocumentEvent]:
-        return [event for event in self._events if event.position > after][:limit]
+        with self._lock:
+            return [event for event in self._events if event.position > after][:limit]
+
+    def has_deferred_document_events(self, after: DocumentEventPosition) -> bool:
+        # In-memory writes are readable the moment they are recorded.
+        return False
 
     def latest_document_event_position(self) -> DocumentEventPosition:
-        return DocumentEventPosition(self._last_event_seq, self._last_event_seq)
+        with self._lock:
+            return DocumentEventPosition(self._last_event_seq, self._last_event_seq)
 
     def get_document_event_cursor(self, consumer: str) -> DocumentEventPosition | None:
         return self._event_cursors.get(consumer)
@@ -356,13 +393,14 @@ class InMemoryDocumentStore:
         self, *, through: DocumentEventPosition, older_than: timedelta
     ) -> int:
         cutoff = datetime.now(UTC) - older_than
-        kept = [
-            event
-            for event in self._events
-            if event.position > through or event.created_at >= cutoff
-        ]
-        removed = len(self._events) - len(kept)
-        self._events = kept
+        with self._lock:
+            kept = [
+                event
+                for event in self._events
+                if event.position > through or event.created_at >= cutoff
+            ]
+            removed = len(self._events) - len(kept)
+            self._events = kept
         return removed
 
     def query_logs(
@@ -976,14 +1014,16 @@ class PostgresDocumentStore:
         origin = _document_write_origin.get()
         with self._pool.connection() as conn:
             with conn.transaction(), conn.cursor() as cur:
-                # A transaction-scoped lock on the key (not a row lock), so
-                # two first writes of a missing document serialize too.
+                # A transaction-scoped lock on the key, so two first writes of
+                # a missing document serialize; plus a row lock on an existing
+                # document, so plain saves/merges (which skip the advisory
+                # lock) cannot commit between this read and the write below.
                 cur.execute(
                     "SELECT pg_advisory_xact_lock(hashtext(%s), hashtext(%s))",
                     (prefix, key),
                 )
                 cur.execute(
-                    "SELECT value FROM store WHERE prefix = %s AND key = %s",
+                    "SELECT value FROM store WHERE prefix = %s AND key = %s FOR UPDATE",
                     (prefix, key),
                 )
                 row = cast(dict[str, Any] | None, cur.fetchone())
@@ -1055,6 +1095,21 @@ class PostgresDocumentStore:
             )
             for row in rows
         ]
+
+    def has_deferred_document_events(self, after: DocumentEventPosition) -> bool:
+        with self._cursor() as cur:
+            cur.execute(
+                """
+                SELECT EXISTS (
+                    SELECT 1 FROM document_events
+                    WHERE (txid, seq) > (%s::text::xid8, %s)
+                      AND txid >= pg_snapshot_xmin(pg_current_snapshot())
+                ) AS deferred
+                """,
+                (str(after.txid), after.seq),
+            )
+            row = cast(dict[str, Any] | None, cur.fetchone())
+        return bool(row and row["deferred"])
 
     def latest_document_event_position(self) -> DocumentEventPosition:
         with self._cursor() as cur:

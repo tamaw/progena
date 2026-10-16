@@ -668,14 +668,6 @@ class AttachmentManager:
 # FastAPI integration helpers
 
 
-# Precedes the machine-only attachment note appended to a user's message so
-# the note can be sent to the LLM (it needs to know a file just arrived and
-# where to read it) while still being stripped back out before the message
-# is persisted/displayed as chat history -- see
-# chat_sessions._strip_attachment_context, the matching consumer.
-ATTACHMENT_CONTEXT_MARKER = "<!--progenitor:attachment-context-->"
-
-
 def format_attachments_for_context(attachments: list[AttachmentResult]) -> str:
     """
     Build a compact, agent-only note listing this turn's attachments.

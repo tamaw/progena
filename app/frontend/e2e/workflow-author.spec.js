@@ -16,6 +16,7 @@ const CRON_TITLE = `pw-cron-${RUN}`;
 const EVENT_TITLE = `pw-event-${RUN}`;
 const CARD_TITLE = `pw-card-${RUN} Production database is down for all customers`;
 const created = [];
+const quickChatThreadIds = [];
 
 test.describe.configure({ mode: 'serial' });
 test.setTimeout(600_000);
@@ -43,23 +44,35 @@ function trackPageErrors(page) {
   return errors;
 }
 
+function sqlLiteral(text) {
+  return `'${text.replaceAll("'", "''")}'`;
+}
+
+// Quick chat prefixes the typed text with a page-context block.
+function quickChatThreadForMessage(text) {
+  const row = sql(`select value->'payload'->>'thread_id' from store where key like 'session:%' and strpos(value->'payload'->>'first_message', ${sqlLiteral(text)}) > 0`);
+  return row || null;
+}
+
 async function askProgenitor(page, text) {
   await page.goto('/workflows');
   await page.getByRole('button', { name: '+ New' }).click();
-  const newChat = page.getByRole('button', { name: 'New chat' });
-  if (await newChat.isVisible().catch(() => false)) await newChat.click();
   const input = page.locator('.qchat-input textarea, .qchat-input input').first();
   await expect(input).toBeVisible({ timeout: 10_000 });
   await input.fill(text);
   await page.getByRole('button', { name: 'Send message' }).click();
+  await expect.poll(() => quickChatThreadForMessage(text), { timeout: 30_000, intervals: [500] }).toBeTruthy();
+  const threadId = quickChatThreadForMessage(text);
+  expect(threadId).toBeTruthy();
+  quickChatThreadIds.push(threadId);
+  await expect(input).toBeEnabled({ timeout: 300_000 });
 }
 
 async function closeQuickChat(page) {
   const closePanel = page.getByRole('button', { name: 'Close panel' });
-  if (await closePanel.isVisible().catch(() => false)) await closePanel.click();
+  if (await closePanel.isVisible()) await closePanel.click();
   await expect(page.locator('.topnav-scrim')).toBeHidden();
 }
-
 async function runCards(page, title) {
   await page.goto('/workflows');
   await page.getByRole('button', { name: new RegExp(title) }).click();
@@ -76,18 +89,19 @@ function sqlRows(query) {
 // each workflow with its runs and run threads, and the kanban card (through the
 // card route, so board bookkeeping such as card_order is updated too).
 test.afterAll(async ({ request }) => {
-  for (const threadId of sqlRows(`select value->'payload'->>'thread_id' from store where key like 'session:%' and value->'payload'->>'first_message' like '%pw-%-${RUN}%'`)) {
+  for (const threadId of quickChatThreadIds) {
     await request.delete(`/api/ui/chats/${threadId}`);
   }
+  const threads = [...quickChatThreadIds];
   for (const id of created) {
-    const threads = runsOf(id).map((run) => run.thread_id).filter(Boolean);
+    threads.push(...runsOf(id).map((run) => run.thread_id).filter(Boolean));
     await request.delete(`/api/ui/workflows/${id}`);
     sql(`delete from store where key like 'workflow_run:%' and value->'payload'->>'workflow_id' = '${id}'`);
-    if (threads.length) {
-      const list = threads.map((thread) => `'${thread}'`).join(',');
-      for (const table of ['checkpoint_writes', 'checkpoint_blobs', 'checkpoints']) {
-        sql(`delete from ${table} where thread_id in (${list})`);
-      }
+  }
+  if (threads.length) {
+    const list = [...new Set(threads)].map((thread) => `'${thread}'`).join(',');
+    for (const table of ['checkpoint_writes', 'checkpoint_blobs', 'checkpoints']) {
+      sql(`delete from ${table} where thread_id in (${list})`);
     }
   }
   for (const cardId of sqlRows(`select value->'payload'->>'id' from store where key like 'kanban_card:%' and value->'payload'->>'title' like 'pw-card-${RUN}%'`)) {

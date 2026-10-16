@@ -62,8 +62,6 @@ OLD_CHAT_PREFIX = "backend.chat.sessions"
 OLD_TRANSCRIPT_PREFIXES = ("progenitor.conversations.meta", "progenitor.conversations.logs")
 MIGRATION_PREFIX = "progenitor.migrations"
 MIGRATION_KEY = "sessions"
-FIRST_MESSAGE_MAX_CHARS = 4000
-IMAGE_ONLY_FIRST_MESSAGE = "* sends an image"
 
 _UI_THREAD = re.compile(
     r"^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|thread_sess_.+)$"
@@ -74,7 +72,7 @@ _UI_THREAD = re.compile(
 _CANDIDATES_SQL = """
 SELECT DISTINCT ON (w.thread_id)
        w.thread_id,
-       progenitor_human_text(w.blob) AS first_message,
+       progenitor_session_first_message(w.blob) AS first_message,
        c.checkpoint->>'ts' AS created_at,
        (SELECT max(t.checkpoint->>'ts') FROM checkpoints t
          WHERE t.thread_id = w.thread_id AND t.checkpoint_ns = '') AS last_activity
@@ -84,7 +82,7 @@ WHERE w.checkpoint_ns = ''
   AND w.channel = 'messages'
   AND c.metadata->>'source' = 'input'
   AND c.metadata->>'lc_agent_name' = 'progenitor'
-  AND progenitor_human_text(w.blob) IS NOT NULL
+  AND progenitor_session_first_message(w.blob) IS NOT NULL
 ORDER BY w.thread_id, w.checkpoint_id, w.idx
 """
 
@@ -105,10 +103,6 @@ def thread_source(thread_id: str) -> str | None:
     if _UI_THREAD.match(thread_id):
         return "ui"
     return None
-
-
-def _first_message(text: str) -> str:
-    return text[:FIRST_MESSAGE_MAX_CHARS] if text else IMAGE_ONLY_FIRST_MESSAGE
 
 
 async def _candidates(
@@ -156,7 +150,7 @@ async def _candidates(
                     "thread_id": thread_id,
                     "source": source,
                     "title": str(old.get("title") or DEFAULT_CHAT_TITLE),
-                    "first_message": _first_message(row["first_message"]),
+                    "first_message": row["first_message"],
                     "pinned": bool(old.get("pinned")),
                     "archived": bool(old.get("archived")),
                     "created_at": row["created_at"],
@@ -170,7 +164,7 @@ async def _candidates(
 
 async def migrate(database_url: str, *, dry_run: bool) -> None:
     # Opening the saver runs the runtime's setup, which installs the session
-    # trigger and ``progenitor_human_text``.
+    # trigger and ``progenitor_session_first_message``.
     saver, saver_conn = await _open_saver(database_url)
     try:
         async with await psycopg.AsyncConnection.connect(

@@ -9,9 +9,13 @@ import {
   deriveUnpackSchemas,
   recomputeUnpackSchemas,
   computeLostEdgesForUnpackChange,
+  pruneLostUnpackEdges,
   isUnpackableSchema,
   parsePromptPlaceholders,
   derivePromptInputSchema,
+  promptTemplatePatch,
+  promptDocumentPatch,
+  createPaletteNode,
   nodeInputPorts,
   schemasAreCompatible,
 } from './WorkflowsPage';
@@ -512,13 +516,16 @@ describe('canvas interaction tools', () => {
 describe('data edge compatibility', () => {
   it('rejects a connection whose source type the target does not accept', () => {
     expect(schemasAreCompatible({ type: 'string' }, { type: 'integer' })).toBe(false);
+    expect(schemasAreCompatible({ type: 'string' }, { type: 'number' })).toBe(false);
     expect(schemasAreCompatible({ type: ['string', 'null'] }, { type: 'string' })).toBe(false);
     expect(schemasAreCompatible({ type: 'object', title: 'Kanban Card' }, { type: 'object', title: 'Workflow' })).toBe(false);
   });
 
-  it('accepts a source whose types the target accepts, including nullable unions', () => {
+  it('accepts a source whose types the target accepts, including JSON integer numbers', () => {
     expect(schemasAreCompatible({ type: 'string' }, { type: 'string' })).toBe(true);
     expect(schemasAreCompatible({ type: 'string' }, { type: ['string', 'null'] })).toBe(true);
+    expect(schemasAreCompatible({ type: 'integer' }, { type: 'number' })).toBe(true);
+    expect(schemasAreCompatible({ type: 'integer' }, { type: ['number', 'null'] })).toBe(true);
     expect(schemasAreCompatible({}, { type: 'integer' })).toBe(true);
   });
 });
@@ -711,6 +718,16 @@ describe('auto-sized nodes without stored size', () => {
   });
 });
 
+describe('palette node creation', () => {
+  it('creates compact nodes so their persisted resize is a data size', () => {
+    const node = createPaletteNode('agent', 'agent_1', { x: 1, y: 2 }, [], {});
+
+    expect(node.data.expanded).toBe(false);
+    expect(node.width).toBe(340);
+    expect(node.height).toBe(160);
+  });
+});
+
 describe('unpack schema derivation', () => {
   it('derives unpack schemas from a connected object port', () => {
     const nodes = [
@@ -722,6 +739,43 @@ describe('unpack schema derivation', () => {
     expect(inputSchema.properties.value).toMatchObject({ title: 'Kanban Card', type: 'object' });
     expect(outputSchema.properties).toHaveProperty('title');
     expect(outputSchema.properties).toHaveProperty('column_id');
+  });
+
+  it('derives fields from a nullable object port', () => {
+    const nodes = [
+      { id: 'source', data: { kind: 'event', outputSchema: { type: 'object', properties: { card: { type: ['object', 'null'], properties: { title: { type: 'string' } } } } } } },
+      { id: 'unpack', data: { kind: 'unpack' } },
+    ];
+    const { outputSchema } = deriveUnpackSchemas('unpack', nodes, [{ source: 'source', target: 'unpack', sourceHandle: 'out:card', targetHandle: 'in:value' }]);
+
+    expect(outputSchema.properties).toEqual({ title: { type: 'string' } });
+  });
+
+  it('resolves chained local refs before exposing Unpack outputs', () => {
+    const nodes = [
+      {
+        id: 'source',
+        data: {
+          kind: 'data',
+          outputSchema: {
+            $ref: '#/$defs/Card',
+            $defs: {
+              Card: { $ref: '#/$defs/CardShape' },
+              CardShape: { type: 'object', required: ['title'], properties: { title: { type: 'string' } } },
+            },
+          },
+        },
+      },
+      { id: 'unpack', data: { kind: 'unpack' } },
+    ];
+    const { inputSchema, outputSchema } = deriveUnpackSchemas('unpack', nodes, [{ source: 'source', target: 'unpack', sourceHandle: 'out:value', targetHandle: 'in:value' }]);
+
+    expect(inputSchema.properties.value).toMatchObject({ $ref: '#/$defs/Card' });
+    expect(outputSchema).toMatchObject({
+      properties: { title: { type: 'string' } },
+      required: ['title'],
+      $defs: nodes[0].data.outputSchema.$defs,
+    });
   });
 
   it('returns empty schemas when no value edge is connected', () => {
@@ -798,9 +852,31 @@ describe('unpack edge loss computation', () => {
   });
 });
 
+describe('unpack dependent edge pruning', () => {
+
+  it('prunes every dangling edge in a downstream unpack chain', () => {
+    const nodes = [
+      { id: 'unpack_1', data: { kind: 'unpack', outputSchema: { type: 'object', properties: { card: { type: 'object', properties: { title: { type: 'string' } } } } } } },
+      { id: 'unpack_2', data: { kind: 'unpack', outputSchema: { type: 'object', properties: { title: { type: 'string' } } } } },
+      { id: 'consumer', data: { kind: 'agent' } },
+    ];
+    const edges = [
+      { id: 'unpack-value', source: 'unpack_1', sourceHandle: 'out:card', target: 'unpack_2', targetHandle: 'in:value' },
+      { id: 'consumer-value', source: 'unpack_2', sourceHandle: 'out:title', target: 'consumer', targetHandle: 'in:title' },
+    ];
+
+    const pruned = pruneLostUnpackEdges(nodes, edges);
+
+    expect(pruned.edges).toEqual([]);
+    expect(pruned.lostEdges.map((edge) => edge.id)).toEqual(['unpack-value', 'consumer-value']);
+  });
+});
+
+
 describe('isUnpackableSchema', () => {
-  it('returns true for an object schema with properties', () => {
+  it('returns true for an object schema or nullable object schema with properties', () => {
     expect(isUnpackableSchema({ type: 'object', properties: { a: { type: 'string' } } })).toBe(true);
+    expect(isUnpackableSchema({ type: ['object', 'null'], properties: { a: { type: 'string' } } })).toBe(true);
   });
 
   it('returns false for non-object or empty properties', () => {
@@ -836,18 +912,47 @@ describe('parsePromptPlaceholders', () => {
 });
 
 describe('derivePromptInputSchema', () => {
-  it('builds an object schema with required roots from placeholders', () => {
+  it('builds an object schema with required placeholder roots and optional thread_id', () => {
     const schema = derivePromptInputSchema('Card {card.title} in {board.name}');
     expect(schema).toEqual({
       type: 'object',
       required: ['card', 'board'],
-      properties: { card: {}, board: {} },
+      properties: { thread_id: { type: 'string' }, card: {}, board: {} },
     });
   });
 
-  it('returns empty properties when there are no placeholders', () => {
+  it('keeps thread_id optional when there are no placeholders', () => {
     const schema = derivePromptInputSchema('Hello world');
-    expect(schema).toEqual({ type: 'object', properties: {} });
+    expect(schema).toEqual({ type: 'object', properties: { thread_id: { type: 'string' } } });
+  });
+
+  it('changes only an inline template input contract, preserving typed Extract outputs', () => {
+    const extractOutputSchema = {
+      type: 'object',
+      required: ['result', 'thread_id'],
+      properties: { result: { type: 'object', properties: { title: { type: 'string' } } }, thread_id: { type: 'string' } },
+    };
+    const node = {
+      template: 'Old template',
+      inputSchema: { type: 'object', properties: {} },
+      outputSchema: extractOutputSchema,
+    };
+    const patch = promptTemplatePatch('Summarize {card.title}');
+    const updated = { ...node, ...patch };
+
+    expect(patch).toEqual({
+      template: 'Summarize {card.title}',
+      inputSchema: { type: 'object', required: ['card'], properties: { thread_id: { type: 'string' }, card: {} } },
+    });
+    expect(updated.outputSchema).toEqual(extractOutputSchema);
+  });
+
+  it('derives the selected prompt document input contract from its loaded text', () => {
+    expect(promptDocumentPatch('prompts/card.md', 'Review {card.title}')).toEqual({
+      prompt: 'prompts/card.md',
+      template: null,
+      inputSchema: { type: 'object', required: ['card'], properties: { thread_id: { type: 'string' }, card: {} } },
+    });
   });
 });
 

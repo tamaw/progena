@@ -49,6 +49,8 @@ DISPATCH_CONSUMER = "backend.dispatch"
 _BATCH_SIZE = 200
 _EVENT_RETENTION = timedelta(days=1)
 _PRUNE_INTERVAL_SECONDS = 600.0
+# How often to re-check while committed events wait behind an open transaction.
+_DEFERRED_RETRY_SECONDS = 1.0
 
 
 def list_document_types(store: BackendDocumentStore) -> dict[str, DocumentType]:
@@ -179,11 +181,18 @@ class DocumentEventDispatcher:
         return self._stopped
 
     async def _run(self) -> None:
+        deferred = False
         while True:
-            await self._wake.wait()
+            if deferred:
+                # Committed events wait behind an open transaction. Its end
+                # produces no event of its own, so re-check on a timer.
+                with contextlib.suppress(TimeoutError):
+                    await asyncio.wait_for(self._wake.wait(), _DEFERRED_RETRY_SECONDS)
+            else:
+                await self._wake.wait()
             self._wake.clear()
             try:
-                await self.drain()
+                deferred = await self.drain()
             except Exception:
                 # Fail fast: the failing event stays unacknowledged and nothing
                 # after it is dispatched until the backend is fixed/restarted.
@@ -191,12 +200,13 @@ class DocumentEventDispatcher:
                 self._stopped = True
                 return
 
-    async def drain(self) -> None:
+    async def drain(self) -> bool:
         """Process every committed event after the cursor, in commit order.
 
         Handler exceptions propagate; the cursor only advances past events
         every handler accepted. Workflow-level failures are recorded by the
-        handler as failed runs and do not raise.
+        handler as failed runs and do not raise. Returns True when committed
+        events remain deferred behind an older open transaction.
         """
 
         async with self._lock:
@@ -211,6 +221,7 @@ class DocumentEventDispatcher:
                     cursor = event.position
                     store.save_document_event_cursor(self._consumer, cursor)
             self._maybe_prune(store, cursor)
+            return store.has_deferred_document_events(cursor)
 
     def _maybe_prune(self, store: BackendDocumentStore, cursor: DocumentEventPosition) -> None:
         now = time.monotonic()

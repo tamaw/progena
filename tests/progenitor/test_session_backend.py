@@ -160,6 +160,36 @@ async def test_edit_changes_title(sessions: _Sessions) -> None:
     assert session["title"] == "Edited chat"
 
 
+async def test_write_rejects_a_value_the_schema_forbids(sessions: _Sessions) -> None:
+    await sessions.session("aaaaaaaa-live")
+    [name] = await sessions.names()
+    current = await sessions.text(name)
+    result = await sessions.backend.awrite(name, current.replace("title: New chat", "title: 123"))
+    assert result.error is not None and "123" in result.error
+
+    session = await sessions.state_manager._runtime_store.peek_document(
+        f"{SESSION_KEY_PREFIX}aaaaaaaa-live"
+    )
+    assert isinstance(session, dict) and session["title"] == "New chat"
+
+
+async def test_edit_of_an_ambiguous_string_needs_replace_all(sessions: _Sessions) -> None:
+    await sessions.session("aaaaaaaa-live")
+    [name] = await sessions.names()
+
+    # pinned: false and archived: false both match.
+    ambiguous = await sessions.backend.aedit(name, ": false", ": true")
+    assert ambiguous.error is not None and "2 times" in ambiguous.error
+
+    result = await sessions.backend.aedit(name, "pinned: false", "pinned: true")
+    assert result.error is None, result.error
+    session = await sessions.state_manager._runtime_store.peek_document(
+        f"{SESSION_KEY_PREFIX}aaaaaaaa-live"
+    )
+    assert isinstance(session, dict) and session["pinned"] is True
+    assert session["archived"] is False
+
+
 async def test_delete_is_not_allowed(sessions: _Sessions) -> None:
     await sessions.session("aaaaaaaa-live")
     [name] = await sessions.names()
@@ -180,9 +210,11 @@ async def test_mount_serves_sessions_through_the_agent_filesystem(
     [path] = [entry["path"] for entry in listing.entries or []]
     read = await filesystem.aread(path, 0, 100)
     found = await filesystem.agrep("<@progenitor>", "/sessions/", "*_weekend-plans_*")
+    globbed = await filesystem.aglob("*.md", "/sessions/")
     written = await filesystem.awrite(path, "x")
 
     assert re.fullmatch(r"/sessions/\d{4}-\d{2}-\d{2}_weekend-plans_aaaaaaaa\.md", path)
     assert read.file_data is not None and "<user> hello" in read.file_data["content"]
     assert [match["path"] for match in found.matches] == [path]
+    assert [match["path"] for match in globbed.matches or []] == [path]
     assert written.error is not None

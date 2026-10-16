@@ -55,6 +55,7 @@ from app.progenitor.workflows import (
     coerce_workflow_definition,
     coerce_workflow_run,
     derive_workflow_port_schemas,
+    json_equal,
     routine_declared_schema,
     validate_workflow_definition_payload,
     workflow_definition_key,
@@ -607,7 +608,7 @@ def _execute_document_node(
     for key, document in store.list_documents(PROGENITOR_STATE_PREFIX, document_type.key_prefix):
         payload = document.payload
         if not isinstance(payload, Mapping) or any(
-            payload.get(field) != value for field, value in filters.items()
+            not json_equal(payload.get(field), value) for field, value in filters.items()
         ):
             continue
         keys.append(key)
@@ -632,24 +633,14 @@ def _execute_document_write_node(
         if field in resolved_input and resolved_input[field] is not None:
             merge_payload[field] = resolved_input[field]
     if not merge_payload:
-        document = store.get_document(PROGENITOR_STATE_PREFIX, key, None)
-        return {"found": document is not None, **dict.fromkeys(document_type.writable)}
-    document_schema = document_type.load_schema()
-    if document_schema is not None:
-        from app.progenitor.structured import validate_against_schema
-
-        partial_schema = {
-            "type": "object",
-            "properties": {
-                field: document_schema.get("properties", {}).get(field, {})
-                for field in document_type.writable
-            },
-        }
-        error = validate_against_schema(merge_payload, partial_schema)
-        if error:
-            raise ValueError(
-                f"document_write node '{node.title}' output failed schema validation: {error}"
-            )
+        # Nothing to write: report existence only, like a write reports only
+        # the fields it wrote (unwritten optional ports stay absent).
+        return {"found": store.get_document(PROGENITOR_STATE_PREFIX, key, None) is not None}
+    error = document_type.validate_write(merge_payload)
+    if error:
+        raise ValueError(
+            f"document_write node '{node.title}' output failed schema validation: {error}"
+        )
     with document_write_origin(run_id):
         found = store.merge_document(PROGENITOR_STATE_PREFIX, key, merge_payload)
     output: dict[str, Any] = {"found": found}
@@ -1191,18 +1182,19 @@ class WorkflowExecutor:
             self._emit_event("workflow.run.started", run.model_dump(mode="json"))
 
         # Node-output registry: every node's typed output object, keyed by
-        # node id. Data nodes are always available; event/agent/extract
-        # outputs are populated as they complete.
+        # node id. Data nodes are always available (refreshed from each reload
+        # of the definition, so a mid-run edit applies to later nodes);
+        # event/agent/extract outputs are populated as they complete.
         node_outputs: dict[str, dict[str, Any]] = dict(run.node_outputs)
-        for node_id, node in definition.graph.nodes.items():
-            immediate_output = workflow_node_output_object(node)
-            if immediate_output is not None:
-                node_outputs[node_id] = immediate_output
         if run.trigger_node_id and run.trigger_node_id not in node_outputs:
             node_outputs[run.trigger_node_id] = dict(run.trigger_event)
 
         while True:
             definition = get_workflow_definition(store, workflow_id) or definition
+            for data_node_id, data_node in definition.graph.nodes.items():
+                immediate_output = workflow_node_output_object(data_node)
+                if immediate_output is not None:
+                    node_outputs[data_node_id] = immediate_output
             latest_run = get_workflow_run(store, run_id) or run
             if not definition.enabled:
                 self._mark_failed(store, latest_run, error="Workflow was disabled during execution")
@@ -1337,8 +1329,11 @@ class WorkflowExecutor:
                     output_text = _bounded_text(json.dumps(output_object, default=str))
                 elif isinstance(node, WorkflowNodeExtract):
                     _validate_node_input(node, resolved_input)
+                    thread_id = self._resolve_thread_id(resolved_input, latest_run) or ""
                     template = parse_prompt_template(_node_template_text(store, node))
-                    input_text = render_prompt_template(template, resolved_input)
+                    input_text = render_prompt_template(
+                        template, {**resolved_input, "thread_id": thread_id}
+                    )
                     result_schema = node.output_schema.get("properties", {}).get("result")
                     if not isinstance(result_schema, dict):
                         raise ValueError(f"extract node '{node.title}' has no result schema")
@@ -1370,7 +1365,6 @@ class WorkflowExecutor:
                         "returned and nothing else:\n"
                         f"```json\n{json.dumps(tool_schema, indent=2)}\n```"
                     )
-                    thread_id = self._resolve_thread_id(resolved_input, latest_run) or ""
                     prompt_result = await self._prompt_runner(
                         workflow=definition,
                         run_id=latest_run.run_id,
@@ -1391,18 +1385,23 @@ class WorkflowExecutor:
                         raise ValueError(
                             f"extract node '{node.title}' output failed schema validation: {error}"
                         )
-                    output_object = {"result": structured, "thread_id": thread_id}
+                    output_object = {
+                        "result": structured,
+                        "thread_id": prompt_result.thread_id or thread_id,
+                    }
                     output_text = _bounded_text(json.dumps(output_object, default=str))
                 elif isinstance(node, WorkflowNodeAgent):
                     _validate_node_input(node, resolved_input)
+                    thread_id = self._resolve_thread_id(resolved_input, latest_run)
                     template = parse_prompt_template(_node_template_text(store, node))
-                    input_text = render_prompt_template(template, resolved_input)
+                    input_text = render_prompt_template(
+                        template, {**resolved_input, "thread_id": thread_id or ""}
+                    )
                     if node.subagent:
                         input_text = (
                             f"{input_text}\n\n"
                             f"Delegate this task to the '{node.subagent}' sub-agent and return its answer."
                         )
-                    thread_id = self._resolve_thread_id(resolved_input, latest_run)
                     prompt_result = await self._prompt_runner(
                         workflow=definition,
                         run_id=latest_run.run_id,
@@ -1413,7 +1412,7 @@ class WorkflowExecutor:
                     )
                     output_object = {
                         "message": prompt_result.response,
-                        "thread_id": thread_id or "",
+                        "thread_id": prompt_result.thread_id or thread_id or "",
                     }
                     _validate_node_output(node, output_object)
                     output_text = _bounded_text(prompt_result.response)

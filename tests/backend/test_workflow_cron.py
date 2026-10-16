@@ -272,3 +272,56 @@ async def test_cron_fire_during_an_active_run_follows_the_node_overlap(overlap, 
     completed = get_workflow_run(store, first.run_id)
     assert completed is not None and completed.source == "cron"
     assert "Due at 2026-10-12T08:00:00+00:00" in runner.calls[0]["input_text"]
+
+
+@pytest.mark.asyncio
+async def test_pause_and_resume_between_ticks_does_not_replay_paused_due_times():
+    store, definition, executor, clock = _setup(expression="*/5 * * * *")
+    await clock.at(START)
+    paused = definition.model_dump(mode="json", by_alias=True) | {"paused": True}
+    # Both land between ticks; the clock only hears of them as document events.
+    clock.clock.workflow_changed(
+        save_workflow_definition(store, paused).model_dump(mode="json", by_alias=True)
+    )
+    resumed = save_workflow_definition(store, paused | {"paused": False})
+    clock.clock.workflow_changed(resumed.model_dump(mode="json", by_alias=True))
+
+    next_due = await clock.at(START + timedelta(minutes=12))
+
+    assert executor.calls == []
+    assert next_due == START + timedelta(minutes=15)
+
+
+@pytest.mark.asyncio
+async def test_backends_sharing_a_store_fire_each_due_time_once():
+    store, _definition, executor, first = _setup(expression="*/5 * * * *")
+    await first.at(START)
+    stale = list(store.list_documents(BACKEND_STATE_PREFIX, "workflow_cron:"))
+
+    class StaleReads:
+        """A second backend that read the cron state before the first fired."""
+
+        def __getattr__(self, name):
+            return getattr(store, name)
+
+        def list_documents(self, prefix, key_prefix=""):
+            if prefix == BACKEND_STATE_PREFIX:
+                return stale
+            return store.list_documents(prefix, key_prefix)
+
+    second = WorkflowCronClock(
+        store_getter=StaleReads,
+        definitions_getter=list_workflow_definitions,
+        executor_getter=lambda: executor,
+        now=lambda: START + timedelta(minutes=5, seconds=1),
+    )
+    await first.at(START + timedelta(minutes=5, seconds=1))
+    await second.tick()
+
+    assert [call["trigger"]["scheduled_for"] for call in executor.calls] == [
+        "2026-10-12T08:35:00+00:00"
+    ]
+
+
+def test_state_keys_of_ids_with_colons_do_not_collide():
+    assert workflow_cron_state_key("a:b", "c") != workflow_cron_state_key("a", "b:c")
