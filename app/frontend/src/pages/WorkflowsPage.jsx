@@ -131,6 +131,14 @@ const DEFAULT_NODE_SIZES = {
     data: { width: 320, height: 140 },
     settings: { width: 380, height: 280 },
   },
+  document_create: {
+    data: { width: 320, height: 140 },
+    settings: { width: 380, height: 280 },
+  },
+  document_delete: {
+    data: { width: 320, height: 140 },
+    settings: { width: 380, height: 240 },
+  },
   unpack: {
     data: { width: 280, height: 120 },
     settings: { width: 340, height: 240 },
@@ -140,8 +148,7 @@ const DEFAULT_NODE_SIZES = {
     settings: { width: 380, height: 320 },
   },
 };
-// V3 node menu: generic agent, data, event, extract, condition and approval
-// nodes only. No capability-specific kinds.
+// Workflow nodes are grouped by what they do, including direct document operations.
 const NODE_MENU_CATEGORIES = [
   { id: 'triggers', label: 'Triggers', items: [{ id: 'event', kind: 'event', label: 'Event', icon: 'E' }, { id: 'cron', kind: 'cron', label: 'Cron', icon: 'C' }] },
   { id: 'agents', label: 'Agents', items: [{ id: 'agent', kind: 'agent', label: 'Agent', icon: 'A' }] },
@@ -150,6 +157,8 @@ const NODE_MENU_CATEGORIES = [
     { id: 'document_read', kind: 'document_read', label: 'Read document', icon: 'R' },
     { id: 'document_query', kind: 'document_query', label: 'Query documents', icon: 'Q' },
     { id: 'document_write', kind: 'document_write', label: 'Write document', icon: 'W' },
+    { id: 'document_create', kind: 'document_create', label: 'Create document', icon: '+' },
+    { id: 'document_delete', kind: 'document_delete', label: 'Delete document', icon: '×' },
     { id: 'unpack', kind: 'unpack', label: 'Unpack', icon: 'U' },
     { id: 'extract', kind: 'extract', label: 'Extract', icon: 'X' },
   ]} ,
@@ -208,7 +217,9 @@ function defaultQueryNode() {
   return {
     title: 'Query documents',
     documentType: '',
-    filterFields: [],
+    filters: [],
+    orderBy: null,
+    order: 'asc',
     limit: 50,
     inputSchema: null,
     outputSchema: null,
@@ -218,6 +229,24 @@ function defaultQueryNode() {
 function defaultWriteNode() {
   return {
     title: 'Write document',
+    documentType: '',
+    inputSchema: null,
+    outputSchema: null,
+  };
+}
+
+function defaultCreateNode() {
+  return {
+    title: 'Create document',
+    documentType: '',
+    inputSchema: null,
+    outputSchema: null,
+  };
+}
+
+function defaultDeleteNode() {
+  return {
+    title: 'Delete document',
     documentType: '',
     inputSchema: null,
     outputSchema: null,
@@ -265,6 +294,8 @@ const DOCK_NODE_DEFAULTS = {
   document_read: defaultReadNode,
   document_query: defaultQueryNode,
   document_write: defaultWriteNode,
+  document_create: defaultCreateNode,
+  document_delete: defaultDeleteNode,
   unpack: () => ({
     title: 'Unpack',
     inputSchema: { type: 'object', required: ['value'], properties: { value: { type: 'object' } } },
@@ -404,6 +435,8 @@ const NODE_MINIMAP_COLORS = {
   document_read: '#79c0ff',
   document_query: '#a5d6ff',
   document_write: '#56d364',
+  document_create: '#56d364',
+  document_delete: '#ff7b72',
   unpack: '#bc8cff',
 };
 
@@ -586,7 +619,9 @@ function buildNodeData(kind, node, callbacks, latestRun) {
       kind,
       title: node.title || 'Query documents',
       documentType: node.document_type || '',
-      filterFields: Array.isArray(node.filter_fields) ? [...node.filter_fields] : [],
+      filters: Array.isArray(node.filters) ? cloneValue(node.filters) : [],
+      orderBy: node.order_by || null,
+      order: node.order || 'asc',
       limit: Number.isFinite(node.limit) ? node.limit : 50,
       inputSchema: cloneValue(node.input_schema) || null,
       outputSchema: cloneValue(node.output_schema) || null,
@@ -595,12 +630,17 @@ function buildNodeData(kind, node, callbacks, latestRun) {
       canDelete: true,
     };
   }
-  if (kind === 'document_write') {
+  if (kind === 'document_write' || kind === 'document_create' || kind === 'document_delete') {
+    const labels = {
+      document_write: 'Write document',
+      document_create: 'Create document',
+      document_delete: 'Delete document',
+    };
     return {
       ...shared,
       ...runState,
       kind,
-      title: node.title || 'Write document',
+      title: node.title || labels[kind],
       documentType: node.document_type || '',
       inputSchema: cloneValue(node.input_schema) || null,
       outputSchema: cloneValue(node.output_schema) || null,
@@ -769,15 +809,22 @@ function flowToWorkflow(baseWorkflow, nodes, edges, viewport) {
         kind: 'document_query',
         title: String(node.data?.title || 'Query documents'),
         document_type: node.data?.documentType || '',
-        filter_fields: Array.isArray(node.data?.filterFields) ? [...node.data.filterFields] : [],
+        filters: Array.isArray(node.data?.filters) ? cloneValue(node.data.filters) : [],
+        order_by: node.data?.orderBy || null,
+        order: node.data?.order || 'asc',
         limit: Number.isFinite(node.data?.limit) ? node.data.limit : 50,
         input_schema: cloneValue(node.data?.inputSchema) || null,
         output_schema: cloneValue(node.data?.outputSchema) || null,
       };
-    } else if (node.type === 'document_write') {
+    } else if (['document_write', 'document_create', 'document_delete'].includes(node.type)) {
+      const titles = {
+        document_write: 'Write document',
+        document_create: 'Create document',
+        document_delete: 'Delete document',
+      };
       graphNodes[node.id] = {
-        kind: 'document_write',
-        title: String(node.data?.title || 'Write document'),
+        kind: node.type,
+        title: String(node.data?.title || titles[node.type]),
         document_type: node.data?.documentType || '',
         input_schema: cloneValue(node.data?.inputSchema) || null,
         output_schema: cloneValue(node.data?.outputSchema) || null,
@@ -1186,15 +1233,24 @@ function JsonFieldEditor({ label, value, onCommit }) {
   );
 }
 
-function buildQueryInputSchema(filterFields, documentSchema) {
-  if (!filterFields || filterFields.length === 0) {
+function buildQueryInputSchema(filters, documentSchema) {
+  if (!filters || filters.length === 0) {
     return { type: 'object', required: ['trigger'], properties: { trigger: {} } };
   }
+  const occurrences = filters.reduce((counts, filter) => ({
+    ...counts,
+    [filter.field]: (counts[filter.field] || 0) + 1,
+  }), {});
   const properties = {};
-  filterFields.forEach((field) => {
-    properties[field] = documentSchema?.properties?.[field] || {};
+  filters.forEach((filter) => {
+    const fieldSchema = documentSchema?.properties?.[filter.field] || {};
+    const port = occurrences[filter.field] === 1 ? filter.field : `${filter.field}_${filter.op}`;
+    if (filter.op === 'in') properties[port] = { type: 'array', items: cloneValue(fieldSchema) };
+    else if (filter.op === 'exists') properties[port] = { type: 'boolean' };
+    else if (filter.op === 'contains') properties[port] = { anyOf: [{ type: 'string' }, cloneValue(fieldSchema.items) || {}] };
+    else properties[port] = cloneValue(fieldSchema);
   });
-  return { type: 'object', required: filterFields, properties };
+  return { type: 'object', properties };
 }
 
 function WorkflowNodeOptionsModal({ node, onChange, onClose }) {
@@ -1254,8 +1310,12 @@ function WorkflowNodeOptionsModal({ node, onChange, onClose }) {
     documentTypes.filter((dt) => dt.collection).map((dt) => ({ value: dt.id, label: dt.label || dt.id })),
   [documentTypes]);
 
+  const schemaCollectionTypeOptions = useMemo(() =>
+    documentTypes.filter((dt) => dt.collection && dt.document_schema).map((dt) => ({ value: dt.id, label: dt.label || dt.id })),
+  [documentTypes]);
+
   const writableTypeOptions = useMemo(() =>
-    documentTypes.filter((dt) => dt.writable?.length).map((dt) => ({ value: dt.id, label: dt.label || dt.id })),
+    documentTypes.filter((dt) => dt.writable_fields?.length).map((dt) => ({ value: dt.id, label: dt.label || dt.id })),
   [documentTypes]);
 
   const selectedDocumentType = useMemo(() =>
@@ -1344,27 +1404,30 @@ function WorkflowNodeOptionsModal({ node, onChange, onClose }) {
 
   const handleQueryTypeChange = (documentTypeId) => {
     const dt = documentTypes.find((t) => t.id === documentTypeId);
-    const nextFilterFields = [];
-    const nextInputSchema = buildQueryInputSchema(nextFilterFields, dt?.document_schema);
+    const filters = [];
     onChange(node.id, {
       documentType: documentTypeId,
-      filterFields: nextFilterFields,
-      inputSchema: nextInputSchema,
+      filters,
+      orderBy: null,
+      order: 'asc',
+      inputSchema: buildQueryInputSchema(filters, dt?.document_schema),
       outputSchema: cloneValue(dt?.query_output_schema) || null,
     });
   };
 
-  const handleQueryFilterFieldsChange = (filterFields) => {
-    const nextInputSchema = buildQueryInputSchema(filterFields, selectedDocumentType?.document_schema);
-    onChange(node.id, { filterFields, inputSchema: nextInputSchema });
+  const handleQueryFiltersChange = (filters) => {
+    onChange(node.id, {
+      filters,
+      inputSchema: buildQueryInputSchema(filters, selectedDocumentType?.document_schema),
+    });
   };
 
-  const handleWriteTypeChange = (documentTypeId) => {
+  const handleDocumentOperationTypeChange = (documentTypeId, operation) => {
     const dt = documentTypes.find((t) => t.id === documentTypeId);
     onChange(node.id, {
       documentType: documentTypeId,
-      inputSchema: cloneValue(dt?.write_input_schema) || null,
-      outputSchema: cloneValue(dt?.write_output_schema) || null,
+      inputSchema: cloneValue(dt?.[`${operation}_input_schema`]) || null,
+      outputSchema: cloneValue(dt?.[`${operation}_output_schema`]) || null,
     });
   };
 
@@ -1525,57 +1588,72 @@ function WorkflowNodeOptionsModal({ node, onChange, onClose }) {
                   Document type
                   <Select value={node.data?.documentType || ''} onChange={handleQueryTypeChange} options={collectionTypeOptions} ariaLabel="Document type" />
                 </label>
+                <div className="workflow-node-options__field">
+                  <span>Filters</span>
+                  {(node.data?.filters || []).map((filter, index) => (
+                    <div key={`${filter.field}-${filter.op}-${index}`} className="workflow-node-options__mapping-form">
+                      <Select
+                        value={filter.field}
+                        onChange={(field) => {
+                          const next = cloneValue(node.data?.filters) || [];
+                          next[index] = { ...next[index], field };
+                          handleQueryFiltersChange(next);
+                        }}
+                        options={fieldOptions}
+                        ariaLabel={`Filter ${index + 1} field`}
+                      />
+                      <Select
+                        value={filter.op}
+                        onChange={(op) => {
+                          const next = cloneValue(node.data?.filters) || [];
+                          next[index] = { ...next[index], op };
+                          handleQueryFiltersChange(next);
+                        }}
+                        options={['eq', 'ne', 'lt', 'lte', 'gt', 'gte', 'in', 'contains', 'exists'].map((op) => ({ value: op, label: op }))}
+                        ariaLabel={`Filter ${index + 1} operator`}
+                      />
+                      <button type="button" className="node-action-btn" onClick={() => {
+                        handleQueryFiltersChange((node.data?.filters || []).filter((_, itemIndex) => itemIndex !== index));
+                      }}>Remove</button>
+                    </div>
+                  ))}
+                  <button type="button" className="node-action-btn" disabled={!fieldOptions.length} onClick={() => {
+                    handleQueryFiltersChange([...(node.data?.filters || []), { field: fieldOptions[0].value, op: 'eq' }]);
+                  }}>Add filter</button>
+                </div>
                 <label className="workflow-node-options__field">
-                  Filter fields
+                  Order by
                   <Select
-                    value=""
-                    onChange={(field) => {
-                      if (!field) return;
-                      const current = new Set(node.data?.filterFields || []);
-                      current.add(field);
-                      handleQueryFilterFieldsChange(Array.from(current));
-                    }}
-                    options={[{ value: '', label: 'Add field…' }, ...fieldOptions]}
-                    ariaLabel="Add filter field"
+                    value={node.data?.orderBy || ''}
+                    onChange={(orderBy) => onChange(node.id, { orderBy: orderBy || null })}
+                    options={[{ value: '', label: 'Document key' }, ...fieldOptions]}
+                    ariaLabel="Order by field"
                   />
-                  <div className="workflow-node-options__tags">
-                    {(node.data?.filterFields || []).map((field) => (
-                      <span key={field} className="workflow-node-options__tag">
-                        {field}
-                        <button
-                          type="button"
-                          onClick={() => {
-                            const next = (node.data?.filterFields || []).filter((f) => f !== field);
-                            handleQueryFilterFieldsChange(next);
-                          }}
-                          aria-label={`Remove ${field}`}
-                        >×</button>
-                      </span>
-                    ))}
-                  </div>
+                </label>
+                <label className="workflow-node-options__field">
+                  Order
+                  <Select value={node.data?.order || 'asc'} onChange={(order) => onChange(node.id, { order })} options={[{ value: 'asc', label: 'Ascending' }, { value: 'desc', label: 'Descending' }]} ariaLabel="Order direction" />
                 </label>
                 <label className="workflow-node-options__field">
                   Limit
-                  <input
-                    type="number"
-                    min={1}
-                    max={200}
-                    value={node.data?.limit || 50}
-                    onChange={(event) => {
-                      const val = parseInt(event.target.value, 10);
-                      onChange(node.id, { limit: Number.isFinite(val) ? Math.max(1, Math.min(200, val)) : 50 });
-                    }}
-                  />
+                  <input type="number" min={1} max={200} value={node.data?.limit || 50} onChange={(event) => {
+                    const val = parseInt(event.target.value, 10);
+                    onChange(node.id, { limit: Number.isFinite(val) ? Math.max(1, Math.min(200, val)) : 50 });
+                  }} />
                 </label>
               </>
             ) : null}
             {kind === 'document_write' ? (
-              <>
-                <label className="workflow-node-options__field">
-                  Document type
-                  <Select value={node.data?.documentType || ''} onChange={handleWriteTypeChange} options={writableTypeOptions} ariaLabel="Document type" />
-                </label>
-              </>
+              <label className="workflow-node-options__field">
+                Document type
+                <Select value={node.data?.documentType || ''} onChange={(documentTypeId) => handleDocumentOperationTypeChange(documentTypeId, 'write')} options={writableTypeOptions} ariaLabel="Document type" />
+              </label>
+            ) : null}
+            {kind === 'document_create' || kind === 'document_delete' ? (
+              <label className="workflow-node-options__field">
+                Document type
+                <Select value={node.data?.documentType || ''} onChange={(documentTypeId) => handleDocumentOperationTypeChange(documentTypeId, kind === 'document_create' ? 'create' : 'delete')} options={schemaCollectionTypeOptions} ariaLabel="Document type" />
+              </label>
             ) : null}
             {kind === 'agent' || kind === 'extract' ? (
               <>
@@ -1886,6 +1964,8 @@ const NODE_TYPES = {
   document_read: PromptNode,
   document_query: PromptNode,
   document_write: PromptNode,
+  document_create: PromptNode,
+  document_delete: PromptNode,
   unpack: UnpackNode,
 };
 

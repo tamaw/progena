@@ -6,6 +6,7 @@
   "properties": {
     "id": {
       "type": "string",
+      "readOnly": true,
       "description": "Unique card identifier (matches the document suffix)."
     },
     "title": {
@@ -67,10 +68,12 @@
     },
     "started_at": {
       "type": ["string", "null"],
+      "readOnly": true,
       "description": "ISO8601 timestamp when work started."
     },
     "completed_at": {
       "type": ["string", "null"],
+      "readOnly": true,
       "description": "ISO8601 timestamp when work completed."
     },
     "last_error": {
@@ -83,10 +86,12 @@
     },
     "created_at": {
       "type": "string",
+      "readOnly": true,
       "description": "ISO8601 creation timestamp."
     },
     "updated_at": {
       "type": "string",
+      "readOnly": true,
       "description": "ISO8601 last-update timestamp."
     }
   },

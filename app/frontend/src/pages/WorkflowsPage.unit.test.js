@@ -158,7 +158,7 @@ describe('workflowToFlow', () => {
           condition: { kind: 'condition', title: 'Condition', expression: 'ready', input_schema: { type: 'object', properties: {} } },
           approval: { kind: 'approval', title: 'Approval', message: 'Approve?', input_schema: { type: 'object', properties: {} } },
           document_read: { kind: 'document_read', title: 'Read', document_type: 'kanban_card', input_schema: KANBAN_READ_SCHEMAS.read_input_schema, output_schema: KANBAN_READ_SCHEMAS.read_output_schema },
-          document_query: { kind: 'document_query', title: 'Query', document_type: 'kanban_card', filter_fields: ['title'], limit: 50, input_schema: { type: 'object', required: ['title'], properties: { title: { type: 'string' } } }, output_schema: KANBAN_READ_SCHEMAS.query_output_schema },
+          document_query: { kind: 'document_query', title: 'Query', document_type: 'kanban_card', filters: [{ field: 'title', op: 'eq' }], limit: 50, input_schema: { type: 'object', properties: { title: { type: 'string' } } }, output_schema: KANBAN_READ_SCHEMAS.query_output_schema },
         },
         edges: [],
       },
@@ -357,9 +357,11 @@ describe('workflowToFlow', () => {
             kind: 'document_query',
             title: 'Query cards',
             document_type: 'kanban_card',
-            filter_fields: ['title'],
+            filters: [{ field: 'title', op: 'eq' }],
+            order_by: 'title',
+            order: 'desc',
             limit: 25,
-            input_schema: { type: 'object', required: ['title'], properties: { title: { type: 'string' } } },
+            input_schema: { type: 'object', properties: { title: { type: 'string' } } },
             output_schema: KANBAN_READ_SCHEMAS.query_output_schema,
           },
         },
@@ -372,25 +374,48 @@ describe('workflowToFlow', () => {
     const node = flow.nodes.find((n) => n.id === 'query_1');
     expect(node.type).toBe('document_query');
     expect(node.data.documentType).toBe('kanban_card');
-    expect(node.data.filterFields).toEqual(['title']);
+    expect(node.data.filters).toEqual([{ field: 'title', op: 'eq' }]);
+    expect(node.data.orderBy).toBe('title');
+    expect(node.data.order).toBe('desc');
     expect(node.data.limit).toBe(25);
 
     const persisted = flowToWorkflow(workflow, flow.nodes, flow.edges, flow.viewport);
     expect(persisted.graph.nodes.query_1).toMatchObject({
       kind: 'document_query',
       document_type: 'kanban_card',
-      filter_fields: ['title'],
+      filters: [{ field: 'title', op: 'eq' }],
+      order_by: 'title',
+      order: 'desc',
       limit: 25,
     });
+  });
+
+  it('round-trips document_create and document_delete nodes', () => {
+    const workflow = {
+      graph: {
+        nodes: {
+          create_1: { kind: 'document_create', title: 'Create card', document_type: 'kanban_card', input_schema: { type: 'object' }, output_schema: { type: 'object' } },
+          delete_1: { kind: 'document_delete', title: 'Delete card', document_type: 'kanban_card', input_schema: { type: 'object' }, output_schema: { type: 'object' } },
+        },
+        edges: [],
+      },
+      ui: { nodes: {} },
+    };
+    const flow = workflowToFlow(workflow, {}, null);
+    expect(flow.nodes.map((node) => node.type).sort()).toEqual(['document_create', 'document_delete']);
+
+    const persisted = flowToWorkflow(workflow, flow.nodes, flow.edges, flow.viewport);
+    expect(persisted.graph.nodes.create_1).toMatchObject({ kind: 'document_create', document_type: 'kanban_card' });
+    expect(persisted.graph.nodes.delete_1).toMatchObject({ kind: 'document_delete', document_type: 'kanban_card' });
   });
 });
 
 describe('workflow node menu', () => {
-  it('exposes exactly the eleven V3 node kinds and no capability-specific kinds', () => {
+  it('exposes document create and delete alongside other workflow nodes', () => {
     const addableKinds = NODE_MENU_CATEGORIES.flatMap((category) => category.items).map((item) => item.kind);
 
     expect(addableKinds.sort()).toEqual(
-      ['agent', 'approval', 'condition', 'cron', 'data', 'document_query', 'document_read', 'document_write', 'event', 'extract', 'unpack'].sort(),
+      ['agent', 'approval', 'condition', 'cron', 'data', 'document_create', 'document_delete', 'document_query', 'document_read', 'document_write', 'event', 'extract', 'unpack'].sort(),
     );
   });
 });
