@@ -67,6 +67,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Model profile names must be unique after trimming whitespace**; a catalog with `" general "` and `"general"` is rejected.
 
 ### Fixed
+- Cards created or deleted outside the card routes (workflow `document_create`/`document_delete`, extensions) now appear on and leave the Tasks board: the backend keeps `kanban_board.card_order` in step with `kanban_card:` documents from the event log.
 - Document event dispatch no longer stalls when an event is held back by an older open transaction that then ends without writing an event; the dispatcher re-checks every second while events are deferred.
 - Renaming a chat while the runtime is down succeeds (was a 503 although the rename applied) and updates the sidebar instead of stopping document event dispatch.
 - The agent's `/sessions/` folder supports `glob`, rejects session field values the schema forbids (e.g. a numeric title) and ambiguous `edit_file` matches; transcript renders of one chat no longer race.
