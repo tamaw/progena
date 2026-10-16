@@ -1,6 +1,6 @@
 import pytest
 
-from app.progenitor.document_types import BUILTIN_DOCUMENT_TYPES
+from app.progenitor.document_types import BUILTIN_DOCUMENT_TYPES, DocumentType
 from app.progenitor.schemas import load_schema
 from app.progenitor.structured import validate_against_schema
 from app.progenitor.workflows import (
@@ -10,6 +10,8 @@ from app.progenitor.workflows import (
     default_workflow_definition,
     derive_workflow_port_schemas,
     document_changed_fields,
+    document_create_input_schema,
+    document_write_input_schema,
     ordered_workflow_node_ids,
     validate_workflow_definition_payload,
 )
@@ -35,6 +37,101 @@ def _default_with_schemas():
     return derive_workflow_port_schemas(
         default_workflow_definition(), {t.id: t for t in BUILTIN_DOCUMENT_TYPES}
     )
+
+
+def test_document_create_defaulted_required_fields_are_optional_ports(monkeypatch):
+    schema = {
+        "type": "object",
+        "required": ["title", "status"],
+        "properties": {
+            "title": {"type": "string"},
+            "status": {"type": "string", "default": "draft"},
+        },
+    }
+    document_type = DocumentType(
+        id="note",
+        label="Note",
+        key_prefix="note:",
+        schema="note.schema.v1.json",
+    )
+    monkeypatch.setattr(DocumentType, "load_schema", lambda self: schema)
+
+    create_input = document_create_input_schema(document_type, schema)
+
+    assert create_input["required"] == ["title"]
+    assert create_input["properties"]["status"]["default"] == "draft"
+    assert document_write_input_schema(document_type, schema)["required"] == ["id"]
+
+
+def test_format_ports_are_derived_from_plain_text_placeholders():
+    payload = default_workflow_definition()
+    agent_id = _node_id(payload, "agent")
+    event_id = _node_id(payload, "event")
+    del payload["graph"]["nodes"][agent_id]
+    payload["graph"]["nodes"]["format"] = {
+        "kind": "format",
+        "title": "Format",
+        "template": "{value.name}: {value.metadata}",
+    }
+    payload["graph"]["edges"] = [
+        {
+            "from": {"node": event_id, "port": "after"},
+            "to": {"node": "format", "port": "value"},
+        }
+    ]
+
+    derived = derive_workflow_port_schemas(payload, _TYPES)
+    format_node = derived["graph"]["nodes"]["format"]
+
+    assert format_node["input_schema"] == {
+        "type": "object",
+        "required": ["value"],
+        "properties": {"value": {}},
+    }
+    assert format_node["output_schema"] == {
+        "type": "object",
+        "required": ["text"],
+        "properties": {"text": {"type": "string"}},
+    }
+    validate_workflow_definition_payload(derived)
+
+
+def test_format_rejects_front_matter():
+    payload = default_workflow_definition()
+    payload["graph"]["nodes"]["format"] = {
+        "kind": "format",
+        "title": "Format",
+        "template": "---\ntitle: Not plain text\n---\n{value}",
+    }
+
+    with pytest.raises(ValueError, match="must not contain front matter"):
+        derive_workflow_port_schemas(payload, _TYPES)
+
+
+def test_format_missing_placeholder_input_is_rejected():
+    payload = default_workflow_definition()
+    agent_id = _node_id(payload, "agent")
+    del payload["graph"]["nodes"][agent_id]
+    payload["graph"]["nodes"]["data"] = {
+        "kind": "data",
+        "title": "First",
+        "value": "first",
+        "output_schema": {"type": "string"},
+    }
+    payload["graph"]["nodes"]["format"] = {
+        "kind": "format",
+        "title": "Format",
+        "template": "{first} {second}",
+    }
+    payload["graph"]["edges"] = [
+        {
+            "from": {"node": "data", "port": "value"},
+            "to": {"node": "format", "port": "first"},
+        }
+    ]
+
+    with pytest.raises(ValueError, match="required input 'second'"):
+        validate_workflow_definition_payload(derive_workflow_port_schemas(payload, _TYPES))
 
 
 def test_default_workflow_wires_an_event_property():

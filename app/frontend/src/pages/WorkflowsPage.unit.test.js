@@ -13,7 +13,9 @@ import {
   isUnpackableSchema,
   parsePromptPlaceholders,
   derivePromptInputSchema,
+  deriveFormatInputSchema,
   promptTemplatePatch,
+  formatTemplatePatch,
   promptDocumentPatch,
   createPaletteNode,
   nodeInputPorts,
@@ -415,7 +417,7 @@ describe('workflow node menu', () => {
     const addableKinds = NODE_MENU_CATEGORIES.flatMap((category) => category.items).map((item) => item.kind);
 
     expect(addableKinds.sort()).toEqual(
-      ['agent', 'approval', 'condition', 'cron', 'data', 'document_create', 'document_delete', 'document_query', 'document_read', 'document_write', 'event', 'extract', 'unpack'].sort(),
+      ['agent', 'approval', 'condition', 'cron', 'data', 'document_create', 'document_delete', 'document_query', 'document_read', 'document_write', 'event', 'extract', 'format', 'unpack'].sort(),
     );
   });
 });
@@ -928,6 +930,52 @@ describe('derivePromptInputSchema', () => {
       prompt: 'prompts/card.md',
       template: null,
       inputSchema: { type: 'object', required: ['card'], properties: { thread_id: { type: 'string' }, card: {} } },
+    });
+  });
+});
+
+describe('format node helpers', () => {
+  it('derives required placeholder ports without adding a thread port', () => {
+    expect(deriveFormatInputSchema('Hello {value.name} in {context}')).toEqual({
+      type: 'object',
+      required: ['value', 'context'],
+      properties: { value: {}, context: {} },
+    });
+    expect(formatTemplatePatch('{thread_id}')).toEqual({
+      template: '{thread_id}',
+      inputSchema: { type: 'object', required: ['thread_id'], properties: { thread_id: {} } },
+    });
+  });
+
+  it('round-trips its template and derived ports', () => {
+    const workflow = {
+      graph: {
+        nodes: {
+          format_1: {
+            kind: 'format',
+            title: 'Greeting',
+            template: 'Hello {value.name}',
+            input_schema: { type: 'object', required: ['value'], properties: { value: {} } },
+            output_schema: { type: 'object', required: ['text'], properties: { text: { type: 'string' } } },
+          },
+        },
+        edges: [],
+      },
+      ui: { nodes: {} },
+    };
+
+    const flow = workflowToFlow(workflow, {}, null);
+    expect(flow.nodes[0]).toMatchObject({
+      type: 'format',
+      data: { template: 'Hello {value.name}', inputSchema: workflow.graph.nodes.format_1.input_schema },
+    });
+    const persisted = flowToWorkflow(workflow, flow.nodes, flow.edges, flow.viewport);
+    expect(persisted.graph.nodes.format_1).toMatchObject({
+      kind: 'format',
+      title: 'Greeting',
+      template: 'Hello {value.name}',
+      input_schema: workflow.graph.nodes.format_1.input_schema,
+      output_schema: workflow.graph.nodes.format_1.output_schema,
     });
   });
 });
