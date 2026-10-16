@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import json
 
-from app.backend.attachments import ATTACHMENT_CONTEXT_MARKER
 from app.backend.chat_sessions import (
     ChatPatchRequest,
     _extract_progress_log_from_content,
@@ -24,6 +23,7 @@ from app.backend.document_store import (
     InMemoryDocumentStore,
 )
 from app.progenitor.document_kinds import SESSION_KEY_PREFIX
+from app.progenitor.sessions.titles import ATTACHMENT_CONTEXT_MARKER
 
 
 class _CountingDocumentStore(InMemoryDocumentStore):
@@ -114,6 +114,15 @@ class TestListChatSessions:
         sessions = list_chat_sessions(store)
         assert len(sessions) == 1
         assert sessions[0].title == "Hello world"
+
+    def test_placeholder_title_redacts_secrets_in_the_first_message(self):
+        store = InMemoryDocumentStore()
+        secret = "sk-proj-abcdefghijklmnopqrstuvwxyz0123456789"
+        _store_session(store, "thread_key", title="New chat", first_message=f"use {secret} now")
+
+        [session] = list_chat_sessions(store)
+        assert secret not in session.title
+        assert session.title.startswith("use [")
 
     def test_counts_messages_from_checkpoint(self):
         store = InMemoryDocumentStore()

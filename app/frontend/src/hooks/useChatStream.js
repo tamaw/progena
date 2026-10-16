@@ -176,6 +176,17 @@ export function useChatStream({
     }
   }, [dispatch]);
 
+  // The caller can leave a foreground stream running in the background. Once
+  // preserved, release only this surface's ownership; do not cancel the
+  // transport or erase its background origin.
+  const retireForegroundStream = useCallback(() => {
+    discardPendingText();
+    cancelTerminalHandoff();
+    activeStreamIdRef.current = null;
+    setLiveAssistantTurn(null);
+    setIsGenerating(false);
+  }, [cancelTerminalHandoff, discardPendingText, setLiveAssistantTurn]);
+
   // If the page unmounts (navigating to a different nav item) while a stream
   // is in flight, treat it exactly like switching chats: preserve it as a
   // background stream instead of leaving it orphaned. Without this, nothing
@@ -558,6 +569,7 @@ export function useChatStream({
     activeStreamIdRef,
     backgroundOriginChatIdRef,
     preserveStreamInBackground,
+    retireForegroundStream,
     handleSend,
     handleStop,
     liveTurnStore,

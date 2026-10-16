@@ -15,6 +15,7 @@ Prompt documents support optional YAML front matter:
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from collections.abc import Mapping
@@ -63,9 +64,9 @@ class PromptTemplate:
 def _split_frontmatter(text: str) -> tuple[dict[str, Any], str]:
     """Split ``---``-delimited YAML frontmatter from a markdown body."""
     stripped = text.lstrip("\n")
-    if not stripped.startswith("---"):
-        return {}, text
     lines = stripped.split("\n")
+    if lines[0].rstrip() != "---":
+        return {}, text
     end = next((i for i in range(1, len(lines)) if lines[i].strip() == "---"), None)
     if end is None:
         raise ValueError("frontmatter opened with '---' but never closed")
@@ -199,8 +200,29 @@ def render_prompt_template(template: PromptTemplate, values: Mapping[str, Any]) 
 _SCHEMA_DEFINITION_KEYS = ("$defs", "definitions")
 
 
+def _json_pointer(root: Mapping[str, Any], ref: str) -> Any:
+    """The value a local ``#/...`` reference points to within ``root``."""
+
+    node: Any = root
+    for raw in ref.removeprefix("#/").split("/"):
+        part = raw.replace("~1", "/").replace("~0", "~")
+        if isinstance(node, Mapping) and part in node:
+            node = node[part]
+        elif isinstance(node, list) and part.isdigit() and int(part) < len(node):
+            node = node[int(part)]
+        else:
+            raise ValueError(f"schema reference {ref!r} does not resolve")
+    return node
+
+
 def _split_definitions(schema: Mapping[str, Any]) -> tuple[dict, dict[str, dict]]:
-    """Separate root ``$defs``/``definitions`` from an embeddable schema copy."""
+    """Separate root ``$defs``/``definitions`` from an embeddable schema copy.
+
+    The copy is embedded under a composed root, where only references into
+    the root definitions still resolve; any other local reference (e.g.
+    ``#/properties/name``) has its target hoisted into ``$defs`` and is
+    rewritten to point there.
+    """
 
     embedded = {key: value for key, value in schema.items() if key not in ("$schema", "$id")}
     definitions = {
@@ -208,6 +230,40 @@ def _split_definitions(schema: Mapping[str, Any]) -> tuple[dict, dict[str, dict]
         for key in _SCHEMA_DEFINITION_KEYS
         if isinstance(embedded.get(key), dict)
     }
+    hoisted: dict[str, Any] = {}
+
+    def rewrite(node: Any) -> Any:
+        if isinstance(node, list):
+            return [rewrite(item) for item in node]
+        if not isinstance(node, Mapping):
+            return node
+        rewritten = {key: rewrite(value) for key, value in node.items()}
+        ref = node.get("$ref")
+        if (
+            not isinstance(ref, str)
+            or not ref.startswith("#")
+            or ref.startswith(tuple(f"#/{key}/" for key in _SCHEMA_DEFINITION_KEYS))
+        ):
+            return rewritten
+        if ref in ("#", "#/"):
+            raise ValueError("an embedded schema cannot reference its own root")
+        target = _json_pointer(schema, ref)
+        name = (
+            "ref_"
+            + hashlib.sha1(  # noqa: S324 - a content name, not security
+                json.dumps(target, sort_keys=True, default=str).encode(), usedforsecurity=False
+            ).hexdigest()[:12]
+        )
+        if name not in hoisted:
+            hoisted[name] = {}  # reserve first: the target may reference itself
+            hoisted[name] = rewrite(target)
+        rewritten["$ref"] = f"#/$defs/{name}"
+        return rewritten
+
+    embedded = rewrite(embedded)
+    definitions = {key: rewrite(value) for key, value in definitions.items()}
+    if hoisted:
+        definitions["$defs"] = {**definitions.get("$defs", {}), **hoisted}
     return embedded, definitions
 
 

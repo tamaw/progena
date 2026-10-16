@@ -49,7 +49,7 @@ function titleWorkflow() {
     version: 3,
     graph: {
       nodes: {
-        started: { kind: 'event', title: 'Chat started', document_type: 'session', operations: ['created'], match: { 'after.source': 'ui' } },
+        started: { kind: 'event', title: 'Chat started', document_type: 'session', operations: ['created'], match: { 'after.source': 'ui', 'after.first_message': FIRST_MESSAGE } },
         chat: { kind: 'unpack', title: 'Session' },
         name: {
           kind: 'extract',
@@ -73,9 +73,35 @@ function titleWorkflow() {
     updated_at: now,
   };
 }
+function workflowStopped() {
+  return runsOf(WORKFLOW_ID).every((run) => ['completed', 'failed', 'paused'].includes(run.status));
+}
+
+async function sidebarSessionTitle(page, threadId) {
+  const sessionsPane = page.locator('aside[aria-label="Conversation sessions"]');
+  const expand = sessionsPane.getByRole('button', { name: 'Expand Chats list' });
+  if (await expand.isVisible()) await expand.click();
+  return sessionsPane.locator(`.chat-session-card[data-thread-id="${threadId}"] .chat-session-card__title`);
+}
 
 test.afterEach(async ({ request }) => {
-  await request.delete(`/api/ui/workflows/${WORKFLOW_ID}`);
+  try {
+    await expect.poll(workflowStopped, { timeout: 180_000, intervals: [2000] }).toBe(true);
+  } finally {
+    const session = sessionWithFirstMessage(FIRST_MESSAGE);
+    const runThreads = runsOf(WORKFLOW_ID).map((run) => run.thread_id).filter(Boolean);
+    const threads = [...new Set([session?.thread_id, ...runThreads].filter(Boolean))];
+
+    await request.delete(`/api/ui/workflows/${WORKFLOW_ID}`);
+    if (session) await request.delete(`/api/ui/chats/${session.thread_id}`);
+    sql(`delete from store where key like 'workflow_run:%' and value->'payload'->>'workflow_id' = '${WORKFLOW_ID}'`);
+    if (threads.length) {
+      const list = threads.map((thread) => `'${thread}'`).join(',');
+      for (const table of ['checkpoint_writes', 'checkpoint_blobs', 'checkpoints']) {
+        sql(`delete from ${table} where thread_id in (${list})`);
+      }
+    }
+  }
 });
 
 test('the first message of a new chat triggers a workflow that renames the chat', async ({ page, request }) => {
@@ -118,8 +144,7 @@ test('the first message of a new chat triggers a workflow that renames the chat'
   const session = sessionWithFirstMessage(FIRST_MESSAGE);
   expect(page.url()).toContain(`/chat/${session.thread_id}`);
   expect(session.title).toBe(title);
-  await expect(page.getByText(title, { exact: true }).first()).toBeVisible({ timeout: 15_000 });
-
+  await expect(await sidebarSessionTitle(page, session.thread_id)).toHaveText(title, { timeout: 15_000 });
   // One creation, one rename; turns rewriting `content` log nothing.
   await expect(page.locator('textarea.chat-input')).toBeEnabled({ timeout: 120_000 });
   await page.waitForTimeout(15_000);
@@ -128,6 +153,6 @@ test('the first message of a new chat triggers a workflow that renames the chat'
   expect(runsOf(WORKFLOW_ID)).toHaveLength(1);
 
   await page.reload();
-  await expect(page.getByText(title, { exact: true }).first()).toBeVisible({ timeout: 15_000 });
+  await expect(await sidebarSessionTitle(page, session.thread_id)).toHaveText(title, { timeout: 15_000 });
   expect(errors).toEqual([]);
 });

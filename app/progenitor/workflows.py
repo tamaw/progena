@@ -207,7 +207,7 @@ def document_write_output_schema(
     }
 
 
-def _json_equal(a: Any, b: Any) -> bool:
+def json_equal(a: Any, b: Any) -> bool:
     """Equality as JSONB sees it: ``true`` is not ``1``, but ``1`` is ``1.0``."""
 
     if isinstance(a, bool) or isinstance(b, bool):
@@ -217,9 +217,9 @@ def _json_equal(a: Any, b: Any) -> bool:
     if type(a) is not type(b):
         return False
     if isinstance(a, list):
-        return len(a) == len(b) and all(_json_equal(x, y) for x, y in zip(a, b, strict=True))
+        return len(a) == len(b) and all(json_equal(x, y) for x, y in zip(a, b, strict=True))
     if isinstance(a, dict):
-        return set(a) == set(b) and all(_json_equal(a[k], b[k]) for k in a)
+        return set(a) == set(b) and all(json_equal(a[k], b[k]) for k in a)
     return a == b
 
 
@@ -233,7 +233,7 @@ def document_changed_fields(before: Any, after: Any) -> list[str]:
         for field in set(previous) | set(current)
         if field not in previous
         or field not in current
-        or not _json_equal(previous[field], current[field])
+        or not json_equal(previous[field], current[field])
     )
 
 
@@ -310,7 +310,7 @@ def schema_at_path(ports: Mapping[str, Any], path: str) -> dict[str, Any] | None
         if not isinstance(schema, Mapping):
             return None
         properties = schema.get("properties")
-        if properties is None and schema.get("type") == "object":
+        if properties is None and _admits_object(schema):
             return {}
         if not isinstance(properties, Mapping) or part not in properties:
             return None
@@ -318,13 +318,41 @@ def schema_at_path(ports: Mapping[str, Any], path: str) -> dict[str, Any] | None
     return dict(schema) if isinstance(schema, Mapping) else {}
 
 
-def unpackable_properties(schema: Mapping[str, Any] | None) -> dict[str, Any]:
-    """Properties of an object port schema an Unpack node can expose (empty if none)."""
+def _admits_object(schema: Mapping[str, Any]) -> bool:
+    """Whether the schema's ``type`` is ``object`` or a union including it."""
 
-    if not isinstance(schema, Mapping) or schema.get("type") != "object":
+    schema_type = schema.get("type")
+    return schema_type == "object" or (isinstance(schema_type, list) and "object" in schema_type)
+
+
+def unpackable_properties(schema: Mapping[str, Any] | None) -> dict[str, Any]:
+    """Properties of an object port schema an Unpack node can expose (empty if none).
+
+    A nullable object (``["object", "null"]``) exposes its fields too.
+    """
+
+    if not isinstance(schema, Mapping) or not _admits_object(schema):
         return {}
     properties = schema.get("properties")
     return dict(properties) if isinstance(properties, Mapping) else {}
+
+
+def _resolve_local_ref(
+    schema: Mapping[str, Any] | None, definitions: Mapping[str, Any]
+) -> Mapping[str, Any] | None:
+    """Follow ``#/$defs/...`` / ``#/definitions/...`` references to their target schema."""
+
+    seen: set[str] = set()
+    while isinstance(schema, Mapping) and isinstance(schema.get("$ref"), str):
+        ref = schema["$ref"]
+        container, _, name = ref.removeprefix("#/").partition("/")
+        group = definitions.get(container) if ref.startswith("#/") else None
+        target = group.get(name) if isinstance(group, Mapping) and "/" not in name else None
+        if ref in seen or not isinstance(target, Mapping):
+            return schema
+        seen.add(ref)
+        schema = target
+    return schema
 
 
 class WorkflowNodeEvent(BaseModel):
@@ -361,7 +389,7 @@ class WorkflowNodeEvent(BaseModel):
         ):
             return False
         return all(
-            _json_equal(value_at_path(event, path), value) and path_exists(event, path)
+            json_equal(value_at_path(event, path), value) and path_exists(event, path)
             for path, value in self.match.items()
         )
 
@@ -502,6 +530,7 @@ def _unpack_input_schema(
 def _unpack_output_schema(
     source: Mapping[str, Any] | None, definitions: Mapping[str, Any]
 ) -> dict[str, Any]:
+    source = _resolve_local_ref(source, definitions)
     required = source.get("required") if source else None
     return {
         "type": "object",
@@ -1309,6 +1338,8 @@ def _schema_types_compatible(source: Mapping[str, Any], target: Mapping[str, Any
     if source_type and target_type:
         source_types = {source_type} if isinstance(source_type, str) else set(source_type)
         target_types = {target_type} if isinstance(target_type, str) else set(target_type)
+        if "number" in target_types:
+            target_types.add("integer")  # every JSON integer is a number
         if not source_types <= target_types:
             return False
     source_title = source.get("title")

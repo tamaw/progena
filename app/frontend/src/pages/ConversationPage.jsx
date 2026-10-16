@@ -69,6 +69,8 @@ import {
   shouldDeferRouteSelection,
   shouldDismissEmptySelection,
   shouldSkipRoutedMountOpen,
+  isReopeningCurrentLocalDraft,
+  shouldAdoptMaterializedDraft,
 } from '../components/chat/conversationModel';
 import {
   buildChatSessionItems,
@@ -578,6 +580,10 @@ function ConversationPage() {
   const recentScheduledContent = useRef(new Set());
   const foregroundOwnershipTokenRef = useRef(0);
   const reconciliationIntentRef = useRef(null);
+  // A draft may acquire a session document while its first response is still
+  // streaming. It is selected without a detail fetch so that response keeps
+  // its live owner until foreground reconciliation can replace it.
+  const materializedDraftThreadIdRef = useRef(null);
 
   useEffect(() => {
     selectedBackendChatIdRef.current = selectedBackendChatId;
@@ -636,6 +642,7 @@ function ConversationPage() {
     liveTurnStore,
     setLiveAssistantTurn,
     preserveStreamInBackground,
+    retireForegroundStream,
     handleSend,
     handleStop,
   } = useChatStream({
@@ -656,48 +663,67 @@ function ConversationPage() {
     requestForegroundReconciliation,
   });
 
-  const openBackendChat = useCallback(async (threadId) => {
-    if (!threadId) {
+  const openBackendChat = useCallback(async (requestedThreadId) => {
+    if (!requestedThreadId) {
       return;
     }
-    if (pendingOpenThreadIdRef.current === threadId) {
+    if (pendingOpenThreadIdRef.current === requestedThreadId) {
       return;
     }
     // A thread with no session document is a local draft (nothing sent yet,
     // or Postgres hasn't checkpointed its first message): open it locally
     // instead of asking the backend for a session that doesn't exist.
-    if (!backendChatSessionsRef.current.some((session) => session.thread_id === threadId)) {
-      selectionIntentRef.current = { threadId };
+    if (!backendChatSessionsRef.current.some((session) => session.thread_id === requestedThreadId)) {
+      const isReopeningCurrentDraft = isReopeningCurrentLocalDraft({
+        selectedBackendChatId,
+        currentThreadId: threadId,
+        requestedThreadId,
+      });
+      selectionIntentRef.current = { threadId: requestedThreadId };
+      if (!isReopeningCurrentDraft) {
+        preserveStreamInBackground();
+        beginForegroundStream();
+        retireForegroundStream();
+        setMessages([]);
+        setOldestMessageCursor(null);
+        recentScheduledContent.current.clear();
+        setTitleDraft('');
+        setIsEditingTitle(false);
+      }
+      materializedDraftThreadIdRef.current = null;
+      selectedBackendChatIdRef.current = null;
       setSelectedBackendChatId(null);
-      setThreadId(threadId);
+      setThreadId(requestedThreadId);
       return;
     }
-    pendingOpenThreadIdRef.current = threadId;
+    pendingOpenThreadIdRef.current = requestedThreadId;
     // Every programmatic selection change must register its intent BEFORE the
     // route reconciler can observe the (still stale) URL. Without this, opening
     // a chat that the address bar hasn't caught up with yet makes the
     // reconciler treat the old URL as a user navigation and reopen it, which
     // ping-pongs with useEntityUrlSync into an infinite redirect loop.
-    selectionIntentRef.current = { threadId };
+    selectionIntentRef.current = { threadId: requestedThreadId };
     const requestId = createUuid();
+    materializedDraftThreadIdRef.current = null;
     beginForegroundStream();
     activeStreamIdRef.current = null;
     setIsGenerating(false);
     setIsEditingTitle(false);
-    setSelectedBackendChatId(threadId);
-    dispatch(clearChatGenerating(threadId));
-    dispatch(clearChatUnread(threadId));
-    dispatch(clearChatErrored(threadId));
+    selectedBackendChatIdRef.current = requestedThreadId;
+    setSelectedBackendChatId(requestedThreadId);
+    dispatch(clearChatGenerating(requestedThreadId));
+    dispatch(clearChatUnread(requestedThreadId));
+    dispatch(clearChatErrored(requestedThreadId));
     lastAppliedBackendChatRequestIdRef.current = null;
     const request = dispatch(requestChatSessionDetail({
       chatsUrl: getApiUrl('chats'),
-      threadId,
+      threadId: requestedThreadId,
       requestId,
     }));
     try {
       return await request.unwrap();
     } finally {
-      if (pendingOpenThreadIdRef.current === threadId) {
+      if (pendingOpenThreadIdRef.current === requestedThreadId) {
         pendingOpenThreadIdRef.current = null;
       }
     }
@@ -707,7 +733,12 @@ function ConversationPage() {
     dispatch,
     getApiUrl,
     pendingOpenThreadIdRef,
+    preserveStreamInBackground,
+    selectedBackendChatId,
+    retireForegroundStream,
     setIsGenerating,
+    setMessages,
+    threadId,
   ]);
   const acquireDraftChat = useCallback(async (requestedThreadId = null) => {
     // Local-only draft; the backend creates the session document when the
@@ -722,6 +753,23 @@ function ConversationPage() {
     () => backendChatSessions.find((session) => session.thread_id === threadId) ?? null,
     [backendChatSessions, threadId],
   );
+
+  useEffect(() => {
+    if (!shouldAdoptMaterializedDraft({
+      selectedBackendChatId,
+      threadId,
+      sessionThreadId: threadSession?.thread_id,
+    })) {
+      return;
+    }
+    // The first checkpoint can make a local draft appear in the roster before
+    // its foreground stream ends. Claim the session now so terminal
+    // reconciliation still belongs to this visible conversation, but do not
+    // fetch detail and displace that stream.
+    materializedDraftThreadIdRef.current = threadSession.thread_id;
+    selectedBackendChatIdRef.current = threadSession.thread_id;
+    setSelectedBackendChatId(threadSession.thread_id);
+  }, [selectedBackendChatId, threadId, threadSession]);
   const chatTitle = threadSession?.title || derivedChatTitle;
 
   const streamEventFilter = useCallback(
@@ -1258,6 +1306,8 @@ function ConversationPage() {
   }, []);
 
   const clearBackendSelection = useCallback(({ clearRoute = false } = {}) => {
+    materializedDraftThreadIdRef.current = null;
+    selectedBackendChatIdRef.current = null;
     setSelectedBackendChatId(null);
     selectionIntentRef.current = null;
     dispatch(clearActiveChatSession());
@@ -1298,11 +1348,20 @@ function ConversationPage() {
       activeLoading: activeBackendChatState.loading,
       activeDetail: activeBackendChat,
       activeError: activeBackendChatState.error,
+      hasMaterializedDraft: materializedDraftThreadIdRef.current === selectedBackendChatId
+        && threadSession?.thread_id === selectedBackendChatId,
     })) {
       return;
     }
     dismissCurrentSession({ clearRoute: true });
-  }, [activeBackendChat, activeBackendChatState.error, activeBackendChatState.loading, dismissCurrentSession, selectedBackendChatId]);
+  }, [
+    activeBackendChat,
+    activeBackendChatState.error,
+    activeBackendChatState.loading,
+    dismissCurrentSession,
+    selectedBackendChatId,
+    threadSession,
+  ]);
 
   useEffect(() => {
     // The mount effect below owns the first URL/roster selection. Running this
@@ -1347,6 +1406,8 @@ function ConversationPage() {
     // Register the intent first so the route reconciler doesn't reopen the
     // chat the address bar still names.
     selectionIntentRef.current = { threadId: draftThreadId };
+    materializedDraftThreadIdRef.current = null;
+    selectedBackendChatIdRef.current = null;
     if (selectedBackendChatId !== null) {
       setSelectedBackendChatId(null);
     }
@@ -1371,9 +1432,10 @@ function ConversationPage() {
     // If a stream is in progress for the chat we're leaving, keep it running in
     // the background (same as switching to a different existing chat) instead
     // of cancelling it — starting a new chat shouldn't discard another chat's
-    // in-flight response.
+    // in-flight response. Release this pane's foreground turn immediately so
+    // the fresh draft's composer is not left disabled by that old response.
     preserveStreamInBackground();
-    activeStreamIdRef.current = null;
+    retireForegroundStream();
     recentScheduledContent.current.clear();
 
     try {
@@ -1425,12 +1487,12 @@ function ConversationPage() {
       setIsClearingSession(false);
     }
   }, [
-    activeStreamIdRef,
     chatTitle,
     focusComposer,
     messages,
     openDraftChat,
     preserveStreamInBackground,
+    retireForegroundStream,
     selectedBackendChatId,
     threadId,
     setArchivedSessions,
@@ -1495,7 +1557,9 @@ function ConversationPage() {
   const chatDetailError = activeBackendChatState.threadId === selectedBackendChatId
     ? activeBackendChatState.error
     : null;
-  const isContentLoading = !chatDetailError && shouldShowChatContentLoading({
+  const isMaterializedDraft = materializedDraftThreadIdRef.current === selectedBackendChatId
+    && threadSession?.thread_id === selectedBackendChatId;
+  const isContentLoading = !chatDetailError && !isMaterializedDraft && shouldShowChatContentLoading({
     backendChatsLoaded: backendChatSessionsState.loaded,
     messages,
     selectedBackendChatId,

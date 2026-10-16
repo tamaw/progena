@@ -582,3 +582,67 @@ def test_cron_sourced_runs_satisfy_the_workflow_run_document_schema():
     )
     error = validate_against_schema(run.model_dump(mode="json"), load_schema("workflow_run"))
     assert error is None
+
+
+def _data_into(node_id, port, node, value, schema):
+    payload = default_workflow_definition()
+    payload["graph"]["nodes"] = {
+        node_id: existing
+        for node_id, existing in payload["graph"]["nodes"].items()
+        if existing["kind"] == "event"
+    }
+    payload["graph"]["nodes"]["data_1"] = {
+        "kind": "data",
+        "title": "Data",
+        "value": value,
+        "output_schema": schema,
+    }
+    payload["graph"]["nodes"][node_id] = node
+    payload["graph"]["edges"] = [
+        {"from": {"node": "data_1", "port": "value"}, "to": {"node": node_id, "port": port}}
+    ]
+    return payload
+
+
+def test_unpack_follows_a_local_ref_to_its_object_schema():
+    schema = {
+        "type": "object",
+        "properties": {"address": {"$ref": "#/$defs/Address"}},
+        "$defs": {
+            "Address": {"type": "object", "properties": {"street": {"type": "string"}}},
+        },
+    }
+    payload = _data_into(
+        "outer", "value", {"kind": "unpack", "title": "Outer"}, {"address": {}}, schema
+    )
+    payload["graph"]["nodes"]["inner"] = {"kind": "unpack", "title": "Inner"}
+    payload["graph"]["edges"].append(
+        {"from": {"node": "outer", "port": "address"}, "to": {"node": "inner", "port": "value"}}
+    )
+
+    inner = _derive(payload)["graph"]["nodes"]["inner"]
+
+    assert set(inner["output_schema"]["properties"]) == {"street"}
+
+
+def test_unpack_exposes_the_fields_of_a_nullable_object():
+    schema = {
+        "type": ["object", "null"],
+        "properties": {"name": {"type": "string"}},
+        "required": ["name"],
+    }
+    payload = _data_into("fields", "value", {"kind": "unpack", "title": "Fields"}, None, schema)
+
+    unpack = _derive(payload)["graph"]["nodes"]["fields"]
+
+    assert set(unpack["output_schema"]["properties"]) == {"name"}
+
+
+@pytest.mark.parametrize("target_type", ["number", "[number, 'null']"])
+def test_integer_output_feeds_a_number_input(target_type):
+    agent = _agent_node(
+        "Count", template=f"---\ninputs:\n  n:\n    type: {target_type}\n---\nCount {{n}}"
+    )
+    payload = _data_into("count", "n", agent, 3, {"type": "integer"})
+
+    validate_workflow_definition_payload(_derive(payload))
