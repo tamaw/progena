@@ -47,7 +47,7 @@ DEFAULT_PROJECT_DATA_DIR = Path(__file__).resolve().parents[3] / "data"
 DEFAULT_PROJECT_STATE_DIR = DEFAULT_PROJECT_DATA_DIR / "state"
 DEFAULT_PROJECT_LOG_DIR = Path(__file__).resolve().parents[3] / "logs"
 DEFAULT_PROJECT_WORKTREE_DIR = Path(__file__).resolve().parents[3] / "worktrees"
-DEFAULT_PROJECT_PROMPTS_DIR = DEFAULT_PROJECT_DATA_DIR / "prompts"
+DEFAULT_PROJECT_INSTRUCTIONS_DIR = DEFAULT_PROJECT_DATA_DIR / "instructions"
 
 
 def _default_data_dir(project_root: Path | None = None) -> Path:
@@ -76,9 +76,9 @@ def _default_worktree_dir(
     return DEFAULT_PROJECT_WORKTREE_DIR if project_root is None else project_root / "worktrees"
 
 
-def _default_prompts_dir(project_root: Path | None = None) -> Path:
+def _default_instructions_dir(project_root: Path | None = None) -> Path:
     """Return the checked-in prompt root unless an explicit project root is provided."""
-    return _default_data_dir(project_root) / "prompts"
+    return _default_data_dir(project_root) / "instructions"
 
 
 @dataclass
@@ -114,7 +114,7 @@ class StorageConfig:
     state_dir: Path = field(default_factory=_default_state_dir)
     log_dir: Path = field(default_factory=_default_log_dir)
     worktree_dir: Path = field(default_factory=_default_worktree_dir)
-    prompts_dir: Path = field(default_factory=_default_prompts_dir)
+    instructions_dir: Path = field(default_factory=_default_instructions_dir)
 
     @classmethod
     def from_env(cls, project_root: Path | None = None) -> StorageConfig:
@@ -128,13 +128,13 @@ class StorageConfig:
                 str(_default_worktree_dir(project_root, worktrees_root=wt_root or None)),
             )
         )
-        d_prompts = data_dir / "prompts"
+        d_instructions = data_dir / "instructions"
         return cls(
             data_dir=data_dir,
             state_dir=Path(os.getenv("PROGENITOR_STATE_DIR", str(d_state))),
             log_dir=d_logs,
             worktree_dir=d_wt,
-            prompts_dir=Path(os.getenv("PROGENITOR_PROMPTS_DIR", str(d_prompts))),
+            instructions_dir=Path(os.getenv("PROGENITOR_INSTRUCTIONS_DIR", str(d_instructions))),
         )
 
 

@@ -23,7 +23,7 @@ class FakeContentStateManager(MagicMock):
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         self._docs: dict[str, dict[str, str]] = {
-            "prompt": {},
+            "instruction": {},
             "skill": {},
             "memory": {},
             "agent": {},
@@ -67,7 +67,7 @@ class TestBackendFactory:
         assert isinstance(backend, CompositeBackend)
         assert isinstance(backend.default, runtime_free_cls)
         assert "/memories/" not in backend.routes
-        assert "/prompts/" not in backend.routes
+        assert "/instructions/" not in backend.routes
         assert "/config/" not in backend.routes
         # /skills/ is a plain disk mount (like /schemas/), so it's present even
         # without a state_manager -- as long as data/skills/ exists on disk,
@@ -94,7 +94,7 @@ class TestBackendFactory:
             assert backend is not None
             assert isinstance(backend.default, runtime_free_cls)
             assert "/memories/" in backend.routes
-            assert "/prompts/" in backend.routes
+            assert "/instructions/" in backend.routes
             assert "/skills/" in backend.routes
             assert "/self/" in backend.routes
             assert "/repos/" in backend.routes
@@ -105,9 +105,9 @@ class TestBackendFactory:
             assert isinstance(backend.routes["/logs/"], ReadOnlyBackend)
             assert isinstance(backend.routes["/schemas/"], ReadOnlyBackend)
             assert isinstance(backend.routes["/schemas/"]._backend, FilesystemBackend)
-            from app.progenitor.agent.state_backend import PromptDocumentDirectoryBackend
+            from app.progenitor.agent.state_backend import InstructionDocumentDirectoryBackend
 
-            assert isinstance(backend.routes["/prompts/"], PromptDocumentDirectoryBackend)
+            assert isinstance(backend.routes["/instructions/"], InstructionDocumentDirectoryBackend)
             # /skills/ is disk-backed now (like /schemas/), not Postgres-backed.
             assert isinstance(backend.routes["/skills/"], ReadOnlyBackend)
             assert isinstance(backend.routes["/skills/"]._backend, FilesystemBackend)
@@ -172,28 +172,28 @@ class TestBackendFactory:
             assert schema_read.error is None
             assert json.loads(schema_read.file_data["content"]) == schema
 
-    async def test_prompts_are_writable_with_validation(self, monkeypatch):
-        """/prompts/ reads Postgres content and validates writes."""
-        from app.progenitor.agent.state_backend import PromptDocumentDirectoryBackend
+    async def test_instructions_mount_reads_and_validates_writes(self, monkeypatch):
+        """/instructions/ reads Postgres content and validates writes."""
+        from app.progenitor.agent.state_backend import InstructionDocumentDirectoryBackend
 
         self._patch_runtime_free_state_backend(monkeypatch)
         state_manager = FakeContentStateManager()
-        state_manager._docs["prompt"]["progenitor/genesis.md"] = "# Genesis\n"
+        state_manager._docs["instruction"]["progenitor/genesis.md"] = "# Genesis\n"
 
         backend = create_progenitor_backend(project_root=".", state_manager=state_manager)
 
-        prompt_read = await backend.aread("/prompts/progenitor/genesis.md")
-        assert prompt_read.error is None
-        assert prompt_read.file_data["content"] == "# Genesis\n"
+        instruction_read = await backend.aread("/instructions/progenitor/genesis.md")
+        assert instruction_read.error is None
+        assert instruction_read.file_data["content"] == "# Genesis\n"
 
-        assert isinstance(backend.routes["/prompts/"], PromptDocumentDirectoryBackend)
+        assert isinstance(backend.routes["/instructions/"], InstructionDocumentDirectoryBackend)
 
-        valid = await backend.awrite("/prompts/progenitor/genesis.md", "# Updated\n")
+        valid = await backend.awrite("/instructions/progenitor/genesis.md", "# Updated\n")
         assert valid.error is None
-        assert state_manager._docs["prompt"]["progenitor/genesis.md"] == "# Updated\n"
+        assert state_manager._docs["instruction"]["progenitor/genesis.md"] == "# Updated\n"
 
         invalid = await backend.awrite(
-            "/prompts/progenitor/genesis.md",
+            "/instructions/progenitor/genesis.md",
             "---\nunknown_key: 1\n---\n# Body\n",
         )
         assert invalid.error is not None

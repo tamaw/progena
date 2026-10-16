@@ -16,7 +16,7 @@ import {
   deriveFormatInputSchema,
   promptTemplatePatch,
   formatTemplatePatch,
-  promptDocumentPatch,
+  instructionPatch,
   createPaletteNode,
   nodeInputPorts,
   schemasAreCompatible,
@@ -57,7 +57,7 @@ describe('workflowToFlow', () => {
       graph: {
         nodes: {
           event: { kind: 'event', title: 'Event', document_type: 'kanban_card', output_schema: KANBAN_EVENT_OUTPUT_SCHEMA },
-          agent: { kind: 'agent', title: 'Agent', prompt: null, template: 'Go', subagent: null, input_schema: { type: 'object', properties: { document_type: { type: 'string' } } }, output_schema: { type: 'object', properties: {} } },
+          agent: { kind: 'agent', title: 'Agent', instruction: null, template: 'Go', subagent: null, input_schema: { type: 'object', properties: { document_type: { type: 'string' } } }, output_schema: { type: 'object', properties: {} } },
         },
         edges: [{ from: { node: 'event', port: 'document_type' }, to: { node: 'agent', port: 'document_type' } }],
       },
@@ -76,7 +76,7 @@ describe('workflowToFlow', () => {
       graph: {
         nodes: {
           condition: { kind: 'condition', title: 'Condition', expression: 'ready', input_schema: { type: 'object', properties: {} }, output_schema: { type: 'object', properties: { true: { type: 'boolean' } } } },
-          agent: { kind: 'agent', title: 'Agent', prompt: null, template: 'Go', subagent: null, input_schema: { type: 'object', properties: { result: { type: 'boolean' } } }, output_schema: { type: 'object', properties: {} } },
+          agent: { kind: 'agent', title: 'Agent', instruction: null, template: 'Go', subagent: null, input_schema: { type: 'object', properties: { result: { type: 'boolean' } } }, output_schema: { type: 'object', properties: {} } },
         },
         edges: [{ from: { node: 'condition', port: 'true' }, to: { node: 'agent', port: 'result' } }],
       },
@@ -99,8 +99,8 @@ describe('workflowToFlow', () => {
     const workflow = {
       graph: {
         nodes: {
-          source: { kind: 'agent', title: 'Source', prompt: null, template: 'Go', subagent: null, input_schema: { type: 'object', properties: {} }, output_schema: AGENT_OUTPUT_SCHEMA },
-          target: { kind: 'agent', title: 'Target', prompt: null, template: 'Go', subagent: null, input_schema: agentInputSchema, output_schema: { type: 'object', properties: {} } },
+          source: { kind: 'agent', title: 'Source', instruction: null, template: 'Go', subagent: null, input_schema: { type: 'object', properties: {} }, output_schema: AGENT_OUTPUT_SCHEMA },
+          target: { kind: 'agent', title: 'Target', instruction: null, template: 'Go', subagent: null, input_schema: agentInputSchema, output_schema: { type: 'object', properties: {} } },
         },
         edges: [{ from: { node: 'source', port: 'title' }, to: { node: 'target', port: 'title' } }],
       },
@@ -154,9 +154,9 @@ describe('workflowToFlow', () => {
         nodes: {
           event: { kind: 'event', title: 'Event', document_type: 'kanban_card', output_schema: KANBAN_EVENT_OUTPUT_SCHEMA },
           cron: { kind: 'cron', title: 'Cron', expression: '0 9 * * 1-5', timezone: 'Australia/Melbourne', overlap: 'skip', output_schema: { type: 'object', required: ['scheduled_for', 'fired_at', 'timezone'], properties: { scheduled_for: { type: 'string', format: 'date-time' }, fired_at: { type: 'string', format: 'date-time' }, timezone: { type: 'string' } } } },
-          agent: { kind: 'agent', title: 'Agent', prompt: null, template: 'Go', subagent: null, input_schema: { type: 'object', properties: {} }, output_schema: { type: 'object', properties: {} } },
+          agent: { kind: 'agent', title: 'Agent', instruction: null, template: 'Go', subagent: null, input_schema: { type: 'object', properties: {} }, output_schema: { type: 'object', properties: {} } },
           data: { kind: 'data', title: 'Data', value: 1, output_schema: { type: 'number' } },
-          extract: { kind: 'extract', title: 'Extract', prompt: null, template: '', schema: null, input_schema: { type: 'object', properties: {} }, output_schema: { type: 'object', properties: {} } },
+          extract: { kind: 'extract', title: 'Extract', instruction: null, template: '', schema: null, input_schema: { type: 'object', properties: {} }, output_schema: { type: 'object', properties: {} } },
           condition: { kind: 'condition', title: 'Condition', expression: 'ready', input_schema: { type: 'object', properties: {} } },
           approval: { kind: 'approval', title: 'Approval', message: 'Approve?', input_schema: { type: 'object', properties: {} } },
           document_read: { kind: 'document_read', title: 'Read', document_type: 'kanban_card', input_schema: KANBAN_READ_SCHEMAS.read_input_schema, output_schema: KANBAN_READ_SCHEMAS.read_output_schema },
@@ -186,7 +186,7 @@ describe('workflowToFlow', () => {
     const flow = workflowToFlow({
       graph: {
         nodes: {
-          agent: { kind: 'agent', title: 'Notify', prompt: null, template: 'Notify the user.', subagent: null, input_schema: { type: 'object', properties: {} }, output_schema: { type: 'object', properties: {} } },
+          agent: { kind: 'agent', title: 'Notify', instruction: null, template: 'Notify the user.', subagent: null, input_schema: { type: 'object', properties: {} }, output_schema: { type: 'object', properties: {} } },
         },
         edges: [],
       },
@@ -217,7 +217,7 @@ describe('workflowToFlow', () => {
             match: { 'after.column_id': 'done' },
             output_schema: KANBAN_EVENT_OUTPUT_SCHEMA,
           },
-          agent_1: { kind: 'agent', title: 'Notify', prompt: null, template: 'Notify the user.', subagent: null, input_schema: { type: 'object', properties: {} }, output_schema: { type: 'object', properties: {} } },
+          agent_1: { kind: 'agent', title: 'Notify', instruction: null, template: 'Notify the user.', subagent: null, input_schema: { type: 'object', properties: {} }, output_schema: { type: 'object', properties: {} } },
         },
         edges: [{ from: { node: 'event_1', port: 'default' }, to: { node: 'agent_1', port: 'default' } }],
       },
@@ -925,9 +925,9 @@ describe('derivePromptInputSchema', () => {
     expect(updated.outputSchema).toEqual(extractOutputSchema);
   });
 
-  it('derives the selected prompt document input contract from its loaded text', () => {
-    expect(promptDocumentPatch('prompts/card.md', 'Review {card.title}')).toEqual({
-      prompt: 'prompts/card.md',
+  it('derives the selected instruction input contract from its loaded text', () => {
+    expect(instructionPatch('workflows/card.md', 'Review {card.title}')).toEqual({
+      instruction: 'workflows/card.md',
       template: null,
       inputSchema: { type: 'object', required: ['card'], properties: { thread_id: { type: 'string' }, card: {} } },
     });
@@ -981,14 +981,14 @@ describe('format node helpers', () => {
 });
 
 describe('agent node round-trip', () => {
-  it('serializes and deserializes prompt, template, and subagent', () => {
+  it('serializes and deserializes instruction, template, and subagent', () => {
     const workflow = {
       graph: {
         nodes: {
           agent_1: {
             kind: 'agent',
             title: 'Notify',
-            prompt: null,
+            instruction: null,
             template: 'Notify about {card.title}',
             subagent: 'Helper',
             input_schema: { type: 'object', required: ['card'], properties: { card: {} } },
@@ -1003,14 +1003,14 @@ describe('agent node round-trip', () => {
     const flow = workflowToFlow(workflow, {}, null);
     const node = flow.nodes.find((n) => n.id === 'agent_1');
     expect(node.type).toBe('agent');
-    expect(node.data.prompt).toBeNull();
+    expect(node.data.instruction).toBeNull();
     expect(node.data.template).toBe('Notify about {card.title}');
     expect(node.data.subagent).toBe('Helper');
 
     const persisted = flowToWorkflow(workflow, flow.nodes, flow.edges, flow.viewport);
     expect(persisted.graph.nodes.agent_1).toMatchObject({
       kind: 'agent',
-      prompt: null,
+      instruction: null,
       template: 'Notify about {card.title}',
       subagent: 'Helper',
     });
@@ -1018,14 +1018,14 @@ describe('agent node round-trip', () => {
 });
 
 describe('extract node round-trip', () => {
-  it('serializes and deserializes prompt, template, and schema', () => {
+  it('serializes and deserializes instruction, template, and schema', () => {
     const workflow = {
       graph: {
         nodes: {
           extract_1: {
             kind: 'extract',
             title: 'Parse',
-            prompt: 'prompts/parse.md',
+            instruction: 'workflows/parse.md',
             template: null,
             schema: 'kanban_card',
             input_schema: { type: 'object', properties: {} },
@@ -1040,14 +1040,14 @@ describe('extract node round-trip', () => {
     const flow = workflowToFlow(workflow, {}, null);
     const node = flow.nodes.find((n) => n.id === 'extract_1');
     expect(node.type).toBe('extract');
-    expect(node.data.prompt).toBe('prompts/parse.md');
+    expect(node.data.instruction).toBe('workflows/parse.md');
     expect(node.data.template).toBeNull();
     expect(node.data.schema).toBe('kanban_card');
 
     const persisted = flowToWorkflow(workflow, flow.nodes, flow.edges, flow.viewport);
     expect(persisted.graph.nodes.extract_1).toMatchObject({
       kind: 'extract',
-      prompt: 'prompts/parse.md',
+      instruction: 'workflows/parse.md',
       template: null,
       schema: 'kanban_card',
     });

@@ -44,8 +44,9 @@ from deepagents.backends.utils import (
 )
 from wcmatch import glob as wcglob
 
+from ..instructions import check_instruction_write
+from ..instructions.templates import instruction_relative_path
 from ..knowledge.indexer_config import default_indexer_payload, validate_indexer_document
-from ..prompts.templates import parse_prompt_template, prompt_relative_path
 from ..routines.store import (
     parse_routine_graph_document,
     routine_file_name,
@@ -1158,20 +1159,20 @@ class WorkflowDirectoryBackend(_AsyncOnlyFileBackendMixin):
         if workflow_id is None:
             return WriteResult(error=f"Unknown workflow file '{file_path}' (expected <id>.json)")
         try:
-            # Validation is synchronous; snapshot the prompt documents the
-            # workflow may reference (by path relative to /prompts/).
-            prompts = dict(await self._sm.list_content_documents("prompt"))
+            # Validation is synchronous; snapshot the instructions the workflow
+            # may reference (by path relative to /instructions/).
+            instructions = dict(await self._sm.list_content_documents("instruction"))
 
-            def _prompt_loader(path: str) -> str:
-                text = prompts.get(prompt_relative_path(path))
+            def _instruction_loader(path: str) -> str:
+                text = instructions.get(instruction_relative_path(path))
                 if text is None:
-                    raise ValueError(f"prompt document '{path}' not found")
+                    raise ValueError(f"instruction '{path}' not found")
                 return text
 
             workflow = validate_workflow_definition_document(
                 content,
                 await self._sm.list_document_types(),
-                prompt_loader=_prompt_loader,
+                instruction_loader=_instruction_loader,
             )
         except ValueError as exc:
             return WriteResult(error=f"Invalid workflow {name}: {exc}")
@@ -1533,7 +1534,7 @@ def create_schedule_state_file(
 class ContentDocumentDirectoryBackend(_AsyncOnlyFileBackendMixin):
     """Async backend exposing Postgres-backed content documents as a directory.
 
-    Backs ``/prompts/`` and ``/memories/`` (whole-kind) plus one
+    Backs ``/instructions/`` and ``/memories/`` (whole-kind) plus one
     ``/skills/<marketplace>__<plugin>/`` mount per installed marketplace
     plugin (``path_prefix`` scopes the backend to just that segment of the
     ``"skill"`` kind, so the mount only ever sees that plugin's own rows).
@@ -1666,17 +1667,20 @@ class UserAgentDirectoryBackend(ContentDocumentDirectoryBackend):
         return await super().awrite(file_path, content)
 
 
-class PromptDocumentDirectoryBackend(ContentDocumentDirectoryBackend):
-    """Validated read/write prompt documents mounted at ``/prompts/``.
+class InstructionDocumentDirectoryBackend(ContentDocumentDirectoryBackend):
+    """Instructions mounted at ``/instructions/``, with validated writes.
 
-    Every write is validated with :func:`parse_prompt_template`; failures
-    surface as a ``WriteResult.error`` so the agent sees the reason.
+    Every write must parse as an instruction template; bundled agent
+    instructions are read-only and runtime instructions keep their
+    placeholders (:func:`check_instruction_write`). Failures surface as a
+    ``WriteResult.error`` so the agent sees the reason.
     """
 
     async def awrite(self, file_path: str, content: str) -> WriteResult:
+        name = self._name(file_path)
         try:
-            prompt_relative_path(self._name(file_path))
-            parse_prompt_template(content)
-        except ValueError as exc:
-            return WriteResult(error=f"Invalid prompt document: {exc}")
+            previous = await self._sm.get_content_document(self._kind, name)
+            check_instruction_write(name, previous, content)
+        except (ValueError, PermissionError) as exc:
+            return WriteResult(error=f"Invalid instruction: {exc}")
         return await super().awrite(file_path, content)

@@ -121,7 +121,7 @@ class LLMClient:
         self,
         config: LLMConfig | None = None,
         mcp_config: MCPConfig | None = None,
-        prompts_dir: Path | str | None = None,
+        instructions_dir: Path | str | None = None,
         role: str | None = None,
     ):
         """Initialize the LLM client.
@@ -129,12 +129,12 @@ class LLMClient:
         Args:
             config: LLM configuration. If None, loads from environment.
             mcp_config: MCP configuration. If None, loads from environment.
-            prompts_dir: Prompt root to use for template loading.
+            instructions_dir: Prompt root to use for template loading.
             role: Optional role for per-role model selection (planner, builder, summary).
         """
         self.config = config or LLMConfig.from_env()
         self.mcp_config = mcp_config or MCPConfig.from_env()
-        self.prompts = PromptTemplates(prompts_dir=prompts_dir)
+        self.prompts = PromptTemplates(instructions_dir=instructions_dir)
         self.role = role
         self.model = self.config.get_model_for_role(role) if role else self.config.model_default
 

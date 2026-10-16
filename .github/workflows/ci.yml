@@ -138,7 +138,7 @@ jobs:
               - 'app/frontend/**'
               - 'docker/**'
               - 'pyproject.toml'
-              - 'data/prompts/**'
+              - 'data/instructions/**'
               - 'data/skills/**'
               - '.github/workflows/ci.yml'
 

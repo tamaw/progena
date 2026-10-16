@@ -50,6 +50,7 @@ import {
 } from '../../data/solutions';
 import {
   AgentsNavIcon,
+  InstructionsNavIcon,
   AlertsIcon,
   ChannelsNavIcon,
   ChatNavIcon,
@@ -140,6 +141,7 @@ const navGroups = [
     label: 'Delegate',
     items: [
       { to: '/agents', icon: <AgentsNavIcon />, label: 'Agents', trackActivity: true },
+      { to: '/instructions', icon: <InstructionsNavIcon />, label: 'Instructions', trackActivity: true },
     ],
   },
   {

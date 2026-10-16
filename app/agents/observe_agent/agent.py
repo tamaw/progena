@@ -204,7 +204,7 @@ class ObserveAgent:
         self.agent_log_dir = self.config.storage.log_dir / self.runtime_agent_name
         self._system_prompt = load_prompt(
             "system.md",
-            prompts_dir=self.config.storage.prompts_dir,
+            instructions_dir=self.config.storage.instructions_dir,
         ).strip()
         self._store: ObserveStore | None = None
         self._graph = self._build_graph()

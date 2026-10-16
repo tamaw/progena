@@ -89,18 +89,17 @@ Ephemeral storage:
 - `/app/tmp` is a `tmpfs` mount in `progenitor` and `backend`
 
 Notes:
-- Prompts, skills, and runtime memories are Postgres-backed content documents
-  (`app/progenitor/content_documents.py`, keyed `prompt:`/`skill:`/`memory:` in
+- Instructions and runtime memories are Postgres-backed content documents
+  (`app/progenitor/content_documents.py`, keyed `instruction:`/`memory:` in
   the same shared `store` table as `mcp.json`/`schedule.json`/etc — see
   `app/progenitor/state/manager.py`). Neither `progenitor` nor `backend` mounts
-  a host directory for them anymore. `data/prompts/` and `data/skills/` are
-  still checked into git and `COPY`'d into the `progenitor` image (not
-  `backend`'s) purely as a one-time seed source: on first boot against an
-  empty database, `progenitor` bulk-loads them into Postgres and never reads
-  disk for them again. Editing a prompt/skill afterward (via the UI or the
-  agent's own `/prompts/`/`/skills/`/`/memories/` virtual mounts) only touches
-  Postgres; it does not update the git-tracked seed files, and re-editing the
-  seed files in git has no effect on an already-seeded database.
+  a host directory for them. `data/instructions/` is checked into git and
+  `COPY`'d into the `progenitor` image (not `backend`'s); every boot syncs it
+  into Postgres: Progenitor's own instructions (`progenitor/`) are added when
+  missing and otherwise kept, since they are edited on the Instructions page,
+  while every other group mirrors its file, because those A2A agents read
+  their own copy from disk. `data/skills/` is a read-only disk mount
+  (`/skills/`), not stored in Postgres.
 - `current_state`, `schedule`, `registry/agents`, `mcp`, `knowledge`, `health`,
   `kanban`, `attachments`, `sessions`, `prompts`, `skills`, and `memories` all
   persist through the shared LangGraph/Postgres document store with no
