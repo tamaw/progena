@@ -592,7 +592,7 @@ def test_query_filter_tells_json_true_from_1():
             "kind": "document_query",
             "title": "Ready",
             "document_type": "kanban_card",
-            "filter_fields": ["metadata"],
+            "filters": [{"field": "metadata", "op": "eq"}],
         }
     )
 

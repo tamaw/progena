@@ -57,6 +57,10 @@ from app.progenitor.workflows import (
     WorkflowListItem,
     WorkflowRun,
     default_workflow_definition,
+    document_create_input_schema,
+    document_create_output_schema,
+    document_delete_input_schema,
+    document_delete_output_schema,
     document_event_output_schema,
     document_query_output_schema,
     document_read_input_schema,
@@ -1959,11 +1963,24 @@ def _document_type_snapshot_item(document_type: DocumentType) -> dict[str, Any]:
         "read_input_schema": document_read_input_schema(document_type),
         "read_output_schema": document_read_output_schema(document_type, document_schema),
         "query_output_schema": document_query_output_schema(document_type, document_schema),
+        "writable_fields": list(document_type.writable_fields),
         "write_input_schema": document_write_input_schema(document_type, document_schema)
-        if document_type.writable
+        if document_type.writable_fields
         else None,
         "write_output_schema": document_write_output_schema(document_type, document_schema)
-        if document_type.writable
+        if document_type.writable_fields
+        else None,
+        "create_input_schema": document_create_input_schema(document_type, document_schema)
+        if document_type.collection and document_schema is not None
+        else None,
+        "create_output_schema": document_create_output_schema(document_type, document_schema)
+        if document_type.collection and document_schema is not None
+        else None,
+        "delete_input_schema": document_delete_input_schema()
+        if document_type.collection and document_schema is not None
+        else None,
+        "delete_output_schema": document_delete_output_schema(document_type, document_schema)
+        if document_type.collection and document_schema is not None
         else None,
     }
 

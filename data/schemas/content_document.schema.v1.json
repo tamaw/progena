@@ -10,6 +10,7 @@
     },
     "updated_at": {
       "type": "string",
+      "readOnly": true,
       "description": "ISO8601 last-update timestamp, when recorded."
     }
   },

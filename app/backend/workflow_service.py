@@ -9,6 +9,7 @@ import re
 import uuid
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any, Protocol
 
 from app.backend.document_events import list_document_types
@@ -34,6 +35,8 @@ from app.progenitor.workflows import (
     WorkflowNodeApproval,
     WorkflowNodeCondition,
     WorkflowNodeCron,
+    WorkflowNodeDocumentCreate,
+    WorkflowNodeDocumentDelete,
     WorkflowNodeDocumentQuery,
     WorkflowNodeDocumentRead,
     WorkflowNodeDocumentWrite,
@@ -49,6 +52,7 @@ from app.progenitor.workflows import (
     coerce_workflow_definition,
     coerce_workflow_run,
     derive_workflow_port_schemas,
+    document_query_filter_port_names,
     json_equal,
     validate_workflow_definition_payload,
     workflow_definition_key,
@@ -525,12 +529,84 @@ def _build_queued_run(
 
 def _resolve_node_document_type(
     store: BackendDocumentStore,
-    node: WorkflowNodeDocumentRead | WorkflowNodeDocumentQuery | WorkflowNodeDocumentWrite,
+    node: (
+        WorkflowNodeDocumentRead
+        | WorkflowNodeDocumentQuery
+        | WorkflowNodeDocumentWrite
+        | WorkflowNodeDocumentCreate
+        | WorkflowNodeDocumentDelete
+    ),
 ) -> DocumentType:
     document_type = list_document_types(store).get(node.document_type)
     if document_type is None:
         raise ValueError(f"node '{node.title}' references unknown document type")
     return document_type
+
+
+def _parse_iso_datetime(value: Any) -> datetime | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _ordered_compare(value: Any, expected: Any) -> int | None:
+    if isinstance(value, bool) or isinstance(expected, bool):
+        return None
+    if isinstance(value, (int, float)) and isinstance(expected, (int, float)):
+        return (value > expected) - (value < expected)
+    if isinstance(value, str) and isinstance(expected, str):
+        value_datetime = _parse_iso_datetime(value)
+        expected_datetime = _parse_iso_datetime(expected)
+        if value_datetime is not None and expected_datetime is not None:
+            try:
+                return (value_datetime > expected_datetime) - (value_datetime < expected_datetime)
+            except TypeError:
+                return None
+        return (value > expected) - (value < expected)
+    return None
+
+
+def _query_filter_matches(payload: Mapping[str, Any], field: str, op: str, expected: Any) -> bool:
+    present = field in payload
+    if op == "exists":
+        return present is expected
+    if not present:
+        return False
+    value = payload[field]
+    if op == "eq":
+        return json_equal(value, expected)
+    if op == "ne":
+        return not json_equal(value, expected)
+    if op == "in":
+        return isinstance(expected, list) and any(json_equal(value, item) for item in expected)
+    if op == "contains":
+        if isinstance(value, str) and isinstance(expected, str):
+            return expected in value
+        return isinstance(value, list) and any(json_equal(item, expected) for item in value)
+    comparison = _ordered_compare(value, expected)
+    return comparison is not None and {
+        "lt": comparison < 0,
+        "lte": comparison <= 0,
+        "gt": comparison > 0,
+        "gte": comparison >= 0,
+    }.get(op, False)
+
+
+def _query_order_value(payload: Mapping[str, Any], field: str) -> tuple[int, int, Any]:
+    if field not in payload or payload[field] is None:
+        return (1, 0, "")
+    value = payload[field]
+    if isinstance(value, bool):
+        return (0, 3, str(value))
+    if isinstance(value, (int, float)):
+        return (0, 0, value)
+    if isinstance(value, str):
+        parsed = _parse_iso_datetime(value)
+        return (0, 1, parsed) if parsed is not None else (0, 2, value)
+    return (0, 4, json.dumps(value, sort_keys=True, default=str))
 
 
 def _execute_document_node(
@@ -549,20 +625,41 @@ def _execute_document_node(
         )
     if document_type.key_prefix is None:
         raise ValueError(f"node '{node.title}' needs a collection document type")
-    filters = {field: resolved_input.get(field) for field in node.filter_fields}
-    keys: list[str] = []
-    items: list[Any] = []
+    filter_ports = document_query_filter_port_names(node.filters)
+    candidates: list[tuple[str, Mapping[str, Any]]] = []
     for key, document in store.list_documents(PROGENITOR_STATE_PREFIX, document_type.key_prefix):
         payload = document.payload
-        if not isinstance(payload, Mapping) or any(
-            not json_equal(payload.get(field), value) for field, value in filters.items()
+        if not isinstance(payload, Mapping):
+            continue
+        if any(
+            port in resolved_input
+            and resolved_input[port] is not None
+            and not _query_filter_matches(payload, item.field, item.op, resolved_input[port])
+            for item, port in zip(node.filters, filter_ports, strict=True)
         ):
             continue
-        keys.append(key)
-        items.append(payload)
-        if len(items) >= node.limit:
-            break
-    return {"items": items, "keys": keys, "count": len(items)}
+        candidates.append((key, payload))
+    if node.order_by:
+        order_by = node.order_by
+        candidates.sort(
+            key=lambda item: _query_order_value(item[1], order_by),
+            reverse=node.order == "desc",
+        )
+        present = [
+            item for item in candidates if order_by in item[1] and item[1][order_by] is not None
+        ]
+        candidates = [
+            *present,
+            *[item for item in candidates if order_by not in item[1] or item[1][order_by] is None],
+        ]
+    total = len(candidates)
+    selected = candidates[: node.limit]
+    return {
+        "items": [payload for _, payload in selected],
+        "keys": [key for key, _ in selected],
+        "count": len(selected),
+        "total": total,
+    }
 
 
 def _execute_document_write_node(
@@ -575,26 +672,78 @@ def _execute_document_write_node(
 
     document_type = _resolve_node_document_type(store, node)
     key = document_type.document_key(str(resolved_input.get("id") or ""))
-    merge_payload: dict[str, Any] = {}
-    for field in document_type.writable:
-        if field in resolved_input and resolved_input[field] is not None:
-            merge_payload[field] = resolved_input[field]
+    merge_payload = {
+        field: resolved_input[field]
+        for field in document_type.writable_fields
+        if field in resolved_input and resolved_input[field] is not None
+    }
     if not merge_payload:
-        # Nothing to write: report existence only, like a write reports only
-        # the fields it wrote (unwritten optional ports stay absent).
         return {"found": store.get_document(PROGENITOR_STATE_PREFIX, key, None) is not None}
     error = document_type.validate_write(merge_payload)
     if error:
         raise ValueError(
-            f"document_write node '{node.title}' output failed schema validation: {error}"
+            f"document_write node '{node.title}' input failed schema validation: {error}"
         )
     with document_write_origin(run_id):
         found = store.merge_document(PROGENITOR_STATE_PREFIX, key, merge_payload)
-    output: dict[str, Any] = {"found": found}
-    for field in document_type.writable:
-        if field in merge_payload:
-            output[field] = merge_payload[field]
-    return output
+    return {"found": found, **merge_payload}
+
+
+def _execute_document_create_node(
+    store: BackendDocumentStore,
+    node: WorkflowNodeDocumentCreate,
+    resolved_input: Mapping[str, Any],
+    run_id: str,
+) -> dict[str, Any]:
+    document_type = _resolve_node_document_type(store, node)
+    if not document_type.collection:
+        raise ValueError(f"node '{node.title}' needs a collection document type")
+    document_id = str(resolved_input.get("id") or uuid.uuid4().hex)
+    key = document_type.document_key(document_id)
+    payload = {
+        field: resolved_input[field]
+        for field in document_type.writable_fields
+        if field in resolved_input
+    }
+    schema = document_type.load_schema()
+    if schema is None:
+        raise ValueError(f"document_create node '{node.title}' needs a document schema")
+    properties = schema.get("properties", {})
+    if "id" in properties:
+        payload["id"] = document_id
+    now = utcnow_isoformat()
+    for field in ("created_at", "updated_at"):
+        if field in properties:
+            payload[field] = now
+    error = validate_against_schema(payload, schema)
+    if error:
+        raise ValueError(
+            f"document_create node '{node.title}' input failed schema validation: {error}"
+        )
+
+    def insert(current: Any) -> dict[str, Any]:
+        if current is not None:
+            raise ValueError(f"document_create node '{node.title}' key '{key}' already exists")
+        return payload
+
+    with document_write_origin(run_id):
+        document = store.mutate_document(PROGENITOR_STATE_PREFIX, key, insert)
+    return {"id": document_id, "key": key, "document": document}
+
+
+def _execute_document_delete_node(
+    store: BackendDocumentStore,
+    node: WorkflowNodeDocumentDelete,
+    resolved_input: Mapping[str, Any],
+    run_id: str,
+) -> dict[str, Any]:
+    document_type = _resolve_node_document_type(store, node)
+    if not document_type.collection:
+        raise ValueError(f"node '{node.title}' needs a collection document type")
+    key = document_type.document_key(str(resolved_input["id"]))
+    with document_write_origin(run_id):
+        before = store.pop_document(PROGENITOR_STATE_PREFIX, key)
+    return {"found": before is not None, "before": before}
 
 
 class WorkflowExecutor:
@@ -1003,6 +1152,20 @@ class WorkflowExecutor:
                 elif isinstance(node, WorkflowNodeDocumentWrite):
                     _validate_node_input(node, resolved_input)
                     output_object = _execute_document_write_node(
+                        store, node, resolved_input, latest_run.run_id
+                    )
+                    _validate_node_output(node, output_object)
+                    output_text = _bounded_text(json.dumps(output_object, default=str))
+                elif isinstance(node, WorkflowNodeDocumentCreate):
+                    _validate_node_input(node, resolved_input)
+                    output_object = _execute_document_create_node(
+                        store, node, resolved_input, latest_run.run_id
+                    )
+                    _validate_node_output(node, output_object)
+                    output_text = _bounded_text(json.dumps(output_object, default=str))
+                elif isinstance(node, WorkflowNodeDocumentDelete):
+                    _validate_node_input(node, resolved_input)
+                    output_object = _execute_document_delete_node(
                         store, node, resolved_input, latest_run.run_id
                     )
                     _validate_node_output(node, output_object)

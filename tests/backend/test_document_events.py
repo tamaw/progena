@@ -16,6 +16,9 @@ from app.backend.document_store import (
     set_default_document_store,
 )
 from app.backend.workflow_service import (
+    _execute_document_create_node,
+    _execute_document_delete_node,
+    _execute_document_node,
     build_manual_trigger_event,
     list_workflow_runs,
     save_workflow_definition,
@@ -23,6 +26,9 @@ from app.backend.workflow_service import (
 from app.progenitor.document_kinds import SESSION_KEY_PREFIX
 from app.progenitor.document_types import BUILTIN_DOCUMENT_TYPES
 from app.progenitor.workflows import (
+    WorkflowNodeDocumentCreate,
+    WorkflowNodeDocumentDelete,
+    WorkflowNodeDocumentQuery,
     WorkflowNodeEvent,
     default_workflow_definition,
     derive_workflow_port_schemas,
@@ -289,7 +295,7 @@ async def test_query_node_returns_collection_documents_matching_unpacked_field(s
                 "kind": "document_query",
                 "title": "Same column",
                 "document_type": "kanban_card",
-                "filter_fields": ["column_id"],
+                "filters": [{"field": "column_id", "op": "eq"}],
             },
         },
         [("event", "after", "card", "value"), ("card", "column_id", "peers", "column_id")],
@@ -580,3 +586,130 @@ def test_in_memory_session_turn_updates_log_no_event_like_postgres():
     events = [e for e in store.read_document_events(EVENT_LOG_START, 100) if e.key == key]
     assert [e.op for e in events] == ["created", "updated"]
     assert events[1].after["title"] == "Hiking"
+
+
+def test_schema_driven_writable_fields_reject_readonly_values():
+    session = BUILTIN_TYPES["session"]
+    assert session.writable_fields == ("title", "pinned", "archived")
+    assert session.validate_write({"title": "Renamed"}) is None
+    assert "not writable" in (session.validate_write({"content": "no"}) or "")
+    assert "not writable" in (session.validate_write({"missing": "no"}) or "")
+
+
+def test_document_create_generates_or_uses_id_and_rejects_duplicate(store):
+    node = WorkflowNodeDocumentCreate(document_type="kanban_card")
+    generated = _execute_document_create_node(
+        store,
+        node,
+        {"title": "Generated", "summary": "", "column_id": "todo", "status": "idle"},
+        "run-create",
+    )
+    assert len(generated["id"]) == 32
+    assert generated["document"]["id"] == generated["id"]
+    assert generated["document"]["created_at"] == generated["document"]["updated_at"]
+    explicit = _execute_document_create_node(
+        store,
+        node,
+        {
+            "id": "explicit",
+            "title": "Explicit",
+            "summary": "",
+            "column_id": "todo",
+            "status": "idle",
+        },
+        "run-create",
+    )
+    assert explicit["key"] == "kanban_card:explicit"
+    with pytest.raises(ValueError, match="already exists"):
+        _execute_document_create_node(
+            store,
+            node,
+            {
+                "id": "explicit",
+                "title": "Again",
+                "summary": "",
+                "column_id": "todo",
+                "status": "idle",
+            },
+            "run-create",
+        )
+    with pytest.raises(ValueError, match="required property"):
+        _execute_document_create_node(store, node, {"title": "Missing"}, "run-create")
+    events = store.read_document_events(EVENT_LOG_START, 100)
+    assert next(event for event in events if event.key == explicit["key"]).origin == "run-create"
+
+
+def test_document_delete_returns_before_and_tags_origin(store):
+    store.save_document(PROGENITOR_STATE_PREFIX, "kanban_card:gone", _card("gone", "todo"))
+    node = WorkflowNodeDocumentDelete(document_type="kanban_card")
+    deleted = _execute_document_delete_node(store, node, {"id": "gone"}, "run-delete")
+    assert deleted == {"found": True, "before": _card("gone", "todo")}
+    assert _execute_document_delete_node(store, node, {"id": "gone"}, "run-delete") == {
+        "found": False,
+        "before": None,
+    }
+    events = store.read_document_events(EVENT_LOG_START, 100)
+    assert (
+        next(
+            event for event in events if event.key == "kanban_card:gone" and event.op == "deleted"
+        ).origin
+        == "run-delete"
+    )
+
+
+@pytest.mark.parametrize(
+    ("op", "value", "expected"),
+    [
+        ("eq", "alpha", ["kanban_card:a"]),
+        ("ne", "alpha", ["kanban_card:b", "kanban_card:c"]),
+        ("lt", 3, ["kanban_card:a", "kanban_card:b"]),
+        ("lte", 2, ["kanban_card:a", "kanban_card:b"]),
+        ("gt", 1, ["kanban_card:b", "kanban_card:c"]),
+        ("gte", 2, ["kanban_card:b", "kanban_card:c"]),
+        ("in", ["alpha", "beta"], ["kanban_card:a", "kanban_card:b"]),
+        ("contains", "ph", ["kanban_card:a"]),
+        ("exists", True, ["kanban_card:a", "kanban_card:b", "kanban_card:c"]),
+    ],
+)
+def test_document_query_operators(store, op, value, expected):
+    store.save_document(
+        PROGENITOR_STATE_PREFIX, "kanban_card:a", _card("a", "todo", title="alpha", position=1)
+    )
+    store.save_document(
+        PROGENITOR_STATE_PREFIX, "kanban_card:b", _card("b", "todo", title="beta", position=2)
+    )
+    store.save_document(
+        PROGENITOR_STATE_PREFIX, "kanban_card:c", _card("c", "todo", title="gamma", position=3)
+    )
+    field = "position" if op in {"lt", "lte", "gt", "gte"} else "title"
+    node = WorkflowNodeDocumentQuery(
+        document_type="kanban_card", filters=[{"field": field, "op": op}]
+    )
+    assert _execute_document_node(store, node, {field: value})["keys"] == expected
+
+
+def test_document_query_datetime_order_total_and_unwired_filter(store):
+    store.save_document(
+        PROGENITOR_STATE_PREFIX,
+        "kanban_card:a",
+        _card("a", "todo", started_at="2024-01-02T00:00:00Z"),
+    )
+    store.save_document(
+        PROGENITOR_STATE_PREFIX,
+        "kanban_card:b",
+        _card("b", "todo", started_at="2024-01-01T00:00:00Z"),
+    )
+    store.save_document(PROGENITOR_STATE_PREFIX, "kanban_card:c", _card("c", "todo"))
+    node = WorkflowNodeDocumentQuery(
+        document_type="kanban_card",
+        filters=[{"field": "started_at", "op": "gte"}],
+        order_by="started_at",
+        order="desc",
+        limit=2,
+    )
+    output = _execute_document_node(store, node, {"started_at": "2024-01-01T12:00:00Z"})
+    assert output["keys"] == ["kanban_card:a"]
+    assert output["count"] == 1 and output["total"] == 1
+    unwired = _execute_document_node(store, node, {})
+    assert unwired["keys"] == ["kanban_card:a", "kanban_card:b"]
+    assert unwired["count"] == 2 and unwired["total"] == 3
