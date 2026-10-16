@@ -30,7 +30,12 @@ from app.progenitor.content_documents import (
     AGENT_DOCUMENT_KEY_PREFIX,
     SKILL_DOCUMENT_KEY_PREFIX,
 )
-from app.progenitor.document_kinds import INBOX_MESSAGE_KEY_PREFIX, REPO_KEY_PREFIX
+from app.progenitor.document_kinds import (
+    INBOX_MESSAGE_KEY_PREFIX,
+    KNOWLEDGE_PAGE_KEY_PREFIX,
+    REPO_KEY_PREFIX,
+)
+from app.progenitor.knowledge.indexer_config import INDEX_STATUS_DOC_KEY
 from app.progenitor.mcp.loader import (
     normalize_mcp_config_payload,
     resolve_required_env_template,
@@ -1870,7 +1875,7 @@ class StateReader:
                 and (
                     changed_key.startswith("policy:")
                     or changed_key == "schedule"
-                    or changed_key == MODEL_PROFILES_DOC_KEY
+                    or changed_key in (MODEL_PROFILES_DOC_KEY, INDEX_STATUS_DOC_KEY)
                     or changed_key.startswith(INBOX_MESSAGE_KEY_PREFIX)
                     or changed_key.startswith(WORKFLOW_DEFINITION_KEY_PREFIX)
                     or changed_key.startswith(WORKFLOW_RUN_KEY_PREFIX)
@@ -1880,6 +1885,7 @@ class StateReader:
                     or changed_key.startswith(SKILL_DOCUMENT_KEY_PREFIX)
                     or changed_key.startswith(ROUTINE_GRAPH_KEY_PREFIX)
                     or changed_key.startswith(REPO_KEY_PREFIX)
+                    or changed_key.startswith(KNOWLEDGE_PAGE_KEY_PREFIX)
                 )
             )
             # Reconnect must reach reconciliation even with unchanged state.

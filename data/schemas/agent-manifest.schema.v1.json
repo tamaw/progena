@@ -75,6 +75,19 @@
     "git_write": {
       "type": "boolean",
       "description": "Bundled agents with shell: true only. Lets the wrapped git/gh run repository setup commands (clone, fetch, pull --ff-only, switch, worktree, submodule, branch create, remote add/set-url, gh repo clone); push, commit and history-rewriting or work-discarding commands stay refused. The shell also gets PROGENITOR_REPOS_DIR, the managed repos directory."
+    },
+    "knowledge": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["base", "access"],
+        "additionalProperties": false,
+        "properties": {
+          "base": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,63}$" },
+          "access": { "enum": ["read", "write"] }
+        }
+      },
+      "description": "Knowledge bases available under /knowledge/<base>/."
     }
   }
 }

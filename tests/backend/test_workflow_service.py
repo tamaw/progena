@@ -104,6 +104,7 @@ async def test_connected_agent_output_schedules_its_consumer_without_control_edg
     executor = _executor(store, runner)
 
     run = await executor.trigger_workflow(definition.id, build_manual_trigger_event(definition))
+
     completed = await _wait_for(
         lambda: (
             get_workflow_run(store, run.run_id)

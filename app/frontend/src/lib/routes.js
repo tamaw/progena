@@ -51,7 +51,8 @@ export function useEntityUrlSync(basePath, id, title) {
     }
     const nextPath = buildEntityPath(basePath, id, title || id);
     if (nextPath !== location.pathname) {
-      navigate(nextPath, { replace: true });
+      // Keep the query (e.g. Knowledge's ?page=) when only the slug is fixed up.
+      navigate({ pathname: nextPath, search: location.search }, { replace: true });
     }
-  }, [basePath, id, title, location.pathname, navigate]);
+  }, [basePath, id, title, location.pathname, location.search, navigate]);
 }

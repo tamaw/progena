@@ -1,0 +1,47 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Knowledge search index status",
+  "description": "System-maintained indexing status for all knowledge bases.",
+  "type": "object",
+  "properties": {
+    "embedding": {
+      "readOnly": true,
+      "anyOf": [
+        {"type": "null"},
+        {
+          "type": "object",
+          "properties": {
+            "profile": {"type": "string", "readOnly": true},
+            "deployment": {"type": "string", "readOnly": true},
+            "dimensions": {"type": "integer", "readOnly": true}
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "bases": {
+      "type": "object",
+      "readOnly": true,
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "status": {"type": "string", "readOnly": true},
+          "pages": {"type": "integer", "readOnly": true},
+          "indexed_pages": {"type": "integer", "readOnly": true},
+          "chunks": {"type": "integer", "readOnly": true},
+          "pending": {
+            "type": "array",
+            "items": {"type": "string"},
+            "readOnly": true
+          },
+          "error": {"type": ["string", "null"], "readOnly": true},
+          "started_at": {"type": ["string", "null"], "readOnly": true},
+          "indexed_at": {"type": ["string", "null"], "readOnly": true}
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": ["bases"],
+  "additionalProperties": false
+}

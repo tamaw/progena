@@ -177,6 +177,24 @@ def test_document_store_open_preserves_documents_and_installs_revision_history()
     assert "ON CONFLICT (routine_id, revision_id) DO NOTHING" in backfill
     assert "RAISE EXCEPTION 'routine_graph_revisions rows are immutable" in emitted
     assert "CREATE TABLE IF NOT EXISTS policy_revisions" in emitted
+    assert "CREATE TABLE IF NOT EXISTS knowledge_page_revisions" in emitted
+    assert (
+        "CREATE OR REPLACE TRIGGER progenitor_capture_knowledge_page_revision AFTER INSERT OR UPDATE ON store"
+        in emitted
+    )
+    assert (
+        "CREATE OR REPLACE TRIGGER progenitor_capture_deleted_knowledge_page_revision BEFORE DELETE ON store"
+        in emitted
+    )
+    assert (
+        "CREATE OR REPLACE TRIGGER progenitor_knowledge_page_revisions_immutable"
+        " BEFORE UPDATE OR DELETE ON knowledge_page_revisions" in emitted
+    )
+    assert "encode(sha256(convert_to(page_content, 'UTF8')), 'hex')" in emitted
+    assert (
+        "INSERT INTO knowledge_page_revisions(base_id, path, content, revision_id) SELECT"
+        in emitted
+    )
     # Setup installs schema/triggers, captures history and seeds the default policy, whether
     # the database is fresh or already contains documents/checkpoints.
     assert all(

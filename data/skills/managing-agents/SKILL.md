@@ -89,5 +89,12 @@ also mount the shared `/memories/`. These notes are not loaded into
 Progenitor's own memory; Progenitor can inspect them at
 `/memories/agents/<name>/`.
 
+Set `knowledge` to a list of `{base, access}` grants. `access: read` is
+read-only; `access: write` permits page writes. Knowledge grants are mounted
+under `/knowledge/<base>/`, automatically attach the `curating-knowledge`
+skill and a `search` tool limited to the granted bases, and isolate sibling
+bases. Unknown bases are skipped with a warning in the child result; create
+the base or fix the manifest.
+
 Confirm the saved name and the change briefly. Creating an agent does not
 execute it or modify any routine that references it.
