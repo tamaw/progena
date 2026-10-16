@@ -5,8 +5,10 @@ under the same advisory-lock pattern as ``CHECKPOINT_TRIGGER_SQL``.
 """
 
 from app.progenitor.document_kinds import SESSION_KEY_PREFIX
+from app.progenitor.sessions.titles import ATTACHMENT_CONTEXT_MARKER
 
-# Only the SESSION_KEY_PREFIX constant is interpolated, never input.
+# Only the SESSION_KEY_PREFIX and ATTACHMENT_CONTEXT_MARKER constants are
+# interpolated, never input.
 SESSION_TRIGGER_SQL = f"""
 SELECT pg_advisory_xact_lock(hashtext('progenitor_session_trigger'));
 
@@ -222,6 +224,29 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+-- The session's first_message: what the user typed, without the machine-only
+-- attachment note, capped at 4000 characters; an action line when nothing was typed.
+CREATE OR REPLACE FUNCTION progenitor_session_first_message(blob bytea) RETURNS text AS $$
+DECLARE
+    _text text := progenitor_human_text(blob);
+BEGIN
+    IF _text IS NULL THEN
+        RETURN NULL;
+    END IF;
+    IF strpos(_text, '{ATTACHMENT_CONTEXT_MARKER}') > 0 THEN
+        _text := rtrim(split_part(_text, '{ATTACHMENT_CONTEXT_MARKER}', 1), E' \\t\\r\\n');
+        IF _text = '' THEN
+            RETURN '* sends an attachment';
+        END IF;
+    END IF;
+    IF _text = '' THEN
+        RETURN '* sends an image';
+    END IF;
+    RETURN LEFT(_text, 4000);
+END;
+$$ LANGUAGE plpgsql;
+
+
 CREATE OR REPLACE FUNCTION progenitor_create_session()
 RETURNS trigger AS $$
 DECLARE
@@ -246,14 +271,11 @@ BEGIN
         RETURN NEW;
     END IF;
 
-    _text := progenitor_human_text(NEW.blob);
+    _text := progenitor_session_first_message(NEW.blob);
     IF _text IS NULL THEN
         RETURN NEW;
     END IF;
 
-    IF _text = '' THEN
-        _text := '* sends an image';
-    END IF;
     INSERT INTO store (prefix, key, value, created_at, updated_at)
     VALUES (
         'progenitor.state',
@@ -263,7 +285,7 @@ BEGIN
             'thread_id', _thread_id,
             'source', _source,
             'title', 'New chat',
-            'first_message', LEFT(_text, 4000),
+            'first_message', _text,
             'pinned', false,
             'archived', false,
             'created_at', _stamp,

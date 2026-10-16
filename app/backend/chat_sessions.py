@@ -27,10 +27,9 @@ from app.progenitor.runtime.messages import (
     extract_reasoning_token_count,
     extract_reasoning_trace,
 )
-from app.progenitor.sessions.titles import display_title
+from app.progenitor.sessions.titles import ATTACHMENT_CONTEXT_MARKER, display_title
 from app.progenitor.state.models import redact_secrets
 
-from .attachments import ATTACHMENT_CONTEXT_MARKER
 from .document_store import PROGENITOR_STATE_PREFIX, BackendDocumentStore, CheckpointThreadSnapshot
 from .runtime_conversations import RuntimeUnavailable
 
@@ -742,6 +741,27 @@ def get_chat_detail(
     messages = _messages_from_checkpoint(snapshot, tool_call_audit=tool_call_audit)
     summary = _summary_from_session(payload, messages=messages)
     return ChatSessionDetail(**summary.model_dump(), messages=messages)
+
+
+def get_chat_summary(store: BackendDocumentStore, thread_id: str) -> ChatSessionSummary | None:
+    """The sidebar summary of one session, with history read best-effort.
+
+    Used by the document-event handler: a runtime outage marks the history
+    unavailable (as the roster does) instead of failing event dispatch.
+    """
+    payload = _session_payload(store, thread_id)
+    if payload is None:
+        return None
+    try:
+        snapshot = store.get_checkpoint_thread_snapshot(thread_id)
+        history_unavailable = snapshot is not None and not snapshot.messages_available
+    except RuntimeUnavailable:
+        snapshot = None
+        history_unavailable = True
+    messages = _messages_from_checkpoint(snapshot, tool_call_audit=_tool_call_audit_index(store))
+    return _summary_from_session(
+        payload, messages=messages, history_unavailable=history_unavailable
+    )
 
 
 def patch_session_document(

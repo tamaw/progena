@@ -24,7 +24,7 @@
     },
     "first_message": {
       "type": "string",
-      "description": "Text of the user's opening message, capped at 4000 characters. \"* sends an image\" when it had no text."
+      "description": "Text of the user's opening message without the machine-only attachment note, capped at 4000 characters. \"* sends an attachment\" when it was only attachments, \"* sends an image\" when it was only images."
     },
     "pinned": {
       "type": "boolean"

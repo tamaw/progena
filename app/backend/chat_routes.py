@@ -203,13 +203,12 @@ def create_chat_router(
         """Update session document metadata (title/pinned/archived) via atomic merge."""
         request_id = request_correlation_id(http_request, x_request_id)
 
-        def _patch() -> ChatSessionDetail | None:
-            store = get_document_store()
-            patch_session_document(store, thread_id, request)
-            return get_chat_detail(store, thread_id)
+        def _patch() -> dict | None:
+            return patch_session_document(get_document_store(), thread_id, request)
 
-        detail = await off_loop(_patch)
-        if detail is None:
+        # Only the session document is touched, so a rename works while the
+        # runtime (and with it the transcript) is unavailable.
+        if await off_loop(_patch) is None:
             raise HTTPException(status_code=404, detail="Chat session not found")
         # The document-event handler broadcasts the snapshot and metadata.updated
         # event so the sidebar updates live for all clients.

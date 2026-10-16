@@ -94,6 +94,7 @@ import {
 import { derivePageContext, formatPageContextBlock, stripPageContextBlock } from '../../lib/pageContext';
 import { buildEntityPath } from '../../lib/routes';
 import PopupModal from '../common/PopupModal';
+import { createSpectatorReplayState } from './quickChatStreamModel';
 
 // Grouped by owner/level (see the entity-relationship model):
 //   Operate  — the surfaces you work in (Progenitor chat, overview, projects)
@@ -989,8 +990,11 @@ function QuickChatPanel({
     const existingAssistant = [...history].reverse().find(
       (turn) => turn.role === 'assistant' && turn.isStreaming,
     );
-    const assistantId = existingAssistant?.id || `qchat_spectate_${requestId}`;
-    let assistantContent = existingAssistant?.content || '';
+    const { assistantId, assistantContent: initialAssistantContent } = createSpectatorReplayState(
+      existingAssistant,
+      requestId,
+    );
+    let assistantContent = initialAssistantContent;
     spectatedRequestIdRef.current = requestId;
     if (!existingAssistant) {
       setHistory((currentHistory) => currentHistory.concat({

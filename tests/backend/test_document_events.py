@@ -169,6 +169,42 @@ async def test_handler_failure_stops_dispatch_without_acknowledging_the_event():
     assert seen == ["kanban_card:bad", "kanban_card:after"]
 
 
+@pytest.mark.asyncio
+async def test_dispatcher_rechecks_while_events_are_deferred(monkeypatch):
+    """A committed event hidden behind an open transaction is dispatched once
+    that transaction ends, even though nothing wakes the dispatcher."""
+    from app.backend import document_events
+
+    monkeypatch.setattr(document_events, "_DEFERRED_RETRY_SECONDS", 0.05)
+
+    class DeferringStore(InMemoryDocumentStore):
+        open_transaction = True
+
+        def read_document_events(self, after, limit):
+            return [] if self.open_transaction else super().read_document_events(after, limit)
+
+        def has_deferred_document_events(self, after):
+            return self.open_transaction and bool(super().read_document_events(after, 1))
+
+    store = DeferringStore()
+    seed_document_types(store)
+    seen: list[str] = []
+
+    async def record(typed: TypedDocumentEvent) -> None:
+        seen.append(typed.event.key)
+
+    dispatcher = DocumentEventDispatcher(store_getter=lambda: store)
+    dispatcher.add_handler(record)
+    await dispatcher.start()
+    store.save_document(PROGENITOR_STATE_PREFIX, "kanban_card:held", _card("held", "plan"))
+    await asyncio.sleep(0.1)
+    assert seen == []
+
+    store.open_transaction = False  # ends without a new event or wake
+    await _wait_for(lambda: seen == ["kanban_card:held"])
+    await dispatcher.stop()
+
+
 def test_in_memory_event_seq_is_not_reused_after_pruning_everything():
     from datetime import timedelta
 
@@ -492,3 +528,55 @@ async def test_document_write_node_not_found_returns_false(store):
     )
     [completed] = await _wait_for(lambda: _completed_runs(store, definition.id))
     assert completed.node_outputs["write"]["found"] is False
+
+
+@pytest.mark.asyncio
+async def test_document_write_node_with_nothing_to_write_completes(store):
+    workflow = _workflow(
+        {"document_type": "session"},
+        {"write": {"kind": "document_write", "title": "Set title", "document_type": "session"}},
+        [("event", "id", "write", "id")],
+    )
+    definition = save_workflow_definition(store, workflow)
+    store.save_document(
+        PROGENITOR_STATE_PREFIX,
+        f"{SESSION_KEY_PREFIX}t1",
+        {
+            "id": "t1",
+            "thread_id": "t1",
+            "source": "ui",
+            "title": "Old",
+            "first_message": "hi",
+            "pinned": False,
+            "archived": False,
+            "created_at": "2024-01-01T00:00:00Z",
+            "last_activity": "2024-01-01T00:00:00Z",
+            "content": "",
+        },
+    )
+    executor = ui_routes.get_workflow_executor()
+    await executor.trigger_workflow(
+        definition.id, build_manual_trigger_event(definition, payload={"id": "t1"})
+    )
+    [completed] = await _wait_for(lambda: _completed_runs(store, definition.id))
+    assert completed.node_outputs["write"] == {"found": True}
+
+
+def test_in_memory_session_turn_updates_log_no_event_like_postgres():
+    """Every turn rewrites content/last_activity; only real edits are events."""
+    store = InMemoryDocumentStore()
+    key = f"{SESSION_KEY_PREFIX}t-noise"
+    session = {"id": "t-noise", "title": "New chat", "content": "", "last_activity": "t0"}
+    store.save_document(PROGENITOR_STATE_PREFIX, key, session)
+    store.merge_document(
+        PROGENITOR_STATE_PREFIX, key, {"content": "<user> hi", "last_activity": "t1"}
+    )
+    store.save_document(
+        PROGENITOR_STATE_PREFIX, key, {**session, "content": "x", "last_activity": "t2"}
+    )
+    store.mutate_document(PROGENITOR_STATE_PREFIX, key, lambda p: {**p, "last_activity": "t3"})
+    store.merge_document(PROGENITOR_STATE_PREFIX, key, {"title": "Hiking", "last_activity": "t4"})
+
+    events = [e for e in store.read_document_events(EVENT_LOG_START, 100) if e.key == key]
+    assert [e.op for e in events] == ["created", "updated"]
+    assert events[1].after["title"] == "Hiking"

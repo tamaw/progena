@@ -79,6 +79,26 @@ export function shouldDeferRouteSelection({
   );
 }
 
+export function isReopeningCurrentLocalDraft({
+  selectedBackendChatId,
+  currentThreadId,
+  requestedThreadId,
+}) {
+  return selectedBackendChatId === null
+    && Boolean(requestedThreadId)
+    && currentThreadId === requestedThreadId;
+}
+
+export function shouldAdoptMaterializedDraft({
+  selectedBackendChatId,
+  threadId,
+  sessionThreadId,
+}) {
+  return selectedBackendChatId === null
+    && Boolean(threadId)
+    && sessionThreadId === threadId;
+}
+
 // On mount, a routed URL must always end up with a real detail request behind
 // it. Skipping the open is only safe when a request for that thread is already
 // in flight or its detail is already loaded (SPA revisit). A bare
@@ -113,13 +133,15 @@ export function shouldDismissEmptySelection({
   activeLoading,
   activeDetail,
   activeError,
+  hasMaterializedDraft = false,
 }) {
   return Boolean(
     hasAutoSelectedOnMount
     && selectedBackendChatId
     && !activeLoading
     && !activeDetail
-    && !activeError,
+    && !activeError
+    && !hasMaterializedDraft,
   );
 }
 

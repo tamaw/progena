@@ -1,12 +1,17 @@
 """Backend clock that fires workflow ``cron`` trigger nodes.
 
 Each cron node has one small state document (``workflow_cron:<workflow>:<node>``
-in the backend namespace) holding the last due time it handled and whether the
-workflow was active, so restarts resume where they left off. A node seen for
-the first time, whose expression or timezone changed, or whose workflow was
-just resumed or re-enabled, starts counting from now. When the backend was down
-across one or more due times, the node fires once for the latest missed one.
-Due times while a workflow is paused or disabled never fire.
+in the backend namespace, each id percent-encoded) holding the last due time it
+handled and whether the workflow was active, so restarts resume where they left
+off. A node seen for the first time, whose expression or timezone changed, or
+whose workflow was just resumed or re-enabled, starts counting from now. When
+the backend was down across one or more due times, the node fires once for the
+latest missed one. Due times while a workflow is paused or disabled never fire:
+every pause or disable is recorded from the workflow's document event, so a
+resume before the next tick still counts from the resume.
+
+Each due time is claimed with an atomic read-modify-write of the state
+document before firing, so backends sharing one database fire it once.
 
 The clock sleeps until the earliest due time; saving, pausing or deleting a
 workflow wakes it to replan. Sleeps are capped so a suspended host (whose
@@ -21,6 +26,9 @@ import logging
 from collections.abc import Callable
 from datetime import datetime
 from typing import Any, Protocol
+from urllib.parse import quote
+
+from pydantic import ValidationError
 
 from app.backend.document_store import BACKEND_STATE_PREFIX, BackendDocumentStore
 from app.progenitor.cron import latest_cron_time, next_cron_time
@@ -52,7 +60,39 @@ class CronWorkflowTrigger(Protocol):
 
 
 def workflow_cron_state_key(workflow_id: str, node_id: str) -> str:
-    return f"{WORKFLOW_CRON_STATE_KEY_PREFIX}{workflow_id}:{node_id}"
+    return (
+        f"{WORKFLOW_CRON_STATE_KEY_PREFIX}{quote(workflow_id, safe='')}:{quote(node_id, safe='')}"
+    )
+
+
+def _next_state(
+    state: Any, node: WorkflowNodeCron, now: datetime, active: bool
+) -> tuple[dict[str, Any], datetime | None]:
+    """The node's state after a tick at ``now``, and the due time to fire (if any).
+
+    A new schedule, or a workflow coming back from paused/disabled, counts
+    from now: due times inside the inactive period never fire.
+    """
+    anchor = None
+    if (
+        isinstance(state, dict)
+        and state.get("expression") == node.expression
+        and state.get("timezone") == node.timezone
+        and (state.get("active") is True or not active)
+    ):
+        anchor = parse_schedule_datetime(state.get("last_due"))
+    last_due = anchor or now
+    fire_at = None
+    if anchor is not None and next_cron_time(node.expression, anchor, node.timezone) <= now:
+        last_due = latest_cron_time(node.expression, now, node.timezone)
+        fire_at = last_due if active else None
+    new_state = {
+        "expression": node.expression,
+        "timezone": node.timezone,
+        "active": active,
+        "last_due": last_due.isoformat(),
+    }
+    return new_state, fire_at
 
 
 class WorkflowCronClock:
@@ -76,6 +116,29 @@ class WorkflowCronClock:
     def wake(self) -> None:
         """Replan now (a workflow was saved, paused, resumed or deleted)."""
         self._wakeup.set()
+
+    def workflow_changed(self, payload: Any) -> None:
+        """Record a workflow definition write, then replan.
+
+        Called for every ``workflow:`` document event in log order. A paused or
+        disabled workflow marks its cron nodes inactive here, independent of
+        whether a tick saw it, so a resume always counts from then on.
+        """
+        try:
+            definition = WorkflowDefinition.model_validate(payload) if payload else None
+        except ValidationError:
+            logger.warning("Cron clock ignored an invalid workflow document", exc_info=True)
+            definition = None
+        if definition is not None and not (definition.enabled and not definition.paused):
+            store = self._store_getter()
+            for node_id, node in definition.graph.nodes.items():
+                if isinstance(node, WorkflowNodeCron):
+                    store.merge_document(
+                        BACKEND_STATE_PREFIX,
+                        workflow_cron_state_key(definition.id, node_id),
+                        {"active": False},
+                    )
+        self.wake()
 
     async def start(self) -> None:
         if self._task is not None and not self._task.done():
@@ -153,46 +216,29 @@ class WorkflowCronClock:
         now: datetime,
         active: bool,
     ) -> datetime | None:
-        def save(last_due: datetime) -> None:
-            store.save_document(
-                BACKEND_STATE_PREFIX,
-                key,
-                {
-                    "expression": node.expression,
-                    "timezone": node.timezone,
-                    "active": active,
-                    "last_due": last_due.isoformat(),
-                },
-            )
+        new_state, fire_at = _next_state(state, node, now, active)
+        if new_state != state:
+            # Claim atomically against the stored state, which another backend
+            # may have advanced since ``state`` was read: only the claimant fires.
+            # Recorded before firing: a crash mid-fire loses that one fire
+            # rather than running it twice.
+            claimed: list[datetime | None] = [None]
 
-        anchor = None
-        # A new schedule, or a workflow coming back from paused/disabled,
-        # counts from now: due times inside the inactive period never fire.
-        if (
-            isinstance(state, dict)
-            and state.get("expression") == node.expression
-            and state.get("timezone") == node.timezone
-            and (state.get("active") is True or not active)
-        ):
-            anchor = parse_schedule_datetime(state.get("last_due"))
-        if anchor is None:
-            save(now)
-            anchor = now
-        elif state.get("active") is not active:
-            save(anchor)
+            def claim(current: Any) -> dict[str, Any]:
+                claimed_state, claimed[0] = _next_state(current, node, now, active)
+                return claimed_state
 
-        due = next_cron_time(node.expression, anchor, node.timezone)
-        if due > now:
-            return due if active else None
-        latest = latest_cron_time(node.expression, now, node.timezone)
-        # Record before firing: a crash mid-fire loses that one fire rather
-        # than running it twice.
-        save(latest)
-        if active:
+            new_state = store.mutate_document(BACKEND_STATE_PREFIX, key, claim)
+            fire_at = claimed[0]
+        if fire_at is not None:
             await self._executor_getter().trigger_workflow(
                 definition.id,
-                build_cron_trigger_output(node, scheduled_for=latest, fired_at=now),
+                build_cron_trigger_output(node, scheduled_for=fire_at, fired_at=now),
                 source="cron",
                 trigger_node_id=node_id,
             )
-        return next_cron_time(node.expression, latest, node.timezone) if active else None
+        if not active:
+            return None
+        last_due = parse_schedule_datetime(new_state["last_due"])
+        assert last_due is not None
+        return next_cron_time(node.expression, last_due, node.timezone)

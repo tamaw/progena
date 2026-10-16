@@ -58,6 +58,12 @@ class TestParsePromptTemplate:
         with pytest.raises(ValueError, match="unknown front matter key"):
             parse_prompt_template(text)
 
+    def test_a_longer_dash_rule_is_body_text_not_front_matter(self):
+        text = "----\nExplain {topic}\n"
+        pt = parse_prompt_template(text)
+        assert pt.body == text
+        assert pt.roots == ["topic"]
+
     def test_inputs_key_not_used_rejected(self):
         text = "---\ninputs:\n  card: kanban_card\n  unused: string\n---\nCard {card.title}\n"
         with pytest.raises(ValueError, match="inputs.*key.*not used"):
@@ -285,6 +291,24 @@ class TestResolveTypeRef:
         assert flow["graph"]["edges"], "fixture must contain edges using #/$defs/edgeEndpoint"
 
         assert validate_against_schema({"key": "k", "flow": flow}, input_schema) is None
+
+    def test_inline_input_with_a_body_reference_stays_resolvable_when_embedded(
+        self, document_types
+    ):
+        payload = default_workflow_definition()
+        agent_id = next(i for i, n in payload["graph"]["nodes"].items() if n["kind"] == "agent")
+        payload["graph"]["nodes"][agent_id]["template"] = (
+            "---\ninputs:\n  person:\n    type: object\n    properties:\n"
+            "      name: {type: string}\n      alias: {$ref: '#/properties/name'}\n"
+            "---\nGreet {person.name} for {key}."
+        )
+        derived = derive_workflow_port_schemas(payload, document_types)
+        input_schema = derived["graph"]["nodes"][agent_id]["input_schema"]
+
+        valid = {"key": "k", "person": {"name": "Ada", "alias": "A"}}
+        assert validate_against_schema(valid, input_schema) is None
+        invalid = {"key": "k", "person": {"name": "Ada", "alias": 7}}
+        assert validate_against_schema(invalid, input_schema) is not None
 
 
 class TestFrontMatterKeys:

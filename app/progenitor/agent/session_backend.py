@@ -26,26 +26,30 @@ from deepagents.backends.protocol import (
     EditResult,
     FileData,
     FileInfo,
-    GrepResult,
     LsResult,
     ReadResult,
     WriteResult,
 )
-from deepagents.backends.utils import create_file_data, grep_matches_from_files, slice_read_response
-from wcmatch import fnmatch
+from deepagents.backends.utils import (
+    create_file_data,
+    perform_string_replacement,
+    slice_read_response,
+)
 
+from ..document_types import BUILTIN_DOCUMENT_TYPES
 from ..sessions.titles import display_title
 from ..state.manager import StateManager
+from .state_backend import _AsyncOnlyFileBackendMixin
 
 logger = logging.getLogger(__name__)
 
 _READ_ONLY_BODY = "The session body cannot be changed; only the front matter is editable."
 _DISALLOWED_DELETE = "Sessions cannot be deleted via the filesystem."
-_SESSION_WRITABLE: frozenset[str] = frozenset({"title", "pinned", "archived"})
+_SESSION_TYPE = next(item for item in BUILTIN_DOCUMENT_TYPES if item.id == "session")
 _SLUG_CHARS = 40
 
 
-class SessionDirectoryBackend:
+class SessionDirectoryBackend(_AsyncOnlyFileBackendMixin):
     """Async backend over session documents, read-write on front matter only."""
 
     _ASYNC_ONLY = "SessionDirectoryBackend is async-only; use the async file tools."
@@ -86,16 +90,16 @@ class SessionDirectoryBackend:
         if session is None:
             return EditResult(error=f"File '{file_path}' not found")
         current = self._format_file(session)
-        if replace_all:
-            proposed = current.replace(old_string, new_string)
-        else:
-            proposed = current.replace(old_string, new_string, 1)
+        replaced = perform_string_replacement(current, old_string, new_string, replace_all)
+        if isinstance(replaced, str):
+            return EditResult(error=replaced)
+        proposed, occurrences = replaced
         if proposed == current:
             return EditResult(error="The edit did not change the file")
         result = await self._apply_edit(session, proposed)
         if result.error:
             return EditResult(error=result.error)
-        return EditResult()
+        return EditResult(path=file_path, occurrences=int(occurrences))
 
     async def adelete(self, file_path: str) -> WriteResult:
         return WriteResult(error=_DISALLOWED_DELETE)
@@ -105,24 +109,6 @@ class SessionDirectoryBackend:
         return LsResult(
             entries=[FileInfo(path=f"/{self._file_name(s)}", is_dir=False) for s in sessions]
         )
-
-    async def agrep(
-        self, pattern: str, path: str | None = None, glob: str | None = None
-    ) -> GrepResult:
-        target = self._name(path or "/").rstrip("/")
-
-        def include(name: str) -> bool:
-            if target and name != target:
-                return False
-            return not glob or fnmatch.fnmatch(name, glob, flags=fnmatch.BRACE)
-
-        sessions = await self._list_sessions()
-        files: dict[str, FileData] = {}
-        for session in sessions:
-            name = self._file_name(session)
-            if include(name):
-                files[f"/{name}"] = create_file_data(self._format_file(session))
-        return grep_matches_from_files(files, pattern, path or "/", glob)
 
     # -- internal helpers ---------------------------------------------------
 
@@ -163,14 +149,17 @@ class SessionDirectoryBackend:
             if key == "display_title":
                 continue
             if session.get(key) != value:
-                if key not in _SESSION_WRITABLE:
+                if key not in _SESSION_TYPE.writable:
                     return WriteResult(
-                        error=f"Field '{key}' is not editable. Allowed fields: {', '.join(sorted(_SESSION_WRITABLE))}"
+                        error=f"Field '{key}' is not editable. Allowed fields: {', '.join(sorted(_SESSION_TYPE.writable))}"
                     )
                 changed[key] = value
 
         if not changed:
             return WriteResult()
+        error = _SESSION_TYPE.validate_write(changed)
+        if error:
+            return WriteResult(error=f"Invalid session field value: {error}")
 
         thread_id = session["thread_id"]
         merged = await self._sm.merge_session(thread_id, changed)
