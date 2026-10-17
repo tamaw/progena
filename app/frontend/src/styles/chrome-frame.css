@@ -4623,36 +4623,6 @@ body,
   margin-bottom: 22px;
 }
 
-.tools-metric-card {
-  min-width: 0;
-  padding: 13px 14px;
-  background: var(--color-bg-secondary);
-  border: 1px solid var(--color-border);
-  border-radius: 8px;
-}
-
-.tools-metric-card span,
-.tools-metric-card small {
-  display: block;
-  color: var(--color-text-muted);
-  font-size: 11px;
-}
-
-.tools-metric-card span {
-  font-weight: 700;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
-}
-
-.tools-metric-card strong {
-  display: block;
-  margin: 8px 0 5px;
-  color: var(--color-text-primary);
-  font-size: 22px;
-  line-height: 1;
-  letter-spacing: -0.02em;
-}
-
 .tools-section {
   margin-bottom: 22px;
 }
@@ -5401,63 +5371,6 @@ body,
   font-size: 13px;
   font-weight: 600;
   color: var(--color-text-primary);
-}
-
-/* JSON editor: a transparent <textarea> stacked over a highlight.js <pre> so the
-   syntax-highlighted layer shows through while the user types. Both layers must
-   share identical box metrics for the caret to line up. */
-.agents-graph-editor__code {
-  position: relative;
-  flex: 1;
-  min-height: 0;
-  display: flex;
-}
-
-.agents-graph-editor__highlight,
-.agents-graph-editor__code .agents-graph-editor__textarea {
-  margin: 0;
-  padding: 10px 12px;
-  border: 1px solid var(--color-border);
-  border-radius: 8px;
-  font-family: var(--font-family-mono);
-  font-size: 12px;
-  line-height: 1.5;
-  tab-size: 2;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  overflow: auto;
-}
-
-.agents-graph-editor__highlight {
-  position: absolute;
-  inset: 0;
-  background: var(--color-bg-primary);
-  pointer-events: none;
-}
-
-.agents-graph-editor__highlight code.hljs {
-  padding: 0;
-  background: transparent;
-  font: inherit;
-}
-
-.agents-graph-editor__code .agents-graph-editor__textarea {
-  position: relative;
-  flex: 1;
-  resize: none;
-  background: transparent;
-  color: transparent;
-  caret-color: var(--color-text-primary);
-}
-
-.agents-graph-editor__code .agents-graph-editor__textarea::selection {
-  background: var(--color-accent-soft);
-}
-
-.agents-graph-editor__textarea:focus {
-  outline: none;
-  border-color: color-mix(in oklab, var(--color-accent) 45%, var(--color-border));
-  box-shadow: 0 0 0 3px var(--color-accent-soft);
 }
 
 .agents-graph-editor__error {
@@ -6347,7 +6260,7 @@ body,
 }
 
 /* Expression field: a transparent <textarea> over a highlight.js <pre>, same
-   technique as .agents-graph-editor__code, sized to match
+   technique as JsonCodeEditor, sized to match
    .agents-graph-node__prompt's box metrics so it drops into the same layout. */
 .agents-graph-node__expr {
   position: relative;

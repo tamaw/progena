@@ -1,4 +1,3 @@
-import { createPortal } from 'react-dom';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { selectRealtime } from '../store/realtimeSlice';
@@ -37,7 +36,9 @@ import {
   selectAgentProfiles,
   selectDocumentTypes,
   selectInstruction,
+  selectInstructionContentRequest,
   selectInstructions,
+  selectWorkflowDetailRequest,
   selectWorkflowDetailByPath,
   selectWorkflowLatestRunById,
   selectWorkflowRuns,
@@ -69,9 +70,14 @@ import {
   PlayActionIcon,
   SaveActionIcon,
 } from '../components/layout/DetailHeader';
-import { JsonCodeEditor } from '../components/canvas/WorkflowJsonPanel';
+import InlineFailure from '../components/common/InlineFailure';
+import { reportFailure } from '../lib/failures';
+import useConfirmAction from '../hooks/useConfirmAction';
+import useUiAction from '../hooks/useUiAction';
+import JsonCodeEditor from '../components/common/JsonCodeEditor';
 import WorkflowNodeTitle from '../components/canvas/WorkflowNodeTitle';
 import PopupModal from '../components/common/PopupModal';
+import Modal from '../components/common/Modal';
 import '../styles/canvas.css';
 import { canvasToolSettings } from './workflowCanvasTools';
 import '../styles/nodes.css';
@@ -1377,13 +1383,6 @@ function buildQueryInputSchema(filters, documentSchema) {
 }
 
 function WorkflowNodeOptionsModal({ node, onChange, onClose }) {
-  useEffect(() => {
-    const handleKeyDown = (event) => {
-      if (event.key === 'Escape') onClose();
-    };
-    document.addEventListener('keydown', handleKeyDown);
-    return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [onClose]);
 
   const kind = node.data?.kind || node.type;
   const dispatch = useDispatch();
@@ -1391,6 +1390,7 @@ function WorkflowNodeOptionsModal({ node, onChange, onClose }) {
   const instructionsUrl = getApiUrl('instructions');
   const instructionPath = node.data?.instruction || '';
   const loadedInstruction = useSelector((state) => selectInstruction(state, instructionPath));
+  const instructionRequest = useSelector((state) => selectInstructionContentRequest(state, instructionPath));
 
   // Fetch the selected document once, then derive its input ports once per
   // loaded text: `onChange` is a fresh function every render and the graph
@@ -1398,6 +1398,12 @@ function WorkflowNodeOptionsModal({ node, onChange, onClose }) {
   const requestedInstructionPathRef = useRef(null);
   const appliedInstructionRef = useRef(null);
   const onChangeRef = useRef(onChange);
+  const loadInstruction = useCallback(() => {
+    if (instructionPath && !instructionRequest.loading) {
+      requestedInstructionPathRef.current = instructionPath;
+      dispatch(fetchInstruction({ instructionsUrl, path: instructionPath }));
+    }
+  }, [dispatch, instructionPath, instructionRequest.loading, instructionsUrl]);
   useLayoutEffect(() => {
     onChangeRef.current = onChange;
   });
@@ -1414,10 +1420,9 @@ function WorkflowNodeOptionsModal({ node, onChange, onClose }) {
       }
       return;
     }
-    if (requestedInstructionPathRef.current === instructionPath) return;
-    requestedInstructionPathRef.current = instructionPath;
-    void dispatch(fetchInstruction({ instructionsUrl, path: instructionPath })).unwrap().catch(() => {});
-  }, [dispatch, kind, node.data?.inputSchema, node.id, loadedInstruction, instructionPath, instructionsUrl]);
+    if (instructionRequest.loading || instructionRequest.error || requestedInstructionPathRef.current === instructionPath) return;
+    loadInstruction();
+  }, [instructionRequest.error, instructionRequest.loading, kind, loadInstruction, node.data?.inputSchema, node.id, loadedInstruction, instructionPath]);
 
   const documentTypes = useSelector(selectDocumentTypes);
 
@@ -1568,10 +1573,14 @@ function WorkflowNodeOptionsModal({ node, onChange, onClose }) {
     });
   };
 
-  return createPortal(
-    <div className="workflow-node-options-backdrop" role="presentation" onMouseDown={onClose}>
-      <section className="workflow-node-options" role="dialog" aria-modal="true" aria-labelledby="workflow-node-options-title" onMouseDown={(event) => event.stopPropagation()}>
-        <header className="workflow-node-options__head">
+  return (
+    <Modal
+      className="workflow-node-options"
+      backdropClassName="workflow-node-options-backdrop"
+      ariaLabelledby="workflow-node-options-title"
+      onClose={onClose}
+    >
+      <header className="workflow-node-options__head">
           <div>
             <span className="sidebar-modal__eyebrow">Node options</span>
             <h2 id="workflow-node-options-title">{node.data?.title || 'Workflow node'}</h2>
@@ -1809,7 +1818,6 @@ function WorkflowNodeOptionsModal({ node, onChange, onClose }) {
                         name={`template-source-${node.id}`}
                         checked={node.data?.instruction != null}
                         onChange={() => {
-                          // An empty path selects instruction mode with none chosen yet.
                           onChange(node.id, { instruction: instructionOptions[0]?.value || '', template: null });
                         }}
                       />
@@ -1827,15 +1835,24 @@ function WorkflowNodeOptionsModal({ node, onChange, onClose }) {
                   </div>
                 </div>
                 {node.data?.instruction != null ? (
-                  <label className="workflow-node-options__field">
-                    Instruction
-                    <Select
-                      value={node.data?.instruction || ''}
-                      onChange={(path) => onChange(node.id, { instruction: path || null, template: null })}
-                      options={[{ value: '', label: 'Select instruction…' }, ...instructionOptions]}
-                      ariaLabel="Instruction"
-                    />
-                  </label>
+                  <>
+                    <label className="workflow-node-options__field">
+                      Instruction
+                      <Select
+                        value={node.data?.instruction || ''}
+                        onChange={(path) => onChange(node.id, { instruction: path || null, template: null })}
+                        options={[{ value: '', label: 'Select instruction…' }, ...instructionOptions]}
+                        ariaLabel="Instruction"
+                      />
+                    </label>
+                    {instructionRequest.error ? (
+                      <InlineFailure
+                        failure={instructionRequest.error}
+                        operation="Load instruction content"
+                        onRetry={loadInstruction}
+                      />
+                    ) : null}
+                  </>
                 ) : (
                   <label className="workflow-node-options__field">
                     Template
@@ -1927,9 +1944,7 @@ function WorkflowNodeOptionsModal({ node, onChange, onClose }) {
             ) : null}
           </section>
         </div>
-      </section>
-    </div>,
-    document.body,
+    </Modal>
   );
 }
 
@@ -2431,11 +2446,12 @@ function WorkflowsInner() {
   const [graphEdges, setGraphEdges] = useState([]);
   const [jsonDraft, setJsonDraft] = useState('');
   const [jsonError, setJsonError] = useState('');
-  const [saving, setSaving] = useState(false);
-  const [busyAction, setBusyAction] = useState('');
   const [localDraftDirty, setLocalDraftDirty] = useState(false);
-  const [deleteConfirmationOpen, setDeleteConfirmationOpen] = useState(false);
   const selectedDetail = useSelector((state) => selectWorkflowDetailByPath(state, selectedPath));
+  const detailRequest = useSelector((state) => selectWorkflowDetailRequest(state, selectedPath));
+  const saveAction = useUiAction(selectedPath);
+  const workflowAction = useUiAction(selectedWorkflowId);
+  const deleteAction = useConfirmAction(selectedWorkflowId);
   const [nodeMenuAnchor, setNodeMenuAnchor] = useState(null);
   const [nodeOptionsId, setNodeOptionsId] = useState(null);
   const [canvasTool, setCanvasTool] = useState('pointer');
@@ -2458,57 +2474,31 @@ function WorkflowsInner() {
 
   useEntityUrlSync('/workflows', selectedWorkflowId, selectedDetail?.workflow?.title);
 
-  const loadWorkflows = useCallback(async () => {
-    try {
-      await dispatch(fetchWorkflows({ workflowsUrl })).unwrap();
-    } catch (error) {
-      show('error', 'Workflow load failed', error.message);
-    }
-  }, [dispatch, show, workflowsUrl]);
-
-  const loadRuns = useCallback(async () => {
-    try {
-      await dispatch(fetchWorkflowRuns({ workflowRunsUrl })).unwrap();
-    } catch (error) {
-      show('error', 'Workflow runs failed', error.message);
-    }
-  }, [dispatch, show, workflowRunsUrl]);
-
-  const loadDocumentTypes = useCallback(async () => {
-    try {
-      await dispatch(fetchDocumentTypes({ documentTypesUrl })).unwrap();
-    } catch (error) {
-      show('error', 'Document types load failed', error.message);
-    }
-  }, [dispatch, show, documentTypesUrl]);
-
-  // Routine nodes read their ports from the routine graphs in the roster.
-  const loadAgentProfiles = useCallback(async () => {
-    try {
-      await dispatch(fetchAgentProfiles({ agentsUrl })).unwrap();
-    } catch (error) {
-      show('error', 'Routines load failed', error.message);
-    }
-  }, [agentsUrl, dispatch, show]);
-  // Agent/Extract nodes pick from the prompt catalogue.
-  const loadInstructions = useCallback(async () => {
-    try {
-      await dispatch(fetchInstructions({ instructionsUrl })).unwrap();
-    } catch (error) {
-      show('error', 'Instructions load failed', error.message);
-    }
-  }, [dispatch, show, instructionsUrl]);
+  const loadInitialData = useCallback(() => {
+    dispatch(fetchWorkflows({ workflowsUrl }));
+    dispatch(fetchWorkflowRuns({ workflowRunsUrl }));
+    dispatch(fetchDocumentTypes({ documentTypesUrl }));
+    dispatch(fetchAgentProfiles({ agentsUrl }));
+    dispatch(fetchInstructions({ instructionsUrl }));
+  }, [agentsUrl, dispatch, documentTypesUrl, instructionsUrl, workflowRunsUrl, workflowsUrl]);
 
   useEffect(() => {
-    if (!realtime.connected) {
-      return;
+    if (realtime.connected) {
+      loadInitialData();
     }
-    void loadWorkflows();
-    void loadRuns();
-    void loadDocumentTypes();
-    void loadAgentProfiles();
-    void loadInstructions();
-  }, [loadAgentProfiles, loadDocumentTypes, loadInstructions, loadRuns, loadWorkflows, realtime.connected]);
+  }, [loadInitialData, realtime.connected]);
+
+  const loadWorkflowDetail = useCallback(() => {
+    if (realtime.connected && selectedPath && !detailRequest.loading) {
+      dispatch(fetchWorkflowContent({ workflowsUrl, path: selectedPath }));
+    }
+  }, [detailRequest.loading, dispatch, realtime.connected, selectedPath, workflowsUrl]);
+
+  useEffect(() => {
+    if (selectedPath && !selectedDetail && !detailRequest.loading && !detailRequest.error) {
+      loadWorkflowDetail();
+    }
+  }, [detailRequest.error, detailRequest.loading, loadWorkflowDetail, selectedDetail, selectedPath]);
 
   useEffect(() => {
     if (!workflows.length) {
@@ -2524,15 +2514,6 @@ function WorkflowsInner() {
       return next;
     });
   }, [routeWorkflowId, workflows]);
-
-  useEffect(() => {
-    if (!realtime.connected || !selectedPath || selectedDetail) {
-      return;
-    }
-    dispatch(fetchWorkflowContent({ workflowsUrl, path: selectedPath }))
-      .unwrap()
-      .catch((error) => show('error', 'Workflow detail load failed', error.message));
-  }, [dispatch, realtime.connected, selectedDetail, selectedPath, show, workflowsUrl]);
   const visibleItems = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
     const filtered = workflows.filter((item) => {
@@ -2847,7 +2828,7 @@ function WorkflowsInner() {
     didConnectRef.current = true;
     const validationError = validateConnection(connection);
     if (validationError) {
-      show('error', 'Invalid workflow connection', validationError);
+      reportFailure(show, 'Connect workflow nodes', validationError);
       return;
     }
     const nextEdges = addEdge(
@@ -3053,18 +3034,11 @@ function WorkflowsInner() {
     if (!selectedPath || !draftWorkflow) {
       return;
     }
-    setSaving(true);
-    try {
-      await dispatch(saveWorkflow({
-        workflowsUrl,
-        path: selectedPath,
-        workflow: draftWorkflow,
-      })).unwrap();
-    } catch (error) {
-      show('error', 'Workflow save failed', error.message);
-    } finally {
-      setSaving(false);
-    }
+    await saveAction.run('Save workflow', async () => dispatch(saveWorkflow({
+      workflowsUrl,
+      path: selectedPath,
+      workflow: draftWorkflow,
+    })).unwrap());
   };
 
   const handlePauseResume = async () => {
@@ -3072,14 +3046,14 @@ function WorkflowsInner() {
     if (!workflowId) {
       return;
     }
-    setBusyAction(selectedDetail.workflow.paused ? 'resume' : 'pause');
-    try {
-      const action = selectedDetail.workflow.paused ? resumeWorkflow : pauseWorkflow;
-      await dispatch(action({ workflowsUrl, workflowId })).unwrap();
-    } catch (error) {
-      show('error', 'Workflow update failed', error.message);
-    } finally {
-      setBusyAction('');
+    const operation = selectedDetail.workflow.paused ? 'Resume workflow' : 'Pause workflow';
+    const action = selectedDetail.workflow.paused ? resumeWorkflow : pauseWorkflow;
+    const result = await workflowAction.run(operation, async () => dispatch(action({
+      workflowsUrl,
+      workflowId,
+    })).unwrap());
+    if (!result.ok && result.error) {
+      reportFailure(show, operation, result.error);
     }
   };
 
@@ -3088,44 +3062,24 @@ function WorkflowsInner() {
     if (!workflowId) {
       return;
     }
-    setBusyAction('trigger');
-    try {
-      await dispatch(triggerWorkflow({
-        workflowsUrl,
-        workflowId,
-      })).unwrap();
-    } catch (error) {
-      show('error', 'Workflow trigger failed', error.message);
-    } finally {
-      setBusyAction('');
+    const result = await workflowAction.run('Run workflow', async () => dispatch(triggerWorkflow({
+      workflowsUrl,
+      workflowId,
+    })).unwrap());
+    if (!result.ok && result.error) {
+      reportFailure(show, 'Run workflow', result.error);
     }
   };
 
   const handleDeleteWorkflow = () => {
-    if (selectedDetail?.workflow?.id) {
-      setDeleteConfirmationOpen(true);
-    }
-  };
-
-  const confirmDeleteWorkflow = async () => {
     const workflowId = selectedDetail?.workflow?.id;
     if (!workflowId) {
-      setDeleteConfirmationOpen(false);
       return;
     }
-    setBusyAction('delete');
-    try {
-      await dispatch(deleteWorkflow({ workflowsUrl, workflowId })).unwrap();
-      setDeleteConfirmationOpen(false);
-      setSelectedWorkflowId('');
-      navigate('/workflows', { replace: true });
-    } catch (error) {
-      show('error', 'Workflow delete failed', error.message);
-    } finally {
-      setBusyAction('');
-    }
+    deleteAction.request('Delete workflow', async () => dispatch(
+      deleteWorkflow({ workflowsUrl, workflowId }),
+    ).unwrap());
   };
-
   return (
     <PageShell className="workflows-page" label="Workflows">
       <PaneSection as="aside" className={paneClassName} aria-label="Workflows" onItemSelect={() => setCollapsed(true)}>
@@ -3146,9 +3100,15 @@ function WorkflowsInner() {
               <PaneListSearch value={query} placeholder="Search workflows" onChange={setQuery} />
               <PaneListSortButton title="Sort workflows" options={SORTS} value={sortMode} onSelect={setSortMode} />
             </PaneListToolbar>
+            {workflowsState.error ? (
+              <InlineFailure
+                failure={workflowsState.error}
+                operation="Load workflows"
+                onRetry={() => dispatch(fetchWorkflows({ workflowsUrl }))}
+              />
+            ) : null}
             {workflowsState.loading && !workflowsState.loaded ? <PaneEmptyState>Loading workflows...</PaneEmptyState> : null}
-            {workflowsState.error && !workflows.length ? <PaneEmptyState>Failed to load workflows.</PaneEmptyState> : null}
-            {!workflowsState.loading && !visibleItems.length ? <PaneEmptyState>No workflows match the current filters.</PaneEmptyState> : null}
+            {!workflowsState.loading && !workflowsState.error && !visibleItems.length ? <PaneEmptyState>No workflows match the current filters.</PaneEmptyState> : null}
             {!workflowsState.loading && visibleItems.length ? (
               <PaneListRows
                 className="workspace-sidebar__scroll"
@@ -3170,17 +3130,18 @@ function WorkflowsInner() {
           </>
         )}
       </PaneSection>
-      {deleteConfirmationOpen && selectedDetail?.workflow ? (
+      {deleteAction.open && selectedDetail?.workflow ? (
         <PopupModal
           eyebrow="Delete workflow"
           title={`Delete “${selectedDetail.workflow.title}”?`}
           message="This workflow and its configuration will be permanently deleted."
           confirmLabel="Delete workflow"
           busyLabel="Deleting…"
-        onClose={() => setDeleteConfirmationOpen(false)}
-        onConfirm={confirmDeleteWorkflow}
-        busy={busyAction === 'delete'}
-      />
+          error={deleteAction.error}
+          onClose={deleteAction.close}
+          onConfirm={deleteAction.confirm}
+          busy={deleteAction.busy}
+        />
       ) : null}
 
       <DetailPane flush className={`workflow-detail ${selectedDetail?.workflow ? 'is-graph-mode' : ''}`} label="Workflow detail">
@@ -3188,7 +3149,15 @@ function WorkflowsInner() {
           <PaneEmptyState detail>Select a workflow to edit or create a new one.</PaneEmptyState>
         ) : null}
 
-        {selectedPath && !selectedDetail ? (
+        {selectedPath && !selectedDetail && detailRequest.error ? (
+          <InlineFailure
+            failure={detailRequest.error}
+            operation="Load workflow detail"
+            onRetry={loadWorkflowDetail}
+          />
+        ) : null}
+
+        {selectedPath && !selectedDetail && !detailRequest.error ? (
           <PaneEmptyState detail>Loading workflow detail...</PaneEmptyState>
         ) : null}
 
@@ -3205,6 +3174,13 @@ function WorkflowsInner() {
                     onPointerMove={onCanvasPointerMove}
                   >
                     <div className="agents-graph-floating">
+                      {saveAction.error ? (
+                        <InlineFailure
+                          failure={saveAction.error}
+                          operation="Save workflow"
+                          onRetry={handleSaveWorkflow}
+                        />
+                      ) : null}
                       <DetailHeaderActions menuLabel="Workflow actions">
                         <DetailHeaderAction
                           icon={<PlayActionIcon />}
@@ -3212,7 +3188,7 @@ function WorkflowsInner() {
                           tooltip="Run workflow now"
                           ariaLabel="Run workflow now"
                           onClick={handleTrigger}
-                          disabled={busyAction === 'trigger'}
+                          disabled={workflowAction.busy}
                         />
                         <DetailHeaderAction
                           icon={draftWorkflow.paused ? <PlayActionIcon /> : <PauseActionIcon />}
@@ -3220,7 +3196,7 @@ function WorkflowsInner() {
                           tooltip={draftWorkflow.paused ? 'Resume workflow' : 'Pause workflow'}
                           ariaLabel={draftWorkflow.paused ? 'Resume workflow' : 'Pause workflow'}
                           onClick={handlePauseResume}
-                          disabled={busyAction === 'pause' || busyAction === 'resume'}
+                          disabled={workflowAction.busy}
                         />
                         <DetailHeaderAction
                           icon={<SaveActionIcon />}
@@ -3228,7 +3204,7 @@ function WorkflowsInner() {
                           tooltip="Save workflow"
                           ariaLabel="Save workflow"
                           onClick={handleSaveWorkflow}
-                          disabled={!hasUnsavedChanges || saving}
+                          disabled={!hasUnsavedChanges || saveAction.busy}
                         />
                         <DetailHeaderAction
                           icon={<DeleteActionIcon />}
@@ -3237,7 +3213,7 @@ function WorkflowsInner() {
                           ariaLabel="Delete workflow"
                           variant="danger"
                           onClick={handleDeleteWorkflow}
-                          disabled={busyAction === 'delete'}
+                          disabled={deleteAction.busy}
                         />
                       </DetailHeaderActions>
                     </div>
@@ -3246,7 +3222,6 @@ function WorkflowsInner() {
                       edges={graphEdges}
                       nodeTypes={NODE_TYPES}
                       onNodesChange={onNodesChange}
-                      onEdgesChange={onEdgesChange}
                       onConnect={onConnect}
                       onConnectStart={onConnectStart}
                       onConnectEnd={onConnectEnd}
@@ -3255,7 +3230,6 @@ function WorkflowsInner() {
                       selectionOnDrag={canvasInteraction.selectionOnDrag}
                       nodesDraggable={canvasInteraction.nodesDraggable}
                       nodesConnectable={canvasInteraction.nodesConnectable}
-                      nodesFocusable
                       deleteKeyCode={['Backspace', 'Delete']}
                       onPaneClick={onCanvasPaneClick}
                       onPaneContextMenu={onCanvasPaneContextMenu}

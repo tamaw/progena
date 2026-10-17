@@ -8,6 +8,7 @@ import {
 import {
   fetchWidgets,
   fetchSchedules,
+  fetchInbox,
   selectUiStatus,
   selectUiWidgets,
   selectUiAlerts,
@@ -106,6 +107,9 @@ export function useDashboardData() {
     inboxUnreadCount,
     connected,
     streamReady,
+    retryRuns: () => dispatch(fetchWorkflowRuns({ workflowRunsUrl })),
+    retrySchedules: () => dispatch(fetchSchedules({ schedulesUrl })),
+    retryInbox: () => dispatch(fetchInbox({ inboxUrl: getApiUrl('inbox') })),
     collectionState: {
       workflows: {
         loaded: workflowsState?.loaded ?? false,

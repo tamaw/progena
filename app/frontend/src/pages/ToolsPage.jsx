@@ -22,13 +22,26 @@ import DetailHeader, {
   PauseActionIcon,
   PlayActionIcon,
 } from '../components/layout/DetailHeader';
+import { MetricCard } from '../components/common/DetailCards';
+import InlineFailure from '../components/common/InlineFailure';
+import PopupModal from '../components/common/PopupModal';
+import useConfirmAction from '../hooks/useConfirmAction';
+import useMissingEntityRoute from '../hooks/useMissingEntityRoute';
+import useUiAction from '../hooks/useUiAction';
 import { useWidgetsApi } from '../hooks/api/useWidgetsApi';
 import { useConfig } from '../context/ConfigContext';
-import { fetchMcp, fetchMcpServerDetail, selectMcpServers, selectMcpServerDetail, selectMcpState } from '../store/uiDataSlice';
+import { useNotifications } from '../context/NotificationContext';
+import {
+  fetchMcp, fetchMcpServerDetail, selectMcpServers, selectMcpServerDetail, selectMcpServerDetailRequest, selectMcpState,
+} from '../store/uiDataSlice';
+import { formatShortLocalDateTime } from '../lib/displayTime';
+import { reportFailure } from '../lib/failures';
 import { selectRealtime } from '../store/realtimeSlice';
 
 const SERVER_FILTERS = ['All', 'Connected', 'Disabled', 'Errors'];
 const SERVER_SORTS = ['Status', 'Name', 'Transport'];
+
+const serverIdOf = (server) => server.id;
 
 // Derive a coarse status from the live MCP widget. Disabled wins (the runtime
 // won't connect a disabled server); otherwise an error-ish status surfaces, and
@@ -80,22 +93,6 @@ function compareServers(a, b, sortMode) {
 const STATUS_GROUP = { connected: 'Connected', disabled: 'Disabled', error: 'Needs attention' };
 const GROUP_ORDER = ['Connected', 'Needs attention', 'Disabled'];
 
-function parseDate(value) {
-  if (!value) return null;
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? null : date;
-}
-
-function formatLogTime(value) {
-  const date = parseDate(value);
-  if (!date) return '';
-  return date.toLocaleString(undefined, {
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
-}
 
 function ToolIcon() {
   return (
@@ -121,12 +118,24 @@ function ToolToggle({ checked, disabled, onChange }) {
   );
 }
 
-function MetricCard({ label, value, detail }) {
+function ToolRow({ tool, index, serverId, onToggle }) {
+  const toolEnabled = tool.enabled !== false;
+  const toolAction = useUiAction(`${serverId}:tool:${tool.name || index}`);
+  const { show } = useNotifications();
+  const toggle = useCallback(async () => {
+    if (!tool.name) return;
+    const result = await toolAction.run('Update tool', () => onToggle(tool));
+    if (!result.ok && result.error) reportFailure(show, 'Update tool', result.error);
+  }, [onToggle, show, tool, toolAction]);
+
   return (
-    <article className="tools-metric-card">
-      <span>{label}</span>
-      <strong>{value}</strong>
-      <small>{detail}</small>
+    <article className={`tools-tool-row ${toolEnabled ? '' : 'tools-tool-row--disabled'}`}>
+      <span className="tools-tool-row__icon"><ToolIcon /></span>
+      <div className="tools-tool-row__body">
+        <strong>{tool.original_name || tool.name || 'tool'}</strong>
+        <p>{tool.description || 'No description provided.'}</p>
+      </div>
+      <ToolToggle checked={toolEnabled} disabled={toolAction.busy} onChange={toggle} />
     </article>
   );
 }
@@ -141,6 +150,7 @@ export default function ToolsPage() {
     ? urlServerId
     : null;
   const { getApiUrl } = useConfig();
+  const { show } = useNotifications();
   const realtime = useSelector(selectRealtime);
   const mcpServers = useSelector(selectMcpServers);
   const mcpState = useSelector(selectMcpState);
@@ -149,22 +159,18 @@ export default function ToolsPage() {
   const [activeFilter, setActiveFilter] = useState('All');
   const [query, setQuery] = useState('');
   const [sortMode, setSortMode] = useState('Status');
-  const [mutating, setMutating] = useState(false);
-  const [error, setError] = useState(null);
+  const [configValidation, setConfigValidation] = useState(null);
 
   const [isEditingConfig, setIsEditingConfig] = useState(false);
   const [configUrl, setConfigUrl] = useState('');
   const [configDesc, setConfigDesc] = useState('');
   const configInputRef = useRef(null);
 
-  const [togglingTool, setTogglingTool] = useState(null);
 
   const mcpUrl = getApiUrl('mcp');
   // The catalogue is hydrated only by `mcp.snapshot` on the canonical stream.
-  const refreshMcp = useCallback(async () => {
-    setError(null);
-    await dispatch(fetchMcp({ mcpUrl })).unwrap();
-  }, [dispatch, mcpUrl]);
+  const refreshMcp = useCallback(() => dispatch(fetchMcp({ mcpUrl })).unwrap(), [dispatch, mcpUrl]);
+  const retryMcp = useCallback(() => { void refreshMcp().catch(() => {}); }, [refreshMcp]);
 
   // The server's rich fields (enabled/transport/url/kind) live under `data`;
   // flatten so the page can read them directly. The store slice already holds
@@ -204,6 +210,20 @@ export default function ToolsPage() {
   // Per-tool schemas and log history are detail-only fields, fetched on
   // demand per server (the list snapshot carries scalar fields only).
   const serverDetail = useSelector((state) => selectMcpServerDetail(state, selectedServer?.id));
+  const serverDetailRequest = useSelector((state) => selectMcpServerDetailRequest(state, selectedServer?.id));
+  const configAction = useUiAction(`${selectedServer?.id || 'tools'}:config`);
+  const serverAction = useUiAction(`${selectedServer?.id || 'tools'}:server`);
+  const deleteAction = useConfirmAction(selectedServer?.id || 'tools');
+  const [configServerId, setConfigServerId] = useState(selectedServer?.id);
+  if (configServerId !== selectedServer?.id) {
+    setConfigServerId(selectedServer?.id);
+    setIsEditingConfig(false);
+    setConfigValidation(null);
+  }
+  const runQuickAction = useCallback(async (action, operation, task) => {
+    const result = await action.run(operation, task);
+    if (!result.ok && result.error) reportFailure(show, operation, result.error);
+  }, [show]);
 
   // Keep the URL in sync with whichever server is actually selected. A routed
   // server id stays authoritative; if it disappears after hydration, the effect
@@ -217,38 +237,33 @@ export default function ToolsPage() {
     errors: servers.filter((server) => statusOf(server) === 'error').length,
   }), [servers]);
 
-  // Request the MCP list after the stream is listening, and retry whenever a
-  // reconnect exposes a newly ready stream.
   useEffect(() => {
     if (!realtime.connected) return;
-    void refreshMcp().catch((loadError) => setError(loadError.message || 'Failed to load MCP servers.'));
+    void refreshMcp().catch(() => {});
   }, [realtime.connected, refreshMcp]);
-  // Fetch the selected server's full detail (tools + logs) once per id; the
-  // cache is refreshed automatically by `mcp.server.detail.updated` after any
-  // enable/disable or config mutation, so no re-fetch is needed post-toggle.
-  useEffect(() => {
+
+  const loadServerDetail = useCallback(() => {
     const id = selectedServer?.id;
-    if (!id || !realtime.connected || serverDetail) return;
-    dispatch(fetchMcpServerDetail({ mcpUrl, id })).catch(() => {
-      // Leave the detail placeholder showing; the next selection/reconnect retries.
-    });
-  }, [dispatch, mcpUrl, realtime.connected, selectedServer?.id, serverDetail]);
-  useEffect(() => {
-    if (!mcpState.loaded || !selectedServerId) {
-      return;
-    }
-    if (!servers.some((server) => server.id === selectedServerId)) {
-      navigate('/tools', { replace: true });
-    }
-  }, [mcpState.loaded, navigate, selectedServerId, servers]);
+    if (!id || !realtime.connected || serverDetailRequest.loading) return;
+    void dispatch(fetchMcpServerDetail({ mcpUrl, id })).unwrap().catch(() => {});
+  }, [dispatch, mcpUrl, realtime.connected, selectedServer?.id, serverDetailRequest.loading]);
 
-
-  // Leave edit mode whenever the selected server changes so a stale draft never
-  // leaks across selections.
   useEffect(() => {
-    setIsEditingConfig(false);
-    setError(null);
-  }, [selectedServer?.id]);
+    if (!serverDetail && !serverDetailRequest.loading && !serverDetailRequest.error) {
+      loadServerDetail();
+    }
+  }, [loadServerDetail, serverDetail, serverDetailRequest.error, serverDetailRequest.loading]);
+
+  useMissingEntityRoute({
+    hydrated: mcpState.loaded,
+    entityId: selectedServerId,
+    entities: servers,
+    getEntityId: serverIdOf,
+    fallbackPath: '/tools',
+  });
+
+  // Draft state resets during the selection identity transition above, before
+  // a different server can render with the previous server's configuration.
 
   useEffect(() => {
     if (!isEditingConfig) return undefined;
@@ -257,86 +272,57 @@ export default function ToolsPage() {
     return undefined;
   }, [isEditingConfig]);
 
-  const toggleEnabled = useCallback(async () => {
+  const toggleEnabled = useCallback(() => {
     if (!selectedServer) return;
-    setMutating(true);
-    setError(null);
-    try {
+    void runQuickAction(serverAction, 'Update server', async () => {
       await updateWidget(`mcp:${selectedServer.name}`, { enabled: selectedServer.enabled === false });
       await refreshMcp();
-    } catch (err) {
-      setError(err.message || 'Failed to update server.');
-    } finally {
-      setMutating(false);
-    }
-  }, [refreshMcp, selectedServer, updateWidget]);
+    });
+  }, [refreshMcp, runQuickAction, selectedServer, serverAction, updateWidget]);
 
-  const toggleTool = useCallback(async (tool) => {
-    if (!tool?.name) return;
-    setTogglingTool(tool.name);
-    setError(null);
-    try {
-      await updateWidget(`mcp_tool:${tool.name}`, { enabled: tool.enabled === false });
-      await refreshMcp();
-    } catch (err) {
-      setError(err.message || 'Failed to update tool.');
-    } finally {
-      setTogglingTool(null);
-    }
+  const updateTool = useCallback(async (tool) => {
+    await updateWidget(`mcp_tool:${tool.name}`, { enabled: tool.enabled === false });
+    await refreshMcp();
   }, [refreshMcp, updateWidget]);
 
   const startConfigEdit = useCallback(() => {
     if (!selectedServer) return;
+    setConfigValidation(null);
     setConfigUrl(selectedServer.url || '');
     setConfigDesc(selectedServer.description || '');
     setIsEditingConfig(true);
   }, [selectedServer]);
 
   const cancelConfigEdit = useCallback(() => {
+    setConfigValidation(null);
     setIsEditingConfig(false);
   }, []);
 
-  const saveConfigEdit = useCallback(async () => {
+  const saveConfigEdit = useCallback(() => {
     if (!selectedServer) return;
     const url = configUrl.trim();
     const description = configDesc.trim();
     if (!url) {
-      setError('Endpoint URL is required.');
+      setConfigValidation('Endpoint URL is required.');
       return;
     }
-    setMutating(true);
-    setError(null);
-    try {
+    setConfigValidation(null);
+    void configAction.run('Save server configuration', async ({ isCurrent }) => {
       await updateWidget(`mcp:${selectedServer.name}`, { url, description });
       await refreshMcp();
-      setIsEditingConfig(false);
-    } catch (err) {
-      setError(err.message || 'Failed to save configuration.');
-    } finally {
-      setMutating(false);
-    }
-  }, [configDesc, configUrl, refreshMcp, selectedServer, updateWidget]);
+      if (isCurrent()) setIsEditingConfig(false);
+    });
+  }, [configAction, configDesc, configUrl, refreshMcp, selectedServer, updateWidget]);
 
-  const handleDelete = useCallback(async () => {
+  const handleDelete = useCallback(() => {
     if (!selectedServer) return;
-    const confirmed = window.confirm(
-      `Remove MCP server "${selectedServer.name}"? This can't be undone.`,
-    );
-    if (!confirmed) return;
-    setMutating(true);
-    setError(null);
-    try {
-      await deleteWidget(`mcp:${selectedServer.name}`);
-      if (selectedServerId === selectedServer.id) {
-        navigate('/tools', { replace: true });
-      }
+    const server = selectedServer;
+    deleteAction.request('Delete server', async ({ isCurrent }) => {
+      await deleteWidget(`mcp:${server.name}`);
       await refreshMcp();
-    } catch (err) {
-      setError(err.message || 'Failed to remove server.');
-    } finally {
-      setMutating(false);
-    }
-  }, [deleteWidget, navigate, refreshMcp, selectedServer, selectedServerId]);
+      if (isCurrent()) navigate('/tools', { replace: true });
+    });
+  }, [deleteAction, deleteWidget, navigate, refreshMcp, selectedServer]);
 
   const addServer = useCallback(() => {
     // Creation is a Progenitor change request: open quick-chat primed to add an
@@ -348,7 +334,7 @@ export default function ToolsPage() {
 
   // DB-backed tools surfaced by the runtime (with per-tool enabled flags),
   // discovered when the runtime initialises / refreshes its MCP context.
-  const isDetailLoading = Boolean(selectedServer) && !serverDetail;
+  const isDetailLoading = Boolean(selectedServer) && !serverDetail && serverDetailRequest.loading;
   const serverTools = Array.isArray(serverDetail?.data?.tools) ? serverDetail.data.tools : [];
   const enabledToolCount = serverTools.filter((tool) => tool.enabled !== false).length;
   const selectedLogs = Array.isArray(serverDetail?.data?.logs) ? serverDetail.data.logs.slice(0, 5) : [];
@@ -368,8 +354,9 @@ export default function ToolsPage() {
           <PaneListSortButton title="Sort servers" options={SERVER_SORTS} value={sortMode} onSelect={setSortMode} />
         </PaneListToolbar>
 
+        {mcpState.error ? <InlineFailure failure={mcpState.error} operation="Load MCP servers" onRetry={retryMcp} /> : null}
         {servers.length === 0 ? (
-          <PaneEmptyState>No MCP servers configured.</PaneEmptyState>
+          mcpState.error ? null : <PaneEmptyState>No MCP servers configured.</PaneEmptyState>
         ) : visibleServers.length === 0 ? (
           <PaneEmptyState>No MCP servers match this view.</PaneEmptyState>
         ) : (
@@ -426,7 +413,7 @@ export default function ToolsPage() {
                     tooltip={selectedServer.enabled === false ? 'Enable server' : 'Disable server'}
                     ariaLabel={selectedServer.enabled === false ? 'Enable server' : 'Disable server'}
                     variant="primary"
-                    disabled={mutating}
+                    disabled={serverAction.busy || deleteAction.busy}
                     onClick={toggleEnabled}
                   />
                   <DetailHeaderAction
@@ -435,7 +422,7 @@ export default function ToolsPage() {
                     tooltip="Remove server"
                     ariaLabel="Remove server"
                     variant="danger"
-                    disabled={mutating}
+                    disabled={serverAction.busy || deleteAction.busy}
                     onClick={handleDelete}
                   />
                 </DetailHeaderActions>
@@ -449,7 +436,13 @@ export default function ToolsPage() {
             />
 
             <div className="detail-pane__body">
-              {error ? <PaneEmptyState>{error}</PaneEmptyState> : null}
+              {serverDetailRequest.error ? (
+                <InlineFailure
+                  failure={serverDetailRequest.error}
+                  operation="Load server details"
+                  onRetry={loadServerDetail}
+                />
+              ) : null}
 
               <section className="tools-metrics" aria-label="MCP server metrics">
                 <MetricCard label="Status" value={statusLabel(selectedStatus)} detail={selectedServer.enabled === false ? 'disabled' : 'enabled'} />
@@ -461,7 +454,7 @@ export default function ToolsPage() {
                 />
                 <MetricCard
                   label="Updated"
-                  value={selectedServer.updated_at ? formatLogTime(selectedServer.updated_at) : '—'}
+                  value={selectedServer.updated_at ? formatShortLocalDateTime(selectedServer.updated_at) : '—'}
                   detail="last change"
                 />
               </section>
@@ -472,8 +465,8 @@ export default function ToolsPage() {
                   <div>
                     {isEditingConfig ? (
                       <>
-                        <button type="button" className="repo-btn repo-btn--ghost" onClick={cancelConfigEdit} disabled={mutating}>Cancel</button>
-                        <button type="button" className="repo-btn" onClick={saveConfigEdit} disabled={mutating}>Save</button>
+                        <button type="button" className="repo-btn repo-btn--ghost" onClick={cancelConfigEdit} disabled={configAction.busy}>Cancel</button>
+                        <button type="button" className="repo-btn" onClick={saveConfigEdit} disabled={configAction.busy}>Save</button>
                       </>
                     ) : (
                       <button type="button" className="repo-btn repo-btn--ghost" onClick={startConfigEdit}>Edit</button>
@@ -482,26 +475,35 @@ export default function ToolsPage() {
                 </div>
                 {isEditingConfig ? (
                   <div className="tools-config-edit">
+                    <InlineFailure failure={configValidation || configAction.error} operation="Save server configuration" />
                     <label className="tools-config-field">
                       <span>Endpoint URL</span>
                       <input
                         ref={configInputRef}
                         value={configUrl}
-                        disabled={mutating}
+                        disabled={configAction.busy}
                         placeholder="https://host/mcp"
-                        onChange={(event) => setConfigUrl(event.target.value)}
+                        onChange={(event) => {
+                          setConfigValidation(null);
+                          configAction.clearError();
+                          setConfigUrl(event.target.value);
+                        }}
                       />
                     </label>
                     <label className="tools-config-field">
                       <span>Description</span>
                       <input
                         value={configDesc}
-                        disabled={mutating}
+                        disabled={configAction.busy}
                         placeholder="What this server provides"
-                        onChange={(event) => setConfigDesc(event.target.value)}
+                        onChange={(event) => {
+                          setConfigValidation(null);
+                          configAction.clearError();
+                          setConfigDesc(event.target.value);
+                        }}
                       />
                     </label>
-                    <p className="tools-config-edit__hint">{mutating ? 'Processing…' : 'Changes apply to the shared MCP registry.'}</p>
+                    <p className="tools-config-edit__hint">{configAction.busy ? 'Processing…' : 'Changes apply to the shared MCP registry.'}</p>
                   </div>
                 ) : (
                   <dl className="tools-connection-grid">
@@ -520,26 +522,15 @@ export default function ToolsPage() {
                   </h2>
                 </div>
                 <div className="tools-tool-list">
-                  {serverTools.length ? serverTools.map((tool, index) => {
-                    const toolEnabled = tool.enabled !== false;
-                    return (
-                      <article
-                        className={`tools-tool-row ${toolEnabled ? '' : 'tools-tool-row--disabled'}`}
-                        key={tool.name || index}
-                      >
-                        <span className="tools-tool-row__icon"><ToolIcon /></span>
-                        <div className="tools-tool-row__body">
-                          <strong>{tool.original_name || tool.name || 'tool'}</strong>
-                          <p>{tool.description || 'No description provided.'}</p>
-                        </div>
-                        <ToolToggle
-                          checked={toolEnabled}
-                          disabled={togglingTool === tool.name}
-                          onChange={() => toggleTool(tool)}
-                        />
-                      </article>
-                    );
-                  }) : (
+                  {serverTools.length ? serverTools.map((tool, index) => (
+                    <ToolRow
+                      key={tool.name || index}
+                      tool={tool}
+                      index={index}
+                      serverId={selectedServer.id}
+                      onToggle={updateTool}
+                    />
+                  )) : (
                     <PaneEmptyState>{isDetailLoading
                       ? 'Loading tools…'
                       : (selectedServer.enabled === false
@@ -557,7 +548,7 @@ export default function ToolsPage() {
                       <span className="tools-tool-row__icon">log</span>
                       <div className="tools-tool-row__body">
                         <strong>{entry.message || entry.event || 'Server activity'}</strong>
-                        <p>{formatLogTime(entry.timestamp || entry.time || entry.updated_at) || 'recent'}</p>
+                        <p>{formatShortLocalDateTime(entry.timestamp || entry.time || entry.updated_at) || 'recent'}</p>
                       </div>
                       <span className="tools-tool-row__calls">{String(entry.level || entry.source || 'info').toLowerCase()}</span>
                     </article>
@@ -570,6 +561,19 @@ export default function ToolsPage() {
           </>
         )}
       </DetailPane>
+      {deleteAction.open && selectedServer ? (
+        <PopupModal
+          eyebrow="Remove MCP server"
+          title={`Remove “${selectedServer.name}”?`}
+          message="This removes the server from the MCP registry. This can’t be undone."
+          error={deleteAction.error}
+          confirmLabel="Remove server"
+          busyLabel="Removing…"
+          busy={deleteAction.busy}
+          onClose={deleteAction.close}
+          onConfirm={deleteAction.confirm}
+        />
+      ) : null}
     </PageShell>
   );
 }

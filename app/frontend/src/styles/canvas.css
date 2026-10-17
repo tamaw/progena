@@ -866,63 +866,6 @@
   color: var(--color-text-primary);
 }
 
-/* JSON editor: a transparent <textarea> stacked over a highlight.js <pre> so the
-   syntax-highlighted layer shows through while the user types. Both layers must
-   share identical box metrics for the caret to line up. */
-.canvas-json__code {
-  position: relative;
-  flex: 1;
-  min-height: 0;
-  display: flex;
-}
-
-.canvas-json__highlight,
-.canvas-json__code .canvas-json__textarea {
-  margin: 0;
-  padding: 10px 12px;
-  border: 1px solid var(--color-border);
-  border-radius: 8px;
-  font-family: var(--font-family-mono);
-  font-size: 12px;
-  line-height: 1.5;
-  tab-size: 2;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  overflow: auto;
-}
-
-.canvas-json__highlight {
-  position: absolute;
-  inset: 0;
-  background: var(--color-bg-primary);
-  pointer-events: none;
-}
-
-.canvas-json__highlight code.hljs {
-  padding: 0;
-  background: transparent;
-  font: inherit;
-}
-
-.canvas-json__code .canvas-json__textarea {
-  position: relative;
-  flex: 1;
-  resize: none;
-  background: transparent;
-  color: transparent;
-  caret-color: var(--color-text-primary);
-}
-
-.canvas-json__code .canvas-json__textarea::selection {
-  background: var(--color-accent-soft);
-}
-
-.canvas-json__textarea:focus {
-  outline: none;
-  border-color: color-mix(in oklab, var(--color-accent) 45%, var(--color-border));
-  box-shadow: 0 0 0 3px var(--color-accent-soft);
-}
-
 .canvas-json-editor__error {
   margin: 0;
   color: var(--color-error, #ef4444);

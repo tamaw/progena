@@ -1,0 +1,8 @@
+.app-markdown-content a {
+  color: var(--color-accent);
+}
+
+.app-markdown-content pre,
+.app-markdown-content code {
+  font-family: var(--font-family-mono);
+}

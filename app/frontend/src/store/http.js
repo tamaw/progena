@@ -1,4 +1,16 @@
 import { createUuid } from '../lib/uuid';
+import { describeFailureDetail, isCancellation } from '../lib/failures';
+
+export class RequestError extends Error {
+  constructor(message, { status, requestId, code, detail, cause } = {}) {
+    super(message, { cause });
+    this.name = 'RequestError';
+    this.status = status;
+    this.requestId = requestId;
+    this.code = code || (status ? `HTTP_${status}` : 'REQUEST_FAILED');
+    this.detail = detail;
+  }
+}
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
@@ -40,7 +52,7 @@ export function withQuery(url, params) {
  * @param {{ method?: string, body?: unknown, requestId: string, signal?: AbortSignal }} [options]
  * @returns {Promise<{request_id: string, event_types: string[]}>}
  */
-export async function requestAcknowledged(url, { method = 'GET', body, requestId, errorLabel, signal } = {}) {
+export async function requestAcknowledged(url, { method = 'GET', body, requestId, signal } = {}) {
   if (!isOperationRequestId(requestId)) {
     throw new Error('requestAcknowledged requires a UUID requestId');
   }
@@ -52,38 +64,41 @@ export async function requestAcknowledged(url, { method = 'GET', body, requestId
     headers['Content-Type'] = 'application/json';
   }
 
-  const response = await fetch(url, {
-    method,
-    headers,
-    credentials: 'include',
-    ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
-    ...(signal ? { signal } : {}),
-  });
+  let response;
+  try {
+    response = await fetch(url, {
+      method,
+      headers,
+      credentials: 'include',
+      ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+      ...(signal ? { signal } : {}),
+    });
+  } catch (cause) {
+    if (isCancellation(cause)) throw cause;
+    throw new RequestError('Check your connection and try again.', { requestId, code: 'NETWORK_ERROR', cause });
+  }
 
   // Only 202 confirms that a finite browser request was dispatched.
   if (response.status !== 202) {
     const text = await response.text().catch(() => '');
-    let detail = `(${response.status})`;
-    if (text) {
-      try {
-        const errorBody = JSON.parse(text);
-        if (errorBody?.detail) {
-          detail = typeof errorBody.detail === 'string'
-            ? errorBody.detail
-            : JSON.stringify(errorBody.detail);
-        }
-      } catch {
-        // non-JSON error body; keep the status-code detail
-      }
+    let detail;
+    try {
+      const errorBody = JSON.parse(text);
+      detail = errorBody?.detail || errorBody?.message;
+    } catch {
+      // Non-JSON server bodies are not suitable UI messages.
     }
-    throw new Error(`${errorLabel || 'Request failed'} ${detail}`);
+    throw new RequestError(
+      describeFailureDetail(detail) || `The server returned an unexpected response (${response.status}).`,
+      { status: response.status, requestId, detail },
+    );
   }
 
   let acknowledgement;
   try {
     acknowledgement = JSON.parse(await response.text());
   } catch {
-    throw new Error(`${errorLabel || 'Request failed'} invalid acknowledgement body`);
+    throw new RequestError('The server returned an invalid acknowledgement.', { requestId, code: 'INVALID_ACKNOWLEDGEMENT' });
   }
 
   if (
@@ -94,17 +109,17 @@ export async function requestAcknowledged(url, { method = 'GET', body, requestId
     || !Object.prototype.hasOwnProperty.call(acknowledgement, 'request_id')
     || !Object.prototype.hasOwnProperty.call(acknowledgement, 'event_types')
   ) {
-    throw new Error(`${errorLabel || 'Request failed'} invalid acknowledgement body`);
+    throw new RequestError('The server returned an invalid acknowledgement.', { requestId, code: 'INVALID_ACKNOWLEDGEMENT' });
   }
   if (acknowledgement.request_id !== requestId) {
-    throw new Error(`${errorLabel || 'Request failed'} request_id mismatch`);
+    throw new RequestError('The server returned a mismatched request identifier.', { requestId, code: 'REQUEST_ID_MISMATCH' });
   }
   if (
     !Array.isArray(acknowledgement.event_types)
     || acknowledgement.event_types.length === 0
     || !acknowledgement.event_types.every((eventType) => typeof eventType === 'string' && eventType)
   ) {
-    throw new Error(`${errorLabel || 'Request failed'} invalid event_types`);
+    throw new RequestError('The server returned invalid event types.', { requestId, code: 'INVALID_EVENT_TYPES' });
   }
 
   return acknowledgement;

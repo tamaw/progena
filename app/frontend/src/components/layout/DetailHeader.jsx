@@ -1,4 +1,6 @@
-import { Children, useEffect, useRef, useState } from 'react';
+import { Children, useRef, useState } from 'react';
+
+import { useMenuDismiss } from '../../hooks/useMenuDismiss';
 
 function normalizeTab(tab) {
   return typeof tab === 'string' ? { id: tab, label: tab } : tab;
@@ -219,23 +221,7 @@ function DetailHeaderOverflowMenu({ items, label }) {
   const [open, setOpen] = useState(false);
   const wrapRef = useRef(null);
 
-  useEffect(() => {
-    if (!open) return undefined;
-    const handlePointer = (event) => {
-      if (wrapRef.current && !wrapRef.current.contains(event.target)) {
-        setOpen(false);
-      }
-    };
-    const handleKey = (event) => {
-      if (event.key === 'Escape') setOpen(false);
-    };
-    document.addEventListener('mousedown', handlePointer);
-    document.addEventListener('keydown', handleKey);
-    return () => {
-      document.removeEventListener('mousedown', handlePointer);
-      document.removeEventListener('keydown', handleKey);
-    };
-  }, [open]);
+  useMenuDismiss(open, wrapRef, () => setOpen(false));
 
   return (
     <div className="detail-header-menu" ref={wrapRef}>

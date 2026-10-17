@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo } from 'react';
 import {
   PaneEmptyState,
   PaneList,
@@ -19,7 +19,7 @@ import DetailHeader, {
   PlayActionIcon,
 } from '../components/layout/DetailHeader';
 import { CapabilityChip, CardFact, MetricCard } from '../components/common/DetailCards';
-
+import { useListSelection } from '../hooks/useListSelection';
 
 // Static catalogue of the LLM models agents can be assigned. Grouped by provider
 // in the list, mirroring the Agents page layout.
@@ -138,6 +138,10 @@ function matchesModel(model, filter, search) {
   return true;
 }
 
+function matchesModelSelection(model, { filter, search }) {
+  return matchesModel(model, filter, search);
+}
+
 
 function ModelRow({ model, selected, onSelect }) {
   return (
@@ -162,14 +166,19 @@ function ModelRow({ model, selected, onSelect }) {
 }
 
 export default function ModelsPage() {
-  const [activeFilter, setActiveFilter] = useState('All');
-  const [search, setSearch] = useState('');
-  const [selectedId, setSelectedId] = useState(MODELS[0].id);
+  const {
+    filter: activeFilter,
+    setFilter: setActiveFilter,
+    search,
+    setSearch,
+    setSelectedId,
+    visible: visibleModels,
+    selected,
+  } = useListSelection(MODELS, {
+    initialSelectedId: MODELS[0].id,
+    match: matchesModelSelection,
+  });
 
-  const visibleModels = useMemo(
-    () => MODELS.filter((model) => matchesModel(model, activeFilter, search)),
-    [activeFilter, search],
-  );
   const providerOrder = useMemo(
     () => [...new Set(visibleModels.map((model) => model.provider))],
     [visibleModels],
@@ -181,8 +190,6 @@ export default function ModelsPage() {
     }
     return groups;
   }, [visibleModels]);
-
-  const selected = MODELS.find((model) => model.id === selectedId) || visibleModels[0] || null;
 
   return (
     <PageShell>

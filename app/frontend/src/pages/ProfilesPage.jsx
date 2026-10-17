@@ -13,6 +13,9 @@ import DetailHeader, {
 } from '../components/layout/DetailHeader';
 import Select from '../components/common/Select';
 import PopupModal from '../components/common/PopupModal';
+import InlineFailure from '../components/common/InlineFailure';
+import useConfirmAction from '../hooks/useConfirmAction';
+import useMissingEntityRoute from '../hooks/useMissingEntityRoute';
 import { useConfig } from '../context/ConfigContext';
 import {
   deleteModelProfile, fetchModelProfiles, patchModelProfile, selectModelProfiles, selectModelProfilesState,
@@ -62,9 +65,7 @@ function ProfileDetails({ profile, profiles, catalogue, url, connected }) {
   const [pendingSave, setPendingSave] = useState(null);
   const [statusMessage, setStatusMessage] = useState('');
   const [error, setError] = useState(null);
-  const [deleteConfirmationOpen, setDeleteConfirmationOpen] = useState(false);
-  const [deleteBusy, setDeleteBusy] = useState(false);
-  const [deleteError, setDeleteError] = useState('');
+  const deleteAction = useConfirmAction(`profile-delete:${url}:${profile.name}`);
   const completedRequestId = catalogue.saveRequest.completedRequestId;
   const ownSnapshot = pendingSave && completedRequestId === pendingSave.requestId;
   const conflict = Boolean(draft && baseline && !ownSnapshot
@@ -113,20 +114,10 @@ function ProfileDetails({ profile, profiles, catalogue, url, connected }) {
   const updateDraft = (field, value) => setDraft((current) => ({ ...current, [field]: value }));
 
   const handleDelete = () => {
-    setDeleteError('');
-    setDeleteConfirmationOpen(true);
-  };
-  const confirmDelete = async () => {
-    setDeleteBusy(true);
-    try {
+    deleteAction.request('Delete profile', async ({ isCurrent }) => {
       await dispatch(deleteModelProfile({ modelProfilesUrl: url, name: profile.name })).unwrap();
-      setDeleteConfirmationOpen(false);
-      navigate('/profiles', { replace: true });
-    } catch (deleteFailure) {
-      setDeleteError(deleteFailure.message || 'Failed to delete profile.');
-    } finally {
-      setDeleteBusy(false);
-    }
+      if (isCurrent()) navigate('/profiles', { replace: true });
+    });
   };
 
   return (
@@ -144,12 +135,12 @@ function ProfileDetails({ profile, profiles, catalogue, url, connected }) {
             tooltip="Delete profile"
             variant="danger"
             onClick={handleDelete}
-            disabled={saving || !connected || catalogue.loading || Boolean(catalogue.error)}
+            disabled={saving || deleteAction.busy || !connected || catalogue.loading || Boolean(catalogue.error)}
           />
         </DetailHeaderActions>
       )} />
       <div className="detail-pane__body">
-        {error ? <div className="profiles-alert profiles-alert--error" role="alert">{error.message || String(error)}</div> : null}
+        {error && !draft ? <InlineFailure failure={error} operation="Save profile" /> : null}
         {statusMessage ? <div className="profiles-alert profiles-alert--status" role="status">{statusMessage}</div> : null}
         {conflict ? (
           <div className="profiles-alert profiles-alert--conflict" role="status">
@@ -191,6 +182,7 @@ function ProfileDetails({ profile, profiles, catalogue, url, connected }) {
                   <input type="text" value={draft[field]} onChange={(event) => updateDraft(field, event.target.value)} disabled={saving} placeholder="Inherit" />
                 </label>
               ))}
+              {error ? <InlineFailure failure={error} operation="Save profile" /> : null}
               <p className="profiles-form__hint">{saving ? 'Saving…' : 'Inherit uses runtime environment settings. Clear effort or summary to remove its override.'}</p>
             </form>
           ) : (
@@ -205,16 +197,17 @@ function ProfileDetails({ profile, profiles, catalogue, url, connected }) {
           )}
         </section>
       </div>
-      {deleteConfirmationOpen ? (
+      {deleteAction.open ? (
         <PopupModal
           eyebrow="Delete profile"
           title={`Delete “${profile.name}”?`}
-          message={deleteError || 'This model profile will be permanently deleted.'}
+          message="This model profile will be permanently deleted."
+          error={deleteAction.error}
           confirmLabel="Delete profile"
           busyLabel="Deleting…"
-          onClose={() => setDeleteConfirmationOpen(false)}
-          onConfirm={confirmDelete}
-          busy={deleteBusy}
+          onClose={deleteAction.close}
+          onConfirm={deleteAction.confirm}
+          busy={deleteAction.busy}
         />
       ) : null}
     </>
@@ -233,6 +226,11 @@ export default function ProfilesPage() {
   const [filter, setFilter] = useState('All');
   const [query, setQuery] = useState('');
   const [sort, setSort] = useState('Name');
+  useEffect(() => {
+    if (!connected) return undefined;
+    dispatch(fetchModelProfiles({ modelProfilesUrl: url }));
+    return undefined;
+  }, [connected, dispatch, url]);
   const visible = useMemo(() => profiles.filter((profile) => (
     (filter === 'All' || isCustomized(profile) === (filter === 'Customized'))
     && `${profile.name} ${providerLabel(profile.provider)} ${profile.deployment}`.toLowerCase().includes(query.trim().toLowerCase())
@@ -240,20 +238,21 @@ export default function ProfilesPage() {
   const selected = profiles.find((profile) => profile.name === profileName)
     || (!profileName ? visible[0] || profiles[0] : null);
   useEntityUrlSync('/profiles', selected?.name, selected?.name);
-  useEffect(() => {
-    if (catalogue.loaded && profileName && !profiles.some((profile) => profile.name === profileName)) {
-      navigate('/profiles', { replace: true });
-    }
-  }, [catalogue.loaded, profileName, profiles, navigate]);
+  useMissingEntityRoute({
+    hydrated: catalogue.loaded,
+    entityId: profileName,
+    entities: profiles,
+    getEntityId: (profile) => profile.name,
+    fallbackPath: '/profiles',
+  });
 
   const openCreateProfileChat = useCallback(() => {
     window.dispatchEvent(new CustomEvent('progenitor:open-quick-chat', {
       detail: { mode: 'profile-create' },
     }));
   }, []);
-  const loadingMessage = catalogue.error ? 'Model profiles could not be loaded.'
-    : !connected ? 'Waiting for the live connection…'
-      : !catalogue.loaded ? 'Loading model profiles…' : 'No model profiles configured.';
+  const loadingMessage = !connected ? 'Waiting for the live connection…'
+    : !catalogue.loaded ? 'Loading model profiles…' : 'No model profiles configured.';
 
   return (
     <PageShell className="profiles-page" label="Model profiles">
@@ -271,13 +270,15 @@ export default function ProfilesPage() {
         </PaneListToolbar>
         {!connected ? <div className="profiles-list-notice" role="status">Offline — reconnecting. {catalogue.loaded ? 'Saved configuration remains visible.' : 'Waiting for profile data.'}</div> : null}
         {catalogue.error ? (
-          <div className="profiles-list-notice profiles-alert--error" role="alert">
-            <span>{catalogue.error}</span>
-            <button type="button" className="repo-btn repo-btn--ghost" disabled={!connected || catalogue.loading} onClick={() => dispatch(fetchModelProfiles({ modelProfilesUrl: url }))}>Retry</button>
-          </div>
+          <InlineFailure
+            failure={catalogue.error}
+            operation="Load model profiles"
+            onRetry={() => dispatch(fetchModelProfiles({ modelProfilesUrl: url }))}
+          />
         ) : null}
-        {!profiles.length ? <PaneEmptyState>{loadingMessage}</PaneEmptyState>
-          : !visible.length ? <PaneEmptyState>No model profiles match this view.</PaneEmptyState>
+        {!profiles.length && !catalogue.error ? <PaneEmptyState>{loadingMessage}</PaneEmptyState>
+          : !profiles.length ? null
+            : !visible.length ? <PaneEmptyState>No model profiles match this view.</PaneEmptyState>
             : <PaneListRows items={visible} getItemKey={(profile) => profile.name} renderItem={(profile) => (
               <button type="button" className={`sess-row profiles-pane-row ${selected?.name === profile.name ? 'is-selected' : ''}`}
                 aria-current={selected?.name === profile.name ? 'true' : undefined}
@@ -294,7 +295,7 @@ export default function ProfilesPage() {
       </PaneList>
       <DetailPane className="detail-pane--dense profiles-detail" label="Model profile detail">
         {selected ? <ProfileDetails key={`${url}:${selected.name}`} profile={selected} profiles={profiles} catalogue={catalogue} url={url} connected={connected} />
-          : <div className="detail-pane__body"><PaneEmptyState detail>{catalogue.loaded && !catalogue.error ? 'Select a profile to view its configuration.' : loadingMessage}</PaneEmptyState></div>}
+          : <div className="detail-pane__body">{!catalogue.error ? <PaneEmptyState detail>{catalogue.loaded ? 'Select a profile to view its configuration.' : loadingMessage}</PaneEmptyState> : null}</div>}
       </DetailPane>
     </PageShell>
   );

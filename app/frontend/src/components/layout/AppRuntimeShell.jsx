@@ -38,7 +38,9 @@ import { CHAT_STATUS } from '../../lib/chatStatus';
 import { useTheme } from '../../hooks/useTheme';
 import { localDesignLibraryEnabled } from '../../lib/localDesignLibrary';
 import { useChatApi } from '../../hooks/api/useChatApi';
-import { renderMarkdownToHtml } from '../../lib/markdown';
+import { useMenuDismiss } from '../../hooks/useMenuDismiss';
+
+import MarkdownContent from '../common/MarkdownContent';
 import { createUuid } from '../../lib/uuid';
 import ChatInput from '../chat/ChatInput';
 import NotificationContainer from '../common/NotificationContainer';
@@ -98,6 +100,7 @@ import {
 import { derivePageContext, formatPageContextBlock, stripPageContextBlock } from '../../lib/pageContext';
 
 import PopupModal from '../common/PopupModal';
+import Modal from '../common/Modal';
 import { createSpectatorReplayState } from './quickChatStreamModel';
 
 // Grouped by owner/level (see the entity-relationship model):
@@ -248,12 +251,6 @@ function PanelIconButton({ label, children, onClick, type = 'button', disabled =
   );
 }
 
-function QuickChatMarkdown({ content }) {
-  const html = useMemo(() => renderMarkdownToHtml(content), [content]);
-  if (!content) return null;
-  return <div className="markdown-content" dangerouslySetInnerHTML={{ __html: html }} />;
-}
-
 function SegmentedControl({ items, value, onChange, ariaLabel, className = '' }) {
   return (
     <div className={`topnav-seg ${className}`.trim()} aria-label={ariaLabel}>
@@ -347,6 +344,7 @@ function SidebarCreateModal({
 }) {
   const [name, setName] = useState('');
   const [summary, setSummary] = useState('');
+  const nameInputRef = useRef(null);
   const isSolution = mode === 'solution';
   const title = isSolution ? 'New solution' : `New project in ${solutionName}`;
   const placeholder = isSolution ? 'Solution name' : 'Project name';
@@ -365,8 +363,14 @@ function SidebarCreateModal({
   }, [isSolution, name, onCreateProject, onCreateSolution, summary]);
 
   return (
-    <div className="sidebar-modal-backdrop" role="presentation" onMouseDown={onClose}>
-      <form className="sidebar-modal" aria-label={title} onSubmit={handleSubmit} onMouseDown={(event) => event.stopPropagation()}>
+    <Modal
+      className="sidebar-modal"
+      backdropClassName="sidebar-modal-backdrop"
+      ariaLabel={title}
+      initialFocusRef={nameInputRef}
+      onClose={onClose}
+    >
+      <form onSubmit={handleSubmit}>
         <header className="sidebar-modal__head">
           <div>
             <span className="sidebar-modal__eyebrow">{isSolution ? 'Solution' : 'Project'}</span>
@@ -376,7 +380,7 @@ function SidebarCreateModal({
         </header>
         <label className="sidebar-modal__field">
           <span>{placeholder}</span>
-          <input value={name} onChange={(event) => setName(event.target.value)} autoFocus />
+          <input ref={nameInputRef} value={name} onChange={(event) => setName(event.target.value)} />
         </label>
         {isSolution ? (
           <label className="sidebar-modal__field">
@@ -389,7 +393,7 @@ function SidebarCreateModal({
           <button type="submit" className="task-btn task-btn--primary">{isSolution ? 'Create solution' : 'Create project'}</button>
         </footer>
       </form>
-    </div>
+    </Modal>
   );
 }
 
@@ -400,23 +404,7 @@ function WorkspaceSwitcher() {
   const [hosts, setHosts] = useState(() => getWorkspaceRegistry());
   const rootRef = useRef(null);
 
-  useEffect(() => {
-    if (!isOpen) return undefined;
-    const handlePointer = (event) => {
-      if (rootRef.current && !rootRef.current.contains(event.target)) {
-        setIsOpen(false);
-      }
-    };
-    const handleKey = (event) => {
-      if (event.key === 'Escape') setIsOpen(false);
-    };
-    document.addEventListener('mousedown', handlePointer);
-    document.addEventListener('keydown', handleKey);
-    return () => {
-      document.removeEventListener('mousedown', handlePointer);
-      document.removeEventListener('keydown', handleKey);
-    };
-  }, [isOpen]);
+  useMenuDismiss(isOpen, rootRef, () => setIsOpen(false));
 
   const switchTo = (host) => {
     setIsOpen(false);
@@ -1397,7 +1385,7 @@ function QuickChatPanel({
                   <span className="qchat-typing"><span /><span /><span /></span>
                 </>
               ) : (
-                <QuickChatMarkdown content={turn.content} />
+                <MarkdownContent content={turn.content} hiddenWhenEmpty />
               )}
             </div>
           </article>

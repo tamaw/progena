@@ -4,7 +4,7 @@
  * and `workflow.run.*` events on /api/ui/stream.
  */
 import { createSelector } from '@reduxjs/toolkit';
-import { createAcknowledgedThunk, requestAcknowledged, addRequestLifecycle } from './async';
+import { createAcknowledgedThunk, requestAcknowledged, addRequestLifecycle, addKeyedRequestLifecycle, completeKeyedRequest, selectKeyedRequest } from './async';
 import { withQuery } from '../http';
 
 function workflowPathForId(workflowId) {
@@ -19,6 +19,7 @@ export const initialState = {
     error: null,
     requestId: null,
     detailByPath: {},
+    detailRequestByPath: {},
     runs: [],
     runsLoaded: false,
     runsLoading: false,
@@ -74,6 +75,7 @@ function upsertWorkflowDetail(state, payload) {
   if (!payload?.path || !payload?.workflow) {
     return;
   }
+  completeKeyedRequest(state.workflows.detailRequestByPath, payload.path, payload.request_id);
   state.workflows.detailByPath[payload.path] = payload;
   upsertWorkflowListItem(state, payload.workflow);
 }
@@ -223,6 +225,11 @@ export function buildExtraReducers(builder) {
     select: (state) => state.workflows,
     errorMessage: 'Failed to load workflows',
   });
+  addKeyedRequestLifecycle(builder, fetchWorkflowContent, {
+    selectRequests: (state) => state.workflows.detailRequestByPath,
+    keyFromArgs: ({ path } = {}) => path,
+    errorMessage: 'Failed to load workflow detail',
+  });
   return addRequestLifecycle(builder, fetchWorkflowRuns, {
     select: (state) => state.workflows,
     loadingKey: 'runsLoading',
@@ -237,6 +244,9 @@ export const selectWorkflowsState = (state) => state.uiData.workflows;
 export const selectWorkflowRuns = (state) => state.uiData.workflows.runs;
 export const selectWorkflowDetailByPath = (state, path) => (
   path ? state.uiData.workflows.detailByPath[path] || null : null
+);
+export const selectWorkflowDetailRequest = (state, path) => (
+  selectKeyedRequest(state.uiData.workflows.detailRequestByPath, path)
 );
 export const selectWorkflowLatestRunById = createSelector(
   [selectWorkflowRuns, (_state, workflowId) => workflowId],
