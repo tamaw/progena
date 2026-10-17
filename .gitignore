@@ -93,6 +93,8 @@ data/repos/*
 !data/repos/.gitkeep
 data/shell-home/
 data/shell-workspaces/
+# Claude ACP container config/credentials (compose default bind dir).
+.claude-agent/
 tmp/
 .tmp/
 

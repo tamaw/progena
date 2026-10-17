@@ -2,7 +2,7 @@
 FROM node:22-bookworm-slim
 
 ARG DEBIAN_FRONTEND=noninteractive
-ARG CLAUDE_ACP_VERSION=0.44.0
+ARG CLAUDE_ACP_VERSION=0.93.0
 
 ENV HOME=/home/claude \
     CLAUDE_CONFIG_DIR=/home/claude/.claude \
@@ -28,7 +28,8 @@ RUN apt-get update \
         socat \
     && rm -rf /var/lib/apt/lists/*
 
-RUN useradd -m -u 1002 -d /home/claude -s /bin/bash claude \
+# UID 10001 matches the Progenitor runtime, which shares the /app/repos workspace.
+RUN useradd -m -u 10001 -d /home/claude -s /bin/bash claude \
     && install -d -o claude -g claude \
         "${CLAUDE_CONFIG_DIR}" \
         "${CLAUDE_WORKSPACE}" \
