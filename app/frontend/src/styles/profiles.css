@@ -78,19 +78,6 @@
   gap: var(--spacing-md);
 }
 
-/* Match the Agents detail: a plain section heading above one bordered data surface. */
-.profiles-detail .profiles-section {
-  margin: 0 0 22px;
-  padding: 0;
-  background: transparent;
-  border: 0;
-  border-radius: 0;
-}
-
-.profiles-section__head {
-  margin-bottom: 10px;
-}
-
 .profiles-section__actions {
   display: inline-flex;
   gap: 5px;

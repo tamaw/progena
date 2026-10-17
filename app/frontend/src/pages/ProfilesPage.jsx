@@ -148,8 +148,8 @@ function ProfileDetails({ profile, profiles, catalogue, url, connected }) {
             <button type="button" className="repo-btn repo-btn--ghost" onClick={startEdit} disabled={saving}>Restart edit</button>
           </div>
         ) : null}
-        <section className="agents-section profiles-section">
-          <header className="agents-section__head profiles-section__head">
+        <section className="agents-section">
+          <header className="agents-section__head">
             <h2>Configuration</h2>
             {draft ? (
               <div className="profiles-section__actions">
