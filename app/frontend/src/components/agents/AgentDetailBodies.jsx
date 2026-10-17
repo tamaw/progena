@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { PaneEmptyState } from '../layout/PaneList';
 import { MetricCard, CardFact, CapabilityChip, DraftField } from '../common/DetailCards';
+import InlineFailure from '../common/InlineFailure';
 import { fetchAgentSkillContent, selectAgentSkillContent, updateAgentSkillContent } from '../../store/uiDataSlice';
 import { formatAge } from './agentFormat';
 
@@ -386,7 +387,7 @@ export function ObjectAgentDetailBody({
   if (editing && agent.card?.source !== 'native') {
     return (
       <div className="detail-pane__body agents-draft">
-        {error ? <p className="agents-draft__note agents-draft__note--error">{error}</p> : null}
+        <InlineFailure failure={error} operation="Save agent" />
         <section className="agents-section agents-section--prompt">
           <header className="agents-section__head"><h2>SYSTEM.md</h2></header>
           <DraftField label="Front matter + prompt" hint="The literal file: YAML front matter between --- fences, then the markdown system prompt. Any front-matter key can be added, renamed, or removed.">

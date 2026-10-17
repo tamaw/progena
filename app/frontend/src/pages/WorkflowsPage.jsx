@@ -73,6 +73,7 @@ import {
 import InlineFailure from '../components/common/InlineFailure';
 import { reportFailure } from '../lib/failures';
 import useConfirmAction from '../hooks/useConfirmAction';
+import useMissingEntityRoute from '../hooks/useMissingEntityRoute';
 import useUiAction from '../hooks/useUiAction';
 import JsonCodeEditor from '../components/common/JsonCodeEditor';
 import WorkflowNodeTitle from '../components/canvas/WorkflowNodeTitle';
@@ -2472,7 +2473,23 @@ function WorkflowsInner() {
   const syncedHashRef = useRef('');
   const hydratingGraphRef = useRef(false);
 
-  useEntityUrlSync('/workflows', selectedWorkflowId, selectedDetail?.workflow?.title);
+  // A row click updates the URL before the selection effect below commits the
+  // matching id. Do not let that previous selection reclaim a valid routed
+  // workflow if a canonical event lands in that window.
+  const routeWorkflowExists = workflows.some((workflow) => workflow.id === routeWorkflowId);
+  const workflowUrlSyncBase = (
+    workflowsState.loaded
+    && routeWorkflowExists
+    && selectedWorkflowId !== routeWorkflowId
+  ) ? null : '/workflows';
+  useEntityUrlSync(workflowUrlSyncBase, selectedWorkflowId, selectedDetail?.workflow?.title);
+  useMissingEntityRoute({
+    hydrated: workflowsState.loaded,
+    entityId: routeWorkflowId,
+    entities: workflows,
+    getEntityId: (workflow) => workflow.id,
+    fallbackPath: '/workflows',
+  });
 
   const loadInitialData = useCallback(() => {
     dispatch(fetchWorkflows({ workflowsUrl }));
@@ -3223,6 +3240,7 @@ function WorkflowsInner() {
                       nodeTypes={NODE_TYPES}
                       onNodesChange={onNodesChange}
                       onConnect={onConnect}
+                      onEdgesChange={onEdgesChange}
                       onConnectStart={onConnectStart}
                       onConnectEnd={onConnectEnd}
                       onEdgeClick={handleEdgeClick}

@@ -74,9 +74,13 @@ export function addKeyedRequestLifecycle(builder, thunk, {
       if (!requestState || requestState.requestId !== action.meta.requestId) {
         return;
       }
+      // Retain failed request identity so a late matching data event can recover it.
+      const cancelled = isCancellation(action.error);
       requestState.loading = false;
-      requestState.error = isCancellation(action.error) ? null : action.error?.message ? action.error : errorMessage;
-      requestState.requestId = null;
+      requestState.error = cancelled ? null : action.error?.message ? action.error : errorMessage;
+      if (cancelled) {
+        requestState.requestId = null;
+      }
     });
   return builder;
 }

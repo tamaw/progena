@@ -30,4 +30,15 @@ describe('object manifest ownership', () => {
     const doc = parseHtml(renderToStaticMarkup(<ObjectAgentDetailBody agent={agent(source)} />));
     expect(Array.from(doc.querySelectorAll('button')).some((b) => b.textContent.trim() === 'Edit')).toBe(true);
   });
+
+  it('keeps a rejected manifest editable while showing its structured failure', () => {
+    const draft = '---\nname: edited-agent\n---\nKeep this rejected draft.';
+    const error = { title: 'Couldn’t save agent', message: 'Manifest name conflicts with another agent.' };
+    const doc = parseHtml(renderToStaticMarkup(
+      <ObjectAgentDetailBody agent={agent('user')} editing draft={draft} error={error} />,
+    ));
+    expect(doc.querySelector('[role="alert"]').textContent).toContain(error.message);
+    expect(doc.querySelector('textarea').value).toBe(draft);
+    expect(doc.querySelector('textarea').disabled).toBe(false);
+  });
 });

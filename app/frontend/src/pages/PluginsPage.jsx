@@ -356,9 +356,10 @@ export default function PluginsPage() {
     && pluginsState.snapshotRequestId === awaitingPluginChange.requestId
     && (awaitingPluginChange.kind === 'uninstall'
       ? !installedPlugins[awaitingPluginChange.key]
-      : Boolean(installedPlugins[awaitingPluginChange.key]));
+      : Boolean(installedPlugins[awaitingPluginChange.key]))
+    ? awaitingPluginChange : null;
   const completedPluginMessage = completedPluginChange
-    ? `Plugin ${awaitingPluginChange.label} ${awaitingPluginChange.kind === 'uninstall' ? 'uninstalled' : awaitingPluginChange.kind === 'update' ? 'updated' : 'installed'}.`
+    ? `Plugin ${completedPluginChange.label} ${completedPluginChange.kind === 'uninstall' ? 'uninstalled' : completedPluginChange.kind === 'update' ? 'updated' : 'installed'}.`
     : '';
   return (
     <div className="plugins-page">

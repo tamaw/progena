@@ -408,6 +408,7 @@ export default function DashboardPage() {
               </span>
             </div>
             <div className="dashboard-panel__body">
+              <InlineFailure failure={collectionState.runs.error} operation="Load workflow reviews" onRetry={retryRuns} />
               <InlineFailure failure={collectionState.inbox.error} operation="Load review messages" onRetry={retryInbox} />
               {unreadAlerts.length === 0 && pendingReview.length === 0 && pendingApprovals.length === 0 && unavailableResources.length === 0 ? (
                 !collectionState.runs.error && !collectionState.inbox.error && <EmptyState small>
