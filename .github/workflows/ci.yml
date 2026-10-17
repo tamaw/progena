@@ -129,7 +129,7 @@ jobs:
           DEPLOYED="$(tr -d '[:space:]' <<< "$DEPLOYED")"
           if [ -z "$DEPLOYED" ] || ! git merge-base --is-ancestor "$DEPLOYED" HEAD 2>/dev/null; then
             echo "No usable deployed commit (${DEPLOYED:-none}); rebuilding and redeploying everything."
-            for output in progenitor_image backend_image frontend_image redeploy; do
+            for output in progenitor_image backend_image frontend_image claude_image redeploy; do
               echo "${output}=true" >> "$GITHUB_OUTPUT"
             done
             exit 0
@@ -141,16 +141,18 @@ jobs:
           PROGENITOR="$(changed "${PYTHON_COMMON[@]}" docker/progenitor data/instructions data/skills data/agents data/shims)"
           BACKEND="$(changed "${PYTHON_COMMON[@]}" docker/backend data/agents/objects)"
           FRONTEND="$(changed app/frontend docker/frontend)"
+          CLAUDE="$(changed docker/claude)"
           # The stack also restarts for compose/deploy-step changes (schemas are bind-mounted).
           STACK="$(changed docker/docker-compose.progenitor.yml .github/workflows/ci.yml data/schemas)"
           REDEPLOY=false
-          for flag in "$PROGENITOR" "$BACKEND" "$FRONTEND" "$STACK"; do
+          for flag in "$PROGENITOR" "$BACKEND" "$FRONTEND" "$CLAUDE" "$STACK"; do
             if [ "$flag" = true ]; then REDEPLOY=true; fi
           done
           {
             echo "progenitor_image=$PROGENITOR"
             echo "backend_image=$BACKEND"
             echo "frontend_image=$FRONTEND"
+            echo "claude_image=$CLAUDE"
             echo "redeploy=$REDEPLOY"
           } | tee -a "$GITHUB_OUTPUT"
 
@@ -206,6 +208,22 @@ jobs:
           cache-from: type=gha,scope=frontend-image
           cache-to: type=gha,mode=max,scope=frontend-image
 
+      - name: Build and load claude image
+        if: ${{ github.event_name == 'workflow_dispatch' || steps.changes.outputs.claude_image == 'true' }}
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/claude/Dockerfile
+          load: true
+          labels: |
+            com.progenitor.managed=true
+            com.progenitor.component=claude
+          tags: |
+            ghcr.io/tamaw/progenitor-claude:latest
+            ghcr.io/tamaw/progenitor-claude:${{ github.sha }}
+          cache-from: type=gha,scope=claude-image
+          cache-to: type=gha,mode=max,scope=claude-image
+
       - name: No deploy-affecting changes
         if: ${{ github.event_name != 'workflow_dispatch' && steps.changes.outputs.redeploy != 'true' }}
         run: echo "No deploy-affecting changes detected; skipping image rebuilds and compose restart."
@@ -232,11 +250,13 @@ jobs:
           TELEGRAM_ALLOWED_USERS: ${{ vars.TELEGRAM_ALLOWED_USERS }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           PROGENITOR_HOST_SCHEMAS_DIR: ${{ github.workspace }}/data/schemas
           PROGENITOR_HOST_LOGS_DIR: /var/lib/progenitor/logs
           # Outside the runner checkout: the runtime's managed clones must survive
           # a clean checkout, and a root-owned folder there breaks other jobs.
           PROGENITOR_HOST_REPOS_DIR: /var/lib/progenitor/repos
+          PROGENITOR_HOST_CLAUDE_DIR: /var/lib/progenitor/claude
         run: |
           # Check every image before touching the running stack, so a missing image
           # fails the deploy without taking production down. Postgres comes from a
@@ -245,10 +265,11 @@ jobs:
           docker image inspect ghcr.io/tamaw/progenitor:${PROGENITOR_IMAGE_TAG} >/dev/null
           docker image inspect ghcr.io/tamaw/progenitor-backend:${PROGENITOR_IMAGE_TAG} >/dev/null
           docker image inspect ghcr.io/tamaw/progenitor-frontend:${PROGENITOR_IMAGE_TAG} >/dev/null
+          docker image inspect ghcr.io/tamaw/progenitor-claude:${PROGENITOR_IMAGE_TAG} >/dev/null
           test -d "$PROGENITOR_HOST_SCHEMAS_DIR"
           # If a manual/dev container exists with the same name, docker compose will fail.
           # Removing containers keeps bind-mounted state (logs/repos, plus Postgres) intact.
-          docker rm -f progenitor progenitor-backend progenitor-frontend 2>/dev/null || true
+          docker rm -f progenitor progenitor-backend progenitor-frontend progenitor-agent-claude 2>/dev/null || true
           docker volume inspect progenitor-postgres-data >/dev/null 2>&1 || docker volume create progenitor-postgres-data >/dev/null
           # The runtime runs as UID 10001; log files left by the old root container
           # are not appendable, so hand its log and repos folders over before starting it.
@@ -284,6 +305,7 @@ jobs:
           wait_healthy progenitor-backend 90
           wait_healthy progenitor 120
           wait_healthy progenitor-frontend 60
+          wait_healthy progenitor-agent-claude 60
 
       - name: Record deployed commit
         if: ${{ github.event_name == 'workflow_dispatch' || steps.changes.outputs.redeploy == 'true' }}
