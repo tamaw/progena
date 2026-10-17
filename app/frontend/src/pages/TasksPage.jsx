@@ -1048,6 +1048,7 @@ export default function TasksPage({ context = null }) {
                         onSubmit={handleAddChecklistItem}
                       />
                     </header>
+                    <div className="agents-section__body">
                     {checklistItems.length ? (
                       <div className="task-progress">
                         <span style={{ width: `${checklistProgress.total ? Math.round((checklistProgress.done / checklistProgress.total) * 100) : 0}%` }} />
@@ -1078,6 +1079,7 @@ export default function TasksPage({ context = null }) {
                     {!checklistItems.length ? (
                       <div className="task-meta-sub" style={{ marginTop: 8 }}>No checklist items yet.</div>
                     ) : null}
+                    </div>
                   </section>
 
                   <section className="agents-section">
@@ -1091,6 +1093,7 @@ export default function TasksPage({ context = null }) {
                         onSubmit={handleAddDependency}
                       />
                     </header>
+                    <div className="agents-section__body">
                     {selectedDependencies.length ? selectedDependencies.map((dependency) => (
                       <div key={dependency.id} className="task-dep-card" style={{ marginTop: 8 }}>
                         <div className="task-dep-card__main">
@@ -1117,6 +1120,7 @@ export default function TasksPage({ context = null }) {
                         </button>
                       </div>
                     )) : <div className="task-meta-sub" style={{ marginTop: 8 }}>Not blocked by any tasks.</div>}
+                    </div>
                   </section>
 
                   <section className="agents-section">
@@ -1130,6 +1134,7 @@ export default function TasksPage({ context = null }) {
                         onSubmit={handleAddTag}
                       />
                     </header>
+                    <div className="agents-section__body">
                     <div className="task-labels">
                       {selectedTags.length ? selectedTags.map((tag, index) => (
                         <span key={tag} className={`task-lbl task-lbl--${['green', 'red', 'orange', 'blue'][index % 4]}`}>
@@ -1146,6 +1151,7 @@ export default function TasksPage({ context = null }) {
                         </span>
                       )) : <span className="task-meta-sub">No tags</span>}
                     </div>
+                    </div>
                   </section>
 
                   <section className="agents-section">
@@ -1159,6 +1165,7 @@ export default function TasksPage({ context = null }) {
                         onSubmit={handleAddCollaborator}
                       />
                     </header>
+                    <div className="agents-section__body">
                     <div className="task-assignee-row">
                       <span className="task-av" style={{ background: selectedAssignee?.color }}>{selectedAssignee?.initial}</span>
                       <div className="task-ar-body">
@@ -1188,6 +1195,7 @@ export default function TasksPage({ context = null }) {
                         </div>
                       );
                     }) : null}
+                    </div>
                   </section>
 
                   <section className="agents-section">
@@ -1195,6 +1203,7 @@ export default function TasksPage({ context = null }) {
                       <h2>Attachments</h2>
                       <InlineAddAttachment disabled={metadataAction.busy} onSubmit={handleAddAttachment} />
                     </header>
+                    <div className="agents-section__body">
                     {selectedAttachments.length ? selectedAttachments.map((attachment) => (
                       <div key={attachment.id} className="task-attach">
                         <span className="task-attach-ic" />
@@ -1216,6 +1225,7 @@ export default function TasksPage({ context = null }) {
                         <span className="task-attach-ext">{badge.key}</span>
                       </div>
                     )) : <div className="task-meta-sub">No attachments linked.</div>}
+                    </div>
                   </section>
                 </div>
               ) : null}

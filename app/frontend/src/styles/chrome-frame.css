@@ -5666,6 +5666,10 @@ body,
   display: flex;
   flex-direction: column;
   gap: 10px;
+}
+
+.agents-card-facts,
+.agents-section__body {
   padding: 14px 16px;
   background: var(--color-bg-secondary);
   border: 1px solid var(--color-border);
@@ -5791,10 +5795,6 @@ body,
 
 .agents-section {
   margin-bottom: 22px;
-  padding: 14px 16px;
-  background: var(--color-bg-secondary);
-  border: 1px solid var(--color-border);
-  border-radius: 8px;
 }
 
 .agents-section__head {
@@ -5827,23 +5827,6 @@ body,
   gap: 5px;
 }
 
-/* On the Agents/Routines detail pane, drop the outer .agents-section card
-   chrome so each section's heading sits as plain text above its content --
-   the content itself (.agents-card-facts, .agents-prompt, individual
-   .agents-skill-card/.agents-chip rows) already carries its own box, so no
-   double border remains. Scoped to .agents-detail: .agents-section is a
-   shared class also used unboxed-header-inside on Channels/Knowledge/
-   Models/Tasks, which keep their current look. */
-.agents-detail .agents-section {
-  padding: 0;
-  background: transparent;
-  border: none;
-  border-radius: 0;
-}
-
-.agents-detail .agents-section__head {
-  margin-bottom: 10px;
-}
 
 .agents-prompt {
   max-height: 220px;

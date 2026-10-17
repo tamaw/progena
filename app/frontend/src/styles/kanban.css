@@ -279,10 +279,8 @@
   padding: 18px 28px 28px;
 }
 
-/* Task tab: the former right-rail meta content, now a responsive grid of
-   sections styled like the Agents/Schedules detail pages. .agents-section's
-   base card treatment (border/background/padding) applies as-is here; only
-   the grid-driven margin reset is Tasks-specific. */
+/* Task metadata uses the shared heading-above-content section treatment;
+   only the grid-driven margin reset is Tasks-specific. */
 .task-overview {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
