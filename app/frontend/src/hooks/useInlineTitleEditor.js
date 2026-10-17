@@ -14,7 +14,7 @@ export default function useInlineTitleEditor({ scopeKey, title, onCommit }) {
   const titleRef = useRef(String(title ?? ''));
   const mountedRef = useRef(true);
   const activeSaveRef = useRef(null);
-  const saveTokenRef = useRef(0);
+  const scopeIncarnationRef = useRef(0);
   const [state, setState] = useState({ scopeKey, editing: false, draft: '', saving: false, error: null });
 
   scopeRef.current = scopeKey;
@@ -28,13 +28,21 @@ export default function useInlineTitleEditor({ scopeKey, title, onCommit }) {
   }, []);
 
   useEffect(() => {
+    scopeIncarnationRef.current += 1;
+    activeSaveRef.current = null;
     setState({ scopeKey, editing: false, draft: '', saving: false, error: null });
   }, [scopeKey]);
 
-
-  const isCurrentScope = useCallback((savedScope) => (
-    mountedRef.current && scopeRef.current === savedScope
+  const isCurrentScope = useCallback((savedScope, savedIncarnation) => (
+    mountedRef.current
+    && scopeRef.current === savedScope
+    && scopeIncarnationRef.current === savedIncarnation
   ), []);
+
+  const isCurrentSave = useCallback((savedScope, savedIncarnation, saveToken) => (
+    isCurrentScope(savedScope, savedIncarnation)
+    && activeSaveRef.current?.token === saveToken
+  ), [isCurrentScope]);
 
   const start = useCallback(() => {
     const nextScopeKey = scopeRef.current;
@@ -42,7 +50,10 @@ export default function useInlineTitleEditor({ scopeKey, title, onCommit }) {
   }, []);
 
   const cancel = useCallback(() => {
-    if (activeSaveRef.current?.scopeKey === scopeRef.current) {
+    if (
+      activeSaveRef.current?.scopeKey === scopeRef.current
+      && activeSaveRef.current.incarnation === scopeIncarnationRef.current
+    ) {
       return;
     }
     setState({
@@ -59,23 +70,33 @@ export default function useInlineTitleEditor({ scopeKey, title, onCommit }) {
   }, []);
 
   const save = useCallback(async () => {
-    if (activeSaveRef.current?.scopeKey === scopeRef.current) {
+    if (
+      activeSaveRef.current?.scopeKey === scopeRef.current
+      && activeSaveRef.current.incarnation === scopeIncarnationRef.current
+    ) {
       return { ok: false, busy: true };
     }
-
     const savedScope = scopeRef.current;
+    const savedIncarnation = scopeIncarnationRef.current;
     const nextTitle = normalizeInlineTitle(state.draft);
     const currentTitle = normalizeInlineTitle(titleRef.current);
     if (!nextTitle || nextTitle === currentTitle) {
-      if (isCurrentScope(savedScope)) {
+      if (isCurrentScope(savedScope, savedIncarnation)) {
         setState({ scopeKey: savedScope, editing: false, draft: titleRef.current, saving: false, error: null });
       }
       return { ok: false, skipped: true };
     }
-    const saveToken = ++saveTokenRef.current;
-    activeSaveRef.current = { scopeKey: savedScope, token: saveToken };
+    const saveToken = Symbol('title-save');
+    activeSaveRef.current = {
+      scopeKey: savedScope,
+      incarnation: savedIncarnation,
+      token: saveToken,
+    };
     const releaseSave = () => {
-      if (activeSaveRef.current?.token === saveToken) {
+      if (
+        activeSaveRef.current?.incarnation === savedIncarnation
+        && activeSaveRef.current.token === saveToken
+      ) {
         activeSaveRef.current = null;
       }
     };
@@ -83,7 +104,7 @@ export default function useInlineTitleEditor({ scopeKey, title, onCommit }) {
     setState((current) => ({ ...current, saving: true, error: null }));
     try {
       const result = await onCommit(nextTitle);
-      if (!isCurrentScope(savedScope)) {
+      if (!isCurrentSave(savedScope, savedIncarnation, saveToken)) {
         return { ok: false, stale: true };
       }
       if (result?.ok === false) {
@@ -98,7 +119,7 @@ export default function useInlineTitleEditor({ scopeKey, title, onCommit }) {
       setState({ scopeKey: savedScope, editing: false, draft: nextTitle, saving: false, error: null });
       return { ok: true, value: result };
     } catch (error) {
-      if (!isCurrentScope(savedScope)) {
+      if (!isCurrentSave(savedScope, savedIncarnation, saveToken)) {
         return { ok: false, stale: true };
       }
       if (isCancellation(error)) {
@@ -111,7 +132,7 @@ export default function useInlineTitleEditor({ scopeKey, title, onCommit }) {
     } finally {
       releaseSave();
     }
-  }, [isCurrentScope, onCommit, state.draft]);
+  }, [isCurrentSave, isCurrentScope, onCommit, state.draft]);
 
   const visible = state.scopeKey === scopeKey
     ? state

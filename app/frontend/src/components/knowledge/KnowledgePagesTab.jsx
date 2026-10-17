@@ -266,13 +266,15 @@ export default function KnowledgePagesTab({ baseId, baseName, knowledgeUrl }) {
 
   // The breadcrumb is the page heading, so the rendered body drops its leading H1; stored files keep it.
   const dropTitle = (text) => text.replace(/^\s*# [^\n]*\n*/, '');
-  const displayContent = viewingRevisionId && revision
-    ? dropTitle(stripYamlFrontmatter(revision.content))
-    : dropTitle(page?.body ?? page?.content ?? '');
+  const isViewingRevision = Boolean(viewingRevisionId);
+  const displayedDocument = isViewingRevision ? revision : page;
+  const displayContent = displayedDocument
+    ? dropTitle(stripYamlFrontmatter(displayedDocument.content ?? displayedDocument.body ?? ''))
+    : '';
   // An open revision shows its own sources, not the current page's.
-  const sources = frontMatterSources(viewingRevisionId ? revision?.front_matter : page?.front_matter);
-  const missingPage = !page && !revision && !pageRequest.error;
-  const missingRevision = Boolean(viewingRevisionId) && !revision && !revisionRequest.error;
+  const sources = frontMatterSources(displayedDocument?.front_matter);
+  const missingPage = !isViewingRevision && !page && !pageRequest.error;
+  const missingRevision = isViewingRevision && !revision && !revisionRequest.error;
 
   return (
     <div className="knowledge-pages-tab">
@@ -289,7 +291,7 @@ export default function KnowledgePagesTab({ baseId, baseName, knowledgeUrl }) {
         {viewingRevisionId && revisionRequest.error ? (
           <InlineFailure failure={revisionRequest.error} operation="Load page revision" onRetry={() => loadRevision(viewingRevisionId)} />
         ) : null}
-        {missingPage || missingRevision ? <p>Loading…</p> : page || revision ? (
+        {missingPage || missingRevision ? <p>Loading…</p> : displayedDocument ? (
           <>
             <PageBody content={displayContent} path={selectedPath} onNavigate={selectPage} />
             {sources.length > 0 && (

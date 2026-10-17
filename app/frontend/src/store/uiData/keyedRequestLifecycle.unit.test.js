@@ -7,18 +7,26 @@ import { fetchWorkflowContent, selectWorkflowDetailRequest } from './workflows';
 const uiState = (state) => ({ uiData: state });
 
 describe('keyed detail request lifecycle', () => {
-  it('ends a rejected cache miss instead of leaving that key loading', () => {
-    let state = reducer(undefined, fetchMcpServerDetail.pending('mcp-a', { id: 'mcp:a' }));
-    state = reducer(state, fetchMcpServerDetail.rejected(new Error('offline'), 'mcp-a', { id: 'mcp:a' }));
+  it('recovers a rejected cache miss when its matching data event arrives', () => {
+    const args = { id: 'mcp:a' };
+    let state = reducer(undefined, fetchMcpServerDetail.pending('mcp-a', args));
+    state = reducer(state, fetchMcpServerDetail.rejected(new Error('offline'), 'mcp-a', args));
     expect(selectMcpServerDetailRequest(uiState(state), 'mcp:a')).toMatchObject({
       loading: false,
       error: { message: 'offline' },
-      requestId: null,
+      requestId: 'mcp-a',
+    });
+
+    state = reducer(state, applyUiEvent({
+      type: 'mcp.server.detail.updated',
+      payload: { id: 'mcp:a', request_id: 'mcp-a' },
+    }));
+
+    expect(selectMcpServerDetailRequest(uiState(state), 'mcp:a')).toEqual({
+      loading: false, error: null, requestId: null,
     });
     expect(selectMcpServerDetailRequest(uiState(state), 'mcp:b')).toEqual({
-      loading: false,
-      error: null,
-      requestId: null,
+      loading: false, error: null, requestId: null,
     });
   });
 
@@ -28,6 +36,38 @@ describe('keyed detail request lifecycle', () => {
     state = reducer(state, fetchMcpServerDetail.rejected(
       { name: 'AbortError', message: 'Aborted' }, 'cancelled-request', args,
     ));
+    expect(selectMcpServerDetailRequest(uiState(state), 'mcp:a')).toEqual({
+      loading: false, error: null, requestId: null,
+    });
+  });
+
+  it('ignores an older failed request event until the replacement request matches', () => {
+    const args = { id: 'mcp:a' };
+    let state = reducer(undefined, fetchMcpServerDetail.pending('first-request', args));
+    state = reducer(state, fetchMcpServerDetail.rejected(
+      new Error('first failed'), 'first-request', args,
+    ));
+    state = reducer(state, fetchMcpServerDetail.pending('second-request', args));
+    state = reducer(state, fetchMcpServerDetail.rejected(
+      new Error('second failed'), 'second-request', args,
+    ));
+
+    state = reducer(state, applyUiEvent({
+      type: 'mcp.server.detail.updated',
+      payload: { id: 'mcp:a', request_id: 'first-request' },
+    }));
+
+    expect(selectMcpServerDetailRequest(uiState(state), 'mcp:a')).toMatchObject({
+      loading: false,
+      error: { message: 'second failed' },
+      requestId: 'second-request',
+    });
+
+    state = reducer(state, applyUiEvent({
+      type: 'mcp.server.detail.updated',
+      payload: { id: 'mcp:a', request_id: 'second-request' },
+    }));
+
     expect(selectMcpServerDetailRequest(uiState(state), 'mcp:a')).toEqual({
       loading: false, error: null, requestId: null,
     });
@@ -66,7 +106,7 @@ describe('keyed detail request lifecycle', () => {
     expect(selectWorkflowDetailRequest(uiState(state), first.path)).toMatchObject({
       loading: false,
       error: { message: 'first failed' },
-      requestId: null,
+      requestId: 'first-request',
     });
     expect(selectWorkflowDetailRequest(uiState(state), second.path)).toEqual({
       loading: true,

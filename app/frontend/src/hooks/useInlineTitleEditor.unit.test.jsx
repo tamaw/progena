@@ -103,3 +103,99 @@ it('does not let an old title save alter the newly selected entity', async () =>
   expect(current.draft).toBe('');
   expect(current.error).toBeNull();
 });
+
+it('lets a returned scope cancel and save while an earlier incarnation is pending', async () => {
+  const oldSavePending = deferred();
+  const newSavePending = deferred();
+  const onCommit = vi.fn()
+    .mockImplementationOnce(() => oldSavePending.promise)
+    .mockImplementationOnce(() => newSavePending.promise);
+  await render('task-a', 'Task A', onCommit);
+
+  await act(async () => {
+    current.start();
+    current.setDraft('Old title');
+  });
+  let oldSave;
+  await act(async () => {
+    oldSave = current.save();
+  });
+
+  await render('task-b', 'Task B', onCommit);
+  await render('task-a', 'Task A', onCommit);
+  await act(async () => {
+    current.start();
+    current.setDraft('Cancelled fresh title');
+    current.cancel();
+  });
+  expect(current.isEditing).toBe(false);
+
+  await act(async () => {
+    current.start();
+    current.setDraft('Fresh title');
+  });
+  let newSave;
+  await act(async () => {
+    newSave = current.save();
+  });
+  expect(onCommit).toHaveBeenCalledTimes(2);
+
+  await act(async () => {
+    oldSavePending.reject(new Error('old save failed'));
+    await oldSave;
+  });
+  expect(current.saving).toBe(true);
+  expect(current.error).toBeNull();
+  expect(current.draft).toBe('Fresh title');
+
+  await act(async () => {
+    newSavePending.reject(new Error('new save failed'));
+    await newSave;
+  });
+  expect(current.saving).toBe(false);
+  expect(current.error?.message).toBe('new save failed');
+});
+
+it('ignores an old successful save after returning to the same scope', async () => {
+  const oldSavePending = deferred();
+  const newSavePending = deferred();
+  const onCommit = vi.fn()
+    .mockImplementationOnce(() => oldSavePending.promise)
+    .mockImplementationOnce(() => newSavePending.promise);
+  await render('task-a', 'Task A', onCommit);
+
+  await act(async () => {
+    current.start();
+    current.setDraft('Old title');
+  });
+  let oldSave;
+  await act(async () => {
+    oldSave = current.save();
+  });
+
+  await render('task-b', 'Task B', onCommit);
+  await render('task-a', 'Task A', onCommit);
+  await act(async () => {
+    current.start();
+    current.setDraft('Fresh title');
+  });
+  let newSave;
+  await act(async () => {
+    newSave = current.save();
+  });
+
+  await act(async () => {
+    oldSavePending.resolve({ ok: true });
+    await oldSave;
+  });
+  expect(current.saving).toBe(true);
+  expect(current.error).toBeNull();
+  expect(current.draft).toBe('Fresh title');
+
+  await act(async () => {
+    newSavePending.resolve({ ok: true });
+    await newSave;
+  });
+  expect(current.isEditing).toBe(false);
+  expect(current.draft).toBe('Fresh title');
+});

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useDispatch, useSelector } from 'react-redux';
+import { useDispatch, useSelector, useStore } from 'react-redux';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { buildEntityPath, useEntityUrlSync } from '../lib/routes';
 import { useConfig } from '../context/ConfigContext';
@@ -52,6 +52,8 @@ import { formatCompactRelativeAge, formatShortLocalDateTime } from '../lib/displ
 
 
 const baseIdOf = (base) => base.id;
+
+
 
 // Search-index values for the base root, from the live base record (updated by
 // knowledge.index.* events), not the cached index.md front matter.
@@ -116,7 +118,7 @@ export default function KnowledgePage() {
   const navigate = useNavigate();
   const { getApiUrl } = useConfig();
   const dispatch = useDispatch();
-  // `titleSlug` is display context only (e.g. /knowledge/src-abc123/docs) --
+  const store = useStore();
   // selection is driven entirely by the id, never by the slug.
   const { baseId: urlBaseId } = useParams();
   const [searchParams] = useSearchParams();
@@ -212,9 +214,9 @@ export default function KnowledgePage() {
 
   const requestDelete = () => {
     if (!selectedBase) return;
-    const base = selectedBase;
+    const baseId = selectedBase.id;
     deleteAction.request('Delete knowledge base', async ({ isCurrent }) => {
-      await putBases(rawBases.filter((item) => item.id !== base.id));
+      await putBases(selectKnowledgeBases(store.getState()).filter((item) => item.id !== baseId));
       if (isCurrent()) navigate('/knowledge', { replace: true });
     });
   };

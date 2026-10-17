@@ -282,6 +282,7 @@ function SchedulesPage() {
   const {
     items: schedules,
     loading,
+    loaded,
     error: listFailure,
     requestId: scheduleRequestId,
   } = schedulesState;
@@ -330,13 +331,13 @@ function SchedulesPage() {
   }, [loadScheduleLogs]);
 
   useEffect(() => {
-    if (loading || listFailure || scheduleRequestId !== null || !selectedScheduleId) {
+    if (!loaded || loading || listFailure || scheduleRequestId !== null || !selectedScheduleId) {
       return;
     }
     if (!schedules.some((schedule) => schedule.id === selectedScheduleId)) {
       navigate('/schedules', { replace: true });
     }
-  }, [listFailure, loading, navigate, scheduleRequestId, schedules, selectedScheduleId]);
+  }, [listFailure, loaded, loading, navigate, scheduleRequestId, schedules, selectedScheduleId]);
 
   const scheduleWidgets = useMemo(() => widgets.reduce((byScheduleId, widget) => {
     const scheduleId = widget?.data?.schedule_id;

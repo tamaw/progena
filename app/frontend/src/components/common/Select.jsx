@@ -96,7 +96,13 @@ export default function Select({
   }, [isOpen, portal]);
 
   useLayoutEffect(() => {
-    if (!isOpen || !portal || !triggerRef.current || !panelRef.current) {
+    if (!isOpen) {
+      // A portal panel is remounted on every open. Clear its previous
+      // constrained geometry before the next mount is measured.
+      setPanelRect(null);
+      return;
+    }
+    if (!portal || !triggerRef.current || !panelRef.current) {
       return;
     }
     const rect = triggerRef.current.getBoundingClientRect();
