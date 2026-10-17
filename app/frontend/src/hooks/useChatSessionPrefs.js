@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { reportFailure } from '../lib/failures';
 import {
   loadStoredArchivedChatSessions,
   loadStoredPinnedSessionIds,
@@ -8,7 +9,7 @@ import { updateChatSessionMetadata } from '../store/uiDataSlice';
 
 // Prune persisted selection ids whose chats no longer exist. Drives the
 // pinned id set. Called from the page after `sessionItems` is derived.
-export function usePrunedSelection({ ids, setIds, persist, sessionItems, show, errorTitle }) {
+export function usePrunedSelection({ ids, setIds, persist, sessionItems, show, operation }) {
   useEffect(() => {
     const activeKeys = new Set(sessionItems.map((item) => item.pinKey));
     if (!ids.some((key) => !activeKeys.has(key))) {
@@ -20,9 +21,9 @@ export function usePrunedSelection({ ids, setIds, persist, sessionItems, show, e
       persist(nextIds);
       setIds(nextIds);
     } catch (error) {
-      show('error', errorTitle, error.message);
+      reportFailure(show, operation, error);
     }
-  }, [errorTitle, ids, persist, sessionItems, setIds, show]);
+  }, [operation, ids, persist, sessionItems, setIds, show]);
 }
 
 // Owns the locally-persisted chat preferences (archived / pinned) and the
@@ -43,7 +44,7 @@ export function useChatSessionPrefs({ dispatch, getApiUrl, show }) {
         threadId: sessionItem.threadId,
         patch: { pinned: !sessionItem.pinned },
       })).unwrap()
-        .catch((error) => show('error', 'Pinning failed', error.message));
+        .catch((error) => reportFailure(show, 'Update pinned chats', error));
       return;
     }
 
@@ -56,7 +57,7 @@ export function useChatSessionPrefs({ dispatch, getApiUrl, show }) {
         persistPinnedSessionIds(nextPinnedSessionIds);
         return nextPinnedSessionIds;
       } catch (error) {
-        show('error', 'Pinning failed', error.message);
+        reportFailure(show, 'Update pinned chats', error);
         return currentPinnedSessionIds;
       }
     });

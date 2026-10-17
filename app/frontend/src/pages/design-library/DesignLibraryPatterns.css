@@ -322,6 +322,12 @@
   min-width: 290px;
 }
 
+.design-library .dlp-json-editor {
+  display: flex;
+  height: 220px;
+  min-width: 0;
+}
+
 .design-library .dlp-timeline {
   display: grid;
   gap: var(--spacing-md);

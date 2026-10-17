@@ -60,7 +60,7 @@ import { RoutineChain } from './RoutineChain';
 import { RoutinePolicyPanel } from './RoutinePolicyPanel';
 import { NodeInspector } from './NodeInspector';
 import PopupModal from '../common/PopupModal';
-import hljs from 'highlight.js/lib/common';
+import JsonCodeEditor from '../common/JsonCodeEditor';
 import Select from '../common/Select';
 import { PaneListRows } from '../layout/PaneList';
 import '../../styles/canvas.css';
@@ -1672,47 +1672,6 @@ function graphToJson(graph) {
     },
     null,
     2,
-  );
-}
-
-// A lightweight JSON editor: an editable textarea overlaid on a highlight.js
-// rendered <pre> so the user gets JSON syntax highlighting while typing. The two
-// layers share identical typography so the caret/text line up; the textarea text
-// is transparent and the highlighted layer shows through.
-function JsonCodeEditor({ value, onChange }) {
-  const highlightRef = useRef(null);
-  const highlighted = useMemo(() => {
-    try {
-      return hljs.highlight(value, { language: 'json' }).value;
-    } catch {
-      return value;
-    }
-  }, [value]);
-
-  function syncScroll(event) {
-    const target = highlightRef.current;
-    if (target) {
-      target.scrollTop = event.target.scrollTop;
-      target.scrollLeft = event.target.scrollLeft;
-    }
-  }
-
-  return (
-    <div className="agents-graph-editor__code">
-      <pre ref={highlightRef} className="agents-graph-editor__highlight" aria-hidden="true">
-        <code
-          className="hljs language-json"
-          dangerouslySetInnerHTML={{ __html: `${highlighted}\n` }}
-        />
-      </pre>
-      <textarea
-        className="agents-graph-editor__textarea"
-        spellCheck={false}
-        value={value}
-        onChange={onChange}
-        onScroll={syncScroll}
-      />
-    </div>
   );
 }
 

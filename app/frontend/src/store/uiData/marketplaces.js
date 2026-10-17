@@ -2,7 +2,7 @@
  * Marketplaces + plugins domain: registered marketplace sources and installed
  * plugins, kept live by SSE snapshots and seeded via REST on page mount.
  */
-import { createAcknowledgedThunk, requestAcknowledged, addRequestLifecycle } from './async';
+import { createAcknowledgedThunk, requestAcknowledged, addRequestLifecycle, addKeyedRequestLifecycle, completeKeyedRequest, selectKeyedRequest } from './async';
 
 export const initialState = {
   marketplaces: {
@@ -23,6 +23,8 @@ export const initialState = {
   },
   catalogByMarketplace: {},
   skillContentByKey: {},
+  catalogRequestByMarketplace: {},
+  skillContentRequestByKey: {},
 };
 
 function applyMarketplaces(state, payload, requestId = null) {
@@ -109,11 +111,14 @@ export const eventHandlers = {
   'plugin.catalog.snapshot': (state, payload) => {
     if (typeof payload?.name === 'string' && payload.name) {
       state.catalogByMarketplace[payload.name] = payload.catalog || {};
+      completeKeyedRequest(state.catalogRequestByMarketplace, payload.name, payload.request_id);
     }
   },
   'plugin.skill.content.updated': (state, payload) => {
     if (typeof payload?.marketplace === 'string' && typeof payload?.plugin === 'string' && typeof payload?.skill === 'string') {
-      state.skillContentByKey[`${payload.marketplace}/${payload.plugin}/${payload.skill}`] = payload;
+      const key = `${payload.marketplace}/${payload.plugin}/${payload.skill}`;
+      state.skillContentByKey[key] = payload;
+      completeKeyedRequest(state.skillContentRequestByKey, key, payload.request_id);
     }
   },
 };
@@ -127,7 +132,18 @@ export function buildExtraReducers(builder) {
     select: (state) => state.plugins,
     errorMessage: 'Failed to load plugins',
   });
-  return builder;
+  addKeyedRequestLifecycle(builder, fetchMarketplaceCatalog, {
+    selectRequests: (state) => state.catalogRequestByMarketplace,
+    keyFromArgs: ({ name } = {}) => name,
+    errorMessage: 'Failed to load marketplace catalog',
+  });
+  return addKeyedRequestLifecycle(builder, fetchPluginSkillContent, {
+    selectRequests: (state) => state.skillContentRequestByKey,
+    keyFromArgs: ({ marketplace, plugin, skill } = {}) => (
+      marketplace && plugin && skill ? `${marketplace}/${plugin}/${skill}` : null
+    ),
+    errorMessage: 'Failed to load plugin skill content',
+  });
 }
 
 export const selectMarketplaces = (state) => state.uiData.marketplaces.items;
@@ -142,4 +158,13 @@ export const selectPluginSkillContent = (state, marketplace, plugin, skill) => (
   marketplace && plugin && skill
     ? state.uiData.skillContentByKey[`${marketplace}/${plugin}/${skill}`] || null
     : null
+);
+export const selectMarketplaceCatalogRequest = (state, name) => (
+  selectKeyedRequest(state.uiData.catalogRequestByMarketplace, name)
+);
+export const selectPluginSkillContentRequest = (state, marketplace, plugin, skill) => (
+  selectKeyedRequest(
+    state.uiData.skillContentRequestByKey,
+    marketplace && plugin && skill ? `${marketplace}/${plugin}/${skill}` : null,
+  )
 );

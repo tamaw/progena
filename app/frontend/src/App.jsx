@@ -7,6 +7,7 @@ import AppRuntimeShell from './components/layout/AppRuntimeShell';
 import RealtimeBridge from './store/RealtimeBridge';
 import { buildWorkspacePath } from './lib/workspace';
 import { localDesignLibraryEnabled } from './lib/localDesignLibrary';
+import InlineFailure from './components/common/InlineFailure';
 
 // Import styles
 import './styles/main.css';
@@ -60,7 +61,7 @@ class RouteErrorBoundary extends Component {
 
   render() {
     if (this.state.error) {
-      return <div className="chrome-route-error">Error loading page: {this.state.error.message}</div>;
+      return <div className="chrome-route-error"><InlineFailure failure={this.state.error} operation="Load page" onRetry={() => window.location.reload()} /></div>;
     }
     return this.props.children;
   }

@@ -1,8 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useConfig } from '../context/ConfigContext';
-import { useMermaidRender } from '../hooks/useMermaidRender';
+import MarkdownContent from '../components/common/MarkdownContent';
 import { renderSafeMarkdown } from '../components/chat/messageRenderUtils';
 import { selectRealtime } from '../store/realtimeSlice';
 import {
@@ -13,8 +13,11 @@ import {
   restoreInstructionRevision,
   saveInstruction,
   selectInstruction,
+  selectInstructionContentRequest,
   selectInstructionRevision,
+  selectInstructionRevisionRequest,
   selectInstructionRevisions,
+  selectInstructionRevisionsRequest,
   selectInstructions,
   selectInstructionsState,
 } from '../store/uiDataSlice';
@@ -41,7 +44,9 @@ import {
   PaneSection,
 } from '../components/layout/PaneList';
 import { usePaneCollapse } from '../components/layout/usePaneCollapse';
-import { formatRelativeTime } from './knowledgePageModel';
+import InlineFailure from '../components/common/InlineFailure';
+import useUiAction from '../hooks/useUiAction';
+import { formatCompactRelativeAge } from '../lib/displayTime';
 import { formatRevisionTime } from './knowledgePagesModel';
 import {
   INSTRUCTION_FILTERS, groupInstructions, groupLabel, instructionHref, placeholderNote, placeholderRoots,
@@ -64,10 +69,7 @@ function InstructionCard({ instruction, selected, onSelect }) {
 }
 
 function InstructionBody({ body }) {
-  const html = useMemo(() => renderSafeMarkdown(body), [body]);
-  const containerRef = useRef(null);
-  useMermaidRender(containerRef, body);
-  return <div ref={containerRef} className="markdown-content" dangerouslySetInnerHTML={{ __html: html }} />;
+  return <MarkdownContent content={body} renderMarkdown={renderSafeMarkdown} renderMermaid />;
 }
 
 export default function InstructionsPage() {
@@ -82,8 +84,6 @@ export default function InstructionsPage() {
   const [filter, setFilter] = useState('All');
   const [query, setQuery] = useState('');
   const [draft, setDraft] = useState(null);
-  const [saving, setSaving] = useState(false);
-  const [actionError, setActionError] = useState('');
   const routePath = useParams()['*'] || '';
   const [params, setParams] = useSearchParams();
   const viewingRevisionId = params.get('revision');
@@ -95,8 +95,18 @@ export default function InstructionsPage() {
   );
   const selectedPath = selected?.path || null;
   const instruction = useSelector((state) => selectInstruction(state, selectedPath));
+  const contentRequest = useSelector((state) => selectInstructionContentRequest(state, selectedPath));
   const revisions = useSelector((state) => selectInstructionRevisions(state, selectedPath));
+  const revisionsRequest = useSelector((state) => selectInstructionRevisionsRequest(state, selectedPath));
   const revision = useSelector((state) => selectInstructionRevision(state, selectedPath, viewingRevisionId));
+  const revisionRequest = useSelector((state) => selectInstructionRevisionRequest(state, selectedPath, viewingRevisionId));
+  const saveAction = useUiAction(selectedPath || 'instructions');
+  const restoreAction = useUiAction(`${selectedPath || 'instructions'}:${viewingRevisionId || 'current'}`);
+  const [draftPath, setDraftPath] = useState(selectedPath);
+  if (draftPath !== selectedPath) {
+    setDraftPath(selectedPath);
+    setDraft(null);
+  }
   const editing = draft !== null;
   const dirty = editing && draft !== instruction?.content;
 
@@ -128,10 +138,7 @@ export default function InstructionsPage() {
     }
   }, [dispatch, instructionsUrl, selectedPath, viewingRevisionId]);
 
-  useEffect(() => {
-    setDraft(null);
-    setActionError('');
-  }, [selectedPath]);
+  // Draft reset occurs during the selected-path identity transition above.
 
   const selectInstructionPath = (path) => {
     if (path === selectedPath) return;
@@ -146,43 +153,34 @@ export default function InstructionsPage() {
 
   const startEdit = () => {
     setParams({});
-    setActionError('');
+    saveAction.clearError();
     setDraft(instruction?.content || '');
   };
 
   const cancelEdit = () => {
     if (dirty && !window.confirm('Discard unsaved changes?')) return;
+    saveAction.clearError();
     setDraft(null);
-    setActionError('');
   };
 
-  const save = async () => {
-    if (!dirty || saving) return;
-    setSaving(true);
-    setActionError('');
-    try {
-      await dispatch(saveInstruction({ instructionsUrl, path: selectedPath, content: draft })).unwrap();
-      setDraft(null);
-    } catch (error) {
-      setActionError(error?.message || 'Failed to save the instruction.');
-    } finally {
-      setSaving(false);
-    }
+  const save = () => {
+    if (!dirty) return;
+    const content = draft;
+    void saveAction.run('Save instruction', async ({ isCurrent }) => {
+      await dispatch(saveInstruction({ instructionsUrl, path: selectedPath, content })).unwrap();
+      if (isCurrent()) setDraft(null);
+    });
   };
 
-  const restore = async () => {
-    if (!viewingRevisionId || saving) return;
+  const restore = () => {
+    if (!viewingRevisionId) return;
     if (!window.confirm('Restoring saves this revision as the live instruction.')) return;
-    setSaving(true);
-    setActionError('');
-    try {
-      await dispatch(restoreInstructionRevision({ instructionsUrl, path: selectedPath, revisionId: viewingRevisionId })).unwrap();
-      setParams({});
-    } catch (error) {
-      setActionError(error?.message || 'Failed to restore the revision.');
-    } finally {
-      setSaving(false);
-    }
+    restoreAction.clearError();
+    const revisionId = viewingRevisionId;
+    void restoreAction.run('Restore instruction revision', async ({ isCurrent }) => {
+      await dispatch(restoreInstructionRevision({ instructionsUrl, path: selectedPath, revisionId })).unwrap();
+      if (isCurrent()) setParams({});
+    });
   };
 
   const viewingCurrent = revisions.find((rev) => rev.revision_id === viewingRevisionId)?.current;
@@ -193,14 +191,14 @@ export default function InstructionsPage() {
 
   const actions = !selected?.editable ? null : editing ? (
     <DetailHeaderActions menuLabel="Instruction actions">
-      <DetailHeaderAction icon={<RejectActionIcon />} label="Cancel" tooltip="Discard changes" onClick={cancelEdit} disabled={saving} />
+      <DetailHeaderAction icon={<RejectActionIcon />} label="Cancel" tooltip="Discard changes" onClick={cancelEdit} disabled={saveAction.busy} />
       <DetailHeaderAction
         icon={<SaveActionIcon />}
         label="Save"
         tooltip={dirty ? 'Save instruction' : 'No changes to save'}
         variant="success"
         onClick={save}
-        disabled={!dirty || saving || !realtime.connected}
+        disabled={!dirty || saveAction.busy || !realtime.connected}
       />
     </DetailHeaderActions>
   ) : viewingRevisionId && !viewingCurrent ? (
@@ -210,7 +208,7 @@ export default function InstructionsPage() {
         label="Restore"
         tooltip="Restore this revision"
         onClick={restore}
-        disabled={saving || !revision || !realtime.connected}
+        disabled={restoreAction.busy || !revision || !realtime.connected}
       />
     </DetailHeaderActions>
   ) : (
@@ -240,8 +238,13 @@ export default function InstructionsPage() {
             <PaneListToolbar>
               <PaneListSearch value={query} placeholder="Search instructions" onChange={setQuery} />
             </PaneListToolbar>
-            {listError ? <div className="task-alert">{listError}</div> : null}
-            {loaded && !groups.length ? (
+            {listError ? (
+              <InlineFailure
+                failure={listError}
+                operation="Load instructions"
+                onRetry={() => dispatch(fetchInstructions({ instructionsUrl }))}
+              />
+            ) : loaded && !groups.length ? (
               <PaneEmptyState>{instructions.length ? 'No matching instructions.' : 'No instructions.'}</PaneEmptyState>
             ) : null}
             {groups.length ? (
@@ -274,17 +277,42 @@ export default function InstructionsPage() {
                   : <DetailStatus key="status" tone="muted">Bundled with {groupLabel(selected.group)} · read-only</DetailStatus>,
                 ...(viewingRevisionId
                   ? [<span key="revision" className="muted">revision {formatRevisionTime(revisions.find((rev) => rev.revision_id === viewingRevisionId))}</span>]
-                  : selected.updated_at ? [<span key="updated" className="muted">updated {formatRelativeTime(selected.updated_at)} ago</span>] : []),
+                  : selected.updated_at ? [<span key="updated" className="muted">updated {formatCompactRelativeAge(selected.updated_at)} ago</span>] : []),
               ]}
             />
             <div className="task-detail__body instructions-detail__body">
-              {actionError ? <div className="task-alert" role="alert">{actionError}</div> : null}
+              {editing ? <InlineFailure failure={saveAction.error} operation="Save instruction" /> : null}
+              {!editing && restoreAction.error ? <InlineFailure failure={restoreAction.error} operation="Restore instruction revision" /> : null}
+              {contentRequest.error ? (
+                <InlineFailure
+                  failure={contentRequest.error}
+                  operation="Load instruction content"
+                  onRetry={() => dispatch(fetchInstruction({ instructionsUrl, path: selectedPath }))}
+                />
+              ) : null}
+              {revisionsRequest.error ? (
+                <InlineFailure
+                  failure={revisionsRequest.error}
+                  operation="Load instruction revisions"
+                  onRetry={() => dispatch(fetchInstructionRevisions({ instructionsUrl, path: selectedPath }))}
+                />
+              ) : null}
+              {viewingRevisionId && revisionRequest.error ? (
+                <InlineFailure
+                  failure={revisionRequest.error}
+                  operation="Load instruction revision"
+                  onRetry={() => dispatch(fetchInstructionRevision({ instructionsUrl, path: selectedPath, revisionId: viewingRevisionId }))}
+                />
+              ) : null}
               {editing ? (
                 <textarea
                   className="instructions-editor"
                   aria-label="Instruction file"
                   value={draft}
-                  onChange={(event) => setDraft(event.target.value)}
+                  onChange={(event) => {
+                    saveAction.clearError();
+                    setDraft(event.target.value);
+                  }}
                   onKeyDown={(event) => {
                     if (event.key === 's' && (event.metaKey || event.ctrlKey)) {
                       event.preventDefault();
@@ -295,9 +323,13 @@ export default function InstructionsPage() {
                     }
                   }}
                   spellCheck={false}
-                  disabled={saving}
+                  disabled={saveAction.busy}
                 />
-              ) : !shown ? <p className="muted">Loading…</p> : (
+              ) : !shown ? (
+                (viewingRevisionId ? revisionRequest.error : contentRequest.error)
+                  ? null
+                  : <p className="muted">Loading…</p>
+              ) : (
                 <article className="instructions-reader">
                   <p className="instructions-reader__description">{shown.front_matter?.description}</p>
                   <InstructionBody body={shown.body} />

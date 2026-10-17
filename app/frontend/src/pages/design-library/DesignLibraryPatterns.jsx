@@ -1,5 +1,8 @@
 import { useCallback, useMemo, useState } from 'react';
 import PopupModal from '../../components/common/PopupModal';
+import JsonCodeEditor from '../../components/common/JsonCodeEditor';
+import MarkdownContent from '../../components/common/MarkdownContent';
+import InlineFailure from '../../components/common/InlineFailure';
 import {
   PaneEmptyState,
   PaneListFilters,
@@ -216,15 +219,15 @@ function FeedbackPatterns() {
       <div className="dlp-feedback-grid">
         <article className="dlp-card">
           <div className="dlp-card__head"><h3>Modal and toast</h3><span className="dlp-pattern-tag">shared components</span></div>
-          <p className="dlp-note">Both controls are real, but their effects stay in this catalogue. The shared modal restores focus and supports Escape, but does not currently trap Tab focus.</p>
+          <p className="dlp-note">Both controls are real, but their effects stay in this catalogue. The shared modal restores focus, handles Escape, and traps Tab focus.</p>
           <div className="dlp-button-row">
             <button type="button" className="btn btn-primary" onClick={() => setModalOpen(true)}>Open confirmation</button>
             <button type="button" className="btn" onClick={() => show('success', 'Catalogue saved', 'This is a local notification demo.')}>Show toast</button>
           </div>
         </article>
         <article className="dlp-card">
-          <div className="dlp-card__head"><h3>Alerts and loading</h3><span className="dlp-pattern-tag">existing markup pattern</span></div>
-          <div className="task-alert" role="alert">Connection lost. Retry is available when a page owns a real request.</div>
+          <div className="dlp-card__head"><h3>Alerts and loading</h3><span className="dlp-pattern-tag">shared component + markup</span></div>
+          <InlineFailure failure={{ code: 'NETWORK_ERROR' }} operation="Load records" />
           <div className="dlp-loading" role="status"><span className="logs-loading-spinner" aria-hidden="true" /> Loading catalogue data…</div>
           <PaneEmptyState>Nothing needs attention.</PaneEmptyState>
         </article>
@@ -241,6 +244,7 @@ function FeedbackPatterns() {
 }
 
 function DataPatterns() {
+  const [jsonDraft, setJsonDraft] = useState('{\n  "workflow": "Cloud review",\n  "approval": true,\n  "agents": ["researcher", "reviewer"]\n}');
   return (
     <section id="library-data" className="dlp-section" aria-labelledby="library-data-title">
       <header className="dlp-section__header">
@@ -287,6 +291,20 @@ function DataPatterns() {
             </div>
           </article>
           <p className="dlp-note">Local markdown fixture using the chat message markup and renderer; it does not open a session or call an agent.</p>
+        </article>
+        <article className="dlp-card">
+          <div className="dlp-card__head"><h3>JSON editor</h3><span className="dlp-pattern-tag">shared component</span></div>
+          <div className="dlp-json-editor">
+            <JsonCodeEditor value={jsonDraft} onChange={(event) => setJsonDraft(event.target.value)} ariaLabel="Catalogue JSON source" />
+          </div>
+          <Caption kind="shared component" source="components/common/JsonCodeEditor.jsx" />
+          <p className="dlp-note">The workflow and routine editors share this highlighted input. Edits here remain local.</p>
+        </article>
+        <article className="dlp-card">
+          <div className="dlp-card__head"><h3>Markdown content</h3><span className="dlp-pattern-tag">shared component</span></div>
+          <MarkdownContent content={'### Review before release\n\nUse **shared components** for consistent pages.\n\n- Keep domain actions in the page\n- Reuse the presentation layer\n\n[Open foundations](#library-foundations)'} />
+          <Caption kind="shared component" source="components/common/MarkdownContent.jsx" />
+          <p className="dlp-note">Read-only content used by instructions, knowledge, plugin previews and quick chat. Document navigation and diagram support stay with their callers.</p>
         </article>
       </div>
     </section>

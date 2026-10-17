@@ -3,13 +3,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { useNavigate, useParams } from 'react-router-dom';
 import { buildEntityPath, useEntityUrlSync } from '../lib/routes';
+import { formatCompactRelativeAge } from '../lib/displayTime';
+import { reportFailure } from '../lib/failures';
 import DetailHeader, {
-  ApproveActionIcon,
   DeleteActionIcon,
   DetailHeaderAction,
   DetailHeaderActions,
   DetailStatus,
-  EditActionIcon,
   PlayActionIcon,
   SaveActionIcon,
 } from '../components/layout/DetailHeader';
@@ -27,14 +27,22 @@ import {
 } from '../components/layout/PaneList';
 import PageShell from '../components/layout/PageShell';
 import DetailPane from '../components/layout/DetailPane';
+import EditableDetailTitle from '../components/common/EditableDetailTitle';
+import InlineFailure from '../components/common/InlineFailure';
+import PopupModal from '../components/common/PopupModal';
 import { useConfig } from '../context/ConfigContext';
 import { useNotifications } from '../context/NotificationContext';
 import { useTasksApi } from '../hooks/api/useTasksApi';
+import useConfirmAction from '../hooks/useConfirmAction';
+import useInlineTitleEditor from '../hooks/useInlineTitleEditor';
+import useMissingEntityRoute from '../hooks/useMissingEntityRoute';
+import useUiAction from '../hooks/useUiAction';
 import {
   fetchKanbanBoard,
   fetchTaskActivity,
   selectKanbanBoard,
   selectTaskActivityEntry,
+  selectTaskActivityRequest,
   selectTasksState,
 } from '../store/uiDataSlice';
 import { selectRealtime } from '../store/realtimeSlice';
@@ -43,7 +51,6 @@ import {
   buildCardBadges,
   cardTags,
   formatAgentName,
-  formatRelativeTime,
   getCardAssignee,
   getCardService,
   groupVisibleCards,
@@ -66,11 +73,11 @@ const ACTIVITY_AVATAR_COLORS = {
   system: agentColors[2],
 };
 
-// agentColors, formatRelativeTime, formatAgentName, normalizePriority,
-// priorityLabel, isArchivedCard, cardTags, getCardService, getCardAssignee,
-// buildCardBadges, sortCards, and groupVisibleCards were extracted to
-// tasksPageModel.js in the frontend-refactor branch (imported above);
-// groupVisibleCards there also gained the projectId filter this branch added.
+// agentColors, formatAgentName, normalizePriority, priorityLabel,
+// isArchivedCard, cardTags, getCardService, getCardAssignee, buildCardBadges,
+// sortCards, and groupVisibleCards were extracted to tasksPageModel.js in the
+// frontend-refactor branch (imported above); groupVisibleCards there also
+// gained the projectId filter this branch added.
 
 function ChevronRightIcon() {
   return (
@@ -147,7 +154,7 @@ function TaskRow({ card, index, selected, compact, onSelect }) {
             <div className="task-card__meta">
               <PriorityPill priority={priority} />
               <span className={`task-pri-inline detail-status detail-status--${cardStatus.tone}`}>{cardStatus.label}</span>
-              <span className="task-card__age">{formatRelativeTime(card.updated_at)}</span>
+              <span className="task-card__age">{formatCompactRelativeAge(card.updated_at)}</span>
             </div>
             <div className="task-card__foot">
               <span className="task-svc"><span className="task-svc-ic" />{getCardService(card)}</span>
@@ -479,31 +486,18 @@ export default function TasksPage({ context = null }) {
   const board = useSelector(selectKanbanBoard);
   const tasksState = useSelector(selectTasksState);
   const [selectedCardId, setSelectedCardId] = useState(null);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState('');
   const [taskFilter, setTaskFilter] = useState('all');
   const [detailTab, setDetailTab] = useState('Task');
   const [searchQuery, setSearchQuery] = useState('');
   const [sortMode, setSortMode] = useState('Priority');
-  const [isEditingTitle, setIsEditingTitle] = useState(false);
-  const [titleDraft, setTitleDraft] = useState('');
-  const titleInputRef = useRef(null);
-  const [taskActivity, setTaskActivity] = useState([]);
-  const [taskActivityLoading, setTaskActivityLoading] = useState(false);
-  const [statusSaving, setStatusSaving] = useState(false);
-  const [metadataSaving, setMetadataSaving] = useState(false);
   const { collapsed, setCollapsed, paneClassName } = usePaneCollapse('tasks-list');
 
-  const loadBoard = useCallback(async () => {
-    setError('');
-    try {
-      await dispatch(fetchKanbanBoard({
-        kanbanUrl: getApiUrl('kanban'),
-      })).unwrap();
-    } catch (loadError) {
-      setError(loadError.message || 'Failed to load tasks.');
-    }
-  }, [dispatch, getApiUrl]);
+  const listFailure = tasksState.error;
+  const loadBoard = useCallback(() => (
+    dispatch(fetchKanbanBoard({
+      kanbanUrl: getApiUrl('kanban'),
+    }))
+  ), [dispatch, getApiUrl]);
 
   useEffect(() => {
     if (!realtime.connected) {
@@ -532,18 +526,16 @@ export default function TasksPage({ context = null }) {
   }, [board, effectiveSelectedCardId, isStandaloneTasksPage, routedCardId, visibleCards]);
 
   // Keep the URL in sync with whichever task is actually selected. A routed id
-  // stays authoritative; if it disappears after hydration, the effect below
-  // clears back to /tasks instead of rewriting stale detail state. Disabled
+  // stays authoritative until task hydration confirms it is absent. Disabled
   // when embedded in a project's kanban board, which doesn't own the /tasks URL.
   useEntityUrlSync(isStandaloneTasksPage ? '/tasks' : null, selectedCard?.id, selectedCard?.title);
-  useEffect(() => {
-    if (!isStandaloneTasksPage || !tasksState.loaded || !routedCardId) {
-      return;
-    }
-    if (!board?.cards?.some((card) => card.id === routedCardId)) {
-      navigate('/tasks', { replace: true });
-    }
-  }, [board, isStandaloneTasksPage, navigate, routedCardId, tasksState.loaded]);
+  useMissingEntityRoute({
+    hydrated: isStandaloneTasksPage && tasksState.loaded,
+    entityId: routedCardId,
+    entities: board?.cards ?? [],
+    getEntityId: (card) => card.id,
+    fallbackPath: '/tasks',
+  });
 
 
   const selectedColumn = useMemo(
@@ -572,7 +564,20 @@ export default function TasksPage({ context = null }) {
     () => (selectedCard ? normalizeAttachments(selectedCard.metadata) : []),
     [selectedCard],
   );
-  const selectedTaskActivityEntry = useSelector((state) => selectTaskActivityEntry(state, selectedCard?.id));
+  const taskScopeKey = selectedCard?.id ?? null;
+  const titleAction = useUiAction(taskScopeKey);
+  const statusAction = useUiAction(taskScopeKey);
+  const metadataAction = useUiAction(taskScopeKey);
+  const tagsAction = useUiAction(taskScopeKey);
+  const deleteConfirmation = useConfirmAction(taskScopeKey);
+  const { run: runTitleAction } = titleAction;
+  const { run: runStatusAction } = statusAction;
+  const { run: runMetadataAction } = metadataAction;
+  const { run: runTagsAction } = tagsAction;
+  const { request: requestTaskDelete } = deleteConfirmation;
+  const selectedTaskActivityEntry = useSelector((state) => selectTaskActivityEntry(state, taskScopeKey));
+  const selectedTaskActivityRequest = useSelector((state) => selectTaskActivityRequest(state, taskScopeKey));
+  const taskActivity = selectedTaskActivityEntry?.items || [];
   const loading = tasksState.loading && !board;
 
   // A task has exactly one checklist (1:1), so flatten any persisted lists into a
@@ -611,167 +616,166 @@ export default function TasksPage({ context = null }) {
   }, [isStandaloneTasksPage, navigate]);
 
 
-  useEffect(() => {
-    if (!selectedCard?.id) {
-      setTaskActivity([]);
-      return undefined;
+  const requestTaskActivity = useCallback((cardId) => {
+    if (!cardId) {
+      return;
     }
-
-    setTaskActivityLoading(true);
-    dispatch(fetchTaskActivity({
+    void dispatch(fetchTaskActivity({
       taskActivityUrl: getApiUrl('/api/ui/tasks'),
-      cardId: selectedCard.id,
-    }))
-      .unwrap()
-      .catch(() => {
-        setTaskActivity([]);
-      })
-      .finally(() => {
-        setTaskActivityLoading(false);
-      });
-    return undefined;
-  }, [dispatch, getApiUrl, selectedCard?.id]);
+      cardId,
+    }));
+  }, [dispatch, getApiUrl]);
 
   useEffect(() => {
-    if (!selectedTaskActivityEntry || selectedTaskActivityEntry.card_id !== selectedCard?.id) {
-      return;
-    }
-    setTaskActivity(selectedTaskActivityEntry.items || []);
-  }, [selectedCard?.id, selectedTaskActivityEntry]);
+    requestTaskActivity(taskScopeKey);
+  }, [requestTaskActivity, taskScopeKey]);
 
-  // Leave title-edit mode whenever the selected task changes so a stale draft
-  // never leaks across selections.
-  useEffect(() => {
-    setIsEditingTitle(false);
-    setTitleDraft('');
-  }, [selectedCard?.id]);
-
-  useEffect(() => {
-    if (!isEditingTitle) return undefined;
-    titleInputRef.current?.focus();
-    titleInputRef.current?.select();
-    return undefined;
-  }, [isEditingTitle]);
-
-  const startTitleEdit = useCallback(() => {
-    setTitleDraft(selectedCard?.title || '');
-    setIsEditingTitle(true);
-  }, [selectedCard?.title]);
-
-  const cancelTitleEdit = useCallback(() => {
-    setIsEditingTitle(false);
-    setTitleDraft('');
-  }, []);
-
-  const saveTitleEdit = useCallback(async () => {
-    if (!selectedCard?.id) return;
-    const nextTitle = titleDraft.replace(/\s+/g, ' ').trim();
-    if (!nextTitle || nextTitle === (selectedCard.title || '')) {
-      cancelTitleEdit();
-      return;
-    }
-    setIsEditingTitle(false);
-    setSaving(true);
-    try {
-      // The board refreshes via the kanban.snapshot event; no refetch needed.
-      await updateKanbanCard({ cardId: selectedCard.id, payload: { title: nextTitle } }, { dispatch, getApiUrl });
-    } catch (saveError) {
-      show('error', 'Rename failed', saveError.message || 'Failed to rename task');
-    } finally {
-      setSaving(false);
-    }
-  }, [cancelTitleEdit, dispatch, getApiUrl, selectedCard?.id, selectedCard?.title, show, titleDraft, updateKanbanCard]);
-
-  const handleDeleteSelected = useCallback(async () => {
+  const commitTitle = useCallback((nextTitle) => {
     if (!selectedCard) {
+      return Promise.resolve({ ok: false, skipped: true });
+    }
+    return runTitleAction('Rename task', async () => {
+      await updateKanbanCard(
+        { cardId: selectedCard.id, payload: { title: nextTitle } },
+        { dispatch, getApiUrl },
+      );
+    });
+  }, [dispatch, getApiUrl, runTitleAction, selectedCard, updateKanbanCard]);
+  const titleEditor = useInlineTitleEditor({
+    scopeKey: taskScopeKey,
+    title: selectedCard?.title || '',
+    onCommit: commitTitle,
+  });
+
+  const handleDeleteSelected = useCallback(() => {
+    const target = selectedCard;
+    if (!target) {
       return;
     }
-    const deletedTitle = selectedCard.title;
-    setSaving(true);
-    try {
-      await deleteKanbanCard({ cardId: selectedCard.id }, { dispatch, getApiUrl });
-      // Trust the kanban.snapshot event to remove the card from the store; when
-      // the standalone route owned this detail, clear it back to /tasks first.
-      if (isStandaloneTasksPage && routedCardId === selectedCard.id) {
+    requestTaskDelete('Delete task', async ({ isCurrent }) => {
+      await deleteKanbanCard({ cardId: target.id }, { dispatch, getApiUrl });
+      if (!isCurrent()) {
+        return;
+      }
+      // The canonical removal arrives through kanban.snapshot. Clear only this
+      // detail's local selection after its request is accepted.
+      if (isStandaloneTasksPage && routedCardId === target.id) {
         navigate('/tasks', { replace: true });
       } else {
         setSelectedCardId(null);
       }
-      show('success', 'Task deleted', deletedTitle);
-    } catch (deleteError) {
-      show('error', 'Delete failed', deleteError.message || 'Failed to delete task');
-    } finally {
-      setSaving(false);
+    });
+  }, [
+    requestTaskDelete,
+    deleteKanbanCard,
+    dispatch,
+    getApiUrl,
+    isStandaloneTasksPage,
+    navigate,
+    routedCardId,
+    selectedCard,
+  ]);
+
+  const reportActionFailure = useCallback((operation, result) => {
+    if (!result?.ok && result?.error) {
+      reportFailure(show, operation, result.error);
     }
-  }, [deleteKanbanCard, dispatch, getApiUrl, isStandaloneTasksPage, navigate, routedCardId, selectedCard, show]);
+  }, [show]);
 
   const handleQuickStatusUpdate = useCallback(async (nextStatus) => {
     if (!selectedCard?.id || selectedCard.status === nextStatus) {
       return;
     }
-    setStatusSaving(true);
-    try {
-      await updateKanbanCard({ cardId: selectedCard.id, payload: { status: nextStatus } }, { dispatch, getApiUrl });
-      // The board refreshes via the kanban.snapshot event; no refetch needed.
-    } catch (updateError) {
-      show('error', 'Status update failed', updateError.message || 'Failed to update task status');
-    } finally {
-      setStatusSaving(false);
-    }
-  }, [dispatch, getApiUrl, selectedCard?.id, selectedCard?.status, show, updateKanbanCard]);
+    const result = await runStatusAction('Update task status', async () => {
+      await updateKanbanCard(
+        { cardId: selectedCard.id, payload: { status: nextStatus } },
+        { dispatch, getApiUrl },
+      );
+    });
+    reportActionFailure('Update task status', result);
+    return result;
+  }, [
+    dispatch,
+    getApiUrl,
+    reportActionFailure,
+    runStatusAction,
+    selectedCard,
+    updateKanbanCard,
+  ]);
 
   const handleMetadataUpdate = useCallback(async (nextMetadata, activityMessage = '') => {
     if (!selectedCard?.id) {
       return;
     }
-    setMetadataSaving(true);
-    try {
-      await updateKanbanCard({ cardId: selectedCard.id, payload: { metadata: nextMetadata } }, { dispatch, getApiUrl });
-      // The board refreshes via the kanban.snapshot event; no refetch needed.
+    const result = await runMetadataAction('Update task metadata', async () => {
+      await updateKanbanCard(
+        { cardId: selectedCard.id, payload: { metadata: nextMetadata } },
+        { dispatch, getApiUrl },
+      );
       if (activityMessage) {
         await createTaskActivity({ cardId: selectedCard.id, payload: {
           message: activityMessage,
           actor: 'user',
           kind: 'meta',
         } }, { dispatch, getApiUrl });
-        // `task.activity.updated` appends the canonical activity item in Redux;
-        // the acknowledgement carries only correlation metadata.
       }
-    } catch (updateError) {
-      show('error', 'Update failed', updateError.message || 'Failed to update task metadata');
-    } finally {
-      setMetadataSaving(false);
-    }
-  }, [createTaskActivity, dispatch, getApiUrl, selectedCard?.id, show, updateKanbanCard]);
+    });
+    reportActionFailure('Update task metadata', result);
+    return result;
+  }, [
+    createTaskActivity,
+    dispatch,
+    getApiUrl,
+    reportActionFailure,
+    runMetadataAction,
+    selectedCard,
+    updateKanbanCard,
+  ]);
 
   // ---- tags (free-form, searchable; stored on card.labels) -----------------
   const handleAddTag = useCallback(async (value) => {
     if (!selectedCard?.id || !value || selectedTags.includes(value)) {
       return;
     }
-    setSaving(true);
-    try {
-      await updateKanbanCard({ cardId: selectedCard.id, payload: { labels: [...selectedTags, value] } }, { dispatch, getApiUrl });
-    } catch (updateError) {
-      show('error', 'Tag failed', updateError.message || 'Failed to add tag');
-    } finally {
-      setSaving(false);
-    }
-  }, [dispatch, getApiUrl, selectedCard?.id, selectedTags, show, updateKanbanCard]);
+    const result = await runTagsAction('Add task tag', async () => {
+      await updateKanbanCard(
+        { cardId: selectedCard.id, payload: { labels: [...selectedTags, value] } },
+        { dispatch, getApiUrl },
+      );
+    });
+    reportActionFailure('Add task tag', result);
+    return result;
+  }, [
+    dispatch,
+    getApiUrl,
+    reportActionFailure,
+    runTagsAction,
+    selectedCard,
+    selectedTags,
+    updateKanbanCard,
+  ]);
 
   const handleRemoveTag = useCallback(async (value) => {
     if (!selectedCard?.id) {
       return;
     }
-    setSaving(true);
-    try {
-      await updateKanbanCard({ cardId: selectedCard.id, payload: { labels: selectedTags.filter((tag) => tag !== value) } }, { dispatch, getApiUrl });
-    } catch (updateError) {
-      show('error', 'Tag failed', updateError.message || 'Failed to remove tag');
-    } finally {
-      setSaving(false);
-    }
-  }, [dispatch, getApiUrl, selectedCard?.id, selectedTags, show, updateKanbanCard]);
+    const result = await runTagsAction('Remove task tag', async () => {
+      await updateKanbanCard(
+        { cardId: selectedCard.id, payload: { labels: selectedTags.filter((tag) => tag !== value) } },
+        { dispatch, getApiUrl },
+      );
+    });
+    reportActionFailure('Remove task tag', result);
+    return result;
+  }, [
+    dispatch,
+    getApiUrl,
+    reportActionFailure,
+    runTagsAction,
+    selectedCard,
+    selectedTags,
+    updateKanbanCard,
+  ]);
 
   // ---- checklist (exactly one per task) ------------------------------------
   // Persist the flat item list back as the single checklist document.
@@ -940,8 +944,8 @@ export default function TasksPage({ context = null }) {
         </PaneListToolbar>
 
         {loading ? <PaneEmptyState>Loading tasks...</PaneEmptyState> : null}
-        {error ? <div className="task-alert">{error}</div> : null}
-        {!loading && !visibleCards.length ? <PaneEmptyState>No matching tasks.</PaneEmptyState> : null}
+        {listFailure ? <InlineFailure failure={listFailure} operation="Load tasks" onRetry={() => { void loadBoard(); }} /> : null}
+        {!loading && !listFailure && !visibleCards.length ? <PaneEmptyState>No matching tasks.</PaneEmptyState> : null}
         {!loading && groupedColumns.some((column) => column.cards.length) ? (
           <PaneListRows
             groups={groupedColumns
@@ -976,41 +980,13 @@ export default function TasksPage({ context = null }) {
             <DetailHeader
               titleClassName="chat-detail-header__title"
               title={(
-                <>
-                  {isEditingTitle ? (
-                    <input
-                      ref={titleInputRef}
-                      type="text"
-                      className="chat-page-header__title-input"
-                      value={titleDraft}
-                      maxLength={160}
-                      aria-label="Task name"
-                      onChange={(event) => setTitleDraft(event.target.value)}
-                      onBlur={cancelTitleEdit}
-                      onKeyDown={(event) => {
-                        if (event.key === 'Enter') {
-                          event.preventDefault();
-                          saveTitleEdit();
-                        } else if (event.key === 'Escape') {
-                          event.preventDefault();
-                          cancelTitleEdit();
-                        }
-                      }}
-                    />
-                  ) : (
-                    <span className="chat-detail-header__title-text">{selectedCard.title}</span>
-                  )}
-                  <button
-                    type="button"
-                    className="chat-icon-button chat-detail-header__rename"
-                    data-tooltip={isEditingTitle ? 'Save task name' : 'Rename task'}
-                    aria-label={isEditingTitle ? 'Save task name' : 'Rename task'}
-                    onMouseDown={isEditingTitle ? (event) => event.preventDefault() : undefined}
-                    onClick={isEditingTitle ? saveTitleEdit : startTitleEdit}
-                  >
-                    {isEditingTitle ? <ApproveActionIcon /> : <EditActionIcon />}
-                  </button>
-                </>
+                <EditableDetailTitle
+                  title={selectedCard.title}
+                  editor={titleEditor}
+                  maxLength={160}
+                  ariaLabel="Task name"
+                  entityLabel="task"
+                />
               )}
               actions={(
                 <DetailHeaderActions>
@@ -1021,7 +997,7 @@ export default function TasksPage({ context = null }) {
                     ariaLabel="Mark task running"
                     variant="primary"
                     onClick={() => handleQuickStatusUpdate('running')}
-                    disabled={statusSaving || selectedCard.status === 'running'}
+                    disabled={statusAction.busy || selectedCard.status === 'running'}
                   />
                   <DetailHeaderAction
                     icon={<SaveActionIcon />}
@@ -1029,7 +1005,7 @@ export default function TasksPage({ context = null }) {
                     tooltip="Mark task complete"
                     ariaLabel="Mark task complete"
                     onClick={() => handleQuickStatusUpdate('complete')}
-                    disabled={statusSaving || selectedCard.status === 'complete'}
+                    disabled={statusAction.busy || selectedCard.status === 'complete'}
                   />
                   <DetailHeaderAction
                     icon={<DeleteActionIcon />}
@@ -1038,7 +1014,7 @@ export default function TasksPage({ context = null }) {
                     ariaLabel="Delete task"
                     variant="danger"
                     onClick={handleDeleteSelected}
-                    disabled={saving}
+                    disabled={deleteConfirmation.busy}
                   />
                 </DetailHeaderActions>
               )}
@@ -1056,6 +1032,7 @@ export default function TasksPage({ context = null }) {
               onTabChange={setDetailTab}
               tabLabel="Task detail tabs"
             />
+            {titleEditor.error ? <InlineFailure failure={titleEditor.error} operation="Rename task" /> : null}
 
             <div className="task-detail__body">
               {detailTab === 'Task' ? (
@@ -1067,7 +1044,7 @@ export default function TasksPage({ context = null }) {
                         pill
                         openLabel="Add item"
                         placeholder="Add an item..."
-                        disabled={metadataSaving}
+                        disabled={metadataAction.busy}
                         onSubmit={handleAddChecklistItem}
                       />
                     </header>
@@ -1083,7 +1060,7 @@ export default function TasksPage({ context = null }) {
                             type="checkbox"
                             checked={item.done}
                             onChange={() => handleToggleChecklistItem(item.id)}
-                            disabled={metadataSaving}
+                            disabled={metadataAction.busy}
                           />
                           <span>{item.title}</span>
                         </label>
@@ -1092,7 +1069,7 @@ export default function TasksPage({ context = null }) {
                           className="task-lbl task-lbl--add"
                           aria-label={`Remove item ${item.title}`}
                           onClick={() => handleRemoveChecklistItem(item.id)}
-                          disabled={metadataSaving}
+                          disabled={metadataAction.busy}
                         >
                           ×
                         </button>
@@ -1110,7 +1087,7 @@ export default function TasksPage({ context = null }) {
                         pill
                         openLabel="Add dependency"
                         placeholder="Add dependency reference..."
-                        disabled={metadataSaving}
+                        disabled={metadataAction.busy}
                         onSubmit={handleAddDependency}
                       />
                     </header>
@@ -1134,7 +1111,7 @@ export default function TasksPage({ context = null }) {
                           className="task-dep-card__remove"
                           aria-label={`Remove dependency ${dependency.title}`}
                           onClick={() => handleRemoveDependency(dependency.id)}
-                          disabled={metadataSaving}
+                          disabled={metadataAction.busy}
                         >
                           ×
                         </button>
@@ -1149,7 +1126,7 @@ export default function TasksPage({ context = null }) {
                         pill
                         openLabel="Add tag"
                         placeholder="Add a tag..."
-                        disabled={saving}
+                        disabled={tagsAction.busy}
                         onSubmit={handleAddTag}
                       />
                     </header>
@@ -1162,7 +1139,7 @@ export default function TasksPage({ context = null }) {
                             className="task-tag-remove"
                             aria-label={`Remove tag ${tag}`}
                             onClick={() => handleRemoveTag(tag)}
-                            disabled={saving}
+                            disabled={tagsAction.busy}
                           >
                             ×
                           </button>
@@ -1178,7 +1155,7 @@ export default function TasksPage({ context = null }) {
                         pill
                         openLabel="Add collaborator"
                         placeholder="Add collaborator handle..."
-                        disabled={metadataSaving}
+                        disabled={metadataAction.busy}
                         onSubmit={handleAddCollaborator}
                       />
                     </header>
@@ -1204,7 +1181,7 @@ export default function TasksPage({ context = null }) {
                             type="button"
                             className="task-lbl task-lbl--add"
                             onClick={() => handleRemoveCollaborator(collaborator)}
-                            disabled={metadataSaving}
+                            disabled={metadataAction.busy}
                           >
                             ×
                           </button>
@@ -1216,7 +1193,7 @@ export default function TasksPage({ context = null }) {
                   <section className="agents-section">
                     <header className="agents-section__head">
                       <h2>Attachments</h2>
-                      <InlineAddAttachment disabled={metadataSaving} onSubmit={handleAddAttachment} />
+                      <InlineAddAttachment disabled={metadataAction.busy} onSubmit={handleAddAttachment} />
                     </header>
                     {selectedAttachments.length ? selectedAttachments.map((attachment) => (
                       <div key={attachment.id} className="task-attach">
@@ -1227,7 +1204,7 @@ export default function TasksPage({ context = null }) {
                           type="button"
                           className="task-lbl task-lbl--add"
                           onClick={() => handleRemoveAttachment(attachment.id)}
-                          disabled={metadataSaving}
+                          disabled={metadataAction.busy}
                         >
                           ×
                         </button>
@@ -1254,10 +1231,17 @@ export default function TasksPage({ context = null }) {
                   <div className="task-activity">
                     <div className="task-act">
                       <span className="task-act-avatar" style={{ background: ACTIVITY_AVATAR_COLORS.system }}>S</span>
-                      <div className="task-act-body"><strong>System</strong> created the card <span className="muted">{formatRelativeTime(selectedCard.created_at)} ago</span></div>
+                      <div className="task-act-body"><strong>System</strong> created the card <span className="muted">{formatCompactRelativeAge(selectedCard.created_at)}</span></div>
                     </div>
-                    {taskActivityLoading ? <div className="task-meta-sub">Loading activity…</div> : null}
-                    {!taskActivityLoading && taskActivity.map((entry) => {
+                    {selectedTaskActivityRequest.loading ? <div className="task-meta-sub">Loading activity…</div> : null}
+                    {selectedTaskActivityRequest.error ? (
+                      <InlineFailure
+                        failure={selectedTaskActivityRequest.error}
+                        operation="Load task activity"
+                        onRetry={() => requestTaskActivity(taskScopeKey)}
+                      />
+                    ) : null}
+                    {!selectedTaskActivityRequest.loading && taskActivity.map((entry) => {
                       const actorName = formatAgentName(entry.actor || 'system');
                       const initial = actorName.charAt(0).toUpperCase() || 'S';
                       const avatarColor = entry.actor === 'user'
@@ -1266,7 +1250,7 @@ export default function TasksPage({ context = null }) {
                       return (
                         <div key={entry.id} className="task-act">
                           <span className="task-act-avatar" style={{ background: avatarColor }}>{initial}</span>
-                          <div className="task-act-body"><strong>{actorName}</strong> {entry.message} <span className="muted">{formatRelativeTime(entry.created_at)} ago</span></div>
+                          <div className="task-act-body"><strong>{actorName}</strong> {entry.message} <span className="muted">{formatCompactRelativeAge(entry.created_at)}</span></div>
                         </div>
                       );
                     })}
@@ -1285,10 +1269,24 @@ export default function TasksPage({ context = null }) {
               ) : null}
             </div>
           </>
+        ) : listFailure ? (
+          <InlineFailure failure={listFailure} operation="Load tasks" onRetry={() => { void loadBoard(); }} />
         ) : (
           <PaneEmptyState detail>Select a task to inspect details.</PaneEmptyState>
         )}
       </DetailPane>
+
+      {deleteConfirmation.open && selectedCard ? (
+        <PopupModal
+          title="Delete task?"
+          message={`Delete “${selectedCard.title}”? This cannot be undone.`}
+          confirmLabel="Delete task"
+          busy={deleteConfirmation.busy}
+          error={deleteConfirmation.error}
+          onClose={deleteConfirmation.close}
+          onConfirm={() => { void deleteConfirmation.confirm(); }}
+        />
+      ) : null}
 
     </PageShell>
   );

@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { buildEntityPath, useEntityUrlSync } from '../lib/routes';
 import { useConfig } from '../context/ConfigContext';
+import { selectRealtime } from '../store/realtimeSlice';
 import {
   fetchKnowledge,
   saveKnowledge,
@@ -14,8 +15,11 @@ import {
   selectKnowledgeState,
 } from '../store/uiDataSlice';
 import KnowledgePagesTab from '../components/knowledge/KnowledgePagesTab';
+import InlineFailure from '../components/common/InlineFailure';
 import PopupModal from '../components/common/PopupModal';
-import { selectRealtime } from '../store/realtimeSlice';
+import useConfirmAction from '../hooks/useConfirmAction';
+import useMissingEntityRoute from '../hooks/useMissingEntityRoute';
+import useUiAction from '../hooks/useUiAction';
 import PageShell from '../components/layout/PageShell';
 import DetailPane from '../components/layout/DetailPane';
 import DetailHeader, {
@@ -40,25 +44,21 @@ import { usePaneCollapse } from '../components/layout/usePaneCollapse';
 import {
   KB_FILTERS,
   KB_SORTS,
-  formatCount,
-  formatRelativeTime,
   fromApiBase,
   groupBases,
   statusMeta,
 } from './knowledgePageModel';
+import { formatCompactRelativeAge, formatShortLocalDateTime } from '../lib/displayTime';
 
 
-
-const readableTime = (ms) => (Number.isFinite(ms)
-  ? new Date(ms).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
-  : null);
+const baseIdOf = (base) => base.id;
 
 // Search-index values for the base root, from the live base record (updated by
 // knowledge.index.* events), not the cached index.md front matter.
 function searchIndexFacts(base) {
   if (!base) return [];
   const pages = base.indexPages;
-  const at = readableTime(Date.parse(base.indexedAt));
+  const at = formatShortLocalDateTime(Date.parse(base.indexedAt));
   return [
     `${base.indexedPages}/${pages} page${pages === 1 ? '' : 's'} indexed`,
     ...(at ? [`indexed ${at}`] : []),
@@ -80,14 +80,14 @@ function pageHeaderFacts(path, frontMatter, pages, base) {
     return {
       type: 'index',
       tags: [],
-      generatedAt: readableTime(newest),
+      generatedAt: formatShortLocalDateTime(newest),
       extra: path === 'index.md' ? searchIndexFacts(base) : [],
     };
   }
   return {
     type: fm.type ? String(fm.type) : null,
     tags: Array.isArray(fm.tags) ? fm.tags.map(String) : fm.tags ? [String(fm.tags)] : [],
-    generatedAt: readableTime(fm.generated && typeof fm.generated === 'object' ? Date.parse(fm.generated.at) : NaN),
+    generatedAt: formatShortLocalDateTime(fm.generated && typeof fm.generated === 'object' ? Date.parse(fm.generated.at) : NaN),
     extra: [],
   };
 }
@@ -105,8 +105,7 @@ function KnowledgeCard({ base, selected, onSelect }) {
           <span className="kb-card__desc">{base.description}</span>
         </div>
         <div className="task-card__meta kb-card__info">
-          <span>{formatCount(base.pageCount)} pages</span>
-          <span>synced {formatRelativeTime(base.lastSynced)}</span>
+          <span>synced {formatCompactRelativeAge(base.lastSynced)}</span>
         </div>
       </button>
     </article>
@@ -135,7 +134,7 @@ export default function KnowledgePage() {
   const [sortMode, setSortMode] = useState('Status');
   const [editingName, setEditingName] = useState(false);
   const [nameDraft, setNameDraft] = useState('');
-  const [savingName, setSavingName] = useState(false);
+  const [nameValidation, setNameValidation] = useState(null);
   const nameInputRef = useRef(null);
   const { collapsed, setCollapsed, paneClassName } = usePaneCollapse('tasks-list');
 
@@ -150,11 +149,7 @@ export default function KnowledgePage() {
 
   const bases = useMemo(() => rawBases.map(fromApiBase), [rawBases]);
 
-  // Clear edit state when switching to a different base.
-  useEffect(() => {
-    setEditingName(false);
-    setNameDraft('');
-  }, [selectedBaseId]);
+  // Reset the rename draft in the render that observes a new routed base.
 
   // Focus + select the name field when entering rename mode.
   useEffect(() => {
@@ -177,30 +172,34 @@ export default function KnowledgePage() {
       || (!selectedBaseId ? visibleBases[0] || null : null),
     [bases, selectedBaseId, visibleBases],
   );
+  const [draftBaseId, setDraftBaseId] = useState(selectedBase?.id);
+  if (draftBaseId !== selectedBase?.id) {
+    setDraftBaseId(selectedBase?.id);
+    setEditingName(false);
+    setNameDraft('');
+    setNameValidation(null);
+  }
 
   // Keep the URL in sync with whichever base is actually selected. A routed
-  // base id stays authoritative; if it disappears after hydration, the effect
-  // below clears back to /knowledge instead of rewriting stale detail state.
-  // The title slug is cosmetic; only the id segment is ever read back.
+  // base id stays authoritative; only an absent hydrated base routes back.
   useEntityUrlSync('/knowledge', selectedBase?.id, selectedBase?.name);
-  useEffect(() => {
-    if (!loaded || !selectedBaseId) {
-      return;
-    }
-    if (!bases.some((base) => base.id === selectedBaseId)) {
-      navigate('/knowledge', { replace: true });
-    }
-  }, [bases, loaded, navigate, selectedBaseId]);
+  useMissingEntityRoute({
+    hydrated: loaded,
+    entityId: selectedBaseId,
+    entities: bases,
+    getEntityId: baseIdOf,
+    fallbackPath: '/knowledge',
+  });
 
 
   const indexedCount = bases.filter((base) => base.status === 'indexed').length;
 
-  const putBases = (nextRaw) => dispatch(saveKnowledge({ knowledgeUrl, bases: nextRaw })).unwrap();
-  const patchSelected = (patch) => putBases(
-    rawBases.map((base) => (base.id === selectedBase?.id
-      ? { ...base, ...patch, updated_at: new Date().toISOString() }
-      : base)),
+  const putBases = useCallback(
+    (nextRaw) => dispatch(saveKnowledge({ knowledgeUrl, bases: nextRaw })).unwrap(),
+    [dispatch, knowledgeUrl],
   );
+  const renameAction = useUiAction(selectedBase?.id || 'knowledge');
+  const deleteAction = useConfirmAction(selectedBase?.id || 'knowledge');
 
   // Open the quick chat prefilled to create a knowledge base — Progenitor edits
   // /config/knowledge.json (managing-knowledge skill) and the new base appears
@@ -211,64 +210,48 @@ export default function KnowledgePage() {
     );
   };
 
-  const [deleteConfirmationOpen, setDeleteConfirmationOpen] = useState(false);
-  const [deleteBusy, setDeleteBusy] = useState(false);
-  const [deleteError, setDeleteError] = useState('');
-
   const requestDelete = () => {
-    if (!selectedBase) {
-      return;
-    }
-    setDeleteError('');
-    setDeleteConfirmationOpen(true);
-  };
-
-  const confirmDelete = async () => {
-    if (!selectedBase) {
-      setDeleteConfirmationOpen(false);
-      return;
-    }
-    const id = selectedBase.id;
-    setDeleteBusy(true);
-    try {
-      await putBases(rawBases.filter((base) => base.id !== id));
-      setDeleteConfirmationOpen(false);
-      navigate('/knowledge', { replace: true });
-    } catch (error) {
-      setDeleteError(error?.message || 'Failed to delete.');
-    } finally {
-      setDeleteBusy(false);
-    }
+    if (!selectedBase) return;
+    const base = selectedBase;
+    deleteAction.request('Delete knowledge base', async ({ isCurrent }) => {
+      await putBases(rawBases.filter((item) => item.id !== base.id));
+      if (isCurrent()) navigate('/knowledge', { replace: true });
+    });
   };
 
   const startNameEdit = () => {
+    setNameValidation(null);
+    renameAction.clearError();
     setNameDraft(selectedBase?.name || '');
     setEditingName(true);
   };
 
   const cancelNameEdit = () => {
+    setNameValidation(null);
+    renameAction.clearError();
     setNameDraft(selectedBase?.name || '');
     setEditingName(false);
   };
 
-  const saveNameEdit = async () => {
-    if (!selectedBase || savingName) {
+  const saveNameEdit = () => {
+    if (!selectedBase) return;
+    const base = selectedBase;
+    const next = nameDraft.replace(/\s+/g, ' ').trim();
+    if (!next) {
+      setNameValidation('A knowledge base name is required.');
       return;
     }
-    const next = nameDraft.replace(/\s+/g, ' ').trim();
-    if (!next || next === selectedBase.name) {
+    if (next === base.name) {
       cancelNameEdit();
       return;
     }
-    setSavingName(true);
-    try {
-      await patchSelected({ name: next });
-      setEditingName(false);
-    } catch {
-      // Leave edit mode open so the draft isn't lost on a transient error.
-    } finally {
-      setSavingName(false);
-    }
+    setNameValidation(null);
+    void renameAction.run('Rename knowledge base', async ({ isCurrent }) => {
+      await putBases(rawBases.map((item) => (item.id === base.id
+        ? { ...item, name: next, updated_at: new Date().toISOString() }
+        : item)));
+      if (isCurrent()) setEditingName(false);
+    });
   };
 
   const meta = selectedBase
@@ -294,7 +277,7 @@ export default function KnowledgePage() {
     : { type: null, tags: [], generatedAt: null, extra: [] };
   // An open revision reports when it was captured, in the same "generated" slot.
   const generatedAt = viewingRevisionId
-    ? readableTime(Date.parse(viewingRevision?.captured_at))
+    ? formatShortLocalDateTime(Date.parse(viewingRevision?.captured_at))
     : pageFacts.generatedAt;
 
   return (
@@ -323,8 +306,9 @@ export default function KnowledgePage() {
               />
             </PaneListToolbar>
 
-            {knowledgeState.error ? <div className="task-alert">{knowledgeState.error}</div> : null}
-            {!visibleBases.length && loaded ? (
+            {knowledgeState.error ? (
+              <InlineFailure failure={knowledgeState.error} operation="Load knowledge bases" onRetry={() => dispatch(fetchKnowledge({ knowledgeUrl }))} />
+            ) : !visibleBases.length && loaded ? (
               <PaneEmptyState>{bases.length ? 'No matching knowledge bases.' : 'No knowledge bases.'}</PaneEmptyState>
             ) : null}
             {groups.length ? (
@@ -364,8 +348,13 @@ export default function KnowledgePage() {
                       value={nameDraft}
                       maxLength={160}
                       aria-label="Knowledge base name"
-                      onChange={(event) => setNameDraft(event.target.value)}
-                      onBlur={cancelNameEdit}
+                      disabled={renameAction.busy}
+                      onChange={(event) => {
+                        setNameValidation(null);
+                        renameAction.clearError();
+                        setNameDraft(event.target.value);
+                      }}
+                      onBlur={() => { if (!renameAction.busy) cancelNameEdit(); }}
                       onKeyDown={(event) => {
                         if (event.key === 'Enter') {
                           event.preventDefault();
@@ -384,6 +373,7 @@ export default function KnowledgePage() {
                     className="chat-icon-button chat-detail-header__rename"
                     data-tooltip={editingName ? 'Save name' : 'Rename knowledge base'}
                     aria-label={editingName ? 'Save name' : 'Rename knowledge base'}
+                    disabled={renameAction.busy}
                     onMouseDown={editingName ? (event) => event.preventDefault() : undefined}
                     onClick={editingName ? saveNameEdit : startNameEdit}
                   >
@@ -407,6 +397,7 @@ export default function KnowledgePage() {
                     tooltip="Delete knowledge base"
                     ariaLabel="Delete knowledge base"
                     variant="danger"
+                    disabled={deleteAction.busy}
                     onClick={requestDelete}
                   />
                 </DetailHeaderActions>
@@ -427,6 +418,7 @@ export default function KnowledgePage() {
             />
 
             <div className="task-detail__body">
+              {editingName ? <InlineFailure failure={nameValidation || renameAction.error} operation="Rename knowledge base" /> : null}
               <KnowledgePagesTab baseId={selectedBase.id} baseName={selectedBase.name} knowledgeUrl={knowledgeUrl} />
             </div>
           </>
@@ -434,16 +426,17 @@ export default function KnowledgePage() {
           <PaneEmptyState detail>Select a knowledge base to inspect details.</PaneEmptyState>
         )}
       </DetailPane>
-      {deleteConfirmationOpen && selectedBase ? (
+      {deleteAction.open && selectedBase ? (
         <PopupModal
           eyebrow="Delete knowledge base"
           title={`Delete “${selectedBase.name}”?`}
-          message={deleteError || 'The base is removed from the catalog and its pages are hidden. Pages are kept and come back if a base with the same id is created again.'}
+          message="The base is removed from the catalog and its pages are hidden. Pages are kept and come back if a base with the same id is created again."
+          error={deleteAction.error}
           confirmLabel="Delete knowledge base"
           busyLabel="Deleting…"
-          onClose={() => setDeleteConfirmationOpen(false)}
-          onConfirm={confirmDelete}
-          busy={deleteBusy}
+          onClose={deleteAction.close}
+          onConfirm={deleteAction.confirm}
+          busy={deleteAction.busy}
         />
       ) : null}
     </PageShell>

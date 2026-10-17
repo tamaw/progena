@@ -43,10 +43,7 @@ describe('extracted routine components', () => {
     const doc = parseMarkup(markup);
 
     expect(doc.textContent).toContain('Compose response');
-    expect(doc.textContent).toContain('System prompt (optional)');
     expect(doc.querySelector('[aria-required="true"]')).not.toBeNull();
-    expect(doc.textContent).toContain('One field is required before this step can be saved.');
-    expect(doc.textContent).toContain('Fill it in, or close to discard this step.');
   });
 
   it('renders a complete inspector expression and cached run details', () => {

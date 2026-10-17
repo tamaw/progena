@@ -1,8 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useSelector } from 'react-redux';
+import { useDispatch, useSelector } from 'react-redux';
 import { useNavigate, useParams } from 'react-router-dom';
 import { buildEntityPath, useEntityUrlSync } from '../lib/routes';
-import { createUuid } from '../lib/uuid';
 import {
   PaneEmptyState,
   PaneList,
@@ -17,20 +16,26 @@ import PageShell from '../components/layout/PageShell';
 import DetailPane from '../components/layout/DetailPane';
 import { MetricCard } from '../components/common/DetailCards';
 import DetailHeader, {
-  ApproveActionIcon,
   DeleteActionIcon,
   DetailHeaderAction,
   DetailHeaderActions,
-  EditActionIcon,
+  DetailStatus,
   PauseActionIcon,
   PlayActionIcon,
 } from '../components/layout/DetailHeader';
+import EditableDetailTitle from '../components/common/EditableDetailTitle';
+import InlineFailure from '../components/common/InlineFailure';
+import PopupModal from '../components/common/PopupModal';
 import { useSchedulesApi } from '../hooks/api/useSchedulesApi';
 import { useConfig } from '../context/ConfigContext';
+import { useNotifications } from '../context/NotificationContext';
 import { useWidgetsApi } from '../hooks/api/useWidgetsApi';
-import { selectSchedules, selectUiWidgets } from '../store/uiDataSlice';
-import { requestAcknowledged } from '../store/http';
-import { selectRealtimeConnected, selectUiEventQueue } from '../store/realtimeSlice';
+import useConfirmAction from '../hooks/useConfirmAction';
+import useInlineTitleEditor from '../hooks/useInlineTitleEditor';
+import useUiAction from '../hooks/useUiAction';
+import { reportFailure } from '../lib/failures';
+import { fetchSchedules, selectSchedulesState, selectUiWidgets } from '../store/uiDataSlice';
+import { selectRealtimeConnected } from '../store/realtimeSlice';
 
 const SCHEDULE_FILTERS = ['All', 'Active', 'Paused', 'Completed'];
 const SCHEDULE_SORTS = ['Type', 'Next', 'Status'];
@@ -257,17 +262,11 @@ function ScheduleRow({ schedule, selected, onSelect }) {
   );
 }
 
-function ScheduleStatusPill({ status }) {
-  return (
-    <span className={`agents-status-pill agents-status-pill--${status}`}>
-      <span className="adot" />
-      {status}
-    </span>
-  );
-}
 
 function SchedulesPage() {
   const navigate = useNavigate();
+  const dispatch = useDispatch();
+  const { show } = useNotifications();
   const { retriggerSchedule } = useSchedulesApi();
   const { getApiUrl } = useConfig();
   const { getWidgets, updateWidget, deleteWidget } = useWidgetsApi();
@@ -279,83 +278,65 @@ function SchedulesPage() {
   // events on /api/ui/stream (backend mutations + runtime fires/CRUD). We only
   // seed it once after realtime connects; every change after that arrives as an
   // event.
-  const schedules = useSelector(selectSchedules);
+  const schedulesState = useSelector(selectSchedulesState);
+  const {
+    items: schedules,
+    loading,
+    error: listFailure,
+    requestId: scheduleRequestId,
+  } = schedulesState;
   const widgets = useSelector(selectUiWidgets);
   const realtimeConnected = useSelector(selectRealtimeConnected);
-  const [loading, setLoading] = useState(true);
-  const [pendingScheduleRequestId, setPendingScheduleRequestId] = useState(null);
-  const hasPendingScheduleSnapshot = useSelector((state) => (
-    pendingScheduleRequestId !== null
-    && selectUiEventQueue(state).some(({ event }) => (
-      event?.type === 'schedule.snapshot'
-      && event?.payload?.request_id === pendingScheduleRequestId
-    ))
-  ));
-  const [error, setError] = useState(null);
+  const [logsFailure, setLogsFailure] = useState(null);
   const [activeFilter, setActiveFilter] = useState('All');
   const [search, setSearch] = useState('');
   const [sortMode, setSortMode] = useState('Type');
-  const [mutating, setMutating] = useState(false);
-  const [isEditingTitle, setIsEditingTitle] = useState(false);
-  const [titleDraft, setTitleDraft] = useState('');
-  const titleInputRef = useRef(null);
   const [isEditingIntent, setIsEditingIntent] = useState(false);
   const [intentDraft, setIntentDraft] = useState('');
   const intentInputRef = useRef(null);
   const [isEditingTrigger, setIsEditingTrigger] = useState(false);
   const [triggerText, setTriggerText] = useState('');
   const triggerInputRef = useRef(null);
-  useEffect(() => {
-    if (!realtimeConnected) {
-      return undefined;
-    }
-    let cancelled = false;
-    const requestId = createUuid();
-    setLoading(true);
-    setError(null);
-    setPendingScheduleRequestId(requestId);
-    requestAcknowledged(getApiUrl('schedules'), {
-      requestId,
-      errorLabel: 'Failed to load schedules',
-    }).catch((err) => {
-      if (!cancelled) {
-        setPendingScheduleRequestId(null);
-        setLoading(false);
-        setError(err.message || 'Failed to load schedules.');
-      }
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [getApiUrl, realtimeConnected]);
+  const [intentValidationFailure, setIntentValidationFailure] = useState(null);
+  const [triggerValidationFailure, setTriggerValidationFailure] = useState(null);
+  const [intentEditScopeKey, setIntentEditScopeKey] = useState(null);
+  const [triggerEditScopeKey, setTriggerEditScopeKey] = useState(null);
+  const logsRequestRef = useRef(0);
+  const requestSchedules = useCallback(() => (
+    dispatch(fetchSchedules({ schedulesUrl: getApiUrl('schedules') }))
+  ), [dispatch, getApiUrl]);
 
   useEffect(() => {
-    if (!pendingScheduleRequestId || !hasPendingScheduleSnapshot) {
-      return;
+    if (realtimeConnected) {
+      void requestSchedules();
     }
-    setPendingScheduleRequestId(null);
-    setLoading(false);
-    setError(null);
-  }, [hasPendingScheduleSnapshot, pendingScheduleRequestId]);
+  }, [realtimeConnected, requestSchedules]);
 
-  useEffect(() => {
-    let cancelled = false;
-    getWidgets().catch((err) => {
-      if (!cancelled) setError(err.message || 'Failed to load schedule logs.');
+  const loadScheduleLogs = useCallback(() => {
+    const requestId = ++logsRequestRef.current;
+    return getWidgets().catch((error) => {
+      if (logsRequestRef.current === requestId) setLogsFailure(error);
     });
-    return () => {
-      cancelled = true;
-    };
   }, [getWidgets]);
 
+  const retryScheduleLogs = useCallback(() => {
+    setLogsFailure(null);
+    void loadScheduleLogs();
+  }, [loadScheduleLogs]);
+
   useEffect(() => {
-    if (loading || pendingScheduleRequestId !== null || !selectedScheduleId) {
+    void loadScheduleLogs();
+    return () => { logsRequestRef.current += 1; };
+  }, [loadScheduleLogs]);
+
+  useEffect(() => {
+    if (loading || listFailure || scheduleRequestId !== null || !selectedScheduleId) {
       return;
     }
     if (!schedules.some((schedule) => schedule.id === selectedScheduleId)) {
       navigate('/schedules', { replace: true });
     }
-  }, [loading, navigate, pendingScheduleRequestId, schedules, selectedScheduleId]);
+  }, [listFailure, loading, navigate, scheduleRequestId, schedules, selectedScheduleId]);
 
   const scheduleWidgets = useMemo(() => widgets.reduce((byScheduleId, widget) => {
     const scheduleId = widget?.data?.schedule_id;
@@ -409,7 +390,7 @@ function SchedulesPage() {
   // the initial snapshot has hydrated. Until then, preserve a deep-linked id
   // instead of replacing it with an empty/default selection.
   useEntityUrlSync(
-    loading || pendingScheduleRequestId !== null ? null : '/schedules',
+    loading || scheduleRequestId !== null ? null : '/schedules',
     selectedSchedule?.id,
     selectedSchedule?.name,
   );
@@ -428,169 +409,154 @@ function SchedulesPage() {
   const recentScheduleLogs = selectedScheduleLogs.slice(0, 5);
   const scheduleTitle = selectedSchedule?.name || 'Untitled schedule';
 
-  // Mutations don't refetch — the backend emits a `schedule.snapshot` event as
-  // part of handling each request, which updates the store (and any other open
-  // tab) live. We only manage local selection here.
-  const handleTogglePause = useCallback(
-    async (schedule) => {
-      setMutating(true);
-      setError(null);
-      try {
-        await updateWidget(`schedule:${schedule.id}`, { enabled: schedule.paused });
-      } catch (err) {
-        setError(err.message || 'Failed to update schedule.');
-      } finally {
-        setMutating(false);
-      }
-    },
-    [updateWidget],
-  );
+  const scheduleScopeKey = selectedSchedule?.id ?? null;
+  const titleAction = useUiAction(scheduleScopeKey);
+  const pauseAction = useUiAction(scheduleScopeKey);
+  const intentAction = useUiAction(scheduleScopeKey);
+  const triggerAction = useUiAction(scheduleScopeKey);
+  const deleteConfirmation = useConfirmAction(scheduleScopeKey);
+  const { run: runTitleAction } = titleAction;
+  const { run: runPauseAction } = pauseAction;
+  const {
+    run: runIntentAction,
+    clearError: clearIntentActionError,
+    busy: intentActionBusy,
+    error: intentActionError,
+  } = intentAction;
+  const {
+    run: runTriggerAction,
+    clearError: clearTriggerActionError,
+    busy: triggerActionBusy,
+    error: triggerActionError,
+  } = triggerAction;
+  const { request: requestScheduleDelete } = deleteConfirmation;
+  const editingIntent = isEditingIntent && intentEditScopeKey === scheduleScopeKey;
+  const editingTrigger = isEditingTrigger && triggerEditScopeKey === scheduleScopeKey;
 
-  const handleDelete = useCallback(
-    async (schedule) => {
-      const confirmed = window.confirm(
-        `Delete schedule "${schedule.name || 'Untitled schedule'}"? This can't be undone.`,
-      );
-      if (!confirmed) return;
-      setMutating(true);
-      setError(null);
-      try {
-        await deleteWidget(`schedule:${schedule.id}`);
-        if (selectedScheduleId === schedule.id) {
-          navigate('/schedules', { replace: true });
-        }
-      } catch (err) {
-        setError(err.message || 'Failed to delete schedule.');
-      } finally {
-        setMutating(false);
-      }
-    },
-    [deleteWidget, navigate, selectedScheduleId],
-  );
-
-  // Leave edit mode whenever the selected schedule changes so a stale draft
-  // never leaks across selections.
-  useEffect(() => {
-    setIsEditingTitle(false);
-    setTitleDraft('');
-    setIsEditingIntent(false);
-    setIntentDraft('');
-    setIsEditingTrigger(false);
-  }, [selectedSchedule?.id]);
-
-  useEffect(() => {
-    if (!isEditingTitle) return undefined;
-    titleInputRef.current?.focus();
-    titleInputRef.current?.select();
-    return undefined;
-  }, [isEditingTitle]);
-
-  const cancelTitleEdit = useCallback(() => {
-    setTitleDraft(scheduleTitle);
-    setIsEditingTitle(false);
-  }, [scheduleTitle]);
-
-  const startTitleEdit = useCallback(() => {
-    setTitleDraft(selectedSchedule?.name || '');
-    setIsEditingTitle(true);
-  }, [selectedSchedule]);
-
-  const saveTitleEdit = useCallback(async () => {
-    if (!selectedSchedule) return;
-    const normalizedTitle = titleDraft.replace(/\s+/g, ' ').trim();
-    if (!normalizedTitle || normalizedTitle === (selectedSchedule.name || '')) {
-      cancelTitleEdit();
-      return;
+  const reportActionFailure = useCallback((operation, result) => {
+    if (!result?.ok && result?.error) {
+      reportFailure(show, operation, result.error);
     }
-    setIsEditingTitle(false);
-    setMutating(true);
-    setError(null);
-    try {
-      // The backend emits a `schedule.snapshot` event, so the store (and any
-      // other open tab) picks up the new name live — no local mutation needed.
-      await updateWidget(`schedule:${selectedSchedule.id}`, { name: normalizedTitle });
-    } catch (err) {
-      setError(err.message || 'Failed to rename schedule.');
-    } finally {
-      setMutating(false);
+  }, [show]);
+
+  const commitTitle = useCallback((nextTitle) => {
+    if (!selectedSchedule) {
+      return Promise.resolve({ ok: false, skipped: true });
     }
-  }, [cancelTitleEdit, selectedSchedule, titleDraft, updateWidget]);
+    return runTitleAction('Rename schedule', async () => {
+      // The backend emits schedule.snapshot; the canonical title remains store-owned.
+      await updateWidget(`schedule:${selectedSchedule.id}`, { name: nextTitle });
+    });
+  }, [runTitleAction, selectedSchedule, updateWidget]);
+  const titleEditor = useInlineTitleEditor({
+    scopeKey: scheduleScopeKey,
+    title: scheduleTitle,
+    onCommit: commitTitle,
+  });
+
+  const handleTogglePause = useCallback(async (schedule) => {
+    const operation = schedule.paused ? 'Resume schedule' : 'Pause schedule';
+    const result = await runPauseAction(operation, async () => {
+      await updateWidget(`schedule:${schedule.id}`, { enabled: schedule.paused });
+    });
+    reportActionFailure(operation, result);
+    return result;
+  }, [reportActionFailure, runPauseAction, updateWidget]);
+
+  const handleDelete = useCallback((schedule) => {
+    const target = schedule;
+    requestScheduleDelete('Delete schedule', async ({ isCurrent }) => {
+      await deleteWidget(`schedule:${target.id}`);
+      if (isCurrent() && selectedScheduleId === target.id) {
+        navigate('/schedules', { replace: true });
+      }
+    });
+  }, [deleteWidget, navigate, requestScheduleDelete, selectedScheduleId]);
 
   useEffect(() => {
-    if (!isEditingIntent) return undefined;
-    intentInputRef.current?.focus();
-    return undefined;
-  }, [isEditingIntent]);
+    if (editingIntent) {
+      intentInputRef.current?.focus();
+    }
+  }, [editingIntent]);
 
   const startIntentEdit = useCallback(() => {
+    setIntentEditScopeKey(scheduleScopeKey);
+    setIntentValidationFailure(null);
+    clearIntentActionError();
     setIntentDraft(selectedSchedule?.message || '');
     setIsEditingIntent(true);
-  }, [selectedSchedule]);
+  }, [clearIntentActionError, scheduleScopeKey, selectedSchedule]);
 
   const cancelIntentEdit = useCallback(() => {
+    if (intentActionBusy) {
+      return;
+    }
+    setIntentValidationFailure(null);
     setIsEditingIntent(false);
     setIntentDraft('');
-  }, []);
+  }, [intentActionBusy]);
 
   const saveIntentEdit = useCallback(async () => {
     if (!selectedSchedule) return;
     const normalizedIntent = intentDraft.trim();
-    if (!normalizedIntent || normalizedIntent === (selectedSchedule.message || '')) {
+    if (!normalizedIntent) {
+      setIntentValidationFailure('Describe what the schedule should do.');
+      return;
+    }
+    if (normalizedIntent === (selectedSchedule.message || '')) {
       cancelIntentEdit();
       return;
     }
-    setIsEditingIntent(false);
-    setMutating(true);
-    setError(null);
-    try {
-      // The backend mirrors `instruction` into the schedule's message and emits
-      // a `schedule.snapshot` event, so the store updates live.
+    const result = await runIntentAction('Save schedule intent', async ({ isCurrent }) => {
+      // schedule.snapshot is the canonical update for the instruction.
       await updateWidget(`schedule:${selectedSchedule.id}`, { instruction: normalizedIntent });
-    } catch (err) {
-      setError(err.message || 'Failed to update schedule intent.');
-    } finally {
-      setMutating(false);
-    }
-  }, [cancelIntentEdit, intentDraft, selectedSchedule, updateWidget]);
+      if (isCurrent()) {
+        setIsEditingIntent(false);
+      }
+    });
+    return result;
+  }, [cancelIntentEdit, intentDraft, runIntentAction, selectedSchedule, updateWidget]);
 
   useEffect(() => {
-    if (!isEditingTrigger) return undefined;
-    triggerInputRef.current?.focus();
-    triggerInputRef.current?.select();
-    return undefined;
-  }, [isEditingTrigger]);
+    if (editingTrigger) {
+      triggerInputRef.current?.focus();
+      triggerInputRef.current?.select();
+    }
+  }, [editingTrigger]);
 
   const startTriggerEdit = useCallback(() => {
     if (!selectedSchedule) return;
+    setTriggerEditScopeKey(scheduleScopeKey);
+    setTriggerValidationFailure(null);
+    clearTriggerActionError();
     setTriggerText(cadenceFor(selectedSchedule));
     setIsEditingTrigger(true);
-  }, [selectedSchedule]);
+  }, [clearTriggerActionError, scheduleScopeKey, selectedSchedule]);
 
   const cancelTriggerEdit = useCallback(() => {
+    if (triggerActionBusy) {
+      return;
+    }
+    setTriggerValidationFailure(null);
     setIsEditingTrigger(false);
-  }, []);
+  }, [triggerActionBusy]);
 
   const saveTriggerEdit = useCallback(async () => {
     if (!selectedSchedule) return;
     const text = triggerText.trim();
     if (!text) {
-      setError('Describe when the schedule should run.');
+      setTriggerValidationFailure('Describe when the schedule should run.');
       return;
     }
-    setMutating(true);
-    setError(null);
-    try {
-      // The backend hands this phrase to the Progenitor agent, which converts
-      // it to cron/datetime and updates the schedule; the resulting
-      // `schedule.snapshot` refreshes the trigger, cadence, and next-run live.
+    const result = await runTriggerAction('Save schedule trigger', async ({ isCurrent }) => {
+      // The backend agent emits schedule.snapshot after interpreting this phrase.
       await retriggerSchedule(selectedSchedule.id, text);
-      setIsEditingTrigger(false);
-    } catch (err) {
-      setError(err.message || 'Failed to update trigger.');
-    } finally {
-      setMutating(false);
-    }
-  }, [retriggerSchedule, selectedSchedule, triggerText]);
+      if (isCurrent()) {
+        setIsEditingTrigger(false);
+      }
+    });
+    return result;
+  }, [retriggerSchedule, runTriggerAction, selectedSchedule, triggerText]);
 
   return (
     <PageShell className="schedules-page">
@@ -615,11 +581,15 @@ function SchedulesPage() {
             onSelect={setSortMode}
           />
         </PaneListToolbar>
-        {loading ? (
-          <PaneEmptyState>Loading schedules…</PaneEmptyState>
-        ) : error && !schedules.length ? (
-          <PaneEmptyState>{error}</PaneEmptyState>
-        ) : visibleSchedules.length ? (
+        {loading ? <PaneEmptyState>Loading schedules…</PaneEmptyState> : null}
+        {!loading && listFailure ? (
+          <InlineFailure
+            failure={listFailure}
+            operation="Load schedules"
+            onRetry={requestSchedules}
+          />
+        ) : null}
+        {!loading && visibleSchedules.length ? (
           <PaneListRows
             groups={order
               .filter((group) => groupedSchedules[group]?.length)
@@ -637,9 +607,9 @@ function SchedulesPage() {
               />
             )}
           />
-        ) : (
+        ) : !loading && !listFailure ? (
           <PaneEmptyState>No schedules match this view.</PaneEmptyState>
-        )}
+        ) : null}
         <PaneListFooter>
           <span>
             <span className="num">{activeCount}</span> active
@@ -658,6 +628,14 @@ function SchedulesPage() {
           <div className="detail-pane__body">
             <PaneEmptyState>Loading schedules…</PaneEmptyState>
           </div>
+        ) : !selectedSchedule && listFailure ? (
+          <div className="detail-pane__body">
+            <InlineFailure
+              failure={listFailure}
+              operation="Load schedules"
+              onRetry={requestSchedules}
+            />
+          </div>
         ) : !selectedSchedule ? (
           <div className="detail-pane__body">
             <PaneEmptyState>Select a schedule, or use New to ask Progenitor to create one.</PaneEmptyState>
@@ -667,44 +645,21 @@ function SchedulesPage() {
             <DetailHeader
               titleClassName="chat-detail-header__title"
               title={(
-                <>
-                  {isEditingTitle ? (
-                    <input
-                      ref={titleInputRef}
-                      type="text"
-                      className="chat-page-header__title-input"
-                      value={titleDraft}
-                      maxLength={120}
-                      aria-label="Schedule name"
-                      onChange={(event) => setTitleDraft(event.target.value)}
-                      onBlur={cancelTitleEdit}
-                      onKeyDown={(event) => {
-                        if (event.key === 'Enter') {
-                          event.preventDefault();
-                          saveTitleEdit();
-                        } else if (event.key === 'Escape') {
-                          event.preventDefault();
-                          cancelTitleEdit();
-                        }
-                      }}
-                    />
-                  ) : (
-                    <span className="chat-detail-header__title-text">{scheduleTitle}</span>
-                  )}
-                  <button
-                    type="button"
-                    className="chat-icon-button chat-detail-header__rename"
-                    data-tooltip={isEditingTitle ? 'Save schedule name' : 'Rename schedule'}
-                    aria-label={isEditingTitle ? 'Save schedule name' : 'Rename schedule'}
-                    onMouseDown={isEditingTitle ? (event) => event.preventDefault() : undefined}
-                    onClick={isEditingTitle ? saveTitleEdit : startTitleEdit}
-                  >
-                    {isEditingTitle ? <ApproveActionIcon /> : <EditActionIcon />}
-                  </button>
-                </>
+                <EditableDetailTitle
+                  title={scheduleTitle}
+                  editor={titleEditor}
+                  maxLength={120}
+                  ariaLabel="Schedule name"
+                  entityLabel="schedule"
+                />
               )}
               meta={[
-                <ScheduleStatusPill key="status" status={statusOf(selectedSchedule)} />,
+                <DetailStatus
+                  key="status"
+                  tone={statusOf(selectedSchedule) === 'active' ? 'ok' : statusOf(selectedSchedule) === 'paused' ? 'warning' : 'muted'}
+                >
+                  {statusOf(selectedSchedule)}
+                </DetailStatus>,
                 <span key="type" className="muted">{scheduleKind(selectedSchedule)}</span>,
                 <span key="cadence" className="muted">{cadenceFor(selectedSchedule)}</span>,
                 <span key="next" className="muted">
@@ -726,8 +681,8 @@ function SchedulesPage() {
                       tooltip={selectedSchedule.paused ? 'Resume schedule' : 'Pause schedule'}
                       ariaLabel={selectedSchedule.paused ? 'Resume schedule' : 'Pause schedule'}
                       variant="primary"
-                      disabled={mutating}
-                      onClick={() => handleTogglePause(selectedSchedule)}
+                      disabled={pauseAction.busy}
+                      onClick={() => { void handleTogglePause(selectedSchedule); }}
                     />
                   ) : null}
                   <DetailHeaderAction
@@ -735,15 +690,15 @@ function SchedulesPage() {
                     label="Delete"
                     tooltip="Delete schedule"
                     ariaLabel="Delete schedule"
-                    disabled={mutating}
+                    disabled={deleteConfirmation.busy}
                     onClick={() => handleDelete(selectedSchedule)}
                   />
                 </DetailHeaderActions>
               }
             />
+            {titleEditor.error ? <InlineFailure failure={titleEditor.error} operation="Rename schedule" /> : null}
 
             <div className="detail-pane__body">
-              {error ? <PaneEmptyState>{error}</PaneEmptyState> : null}
               <div className="agents-metrics">
                 <MetricCard
                   label="Next run"
@@ -767,13 +722,13 @@ function SchedulesPage() {
                 <header className="agents-section__head">
                   <h2>Schedule intent</h2>
                   <div>
-                    {isEditingIntent ? (
+                    {editingIntent ? (
                       <>
                         <button
                           type="button"
                           className="task-btn task-btn--secondary"
                           onClick={cancelIntentEdit}
-                          disabled={mutating}
+                          disabled={intentActionBusy}
                         >
                           Cancel
                         </button>
@@ -781,7 +736,7 @@ function SchedulesPage() {
                           type="button"
                           className="task-btn task-btn--primary"
                           onClick={saveIntentEdit}
-                          disabled={mutating}
+                          disabled={intentActionBusy}
                         >
                           Save
                         </button>
@@ -797,7 +752,7 @@ function SchedulesPage() {
                     )}
                   </div>
                 </header>
-                {isEditingIntent ? (
+                {editingIntent ? (
                   <textarea
                     ref={intentInputRef}
                     className="schedules-summary__editor"
@@ -805,7 +760,12 @@ function SchedulesPage() {
                     rows={4}
                     aria-label="Schedule intent"
                     placeholder="What should the agent do when this runs?"
-                    onChange={(event) => setIntentDraft(event.target.value)}
+                    disabled={intentActionBusy}
+                    onChange={(event) => {
+                      clearIntentActionError();
+                      setIntentValidationFailure(null);
+                      setIntentDraft(event.target.value);
+                    }}
                     onKeyDown={(event) => {
                       if (event.key === 'Escape') {
                         event.preventDefault();
@@ -819,19 +779,25 @@ function SchedulesPage() {
                 ) : (
                   <p>{selectedSchedule.message || selectedSchedule.name || 'No instruction set.'}</p>
                 )}
+                {editingIntent && (intentValidationFailure || intentActionError) ? (
+                  <InlineFailure
+                    failure={intentValidationFailure || intentActionError}
+                    operation="Save schedule intent"
+                  />
+                ) : null}
               </section>
 
               <section className="agents-section">
                 <header className="agents-section__head">
                   <h2>Trigger</h2>
                   <div>
-                    {isEditingTrigger ? (
+                    {editingTrigger ? (
                       <>
                         <button
                           type="button"
                           className="task-btn task-btn--secondary"
                           onClick={cancelTriggerEdit}
-                          disabled={mutating}
+                          disabled={triggerActionBusy}
                         >
                           Cancel
                         </button>
@@ -839,7 +805,7 @@ function SchedulesPage() {
                           type="button"
                           className="task-btn task-btn--primary"
                           onClick={saveTriggerEdit}
-                          disabled={mutating}
+                          disabled={triggerActionBusy}
                         >
                           Save
                         </button>
@@ -855,7 +821,7 @@ function SchedulesPage() {
                     )}
                   </div>
                 </header>
-                {isEditingTrigger ? (
+                {editingTrigger ? (
                   <div className="schedules-trigger-edit">
                     <textarea
                       ref={triggerInputRef}
@@ -864,8 +830,12 @@ function SchedulesPage() {
                       rows={2}
                       aria-label="Schedule timing"
                       placeholder="e.g. every weekday at 9am, or Friday at 15:00"
-                      disabled={mutating}
-                      onChange={(event) => setTriggerText(event.target.value)}
+                      disabled={triggerActionBusy}
+                      onChange={(event) => {
+                        clearTriggerActionError();
+                        setTriggerValidationFailure(null);
+                        setTriggerText(event.target.value);
+                      }}
                       onKeyDown={(event) => {
                         if (event.key === 'Escape') {
                           event.preventDefault();
@@ -877,7 +847,7 @@ function SchedulesPage() {
                       }}
                     />
                     <p className="schedules-trigger-edit__hint">
-                      {mutating
+                      {triggerActionBusy
                         ? 'Processing…'
                         : 'Describe the timing in plain language — Progenitor converts it for you.'}
                     </p>
@@ -896,6 +866,12 @@ function SchedulesPage() {
                     </div>
                   </div>
                 )}
+                {editingTrigger && (triggerValidationFailure || triggerActionError) ? (
+                  <InlineFailure
+                    failure={triggerValidationFailure || triggerActionError}
+                    operation="Save schedule trigger"
+                  />
+                ) : null}
               </section>
 
               <section className="agents-section">
@@ -903,6 +879,13 @@ function SchedulesPage() {
                   <h2>Latest activity</h2>
                 </header>
                 <div className="agents-mini-list">
+                  {logsFailure ? (
+                    <InlineFailure
+                      failure={logsFailure}
+                      operation="Load schedule logs"
+                      onRetry={retryScheduleLogs}
+                    />
+                  ) : null}
                   {recentScheduleLogs.map((entry, index) => (
                     <div
                       key={`${entry.id || entry.timestamp || entry.time || index}`}
@@ -932,6 +915,17 @@ function SchedulesPage() {
           </>
         )}
       </DetailPane>
+      {deleteConfirmation.open && selectedSchedule ? (
+        <PopupModal
+          title="Delete schedule?"
+          message={`Delete “${selectedSchedule.name || 'Untitled schedule'}”? This cannot be undone.`}
+          confirmLabel="Delete schedule"
+          busy={deleteConfirmation.busy}
+          error={deleteConfirmation.error}
+          onClose={deleteConfirmation.close}
+          onConfirm={() => { void deleteConfirmation.confirm(); }}
+        />
+      ) : null}
     </PageShell>
   );
 }

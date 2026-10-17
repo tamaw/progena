@@ -5,7 +5,7 @@
  * markdown bodies (messages are small), so there is no detail request dance.
  */
 import { createSelector } from '@reduxjs/toolkit';
-import { createAcknowledgedThunk, requestAcknowledged } from './async';
+import { addRequestLifecycle, createAcknowledgedThunk, requestAcknowledged } from './async';
 
 
 export const initialState = {
@@ -93,20 +93,10 @@ export const eventHandlers = {
 };
 
 export function buildExtraReducers(builder) {
-  builder
-    .addCase(fetchInbox.pending, (state, action) => {
-      state.inbox.loading = true;
-      state.inbox.error = null;
-      state.inbox.requestId = action.meta.requestId;
-    })
-    .addCase(fetchInbox.rejected, (state, action) => {
-      if (state.inbox.requestId !== action.meta.requestId) {
-        return;
-      }
-      state.inbox.loading = false;
-      state.inbox.error = action.error?.message || 'Failed to load inbox';
-      state.inbox.requestId = null;
-    });
+  addRequestLifecycle(builder, fetchInbox, {
+    select: (state) => state.inbox,
+    errorMessage: 'Failed to load inbox',
+  });
 }
 
 export const selectInboxMessages = createSelector(

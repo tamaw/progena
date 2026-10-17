@@ -9,6 +9,9 @@ import { requestAcknowledged, withQuery } from '../store/http';
 import { selectRealtime } from '../store/realtimeSlice';
 import { createUuid } from '../lib/uuid';
 import Select from '../components/common/Select';
+import InlineFailure from '../components/common/InlineFailure';
+import { failureMessage, reportFailure } from '../lib/failures';
+import { useNotifications } from '../context/NotificationContext';
 
 const COLLAPSED_ROW_HEIGHT = 38;
 const EXPANDED_ROW_HEIGHT = 180;
@@ -209,6 +212,7 @@ function findVisibleRange(items, scrollTop, viewportHeight) {
 function LogsPage() {
   const { getLogs } = useLogsApi();
   const { getApiUrl } = useConfig();
+  const { show } = useNotifications();
   const logsPage = useSelector(selectLogsPage);
   const logsState = useSelector(selectLogsState);
   const [searchParams, setSearchParams] = useSearchParams();
@@ -486,7 +490,7 @@ function LogsPage() {
       }
     } catch (loadError) {
       if (requestVersion === requestVersionRef.current) {
-        setError(loadError.message || 'Failed to load logs.');
+        setError(failureMessage(loadError, 'Load logs'));
         if (!incremental) {
           setLoadingEntries(false);
         }
@@ -627,13 +631,13 @@ function LogsPage() {
     try {
       const acknowledgement = await requestAcknowledged(
         withQuery(getApiUrl('/api/ui/logs/export'), params),
-        { requestId, errorLabel: 'Log export failed' },
+        { requestId },
       );
       setPendingExportRequestId(acknowledgement.request_id);
     } catch (exportError) {
-      setError(exportError.message || 'Failed to export logs.');
+      reportFailure(show, 'Export logs', exportError);
     }
-  }, [getApiUrl, level, requestFilters]);
+  }, [getApiUrl, level, requestFilters, show]);
 
   const exportState = useSelector((state) => selectLogsExport(state, pendingExportRequestId));
   useEffect(() => {
@@ -856,11 +860,7 @@ function LogsPage() {
 
           <section className="logs-container-full">
             <div ref={scrollAreaRef} className="logs-scroll-area" onScroll={handleScroll}>
-            {error ? (
-              <div className="empty-state">
-                <span>{error}</span>
-              </div>
-            ) : null}
+            <InlineFailure failure={error} onRetry={() => loadLogs()} />
             {!error && loading ? (
               <div className="empty-state">
                 <span className="logs-loading-spinner" aria-hidden="true" />
@@ -873,7 +873,7 @@ function LogsPage() {
                 <span>{entries.length > 0 ? 'No logs match the current level filter' : 'No logs available'}</span>
               </div>
             ) : null}
-            {!error && filteredEntries.length > 0 ? (
+            {filteredEntries.length > 0 ? (
               <div className="logs-virtualized" style={{ height: `${rowLayout.totalHeight}px` }}>
                 {visibleRows.map((row) => (
                   <div

@@ -31,13 +31,26 @@ The catalogue shows the current theme tokens, typography, branding, controls, li
 
 Use this page to review the existing UI before extracting or migrating more shared components. It is not a new component framework. Catalogue code lives in `src/pages/DesignLibraryPage.jsx` and `src/pages/design-library/`.
 
-Primitive reuse conventions:
+Component reuse conventions:
 - Use `components/common/Select` for themed choices; pass `portal` inside transformed graph nodes or clipped panels. Portal menus stay within the viewport and close on outside wheel/resize.
 - Use `NumberStepper` only for bounded, non-null numeric values with a defined step. Keep native number fields where blank means inherited/unset, decimals are unrestricted, or parsing semantics differ.
 - Reuse `DetailCards` and `DetailHeader` action icons rather than copying their markup. Use the existing `task-btn`, `set-text-input` and `set-switch` patterns when they fit the control; switches retain native checkbox behavior, keyboard focus and disabled styling.
 - Use `--font-family`, `--font-family-mono` and the defined `--color-*` theme tokens. Keep intentional handwritten branding and data-driven agent/chart colors.
+- Use `Modal` for dialog focus, Escape/backdrop handling and portal placement; use `PopupModal` for confirmations. Pass busy state to prevent dismissal during a pending action. Keep domain forms and submit logic in the caller.
+- Use `MarkdownContent` for read-only Markdown bodies. Preserve the caller's renderer/sanitization policy, link transformation and click handling; Mermaid rendering is explicit opt-in. Structured inbox documents and interactive chat messages retain their specialized renderers.
+- Use `JsonCodeEditor` for the shared highlighted JSON input. Parsing, validation, reset/apply actions and persistence belong to the containing workflow/routine panel. Its syntax colors follow the current theme.
 
-The first consistency pass aligns small controls and presentation primitives only; sidebar, list-pane and editor consolidation remains separate.
+The catalogue includes interactive JSON and Markdown examples. Larger list/detail surfaces already use the existing layout components in most pages; domain-specific trees, transcript panes and editors should not be forced into a shared wrapper unless their interaction contracts match.
+
+Shared JavaScript behavior:
+- Use `failureMessage` / `reportFailure` (`src/lib/failures.js`) and `InlineFailure` for operation-specific errors. Load failures need a real retry callback and must not hide cached data or masquerade as an empty result. `requestAcknowledged` throws `RequestError` with status, request ID, stable code and readable validation details; the code survives Redux error serialization. Cancellation is not a notification.
+- Use `useUiAction(entityScope)` for one mutation busy/error lifecycle. `run(operation, task)` returns an explicit result instead of throwing. Use separate instances for independent controls. After an await, guard entity-local draft changes/navigation with the task's `isCurrent()` callback.
+- Use `useConfirmAction(entityScope)` with `PopupModal` for destructive actions. Capture the target when requesting confirmation; pass `busy` and `error` separately so a rejected operation keeps its original warning and can be retried.
+- Use `useInlineTitleEditor` with `EditableDetailTitle` for short detail titles. Callers supply identity, persistence and length limits; the shared behavior handles normalization, focus, keyboard/blur interaction, duplicate submissions and rejected drafts.
+- Agents and Routines share `useAgentCatalogue` and `agentCatalogueModel`, not a configurable page framework. Domain filters, graph drafts and run behavior remain explicit.
+- Detail caches use `addKeyedRequestLifecycle`, `completeKeyedRequest` and per-domain request selectors. HTTP 202 acknowledges dispatch only; a matching canonical event ends loading. Retain cached content on rejection, ignore stale request failures, and keep retry available for cache misses.
+- Use `useMenuDismiss` for ordinary non-portal menus, `useMissingEntityRoute` only after collection hydration, and `useListSelection` where selection is local rather than SSE/route-owned. Portal dropdowns and modal focus retain their specialized behavior.
+- Matching compact ages and local date/time labels share `lib/displayTime.js`. Keep schedule timezone/cron formatting and domain-specific timestamps separate.
 
 ### Production Build
 

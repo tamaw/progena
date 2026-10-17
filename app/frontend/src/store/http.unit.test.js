@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { miniSerializeError } from '@reduxjs/toolkit';
+import { failureMessage } from '../lib/failures';
 import { requestAcknowledged } from './http';
 
 const requestId = 'f0e1d2c3-b4a5-4678-9abc-def012345678';
@@ -36,13 +38,13 @@ describe('requestAcknowledged', () => {
   });
 
   it.each([
-    [201, { request_id: requestId, event_types: ['widgets.updated'] }, /\(201\)/],
-    [202, { accepted: true, request_id: requestId, event_types: ['widgets.updated'] }, /invalid acknowledgement body/],
-    [202, { request_id: requestId, event_types: [] }, /invalid event_types/],
-  ])('rejects non-canonical acknowledgement status or body', async (status, body, error) => {
+    [201, { request_id: requestId, event_types: ['widgets.updated'] }, 'HTTP_201'],
+    [202, { accepted: true, request_id: requestId, event_types: ['widgets.updated'] }, 'INVALID_ACKNOWLEDGEMENT'],
+    [202, { request_id: requestId, event_types: [] }, 'INVALID_EVENT_TYPES'],
+  ])('rejects non-canonical acknowledgement status or body', async (status, body, code) => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response(status, body)));
 
-    await expect(requestAcknowledged('/api/ui/widgets', { requestId })).rejects.toThrow(error);
+    await expect(requestAcknowledged('/api/ui/widgets', { requestId })).rejects.toMatchObject({ code, requestId });
   });
   it('rejects a 202 acknowledgement correlated to a different request', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response(202, {
@@ -53,6 +55,33 @@ describe('requestAcknowledged', () => {
     await expect(requestAcknowledged('/api/ui/responses', {
       method: 'POST',
       requestId,
-    })).rejects.toThrow(/request_id mismatch/);
+    })).rejects.toMatchObject({ code: 'REQUEST_ID_MISMATCH', requestId });
+  });
+
+  it('retains HTTP identity and readable field failures through Redux serialization', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response(422, {
+      detail: [{ loc: ['body', 'name'], msg: 'Field required', type: 'missing' }],
+    })));
+    const error = await requestAcknowledged('/api/ui/widgets', { requestId }).catch((failure) => failure);
+    expect(error).toMatchObject({ status: 422, code: 'HTTP_422', requestId });
+    expect(error.message).toContain('name');
+    expect(error.message).not.toContain('"loc"');
+    expect(miniSerializeError(error)).toMatchObject({ code: 'HTTP_422', message: error.message });
+  });
+
+  it('keeps authorization policy identifiable after Redux serializes an error', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response(403, { detail: 'Private server detail' })));
+    const error = await requestAcknowledged('/api/ui/widgets', { requestId }).catch((failure) => failure);
+    const serialized = miniSerializeError(error);
+    expect(serialized.code).toBe('HTTP_403');
+    expect(failureMessage(serialized, 'Save record')).toEqual(failureMessage(error, 'Save record'));
+  });
+
+  it('distinguishes network errors from cancellation', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('Failed to fetch')));
+    await expect(requestAcknowledged('/api/ui/widgets', { requestId })).rejects.toMatchObject({ code: 'NETWORK_ERROR', requestId });
+    const abort = new DOMException('Request aborted', 'AbortError');
+    fetch.mockRejectedValueOnce(abort);
+    await expect(requestAcknowledged('/api/ui/widgets', { requestId })).rejects.toBe(abort);
   });
 });
