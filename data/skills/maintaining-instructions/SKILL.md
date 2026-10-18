@@ -7,10 +7,10 @@ allowed-tools: ls read_file write_file edit_file grep glob
 # Maintaining Instructions
 
 ## When to Use
-- A workflow `extract`/`agent` step needs a reusable template
+- A workflow `extract`/`agent` step or routine `agent` node needs a reusable template
 - The user asks why Progenitor or an agent behaves a certain way, or to change that behaviour
 - The user asks what an instruction is for or what fills its placeholders
-
+- An agent needs instructions for driving Claude through `acp_*` tools
 ## Layout
 `/instructions/<group>/<file>.md`. The group decides who fills the placeholders and who may edit:
 
@@ -18,7 +18,7 @@ allowed-tools: ls read_file write_file edit_file grep glob
 |---|---|---|---|
 | `progenitor/` | this runtime (`genesis.md` is your own system prompt) | yes; applies on the next model call | fixed by code: keep exactly the same `{names}` |
 | `builder_agent/`, `builder_progenitor/`, `observe_agent/` | that A2A agent, from its own disk copy | no (writes fail); change `data/instructions/` in git | fixed by that agent's code |
-| anything else, e.g. `workflows/` | workflow steps that reference the path | yes | free; each root becomes an input port |
+| anything else, e.g. `workflows/` | workflow steps and routine `agent` nodes that reference the path | yes | free; each root becomes an input port or resolves from routine state |
 
 ## Format
 
@@ -42,3 +42,11 @@ All front matter keys are optional and no others are allowed. `{name}` and `{nam
 2. Make the smallest change; keep the existing voice, constraints and placeholders.
 3. New workflow templates go under `/instructions/workflows/` with a `title` and `description`.
 4. Match what the runtime can actually do.
+
+## ACP-driving templates
+
+An instruction may direct its runner to use `acp_start`, `acp_send`,
+`acp_status`, `acp_answer`, `acp_cancel`, or `acp_list`. The runner's agent
+manifest must list those tools and include the `driving-acp-agents` skill.
+For code changes, have it request a `repo-manager` worktree and pass that path
+as `cwd` to `acp_start`.

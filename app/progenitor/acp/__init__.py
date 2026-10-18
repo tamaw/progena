@@ -22,7 +22,6 @@ from .runner import ACPRunner, ACPRunResult
 from .tasks import (
     acp_config_from_agent_config,
     build_acp_completion_message,
-    build_acp_task_response,
     enqueue_acp_completion_followup,
     runner_for,
     task_command,
@@ -36,7 +35,6 @@ __all__ = [
     "ACPSessionClient",
     "acp_config_from_agent_config",
     "build_acp_completion_message",
-    "build_acp_task_response",
     "build_agent_args",
     "build_copilot_args",
     "enqueue_acp_completion_followup",

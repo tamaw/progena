@@ -29,6 +29,8 @@ class _Runs:
     hold_cancelled: bool = False
     started: list[str] = field(default_factory=list)
     session_ids: list[str | None] = field(default_factory=list)
+    steered: list[tuple[str, str]] = field(default_factory=list)
+    modes: list[str] = field(default_factory=list)
     runners: list[_FakeRunner] = field(default_factory=list)
 
 
@@ -46,6 +48,14 @@ class _FakeRunner:
             self.release.set()
         return True
 
+    async def steer(self, session_id: str, text: str) -> str:
+        self.runs.steered.append((session_id, text))
+        return "injected"
+
+    async def set_mode(self, mode: str) -> bool:
+        self.runs.modes.append(mode)
+        return True
+
     async def run(
         self,
         prompt: str,
@@ -53,7 +63,9 @@ class _FakeRunner:
         *,
         run_id: str,
         session_id: str | None,
+        mode: str | None,
         on_progress: Callable[[dict[str, Any]], Awaitable[None]],
+        on_input: Callable[[dict[str, Any]], Awaitable[Any]],
     ) -> ACPRunResult:
         _ = cwd
         self.runs.started.append(prompt)
@@ -67,6 +79,25 @@ class _FakeRunner:
                 "tool_call": {"id": run_id, "name": "edit", "status": "start"},
             }
         )
+        if mode:
+            self.runs.modes.append(mode)
+        if prompt in {"question", "plan-approve", "plan-reject"}:
+            kind = "question" if prompt == "question" else "plan"
+            answer = await on_input(
+                {
+                    "id": f"input-{prompt}",
+                    "kind": kind,
+                    "message": f"{kind} requested",
+                    **({"fields": {"value": {"type": "string"}}} if kind == "question" else {}),
+                    **({"plan": "proposed steps"} if kind == "plan" else {}),
+                }
+            )
+            return ACPRunResult(
+                success=True,
+                output=str(answer),
+                stop_reason="end_turn",
+                session_id=active_session,
+            )
         if prompt in self.runs.block_prompts:
             await self.release.wait()
         if self.cancelled:
@@ -289,6 +320,139 @@ async def test_concurrency_cap_leaves_extra_task_queued_until_slot_frees(monkeyp
         for runner in list(harness.runs.runners):
             runner.release.set()
         await _wait_for(lambda: harness.task("three").get("status") == "completed")
+    finally:
+        await harness.stop()
+
+
+async def test_message_steers_a_running_turn(monkeypatch) -> None:
+    harness = _Harness(monkeypatch)
+    _registry(harness.store)
+    harness.runs.block_prompts.add("build")
+    await harness.start()
+    try:
+        harness.add_task("one", "build")
+        await _wait_for(lambda: harness.runs.started == ["build"])
+        harness.mutate(
+            "one",
+            lambda task: task.update(
+                {"messages": [{"id": "message-1", "text": "change direction", "status": "pending"}]}
+            ),
+        )
+        await _wait_for(lambda: harness.task("one")["messages"][0]["status"] == "injected")
+        assert harness.runs.steered == [("session-1", "change direction")]
+        harness.runs.runners[0].release.set()
+        await _wait_for(lambda: harness.task("one").get("status") == "completed")
+    finally:
+        await harness.stop()
+
+
+async def test_idle_message_starts_a_turn_on_the_existing_session(monkeypatch) -> None:
+    harness = _Harness(monkeypatch)
+    _registry(harness.store)
+    await harness.start()
+    try:
+        harness.add_task("one", "first")
+        await _wait_for(lambda: harness.task("one").get("status") == "completed")
+        harness.mutate(
+            "one",
+            lambda task: task.update(
+                {"messages": [{"id": "message-1", "text": "second", "status": "pending"}]}
+            ),
+        )
+        await _wait_for(lambda: harness.task("one").get("turn") == 2)
+        await _wait_for(lambda: harness.task("one").get("status") == "completed")
+        task = harness.task("one")
+        assert task["messages"][0]["status"] == "started_turn"
+        assert harness.runs.session_ids == [None, "session-1"]
+        assert harness.runs.started == ["first", "second"]
+    finally:
+        await harness.stop()
+
+
+async def test_question_answer_round_trip_clears_pending_input(monkeypatch) -> None:
+    harness = _Harness(monkeypatch)
+    _registry(harness.store)
+    await harness.start()
+    try:
+        harness.add_task("one", "question")
+        await _wait_for(lambda: harness.task("one").get("pending_input") is not None)
+        pending = harness.task("one")["pending_input"]
+        assert pending["kind"] == "question"
+        assert pending["fields"] == {"value": {"type": "string"}}
+        harness.mutate(
+            "one", lambda task: task.update({"answers": {pending["id"]: {"value": "yes"}}})
+        )
+        await _wait_for(lambda: harness.task("one").get("status") == "completed")
+        task = harness.task("one")
+        assert task["pending_input"] is None
+        assert task["answers"] == {}
+        assert task["output"] == "{'value': 'yes'}"
+    finally:
+        await harness.stop()
+
+
+async def test_plan_answers_drive_approval_and_rejection(monkeypatch) -> None:
+    harness = _Harness(monkeypatch)
+    _registry(harness.store)
+    await harness.start()
+    try:
+        harness.add_task("approve", "plan-approve")
+        await _wait_for(lambda: harness.task("approve").get("pending_input") is not None)
+        approve_id = harness.task("approve")["pending_input"]["id"]
+        harness.mutate(
+            "approve",
+            lambda task: task.update({"answers": {approve_id: {"approve": True}}}),
+        )
+        await _wait_for(lambda: harness.task("approve").get("status") == "completed")
+        assert harness.task("approve")["output"] == "{'approve': True}"
+
+        harness.add_task("reject", "plan-reject")
+        await _wait_for(lambda: harness.task("reject").get("pending_input") is not None)
+        reject_id = harness.task("reject")["pending_input"]["id"]
+        harness.mutate(
+            "reject",
+            lambda task: task.update(
+                {"answers": {reject_id: {"approve": False, "feedback": "use smaller steps"}}}
+            ),
+        )
+        await _wait_for(lambda: harness.task("reject").get("status") == "completed")
+        assert (
+            harness.task("reject")["output"]
+            == "{'approve': False, 'feedback': 'use smaller steps'}"
+        )
+    finally:
+        await harness.stop()
+
+
+async def test_mode_change_applies_to_the_active_session(monkeypatch) -> None:
+    harness = _Harness(monkeypatch)
+    _registry(harness.store)
+    harness.runs.block_prompts.add("build")
+    await harness.start()
+    try:
+        harness.add_task("one", "build", mode="plan")
+        await _wait_for(lambda: harness.runs.started == ["build"])
+        await _wait_for(lambda: harness.runs.modes == ["plan"])
+        harness.mutate("one", lambda task: task.update({"mode": "acceptEdits"}))
+        await _wait_for(lambda: harness.runs.modes == ["plan", "acceptEdits"])
+        harness.runs.runners[0].release.set()
+        await _wait_for(lambda: harness.task("one").get("status") == "completed")
+    finally:
+        await harness.stop()
+
+
+async def test_late_answer_is_discarded_after_turn_end(monkeypatch) -> None:
+    harness = _Harness(monkeypatch)
+    _registry(harness.store)
+    await harness.start()
+    try:
+        harness.add_task(
+            "one", "first", pending_input={"id": "old", "kind": "question", "message": "old"}
+        )
+        await _wait_for(lambda: harness.task("one").get("status") == "completed")
+        harness.mutate("one", lambda task: task.update({"answers": {"old": {"value": "late"}}}))
+        await _wait_for(lambda: harness.task("one").get("answers") == {})
+        assert harness.task("one")["pending_input"] is None
     finally:
         await harness.stop()
 

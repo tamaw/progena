@@ -12,6 +12,11 @@ from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.runtime import Runtime
 from langgraph.types import interrupt
 
+from ..instructions.templates import (
+    instruction_relative_path,
+    parse_instruction_template,
+    render_instruction_template,
+)
 from ..structured import validate_against_schema
 from .approvals import approval_decision_id
 from .control_nodes import _foreach_items
@@ -36,6 +41,7 @@ def _build_object_agent_node(
     *,
     object_agent_registry: dict[str, Any],
     defs: dict[str, dict[str, Any]] | None = None,
+    instruction_loader: Callable[[str], str] | None = None,
     background_runner: Callable[..., Awaitable[dict[str, Any]]] | None = None,
 ) -> Any:
     """Conversational delegation to a local object agent, keyed to stay on the
@@ -44,12 +50,16 @@ def _build_object_agent_node(
     conversation each time."""
     config = _node_config(node)
     output_key = node.output_key or node.id
-    _require_no_file_source(node.id, "agent", config, "prompt_file")
     agent_name = config["agent_name"]
     template = config.get("prompt_template")
+    instruction = config.get("instruction")
     inputs_config = config.get("inputs") or {}
-    if not template and not inputs_config:
-        raise ValueError(f"agent node {node.id}: config needs 'prompt_template' or 'inputs'")
+    if not template and not instruction and not inputs_config:
+        raise ValueError(
+            f"agent node {node.id}: config needs 'prompt_template', 'instruction', or 'inputs'"
+        )
+    if instruction and instruction_loader is None:
+        raise ValueError(f"agent node {node.id}: instruction '{instruction}' cannot be loaded")
     response_schema = _resolve_response_schema(node.id, "agent", config, defs)
     continue_thread = config.get("continue_thread", True)
 
@@ -60,6 +70,18 @@ def _build_object_agent_node(
         if inputs_config:
             namespace = _resolve_inputs(node.id, inputs_config, data)
             rendered = json.dumps(namespace)
+        elif instruction:
+            assert instruction_loader is not None  # guaranteed by the guard above
+            path = instruction_relative_path(instruction)
+            try:
+                source = instruction_loader(path)
+            except (FileNotFoundError, KeyError, ValueError) as exc:
+                raise ValueError(
+                    f"agent node {node.id}: instruction '{instruction}' not found"
+                ) from exc
+            if source is None:
+                raise ValueError(f"agent node {node.id}: instruction '{instruction}' not found")
+            rendered = render_instruction_template(parse_instruction_template(source), data)
         else:
             assert template is not None  # guaranteed by the guard above
             try:

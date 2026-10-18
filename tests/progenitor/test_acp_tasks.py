@@ -7,7 +7,6 @@ import pytest
 from app.progenitor.acp.tasks import (
     acp_config_from_agent_config,
     build_acp_completion_message,
-    build_acp_task_response,
     task_command,
     task_cwd,
 )
@@ -25,20 +24,6 @@ def test_tcp_task_uses_requested_cwd_and_endpoint_label() -> None:
     )
     assert task_cwd(config, "/app/repos/card") == "/app/repos/card"
     assert task_command(config) == "claude:3001"
-
-
-def test_terminal_task_response_exposes_completion_output() -> None:
-    task = ACPTaskRecord(
-        task_id="task-1",
-        agent_name="claude",
-        prompt="implement it",
-        status=ACPTaskStatus.COMPLETED,
-        output="done",
-    )
-    response = build_acp_task_response(task)
-    assert response["status"] == "completed"
-    assert response["output"] == "done"
-    assert "finished" in build_acp_completion_message(task)
 
 
 def test_interrupted_task_is_terminal_and_reports_reason() -> None:

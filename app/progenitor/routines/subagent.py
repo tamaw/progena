@@ -32,6 +32,7 @@ from langgraph.cache.memory import InMemoryCache
 from langgraph.errors import NodeTimeoutError
 from langgraph.types import Command
 
+from ..instructions.templates import instruction_relative_path
 from ..policies import PolicyValues, resolve_execution_policy
 from ..structured import validate_against_schema
 from ..utils import utcnow
@@ -88,6 +89,22 @@ async def resolve_routine_document(
         if requested in {graph_id, graph_name} and graph_id:
             return graph_id, graph_doc
     return None
+
+
+async def _routine_instruction_loader(
+    state_manager: Any,
+) -> tuple[Callable[[str], str], dict[str, str]]:
+    """Snapshot instructions once per routine compilation, matching workflow reads."""
+    instructions = dict(await state_manager.list_content_documents("instruction"))
+
+    def load(path: str) -> str:
+        relative_path = instruction_relative_path(path)
+        text = instructions.get(relative_path)
+        if text is None:
+            raise ValueError(f"instruction '{path}' not found")
+        return text
+
+    return load, instructions
 
 
 async def resolve_routine_graph(
@@ -217,8 +234,18 @@ def create_routine_executor(
             )
             else None
         )
+        instruction_loader = None
+        instruction_documents: dict[str, str] | None = None
+        if any(
+            node.kind == "agent" and node.config.instruction is not None
+            for node in selected_graph.nodes
+        ):
+            instruction_loader, instruction_documents = await _routine_instruction_loader(
+                state_manager
+            )
         compile_key = json.dumps(
-            [revision_id, graph_doc, execution_policy, model_profiles], sort_keys=True
+            [revision_id, graph_doc, execution_policy, model_profiles, instruction_documents],
+            sort_keys=True,
         )
         compiled: Any = None
         run_config: RunnableConfig | None = None
@@ -238,6 +265,7 @@ def create_routine_executor(
                     model_profile_resolver=model_profile_resolver,
                     tool_registry=tool_registry,
                     base_system_prompt=None,
+                    instruction_loader=instruction_loader,
                     checkpointer=checkpointer,
                     preserve_data=True,
                     execution_policy=policy_values,
@@ -640,6 +668,9 @@ async def _resume_routine_thread(
         raise ValueError(f"routine {routine_id!r} has no stored graph to resume against")
 
     graph = validate_routine_graph_payload(graph_doc)
+    instruction_loader = None
+    if any(node.kind == "agent" and node.config.instruction is not None for node in graph.nodes):
+        instruction_loader, _ = await _routine_instruction_loader(state_manager)
     compiled = compile_routine_graph(
         graph,
         model=model,
@@ -650,6 +681,7 @@ async def _resume_routine_thread(
         model_profile_resolver=model_profile_resolver,
         tool_registry=tool_registry,
         base_system_prompt=None,
+        instruction_loader=instruction_loader,
         checkpointer=checkpointer,
     )
     run_config: RunnableConfig = {"configurable": {"thread_id": thread_id}}
@@ -666,6 +698,7 @@ async def _resume_routine_thread(
         agent_background_runner=agent_background_runner,
         model_profile_resolver=model_profile_resolver,
         tool_registry=tool_registry,
+        instruction_loader=instruction_loader,
         checkpointer=checkpointer,
         execution_policy=PolicyValues.model_validate(execution_policy["values"]),
         cache=_RUNTIME_NODE_CACHE,

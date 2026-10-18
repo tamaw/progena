@@ -994,6 +994,23 @@ class StateManager:
             merge_document_fn=self._runtime_store.merge_document,
         )
 
+    async def append_acp_task_message(self, task_id: str, message: dict[str, Any]) -> bool:
+        """Atomically append a requester message to an ACP task document."""
+        return await acp_store.append_acp_task_message(
+            task_id=task_id,
+            message=message,
+            append_document_list_fn=self._runtime_store.append_document_list,
+        )
+
+    async def set_acp_task_answer(self, task_id: str, input_id: str, answer: Any) -> bool:
+        """Atomically store one ACP input answer."""
+        return await acp_store.set_acp_task_answer(
+            task_id=task_id,
+            input_id=input_id,
+            answer=answer,
+            merge_document_object_fn=self._runtime_store.merge_document_object,
+        )
+
     # ==========================================================================
     # Async Subagent Task Tracking
     # ==========================================================================

@@ -52,22 +52,6 @@ def runner_for(acp_config: ACPAgentConfig, cwd: str) -> ACPRunner:
     return ACPRunner(acp_config.command, args, timeout=acp_config.timeout_seconds)
 
 
-def build_acp_task_response(record: ACPTaskRecord) -> dict[str, Any]:
-    """Compact tool-result payload describing a tracked ACP task."""
-    payload: dict[str, Any] = {
-        "task_id": record.task_id,
-        "agent": record.agent_name,
-        "status": record.status,
-        "source": record.source,
-        "transport": "acp",
-        "cwd": record.cwd,
-        "turn": record.turn,
-    }
-    if record.is_terminal and record.output is not None:
-        payload["output"] = record.output
-    return payload
-
-
 def build_acp_completion_message(record: ACPTaskRecord) -> str:
     """Human-readable completion summary for conversation history / notifications."""
     name = record.agent_name.replace("_", " ").strip() or "ACP agent"

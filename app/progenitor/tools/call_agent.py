@@ -2,26 +2,16 @@
 
 from __future__ import annotations
 
-import asyncio
 import contextlib
 import inspect
 import logging
-import uuid
 from collections.abc import Awaitable, Callable
 from typing import Any, cast
 
 from pydantic import BaseModel, Field
 
 from ..a2a import build_task_response, dispatch_tracked_a2a_task, extract_message_text
-from ..acp import (
-    acp_config_from_agent_config,
-    build_acp_task_response,
-    task_command,
-    task_cwd,
-)
 from ..sse.stream_events import build_a2a_call_progress_event, emit_stream_event
-from ..state.models import ACPTaskRecord, ACPTaskStatus
-from ..utils import utcnow
 from .protocol import BaseSystemTool, ToolContext, ToolResult
 
 logger = logging.getLogger(__name__)
@@ -74,10 +64,9 @@ class CallAgentTool(BaseSystemTool):
     @property
     def description(self) -> str:
         return (
-            "Call a deployed agent by name or capability, or omit agent to auto-route. "
-            "Handles both remote A2A agents and local ACP agents (e.g. GitHub Copilot); "
-            "the registered agent's transport is dispatched automatically. "
-            "Use for external/hosted/CLI agents; prefer DeepAgent subagents for internal work. "
+            "Call a deployed remote A2A agent by name or capability, or omit agent to auto-route. "
+            "Use acp_start for registered ACP CLI agents such as Claude Code. "
+            "Use this for external/hosted agents; prefer DeepAgent subagents for internal work. "
             "Defaults to async tracked dispatch; set blocking=true to wait for completion."
         )
 
@@ -146,61 +135,10 @@ class CallAgentTool(BaseSystemTool):
         resolved_name = str(cfg.get("name") or agent or "").strip() or agent
         routing_mode = "explicit" if args.get("agent") or args.get("agent_name") else "auto"
 
-        # ACP turns are driven exclusively by the backend supervisor.  The
-        # runtime only creates the durable queued request and, for a blocking
-        # call, observes that document until it reaches a terminal state.
         if str(cfg.get("transport") or "").lower() == "acp":
-            try:
-                acp_config = acp_config_from_agent_config(cfg)
-            except ValueError as exc:
-                return ToolResult.fail(str(exc))
-            task_id = f"acp_{uuid.uuid4().hex[:12]}"
-            record = ACPTaskRecord(
-                task_id=task_id,
-                agent_name=resolved_name,
-                prompt=request,
-                cwd=task_cwd(acp_config, None),
-                command=task_command(acp_config),
-                source="call_agent",
-                request_metadata={
-                    "caller": "progenitor",
-                    "dispatch_mode": "blocking" if blocking else "async",
-                    "routing_mode": routing_mode,
-                    "thread_id": str((context.state or {}).get("thread_id") or "").strip() or None,
-                },
-                status=ACPTaskStatus.QUEUED,
-                notify_on_completion=not blocking,
-                created_at=utcnow(),
-                updated_at=utcnow(),
+            return ToolResult.fail(
+                f"Agent '{resolved_name}' uses ACP; start it with acp_start instead of call_agent"
             )
-            await context.state_manager.upsert_acp_task(record)
-            if not blocking:
-                payload = build_acp_task_response(record)
-                payload["message"] = (
-                    f"ACP task queued for '{agent}' (task_id: {record.task_id}). "
-                    "You'll be notified when it finishes."
-                )
-                return ToolResult.ok(payload)
-
-            deadline = asyncio.get_running_loop().time() + max(timeout_seconds, 0.0)
-            while True:
-                current = await context.state_manager.get_acp_task(task_id)
-                if current is None:
-                    return ToolResult.fail(f"ACP task disappeared: {task_id}")
-                if current.is_terminal:
-                    payload = build_acp_task_response(current)
-                    if current.status == ACPTaskStatus.COMPLETED.value:
-                        return ToolResult.ok(payload)
-                    return ToolResult.fail(
-                        current.last_error
-                        or current.stop_reason
-                        or f"ACP task finished with status {current.status}"
-                    )
-                if asyncio.get_running_loop().time() >= deadline:
-                    return ToolResult.fail(
-                        f"Timed out waiting for ACP task {task_id} after {timeout_seconds:g}s"
-                    )
-                await asyncio.sleep(0.1)
 
         progress_callback = (
             _make_progress_callback(context.tool_call_id, resolved_name) if blocking else None
