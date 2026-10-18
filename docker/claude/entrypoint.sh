@@ -37,6 +37,10 @@ ensure_dirs
 
 git config --global --add safe.directory "${CLAUDE_WORKSPACE}" 2>/dev/null || true
 git config --global --add safe.directory "${CLAUDE_WORKSPACE}/*" 2>/dev/null || true
+# Claude commits its own work in Progenitor's worktrees; pushing stays with
+# Progenitor's repo-manager agent (this container has no GitHub credentials).
+git config --global user.name "${CLAUDE_GIT_NAME:-Claude (Progenitor)}"
+git config --global user.email "${CLAUDE_GIT_EMAIL:-claude@progenitor.invalid}"
 
 if [[ "$#" -gt 0 ]]; then
     exec "$@"

@@ -257,6 +257,66 @@ class TestAgentResponseSchema:
             )
 
 
+class TestAgentInstruction:
+    @staticmethod
+    def _graph(instruction: str = "workflows/greet.md"):
+        return validate_routine_graph_payload(
+            {
+                "id": "agent-instruction",
+                "name": "Agent instruction",
+                "description": "",
+                "version": "2.0.0",
+                "entry": "call",
+                "nodes": [
+                    {
+                        "id": "call",
+                        "kind": "agent",
+                        "output_key": "result",
+                        "config": {"agent_name": "greeter", "instruction": instruction},
+                    }
+                ],
+                "edges": [],
+            }
+        )
+
+    async def test_renders_instruction_with_routine_state(self):
+        agent = FakeAgent("Hello")
+        graph = self._graph()
+        runnable = compile_routine_graph(
+            graph,
+            model=FakeModel([]),
+            agent_registry={"greeter": agent},
+            instruction_loader=lambda path: (
+                "---\ntitle: Greet\ninputs: {name: string}\n---\nHello {name}!"
+            ),
+        )
+
+        result = await runnable.ainvoke({"data": {"name": "Ada"}})
+
+        assert result["data"]["result"] == "Hello"
+        assert agent.calls[0]["messages"][0].content == "Hello Ada!"
+
+    def test_missing_instruction_fails_clearly(self):
+        graph = self._graph()
+
+        with pytest.raises(ValueError, match="instruction 'workflows/greet.md' cannot be loaded"):
+            compile_routine_graph(
+                graph, model=FakeModel([]), agent_registry={"greeter": FakeAgent("x")}
+            )
+
+    async def test_unknown_instruction_fails_clearly(self):
+        graph = self._graph()
+        runnable = compile_routine_graph(
+            graph,
+            model=FakeModel([]),
+            agent_registry={"greeter": FakeAgent("x")},
+            instruction_loader=lambda path: None,
+        )
+
+        with pytest.raises(ValueError, match="instruction 'workflows/greet.md' not found"):
+            await runnable.ainvoke({"data": {}})
+
+
 class TestRoutineRegistry:
     async def test_missing_routine_raises_keyerror(self):
         payload = {

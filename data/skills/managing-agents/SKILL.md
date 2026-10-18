@@ -73,6 +73,12 @@ do not repeat it under `mounts`. `skills` never takes a whole folder of skills;
 to give an agent read access to every skill, mount `/skills/` instead (that
 grants file access only and loads none of them into its prompt).
 
+User agents may list the ACP tools `acp_start`, `acp_send`, `acp_status`,
+`acp_answer`, `acp_cancel`, and `acp_list` when they need to drive a Claude ACP
+session. Give such an agent the `driving-acp-agents` skill as well; use a
+`repo-manager` worktree as the ACP `cwd`, rather than granting it shell or GitHub
+credentials.
+
 Agents have no other filesystem access unless declared. Declare required paths
 in `mounts` with `access: read` or `read-write`; extra `permissions` must stay
 within those mounts or listed skills. Adding a skill does not grant access to

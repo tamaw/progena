@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "ACP Task",
-  "description": "One ACP (Agent Client Protocol) session driven by the backend supervisor, stored as an acp_task:<id> document. Writable fields are requests: create with status 'queued' to start a session; write {prompt, status: 'queued'} to run the next turn on the same session (cancelling a running turn first); write {cancel_requested: true} to cancel. Read-only fields are owned by the supervisor.",
+  "description": "One ACP (Agent Client Protocol) session driven by the backend supervisor, stored as an acp_task:<id> document. Writable fields request work: create with status 'queued' to start a session; append a message to steer a working turn or start the next turn when idle; write {prompt, status: 'queued'} to run the next turn on the same session; write {cancel_requested: true} to cancel. Read-only fields are owned by the supervisor.",
   "type": "object",
   "properties": {
     "task_id": {"type": "string", "readOnly": true, "description": "The id part of the acp_task:<id> key."},
@@ -16,6 +16,25 @@
       "description": "queued: a turn is requested; working: a turn is running; completed/failed/canceled: the last turn ended; interrupted: the backend restarted during the turn (queue another turn to resume the session)."
     },
     "cancel_requested": {"type": "boolean", "default": false, "description": "Set true to cancel the running or queued turn; reset to false by the supervisor."},
+    "messages": {
+      "type": "array",
+      "default": [],
+      "description": "Messages appended by requesters for injection into a running turn or the next turn when idle.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {"type": "string"},
+          "text": {"type": "string"},
+          "status": {"type": "string", "enum": ["pending", "injected", "started_turn", "failed"]},
+          "error": {"type": "string"},
+          "sent_at": {"type": "string"}
+        },
+        "required": ["id", "text", "status"],
+        "additionalProperties": false
+      }
+    },
+    "mode": {"type": ["string", "null"], "enum": ["default", "acceptEdits", "plan", "bypassPermissions", null], "description": "Requested session mode, applied when a session starts or resumes and while it is running."},
+    "answers": {"type": "object", "default": {}, "additionalProperties": true, "description": "Answers keyed by a supervisor-created pending_input id."},
     "source": {"type": "string", "default": "workflow", "description": "Who requested the task (e.g. 'workflow', 'call_agent')."},
     "request_metadata": {"type": "object", "default": {}, "description": "Free-form caller context."},
     "notify_on_completion": {"type": "boolean", "default": false, "description": "Tell Progenitor's chat when a turn ends."},
@@ -41,6 +60,23 @@
     },
     "stalled": {"type": "boolean", "readOnly": true, "description": "True while a working turn has shown no agent activity for PROGENITOR_ACP_STALL_SECONDS."},
     "history": {"type": "array", "items": {"type": "object"}, "readOnly": true, "description": "Finished turns: turn, status, prompt, output, summary, stop_reason, last_error, completed_at."},
+    "pending_input": {
+      "type": ["object", "null"],
+      "readOnly": true,
+      "description": "Human input currently requested by the agent, or null.",
+      "properties": {
+        "id": {"type": "string"},
+        "kind": {"type": "string", "enum": ["question", "plan", "permission"]},
+        "message": {"type": "string"},
+        "fields": {"type": "object", "additionalProperties": true},
+        "plan": {"type": "string"},
+        "tool": {"type": "string"},
+        "options": {"type": "array", "items": {"type": "object"}},
+        "requested_at": {"type": "string"}
+      },
+      "required": ["id", "kind", "message", "requested_at"],
+      "additionalProperties": false
+    },
     "created_at": {"type": "string", "readOnly": true},
     "updated_at": {"type": "string", "readOnly": true},
     "started_at": {"type": ["string", "null"], "readOnly": true},

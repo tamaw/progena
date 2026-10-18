@@ -235,7 +235,7 @@
         "model_profile": { "type": ["string", "null"], "minLength": 1 },
         "agent_name": { "type": "string", "minLength": 1 },
         "prompt_template": { "type": "string", "minLength": 1 },
-        "prompt_file": { "type": "string", "minLength": 1 },
+        "instruction": { "type": "string", "minLength": 1, "description": "Path relative to /instructions/." },
         "inputs": { "$ref": "#/$defs/inputMap" },
         "response_schema": { "$ref": "#/$defs/responseSchema" },
         "continue_thread": { "type": "boolean" },
@@ -244,9 +244,9 @@
         "timeout": { "type": "number", "minimum": 0, "description": "Seconds before this node is abandoned, overriding the execution policy attempt timeout. 0 disables the limit." }
       },
       "oneOf": [
-        { "required": ["prompt_template"], "not": { "anyOf": [{ "required": ["prompt_file"] }, { "required": ["inputs"] }] } },
-        { "required": ["prompt_file"], "not": { "anyOf": [{ "required": ["prompt_template"] }, { "required": ["inputs"] }] } },
-        { "required": ["inputs"], "not": { "anyOf": [{ "required": ["prompt_template"] }, { "required": ["prompt_file"] }] } }
+        { "required": ["prompt_template"], "not": { "anyOf": [{ "required": ["instruction"] }, { "required": ["inputs"] }] } },
+        { "required": ["instruction"], "not": { "anyOf": [{ "required": ["prompt_template"] }, { "required": ["inputs"] }] } },
+        { "required": ["inputs"], "not": { "anyOf": [{ "required": ["prompt_template"] }, { "required": ["instruction"] }] } }
       ]
     },
     "a2aConfig": {

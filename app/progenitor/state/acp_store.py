@@ -69,3 +69,24 @@ async def update_acp_task(
     return await merge_document_fn(
         acp_task_key(task_id), _JSON_FIELDS.dump_python(updates, mode="json")
     )
+
+
+async def append_acp_task_message(
+    *,
+    task_id: str,
+    message: dict[str, Any],
+    append_document_list_fn: Callable[[str, str, Any], Awaitable[bool]],
+) -> bool:
+    """Atomically append one requester message to an ACP task."""
+    return await append_document_list_fn(acp_task_key(task_id), "messages", message)
+
+
+async def set_acp_task_answer(
+    *,
+    task_id: str,
+    input_id: str,
+    answer: Any,
+    merge_document_object_fn: Callable[[str, str, dict[str, Any]], Awaitable[bool]],
+) -> bool:
+    """Atomically record one answer without overwriting other pending answers."""
+    return await merge_document_object_fn(acp_task_key(task_id), "answers", {input_id: answer})

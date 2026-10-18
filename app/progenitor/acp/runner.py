@@ -19,7 +19,7 @@ import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 from acp import PROTOCOL_VERSION, connect_to_agent, spawn_agent_process, text_block
 
@@ -51,7 +51,7 @@ class ACPRunner:
     - **stdio** (default): spawn ``command *args`` as a subprocess and drive it.
     - **TCP**: set ``port`` (and optionally ``host``) to connect to an already
       running ACP server (e.g. ``copilot --acp --port 3000``); ``model`` is then
-      applied per session via ``set_session_model``.
+      applied per session through ``session/set_config_option``.
     """
 
     def __init__(
@@ -89,39 +89,39 @@ class ACPRunner:
         self._cancel_requested = True
         return True
 
-    async def _set_session_model(
-        self,
-        conn: Any,
-        initialized: Any,
-        session_id: str,
-    ) -> None:
-        """Select a model, using Claude ACP's untyped config-option extension."""
-        if not self.model:
-            return
-        capabilities = getattr(initialized, "agent_capabilities", None)
-        session_capabilities = getattr(capabilities, "session_capabilities", None)
-        typed_models = getattr(session_capabilities, "models", None) or getattr(
-            capabilities, "models", None
+    async def steer(self, session_id: str, text: str) -> str:
+        """Inject text into the active turn on this runner's live connection."""
+        conn = self._active_conn
+        if conn is None or session_id != self._active_session_id:
+            return "promptRequired"
+        response = await conn.ext_method(
+            "session/steering",
+            {
+                "sessionId": session_id,
+                "prompt": [text_block(text).model_dump(mode="json", by_alias=True)],
+                "_meta": {"steering": {"idleBehavior": "promptRequired"}},
+            },
         )
-        if typed_models:
-            await conn.set_session_model(model_id=self.model, session_id=session_id)
-            return
-        raw_connection = getattr(conn, "_conn", None)
-        send_request = getattr(raw_connection, "send_request", None)
-        if not callable(send_request):
-            logger.warning("ACP agent does not expose a model-selection API")
-            return
-        await cast(
-            Any,
-            send_request(
-                "session/set_config_option",
-                {
-                    "sessionId": session_id,
-                    "configId": "model",
-                    "value": self.model,
-                },
-            ),
-        )
+        outcome = response.get("outcome") if isinstance(response, dict) else None
+        return str(outcome or "failed")
+
+    async def set_mode(self, mode: str) -> bool:
+        """Set the mode of this runner's active ACP session."""
+        conn = self._active_conn
+        session_id = self._active_session_id
+        if conn is None or not session_id:
+            return False
+        await conn.set_session_mode(session_id=session_id, mode_id=mode)
+        return True
+
+    async def _set_session_model(self, conn: Any, session_id: str) -> None:
+        """Select the configured model through ACP's typed config-option API."""
+        if self.model:
+            await conn.set_config_option(
+                config_id="model",
+                session_id=session_id,
+                value=self.model,
+            )
 
     @property
     def is_tcp(self) -> bool:
@@ -134,7 +134,7 @@ class ACPRunner:
             host = self.host or "127.0.0.1"
             logger.info("ACP [%s]: connecting to %s:%s", run_id, host, self.port)
             reader, writer = await asyncio.open_connection(host, self.port)
-            conn = connect_to_agent(client, writer, reader)  # input=writer, output=reader
+            conn = connect_to_agent(client, writer, reader, use_unstable_protocol=True)
             try:
                 yield conn
             finally:
@@ -157,8 +157,8 @@ class ACPRunner:
                 *self.args,
                 cwd=str(cwd),
                 env=os.environ.copy(),
+                use_unstable_protocol=True,
             ) as (conn, proc):
-                logger.info("ACP [%s]: process pid=%s", run_id, getattr(proc, "pid", "?"))
                 yield conn
 
     async def run(
@@ -168,17 +168,21 @@ class ACPRunner:
         *,
         run_id: str = "unknown",
         session_id: str | None = None,
+        mode: str | None = None,
         on_progress: Callable[[dict[str, Any]], Awaitable[None] | None] | None = None,
+        on_input: Callable[[dict[str, Any]], Awaitable[Any] | Any] | None = None,
     ) -> ACPRunResult:
-        """Run one prompt, resuming ``session_id`` when a prior turn exists."""
         cwd_path = Path(cwd)
         start = time.perf_counter()
-        client = ACPSessionClient(run_id=run_id, on_progress=on_progress)
+        client = ACPSessionClient(run_id=run_id, on_progress=on_progress, on_input=on_input)
         active_session_id = session_id
 
         try:
             async with self._open(client, cwd_path, run_id) as conn:
-                initialized = await conn.initialize(protocol_version=PROTOCOL_VERSION)
+                await conn.initialize(
+                    protocol_version=PROTOCOL_VERSION,
+                    client_capabilities=client.capabilities,
+                )
                 if session_id:
                     session = await conn.resume_session(
                         cwd=str(cwd_path),
@@ -200,7 +204,9 @@ class ACPRunner:
                     if asyncio.iscoroutine(progress_result):
                         await progress_result
                 if self.is_tcp and self.model:
-                    await self._set_session_model(conn, initialized, active_session_id)
+                    await self._set_session_model(conn, active_session_id)
+                if mode:
+                    await self.set_mode(mode)
                 response = await asyncio.wait_for(
                     conn.prompt(prompt=[text_block(prompt_text)], session_id=active_session_id),
                     timeout=self.timeout,

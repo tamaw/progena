@@ -51,13 +51,27 @@ Node kinds:
 - To alert the user, use `format` to render any dynamic message and wire its `text` output to a `document_create` node for document type `alert`. Supply title and message; alert defaults supply type `info`, `urgent` false, `requires_response` false, and `viewed` false.
 
 ACP tasks (driving Claude and other ACP agents):
-- An `acp_task` document is one agent session run by the backend; workflows drive it with the generic document nodes, never an `agent` node. See `/schemas/acp_task.schema.v1.json`.
-  - Start: `document_create(acp_task)` with `agent_name` (e.g. `claude`), `prompt`, and optionally `cwd` (a worktree path, e.g. one the `repo-manager` agent created) and `card_id`. It starts `queued`.
-  - Nudge / continue: `document_write(acp_task)` with `id`, a new `prompt`, and `status` `"queued"`. The next turn resumes the same session; a running turn is cancelled first.
-  - Cancel: `document_write(acp_task)` with `id` and `cancel_requested` `true`.
-- The backend sets `status` to `working`, then `completed`, `failed`, `canceled`, or `interrupted` (the backend restarted mid-turn; queue another turn to resume). It also keeps `output` (the last reply), `progress` (`last_message`, `plan`, `tool_call_count`, `last_tool`, `last_activity_at`), `turn`, `history`, and `stalled` (true after a long silence while working).
-- Do not wait inside one run: end the run after starting the task and react in another workflow. Examples: "turn finished" `{"kind": "event", "document_type": "acp_task", "changed_fields": ["status"], "match": {"after.status": "completed"}}`; "agent went quiet" `{"kind": "event", "document_type": "acp_task", "changed_fields": ["stalled"], "match": {"after.stalled": true}}`.
-- Repository work (clone, worktrees, push, pull requests) is agent work, not a workflow node: run a routine whose `agent` step uses the bundled `repo-manager` agent (see the managing-routines skill).
+- Prefer an `agent` or `routine` step whose runner has the `acp_*` tools and
+  `driving-acp-agents` skill. It can use `acp_start`, `acp_status` (with a wait
+  of at most 300 seconds), `acp_answer`, and `acp_send` to drive one interactive
+  session while it owns the work.
+- An `acp_task` document is one agent session run by the backend. Workflows that
+  need durable event-driven orchestration use the generic document nodes; see
+  `/schemas/acp_task.schema.v1.json`.
+  - Start: `document_create(acp_task)` with `agent_name` (e.g. `claude`),
+    `prompt`, and optionally `cwd` (a repo-manager worktree path), `card_id`,
+    and `mode`. It starts `queued`.
+  - To supply a follow-up request, append a pending `messages` entry rather
+    than replacing `prompt`; the supervisor steers a running turn or starts the
+    next idle turn. Write `answers[input_id]` to answer a pending input and
+    `cancel_requested: true` to cancel.
+- The backend sets `status` to `working`, then `completed`, `failed`, `canceled`,
+  or `interrupted`, and records output, progress, turn, history, and stalled.
+  `pending_input` is set when Claude needs a question or plan answer; answer it
+  promptly because Claude remains blocked until it is cleared.
+- Do not wait inside one document-driven run. React in another workflow:
+  `{"kind": "event", "document_type": "acp_task", "changed_fields": ["pending_input"]}`
+  handles questions/plans; status and stalled events handle completion and silence.
 
 Set `"notify_on_pause": true` on the workflow to raise an alert whenever a run pauses at an `approval` node or at a routine's `human` step. Pause alerts are under `/alerts/<id>.json` with a `context` saying what is waiting (`workflow_id`/`run_id`, or a routine `thread_id`) and its `approver`. Answer one only when the user asks you to: `resolve_workflow_approval` for approvals, `resume_routine` for routine steps; `approver: "human"` ones must be answered by the user in the UI.
 

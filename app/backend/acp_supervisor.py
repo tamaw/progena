@@ -121,6 +121,9 @@ class _ActiveTurn:
     progress: dict[str, Any]
     tool_calls: list[dict[str, Any]]
     session_id: str | None
+    mode: str | None
+    input_id: str | None = None
+    input_future: asyncio.Future[Any] | None = None
     last_persisted: float = field(default_factory=time.monotonic)
     dirty: bool = False
     stalled: bool = False
@@ -181,8 +184,19 @@ class ACPTaskSupervisor:
                 continue
             if record.status == ACPTaskStatus.WORKING.value:
                 self._mark_interrupted(task_id)
-            elif record.status == ACPTaskStatus.QUEUED.value:
+                recovered = self._get(task_id)
+                if recovered is not None and self._has_pending_message(recovered):
+                    self._queue_pending_message_turn(task_id)
+                continue
+            if record.pending_input is not None:
+                self._clear_pending_input(task_id)
+                record = self._get(task_id)
+                if record is None:
+                    continue
+            if record.status == ACPTaskStatus.QUEUED.value:
                 self.schedule(task_id)
+            elif self._has_pending_message(record):
+                self._queue_pending_message_turn(task_id)
         self._watchdog = asyncio.create_task(self._watch_for_stalls())
 
     async def stop(self) -> None:
@@ -194,6 +208,7 @@ class ACPTaskSupervisor:
                 await self._watchdog
             self._watchdog = None
         for active in list(self._active.values()):
+            self._resolve_input(active, {"action": "decline"})
             await active.runner.cancel(active.session_id)
         scheduled = list(self._scheduled.values())
         if scheduled:
@@ -217,6 +232,7 @@ class ACPTaskSupervisor:
         if typed.event.op == "deleted":
             active = self._active.get(task_id)
             if active is not None:
+                self._resolve_input(active, {"action": "decline"})
                 await active.runner.cancel(active.session_id)
             return
         record = _record(task_id, typed.event.after)
@@ -224,12 +240,26 @@ class ACPTaskSupervisor:
             return
         if record.cancel_requested:
             await self._cancel_requested(task_id)
-        elif record.status == ACPTaskStatus.QUEUED.value:
-            active = self._active.get(task_id)
-            if active is not None:
+            return
+        active = self._active.get(task_id)
+        if active is not None:
+            if (
+                record.mode
+                and record.mode != active.mode
+                and await active.runner.set_mode(record.mode)
+            ):
+                active.mode = record.mode
+            await self._deliver_input(active)
+            await self._process_pending_messages(active)
+            if record.status == ACPTaskStatus.QUEUED.value:
                 await active.runner.cancel(active.session_id)
-            else:
-                self.schedule(task_id)
+            return
+        if record.status == ACPTaskStatus.QUEUED.value:
+            self.schedule(task_id)
+        elif self._has_pending_message(record):
+            self._queue_pending_message_turn(task_id)
+        elif record.pending_input is None and record.answers:
+            self._clear_stale_answers(task_id)
 
     def schedule(self, task_id: str) -> None:
         """Queue work without changing a task's queued status while it waits."""
@@ -349,6 +379,7 @@ class ACPTaskSupervisor:
             progress=dict(record.progress),
             tool_calls=list(record.tool_calls[-_TOOL_CALL_LIMIT:]),
             session_id=record.session_id,
+            mode=record.mode,
         )
         self._active[record.task_id] = active
         try:
@@ -362,18 +393,25 @@ class ACPTaskSupervisor:
             if current.cancel_requested:
                 self._cancel_working_without_runner(record.task_id, record.turn)
                 return
+            active.mode = current.mode
             result = await runner.run(
                 record.prompt,
                 cwd=cwd,
                 run_id=record.task_id,
                 session_id=record.session_id,
+                mode=active.mode,
                 on_progress=lambda update: self._on_progress(active, update),
+                on_input=lambda request: self._on_input(active, request),
             )
             await self._persist_progress(active, force=True)
             self._finalize_turn(active, result)
         finally:
+            self._resolve_input(active, {"action": "decline"})
             self._active.pop(record.task_id, None)
             latest = self._get(record.task_id)
+            if latest is not None and latest.status != ACPTaskStatus.WORKING.value:
+                self._queue_pending_message_turn(record.task_id)
+                latest = self._get(record.task_id)
             if latest is not None and latest.status == ACPTaskStatus.QUEUED.value:
                 self.schedule(record.task_id)
 
@@ -403,6 +441,271 @@ class ACPTaskSupervisor:
             active.dirty = True
             force = kind == "session" or active.stalled
         await self._persist_progress(active, force=force)
+        if kind == "session":
+            await self._process_pending_messages(active)
+
+    @staticmethod
+    def _has_pending_message(record: ACPTaskRecord) -> bool:
+        return any(
+            isinstance(message, dict) and message.get("status") == "pending"
+            for message in record.messages
+        )
+
+    @staticmethod
+    def _first_pending_message(record: ACPTaskRecord) -> dict[str, Any] | None:
+        return next(
+            (
+                message
+                for message in record.messages
+                if isinstance(message, dict)
+                and message.get("status") == "pending"
+                and isinstance(message.get("id"), str)
+                and isinstance(message.get("text"), str)
+            ),
+            None,
+        )
+
+    async def _process_pending_messages(self, active: _ActiveTurn) -> None:
+        """Steer every queued message into the currently running ACP turn."""
+        if not active.session_id:
+            return
+        while True:
+            record = self._get(active.task_id)
+            if (
+                record is None
+                or record.status != ACPTaskStatus.WORKING.value
+                or record.turn != active.turn
+            ):
+                return
+            message = self._first_pending_message(record)
+            if message is None:
+                return
+            message_id = message["id"]
+            try:
+                outcome = await active.runner.steer(active.session_id, message["text"])
+            except Exception as exc:
+                logger.warning("ACP steering failed for task %s", active.task_id, exc_info=True)
+                self._update_message(
+                    active.task_id,
+                    message_id,
+                    status="failed",
+                    error=str(exc),
+                )
+                continue
+            if outcome == "injected":
+                self._update_message(active.task_id, message_id, status="injected")
+                continue
+            if outcome == "promptRequired":
+                return
+            self._update_message(
+                active.task_id,
+                message_id,
+                status="failed",
+                error=f"ACP steering returned {outcome}",
+            )
+
+    def _update_message(
+        self,
+        task_id: str,
+        message_id: str,
+        *,
+        status: str,
+        error: str | None = None,
+    ) -> None:
+        def update(current: Any) -> Any:
+            record = _record(task_id, current)
+            if record is None:
+                return current
+            messages = list(record.messages)
+            for index, message in enumerate(messages):
+                if not isinstance(message, dict) or message.get("id") != message_id:
+                    continue
+                if message.get("status") != "pending":
+                    return current
+                updated = dict(message)
+                updated["status"] = status
+                updated["sent_at"] = _now()
+                if error:
+                    updated["error"] = error
+                else:
+                    updated.pop("error", None)
+                messages[index] = updated
+                payload = dict(current)
+                payload["messages"] = messages
+                payload["updated_at"] = _now()
+                return payload
+            return current
+
+        self._mutate(task_id, update)
+
+    def _queue_pending_message_turn(self, task_id: str) -> None:
+        """Turn the first pending idle message into the task's next prompt."""
+        queued = False
+
+        def queue(current: Any) -> Any:
+            nonlocal queued
+            record = _record(task_id, current)
+            if record is None or record.status in {
+                ACPTaskStatus.QUEUED.value,
+                ACPTaskStatus.WORKING.value,
+            }:
+                return current
+            message = self._first_pending_message(record)
+            if message is None:
+                return current
+            messages = list(record.messages)
+            for index, candidate in enumerate(messages):
+                if isinstance(candidate, dict) and candidate.get("id") == message["id"]:
+                    updated = dict(candidate)
+                    updated["status"] = "started_turn"
+                    updated["sent_at"] = _now()
+                    updated.pop("error", None)
+                    messages[index] = updated
+                    payload = dict(current)
+                    payload.update(
+                        {
+                            "messages": messages,
+                            "prompt": message["text"],
+                            "status": ACPTaskStatus.QUEUED.value,
+                            "cancel_requested": False,
+                            "updated_at": _now(),
+                            "completed_at": None,
+                            "stalled": False,
+                        }
+                    )
+                    queued = True
+                    return payload
+            return current
+
+        self._mutate(task_id, queue)
+        if queued:
+            self.schedule(task_id)
+
+    async def _on_input(self, active: _ActiveTurn, request: dict[str, Any]) -> Any:
+        """Publish an ACP input request and wait for its matching document answer."""
+        input_id = str(request.get("id") or "")
+        kind = str(request.get("kind") or "")
+        if not input_id or kind not in {"question", "plan", "permission"}:
+            return {"action": "decline"}
+        future: asyncio.Future[Any] = asyncio.get_running_loop().create_future()
+        active.input_id = input_id
+        active.input_future = future
+        pending = {
+            "id": input_id,
+            "kind": kind,
+            "message": str(request.get("message") or ""),
+            "requested_at": _now(),
+        }
+        for key in ("fields", "plan", "tool", "options"):
+            if key in request:
+                pending[key] = request[key]
+        if not self._publish_pending_input(active, pending):
+            self._resolve_input(active, {"action": "decline"})
+        else:
+            await self._deliver_input(active)
+        try:
+            return await future
+        finally:
+            if active.input_future is future:
+                active.input_future = None
+                active.input_id = None
+
+    def _publish_pending_input(self, active: _ActiveTurn, pending: dict[str, Any]) -> bool:
+        published = False
+
+        def publish(current: Any) -> Any:
+            nonlocal published
+            record = _record(active.task_id, current)
+            if (
+                record is None
+                or record.status != ACPTaskStatus.WORKING.value
+                or record.turn != active.turn
+            ):
+                return current
+            payload = dict(current)
+            payload["pending_input"] = pending
+            payload["updated_at"] = _now()
+            published = True
+            return payload
+
+        self._mutate(active.task_id, publish)
+        return published
+
+    async def _deliver_input(self, active: _ActiveTurn) -> None:
+        input_id = active.input_id
+        if not input_id:
+            return
+        found, answer = self._take_answer(active, input_id)
+        if found:
+            self._resolve_input(active, answer)
+
+    def _take_answer(self, active: _ActiveTurn, input_id: str) -> tuple[bool, Any]:
+        found = False
+        answer: Any = None
+
+        def take(current: Any) -> Any:
+            nonlocal found, answer
+            record = _record(active.task_id, current)
+            if (
+                record is None
+                or record.status != ACPTaskStatus.WORKING.value
+                or record.turn != active.turn
+                or not isinstance(record.pending_input, dict)
+                or record.pending_input.get("id") != input_id
+                or input_id not in record.answers
+            ):
+                return current
+            answers = dict(record.answers)
+            answer = answers.pop(input_id)
+            payload = dict(current)
+            payload["answers"] = answers
+            payload["pending_input"] = None
+            payload["updated_at"] = _now()
+            found = True
+            return payload
+
+        self._mutate(active.task_id, take)
+        return found, answer
+
+    @staticmethod
+    def _resolve_input(active: _ActiveTurn, answer: Any) -> None:
+        future = active.input_future
+        if future is not None and not future.done():
+            future.set_result(answer)
+
+    def _clear_pending_input(self, task_id: str, turn: int | None = None) -> None:
+        def clear(current: Any) -> Any:
+            record = _record(task_id, current)
+            if record is None or (turn is not None and record.turn != turn):
+                return current
+            input_id = (
+                record.pending_input.get("id") if isinstance(record.pending_input, dict) else None
+            )
+            if record.pending_input is None and not input_id:
+                return current
+            payload = dict(current)
+            payload["pending_input"] = None
+            if isinstance(input_id, str):
+                answers = dict(record.answers)
+                answers.pop(input_id, None)
+                payload["answers"] = answers
+            payload["updated_at"] = _now()
+            return payload
+
+        self._mutate(task_id, clear)
+
+    def _clear_stale_answers(self, task_id: str) -> None:
+        def clear(current: Any) -> Any:
+            record = _record(task_id, current)
+            if record is None or record.status == ACPTaskStatus.WORKING.value or not record.answers:
+                return current
+            payload = dict(current)
+            payload["answers"] = {}
+            payload["pending_input"] = None
+            payload["updated_at"] = _now()
+            return payload
+
+        self._mutate(task_id, clear)
 
     async def _persist_progress(self, active: _ActiveTurn, *, force: bool) -> None:
         if not active.dirty:
@@ -474,6 +777,14 @@ class ACPTaskSupervisor:
                 history.append(history_entry)
             payload["history"] = history[-_HISTORY_LIMIT:]
             payload["task_id"] = active.task_id
+            pending_id = (
+                record.pending_input.get("id") if isinstance(record.pending_input, dict) else None
+            )
+            if pending_id:
+                answers = dict(record.answers)
+                answers.pop(str(pending_id), None)
+                payload["answers"] = answers
+            payload["pending_input"] = None
             if record.status == ACPTaskStatus.QUEUED.value:
                 # A newer request nudge owns the request fields and status.  Keep
                 # it queued; the old turn is retained in history only.
@@ -506,9 +817,22 @@ class ACPTaskSupervisor:
 
         self._mutate(active.task_id, finalize)
 
+    @staticmethod
+    def _clear_pending_answer(record: ACPTaskRecord, payload: dict[str, Any]) -> None:
+        """Clear a terminal input request and its answer without touching other answers."""
+        pending_id = (
+            record.pending_input.get("id") if isinstance(record.pending_input, dict) else None
+        )
+        payload["pending_input"] = None
+        if isinstance(pending_id, str):
+            answers = dict(record.answers)
+            answers.pop(pending_id, None)
+            payload["answers"] = answers
+
     async def _cancel_requested(self, task_id: str) -> None:
         active = self._active.get(task_id)
         if active is not None:
+            self._resolve_input(active, {"action": "decline"})
             await active.runner.cancel(active.session_id)
             return
 
@@ -523,12 +847,14 @@ class ACPTaskSupervisor:
                         "task_id": task_id,
                         "status": ACPTaskStatus.CANCELED.value,
                         "cancel_requested": False,
+                        "pending_input": None,
                         "stop_reason": "cancelled",
                         "updated_at": _now(),
                         "completed_at": _now(),
                         "stalled": False,
                     }
                 )
+                self._clear_pending_answer(record, payload)
             return payload
 
         self._mutate(task_id, cancel)
@@ -549,12 +875,14 @@ class ACPTaskSupervisor:
                     "task_id": task_id,
                     "status": ACPTaskStatus.CANCELED.value,
                     "cancel_requested": False,
+                    "pending_input": None,
                     "stop_reason": "cancelled",
                     "updated_at": _now(),
                     "completed_at": _now(),
                     "stalled": False,
                 }
             )
+            self._clear_pending_answer(record, payload)
             return payload
 
         self._mutate(task_id, cancel)
@@ -570,12 +898,14 @@ class ACPTaskSupervisor:
                     "task_id": task_id,
                     "status": ACPTaskStatus.FAILED.value,
                     "cancel_requested": False,
+                    "pending_input": None,
                     "last_error": error,
                     "updated_at": _now(),
                     "completed_at": _now(),
                     "stalled": False,
                 }
             )
+            self._clear_pending_answer(record, payload)
             return payload
 
         self._mutate(task_id, fail)
@@ -591,6 +921,7 @@ class ACPTaskSupervisor:
                     "task_id": task_id,
                     "status": ACPTaskStatus.INTERRUPTED.value,
                     "cancel_requested": False,
+                    "pending_input": None,
                     "stop_reason": "interrupted",
                     "last_error": "ACP backend restarted while this turn was working",
                     "updated_at": _now(),
@@ -598,6 +929,7 @@ class ACPTaskSupervisor:
                     "stalled": False,
                 }
             )
+            self._clear_pending_answer(record, payload)
             return payload
 
         self._mutate(task_id, interrupt)
