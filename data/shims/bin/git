@@ -3,15 +3,19 @@
 #
 # Read-only git for every shell agent. Agents whose manifest sets
 # git_write: true (PROGENITOR_SHIM_GIT_WRITE=1) may also run repository setup:
-# clone, fetch, pull --ff-only, switch, worktree, submodule, branch create,
-# remote add/set-url. Push, commit, and anything that rewrites history or
-# discards work stays refused for everyone.
+# clone, fetch, pull --ff-only, switch, worktree add/remove, submodule, branch
+# create, remote add/set-url. Agents that also set git_publish: true
+# (PROGENITOR_SHIM_GIT_PUBLISH=1) may push a named non-default branch, never
+# forced. Commit, and anything that rewrites history or discards work, stays
+# refused for everyone.
 set -euo pipefail
 
 REAL_PATH="${PROGENITOR_SHIM_SYSTEM_PATH:-/usr/bin:/bin}"
 WRITE="${PROGENITOR_SHIM_GIT_WRITE:-}"
+PUBLISH="${PROGENITOR_SHIM_GIT_PUBLISH:-}"
 deny() { printf 'progenitor-shim: refused: %s\n' "$*" >&2; exit 2; }
 need_write() { [[ "$WRITE" == "1" ]] || deny "$*"; }
+need_publish() { [[ "$WRITE" == "1" && "$PUBLISH" == "1" ]] || deny "$*"; }
 
 args=("$@")
 index=0
@@ -105,7 +109,7 @@ case "$sub" in
   worktree)
     case "${remaining[0]:-}" in
       list) ;;
-      add|prune|lock|unlock|repair) need_write "worktree command: ${remaining[0]}" ;;
+      add|remove|prune|lock|unlock|repair) need_write "worktree command: ${remaining[0]}" ;;
       *) deny "worktree command: ${remaining[0]:-}" ;;
     esac
     for arg in "${remaining[@]}"; do
@@ -134,6 +138,26 @@ case "$sub" in
     done
     (( ff_only == 1 )) || deny "pull requires --ff-only"
     ;;
+  push)
+    need_publish "subcommand: push"
+    positionals=()
+    for arg in "${remaining[@]}"; do
+      case "$arg" in
+        -u|--set-upstream|-q|--quiet|-v|--verbose) ;;
+        -*) deny "push option: $arg" ;;
+        *) positionals+=("$arg") ;;
+      esac
+    done
+    # Name the remote and every branch: an implicit push could publish the
+    # default branch.
+    (( ${#positionals[@]} >= 2 )) || deny "push needs a remote and branch names"
+    for branch in "${positionals[@]:1}"; do
+      case "$branch" in
+        *:*|+*) deny "push refspec: $branch" ;;
+        HEAD|main|master) deny "push of branch: $branch" ;;
+      esac
+    done
+    ;;
   switch)
     need_write "subcommand: switch"
     for arg in "${remaining[@]}"; do
@@ -150,4 +174,15 @@ case "$sub" in
     ;;
 esac
 
-exec /usr/bin/env PATH="$REAL_PATH" git "${args[@]}"
+# Network commands authenticate to GitHub with the passed-through GH_TOKEN via
+# gh's credential helper; the token never appears in argv or remote URLs.
+auth=()
+case "$sub" in
+  clone|fetch|pull|push|submodule)
+    if [[ -n "${GH_TOKEN:-}" ]]; then
+      auth=(-c credential.helper= -c 'credential.helper=!gh auth git-credential')
+    fi
+    ;;
+esac
+
+exec /usr/bin/env PATH="$REAL_PATH" git "${auth[@]}" "${args[@]}"

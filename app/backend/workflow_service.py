@@ -20,7 +20,6 @@ from app.backend.document_store import (
     BackendDocumentStore,
     document_write_origin,
 )
-from app.backend.repo_manager import RepoManager
 from app.backend.routine_runs import enqueue_routine_run
 from app.progenitor.content_documents import content_document_key
 from app.progenitor.document_types import DocumentType
@@ -50,7 +49,6 @@ from app.progenitor.workflows import (
     WorkflowNodeEvent,
     WorkflowNodeExtract,
     WorkflowNodeFormat,
-    WorkflowNodeRepo,
     WorkflowNodeRoutine,
     WorkflowNodeUnpack,
     WorkflowRun,
@@ -819,9 +817,7 @@ class WorkflowExecutor:
         store_getter: Callable[[], BackendDocumentStore],
         prompt_runner: WorkflowPromptRunner,
         emit_event: Callable[[str, Mapping[str, Any]], Any],
-        repo_manager: RepoManager | None = None,
     ) -> None:
-        self._repo_manager = repo_manager or RepoManager(store_getter=store_getter)
         self._store_getter = store_getter
         self._prompt_runner = prompt_runner
         self._emit_event = emit_event
@@ -1508,11 +1504,6 @@ class WorkflowExecutor:
                     }
                     _validate_node_output(node, output_object)
                     output_text = _bounded_text(output_object["text"])
-                elif isinstance(node, WorkflowNodeRepo):
-                    _validate_node_input(node, resolved_input)
-                    output_object = await self._repo_manager.execute(node.action, resolved_input)
-                    _validate_node_output(node, output_object)
-                    output_text = _bounded_text(json.dumps(output_object, default=str))
                 elif isinstance(node, WorkflowNodeUnpack):
                     _validate_node_input(node, resolved_input)
                     value = resolved_input.get("value")

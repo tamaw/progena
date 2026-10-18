@@ -74,7 +74,11 @@
     },
     "git_write": {
       "type": "boolean",
-      "description": "Bundled agents with shell: true only. Lets the wrapped git/gh run repository setup commands (clone, fetch, pull --ff-only, switch, worktree, submodule, branch create, remote add/set-url, gh repo clone); push, commit and history-rewriting or work-discarding commands stay refused. The shell also gets PROGENITOR_REPOS_DIR, the managed repos directory."
+      "description": "Bundled agents with shell: true only. Lets the wrapped git/gh run repository setup commands (clone, fetch, pull --ff-only, switch, worktree add/remove, submodule, branch create, remote add/set-url, gh repo clone); push, commit and history-rewriting or work-discarding commands stay refused. The shell also gets PROGENITOR_REPOS_DIR, the managed repos directory."
+    },
+    "git_publish": {
+      "type": "boolean",
+      "description": "Bundled agents with git_write: true only. Also lets the wrapped git/gh push named branches other than main/master (never forced, no refspecs) and run gh pr create; GitHub authentication uses the passed-through GH_TOKEN via gh's credential helper. Commit stays refused."
     },
     "knowledge": {
       "type": "array",

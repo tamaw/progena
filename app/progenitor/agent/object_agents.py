@@ -333,10 +333,21 @@ GIT_READ_ONLY_NOTE = (
 )
 GIT_WRITE_NOTE = (
     "`git` and `gh` are available but wrapped: read-only subcommands plus "
-    "repository setup succeed (clone, fetch, pull --ff-only, switch, worktree, "
-    "submodule, branch create, remote add/set-url, gh repo clone); push, commit "
-    "and history-rewriting or work-discarding commands (reset, rebase, merge, "
-    "clean, rm, checkout, forced switch, branch delete) are refused with exit code 2."
+    "repository setup succeed (clone, fetch, pull --ff-only, switch, worktree "
+    "add/remove, submodule, branch create, remote add/set-url, gh repo clone); push, "
+    "commit and history-rewriting or work-discarding commands (reset, rebase, merge, "
+    "clean, rm, checkout, forced switch or worktree remove, branch delete) are "
+    "refused with exit code 2."
+)
+GIT_PUBLISH_NOTE = (
+    "`git` and `gh` are available but wrapped: read-only subcommands plus "
+    "repository setup succeed (clone, fetch, pull --ff-only, switch, worktree "
+    "add/remove, submodule, branch create, remote add/set-url, gh repo clone), and "
+    "you may publish: `git push [-u] <remote> <branch>...` for named branches other "
+    "than main/master (never forced, no refspecs) and `gh pr create`. GitHub "
+    "authentication is automatic. Commit and history-rewriting or work-discarding "
+    "commands (reset, rebase, merge, clean, rm, checkout, forced switch or worktree "
+    "remove, branch delete) are refused with exit code 2."
 )
 
 
@@ -602,11 +613,15 @@ def build_object_agent(
         )
     system_prompt = manifest.system_prompt
     if workspace is not None:
-        git_write = manifest.shell is not None and manifest.shell.git_write
-        system_prompt += SHELL_PROMPT_NOTE.format(
-            workspace=workspace,
-            git_access=GIT_WRITE_NOTE if git_write else GIT_READ_ONLY_NOTE,
+        shell = manifest.shell
+        git_access = (
+            GIT_PUBLISH_NOTE
+            if shell is not None and shell.git_publish
+            else GIT_WRITE_NOTE
+            if shell is not None and shell.git_write
+            else GIT_READ_ONLY_NOTE
         )
+        system_prompt += SHELL_PROMPT_NOTE.format(workspace=workspace, git_access=git_access)
     return create_agent(
         name=manifest.name,
         model=child_model,
