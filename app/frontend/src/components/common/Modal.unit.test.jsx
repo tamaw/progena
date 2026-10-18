@@ -86,4 +86,50 @@ describe('Modal keyboard and dismissal behavior', () => {
     backdrop.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
     expect(onClose).toHaveBeenCalledTimes(1);
   });
+
+  it('wraps reverse tabbing from the dialog surface to its last control', async () => {
+    await act(async () => root.render(
+      <Modal onClose={() => {}} ariaLabel="Confirm action">
+        <button type="button">Cancel</button>
+        <button type="button">Confirm</button>
+      </Modal>,
+    ));
+    const dialog = document.querySelector('[role="dialog"]');
+    const [, last] = dialog.querySelectorAll('button');
+    dialog.focus();
+    key(dialog, 'Tab', { shiftKey: true });
+    expect(document.activeElement).toBe(last);
+  });
+
+  it('gives Tab and Escape only to the topmost of stacked dialogs', async () => {
+    const onCloseLower = vi.fn();
+    const onCloseUpper = vi.fn();
+    await act(async () => root.render(
+      <Modal onClose={onCloseLower} ariaLabel="Lower">
+        <button type="button">Lower action</button>
+      </Modal>,
+    ));
+    await act(async () => root.render(
+      <>
+        <Modal onClose={onCloseLower} ariaLabel="Lower">
+          <button type="button">Lower action</button>
+        </Modal>
+        <Modal onClose={onCloseUpper} ariaLabel="Upper">
+          <button type="button">Upper first</button>
+          <button type="button">Upper last</button>
+        </Modal>
+      </>,
+    ));
+    const upperFirst = document.querySelector('[aria-label="Upper"] button');
+    const upperLast = document.querySelectorAll('[aria-label="Upper"] button')[1];
+    upperFirst.focus();
+    key(upperFirst, 'Tab');
+    expect(document.activeElement).toBe(upperFirst);
+    upperLast.focus();
+    key(upperLast, 'Tab');
+    expect(document.activeElement).toBe(upperFirst);
+    key(upperFirst, 'Escape');
+    expect(onCloseUpper).toHaveBeenCalledTimes(1);
+    expect(onCloseLower).not.toHaveBeenCalled();
+  });
 });

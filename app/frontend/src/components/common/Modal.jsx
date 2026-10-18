@@ -11,6 +11,9 @@ const FOCUSABLE_SELECTOR = [
   '[contenteditable="true"]',
 ].join(', ');
 
+// Open dialogs in mount order; only the topmost one owns Tab and Escape.
+const openDialogs = [];
+
 export default function Modal({
   children,
   onClose,
@@ -50,6 +53,7 @@ export default function Modal({
     focusInitial();
 
     const handleKeyDown = (event) => {
+      if (openDialogs[openDialogs.length - 1] !== dialog) return;
       if (event.key === 'Escape') {
         if (!event.defaultPrevented && !busyRef.current) {
           onCloseRef.current();
@@ -67,14 +71,17 @@ export default function Modal({
       const first = controls[0];
       const last = controls[controls.length - 1];
       const activeElement = document.activeElement;
-      if (event.shiftKey ? activeElement === first || !dialog?.contains(activeElement) : activeElement === last || !dialog?.contains(activeElement)) {
+      const outsideControls = activeElement === dialog || !dialog?.contains(activeElement);
+      if (outsideControls || activeElement === (event.shiftKey ? first : last)) {
         event.preventDefault();
         (event.shiftKey ? last : first).focus();
       }
     };
 
+    openDialogs.push(dialog);
     document.addEventListener('keydown', handleKeyDown);
     return () => {
+      openDialogs.splice(openDialogs.indexOf(dialog), 1);
       document.removeEventListener('keydown', handleKeyDown);
       if (opener?.isConnected) opener.focus();
     };

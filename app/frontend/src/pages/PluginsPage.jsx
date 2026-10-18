@@ -351,12 +351,17 @@ export default function PluginsPage() {
   const marketplaceSkillsFailure = marketplaceSkillsResult?.error || null;
   const marketplaceSkillsPending = realtime.connected && !isPluginInstalled && !marketplaceSkillsResult;
   const displayedSkills = isPluginInstalled ? (installedEntry?.skills || []) : previewSkills;
-  const completedPluginChange = awaitingPluginChange
-    && awaitingPluginChange.key === selectedPluginKey
+  // Latch completion when its snapshot arrives: later snapshots (e.g. after a reconnect) carry other request IDs.
+  if (awaitingPluginChange
+    && !awaitingPluginChange.completed
     && pluginsState.snapshotRequestId === awaitingPluginChange.requestId
     && (awaitingPluginChange.kind === 'uninstall'
       ? !installedPlugins[awaitingPluginChange.key]
-      : Boolean(installedPlugins[awaitingPluginChange.key]))
+      : Boolean(installedPlugins[awaitingPluginChange.key]))) {
+    setAwaitingPluginChange({ ...awaitingPluginChange, completed: true });
+  }
+  const completedPluginChange = awaitingPluginChange?.completed
+    && awaitingPluginChange.key === selectedPluginKey
     ? awaitingPluginChange : null;
   const completedPluginMessage = completedPluginChange
     ? `Plugin ${completedPluginChange.label} ${completedPluginChange.kind === 'uninstall' ? 'uninstalled' : completedPluginChange.kind === 'update' ? 'updated' : 'installed'}.`
