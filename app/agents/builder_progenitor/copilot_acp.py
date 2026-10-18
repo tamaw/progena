@@ -14,7 +14,9 @@ from acp import PROTOCOL_VERSION, Client, spawn_agent_process, text_block
 from acp.schema import (
     AgentMessageChunk,
     AllowedOutcome,
+    DeclineElicitationResponse,
     DeniedOutcome,
+    ElicitationMode,
     PermissionOption,
     PromptResponse,
     RequestPermissionResponse,
@@ -54,23 +56,25 @@ class ACPClient(Client):
             if text:
                 self.text_parts.append(text)
         elif isinstance(update, ToolCallStart):
-            self.tool_calls.append({
-                "name": getattr(update, "title", "?"),
-                "id": getattr(update, "tool_call_id", "?"),
-            })
+            self.tool_calls.append(
+                {
+                    "name": getattr(update, "title", "?"),
+                    "id": getattr(update, "tool_call_id", "?"),
+                }
+            )
 
     async def request_permission(
         self,
-        options: list[PermissionOption],
         session_id: str,
         tool_call: ToolCallUpdate,
+        options: list[PermissionOption],
         **kwargs: Any,
     ) -> RequestPermissionResponse:
         _ = (session_id, tool_call, kwargs)
-        if options and hasattr(options[0], "id"):
+        if options:
             return RequestPermissionResponse(
                 outcome=AllowedOutcome(
-                    option_id=getattr(options[0], "id", "default"),
+                    option_id=options[0].option_id,
                     outcome="selected",
                 )
             )
@@ -103,6 +107,15 @@ class ACPClient(Client):
 
     async def ext_notification(self, method: str, params: dict[str, Any]) -> None:
         pass
+
+    async def complete_elicitation(self, elicitation_id: str, **_kw: Any) -> None:
+        _ = elicitation_id
+
+    async def create_elicitation(
+        self, message: str, mode: ElicitationMode, **_kw: Any
+    ) -> DeclineElicitationResponse:
+        _ = (message, mode)
+        return DeclineElicitationResponse(action="decline")
 
     def get_output(self) -> str:
         return "".join(self.text_parts)
@@ -225,13 +238,21 @@ class ACPManager:
 
         except TimeoutError:
             return {
-                "success": False, "stdout": "", "stderr": f"Timeout ({self.timeout}s)",
-                "stop_reason": "timeout", "tool_calls": [], "elapsed": time.perf_counter() - t0,
+                "success": False,
+                "stdout": "",
+                "stderr": f"Timeout ({self.timeout}s)",
+                "stop_reason": "timeout",
+                "tool_calls": [],
+                "elapsed": time.perf_counter() - t0,
             }
         except Exception as exc:
             return {
-                "success": False, "stdout": "", "stderr": str(exc),
-                "stop_reason": "error", "tool_calls": [], "elapsed": time.perf_counter() - t0,
+                "success": False,
+                "stdout": "",
+                "stderr": str(exc),
+                "stop_reason": "error",
+                "tool_calls": [],
+                "elapsed": time.perf_counter() - t0,
             }
 
 
@@ -339,8 +360,11 @@ class CopilotCLI:
         for args in (["diff", "--cached", "--stat"], ["diff", "--stat"]):
             try:
                 proc = await asyncio.create_subprocess_exec(
-                    "git", *args, cwd=cwd,
-                    stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+                    "git",
+                    *args,
+                    cwd=cwd,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
                 )
                 out, _ = await asyncio.wait_for(proc.communicate(), timeout=30)
                 if proc.returncode == 0 and out:

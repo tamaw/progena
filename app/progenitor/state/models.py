@@ -5,7 +5,7 @@ import re
 import uuid
 from datetime import datetime
 from enum import StrEnum
-from typing import Any, TypedDict
+from typing import Any, Literal, TypedDict
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -344,10 +344,12 @@ class ACPTaskRecord(BaseModel):
     card_id: str | None = None
     status: ACPTaskStatus = ACPTaskStatus.QUEUED
     cancel_requested: bool = False
+    messages: list[dict[str, Any]] = Field(default_factory=list)
+    mode: Literal["default", "acceptEdits", "plan", "bypassPermissions"] | None = None
+    answers: dict[str, Any] = Field(default_factory=dict)
     source: str = "call_agent"
     request_metadata: dict[str, Any] = Field(default_factory=dict)
     notify_on_completion: bool = True
-
     command: str = ""
     session_id: str | None = None
     turn: int = 0
@@ -367,6 +369,7 @@ class ACPTaskRecord(BaseModel):
     )
     stalled: bool = False
     history: list[dict[str, Any]] = Field(default_factory=list)
+    pending_input: dict[str, Any] | None = None
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)
     started_at: datetime | None = None

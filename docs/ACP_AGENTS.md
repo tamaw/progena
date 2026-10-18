@@ -13,61 +13,54 @@ remote HTTP servers, ACP agents are local subprocesses Progenitor spawns and dri
 ## How it fits together
 
 ```
-call_agent tool ─┬─ transport == "http" ─→ app/progenitor/a2a/   (remote A2A task, polled)
-                 └─ transport == "acp"  ─→ acp_task:<id> document (queued)
-workflows ───────── document_create / document_write(acp_task) ─┘
-                                                                 │ document event
-backend ACPTaskSupervisor (app/backend/acp_supervisor.py) ◀──────┘
+acp_* tools / workflows ─→ acp_task:<id> document (queued or updated)
+                                   │ document event
+backend ACPTaskSupervisor ─────────┘
    └─ ACPRunner (app/progenitor/acp/) ─→ ACP agent (TCP server or stdio CLI)
-
-registry (Postgres `registry` document — canonical; read-through to the backend)
-   └─ kind=acp_agent, transport=acp, acp={command|host+port, profile, model, cwd, ...}
 ```
 
-### Where the registry lives (database, not the file)
+The runtime registry is database-backed: `ToolRegistry` reads and writes the
+Postgres `registry` document through `StateManager`. ACP agents are registered
+as `acp_agent` entries with `acp={command|host+port, profile, model, cwd, ...}`.
 
-The runtime registry is **database-backed**: `ToolRegistry` reads and writes the
-Postgres `registry` document through `StateManager` (`registry/runtime.py`
-`bind_state_manager`). The agent-facing `/config/agents.json` virtual file is a
-validated view of that same document. It is not a local file under
-`data/config/`. Registering through `register_acp_agent` persists to Postgres,
-so a restart picks it up without touching the filesystem. An unbound
-`ToolRegistry` instance, such as one used in an isolated unit test, starts with
-an in-memory registry and does not provide production persistence.
+### Interactive sessions
 
-- **Invocation** — every ACP run is an `acp_task:<id>` document. `call_agent`
-  (runtime) and workflows (`document_create`/`document_write`) only write
-  requests; the backend's `ACPTaskSupervisor` is the single driver. It reacts to
-  the document events, resolves `agent_name` from the registry, and runs turns
-  through `ACPRunner` (`app/progenitor/acp/`, built on the `acp` SDK) over
-  **TCP** (`host`/`port`, e.g. the Claude container) or **stdio** (spawn a
-  `command`; the CLI must then be installed in the backend image).
-- **Requests** — create with `status: "queued"` to start a session; write
-  `{prompt, status: "queued"}` to run the next turn on the same session (resumed
-  with ACP `session/resume`; a running turn is cancelled first, which is how a
-  stalled agent is nudged); write `{cancel_requested: true}` to cancel. All
-  supervisor writes are atomic read-modify-writes of its own fields, so a request
-  written mid-turn is never lost.
-- **State** — the supervisor sets `status` (`working`, then `completed`,
-  `failed`, `canceled`, or `interrupted`), `session_id`, `turn`, `output`,
-  `history`, `tool_calls`, and `progress` (`last_message`, `plan`,
-  `tool_call_count`, `last_tool`, `last_activity_at`, saved every
-  `PROGENITOR_ACP_PROGRESS_INTERVAL_SECONDS`). `stalled` turns true when a working
-  turn shows no activity for `PROGENITOR_ACP_STALL_SECONDS`. Schema:
-  `data/schemas/acp_task.schema.v1.json`.
-- **Limits** — at most `PROGENITOR_ACP_MAX_SESSIONS` turns run at once (extra
-  tasks stay `queued`); a task that already started `PROGENITOR_ACP_MAX_TURNS`
-  turns fails its next request.
-- **Model** — when the registry entry sets `model`, it is selected per session:
-  `session/set_config_option` (`configId: "model"`) for agents that expose models
-  as config options (Claude ACP), else `session/set_session_model`.
-- **Completion** — the idle heartbeat (`nodes/acp.py`) picks up finished tasks
-  with `notify_on_completion` (set by non-blocking `call_agent`), appends a
-  conversation message, and notifies the user. Blocking `call_agent` polls the
-  document until it finishes. Workflows chain on the document events instead.
-- **Storage / visibility** — ACP agents live in the same registry as A2A agents, so
-  they are invocable by the runtime and read-through to the backend Agents page
-  (grouped under "ACP agents"), exactly like A2A agents.
+Every session is an `acp_task:<id>` document. The backend
+`ACPTaskSupervisor` is the sole driver and keeps the connection that owns the
+running turn, which is required for live steering and replies.
+
+- **Start** — `acp_start(agent, prompt, cwd=None, card_id=None, mode=None)`
+  creates the task. `mode` may be `default`, `acceptEdits`, `plan`, or
+  `bypassPermissions`; it is applied when starting/resuming and when changed
+  during a turn.
+- **Send** — `acp_send(task_id, message)` steers a running Claude turn on that
+  live connection (`outcome: "injected"`). When idle it starts the next turn on
+  the same session (`outcome: "started_turn"`). Use short, specific corrections;
+  do not cancel merely to send a follow-up.
+- **Inspect** — `acp_status(task_id, wait_seconds=0)` returns the task snapshot;
+  its wait is capped at 300 seconds. `acp_list(card_id=None, status=None,
+  agent=None, limit=20)` finds sessions.
+- **Answer** — Claude questions and plan submissions appear in `pending_input`.
+  Call `acp_answer(task_id, input_id, answer)` promptly: Claude is blocked until
+  the supervisor sends the matching `answers[input_id]` reply on its live
+  connection and clears `pending_input`. Question answers are form-value objects
+  (or `{"action":"decline"}`); plan answers are
+  `{"approve": bool, "feedback"?: string}`.
+- **Cancel** — `acp_cancel(task_id)` sets `cancel_requested`; use it only for a
+  turn that is going wrong.
+
+The supervisor processes pending `messages` in order, using steering while a
+turn runs and a normal next turn when idle. It sets their `status` to
+`injected`, `started_turn`, or `failed`, with send metadata. Ordinary tool
+permissions are auto-approved; plan mode's ExitPlanMode is exposed as a
+`pending_input` of kind `plan` for explicit approval or feedback.
+
+Workflow event nodes can react to `acp_task` `status`, `stalled`, and
+`pending_input` changes. The supervisor owns status, progress, output,
+`pending_input`, and session fields; requesters own messages, mode, answers,
+and cancellation requests. A task cannot start beyond `PROGENITOR_ACP_MAX_TURNS`.
+
+`call_agent` no longer invokes ACP agents; use `acp_start` instead.
 
 ## Registering an ACP agent
 

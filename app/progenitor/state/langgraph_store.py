@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import sys
 import uuid
@@ -48,6 +49,7 @@ class LangGraphRuntimeStore:
 
     def __init__(self, store: AsyncLangGraphStore, *, debug_mode: bool = False) -> None:
         self._store = store
+        self._document_locks: dict[str, asyncio.Lock] = {}
         self._debug_mode = debug_mode
 
     async def open(self) -> None:
@@ -108,6 +110,87 @@ class LangGraphRuntimeStore:
         """
         # A pool hands out connections; a single AsyncConnection's `connection`
         # is a non-callable property.
+        if callable(getattr(conn, "connection", None)):
+            async with conn.connection() as connection, connection.cursor() as cur:
+                await cur.execute(sql, params)
+                row = await cur.fetchone()
+        else:
+            async with conn.cursor() as cur:
+                await cur.execute(sql, params)
+                row = await cur.fetchone()
+        return row is not None
+
+    async def append_document_list(self, name: str, field: str, item: Any) -> bool:
+        """Atomically append one value to a list field in a runtime document."""
+        key = name
+        conn = getattr(self._store, "conn", None)
+        if conn is None:
+            lock = self._document_locks.get(key)
+            if lock is None:
+                lock = asyncio.Lock()
+                self._document_locks[key] = lock
+            async with lock:
+                current = await self.peek_document(key)
+                if not isinstance(current, dict):
+                    return False
+                payload = dict(current)
+                values = payload.get(field)
+                payload[field] = [*values, item] if isinstance(values, list) else [item]
+                await self.save_document(key, payload)
+                return True
+
+        params = (field, field, json.dumps([item]), key)
+        sql = """
+            UPDATE store
+            SET value = jsonb_set(
+                value,
+                ARRAY['payload', %s],
+                COALESCE(value #> ARRAY['payload', %s], '[]'::jsonb) || %s::jsonb
+            ), updated_at = now()
+            WHERE prefix = 'progenitor.state' AND key = %s
+            RETURNING 1
+        """
+        return await self._execute_document_mutation(sql, params)
+
+    async def merge_document_object(self, name: str, field: str, fields: dict[str, Any]) -> bool:
+        """Atomically merge keys into an object field in a runtime document."""
+        key = name
+        conn = getattr(self._store, "conn", None)
+        if conn is None:
+            lock = self._document_locks.get(key)
+            if lock is None:
+                lock = asyncio.Lock()
+                self._document_locks[key] = lock
+            async with lock:
+                current = await self.peek_document(key)
+                if not isinstance(current, dict):
+                    return False
+                payload = dict(current)
+                existing = payload.get(field)
+                payload[field] = {
+                    **(existing if isinstance(existing, dict) else {}),
+                    **fields,
+                }
+                await self.save_document(key, payload)
+                return True
+
+        params = (field, field, json.dumps(fields), key)
+        sql = """
+            UPDATE store
+            SET value = jsonb_set(
+                value,
+                ARRAY['payload', %s],
+                COALESCE(value #> ARRAY['payload', %s], '{}'::jsonb) || %s::jsonb
+            ), updated_at = now()
+            WHERE prefix = 'progenitor.state' AND key = %s
+            RETURNING 1
+        """
+        return await self._execute_document_mutation(sql, params)
+
+    async def _execute_document_mutation(self, sql: str, params: tuple[Any, ...]) -> bool:
+        """Run one SQL mutation against the native store connection."""
+        conn = getattr(self._store, "conn", None)
+        assert conn is not None
         if callable(getattr(conn, "connection", None)):
             async with conn.connection() as connection, connection.cursor() as cur:
                 await cur.execute(sql, params)
