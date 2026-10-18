@@ -833,9 +833,9 @@ def _acp_task_view(record: dict[str, Any]) -> dict[str, Any]:
     """Shape a Progenitor ``ACPTaskRecord`` dict for the Agents-page detail pane."""
     return {
         "id": str(record.get("task_id") or ""),
-        "status": str(record.get("status") or "working"),
+        "status": str(record.get("status") or "queued"),
         "source": str(record.get("source") or ""),
-        "title": str(record.get("request_text") or record.get("summary") or "").strip(),
+        "title": str(record.get("prompt") or record.get("summary") or "").strip(),
         "summary": str(record.get("summary") or record.get("output") or "").strip()[:400],
         "created": record.get("created_at"),
         "updated": record.get("updated_at"),

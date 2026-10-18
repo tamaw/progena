@@ -1,9 +1,8 @@
-"""ACP run completion nodes.
+"""ACP task completion heartbeat nodes.
 
-Peer of ``nodes/a2a.py``. ACP runs finish in-process (a background task updates
-the persisted record), so there is no remote poll: ``collect_completed_acp_tasks_node``
-simply scans tracked records for terminal-but-unnotified runs each idle pass, then
-``apply``/``notify`` inject a conversation message and notify the user.
+The backend ACP supervisor drives task documents to a terminal state.  The
+heartbeat only finds terminal, unnotified records and feeds their result back
+into the originating conversation.
 """
 
 from __future__ import annotations

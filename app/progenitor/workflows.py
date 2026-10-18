@@ -624,6 +624,87 @@ class WorkflowNodeDocumentDelete(BaseModel):
     output_schema: dict[str, Any] = Field(default_factory=lambda: dict(_JSON_OBJECT_SCHEMA))
 
 
+RepoNodeAction = Literal["sync", "worktree", "publish", "remove_worktree"]
+
+
+def repo_node_port_schemas(action: RepoNodeAction) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Return the fixed input/output contracts for one repo-management action."""
+    required_input: dict[RepoNodeAction, list[str]] = {
+        "sync": ["repo_id"],
+        "worktree": ["repo_id", "branch"],
+        "publish": ["repo_id", "branch", "title"],
+        "remove_worktree": ["repo_id", "branch"],
+    }
+    input_properties: dict[RepoNodeAction, dict[str, Any]] = {
+        "sync": {"repo_id": {"type": "string"}},
+        "worktree": {
+            "repo_id": {"type": "string"},
+            "branch": {"type": "string"},
+            "base": {"type": "string"},
+        },
+        "publish": {
+            "repo_id": {"type": "string"},
+            "branch": {"type": "string"},
+            "title": {"type": "string"},
+            "body": {"type": "string"},
+        },
+        "remove_worktree": {"repo_id": {"type": "string"}, "branch": {"type": "string"}},
+    }
+    output_properties: dict[RepoNodeAction, dict[str, Any]] = {
+        "sync": {
+            "repo_id": {"type": "string"},
+            "path": {"type": "string"},
+            "default_branch": {"type": "string"},
+            "head": {"type": "string"},
+        },
+        "worktree": {
+            "repo_id": {"type": "string"},
+            "branch": {"type": "string"},
+            "path": {"type": "string"},
+            "head": {"type": "string"},
+            "created": {"type": "boolean"},
+        },
+        "publish": {
+            "repo_id": {"type": "string"},
+            "branch": {"type": "string"},
+            "pushed": {"type": "boolean"},
+            "pr_url": {"type": "string"},
+            "pr_number": {"type": "integer"},
+        },
+        "remove_worktree": {
+            "repo_id": {"type": "string"},
+            "branch": {"type": "string"},
+            "removed": {"type": "boolean"},
+        },
+    }
+    return (
+        {
+            "type": "object",
+            "required": required_input[action],
+            "properties": input_properties[action],
+            "additionalProperties": False,
+        },
+        {
+            "type": "object",
+            "required": list(output_properties[action]),
+            "properties": output_properties[action],
+            "additionalProperties": False,
+        },
+    )
+
+
+class WorkflowNodeRepo(BaseModel):
+    """Synchronous managed-repository operation executed by the backend."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["repo"] = "repo"
+    title: str = "Repo"
+    action: RepoNodeAction
+    input_schema: dict[str, Any] = Field(default_factory=lambda: dict(_JSON_OBJECT_SCHEMA))
+    output_schema: dict[str, Any] = Field(default_factory=lambda: dict(_JSON_OBJECT_SCHEMA))
+
+
 class WorkflowNodeUnpack(BaseModel):
     """Pure step exposing one object's properties as output ports.
 
@@ -768,6 +849,7 @@ WorkflowNode = Annotated[
     | WorkflowNodeDocumentRead
     | WorkflowNodeDocumentQuery
     | WorkflowNodeDocumentWrite
+    | WorkflowNodeRepo
     | WorkflowNodeDocumentCreate
     | WorkflowNodeDocumentDelete
     | WorkflowNodeFormat
@@ -1300,6 +1382,13 @@ def derive_workflow_port_schemas(
         return result
     schemas: dict[str, dict[str, Any] | None] = {}
     for node_id, node in nodes.items():
+        if isinstance(node, dict) and node.get("kind") == "repo":
+            action = node.get("action")
+            if action not in {"sync", "worktree", "publish", "remove_worktree"}:
+                raise ValueError(f"repo node '{node_id}' has unknown action '{action}'")
+            node.setdefault("title", "Repo")
+            node["input_schema"], node["output_schema"] = repo_node_port_schemas(action)
+            continue
         if isinstance(node, dict) and node.get("kind") == "cron":
             node["output_schema"] = copy.deepcopy(CRON_OUTPUT_SCHEMA)
             continue

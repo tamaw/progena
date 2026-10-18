@@ -121,6 +121,12 @@ services:
       CHAT_SERVER_PORT: 8000
       CHAT_SERVER_PROGENITOR_TIMEOUT: 300
       PROGENITOR_WORKTREE_DIR: /app/repos
+      # Workflow repo nodes push and open pull requests from the backend.
+      GH_TOKEN: ${GH_TOKEN:-}
+      # Git runs as the UID the runtime and Claude containers use, so Claude can
+      # edit the worktrees the backend creates under /app/repos.
+      PROGENITOR_REPO_UID: "10001"
+      PROGENITOR_REPO_GID: "10001"
       # Backend runs in a separate container; connect to the runtime HTTP server via service DNS.
       PROGENITOR_RUNTIME_URL: http://progenitor:9501
       # Telegram integration (backend only)

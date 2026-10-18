@@ -1,0 +1,52 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ACP Task",
+  "description": "One ACP (Agent Client Protocol) session driven by the backend supervisor, stored as an acp_task:<id> document. Writable fields are requests: create with status 'queued' to start a session; write {prompt, status: 'queued'} to run the next turn on the same session (cancelling a running turn first); write {cancel_requested: true} to cancel. Read-only fields are owned by the supervisor.",
+  "type": "object",
+  "properties": {
+    "task_id": {"type": "string", "readOnly": true, "description": "The id part of the acp_task:<id> key."},
+    "agent_name": {"type": "string", "minLength": 1, "description": "Registered ACP agent to drive (e.g. 'claude')."},
+    "prompt": {"type": "string", "description": "Prompt for the next turn."},
+    "cwd": {"type": ["string", "null"], "description": "Working directory on the agent's host, e.g. a repo node's worktree path. Defaults to the agent's configured cwd."},
+    "card_id": {"type": ["string", "null"], "description": "Kanban card this task works for, if any."},
+    "status": {
+      "type": "string",
+      "enum": ["queued", "working", "completed", "failed", "canceled", "interrupted"],
+      "default": "queued",
+      "description": "queued: a turn is requested; working: a turn is running; completed/failed/canceled: the last turn ended; interrupted: the backend restarted during the turn (queue another turn to resume the session)."
+    },
+    "cancel_requested": {"type": "boolean", "default": false, "description": "Set true to cancel the running or queued turn; reset to false by the supervisor."},
+    "source": {"type": "string", "default": "workflow", "description": "Who requested the task (e.g. 'workflow', 'call_agent')."},
+    "request_metadata": {"type": "object", "default": {}, "description": "Free-form caller context."},
+    "notify_on_completion": {"type": "boolean", "default": false, "description": "Tell Progenitor's chat when a turn ends."},
+    "command": {"type": "string", "readOnly": true, "description": "Agent endpoint used (host:port or command)."},
+    "session_id": {"type": ["string", "null"], "readOnly": true, "description": "ACP session id; later turns resume it."},
+    "turn": {"type": "integer", "minimum": 0, "readOnly": true, "description": "Number of turns started."},
+    "output": {"type": ["string", "null"], "readOnly": true, "description": "Agent reply text of the last finished turn."},
+    "summary": {"type": ["string", "null"], "readOnly": true, "description": "First line of the last output."},
+    "stop_reason": {"type": ["string", "null"], "readOnly": true},
+    "last_error": {"type": ["string", "null"], "readOnly": true},
+    "tool_calls": {"type": "array", "items": {"type": "object"}, "readOnly": true, "description": "Recent tool calls (bounded)."},
+    "progress": {
+      "type": "object",
+      "readOnly": true,
+      "description": "Live progress of the current turn, saved periodically.",
+      "properties": {
+        "last_message": {"type": ["string", "null"]},
+        "plan": {"type": "array"},
+        "tool_call_count": {"type": "integer"},
+        "last_tool": {"type": ["string", "null"]},
+        "last_activity_at": {"type": ["string", "null"]}
+      }
+    },
+    "stalled": {"type": "boolean", "readOnly": true, "description": "True while a working turn has shown no agent activity for PROGENITOR_ACP_STALL_SECONDS."},
+    "history": {"type": "array", "items": {"type": "object"}, "readOnly": true, "description": "Finished turns: turn, status, prompt, output, summary, stop_reason, last_error, completed_at."},
+    "created_at": {"type": "string", "readOnly": true},
+    "updated_at": {"type": "string", "readOnly": true},
+    "started_at": {"type": ["string", "null"], "readOnly": true},
+    "completed_at": {"type": ["string", "null"], "readOnly": true},
+    "notification_sent_at": {"type": ["string", "null"], "readOnly": true}
+  },
+  "required": ["agent_name"],
+  "additionalProperties": false
+}

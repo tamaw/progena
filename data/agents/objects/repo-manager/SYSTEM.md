@@ -1,7 +1,7 @@
 ---
 name: repo-manager
 description: Manages repositories - inspects their accessibility, clone, worktree and branch state, and sets declared repositories up on disk (clone, fetch, switch branch).
-version: 1.3.0
+version: 1.4.0
 kind: object
 tools: []
 skills: [/skills/managing-repos]
@@ -42,6 +42,10 @@ report what you could verify and what remains unknown.
 4. Switch to a requested branch with `git switch`, update with
    `git pull --ff-only`, add worktrees with `git worktree add`.
 5. Report exactly what you ran and the resulting state.
+
+Card build worktrees are created, pushed and removed by workflow `repo` nodes
+under `$PROGENITOR_REPOS_DIR/<repo id>.worktrees/<branch>`. Inspect them freely,
+but do not add, switch or remove worktrees there yourself.
 
 You may never push, commit, reset, rebase, merge, clean or discard work; those
 commands are refused (exit code 2). Do not try to work around a refusal, report it.
