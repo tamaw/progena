@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useDispatch, useSelector } from 'react-redux';
+import { useDispatch, useSelector, useStore } from 'react-redux';
 import { useNavigate, useParams } from 'react-router-dom';
 import { buildEntityPath, useEntityUrlSync } from '../lib/routes';
 import {
@@ -330,14 +330,18 @@ function SchedulesPage() {
     return () => { logsRequestRef.current += 1; };
   }, [loadScheduleLogs]);
 
+  const store = useStore();
   useEffect(() => {
-    if (!loaded || loading || listFailure || scheduleRequestId !== null || !selectedScheduleId) {
+    // Read the store, not this render: the mount refresh above dispatches in this
+    // same commit, and a list cached from an earlier visit may lack a new schedule.
+    const current = selectSchedulesState(store.getState());
+    if (!current.loaded || current.loading || current.error || current.requestId !== null || !selectedScheduleId) {
       return;
     }
-    if (!schedules.some((schedule) => schedule.id === selectedScheduleId)) {
+    if (!current.items.some((schedule) => schedule.id === selectedScheduleId)) {
       navigate('/schedules', { replace: true });
     }
-  }, [listFailure, loaded, loading, navigate, scheduleRequestId, schedules, selectedScheduleId]);
+  }, [listFailure, loaded, loading, navigate, scheduleRequestId, schedules, selectedScheduleId, store]);
 
   const scheduleWidgets = useMemo(() => widgets.reduce((byScheduleId, widget) => {
     const scheduleId = widget?.data?.schedule_id;

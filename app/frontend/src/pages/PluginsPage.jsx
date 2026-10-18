@@ -351,13 +351,13 @@ export default function PluginsPage() {
   const marketplaceSkillsFailure = marketplaceSkillsResult?.error || null;
   const marketplaceSkillsPending = realtime.connected && !isPluginInstalled && !marketplaceSkillsResult;
   const displayedSkills = isPluginInstalled ? (installedEntry?.skills || []) : previewSkills;
-  // Latch completion when its snapshot arrives: later snapshots (e.g. after a reconnect) carry other request IDs.
+  // The backend publishes the correlated snapshot only after saving, possibly before
+  // its 202 or followed by other snapshots, so match the per-request event record
+  // rather than the latest snapshot ID, then latch the result for this view.
   if (awaitingPluginChange
     && !awaitingPluginChange.completed
-    && pluginsState.snapshotRequestId === awaitingPluginChange.requestId
-    && (awaitingPluginChange.kind === 'uninstall'
-      ? !installedPlugins[awaitingPluginChange.key]
-      : Boolean(installedPlugins[awaitingPluginChange.key]))) {
+    && (realtime.receivedRequestEvents[awaitingPluginChange.requestId] || [])
+      .some((event) => event.type === 'plugins.snapshot')) {
     setAwaitingPluginChange({ ...awaitingPluginChange, completed: true });
   }
   const completedPluginChange = awaitingPluginChange?.completed

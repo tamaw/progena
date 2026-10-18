@@ -2492,12 +2492,16 @@ function WorkflowsInner() {
   });
 
   const loadInitialData = useCallback(() => {
+    // The workflow list renders its own failure; supporting catalogues would otherwise look empty.
+    const loadSupporting = (operation, thunk) => {
+      dispatch(thunk).unwrap().catch((error) => reportFailure(show, operation, error));
+    };
     dispatch(fetchWorkflows({ workflowsUrl }));
-    dispatch(fetchWorkflowRuns({ workflowRunsUrl }));
-    dispatch(fetchDocumentTypes({ documentTypesUrl }));
-    dispatch(fetchAgentProfiles({ agentsUrl }));
-    dispatch(fetchInstructions({ instructionsUrl }));
-  }, [agentsUrl, dispatch, documentTypesUrl, instructionsUrl, workflowRunsUrl, workflowsUrl]);
+    loadSupporting('Load workflow runs', fetchWorkflowRuns({ workflowRunsUrl }));
+    loadSupporting('Load document types', fetchDocumentTypes({ documentTypesUrl }));
+    loadSupporting('Load routines', fetchAgentProfiles({ agentsUrl }));
+    loadSupporting('Load instructions', fetchInstructions({ instructionsUrl }));
+  }, [agentsUrl, dispatch, documentTypesUrl, instructionsUrl, show, workflowRunsUrl, workflowsUrl]);
 
   useEffect(() => {
     if (realtime.connected) {

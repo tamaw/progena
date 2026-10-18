@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import reducer, { applyUiEvent } from '../uiDataSlice';
+import { failPendingOp } from '../realtimeSlice';
 import { fetchMcpServerDetail, selectMcpServerDetailRequest } from './mcp';
 import { fetchInstruction, selectInstructionContentRequest } from './instructions';
 import { fetchWorkflowContent, selectWorkflowDetailRequest } from './workflows';
@@ -87,6 +88,32 @@ describe('keyed detail request lifecycle', () => {
       error: null,
       requestId: null,
     });
+  });
+
+  it('settles an acknowledged load whose stream fails before its data event, then recovers on retry', () => {
+    const args = { path: '/workflows/a.json' };
+    let state = reducer(undefined, fetchWorkflowContent.pending('lost-request', args));
+    state = reducer(state, fetchWorkflowContent.fulfilled({ request_id: 'lost-request' }, 'lost-request', args));
+    state = reducer(state, failPendingOp({ requestId: 'unrelated', error: 'Realtime stream disconnected' }));
+    expect(selectWorkflowDetailRequest(uiState(state), args.path).loading).toBe(true);
+
+    state = reducer(state, failPendingOp({ requestId: 'lost-request', error: 'Realtime stream disconnected' }));
+    expect(selectWorkflowDetailRequest(uiState(state), args.path)).toEqual({
+      loading: false, error: 'Realtime stream disconnected', requestId: 'lost-request',
+    });
+
+    state = reducer(state, fetchWorkflowContent.pending('retry-request', args));
+    expect(selectWorkflowDetailRequest(uiState(state), args.path)).toEqual({
+      loading: true, error: null, requestId: 'retry-request',
+    });
+  });
+
+  it('keeps a thunk rejection failure when the pending operation is failed afterwards', () => {
+    const args = { id: 'mcp:a' };
+    let state = reducer(undefined, fetchMcpServerDetail.pending('rejected-request', args));
+    state = reducer(state, fetchMcpServerDetail.rejected(new Error('Server unavailable'), 'rejected-request', args));
+    state = reducer(state, failPendingOp({ requestId: 'rejected-request', error: 'Server unavailable' }));
+    expect(selectMcpServerDetailRequest(uiState(state), 'mcp:a').error).toMatchObject({ message: 'Server unavailable' });
   });
 
   it('does not let a late error or unrelated event poison another detail key', () => {

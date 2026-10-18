@@ -142,12 +142,21 @@ export default function Select({
     listRef.current?.querySelector(`[data-index="${activeIndex}"]`)?.scrollIntoView({ block: 'nearest' });
   }, [isOpen, activeIndex]);
 
+  // Like a native select: closing from the menu keeps focus on the control, and
+  // choosing the current option is not a change.
+  const close = useCallback(() => {
+    setIsOpen(false);
+    triggerRef.current?.focus();
+  }, []);
+
   const commit = useCallback(
     (nextValue) => {
-      onChange(nextValue);
-      setIsOpen(false);
+      if (nextValue !== value) {
+        onChange(nextValue);
+      }
+      close();
     },
-    [onChange],
+    [close, onChange, value],
   );
 
   const handlePanelKeyDown = useCallback(
@@ -165,10 +174,10 @@ export default function Select({
         }
       } else if (event.key === 'Escape') {
         event.preventDefault();
-        setIsOpen(false);
+        close();
       }
     },
-    [filtered, activeIndex, commit],
+    [filtered, activeIndex, commit, close],
   );
 
   const panel = isOpen ? (

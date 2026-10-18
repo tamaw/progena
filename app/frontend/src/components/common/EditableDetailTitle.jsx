@@ -41,14 +41,16 @@ export default function EditableDetailTitle({
           value={draft}
           maxLength={maxLength}
           aria-label={ariaLabel}
-          disabled={saving}
+          // Read-only, not disabled: a rejected save keeps focus in the draft for correction.
+          readOnly={saving}
+          aria-busy={saving}
           onChange={(event) => setDraft(event.target.value)}
           onBlur={saving ? undefined : cancel}
           onKeyDown={(event) => {
             if (event.key === 'Enter') {
               event.preventDefault();
               void save();
-            } else if (event.key === 'Escape') {
+            } else if (event.key === 'Escape' && !saving) {
               event.preventDefault();
               cancel();
             }
