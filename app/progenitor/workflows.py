@@ -635,20 +635,14 @@ def repo_node_port_schemas(action: RepoNodeAction) -> tuple[dict[str, Any], dict
         "publish": ["repo_id", "branch", "title"],
         "remove_worktree": ["repo_id", "branch"],
     }
+    # Inputs accept null so nullable document fields (a card's repo_id or
+    # branch_name) can be wired; a missing value fails the step when it runs.
+    text: dict[str, Any] = {"type": ["string", "null"]}
     input_properties: dict[RepoNodeAction, dict[str, Any]] = {
-        "sync": {"repo_id": {"type": "string"}},
-        "worktree": {
-            "repo_id": {"type": "string"},
-            "branch": {"type": "string"},
-            "base": {"type": "string"},
-        },
-        "publish": {
-            "repo_id": {"type": "string"},
-            "branch": {"type": "string"},
-            "title": {"type": "string"},
-            "body": {"type": "string"},
-        },
-        "remove_worktree": {"repo_id": {"type": "string"}, "branch": {"type": "string"}},
+        "sync": {"repo_id": text},
+        "worktree": {"repo_id": text, "branch": text, "base": text},
+        "publish": {"repo_id": text, "branch": text, "title": text, "body": text},
+        "remove_worktree": {"repo_id": text, "branch": text},
     }
     output_properties: dict[RepoNodeAction, dict[str, Any]] = {
         "sync": {
@@ -681,7 +675,7 @@ def repo_node_port_schemas(action: RepoNodeAction) -> tuple[dict[str, Any], dict
         {
             "type": "object",
             "required": required_input[action],
-            "properties": input_properties[action],
+            "properties": copy.deepcopy(input_properties[action]),
             "additionalProperties": False,
         },
         {

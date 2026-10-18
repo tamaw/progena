@@ -309,13 +309,17 @@ const REPO_ACTION_OPTIONS = [
   { value: 'remove_worktree', label: 'Remove worktree', description: 'Remove a branch worktree.' },
 ];
 
+// Inputs accept null so nullable document fields (a card's repo_id or
+// branch_name) can be wired; mirrors repo_node_port_schemas() in workflows.py.
+const REPO_TEXT_INPUT = { type: ['string', 'null'] };
+
 function repoNodeSchemas(action) {
   const schemas = {
     sync: {
       inputSchema: {
         type: 'object',
         required: ['repo_id'],
-        properties: { repo_id: { type: 'string' } },
+        properties: { repo_id: REPO_TEXT_INPUT },
       },
       outputSchema: {
         type: 'object',
@@ -333,9 +337,9 @@ function repoNodeSchemas(action) {
         type: 'object',
         required: ['repo_id', 'branch'],
         properties: {
-          repo_id: { type: 'string' },
-          branch: { type: 'string' },
-          base: { type: 'string' },
+          repo_id: REPO_TEXT_INPUT,
+          branch: REPO_TEXT_INPUT,
+          base: REPO_TEXT_INPUT,
         },
       },
       outputSchema: {
@@ -355,10 +359,10 @@ function repoNodeSchemas(action) {
         type: 'object',
         required: ['repo_id', 'branch', 'title'],
         properties: {
-          repo_id: { type: 'string' },
-          branch: { type: 'string' },
-          title: { type: 'string' },
-          body: { type: 'string' },
+          repo_id: REPO_TEXT_INPUT,
+          branch: REPO_TEXT_INPUT,
+          title: REPO_TEXT_INPUT,
+          body: REPO_TEXT_INPUT,
         },
       },
       outputSchema: {
@@ -378,8 +382,8 @@ function repoNodeSchemas(action) {
         type: 'object',
         required: ['repo_id', 'branch'],
         properties: {
-          repo_id: { type: 'string' },
-          branch: { type: 'string' },
+          repo_id: REPO_TEXT_INPUT,
+          branch: REPO_TEXT_INPUT,
         },
       },
       outputSchema: {

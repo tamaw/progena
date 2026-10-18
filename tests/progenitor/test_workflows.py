@@ -744,43 +744,116 @@ def test_integer_output_feeds_a_number_input(target_type):
     validate_workflow_definition_payload(_derive(payload))
 
 
-def test_repo_ports_are_derived_and_unknown_action_is_rejected():
+def _edge(source, source_port, target, target_port):
+    return {
+        "from": {"node": source, "port": source_port},
+        "to": {"node": target, "port": target_port},
+    }
+
+
+def _pipeline(nodes, edges):
     payload = default_workflow_definition()
-    event_id = _node_id(payload, "event")
-    payload["graph"]["nodes"]["branch"] = {
-        "kind": "data",
-        "title": "Branch",
-        "value": "feature/card",
-        "output_schema": {"type": "string"},
-    }
-    payload["graph"]["edges"].extend(
-        [
-            {"from": {"node": event_id, "port": "id"}, "to": {"node": "repo", "port": "repo_id"}},
-            {"from": {"node": "branch", "port": "value"}, "to": {"node": "repo", "port": "branch"}},
-        ]
-    )
-    payload["graph"]["nodes"]["repo"] = {
-        "kind": "repo",
-        "action": "worktree",
-        "input_schema": {"type": "string"},
-        "output_schema": {"type": "string"},
-    }
+    payload["graph"] = {"nodes": nodes, "edges": edges}
+    return validate_workflow_definition_payload(derive_workflow_port_schemas(payload, _TYPES))
 
-    derived = derive_workflow_port_schemas(payload, _TYPES)
-    repo = derived["graph"]["nodes"]["repo"]
-    assert repo["input_schema"] == {
-        "type": "object",
-        "required": ["repo_id", "branch"],
-        "properties": {
-            "repo_id": {"type": "string"},
-            "branch": {"type": "string"},
-            "base": {"type": "string"},
+
+def test_build_stage_wires_nullable_card_fields_into_a_worktree_and_acp_task():
+    """The documented build stage: card enters build → worktree → Claude task → link."""
+    normalized = _pipeline(
+        {
+            "entered": {
+                "kind": "event",
+                "title": "Card entered build",
+                "document_type": "kanban_card",
+                "operations": ["updated"],
+                "changed_fields": ["column_id"],
+                "match": {"after.column_id": "build"},
+            },
+            "card": {"kind": "unpack", "title": "Card"},
+            "worktree": {"kind": "repo", "title": "Worktree", "action": "worktree"},
+            "agent": {
+                "kind": "data",
+                "title": "Agent",
+                "value": "claude",
+                "output_schema": {"type": "string"},
+            },
+            "prompt": {"kind": "format", "title": "Prompt", "template": "Implement: {title}"},
+            "task": {
+                "kind": "document_create",
+                "title": "Start Claude",
+                "document_type": "acp_task",
+            },
+            "link": {"kind": "document_write", "title": "Link", "document_type": "kanban_card"},
         },
-        "additionalProperties": False,
-    }
-    assert repo["output_schema"]["required"] == ["repo_id", "branch", "path", "head", "created"]
-    validate_workflow_definition_payload(derived)
+        [
+            _edge("entered", "after", "card", "value"),
+            _edge("card", "repo_id", "worktree", "repo_id"),
+            _edge("card", "branch_name", "worktree", "branch"),
+            _edge("card", "title", "prompt", "title"),
+            _edge("agent", "value", "task", "agent_name"),
+            _edge("prompt", "text", "task", "prompt"),
+            _edge("worktree", "path", "task", "cwd"),
+            _edge("card", "id", "task", "card_id"),
+            _edge("card", "id", "link", "id"),
+            _edge("task", "id", "link", "acp_task_id"),
+        ],
+    )
 
-    payload["graph"]["nodes"]["repo"]["action"] = "invalid"
+    worktree = normalized["graph"]["nodes"]["worktree"]
+    assert worktree["input_schema"]["required"] == ["repo_id", "branch"]
+    assert set(worktree["output_schema"]["properties"]) == {
+        "repo_id",
+        "branch",
+        "path",
+        "head",
+        "created",
+    }
+    task_inputs = normalized["graph"]["nodes"]["task"]["input_schema"]
+    assert task_inputs["required"] == ["agent_name"]
+    assert {"prompt", "cwd", "card_id", "status", "cancel_requested"} <= set(
+        task_inputs["properties"]
+    )
+
+
+def test_publish_stage_reads_the_card_back_from_a_finished_acp_task():
+    normalized = _pipeline(
+        {
+            "finished": {
+                "kind": "event",
+                "title": "Claude finished",
+                "document_type": "acp_task",
+                "changed_fields": ["status"],
+                "match": {"after.status": "completed", "after.source": "workflow"},
+            },
+            "task": {"kind": "unpack", "title": "Task"},
+            "read": {"kind": "document_read", "title": "Card", "document_type": "kanban_card"},
+            "card": {"kind": "unpack", "title": "Card fields"},
+            "publish": {"kind": "repo", "title": "Publish", "action": "publish"},
+            "link": {"kind": "document_write", "title": "PR link", "document_type": "kanban_card"},
+        },
+        [
+            _edge("finished", "after", "task", "value"),
+            _edge("task", "card_id", "read", "id"),
+            _edge("read", "document", "card", "value"),
+            _edge("card", "repo_id", "publish", "repo_id"),
+            _edge("card", "branch_name", "publish", "branch"),
+            _edge("card", "title", "publish", "title"),
+            _edge("card", "id", "link", "id"),
+            _edge("publish", "pr_url", "link", "pr_url"),
+        ],
+    )
+
+    assert normalized["graph"]["nodes"]["publish"]["output_schema"]["required"] == [
+        "repo_id",
+        "branch",
+        "pushed",
+        "pr_url",
+        "pr_number",
+    ]
+
+
+def test_repo_node_rejects_unknown_action():
+    payload = default_workflow_definition()
+    payload["graph"]["nodes"]["repo"] = {"kind": "repo", "title": "Repo", "action": "invalid"}
     with pytest.raises(ValueError, match="unknown action"):
         derive_workflow_port_schemas(payload, _TYPES)

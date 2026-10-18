@@ -654,7 +654,11 @@ class ACPTaskSupervisor:
             payload["task_id"] = task_id
             payload.setdefault("prompt", payload.pop("request_text", ""))
             try:
-                normalized = ACPTaskRecord.model_validate(payload).model_dump(mode="json")
+                # Unset optional fields are omitted: the schema types cwd/card_id
+                # as plain strings so workflows can wire them.
+                normalized = ACPTaskRecord.model_validate(payload).model_dump(
+                    mode="json", exclude_none=True
+                )
             except Exception:
                 logger.warning("Skipping malformed legacy ACP task %s", task_id, exc_info=True)
                 continue

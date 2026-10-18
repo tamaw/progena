@@ -7,8 +7,8 @@
     "task_id": {"type": "string", "readOnly": true, "description": "The id part of the acp_task:<id> key."},
     "agent_name": {"type": "string", "minLength": 1, "description": "Registered ACP agent to drive (e.g. 'claude')."},
     "prompt": {"type": "string", "description": "Prompt for the next turn."},
-    "cwd": {"type": ["string", "null"], "description": "Working directory on the agent's host, e.g. a repo node's worktree path. Defaults to the agent's configured cwd."},
-    "card_id": {"type": ["string", "null"], "description": "Kanban card this task works for, if any."},
+    "cwd": {"type": "string", "description": "Working directory on the agent's host, e.g. a repo node's worktree path. Absent: the agent's configured cwd."},
+    "card_id": {"type": "string", "description": "Kanban card this task works for; absent when none (wire it straight into document_read kanban_card)."},
     "status": {
       "type": "string",
       "enum": ["queued", "working", "completed", "failed", "canceled", "interrupted"],

@@ -51,8 +51,10 @@ async def upsert_acp_task(
     task: ACPTaskRecord,
     save_document_fn: Callable[[str, Any], Awaitable[None]],
 ) -> None:
-    """Persist one ACP task document."""
-    await save_document_fn(acp_task_key(task.task_id), task.model_dump(mode="json"))
+    """Persist one ACP task document; unset optional fields are omitted, not null."""
+    await save_document_fn(
+        acp_task_key(task.task_id), task.model_dump(mode="json", exclude_none=True)
+    )
 
 
 async def update_acp_task(
