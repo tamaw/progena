@@ -81,6 +81,14 @@ The current schema supports: `prompt`, `eval`, `condition`, `switch`, `split`,
   Background output is a task reference (`task_id`, `thread_id`, `run_id`,
   `agent_name`, `status`), not the final response. Each launch creates a separate
   conversation; `response_schema` validates the eventual task result.
+  Every node stops after 120 seconds unless it sets `timeout` (seconds; `0`
+  means no limit). Agent steps that run shell work (cloning, worktrees, builds)
+  usually need more: set e.g. `"timeout": 900`.
+  Repository work goes to the bundled `repo-manager` agent: it clones declared
+  repos (`/config/repos/<id>.json`), creates and removes per-branch worktrees
+  under `$PROGENITOR_REPOS_DIR/<repo-id>.worktrees/`, and publishes branches
+  (push + pull request). Tell it the repo id and branch, and ask it to reply
+  with the paths and URLs it produced.
 - `noop` passes state through unchanged.
 - `human` pauses for a user response and is suitable for approval/review.
 - `foreach` supports parallel item fan-out (`mode: "send"`) or per-item agent

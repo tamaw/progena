@@ -19,7 +19,6 @@ import {
   instructionPatch,
   createPaletteNode,
   nodeInputPorts,
-  repoNodeSchemas,
   schemasAreCompatible,
 } from './WorkflowsPage';
 import { canvasToolSettings } from './workflowCanvasTools';
@@ -455,40 +454,6 @@ describe('workflowToFlow', () => {
     expect(persisted.graph.nodes.create_1).toMatchObject({ kind: 'document_create', document_type: 'kanban_card' });
     expect(persisted.graph.nodes.delete_1).toMatchObject({ kind: 'document_delete', document_type: 'kanban_card' });
   });
-  it('derives repo ports per action and round-trips the selected action', () => {
-    expect(Object.keys(repoNodeSchemas('sync').inputSchema.properties)).toEqual(['repo_id']);
-    expect(Object.keys(repoNodeSchemas('worktree').inputSchema.properties)).toEqual(['repo_id', 'branch', 'base']);
-    expect(Object.keys(repoNodeSchemas('publish').inputSchema.properties)).toEqual(['repo_id', 'branch', 'title', 'body']);
-    expect(Object.keys(repoNodeSchemas('remove_worktree').outputSchema.properties)).toEqual(['repo_id', 'branch', 'removed']);
-
-    const workflow = {
-      graph: {
-        nodes: {
-          publish_1: {
-            kind: 'repo',
-            title: 'Publish branch',
-            action: 'publish',
-            input_schema: repoNodeSchemas('publish').inputSchema,
-            output_schema: repoNodeSchemas('publish').outputSchema,
-          },
-        },
-        edges: [],
-      },
-      ui: { nodes: {} },
-    };
-
-    const flow = workflowToFlow(workflow, {}, null);
-    expect(flow.nodes[0].data).toMatchObject({ action: 'publish', inputSchema: repoNodeSchemas('publish').inputSchema });
-
-    const persisted = flowToWorkflow(workflow, flow.nodes, flow.edges, flow.viewport);
-    expect(persisted.graph.nodes.publish_1).toMatchObject({
-      kind: 'repo',
-      title: 'Publish branch',
-      action: 'publish',
-      input_schema: repoNodeSchemas('publish').inputSchema,
-      output_schema: repoNodeSchemas('publish').outputSchema,
-    });
-  });
 });
 
 describe('workflow node menu', () => {
@@ -496,7 +461,7 @@ describe('workflow node menu', () => {
     const addableKinds = NODE_MENU_CATEGORIES.flatMap((category) => category.items).map((item) => item.kind);
 
     expect(addableKinds.sort()).toEqual(
-      ['agent', 'approval', 'condition', 'cron', 'data', 'document_create', 'document_delete', 'document_query', 'document_read', 'document_write', 'event', 'extract', 'format', 'repo', 'routine', 'unpack'].sort(),
+      ['agent', 'approval', 'condition', 'cron', 'data', 'document_create', 'document_delete', 'document_query', 'document_read', 'document_write', 'event', 'extract', 'format', 'routine', 'unpack'].sort(),
     );
   });
 });

@@ -60,6 +60,9 @@ def build_shell_env(
     if config.git_write:
         # Read by data/shims/bin/{git,gh}: unlocks repository setup commands.
         environment["PROGENITOR_SHIM_GIT_WRITE"] = "1"
+    if config.git_publish:
+        # Read by data/shims/bin/{git,gh}: unlocks branch pushes and `gh pr create`.
+        environment["PROGENITOR_SHIM_GIT_PUBLISH"] = "1"
     if repos_dir is not None:
         # Where declared repos with a relative local_path live on disk.
         environment["PROGENITOR_REPOS_DIR"] = str(repos_dir)
