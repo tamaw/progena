@@ -200,7 +200,7 @@ class AgentNodeConfig(BaseModel):
     agent_name: str = Field(min_length=1)
     execution: Literal["wait", "background"] = "wait"
     prompt_template: str | None = None
-    prompt_file: str | None = None
+    instruction: str | None = None
     inputs: dict[str, str] = Field(default_factory=dict)
     response_schema: dict[str, Any] | None = None
     continue_thread: bool = True
@@ -213,7 +213,7 @@ class AgentNodeConfig(BaseModel):
         data = handler(self)
         # The schema selects input sources by field presence. An internal
         # empty-map default must not create a second source in a saved graph.
-        if (self.prompt_template is not None or self.prompt_file is not None) and not self.inputs:
+        if (self.prompt_template is not None or self.instruction is not None) and not self.inputs:
             data.pop("inputs", None)
         return data
 

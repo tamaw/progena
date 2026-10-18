@@ -1,4 +1,4 @@
 # Greetings agent dependencies (the shared image also installs the repo package)
 
 a2a-sdk[http-server]>=0.3.24
-agent-client-protocol>=0.7.1,<0.8.0
+agent-client-protocol==0.12.1
