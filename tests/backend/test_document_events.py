@@ -696,6 +696,23 @@ def test_schema_driven_writable_fields_reject_readonly_values():
     assert "not writable" in (session.validate_write({"missing": "no"}) or "")
 
 
+def test_acp_task_schema_exposes_only_request_fields_as_writable():
+    acp_task = BUILTIN_TYPES["acp_task"]
+    assert acp_task.writable_fields == (
+        "agent_name",
+        "prompt",
+        "cwd",
+        "card_id",
+        "status",
+        "cancel_requested",
+        "source",
+        "request_metadata",
+        "notify_on_completion",
+    )
+    assert acp_task.validate_write({"agent_name": "claude", "prompt": "build"}) is None
+    assert "not writable" in (acp_task.validate_write({"session_id": "s"}) or "")
+
+
 def test_document_create_generates_or_uses_id_and_rejects_duplicate(store):
     node = WorkflowNodeDocumentCreate(document_type="kanban_card")
     generated = _execute_document_create_node(

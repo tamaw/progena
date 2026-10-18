@@ -88,3 +88,35 @@ async def test_runner_happy_path_with_mocked_spawn(monkeypatch):
     assert result.output == "done"
     assert result.session_id == "sess-1"
     assert result.stop_reason == "end_turn"
+
+
+async def test_runner_resumes_existing_session_with_same_id(monkeypatch):
+    resumed: list[tuple[str, str]] = []
+
+    @contextlib.asynccontextmanager
+    async def fake_spawn(client: Any, command: str, *args: str, **kwargs: Any):
+        async def initialize(**_k: Any) -> Any:
+            return SimpleNamespace()
+
+        async def resume_session(cwd: str, session_id: str, **_k: Any) -> Any:
+            resumed.append((cwd, session_id))
+            return SimpleNamespace(session_id=session_id)
+
+        async def prompt(prompt: Any, session_id: str, **_k: Any) -> Any:
+            await client.session_update(session_id, _message_chunk("continued"))
+            return SimpleNamespace(stop_reason="end_turn")
+
+        conn = SimpleNamespace(
+            initialize=initialize,
+            resume_session=resume_session,
+            prompt=prompt,
+        )
+        yield conn, SimpleNamespace(pid=4321)
+
+    monkeypatch.setattr(runner_module, "spawn_agent_process", fake_spawn)
+    result = await ACPRunner("copilot", ["--acp"], timeout=5).run(
+        "continue", "/tmp/worktree", run_id="t", session_id="sess-existing"
+    )
+    assert resumed == [("/tmp/worktree", "sess-existing")]
+    assert result.session_id == "sess-existing"
+    assert result.output == "continued"
