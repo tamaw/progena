@@ -154,10 +154,6 @@ const DEFAULT_NODE_SIZES = {
     data: { width: 280, height: 120 },
     settings: { width: 340, height: 240 },
   },
-  repo: {
-    data: { width: 320, height: 160 },
-    settings: { width: 380, height: 240 },
-  },
   cron: {
     data: { width: 320, height: 220 },
     settings: { width: 380, height: 320 },
@@ -188,7 +184,6 @@ const NODE_MENU_CATEGORIES = [
       { id: 'condition', kind: 'condition', label: 'Condition', icon: '◇' },
       { id: 'format', kind: 'format', label: 'Format', icon: 'F' },
       { id: 'approval', kind: 'approval', label: 'Approval', icon: '✓' },
-      { id: 'repo', kind: 'repo', label: 'Repo', icon: 'R' },
     ],
   },
 ];
@@ -302,108 +297,6 @@ function defaultDeleteNode() {
   };
 }
 
-const REPO_ACTION_OPTIONS = [
-  { value: 'sync', label: 'Sync', description: 'Clone or fetch a repository in the managed repos root.' },
-  { value: 'worktree', label: 'Worktree', description: 'Create or reuse a branch worktree.' },
-  { value: 'publish', label: 'Publish', description: 'Push a branch and open or find its pull request.' },
-  { value: 'remove_worktree', label: 'Remove worktree', description: 'Remove a branch worktree.' },
-];
-
-function repoNodeSchemas(action) {
-  const schemas = {
-    sync: {
-      inputSchema: {
-        type: 'object',
-        required: ['repo_id'],
-        properties: { repo_id: { type: 'string' } },
-      },
-      outputSchema: {
-        type: 'object',
-        required: ['repo_id', 'path', 'default_branch', 'head'],
-        properties: {
-          repo_id: { type: 'string' },
-          path: { type: 'string' },
-          default_branch: { type: 'string' },
-          head: { type: 'string' },
-        },
-      },
-    },
-    worktree: {
-      inputSchema: {
-        type: 'object',
-        required: ['repo_id', 'branch'],
-        properties: {
-          repo_id: { type: 'string' },
-          branch: { type: 'string' },
-          base: { type: 'string' },
-        },
-      },
-      outputSchema: {
-        type: 'object',
-        required: ['repo_id', 'branch', 'path', 'head', 'created'],
-        properties: {
-          repo_id: { type: 'string' },
-          branch: { type: 'string' },
-          path: { type: 'string' },
-          head: { type: 'string' },
-          created: { type: 'boolean' },
-        },
-      },
-    },
-    publish: {
-      inputSchema: {
-        type: 'object',
-        required: ['repo_id', 'branch', 'title'],
-        properties: {
-          repo_id: { type: 'string' },
-          branch: { type: 'string' },
-          title: { type: 'string' },
-          body: { type: 'string' },
-        },
-      },
-      outputSchema: {
-        type: 'object',
-        required: ['repo_id', 'branch', 'pushed', 'pr_url', 'pr_number'],
-        properties: {
-          repo_id: { type: 'string' },
-          branch: { type: 'string' },
-          pushed: { type: 'boolean' },
-          pr_url: { type: 'string' },
-          pr_number: { type: 'integer' },
-        },
-      },
-    },
-    remove_worktree: {
-      inputSchema: {
-        type: 'object',
-        required: ['repo_id', 'branch'],
-        properties: {
-          repo_id: { type: 'string' },
-          branch: { type: 'string' },
-        },
-      },
-      outputSchema: {
-        type: 'object',
-        required: ['repo_id', 'branch', 'removed'],
-        properties: {
-          repo_id: { type: 'string' },
-          branch: { type: 'string' },
-          removed: { type: 'boolean' },
-        },
-      },
-    },
-  };
-  return cloneValue(schemas[action] || schemas.sync);
-}
-
-function defaultRepoNode() {
-  return {
-    title: 'Repo',
-    action: 'sync',
-    ...repoNodeSchemas('sync'),
-  };
-}
-
 const DOCK_NODE_DEFAULTS = {
   event: defaultEventNode,
   agent: () => ({
@@ -454,7 +347,6 @@ const DOCK_NODE_DEFAULTS = {
     },
   }),
   cron: defaultCronNode,
-  repo: defaultRepoNode,
   document_read: defaultReadNode,
   document_query: defaultQueryNode,
   document_write: defaultWriteNode,
@@ -599,7 +491,6 @@ const NODE_MINIMAP_COLORS = {
   document_read: '#79c0ff',
   document_query: '#a5d6ff',
   routine: '#db61a2',
-  repo: '#f0883e',
   document_write: '#56d364',
   document_create: '#56d364',
   document_delete: '#ff7b72',
@@ -845,22 +736,6 @@ function buildNodeData(kind, node, callbacks, latestRun) {
       canDelete: true,
     };
   }
-  if (kind === 'repo') {
-    const action = node.action || 'sync';
-    const schemas = repoNodeSchemas(action);
-    return {
-      ...shared,
-      ...runState,
-      kind,
-      title: node.title || 'Repo',
-      action,
-      inputSchema: cloneValue(node.input_schema) || schemas.inputSchema,
-      outputSchema: cloneValue(node.output_schema) || schemas.outputSchema,
-      onChange: callbacks.onNodeChange,
-      onDelete: callbacks.onDeleteNode,
-      canDelete: true,
-    };
-  }
   if (kind === 'unpack') {
     return {
       ...shared,
@@ -1053,16 +928,6 @@ function flowToWorkflow(baseWorkflow, nodes, edges, viewport) {
         routine: node.data?.routine || '',
         input_schema: cloneValue(node.data?.inputSchema) || null,
         output_schema: cloneValue(node.data?.outputSchema) || null,
-      };
-    } else if (node.type === 'repo') {
-      const action = node.data?.action || 'sync';
-      const schemas = repoNodeSchemas(action);
-      graphNodes[node.id] = {
-        kind: 'repo',
-        title: String(node.data?.title || 'Repo'),
-        action,
-        input_schema: cloneValue(node.data?.inputSchema) || schemas.inputSchema,
-        output_schema: cloneValue(node.data?.outputSchema) || schemas.outputSchema,
       };
     } else if (node.type === 'data') {
       graphNodes[node.id] = {
@@ -1933,18 +1798,6 @@ function WorkflowNodeOptionsModal({ node, onChange, onClose }) {
                 <Select value={node.data?.routine || ''} onChange={handleRoutineChange} options={routineOptions} ariaLabel="Routine" />
               </label>
             ) : null}
-            {kind === 'repo' ? (
-              <label className="workflow-node-options__field">
-                Action
-                <Select
-                  value={node.data?.action || 'sync'}
-                  onChange={(action) => onChange(node.id, { action, ...repoNodeSchemas(action) })}
-                  options={REPO_ACTION_OPTIONS.map(({ value, label }) => ({ value, label }))}
-                  ariaLabel="Repository action"
-                />
-                <small>{REPO_ACTION_OPTIONS.find((option) => option.value === (node.data?.action || 'sync'))?.description}</small>
-              </label>
-            ) : null}
             {kind === 'agent' || kind === 'extract' ? (
               <>
                 <div className="workflow-node-options__field">
@@ -2275,7 +2128,6 @@ const NODE_TYPES = {
   document_query: PromptNode,
   document_write: PromptNode,
   routine: PromptNode,
-  repo: PromptNode,
   document_create: PromptNode,
   document_delete: PromptNode,
   unpack: UnpackNode,
@@ -2460,7 +2312,6 @@ const DOCK_ITEM_META = {
   routine: { icon: 'R', label: 'Routine' },
   condition: { icon: '◇', label: 'Condition' },
   approval: { icon: '✓', label: 'Approval' },
-  repo: { icon: 'R', label: 'Repo' },
 };
 
 function WorkflowSideDock({ onSelect }) {
@@ -3536,7 +3387,7 @@ function WorkflowsInner() {
 
 // This helper is exported for the focused workflow graph unit test.
 // eslint-disable-next-line react-refresh/only-export-components
-export { flowToWorkflow, workflowToFlow, NODE_MENU_CATEGORIES, schemaProperties, canvasMenuAnchor, visibleNodePortProperties, deriveUnpackSchemas, recomputeUnpackSchemas, computeLostEdgesForUnpackChange, pruneLostUnpackEdges, isUnpackableSchema, parsePromptPlaceholders, derivePromptInputSchema, promptTemplatePatch, instructionPatch, createPaletteNode, nodeInputPorts, nodeOutputPorts, schemasAreCompatible, deriveFormatInputSchema, formatTemplatePatch, repoNodeSchemas };
+export { flowToWorkflow, workflowToFlow, NODE_MENU_CATEGORIES, schemaProperties, canvasMenuAnchor, visibleNodePortProperties, deriveUnpackSchemas, recomputeUnpackSchemas, computeLostEdgesForUnpackChange, pruneLostUnpackEdges, isUnpackableSchema, parsePromptPlaceholders, derivePromptInputSchema, promptTemplatePatch, instructionPatch, createPaletteNode, nodeInputPorts, nodeOutputPorts, schemasAreCompatible, deriveFormatInputSchema, formatTemplatePatch };
 export default function WorkflowsPage() {
   return (
     <ReactFlowProvider>
