@@ -334,13 +334,22 @@ def test_validate_kanban_structure_rejects_bad_shapes():
 
 
 def test_card_markdown_round_trips():
-    card = {"id": "card_1", "title": "Ship", "column_id": "backlog", "description": "Do the thing"}
+    card = {
+        "id": "card_1",
+        "title": "Ship",
+        "column_id": "backlog",
+        "description": "Do the thing",
+        "repo_id": "progenitor",
+        "acp_task_id": "task_123",
+    }
     text = card_to_markdown(card)
     assert text.startswith("---\n")
     parsed = markdown_to_card(text, "card_1")
     assert parsed["title"] == "Ship"
     assert parsed["column_id"] == "backlog"
     assert parsed["description"] == "Do the thing"
+    assert parsed["repo_id"] == "progenitor"
+    assert parsed["acp_task_id"] == "task_123"
 
 
 async def test_kanban_aread_and_ls():

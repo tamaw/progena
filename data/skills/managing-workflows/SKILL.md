@@ -1,6 +1,6 @@
 ---
 name: managing-workflows
-description: Create, inspect, update, pause/resume, wire, or delete backend-native workflow definitions by editing one file under /workflows/ at a time. Use when a user asks to create or modify a workflow that reacts to document create/update/delete events (kanban cards, inbox messages, workflow runs, preferences, ...) and runs agent, MCP, condition, approval, or direct document read/query nodes through the backend workflow executor.
+description: Create, inspect, update, pause/resume, wire, or delete backend-native workflow definitions by editing one file under /workflows/ at a time. Use when a user asks to create or modify a workflow that reacts to document create/update/delete events (kanban cards, inbox messages, workflow runs, ACP tasks, repos, preferences, ...) and runs agent, routine, repo (git worktree/push/PR), condition, approval, or direct document nodes — including stage pipelines that drive Claude or other ACP agents through acp_task documents.
 allowed-tools: read_file write_file edit_file ls structured_output generate_id current_time
 ---
 
@@ -18,10 +18,10 @@ Core rules:
 4. Do not add runtime execution fields to the definition file.
 5. Prefer `edit_file` for focused changes. Use `write_file` only when creating a new workflow or rewriting the whole document intentionally.
 6. Use `structured_output` against the complete definition schema whenever creating or reshaping nodes or edges — do not hand-assemble JSON from memory.
-7. Never hand-write `input_schema`/`output_schema` for `event`, `cron`, `document_read`, `document_query`, `document_write`, `document_create`, `document_delete`, or `format` nodes: the server derives them on save. Wire edges to the port names listed below.
+7. Never hand-write `input_schema`/`output_schema` for `event`, `cron`, `document_read`, `document_query`, `document_write`, `document_create`, `document_delete`, `format`, or `repo` nodes: the server derives them on save. Wire edges to the port names listed below.
 
 Document events:
-- Every create/update/delete of a stored document is an event. An `event` node subscribes by `document_type` (a registered type id). Built-in ids: `kanban_card`, `kanban_task` (task body), `inbox_message`, `workflow`, `workflow_run`, `routine`, `policy`, `agent`, `skill`, `memory`, `instruction`, `preferences`, `schedule`, `mcp`, `plugins`, `marketplaces`, `knowledge`, `knowledge_page`, `knowledge_index`, `repos`, `kanban_board`, and `session` (below). Writing a workflow with an unknown id fails with the list of registered ids.
+- Every create/update/delete of a stored document is an event. An `event` node subscribes by `document_type` (a registered type id). Built-in ids: `kanban_card`, `kanban_task` (task body), `inbox_message`, `workflow`, `workflow_run`, `routine`, `policy`, `agent`, `skill`, `memory`, `instruction`, `preferences`, `schedule`, `mcp`, `plugins`, `marketplaces`, `knowledge`, `knowledge_page`, `knowledge_index`, `repo`, `acp_task` (below), `alert`, `kanban_board`, and `session` (below). Writing a workflow with an unknown id fails with the list of registered ids.
 - `knowledge_page` receives events for pages under `knowledge:<base-id>/`; `knowledge_index` receives system-maintained indexing-status updates at `knowledge_index`. The index type is read-only, while knowledge page content has the standard content-document ports.
 - Optional filters on the event node: `key` (exact document key), `operations` (subset of `created`/`updated`/`deleted`; empty = any), `changed_fields` (fire only if one of these top-level fields changed), `match` (equality at dotted output paths, e.g. `{"after.column_id": "done"}`; the path must exist).
 - Event output ports: `event_id`, `document_type`, `key`, `id` (key without prefix), `op`, `timestamp`, `changed_fields`, `before`, `after`. `before`/`after` are the whole document, typed with the document type's label (e.g. `Kanban Card`); wire them into an `unpack` node to reach individual fields. `before` is absent on created, `after` on deleted.
@@ -48,7 +48,24 @@ Node kinds:
 - Templates are markdown with optional front matter (`title`, `description`, `inputs` mapping placeholder roots to types, `output_schema`, `system`). Placeholders `{card}` / `{card.title}` become input ports; a missing value fails the step. All prompt steps in a run share one thread unless `thread_id` is wired. Reusable templates are instructions: write them under `/instructions/workflows/` (see the maintaining-instructions skill) and reference them by `instruction` path.
 - `condition` — deterministic branch with `true`/`false` outputs.
 - `approval` — pauses for an approve/reject decision. Fields `kind`, `title`, `message`, optional `approver`: `any` (default; you may decide it with `resolve_workflow_approval` when the user asks) or `human` (only a person, in the UI; the tool refuses).
+- `repo` — deterministic git operation on a declared repository (`/config/repos/<id>.json`; no LLM). Fields `kind`, `title`, `action`. Ports by action:
+  - `sync`: in `repo_id` → out `repo_id`, `path`, `default_branch`, `head`. Clones `remote_url` into the repo's `local_path` if missing, else fetches.
+  - `worktree`: in `repo_id`, `branch`, optional `base` → out `repo_id`, `branch`, `path`, `head`, `created`. One worktree per branch; an existing branch is checked out as is (never reset), a new one starts from `base` or `origin/<default branch>`. Needs `access: "write"`.
+  - `publish`: in `repo_id`, `branch`, `title`, optional `body` → out `repo_id`, `branch`, `pushed`, `pr_url`, `pr_number`. Pushes the branch and opens a GitHub pull request, or returns the open one for that branch. Needs `access: "write"`.
+  - `remove_worktree`: in `repo_id`, `branch` → out `repo_id`, `branch`, `removed`. Discards uncommitted changes in that worktree.
+  A failed git or GitHub call fails the run with the error.
 - To alert the user, use `format` to render any dynamic message and wire its `text` output to a `document_create` node for document type `alert`. Supply title and message; alert defaults supply type `info`, `urgent` false, `requires_response` false, and `viewed` false.
+
+ACP tasks (driving Claude and other ACP agents):
+- An `acp_task` document is one agent session run by the backend; workflows drive it with the generic document nodes, never an `agent` node. See `/schemas/acp_task.schema.v1.json`.
+  - Start: `document_create(acp_task)` with `agent_name` (e.g. `claude`), `prompt`, `cwd` (wire a `repo` worktree `path`), and `card_id`. It starts `queued`.
+  - Nudge / continue: `document_write(acp_task)` with `id`, a new `prompt`, and `status` `"queued"`. The next turn resumes the same session; a running turn is cancelled first.
+  - Cancel: `document_write(acp_task)` with `id` and `cancel_requested` `true`.
+- The backend sets `status` to `working`, then `completed`, `failed`, `canceled`, or `interrupted` (the backend restarted mid-turn; queue another turn to resume). It also keeps `output` (the last reply), `progress` (`last_message`, `plan`, `tool_call_count`, `last_tool`, `last_activity_at`), `turn`, `history`, and `stalled` (true after a long silence while working).
+- Do not wait inside one run: end the run after starting the task and react in another workflow. Examples: "turn finished" `{"kind": "event", "document_type": "acp_task", "changed_fields": ["status"], "match": {"after.status": "completed"}}`; "agent went quiet" `{"kind": "event", "document_type": "acp_task", "changed_fields": ["stalled"], "match": {"after.stalled": true}}`. Read the card back with `document_read(kanban_card)` from `after.card_id`.
+- Record the link on the card: `document_write(kanban_card)` with `acp_task_id`, `repo_id`, and `branch_name`.
+
+Example — a build stage: `event(kanban_card entered "build")` → `unpack` card → `repo(worktree)` with `branch` from the card → `document_create(acp_task)` with `cwd` = worktree `path` and the plan as `prompt` → `document_write(kanban_card)` with `acp_task_id`. A second workflow on `acp_task` `completed` moves the card to `validate`; a third on `stalled` queues a nudge prompt; a publish workflow runs `repo(publish)` and writes `pr_url` to the card.
 
 Set `"notify_on_pause": true` on the workflow to raise an alert whenever a run pauses at an `approval` node or at a routine's `human` step. Pause alerts are under `/alerts/<id>.json` with a `context` saying what is waiting (`workflow_id`/`run_id`, or a routine `thread_id`) and its `approver`. Answer one only when the user asks you to: `resolve_workflow_approval` for approvals, `resume_routine` for routine steps; `approver: "human"` ones must be answered by the user in the UI.
 

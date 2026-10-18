@@ -742,3 +742,45 @@ def test_integer_output_feeds_a_number_input(target_type):
     payload = _data_into("count", "n", agent, 3, {"type": "integer"})
 
     validate_workflow_definition_payload(_derive(payload))
+
+
+def test_repo_ports_are_derived_and_unknown_action_is_rejected():
+    payload = default_workflow_definition()
+    event_id = _node_id(payload, "event")
+    payload["graph"]["nodes"]["branch"] = {
+        "kind": "data",
+        "title": "Branch",
+        "value": "feature/card",
+        "output_schema": {"type": "string"},
+    }
+    payload["graph"]["edges"].extend(
+        [
+            {"from": {"node": event_id, "port": "id"}, "to": {"node": "repo", "port": "repo_id"}},
+            {"from": {"node": "branch", "port": "value"}, "to": {"node": "repo", "port": "branch"}},
+        ]
+    )
+    payload["graph"]["nodes"]["repo"] = {
+        "kind": "repo",
+        "action": "worktree",
+        "input_schema": {"type": "string"},
+        "output_schema": {"type": "string"},
+    }
+
+    derived = derive_workflow_port_schemas(payload, _TYPES)
+    repo = derived["graph"]["nodes"]["repo"]
+    assert repo["input_schema"] == {
+        "type": "object",
+        "required": ["repo_id", "branch"],
+        "properties": {
+            "repo_id": {"type": "string"},
+            "branch": {"type": "string"},
+            "base": {"type": "string"},
+        },
+        "additionalProperties": False,
+    }
+    assert repo["output_schema"]["required"] == ["repo_id", "branch", "path", "head", "created"]
+    validate_workflow_definition_payload(derived)
+
+    payload["graph"]["nodes"]["repo"]["action"] = "invalid"
+    with pytest.raises(ValueError, match="unknown action"):
+        derive_workflow_port_schemas(payload, _TYPES)
