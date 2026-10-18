@@ -431,6 +431,16 @@ function SchedulesPage() {
     error: triggerActionError,
   } = triggerAction;
   const { request: requestScheduleDelete } = deleteConfirmation;
+  // An edit session belongs to the schedule it started on; leaving that schedule discards it.
+  if (isEditingIntent && intentEditScopeKey !== scheduleScopeKey) {
+    setIsEditingIntent(false);
+    setIntentDraft('');
+    setIntentValidationFailure(null);
+  }
+  if (isEditingTrigger && triggerEditScopeKey !== scheduleScopeKey) {
+    setIsEditingTrigger(false);
+    setTriggerValidationFailure(null);
+  }
   const editingIntent = isEditingIntent && intentEditScopeKey === scheduleScopeKey;
   const editingTrigger = isEditingTrigger && triggerEditScopeKey === scheduleScopeKey;
 
