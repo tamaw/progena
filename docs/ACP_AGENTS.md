@@ -90,16 +90,15 @@ Remove an agent with the `unregister_agent` tool (by name) — it deletes any ag
 ## Working directory & safety
 
 Each task runs in its `cwd` (a path on the agent's host), else the registry
-entry's `acp.cwd`, else `/tmp`. For build work pass a worktree from the workflow
-`repo` node: `/app/repos` (`PROGENITOR_WORKTREE_DIR`) is mounted at the same path
-in the backend, runtime, and Claude containers, so the worktree path the backend
-creates is the one Claude edits.
+entry's `acp.cwd`, else `/tmp`. For build work pass a worktree the `repo-manager`
+agent created under `/app/repos` (`PROGENITOR_WORKTREE_DIR`): it is mounted at
+the same path in the runtime, backend, and Claude containers, all running as
+UID 10001, so the path the agent reports is the one Claude edits.
 
 Permission requests are auto-approved (an allow option is chosen) — **the
-working directory is the guardrail, not per-call prompting**. Claude commits in
-the worktree with the repo-local identity the repo node sets; it has no GitHub
-credentials. Pushing and pull requests are done by the backend's `repo` node
-(`publish`), which holds `GH_TOKEN`.
+working directory is the guardrail, not per-call prompting**. Claude has no
+GitHub credentials; pushing and pull requests are the `repo-manager` agent's job
+(`git_publish: true`), using the runtime's `GH_TOKEN`.
 
 ## Restarts
 

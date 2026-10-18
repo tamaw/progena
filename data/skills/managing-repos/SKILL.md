@@ -15,8 +15,11 @@ or deleted.
 
 **Declaring a repo never clones it.** A file only records intent (name, path,
 access). If `local_path` doesn't exist on disk yet, the repo shows as "not yet
-cloned" until a human (or a separate git-capable agent) actually clones it there —
-this skill does not run `git clone`.
+cloned" until it is cloned there — this skill does not run `git clone`. The
+bundled `repo-manager` agent does the git work (clone, per-branch worktrees,
+push and pull requests), e.g. from a routine `agent` step. A relative
+`local_path` (e.g. `"progenitor"`) is the usual choice: it lives in the managed
+repos directory that the runtime, backend and Claude containers share.
 
 ## Live git status is a separate, read-only file
 Branch, dirty count, commit/branch counts, and recent commits are **not** in the

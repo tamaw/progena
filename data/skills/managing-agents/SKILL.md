@@ -80,7 +80,7 @@ the documents that skill manages. For example, an agent using
 `managing-routines` also needs a read-write mount for `/routines/`. Use the same
 pattern for `managing-agents` and `/agents/user/` when agent creation is part of
 its job. Agents created here may mount `/config/` read-only only, and cannot
-enable `shell`, `env_passthrough` or `git_write`; those are reserved for bundled agents.
+enable `shell`, `env_passthrough`, `git_write` or `git_publish`; those are reserved for bundled agents.
 
 Set `memory: true` to give an agent private memory: its `/memories/` is its own
 writable folder, and every file in it is loaded into its prompt on every run
