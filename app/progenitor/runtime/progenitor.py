@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from ..config import ProgenitorConfig, get_config
-from ..document_kinds import AGENT_DOCUMENT_KEY_PREFIX
+from ..document_kinds import AGENT_DOCUMENT_KEY_PREFIX, ROUTINE_GRAPH_KEY_PREFIX
 from ..llm.client import LLMClient
 from ..mcp import MCPRuntime
 from ..registry import AgentRegistryRuntime
@@ -71,7 +71,8 @@ class Progenitor:
         The runtime only listens for what chat calls into: ``mcp`` (server
         config) needs a full re-discovery, ``mcp_tools`` (a per-tool toggle)
         only re-applies the disabled set, ``plugins`` runs the plugin
-        reconciler, and ``agent:`` documents refresh the sub-agent registry.
+        reconciler, and ``agent:`` and routine documents refresh the sub-agent
+        registries (so new agents and routines are runnable without a restart).
         Each routes onto a coalescing scheduler. Documents the backend also
         writes (``repo:<id>`` documents, repo scan, background tasks) are read through from the
         store by ``StateManager`` instead, so they need no notification here.
@@ -83,7 +84,7 @@ class Progenitor:
             key = None
         if not isinstance(key, str):
             return
-        if key.startswith(AGENT_DOCUMENT_KEY_PREFIX):
+        if key.startswith((AGENT_DOCUMENT_KEY_PREFIX, ROUTINE_GRAPH_KEY_PREFIX)):
             if self._agent_scheduler is not None:
                 self._agent_scheduler.request()
         elif key in ("mcp", "mcp_tools"):
@@ -102,11 +103,13 @@ class Progenitor:
             self._agent_scheduler.request()
 
     async def _do_agent_refresh(self) -> None:
-        registry = getattr(self.graph, "object_agent_registry", None)
-        if registry is None:
-            registry = getattr(getattr(self.graph, "agent", None), "object_agent_registry", None)
-        if registry is not None:
-            await registry.refresh()
+        holder = self.graph
+        if getattr(holder, "object_agent_registry", None) is None:
+            holder = getattr(self.graph, "agent", None)
+        for name in ("object_agent_registry", "routine_subagent_registry"):
+            registry = getattr(holder, name, None)
+            if registry is not None:
+                await registry.refresh()
 
     async def _do_mcp_full_resync(self) -> None:
         from ..nodes.mcp import sync_mcp_runtime_context

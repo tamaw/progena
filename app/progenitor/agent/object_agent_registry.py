@@ -58,33 +58,66 @@ class ObjectAgentRegistry:
             self.descriptors = tuple(specs)
 
 
+class RoutineSubagentRegistry:
+    """Routine graphs published as ``task`` subagents, rebuilt when routines change.
+
+    ``build`` turns one stored routine graph into a subagent spec, or ``None``
+    for a graph that cannot be offered (invalid, or a reserved name).
+    """
+
+    def __init__(
+        self,
+        *,
+        state_manager: Any,
+        build: Callable[[dict[str, Any]], CompiledSubAgent | None],
+    ) -> None:
+        self._state_manager = state_manager
+        self._build = build
+        self._lock = asyncio.Lock()
+        self.descriptors: tuple[CompiledSubAgent, ...] = ()
+
+    async def refresh(self) -> None:
+        async with self._lock:
+            specs: list[CompiledSubAgent] = []
+            for graph_doc in await self._state_manager.list_routine_graphs():
+                spec = self._build(graph_doc)
+                if spec is not None:
+                    specs.append(spec)
+            self.descriptors = tuple(specs)
+
+
 class LiveSubagentMiddleware(AgentMiddleware):
     """Bind SDK task tools from immutable snapshots through public hooks.
 
     Only synchronous task descriptors belong here. The SDK's independent
     AsyncSubAgentMiddleware continues to own the async delegation tools.
     No compiled tool closures or parent graph/checkpointer are mutated.
+    Object agents win a name clash with routines.
     """
 
     def __init__(
         self,
         registry: ObjectAgentRegistry,
         *,
-        static_subagents: Iterable[CompiledSubAgent] = (),
+        routines: RoutineSubagentRegistry | None = None,
         backend: Any,
         state_schema: type | None = None,
         private_state_keys: frozenset[str] = frozenset(),
     ) -> None:
         self._registry = registry
-        self._static = tuple(static_subagents)
+        self._routines = routines
         self._backend = backend
         self._state_schema = state_schema
         self._private_state_keys = private_state_keys
 
-    def _snapshot(self) -> SubAgentMiddleware | None:
+    def _specs(self) -> list[CompiledSubAgent]:
         objects = self._registry.descriptors
         names = {spec["name"] for spec in objects}
-        specs = [*objects, *(spec for spec in self._static if spec["name"] not in names)]
+        routines = self._routines.descriptors if self._routines is not None else ()
+        return [*objects, *(spec for spec in routines if spec["name"] not in names)]
+
+    def _snapshot(self) -> SubAgentMiddleware | None:
+        specs = self._specs()
         if not specs:
             return None
         return SubAgentMiddleware(
@@ -103,8 +136,7 @@ class LiveSubagentMiddleware(AgentMiddleware):
         if original is not None:
             # Retain the SDK's built-in general-purpose description. Copy the
             # tool rather than mutating either generation's shared instance.
-            specs = (*self._static, *self._registry.descriptors)
-            descriptions = {spec["name"]: spec["description"] for spec in specs}
+            descriptions = {spec["name"]: spec["description"] for spec in self._specs()}
             live_description = "\n".join(
                 f"- {name}: {description}" for name, description in descriptions.items()
             )
@@ -154,5 +186,13 @@ class LiveSubagentMiddleware(AgentMiddleware):
     async def awrap_tool_call(
         self, request: ToolCallRequest, handler: Callable[..., Awaitable[Any]]
     ) -> Any:
+        if request.tool_call["name"] == "task":
+            wanted = request.tool_call["args"].get("subagent_type")
+            if wanted != "general-purpose" and wanted not in {s["name"] for s in self._specs()}:
+                # Created earlier in this same turn (e.g. a routine just written):
+                # the change notification may not have refreshed us yet.
+                await self._registry.refresh()
+                if self._routines is not None:
+                    await self._routines.refresh()
         bound = self._bind_task(request)
         return bound if isinstance(bound, ToolMessage) else await handler(bound)
