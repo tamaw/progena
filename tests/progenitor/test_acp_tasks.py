@@ -1,103 +1,53 @@
-"""Tests for tracked ACP run dispatch (blocking + background-tracked)."""
+"""Tests for ACP task helpers used by the backend supervisor."""
 
 from __future__ import annotations
 
-import asyncio
-from pathlib import Path
-from typing import Any
-
 import pytest
 
-from app.progenitor.acp import tasks as acp_tasks
-from app.progenitor.acp.runner import ACPRunResult
+from app.progenitor.acp.tasks import (
+    acp_config_from_agent_config,
+    build_acp_completion_message,
+    build_acp_task_response,
+    task_command,
+    task_cwd,
+)
 from app.progenitor.state.models import ACPTaskRecord, ACPTaskStatus
 
 
-class _FakeStateManager:
-    """In-memory stand-in for the parts of StateManager the dispatch path uses."""
-
-    def __init__(self) -> None:
-        self._tasks: dict[str, ACPTaskRecord] = {}
-
-    async def upsert_acp_task(self, task: ACPTaskRecord) -> None:
-        self._tasks[task.task_id] = task
-
-    async def get_acp_task(self, task_id: str) -> ACPTaskRecord | None:
-        return self._tasks.get(task_id)
-
-    async def update_acp_task(self, task_id: str, updates: dict[str, Any]) -> bool:
-        existing = self._tasks.get(task_id)
-        if existing is None:
-            return False
-        payload = existing.model_dump()
-        payload.update(updates)
-        self._tasks[task_id] = ACPTaskRecord(**payload)
-        return True
-
-
-def _stub_runner(result: ACPRunResult, monkeypatch):
-    class _StubRunner:
-        async def run(self, *_a: Any, **_k: Any) -> ACPRunResult:
-            return result
-
-    monkeypatch.setattr(acp_tasks, "_runner_for", lambda *a, **k: _StubRunner())
-
-
-async def test_blocking_dispatch_returns_terminal_record(monkeypatch, tmp_path):
-    monkeypatch.setenv("PROGENITOR_ACP_WORKSPACE", str(tmp_path / "ws"))
-    _stub_runner(ACPRunResult(success=True, output="all done", stop_reason="end_turn"), monkeypatch)
-    sm = _FakeStateManager()
-
-    response, record = await acp_tasks.dispatch_tracked_acp_task(
-        state_manager=sm,
-        agent_name="github_copilot",
-        agent_config={"acp": {"command": "copilot", "profile": "copilot"}},
-        request_text="do it",
-        blocking=True,
-    )
-    assert response["success"] is True
-    assert record.status == ACPTaskStatus.COMPLETED.value
-    assert record.output == "all done"
-    # A fresh per-run sandbox was provisioned.
-    assert record.cwd and Path(record.cwd).is_dir()
-
-
-async def test_dispatch_fails_fast_when_acp_config_missing(monkeypatch, tmp_path):
-    """A registry entry without an 'acp' config must not silently spawn Copilot."""
-    monkeypatch.setenv("PROGENITOR_ACP_WORKSPACE", str(tmp_path / "ws"))
-    sm = _FakeStateManager()
-
+def test_acp_config_requires_explicit_acp_settings() -> None:
     with pytest.raises(ValueError, match="missing its 'acp' configuration"):
-        await acp_tasks.dispatch_tracked_acp_task(
-            state_manager=sm,
-            agent_name="github_copilot",
-            agent_config={"name": "github_copilot"},
-            request_text="do it",
-            blocking=True,
-        )
+        acp_config_from_agent_config({"name": "claude"})
 
 
-async def test_background_dispatch_completes_via_task(monkeypatch, tmp_path):
-    monkeypatch.setenv("PROGENITOR_ACP_WORKSPACE", str(tmp_path / "ws"))
-    _stub_runner(
-        ACPRunResult(success=False, output="", stop_reason="error", error="boom"), monkeypatch
+def test_tcp_task_uses_requested_cwd_and_endpoint_label() -> None:
+    config = acp_config_from_agent_config(
+        {"name": "claude", "acp": {"host": "claude", "port": 3001, "model": "opus"}}
     )
-    sm = _FakeStateManager()
+    assert task_cwd(config, "/app/repos/card") == "/app/repos/card"
+    assert task_command(config) == "claude:3001"
 
-    response, record = await acp_tasks.dispatch_tracked_acp_task(
-        state_manager=sm,
-        agent_name="github_copilot",
-        agent_config={"acp": {"command": "copilot", "profile": "copilot"}},
-        request_text="do it",
-        blocking=False,
+
+def test_terminal_task_response_exposes_completion_output() -> None:
+    task = ACPTaskRecord(
+        task_id="task-1",
+        agent_name="claude",
+        prompt="implement it",
+        status=ACPTaskStatus.COMPLETED,
+        output="done",
     )
-    # Returns immediately in the working state.
-    assert record.status == ACPTaskStatus.WORKING.value
-    assert response["task_id"] == record.task_id
+    response = build_acp_task_response(task)
+    assert response["status"] == "completed"
+    assert response["output"] == "done"
+    assert "finished" in build_acp_completion_message(task)
 
-    # Drain the background run and confirm it finalized the record.
-    await asyncio.gather(*list(acp_tasks._background_runs))
-    final = await sm.get_acp_task(record.task_id)
-    assert final is not None
-    assert final.status == ACPTaskStatus.FAILED.value
-    assert final.last_error == "boom"
+
+def test_interrupted_task_is_terminal_and_reports_reason() -> None:
+    task = ACPTaskRecord(
+        task_id="task-1",
+        agent_name="claude",
+        prompt="implement it",
+        status=ACPTaskStatus.INTERRUPTED,
+        last_error="backend restarted",
+    )
+    assert task.is_terminal
+    assert "backend restarted" in build_acp_completion_message(task)

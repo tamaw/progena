@@ -20,10 +20,13 @@ from .agents import ACP_PROFILES, build_agent_args, build_copilot_args, parse_ac
 from .client import ACPSessionClient
 from .runner import ACPRunner, ACPRunResult
 from .tasks import (
+    acp_config_from_agent_config,
     build_acp_completion_message,
     build_acp_task_response,
-    dispatch_tracked_acp_task,
     enqueue_acp_completion_followup,
+    runner_for,
+    task_command,
+    task_cwd,
 )
 
 __all__ = [
@@ -31,11 +34,14 @@ __all__ = [
     "ACPRunner",
     "ACPRunResult",
     "ACPSessionClient",
+    "acp_config_from_agent_config",
     "build_acp_completion_message",
     "build_acp_task_response",
     "build_agent_args",
     "build_copilot_args",
-    "dispatch_tracked_acp_task",
     "enqueue_acp_completion_followup",
     "parse_acp_connection",
+    "runner_for",
+    "task_command",
+    "task_cwd",
 ]

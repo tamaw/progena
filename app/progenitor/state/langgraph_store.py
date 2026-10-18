@@ -9,8 +9,6 @@ from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import Any, Protocol
 
-from app.progenitor.document_kinds import SESSION_KEY_PREFIX
-
 from .models import redact_secrets
 
 STATE_NAMESPACE = ("progenitor", "state")
@@ -83,12 +81,13 @@ class LangGraphRuntimeStore:
         """Persist one runtime document."""
         await self._store.aput(STATE_NAMESPACE, name, {"payload": payload})
 
-    async def merge_session(self, thread_id: str, fields: dict[str, Any]) -> bool:
-        """Atomically merge ``fields`` into the payload of ``session:<thread_id>``.
+    async def merge_document(self, name: str, fields: dict[str, Any]) -> bool:
+        """Atomically merge top-level ``fields`` into one runtime document's payload.
 
-        Returns ``True`` when the row existed and was updated.
+        Concurrent writers (e.g. the backend) never lose their own fields to this
+        merge. Returns ``True`` when the row existed and was updated.
         """
-        key = f"{SESSION_KEY_PREFIX}{thread_id}"
+        key = name
         conn = getattr(self._store, "conn", None)
         if conn is None:
             item = await self._store.aget(STATE_NAMESPACE, key)
@@ -107,7 +106,9 @@ class LangGraphRuntimeStore:
             WHERE prefix = 'progenitor.state' AND key = %s
             RETURNING 1
         """
-        if hasattr(conn, "connection"):
+        # A pool hands out connections; a single AsyncConnection's `connection`
+        # is a non-callable property.
+        if callable(getattr(conn, "connection", None)):
             async with conn.connection() as connection, connection.cursor() as cur:
                 await cur.execute(sql, params)
                 row = await cur.fetchone()

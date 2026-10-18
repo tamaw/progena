@@ -186,6 +186,30 @@ async def test_call_agent_uses_registry_and_a2a(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
+async def test_call_agent_acp_creates_queued_document_without_in_process_runner() -> None:
+    registry = MagicMock()
+    registry.find_by_name.return_value = {
+        "name": "Claude",
+        "transport": "acp",
+        "acp": {"host": "progenitor-agent-claude", "port": 3001},
+    }
+    state_manager = MagicMock()
+    state_manager.upsert_acp_task = AsyncMock()
+    tools = create_deepagent_tools(tool_registry=registry, state_manager=state_manager)
+
+    result = await _invoke(
+        _tool_by_name(tools, "call_agent"),
+        {"agent": "Claude", "request": "Implement the card", "blocking": False},
+    )
+
+    assert result["status"] == "queued"
+    saved = state_manager.upsert_acp_task.await_args.args[0]
+    assert saved.agent_name == "Claude"
+    assert saved.prompt == "Implement the card"
+    assert saved.status == "queued"
+
+
+@pytest.mark.asyncio
 async def test_call_agent_uses_card_url_when_endpoint_missing(monkeypatch) -> None:
     registry = MagicMock()
     registry.find_by_name.return_value = {

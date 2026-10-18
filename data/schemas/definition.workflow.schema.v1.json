@@ -86,6 +86,11 @@
             "routine": {"description": "Routine id to run. Inputs are the routine's input_schema fields (else one 'message' string); outputs its output_schema fields (else 'message') plus 'thread_id'.", "type": "string", "minLength": 1},
             "input_schema": {"type": "object"}, "output_schema": {"type": "object"}
           }},
+          {"type": "object", "additionalProperties": false, "required": ["kind", "title", "action"], "properties": {
+            "kind": {"const": "repo"}, "title": {"type": "string", "minLength": 1},
+            "action": {"enum": ["sync", "worktree", "publish", "remove_worktree"]},
+            "input_schema": {"type": "object"}, "output_schema": {"type": "object"}
+          }},
           {"type": "object", "additionalProperties": false, "required": ["kind", "title", "expression"], "properties": {
             "kind": {"const": "condition"}, "title": {"type": "string", "minLength": 1}, "expression": {"type": "string", "minLength": 1}, "input_schema": {"type": "object"}, "output_schema": {"type": "object"}
           }},

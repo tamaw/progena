@@ -31,6 +31,7 @@ from app.progenitor.content_documents import (
     SKILL_DOCUMENT_KEY_PREFIX,
 )
 from app.progenitor.document_kinds import (
+    ACP_TASK_KEY_PREFIX,
     INBOX_MESSAGE_KEY_PREFIX,
     KNOWLEDGE_PAGE_KEY_PREFIX,
     REPO_KEY_PREFIX,
@@ -629,14 +630,16 @@ class StateReader:
         return [task for task in doc if isinstance(task, dict)] if isinstance(doc, list) else []
 
     def get_acp_tasks(self) -> list[dict[str, Any]]:
-        """Read Progenitor's tracked ACP run records (read-through).
-
-        Peer of :meth:`get_a2a_tasks`; Progenitor persists ACP runs to its
-        ``("progenitor","state","acp_tasks")`` document.
-        """
-        document = self.document_store.get_document(PROGENITOR_STATE_PREFIX, "acp_tasks", [])
-        doc = document.payload if document is not None else []
-        return [task for task in doc if isinstance(task, dict)] if isinstance(doc, list) else []
+        """Read the per-record ACP task documents for the Agents page."""
+        rows = self.document_store.list_documents(PROGENITOR_STATE_PREFIX, ACP_TASK_KEY_PREFIX)
+        tasks: list[dict[str, Any]] = []
+        for key, document in rows:
+            if not isinstance(document.payload, dict):
+                continue
+            task = dict(document.payload)
+            task.setdefault("task_id", key.removeprefix(ACP_TASK_KEY_PREFIX))
+            tasks.append(task)
+        return tasks
 
     def _registry_tools(self, agents: list[AgentInfo]) -> tuple[list[AgentInfo], list[ToolInfo]]:
         tools = self._mcp_tools_from_store()

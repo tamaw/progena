@@ -20,6 +20,7 @@ from app.backend.document_store import (
     BackendDocumentStore,
     document_write_origin,
 )
+from app.backend.repo_manager import RepoManager
 from app.backend.routine_runs import enqueue_routine_run
 from app.progenitor.content_documents import content_document_key
 from app.progenitor.document_types import DocumentType
@@ -49,6 +50,7 @@ from app.progenitor.workflows import (
     WorkflowNodeEvent,
     WorkflowNodeExtract,
     WorkflowNodeFormat,
+    WorkflowNodeRepo,
     WorkflowNodeRoutine,
     WorkflowNodeUnpack,
     WorkflowRun,
@@ -817,7 +819,9 @@ class WorkflowExecutor:
         store_getter: Callable[[], BackendDocumentStore],
         prompt_runner: WorkflowPromptRunner,
         emit_event: Callable[[str, Mapping[str, Any]], Any],
+        repo_manager: RepoManager | None = None,
     ) -> None:
+        self._repo_manager = repo_manager or RepoManager(store_getter=store_getter)
         self._store_getter = store_getter
         self._prompt_runner = prompt_runner
         self._emit_event = emit_event
@@ -837,6 +841,34 @@ class WorkflowExecutor:
         """Drop the cached event-node index; rebuilt on the next dispatch."""
 
         self._subscriptions = None
+
+    async def recover_startup_runs(self) -> None:
+        """Fail interrupted synchronous runs and resume queued runs after a restart."""
+        store = self._store_getter()
+        by_workflow: dict[str, list[WorkflowRun]] = {}
+        for run in list_workflow_runs(store):
+            by_workflow.setdefault(run.workflow_id, []).append(run)
+        for workflow_id, runs in by_workflow.items():
+            try:
+                await self._recover_workflow_runs(store, workflow_id, runs)
+            except Exception:
+                # One unreadable workflow must not stop the backend from starting.
+                logger.exception("Could not recover runs of workflow %r", workflow_id)
+
+    async def _recover_workflow_runs(
+        self, store: BackendDocumentStore, workflow_id: str, runs: list[WorkflowRun]
+    ) -> None:
+        for run in runs:
+            if run.status == "running" and run.pending_routine is None:
+                self._mark_failed(store, run, error="interrupted by backend restart")
+        refreshed = list_workflow_runs(store, workflow_id=workflow_id)
+        if any(run.status in {"running", "paused"} for run in refreshed):
+            return
+        queued = next((run for run in reversed(refreshed) if run.status == "queued"), None)
+        if queued is not None:
+            self._start_task(workflow_id, queued.run_id)
+        else:
+            await self._maybe_start_next_run_locked(store, workflow_id)
 
     def _subscriptions_for(self, document_type: str) -> list[tuple[str, str, WorkflowNodeEvent]]:
         if self._subscriptions is None:
@@ -1476,6 +1508,11 @@ class WorkflowExecutor:
                     }
                     _validate_node_output(node, output_object)
                     output_text = _bounded_text(output_object["text"])
+                elif isinstance(node, WorkflowNodeRepo):
+                    _validate_node_input(node, resolved_input)
+                    output_object = await self._repo_manager.execute(node.action, resolved_input)
+                    _validate_node_output(node, output_object)
+                    output_text = _bounded_text(json.dumps(output_object, default=str))
                 elif isinstance(node, WorkflowNodeUnpack):
                     _validate_node_input(node, resolved_input)
                     value = resolved_input.get("value")

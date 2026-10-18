@@ -1,10 +1,9 @@
 """Generic streaming ACP client.
 
-``ACPSessionClient`` implements the ACP ``Client`` callback interface for *any*
-stdio ACP agent. It collects the streaming session updates (agent message text,
-thoughts, tool calls) emitted during a ``session/prompt`` and auto-approves
-permission requests, since runs are sandboxed to a scoped working directory
-(see ``ACPRunner``) rather than gated per tool call.
+``ACPSessionClient`` implements the ACP ``Client`` callback interface for any
+ACP agent. It collects the streamed session updates (agent message text,
+thoughts, plans, and tool calls) emitted during a ``session/prompt`` and
+auto-approves an available allow option for permission requests.
 
 Generalised from ``app/agents/builder_agent/runtime/copilot_acp.py``
 (``ProgenitorACPClient``); nothing here is Copilot-specific.
@@ -12,12 +11,15 @@ Generalised from ``app/agents/builder_agent/runtime/copilot_acp.py``
 
 from __future__ import annotations
 
+import inspect
 import logging
+from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
 
 from acp import Client
 from acp.schema import (
     AgentMessageChunk,
+    AgentPlanUpdate,
     AgentThoughtChunk,
     AllowedOutcome,
     CreateTerminalResponse,
@@ -47,13 +49,25 @@ logger = logging.getLogger(__name__)
 class ACPSessionClient(Client):
     """Collects streaming updates from an ACP agent for one prompt."""
 
-    def __init__(self, run_id: str = "unknown") -> None:
+    def __init__(
+        self,
+        run_id: str = "unknown",
+        on_progress: Callable[[dict[str, Any]], Awaitable[None] | None] | None = None,
+    ) -> None:
         self.run_id = run_id
         self.text_parts: list[str] = []
         self.thoughts: list[str] = []
         self.tool_calls: list[dict[str, Any]] = []
         self.errors: list[str] = []
         self._conn: Any = None
+        self._on_progress = on_progress
+
+    async def _emit_progress(self, update: dict[str, Any]) -> None:
+        if self._on_progress is None:
+            return
+        result = self._on_progress(update)
+        if inspect.isawaitable(result):
+            await result
 
     def on_connect(self, conn: Any) -> None:
         self._conn = conn
@@ -71,29 +85,32 @@ class ACPSessionClient(Client):
             text = getattr(getattr(update, "content", None), "text", None)
             if text:
                 self.text_parts.append(text)
+                await self._emit_progress({"kind": "message", "text": text})
         elif isinstance(update, AgentThoughtChunk):
             text = getattr(getattr(update, "content", None), "text", None)
             if text:
                 self.thoughts.append(text)
+                await self._emit_progress({"kind": "thought", "text": text})
+        elif isinstance(update, AgentPlanUpdate):
+            plan = update.model_dump(mode="json").get("entries", [])
+            await self._emit_progress({"kind": "plan", "plan": plan})
         elif isinstance(update, ToolCallStart):
-            self.tool_calls.append(
-                {
-                    "id": getattr(update, "tool_call_id", None),
-                    "name": getattr(update, "title", None),
-                    "kind": getattr(update, "kind", None),
-                    "status": "start",
-                }
-            )
+            call = {
+                "id": getattr(update, "tool_call_id", None),
+                "name": getattr(update, "title", None),
+                "kind": getattr(update, "kind", None),
+                "status": "start",
+            }
+            self.tool_calls.append(call)
+            await self._emit_progress({"kind": "tool", "tool_call": call})
         elif isinstance(update, ToolCallProgress):
-            self.tool_calls.append(
-                {
-                    "id": getattr(update, "tool_call_id", None),
-                    "name": getattr(update, "title", None),
-                    "status": str(getattr(update, "status", "") or "progress"),
-                }
-            )
-        # AgentPlanUpdate / AvailableCommandsUpdate / CurrentModeUpdate /
-        # SessionInfoUpdate carry no text we surface; ignored.
+            call = {
+                "id": getattr(update, "tool_call_id", None),
+                "name": getattr(update, "title", None),
+                "status": str(getattr(update, "status", "") or "progress"),
+            }
+            self.tool_calls.append(call)
+            await self._emit_progress({"kind": "tool", "tool_call": call})
 
     async def request_permission(
         self,
@@ -102,18 +119,30 @@ class ACPSessionClient(Client):
         tool_call: ToolCallUpdate,
         **_kwargs: Any,
     ) -> RequestPermissionResponse:
-        """Auto-approve tool calls.
+        """Auto-approve an explicitly allow-listed permission option.
 
-        Runs are confined to a sandbox directory by ``ACPRunner`` (passed to the
-        agent as its allowed dir), so the filesystem scope — not per-call
-        prompting — is the guardrail.
+        ACP task documents name the agent-host working directory; configured
+        stdio agents receive that directory as an allowed path.  Permission
+        requests remain automatic so a supervised task can run unattended.
         """
         _ = session_id
         _ = tool_call
-        if options and hasattr(options[0], "id"):
-            return RequestPermissionResponse(
-                outcome=AllowedOutcome(option_id=options[0].id, outcome="selected")
+        for preferred_kind in ("allow_always", "allow_once"):
+            option = next(
+                (
+                    candidate
+                    for candidate in options
+                    if getattr(candidate, "kind", None) == preferred_kind
+                ),
+                None,
             )
+            option_id = getattr(option, "option_id", None) if option is not None else None
+            if option_id is None and option is not None:
+                option_id = getattr(option, "id", None)
+            if option_id:
+                return RequestPermissionResponse(
+                    outcome=AllowedOutcome(option_id=option_id, outcome="selected")
+                )
         return RequestPermissionResponse(outcome=DeniedOutcome(outcome="cancelled"))
 
     # --- Minimal client-side I/O stubs (the agent handles these internally) ---

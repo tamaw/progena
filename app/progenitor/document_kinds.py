@@ -38,6 +38,7 @@ SESSION_KEY_PREFIX = "session:"
 REPO_KEY_PREFIX = "repo:"
 ALERT_KEY_PREFIX = "alert:"
 KNOWLEDGE_PAGE_KEY_PREFIX = "knowledge:"
+ACP_TASK_KEY_PREFIX = "acp_task:"
 
 # Internal-plumbing prefixes: real ``store`` key prefixes, centralized here to
 # avoid re-drift, but not registered as document types.
@@ -144,6 +145,7 @@ DOCUMENT_KINDS: tuple[DocumentKind, ...] = (
         ),
     ),
     DocumentKind("Workflow Run", WORKFLOW_RUN_KEY_PREFIX, search=None),
+    DocumentKind("ACP Task", ACP_TASK_KEY_PREFIX, search=None),
     DocumentKind("Repository", REPO_KEY_PREFIX, search=None),
     DocumentKind("Alert", ALERT_KEY_PREFIX, search=None),
     DocumentKind(

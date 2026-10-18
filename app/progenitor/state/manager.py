@@ -74,7 +74,6 @@ class StateManager:
     CORE_FILES: dict[str, str] = {
         "current_state": "current_state.json",
         "a2a_tasks": "a2a_tasks.json",
-        "acp_tasks": "acp_tasks.json",
         "async_subagent_tasks": "async_subagent_tasks.json",
         "background_tasks": "background_tasks.json",
         "registry": "agents.json",
@@ -162,7 +161,6 @@ class StateManager:
                 "pending_response": None,
             },
             "a2a_tasks": [],
-            "acp_tasks": [],
             "async_subagent_tasks": [],
             "background_tasks": [],
             "schedule_runs": [],
@@ -669,7 +667,7 @@ class StateManager:
 
         Returns ``True`` when the row existed.
         """
-        return await self._runtime_store.merge_session(thread_id, fields)
+        return await self._runtime_store.merge_document(f"{SESSION_KEY_PREFIX}{thread_id}", fields)
 
     # ==========================================================================
     # Workflow definitions
@@ -969,36 +967,31 @@ class StateManager:
     # ==========================================================================
 
     async def get_acp_tasks(self) -> list[ACPTaskRecord]:
-        """Return all ACP task records."""
-        payload = await self._get_runtime_document("acp_tasks")
-        return [ACPTaskRecord.model_validate(item) for item in payload]
-
-    async def save_acp_tasks(self, tasks: list[ACPTaskRecord]) -> None:
-        """Persist all ACP task records."""
-        await self._save_runtime_document(
-            "acp_tasks",
-            [task.model_dump(mode="json") for task in tasks],
+        """Return all per-record ACP task documents."""
+        return await acp_store.get_acp_tasks(
+            list_documents_fn=self._runtime_store.list_documents,
         )
 
     async def get_acp_task(self, task_id: str) -> ACPTaskRecord | None:
         """Return one ACP task by id, or ``None`` if not found."""
-        return await acp_store.get_acp_task(task_id=task_id, get_acp_tasks_fn=self.get_acp_tasks)
+        return await acp_store.get_acp_task(
+            task_id=task_id,
+            peek_document_fn=self._runtime_store.peek_document,
+        )
 
     async def upsert_acp_task(self, task: ACPTaskRecord) -> None:
-        """Insert or update an ACP task record."""
+        """Insert or update one ACP task document."""
         await acp_store.upsert_acp_task(
             task=task,
-            get_acp_tasks_fn=self.get_acp_tasks,
-            save_acp_tasks_fn=self.save_acp_tasks,
+            save_document_fn=self._runtime_store.save_document,
         )
 
     async def update_acp_task(self, task_id: str, updates: dict[str, Any]) -> bool:
-        """Apply partial updates to an ACP task. Returns ``True`` if the task existed."""
+        """Apply a partial update to one ACP task document."""
         return await acp_store.update_acp_task(
             task_id=task_id,
             updates=updates,
-            get_acp_tasks_fn=self.get_acp_tasks,
-            save_acp_tasks_fn=self.save_acp_tasks,
+            merge_document_fn=self._runtime_store.merge_document,
         )
 
     # ==========================================================================
