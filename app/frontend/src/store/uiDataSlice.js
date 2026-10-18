@@ -15,6 +15,7 @@
  * below.
  */
 import { createSelector, createSlice } from '@reduxjs/toolkit';
+import { addKeyedStreamFailureLifecycle } from './uiData/async';
 import * as chats from './uiData/chats';
 import * as agents from './uiData/agents';
 import * as tasks from './uiData/tasks';
@@ -133,6 +134,7 @@ const uiDataSlice = createSlice({
     for (const domain of domains) {
       domain.buildExtraReducers?.(builder);
     }
+    addKeyedStreamFailureLifecycle(builder);
   },
 });
 

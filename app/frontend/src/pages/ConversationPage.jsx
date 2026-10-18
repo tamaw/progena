@@ -461,22 +461,29 @@ function ConversationPage() {
     [backendChatSessions, threadId],
   );
   const chatTitle = threadSession?.title || derivedChatTitle;
-  const titleAction = useUiAction(threadSession?.thread_id ?? null);
+  const [selectedBackendChatId, setSelectedBackendChatId] = useState(() => urlThreadId || null);
+  // Rename only the session that is both open and selected: opening another chat
+  // changes the selection before its detail replaces `threadId`, and the previous
+  // session's draft, pending rename or failure must not surface under it.
+  const titleScopeKey = threadSession && threadSession.thread_id === selectedBackendChatId
+    ? threadSession.thread_id
+    : null;
+  const titleAction = useUiAction(titleScopeKey);
   const { run: runTitleAction } = titleAction;
   const commitTitle = useCallback((nextTitle) => {
-    if (!threadSession) {
+    if (!titleScopeKey) {
       return Promise.resolve({ ok: false, skipped: true });
     }
     return runTitleAction('Rename conversation', async () => {
       await dispatch(updateChatSessionMetadata({
         chatsUrl: getApiUrl('chats'),
-        threadId: threadSession.thread_id,
+        threadId: titleScopeKey,
         patch: { title: nextTitle },
       })).unwrap();
     });
-  }, [dispatch, getApiUrl, runTitleAction, threadSession]);
+  }, [dispatch, getApiUrl, runTitleAction, titleScopeKey]);
   const titleEditor = useInlineTitleEditor({
-    scopeKey: threadSession?.thread_id ?? null,
+    scopeKey: titleScopeKey,
     title: chatTitle,
     onCommit: commitTitle,
   });
@@ -487,7 +494,6 @@ function ConversationPage() {
   const [sidebarFilter, setSidebarFilter] = useState('all');
   const [sidebarQuery, setSidebarQuery] = useState('');
   const [sidebarSort, setSidebarSort] = useState('Recent');
-  const [selectedBackendChatId, setSelectedBackendChatId] = useState(() => urlThreadId || null);
   // The no-route bootstrap creates a fresh draft session asynchronously. Keep
   // initial roster auto-selection behind that bootstrap; otherwise the two
   // mount effects race and the selected chat can oscillate between the draft
@@ -1931,7 +1937,7 @@ function ConversationPage() {
           titleEditor={titleEditor}
           chatActions={chatActions}
           title={chatTitle}
-          canRename={Boolean(threadSession)}
+          canRename={Boolean(titleScopeKey)}
         />
 
         <div

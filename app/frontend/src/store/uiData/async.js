@@ -1,6 +1,9 @@
 import { createAsyncThunk } from '@reduxjs/toolkit';
 import { createOperationRequestId, requestAcknowledged } from '../http';
+import { failPendingOp } from '../realtimeSlice';
 import { failureMessage, isCancellation } from '../../lib/failures';
+
+const keyedRequestLifecycles = new WeakMap();
 
 /** Build a finite UI request with one generated ID and its 202 acknowledgement. */
 export function createAcknowledgedThunk(type, request) {
@@ -56,6 +59,10 @@ export function addKeyedRequestLifecycle(builder, thunk, {
   keyFromArgs,
   errorMessage,
 }) {
+  keyedRequestLifecycles.set(builder, [
+    ...(keyedRequestLifecycles.get(builder) || []),
+    { selectRequests, errorMessage },
+  ]);
   builder
     .addCase(thunk.pending, (state, action) => {
       const key = keyFromArgs(action.meta.arg);
@@ -83,6 +90,27 @@ export function addKeyedRequestLifecycle(builder, thunk, {
       }
     });
   return builder;
+}
+
+/**
+ * Settle keyed loads whose stream operation failed (disconnect or stale stream):
+ * their data event will never arrive, so leave a retryable failure instead of
+ * loading forever. Register once, after every keyed lifecycle on the builder.
+ */
+export function addKeyedStreamFailureLifecycle(builder) {
+  const lifecycles = keyedRequestLifecycles.get(builder) || [];
+  return builder.addCase(failPendingOp, (state, action) => {
+    const { requestId, error } = action.payload;
+    for (const { selectRequests, errorMessage } of lifecycles) {
+      for (const requestState of Object.values(selectRequests(state))) {
+        // A rejected thunk has already settled with its own failure.
+        if (requestState.loading && requestState.requestId === requestId) {
+          requestState.loading = false;
+          requestState.error = error || errorMessage;
+        }
+      }
+    }
+  });
 }
 
 /** Complete a keyed load only when its matching data event reaches the cache. */

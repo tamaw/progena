@@ -96,3 +96,41 @@ describe('Select portal positioning', () => {
     expect(panel.style.maxHeight).toBe('316px');
   });
 });
+
+describe('Select commits', () => {
+  const options = [{ value: 'send', label: 'Send' }, { value: 'agent', label: 'Agent' }];
+  const listKey = (key) => document.querySelector('[role="listbox"]')
+    .dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true }));
+
+  it('treats choosing the current option as no change, like a native select', async () => {
+    const onChange = vi.fn();
+    await act(async () => root.render(<Select portal ariaLabel="Mode" value="send" onChange={onChange} options={options} />));
+    const trigger = host.querySelector('button');
+
+    await act(async () => trigger.click());
+    await act(async () => listKey('Enter'));
+    await act(async () => trigger.click());
+    await act(async () => document.querySelector('.app-listbox__option.is-selected').click());
+    expect(onChange).not.toHaveBeenCalled();
+
+    await act(async () => trigger.click());
+    await act(async () => listKey('ArrowDown'));
+    await act(async () => listKey('Enter'));
+    expect(onChange).toHaveBeenCalledExactlyOnceWith('agent');
+  });
+
+  it('returns focus to its trigger when the menu closes from the keyboard', async () => {
+    await act(async () => root.render(<Select portal ariaLabel="Mode" value="send" onChange={() => {}} options={options} />));
+    const trigger = host.querySelector('button');
+
+    await act(async () => trigger.click());
+    expect(document.activeElement.getAttribute('role')).toBe('listbox');
+    await act(async () => listKey('Escape'));
+    expect(document.activeElement).toBe(trigger);
+
+    await act(async () => trigger.click());
+    await act(async () => listKey('ArrowDown'));
+    await act(async () => listKey('Enter'));
+    expect(document.activeElement).toBe(trigger);
+  });
+});
