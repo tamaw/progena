@@ -18,6 +18,8 @@ from app.backend.telegram_client import (
     TelegramConfig,
     TelegramDraftSession,
     TelegramDraftStreamingError,
+    TelegramImage,
+    TelegramMediaError,
     TelegramRateLimiter,
     get_telegram_client,
     init_telegram_client,
@@ -956,3 +958,407 @@ class TestTelegramBackendStreaming:
 
         assert result is not None
         assert "draft streaming failed" in result.lower()
+
+
+def _image_config(**overrides) -> TelegramConfig:
+    values = {
+        "bot_token": "123456:ABC-DEF",
+        "chat_id": "987654321",
+        "api_timeout": 10,
+        "max_retries": 1,
+        "retry_delay": 0.01,
+        "max_message_length": 4096,
+        "rate_limit_per_minute": 30,
+        "allowed_users": {"987654321"},
+        "max_image_bytes": 1000,
+        "media_group_wait": 0.01,
+    }
+    values.update(overrides)
+    return TelegramConfig(**values)
+
+
+def _photo_sizes(*sizes: tuple[int, int]) -> list[dict]:
+    """PhotoSize entries ``(side, file_size)``, smallest first like Telegram sends them."""
+    return [
+        {
+            "file_id": f"photo-{side}",
+            "file_unique_id": f"uniq-{side}",
+            "width": side,
+            "height": side,
+            "file_size": file_size,
+        }
+        for side, file_size in sizes
+    ]
+
+
+def _update(message_id: int = 1, **fields) -> dict:
+    message = {
+        "message_id": message_id,
+        "chat": {"id": 987654321, "type": "private"},
+        "from": {"id": 987654321, "username": "owner", "first_name": "Owner"},
+        **fields,
+    }
+    return {"update_id": message_id, "message": message}
+
+
+class TestTelegramImageExtraction:
+    """Which photos/documents in a message become agent images."""
+
+    def test_photo_uses_largest_size_under_the_cap(self):
+        client = TelegramClient(_image_config())
+        images, errors = client._extract_images(
+            {"photo": _photo_sizes((90, 100), (320, 400), (1280, 5000))}
+        )
+        assert errors == []
+        assert [(i.file_id, i.mime_type) for i in images] == [("photo-320", "image/jpeg")]
+        assert images[0].filename == "telegram_uniq-320.jpg"
+
+    def test_photo_with_every_size_over_the_cap_is_rejected(self):
+        client = TelegramClient(_image_config())
+        images, errors = client._extract_images({"photo": _photo_sizes((90, 2000))})
+        assert images == []
+        assert errors == ["photo is larger than the 0.0 MB limit"]
+
+    def test_image_document_is_accepted(self):
+        client = TelegramClient(_image_config())
+        images, errors = client._extract_images(
+            {
+                "document": {
+                    "file_id": "doc-1",
+                    "file_unique_id": "udoc",
+                    "file_name": "diagram.png",
+                    "mime_type": "image/png",
+                    "file_size": 500,
+                }
+            }
+        )
+        assert errors == []
+        assert images[0].filename == "telegram_udoc.png"
+
+    @pytest.mark.parametrize(
+        ("document", "expected"),
+        [
+            (
+                {"file_name": "pic.heic", "mime_type": "image/heic", "file_size": 10},
+                "pic.heic: unsupported image type (image/heic)",
+            ),
+            (
+                {"file_name": "notes.pdf", "mime_type": "application/pdf", "file_size": 10},
+                "notes.pdf: unsupported file type (application/pdf)",
+            ),
+            (
+                {"file_name": "big.png", "mime_type": "image/png", "file_size": 5 * 1024 * 1024},
+                "big.png is 5.0 MB, over the 0.0 MB limit",
+            ),
+        ],
+    )
+    def test_unusable_documents_are_reported(self, document, expected):
+        client = TelegramClient(_image_config())
+        images, errors = client._extract_images({"document": {"file_id": "d", **document}})
+        assert images == []
+        assert errors == [expected]
+
+
+class TestTelegramImageUpdates:
+    """Inbound photo updates reach the message handler with their images."""
+
+    @staticmethod
+    def _client(**overrides) -> tuple[TelegramClient, list[tuple[str, dict]]]:
+        client = TelegramClient(_image_config(**overrides))
+        client._started = True
+        client._session = MagicMock()
+        calls: list[tuple[str, dict]] = []
+
+        async def handler(chat_id, text, metadata):
+            calls.append((text, metadata))
+            return None
+
+        client.set_message_handler(handler)
+        return client, calls
+
+    @pytest.mark.asyncio
+    async def test_caption_becomes_text_and_images_ride_in_metadata(self):
+        client, calls = self._client()
+        with patch.object(client, "_api_call", new=AsyncMock(return_value=True)):
+            await client._process_update(
+                _update(photo=_photo_sizes((320, 400)), caption="/what is this?")
+            )
+        [(text, metadata)] = calls
+        assert text == "/what is this?"  # a caption is never treated as a command
+        assert [image.file_id for image in metadata["images"]] == ["photo-320"]
+        assert metadata["image_errors"] == []
+
+    @pytest.mark.asyncio
+    async def test_photo_without_caption_still_reaches_handler(self):
+        client, calls = self._client()
+        with patch.object(client, "_api_call", new=AsyncMock(return_value=True)):
+            await client._process_update(_update(photo=_photo_sizes((320, 400))))
+        [(text, metadata)] = calls
+        assert text == ""
+        assert len(metadata["images"]) == 1
+
+    @pytest.mark.asyncio
+    async def test_unsupported_message_is_ignored(self):
+        client, calls = self._client()
+        await client._process_update(_update(sticker={"file_id": "s"}))
+        assert calls == []
+
+    @pytest.mark.asyncio
+    async def test_album_is_collected_into_one_handler_call(self):
+        client, calls = self._client()
+        with patch.object(client, "_api_call", new=AsyncMock(return_value=True)):
+            for index, caption in enumerate(["", "three cats", ""], start=1):
+                await client._process_update(
+                    _update(
+                        message_id=index,
+                        media_group_id="album-1",
+                        photo=_photo_sizes((100 + index, 400)),
+                        caption=caption,
+                    )
+                )
+            assert calls == []  # still waiting for the album to finish
+            await asyncio.sleep(0.1)
+
+        [(text, metadata)] = calls
+        assert text == "three cats"
+        assert [image.file_id for image in metadata["images"]] == [
+            "photo-101",
+            "photo-102",
+            "photo-103",
+        ]
+        assert metadata["media_group_id"] == "album-1"
+        assert client._media_groups == {}
+
+    @pytest.mark.asyncio
+    async def test_images_beyond_the_limit_are_dropped_and_reported(self):
+        client, calls = self._client(max_images_per_message=2)
+        with patch.object(client, "_api_call", new=AsyncMock(return_value=True)):
+            for index in range(1, 4):
+                await client._process_update(
+                    _update(
+                        message_id=index,
+                        media_group_id="album-2",
+                        photo=_photo_sizes((100 + index, 400)),
+                    )
+                )
+            await asyncio.sleep(0.1)
+
+        [(_text, metadata)] = calls
+        assert len(metadata["images"]) == 2
+        assert metadata["image_errors"] == ["only the first 2 of 3 images were used"]
+
+    @pytest.mark.asyncio
+    async def test_stop_polling_drops_pending_albums(self):
+        client, calls = self._client(media_group_wait=10)
+        await client._process_update(
+            _update(media_group_id="album-3", photo=_photo_sizes((100, 400)))
+        )
+        await client.stop_polling()
+        assert client._media_groups == {}
+        assert calls == []
+
+
+class _FakeDownload:
+    """Stands in for ``aiohttp.ClientSession.get(...)`` in download tests."""
+
+    def __init__(self, status: int, chunks: list[bytes]) -> None:
+        self.status = status
+        self.content = MagicMock()
+
+        async def iter_chunked(_size):
+            for chunk in chunks:
+                yield chunk
+
+        self.content.iter_chunked = iter_chunked
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_exc):
+        return False
+
+
+class TestTelegramDownloadFile:
+    @staticmethod
+    def _client(get_file_result, download: _FakeDownload | None = None) -> TelegramClient:
+        client = TelegramClient(_image_config())
+        client._started = True
+        client._session = MagicMock()
+        client._session.get = MagicMock(return_value=download)
+        client._api_call = AsyncMock(return_value=get_file_result)  # type: ignore[method-assign]
+        return client
+
+    @pytest.mark.asyncio
+    async def test_downloads_file_bytes(self):
+        client = self._client(
+            {"file_path": "photos/a.jpg", "file_size": 6}, _FakeDownload(200, [b"abc", b"def"])
+        )
+        assert await client.download_file("f1", max_bytes=100) == b"abcdef"
+        url = client._session.get.call_args.args[0]
+        assert url == "https://api.telegram.org/file/bot123456:ABC-DEF/photos/a.jpg"
+
+    @pytest.mark.asyncio
+    async def test_get_file_failure_is_reported(self):
+        client = self._client(None)
+        with pytest.raises(TelegramMediaError, match="too large or expired"):
+            await client.download_file("f1", max_bytes=100)
+
+    @pytest.mark.asyncio
+    async def test_declared_size_over_cap_is_refused_before_download(self):
+        client = self._client({"file_path": "a.jpg", "file_size": 5000})
+        with pytest.raises(TelegramMediaError, match="over the"):
+            await client.download_file("f1", max_bytes=100)
+        client._session.get.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_streamed_size_over_cap_is_refused(self):
+        client = self._client({"file_path": "a.jpg"}, _FakeDownload(200, [b"x" * 60, b"x" * 60]))
+        with pytest.raises(TelegramMediaError, match="over the"):
+            await client.download_file("f1", max_bytes=100)
+
+    @pytest.mark.asyncio
+    async def test_http_error_does_not_leak_the_token(self):
+        client = self._client({"file_path": "a.jpg"}, _FakeDownload(404, []))
+        with pytest.raises(TelegramMediaError) as excinfo:
+            await client.download_file("f1", max_bytes=100)
+        assert "HTTP 404" in str(excinfo.value)
+        assert "ABC-DEF" not in str(excinfo.value)
+
+
+class TestTelegramBackendImages:
+    """Backend wiring: images become attachments plus multimodal input."""
+
+    @pytest.fixture(autouse=True)
+    def _blob_store(self):
+        from app.backend.attachment_blob_store import (
+            InMemoryAttachmentBlobStore,
+            set_default_attachment_blob_store,
+        )
+        from app.backend.attachment_routes import get_attachment_manager
+
+        store = InMemoryAttachmentBlobStore()
+        set_default_attachment_blob_store(store)
+        get_attachment_manager().clear_cache()
+        return store
+
+    @staticmethod
+    def _progenitor():
+        progenitor = AsyncMock()
+        progenitor.is_running = True
+        progenitor.send_message_stream_events = MagicMock(
+            return_value=_async_event_iter({"type": "stream_chunk", "content": "A cat"})
+        )
+        return progenitor
+
+    @staticmethod
+    def _telegram(downloads: dict[str, bytes | Exception]):
+        telegram = AsyncMock()
+        telegram.config = _image_config()
+        telegram.stream_agent_response_to_chat.return_value = len("A cat")
+
+        async def download_file(file_id, max_bytes):
+            outcome = downloads[file_id]
+            if isinstance(outcome, Exception):
+                raise outcome
+            return outcome
+
+        telegram.download_file = AsyncMock(side_effect=download_file)
+        return telegram
+
+    @staticmethod
+    def _image(file_id: str) -> TelegramImage:
+        return TelegramImage(file_id=file_id, file_unique_id=f"u{file_id}", mime_type="image/jpeg")
+
+    @pytest.mark.asyncio
+    async def test_images_are_stored_and_sent_as_multimodal_input(self, _blob_store):
+        from app.backend import main as backend_main
+
+        telegram = self._telegram({"p1": b"\xff\xd8one", "p2": b"\xff\xd8two"})
+        progenitor = self._progenitor()
+
+        result = await backend_main._handle_telegram_agent_message(
+            telegram,
+            progenitor,
+            "987654321",
+            "what are these?",
+            {
+                "chat_id": "987654321",
+                "message_thread_id": 7,
+                "images": [self._image("p1"), self._image("p2")],
+                "image_errors": [],
+            },
+        )
+
+        assert result is None
+        call = progenitor.send_message_stream_events.call_args
+        message = call.args[0]
+        assert message.startswith("what are these?\n\n<!--progenitor:attachment-context-->")
+        assert "telegram_up1.jpg (image/jpeg" in message
+        assert call.kwargs["images"] == [
+            "data:image/jpeg;base64,/9hvbmU=",
+            "data:image/jpeg;base64,/9h0d28=",
+        ]
+        metadata = call.kwargs["metadata"]
+        assert metadata["thread_id"] == "tele_987654321_7"
+        assert metadata["source"] == "telegram"
+        assert [a["name"] for a in metadata["attachments"]] == [
+            "telegram_up1.jpg",
+            "telegram_up2.jpg",
+        ]
+        stored = _blob_store.list_metadata(thread_id="tele_987654321_7")
+        assert sorted(meta.filename for meta in stored) == ["telegram_up1.jpg", "telegram_up2.jpg"]
+        assert all(meta.text_content is None for meta in stored)
+        telegram.send_message_to_chat.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_partial_failure_notifies_user_and_still_sends_the_rest(self):
+        from app.backend import main as backend_main
+
+        telegram = self._telegram(
+            {"p1": b"\xff\xd8one", "p2": TelegramMediaError("download failed (HTTP 404)")}
+        )
+        progenitor = self._progenitor()
+
+        await backend_main._handle_telegram_agent_message(
+            telegram,
+            progenitor,
+            "987654321",
+            "",
+            {"images": [self._image("p1"), self._image("p2")], "image_errors": ["x.heic: nope"]},
+        )
+
+        notice = telegram.send_message_to_chat.await_args.args[1]
+        assert "x.heic: nope" in notice
+        assert "image 2: download failed (HTTP 404)" in notice
+        call = progenitor.send_message_stream_events.call_args
+        assert len(call.kwargs["images"]) == 1
+        message = call.args[0]
+        assert message.startswith("<!--progenitor:attachment-context-->")
+        assert "image 2: download failed (HTTP 404)" in message.split("Could not be read")[1]
+
+    @pytest.mark.asyncio
+    async def test_nothing_usable_skips_the_agent_turn(self):
+        from app.backend import main as backend_main
+
+        telegram = self._telegram({"p1": TelegramMediaError("file is over the 5.0 MB limit")})
+        progenitor = self._progenitor()
+
+        result = await backend_main._handle_telegram_agent_message(
+            telegram, progenitor, "987654321", "", {"images": [self._image("p1")]}
+        )
+
+        assert result is None
+        telegram.send_message_to_chat.assert_awaited_once()
+        progenitor.send_message_stream_events.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_text_only_messages_send_no_images(self):
+        from app.backend import main as backend_main
+
+        progenitor = self._progenitor()
+        await backend_main._handle_telegram_agent_message(
+            self._telegram({}), progenitor, "987654321", "hi", {}
+        )
+        call = progenitor.send_message_stream_events.call_args
+        assert call.args[0] == "hi"
+        assert call.kwargs["images"] is None

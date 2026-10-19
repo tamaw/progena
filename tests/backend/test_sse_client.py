@@ -46,6 +46,8 @@ class _Wait:
 
 
 class ScriptedBridge:
+    calls: list[dict[str, Any]] = []
+
     def __init__(self, graph: Any, *, config: Any, state: dict[str, Any], script: Any) -> None:
         self.graph = graph
         self.config = config
@@ -60,7 +62,9 @@ class ScriptedBridge:
         received_at: float | None = None,
         source: str | None = None,
         attachments: list[dict[str, Any]] | None = None,
+        images: list[dict[str, Any]] | None = None,
     ):
+        self.calls.append({"message": message, "images": images, "source": source})
         items = self._script(message) if callable(self._script) else self._script
         for item in items:
             if isinstance(item, _Wait):
@@ -200,6 +204,35 @@ async def test_stream_events_translate_back_to_internal_chunks_and_events() -> N
     sequences = [events[0]["runtime_stream_seq"], events[1]["runtime_stream_seq"]]
     assert sequences == sorted(sequences)
     assert isinstance(events[1]["runtime_emitted_at_ms"], int)
+
+
+async def test_stream_events_send_images_as_input_image_parts(monkeypatch) -> None:
+    calls: list[dict[str, Any]] = []
+    monkeypatch.setattr(ScriptedBridge, "calls", calls)
+    url = "data:image/jpeg;base64,QUJD"
+    script = [{"type": "stream_chunk", "content": "a cat", "is_final": True}]
+    runtime = await _start_runtime_server(bridge_factory=make_bridge_factory(script))
+    client = SSEProgenitorClient(_client_config(runtime.base_url))
+    try:
+        events = [
+            event
+            async for event in client.send_message_stream_events(
+                "what is this?",
+                request_id="req-img",
+                metadata={"thread_id": "tele_1", "source": "telegram"},
+                images=[url, url],
+            )
+        ]
+        await client.send_message("plain", request_id="req-text")
+    finally:
+        await client.stop()
+        await runtime.server.stop()
+
+    assert [e["content"] for e in events if e["type"] == "stream_chunk"][0] == "a cat"
+    image = {"type": "image_url", "image_url": {"url": url}}
+    assert calls[0] == {"message": "what is this?", "images": [image, image], "source": "telegram"}
+    assert calls[1]["message"] == "plain"
+    assert calls[1]["images"] == []
 
 
 async def test_stream_events_raise_on_failed_response() -> None:

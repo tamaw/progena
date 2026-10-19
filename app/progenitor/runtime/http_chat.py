@@ -7,9 +7,12 @@ the native LangGraph agent graph (``astream``, ``aget_state``, checkpointer).
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 import contextlib
 import json
 import logging
+import os
 import time
 import uuid
 from collections.abc import Awaitable, Callable, Coroutine
@@ -46,6 +49,9 @@ DIRECT_STREAM_QUEUE_SIZE = 256
 # a cancelled turn's partial reply is written as if this node returned it.
 MODEL_NODE = "model"
 
+INPUT_IMAGE_MIME_TYPES = frozenset({"image/jpeg", "image/png", "image/gif", "image/webp"})
+MAX_INPUT_IMAGE_BYTES = int(os.getenv("PROGENITOR_MAX_INPUT_IMAGE_BYTES", str(5 * 1024 * 1024)))
+
 _SSE_HEADERS = {
     "Cache-Control": "no-cache",
     "X-Accel-Buffering": "no",
@@ -66,13 +72,44 @@ def _extract_attachments(metadata: dict[str, Any] | None) -> list[dict[str, Any]
     return [item for item in attachments if isinstance(item, dict)] or None
 
 
-def _extract_input_text(payload: dict[str, Any]) -> str:
-    """Extract user text from the ``input`` field (string or list of items)."""
+def _input_image_block(block: dict[str, Any]) -> dict[str, Any]:
+    """LangChain ``image_url`` block for a Responses ``input_image`` part.
+
+    Only inline ``data:`` URLs of common image types are accepted, so the
+    runtime never fetches remote URLs on a caller's behalf.
+    """
+    image_url = block.get("image_url")
+    url = image_url.get("url") if isinstance(image_url, dict) else image_url
+    if not isinstance(url, str) or not url.startswith("data:"):
+        raise ValueError("input_image must be a base64 data: URL")
+    header, sep, data = url.partition(",")
+    mime_type = header[len("data:") :].split(";", 1)[0].lower()
+    if not sep or ";base64" not in header:
+        raise ValueError("input_image must be a base64 data: URL")
+    if mime_type not in INPUT_IMAGE_MIME_TYPES:
+        raise ValueError(f"Unsupported input_image type: {mime_type or 'unknown'}")
+    try:
+        size = len(base64.b64decode(data, validate=True))
+    except (binascii.Error, ValueError) as exc:
+        raise ValueError("input_image has invalid base64 data") from exc
+    if size > MAX_INPUT_IMAGE_BYTES:
+        raise ValueError(
+            f"input_image is {size:,} bytes; the limit is {MAX_INPUT_IMAGE_BYTES:,} bytes"
+        )
+    return {"type": "image_url", "image_url": {"url": url}}
+
+
+def _extract_input(payload: dict[str, Any]) -> tuple[str, list[dict[str, Any]]]:
+    """User text and image blocks from the ``input`` field (string or list of items).
+
+    Raises ``ValueError`` for an ``input_image`` part that cannot be accepted.
+    """
     raw = payload.get("input")
     if isinstance(raw, str):
-        return raw.strip()
+        return raw.strip(), []
+    parts: list[str] = []
+    images: list[dict[str, Any]] = []
     if isinstance(raw, list):
-        parts: list[str] = []
         for item in raw:
             if isinstance(item, dict) and item.get("role") == "user":
                 content = item.get("content")
@@ -80,10 +117,13 @@ def _extract_input_text(payload: dict[str, Any]) -> str:
                     parts.append(content.strip())
                 elif isinstance(content, list):
                     for block in content:
-                        if isinstance(block, dict) and block.get("type") == "input_text":
+                        if not isinstance(block, dict):
+                            continue
+                        if block.get("type") == "input_text":
                             parts.append(str(block.get("text", "")).strip())
-        return "\n\n".join(parts)
-    return ""
+                        elif block.get("type") == "input_image":
+                            images.append(_input_image_block(block))
+    return "\n\n".join(parts), images
 
 
 def _conversation_id(conversation: Any) -> str:
@@ -159,11 +199,14 @@ class RuntimeChatService:
         if not isinstance(payload, dict):
             return _json_error("Expected a JSON object body", "bad_request", 400)
 
-        message = _extract_input_text(payload)
+        try:
+            message, images = _extract_input(payload)
+        except ValueError as exc:
+            return _json_error(str(exc), "invalid_input_image", 400, param="input")
         metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else None
         attachments = _extract_attachments(metadata)
 
-        if not message and not attachments:
+        if not message and not attachments and not images:
             return _json_error("input is required", "bad_request", 400)
 
         received_at = time.time()
@@ -195,6 +238,7 @@ class RuntimeChatService:
                         cancel_event,
                         received_at,
                         source=source,
+                        images=images,
                     ),
                     on_queued=lambda: self._notify_queued_request(response_id, streaming=False),
                 )
@@ -244,6 +288,7 @@ class RuntimeChatService:
                     received_at,
                     start_sequence=sequence,
                     source=source,
+                    images=images,
                 )
 
             await self._run_serialized(thread_id, _turn, on_queued=_on_queued)
@@ -290,6 +335,7 @@ class RuntimeChatService:
         received_at: float,
         start_sequence: int,
         source: str | None = None,
+        images: list[dict[str, Any]] | None = None,
     ) -> None:
         bridge = self._create_direct_stream_bridge()
         cancelled = False
@@ -325,6 +371,7 @@ class RuntimeChatService:
                         received_at=received_at,
                         attachments=_extract_attachments(metadata),
                         source=source,
+                        images=images,
                     ):
                         await queue.put(("item", item))
                 except asyncio.CancelledError:
@@ -606,6 +653,7 @@ class RuntimeChatService:
         cancel_event: asyncio.Event,
         received_at: float,
         source: str | None = None,
+        images: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         bridge = self._create_direct_stream_bridge()
         try:
@@ -624,6 +672,7 @@ class RuntimeChatService:
                     received_at=received_at,
                     attachments=_extract_attachments(metadata),
                     source=source,
+                    images=images,
                 )
                 # aclosing: a cancel must stop the graph run before the
                 # cancelled reply is written to the thread.

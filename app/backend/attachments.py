@@ -109,6 +109,11 @@ class AttachmentConfig(BaseModel):
             ".doc",
             ".csv",
             ".log",
+            ".jpg",
+            ".jpeg",
+            ".png",
+            ".gif",
+            ".webp",
         ]
     )
     cache_dir: Path | None = None
@@ -284,6 +289,10 @@ class AttachmentManager:
     ) -> str:
         """Extract text content from file bytes."""
         ext = Path(filename).suffix.lower()
+
+        # Images carry no extractable text; the raw bytes are what matter.
+        if mime_type.startswith("image/"):
+            return ""
 
         # PDF extraction
         if ext == ".pdf" or mime_type == "application/pdf":

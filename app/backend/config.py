@@ -81,6 +81,11 @@ class ChatServerConfig:
         ""  # Comma-separated chat IDs allowed to send messages (empty = only chat_id)
     )
 
+    # Telegram inbound image settings
+    telegram_max_image_bytes: int = 5 * 1024 * 1024  # Largest image passed to the agent
+    telegram_max_images_per_message: int = 10  # Telegram albums hold at most 10 items
+    telegram_media_group_wait: float = 1.5  # Seconds to collect the parts of an album
+
     @property
     def backend_database_url(self) -> str:
         """Backend database URL: ``database_url`` with the db name swapped.
@@ -136,4 +141,8 @@ class ChatServerConfig:
             telegram_polling_interval=env_float("TELEGRAM_POLLING_INTERVAL", 2.0),
             telegram_polling_timeout=env_int("TELEGRAM_POLLING_TIMEOUT", 30),
             telegram_allowed_users=os.getenv("TELEGRAM_ALLOWED_USERS", ""),
+            # Telegram inbound image settings
+            telegram_max_image_bytes=env_int("TELEGRAM_MAX_IMAGE_BYTES", 5 * 1024 * 1024),
+            telegram_max_images_per_message=env_int("TELEGRAM_MAX_IMAGES_PER_MESSAGE", 10),
+            telegram_media_group_wait=env_float("TELEGRAM_MEDIA_GROUP_WAIT", 1.5),
         )

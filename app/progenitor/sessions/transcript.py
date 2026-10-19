@@ -5,7 +5,8 @@ the text goes. Every line starts ``HH:MM:SS`` and has one of these shapes::
 
     <nick> text / <@agent> text    something said; ``@`` marks agents
     * nick does something          reasoning title or tool use
-    * nick sends an image          an image content block (human or AI)
+    * nick sends an image [name]   an image content block (human or AI)
+    * nick sends an attachment name  a non-image file the user attached
     -nick- text                    one-way notice to the user (notify/say/ask)
     -> *agent* text                delegated request, sent privately to an agent
     -!- event                      join/part/quit, failed direct agent calls
@@ -31,9 +32,10 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMe
 from ..agent.middleware.direct_a2a_fast_path import _DIRECT_A2A_EMPTY_RE, _DIRECT_A2A_RE
 from ..runtime.responses_api import CANCELLED_STATUS
 from ..state.models import redact_secrets
+from .titles import ATTACHMENT_CONTEXT_MARKER
 
 # Bump whenever rendered output changes, so cached transcripts re-render.
-FORMAT_VERSION = 1
+FORMAT_VERSION = 2
 
 DEFAULT_USER_NICK = "user"
 DEFAULT_AGENT_NICK = "progenitor"
@@ -167,14 +169,10 @@ class _Renderer:
             at = _message_time(message, thread.committed_at) or last
             last = at or last
             if isinstance(message, HumanMessage):
-                blocks = _content_blocks(message)
-                text_parts = [b.get("text", "") for b in blocks if b.get("type") == "text"]
-                image_count = sum(1 for b in blocks if b.get("type") == "image_url")
-                text = "\n".join(text_parts)
+                text, sends = _human_text_and_sends(message)
                 if parent_nick is not None:
                     lines += [Line(at, f"-> *{thread.nick}* {row}") for row in _rows(text)]
-                    for _ in range(image_count):
-                        lines.append(Line(at, f"* {thread.nick} sends an image"))
+                    lines += [Line(at, f"* {thread.nick} {send}") for send in sends]
                     continue
                 self.user_spoke = True
                 self.first_user_text = self.first_user_text or text
@@ -185,8 +183,7 @@ class _Renderer:
                 addressed = (mention[0], len(lines)) if mention else None
                 spoken = f"{mention[0]}: {mention[1]}" if mention else text
                 lines += _say(at, self.user_nick, spoken)
-                for _ in range(image_count):
-                    lines.append(Line(at, f"* {self.user_nick} sends an image"))
+                lines += [Line(at, f"* {self.user_nick} {send}") for send in sends]
             elif isinstance(message, AIMessage):
                 if addressed is not None and _is_direct_reply(message):
                     present = self._direct_reply(message, at, addressed, present, lines)
@@ -477,6 +474,36 @@ def _message_text(message: BaseMessage) -> str:
     return "\n".join(
         block.get("text", "") for block in _content_blocks(message) if block.get("type") == "text"
     )
+
+
+def _human_text_and_sends(message: HumanMessage) -> tuple[str, list[str]]:
+    """What the user typed, and an action per image or attachment they sent.
+
+    The machine-only attachment note is cut off the text. Image blocks are
+    paired in order with the turn's image attachment refs so the log names the
+    stored file (``sends an image photo.jpg``); other refs are attachments.
+    """
+    blocks = _content_blocks(message)
+    text = "\n".join(b.get("text", "") for b in blocks if b.get("type") == "text")
+    text = text.split(ATTACHMENT_CONTEXT_MARKER, 1)[0].rstrip()
+    image_count = sum(1 for b in blocks if b.get("type") == "image_url")
+    refs = message.additional_kwargs.get("attachments")
+    refs = [ref for ref in refs if isinstance(ref, dict)] if isinstance(refs, list) else []
+    image_names = [
+        str(ref.get("name") or "")
+        for ref in refs
+        if str(ref.get("mime_type") or "").startswith("image/")
+    ]
+    sends = [
+        f"sends an image {image_names[i]}".rstrip() if i < len(image_names) else "sends an image"
+        for i in range(max(image_count, len(image_names)))
+    ]
+    sends += [
+        f"sends an attachment {ref.get('name') or ''}".rstrip()
+        for ref in refs
+        if not str(ref.get("mime_type") or "").startswith("image/")
+    ]
+    return text, sends
 
 
 def _rows(text: str) -> list[str]:

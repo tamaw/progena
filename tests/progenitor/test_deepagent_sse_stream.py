@@ -96,6 +96,43 @@ async def test_no_attachments_key_when_none_provided():
 
 
 @pytest.mark.asyncio
+async def test_images_make_the_human_message_multimodal():
+    graph = _FakeGraph([("updates", {"respond": {"pending_response": "ok"}})])
+    bridge = DeepAgentSSEStream(graph, config=_make_config(), state={})
+    image = {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}}
+
+    async for _ in bridge.stream("what is this?", thread_id="thread-1", images=[image, image]):
+        pass
+
+    human_message = graph.last_input["messages"][0]
+    assert human_message.content == [{"type": "text", "text": "what is this?"}, image, image]
+    assert bridge.state["current_input"] == "what is this?"
+
+
+@pytest.mark.asyncio
+async def test_image_only_message_has_no_empty_text_block():
+    graph = _FakeGraph([("updates", {"respond": {"pending_response": "ok"}})])
+    bridge = DeepAgentSSEStream(graph, config=_make_config(), state={})
+    image = {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}}
+
+    async for _ in bridge.stream("", thread_id="thread-1", images=[image]):
+        pass
+
+    assert graph.last_input["messages"][0].content == [image]
+
+
+@pytest.mark.asyncio
+async def test_text_only_message_content_stays_a_string():
+    graph = _FakeGraph([("updates", {"respond": {"pending_response": "ok"}})])
+    bridge = DeepAgentSSEStream(graph, config=_make_config(), state={})
+
+    async for _ in bridge.stream("hi", thread_id="thread-1", images=[]):
+        pass
+
+    assert graph.last_input["messages"][0].content == "hi"
+
+
+@pytest.mark.asyncio
 async def test_pending_response_still_streams_when_no_message_events_exist():
     graph = _FakeGraph(
         [

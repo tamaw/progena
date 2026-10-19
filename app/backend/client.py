@@ -299,8 +299,12 @@ class ProgenitorClient:
         message: str,
         request_id: str | None = None,
         metadata: dict[str, Any] | None = None,
+        *,
+        images: list[str] | None = None,
     ) -> AsyncIterator[dict[str, Any]]:
         """Send a message and stream structured events from the subprocess client."""
+        if images:
+            raise RuntimeError("Image input requires the runtime HTTP client")
         if not self._started:
             await self.start()
 
