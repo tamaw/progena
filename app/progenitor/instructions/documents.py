@@ -16,7 +16,17 @@ path segment is the group:
 
 from __future__ import annotations
 
-from .templates import instruction_relative_path, parse_instruction_template
+from collections.abc import Mapping
+from typing import TYPE_CHECKING
+
+from .templates import (
+    check_template_type_refs,
+    instruction_relative_path,
+    parse_instruction_template,
+)
+
+if TYPE_CHECKING:
+    from app.progenitor.document_types import DocumentType
 
 RUNTIME_INSTRUCTION_GROUP = "progenitor"
 GENESIS_INSTRUCTION = "progenitor/genesis.md"
@@ -38,15 +48,26 @@ def is_bundled_instruction(path: str) -> bool:
     return instruction_group(path) in BUNDLED_INSTRUCTION_GROUPS
 
 
-def check_instruction_write(path: str, previous: str | None, content: str) -> None:
-    """Raise ``ValueError`` unless ``content`` may replace ``previous`` at ``path``."""
+def check_instruction_write(
+    path: str,
+    previous: str | None,
+    content: str,
+    document_types: Mapping[str, DocumentType],
+) -> None:
+    """Raise ``ValueError`` unless ``content`` may replace ``previous`` at ``path``.
+
+    Front matter types are resolved against ``document_types`` here, so a bad
+    type fails the write that introduced it rather than a later workflow save.
+    """
     instruction_relative_path(path)
     if is_bundled_instruction(path):
         raise PermissionError(
             f"'{path}' is bundled with {instruction_group(path)}, which reads it from disk; "
             "change it in data/instructions/ instead"
         )
-    roots = parse_instruction_template(content).roots
+    template = parse_instruction_template(content)
+    check_template_type_refs(template, document_types)
+    roots = template.roots
     if is_runtime_instruction(path) and previous is not None:
         expected = parse_instruction_template(previous).roots
         if sorted(roots) != sorted(expected):

@@ -1840,7 +1840,7 @@ class InstructionDocumentDirectoryBackend(ContentDocumentDirectoryBackend):
         name = self._name(file_path)
         try:
             previous = await self._sm.get_content_document(self._kind, name)
-            check_instruction_write(name, previous, content)
+            check_instruction_write(name, previous, content, await self._sm.list_document_types())
         except (ValueError, PermissionError) as exc:
             return WriteResult(error=f"Invalid instruction: {exc}")
         return await super().awrite(file_path, content)

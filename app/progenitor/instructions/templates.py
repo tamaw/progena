@@ -293,4 +293,24 @@ def resolve_type_ref(
     try:
         return _split_definitions(load_schema(ref))
     except FileNotFoundError:
-        raise ValueError(f"unknown type ref: {ref!r}") from None
+        raise ValueError(
+            f"unknown type ref: {ref!r}; use a document type id (e.g. 'kanban_card'), a schema "
+            "file name under /schemas/, or an inline JSON schema such as {type: string}"
+        ) from None
+
+
+def check_template_type_refs(
+    template: InstructionTemplate, document_types: Mapping[str, DocumentType]
+) -> None:
+    """Raise ``ValueError`` naming the front matter key whose type ref does not resolve."""
+
+    for name, ref in template.inputs.items():
+        try:
+            resolve_type_ref(ref, document_types)
+        except ValueError as exc:
+            raise ValueError(f"front matter inputs '{name}': {exc}") from None
+    if template.output_schema is not None:
+        try:
+            resolve_type_ref(template.output_schema, document_types)
+        except ValueError as exc:
+            raise ValueError(f"front matter output_schema: {exc}") from None

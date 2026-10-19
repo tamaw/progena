@@ -10,6 +10,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import app.backend.instruction_routes as routes
+from app.backend.document_events import seed_document_types
 from app.backend.document_store import (
     PROGENITOR_STATE_PREFIX,
     InMemoryDocumentStore,
@@ -26,6 +27,7 @@ THINK = "---\ntitle: Think\ndescription: Approaches\n---\nThink hard.\n"
 def harness(monkeypatch):
     store = InMemoryDocumentStore()
     set_default_document_store(store)
+    seed_document_types(store)
     for path, content in (
         ("progenitor/genesis.md", GENESIS),
         ("progenitor/discovery.md", DISCOVERY),

@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import contextlib
 import copy
 import json
 import uuid
 from collections import defaultdict
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from datetime import datetime
 from typing import Annotated, Any, Literal
 
@@ -1065,7 +1066,10 @@ def _derive_prompt_node_input_schema(
     for root in template.roots:
         type_ref = template.inputs.get(root)
         if type_ref is not None:
-            properties[root], root_definitions = resolve_type_ref(type_ref, document_types)
+            try:
+                properties[root], root_definitions = resolve_type_ref(type_ref, document_types)
+            except ValueError as exc:
+                raise ValueError(f"front matter inputs '{root}': {exc}") from None
             _merge_definitions(definitions, root_definitions)
         else:
             properties[root] = _ANY_VALUE_SCHEMA
@@ -1143,7 +1147,11 @@ def _derive_extract_output_schema(
     text = _node_instruction_text(node, instruction_loader)
     template = parse_instruction_template(text)
     if template.output_schema is not None:
-        return _extract_result_schema(*resolve_type_ref(template.output_schema, document_types))
+        try:
+            resolved = resolve_type_ref(template.output_schema, document_types)
+        except ValueError as exc:
+            raise ValueError(f"front matter output_schema: {exc}") from None
+        return _extract_result_schema(*resolved)
 
     # 3. Infer from downstream non-unpack targets
     target_schemas: list[dict[str, Any]] = []
@@ -1420,20 +1428,35 @@ def derive_workflow_port_schemas(
     # Order matters: every prompt node's inputs first (Extract infers its result
     # from the inputs it feeds), then Extract results, then Unpack (which may
     # unpack an Extract result; an Unpack value never constrains an Extract).
-    for node in prompt_nodes.values():
-        node["input_schema"] = _derive_prompt_node_input_schema(
-            node, document_types, instruction_loader
-        )
     for node_id, node in prompt_nodes.items():
-        if node["kind"] == "extract":
-            node["output_schema"] = _derive_extract_output_schema(
-                node, node_id, nodes, edges, document_types, instruction_loader
+        with _prompt_node_context(node_id, node):
+            node["input_schema"] = _derive_prompt_node_input_schema(
+                node, document_types, instruction_loader
             )
-        else:
-            node["output_schema"] = _derive_agent_output_schema()
+    for node_id, node in prompt_nodes.items():
+        with _prompt_node_context(node_id, node):
+            if node["kind"] == "extract":
+                node["output_schema"] = _derive_extract_output_schema(
+                    node, node_id, nodes, edges, document_types, instruction_loader
+                )
+            else:
+                node["output_schema"] = _derive_agent_output_schema()
     _derive_unpack_schemas(nodes, edges)
 
     return result
+
+
+@contextlib.contextmanager
+def _prompt_node_context(node_id: str, node: dict[str, Any]) -> Iterator[None]:
+    """Prefix derivation errors with the node and the template it reads."""
+
+    try:
+        yield
+    except ValueError as exc:
+        source = (
+            f"instruction '{node['instruction']}'" if node.get("instruction") else "inline template"
+        )
+        raise ValueError(f"{node['kind']} node '{node_id}' ({source}): {exc}") from None
 
 
 def _raw_output_port(node: Any, port: str) -> tuple[dict[str, Any] | None, dict[str, Any]]:
