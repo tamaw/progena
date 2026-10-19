@@ -62,7 +62,9 @@ def validate_against_schema(value: Any, schema: dict[str, Any]) -> str | None:
     try:
         jsonschema.validate(value, schema)
     except jsonschema.ValidationError as exc:
-        return str(exc.message)
+        # The path tells the writer (often a model) which field to fix.
+        path = exc.json_path
+        return str(exc.message) if path == "$" else f"at {path}: {exc.message}"
     except jsonschema.SchemaError as exc:  # pragma: no cover - authoring error
         return f"invalid schema: {exc.message}"
     return None

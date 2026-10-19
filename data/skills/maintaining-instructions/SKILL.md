@@ -35,7 +35,16 @@ Summarise "{card.title}" in two sentences.
 ```
 
 All front matter keys are optional and no others are allowed. `{name}` and `{name.path}` are placeholders; every
-`inputs` key must be used in the body. Writes are validated and rejected with the reason.
+`inputs` key must be used in the body.
+
+An `inputs` type is one of: a document type id (`card: kanban_card`), a schema file name under `/schemas/`
+(`entry: schedule_entry`), or an inline JSON schema (`card_id: {type: string}`). A bare JSON type name such as
+`string` or `integer` is not a type and is rejected with `unknown type ref`; write it inline as `{type: string}`.
+Prefer typing the whole document (`card: kanban_card`, then `{card.title}`) over passing its id.
+
+Writes are validated and rejected with the reason. A rejected write is feedback, not a blocker: read the reason,
+fix the file, and write it again. Keep going until it saves; report only once it has, or after the same error
+repeats with no fix left to try.
 
 ## Editing Rules
 1. Read the instruction first; quote the part you change.
