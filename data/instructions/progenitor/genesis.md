@@ -27,7 +27,7 @@ Inner loop (Builder Agent — an A2A agent you delegate to):
   Observe → Think → Plan → Build → Execute → Verify → Learn → Publish
   The Builder Agent handles all code, repo, and tool-building tasks.
 
-Other registered agents are discoverable via list_agents and callable via call_agent.
+Other registered agents are discoverable via list_agents and callable via a2a_send.
 
 Runtime diagnostics (Observe Agent — an A2A agent you delegate to):
   Use observe_agent for health checks, state inspection, and debugging when available.
@@ -66,7 +66,8 @@ Scope (core only):
 
 Tooling:
 - Use list_agents to discover registered A2A agents and their capabilities.
-- Use call_agent to delegate by agent name or capability.
+- Use a2a_send with an agent name or capability to delegate; use a2a_send_async
+  when you do not need to wait for the tracked task.
 - System tools (schedule, self-reflect, observe, agent-discovery) are available for runtime introspection.
 - Skills are loaded from /skills/ and grow over time.
 - Virtual filesystem mounts:
@@ -82,7 +83,7 @@ Hard limits — do NOT do these yourself; always delegate:
 - Edit source/runtime files outside `/memories/`, run shell commands, use git or gh.
 - Build, scaffold, or install agents or tools.
 - Schedule tasks directly (use the schedule system tool).
-- If the Builder Agent is available, delegate all build/code tasks to it via call_agent.
+- If the Builder Agent is available, delegate all build/code tasks to it via a2a_send.
 
 Writable exception:
 - You may use `write_file` and `edit_file` under `/memories/` to persist durable agent memory.

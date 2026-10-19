@@ -194,7 +194,7 @@ class TestStateManager:
             agent_name="observe_agent",
             agent_url="http://localhost:8108",
             context_id="ctx-123",
-            source="call_agent",
+            source="a2a_send",
             request_text="Inspect logs",
         )
 

@@ -13,7 +13,7 @@ async function createAgent(page, name) {
   await page.getByRole('textbox', { name: 'Agent name', exact: true }).fill(name);
   await page.getByPlaceholder('What this agent is for…').fill('Disposable restricted delegation verification');
   await page.getByPlaceholder('You are…').fill(prompt('v1'));
-  await page.getByPlaceholder('shell, mcp, call_agent').fill('');
+  await page.getByPlaceholder('shell, mcp, a2a_send').fill('');
   await page.getByPlaceholder('/skills/review/').fill('');
   await page.getByRole('button', { name: 'Create agent' }).click();
   await page.getByPlaceholder('Search agents...').fill(name);

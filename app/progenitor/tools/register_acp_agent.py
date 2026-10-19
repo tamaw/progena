@@ -1,10 +1,9 @@
 """Tool to register an ACP agent into the runtime registry.
 
 ACP agents (Agent Client Protocol — local stdio CLIs such as ``copilot --acp``)
-live in the same registry as A2A agents, so once registered they are invocable
-through ``call_agent`` and visible on the Agents page. This tool writes an
-``acp_agent`` entry; nothing is registered automatically — every ACP agent
-(including Copilot) must be added explicitly via this tool.
+live in the same registry as A2A agents and are visible on the Agents page. This
+tool writes an ``acp_agent`` entry; nothing is registered automatically — every
+ACP agent (including Copilot) must be added explicitly via this tool.
 """
 
 from __future__ import annotations
@@ -25,7 +24,7 @@ logger = logging.getLogger(__name__)
 class RegisterACPAgentArgs(BaseModel):
     """Arguments for registering an ACP agent."""
 
-    name: str = Field(description="Unique agent name (used to invoke it via call_agent).")
+    name: str = Field(description="Unique agent name (used to start it via acp_start).")
     connection: str | None = Field(
         default=None,
         description=(
@@ -78,8 +77,8 @@ class RegisterACPAgentTool(BaseSystemTool):
     def description(self) -> str:
         return (
             "Register a local ACP agent (Agent Client Protocol CLI, e.g. GitHub Copilot) "
-            "into the registry so it can be invoked with call_agent. Provide the command "
-            "and an optional profile/model. The agent is sandboxed per run."
+            "into the registry for acp_start. Provide the command and an optional "
+            "profile/model. The agent is sandboxed per run."
         )
 
     async def execute(self, context: ToolContext) -> ToolResult:

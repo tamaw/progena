@@ -7,7 +7,7 @@ allowed-tools: acp_start acp_send acp_status acp_answer acp_cancel acp_list task
 # Driving ACP agents
 
 ACP sessions run Claude over the Agent Client Protocol. Start and control them
-with the `acp_*` tools; do not use `call_agent` for ACP.
+with the `acp_*` tools; the `a2a_*` tools are for remote A2A agents only.
 
 ## Working safely
 

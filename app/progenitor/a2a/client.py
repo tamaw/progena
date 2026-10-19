@@ -22,6 +22,7 @@ from a2a.types import (
     Part,
     PushNotificationConfig,
     Role,
+    TaskIdParams,
     TaskQueryParams,
     TextPart,
 )
@@ -30,6 +31,7 @@ from ..utils import utcnow_isoformat
 
 logger = logging.getLogger(__name__)
 _TERMINAL_TASK_STATES = {"completed", "failed", "canceled", "cancelled"}
+_SETTLED_TASK_STATES = _TERMINAL_TASK_STATES | {"input-required"}
 
 _MAX_PROGRESS_UPDATES = 50
 
@@ -116,7 +118,7 @@ class A2AClient:
         deadline: float | None = None,
     ) -> dict[str, Any]:
         state = self._task_state(payload)
-        if state in _TERMINAL_TASK_STATES:
+        if state in _SETTLED_TASK_STATES:
             return payload
 
         task_id = str(payload.get("id") or "").strip()
@@ -146,14 +148,14 @@ class A2AClient:
             if not isinstance(result, dict):
                 return latest
             latest = result
-            if self._task_state(latest) in _TERMINAL_TASK_STATES:
+            if self._task_state(latest) in _SETTLED_TASK_STATES:
                 return latest
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 return latest
             await asyncio.sleep(min(0.25, remaining))
 
-    async def call_agent(
+    async def send_message(
         self,
         agent_config: dict[str, Any],
         request: str,
@@ -163,8 +165,10 @@ class A2AClient:
         history_length: int | None = None,
         callback_url: str | None = None,
         on_progress: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
+        task_id: str | None = None,
+        context_id: str | None = None,
     ) -> dict[str, Any]:
-        """Call an A2A agent with a request."""
+        """Send a message to an A2A agent, optionally continuing a task or context."""
         transport = agent_config.get("transport", "http")
         status = agent_config.get("status", "stopped")
         if status == "failed":
@@ -210,6 +214,9 @@ class A2AClient:
                     parts=[Part(root=TextPart(text=request or ""))],
                     message_id=uuid.uuid4().hex,
                     metadata=context or {},
+                    task_id=task_id,
+                    context_id=context_id,
+                    reference_task_ids=[task_id] if task_id else None,
                 )
                 configuration = MessageSendConfiguration(
                     blocking=blocking,
@@ -329,6 +336,23 @@ class A2AClient:
                 task = await client.get_task(
                     TaskQueryParams(id=task_id, history_length=history_length)
                 )
+        except (TimeoutError, httpx.TimeoutException):
+            return {"success": False, "error": f"Request timeout after {timeout}s"}
+        except Exception as exc:
+            return {"success": False, "error": str(exc)}
+        return {"success": True, "result": self._serialize_model(task)}
+
+    async def cancel_task(
+        self,
+        agent_config: dict[str, Any],
+        task_id: str,
+        *,
+        timeout: float = 15.0,
+    ) -> dict[str, Any]:
+        """Cancel a remote A2A task and return its latest snapshot."""
+        try:
+            async with self._sdk_client(agent_config, timeout=timeout) as client:
+                task = await client.cancel_task(TaskIdParams(id=task_id))
         except (TimeoutError, httpx.TimeoutException):
             return {"success": False, "error": f"Request timeout after {timeout}s"}
         except Exception as exc:

@@ -7,6 +7,7 @@ import {
   isEventVisible,
   loadStreamFilters,
 } from './streamFilters';
+import { A2A_TOOL_NAMES, isA2AToolName } from './a2aTools';
 
 function emptyCounts() {
   return STREAM_EVENT_CATEGORIES.reduce((acc, c) => { acc[c.id] = 0; return acc; }, {});
@@ -27,19 +28,20 @@ describe('categoryForEventType', () => {
     expect(categoryForEventType(123)).toBe('debug');
   });
 
-  it('buckets call_agent under its own "a2a" category, not "tools"', () => {
+  it('buckets every A2A tool under its own "a2a" category, not "tools"', () => {
     expect(categoryForEventType('a2a_call_progress')).toBe('a2a');
-    expect(categoryForEventType('tool_start', { tool_name: 'call_agent' })).toBe('a2a');
-    expect(categoryForEventType('tool_result', { tool_name: 'call_agent' })).toBe('a2a');
-    // Takes priority over the generic tool_error -> 'errors' bucket, the
-    // same way subagent_tool_error stays under 'subagents' rather than
-    // 'errors' -- a family with its own category owns its own failures too.
-    expect(categoryForEventType('tool_error', { tool_name: 'call_agent' })).toBe('a2a');
+    for (const toolName of A2A_TOOL_NAMES) {
+      expect(isA2AToolName(toolName)).toBe(true);
+      expect(categoryForEventType('tool_start', { tool_name: toolName })).toBe('a2a');
+      expect(categoryForEventType('tool_result', { tool_name: toolName })).toBe('a2a');
+      expect(categoryForEventType('tool_error', { tool_name: toolName })).toBe('a2a');
+    }
   });
 
-  it('leaves non-call_agent tool events under "tools"', () => {
+  it('leaves non-A2A tool events under "tools"', () => {
     expect(categoryForEventType('tool_start', { tool_name: 'shell' })).toBe('tools');
     expect(categoryForEventType('tool_error', { tool_name: 'shell' })).toBe('errors');
+    expect(isA2AToolName('shell')).toBe(false);
   });
 });
 
@@ -55,11 +57,11 @@ describe('countCategorizedEvents', () => {
     expect(counts.tools).toBe(1);
   });
 
-  it('counts a call_agent start/result pair once under "a2a", not "tools"', () => {
+  it('counts an A2A start/result pair once under "a2a", not "tools"', () => {
     const counts = countCategorizedEvents(
       [
-        { eventType: 'tool_start', metadata: { tool_name: 'call_agent' } },
-        { eventType: 'tool_result', metadata: { tool_name: 'call_agent' } },
+        { eventType: 'tool_start', metadata: { tool_name: 'a2a_send' } },
+        { eventType: 'tool_result', metadata: { tool_name: 'a2a_send' } },
       ],
       emptyCounts(),
     );
@@ -67,11 +69,11 @@ describe('countCategorizedEvents', () => {
     expect(counts.tools).toBe(0);
   });
 
-  it('does not double-count a call_agent invocation that also errors', () => {
+  it('does not double-count an A2A invocation that also errors', () => {
     const counts = countCategorizedEvents(
       [
-        { eventType: 'tool_start', metadata: { tool_name: 'call_agent' } },
-        { eventType: 'tool_error', metadata: { tool_name: 'call_agent' } },
+        { eventType: 'tool_start', metadata: { tool_name: 'a2a_send' } },
+        { eventType: 'tool_error', metadata: { tool_name: 'a2a_send' } },
       ],
       emptyCounts(),
     );
@@ -94,10 +96,10 @@ describe('countCategorizedEvents', () => {
   it('counts intermediate a2a_call_progress updates as part of the same invocation', () => {
     const counts = countCategorizedEvents(
       [
-        { eventType: 'tool_start', metadata: { tool_name: 'call_agent' } },
+        { eventType: 'tool_start', metadata: { tool_name: 'a2a_send' } },
         { eventType: 'a2a_call_progress', metadata: { tool_call_id: 'x' } },
         { eventType: 'a2a_call_progress', metadata: { tool_call_id: 'x' } },
-        { eventType: 'tool_result', metadata: { tool_name: 'call_agent' } },
+        { eventType: 'tool_result', metadata: { tool_name: 'a2a_send' } },
       ],
       emptyCounts(),
     );
@@ -131,8 +133,8 @@ describe('countCategorizedEvents', () => {
       { eventType: 'tool_result', metadata: { tool_name: 'write_todos' } },
     ];
     for (let i = 0; i < 6; i += 1) {
-      events.push({ eventType: 'tool_start', metadata: { tool_name: 'call_agent' } });
-      events.push({ eventType: 'tool_result', metadata: { tool_name: 'call_agent' } });
+      events.push({ eventType: 'tool_start', metadata: { tool_name: 'a2a_send' } });
+      events.push({ eventType: 'tool_result', metadata: { tool_name: 'a2a_send' } });
     }
     const counts = countCategorizedEvents(events, emptyCounts());
     expect(counts.tools).toBe(4);

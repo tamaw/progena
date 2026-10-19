@@ -85,7 +85,7 @@ def test_build_json_schema_format_from_dict_defaults_missing_root_type():
 
 def test_llm_client_configures_connect_retries():
     # The custom LLMClient's httpx client is idle for most of a turn (only
-    # used by structured_output/call_agent, unlike the main chat loop which
+    # used by structured_output/a2a_send, unlike the main chat loop which
     # goes through a separate LangChain client) - past the default 5s
     # keepalive expiry, its next request opens a fresh connection, which in
     # this environment intermittently fails DNS resolution once before
@@ -349,7 +349,7 @@ async def test_execute_tool_call_routes_url_only_registry_entry_to_a2a():
     assert result["result"]["task_id"] == "task-123"
     client._call_mcp_tool.assert_not_awaited()
     mock_execute.assert_awaited_once()
-    assert mock_execute.await_args.kwargs["tool_name"] == "call_agent"
+    assert mock_execute.await_args.kwargs["tool_name"] == "a2a_send"
     assert mock_execute.await_args.kwargs["tool_args"]["agent"] == "builder"
 
 
