@@ -26,6 +26,7 @@ from app.progenitor.instructions.templates import (
     parse_instruction_template,
 )
 
+from .document_events import list_document_types
 from .document_store import (
     PROGENITOR_STATE_PREFIX,
     BackendDocumentStore,
@@ -112,7 +113,7 @@ def save_instruction(
     """Validate and store a new version of an existing editable instruction."""
     store = store or get_default_document_store()
     current = get_instruction(path, store)
-    check_instruction_write(path, current["content"], content)
+    check_instruction_write(path, current["content"], content, list_document_types(store))
     store.save_document(
         PROGENITOR_STATE_PREFIX,
         content_document_key(_KIND, path),

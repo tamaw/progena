@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from app.progenitor.content_documents import sync_instruction_documents
+from app.progenitor.document_types import BUILTIN_DOCUMENT_TYPES
 from app.progenitor.instructions import (
     DEFAULT_INSTRUCTIONS_DIR,
     check_instruction_write,
@@ -14,6 +15,7 @@ from app.progenitor.instructions import (
 from app.progenitor.instructions.templates import parse_instruction_template
 
 VALID = "---\ntitle: T\ndescription: D\n---\nHello {name}.\n"
+TYPES = {item.id: item for item in BUILTIN_DOCUMENT_TYPES}
 
 
 class FakeStateManager:
@@ -71,16 +73,34 @@ def test_render_drops_front_matter_and_fills_variables():
         ("progenitor/genesis.md", "Hello.\n", "{name}"),
         ("builder_agent/think.md", VALID, "bundled with builder_agent"),
         ("workflows/card.md", "---\nvariables: [x]\n---\nx\n", "unknown front matter key"),
+        # A bare JSON type name is not a type ref: rejected at write, naming the input.
+        (
+            "workflows/fix.md",
+            "---\ninputs:\n  fix_list: string\n---\n{fix_list}\n",
+            r"inputs 'fix_list': unknown type ref: 'string'.*\{type: string\}",
+        ),
+        (
+            "workflows/fix.md",
+            "---\noutput_schema: no_such_type\n---\nx\n",
+            "output_schema: unknown type ref: 'no_such_type'",
+        ),
     ],
-    ids=["runtime-placeholder-renamed", "runtime-placeholder-dropped", "bundled", "unknown-key"],
+    ids=[
+        "runtime-placeholder-renamed",
+        "runtime-placeholder-dropped",
+        "bundled",
+        "unknown-key",
+        "bare-input-type",
+        "unknown-output-schema",
+    ],
 )
 def test_rejected_instruction_writes(path, content, error):
     with pytest.raises((ValueError, PermissionError), match=error):
-        check_instruction_write(path, VALID, content)
+        check_instruction_write(path, VALID, content, TYPES)
 
 
 def test_workflow_templates_may_change_placeholders():
-    check_instruction_write("workflows/card.md", VALID, "Card {card.title}\n")
+    check_instruction_write("workflows/card.md", VALID, "Card {card.title}\n", TYPES)
 
 
 async def test_sync_keeps_edited_runtime_instructions_and_mirrors_bundled_ones(tmp_path):

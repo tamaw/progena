@@ -339,6 +339,9 @@ class _Instructions:
     async def save_content_document(self, kind: str, path: str, content: str) -> None:
         self.docs[path] = content
 
+    async def list_document_types(self):
+        return {item.id: item for item in BUILTIN_DOCUMENT_TYPES}
+
 
 class TestInstructionDocumentDirectoryBackend:
     @staticmethod
@@ -361,8 +364,13 @@ class TestInstructionDocumentDirectoryBackend:
             ("/workflows/card.txt", "Body\n", ".md"),
             ("/builder_agent/think.md", "Think {task}\n", "bundled with builder_agent"),
             ("/progenitor/discovery.md", "Analyse {other}.\n", "{folders}"),
+            (
+                "/workflows/fix.md",
+                "---\ninputs:\n  fix_list: string\n---\n{fix_list}\n",
+                "inputs 'fix_list': unknown type ref: 'string'",
+            ),
         ],
-        ids=["unknown-key", "not-markdown", "bundled", "runtime-placeholders"],
+        ids=["unknown-key", "not-markdown", "bundled", "runtime-placeholders", "bare-type"],
     )
     async def test_rejected_writes_leave_documents_unchanged(self, path, content, error):
         docs = {
