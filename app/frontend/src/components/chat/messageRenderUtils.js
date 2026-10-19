@@ -181,19 +181,18 @@ function prettifyLabel(value) {
 }
 
 /**
- * Best-effort extraction of just the `summary` field out of a call_agent
- * tool result string. That string is the whole result dict, JSON-
- * stringified -- rendering it raw as a card's fallback (no progress
- * messages to tell the story instead, e.g. blocking=false, or a reloaded
- * chat with no persisted progress history) is exactly the "meaningless
- * JSON blob" experience live A2A cards exist to fix. A plain JSON.parse
- * handles the common short-result case, but the backend's own preview
- * truncation (chat_sessions.py) cuts long results off wherever the 400-char
- * budget runs out -- almost never on a clean closing brace -- so a regex
- * fallback pulls `summary` out on its own even when the overall string
- * isn't valid JSON, as long as summary itself wasn't the part truncated.
+ * Best-effort extraction of just the `summary` field out of an A2A tool
+ * result string. That string is the whole result dict, JSON-stringified --
+ * rendering it raw as a card's fallback (no progress messages to tell the
+ * story, or a reloaded chat with no persisted progress history) is exactly
+ * the "meaningless JSON blob" experience live A2A cards exist to fix. A
+ * plain JSON.parse handles the common short-result case, but the backend's
+ * preview truncation cuts long results off wherever the 400-char budget runs
+ * out, so a regex fallback pulls `summary` out on its own even when the
+ * overall string is not valid JSON, as long as summary itself was not
+ * truncated.
  */
-export function extractCallAgentSummary(resultText) {
+export function extractA2ASummary(resultText) {
   if (!resultText) return '';
   try {
     const parsed = JSON.parse(resultText);
@@ -661,13 +660,9 @@ export function describeStreamEvent(event) {
   // a2a_call_progress only reaches this generic renderer via the reload
   // fallback (buildDefaultAssistantTimeline groups it into the a2a_call card
   // when it can -- see liveAssistantTurnModel.js) or chats persisted before
-  // grouping shipped. call_agent's own tool_start/tool_result/tool_error
-  // get no equivalent special-casing here -- Progenitor's dispatch/return
-  // for that call is an ordinary tool call and is handled by the plain
-  // tool_start/tool_result/tool_error branches above like any other tool,
-  // with the same 'Tool' badge; only a2a_call_progress is genuinely new
-  // information (the A2A protocol's own status stream) with no tool-call
-  // equivalent, so it alone gets its own badge.
+  // grouping shipped. A2A tool lifecycle events get no equivalent special-
+  // casing here: dispatch/return are ordinary tool rows handled by the plain
+  // tool_start/tool_result/tool_error branches above like any other tool.
   if (eventType === 'a2a_call_progress') {
     const agentName = typeof metadata.agent_name === 'string' && metadata.agent_name
       ? metadata.agent_name

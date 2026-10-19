@@ -73,31 +73,22 @@ _MAX_PROGRESS_MESSAGE_TEXT_LENGTH = 500
 
 
 def extract_progress_log(progress_updates: Any, agent_name: str = "") -> list[dict[str, str]]:
-    """Compact A2AClient.call_agent()'s raw `progress_updates` (full
-    TaskStatusUpdateEvent payloads) down to the {state, message_text,
-    agent_name, timestamp} entries a reloaded chat needs to rebuild the same
-    progress chain a live viewer saw -- callers persist this instead of the
-    raw envelopes (task/context ids, kind markers, ...), which add nothing
-    for that purpose and would only get truncated away anyway (see
-    chat_sessions.py's 400-char result preview). Bounded to the most recent
-    `_MAX_PROGRESS_LOG_ENTRIES`, each with `message_text` capped to
-    `_MAX_PROGRESS_MESSAGE_TEXT_LENGTH`, so a long-running task's log can't
-    grow the persisted ToolMessage (and every future turn's context) without
-    limit.
+    """Compact A2AClient.send_message() progress updates for persistence.
 
-    `agent_name` isn't part of the raw TaskStatusUpdateEvent -- it's the
-    caller's own resolved agent name (see dispatch_tracked_a2a_task), stamped
-    onto every entry so a reload can repopulate the card header the same way
-    the live `a2a_call_progress` stream event does (see
-    build_a2a_call_progress_event); without it, a reload has no source for
-    the name at all once the task auto-routed (the LLM's raw tool-call args
-    never named an agent) and falls back to a generic placeholder.
+    Raw task/context envelopes add nothing to a reloaded chat's progress chain
+    and would be truncated from result previews. Entries are bounded to the
+    most recent `_MAX_PROGRESS_LOG_ENTRIES`, with `message_text` capped to
+    `_MAX_PROGRESS_MESSAGE_TEXT_LENGTH`, so a long-running task's log cannot
+    grow persisted tool results or future turn context without limit.
+
+    `agent_name` is the caller's resolved agent name, stamped onto every entry
+    so a reload can rebuild the same card header as the live
+    `a2a_call_progress` stream event.
 
     `timestamp` comes from `_progenitor_received_at`, stamped by
-    A2AClient.call_agent() at the moment each update actually arrived (see
-    client.py) -- extraction itself only runs once, after the whole blocking
-    call has completed, so there's no other way to recover each entry's real
-    time instead of collapsing them all onto one post-hoc "now"."""
+    A2AClient.send_message() when each update arrives; extraction runs after
+    dispatch, so it cannot otherwise preserve per-update arrival time.
+    """
     if not isinstance(progress_updates, list):
         return []
     entries: list[dict[str, str]] = []

@@ -1197,7 +1197,7 @@ class TestA2ANodeTimeout:
             ),
         )
         with patch(
-            "app.progenitor.a2a.client.A2AClient.call_agent",
+            "app.progenitor.a2a.client.A2AClient.send_message",
             new_callable=AsyncMock,
             return_value={
                 "success": True,
@@ -1232,7 +1232,7 @@ class TestA2ANodeTimeout:
             execution_policy=PolicyValues(attempt_timeout=42),
         )
         with patch(
-            "app.progenitor.a2a.client.A2AClient.call_agent",
+            "app.progenitor.a2a.client.A2AClient.send_message",
             new_callable=AsyncMock,
             return_value={
                 "success": True,
@@ -1266,7 +1266,7 @@ class TestA2ANodeTimeout:
             ),
         )
         with patch(
-            "app.progenitor.a2a.client.A2AClient.call_agent",
+            "app.progenitor.a2a.client.A2AClient.send_message",
             new_callable=AsyncMock,
             return_value={
                 "success": True,

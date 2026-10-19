@@ -71,7 +71,7 @@ class DirectA2AFastPathMiddleware(AgentMiddleware):
             )
 
         thread_id = _extract_thread_id(request.state)
-        response = await self._client_factory().call_agent(
+        response = await self._client_factory().send_message(
             cfg,
             request_text,
             blocking=True,

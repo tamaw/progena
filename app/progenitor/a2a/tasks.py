@@ -91,12 +91,11 @@ async def upsert_tracked_task_from_payload(
     notify_on_completion: bool = True,
     progress_log: list[dict[str, str]] | None = None,
 ) -> A2ATaskRecord:
-    """Create or update the persisted record for a serialized A2A task payload.
+    """Create or update a persisted A2A task record from an agent payload.
 
-    `progress_log` is only ever available from the live `call_agent` dispatch
-    path below (extracted from that call's own SSE stream) -- other callers
-    (push-notification callbacks, heartbeat polling refreshes) have no
-    equivalent data and pass nothing, which leaves the record's existing log
+    `progress_log` is only available from a live `a2a_send` dispatch (extracted
+    from that call's SSE stream). Other callers (push-notification callbacks,
+    heartbeat polling refreshes) pass nothing, which leaves the existing log
     untouched rather than blanking it out.
     """
     metadata = dict(request_metadata or {})
@@ -174,8 +173,10 @@ async def dispatch_tracked_a2a_task(
     blocking: bool,
     notify_on_completion: bool = True,
     on_progress: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
+    task_id: str | None = None,
+    context_id: str | None = None,
 ) -> tuple[dict[str, Any], A2ATaskRecord | None]:
-    """Submit an A2A task and persist the returned task snapshot when available."""
+    """Send and persist an A2A task snapshot, including follow-up messages."""
     metadata = dict(request_metadata or {})
     metadata.pop("a2a_task_id", None)
     metadata.pop("a2a_context_id", None)
@@ -183,7 +184,7 @@ async def dispatch_tracked_a2a_task(
     if callback_url is None:
         callback_url = str(agent_config.get("callback_url", "") or "").strip() or None
 
-    response = await A2AClient().call_agent(
+    response = await A2AClient().send_message(
         agent_config=agent_config,
         request=request_text,
         context=metadata,
@@ -191,6 +192,8 @@ async def dispatch_tracked_a2a_task(
         blocking=blocking,
         callback_url=callback_url,
         on_progress=on_progress,
+        task_id=task_id,
+        context_id=context_id,
     )
 
     task_record: A2ATaskRecord | None = None
@@ -290,6 +293,38 @@ async def refresh_tracked_a2a_task(
     if not is_task_payload(payload):
         raise RuntimeError(f"Invalid A2A task payload returned for {task_id}")
 
+    return await upsert_tracked_task_from_payload(
+        state_manager,
+        task_payload=cast(dict[str, Any], payload),
+        agent_name=record.agent_name,
+        agent_config=agent_config,
+        source=record.source,
+        request_text=record.request_text,
+        request_metadata=record.request_metadata,
+        notify_on_completion=record.notify_on_completion,
+    )
+
+
+async def cancel_tracked_a2a_task(
+    state_manager: Any,
+    task_id: str,
+    *,
+    tool_registry: Any = None,
+    timeout: float = 15.0,
+) -> A2ATaskRecord:
+    """Cancel a tracked A2A task and persist the returned task snapshot."""
+    record = await state_manager.get_a2a_task(task_id)
+    if record is None:
+        raise LookupError(f"Unknown tracked A2A task: {task_id}")
+
+    agent_config = await _resolve_agent_config(state_manager, record, tool_registry=tool_registry)
+    result = await A2AClient().cancel_task(agent_config, task_id, timeout=timeout)
+    if not result.get("success"):
+        raise RuntimeError(str(result.get("error") or "Failed to cancel A2A task"))
+
+    payload = result.get("result")
+    if not is_task_payload(payload):
+        raise RuntimeError(f"Invalid A2A task payload returned while canceling {task_id}")
     return await upsert_tracked_task_from_payload(
         state_manager,
         task_payload=cast(dict[str, Any], payload),
