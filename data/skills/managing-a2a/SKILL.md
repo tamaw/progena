@@ -60,6 +60,14 @@ Each agent is keyed by its unique `name` (no generated id needed). Common fields
    `structured_output` and splice it into `agents` with `edit_file`. Don't ask
    `structured_output` to reproduce the whole `{agents, tools}` document.
 
+## Sending work to an A2A agent
+
+After registration, use `a2a_send` with the required agent name and message to
+wait for a task to settle, or `a2a_send_async` to return the tracked task
+immediately and receive a completion follow-up. Use `a2a_status` to refresh a
+task, `a2a_cancel` to cancel it, and `a2a_list` to find tracked tasks. These
+tools only support HTTP A2A agents; ACP agents use `acp_start`.
+
 ## Common Operations
 
 ### Register / add an A2A agent

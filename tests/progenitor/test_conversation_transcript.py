@@ -207,15 +207,15 @@ def test_reasoning_titles_become_actions_and_cancelled_turns_quit() -> None:
     ]
 
 
-def test_call_agent_completed_speaks_the_reply_and_failure_parts_with_the_reason() -> None:
+def test_a2a_send_completed_speaks_the_reply_and_failure_parts_with_the_reason() -> None:
     lines = _lines(
         _thread(
             HumanMessage("greet me twice"),
             AIMessage(
                 "",
                 tool_calls=[
-                    _call("call_agent", "a1", agent_name="greeter", request="Bonjour please"),
-                    _call("call_agent", "a2", agent_name="greeter", request="Again"),
+                    _call("a2a_send", "a1", agent="greeter", message="Bonjour please"),
+                    _call("a2a_send", "a2", agent="greeter", message="Again"),
                 ],
                 response_metadata=MODEL,
             ),

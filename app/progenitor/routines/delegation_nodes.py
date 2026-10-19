@@ -201,7 +201,7 @@ def _build_a2a_node(node: RoutineNode, *, tool_registry: Any, timeout: float | N
         effective_timeout = (
             timeout if timeout is not None and timeout > 0 else _A2A_NO_LIMIT_TIMEOUT
         )
-        response = await A2AClient().call_agent(
+        response = await A2AClient().send_message(
             cfg,
             rendered,
             blocking=True,

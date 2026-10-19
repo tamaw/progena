@@ -1,7 +1,7 @@
 /**
- * Renders a `{ kind: 'a2a_call', ... }` timeline item -- one card per
- * blocking `call_agent` invocation of a deployed A2A agent, live-updated as
- * intermediate status updates stream in. Structurally mirrors SubagentCard
+ * Renders a `{ kind: 'a2a_call', ... }` timeline item -- one card per A2A
+ * tool invocation of a deployed agent, live-updated as intermediate status
+ * updates stream in. Structurally mirrors SubagentCard
  * (same entry/gutter/main layout, same fixed-height auto-scrolling body).
  *
  * Each status update renders as its own small `.entry` node in a nested
@@ -19,7 +19,7 @@ import { memo } from 'react';
 import {
   formatDuration,
   formatTimestamp,
-  extractCallAgentSummary,
+  extractA2ASummary,
 } from './messageRenderUtils';
 import useStickyScroll from './useStickyScroll';
 import { SubmittedGlyph, WorkingGlyph, CompletedGlyph, FailedGlyph } from './eventGlyphs';
@@ -93,14 +93,13 @@ const A2ASubEntry = memo(function A2ASubEntry({ message, isLast }) {
 });
 
 const A2ACallCard = memo(function A2ACallCard({ item }) {
+  const messageCount = item.messages.length;
   const durationLabel = Number.isFinite(item.durationMs) ? formatDuration(item.durationMs) : '';
   const formattedTime = formatTimestamp(item.finishedAt || item.startedAt);
-  const messageCount = item.messages.length;
-  // resultPreview is the whole call_agent result dict, stringified -- only
-  // shown when there's no message log to tell the story instead (e.g.
-  // blocking=false, or an agent that doesn't stream), and even then prefer
-  // just the human-readable summary over the raw JSON when it's extractable.
-  const displayedResult = extractCallAgentSummary(item.resultPreview) || item.resultPreview;
+  // resultPreview is the whole A2A tool result dict, stringified -- only
+  // shown when there's no message log to tell the story instead, and even
+  // then prefer just the human-readable summary over raw JSON when extractable.
+  const displayedResult = extractA2ASummary(item.resultPreview) || item.resultPreview;
   const { ref: scrollRef, onScroll } = useStickyScroll(`${messageCount}:${item.status}`);
 
   return (
@@ -134,13 +133,11 @@ const A2ACallCard = memo(function A2ACallCard({ item }) {
             <div className="a2a-call-card__error">{item.error}</div>
           )}
           {/* resultPreview is a generic, unstructured stringified dump of
-              the whole call_agent result (task id, context id, raw
-              history, ...) -- shown only as a fallback when there are no
-              per-step messages to tell the story instead (e.g. a
-              non-streaming agent, or blocking=false), matching
-              SubagentCard's content-or-resultPreview fallback. With
-              messages present, showing both would just repeat the same
-              narrative twice, once readable and once as raw JSON. */}
+              the whole A2A tool result (task id, context id, raw history,
+              ...) -- shown only as a fallback when there are no per-step
+              messages to tell the story instead, matching SubagentCard's
+              content-or-resultPreview fallback. With messages present,
+              showing both would repeat the same narrative as raw JSON. */}
           {item.status === 'success' && messageCount === 0 && displayedResult && (
             <div className="a2a-call-card__result">{displayedResult}</div>
           )}

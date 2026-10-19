@@ -439,9 +439,12 @@ class LLMClient:
                 ):
                     forwarded_args = dict(tool_args)
                     forwarded_args.setdefault("agent", str(agent_cfg.get("name") or tool_name))
+                    forwarded_args.setdefault(
+                        "message", str(forwarded_args.pop("request", "") or tool_user_input)
+                    )
 
                     data_out, err, state_updates, _retry = await execute_system_tool(
-                        tool_name="call_agent",
+                        tool_name="a2a_send",
                         tool_registry=tool_registry,
                         llm_client=self,
                         state=state,

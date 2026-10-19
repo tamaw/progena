@@ -695,9 +695,9 @@
     height: 9px;
 }
 
-/* A2A call card -- one per blocking `call_agent` invocation of a deployed
-   A2A agent, live-updated as intermediate status updates stream in. Same
-   card-like treatment as .subagent-card (see A2ACallCard.jsx /
+/* A2A call card -- one per A2A tool invocation of a deployed agent,
+   live-updated as intermediate status updates stream in. Same card-like
+   treatment as .subagent-card (see A2ACallCard.jsx /
    applyA2ACallEvent in liveAssistantTurnModel.js). Accent is
    --color-accent-secondary (main.css) -- the teal .subagent-card used to
    own before the green swap above -- still its own hue, distinct from the

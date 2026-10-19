@@ -174,7 +174,7 @@ class TestDirectA2AFastPathMiddleware:
             "url": "http://localhost:8109",
         }
         client = MagicMock()
-        client.call_agent = AsyncMock(
+        client.send_message = AsyncMock(
             return_value={
                 "success": True,
                 "result": {
@@ -191,21 +191,21 @@ class TestDirectA2AFastPathMiddleware:
 
         result = await mw.awrap_model_call(self._request("@greetings_agent hey"), AsyncMock())
 
-        client.call_agent.assert_awaited_once()
+        client.send_message.assert_awaited_once()
         assert result.result[0].content == "Hello from greetings_agent!"
         assert result.result[0].response_metadata["display_agent_name"] == "greetings_agent"
 
     async def test_prefix_only_matches_at_start_of_latest_user_message(self):
         registry = MagicMock()
         client = MagicMock()
-        client.call_agent = AsyncMock()
+        client.send_message = AsyncMock()
         mw = DirectA2AFastPathMiddleware(tool_registry=registry, client_factory=lambda: client)
         handler = AsyncMock(return_value=ModelResponse(result=[AIMessage(content="llm")]))
 
         result = await mw.awrap_model_call(self._request("hello @greetings_agent hey"), handler)
 
         handler.assert_awaited_once()
-        client.call_agent.assert_not_called()
+        client.send_message.assert_not_called()
         assert result.result[0].content == "llm"
 
     async def test_unknown_agent_returns_direct_error(self):
@@ -241,7 +241,7 @@ class TestDirectA2AFastPathMiddleware:
             "url": "http://localhost:8109",
         }
         client = MagicMock()
-        client.call_agent = AsyncMock(
+        client.send_message = AsyncMock(
             return_value={"success": True, "result": {"status": {"message": {"text": "ok"}}}}
         )
         mw = DirectA2AFastPathMiddleware(tool_registry=registry, client_factory=lambda: client)
@@ -251,7 +251,7 @@ class TestDirectA2AFastPathMiddleware:
             AsyncMock(),
         )
 
-        kwargs = client.call_agent.await_args.kwargs
+        kwargs = client.send_message.await_args.kwargs
         assert kwargs["blocking"] is True
         assert kwargs["context"]["thread_id"] == "thread-direct"
         assert kwargs["context"]["routing_mode"] == "direct_prefix"
