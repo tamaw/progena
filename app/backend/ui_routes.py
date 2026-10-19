@@ -78,6 +78,7 @@ from app.progenitor.workflows import (
     workflow_id_from_path,
 )
 
+from .acp_supervisor import ACPTaskSupervisor
 from .agent_catalog_routes import (
     AgentGraphModel,
     broadcast_agent_profiles_snapshot,
@@ -327,6 +328,8 @@ class KanbanCardResponse(BaseModel):
     labels: list[str] = Field(default_factory=list)
     spec_path: str | None = None
     branch_name: str | None = None
+    repo_id: str | None = None
+    acp_task_id: str | None = None
     pr_url: str | None = None
     started_at: str | None = None
     completed_at: str | None = None
@@ -376,6 +379,8 @@ class KanbanCardPatchRequest(BaseModel):
     labels: list[str] | None = None
     spec_path: str | None = None
     branch_name: str | None = None
+    repo_id: str | None = None
+    acp_task_id: str | None = None
     pr_url: str | None = None
     started_at: str | None = None
     completed_at: str | None = None
@@ -790,6 +795,8 @@ def _kanban_card_schema(columns: list[dict]) -> KanbanCardSchemaResponse:
             KanbanFieldSchemaResponse(key="project_id", label="Project"),
             KanbanFieldSchemaResponse(key="spec_path", label="Spec File"),
             KanbanFieldSchemaResponse(key="branch_name", label="Branch"),
+            KanbanFieldSchemaResponse(key="repo_id", label="Repository"),
+            KanbanFieldSchemaResponse(key="acp_task_id", label="ACP Task"),
             KanbanFieldSchemaResponse(key="pr_url", label="Pull Request URL"),
             KanbanFieldSchemaResponse(key="last_error", label="Last Error", control="textarea"),
         ],
@@ -858,6 +865,8 @@ def _normalize_kanban_card(card: dict, columns: dict[str, dict]) -> dict:
         "labels": _normalize_string_list(card.get("labels")),
         "spec_path": str(card.get("spec_path") or "").strip() or None,
         "branch_name": str(card.get("branch_name") or "").strip() or None,
+        "repo_id": str(card.get("repo_id") or "").strip() or None,
+        "acp_task_id": str(card.get("acp_task_id") or "").strip() or None,
         "pr_url": str(card.get("pr_url") or "").strip() or None,
         "started_at": str(card.get("started_at") or "").strip() or None,
         "completed_at": str(card.get("completed_at") or "").strip() or None,
@@ -3037,6 +3046,10 @@ async def patch_kanban_card(
             card["spec_path"] = body.spec_path.strip() or None
         if body.branch_name is not None:
             card["branch_name"] = body.branch_name.strip() or None
+        if body.repo_id is not None:
+            card["repo_id"] = body.repo_id.strip() or None
+        if body.acp_task_id is not None:
+            card["acp_task_id"] = body.acp_task_id.strip() or None
         if body.pr_url is not None:
             card["pr_url"] = body.pr_url.strip() or None
         if body.started_at is not None:
@@ -3957,6 +3970,15 @@ def _queue_workflow_invoke_reconciliation(_snapshot, changed_key: str | None = N
 
 
 _document_event_dispatcher: DocumentEventDispatcher | None = None
+_acp_task_supervisor: ACPTaskSupervisor | None = None
+
+
+def get_acp_task_supervisor() -> ACPTaskSupervisor:
+    """Return the backend process's singleton ACP task supervisor."""
+    global _acp_task_supervisor
+    if _acp_task_supervisor is None:
+        _acp_task_supervisor = ACPTaskSupervisor(store_getter=get_default_document_store)
+    return _acp_task_supervisor
 
 
 def get_document_event_dispatcher() -> DocumentEventDispatcher:
@@ -3970,6 +3992,7 @@ def get_document_event_dispatcher() -> DocumentEventDispatcher:
         dispatcher.add_handler(_publish_alert_document)
         dispatcher.add_handler(_apply_workflow_approval_request)
         dispatcher.add_handler(_dispatch_document_event_workflows)
+        dispatcher.add_handler(get_acp_task_supervisor().handle_document_event)
         dispatcher.add_handler(_apply_document_event_widgets)
         dispatcher.add_handler(_record_kanban_card_activity)
         dispatcher.add_handler(_sync_kanban_card_order)
@@ -4279,7 +4302,9 @@ async def start_state_status_watcher(reconnect_delay: float = 2.0) -> None:
         _knowledge_index_watch_callback = _queue_knowledge_index_resync
         state_reader.add_watcher(_knowledge_index_watch_callback)
     await routine_events.start()
+    await get_acp_task_supervisor().start()
     await get_document_event_dispatcher().start(reconnect_delay)
+    await get_workflow_executor().recover_startup_runs()
     await get_workflow_cron_clock().start()
     await state_reader.start_watching(reconnect_delay)
 
@@ -4303,6 +4328,7 @@ async def stop_state_status_watcher() -> None:
         _knowledge_index_watch_callback = None
     await routine_events.stop()
     await get_workflow_cron_clock().stop()
+    await get_acp_task_supervisor().stop()
     await get_document_event_dispatcher().stop()
     await state_reader.stop_watching()
 

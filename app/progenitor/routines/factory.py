@@ -266,6 +266,7 @@ def _build_node_callable(
     model_profile_resolver: Callable[[str], Awaitable[Any]] | None = None,
     tool_registry: Any = None,
     defs: dict[str, dict[str, Any]] | None = None,
+    instruction_loader: Callable[[str], str] | None = None,
     policy_defaults: dict[str, Any] | None = None,
 ) -> Any:
     profile = _node_config(node).get("model_profile")
@@ -305,6 +306,7 @@ def _build_node_callable(
             node,
             object_agent_registry=agent_registry,
             defs=defs,
+            instruction_loader=instruction_loader,
             background_runner=agent_background_runner,
         )
     if node.kind == "a2a":
@@ -480,6 +482,7 @@ def compile_routine_graph(
     model_profile_resolver: Callable[[str], Awaitable[Any]] | None = None,
     tool_registry: Any = None,
     base_system_prompt: str | None = None,
+    instruction_loader: Callable[[str], str] | None = None,
     checkpointer: Any | None = None,
     cache: Any | None = None,
     preserve_data: bool = False,
@@ -664,6 +667,7 @@ def compile_routine_graph(
                     model_profile_resolver=model_profile_resolver,
                     tool_registry=tool_registry,
                     defs=graph.defs,
+                    instruction_loader=instruction_loader,
                     policy_defaults=policy_defaults,
                 ),
                 route_fn=route_fns.get(node.id),

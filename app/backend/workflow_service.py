@@ -838,6 +838,34 @@ class WorkflowExecutor:
 
         self._subscriptions = None
 
+    async def recover_startup_runs(self) -> None:
+        """Fail interrupted synchronous runs and resume queued runs after a restart."""
+        store = self._store_getter()
+        by_workflow: dict[str, list[WorkflowRun]] = {}
+        for run in list_workflow_runs(store):
+            by_workflow.setdefault(run.workflow_id, []).append(run)
+        for workflow_id, runs in by_workflow.items():
+            try:
+                await self._recover_workflow_runs(store, workflow_id, runs)
+            except Exception:
+                # One unreadable workflow must not stop the backend from starting.
+                logger.exception("Could not recover runs of workflow %r", workflow_id)
+
+    async def _recover_workflow_runs(
+        self, store: BackendDocumentStore, workflow_id: str, runs: list[WorkflowRun]
+    ) -> None:
+        for run in runs:
+            if run.status == "running" and run.pending_routine is None:
+                self._mark_failed(store, run, error="interrupted by backend restart")
+        refreshed = list_workflow_runs(store, workflow_id=workflow_id)
+        if any(run.status in {"running", "paused"} for run in refreshed):
+            return
+        queued = next((run for run in reversed(refreshed) if run.status == "queued"), None)
+        if queued is not None:
+            self._start_task(workflow_id, queued.run_id)
+        else:
+            await self._maybe_start_next_run_locked(store, workflow_id)
+
     def _subscriptions_for(self, document_type: str) -> list[tuple[str, str, WorkflowNodeEvent]]:
         if self._subscriptions is None:
             index: dict[str, list[tuple[str, str, WorkflowNodeEvent]]] = {}

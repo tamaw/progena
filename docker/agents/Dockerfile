@@ -58,7 +58,7 @@ RUN set -eux; \
     esac
 
 RUN set -eux; \
-    if [ "$AGENT_NAME" = "builder_progenitor" ]; then \
+    if [ "$AGENT_NAME" = "builder_progenitor" ] || [ "$AGENT_NAME" = "greetings_agent" ]; then \
       curl -fsSL --retry 8 --retry-delay 2 --retry-all-errors https://gh.io/copilot-install \
         -o /tmp/copilot-install.sh; \
       bash /tmp/copilot-install.sh; \

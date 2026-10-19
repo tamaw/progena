@@ -73,6 +73,12 @@ do not repeat it under `mounts`. `skills` never takes a whole folder of skills;
 to give an agent read access to every skill, mount `/skills/` instead (that
 grants file access only and loads none of them into its prompt).
 
+User agents may list the ACP tools `acp_start`, `acp_send`, `acp_status`,
+`acp_answer`, `acp_cancel`, and `acp_list` when they need to drive a Claude ACP
+session. Give such an agent the `driving-acp-agents` skill as well; use a
+`repo-manager` worktree as the ACP `cwd`, rather than granting it shell or GitHub
+credentials.
+
 Agents have no other filesystem access unless declared. Declare required paths
 in `mounts` with `access: read` or `read-write`; extra `permissions` must stay
 within those mounts or listed skills. Adding a skill does not grant access to
@@ -80,7 +86,7 @@ the documents that skill manages. For example, an agent using
 `managing-routines` also needs a read-write mount for `/routines/`. Use the same
 pattern for `managing-agents` and `/agents/user/` when agent creation is part of
 its job. Agents created here may mount `/config/` read-only only, and cannot
-enable `shell`, `env_passthrough` or `git_write`; those are reserved for bundled agents.
+enable `shell`, `env_passthrough`, `git_write` or `git_publish`; those are reserved for bundled agents.
 
 Set `memory: true` to give an agent private memory: its `/memories/` is its own
 writable folder, and every file in it is loaded into its prompt on every run

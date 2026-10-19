@@ -1,3 +1,10 @@
 runtime:
   port: 8109
-  additional_env_keys: []
+  mounts:
+    - host_path: /var/lib/progenitor/data/state/agents/greetings_agent
+      container_path: /app/data/state
+    - host_path: /var/lib/progenitor/logs
+      container_path: /app/logs
+  additional_env_keys:
+    - COPILOT_GITHUB_TOKEN
+    - DEFAULT_COPILOT_MODEL

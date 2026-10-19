@@ -18,7 +18,8 @@ x-progenitor-database-env: &progenitor-database-env
 
 services:
   postgres:
-    image: postgres:16-alpine
+    # pgvector: the knowledge index needs the `vector` extension.
+    image: pgvector/pgvector:pg16
     container_name: progenitor-postgres
     restart: unless-stopped
     environment:
@@ -181,6 +182,39 @@ services:
           cpus: '0.5'
         reservations:
           memory: 64M
+
+  # Claude Code over ACP (claude-agent-acp behind socat). Progenitor reaches it at
+  # tcp://progenitor-agent-claude:3001 on the stack network; no host port.
+  claude:
+    image: ghcr.io/tamaw/progenitor-claude:${PROGENITOR_IMAGE_TAG:-latest}
+    build:
+      context: ..
+      dockerfile: docker/claude/Dockerfile
+    container_name: progenitor-agent-claude
+    restart: unless-stopped
+    environment:
+      # Long-lived token from `claude setup-token`.
+      CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
+    volumes:
+      - ${PROGENITOR_HOST_CLAUDE_DIR:-../.claude-agent}:/home/claude/.claude
+      - ${PROGENITOR_HOST_REPOS_DIR:-../repos}:/app/repos
+    networks:
+      - progenitor-net
+      - progenitor_network
+    healthcheck:
+      # A TCP probe would spawn a Claude process per check; the listener is enough.
+      test: ["CMD", "pgrep", "-x", "socat"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: '2.0'
+        reservations:
+          memory: 256M
 
 networks:
   progenitor-net:

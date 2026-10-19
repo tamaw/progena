@@ -14,8 +14,8 @@ tmp
 worktrees
 htmlcov
 data/*
-!data/prompts/
-!data/prompts/**
+!data/instructions/
+!data/instructions/**
 !data/skills/
 !data/skills/**
 !data/schemas/

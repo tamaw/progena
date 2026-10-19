@@ -37,6 +37,10 @@ ensure_dirs
 
 git config --global --add safe.directory "${CLAUDE_WORKSPACE}" 2>/dev/null || true
 git config --global --add safe.directory "${CLAUDE_WORKSPACE}/*" 2>/dev/null || true
+# Claude commits its own work in Progenitor's worktrees; pushing stays with
+# Progenitor's repo-manager agent (this container has no GitHub credentials).
+git config --global user.name "${CLAUDE_GIT_NAME:-Claude (Progenitor)}"
+git config --global user.email "${CLAUDE_GIT_EMAIL:-claude@progenitor.invalid}"
 
 if [[ "$#" -gt 0 ]]; then
     exec "$@"
@@ -50,7 +54,8 @@ fi
 
 # claude-agent-acp uses stdio transport; expose it over TCP using socat so
 # callers can connect without docker exec. Each TCP connection spawns a fresh
-# claude-agent-acp process, which matches the ACP session model.
+# claude-agent-acp process, which matches the ACP session model. Its stderr goes
+# to the container log; mixing it into the socket corrupts the JSON-RPC stream.
 echo "[claude-entrypoint] Listening on 0.0.0.0:${CLAUDE_ACP_PORT} (socat -> claude-agent-acp)" >&2
 exec socat "TCP-LISTEN:${CLAUDE_ACP_PORT},bind=0.0.0.0,reuseaddr,fork" \
-    "EXEC:${acp_cmd},stderr"
+    "EXEC:${acp_cmd}"

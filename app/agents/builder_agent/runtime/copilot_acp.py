@@ -18,7 +18,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from acp import (
     PROTOCOL_VERSION,
@@ -31,12 +31,12 @@ from acp.schema import (
     AgentPlanUpdate,
     AgentThoughtChunk,
     AllowedOutcome,
-    AvailableCommandsUpdate,
     CreateTerminalResponse,
-    CurrentModeUpdate,
+    DeclineElicitationResponse,
     DeniedOutcome,
+    ElicitationMode,
     EnvVariable,
-    KillTerminalCommandResponse,
+    KillTerminalResponse,
     PermissionOption,
     PromptResponse,
     ReadTextFileResponse,
@@ -47,15 +47,9 @@ from acp.schema import (
     ToolCallProgress,
     ToolCallStart,
     ToolCallUpdate,
-    UserMessageChunk,
     WaitForTerminalExitResponse,
     WriteTextFileResponse,
 )
-
-if TYPE_CHECKING:
-    from acp.terminal import TerminalHandle
-else:
-    TerminalHandle = Any  # type: ignore[assignment]
 
 logger = logging.getLogger(__name__)
 
@@ -91,17 +85,7 @@ class ProgenitorACPClient(Client):
     async def session_update(
         self,
         session_id: str,
-        update: (
-            UserMessageChunk
-            | AgentMessageChunk
-            | AgentThoughtChunk
-            | ToolCallStart
-            | ToolCallProgress
-            | AgentPlanUpdate
-            | AvailableCommandsUpdate
-            | CurrentModeUpdate
-            | SessionInfoUpdate
-        ),
+        update: Any,
         **_kwargs: Any,
     ) -> None:
         """Handle session updates from the agent.
@@ -206,9 +190,9 @@ class ProgenitorACPClient(Client):
 
     async def request_permission(
         self,
-        options: list[PermissionOption],
         session_id: str,
         tool_call: ToolCallUpdate,
+        options: list[PermissionOption],
         **kwargs: Any,
     ) -> RequestPermissionResponse:
         """Handle permission requests from the agent.
@@ -226,74 +210,59 @@ class ProgenitorACPClient(Client):
             [getattr(opt, "label", str(opt)) for opt in options],
         )
         # Auto-approve - return the first option with selected outcome
-        if options and hasattr(options[0], "id"):
-            option_id = getattr(options[0], "id", "default")
+        if options:
+            option_id = options[0].option_id
             return RequestPermissionResponse(
                 outcome=AllowedOutcome(option_id=option_id, outcome="selected")
             )
-        # If no options, deny by returning cancelled
-        return RequestPermissionResponse(
-            outcome=DeniedOutcome(outcome="cancelled")
-        )
+        return RequestPermissionResponse(outcome=DeniedOutcome(outcome="cancelled"))
 
     # Required interface methods - provide minimal async implementations
     async def create_terminal(
         self,
-        command: str,
         session_id: str,
+        command: str,
         args: list[str] | None = None,
-        cwd: str | None = None,
         env: list[EnvVariable] | None = None,
+        cwd: str | None = None,
         output_byte_limit: int | None = None,
         **kwargs: Any,
-    ) -> CreateTerminalResponse | TerminalHandle:
+    ) -> CreateTerminalResponse:
         """Handle terminal creation requests."""
-        _ = session_id
-        _ = args
-        _ = cwd
-        _ = env
-        _ = output_byte_limit
-        _ = kwargs
+        _ = (session_id, args, env, cwd, output_byte_limit, kwargs)
         logger.debug(
             "COPILOT_ACP [%s]: Terminal create requested: %s",
             self.work_item_id,
             command,
         )
-        # Return a minimal response - copilot handles terminal internally
         return CreateTerminalResponse(terminal_id="internal")
 
     async def read_text_file(
         self,
-        path: str,
         session_id: str,
-        limit: int | None = None,
+        path: str,
         line: int | None = None,
+        limit: int | None = None,
         **kwargs: Any,
     ) -> ReadTextFileResponse:
         """Handle file read requests."""
-        _ = session_id
-        _ = limit
-        _ = line
-        _ = kwargs
+        _ = (session_id, line, limit, kwargs)
         logger.debug(
             "COPILOT_ACP [%s]: File read requested: %s",
             self.work_item_id,
             path,
         )
-        # Copilot handles file reading internally
         return ReadTextFileResponse(content="")
 
     async def write_text_file(
         self,
-        content: str,
-        path: str,
         session_id: str,
+        path: str,
+        content: str,
         **kwargs: Any,
     ) -> WriteTextFileResponse | None:
         """Handle file write requests."""
-        _ = content
-        _ = session_id
-        _ = kwargs
+        _ = (session_id, content, kwargs)
         logger.debug(
             "COPILOT_ACP [%s]: File write requested: %s",
             self.work_item_id,
@@ -330,11 +299,9 @@ class ProgenitorACPClient(Client):
         session_id: str,
         terminal_id: str,
         **kwargs: Any,
-    ) -> KillTerminalCommandResponse | None:
+    ) -> KillTerminalResponse | None:
         """Handle terminal kill requests."""
-        _ = session_id
-        _ = terminal_id
-        _ = kwargs
+        _ = (session_id, terminal_id, kwargs)
         return None
 
     async def wait_for_terminal_exit(
@@ -367,6 +334,15 @@ class ProgenitorACPClient(Client):
             self.work_item_id,
             method,
         )
+
+    async def complete_elicitation(self, elicitation_id: str, **_kwargs: Any) -> None:
+        _ = elicitation_id
+
+    async def create_elicitation(
+        self, message: str, mode: ElicitationMode, **_kwargs: Any
+    ) -> DeclineElicitationResponse:
+        _ = (message, mode)
+        return DeclineElicitationResponse(action="decline")
 
     def get_output(self) -> str:
         """Get all collected text output."""
@@ -429,11 +405,8 @@ class CopilotACPManager:
             p = Path(raw)
             p = (cwd_resolved / p).resolve() if not p.is_absolute() else p.resolve()
             # Defensive: keep Copilot scoped to the worktree/session directory.
-            try:
-                p.relative_to(cwd_resolved)
-            except Exception:
-                continue
-            normalized.append(str(p))
+            if p.is_relative_to(cwd_resolved):
+                normalized.append(str(p))
         return normalized
 
     def _build_args(self, *, allowed_dirs: list[str], cwd: Path) -> list[str]:
@@ -667,6 +640,7 @@ class CopilotACPManager:
                 "elapsed_seconds": elapsed,
                 "error": str(e),
             }
+
 
 class ACPLogCapture:
     """Captures ACP streaming output to log files.

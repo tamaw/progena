@@ -56,7 +56,11 @@ from .middleware import (
     SecretRedactionMiddleware,
     ToolErrorMiddleware,
 )
-from .object_agent_registry import LiveSubagentMiddleware, ObjectAgentRegistry
+from .object_agent_registry import (
+    LiveSubagentMiddleware,
+    ObjectAgentRegistry,
+    RoutineSubagentRegistry,
+)
 from .object_agents import create_object_agent_proxy
 from .shell_backend import ShellPaths
 from .state import ProgenitorAgentState
@@ -442,20 +446,19 @@ async def create_progenitor_agent(
                 return await executor.ainvoke(state)
         return await executor.ainvoke(state)
 
-    routine_subagents: list[CompiledSubAgent] = []
-    for graph_doc in await state_manager.list_routine_graphs():
+    def _routine_subagent(graph_doc: dict[str, Any]) -> CompiledSubAgent | None:
         routine_id = str(graph_doc.get("id") or "").strip()
         if not routine_id:
             logger.warning("Skipping routine graph document with no id: %r", graph_doc)
-            continue
+            return None
         if routine_id in reserved_names:
             logger.warning("Skipping routine %r: name collides with an existing agent", routine_id)
-            continue
+            return None
         try:
             validate_routine_graph_payload(graph_doc)
         except (ValueError, KeyError) as exc:
             logger.warning("Skipping routine %r: invalid graph document: %s", routine_id, exc)
-            continue
+            return None
         input_schema = graph_doc.get("input_schema")
         description = str(graph_doc.get("description") or "").strip() or (
             f"Runs the {graph_doc.get('name') or routine_id} routine graph."
@@ -466,7 +469,7 @@ async def create_progenitor_agent(
                 f"{routine_id!r}, description=<JSON object matching this input schema>). "
                 f"Input schema: {json.dumps(input_schema, separators=(',', ':'))}"
             )
-        routine_spec = create_routine_subagent(
+        return create_routine_subagent(
             routine_id=routine_id,
             description=description,
             model=model,
@@ -480,8 +483,11 @@ async def create_progenitor_agent(
             tool_registry=tool_registry,
             checkpointer=checkpointer,
         )
-        routine_subagents.append(routine_spec)
-        reserved_names.add(routine_id)
+
+    # Rebuilt whenever a routine document changes (see runtime/progenitor.py),
+    # so a routine Progenitor just wrote is runnable without a restart.
+    live_routines = RoutineSubagentRegistry(state_manager=state_manager, build=_routine_subagent)
+    await live_routines.refresh()
 
     async def _resume_routine(thread_id: str, answer: Any, **kwargs: Any) -> dict[str, Any]:
         return await resume_routine_thread(
@@ -511,12 +517,12 @@ async def create_progenitor_agent(
     all_subagents: list[AsyncSubAgent | CompiledSubAgent] = [
         *async_subagents,
         *live_objects.descriptors,
-        *routine_subagents,
+        *live_routines.descriptors,
     ]
     custom_middleware.append(
         LiveSubagentMiddleware(
             live_objects,
-            static_subagents=routine_subagents,
+            routines=live_routines,
             backend=backend,
             state_schema=ProgenitorAgentState,
         )
@@ -556,6 +562,7 @@ async def create_progenitor_agent(
     agent.routine_runner = _run_routine  # type: ignore[attr-defined]
     agent.routine_resumer = _resume_routine  # type: ignore[attr-defined]
     agent.object_agent_registry = live_objects  # type: ignore[attr-defined]
+    agent.routine_subagent_registry = live_routines  # type: ignore[attr-defined]
 
     async def _thread_state(thread_id: str) -> Any:
         return await agent.aget_state({"configurable": {"thread_id": thread_id}})
@@ -567,6 +574,6 @@ async def create_progenitor_agent(
         config.llm.model_default,
         [subagent["name"] for subagent in all_subagents],
         len(live_objects.descriptors),
-        len(routine_subagents),
+        len(live_routines.descriptors),
     )
     return agent
