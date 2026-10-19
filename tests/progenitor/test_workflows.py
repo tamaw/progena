@@ -199,6 +199,25 @@ def test_schema_rejection_names_the_field():
         validate_workflow_definition_payload(payload)
 
 
+def test_bad_instruction_type_names_node_instruction_and_input():
+    """The type error a workflow save hits names where to fix it."""
+    payload = default_workflow_definition()
+    agent_id = _node_id(payload, "agent")
+    payload["graph"]["nodes"][agent_id] = {
+        "kind": "agent",
+        "title": "Fix",
+        "instruction": "workflows/fix.md",
+    }
+    templates = {"workflows/fix.md": "---\ninputs:\n  fix_list: string\n---\n{fix_list}\n"}
+
+    with pytest.raises(
+        ValueError,
+        match=rf"agent node '{agent_id}' \(instruction 'workflows/fix.md'\): "
+        r"front matter inputs 'fix_list': unknown type ref: 'string'",
+    ):
+        derive_workflow_port_schemas(payload, _TYPES, instruction_loader=templates.__getitem__)
+
+
 def test_connected_property_is_the_execution_dependency():
     payload = _default_with_schemas()
     event_id = _node_id(payload, "event")
