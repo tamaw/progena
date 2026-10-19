@@ -43,7 +43,16 @@ _REASON_CHARS = 100
 _QUOTE_CHARS = 80
 _DIRECT_FAILED_PREFIX = "Direct agent call failed:"
 _A2A_FAILED_STATUSES = {"failed", "canceled", "cancelled", "rejected"}
-_DELEGATION_TOOLS = {"task", "start_async_task", "call_agent"}
+_DELEGATION_TOOLS = {
+    "task",
+    "start_async_task",
+    "a2a_send",
+    "a2a_send_async",
+    "a2a_status",
+    "a2a_cancel",
+    "a2a_list",
+}
+_A2A_TOOLS = _DELEGATION_TOOLS - {"task", "start_async_task"}
 _NOTICE_TOOLS = {"say_to_user", "ask_user"}
 
 
@@ -251,11 +260,15 @@ class _Renderer:
         if name in _DELEGATION_TOOLS:
             agent = _delegate_name(name, args)
             self.agents.add(agent)
-            kind = {"task": "subagent", "start_async_task": "async", "call_agent": "a2a"}[name]
+            kind = (
+                "subagent" if name == "task" else "async" if name == "start_async_task" else "a2a"
+            )
             out = [Line(at, f"-!- {agent} [{kind}] has joined #{self.channel}")]
             child = self.subagents.get(call["id"]) if name == "task" else None
             if child is None:
-                request = args.get("description") or args.get("request") or ""
+                request = (
+                    args.get("description") or args.get("message") or args.get("request") or ""
+                )
                 out += [Line(at, f"-> *{agent}* {row}") for row in _rows(str(request))]
                 return out
             out += self.render(child if child.nick else replace(child, nick=agent), nick)
@@ -320,15 +333,16 @@ class _Renderer:
         kind = "subagent" if name == "task" else "a2a"
         if failed:
             return [Line(at, f"-!- {agent} [{kind}] has left #{self.channel} [{_reason(text)}]")]
-        if name == "call_agent":
+        if name in _A2A_TOOLS:
             return self._a2a_result(agent, text, at)
         return [*_say(at, f"@{agent}", text), self._part(at, agent, kind)]
 
     def _a2a_result(self, agent: str, text: str, at: datetime | None) -> list[Line]:
-        """``call_agent`` returns the tracked A2A task record (or a failure dict)."""
+        """A2A session tools return a tracked A2A task record or failure payload."""
         result = _parse_json(text)
         if not isinstance(result, dict):
             return [*_say(at, f"@{agent}", text), self._part(at, agent, "a2a")]
+        agent = str(result.get("agent") or agent)
         status = str(result.get("status") or "")
         error = result.get("error") or result.get("last_error")
         if result.get("success") is False or error or status in _A2A_FAILED_STATUSES:
@@ -406,8 +420,8 @@ def _notice_text(name: str, args: dict[str, Any]) -> str:
 
 
 def _delegate_name(tool: str, args: dict[str, Any]) -> str:
-    if tool == "call_agent":
-        return str(args.get("agent") or args.get("agent_name") or "a2a-agent")
+    if tool in _A2A_TOOLS:
+        return str(args.get("agent") or "a2a-agent")
     return str(args.get("subagent_type") or "subagent")
 
 

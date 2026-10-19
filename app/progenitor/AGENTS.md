@@ -73,8 +73,8 @@ def create_node(state_manager, llm_client=None) -> Callable[[ProgenitorState], A
 ```
 
 Builder, worktree, Copilot CLI, and PR workflows belong to external builder
-agents. Progenitor can call those agents through `call_agent`, but it does not
-own their implementation loop.
+agents. Progenitor can send work to remote A2A agents through `a2a_send`, but it
+does not own their implementation loop.
 
 ### Development
 

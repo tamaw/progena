@@ -60,7 +60,22 @@ Workflow event nodes can react to `acp_task` `status`, `stalled`, and
 `pending_input`, and session fields; requesters own messages, mode, answers,
 and cancellation requests. A task cannot start beyond `PROGENITOR_ACP_MAX_TURNS`.
 
-`call_agent` no longer invokes ACP agents; use `acp_start` instead.
+ACP agents are reached only through `acp_*`; `a2a_*` tools handle remote A2A agents.
+
+## A2A task sessions
+
+Remote HTTP A2A agents use a separate task-session family:
+
+- `a2a_send(agent, message, ...)` sends a task or follow-up and waits up to
+  `wait_seconds` (default 60, maximum 300) for a terminal or `input-required`
+  state. It returns the tracked task record even when the wait expires.
+- `a2a_send_async(agent, message, ...)` returns the tracked task immediately
+  and queues a completion follow-up turn.
+- `a2a_status`, `a2a_cancel`, and `a2a_list` refresh, cancel, and enumerate
+  tracked A2A tasks. `a2a_send` and `a2a_status` return
+  `build_task_response` records, including persisted `progress_log` entries.
+
+The A2A tools reject ACP-transport registry entries; use `acp_start` instead.
 
 ## Registering an ACP agent
 
