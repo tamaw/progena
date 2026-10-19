@@ -11,6 +11,7 @@ Features:
 - Message chunking for long messages
 - Connection state tracking
 - Long polling for incoming messages
+- Inbound photos and image documents (albums collected into one message)
 - Command handling (/start, /help, /status, /ping)
 """
 
@@ -48,6 +49,10 @@ class TelegramConfig:
     polling_interval: float = 2.0
     polling_timeout: int = 30
     allowed_users: set[str] = field(default_factory=set)
+    # Inbound image settings
+    max_image_bytes: int = 5 * 1024 * 1024
+    max_images_per_message: int = 10
+    media_group_wait: float = 1.5
 
     @classmethod
     def from_chat_config(cls, config: ChatServerConfig) -> "TelegramConfig":
@@ -74,6 +79,9 @@ class TelegramConfig:
             polling_interval=config.telegram_polling_interval,
             polling_timeout=config.telegram_polling_timeout,
             allowed_users=allowed_users,
+            max_image_bytes=config.telegram_max_image_bytes,
+            max_images_per_message=config.telegram_max_images_per_message,
+            media_group_wait=config.telegram_media_group_wait,
         )
 
 
@@ -118,6 +126,52 @@ class TelegramDraftStreamingError(RuntimeError):
     """Raised when Telegram native draft streaming cannot proceed."""
 
 
+class TelegramMediaError(RuntimeError):
+    """Raised when an inbound Telegram file cannot be downloaded."""
+
+
+# Image types passed to the agent as multimodal input.
+SUPPORTED_IMAGE_TYPES = {
+    "image/jpeg": ".jpg",
+    "image/png": ".png",
+    "image/gif": ".gif",
+    "image/webp": ".webp",
+}
+
+
+@dataclass
+class TelegramImage:
+    """An image in an inbound Telegram message (a photo or an image document)."""
+
+    file_id: str
+    file_unique_id: str
+    mime_type: str
+    file_size: int | None = None
+    width: int | None = None
+    height: int | None = None
+
+    @property
+    def filename(self) -> str:
+        """Stable attachment filename; Telegram's unique id dedups re-sends."""
+        return f"telegram_{self.file_unique_id}{SUPPORTED_IMAGE_TYPES[self.mime_type]}"
+
+
+@dataclass
+class _PendingMediaGroup:
+    """Parts of a Telegram album collected until the album is complete."""
+
+    chat_id: str
+    metadata: dict[str, Any]
+    text: str = ""
+    images: list[TelegramImage] = field(default_factory=list)
+    image_errors: list[str] = field(default_factory=list)
+    flush_task: asyncio.Task | None = None
+
+
+def _megabytes(size: int) -> str:
+    return f"{size / (1024 * 1024):.1f} MB"
+
+
 @dataclass
 class TelegramDraftSession:
     """Tracks a native Telegram draft streaming session."""
@@ -140,6 +194,8 @@ class TelegramClient:
     """
 
     BASE_URL = "https://api.telegram.org/bot{token}/{method}"
+    FILE_URL = "https://api.telegram.org/file/bot{token}/{file_path}"
+    DOWNLOAD_CHUNK_BYTES = 64 * 1024
 
     def __init__(self, config: TelegramConfig):
         """Initialize the Telegram client.
@@ -156,6 +212,8 @@ class TelegramClient:
         self._last_update_id: int = 0
         self._message_handler: MessageHandler | None = None
         self._processing_messages: set[int] = set()  # Track messages being processed
+        # Albums arrive as one update per item; collect them by (chat, media_group_id)
+        self._media_groups: dict[tuple[str, str], _PendingMediaGroup] = {}
         self._draft_id_counter = count(start=max(1, int(time.time() * 1000)))
 
     def set_message_handler(self, handler: MessageHandler | None) -> None:
@@ -222,7 +280,11 @@ class TelegramClient:
         logger.info("Telegram polling started")
 
     async def stop_polling(self) -> None:
-        """Stop the polling task."""
+        """Stop the polling task and drop any half-collected albums."""
+        for group in self._media_groups.values():
+            if group.flush_task:
+                group.flush_task.cancel()
+        self._media_groups.clear()
         if self._polling_task:
             self._polling_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -366,6 +428,7 @@ class TelegramClient:
         first_name = from_user.get("first_name", "")
 
         text = message.get("text", "")
+        caption = message.get("caption", "")
 
         # Skip if already processing this message
         if message_id in self._processing_messages:
@@ -381,21 +444,154 @@ class TelegramClient:
             )
             return
 
-        if not text:
-            logger.debug("Ignoring non-text message from %s", chat_id)
+        images, image_errors = self._extract_images(message)
+        if not text and not caption and not images and not image_errors:
+            logger.debug("Ignoring unsupported message from %s", chat_id)
             return
 
+        body = text or caption
         logger.info(
-            "Received message from %s (@%s): %s",
+            "Received message from %s (@%s): %s%s",
             first_name or user_id,
             username or "no_username",
-            text[:50] + "..." if len(text) > 50 else text,
+            body[:50] + "..." if len(body) > 50 else body,
+            f" [+{len(images)} image(s)]" if images else "",
         )
 
-        # Handle commands
+        # Handle commands (a photo caption is never a command)
         if text.startswith("/"):
             await self._handle_command(chat_id, text, message)
             return
+
+        metadata = {
+            "chat_id": chat_id,
+            "chat_type": chat_type,
+            "user_id": user_id,
+            "username": username,
+            "first_name": first_name,
+            "message_id": message_id,
+            "message_thread_id": message_thread_id,
+        }
+
+        media_group_id = message.get("media_group_id")
+        if media_group_id:
+            self._collect_media_group(
+                chat_id, str(media_group_id), metadata, body, images, image_errors
+            )
+            return
+
+        await self._dispatch_message(chat_id, body, metadata, images, image_errors)
+
+    def _extract_images(self, message: dict) -> tuple[list[TelegramImage], list[str]]:
+        """Images in a message, and a reason for each one that cannot be used.
+
+        A ``photo`` is a list of sizes of the same picture: the largest one
+        under the size cap is used. A ``document`` counts when it is a
+        supported image type; other files are reported, not silently dropped.
+        """
+        max_bytes = self.config.max_image_bytes
+        images: list[TelegramImage] = []
+        errors: list[str] = []
+
+        sizes = [size for size in message.get("photo") or [] if isinstance(size, dict)]
+        if sizes:
+            fitting = [s for s in sizes if (s.get("file_size") or 0) <= max_bytes]
+            if fitting:
+                best = max(fitting, key=lambda s: (s.get("width") or 0) * (s.get("height") or 0))
+                images.append(
+                    TelegramImage(
+                        file_id=str(best.get("file_id", "")),
+                        file_unique_id=str(best.get("file_unique_id") or best.get("file_id", "")),
+                        mime_type="image/jpeg",
+                        file_size=best.get("file_size"),
+                        width=best.get("width"),
+                        height=best.get("height"),
+                    )
+                )
+            else:
+                errors.append(f"photo is larger than the {_megabytes(max_bytes)} limit")
+
+        document = message.get("document")
+        if isinstance(document, dict):
+            name = document.get("file_name") or "file"
+            mime_type = str(document.get("mime_type") or "").lower()
+            file_size = document.get("file_size")
+            if mime_type not in SUPPORTED_IMAGE_TYPES:
+                kind = "image type" if mime_type.startswith("image/") else "file type"
+                errors.append(f"{name}: unsupported {kind} ({mime_type or 'unknown'})")
+            elif file_size and file_size > max_bytes:
+                errors.append(
+                    f"{name} is {_megabytes(file_size)}, over the {_megabytes(max_bytes)} limit"
+                )
+            else:
+                images.append(
+                    TelegramImage(
+                        file_id=str(document.get("file_id", "")),
+                        file_unique_id=str(
+                            document.get("file_unique_id") or document.get("file_id", "")
+                        ),
+                        mime_type=mime_type,
+                        file_size=file_size,
+                    )
+                )
+        return images, errors
+
+    def _collect_media_group(
+        self,
+        chat_id: str,
+        media_group_id: str,
+        metadata: dict[str, Any],
+        text: str,
+        images: list[TelegramImage],
+        image_errors: list[str],
+    ) -> None:
+        """Buffer one album item; the album is sent once no new item arrives
+        for ``media_group_wait`` seconds. Telegram puts the caption on one item
+        (usually the first), so the first non-empty one is kept."""
+        key = (chat_id, media_group_id)
+        group = self._media_groups.get(key)
+        if group is None:
+            group = _PendingMediaGroup(chat_id=chat_id, metadata=dict(metadata))
+            self._media_groups[key] = group
+        elif group.flush_task:
+            group.flush_task.cancel()
+        group.text = group.text or text
+        group.images.extend(images)
+        group.image_errors.extend(image_errors)
+        group.flush_task = asyncio.create_task(self._flush_media_group(key))
+
+    async def _flush_media_group(self, key: tuple[str, str]) -> None:
+        await asyncio.sleep(self.config.media_group_wait)
+        # Popping before any further await means a late item starts a new group
+        # instead of cancelling this one mid-dispatch.
+        group = self._media_groups.pop(key, None)
+        if group is None:
+            return
+        group.metadata["media_group_id"] = key[1]
+        await self._dispatch_message(
+            group.chat_id, group.text, group.metadata, group.images, group.image_errors
+        )
+
+    async def _dispatch_message(
+        self,
+        chat_id: str,
+        text: str,
+        metadata: dict[str, Any],
+        images: list[TelegramImage],
+        image_errors: list[str],
+    ) -> None:
+        """Hand a user message (text and/or images) to the message handler."""
+        message_id = metadata.get("message_id", 0)
+        message_thread_id = metadata.get("message_thread_id")
+        limit = self.config.max_images_per_message
+        if len(images) > limit:
+            image_errors = [
+                *image_errors,
+                f"only the first {limit} of {len(images)} images were used",
+            ]
+            images = images[:limit]
+        if images or image_errors:
+            metadata = {**metadata, "images": images, "image_errors": image_errors}
 
         # Process regular message with handler
         if self._message_handler:
@@ -406,16 +602,6 @@ class TelegramClient:
                 typing_task = asyncio.create_task(
                     self._keep_typing(chat_id, message_thread_id=message_thread_id)
                 )
-
-                metadata = {
-                    "chat_id": chat_id,
-                    "chat_type": chat_type,
-                    "user_id": user_id,
-                    "username": username,
-                    "first_name": first_name,
-                    "message_id": message_id,
-                    "message_thread_id": message_thread_id,
-                }
 
                 response = await self._message_handler(chat_id, text, metadata)
 
@@ -476,6 +662,7 @@ class TelegramClient:
                 "*Tips:*\n"
                 "• Be specific in your requests\n"
                 "• I can handle multi-turn conversations\n"
+                "• Send photos (with a caption if you like) and I'll look at them\n"
                 "• Long responses may be split into multiple messages\n\n"
                 "*Commands:*\n"
                 "/status - Check if the agent is connected\n"
@@ -506,6 +693,41 @@ class TelegramClient:
                 f"Unknown command: {command}\nUse /help to see available commands.",
                 message_thread_id=message_thread_id,
             )
+
+    async def download_file(self, file_id: str, max_bytes: int) -> bytes:
+        """Download an inbound file's bytes, refusing anything over ``max_bytes``.
+
+        Raises ``TelegramMediaError`` with a user-presentable reason. The
+        download URL embeds the bot token, so it never appears in errors/logs.
+        """
+        if not self._started or not self._session:
+            raise TelegramMediaError("Telegram client not started")
+
+        file_info = await self._api_call("getFile", {"file_id": file_id})
+        if not isinstance(file_info, dict):
+            file_info = {}
+        file_path = file_info.get("file_path")
+        if not file_path:
+            raise TelegramMediaError("Telegram could not provide the file (too large or expired)")
+        file_size = file_info.get("file_size")
+        if file_size and file_size > max_bytes:
+            raise TelegramMediaError(
+                f"file is {_megabytes(file_size)}, over the {_megabytes(max_bytes)} limit"
+            )
+
+        url = self.FILE_URL.format(token=self.config.bot_token, file_path=file_path)
+        data = bytearray()
+        try:
+            async with self._session.get(url) as response:
+                if response.status != 200:
+                    raise TelegramMediaError(f"download failed (HTTP {response.status})")
+                async for chunk in response.content.iter_chunked(self.DOWNLOAD_CHUNK_BYTES):
+                    data.extend(chunk)
+                    if len(data) > max_bytes:
+                        raise TelegramMediaError(f"file is over the {_megabytes(max_bytes)} limit")
+        except (aiohttp.ClientError, TimeoutError) as e:
+            raise TelegramMediaError(f"download failed ({type(e).__name__})") from None
+        return bytes(data)
 
     async def _send_chat_action(
         self,

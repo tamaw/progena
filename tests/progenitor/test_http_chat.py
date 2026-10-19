@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -72,8 +73,10 @@ class ScriptedBridge:
         received_at: float | None = None,
         attachments: list[dict[str, Any]] | None = None,
         source: str | None = None,
+        images: list[dict[str, Any]] | None = None,
     ):
         self.thread_id = thread_id
+        self.images = images
         items = self._script(message) if callable(self._script) else self._script
         for item in items:
             if isinstance(item, _Wait):
@@ -468,8 +471,9 @@ async def test_direct_stream_queue_applies_backpressure(monkeypatch) -> None:
             received_at: float | None = None,
             attachments: list[dict[str, Any]] | None = None,
             source: str | None = None,
+            images: list[dict[str, Any]] | None = None,
         ):
-            del thread_id, received_at, source
+            del thread_id, received_at, source, images
             nonlocal produced
             for index in range(30):
                 produced += 1
@@ -693,6 +697,7 @@ async def test_turn_threads_progenitor_source_from_metadata() -> None:
             received_at: float,
             source: str | None = None,
             attachments: Any = None,
+            images: Any = None,
         ) -> Any:
             self.last_source = source
             yield {"type": "stream_chunk", "content": "ok", "is_final": True}
@@ -723,6 +728,77 @@ async def test_turn_threads_progenitor_source_from_metadata() -> None:
         assert bridges[-1].last_source is None
     finally:
         await _stop_chat_server(server)
+
+
+_PNG_DATA_URL = "data:image/png;base64," + base64.b64encode(b"\x89PNG fake").decode()
+
+
+def _image_input(text: str, *urls: str) -> list[dict[str, Any]]:
+    content: list[dict[str, Any]] = [{"type": "input_text", "text": text}] if text else []
+    content += [{"type": "input_image", "image_url": url} for url in urls]
+    return [{"role": "user", "content": content}]
+
+
+async def test_input_image_parts_reach_bridge_as_image_url_blocks() -> None:
+    loop_runner = FakeLoopRunner()
+    bridges: list[ScriptedBridge] = []
+    script = [{"type": "stream_chunk", "content": "ok", "is_final": True}]
+
+    def factory(graph: Any, *, config: Any, state: dict[str, Any]) -> ScriptedBridge:
+        bridge = ScriptedBridge(graph, config=config, state=state, script=script)
+        bridges.append(bridge)
+        return bridge
+
+    server = await _start_chat_server(loop_runner, bridge_factory=factory)
+    try:
+        async with _client() as client:
+            for request_id, payload_input in (
+                ("img-caption", _image_input("look", _PNG_DATA_URL)),
+                ("img-only", _image_input("", _PNG_DATA_URL, _PNG_DATA_URL)),
+            ):
+                response = await client.post(
+                    f"{server.base_url}/v1/responses",
+                    json={
+                        "input": payload_input,
+                        "stream": False,
+                        "conversation": TEST_CONVERSATION,
+                        "metadata": {"request_id": request_id, "source": "telegram"},
+                    },
+                )
+                assert response.status_code == 200
+    finally:
+        await _stop_chat_server(server)
+
+    block = {"type": "image_url", "image_url": {"url": _PNG_DATA_URL}}
+    assert bridges[0].images == [block]
+    assert bridges[1].images == [block, block]
+
+
+@pytest.mark.parametrize(
+    ("url", "fragment"),
+    [
+        ("https://example.com/cat.png", "data: URL"),
+        ("data:image/svg+xml;base64,PHN2Zz4=", "Unsupported"),
+        ("data:image/png;base64,!!!not-base64", "invalid base64"),
+        ("data:image/png;base64," + base64.b64encode(b"x" * 64).decode(), "limit"),
+    ],
+)
+async def test_invalid_input_image_is_rejected(monkeypatch, url: str, fragment: str) -> None:
+    monkeypatch.setattr("app.progenitor.runtime.http_chat.MAX_INPUT_IMAGE_BYTES", 32)
+    server = await _start_chat_server(FakeLoopRunner(), bridge_factory=make_bridge_factory([]))
+    try:
+        async with _client() as client:
+            response = await client.post(
+                f"{server.base_url}/v1/responses",
+                json={"input": _image_input("hi", url), "stream": False},
+            )
+    finally:
+        await _stop_chat_server(server)
+
+    assert response.status_code == 400
+    error = response.json()["error"]
+    assert error["code"] == "invalid_input_image"
+    assert fragment in error["message"]
 
 
 async def test_items_paging_and_invalid_limit() -> None:
@@ -947,6 +1023,44 @@ async def test_cancelled_turn_keeps_partial_reply_and_next_turn_continues() -> N
             assert state.values["messages"][-1].content == "continued"
     finally:
         await _stop_chat_server(server)
+
+
+async def test_input_image_reaches_the_model_and_conversation_items() -> None:
+    """Real create_agent graph + real SSE bridge: an ``input_image`` part is
+    what the model sees, and the stored turn reads back as ``input_image``."""
+    _MODEL_INPUTS.clear()
+    model = _SlowStreamingModel(messages=iter([AIMessage(content="a cat")]))
+    graph = create_agent(model=model, tools=[], checkpointer=InMemorySaver())
+    server = await _start_chat_server(
+        FakeLoopRunner(graph=graph), bridge_factory=DeepAgentSSEStream
+    )
+    try:
+        async with _client() as client:
+            resp = await client.post(
+                f"{server.base_url}/v1/responses",
+                json={
+                    "input": _image_input("what is this?", _PNG_DATA_URL),
+                    "conversation": "c-image",
+                    "metadata": {"source": "telegram"},
+                },
+            )
+            assert resp.json()["status"] == "completed"
+            items = await client.get(
+                f"{server.base_url}/v1/conversations/c-image/items", params={"order": "asc"}
+            )
+    finally:
+        await _stop_chat_server(server)
+
+    [human] = [m for m in _MODEL_INPUTS[-1] if m.type == "human"]
+    assert human.content == [
+        {"type": "text", "text": "what is this?"},
+        {"type": "image_url", "image_url": {"url": _PNG_DATA_URL}},
+    ]
+    user_item = items.json()["data"][0]
+    assert user_item["content"] == [
+        {"type": "input_text", "text": "what is this?"},
+        {"type": "input_image", "image_url": _PNG_DATA_URL, "detail": "auto"},
+    ]
 
 
 async def test_session_renders_of_one_thread_run_in_order(monkeypatch) -> None:

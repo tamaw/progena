@@ -266,12 +266,16 @@ class SSEProgenitorClient:
         message: str,
         request_id: str | None = None,
         metadata: dict[str, Any] | None = None,
+        *,
+        images: list[str] | None = None,
     ) -> AsyncIterator[dict[str, Any]]:
         """Send a message and stream structured chat events.
 
         Posts to the runtime's ``/v1/responses`` endpoint (OpenAI Responses
         API shape) and translates the returned SSE frames back into the
         existing internal dicts so the rest of the backend stays unchanged.
+        ``images`` are base64 ``data:`` URLs sent as ``input_image`` parts
+        alongside the text, making the turn multimodal.
         """
         if not self._started:
             await self.start()
@@ -283,6 +287,10 @@ class SSEProgenitorClient:
             # what POST /v1/responses/{id}/cancel addresses.
             request_metadata["request_id"] = request_id
         body: dict[str, Any] = {"input": message, "stream": True}
+        if images:
+            content: list[dict[str, Any]] = [{"type": "input_text", "text": message}]
+            content += [{"type": "input_image", "image_url": url} for url in images]
+            body["input"] = [{"role": "user", "content": content}]
         if request_metadata:
             body["metadata"] = request_metadata
         thread_id = request_metadata.get("thread_id")

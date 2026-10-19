@@ -270,6 +270,47 @@ def test_log_header_lists_participants_and_marks_day_changes_in_the_users_timezo
     ]
 
 
+def test_user_images_are_named_from_their_attachment_refs() -> None:
+    image = {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,QUJD"}}
+    root = _thread(
+        HumanMessage(
+            content=[
+                {
+                    "type": "text",
+                    "text": "two cats\n\n<!--progenitor:attachment-context-->\nAttached this turn:",
+                },
+                image,
+                image,
+            ],
+            additional_kwargs={
+                "attachments": [
+                    {"id": "att_1", "name": "telegram_a.jpg", "mime_type": "image/jpeg"},
+                    {"id": "att_2", "name": "telegram_b.jpg", "mime_type": "image/jpeg"},
+                ]
+            },
+        )
+    )
+    assert _lines(root) == [
+        "<Tama> two cats",
+        "* Tama sends an image telegram_a.jpg",
+        "* Tama sends an image telegram_b.jpg",
+    ]
+
+
+def test_attachment_note_is_not_logged_and_files_are_named() -> None:
+    root = _thread(
+        HumanMessage(
+            content="<!--progenitor:attachment-context-->\nAttached this turn:\n- report.pdf",
+            additional_kwargs={
+                "attachments": [
+                    {"id": "att_1", "name": "report.pdf", "mime_type": "application/pdf"}
+                ]
+            },
+        )
+    )
+    assert _lines(root) == ["* Tama sends an attachment report.pdf"]
+
+
 def test_image_blocks_render_as_sends_an_image() -> None:
     root = _thread(
         HumanMessage(

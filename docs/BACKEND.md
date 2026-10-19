@@ -295,8 +295,8 @@ The following are intentionally absent rather than compatibility endpoints:
 
 - `GET /health`, `GET /health/detailed`, `GET /ready`, `GET /live`,
   `GET /v1/models`, and `POST /chat`.
-- Attachment upload/download routes and legacy session, preferences, settings,
-  and conversation APIs.
+- Legacy session, preferences, settings, and conversation APIs. (Attachments
+  live at `/api/attachments`, scoped by `thread_id`.)
 - `POST /agents/register`.
 - `GET /api/ui/status/snapshot`, `/loops`, `/agents`, `/backlog`, `/schedule`,
   `/tasks`, `/agents/{agent_name}`, `/database/schema`, and
@@ -307,6 +307,32 @@ The following are intentionally absent rather than compatibility endpoints:
 - `GET /api/ui/events` and every `/api/ui/status` EventSource variant.
 
 A deleted path returns `404`; it is not a fallback for a stream failure.
+
+## Telegram images
+
+Inbound Telegram photos and image documents (JPEG, PNG, GIF, WebP) reach the
+agent as multimodal input in the chat's `tele_<chat>[_<topic>]` conversation:
+
+- A photo's caption is the message text; an image without a caption is still a
+  turn. A `photo` uses the largest size under `TELEGRAM_MAX_IMAGE_BYTES`
+  (default 5 MB). The items of an album (`media_group_id`) are collected for
+  `TELEGRAM_MEDIA_GROUP_WAIT` seconds (default 1.5) and sent as one turn of at
+  most `TELEGRAM_MAX_IMAGES_PER_MESSAGE` images (default 10).
+- Each image is downloaded (`getFile`, size-capped while streaming) and stored
+  as an attachment (`telegram_<file_unique_id>.<ext>`) claimed by the
+  conversation, so the agent can re-read it under `/attachments/` and the turn
+  carries the usual `metadata.attachments` references.
+- The backend sends the turn to the runtime as Responses `input` parts:
+  `input_text` plus one `input_image` per image as a base64 `data:` URL. The
+  runtime accepts only `data:` URLs of those four types up to
+  `PROGENITOR_MAX_INPUT_IMAGE_BYTES` (default 5 MB; otherwise `400
+  invalid_input_image`) and stores them as `image_url` blocks on the
+  `HumanMessage`, so they stay in the checkpoint and are re-sent to the model
+  on later turns of the conversation.
+- Images that cannot be used (unsupported type, over the limit, download
+  failure) are listed back to the user in Telegram and noted for the agent in
+  the machine-only attachment note. If nothing usable remains, no turn is run.
+- The session log records each image as `* <user> sends an image <filename>`.
 
 ## Local development
 

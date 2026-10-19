@@ -115,3 +115,22 @@ class TestDeleteIsThreadScoped:
 
         gone = client.get(f"/api/attachments/{uploaded['id']}", params={"thread_id": "thread-a"})
         assert gone.status_code == 404
+
+
+class TestImageUploads:
+    def test_png_is_accepted_and_stored_without_extracted_text(self, client):
+        content = b"\x89PNG\r\n\x1a\n" + uuid.uuid4().bytes
+        response = client.post(
+            "/api/attachments",
+            files={"file": ("chart.png", content, "image/png")},
+            data={"thread_id": "thread-a"},
+        )
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["mime_type"] == "image/png"
+        assert body["content"] == ""
+
+        stored = get_attachment_manager()._store().get(body["id"])
+        assert stored is not None
+        assert stored.data == content
+        assert stored.text_content is None
