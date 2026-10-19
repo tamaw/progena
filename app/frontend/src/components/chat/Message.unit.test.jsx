@@ -868,7 +868,7 @@ describe('normal tool content and metadata display', () => {
     expect(disclosure).toContain(rawArgs.replaceAll('"', '&quot;'));
   });
 
-  it('renders call_agent outer start and result rows as closed readable disclosures', () => {
+  it('renders a2a_send outer start and result rows as closed readable disclosures', () => {
     const rawArgs = '{"agent":"greetings_agent","request":"hi"}';
     const rawResult = 'Agent finished successfully';
     const message = baseMessage({
@@ -881,7 +881,7 @@ describe('normal tool content and metadata display', () => {
             eventType: 'tool_start',
             timestamp: MS_EPOCH,
             metadata: {
-              tool_name: 'call_agent',
+              tool_name: 'a2a_send',
               args_preview: rawArgs,
             },
           },
@@ -894,7 +894,7 @@ describe('normal tool content and metadata display', () => {
             eventType: 'tool_result',
             timestamp: MS_EPOCH,
             metadata: {
-              tool_name: 'call_agent',
+              tool_name: 'a2a_send',
               duration_ms: 187,
               result_preview: rawResult,
             },
@@ -989,7 +989,7 @@ describe('normal tool content and metadata display', () => {
     expect(disclosure).toContain(rawArgs.replaceAll('"', '&quot;'));
   });
 
-  it('renders legacy call_agent stream events as closed readable disclosures', () => {
+  it('renders persisted a2a_send stream events as closed readable disclosures', () => {
     const rawArgs = '{"agent":"greetings_agent","request":"hi"}';
     const rawResult = 'Legacy route completed';
     const message = baseMessage({
@@ -999,7 +999,7 @@ describe('normal tool content and metadata display', () => {
           id: 'legacy-call-agent-start-1',
           eventType: 'tool_start',
           metadata: {
-            tool_name: 'call_agent',
+            tool_name: 'a2a_send',
             args_preview: rawArgs,
           },
         },
@@ -1007,7 +1007,7 @@ describe('normal tool content and metadata display', () => {
           id: 'legacy-call-agent-result-1',
           eventType: 'tool_result',
           metadata: {
-            tool_name: 'call_agent',
+            tool_name: 'a2a_send',
             duration_ms: 91,
             result_preview: rawResult,
           },

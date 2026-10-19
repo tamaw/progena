@@ -21,6 +21,7 @@
 
 import { createStreamEvent, appendStreamEvent, appendReasoningText, extractReasoningTokenCount, extractCacheReadTokenCount, mergeReasoningEvents, isReasoningEvent, hasReasoningContent, isRenderableStreamEvent, MAX_STREAM_EVENTS_PER_MESSAGE } from './streamEventsModel';
 import { CHAT_AGENT_NAME } from './conversationModel';
+import { isA2AToolName } from './a2aTools';
 
 /** Create a fresh live assistant turn with no visible output yet. */
 export function createLiveAssistantTurn({ streamId, startedAt }) {
@@ -298,19 +299,14 @@ export function applySubagentEvent(timelineItems, nextEvent) {
   ));
 }
 
-// A2A call_agent progress cards. Unlike subagents (dedicated subagent_*
-// event types for every phase), Progenitor's own dispatch/return for
-// call_agent is left as the exact same generic tool_start/tool_result/
-// tool_error every other tool call gets -- deliberately: from Progenitor's
-// side, calling call_agent is an ordinary tool call, same as search_web or
-// read_file, and it should be handled no differently. Only the intermediate
-// progress is a dedicated type, a2a_call_progress -- the A2A protocol's own
-// status stream, which has no tool-call equivalent to reuse. All four are
-// correlated by the same tool_call_id.
-function isCallAgentToolEvent(event) {
+// A2A tool progress cards. Unlike subagents (dedicated subagent_* event
+// types for every phase), A2A dispatch/return reuse generic tool lifecycle
+// events. Only intermediate progress is a dedicated a2a_call_progress event.
+// All events are correlated by the same tool_call_id.
+function isA2AToolEvent(event) {
   return (
     (event?.eventType === 'tool_start' || event?.eventType === 'tool_result' || event?.eventType === 'tool_error')
-    && event?.metadata?.tool_name === 'call_agent'
+    && isA2AToolName(event?.metadata?.tool_name)
   );
 }
 
@@ -350,7 +346,6 @@ function applyA2ACallEventToItem(item, nextEvent) {
     case 'a2a_call_progress':
       return {
         ...item,
-        agentName: metadata.agent_name || item.agentName,
         messages: [
           ...item.messages,
           {
@@ -386,18 +381,17 @@ function applyA2ACallEventToItem(item, nextEvent) {
 }
 
 /**
- * Find-or-create-or-update the A2A call card for a call_agent tool_start/
+ * Find-or-create-or-update the A2A call card for an A2A tool_start/
  * tool_result/tool_error or a2a_call_progress event, keyed by tool_call_id.
  * Mirrors applySubagentEvent's null-sentinel contract ("not mine, fall
  * through" vs. "handled, here's the updated array"). Unlike subagent's
- * defensive create-on-anything, a2a_call_progress (or tool_result/
- * tool_error) with no existing card is ignored rather than guessed at --
- * a call_agent tool_start should always arrive first.
+ * defensive create-on-anything, an A2A tool result/error with no existing
+ * card is ignored rather than guessed at -- a tool_start arrives first.
  */
 export function applyA2ACallEvent(timelineItems, nextEvent) {
   if (!nextEvent) return null;
   const isProgressEvent = nextEvent.eventType === 'a2a_call_progress';
-  if (!isCallAgentToolEvent(nextEvent) && !isProgressEvent) return null;
+  if (!isA2AToolEvent(nextEvent) && !isProgressEvent) return null;
 
   const toolCallId = nextEvent.metadata?.tool_call_id;
   if (!toolCallId) return null;
@@ -407,16 +401,8 @@ export function applyA2ACallEvent(timelineItems, nextEvent) {
 
   if (index === -1) {
     if (nextEvent.eventType !== 'tool_start') return null;
-    // call_agent's args schema accepts either key for the same field (`agent`
-    // is primary, `agent_name` an explicit alias -- see CallAgentArgs on the
-    // backend) and the calling LLM is free to use either, so both must be
-    // checked here. Still empty for the auto-route case (agent omitted
-    // entirely, resolved only after tool_start fires) -- that gets backfilled
-    // by the first a2a_call_progress event instead, see below.
     const argsPreview = nextEvent.metadata?.args_preview || {};
-    const agentName = typeof argsPreview.agent === 'string'
-      ? argsPreview.agent
-      : (typeof argsPreview.agent_name === 'string' ? argsPreview.agent_name : '');
+    const agentName = typeof argsPreview.agent === 'string' ? argsPreview.agent : '';
     const seed = createA2ACallItem(toolCallId, agentName, nextEvent.timestamp);
     return [...timelineItems, applyA2ACallEventToItem(seed, nextEvent)];
   }
@@ -477,36 +463,23 @@ export function applyAssistantStreamEvent(turn, streamEvent) {
     return next;
   }
 
-  // call_agent's tool_start/tool_result/tool_error update the rich a2a_call
-  // card (the remote agent's own submitted/working/completed self-reporting)
-  // but deliberately do NOT short-circuit here -- Progenitor's own act of
-  // dispatching/receiving that call is a regular tool call like any other,
-  // and gets its own plain stream_event row too, right alongside the richer
-  // card (unmodified -- no dedicated event type, no special badge; see
-  // describeStreamEvent's plain tool_start/tool_result/tool_error branches,
-  // messageRenderUtils.js). That plain row is pushed *before* applyA2ACallEvent
-  // runs so a freshly-seeded card is always appended after it -- the call
-  // itself has to read before the progress card that explains it, not after.
-  // a2a_call_progress has no such equivalent -- a plain tool call never has
-  // an in-flight progress stream -- so it stays card-only.
-  const isCallAgentEvt = isCallAgentToolEvent(nextEvent);
-  if (isCallAgentEvt) {
+  // A2A tool lifecycle events update the rich a2a_call card but deliberately
+  // also keep their plain stream_event row. The plain row is pushed first so
+  // a freshly-seeded card follows its dispatch marker. Progress has no
+  // generic tool-call equivalent, so it stays card-only.
+  const isA2AToolEvt = isA2AToolEvent(nextEvent);
+  if (isA2AToolEvt) {
     next.timelineItems = [...next.timelineItems, { kind: 'stream_event', id: nextEvent.id, event: nextEvent }];
   }
   const updatedA2ACallItems = applyA2ACallEvent(next.timelineItems, nextEvent);
   if (updatedA2ACallItems) {
     next.timelineItems = updatedA2ACallItems;
   }
-  // call_agent's own tool_start/tool_result/tool_error always got their
-  // plain row above regardless of whether applyA2ACallEvent could build a
-  // card for them, so they always short-circuit here. a2a_call_progress has
-  // no such guaranteed row of its own -- only short-circuit for it when a
-  // card was actually found and updated; an orphaned progress event (no
-  // matching prior tool_start, e.g. a dropped frame or missing
-  // tool_call_id) must fall through to the generic stream_event push below
-  // instead of silently vanishing, matching buildDefaultAssistantTimeline's
-  // identical fallback for the reload path.
-  if (isCallAgentEvt || (nextEvent.eventType === 'a2a_call_progress' && updatedA2ACallItems)) {
+  // A2A tool lifecycle events always got their plain row above regardless of
+  // whether applyA2ACallEvent could build a card. Progress only short-circuits
+  // when a card consumed it; an orphaned progress event falls through to the
+  // generic stream_event push below.
+  if (isA2AToolEvt || (nextEvent.eventType === 'a2a_call_progress' && updatedA2ACallItems)) {
     return next;
   }
 
@@ -666,14 +639,12 @@ function collectSubagentGroups(streamEvents) {
 }
 
 // Reconstructs grouped A2A call cards from a flat, persisted stream_events
-// array -- same rationale and mechanism as collectSubagentGroups (replays
-// applyA2ACallEvent over the flat events in order so live and reload can't
-// drift apart), just matched by metadata.tool_name === 'call_agent' instead
-// of an eventType prefix.
+// array by replaying applyA2ACallEvent over the flat events in order so live
+// and reload cannot drift apart.
 function collectA2ACallGroups(streamEvents) {
   let items = [];
   for (const event of streamEvents) {
-    if (!isCallAgentToolEvent(event) && event?.eventType !== 'a2a_call_progress') continue;
+    if (!isA2AToolEvent(event) && event?.eventType !== 'a2a_call_progress') continue;
     const updated = applyA2ACallEvent(items, event);
     if (updated) items = updated;
   }
@@ -729,20 +700,11 @@ export function buildDefaultAssistantTimeline(message) {
     }
 
 
-    // The grouped A2A call card splices in once, right after the earliest
-    // call_agent tool_start/tool_result/tool_error event carrying its
-    // tool_call_id -- but unlike subagent groups above, call_agent's own
-    // tool_start/tool_result/tool_error deliberately keep their own plain
-    // stream_event row too, right alongside the richer card (see the
-    // matching comment in applyAssistantStreamEvent), pushed *before* the
-    // card so the dispatch/return marker always reads first -- matches the
-    // live ordering instead of showing the (possibly already-complete) card
-    // ahead of the tool_start that kicked it off. Only a2a_call_progress is
-    // consumed with no row of its own -- a plain tool call has no equivalent
-    // of an in-flight progress stream -- and, same as the subagent rule
-    // above, only when a group was actually found for it: a missing/empty
-    // tool_call_id must still fall through instead of silently vanishing.
-    if (isCallAgentToolEvent(event) || event?.eventType === 'a2a_call_progress') {
+    // The grouped A2A call card splices in once after the earliest lifecycle
+    // event carrying its tool_call_id. Lifecycle events retain plain rows
+    // alongside the richer card, while progress is consumed only when a
+    // matching group exists.
+    if (isA2AToolEvent(event) || event?.eventType === 'a2a_call_progress') {
       const toolCallId = event.metadata?.tool_call_id;
       const group = toolCallId ? a2aCallGroups.get(toolCallId) : undefined;
       if (group) {

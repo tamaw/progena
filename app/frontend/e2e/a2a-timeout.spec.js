@@ -98,7 +98,7 @@ test('J17: greetings A2A and object adapters stay distinct; hello-world async re
   const calls = peer.requests.filter((request) => request.method === 'message/send');
   expect(calls.some((request) => JSON.stringify(request.params).includes(marker))).toBe(true);
   const asyncMarker = `J17_ASYNC_${suffix}`;
-  const reply = await chat(page, `Use start_async_task with subagent_type hello-world-async and description ${asyncMarker}. Start it once in the background and return its task ID. Do not use call_agent or the synchronous task tool, and do not wait or check it yourself; its completion notification must arrive later.`);
+  const reply = await chat(page, `Use start_async_task with subagent_type hello-world-async and description ${asyncMarker}. Start it once in the background and return its task ID. Do not use a2a_send or the synchronous task tool, and do not wait or check it yourself; its completion notification must arrive later.`);
   await expect.poll(() => asyncTasks().find((task) => task.request_text.includes(asyncMarker)), { timeout: 30_000, intervals: [1_000] }).toBeTruthy();
   const started = asyncTasks().find((task) => task.request_text.includes(asyncMarker));
   expect(started.task_id).toBeTruthy(); expect(started.agent_name).toBe('hello-world-async');

@@ -15,7 +15,7 @@ import {
   appendStreamingCursor,
   describeStreamEvent,
   toolDetailsForEvent,
-  extractCallAgentSummary,
+  extractA2ASummary,
   formatTimestamp,
   renderSafeMarkdown,
 } from './messageRenderUtils';
@@ -224,75 +224,72 @@ describe('describeStreamEvent (a2a_call_progress)', () => {
   });
 });
 
-// Progenitor's own dispatch/return for call_agent is an ordinary tool call
-// and gets no special-casing here -- badged 'Tool', titled with its own name
-// (prettifyLabel('call_agent')), exactly like search_web or read_file would
-// be. Only the intermediate a2a_call_progress (tested above) is genuinely
-// new information with no tool-call equivalent, so it alone gets its own
-// 'A2A' badge.
-describe('describeStreamEvent (call_agent tool_start/tool_result/tool_error)', () => {
-  it('badges a call_agent tool_start as Tool, same as any other tool', () => {
+// A2A tool lifecycle events are ordinary tool calls and get no special-
+// casing here. Only intermediate a2a_call_progress has no tool-call
+// equivalent and receives its own A2A badge.
+describe('describeStreamEvent (a2a_send tool_start/tool_result/tool_error)', () => {
+  it('badges an A2A tool_start as Tool, same as any other tool', () => {
     const description = describeStreamEvent({
       eventType: 'tool_start',
-      metadata: { tool_name: 'call_agent', args_preview: { agent: 'greetings_agent' } },
+      metadata: { tool_name: 'a2a_send', args_preview: { agent: 'greetings_agent' } },
     });
     expect(description.badge).toBe('Tool');
-    expect(description.title).toBe('→ Call Agent');
+    expect(description.title).toBe('→ A2a Send');
   });
 
-  it('badges a call_agent tool_result as Tool, same as any other tool', () => {
+  it('badges an A2A tool_result as Tool, same as any other tool', () => {
     const description = describeStreamEvent({
       eventType: 'tool_result',
-      metadata: { tool_name: 'call_agent', result_preview: 'Hello!' },
+      metadata: { tool_name: 'a2a_send', result_preview: 'Hello!' },
     });
     expect(description.badge).toBe('Tool');
-    expect(description.title).toBe('✓ Call Agent');
+    expect(description.title).toBe('✓ A2a Send');
   });
 
-  it('badges a call_agent tool_error as Tool, same as any other tool', () => {
+  it('badges an A2A tool_error as Tool, same as any other tool', () => {
     const description = describeStreamEvent({
       eventType: 'tool_error',
-      metadata: { tool_name: 'call_agent', error: 'agent unreachable' },
+      metadata: { tool_name: 'a2a_send', error: 'agent unreachable' },
     });
     expect(description.badge).toBe('Tool');
-    expect(description.title).toBe('✗ Call Agent');
+    expect(description.title).toBe('✗ A2a Send');
   });
 });
 
-describe('extractCallAgentSummary', () => {
+describe('extractA2ASummary', () => {
   it('returns empty string for falsy input', () => {
-    expect(extractCallAgentSummary('')).toBe('');
-    expect(extractCallAgentSummary(null)).toBe('');
-    expect(extractCallAgentSummary(undefined)).toBe('');
+    expect(extractA2ASummary('')).toBe('');
+    expect(extractA2ASummary(null)).toBe('');
+    expect(extractA2ASummary(undefined)).toBe('');
   });
 
   it('extracts summary from complete, valid JSON', () => {
     const json = JSON.stringify({ task_id: 't1', agent: 'greetings_agent', summary: 'Hello there.' });
-    expect(extractCallAgentSummary(json)).toBe('Hello there.');
+    expect(extractA2ASummary(json)).toBe('Hello there.');
   });
 
   it('returns empty string when valid JSON has no summary field', () => {
     const json = JSON.stringify({ task_id: 't1', agent: 'greetings_agent' });
-    expect(extractCallAgentSummary(json)).toBe('');
+    expect(extractA2ASummary(json)).toBe('');
   });
 
   it('pulls summary via regex when the JSON is truncated after it', () => {
     const truncated = '{"task_id": "t1", "summary": "Hello there.", "task": {"history": [{"kind": "mess…';
-    expect(extractCallAgentSummary(truncated)).toBe('Hello there.');
+    expect(extractA2ASummary(truncated)).toBe('Hello there.');
   });
 
   it('unescapes JSON string escapes (newlines, quotes) in the extracted summary', () => {
     const truncated = String.raw`{"summary": "Line one\nLine \"two\"", "task": {"h…`;
-    expect(extractCallAgentSummary(truncated)).toBe('Line one\nLine "two"');
+    expect(extractA2ASummary(truncated)).toBe('Line one\nLine "two"');
   });
 
   it('returns empty string when the summary value itself was truncated (no closing quote)', () => {
     const truncated = '{"task_id": "t1", "summary": "Hello the…';
-    expect(extractCallAgentSummary(truncated)).toBe('');
+    expect(extractA2ASummary(truncated)).toBe('');
   });
 
   it('returns empty string for non-JSON garbage with no summary key', () => {
-    expect(extractCallAgentSummary('not json at all')).toBe('');
+    expect(extractA2ASummary('not json at all')).toBe('');
   });
 });
 
@@ -353,18 +350,18 @@ describe('normal tool detail rendering', () => {
     expect(startDetails.summary).not.toContain(startDetails.command);
   });
 
-  it('treats call_agent outer lifecycle rows as normal tool disclosures', () => {
+  it('treats A2A outer lifecycle rows as normal tool disclosures', () => {
     const start = {
       eventType: 'tool_start',
       metadata: {
-        tool_name: 'call_agent',
+        tool_name: 'a2a_send',
         args_preview: { agent: 'greetings_agent', request: 'hi' },
       },
     };
     const result = {
       eventType: 'tool_result',
       metadata: {
-        tool_name: 'call_agent',
+        tool_name: 'a2a_send',
         duration_ms: 187,
         result_preview: 'Hello! Completed the request.',
       },
@@ -374,14 +371,14 @@ describe('normal tool detail rendering', () => {
     const resultDetails = toolDetailsForEvent(result, describeStreamEvent(result));
 
     expect(startDetails).toMatchObject({
-      kind: 'call_agent',
+      kind: 'a2a_send',
       isNormal: true,
       summary: 'agent: greetings_agent • request: hi',
       command: '{"agent":"greetings_agent","request":"hi"}',
       body: '',
     });
     expect(resultDetails).toMatchObject({
-      kind: 'call_agent',
+      kind: 'a2a_send',
       isNormal: true,
       summary: 'Hello! Completed the request.',
       duration: '187ms',

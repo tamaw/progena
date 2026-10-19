@@ -272,8 +272,8 @@ describe('normalizeBackendChatMessage', () => {
   // progress_log (older data predating that field, or a call that never
   // streamed intermediate updates) -- the reconstructed card has an empty
   // message log and falls back to this result_preview instead (see
-  // A2ACallCard.jsx and extractCallAgentSummary in chatSessionsModel.js).
-  // The raw result is the whole call_agent result dict, JSON-stringified --
+  // A2ACallCard.jsx and extractA2ASummary in chatSessionsModel.js).
+  // The raw result is the whole A2A tool result dict, JSON-stringified --
   // showing that verbatim is exactly the "meaningless JSON blob" experience
   // this feature exists to fix, so just `summary` is pulled out of it when
   // the JSON is intact. See 'reconstructs the a2a_call sub-chain from a
@@ -293,7 +293,7 @@ describe('normalizeBackendChatMessage', () => {
       content: 'done',
       tool_calls: [{
         id: 'call_1',
-        name: 'call_agent',
+        name: 'a2a_send',
         args: { agent: 'greetings_agent', request: 'hi' },
         result: resultJson,
       }],
@@ -328,7 +328,7 @@ describe('normalizeBackendChatMessage', () => {
       content: 'done',
       tool_calls: [{
         id: 'call_1',
-        name: 'call_agent',
+        name: 'a2a_send',
         args: { agent: 'greetings_agent', request: 'hi' },
         result: resultJson,
         progress_log: [
@@ -350,12 +350,10 @@ describe('normalizeBackendChatMessage', () => {
     ]);
   });
 
-  // Each progress_log entry carries its own real arrival time (stamped by
-  // A2AClient.call_agent(), see extract_progress_log in
-  // app/progenitor/a2a/payloads.py) -- reload must use that per-entry time
-  // rather than reusing the parent tool call's single created_at for every
-  // sub-entry, or a viewer sees every update stamped at the exact same
-  // moment regardless of how long the task actually ran.
+  // Each progress_log entry carries its own real arrival time -- reload must
+  // use that per-entry time rather than reusing the parent tool call's shared
+  // created_at for every sub-entry, or a viewer sees every update stamped at
+  // the exact same moment regardless of how long the task actually ran.
   it('uses each progress_log entry\'s own timestamp, not the parent tool call\'s shared one', () => {
     const resultJson = JSON.stringify({ task_id: 'task-123', status: 'completed' });
     const m = normalizeBackendChatMessage({
@@ -364,7 +362,7 @@ describe('normalizeBackendChatMessage', () => {
       content: 'done',
       tool_calls: [{
         id: 'call_1',
-        name: 'call_agent',
+        name: 'a2a_send',
         args: { agent: 'greetings_agent', request: 'hi' },
         result: resultJson,
         created_at: '2026-07-11T02:31:00+00:00',
@@ -380,14 +378,14 @@ describe('normalizeBackendChatMessage', () => {
       new Date('2026-07-11T02:31:09+00:00').getTime(),
     ]);
   });
-  it('derives call_agent result duration from the progress timestamp span', () => {
+  it('derives A2A result duration from the progress timestamp span', () => {
     const m = normalizeBackendChatMessage({
       id: 'm9-duration-derived',
       role: 'assistant',
       content: 'done',
       tool_calls: [{
         id: 'call-duration-derived',
-        name: 'call_agent',
+        name: 'a2a_send',
         args: { agent: 'greetings_agent', request: 'hi' },
         result: JSON.stringify({ task_id: 'task-123', status: 'completed' }),
         progress_log: [
@@ -401,14 +399,14 @@ describe('normalizeBackendChatMessage', () => {
     expect(result.metadata.duration_ms).toBe(7500);
   });
 
-  it('preserves explicit call_agent duration over the progress timestamp span', () => {
+  it('preserves explicit A2A duration over the progress timestamp span', () => {
     const m = normalizeBackendChatMessage({
       id: 'm9-duration-explicit',
       role: 'assistant',
       content: 'done',
       tool_calls: [{
         id: 'call-duration-explicit',
-        name: 'call_agent',
+        name: 'a2a_send',
         args: { agent: 'greetings_agent', request: 'hi' },
         result: JSON.stringify({ task_id: 'task-123', status: 'completed' }),
         duration_ms: 42,
@@ -431,7 +429,7 @@ describe('normalizeBackendChatMessage', () => {
       content: 'done',
       tool_calls: [{
         id: 'call_1',
-        name: 'call_agent',
+        name: 'a2a_send',
         args: { agent: 'greetings_agent', request: 'hi' },
         result: resultJson,
         created_at: '2026-07-11T02:31:00+00:00',
@@ -442,24 +440,19 @@ describe('normalizeBackendChatMessage', () => {
     expect(a2aItems[0].messages[0].timestamp).toBe(new Date('2026-07-11T02:31:00+00:00').getTime());
   });
 
-  // Regression: an auto-routed call never names its target agent in the raw
-  // tool-call args (the LLM omits `agent`/`agent_name` entirely and lets
-  // call_agent pick one internally, after tool_start has already fired), so
-  // reload has no seed to fall back on -- progress_log's own agent_name (see
-  // extract_progress_log) must be the one source of truth here, not args.
-  it('recovers agentName from progress_log entries when args never named an agent (auto-route case)', () => {
+  it('uses args.agent as the A2A card display name', () => {
     const m = normalizeBackendChatMessage({
       id: 'm9c',
       role: 'assistant',
       content: 'done',
       tool_calls: [{
         id: 'call_1',
-        name: 'call_agent',
-        args: { request: 'hi' },
+        name: 'a2a_send',
+        args: { agent: 'greetings_agent', request: 'hi' },
         result: JSON.stringify({ task_id: 'task-123', agent: 'greetings_agent', status: 'completed' }),
         progress_log: [
-          { state: 'submitted', message_text: 'Accepted: hi', agent_name: 'greetings_agent' },
-          { state: 'completed', message_text: 'Hello!', agent_name: 'greetings_agent' },
+          { state: 'submitted', message_text: 'Accepted: hi', agent_name: 'different_agent' },
+          { state: 'completed', message_text: 'Hello!', agent_name: 'different_agent' },
         ],
       }],
     }, 1);
@@ -480,7 +473,7 @@ describe('normalizeBackendChatMessage', () => {
       id: 'm10',
       role: 'assistant',
       content: 'done',
-      tool_calls: [{ id: 'call_1', name: 'call_agent', args: {}, result: truncated }],
+      tool_calls: [{ id: 'call_1', name: 'a2a_send', args: {}, result: truncated }],
     }, 1);
     const a2aItems = m.timelineItems.filter((item) => item.kind === 'a2a_call');
     expect(a2aItems[0].resultPreview).toBe('Hello! Completed a 3-step task:\n1. prep done');
@@ -492,7 +485,7 @@ describe('normalizeBackendChatMessage', () => {
       id: 'm11',
       role: 'assistant',
       content: 'done',
-      tool_calls: [{ id: 'call_1', name: 'call_agent', args: {}, result: truncated }],
+      tool_calls: [{ id: 'call_1', name: 'a2a_send', args: {}, result: truncated }],
     }, 1);
     const a2aItems = m.timelineItems.filter((item) => item.kind === 'a2a_call');
     expect(a2aItems[0].resultPreview).toBe(truncated);

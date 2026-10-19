@@ -35,7 +35,7 @@ class UnregisterAgentTool(BaseSystemTool):
     def description(self) -> str:
         return (
             "Remove a registered agent (ACP, A2A, etc.) from the registry by name. "
-            "Deletes it from the database so it is no longer invocable via call_agent."
+            "Deletes it from the database so it can no longer be started or messaged."
         )
 
     async def execute(self, context: ToolContext) -> ToolResult:

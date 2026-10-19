@@ -29,6 +29,10 @@ new conversation and advance with a task reference (task_id, thread_id, run_id,
 agent_name, status), rather than the agent response. Its response_schema validates
 the eventual task result; task failures are reported separately from the parent run.
 
+Remote HTTP A2A delegation is distinct from object-agent delegation: use
+`a2a_send`/`a2a_send_async` for an explicitly named registered remote agent,
+then `a2a_status` or `a2a_cancel` for its tracked task.
+
 ## Create an agent
 
 1. Inspect `/agents/` and `/agents/user/` for existing names. When creating a

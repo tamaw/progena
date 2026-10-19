@@ -284,11 +284,9 @@ def _extract_images_from_content(content: Any) -> list[dict[str, str]]:
 
 
 def _extract_progress_log_from_content(content: Any) -> list[dict[str, str]]:
-    """Pull call_agent's compact progress-update log (build_task_response's
-    `progress_log` key, see app/progenitor/a2a/payloads.py) out of a
-    ToolMessage's raw string content, before result_text below truncates it
-    away -- it's the last key in that JSON object, so a naive 400-char slice
-    always cuts if off first."""
+    """Pull a2a_send's compact `progress_log` from a ToolMessage result before
+    `result_text` truncates it. `build_task_response` keeps the key last, so a
+    naive 400-character result preview cannot retain it."""
     if not isinstance(content, str) or not content.strip():
         return []
     if '"progress_log"' not in content:

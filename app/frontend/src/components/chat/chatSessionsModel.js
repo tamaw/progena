@@ -7,7 +7,8 @@ import {
   toValidTimestamp,
 } from './conversationModel';
 import { buildDefaultAssistantTimeline, normalizeTaskSummary } from './liveAssistantTurnModel';
-import { extractCallAgentSummary } from './messageRenderUtils';
+import { isA2AToolName } from './a2aTools';
+import { extractA2ASummary } from './messageRenderUtils';
 import { deriveChatStatus } from '../../lib/chatStatus';
 export function compareSessionItems(left, right) {
   const pinnedDelta = Number(Boolean(right.pinned)) - Number(Boolean(left.pinned));
@@ -121,8 +122,8 @@ function buildToolStreamEvents(toolCalls, messageId) {
 
     const args = tc.args && typeof tc.args === 'object' && !Array.isArray(tc.args) ? tc.args : {};
     const rawResult = typeof tc.result === 'string' ? tc.result : '';
-    const result = toolName === 'call_agent'
-      ? (extractCallAgentSummary(rawResult) || rawResult)
+    const result = isA2AToolName(toolName)
+      ? (extractA2ASummary(rawResult) || rawResult)
       : rawResult;
     const toolCallId = typeof tc.id === 'string' ? tc.id.trim() : '';
 
@@ -190,23 +191,17 @@ function buildToolStreamEvents(toolCalls, messageId) {
       },
     });
     // Replays the same submitted/working/completed/... sequence a live
-    // viewer saw as synthetic a2a_call_progress events (progress_log comes
-    // from build_task_response on the backend, populated from
-    // A2AClient.call_agent()'s own progress_updates -- see
-    // app/progenitor/a2a/payloads.py's extract_progress_log). Without this,
+    // viewer saw as synthetic a2a_call_progress events. Without this,
     // applyA2ACallEvent has nothing to group on reload, and the card falls
     // back to a single result blob instead of the chained sub-entries the
     // live path shows.
-    if (toolName === 'call_agent' && Array.isArray(tc.progress_log)) {
+    if (isA2AToolName(toolName) && Array.isArray(tc.progress_log)) {
       tc.progress_log.forEach((entry, progressIndex) => {
         if (!entry || typeof entry !== 'object') return;
         const messageText = typeof entry.message_text === 'string' ? entry.message_text : '';
-        // Each entry carries its own real arrival time (stamped by
-        // A2AClient.call_agent(), see extract_progress_log in
-        // app/progenitor/a2a/payloads.py) -- falls back to the parent tool
-        // call's shared timestamp only for older persisted data from before
-        // that field existed, rather than showing every sub-entry at the
-        // exact same clock time.
+        // Each entry carries its own real arrival time -- falls back to the
+        // parent tool call's shared timestamp only for older persisted data,
+        // rather than showing every sub-entry at the exact same clock time.
         const entryTimestamp = toValidTimestamp(entry.timestamp) ?? timestamp;
         events.push({
           id: `${messageId}-a2a-progress-${index}-${progressIndex}`,

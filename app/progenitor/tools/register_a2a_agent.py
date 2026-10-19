@@ -1,9 +1,10 @@
 """Tool to register an A2A agent into the runtime registry (database-backed).
 
 The A2A counterpart of ``register_acp_agent``: adds a remote HTTP A2A agent by URL
-so it can be invoked via ``call_agent``. Persists to the registry store (DB), so a
-restart picks it up. (A2A agents can also arrive via discovery or the backend
-``/agents/register`` API; this exposes the same capability as a system tool.)
+so it can be invoked via ``a2a_send`` or ``a2a_send_async``. Persists to the
+registry store (DB), so a restart picks it up. (A2A agents can also arrive via
+discovery or the backend ``/agents/register`` API; this exposes the same
+capability as a system tool.)
 """
 
 from __future__ import annotations
@@ -22,7 +23,7 @@ logger = logging.getLogger(__name__)
 class RegisterA2AAgentArgs(BaseModel):
     """Arguments for registering an A2A agent."""
 
-    name: str = Field(description="Unique agent name (used to invoke it via call_agent).")
+    name: str = Field(description="Unique agent name (used with a2a_send).")
     url: str = Field(description="Base URL of the A2A server, e.g. 'http://localhost:8107'.")
     description: str = Field(default="", description="What this agent does.")
     capabilities: list[str] = Field(
@@ -50,7 +51,7 @@ class RegisterA2AAgentTool(BaseSystemTool):
     def description(self) -> str:
         return (
             "Register a remote A2A agent by URL into the registry so it can be invoked "
-            "with call_agent. Persists to the database; a restart keeps it."
+            "with a2a_send. Persists to the database; a restart keeps it."
         )
 
     async def execute(self, context: ToolContext) -> ToolResult:
