@@ -81,8 +81,9 @@ Recommended flow for a new workflow:
 1. `ls /workflows/`
 2. `read_file /schemas/definition.workflow.schema.v1.json`
 3. Generate ids for the workflow and its nodes.
-4. One `structured_output` call, `schema_file: definition.workflow.schema.v1.json`, describing every node and edge — this produces the complete, schema-valid definition in one shot.
+4. One `structured_output` call with `schema_file: definition.workflow.schema.v1.json` (not an inline `json_schema`), describing every node and edge — this produces the complete, schema-valid definition in one shot.
 5. `write_file /workflows/<workflow-id>.json`
+6. If the save is rejected, the error names the problem (unknown port, missing edge, bad type ref, unknown routine id, ...). Fix it — `edit_file` for a local fix, another `structured_output` for rewiring — and write again. A rejection is feedback, not a blocker: do not stop or report until the workflow saves, unless the same error repeats with no fix left to try. Templates the workflow references must save first (see maintaining-instructions).
 
 Recommended flow for editing an existing workflow:
 1. `ls /workflows/`
