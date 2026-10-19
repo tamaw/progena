@@ -159,6 +159,46 @@ def test_workflow_edges_have_no_control_kind():
         validate_workflow_definition_payload(payload)
 
 
+@pytest.mark.parametrize(
+    ("edge", "expected"),
+    [
+        # Wrong target port: the rejection lists the target's real inputs.
+        ({"from": "after", "to": ("unpack", "input")}, r"no input port 'input'.*inputs: value"),
+        # Wrong source port: the rejection lists the event's real outputs.
+        ({"from": "card", "to": ("unpack", "value")}, r"no output port 'card'.*outputs: .*after"),
+        # Unwired executable node: the rejection lists what it can take.
+        (None, r"'unpack' has no inbound connection.*inputs: value"),
+    ],
+)
+def test_rejected_wiring_names_the_valid_ports(edge, expected):
+    """A rejected save must tell the writer (often a model) the ports it can use."""
+    payload = default_workflow_definition()
+    event_id = _node_id(payload, "event")
+    del payload["graph"]["nodes"][_node_id(payload, "agent")]
+    payload["graph"]["nodes"]["unpack"] = {"kind": "unpack", "title": "Card"}
+    payload["graph"]["edges"] = (
+        []
+        if edge is None
+        else [
+            {
+                "from": {"node": event_id, "port": edge["from"]},
+                "to": {"node": edge["to"][0], "port": edge["to"][1]},
+            }
+        ]
+    )
+
+    with pytest.raises(ValueError, match=expected):
+        validate_workflow_definition_payload(derive_workflow_port_schemas(payload, _TYPES))
+
+
+def test_schema_rejection_names_the_field():
+    payload = default_workflow_definition()
+    payload["version"] = 2
+
+    with pytest.raises(ValueError, match=r"at \$\.version: "):
+        validate_workflow_definition_payload(payload)
+
+
 def test_connected_property_is_the_execution_dependency():
     payload = _default_with_schemas()
     event_id = _node_id(payload, "event")

@@ -1711,11 +1711,15 @@ def _validate_data_edges(definition: WorkflowDefinition) -> None:
         output_ports = workflow_node_output_ports(source)
         if edge.from_.port not in output_ports:
             raise ValueError(
-                f"edge source '{edge.from_.node}' has no output port '{edge.from_.port}'"
+                f"edge source '{edge.from_.node}' has no output port '{edge.from_.port}'; "
+                f"{source.kind} node '{edge.from_.node}' outputs: {_describe_ports(output_ports)}"
             )
         input_ports = workflow_node_input_ports(target)
         if edge.to.port not in input_ports:
-            raise ValueError(f"edge target '{edge.to.node}' has no input port '{edge.to.port}'")
+            raise ValueError(
+                f"edge target '{edge.to.node}' has no input port '{edge.to.port}'; "
+                f"{target.kind} node '{edge.to.node}' inputs: {_describe_ports(input_ports)}"
+            )
         target_key = (edge.to.node, edge.to.port)
         if target_key in seen_targets:
             raise ValueError(
@@ -1725,7 +1729,9 @@ def _validate_data_edges(definition: WorkflowDefinition) -> None:
         if not _schema_types_compatible(output_ports[edge.from_.port], input_ports[edge.to.port]):
             raise ValueError(
                 f"edge from '{edge.from_.node}.{edge.from_.port}' to "
-                f"'{edge.to.node}.{edge.to.port}' has incompatible types"
+                f"'{edge.to.node}.{edge.to.port}' has incompatible types: "
+                f"{_describe_schema(output_ports[edge.from_.port])} -> "
+                f"{_describe_schema(input_ports[edge.to.port])}"
             )
         inbound[edge.to.node] += 1
         adjacency[edge.from_.node].append(edge.to.node)
@@ -1737,13 +1743,43 @@ def _validate_data_edges(definition: WorkflowDefinition) -> None:
             not isinstance(node, WorkflowNodeData | WorkflowNodeEvent | WorkflowNodeCron)
             and not inbound[node_id]
         ):
-            raise ValueError(f"executable node '{node_id}' has no inbound connection")
+            raise ValueError(
+                f"executable node '{node_id}' has no inbound connection; wire an edge into one "
+                f"of its inputs: {_describe_ports(workflow_node_input_ports(node))}"
+            )
         input_schema = getattr(node, "input_schema", None) or {}
+        properties = input_schema.get("properties") or {}
         for port in input_schema.get("required") or []:
             if (node_id, port) not in seen_targets:
-                raise ValueError(f"required input '{port}' on node '{node_id}' has no edge")
+                raise ValueError(
+                    f"required input '{port}' on node '{node_id}' has no edge; wire an output "
+                    f"of type {_describe_schema(properties.get(port) or {})} into it"
+                )
 
     _assert_acyclic(set(nodes), adjacency)
+
+
+def _describe_schema(schema: Mapping[str, Any]) -> str:
+    """Short human/LLM-readable type label for one port schema in save errors."""
+
+    if schema.get("title"):
+        return str(schema["title"])
+    if "$ref" in schema:
+        return str(schema["$ref"]).rsplit("/", 1)[-1]
+    kind = schema.get("type")
+    if isinstance(kind, list):
+        return "|".join(str(item) for item in kind)
+    if kind == "array" and isinstance(schema.get("items"), Mapping):
+        return f"array of {_describe_schema(schema['items'])}"
+    return str(kind) if kind else "any"
+
+
+def _describe_ports(ports: Mapping[str, Mapping[str, Any]]) -> str:
+    """``name (type), ...`` listing of a node's ports for save errors."""
+
+    if not ports:
+        return "(none)"
+    return ", ".join(f"{name} ({_describe_schema(schema)})" for name, schema in ports.items())
 
 
 def _assert_acyclic(node_ids: set[str], adjacency: dict[str, list[str]]) -> None:
