@@ -1,7 +1,7 @@
 """Tests for Progenitor DeepAgent tool adapters."""
 
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import pytest
 from langchain_core.tools import StructuredTool
@@ -9,8 +9,7 @@ from langchain_core.tools import StructuredTool
 from app.progenitor.agent.adapters import create_deepagent_tools, create_dynamic_mcp_tools
 from app.progenitor.config import MCPConfig
 from app.progenitor.mcp import MCPRuntime
-from app.progenitor.state.models import A2ATaskRecord
-from app.progenitor.tools.call_agent import CallAgentArgs
+from app.progenitor.tools.a2a_sessions import A2ASendArgs
 from app.progenitor.tools.protocol import RequestToolArgs
 
 
@@ -31,17 +30,6 @@ async def _invoke(tool, args: dict[str, Any], *, tool_call_id: str = "call_test"
         {"name": tool.name, "args": args, "id": tool_call_id, "type": "tool_call"}
     )
     return json.loads(message.content)
-
-
-def _tracked_task(agent_name: str = "Builder Agent") -> A2ATaskRecord:
-    return A2ATaskRecord(
-        task_id="task-123",
-        agent_name=agent_name,
-        agent_url="http://localhost:9999",
-        context_id="ctx-123",
-        source="call_agent",
-        request_text="hello",
-    )
 
 
 def _mcp_tool(name: str) -> StructuredTool:
@@ -67,7 +55,11 @@ def test_core_only_tools_present() -> None:
         "say_to_user",
         "ask_user",
         "list_agents",
-        "call_agent",
+        "a2a_send",
+        "a2a_send_async",
+        "a2a_status",
+        "a2a_cancel",
+        "a2a_list",
         "acp_start",
         "acp_send",
         "acp_status",
@@ -75,7 +67,6 @@ def test_core_only_tools_present() -> None:
         "acp_cancel",
         "acp_list",
         "enqueue_background_task",
-        "get_a2a_task",
         "mcp_refresh",
     }.issubset(names)
     assert {"current_time", "list_tools"}.issubset(names)
@@ -96,7 +87,7 @@ def test_deepagent_reuses_declared_args_models() -> None:
     tools = create_deepagent_tools()
 
     assert _tool_by_name(tools, "current_time").args_schema is RequestToolArgs
-    assert _tool_by_name(tools, "call_agent").args_schema is CallAgentArgs
+    assert _tool_by_name(tools, "a2a_send").args_schema is A2ASendArgs
 
 
 def test_user_communication_tools_expose_structured_parameters() -> None:
@@ -123,30 +114,19 @@ def test_reflection_tool_exposes_structured_parameters() -> None:
     assert reflect_schema.get("required") == ["operation"]
 
 
-def test_call_agent_and_task_tools_expose_structured_parameters() -> None:
+def test_a2a_tools_expose_structured_parameters() -> None:
     tools = create_deepagent_tools()
+    send_schema = _tool_by_name(tools, "a2a_send").args_schema.model_json_schema()
+    status_schema = _tool_by_name(tools, "a2a_status").args_schema.model_json_schema()
+    send_properties = send_schema.get("properties", {})
+    status_properties = status_schema.get("properties", {})
 
-    call_schema = _tool_by_name(tools, "call_agent").args_schema.model_json_schema()
-    task_schema = _tool_by_name(tools, "get_a2a_task").args_schema.model_json_schema()
-    background_schema = _tool_by_name(
-        tools, "enqueue_background_task"
-    ).args_schema.model_json_schema()
-
-    call_properties = call_schema.get("properties", {})
-    assert {"request", "agent", "agent_name", "timeout_seconds", "blocking", "context"} <= set(
-        call_properties
+    assert {"agent", "message", "task_id", "context_id", "wait_seconds", "context"} <= set(
+        send_properties
     )
-    assert call_schema.get("required") == ["request"]
-
-    task_properties = task_schema.get("properties", {})
-    assert {"task_id", "refresh", "history_length"} <= set(task_properties)
-    assert task_schema.get("required") == ["task_id"]
-
-    background_properties = background_schema.get("properties", {})
-    assert {"request", "notify_on_completion", "isolated_thread", "completion_event_type"} <= set(
-        background_properties
-    )
-    assert background_schema.get("required") == ["request"]
+    assert send_schema.get("required") == ["agent", "message"]
+    assert {"task_id", "wait_seconds"} <= set(status_properties)
+    assert status_schema.get("required") == ["task_id"]
 
 
 @pytest.mark.asyncio
@@ -159,166 +139,6 @@ async def test_list_agents_returns_registry_entries() -> None:
     result = await _invoke(t, {"request": "list agents"})
     assert result["total_count"] == 1
     assert result["agents"][0]["name"] == "Hello World Agent"
-
-
-@pytest.mark.asyncio
-async def test_call_agent_uses_registry_and_a2a(monkeypatch) -> None:
-    registry = MagicMock()
-    registry.find_by_name.return_value = {
-        "name": "Builder Agent",
-        "transport": "http",
-        "url": "http://localhost:9999",
-        "status": "running",
-    }
-
-    dispatch_mock = AsyncMock(
-        return_value=(
-            {"success": True, "result": {"id": "task-123"}},
-            _tracked_task(),
-        )
-    )
-    monkeypatch.setattr("app.progenitor.tools.call_agent.dispatch_tracked_a2a_task", dispatch_mock)
-
-    tools = create_deepagent_tools(tool_registry=registry, state_manager=MagicMock())
-    t = _tool_by_name(tools, "call_agent")
-
-    result = await _invoke(
-        t, {"agent": "Builder Agent", "request": "hello", "timeout_seconds": 1.0}
-    )
-
-    assert result["task_id"] == "task-123"
-    assert result["agent"] == "Builder Agent"
-    dispatch_mock.assert_awaited_once()
-
-
-async def test_call_agent_rejects_acp_agent_with_acp_start_pointer() -> None:
-    registry = MagicMock()
-    registry.find_by_name.return_value = {
-        "name": "Claude",
-        "transport": "acp",
-        "acp": {"host": "progenitor-agent-claude", "port": 3001},
-    }
-    tools = create_deepagent_tools(tool_registry=registry, state_manager=MagicMock())
-
-    result = await _invoke(
-        _tool_by_name(tools, "call_agent"),
-        {"agent": "Claude", "request": "Implement the card"},
-    )
-
-    assert result["success"] is False
-    assert "acp_start" in result["error"]
-
-
-@pytest.mark.asyncio
-async def test_call_agent_uses_card_url_when_endpoint_missing(monkeypatch) -> None:
-    registry = MagicMock()
-    registry.find_by_name.return_value = {
-        "name": "Builder Agent",
-        "transport": "http",
-        "status": "running",
-    }
-
-    dispatch_mock = AsyncMock(
-        return_value=(
-            {"success": True, "result": {"id": "task-123"}},
-            _tracked_task(),
-        )
-    )
-    monkeypatch.setattr("app.progenitor.tools.call_agent.dispatch_tracked_a2a_task", dispatch_mock)
-
-    tools = create_deepagent_tools(tool_registry=registry, state_manager=MagicMock())
-    t = _tool_by_name(tools, "call_agent")
-
-    result = await _invoke(t, {"agent": "Builder Agent", "request": "hello"})
-    assert result["task_id"] == "task-123"
-    assert dispatch_mock.await_args.kwargs["agent_config"]["status"] == "running"
-
-
-@pytest.mark.asyncio
-async def test_call_agent_supports_url_only_registry_entry(monkeypatch) -> None:
-    registry = MagicMock()
-    registry.find_by_name.return_value = {
-        "name": "Builder Agent",
-        "transport": "http",
-        "url": "http://localhost:9200",
-    }
-
-    dispatch_mock = AsyncMock(
-        return_value=(
-            {"success": True, "result": {"id": "task-123"}},
-            _tracked_task(),
-        )
-    )
-    monkeypatch.setattr("app.progenitor.tools.call_agent.dispatch_tracked_a2a_task", dispatch_mock)
-
-    tools = create_deepagent_tools(tool_registry=registry, state_manager=MagicMock())
-    t = _tool_by_name(tools, "call_agent")
-
-    result = await _invoke(t, {"agent": "Builder Agent", "request": "hello"})
-    assert result["task_id"] == "task-123"
-    assert dispatch_mock.await_args.kwargs["agent_config"]["url"] == "http://localhost:9200"
-
-
-@pytest.mark.asyncio
-async def test_call_agent_unknown_agent_returns_error() -> None:
-    registry = MagicMock()
-    registry.find_by_name.return_value = None
-    registry.find_agent_by_capability.return_value = None
-
-    tools = create_deepagent_tools(tool_registry=registry, state_manager=MagicMock())
-    t = _tool_by_name(tools, "call_agent")
-
-    result = await _invoke(t, {"agent": "does-not-exist", "request": "hello"})
-    assert result.get("success") is False
-    assert "Unknown agent" in str(result.get("error"))
-
-
-@pytest.mark.asyncio
-async def test_call_agent_without_agent_routes_via_tool_llm(monkeypatch) -> None:
-    registry = MagicMock()
-    registry.get_agents.return_value = [
-        {
-            "name": "Builder Agent",
-            "transport": "http",
-            "url": "http://localhost:9200",
-            "description": "Handles builds",
-            "capabilities": ["build"],
-        }
-    ]
-    registry.find_by_name.return_value = {
-        "name": "Builder Agent",
-        "transport": "http",
-        "url": "http://localhost:9200",
-    }
-
-    llm_client = MagicMock()
-    llm_client.chat_structured = AsyncMock(
-        return_value=MagicMock(
-            agent_name="Builder Agent",
-            message="hello",
-            reasoning="Builder Agent matches the task.",
-        )
-    )
-
-    dispatch_mock = AsyncMock(
-        return_value=(
-            {"success": True, "result": {"id": "task-123"}},
-            _tracked_task(),
-        )
-    )
-    monkeypatch.setattr("app.progenitor.tools.call_agent.dispatch_tracked_a2a_task", dispatch_mock)
-
-    tools = create_deepagent_tools(
-        tool_registry=registry,
-        llm_client=llm_client,
-        state_manager=MagicMock(),
-    )
-    t = _tool_by_name(tools, "call_agent")
-
-    result = await _invoke(t, {"request": "hello"})
-    assert result["task_id"] == "task-123"
-    dispatch_mock.assert_awaited_once()
-    llm_client.chat_structured.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -383,11 +203,10 @@ async def test_shell_exec_receives_structured_kwargs(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_get_a2a_task_kwargs_populate_tool_args(monkeypatch) -> None:
-    """The adapter passes structured kwargs through as context.tool_args."""
+async def test_a2a_status_kwargs_populate_tool_args(monkeypatch) -> None:
+    """The adapter passes structured status kwargs through as tool arguments."""
     tools = create_deepagent_tools(state_manager=MagicMock())
-    tool = _tool_by_name(tools, "get_a2a_task")
-
+    tool = _tool_by_name(tools, "a2a_status")
     captured: dict[str, Any] = {}
 
     async def _fake_execute(self, context):  # type: ignore[no-untyped-def]
@@ -398,32 +217,20 @@ async def test_get_a2a_task_kwargs_populate_tool_args(monkeypatch) -> None:
         return ToolResult.ok({"status": "ok"})
 
     monkeypatch.setattr(
-        "app.progenitor.tools.get_a2a_task.GetA2ATaskTool.execute",
+        "app.progenitor.tools.a2a_sessions.A2AStatusTool.execute",
         _fake_execute,
         raising=True,
     )
-
-    await _invoke(tool, {"task_id": "task-xyz", "refresh": False, "history_length": 7})
-
+    await _invoke(tool, {"task_id": "task-xyz", "wait_seconds": 7})
     assert captured["user_input"] == ""
-    assert captured["tool_args"] == {
-        "task_id": "task-xyz",
-        "history_length": 7,
-        "refresh": False,
-    }
+    assert captured["tool_args"] == {"task_id": "task-xyz", "wait_seconds": 7}
 
 
 @pytest.mark.asyncio
 async def test_tool_call_id_reaches_tool_context(monkeypatch) -> None:
-    """Every wrapped system tool now carries an InjectedToolCallId parameter
-    (see adapters.py) so it can tag its own live-progress stream events (e.g.
-    call_agent's a2a_call_progress). Confirms the real id LangGraph's ToolNode
-    supplies at invocation time actually reaches ToolContext.tool_call_id --
-    this is the regression test for the empirical check done while building
-    that wiring."""
+    """Wrapped A2A tools receive LangGraph's real tool-call ID."""
     tools = create_deepagent_tools(state_manager=MagicMock())
-    tool = _tool_by_name(tools, "get_a2a_task")
-
+    tool = _tool_by_name(tools, "a2a_status")
     captured: dict[str, Any] = {}
 
     async def _fake_execute(self, context):  # type: ignore[no-untyped-def]
@@ -433,11 +240,9 @@ async def test_tool_call_id_reaches_tool_context(monkeypatch) -> None:
         return ToolResult.ok({"status": "ok"})
 
     monkeypatch.setattr(
-        "app.progenitor.tools.get_a2a_task.GetA2ATaskTool.execute",
+        "app.progenitor.tools.a2a_sessions.A2AStatusTool.execute",
         _fake_execute,
         raising=True,
     )
-
     await _invoke(tool, {"task_id": "task-xyz"}, tool_call_id="call_specific_id_789")
-
     assert captured["tool_call_id"] == "call_specific_id_789"

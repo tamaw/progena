@@ -240,7 +240,7 @@ function DraftAgentDetailBody({ draft, onChange }) {
         <header className="agents-section__head"><h2>Connections</h2></header>
         <div className="agents-draft-grid">
           <DraftField label="Tools" hint="Comma-separated tool names.">
-            <input value={draft.tools} onChange={set('tools')} placeholder="shell, mcp, call_agent" />
+            <input value={draft.tools} onChange={set('tools')} placeholder="shell, mcp, a2a_send" />
           </DraftField>
           <DraftField label="Skills" hint="Comma-separated /skills/ source paths.">
             <input value={draft.skills} onChange={set('skills')} placeholder="/skills/review/" />

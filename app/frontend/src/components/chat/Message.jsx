@@ -20,6 +20,7 @@ import {
   appendStreamingCursor,
   formatTimestamp,
 } from './messageRenderUtils';
+import { A2A_PRIMARY_TOOL_NAME } from './a2aTools';
 
 function isTimelineStreamEvent(event) {
   return isRenderableStreamEvent(event);
@@ -323,19 +324,13 @@ function MessageView({
         return typeof streamEventFilter !== 'function' || streamEventFilter({ eventType: 'subagent_start' });
       }
       if (item.kind === 'a2a_call') {
-        // Same reasoning as 'subagent' above -- gate on the dedicated "a2a"
-        // category (see categoryForEventType in streamFilters.js). call_agent
-        // has no dedicated start event of its own (Progenitor's dispatch of
-        // it is a plain tool_start, tagged via metadata.tool_name, same as
-        // any other tool -- see applyA2ACallEvent in liveAssistantTurnModel.js),
-        // so the synthetic sentinel event needs that metadata too or it would
-        // fall into the generic 'tools' category instead of 'a2a'. The
-        // card's own tool_start/tool_result rows also render their own plain
-        // stream_event rows (see TimelineItem.jsx) gated independently by
-        // the same filter via their own real metadata, so this only needs
-        // to gate the card itself.
+        // A2A cards are not a single event, so gate on the same category as
+        // the generic lifecycle event that seeded the card.
         return typeof streamEventFilter !== 'function'
-          || streamEventFilter({ eventType: 'tool_start', metadata: { tool_name: 'call_agent' } });
+          || streamEventFilter({
+            eventType: 'tool_start',
+            metadata: { tool_name: A2A_PRIMARY_TOOL_NAME },
+          });
       }
       return true;
     });

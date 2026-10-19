@@ -51,7 +51,7 @@ test.describe('PR342 journey 15: object agent registration and prompt edits', ()
     await page.getByRole('textbox', { name: 'Agent name', exact: true }).fill(name);
     await page.getByPlaceholder('What this agent is for…').fill(`Disposable PR342 functional test agent ${run}`);
     await page.getByPlaceholder('You are…').fill(firstPrompt);
-    await page.getByPlaceholder('shell, mcp, call_agent').fill('');
+    await page.getByPlaceholder('shell, mcp, a2a_send').fill('');
     await page.getByPlaceholder('/skills/review/').fill('');
     console.log(`PR342_TEST_RESOURCE id=${slug}`);
     await page.getByRole('button', { name: 'Create agent' }).click();

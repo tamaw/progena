@@ -12,6 +12,7 @@ from .payloads import (
 from .tasks import (
     DEFAULT_A2A_HISTORY_LENGTH,
     DEFAULT_A2A_POLL_SECONDS,
+    cancel_tracked_a2a_task,
     dispatch_tracked_a2a_task,
     enqueue_completion_followup,
     refresh_tracked_a2a_task,
@@ -24,6 +25,7 @@ __all__ = [
     "DEFAULT_A2A_POLL_SECONDS",
     "build_completion_message",
     "build_task_response",
+    "cancel_tracked_a2a_task",
     "dispatch_tracked_a2a_task",
     "enqueue_completion_followup",
     "extract_message_text",

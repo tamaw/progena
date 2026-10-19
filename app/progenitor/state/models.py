@@ -256,7 +256,7 @@ class A2ATaskRecord(BaseModel):
     agent_card_url: str | None = None
     transport: str = "http"
     context_id: str | None = None
-    source: str = "call_agent"
+    source: str = "a2a_send"
     request_text: str = ""
     request_metadata: dict[str, Any] = Field(default_factory=dict)
     status: A2ATaskStatus = A2ATaskStatus.SUBMITTED
@@ -347,7 +347,7 @@ class ACPTaskRecord(BaseModel):
     messages: list[dict[str, Any]] = Field(default_factory=list)
     mode: Literal["default", "acceptEdits", "plan", "bypassPermissions"] | None = None
     answers: dict[str, Any] = Field(default_factory=dict)
-    source: str = "call_agent"
+    source: str = "workflow"
     request_metadata: dict[str, Any] = Field(default_factory=dict)
     notify_on_completion: bool = True
     command: str = ""
