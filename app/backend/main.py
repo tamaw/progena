@@ -14,6 +14,7 @@ Features (from text-generation-webui patterns):
 """
 
 import asyncio
+import base64
 import inspect
 import json
 import logging
@@ -80,6 +81,8 @@ from .sse_client import SSEProgenitorClient, get_sse_client, start_sse_client_wi
 from .telegram_client import (
     TelegramClient,
     TelegramDraftStreamingError,
+    TelegramImage,
+    TelegramMediaError,
     get_telegram_client,
     init_telegram_client,
     stop_telegram_client,
@@ -693,6 +696,58 @@ async def _relay_alert(
         logger.warning("Failed to relay alert %s: %s", alert.id, e)
 
 
+async def _prepare_telegram_images(
+    telegram: TelegramClient,
+    images: list[TelegramImage],
+    metadata: dict[str, Any],
+) -> tuple[list[str], list[str], list[str]]:
+    """Download and store inbound Telegram images.
+
+    Returns ``(data_urls, attachment_ids, errors)``: a base64 ``data:`` URL and
+    a stored attachment id per usable image, and a user-facing reason for each
+    image that could not be used.
+    """
+    manager = get_attachment_manager()
+    data_urls: list[str] = []
+    attachment_ids: list[str] = []
+    errors: list[str] = []
+    for index, image in enumerate(images, start=1):
+        label = f"image {index}" if len(images) > 1 else "image"
+        try:
+            data = await telegram.download_file(image.file_id, telegram.config.max_image_bytes)
+        except TelegramMediaError as e:
+            logger.warning("Telegram %s download failed: %s", image.filename, e)
+            errors.append(f"{label}: {e}")
+            continue
+        result = await manager.process_file(
+            image.filename,
+            data,
+            source_type="telegram",
+            metadata={
+                "chat_id": metadata.get("chat_id"),
+                "message_id": metadata.get("message_id"),
+                "media_group_id": metadata.get("media_group_id"),
+            },
+        )
+        if result.error:
+            logger.warning("Telegram %s could not be stored: %s", image.filename, result.error)
+            errors.append(f"{label}: {result.error}")
+            continue
+        attachment_ids.append(result.id)
+        data_urls.append(f"data:{image.mime_type};base64,{base64.b64encode(data).decode('ascii')}")
+    return data_urls, attachment_ids, errors
+
+
+def _append_agent_note(message: str, note: str) -> str:
+    """Append ``note`` to the machine-only section after ``ATTACHMENT_CONTEXT_MARKER``
+    (creating it if needed), so it reaches the LLM but is never shown as chat text."""
+    if ATTACHMENT_CONTEXT_MARKER in message:
+        return f"{message}\n\n{note}"
+    if not message.strip():
+        return f"{ATTACHMENT_CONTEXT_MARKER}\n{note}"
+    return f"{message}\n\n{ATTACHMENT_CONTEXT_MARKER}\n{note}"
+
+
 async def _handle_telegram_agent_message(
     telegram: TelegramClient,
     progenitor: ProgenitorClient | SSEProgenitorClient,
@@ -700,7 +755,40 @@ async def _handle_telegram_agent_message(
     message: str,
     metadata: dict[str, Any],
 ) -> str | None:
-    """Handle an inbound Telegram chat by streaming the reply back to Telegram."""
+    """Handle an inbound Telegram chat by streaming the reply back to Telegram.
+
+    Images (``metadata["images"]``) are stored as thread attachments and sent
+    to the agent inline as multimodal input; any that cannot be used are
+    reported to the user and noted for the agent.
+    """
+    message_thread_id = metadata.get("message_thread_id")
+    conversation_id = _telegram_conversation_id(chat_id, message_thread_id)
+    request_metadata: dict[str, Any] = {"thread_id": conversation_id, "source": SOURCE_TELEGRAM}
+    image_urls: list[str] = []
+    image_errors = list(metadata.get("image_errors") or [])
+    if metadata.get("images"):
+        image_urls, attachment_ids, download_errors = await _prepare_telegram_images(
+            telegram, metadata["images"], metadata
+        )
+        image_errors += download_errors
+        if attachment_ids:
+            request_metadata["attachments"] = attachment_ids
+            message = _resolve_message_attachments(message, request_metadata, conversation_id)
+    if image_errors:
+        await telegram.send_message_to_chat(
+            chat_id,
+            "⚠️ Some of what you sent could not be used:\n"
+            + "\n".join(f"• {error}" for error in image_errors),
+            message_thread_id=message_thread_id,
+        )
+        if not image_urls and not message.strip():
+            return None
+        message = _append_agent_note(
+            message,
+            "Could not be read (the user has been told):\n"
+            + "\n".join(f"- {error}" for error in image_errors),
+        )
+
     max_retries = 2
     for attempt in range(max_retries + 1):
         try:
@@ -716,17 +804,17 @@ async def _handle_telegram_agent_message(
                 await progenitor.start()
 
             request_id = f"telegram-{chat_id}-{uuid.uuid4().hex[:8]}"
-            conversation_id = _telegram_conversation_id(chat_id, metadata.get("message_thread_id"))
             streamed_chars = await telegram.stream_agent_response_to_chat(
                 chat_id,
                 _stream_text_chunks(
                     progenitor.send_message_stream_events(
                         message,
                         request_id=request_id,
-                        metadata={"thread_id": conversation_id, "source": SOURCE_TELEGRAM},
+                        metadata=dict(request_metadata),
+                        images=image_urls or None,
                     )
                 ),
-                message_thread_id=metadata.get("message_thread_id"),
+                message_thread_id=message_thread_id,
             )
 
             logger.info(

@@ -171,15 +171,23 @@ class DeepAgentSSEStream:
         received_at: float | None = None,
         attachments: list[dict[str, Any]] | None = None,
         source: str | None = None,
+        images: list[dict[str, Any]] | None = None,
     ) -> AsyncGenerator[dict[str, Any]]:
-        """Yield SSE stream items from ``graph.astream``."""
+        """Yield SSE stream items from ``graph.astream``.
+
+        ``images`` are LangChain ``image_url`` content blocks; when present the
+        user message is multimodal (a text block followed by the images).
+        """
 
         additional_kwargs: dict[str, Any] = {
             "created_at": received_at if received_at is not None else time.time()
         }
         if attachments:
             additional_kwargs["attachments"] = attachments
-        human_message = HumanMessage(content=message, additional_kwargs=additional_kwargs)
+        content: str | list[str | dict[str, Any]] = message
+        if images:
+            content = [{"type": "text", "text": message}, *images] if message else [*images]
+        human_message = HumanMessage(content=content, additional_kwargs=additional_kwargs)
         graph_input: dict[str, Any] = {"messages": [human_message]}
         self._trace_begin(thread_id=thread_id)
         self.state["current_input"] = message

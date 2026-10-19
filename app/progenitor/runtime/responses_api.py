@@ -63,8 +63,12 @@ def _human_content_parts(content: Any) -> list[dict[str, Any]]:
         parts: list[dict[str, Any]] = []
         for block in content:
             if isinstance(block, dict):
-                if block.get("type") == "input_text":
+                kind = block.get("type")
+                url = _image_url(block) if kind in ("image", "image_url") else None
+                if kind in ("input_text", "text"):
                     parts.append({"type": "input_text", "text": str(block.get("text", ""))})
+                elif url is not None:
+                    parts.append({"type": "input_image", "image_url": url, "detail": "auto"})
                 else:
                     parts.append(dict(block))
             else:

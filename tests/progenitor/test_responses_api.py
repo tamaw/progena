@@ -48,6 +48,21 @@ class TestMessagesToConversationItems:
             {"type": "input_text", "text": "b"},
         ]
 
+    def test_human_multimodal_content_maps_to_input_parts(self) -> None:
+        url = "data:image/jpeg;base64,QUJD"
+        msg = HumanMessage(
+            content=[
+                {"type": "text", "text": "look"},
+                {"type": "image_url", "image_url": {"url": url}},
+            ],
+            id="h3",
+        )
+        items = messages_to_conversation_items([msg], "conv1")
+        assert items[0]["content"] == [
+            {"type": "input_text", "text": "look"},
+            {"type": "input_image", "image_url": url, "detail": "auto"},
+        ]
+
     def test_system_message(self) -> None:
         msg = SystemMessage(content="sys", id="s1")
         items = messages_to_conversation_items([msg], "conv1")
