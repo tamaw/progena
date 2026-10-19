@@ -27,14 +27,25 @@ subscribeUiEvent((event) => {
 });
 
 export function watchRoutineRuns(agentsUrl, agentId) {
-  const watch = { agentsUrl, agentId, selection: {} };
+  const watch = { agentsUrl, agentId, selection: {}, selectionKey: null, selectionOperation: null };
+  // Identical selections share one request: the page re-selects the same thread
+  // on mount and after starting a run. Reconnects bypass this and always resubmit.
+  const selectSubscribed = (selection) => {
+    const key = JSON.stringify(selection);
+    if (watch.selectionKey === key) return watch.selectionOperation;
+    watch.selection = selection;
+    watch.selectionKey = key;
+    const operation = submit(watch, true);
+    watch.selectionOperation = operation;
+    operation.catch(() => {
+      if (watch.selectionOperation === operation) watch.selectionKey = null;
+    });
+    return operation;
+  };
   activeWatch = watch;
-  void submit(watch, true).catch(() => {});
+  void selectSubscribed({}).catch(() => {});
   return {
-    select(selection = {}) {
-      watch.selection = selection;
-      return submit(watch, true);
-    },
+    select: (selection = {}) => selectSubscribed(selection),
     close() {
       if (activeWatch !== watch) return;
       activeWatch = null;
