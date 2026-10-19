@@ -11,6 +11,7 @@ from app.progenitor.agent.backends import (
     create_progenitor_backend,
 )
 from app.progenitor.agent.state_backend import RepoDirectoryBackend
+from app.progenitor.document_types import BUILTIN_DOCUMENT_TYPES
 
 
 class FakeContentStateManager(MagicMock):
@@ -41,6 +42,9 @@ class FakeContentStateManager(MagicMock):
 
     async def list_content_documents(self, kind: str) -> list[tuple[str, str]]:
         return list(self._docs[kind].items())
+
+    async def list_document_types(self):
+        return {item.id: item for item in BUILTIN_DOCUMENT_TYPES}
 
 
 class TestBackendFactory:
