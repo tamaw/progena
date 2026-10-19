@@ -1,16 +1,22 @@
-import { useCallback, useMemo, useState } from 'react';
-import { useDispatch } from 'react-redux';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useDispatch, useSelector } from 'react-redux';
 import { useNavigate } from 'react-router-dom';
 import { DraftField } from '../components/common/DetailCards';
 import InlineFailure from '../components/common/InlineFailure';
 import PopupModal from '../components/common/PopupModal';
 import Modal from '../components/common/Modal';
+import useEntityDraft from '../hooks/useEntityDraft';
 import useAgentCatalogue from '../hooks/useAgentCatalogue';
 import useConfirmAction from '../hooks/useConfirmAction';
-import useUiAction from '../hooks/useUiAction';
+import { createUuid } from '../lib/uuid';
+import { requestAcknowledged } from '../store/http';
+import {
+  draftChanged,
+  draftDiscarded,
+  entityDraftKey,
+} from '../store/editorDraftsSlice';
 import {
   deleteAgentProfile,
-  fetchAgentProfiles,
   updateObjectAgentProfile,
 } from '../store/uiDataSlice';
 import {
@@ -49,6 +55,8 @@ const AGENT_TYPES = [
 ];
 
 const AGENT_TYPE_LABELS = Object.fromEntries(AGENT_TYPES.map((type) => [type.kind, type.label]));
+
+const NEW_AGENT_SENTINEL = 'create';
 
 function makeDraftAgent(kind) {
   return {
@@ -191,48 +199,115 @@ export default function AgentsPage() {
   const [activeFilter, setActiveFilter] = useState('All');
   const [search, setSearch] = useState('');
   const [sortMode, setSortMode] = useState('Type');
-  // Object-agent drafts are keyed by route identity, so switching routes
-  // cannot expose an old manifest beneath the newly selected profile.
-  const [objectAgentDraftState, setObjectAgentDraftState] = useState(null);
-  const objectAgentDraft = objectAgentDraftState?.agentId === effectiveAgentId
-    ? objectAgentDraftState.content
-    : null;
+  const createDraftKey = entityDraftKey('agent-create', NEW_AGENT_SENTINEL, 'object');
+  const [draftAgent, setDraftAgent, createDraftControls] = useEntityDraft(createDraftKey, null);
+  const agentViewKey = entityDraftKey('agents', 'page', 'view');
+  const [agentView, setAgentView] = useEntityDraft(agentViewKey, null);
+  const showNewAgentDraft = agentView === 'create' && Boolean(draftAgent);
+  const objectDraftKey = entityDraftKey('agent-system', effectiveAgentId, 'system');
+  const [objectAgentDraft, setObjectAgentDraft, objectDraftControls] = useEntityDraft(objectDraftKey, null);
+  const {
+    clear: clearCreateDraft,
+    beginSave: beginCreateDraftSave,
+    trackSave: trackCreateDraftSave,
+    failSave: failCreateDraftSave,
+    saving: createDraftSaving,
+    error: createDraftError,
+  } = createDraftControls;
+  const {
+    clear: clearObjectDraft,
+    beginSave: beginObjectDraftSave,
+    trackSave: trackObjectDraftSave,
+    failSave: failObjectDraftSave,
+    hasDraft: hasObjectDraft,
+    saving: objectDraftSaving,
+    error: objectDraftError,
+  } = objectDraftControls;
+  const [renameIntent, setRenameIntent] = useState(null);
+  // The confirmation effect runs once per intent; a ref (not state) records
+  // that, so applying an external confirmation never re-renders from an effect.
+  const appliedRenameRef = useRef(null);
+  const renameSourceDraft = useSelector((state) => (
+    renameIntent
+      ? state.editorDrafts?.entries[entityDraftKey('agent-system', renameIntent.agentId, 'system')]
+      : null
+  ));
+  const renameConfirmed = useSelector((state) => (
+    renameIntent?.requestId
+      && state.realtime?.receivedRequestEvents?.[renameIntent.requestId]?.some(
+        (event) => event.type === 'agents.snapshot',
+      )
+  ));
   const [newAgentOpen, setNewAgentOpen] = useState(false);
-  const [draftAgent, setDraftAgent] = useState(null);
   const [deleteTarget, setDeleteTarget] = useState(null);
-  const createAction = useUiAction('new-agent');
-  const objectSaveAction = useUiAction(effectiveAgentId);
   const deleteAction = useConfirmAction(effectiveAgentId);
 
+  useEffect(() => {
+    if (agentView === 'create' && !draftAgent && !createDraftSaving) {
+      setAgentView('selected');
+    }
+  }, [agentView, createDraftSaving, draftAgent, setAgentView]);
+
+  useEffect(() => {
+    if (
+      !renameIntent
+      || !renameConfirmed
+      || appliedRenameRef.current === renameIntent
+      || effectiveAgentId !== renameIntent.agentId
+    ) {
+      return;
+    }
+    appliedRenameRef.current = renameIntent;
+
+    if (renameSourceDraft) {
+      const destinationKey = entityDraftKey('agent-system', renameIntent.newId, 'system');
+      dispatch(draftChanged({ key: destinationKey, value: renameSourceDraft.value }));
+      dispatch(draftDiscarded(objectDraftKey));
+    }
+    selectAgent(renameIntent.newId);
+  }, [
+    dispatch,
+    effectiveAgentId,
+    objectDraftKey,
+    renameConfirmed,
+    renameIntent,
+    renameSourceDraft,
+    selectAgent,
+  ]);
+
   const handleNewAgent = useCallback(() => {
-    createAction.clearError();
     setNewAgentOpen(true);
-  }, [createAction]);
+  }, []);
 
   const handlePickType = useCallback((kind) => {
-    createAction.clearError();
-    setDraftAgent(makeDraftAgent(kind));
+    setDraftAgent((current) => current ?? makeDraftAgent(kind));
+    setAgentView('create');
     setNewAgentOpen(false);
-  }, [createAction]);
+  }, [setAgentView, setDraftAgent]);
 
   const updateDraft = useCallback((field, value) => {
-    createAction.clearError();
     setDraftAgent((current) => (current ? { ...current, [field]: value } : current));
-  }, [createAction]);
+  }, [setDraftAgent]);
 
   const discardDraft = useCallback(() => {
-    createAction.clearError();
-    setDraftAgent(null);
-  }, [createAction]);
+    clearCreateDraft();
+    setAgentView('selected');
+  }, [clearCreateDraft, setAgentView]);
 
   const createDraft = useCallback(async () => {
-    if (!draftAgent) return;
+    if (!draftAgent || createDraftSaving) return;
+    const ticket = beginCreateDraftSave();
+    if (!ticket) return;
     const list = (value) => value.split(',').map((item) => item.trim()).filter(Boolean);
-    await createAction.run('Create agent', async ({ isCurrent }) => {
-      const response = await fetch(`${agentsUrl}/object`, {
+    const requestId = createUuid();
+    trackCreateDraftSave(ticket, {
+      requestId,
+      events: ['agents.snapshot'],
+    });
+    try {
+      await requestAcknowledged(`${agentsUrl}/object`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+        body: {
           name: draftAgent.name,
           description: draftAgent.summary,
           version: draftAgent.version,
@@ -240,27 +315,26 @@ export default function AgentsPage() {
           system_prompt: draftAgent.prompt,
           tools: list(draftAgent.tools),
           skills: list(draftAgent.skills),
-        }),
+        },
+        requestId,
       });
-      if (!response.ok) {
-        const body = await response.json().catch(() => ({}));
-        const error = new Error(typeof body.detail === 'string' ? body.detail : 'Unable to create object agent.');
-        error.status = response.status;
-        error.detail = body.detail;
-        throw error;
-      }
-      if (isCurrent()) {
-        setDraftAgent(null);
-        dispatch(fetchAgentProfiles({ agentsUrl }));
-      }
-    });
-  }, [agentsUrl, createAction, dispatch, draftAgent]);
+    } catch (error) {
+      failCreateDraftSave(ticket, error);
+    }
+  }, [
+    agentsUrl,
+    beginCreateDraftSave,
+    createDraftSaving,
+    draftAgent,
+    failCreateDraftSave,
+    trackCreateDraftSave,
+  ]);
 
 
   const handleSelectAgent = useCallback((id) => {
-    setDraftAgent(null);
+    setAgentView('selected');
     selectAgent(id);
-  }, [selectAgent]);
+  }, [selectAgent, setAgentView]);
 
   const requestDeleteAgent = useCallback(() => {
     if (!selectedAgent) return;
@@ -300,40 +374,50 @@ export default function AgentsPage() {
   }
 
   const startEditObjectAgent = useCallback(() => {
-    objectSaveAction.clearError();
-    if (effectiveAgentId) {
-      setObjectAgentDraftState({
-        agentId: effectiveAgentId,
-        content: selectedAgent?.card?.raw_content ?? '',
-      });
-    }
-  }, [effectiveAgentId, objectSaveAction, selectedAgent]);
+    setObjectAgentDraft(selectedAgent?.card?.raw_content ?? '');
+  }, [selectedAgent, setObjectAgentDraft]);
 
   const cancelEditObjectAgent = useCallback(() => {
-    objectSaveAction.clearError();
-    setObjectAgentDraftState((current) => (
-      current?.agentId === effectiveAgentId ? null : current
-    ));
-  }, [effectiveAgentId, objectSaveAction]);
+    clearObjectDraft();
+    setRenameIntent(null);
+  }, [clearObjectDraft]);
 
   const saveObjectAgentDraft = useCallback(async () => {
-    if (objectAgentDraft === null || !effectiveAgentId) return;
-    await objectSaveAction.run('Save agent', async ({ isCurrent }) => {
-      await dispatch(updateObjectAgentProfile({
-        agentsUrl,
-        agentId: effectiveAgentId,
-        manifest: { content: objectAgentDraft },
-      })).unwrap();
-      const name = extractManifestName(objectAgentDraft);
-      if (isCurrent()) {
-        setObjectAgentDraftState((current) => (
-          current?.agentId === effectiveAgentId ? null : current
-        ));
-        const newId = name ? `object-${slugifyAgentName(name)}` : null;
-        if (newId && newId !== effectiveAgentId) selectAgent(newId);
-      }
+    if (objectAgentDraft === null || !effectiveAgentId || objectDraftSaving) return;
+    const agentId = effectiveAgentId;
+    const content = objectAgentDraft;
+    const ticket = beginObjectDraftSave();
+    if (!ticket) return;
+    const name = extractManifestName(content);
+    const newId = name ? `object-${slugifyAgentName(name)}` : null;
+    const operation = dispatch(updateObjectAgentProfile({
+      agentsUrl,
+      agentId,
+      manifest: { content },
+    }));
+    setRenameIntent(
+      newId && newId !== agentId ? { agentId, newId, requestId: operation.requestId } : null,
+    );
+    trackObjectDraftSave(ticket, {
+      requestId: operation.requestId,
+      events: ['agents.snapshot'],
     });
-  }, [agentsUrl, dispatch, effectiveAgentId, objectAgentDraft, objectSaveAction, selectAgent]);
+    try {
+      await operation.unwrap();
+    } catch (error) {
+      setRenameIntent(null);
+      failObjectDraftSave(ticket, error);
+    }
+  }, [
+    agentsUrl,
+    beginObjectDraftSave,
+    dispatch,
+    effectiveAgentId,
+    failObjectDraftSave,
+    objectAgentDraft,
+    objectDraftSaving,
+    trackObjectDraftSave,
+  ]);
 
   return (
     <PageShell>
@@ -376,7 +460,7 @@ export default function AgentsPage() {
         </PaneListFooter>
       </PaneList>
 
-      {draftAgent ? (
+      {showNewAgentDraft && draftAgent ? (
         <DetailPane className="detail-pane--dense agents-detail agents-detail--draft" label="New agent">
           <DetailHeader
             title={(
@@ -390,8 +474,8 @@ export default function AgentsPage() {
             )}
             actions={(
               <DetailHeaderActions>
-                <DetailHeaderAction icon={<DeleteActionIcon />} label="Discard" tooltip="Discard draft" ariaLabel="Discard draft" onClick={discardDraft} disabled={createAction.busy} />
-                <DetailHeaderAction icon={<SaveActionIcon />} label={createAction.busy ? 'Creating…' : 'Create'} tooltip="Create agent" ariaLabel="Create agent" variant="primary" onClick={createDraft} disabled={createAction.busy} />
+                <DetailHeaderAction icon={<DeleteActionIcon />} label="Discard" tooltip="Discard draft" ariaLabel="Discard draft" onClick={discardDraft} disabled={createDraftSaving} />
+                <DetailHeaderAction icon={<SaveActionIcon />} label={createDraftSaving ? 'Creating…' : 'Create'} tooltip="Create agent" ariaLabel="Create agent" variant="primary" onClick={createDraft} disabled={createDraftSaving} />
               </DetailHeaderActions>
             )}
             meta={[
@@ -399,7 +483,7 @@ export default function AgentsPage() {
               <span key="hint" className="muted">Unsaved draft</span>,
             ]}
           />
-          <InlineFailure failure={createAction.error} operation="Create agent" />
+          <InlineFailure failure={createDraftError} operation="Create agent" />
           <DraftAgentDetailBody draft={draftAgent} onChange={updateDraft} />
         </DetailPane>
       ) : selectedAgent ? (
@@ -459,19 +543,14 @@ export default function AgentsPage() {
                 <ObjectAgentDetailBody
                   agent={selectedAgent}
                   agentsUrl={agentsUrl}
-                  editing={objectAgentDraft !== null}
+                  editing={hasObjectDraft}
                   draft={objectAgentDraft}
-                  onDraftChange={(content) => {
-                    objectSaveAction.clearError();
-                    setObjectAgentDraftState((current) => (
-                      current?.agentId === effectiveAgentId ? { ...current, content } : current
-                    ));
-                  }}
+                  onDraftChange={setObjectAgentDraft}
                   onStartEdit={startEditObjectAgent}
                   onCancelEdit={cancelEditObjectAgent}
                   onSaveEdit={saveObjectAgentDraft}
-                  saving={objectSaveAction.busy}
-                  error={objectSaveAction.error}
+                  saving={objectDraftSaving}
+                  error={objectDraftError}
                 />
               )}
         </DetailPane>

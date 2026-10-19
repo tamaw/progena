@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useDispatch, useSelector, useStore } from 'react-redux';
 import { useNavigate, useParams } from 'react-router-dom';
 import { buildEntityPath, useEntityUrlSync } from '../lib/routes';
+import { createUuid } from '../lib/uuid';
 import {
   PaneEmptyState,
   PaneList,
@@ -31,10 +32,12 @@ import { useConfig } from '../context/ConfigContext';
 import { useNotifications } from '../context/NotificationContext';
 import { useWidgetsApi } from '../hooks/api/useWidgetsApi';
 import useConfirmAction from '../hooks/useConfirmAction';
+import useEntityDraft from '../hooks/useEntityDraft';
 import useInlineTitleEditor from '../hooks/useInlineTitleEditor';
 import useUiAction from '../hooks/useUiAction';
 import { reportFailure } from '../lib/failures';
 import { fetchSchedules, selectSchedulesState, selectUiWidgets } from '../store/uiDataSlice';
+import { entityDraftKey } from '../store/editorDraftsSlice';
 import { selectRealtimeConnected } from '../store/realtimeSlice';
 
 const SCHEDULE_FILTERS = ['All', 'Active', 'Paused', 'Completed'];
@@ -292,16 +295,10 @@ function SchedulesPage() {
   const [activeFilter, setActiveFilter] = useState('All');
   const [search, setSearch] = useState('');
   const [sortMode, setSortMode] = useState('Type');
-  const [isEditingIntent, setIsEditingIntent] = useState(false);
-  const [intentDraft, setIntentDraft] = useState('');
-  const intentInputRef = useRef(null);
-  const [isEditingTrigger, setIsEditingTrigger] = useState(false);
-  const [triggerText, setTriggerText] = useState('');
-  const triggerInputRef = useRef(null);
   const [intentValidationFailure, setIntentValidationFailure] = useState(null);
   const [triggerValidationFailure, setTriggerValidationFailure] = useState(null);
-  const [intentEditScopeKey, setIntentEditScopeKey] = useState(null);
-  const [triggerEditScopeKey, setTriggerEditScopeKey] = useState(null);
+  const intentInputRef = useRef(null);
+  const triggerInputRef = useRef(null);
   const logsRequestRef = useRef(0);
   const requestSchedules = useCallback(() => (
     dispatch(fetchSchedules({ schedulesUrl: getApiUrl('schedules') }))
@@ -415,38 +412,38 @@ function SchedulesPage() {
   const scheduleTitle = selectedSchedule?.name || 'Untitled schedule';
 
   const scheduleScopeKey = selectedSchedule?.id ?? null;
-  const titleAction = useUiAction(scheduleScopeKey);
+  const intentKey = entityDraftKey('schedule', scheduleScopeKey, 'intent');
+  const triggerKey = entityDraftKey('schedule', scheduleScopeKey, 'trigger');
+  const [intentDraft, setIntentDraft, intentDraftControls] = useEntityDraft(
+    intentKey,
+    { editing: false, text: selectedSchedule?.message || '' },
+  );
+  const [triggerDraft, setTriggerDraft, triggerDraftControls] = useEntityDraft(
+    triggerKey,
+    { editing: false, text: selectedSchedule ? cadenceFor(selectedSchedule) : '' },
+  );
+  const {
+    beginSave: beginIntentSave,
+    clear: clearIntentDraft,
+    error: intentSaveError,
+    failSave: failIntentSave,
+    saving: intentSaving,
+    trackSave: trackIntentSave,
+  } = intentDraftControls;
+  const {
+    beginSave: beginTriggerSave,
+    clear: clearTriggerDraft,
+    error: triggerSaveError,
+    failSave: failTriggerSave,
+    saving: triggerSaving,
+    trackSave: trackTriggerSave,
+  } = triggerDraftControls;
   const pauseAction = useUiAction(scheduleScopeKey);
-  const intentAction = useUiAction(scheduleScopeKey);
-  const triggerAction = useUiAction(scheduleScopeKey);
   const deleteConfirmation = useConfirmAction(scheduleScopeKey);
-  const { run: runTitleAction } = titleAction;
   const { run: runPauseAction } = pauseAction;
-  const {
-    run: runIntentAction,
-    clearError: clearIntentActionError,
-    busy: intentActionBusy,
-    error: intentActionError,
-  } = intentAction;
-  const {
-    run: runTriggerAction,
-    clearError: clearTriggerActionError,
-    busy: triggerActionBusy,
-    error: triggerActionError,
-  } = triggerAction;
   const { request: requestScheduleDelete } = deleteConfirmation;
-  // An edit session belongs to the schedule it started on; leaving that schedule discards it.
-  if (isEditingIntent && intentEditScopeKey !== scheduleScopeKey) {
-    setIsEditingIntent(false);
-    setIntentDraft('');
-    setIntentValidationFailure(null);
-  }
-  if (isEditingTrigger && triggerEditScopeKey !== scheduleScopeKey) {
-    setIsEditingTrigger(false);
-    setTriggerValidationFailure(null);
-  }
-  const editingIntent = isEditingIntent && intentEditScopeKey === scheduleScopeKey;
-  const editingTrigger = isEditingTrigger && triggerEditScopeKey === scheduleScopeKey;
+  const editingIntent = Boolean(intentDraft.editing);
+  const editingTrigger = Boolean(triggerDraft.editing);
 
   const reportActionFailure = useCallback((operation, result) => {
     if (!result?.ok && result?.error) {
@@ -454,17 +451,28 @@ function SchedulesPage() {
     }
   }, [show]);
 
-  const commitTitle = useCallback((nextTitle) => {
-    if (!selectedSchedule) {
-      return Promise.resolve({ ok: false, skipped: true });
-    }
-    return runTitleAction('Rename schedule', async () => {
-      // The backend emits schedule.snapshot; the canonical title remains store-owned.
-      await updateWidget(`schedule:${selectedSchedule.id}`, { name: nextTitle });
+  const commitTitle = useCallback(async (nextTitle, { ticket, trackSave, failSave }) => {
+    if (!selectedSchedule) return { ok: false, skipped: true };
+    const requestId = createUuid();
+    trackSave(ticket, {
+      requestId,
+      events: ['schedule.snapshot'],
     });
-  }, [runTitleAction, selectedSchedule, updateWidget]);
+    try {
+      await updateWidget(
+        `schedule:${selectedSchedule.id}`,
+        { name: nextTitle },
+        { requestId },
+      );
+      return { ok: true };
+    } catch (error) {
+      failSave(ticket, error);
+      throw error;
+    }
+  }, [selectedSchedule, updateWidget]);
   const titleEditor = useInlineTitleEditor({
     scopeKey: scheduleScopeKey,
+    kind: 'schedule',
     title: scheduleTitle,
     onCommit: commitTitle,
   });
@@ -495,42 +503,54 @@ function SchedulesPage() {
   }, [editingIntent]);
 
   const startIntentEdit = useCallback(() => {
-    setIntentEditScopeKey(scheduleScopeKey);
     setIntentValidationFailure(null);
-    clearIntentActionError();
-    setIntentDraft(selectedSchedule?.message || '');
-    setIsEditingIntent(true);
-  }, [clearIntentActionError, scheduleScopeKey, selectedSchedule]);
+    setIntentDraft((current) => ({ ...current, editing: true }));
+  }, [setIntentDraft]);
 
   const cancelIntentEdit = useCallback(() => {
-    if (intentActionBusy) {
-      return;
-    }
+    if (intentSaving) return;
     setIntentValidationFailure(null);
-    setIsEditingIntent(false);
-    setIntentDraft('');
-  }, [intentActionBusy]);
+    clearIntentDraft();
+  }, [clearIntentDraft, intentSaving]);
 
   const saveIntentEdit = useCallback(async () => {
-    if (!selectedSchedule) return;
-    const normalizedIntent = intentDraft.trim();
+    if (!selectedSchedule || intentSaving) return;
+    const target = selectedSchedule;
+    const normalizedIntent = intentDraft.text.trim();
     if (!normalizedIntent) {
       setIntentValidationFailure('Describe what the schedule should do.');
       return;
     }
-    if (normalizedIntent === (selectedSchedule.message || '')) {
+    if (normalizedIntent === (target.message || '')) {
       cancelIntentEdit();
       return;
     }
-    const result = await runIntentAction('Save schedule intent', async ({ isCurrent }) => {
-      // schedule.snapshot is the canonical update for the instruction.
-      await updateWidget(`schedule:${selectedSchedule.id}`, { instruction: normalizedIntent });
-      if (isCurrent()) {
-        setIsEditingIntent(false);
-      }
+    const ticket = beginIntentSave();
+    if (!ticket) return;
+    const requestId = createUuid();
+    trackIntentSave(ticket, {
+      requestId,
+      events: ['schedule.snapshot'],
     });
-    return result;
-  }, [cancelIntentEdit, intentDraft, runIntentAction, selectedSchedule, updateWidget]);
+    try {
+      await updateWidget(
+        `schedule:${target.id}`,
+        { instruction: normalizedIntent },
+        { requestId },
+      );
+    } catch (error) {
+      failIntentSave(ticket, error);
+    }
+  }, [
+    beginIntentSave,
+    cancelIntentEdit,
+    failIntentSave,
+    intentDraft.text,
+    intentSaving,
+    selectedSchedule,
+    trackIntentSave,
+    updateWidget,
+  ]);
 
   useEffect(() => {
     if (editingTrigger) {
@@ -541,37 +561,45 @@ function SchedulesPage() {
 
   const startTriggerEdit = useCallback(() => {
     if (!selectedSchedule) return;
-    setTriggerEditScopeKey(scheduleScopeKey);
     setTriggerValidationFailure(null);
-    clearTriggerActionError();
-    setTriggerText(cadenceFor(selectedSchedule));
-    setIsEditingTrigger(true);
-  }, [clearTriggerActionError, scheduleScopeKey, selectedSchedule]);
+    setTriggerDraft((current) => ({ ...current, editing: true }));
+  }, [selectedSchedule, setTriggerDraft]);
 
   const cancelTriggerEdit = useCallback(() => {
-    if (triggerActionBusy) {
-      return;
-    }
+    if (triggerSaving) return;
     setTriggerValidationFailure(null);
-    setIsEditingTrigger(false);
-  }, [triggerActionBusy]);
+    clearTriggerDraft();
+  }, [clearTriggerDraft, triggerSaving]);
 
   const saveTriggerEdit = useCallback(async () => {
-    if (!selectedSchedule) return;
-    const text = triggerText.trim();
+    if (!selectedSchedule || triggerSaving) return;
+    const target = selectedSchedule;
+    const text = triggerDraft.text.trim();
     if (!text) {
       setTriggerValidationFailure('Describe when the schedule should run.');
       return;
     }
-    const result = await runTriggerAction('Save schedule trigger', async ({ isCurrent }) => {
-      // The backend agent emits schedule.snapshot after interpreting this phrase.
-      await retriggerSchedule(selectedSchedule.id, text);
-      if (isCurrent()) {
-        setIsEditingTrigger(false);
-      }
+    const ticket = beginTriggerSave();
+    if (!ticket) return;
+    const requestId = createUuid();
+    trackTriggerSave(ticket, {
+      requestId,
+      events: ['schedule.snapshot'],
     });
-    return result;
-  }, [retriggerSchedule, runTriggerAction, selectedSchedule, triggerText]);
+    try {
+      await retriggerSchedule(target.id, text, { requestId });
+    } catch (error) {
+      failTriggerSave(ticket, error);
+    }
+  }, [
+    beginTriggerSave,
+    failTriggerSave,
+    retriggerSchedule,
+    selectedSchedule,
+    trackTriggerSave,
+    triggerDraft.text,
+    triggerSaving,
+  ]);
 
   return (
     <PageShell className="schedules-page">
@@ -743,7 +771,7 @@ function SchedulesPage() {
                           type="button"
                           className="task-btn task-btn--secondary"
                           onClick={cancelIntentEdit}
-                          disabled={intentActionBusy}
+                          disabled={intentSaving}
                         >
                           Cancel
                         </button>
@@ -751,7 +779,7 @@ function SchedulesPage() {
                           type="button"
                           className="task-btn task-btn--primary"
                           onClick={saveIntentEdit}
-                          disabled={intentActionBusy}
+                          disabled={intentSaving}
                         >
                           Save
                         </button>
@@ -771,15 +799,14 @@ function SchedulesPage() {
                   <textarea
                     ref={intentInputRef}
                     className="schedules-summary__editor"
-                    value={intentDraft}
+                    value={intentDraft.text}
                     rows={4}
                     aria-label="Schedule intent"
                     placeholder="What should the agent do when this runs?"
-                    disabled={intentActionBusy}
+                    disabled={intentSaving}
                     onChange={(event) => {
-                      clearIntentActionError();
                       setIntentValidationFailure(null);
-                      setIntentDraft(event.target.value);
+                      setIntentDraft((current) => ({ ...current, text: event.target.value }));
                     }}
                     onKeyDown={(event) => {
                       if (event.key === 'Escape') {
@@ -794,9 +821,9 @@ function SchedulesPage() {
                 ) : (
                   <p>{selectedSchedule.message || selectedSchedule.name || 'No instruction set.'}</p>
                 )}
-                {editingIntent && (intentValidationFailure || intentActionError) ? (
+                {editingIntent && (intentValidationFailure || intentSaveError) ? (
                   <InlineFailure
-                    failure={intentValidationFailure || intentActionError}
+                    failure={intentValidationFailure || intentSaveError}
                     operation="Save schedule intent"
                   />
                 ) : null}
@@ -812,7 +839,7 @@ function SchedulesPage() {
                           type="button"
                           className="task-btn task-btn--secondary"
                           onClick={cancelTriggerEdit}
-                          disabled={triggerActionBusy}
+                          disabled={triggerSaving}
                         >
                           Cancel
                         </button>
@@ -820,7 +847,7 @@ function SchedulesPage() {
                           type="button"
                           className="task-btn task-btn--primary"
                           onClick={saveTriggerEdit}
-                          disabled={triggerActionBusy}
+                          disabled={triggerSaving}
                         >
                           Save
                         </button>
@@ -841,15 +868,14 @@ function SchedulesPage() {
                     <textarea
                       ref={triggerInputRef}
                       className="schedules-summary__editor"
-                      value={triggerText}
+                      value={triggerDraft.text}
                       rows={2}
                       aria-label="Schedule timing"
                       placeholder="e.g. every weekday at 9am, or Friday at 15:00"
-                      disabled={triggerActionBusy}
+                      disabled={triggerSaving}
                       onChange={(event) => {
-                        clearTriggerActionError();
                         setTriggerValidationFailure(null);
-                        setTriggerText(event.target.value);
+                        setTriggerDraft((current) => ({ ...current, text: event.target.value }));
                       }}
                       onKeyDown={(event) => {
                         if (event.key === 'Escape') {
@@ -862,7 +888,7 @@ function SchedulesPage() {
                       }}
                     />
                     <p className="schedules-trigger-edit__hint">
-                      {triggerActionBusy
+                      {triggerSaving
                         ? 'Processing…'
                         : 'Describe the timing in plain language — Progenitor converts it for you.'}
                     </p>
@@ -881,9 +907,9 @@ function SchedulesPage() {
                     </div>
                   </div>
                 )}
-                {editingTrigger && (triggerValidationFailure || triggerActionError) ? (
+                {editingTrigger && (triggerValidationFailure || triggerSaveError) ? (
                   <InlineFailure
-                    failure={triggerValidationFailure || triggerActionError}
+                    failure={triggerValidationFailure || triggerSaveError}
                     operation="Save schedule trigger"
                   />
                 ) : null}

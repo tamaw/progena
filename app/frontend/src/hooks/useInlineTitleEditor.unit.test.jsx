@@ -1,15 +1,21 @@
 // @vitest-environment jsdom
 import React, { act, useEffect } from 'react';
+import { Provider } from 'react-redux';
+import { configureStore } from '@reduxjs/toolkit';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { createRoot } from 'react-dom/client';
+import realtimeReducer from '../store/realtimeSlice';
+import uiDataReducer, { applyUiEvent } from '../store/uiDataSlice';
+import editorDraftsReducer from '../store/editorDraftsSlice';
 import useInlineTitleEditor from './useInlineTitleEditor';
 
 let host;
 let root;
+let store;
 let current;
 
-function Probe({ scopeKey, title, onCommit, onEditor }) {
-  const editor = useInlineTitleEditor({ scopeKey, title, onCommit });
+function Probe({ kind = 'task', scopeKey, title, onCommit, onEditor }) {
+  const editor = useInlineTitleEditor({ kind, scopeKey, title, onCommit });
   useEffect(() => {
     onEditor(editor);
   }, [editor, onEditor]);
@@ -32,6 +38,13 @@ beforeEach(() => {
   host = document.createElement('div');
   document.body.append(host);
   root = createRoot(host);
+  store = configureStore({
+    reducer: {
+      editorDrafts: editorDraftsReducer,
+      realtime: realtimeReducer,
+      uiData: uiDataReducer,
+    },
+  });
 });
 
 afterEach(async () => {
@@ -39,53 +52,96 @@ afterEach(async () => {
   host.remove();
   vi.unstubAllGlobals();
 });
+
 const setCurrent = (editor) => {
   current = editor;
 };
 
-const render = (scopeKey, title, onCommit) => act(async () => {
-  root.render(<Probe scopeKey={scopeKey} title={title} onCommit={onCommit} onEditor={setCurrent} />);
+const render = ({ kind = 'task', scopeKey, title, onCommit }) => act(async () => {
+  root.render(
+    <Provider store={store}>
+      <Probe kind={kind} scopeKey={scopeKey} title={title} onCommit={onCommit} onEditor={setCurrent} />
+    </Provider>,
+  );
 });
 
-it('blocks same-tick duplicate title saves and retains the rejected draft', async () => {
-  const pending = deferred();
-  const onCommit = vi.fn(() => pending.promise);
-  await render('schedule-a', 'Original title', onCommit);
+it('retains an active raw title draft through selection changes and page remount', async () => {
+  const onCommit = vi.fn();
+  await render({ scopeKey: 'task-a', title: 'Task A', onCommit });
 
   await act(async () => {
     current.start();
+    current.setDraft('  Task A, raw title  ');
   });
-  await act(async () => {
-    current.setDraft('  Updated   title  ');
-  });
+  await render({ scopeKey: 'task-b', title: 'Task B', onCommit });
+  expect(current.isEditing).toBe(false);
+  expect(current.draft).toBe('Task B');
 
-  let firstSave;
-  let duplicateResult;
-  await act(async () => {
-    firstSave = current.save();
-    duplicateResult = await current.save();
-  });
-  expect(onCommit).toHaveBeenCalledTimes(1);
-  expect(duplicateResult).toEqual({ ok: false, busy: true });
+  await render({ scopeKey: 'task-a', title: 'Task A', onCommit });
+  expect(current.isEditing).toBe(true);
+  expect(current.draft).toBe('  Task A, raw title  ');
+
+  await act(async () => root.unmount());
+  root = createRoot(host);
+  await render({ scopeKey: 'task-a', title: 'Task A', onCommit });
+  expect(current.isEditing).toBe(true);
+  expect(current.draft).toBe('  Task A, raw title  ');
+});
+
+it('discards only on explicit cancel and otherwise follows a live canonical title', async () => {
+  const onCommit = vi.fn();
+  await render({ scopeKey: 'task-a', title: 'Task A', onCommit });
 
   await act(async () => {
-    pending.reject(new Error('save failed'));
-    await firstSave;
+    current.start();
+    current.setDraft('Unsaved task title');
+    current.cancel();
+  });
+  await render({ scopeKey: 'task-a', title: 'Canonical title', onCommit });
+
+  expect(current.isEditing).toBe(false);
+  expect(current.draft).toBe('Canonical title');
+});
+
+it('keeps a title save pending until its correlated canonical event arrives', async () => {
+  const onCommit = vi.fn((_title, { ticket, trackSave }) => {
+    trackSave(ticket, {
+      requestId: 'task-title-request',
+      events: ['kanban.snapshot'],
+    });
+    return Promise.resolve({ request_id: 'task-title-request' });
+  });
+  await render({ scopeKey: 'task-a', title: 'Task A', onCommit });
+
+  await act(async () => {
+    current.start();
+    current.setDraft('Renamed task');
+  });
+  await act(async () => {
+    await current.save();
   });
   expect(current.isEditing).toBe(true);
-  expect(current.draft).toBe('  Updated   title  ');
-  expect(current.error?.message).toBe('save failed');
+  expect(current.saving).toBe(true);
+  expect(current.draft).toBe('Renamed task');
+
+  await act(async () => store.dispatch(applyUiEvent({
+    type: 'kanban.snapshot',
+    payload: { request_id: 'task-title-request' },
+  })));
+  await render({ scopeKey: 'task-a', title: 'Renamed task', onCommit });
+
+  expect(current.isEditing).toBe(false);
+  expect(current.saving).toBe(false);
+  expect(current.draft).toBe('Renamed task');
 });
 
-it('does not let an old title save alter the newly selected entity', async () => {
+it('settles a failed save on its original task without surfacing it under a new selection', async () => {
   const pending = deferred();
   const onCommit = vi.fn(() => pending.promise);
-  await render('task-a', 'Task A', onCommit);
+  await render({ scopeKey: 'task-a', title: 'Task A', onCommit });
 
   await act(async () => {
     current.start();
-  });
-  await act(async () => {
     current.setDraft('Task A renamed');
   });
   let oldSave;
@@ -93,109 +149,51 @@ it('does not let an old title save alter the newly selected entity', async () =>
     oldSave = current.save();
   });
 
-  await render('task-b', 'Task B', onCommit);
+  await render({ scopeKey: 'task-b', title: 'Task B', onCommit });
   await act(async () => {
-    pending.resolve({ ok: true });
+    pending.reject(new Error('save failed'));
     await oldSave;
   });
-
   expect(current.isEditing).toBe(false);
-  expect(current.draft).toBe('');
   expect(current.error).toBeNull();
+
+  await render({ scopeKey: 'task-a', title: 'Task A', onCommit });
+  expect(current.isEditing).toBe(true);
+  expect(current.saving).toBe(false);
+  expect(current.draft).toBe('Task A renamed');
+  expect(current.error).toBe('save failed');
 });
 
-it('lets a returned scope cancel and save while an earlier incarnation is pending', async () => {
-  const oldSavePending = deferred();
-  const newSavePending = deferred();
-  const onCommit = vi.fn()
-    .mockImplementationOnce(() => oldSavePending.promise)
-    .mockImplementationOnce(() => newSavePending.promise);
-  await render('task-a', 'Task A', onCommit);
+it('does not let a late task confirmation clear a newer draft for that task', async () => {
+  const onCommit = vi.fn((_title, { ticket, trackSave }) => {
+    trackSave(ticket, {
+      requestId: 'old-title-request',
+      events: ['kanban.snapshot'],
+    });
+    return Promise.resolve({ request_id: 'old-title-request' });
+  });
+  await render({ scopeKey: 'task-a', title: 'Task A', onCommit });
 
   await act(async () => {
     current.start();
     current.setDraft('Old title');
   });
-  let oldSave;
   await act(async () => {
-    oldSave = current.save();
+    await current.save();
   });
-
-  await render('task-b', 'Task B', onCommit);
-  await render('task-a', 'Task A', onCommit);
   await act(async () => {
-    current.start();
-    current.setDraft('Cancelled fresh title');
     current.cancel();
   });
-  expect(current.isEditing).toBe(false);
-
   await act(async () => {
     current.start();
-    current.setDraft('Fresh title');
+    current.setDraft('Newer raw title');
   });
-  let newSave;
-  await act(async () => {
-    newSave = current.save();
-  });
-  expect(onCommit).toHaveBeenCalledTimes(2);
+  await act(async () => store.dispatch(applyUiEvent({
+    type: 'kanban.snapshot',
+    payload: { request_id: 'old-title-request' },
+  })));
 
-  await act(async () => {
-    oldSavePending.reject(new Error('old save failed'));
-    await oldSave;
-  });
-  expect(current.saving).toBe(true);
-  expect(current.error).toBeNull();
-  expect(current.draft).toBe('Fresh title');
-
-  await act(async () => {
-    newSavePending.reject(new Error('new save failed'));
-    await newSave;
-  });
+  expect(current.isEditing).toBe(true);
+  expect(current.draft).toBe('Newer raw title');
   expect(current.saving).toBe(false);
-  expect(current.error?.message).toBe('new save failed');
-});
-
-it('ignores an old successful save after returning to the same scope', async () => {
-  const oldSavePending = deferred();
-  const newSavePending = deferred();
-  const onCommit = vi.fn()
-    .mockImplementationOnce(() => oldSavePending.promise)
-    .mockImplementationOnce(() => newSavePending.promise);
-  await render('task-a', 'Task A', onCommit);
-
-  await act(async () => {
-    current.start();
-    current.setDraft('Old title');
-  });
-  let oldSave;
-  await act(async () => {
-    oldSave = current.save();
-  });
-
-  await render('task-b', 'Task B', onCommit);
-  await render('task-a', 'Task A', onCommit);
-  await act(async () => {
-    current.start();
-    current.setDraft('Fresh title');
-  });
-  let newSave;
-  await act(async () => {
-    newSave = current.save();
-  });
-
-  await act(async () => {
-    oldSavePending.resolve({ ok: true });
-    await oldSave;
-  });
-  expect(current.saving).toBe(true);
-  expect(current.error).toBeNull();
-  expect(current.draft).toBe('Fresh title');
-
-  await act(async () => {
-    newSavePending.resolve({ ok: true });
-    await newSave;
-  });
-  expect(current.isEditing).toBe(false);
-  expect(current.draft).toBe('Fresh title');
 });

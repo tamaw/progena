@@ -88,12 +88,13 @@ function closeCurrentStream(dispatch) {
 realtimeListenerMiddleware.startListening({
   actionCreator: startRealtimeStream,
   effect: async (action, listenerApi) => {
-    const { streamUrl } = action.payload || {};
-    if (!streamUrl || activeStreamUrl === streamUrl) {
+    const { streamUrl, force = false } = action.payload || {};
+    if (!streamUrl || (!force && activeStreamUrl === streamUrl)) {
       return;
     }
 
     closeCurrentStream(listenerApi.dispatch);
+    if (force) failPendingOperations(listenerApi, 'Reconnecting to event stream');
     listenerApi.dispatch(realtimeConnecting());
 
     const source = new EventSource(withQuery(streamUrl, { client_id: realtimeClientId }));
@@ -142,6 +143,7 @@ realtimeListenerMiddleware.startListening({
     };
 
     source.addEventListener('ui.event', (messageEvent) => {
+      if (eventSource !== source) return;
       lastEventAt = Date.now();
       try {
         const event = JSON.parse(messageEvent.data);

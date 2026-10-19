@@ -31,20 +31,6 @@ export const fetchRepoDetail = createAcknowledgedThunk('uiData/fetchRepoDetail',
   return requestAcknowledged(`${reposUrl}/${encodeURIComponent(repoId)}/detail`, { requestId });
 });
 
-export const createRepo = createAcknowledgedThunk('uiData/createRepo', async ({ reposUrl, name, localPath, access, remoteUrl, summary, owner }, { requestId }) => {
-  return requestAcknowledged(reposUrl, {
-    method: 'POST',
-    body: {
-      name,
-      local_path: localPath,
-      access,
-      remote_url: remoteUrl || undefined,
-      summary: summary || undefined,
-      owner: owner || undefined,
-    },
-    requestId,
-  });
-});
 
 export const updateRepo = createAcknowledgedThunk('uiData/updateRepo', async ({ reposUrl, repoId, patch }, { requestId }) => {
   return requestAcknowledged(`${reposUrl}/${encodeURIComponent(repoId)}`, {

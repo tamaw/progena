@@ -34,6 +34,7 @@ import {
   buildStatePathSuggestions,
   filterStatePathSuggestions,
   getExpressionAutocompleteContext,
+  isCompleteSchemaFieldText,
   schemaFieldsToText,
   textToSchemaFields,
 } from './graphFieldHelpers';
@@ -704,6 +705,18 @@ describe('textToSchemaFields', () => {
       required: ['category'],
       additionalProperties: false,
     });
+  });
+});
+
+describe('isCompleteSchemaFieldText', () => {
+  it('keeps incomplete schema type source out of save settlement', () => {
+    expect(isCompleteSchemaFieldText('count: inte')).toBe(false);
+    expect(isCompleteSchemaFieldText('category: enum(billing,')).toBe(false);
+    expect(isCompleteSchemaFieldText('category: enum()')).toBe(false);
+  });
+
+  it('accepts parser-supported primitive, alias, array, and enum types', () => {
+    expect(isCompleteSchemaFieldText('count: int\nflags: bool[]\ncategory: enum(billing, technical) # owner')).toBe(true);
   });
 });
 

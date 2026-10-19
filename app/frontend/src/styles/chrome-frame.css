@@ -4290,59 +4290,6 @@ body,
   border-color: transparent;
 }
 
-.repo-create-form {
-  display: grid;
-  gap: 10px;
-  padding: 14px;
-  margin: 0 10px 10px;
-  background: var(--color-bg-secondary);
-  border: 1px solid var(--color-border);
-  border-radius: 8px;
-}
-
-.repo-create-form__field {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  font-size: 12px;
-}
-
-.repo-create-form__field span {
-  color: var(--color-text-muted);
-  font-size: 11px;
-  font-weight: 600;
-}
-
-.repo-create-form__field input {
-  padding: 7px 9px;
-  color: var(--color-text-primary);
-  background: var(--color-bg-primary);
-  border: 1px solid var(--color-border);
-  border-radius: 6px;
-  font-size: 12.5px;
-}
-
-.repo-create-form__field input:focus {
-  outline: none;
-  border-color: var(--color-accent);
-}
-
-.repo-create-form__field .app-listbox,
-.repo-create-form__field .app-listbox__trigger {
-  width: 100%;
-}
-
-.repo-create-form__error {
-  color: var(--color-error);
-  font-size: 11.5px;
-}
-
-.repo-create-form__actions {
-  display: flex;
-  gap: 8px;
-  justify-content: flex-end;
-}
-
 .repo-profile__body {
   width: 100%;
   max-width: none;

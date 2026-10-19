@@ -4,6 +4,7 @@ import { useDispatch, useSelector } from 'react-redux';
 import { useNavigate, useParams } from 'react-router-dom';
 import { buildEntityPath, useEntityUrlSync } from '../lib/routes';
 import { formatCompactRelativeAge } from '../lib/displayTime';
+import { createUuid } from '../lib/uuid';
 import { reportFailure } from '../lib/failures';
 import DetailHeader, {
   DeleteActionIcon,
@@ -34,9 +35,11 @@ import { useConfig } from '../context/ConfigContext';
 import { useNotifications } from '../context/NotificationContext';
 import { useTasksApi } from '../hooks/api/useTasksApi';
 import useConfirmAction from '../hooks/useConfirmAction';
+import useEntityDraft from '../hooks/useEntityDraft';
 import useInlineTitleEditor from '../hooks/useInlineTitleEditor';
 import useMissingEntityRoute from '../hooks/useMissingEntityRoute';
 import useUiAction from '../hooks/useUiAction';
+import { entityDraftKey } from '../store/editorDraftsSlice';
 import {
   fetchKanbanBoard,
   fetchTaskActivity,
@@ -178,55 +181,89 @@ function DetailSection({ title, children, meta }) {
 }
 
 // Minimal add affordance for the meta pane: a small "+ Add" link (or "+" pill for
-// tags) that reveals a single inline input only when clicked. Restores the
-// original lightweight look without losing the dynamic add capability.
-function InlineAdd({ openLabel = '+ Add', placeholder, disabled = false, pill = false, pillLabel = '', onSubmit }) {
+// tags) that reveals a single inline input only when clicked. The input text is
+// retained for its task and field while the popover itself remains ephemeral.
+function InlineAdd({
+  draftKey,
+  openLabel = '+ Add',
+  operation = 'Add task item',
+  placeholder,
+  disabled = false,
+  pill = false,
+  pillLabel = '',
+  onSubmit,
+}) {
   const [open, setOpen] = useState(false);
-  const [value, setValue] = useState('');
+  const [pending, setPending] = useState(false);
+  const [value, setValue, controls] = useEntityDraft(draftKey, '');
+  const {
+    clear,
+    beginSave,
+    trackSave,
+    failSave,
+    hasDraft,
+    saving,
+    error,
+  } = controls;
   const inputRef = useRef(null);
+  const isOpen = open && (!pending || hasDraft || saving);
 
   useEffect(() => {
-    if (open) {
+    if (isOpen) {
       inputRef.current?.focus();
     }
-  }, [open]);
+  }, [isOpen]);
 
-  const close = () => {
-    setValue('');
+  const discard = () => {
+    clear();
+    setPending(false);
     setOpen(false);
   };
 
   const submit = async () => {
     const trimmed = value.trim();
-    if (!trimmed) {
-      close();
-      return;
+    if (!trimmed) return;
+
+    const ticket = beginSave();
+    if (!ticket) return;
+    setPending(true);
+    try {
+      const result = await onSubmit(trimmed, {
+        ticket,
+        trackSave,
+        failSave,
+      });
+      if (result?.ok === false && !result.stale && !result.cancelled && !result.busy) {
+        failSave(ticket, result.error || 'Add item failed. Please try again.');
+      }
+    } catch (submitError) {
+      failSave(ticket, submitError);
     }
-    await onSubmit(trimmed);
-    close();
   };
 
-  if (!open) {
+  if (!isOpen) {
     return (
       <button
         type="button"
         className={pill ? 'task-lbl task-lbl--add' : 'task-add-sub'}
         data-tooltip={pill ? openLabel : undefined}
         aria-label={pill ? openLabel : undefined}
-        onClick={() => setOpen(true)}
-        disabled={disabled}
+        onClick={() => {
+          setPending(false);
+          setOpen(true);
+        }}
+        disabled={disabled || saving}
       >
         {pill ? (pillLabel ? `+ ${pillLabel}` : '+') : openLabel}
       </button>
     );
   }
 
-  // Close when focus leaves the whole control (click-away). relatedTarget is the
-  // element gaining focus; if it's outside this row — including the Add button's
-  // own click, which keeps focus inside until submit() runs — we dismiss.
+  // A click-away only closes this transient popover; it deliberately leaves
+  // the retained raw field text available when the user returns to the task.
   const handleBlur = (event) => {
     if (!event.currentTarget.contains(event.relatedTarget)) {
-      close();
+      setOpen(false);
     }
   };
 
@@ -241,55 +278,84 @@ function InlineAdd({ openLabel = '+ Add', placeholder, disabled = false, pill = 
         onKeyDown={(event) => {
           if (event.key === 'Enter') {
             event.preventDefault();
-            submit();
+            void submit();
           } else if (event.key === 'Escape') {
             event.preventDefault();
-            close();
+            discard();
           }
         }}
-        disabled={disabled}
+        disabled={disabled || saving}
       />
       <button
         type="button"
         className="task-add-sub"
         onMouseDown={(event) => event.preventDefault()}
-        onClick={submit}
-        disabled={disabled}
+        onClick={() => { void submit(); }}
+        disabled={disabled || saving}
       >
         Add
       </button>
+      {error ? <InlineFailure failure={error} operation={operation} /> : null}
     </div>
   );
 }
 
 // Attachments need two fields, so they get their own toggled variant.
-function InlineAddAttachment({ disabled = false, onSubmit }) {
+function InlineAddAttachment({ draftKey, disabled = false, onSubmit }) {
   const [open, setOpen] = useState(false);
-  const [label, setLabel] = useState('');
-  const [url, setUrl] = useState('');
+  const [pending, setPending] = useState(false);
+  const [value, setValue, controls] = useEntityDraft(draftKey, { label: '', url: '' });
+  const label = typeof value?.label === 'string' ? value.label : '';
+  const url = typeof value?.url === 'string' ? value.url : '';
+  const {
+    clear,
+    beginSave,
+    trackSave,
+    failSave,
+    hasDraft,
+    saving,
+    error,
+  } = controls;
   const labelRef = useRef(null);
+  const isOpen = open && (!pending || hasDraft || saving);
 
   useEffect(() => {
-    if (open) {
+    if (isOpen) {
       labelRef.current?.focus();
     }
-  }, [open]);
+  }, [isOpen]);
 
-  const close = () => {
-    setLabel('');
-    setUrl('');
+  const discard = () => {
+    clear();
+    setPending(false);
     setOpen(false);
   };
 
-  const submit = async () => {
-    if (!label.trim() || !url.trim()) {
-      return;
-    }
-    await onSubmit(label.trim(), url.trim());
-    close();
+  const updateField = (field, nextValue) => {
+    setValue({ label, url, [field]: nextValue });
   };
 
-  if (!open) {
+  const submit = async () => {
+    if (!label.trim() || !url.trim()) return;
+
+    const ticket = beginSave();
+    if (!ticket) return;
+    setPending(true);
+    try {
+      const result = await onSubmit(label.trim(), url.trim(), {
+        ticket,
+        trackSave,
+        failSave,
+      });
+      if (result?.ok === false && !result.stale && !result.cancelled && !result.busy) {
+        failSave(ticket, result.error || 'Add attachment failed. Please try again.');
+      }
+    } catch (submitError) {
+      failSave(ticket, submitError);
+    }
+  };
+
+  if (!isOpen) {
     return (
       <div style={{ marginTop: 8 }}>
         <button
@@ -297,8 +363,11 @@ function InlineAddAttachment({ disabled = false, onSubmit }) {
           className="task-lbl task-lbl--add"
           data-tooltip="Add attachment"
           aria-label="Add attachment"
-          onClick={() => setOpen(true)}
-          disabled={disabled}
+          onClick={() => {
+            setPending(false);
+            setOpen(true);
+          }}
+          disabled={disabled || saving}
         >
           +
         </button>
@@ -306,11 +375,10 @@ function InlineAddAttachment({ disabled = false, onSubmit }) {
     );
   }
 
-  // Close on click-away — only when focus leaves the whole control, so moving
-  // between the two fields (or onto the button) keeps it open.
+  // Moving elsewhere closes the popover without discarding either field.
   const handleBlur = (event) => {
     if (!event.currentTarget.contains(event.relatedTarget)) {
-      close();
+      setOpen(false);
     }
   };
 
@@ -325,33 +393,41 @@ function InlineAddAttachment({ disabled = false, onSubmit }) {
         type="text"
         value={label}
         placeholder="Attachment label..."
-        onChange={(event) => setLabel(event.target.value)}
+        onChange={(event) => updateField('label', event.target.value)}
+        onKeyDown={(event) => {
+          if (event.key === 'Escape') {
+            event.preventDefault();
+            discard();
+          }
+        }}
+        disabled={disabled || saving}
       />
       <input
         type="text"
         value={url}
         placeholder="Attachment URL..."
-        onChange={(event) => setUrl(event.target.value)}
+        onChange={(event) => updateField('url', event.target.value)}
         onKeyDown={(event) => {
           if (event.key === 'Escape') {
             event.preventDefault();
-            close();
+            discard();
           }
         }}
+        disabled={disabled || saving}
       />
       <button
         type="button"
         className="task-add-sub"
         onMouseDown={(event) => event.preventDefault()}
-        onClick={submit}
-        disabled={disabled || !label.trim() || !url.trim()}
+        onClick={() => { void submit(); }}
+        disabled={disabled || saving || !label.trim() || !url.trim()}
       >
         Add attachment
       </button>
+      {error ? <InlineFailure failure={error} operation="Add task attachment" /> : null}
     </div>
   );
 }
-
 function normalizeChecklistItems(items) {
   if (!Array.isArray(items)) {
     return [];
@@ -485,7 +561,13 @@ export default function TasksPage({ context = null }) {
     : null;
   const board = useSelector(selectKanbanBoard);
   const tasksState = useSelector(selectTasksState);
-  const [selectedCardId, setSelectedCardId] = useState(null);
+  const embeddedSelectionKey = context?.projectId
+    ? entityDraftKey('task-board', context.projectId, 'selection')
+    : null;
+  const [selectedCardId, setSelectedCardId, { clear: clearSelectedCardId }] = useEntityDraft(
+    embeddedSelectionKey,
+    null,
+  );
   const [taskFilter, setTaskFilter] = useState('all');
   const [detailTab, setDetailTab] = useState('Task');
   const [searchQuery, setSearchQuery] = useState('');
@@ -613,7 +695,7 @@ export default function TasksPage({ context = null }) {
       return;
     }
     setSelectedCardId(cardId);
-  }, [isStandaloneTasksPage, navigate]);
+  }, [isStandaloneTasksPage, navigate, setSelectedCardId]);
 
 
   const requestTaskActivity = useCallback((cardId) => {
@@ -630,18 +712,43 @@ export default function TasksPage({ context = null }) {
     requestTaskActivity(taskScopeKey);
   }, [requestTaskActivity, taskScopeKey]);
 
-  const commitTitle = useCallback((nextTitle) => {
-    if (!selectedCard) {
-      return Promise.resolve({ ok: false, skipped: true });
+  const commitTitle = useCallback((nextTitle, { ticket, trackSave, failSave }) => {
+    const target = selectedCard;
+    if (!target) {
+      failSave(ticket, 'Task is no longer selected. Please try again.');
+      return Promise.resolve({ ok: false, stale: true });
     }
-    return runTitleAction('Rename task', async () => {
-      await updateKanbanCard(
-        { cardId: selectedCard.id, payload: { title: nextTitle } },
-        { dispatch, getApiUrl },
-      );
+
+    const requestId = createUuid();
+    trackSave(ticket, {
+      requestId,
+      events: ['kanban.snapshot'],
     });
-  }, [dispatch, getApiUrl, runTitleAction, selectedCard, updateKanbanCard]);
+    let dispatched = false;
+    return runTitleAction('Rename task', async () => {
+      dispatched = true;
+      try {
+        const acknowledgement = await updateKanbanCard({
+          cardId: target.id,
+          payload: { title: nextTitle },
+          requestId,
+        });
+        return acknowledgement;
+      } catch (commitError) {
+        // useUiAction fences stale UI state, not the retained record that
+        // originated this request. Settle that original record directly.
+        failSave(ticket, commitError);
+        throw commitError;
+      }
+    }).then((result) => {
+      if (!dispatched && !result.ok) {
+        failSave(ticket, result.error || 'Task is no longer selected. Please try again.');
+      }
+      return result;
+    });
+  }, [runTitleAction, selectedCard, updateKanbanCard]);
   const titleEditor = useInlineTitleEditor({
+    kind: 'task',
     scopeKey: taskScopeKey,
     title: selectedCard?.title || '',
     onCommit: commitTitle,
@@ -662,10 +769,11 @@ export default function TasksPage({ context = null }) {
       if (isStandaloneTasksPage && routedCardId === target.id) {
         navigate('/tasks', { replace: true });
       } else {
-        setSelectedCardId(null);
+        clearSelectedCardId();
       }
     });
   }, [
+    clearSelectedCardId,
     requestTaskDelete,
     deleteKanbanCard,
     dispatch,
@@ -703,25 +811,54 @@ export default function TasksPage({ context = null }) {
     updateKanbanCard,
   ]);
 
-  const handleMetadataUpdate = useCallback(async (nextMetadata, activityMessage = '') => {
-    if (!selectedCard?.id) {
-      return;
+  const handleMetadataUpdate = useCallback((nextMetadata, activityMessage = '', draftSave = null) => {
+    const target = selectedCard;
+    if (!target?.id) {
+      draftSave?.failSave(draftSave.ticket, 'Task is no longer selected. Please try again.');
+      return Promise.resolve({ ok: false, stale: true });
     }
-    const result = await runMetadataAction('Update task metadata', async () => {
-      await updateKanbanCard(
-        { cardId: selectedCard.id, payload: { metadata: nextMetadata } },
-        { dispatch, getApiUrl },
-      );
-      if (activityMessage) {
-        await createTaskActivity({ cardId: selectedCard.id, payload: {
-          message: activityMessage,
-          actor: 'user',
-          kind: 'meta',
-        } }, { dispatch, getApiUrl });
+
+    const requestId = draftSave ? createUuid() : undefined;
+    if (draftSave) {
+      draftSave.trackSave(draftSave.ticket, {
+        requestId,
+        events: ['kanban.snapshot'],
+      });
+    }
+    let dispatched = false;
+    return runMetadataAction('Update task metadata', async () => {
+      dispatched = true;
+      try {
+        const acknowledgement = await updateKanbanCard(
+          { cardId: target.id, payload: { metadata: nextMetadata }, requestId },
+          { dispatch, getApiUrl },
+        );
+        if (activityMessage) {
+          try {
+            await createTaskActivity({ cardId: target.id, payload: {
+              message: activityMessage,
+              actor: 'user',
+              kind: 'meta',
+            } }, { dispatch, getApiUrl });
+          } catch (activityError) {
+            reportFailure(show, 'Log task activity', activityError);
+          }
+        }
+        return acknowledgement;
+      } catch (commitError) {
+        draftSave?.failSave(draftSave.ticket, commitError);
+        throw commitError;
       }
+    }).then((result) => {
+      if (!dispatched && !result.ok) {
+        draftSave?.failSave(
+          draftSave.ticket,
+          result.error || 'Task is no longer selected. Please try again.',
+        );
+      }
+      reportActionFailure('Update task metadata', result);
+      return result;
     });
-    reportActionFailure('Update task metadata', result);
-    return result;
   }, [
     createTaskActivity,
     dispatch,
@@ -729,22 +866,45 @@ export default function TasksPage({ context = null }) {
     reportActionFailure,
     runMetadataAction,
     selectedCard,
+    show,
     updateKanbanCard,
   ]);
 
   // ---- tags (free-form, searchable; stored on card.labels) -----------------
-  const handleAddTag = useCallback(async (value) => {
-    if (!selectedCard?.id || !value || selectedTags.includes(value)) {
-      return;
+  const handleAddTag = useCallback((value, draftSave) => {
+    const target = selectedCard;
+    if (!target?.id || !value || selectedTags.includes(value)) {
+      draftSave?.failSave(draftSave.ticket, 'Tag cannot be added. Please try again.');
+      return Promise.resolve({ ok: false, skipped: true });
     }
-    const result = await runTagsAction('Add task tag', async () => {
-      await updateKanbanCard(
-        { cardId: selectedCard.id, payload: { labels: [...selectedTags, value] } },
-        { dispatch, getApiUrl },
-      );
+
+    const requestId = draftSave ? createUuid() : undefined;
+    if (draftSave) {
+      draftSave.trackSave(draftSave.ticket, {
+        requestId,
+        events: ['kanban.snapshot'],
+      });
+    }
+    let dispatched = false;
+    return runTagsAction('Add task tag', async () => {
+      dispatched = true;
+      try {
+        const acknowledgement = await updateKanbanCard(
+          { cardId: target.id, payload: { labels: [...selectedTags, value] }, requestId },
+          { dispatch, getApiUrl },
+        );
+        return acknowledgement;
+      } catch (commitError) {
+        draftSave?.failSave(draftSave.ticket, commitError);
+        throw commitError;
+      }
+    }).then((result) => {
+      if (!dispatched && !result.ok) {
+        draftSave?.failSave(draftSave.ticket, result.error || 'Tag cannot be added. Please try again.');
+      }
+      reportActionFailure('Add task tag', result);
+      return result;
     });
-    reportActionFailure('Add task tag', result);
-    return result;
   }, [
     dispatch,
     getApiUrl,
@@ -779,19 +939,20 @@ export default function TasksPage({ context = null }) {
 
   // ---- checklist (exactly one per task) ------------------------------------
   // Persist the flat item list back as the single checklist document.
-  const commitChecklistItems = useCallback((items, activityMessage) => {
+  const commitChecklistItems = useCallback((items, activityMessage, draftSave) => {
     const meta = { ...(selectedCard?.metadata || {}) };
     delete meta.subtasks; // migrate legacy single-list metadata onto `checklists`
     meta.checklists = serializeChecklists([{ id: 'default', title: 'Checklist', items }]);
-    return handleMetadataUpdate(meta, activityMessage);
+    return handleMetadataUpdate(meta, activityMessage, draftSave);
   }, [handleMetadataUpdate, selectedCard?.metadata]);
 
-  const handleAddChecklistItem = useCallback(async (title) => {
+  const handleAddChecklistItem = useCallback(async (title, draftSave) => {
     if (!selectedCard || !title) {
-      return;
+      draftSave?.failSave(draftSave.ticket, 'Task is no longer selected. Please try again.');
+      return { ok: false, stale: true };
     }
     const nextItems = [...checklistItems, { id: `item_${Date.now().toString(16)}`, title, done: false }];
-    await commitChecklistItems(nextItems, `Added checklist item: ${title}`);
+    return commitChecklistItems(nextItems, `Added checklist item: ${title}`, draftSave);
   }, [checklistItems, commitChecklistItems, selectedCard]);
 
   const handleToggleChecklistItem = useCallback(async (itemId) => {
@@ -822,26 +983,29 @@ export default function TasksPage({ context = null }) {
   }, [checklistItems, commitChecklistItems, selectedCard]);
 
   // ---- dependencies / collaborators / attachments --------------------------
-  const commitDependencies = useCallback((nextDependencies, activityMessage) => (
+  const commitDependencies = useCallback((nextDependencies, activityMessage, draftSave) => (
     handleMetadataUpdate(
       { ...(selectedCard?.metadata || {}), dependencies: serializeDependencies(nextDependencies) },
       activityMessage,
+      draftSave,
     )
   ), [handleMetadataUpdate, selectedCard?.metadata]);
 
-  const handleAddDependency = useCallback(async (title) => {
+  const handleAddDependency = useCallback(async (title, draftSave) => {
     if (!selectedCard || !title) {
-      return;
+      draftSave?.failSave(draftSave.ticket, 'Task is no longer selected. Please try again.');
+      return { ok: false, stale: true };
     }
     const draft = buildDependencyDraft(title, board);
     if (!draft) {
-      return;
+      draftSave?.failSave(draftSave.ticket, 'Dependency cannot be added. Please try again.');
+      return { ok: false, skipped: true };
     }
     const nextDependencies = [
       ...selectedDependencies,
       { id: `dep_${Date.now().toString(16)}`, title: draft.title, ref: draft.ref },
     ];
-    await commitDependencies(nextDependencies, `Added dependency: ${draft.title}`);
+    return commitDependencies(nextDependencies, `Added dependency: ${draft.title}`, draftSave);
   }, [board, commitDependencies, selectedCard, selectedDependencies]);
 
   const handleRemoveDependency = useCallback(async (id) => {
@@ -864,14 +1028,16 @@ export default function TasksPage({ context = null }) {
     }
   }, [board, selectTaskCard]);
 
-  const handleAddCollaborator = useCallback(async (value) => {
+  const handleAddCollaborator = useCallback(async (value, draftSave) => {
     if (!selectedCard || !value) {
-      return;
+      draftSave?.failSave(draftSave.ticket, 'Task is no longer selected. Please try again.');
+      return { ok: false, stale: true };
     }
     const nextCollaborators = [...selectedCollaborators, value];
-    await handleMetadataUpdate(
+    return handleMetadataUpdate(
       { ...(selectedCard.metadata || {}), collaborators: nextCollaborators },
       `Added collaborator: ${value}`,
+      draftSave,
     );
   }, [handleMetadataUpdate, selectedCard, selectedCollaborators]);
 
@@ -886,9 +1052,10 @@ export default function TasksPage({ context = null }) {
     );
   }, [handleMetadataUpdate, selectedCard, selectedCollaborators]);
 
-  const handleAddAttachment = useCallback(async (label, url) => {
+  const handleAddAttachment = useCallback(async (label, url, draftSave) => {
     if (!selectedCard || !label || !url) {
-      return;
+      draftSave?.failSave(draftSave.ticket, 'Task is no longer selected. Please try again.');
+      return { ok: false, stale: true };
     }
     const nextAttachments = [
       ...selectedAttachments,
@@ -899,9 +1066,10 @@ export default function TasksPage({ context = null }) {
         kind: url.includes('/pull/') ? 'pr' : 'link',
       },
     ];
-    await handleMetadataUpdate(
+    return handleMetadataUpdate(
       { ...(selectedCard.metadata || {}), attachments: nextAttachments },
       `Added attachment: ${label}`,
+      draftSave,
     );
   }, [handleMetadataUpdate, selectedAttachments, selectedCard]);
 
@@ -1041,8 +1209,11 @@ export default function TasksPage({ context = null }) {
                     <header className="agents-section__head">
                       <h2>Checklist <span>{checklistProgress.done}/{checklistProgress.total} done</span></h2>
                       <InlineAdd
+                        key={taskScopeKey}
+                        draftKey={entityDraftKey('task', taskScopeKey, 'checklist-add')}
                         pill
                         openLabel="Add item"
+                        operation="Add checklist item"
                         placeholder="Add an item..."
                         disabled={metadataAction.busy}
                         onSubmit={handleAddChecklistItem}
@@ -1086,8 +1257,11 @@ export default function TasksPage({ context = null }) {
                     <header className="agents-section__head">
                       <h2>Dependencies <span>{blockedLabel}</span></h2>
                       <InlineAdd
+                        key={taskScopeKey}
+                        draftKey={entityDraftKey('task', taskScopeKey, 'dependency-add')}
                         pill
                         openLabel="Add dependency"
+                        operation="Add dependency"
                         placeholder="Add dependency reference..."
                         disabled={metadataAction.busy}
                         onSubmit={handleAddDependency}
@@ -1127,8 +1301,11 @@ export default function TasksPage({ context = null }) {
                     <header className="agents-section__head">
                       <h2>Tags</h2>
                       <InlineAdd
+                        key={taskScopeKey}
+                        draftKey={entityDraftKey('task', taskScopeKey, 'tag-add')}
                         pill
                         openLabel="Add tag"
+                        operation="Add tag"
                         placeholder="Add a tag..."
                         disabled={tagsAction.busy}
                         onSubmit={handleAddTag}
@@ -1158,8 +1335,11 @@ export default function TasksPage({ context = null }) {
                     <header className="agents-section__head">
                       <h2>Assignees</h2>
                       <InlineAdd
+                        key={taskScopeKey}
+                        draftKey={entityDraftKey('task', taskScopeKey, 'collaborator-add')}
                         pill
                         openLabel="Add collaborator"
+                        operation="Add collaborator"
                         placeholder="Add collaborator handle..."
                         disabled={metadataAction.busy}
                         onSubmit={handleAddCollaborator}
@@ -1201,7 +1381,12 @@ export default function TasksPage({ context = null }) {
                   <section className="agents-section">
                     <header className="agents-section__head">
                       <h2>Attachments</h2>
-                      <InlineAddAttachment disabled={metadataAction.busy} onSubmit={handleAddAttachment} />
+                      <InlineAddAttachment
+                        key={taskScopeKey}
+                        draftKey={entityDraftKey('task', taskScopeKey, 'attachment-add')}
+                        disabled={metadataAction.busy}
+                        onSubmit={handleAddAttachment}
+                      />
                     </header>
                     <div className="agents-section__body">
                     {selectedAttachments.length ? selectedAttachments.map((attachment) => (

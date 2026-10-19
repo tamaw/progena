@@ -27,6 +27,7 @@ import InlineFailure from '../components/common/InlineFailure';
 import PopupModal from '../components/common/PopupModal';
 import useConfirmAction from '../hooks/useConfirmAction';
 import useMissingEntityRoute from '../hooks/useMissingEntityRoute';
+import useEntityDraft from '../hooks/useEntityDraft';
 import useUiAction from '../hooks/useUiAction';
 import { useWidgetsApi } from '../hooks/api/useWidgetsApi';
 import { useConfig } from '../context/ConfigContext';
@@ -37,7 +38,8 @@ import {
 import { formatShortLocalDateTime } from '../lib/displayTime';
 import { reportFailure } from '../lib/failures';
 import { selectRealtime } from '../store/realtimeSlice';
-
+import { entityDraftKey } from '../store/editorDraftsSlice';
+import { createUuid } from '../lib/uuid';
 const SERVER_FILTERS = ['All', 'Connected', 'Disabled', 'Errors'];
 const SERVER_SORTS = ['Status', 'Name', 'Transport'];
 
@@ -159,13 +161,10 @@ export default function ToolsPage() {
   const [activeFilter, setActiveFilter] = useState('All');
   const [query, setQuery] = useState('');
   const [sortMode, setSortMode] = useState('Status');
-  const [configValidation, setConfigValidation] = useState(null);
+  // Keyed by server so a failure never follows navigation to another server.
+  const [configValidationState, setConfigValidationState] = useState(null);
 
-  const [isEditingConfig, setIsEditingConfig] = useState(false);
-  const [configUrl, setConfigUrl] = useState('');
-  const [configDesc, setConfigDesc] = useState('');
   const configInputRef = useRef(null);
-
 
   const mcpUrl = getApiUrl('mcp');
   // The catalogue is hydrated only by `mcp.snapshot` on the canonical stream.
@@ -211,15 +210,26 @@ export default function ToolsPage() {
   // demand per server (the list snapshot carries scalar fields only).
   const serverDetail = useSelector((state) => selectMcpServerDetail(state, selectedServer?.id));
   const serverDetailRequest = useSelector((state) => selectMcpServerDetailRequest(state, selectedServer?.id));
-  const configAction = useUiAction(`${selectedServer?.id || 'tools'}:config`);
+  const [configDraft, setConfigDraft, configDraftControls] = useEntityDraft(
+    entityDraftKey('mcp', selectedServer?.id, 'config'),
+    {
+      editing: false,
+      url: selectedServer?.url || '',
+      description: selectedServer?.description || '',
+    },
+  );
+  const {
+    beginSave: beginConfigSave,
+    clear: clearConfigDraft,
+    error: configSaveError,
+    failSave: failConfigSave,
+    saving: configSaving,
+    trackSave: trackConfigSave,
+  } = configDraftControls;
+  const configValidation = configValidationState && configValidationState.serverId === selectedServer?.id ? configValidationState.message : null;
+  const isEditingConfig = Boolean(configDraft.editing);
   const serverAction = useUiAction(`${selectedServer?.id || 'tools'}:server`);
   const deleteAction = useConfirmAction(selectedServer?.id || 'tools');
-  const [configServerId, setConfigServerId] = useState(selectedServer?.id);
-  if (configServerId !== selectedServer?.id) {
-    setConfigServerId(selectedServer?.id);
-    setIsEditingConfig(false);
-    setConfigValidation(null);
-  }
   const runQuickAction = useCallback(async (action, operation, task) => {
     const result = await action.run(operation, task);
     if (!result.ok && result.error) reportFailure(show, operation, result.error);
@@ -262,8 +272,6 @@ export default function ToolsPage() {
     fallbackPath: '/tools',
   });
 
-  // Draft state resets during the selection identity transition above, before
-  // a different server can render with the previous server's configuration.
 
   useEffect(() => {
     if (!isEditingConfig) return undefined;
@@ -287,32 +295,54 @@ export default function ToolsPage() {
 
   const startConfigEdit = useCallback(() => {
     if (!selectedServer) return;
-    setConfigValidation(null);
-    setConfigUrl(selectedServer.url || '');
-    setConfigDesc(selectedServer.description || '');
-    setIsEditingConfig(true);
-  }, [selectedServer]);
+    setConfigValidationState(null);
+    setConfigDraft({
+      editing: true,
+      url: selectedServer.url || '',
+      description: selectedServer.description || '',
+    });
+  }, [selectedServer, setConfigDraft]);
 
   const cancelConfigEdit = useCallback(() => {
-    setConfigValidation(null);
-    setIsEditingConfig(false);
-  }, []);
+    if (configSaving) return;
+    setConfigValidationState(null);
+    clearConfigDraft();
+  }, [clearConfigDraft, configSaving]);
 
-  const saveConfigEdit = useCallback(() => {
-    if (!selectedServer) return;
-    const url = configUrl.trim();
-    const description = configDesc.trim();
+  const saveConfigEdit = useCallback(async () => {
+    if (!selectedServer || configSaving) return;
+    const target = selectedServer;
+    const url = configDraft.url.trim();
+    const description = configDraft.description.trim();
     if (!url) {
-      setConfigValidation('Endpoint URL is required.');
+      setConfigValidationState({ serverId: target.id, message: 'Endpoint URL is required.' });
       return;
     }
-    setConfigValidation(null);
-    void configAction.run('Save server configuration', async ({ isCurrent }) => {
-      await updateWidget(`mcp:${selectedServer.name}`, { url, description });
-      await refreshMcp();
-      if (isCurrent()) setIsEditingConfig(false);
+    setConfigValidationState(null);
+    const ticket = beginConfigSave();
+    if (!ticket) return;
+    const requestId = createUuid();
+    trackConfigSave(ticket, {
+      requestId,
+      events: ['mcp.snapshot'],
     });
-  }, [configAction, configDesc, configUrl, refreshMcp, selectedServer, updateWidget]);
+    try {
+      await updateWidget(`mcp:${target.name}`, { url, description }, { requestId });
+      void refreshMcp().catch(() => {});
+    } catch (error) {
+      failConfigSave(ticket, error);
+    }
+  }, [
+    beginConfigSave,
+    configDraft.description,
+    configDraft.url,
+    configSaving,
+    failConfigSave,
+    refreshMcp,
+    selectedServer,
+    trackConfigSave,
+    updateWidget,
+  ]);
 
   const handleDelete = useCallback(() => {
     if (!selectedServer) return;
@@ -465,8 +495,8 @@ export default function ToolsPage() {
                   <div>
                     {isEditingConfig ? (
                       <>
-                        <button type="button" className="repo-btn repo-btn--ghost" onClick={cancelConfigEdit} disabled={configAction.busy}>Cancel</button>
-                        <button type="button" className="repo-btn" onClick={saveConfigEdit} disabled={configAction.busy}>Save</button>
+                        <button type="button" className="repo-btn repo-btn--ghost" onClick={cancelConfigEdit} disabled={configSaving}>Cancel</button>
+                        <button type="button" className="repo-btn" onClick={saveConfigEdit} disabled={configSaving}>Save</button>
                       </>
                     ) : (
                       <button type="button" className="repo-btn repo-btn--ghost" onClick={startConfigEdit}>Edit</button>
@@ -475,35 +505,33 @@ export default function ToolsPage() {
                 </div>
                 {isEditingConfig ? (
                   <div className="tools-config-edit">
-                    <InlineFailure failure={configValidation || configAction.error} operation="Save server configuration" />
+                    <InlineFailure failure={configValidation || configSaveError} operation="Save server configuration" />
                     <label className="tools-config-field">
                       <span>Endpoint URL</span>
                       <input
                         ref={configInputRef}
-                        value={configUrl}
-                        disabled={configAction.busy}
+                        value={configDraft.url}
+                        disabled={configSaving}
                         placeholder="https://host/mcp"
                         onChange={(event) => {
-                          setConfigValidation(null);
-                          configAction.clearError();
-                          setConfigUrl(event.target.value);
+                          setConfigValidationState(null);
+                          setConfigDraft((current) => ({ ...current, url: event.target.value }));
                         }}
                       />
                     </label>
                     <label className="tools-config-field">
                       <span>Description</span>
                       <input
-                        value={configDesc}
-                        disabled={configAction.busy}
+                        value={configDraft.description}
+                        disabled={configSaving}
                         placeholder="What this server provides"
                         onChange={(event) => {
-                          setConfigValidation(null);
-                          configAction.clearError();
-                          setConfigDesc(event.target.value);
+                          setConfigValidationState(null);
+                          setConfigDraft((current) => ({ ...current, description: event.target.value }));
                         }}
                       />
                     </label>
-                    <p className="tools-config-edit__hint">{configAction.busy ? 'Processing…' : 'Changes apply to the shared MCP registry.'}</p>
+                    <p className="tools-config-edit__hint">{configSaving ? 'Processing…' : 'Changes apply to the shared MCP registry.'}</p>
                   </div>
                 ) : (
                   <dl className="tools-connection-grid">

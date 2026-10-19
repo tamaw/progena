@@ -7,6 +7,7 @@ import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import realtimeReducer, { realtimeConnected } from '../store/realtimeSlice';
 import uiDataReducer, { applyUiEvent } from '../store/uiDataSlice';
+import editorDraftsReducer from '../store/editorDraftsSlice';
 import SchedulesPage from './SchedulesPage';
 
 // Stable like the real providers: page effects depend on these callbacks.
@@ -49,8 +50,10 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 
-it('discards an unsaved intent draft when the user leaves and returns to a schedule', async () => {
-  const store = configureStore({ reducer: { realtime: realtimeReducer, uiData: uiDataReducer } });
+it('retains independent unsaved intent drafts for schedules A and B across selection changes', async () => {
+  const store = configureStore({
+    reducer: { realtime: realtimeReducer, uiData: uiDataReducer, editorDrafts: editorDraftsReducer },
+  });
   store.dispatch(applyUiEvent({
     type: 'schedule.snapshot',
     payload: {
@@ -71,22 +74,30 @@ it('discards an unsaved intent draft when the user leaves and returns to a sched
   ));
   const intentSection = () => host.querySelector('.schedules-summary');
   const intentEditor = () => host.querySelector('textarea[aria-label="Schedule intent"]');
-  const editButton = Array.from(intentSection().querySelectorAll('button'))
-    .find((button) => button.textContent.trim() === 'Edit');
+  const editIntent = () => Array.from(intentSection().querySelectorAll('button'))
+    .find((button) => button.textContent.trim() === 'Edit').click();
+  const enterIntent = async (value) => {
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(intentEditor(), value);
+      intentEditor().dispatchEvent(new Event('input', { bubbles: true }));
+    });
+  };
   const selectSchedule = (name) => Array.from(host.querySelectorAll('.schedule-pane-row'))
     .find((row) => row.querySelector('.schedule-pane-row__name').textContent === name)
     .click();
 
-  await act(async () => editButton.click());
-  await act(async () => {
-    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(intentEditor(), 'Unsaved draft');
-    intentEditor().dispatchEvent(new Event('input', { bubbles: true }));
-  });
+  await act(async () => editIntent());
+  await enterIntent('Alpha draft');
   await act(async () => selectSchedule('Beta'));
-  await act(async () => selectSchedule('Alpha'));
-
   expect(intentEditor()).toBeNull();
-  expect(intentSection().textContent).toContain('alpha intent');
+
+  await act(async () => editIntent());
+  await enterIntent('Beta draft');
+  await act(async () => selectSchedule('Alpha'));
+  expect(intentEditor().value).toBe('Alpha draft');
+
+  await act(async () => selectSchedule('Beta'));
+  expect(intentEditor().value).toBe('Beta draft');
 });
 
 it('keeps a deep link that a cached list lacks until this visit’s refresh settles', async () => {
@@ -95,7 +106,9 @@ it('keeps a deep link that a cached list lacks until this visit’s refresh sett
     refreshRequestId = headers['X-Request-ID'];
     return new Response(JSON.stringify({ request_id: refreshRequestId, event_types: ['schedule.snapshot'] }), { status: 202 });
   }));
-  const store = configureStore({ reducer: { realtime: realtimeReducer, uiData: uiDataReducer } });
+  const store = configureStore({
+    reducer: { realtime: realtimeReducer, uiData: uiDataReducer, editorDrafts: editorDraftsReducer },
+  });
   store.dispatch(realtimeConnected());
   // Hydrated by an earlier visit, before schedule "b" was created elsewhere.
   store.dispatch(applyUiEvent({

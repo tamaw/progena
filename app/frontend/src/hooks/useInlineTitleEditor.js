@@ -1,148 +1,118 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback } from 'react';
 import { failureMessage, isCancellation } from '../lib/failures';
+import useEntityDraft from './useEntityDraft';
+import { entityDraftKey } from '../store/editorDraftsSlice';
 
 export function normalizeInlineTitle(value) {
   return String(value ?? '').replace(/\s+/g, ' ').trim();
 }
 
 /**
- * Owns the short-lived draft for a detail title. A scope change drops the draft
- * and makes completions for the previous entity invisible to the new one.
+ * Retains a detail-title edit independently of the mounted detail pane.
+ *
+ * `kind` is required to prevent one entity type's title draft from surfacing
+ * under another. `onCommit` receives the saved ticket controls so the caller
+ * can bind a 202 acknowledgement to its canonical stream confirmation:
+ * `onCommit(title, { ticket, trackSave, failSave })`.
  */
-export default function useInlineTitleEditor({ scopeKey, title, onCommit }) {
-  const scopeRef = useRef(scopeKey);
-  const titleRef = useRef(String(title ?? ''));
-  const mountedRef = useRef(true);
-  const activeSaveRef = useRef(null);
-  const scopeIncarnationRef = useRef(0);
-  const [state, setState] = useState({ scopeKey, editing: false, draft: '', saving: false, error: null });
+export default function useInlineTitleEditor({ kind, scopeKey, title, onCommit }) {
+  if (!kind) {
+    throw new Error('useInlineTitleEditor requires a draft kind');
+  }
 
-  scopeRef.current = scopeKey;
-  titleRef.current = String(title ?? '');
-
-  useEffect(() => {
-    mountedRef.current = true;
-    return () => {
-      mountedRef.current = false;
-    };
-  }, []);
-
-  useEffect(() => {
-    scopeIncarnationRef.current += 1;
-    activeSaveRef.current = null;
-    setState({ scopeKey, editing: false, draft: '', saving: false, error: null });
-  }, [scopeKey]);
-
-  const isCurrentScope = useCallback((savedScope, savedIncarnation) => (
-    mountedRef.current
-    && scopeRef.current === savedScope
-    && scopeIncarnationRef.current === savedIncarnation
-  ), []);
-
-  const isCurrentSave = useCallback((savedScope, savedIncarnation, saveToken) => (
-    isCurrentScope(savedScope, savedIncarnation)
-    && activeSaveRef.current?.token === saveToken
-  ), [isCurrentScope]);
+  const key = entityDraftKey(kind, scopeKey, 'title');
+  const initialValue = { editing: false, draft: String(title ?? '') };
+  const [value, setValue, controls] = useEntityDraft(key, initialValue);
+  const draft = typeof value?.draft === 'string' ? value.draft : initialValue.draft;
+  const isEditing = Boolean(value?.editing);
+  const {
+    clear,
+    beginSave,
+    trackSave,
+    failSave,
+    saving,
+    error,
+  } = controls;
 
   const start = useCallback(() => {
-    const nextScopeKey = scopeRef.current;
-    setState({ scopeKey: nextScopeKey, editing: true, draft: titleRef.current, saving: false, error: null });
-  }, []);
+    if (!key) return;
+    setValue((current) => ({
+      editing: true,
+      draft: typeof current?.draft === 'string' ? current.draft : String(title ?? ''),
+    }));
+  }, [key, setValue, title]);
 
   const cancel = useCallback(() => {
-    if (
-      activeSaveRef.current?.scopeKey === scopeRef.current
-      && activeSaveRef.current.incarnation === scopeIncarnationRef.current
-    ) {
-      return;
-    }
-    setState({
-      scopeKey: scopeRef.current,
-      editing: false,
-      draft: titleRef.current,
-      saving: false,
-      error: null,
-    });
-  }, []);
+    clear();
+  }, [clear]);
 
-  const setDraft = useCallback((draft) => {
-    setState((current) => ({ ...current, draft, error: null }));
-  }, []);
+  const setDraft = useCallback((nextDraft) => {
+    if (!key) return;
+    setValue((current) => {
+      const previousDraft = typeof current?.draft === 'string'
+        ? current.draft
+        : String(title ?? '');
+      const draftValue = typeof nextDraft === 'function'
+        ? nextDraft(previousDraft)
+        : nextDraft;
+      return { editing: true, draft: String(draftValue ?? '') };
+    });
+  }, [key, setValue, title]);
 
   const save = useCallback(async () => {
-    if (
-      activeSaveRef.current?.scopeKey === scopeRef.current
-      && activeSaveRef.current.incarnation === scopeIncarnationRef.current
-    ) {
-      return { ok: false, busy: true };
-    }
-    const savedScope = scopeRef.current;
-    const savedIncarnation = scopeIncarnationRef.current;
-    const nextTitle = normalizeInlineTitle(state.draft);
-    const currentTitle = normalizeInlineTitle(titleRef.current);
-    if (!nextTitle || nextTitle === currentTitle) {
-      if (isCurrentScope(savedScope, savedIncarnation)) {
-        setState({ scopeKey: savedScope, editing: false, draft: titleRef.current, saving: false, error: null });
-      }
+    if (!key) return { ok: false, skipped: true };
+
+    const nextTitle = normalizeInlineTitle(draft);
+    if (!nextTitle || nextTitle === normalizeInlineTitle(title)) {
+      clear();
       return { ok: false, skipped: true };
     }
-    const saveToken = Symbol('title-save');
-    activeSaveRef.current = {
-      scopeKey: savedScope,
-      incarnation: savedIncarnation,
-      token: saveToken,
-    };
-    const releaseSave = () => {
-      if (
-        activeSaveRef.current?.incarnation === savedIncarnation
-        && activeSaveRef.current.token === saveToken
-      ) {
-        activeSaveRef.current = null;
-      }
-    };
 
-    setState((current) => ({ ...current, saving: true, error: null }));
+    const ticket = beginSave();
+    if (!ticket) return { ok: false, busy: true };
+
     try {
-      const result = await onCommit(nextTitle);
-      if (!isCurrentSave(savedScope, savedIncarnation, saveToken)) {
-        return { ok: false, stale: true };
-      }
+      const result = await onCommit(nextTitle, {
+        ticket,
+        trackSave,
+        failSave,
+      });
       if (result?.ok === false) {
-        if (result.stale || result.cancelled || result.busy) {
-          setState((current) => ({ ...current, saving: false }));
-          return result;
+        // A stale UI-action result can still have a tracked request in flight.
+        // The page wrapper settles pre-dispatch stale calls itself.
+        if (!result.stale && !result.cancelled && !result.busy) {
+          failSave(ticket, result.error || 'Save title failed. Please try again.');
         }
-        const error = failureMessage(result.error || new Error('Please try again.'), 'Save title');
-        setState((current) => ({ ...current, saving: false, error }));
-        return { ...result, error };
+        return result;
       }
-      setState({ scopeKey: savedScope, editing: false, draft: nextTitle, saving: false, error: null });
+      // An HTTP acknowledgement only means the request was accepted. The
+      // retained entry is cleared by its correlated canonical stream event.
       return { ok: true, value: result };
-    } catch (error) {
-      if (!isCurrentSave(savedScope, savedIncarnation, saveToken)) {
-        return { ok: false, stale: true };
-      }
-      if (isCancellation(error)) {
-        setState((current) => ({ ...current, saving: false }));
+    } catch (commitError) {
+      if (isCancellation(commitError)) {
+        failSave(ticket, null);
         return { ok: false, cancelled: true };
       }
-      const failure = failureMessage(error, 'Save title');
-      setState((current) => ({ ...current, saving: false, error: failure }));
+      const failure = failureMessage(commitError, 'Save title');
+      failSave(ticket, failure.message);
       return { ok: false, error: failure };
-    } finally {
-      releaseSave();
     }
-  }, [isCurrentSave, isCurrentScope, onCommit, state.draft]);
-
-  const visible = state.scopeKey === scopeKey
-    ? state
-    : { editing: false, draft: '', saving: false, error: null };
+  }, [
+    beginSave,
+    clear,
+    draft,
+    failSave,
+    key,
+    onCommit,
+    title,
+    trackSave,
+  ]);
 
   return {
-    isEditing: visible.editing,
-    draft: visible.draft,
-    saving: visible.saving,
-    error: visible.error,
+    isEditing,
+    draft,
+    saving,
+    error,
     setDraft,
     start,
     cancel,

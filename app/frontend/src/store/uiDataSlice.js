@@ -355,7 +355,6 @@ export {
 export {
   fetchRepos,
   fetchRepoDetail,
-  createRepo,
   updateRepo,
   deleteRepo,
   fetchRepoUpstream,

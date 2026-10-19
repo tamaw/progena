@@ -19,15 +19,15 @@ import DetailHeader, {
 } from '../components/layout/DetailHeader';
 import PageShell from '../components/layout/PageShell';
 import DetailPane from '../components/layout/DetailPane';
-import Select from '../components/common/Select';
 import PopupModal from '../components/common/PopupModal';
 import InlineFailure from '../components/common/InlineFailure';
 import useUiAction from '../hooks/useUiAction';
 import useConfirmAction from '../hooks/useConfirmAction';
+import useEntityDraft from '../hooks/useEntityDraft';
+import { entityDraftKey } from '../store/editorDraftsSlice';
 import { useConfig } from '../context/ConfigContext';
 import { selectRealtimeConnected } from '../store/realtimeSlice';
 import {
-  createRepo,
   deleteRepo,
   fetchRepoDetail,
   fetchRepoUpstream,
@@ -40,10 +40,6 @@ import {
 
 const SOURCE_FILTERS = ['All', 'Remote', 'Local', 'Dirty'];
 
-const ACCESS_OPTIONS = [
-  { value: 'read', label: 'Read only' },
-  { value: 'write', label: 'Read / write' },
-];
 
 // A repo's row status is entirely derived from its latest heartbeat scan —
 // there is no PR/CI signal available (that needs a GitHub API integration
@@ -97,66 +93,6 @@ function groupRepositories(rows) {
   }, new Map());
 }
 
-function RepoCreateForm({ onCancel, onCreate, submitting, error }) {
-  const [name, setName] = useState('');
-  const [localPath, setLocalPath] = useState('');
-  const [access, setAccess] = useState('read');
-  const [remoteUrl, setRemoteUrl] = useState('');
-  const [owner, setOwner] = useState('');
-
-  const submit = (event) => {
-    event.preventDefault();
-    onCreate({ name, localPath, access, remoteUrl, owner });
-  };
-
-  return (
-    <form className="repo-create-form" onSubmit={submit}>
-      <label className="repo-create-form__field">
-        <span>Name</span>
-        <input value={name} onChange={(e) => setName(e.target.value)} placeholder="progenitor" required />
-      </label>
-      <label className="repo-create-form__field">
-        <span>Local worktree path</span>
-        <input
-          value={localPath}
-          onChange={(e) => setLocalPath(e.target.value)}
-          placeholder="progenitor"
-          required
-        />
-      </label>
-      <label className="repo-create-form__field">
-        <span>Remote URL (optional)</span>
-        <input
-          value={remoteUrl}
-          onChange={(e) => setRemoteUrl(e.target.value)}
-          placeholder="github.com/tamaw/progenitor"
-        />
-      </label>
-      <label className="repo-create-form__field">
-        <span>Owner (optional)</span>
-        <input value={owner} onChange={(e) => setOwner(e.target.value)} placeholder="Progenitor" />
-      </label>
-      <label className="repo-create-form__field">
-        <span>Access</span>
-        <Select
-          value={access}
-          onChange={setAccess}
-          options={ACCESS_OPTIONS}
-          ariaLabel="Repository access"
-        />
-      </label>
-      {error ? <InlineFailure failure={error} operation="Add repository" /> : null}
-      <div className="repo-create-form__actions">
-        <button type="button" className="repo-btn repo-btn--ghost" onClick={onCancel} disabled={submitting}>
-          Cancel
-        </button>
-        <button type="submit" className="repo-btn repo-btn--primary" disabled={submitting}>
-          {submitting ? 'Adding…' : 'Add repository'}
-        </button>
-      </div>
-    </form>
-  );
-}
 
 export default function RepositoriesPage() {
   const dispatch = useDispatch();
@@ -168,12 +104,9 @@ export default function RepositoriesPage() {
 
   const [activeFilter, setActiveFilter] = useState(SOURCE_FILTERS[0]);
   const [query, setQuery] = useState('');
-  const [selectedId, setSelectedId] = useState(null);
-  const [isCreating, setIsCreating] = useState(false);
-  const [createValidationError, setCreateValidationError] = useState(null);
+  const [selectedId, setSelectedId] = useEntityDraft(entityDraftKey('view', 'repositories', 'selection'), null);
 
   const { loading, error: loadError } = useSelector(selectReposState);
-  const createAction = useUiAction('repository-create');
 
   useEffect(() => {
     if (!realtimeConnected) return undefined;
@@ -205,26 +138,12 @@ export default function RepositoriesPage() {
     dispatch(fetchRepoDetail({ reposUrl, repoId: selectedRepoId }));
   }, [dispatch, reposUrl, selectedRepoId]);
 
-  const handleCreate = useCallback(async ({ name, localPath, access, remoteUrl, owner }) => {
-    if (!name.trim() || !localPath.trim()) {
-      setCreateValidationError('Name and local worktree path are required.');
-      return;
-    }
-    setCreateValidationError(null);
-    const result = await createAction.run('Add repository', async () => dispatch(createRepo({
-      reposUrl,
-      name,
-      localPath,
-      access,
-      remoteUrl,
-      owner,
-    })).unwrap());
-    if (!result.ok) return;
-    // The acknowledgement only accepts the request; the entry itself arrives
-    // on the subsequent repositories.snapshot stream event.
-    setSelectedId(null);
-    setIsCreating(false);
-  }, [createAction, dispatch, reposUrl]);
+  const openCreateChat = useCallback(() => {
+    window.dispatchEvent(new CustomEvent('progenitor:open-quick-chat', {
+      detail: { mode: 'repository-create' },
+    }));
+  }, []);
+
 
   const handleDelete = useCallback(() => {
     if (!selectedRow) return;
@@ -233,7 +152,7 @@ export default function RepositoriesPage() {
       await dispatch(deleteRepo({ reposUrl, repoId: repo.id })).unwrap();
       if (isCurrent()) setSelectedId(null);
     });
-  }, [deleteAction, dispatch, reposUrl, selectedRow]);
+  }, [deleteAction, dispatch, reposUrl, selectedRow, setSelectedId]);
 
   const handleOpen = useCallback(() => {
     if (!selectedRow?.declared?.remote_url) return;
@@ -259,7 +178,7 @@ export default function RepositoriesPage() {
           activeFilter={activeFilter}
           onFilterChange={setActiveFilter}
           actionLabel="+ New"
-          onAction={() => setIsCreating(true)}
+          onAction={openCreateChat}
         />
         <PaneListToolbar>
           <PaneListSearch value={query} placeholder="Search sources" onChange={setQuery} />
@@ -272,18 +191,7 @@ export default function RepositoriesPage() {
             onRetry={() => dispatch(fetchRepos({ reposUrl }))}
           />
         ) : null}
-        {isCreating ? (
-          <RepoCreateForm
-            onCancel={() => {
-              setIsCreating(false);
-              setCreateValidationError(null);
-              createAction.clearError();
-            }}
-            onCreate={handleCreate}
-            submitting={createAction.busy}
-            error={createValidationError || createAction.error}
-          />
-        ) : loading && rows.length === 0 ? (
+        {loading && rows.length === 0 ? (
           <PaneEmptyState>Loading repositories…</PaneEmptyState>
         ) : rows.length === 0 && !loadError ? (
           <PaneEmptyState>No repositories declared.</PaneEmptyState>

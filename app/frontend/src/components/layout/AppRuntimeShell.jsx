@@ -45,6 +45,8 @@ import { createUuid } from '../../lib/uuid';
 import ChatInput from '../chat/ChatInput';
 import NotificationContainer from '../common/NotificationContainer';
 import Select from '../common/Select';
+import EventDebugPanel from './EventDebugPanel';
+import ConnectionRecoveryModal from './ConnectionRecoveryModal';
 import {
   createSolutionFromName,
   createProjectFromName,
@@ -183,9 +185,8 @@ const breadcrumbRoutes = [
   ...(localDesignLibraryEnabled ? [{ to: '/design', label: 'Design library' }] : []),
 ];
 
-// Panels PanelHost actually grants isPinned/onTogglePin to (Settings/Account
-// are modal popups, never pinned) - the only values worth persisting as
-// preferences.pinnedPanel.
+// Only these panels persist as preferences.pinnedPanel. The hidden event
+// debugger may dock for this session, but never restores itself on reload.
 const PINNABLE_PANELS = new Set(['quickChat', 'alerts', 'insights']);
 const SIDEBAR_COLLAPSED_STORAGE_KEY = 'progenitor_sidebar_collapsed';
 const PINNED_PANEL_STORAGE_KEY = 'progenitor_pinned_panel';
@@ -1287,7 +1288,8 @@ function QuickChatPanel({
   }, [pendingComposerDraft, onComposerDraftConsumed]);
 
   const openInChat = useCallback(() => {
-    if (history.length > 0) {
+    const hasQuickChatHandoff = history.length > 0;
+    if (hasQuickChatHandoff) {
       const promotedMessages = history.map((turn, index) => ({
         id: `msg_quick_${Date.now()}_${index}`,
         role: turn.role,
@@ -1315,7 +1317,7 @@ function QuickChatPanel({
     }
     onClose();
     if (!isOnChatPage) {
-      navigate('/chat');
+      navigate('/chat', hasQuickChatHandoff ? { state: { quickChatHandoff: true } } : undefined);
     }
   }, [config.storage.chatHistory, config.storage.quickChatHandoff, history, isOnChatPage, navigate, onClose, scratchThreadId]);
 
@@ -2276,7 +2278,12 @@ function PanelHost({ activePanel, settingsOpen, quickChatConfig, quickChatSubmis
   if (displayed === 'alerts') panelContent = <AlertsPanel onClose={closePanel} {...shared} />;
   if (displayed === 'search') panelContent = <SearchPanel query={searchQuery} onClose={closePanel} {...shared} />;
   if (displayed === 'insights') panelContent = <InsightsPanel onClose={closePanel} {...shared} />;
-  const showScrim = ['alerts', 'quickChat', 'search', 'insights'].includes(displayed);
+  if (displayed === 'events') panelContent = (
+    <TopNavPane title="Event stream" subtitle="Redux UI events · Ctrl/Cmd+Shift+E" onClose={closePanel} bodyClassName="event-debug" {...shared}>
+      <EventDebugPanel />
+    </TopNavPane>
+  );
+  const showScrim = ['alerts', 'quickChat', 'search', 'insights', 'events'].includes(displayed);
   return (
     <>
       {quickChatHost}
@@ -2502,6 +2509,11 @@ function AppRuntimeShell() {
 
   useEffect(() => {
     const handleKeyDown = (event) => {
+      if ((event.metaKey || event.ctrlKey) && event.shiftKey && !event.altKey && event.code === 'KeyE') {
+        event.preventDefault();
+        if (!event.repeat) setActivePanel((current) => (current === 'events' ? null : 'events'));
+        return;
+      }
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
         event.preventDefault();
         setQuickChatConfig(defaultQuickChatConfig);
@@ -2665,6 +2677,7 @@ function AppRuntimeShell() {
         onResetLiveUiState={resetLiveUiState}
       />
       <NotificationContainer />
+      <ConnectionRecoveryModal />
     </div>
   );
 }

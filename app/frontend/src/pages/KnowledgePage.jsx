@@ -19,7 +19,7 @@ import InlineFailure from '../components/common/InlineFailure';
 import PopupModal from '../components/common/PopupModal';
 import useConfirmAction from '../hooks/useConfirmAction';
 import useMissingEntityRoute from '../hooks/useMissingEntityRoute';
-import useUiAction from '../hooks/useUiAction';
+import useEntityDraft from '../hooks/useEntityDraft';
 import PageShell from '../components/layout/PageShell';
 import DetailPane from '../components/layout/DetailPane';
 import DetailHeader, {
@@ -48,6 +48,7 @@ import {
   groupBases,
   statusMeta,
 } from './knowledgePageModel';
+import { draftDiscarded, entityDraftKey } from '../store/editorDraftsSlice';
 import { formatCompactRelativeAge, formatShortLocalDateTime } from '../lib/displayTime';
 
 
@@ -134,9 +135,8 @@ export default function KnowledgePage() {
   const [activeFilter, setActiveFilter] = useState('All');
   const [searchQuery, setSearchQuery] = useState('');
   const [sortMode, setSortMode] = useState('Status');
-  const [editingName, setEditingName] = useState(false);
-  const [nameDraft, setNameDraft] = useState('');
-  const [nameValidation, setNameValidation] = useState(null);
+  // Keyed by base so a failure never follows navigation to another base.
+  const [nameValidationState, setNameValidationState] = useState(null);
   const nameInputRef = useRef(null);
   const { collapsed, setCollapsed, paneClassName } = usePaneCollapse('tasks-list');
 
@@ -151,16 +151,6 @@ export default function KnowledgePage() {
 
   const bases = useMemo(() => rawBases.map(fromApiBase), [rawBases]);
 
-  // Reset the rename draft in the render that observes a new routed base.
-
-  // Focus + select the name field when entering rename mode.
-  useEffect(() => {
-    if (!editingName) {
-      return;
-    }
-    nameInputRef.current?.focus();
-    nameInputRef.current?.select();
-  }, [editingName]);
 
   const groups = useMemo(
     () => groupBases(bases, activeFilter, searchQuery, sortMode),
@@ -174,13 +164,28 @@ export default function KnowledgePage() {
       || (!selectedBaseId ? visibleBases[0] || null : null),
     [bases, selectedBaseId, visibleBases],
   );
-  const [draftBaseId, setDraftBaseId] = useState(selectedBase?.id);
-  if (draftBaseId !== selectedBase?.id) {
-    setDraftBaseId(selectedBase?.id);
-    setEditingName(false);
-    setNameDraft('');
-    setNameValidation(null);
-  }
+  const [nameDraft, setNameDraft, nameDraftControls] = useEntityDraft(
+    entityDraftKey('knowledge', selectedBase?.id, 'name'),
+    { editing: false, name: selectedBase?.name || '' },
+  );
+  const {
+    beginSave: beginNameSave,
+    clear: clearNameDraft,
+    error: nameSaveError,
+    failSave: failNameSave,
+    saving: nameSaving,
+    trackSave: trackNameSave,
+  } = nameDraftControls;
+  const nameValidation = nameValidationState && nameValidationState.baseId === selectedBase?.id ? nameValidationState.message : null;
+  const editingName = Boolean(nameDraft.editing);
+  // Focus + select the name field when entering rename mode.
+  useEffect(() => {
+    if (!editingName) {
+      return;
+    }
+    nameInputRef.current?.focus();
+    nameInputRef.current?.select();
+  }, [editingName]);
 
   // Keep the URL in sync with whichever base is actually selected. A routed
   // base id stays authoritative; only an absent hydrated base routes back.
@@ -200,7 +205,6 @@ export default function KnowledgePage() {
     (nextRaw) => dispatch(saveKnowledge({ knowledgeUrl, bases: nextRaw })).unwrap(),
     [dispatch, knowledgeUrl],
   );
-  const renameAction = useUiAction(selectedBase?.id || 'knowledge');
   const deleteAction = useConfirmAction(selectedBase?.id || 'knowledge');
 
   // Open the quick chat prefilled to create a knowledge base — Progenitor edits
@@ -217,42 +221,54 @@ export default function KnowledgePage() {
     const baseId = selectedBase.id;
     deleteAction.request('Delete knowledge base', async ({ isCurrent }) => {
       await putBases(selectKnowledgeBases(store.getState()).filter((item) => item.id !== baseId));
+      dispatch(draftDiscarded(entityDraftKey('knowledge', baseId, 'name')));
       if (isCurrent()) navigate('/knowledge', { replace: true });
     });
   };
 
   const startNameEdit = () => {
-    setNameValidation(null);
-    renameAction.clearError();
-    setNameDraft(selectedBase?.name || '');
-    setEditingName(true);
+    setNameValidationState(null);
+    setNameDraft({ editing: true, name: selectedBase?.name || '' });
   };
 
   const cancelNameEdit = () => {
-    setNameValidation(null);
-    renameAction.clearError();
-    setNameDraft(selectedBase?.name || '');
-    setEditingName(false);
+    if (nameSaving) return;
+    setNameValidationState(null);
+    clearNameDraft();
   };
 
   const saveNameEdit = () => {
-    if (!selectedBase) return;
+    if (!selectedBase || nameSaving) return;
     const base = selectedBase;
-    const next = nameDraft.replace(/\s+/g, ' ').trim();
+    const next = nameDraft.name.replace(/\s+/g, ' ').trim();
     if (!next) {
-      setNameValidation('A knowledge base name is required.');
+      setNameValidationState({ baseId: base.id, message: 'A knowledge base name is required.' });
       return;
     }
     if (next === base.name) {
       cancelNameEdit();
       return;
     }
-    setNameValidation(null);
-    void renameAction.run('Rename knowledge base', async ({ isCurrent }) => {
-      await putBases(rawBases.map((item) => (item.id === base.id
+    setNameValidationState(null);
+    const ticket = beginNameSave();
+    if (!ticket) return;
+    const operation = dispatch(saveKnowledge({
+      knowledgeUrl,
+      bases: selectKnowledgeBases(store.getState()).map((item) => (item.id === base.id
         ? { ...item, name: next, updated_at: new Date().toISOString() }
-        : item)));
-      if (isCurrent()) setEditingName(false);
+        : item)),
+    }));
+    trackNameSave(ticket, {
+      requestId: operation.requestId,
+      events: [],
+    });
+    void operation.unwrap().then((acknowledgement) => {
+      trackNameSave(ticket, {
+        requestId: acknowledgement.request_id,
+        events: acknowledgement.event_types,
+      });
+    }).catch((error) => {
+      failNameSave(ticket, error);
     });
   };
 
@@ -347,16 +363,14 @@ export default function KnowledgePage() {
                       ref={nameInputRef}
                       type="text"
                       className="chat-page-header__title-input"
-                      value={nameDraft}
+                      value={nameDraft.name}
                       maxLength={160}
                       aria-label="Knowledge base name"
-                      disabled={renameAction.busy}
+                      disabled={nameSaving}
                       onChange={(event) => {
-                        setNameValidation(null);
-                        renameAction.clearError();
-                        setNameDraft(event.target.value);
+                        setNameValidationState(null);
+                        setNameDraft((current) => ({ ...current, name: event.target.value }));
                       }}
-                      onBlur={() => { if (!renameAction.busy) cancelNameEdit(); }}
                       onKeyDown={(event) => {
                         if (event.key === 'Enter') {
                           event.preventDefault();
@@ -375,7 +389,7 @@ export default function KnowledgePage() {
                     className="chat-icon-button chat-detail-header__rename"
                     data-tooltip={editingName ? 'Save name' : 'Rename knowledge base'}
                     aria-label={editingName ? 'Save name' : 'Rename knowledge base'}
-                    disabled={renameAction.busy}
+                    disabled={nameSaving}
                     onMouseDown={editingName ? (event) => event.preventDefault() : undefined}
                     onClick={editingName ? saveNameEdit : startNameEdit}
                   >
@@ -420,7 +434,7 @@ export default function KnowledgePage() {
             />
 
             <div className="task-detail__body">
-              {editingName ? <InlineFailure failure={nameValidation || renameAction.error} operation="Rename knowledge base" /> : null}
+              {editingName ? <InlineFailure failure={nameValidation || nameSaveError} operation="Rename knowledge base" /> : null}
               <KnowledgePagesTab baseId={selectedBase.id} baseName={selectedBase.name} knowledgeUrl={knowledgeUrl} />
             </div>
           </>

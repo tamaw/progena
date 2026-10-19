@@ -470,19 +470,41 @@ function ConversationPage() {
     : null;
   const titleAction = useUiAction(titleScopeKey);
   const { run: runTitleAction } = titleAction;
-  const commitTitle = useCallback((nextTitle) => {
+  const commitTitle = useCallback((nextTitle, { ticket, trackSave, failSave }) => {
     if (!titleScopeKey) {
-      return Promise.resolve({ ok: false, skipped: true });
+      failSave(ticket, 'Conversation is no longer selected. Please try again.');
+      return Promise.resolve({ ok: false, stale: true });
     }
+
+    let dispatched = false;
     return runTitleAction('Rename conversation', async () => {
-      await dispatch(updateChatSessionMetadata({
+      dispatched = true;
+      const operation = dispatch(updateChatSessionMetadata({
         chatsUrl: getApiUrl('chats'),
         threadId: titleScopeKey,
         patch: { title: nextTitle },
-      })).unwrap();
+      }));
+      trackSave(ticket, {
+        requestId: operation.requestId,
+        events: ['chat.session.metadata.updated', 'chat.sessions.snapshot'],
+      });
+      try {
+        return await operation.unwrap();
+      } catch (commitError) {
+        // The stale UI-action fence must not leave the originating title
+        // ticket pending after the user moved to another conversation.
+        failSave(ticket, commitError);
+        throw commitError;
+      }
+    }).then((result) => {
+      if (!dispatched && !result.ok) {
+        failSave(ticket, result.error || 'Conversation is no longer selected. Please try again.');
+      }
+      return result;
     });
   }, [dispatch, getApiUrl, runTitleAction, titleScopeKey]);
   const titleEditor = useInlineTitleEditor({
+    kind: 'chat',
     scopeKey: titleScopeKey,
     title: chatTitle,
     onCommit: commitTitle,
