@@ -15,22 +15,30 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-def _environment(*, write: bool = False) -> dict[str, str]:
+def _environment(*, write: bool = False, publish: bool = False) -> dict[str, str]:
     environment = os.environ.copy()
     environment["PROGENITOR_SHIM_SYSTEM_PATH"] = "/usr/bin:/bin"
     environment.pop("PROGENITOR_SHIM_GIT_WRITE", None)
+    environment.pop("PROGENITOR_SHIM_GIT_PUBLISH", None)
+    environment.pop("GH_TOKEN", None)
     if write:
         environment["PROGENITOR_SHIM_GIT_WRITE"] = "1"
+    if publish:
+        environment["PROGENITOR_SHIM_GIT_PUBLISH"] = "1"
     return environment
 
 
 def _run(
-    shim: Path, *args: str, cwd: Path | None = None, write: bool = False
+    shim: Path,
+    *args: str,
+    cwd: Path | None = None,
+    write: bool = False,
+    publish: bool = False,
 ) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [str(shim), *args],
         cwd=cwd,
-        env=_environment(write=write),
+        env=_environment(write=write, publish=publish),
         text=True,
         capture_output=True,
         check=False,
@@ -174,3 +182,99 @@ def test_git_write_still_refuses_work_losing_or_publishing_commands(
     assert result.returncode == 2
     assert "progenitor-shim: refused:" in result.stderr
     assert (tmp_path / "tracked.txt").read_text(encoding="utf-8") == "local edit\n"
+
+
+def _published_clone(tmp_path: Path) -> tuple[Path, Path]:
+    """A bare origin and a clone of it on a fresh feature branch."""
+    seed = tmp_path / "seed"
+    seed.mkdir()
+    _seed_repository(seed)
+    origin = tmp_path / "origin.git"
+    subprocess.run(
+        ["git", "clone", "--bare", str(seed), str(origin)], check=True, capture_output=True
+    )
+    clone = tmp_path / "clone"
+    subprocess.run(["git", "clone", str(origin), str(clone)], check=True, capture_output=True)
+    subprocess.run(
+        ["git", "switch", "-c", "feature/card"], cwd=clone, check=True, capture_output=True
+    )
+    return origin, clone
+
+
+def test_publish_pushes_a_named_feature_branch(tmp_path: Path):
+    origin, clone = _published_clone(tmp_path)
+
+    refused = _run(GIT_SHIM, "-C", str(clone), "push", "-u", "origin", "feature/card", write=True)
+    assert refused.returncode == 2
+
+    pushed = _run(
+        GIT_SHIM, "-C", str(clone), "push", "-u", "origin", "feature/card", write=True, publish=True
+    )
+    assert pushed.returncode == 0, pushed.stderr
+    branches = subprocess.run(
+        ["git", "-C", str(origin), "branch", "--list", "feature/card"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert "feature/card" in branches.stdout
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        ("push",),
+        ("push", "origin"),
+        ("push", "origin", "master"),
+        ("push", "origin", "main"),
+        ("push", "origin", "HEAD"),
+        ("push", "origin", "feature/card:master"),
+        ("push", "origin", "+feature/card"),
+        ("push", "-f", "origin", "feature/card"),
+        ("push", "--force-with-lease", "origin", "feature/card"),
+        ("push", "--delete", "origin", "feature/card"),
+        ("push", "--all", "origin"),
+        ("commit", "-m", "x"),
+    ],
+)
+def test_publish_still_refuses_default_branch_forced_or_implicit_pushes(
+    tmp_path: Path, arguments: tuple[str, ...]
+):
+    origin, clone = _published_clone(tmp_path)
+    refs_before = sorted((origin / "refs" / "heads").rglob("*"))
+
+    result = _run(GIT_SHIM, "-C", str(clone), *arguments, write=True, publish=True)
+
+    assert result.returncode == 2
+    assert "progenitor-shim: refused:" in result.stderr
+    assert sorted((origin / "refs" / "heads").rglob("*")) == refs_before
+
+
+def test_gh_pr_create_needs_publish():
+    for write in (False, True):
+        result = _run(GH_SHIM, "pr", "create", "--title", "x", write=write)
+        assert result.returncode == 2
+        assert "progenitor-shim: refused:" in result.stderr
+
+
+def test_worktree_remove_needs_write_and_keeps_uncommitted_work(tmp_path: Path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _seed_repository(repo)
+    worktree = tmp_path / "wt"
+    subprocess.run(
+        ["git", "-C", str(repo), "worktree", "add", "-b", "wt", str(worktree)],
+        check=True,
+        capture_output=True,
+    )
+    assert _run(GIT_SHIM, "-C", str(repo), "worktree", "remove", str(worktree)).returncode == 2
+
+    (worktree / "tracked.txt").write_text("unsaved\n", encoding="utf-8")
+    dirty = _run(GIT_SHIM, "-C", str(repo), "worktree", "remove", str(worktree), write=True)
+    assert dirty.returncode != 0
+    assert (worktree / "tracked.txt").read_text(encoding="utf-8") == "unsaved\n"
+
+    subprocess.run(["git", "-C", str(worktree), "checkout", "--", "."], check=True)
+    clean = _run(GIT_SHIM, "-C", str(repo), "worktree", "remove", str(worktree), write=True)
+    assert clean.returncode == 0, clean.stderr
+    assert not worktree.exists()

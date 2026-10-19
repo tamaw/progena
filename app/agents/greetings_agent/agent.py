@@ -81,9 +81,11 @@ from acp.schema import (
     AgentMessageChunk,
     AllowedOutcome,
     CreateTerminalResponse,
+    DeclineElicitationResponse,
     DeniedOutcome,
+    ElicitationMode,
     EnvVariable,
-    KillTerminalCommandResponse,
+    KillTerminalResponse,
     PermissionOption,
     ReadTextFileResponse,
     ReleaseTerminalResponse,
@@ -197,50 +199,50 @@ class _ProbeACPClient(Client):
 
     async def request_permission(
         self,
-        options: list[PermissionOption],
         session_id: str,
         tool_call: ToolCallUpdate,
+        options: list[PermissionOption],
         **_kwargs: Any,
     ) -> RequestPermissionResponse:
         _ = (session_id, tool_call)
-        if options and hasattr(options[0], "id"):
+        if options:
             return RequestPermissionResponse(
-                outcome=AllowedOutcome(option_id=options[0].id, outcome="selected")
+                outcome=AllowedOutcome(option_id=options[0].option_id, outcome="selected")
             )
         return RequestPermissionResponse(outcome=DeniedOutcome(outcome="cancelled"))
 
     async def create_terminal(
         self,
-        command: str,
         session_id: str,
+        command: str,
         args: list[str] | None = None,
-        cwd: str | None = None,
         env: list[EnvVariable] | None = None,
+        cwd: str | None = None,
         output_byte_limit: int | None = None,
         **_kwargs: Any,
     ) -> CreateTerminalResponse:
-        _ = (command, session_id, args, cwd, env, output_byte_limit)
+        _ = (session_id, command, args, env, cwd, output_byte_limit)
         return CreateTerminalResponse(terminal_id="internal")
 
     async def read_text_file(
         self,
-        path: str,
         session_id: str,
-        limit: int | None = None,
+        path: str,
         line: int | None = None,
+        limit: int | None = None,
         **_kwargs: Any,
     ) -> ReadTextFileResponse:
-        _ = (path, session_id, limit, line)
+        _ = (session_id, path, line, limit)
         return ReadTextFileResponse(content="")
 
     async def write_text_file(
         self,
-        content: str,
-        path: str,
         session_id: str,
+        path: str,
+        content: str,
         **_kwargs: Any,
     ) -> WriteTextFileResponse | None:
-        _ = (content, path, session_id)
+        _ = (session_id, path, content)
         return None
 
     async def terminal_output(
@@ -257,7 +259,7 @@ class _ProbeACPClient(Client):
 
     async def kill_terminal(
         self, session_id: str, terminal_id: str, **_kwargs: Any
-    ) -> KillTerminalCommandResponse | None:
+    ) -> KillTerminalResponse | None:
         _ = (session_id, terminal_id)
         return None
 
@@ -273,6 +275,15 @@ class _ProbeACPClient(Client):
 
     async def ext_notification(self, method: str, params: dict[str, Any]) -> None:
         _ = (method, params)
+
+    async def complete_elicitation(self, elicitation_id: str, **_kwargs: Any) -> None:
+        _ = elicitation_id
+
+    async def create_elicitation(
+        self, message: str, mode: ElicitationMode, **_kwargs: Any
+    ) -> DeclineElicitationResponse:
+        _ = (message, mode)
+        return DeclineElicitationResponse(action="decline")
 
     def get_output(self) -> str:
         return "".join(self.text_parts)
@@ -965,7 +976,6 @@ class GreetingsExecutor(AgentExecutor):
             status=status,
             metadata=dict(message.metadata or {}),
         )
-
 
 
 # ---------------------------------------------------------------------------

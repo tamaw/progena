@@ -108,7 +108,7 @@ def test_parse_routine_graph_document_rejects_additional_properties():
     "source",
     [
         {"prompt_template": "Summarize {request}"},
-        {"prompt_file": "/prompts/summary.md"},
+        {"instruction": "workflows/summary.md"},
         {"inputs": {"request": "request"}},
     ],
 )
@@ -126,7 +126,7 @@ def test_agent_input_source_survives_save_read_round_trip(source):
     config = saved["nodes"][0]["config"]
     assert config["continue_thread"] is True
     assert {
-        key: config[key] for key in ("prompt_template", "prompt_file", "inputs") if key in config
+        key: config[key] for key in ("prompt_template", "instruction", "inputs") if key in config
     } == source
 
 

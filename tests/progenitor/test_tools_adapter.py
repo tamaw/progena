@@ -68,6 +68,12 @@ def test_core_only_tools_present() -> None:
         "ask_user",
         "list_agents",
         "call_agent",
+        "acp_start",
+        "acp_send",
+        "acp_status",
+        "acp_answer",
+        "acp_cancel",
+        "acp_list",
         "enqueue_background_task",
         "get_a2a_task",
         "mcp_refresh",
@@ -183,6 +189,24 @@ async def test_call_agent_uses_registry_and_a2a(monkeypatch) -> None:
     assert result["task_id"] == "task-123"
     assert result["agent"] == "Builder Agent"
     dispatch_mock.assert_awaited_once()
+
+
+async def test_call_agent_rejects_acp_agent_with_acp_start_pointer() -> None:
+    registry = MagicMock()
+    registry.find_by_name.return_value = {
+        "name": "Claude",
+        "transport": "acp",
+        "acp": {"host": "progenitor-agent-claude", "port": 3001},
+    }
+    tools = create_deepagent_tools(tool_registry=registry, state_manager=MagicMock())
+
+    result = await _invoke(
+        _tool_by_name(tools, "call_agent"),
+        {"agent": "Claude", "request": "Implement the card"},
+    )
+
+    assert result["success"] is False
+    assert "acp_start" in result["error"]
 
 
 @pytest.mark.asyncio

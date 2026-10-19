@@ -1,6 +1,6 @@
 ---
 name: managing-workflows
-description: Create, inspect, update, pause/resume, wire, or delete backend-native workflow definitions by editing one file under /workflows/ at a time. Use when a user asks to create or modify a workflow that reacts to document create/update/delete events (kanban cards, inbox messages, workflow runs, preferences, ...) and runs agent, MCP, condition, approval, or direct document read/query nodes through the backend workflow executor.
+description: Create, inspect, update, pause/resume, wire, or delete backend-native workflow definitions by editing one file under /workflows/ at a time. Use when a user asks to create or modify a workflow that reacts to document create/update/delete events (kanban cards, inbox messages, workflow runs, ACP tasks, repos, preferences, ...) and runs agent, routine, condition, approval, or direct document nodes.
 allowed-tools: read_file write_file edit_file ls structured_output generate_id current_time
 ---
 
@@ -21,7 +21,7 @@ Core rules:
 7. Never hand-write `input_schema`/`output_schema` for `event`, `cron`, `document_read`, `document_query`, `document_write`, `document_create`, `document_delete`, or `format` nodes: the server derives them on save. Wire edges to the port names listed below.
 
 Document events:
-- Every create/update/delete of a stored document is an event. An `event` node subscribes by `document_type` (a registered type id). Built-in ids: `kanban_card`, `kanban_task` (task body), `inbox_message`, `workflow`, `workflow_run`, `routine`, `policy`, `agent`, `skill`, `memory`, `instruction`, `preferences`, `schedule`, `mcp`, `plugins`, `marketplaces`, `knowledge`, `knowledge_page`, `knowledge_index`, `repos`, `kanban_board`, and `session` (below). Writing a workflow with an unknown id fails with the list of registered ids.
+- Every create/update/delete of a stored document is an event. An `event` node subscribes by `document_type` (a registered type id). Built-in ids: `kanban_card`, `kanban_task` (task body), `inbox_message`, `workflow`, `workflow_run`, `routine`, `policy`, `agent`, `skill`, `memory`, `instruction`, `preferences`, `schedule`, `mcp`, `plugins`, `marketplaces`, `knowledge`, `knowledge_page`, `knowledge_index`, `repo`, `acp_task` (below), `alert`, `kanban_board`, and `session` (below). Writing a workflow with an unknown id fails with the list of registered ids.
 - `knowledge_page` receives events for pages under `knowledge:<base-id>/`; `knowledge_index` receives system-maintained indexing-status updates at `knowledge_index`. The index type is read-only, while knowledge page content has the standard content-document ports.
 - Optional filters on the event node: `key` (exact document key), `operations` (subset of `created`/`updated`/`deleted`; empty = any), `changed_fields` (fire only if one of these top-level fields changed), `match` (equality at dotted output paths, e.g. `{"after.column_id": "done"}`; the path must exist).
 - Event output ports: `event_id`, `document_type`, `key`, `id` (key without prefix), `op`, `timestamp`, `changed_fields`, `before`, `after`. `before`/`after` are the whole document, typed with the document type's label (e.g. `Kanban Card`); wire them into an `unpack` node to reach individual fields. `before` is absent on created, `after` on deleted.
@@ -49,6 +49,29 @@ Node kinds:
 - `condition` — deterministic branch with `true`/`false` outputs.
 - `approval` — pauses for an approve/reject decision. Fields `kind`, `title`, `message`, optional `approver`: `any` (default; you may decide it with `resolve_workflow_approval` when the user asks) or `human` (only a person, in the UI; the tool refuses).
 - To alert the user, use `format` to render any dynamic message and wire its `text` output to a `document_create` node for document type `alert`. Supply title and message; alert defaults supply type `info`, `urgent` false, `requires_response` false, and `viewed` false.
+
+ACP tasks (driving Claude and other ACP agents):
+- Prefer an `agent` or `routine` step whose runner has the `acp_*` tools and
+  `driving-acp-agents` skill. It can use `acp_start`, `acp_status` (with a wait
+  of at most 300 seconds), `acp_answer`, and `acp_send` to drive one interactive
+  session while it owns the work.
+- An `acp_task` document is one agent session run by the backend. Workflows that
+  need durable event-driven orchestration use the generic document nodes; see
+  `/schemas/acp_task.schema.v1.json`.
+  - Start: `document_create(acp_task)` with `agent_name` (e.g. `claude`),
+    `prompt`, and optionally `cwd` (a repo-manager worktree path), `card_id`,
+    and `mode`. It starts `queued`.
+  - To supply a follow-up request, append a pending `messages` entry rather
+    than replacing `prompt`; the supervisor steers a running turn or starts the
+    next idle turn. Write `answers[input_id]` to answer a pending input and
+    `cancel_requested: true` to cancel.
+- The backend sets `status` to `working`, then `completed`, `failed`, `canceled`,
+  or `interrupted`, and records output, progress, turn, history, and stalled.
+  `pending_input` is set when Claude needs a question or plan answer; answer it
+  promptly because Claude remains blocked until it is cleared.
+- Do not wait inside one document-driven run. React in another workflow:
+  `{"kind": "event", "document_type": "acp_task", "changed_fields": ["pending_input"]}`
+  handles questions/plans; status and stalled events handle completion and silence.
 
 Set `"notify_on_pause": true` on the workflow to raise an alert whenever a run pauses at an `approval` node or at a routine's `human` step. Pause alerts are under `/alerts/<id>.json` with a `context` saying what is waiting (`workflow_id`/`run_id`, or a routine `thread_id`) and its `approver`. Answer one only when the user asks you to: `resolve_workflow_approval` for approvals, `resume_routine` for routine steps; `approver: "human"` ones must be answered by the user in the UI.
 

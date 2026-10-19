@@ -23,6 +23,11 @@ case "$group:$verb" in
     # Same opt-in as git clone (manifest git_write: true).
     [[ "${PROGENITOR_SHIM_GIT_WRITE:-}" == "1" ]] || deny "gh $group $verb"
     ;;
+  pr:create)
+    # Same opt-in as git push (manifest git_publish: true).
+    [[ "${PROGENITOR_SHIM_GIT_WRITE:-}" == "1" && "${PROGENITOR_SHIM_GIT_PUBLISH:-}" == "1" ]] \
+      || deny "gh $group $verb"
+    ;;
   *)
     deny "gh $group $verb"
     ;;

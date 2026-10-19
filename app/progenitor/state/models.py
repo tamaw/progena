@@ -5,7 +5,7 @@ import re
 import uuid
 from datetime import datetime
 from enum import StrEnum
-from typing import Any, TypedDict
+from typing import Any, Literal, TypedDict
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -167,11 +167,15 @@ class AgentStatus(StrEnum):
 class ACPAgentConfig(BaseModel):
     """Invocation config for an Agent Client Protocol (ACP) agent.
 
-    Carried on an ``AgentRegistryEntry`` with ``transport="acp"``. ACP agents are
-    spawned as local stdio subprocesses (e.g. ``copilot --acp``), so they have a
-    ``command`` and CLI ``args`` rather than a URL. ``profile`` names a known agent
-    whose flag builder lives in ``app/progenitor/acp/agents.py``; ``args`` (when
-    set) overrides the profile builder with raw arguments.
+    Carried on an ``AgentRegistryEntry`` with ``transport="acp"``. Agents may
+    be local stdio subprocesses or long-lived TCP ACP servers. ``profile``
+    names a known stdio agent whose flag builder lives in
+    ``app/progenitor/acp/agents.py``; ``args`` (when set) overrides the profile
+    builder with raw arguments.
+
+    ``host`` and ``port`` select a TCP server. ``model`` is selected per TCP
+    session when the agent supports it, and ``cwd`` is passed to every ACP
+    new/resume session unless the task supplies its own working directory.
     """
 
     command: str = "copilot"
@@ -180,10 +184,6 @@ class ACPAgentConfig(BaseModel):
     model: str | None = None
     flags: list[str] = Field(default_factory=list)
     timeout_seconds: int = 1200
-    # TCP mode: connect to an already-running ACP server (e.g. ``copilot --acp
-    # --port 3000``) instead of spawning a local stdio subprocess. ``host``/``port``
-    # select the server; ``model`` is applied per session via set_session_model;
-    # ``cwd`` is the server-side working directory passed to new_session.
     host: str | None = None
     port: int | None = None
     cwd: str | None = None
@@ -306,18 +306,14 @@ class A2ATaskRecord(BaseModel):
 
 
 class ACPTaskStatus(StrEnum):
-    """Lifecycle states for a tracked ACP agent run.
+    """Lifecycle states for one persisted ACP task turn sequence."""
 
-    ACP runs are local subprocesses that Progenitor drives to completion, so the
-    vocabulary is simpler than A2A's: there is no remote ``submitted``/``working``
-    distinction to poll — a run is ``working`` until it finishes or the process
-    fails/is cancelled.
-    """
-
+    QUEUED = "queued"
     WORKING = "working"
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELED = "canceled"
+    INTERRUPTED = "interrupted"
 
 
 TERMINAL_ACP_TASK_STATUSES = frozenset(
@@ -325,39 +321,60 @@ TERMINAL_ACP_TASK_STATUSES = frozenset(
         ACPTaskStatus.COMPLETED.value,
         ACPTaskStatus.FAILED.value,
         ACPTaskStatus.CANCELED.value,
+        ACPTaskStatus.INTERRUPTED.value,
     }
 )
 
 
 class ACPTaskRecord(BaseModel):
-    """Persisted metadata for an ACP agent run tracked by Progenitor.
+    """Persisted request and supervisor state for one ACP session.
 
-    Peer to :class:`A2ATaskRecord` but for the ACP protocol: a local stdio agent
-    run rather than a remote A2A task. There is no poll-refresh — the background
-    run updates this record and enqueues a completion when it finishes.
+    Request-owned fields are deliberately separate from the fields written by
+    the backend supervisor.  A request may queue a next prompt while the prior
+    turn is still working, without losing either the new prompt or the prior
+    turn's recorded history.
     """
 
     model_config = {"use_enum_values": True}
 
     task_id: str
     agent_name: str
-    command: str = ""
+    prompt: str = ""
     cwd: str | None = None
-    session_id: str | None = None
+    card_id: str | None = None
+    status: ACPTaskStatus = ACPTaskStatus.QUEUED
+    cancel_requested: bool = False
+    messages: list[dict[str, Any]] = Field(default_factory=list)
+    mode: Literal["default", "acceptEdits", "plan", "bypassPermissions"] | None = None
+    answers: dict[str, Any] = Field(default_factory=dict)
     source: str = "call_agent"
-    request_text: str = ""
     request_metadata: dict[str, Any] = Field(default_factory=dict)
-    status: ACPTaskStatus = ACPTaskStatus.WORKING
-    summary: str | None = None
+    notify_on_completion: bool = True
+    command: str = ""
+    session_id: str | None = None
+    turn: int = 0
     output: str | None = None
-    tool_calls: list[dict[str, Any]] = Field(default_factory=list)
+    summary: str | None = None
     stop_reason: str | None = None
     last_error: str | None = None
-    notify_on_completion: bool = True
-    notification_sent_at: datetime | None = None
+    tool_calls: list[dict[str, Any]] = Field(default_factory=list)
+    progress: dict[str, Any] = Field(
+        default_factory=lambda: {
+            "last_message": None,
+            "plan": [],
+            "tool_call_count": 0,
+            "last_tool": None,
+            "last_activity_at": None,
+        }
+    )
+    stalled: bool = False
+    history: list[dict[str, Any]] = Field(default_factory=list)
+    pending_input: dict[str, Any] | None = None
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)
+    started_at: datetime | None = None
     completed_at: datetime | None = None
+    notification_sent_at: datetime | None = None
 
     @field_validator("status", mode="before")
     @classmethod
@@ -369,13 +386,13 @@ class ACPTaskRecord(BaseModel):
             try:
                 return ACPTaskStatus(v.strip().lower())
             except ValueError:
-                logger.warning("Unknown ACPTaskStatus %r, defaulting to WORKING", v)
-                return ACPTaskStatus.WORKING
+                logger.warning("Unknown ACPTaskStatus %r, defaulting to QUEUED", v)
+                return ACPTaskStatus.QUEUED
         logger.warning(
-            "Unexpected ACPTaskRecord status type %s, defaulting to WORKING",
+            "Unexpected ACPTaskRecord status type %s, defaulting to QUEUED",
             type(v).__name__,
         )
-        return ACPTaskStatus.WORKING
+        return ACPTaskStatus.QUEUED
 
     @property
     def status_value(self) -> str:

@@ -104,6 +104,8 @@ def test_absent_or_disabled_shell_is_not_enabled(shell: str):
         ("shell: false\nenv_passthrough: []\n", "env_passthrough requires shell"),
         ("shell: false\ngit_write: true\n", "git_write requires shell"),
         ("shell: true\ngit_write: yes please\n", "git_write.*boolean"),
+        ("shell: false\ngit_publish: true\n", "git_publish requires shell"),
+        ("shell: true\ngit_publish: true\n", "git_publish requires git_write"),
     ],
 )
 def test_shell_rejects_nested_or_disabled_environment_settings(shell_block: str, match: str):
@@ -223,13 +225,21 @@ def test_git_write_is_opt_in_and_exposes_the_repos_dir():
             shim_bin=Path("/shims"),
             agent_home=Path("/home/agent"),
             config=config,
-            parent_env={"PROGENITOR_SHIM_GIT_WRITE": "1"},
+            parent_env={"PROGENITOR_SHIM_GIT_WRITE": "1", "PROGENITOR_SHIM_GIT_PUBLISH": "1"},
             repos_dir=Path("/data/repos"),
         )
 
-    # The parent's value never leaks in; only the manifest grants write.
+    publisher = parse_object_agent_manifest(
+        SHELL_SYSTEM.replace("shell: true\n", "shell: true\ngit_write: true\ngit_publish: true\n"),
+        source="test",
+    ).shell
+    assert publisher is not None
+
+    # The parent's values never leak in; only the manifest grants write/publish.
     assert "PROGENITOR_SHIM_GIT_WRITE" not in env(read_only)
     assert env(writer)["PROGENITOR_SHIM_GIT_WRITE"] == "1"
+    assert "PROGENITOR_SHIM_GIT_PUBLISH" not in env(writer)
+    assert env(publisher)["PROGENITOR_SHIM_GIT_PUBLISH"] == "1"
     assert env(read_only)["PROGENITOR_REPOS_DIR"] == "/data/repos"
 
 

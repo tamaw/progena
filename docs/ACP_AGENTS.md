@@ -13,38 +13,54 @@ remote HTTP servers, ACP agents are local subprocesses Progenitor spawns and dri
 ## How it fits together
 
 ```
-call_agent tool ─┬─ transport == "http" ─→ app/progenitor/a2a/   (remote A2A task, polled)
-                 └─ transport == "acp"  ─→ app/progenitor/acp/   (local/remote run, background-tracked)
-
-registry (Postgres `registry` document — canonical; read-through to the backend)
-   └─ kind=acp_agent, transport=acp, acp={command|host+port, profile, model, cwd, ...}
+acp_* tools / workflows ─→ acp_task:<id> document (queued or updated)
+                                   │ document event
+backend ACPTaskSupervisor ─────────┘
+   └─ ACPRunner (app/progenitor/acp/) ─→ ACP agent (TCP server or stdio CLI)
 ```
 
-### Where the registry lives (database, not the file)
+The runtime registry is database-backed: `ToolRegistry` reads and writes the
+Postgres `registry` document through `StateManager`. ACP agents are registered
+as `acp_agent` entries with `acp={command|host+port, profile, model, cwd, ...}`.
 
-The runtime registry is **database-backed**: `ToolRegistry` reads and writes the
-Postgres `registry` document through `StateManager` (`registry/runtime.py`
-`bind_state_manager`). The agent-facing `/config/agents.json` virtual file is a
-validated view of that same document. It is not a local file under
-`data/config/`. Registering through `register_acp_agent` persists to Postgres,
-so a restart picks it up without touching the filesystem. An unbound
-`ToolRegistry` instance, such as one used in an isolated unit test, starts with
-an in-memory registry and does not provide production persistence.
+### Interactive sessions
 
-- **Invocation** — `call_agent` resolves the agent from the registry and dispatches
-  by `transport`. ACP runs are dispatched through `app/progenitor/acp/` (a generic
-  client built on the `acp` SDK: `ACPRunner` + `ACPSessionClient`). The runner
-  supports both **stdio** (spawn a local `command`) and **TCP** (connect to an
-  already-running server via `host`/`port`, e.g. `copilot --acp --port 3000`); in
-  TCP mode the `model` is selected per session via `set_session_model`.
-- **Tracking** — each run is an `ACPTaskRecord` persisted to the `acp_tasks`
-  document. Non-blocking runs execute in a background task that updates the record
-  on completion; the idle heartbeat (`nodes/acp.py`) picks up terminal-but-unnotified
-  runs, appends a conversation message, and notifies the user. Set `blocking=true`
-  to await a short run inline.
-- **Storage / visibility** — ACP agents live in the same registry as A2A agents, so
-  they are invocable by the runtime and read-through to the backend Agents page
-  (grouped under "ACP agents"), exactly like A2A agents.
+Every session is an `acp_task:<id>` document. The backend
+`ACPTaskSupervisor` is the sole driver and keeps the connection that owns the
+running turn, which is required for live steering and replies.
+
+- **Start** — `acp_start(agent, prompt, cwd=None, card_id=None, mode=None)`
+  creates the task. `mode` may be `default`, `acceptEdits`, `plan`, or
+  `bypassPermissions`; it is applied when starting/resuming and when changed
+  during a turn.
+- **Send** — `acp_send(task_id, message)` steers a running Claude turn on that
+  live connection (`outcome: "injected"`). When idle it starts the next turn on
+  the same session (`outcome: "started_turn"`). Use short, specific corrections;
+  do not cancel merely to send a follow-up.
+- **Inspect** — `acp_status(task_id, wait_seconds=0)` returns the task snapshot;
+  its wait is capped at 300 seconds. `acp_list(card_id=None, status=None,
+  agent=None, limit=20)` finds sessions.
+- **Answer** — Claude questions and plan submissions appear in `pending_input`.
+  Call `acp_answer(task_id, input_id, answer)` promptly: Claude is blocked until
+  the supervisor sends the matching `answers[input_id]` reply on its live
+  connection and clears `pending_input`. Question answers are form-value objects
+  (or `{"action":"decline"}`); plan answers are
+  `{"approve": bool, "feedback"?: string}`.
+- **Cancel** — `acp_cancel(task_id)` sets `cancel_requested`; use it only for a
+  turn that is going wrong.
+
+The supervisor processes pending `messages` in order, using steering while a
+turn runs and a normal next turn when idle. It sets their `status` to
+`injected`, `started_turn`, or `failed`, with send metadata. Ordinary tool
+permissions are auto-approved; plan mode's ExitPlanMode is exposed as a
+`pending_input` of kind `plan` for explicit approval or feedback.
+
+Workflow event nodes can react to `acp_task` `status`, `stalled`, and
+`pending_input` changes. The supervisor owns status, progress, output,
+`pending_input`, and session fields; requesters own messages, mode, answers,
+and cancellation requests. A task cannot start beyond `PROGENITOR_ACP_MAX_TURNS`.
+
+`call_agent` no longer invokes ACP agents; use `acp_start` instead.
 
 ## Registering an ACP agent
 
@@ -64,21 +80,28 @@ Remove an agent with the `unregister_agent` tool (by name) — it deletes any ag
 (ACP or A2A) from the database registry. The A2A counterpart for *adding* agents is
 `register_a2a_agent` (by URL).
 
-## Sandboxing & safety
+## Working directory & safety
 
-Each ACP run executes in a **fresh per-run sandbox directory** under
-`PROGENITOR_ACP_WORKSPACE` (default `data/acp_workspaces/<task_id>/`), passed to the
-agent as both its working directory and its allowed dir (Copilot's `--add-dir`).
+Each task runs in its `cwd` (a path on the agent's host), else the registry
+entry's `acp.cwd`, else `/tmp`. For build work pass a worktree the `repo-manager`
+agent created under `/app/repos` (`PROGENITOR_WORKTREE_DIR`): it is mounted at
+the same path in the runtime, backend, and Claude containers, all running as
+UID 10001, so the path the agent reports is the one Claude edits.
 
-Copilot runs with `--yolo`, so tool calls are auto-approved — **the filesystem
-scope is the guardrail, not per-call prompting**. This mirrors the Builder Agent's
-practice of confining Copilot to a worktree. Do not widen the allowed dirs to the
-project root unless you intend the agent to modify the live repo.
+Permission requests are auto-approved (an allow option is chosen) — **the
+working directory is the guardrail, not per-call prompting**. Claude has no
+GitHub credentials; pushing and pull requests are the `repo-manager` agent's job
+(`git_publish: true`), using the runtime's `GH_TOKEN`.
 
-## Limitations (current iteration)
+## Restarts
 
-- A run in flight when the runtime stops is orphaned; its record stays `working`.
-- TCP runs target a (possibly remote) server, so the per-run local sandbox does not
-  apply — the session `cwd` is a path on the server's filesystem (`acp.cwd`).
+On backend startup the supervisor marks tasks left `working` as `interrupted`
+(their connection died with the process) and starts tasks left `queued`. On
+shutdown in-flight turns are cancelled and marked `interrupted`. Claude keeps
+sessions on disk (`/home/claude/.claude`), so queueing a new prompt on an
+interrupted task resumes the same conversation.
+
+## Limitations
+
 - New ACP agents are managed via the `register_acp_agent` tool / config edits — no
   backend REST API or Agents-page form yet.

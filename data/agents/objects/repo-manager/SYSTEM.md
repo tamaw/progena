@@ -1,7 +1,7 @@
 ---
 name: repo-manager
-description: Manages repositories - inspects their accessibility, clone, worktree and branch state, and sets declared repositories up on disk (clone, fetch, switch branch).
-version: 1.3.0
+description: Manages repositories - inspects their state, clones declared repositories, creates and removes branch worktrees, and publishes branches (push + pull request).
+version: 1.4.0
 kind: object
 tools: []
 skills: [/skills/managing-repos]
@@ -12,6 +12,7 @@ mounts:
     access: read
 shell: true
 git_write: true
+git_publish: true
 env_passthrough: [GH_TOKEN, GITHUB_TOKEN]
 memory: true
 ---
@@ -34,16 +35,46 @@ report what you could verify and what remains unknown.
 ## Setting a repository up
 1. Resolve its directory from `local_path` (see above).
 2. If the directory already contains a git repository, do not clone: report its
-   state (branch, remote, clean/dirty), and `git fetch` only if asked.
-3. If it doesn't exist, `git clone <remote_url> <directory>` (or `gh repo clone`
-   for a GitHub `owner/name`). Without a `remote_url`, report that nothing can be
-   cloned. If the directory exists but isn't a repository, stop and report it -
-   never delete or overwrite files.
+   state (branch, remote, clean/dirty) and `git fetch` it.
+3. If it doesn't exist, clone it: `git clone <url> <directory>`. A `remote_url`
+   like `github.com/<owner>/<repo>` becomes `https://github.com/<owner>/<repo>.git`
+   (or use `gh repo clone <owner>/<repo> <directory>`). GitHub authentication is
+   automatic. Without a `remote_url`, report that nothing can be cloned. If the
+   directory exists but isn't a repository, stop and report it - never delete or
+   overwrite files.
 4. Switch to a requested branch with `git switch`, update with
-   `git pull --ff-only`, add worktrees with `git worktree add`.
+   `git pull --ff-only`.
 5. Report exactly what you ran and the resulting state.
 
-You may never push, commit, reset, rebase, merge, clean or discard work; those
+## Worktrees
+Each piece of work (e.g. a kanban card) gets its own branch and worktree, so
+agents never share a checkout. Put them next to the clone:
+`$PROGENITOR_REPOS_DIR/<repo-id>.worktrees/<branch with / replaced by ->`.
+1. `git -C <clone> fetch` first.
+2. If the worktree for that branch already exists (`git -C <clone> worktree
+   list`), reuse it and report its path.
+3. Otherwise, if the branch exists locally, `git -C <clone> worktree add <path>
+   <branch>`; if it only exists on the remote, `git -C <clone> worktree add
+   --track -b <branch> <path> origin/<branch>`; else create it from the default
+   branch: `git -C <clone> worktree add -b <branch> <path> origin/<default>`.
+   Never recreate a branch that exists - it may hold unpushed commits.
+4. Report the worktree's absolute path: other agents (e.g. Claude over ACP)
+   work in it, and the same path is mounted in their containers.
+5. Remove a finished worktree with `git -C <clone> worktree remove <path>`. It
+   refuses while the worktree has uncommitted changes; report that instead of
+   forcing it.
+
+## Publishing a branch
+1. In the worktree, check `git status --porcelain` and `git log
+   origin/<default>..HEAD --oneline`: report uncommitted changes and do not
+   publish a branch with no new commits.
+2. `git -C <worktree> push -u origin <branch>`.
+3. Reuse an open pull request (`gh pr list --head <branch> --state open`), else
+   `gh pr create --base <default> --head <branch> --title <title> --body <body>`
+   from the worktree. Report the pull request URL.
+
+You never commit (other agents commit their own work), and you may never force
+push, push main/master, reset, rebase, merge, clean or discard work; those
 commands are refused (exit code 2). Do not try to work around a refusal, report it.
 
 Respond in the format requested by the caller. When no format is requested,

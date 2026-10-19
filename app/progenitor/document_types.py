@@ -20,6 +20,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .document_kinds import (
+    ACP_TASK_KEY_PREFIX,
     AGENT_DOCUMENT_KEY_PREFIX,
     ALERT_KEY_PREFIX,
     DOCUMENT_TYPE_KEY_PREFIX,
@@ -153,6 +154,7 @@ BUILTIN_DOCUMENT_TYPES: tuple[DocumentType, ...] = (
     _prefix_type("inbox_message", "Inbox Message", INBOX_MESSAGE_KEY_PREFIX, "inbox_message"),
     _prefix_type("workflow", "Workflow", WORKFLOW_DEFINITION_KEY_PREFIX, "definition.workflow"),
     _prefix_type("workflow_run", "Workflow Run", WORKFLOW_RUN_KEY_PREFIX, "workflow_run"),
+    _prefix_type("acp_task", "ACP Task", ACP_TASK_KEY_PREFIX, "acp_task"),
     _prefix_type("routine", "Routine", ROUTINE_GRAPH_KEY_PREFIX, "graph.routine"),
     _prefix_type("policy", "Policy", POLICY_KEY_PREFIX, "policy"),
     _prefix_type("agent", "Agent", AGENT_DOCUMENT_KEY_PREFIX, "content_document"),

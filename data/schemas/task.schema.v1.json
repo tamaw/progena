@@ -62,6 +62,14 @@
       "type": ["string", "null"],
       "description": "Linked git branch, if any."
     },
+    "repo_id": {
+      "type": ["string", "null"],
+      "description": "Declared repository id linked to this card, if any."
+    },
+    "acp_task_id": {
+      "type": ["string", "null"],
+      "description": "ACP task id linked to this card, if any."
+    },
     "pr_url": {
       "type": ["string", "null"],
       "description": "Linked pull request URL, if any."

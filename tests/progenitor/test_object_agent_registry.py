@@ -14,7 +14,11 @@ from langgraph.checkpoint.memory import MemorySaver
 from pydantic import Field
 
 from app.progenitor.agent.async_subagents import create_progenitor_async_subagents
-from app.progenitor.agent.object_agent_registry import LiveSubagentMiddleware, ObjectAgentRegistry
+from app.progenitor.agent.object_agent_registry import (
+    LiveSubagentMiddleware,
+    ObjectAgentRegistry,
+    RoutineSubagentRegistry,
+)
 from app.progenitor.routines.factory import compile_routine_graph
 from app.progenitor.routines.graph import validate_routine_graph_payload
 
@@ -52,6 +56,21 @@ def registry_for(documents, proxy_factory=None, reserved_names=()):
     return ObjectAgentRegistry(
         state_manager=sm, proxy_factory=proxy_factory or proxy, reserved_names=reserved_names
     )
+
+
+def routines_for(graphs):
+    """A routine registry publishing one echo subagent per stored graph."""
+    sm = SimpleNamespace(list_routine_graphs=AsyncMock(side_effect=lambda: list(graphs)))
+
+    def build(graph_doc):
+        name = graph_doc["id"]
+        return {
+            "name": name,
+            "description": f"Run {name}.",
+            "runnable": RunnableLambda(lambda state: {"messages": [AIMessage(content=name)]}),
+        }
+
+    return RoutineSubagentRegistry(state_manager=sm, build=build)
 
 
 async def test_create_delete_rename_plugin_task_and_routine_map_without_restart():
@@ -132,12 +151,9 @@ async def test_create_delete_rename_plugin_task_and_routine_map_without_restart(
 async def test_general_purpose_task_coexists_with_live_objects_and_routines():
     registry = registry_for({"user/helper/SYSTEM.md": manifest("helper")})
     await registry.refresh()
-    routine = {
-        "name": "routine-demo",
-        "description": "Run the routine.",
-        "runnable": RunnableLambda(lambda state: {"messages": [AIMessage(content="routine")]}),
-    }
-    middleware = LiveSubagentMiddleware(registry, static_subagents=[routine], backend=None)
+    routines = routines_for([{"id": "routine-demo"}])
+    await routines.refresh()
+    middleware = LiveSubagentMiddleware(registry, routines=routines, backend=None)
     model = Model(
         responses=[
             AIMessage(
@@ -162,6 +178,39 @@ async def test_general_purpose_task_coexists_with_live_objects_and_routines():
     )
     assert all(
         name in model.task_descriptions[0] for name in ("general-purpose", "helper", "routine-demo")
+    )
+
+
+async def test_routine_written_in_the_same_turn_is_runnable():
+    """Progenitor writes a routine, then runs it before any change notification lands."""
+    registry = registry_for({})
+    await registry.refresh()
+    graphs: list[dict] = []
+    routines = routines_for(graphs)
+    await routines.refresh()
+    middleware = LiveSubagentMiddleware(registry, routines=routines, backend=None)
+    model = Model(
+        responses=[
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "task",
+                        "args": {"description": "{}", "subagent_type": "routine_new"},
+                        "id": "run",
+                    }
+                ],
+            ),
+            AIMessage(content="parent done"),
+        ]
+    )
+    graph = create_deep_agent(model=model, middleware=[middleware])
+    graphs.append({"id": "routine_new"})
+
+    result = await graph.ainvoke({"messages": [HumanMessage(content="run it")]})
+
+    assert any(
+        isinstance(m, ToolMessage) and m.content == "routine_new" for m in result["messages"]
     )
 
 
