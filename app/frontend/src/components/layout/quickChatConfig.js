@@ -73,6 +73,19 @@ const profileQuickChatConfig = {
   prompts: profileQuickPrompts,
 };
 
+const repositoryQuickPrompts = [
+  'Add a repository named payments-api that clones github.com/acme/payments-api with read/write access.',
+  'Track the local checkout at /home/me/projects/frontend as a read-only repository called frontend.',
+  'Add a repository for github.com/acme/infra, owned by Platform, cloned into infra.',
+];
+const repositoryQuickChatConfig = {
+  ...defaultQuickChatConfig,
+  mode: 'repository-create',
+  title: 'Add a repository',
+  placeholder: 'Describe the repository to add...',
+  prompts: repositoryQuickPrompts,
+};
+
 const inboxQuickPrompts = [
   "Summarize this week's repo activity and send it to my inbox.",
   'Write me an inbox message with your current priorities and blockers.',
@@ -144,6 +157,7 @@ const QUICK_CHAT_CONFIGS_BY_MODE = {
   'task-create': taskQuickChatConfig,
   'knowledge-create': knowledgeQuickChatConfig,
   'profile-create': profileQuickChatConfig,
+  'repository-create': repositoryQuickChatConfig,
   'inbox-compose': inboxQuickChatConfig,
   'inbox-edit': inboxEditQuickChatConfig,
   'workflow-create': workflowQuickChatConfig,

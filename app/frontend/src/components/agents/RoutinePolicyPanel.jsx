@@ -1,6 +1,8 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { useConfig } from '../../context/ConfigContext';
+import { entityDraftKey } from '../../store/editorDraftsSlice';
+import useEntityDraft from '../../hooks/useEntityDraft';
 import { fetchPolicies, savePolicy, selectPolicies } from '../../store/uiDataSlice';
 import styles from './RoutinePolicyPanel.module.css';
 import Select from '../common/Select';
@@ -17,27 +19,38 @@ export function RoutinePolicyPanel({ policyId, onSelect, onClose, recordedPolicy
   const url = getApiUrl('policies');
   const catalog = useSelector(selectPolicies);
   const selected = useMemo(() => catalog.items.find((item) => item.id === policyId), [catalog.items, policyId]);
-  const [localDraft, setDraft] = useState(null);
-  const [dirty, setDirty] = useState(false);
-  const [error, setError] = useState(null);
-  const [status, setStatus] = useState('');
+  const draftKey = entityDraftKey('routine-policy', policyId);
+  const [draft, setDraft, controls] = useEntityDraft(draftKey, selected || null);
   useEffect(() => { dispatch(fetchPolicies({ url })); }, [dispatch, url]);
-  const draft = dirty ? localDraft : selected;
+  const workspaceGenerationRef = useRef(0);
+  useEffect(() => {
+    const invalidateSaveContinuation = () => { workspaceGenerationRef.current += 1; };
+    window.addEventListener('progenitor:workspace-switched', invalidateSaveContinuation);
+    return () => window.removeEventListener('progenitor:workspace-switched', invalidateSaveContinuation);
+  }, []);
   const values = historical ? recordedPolicy?.values : draft?.values;
   function update(key, value, retry = false) {
-    setDirty(true); setStatus('');
-    setDraft({ ...draft, values: retry
-      ? { ...draft.values, retry: { ...draft.values.retry, [key]: value } }
-      : { ...draft.values, [key]: value } });
+    setDraft((current) => ({
+      ...current,
+      values: retry
+        ? { ...current.values, retry: { ...current.values.retry, [key]: value } }
+        : { ...current.values, [key]: value },
+    }));
   }
   async function save(copy = false) {
-    setError(null); setStatus('Saving…');
+    if (!draft || controls.saving) return;
     const policy = copy ? { ...draft, id: `policy_${crypto.randomUUID().replaceAll('-', '')}`, name: `${draft.name} copy` } : draft;
+    const ticket = controls.beginSave();
+    if (!ticket) return;
+    const workspaceGeneration = workspaceGenerationRef.current;
+    const operation = dispatch(savePolicy({ url, policy }));
+    controls.trackSave(ticket, { requestId: operation.requestId, events: ['policies.snapshot'] });
     try {
-      await dispatch(savePolicy({ url, policy })).unwrap();
-      setDirty(false); setStatus('Saved');
-      if (copy) onSelect(policy.id);
-    } catch (err) { setError(err.message || 'Unable to save policy'); setStatus(''); }
+      await operation.unwrap();
+      if (copy && workspaceGeneration === workspaceGenerationRef.current) onSelect(policy.id);
+    } catch (err) {
+      controls.failSave(ticket, err);
+    }
   }
   return <aside className={`agents-graph-editor ${styles.panel}`} aria-label="Routine policy">
     <header className="agents-graph-editor__header"><h3>Policy</h3><button type="button" aria-label="Close policy" onClick={onClose}>×</button></header>
@@ -45,7 +58,7 @@ export function RoutinePolicyPanel({ policyId, onSelect, onClose, recordedPolicy
       {!historical && <label>Selected policy<Select
         ariaLabel="Selected policy"
         value={policyId}
-        onChange={(next) => { setDirty(false); setStatus(''); onSelect(next); }}
+        onChange={onSelect}
         options={[
           ...(!selected ? [{ value: policyId, label: `${policyId} (unavailable)` }] : []),
           ...catalog.items.map((item) => ({ value: item.id, label: item.name })),
@@ -77,9 +90,9 @@ export function RoutinePolicyPanel({ policyId, onSelect, onClose, recordedPolicy
           className="routine-policy-panel__select nodrag nowheel"
         /></label>
       </fieldset>}
-      {(error || catalog.error) && <p role="alert">{error || catalog.error}</p>}
-      {status && <p role="status">{status}</p>}
-      {!historical && draft && <div className={styles.actions}><button type="button" disabled={!dirty || status === 'Saving…'} onClick={() => save()}>Save policy</button><button type="button" disabled={status === 'Saving…'} onClick={() => save(true)}>Create a copy</button></div>}
+      {(controls.error || catalog.error) && <p role="alert">{controls.error || catalog.error}</p>}
+      {controls.saving && <p role="status">Saving…</p>}
+      {!historical && draft && <div className={styles.actions}><button type="button" disabled={!controls.hasDraft || controls.saving} onClick={() => save()}>Save policy</button><button type="button" disabled={controls.saving} onClick={() => save(true)}>Create a copy</button></div>}
     </div>
   </aside>;
 }

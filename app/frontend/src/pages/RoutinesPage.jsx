@@ -1,6 +1,8 @@
 import { useCallback, useMemo, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { useNavigate } from 'react-router-dom';
+import { entityDraftKey } from '../store/editorDraftsSlice';
+import useEntityDraft from '../hooks/useEntityDraft';
 import InlineFailure from '../components/common/InlineFailure';
 import PopupModal from '../components/common/PopupModal';
 import useAgentCatalogue from '../hooks/useAgentCatalogue';
@@ -83,8 +85,10 @@ export default function RoutinesPage() {
   const [activeFilter, setActiveFilter] = useState('All');
   const [search, setSearch] = useState('');
   const [sortMode, setSortMode] = useState('Name');
-  const [graphEditorOpen, setGraphEditorOpen] = useState(false);
-  const [routineRunsOpen, setRoutineRunsOpen] = useState(false);
+  const viewKey = entityDraftKey('routine', effectiveAgentId, 'view');
+  const [editorView, setEditorView] = useEntityDraft(viewKey, { jsonOpen: false, runsOpen: false });
+  const graphEditorOpen = editorView.jsonOpen;
+  const routineRunsOpen = editorView.runsOpen;
   const [deleteTarget, setDeleteTarget] = useState(null);
   const deleteAction = useConfirmAction(effectiveAgentId);
 
@@ -127,10 +131,10 @@ export default function RoutinesPage() {
   const selectedGraph = selectedAgent?.graph || FALLBACK_GRAPH;
   const hasCachedGraph = selectedAgent?.graph != null;
 
-  async function handleSaveGraph(parsed) {
+  function handleSaveGraph(parsed, agentId) {
     return dispatch(updateAgentGraph({
       agentsUrl,
-      agentId: effectiveAgentId,
+      agentId,
       entry: parsed.entry,
       nodes: parsed.nodes,
       edges: parsed.edges,
@@ -140,7 +144,7 @@ export default function RoutinesPage() {
       input_schema: parsed.input_schema,
       output_schema: parsed.output_schema,
       $defs: parsed.$defs,
-    })).unwrap();
+    }));
   }
 
   return (
@@ -205,11 +209,11 @@ export default function RoutinesPage() {
                   onShowProfile={null}
                   onDelete={requestDeleteAgent}
                   jsonOpen={graphEditorOpen}
-                  onOpenJson={() => { setGraphEditorOpen(true); setRoutineRunsOpen(false); }}
-                  onCloseJson={() => setGraphEditorOpen(false)}
+                  onOpenJson={() => setEditorView((current) => ({ ...current, jsonOpen: true, runsOpen: false }))}
+                  onCloseJson={() => setEditorView((current) => ({ ...current, jsonOpen: false }))}
                   runsOpen={routineRunsOpen}
-                  onOpenRuns={() => { setRoutineRunsOpen(true); setGraphEditorOpen(false); }}
-                  onCloseRuns={() => setRoutineRunsOpen(false)}
+                  onOpenRuns={() => setEditorView((current) => ({ ...current, runsOpen: true, jsonOpen: false }))}
+                  onCloseRuns={() => setEditorView((current) => ({ ...current, runsOpen: false }))}
                 />
               </div>
             )}

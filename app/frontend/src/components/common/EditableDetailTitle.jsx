@@ -16,6 +16,7 @@ export default function EditableDetailTitle({
     isEditing,
     draft,
     saving,
+    error,
     setDraft,
     start,
     cancel,
@@ -29,6 +30,12 @@ export default function EditableDetailTitle({
       inputRef.current?.select();
     }
   }, [isEditing]);
+
+  useEffect(() => {
+    if (isEditing && error) {
+      inputRef.current?.focus();
+    }
+  }, [error, isEditing]);
 
 
   return (
@@ -45,7 +52,6 @@ export default function EditableDetailTitle({
           readOnly={saving}
           aria-busy={saving}
           onChange={(event) => setDraft(event.target.value)}
-          onBlur={saving ? undefined : cancel}
           onKeyDown={(event) => {
             if (event.key === 'Enter') {
               event.preventDefault();

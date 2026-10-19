@@ -142,6 +142,25 @@ describe('realtimeListener heartbeat watchdog', () => {
     expect(source.closed).toBe(false);
   });
 
+  it('forces a fresh connection and ignores late frames from the replaced stream', async () => {
+    store.dispatch(startRealtimeStream({ streamUrl: STREAM_URL }));
+    const first = MockEventSource.instances[0];
+    store.dispatch(registerPendingOp({ requestId: 'replaced-request' }));
+    store.dispatch(startRealtimeStream({ streamUrl: STREAM_URL, force: true }));
+    const second = MockEventSource.instances[1];
+
+    expect(first.closed).toBe(true);
+    expect(second.closed).toBe(false);
+    expect(store.getState().realtime.pendingOps['replaced-request']).toBeUndefined();
+    const stale = { id: 'stale-status', type: 'status.updated', payload: { status: 'stale' } };
+    first.emit('ui.event', JSON.stringify(stale));
+    expect(store.getState().realtime.eventQueue).toEqual([]);
+    const current = { id: 'current-status', type: 'status.updated', payload: { status: 'healthy' } };
+    second.emit('ui.event', JSON.stringify(current));
+    expect(store.getState().realtime.eventQueue).toEqual([{ sequence: 1, event: current }]);
+    expect(store.getState().uiData.status.status).toBe('healthy');
+  });
+
   it('routes canonical response lifecycle envelopes through Redux and publishUiEvent', async () => {
     store.dispatch(startRealtimeStream({ streamUrl: STREAM_URL }));
     await Promise.resolve();

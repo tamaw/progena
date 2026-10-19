@@ -45,7 +45,9 @@ import {
 } from '../components/layout/PaneList';
 import { usePaneCollapse } from '../components/layout/usePaneCollapse';
 import InlineFailure from '../components/common/InlineFailure';
+import useEntityDraft from '../hooks/useEntityDraft';
 import useUiAction from '../hooks/useUiAction';
+import { entityDraftKey } from '../store/editorDraftsSlice';
 import { formatCompactRelativeAge } from '../lib/displayTime';
 import { formatRevisionTime } from './knowledgePagesModel';
 import {
@@ -83,7 +85,6 @@ export default function InstructionsPage() {
   const { collapsed, setCollapsed, paneClassName } = usePaneCollapse('tasks-list');
   const [filter, setFilter] = useState('All');
   const [query, setQuery] = useState('');
-  const [draft, setDraft] = useState(null);
   const routePath = useParams()['*'] || '';
   const [params, setParams] = useSearchParams();
   const viewingRevisionId = params.get('revision');
@@ -100,15 +101,21 @@ export default function InstructionsPage() {
   const revisionsRequest = useSelector((state) => selectInstructionRevisionsRequest(state, selectedPath));
   const revision = useSelector((state) => selectInstructionRevision(state, selectedPath, viewingRevisionId));
   const revisionRequest = useSelector((state) => selectInstructionRevisionRequest(state, selectedPath, viewingRevisionId));
-  const saveAction = useUiAction(selectedPath || 'instructions');
+  const [draft, setDraft, draftControls] = useEntityDraft(
+    entityDraftKey('instruction', selectedPath, 'content'),
+    { editing: false, content: instruction?.content || '' },
+  );
+  const {
+    beginSave: beginDraftSave,
+    clear: clearDraft,
+    error: draftSaveError,
+    failSave: failDraftSave,
+    saving: draftSaving,
+    trackSave: trackDraftSave,
+  } = draftControls;
   const restoreAction = useUiAction(`${selectedPath || 'instructions'}:${viewingRevisionId || 'current'}`);
-  const [draftPath, setDraftPath] = useState(selectedPath);
-  if (draftPath !== selectedPath) {
-    setDraftPath(selectedPath);
-    setDraft(null);
-  }
-  const editing = draft !== null;
-  const dirty = editing && draft !== instruction?.content;
+  const editing = Boolean(draft.editing);
+  const dirty = editing && draft.content !== instruction?.content;
 
   useEffect(() => {
     if (realtime.connected) {
@@ -138,11 +145,8 @@ export default function InstructionsPage() {
     }
   }, [dispatch, instructionsUrl, selectedPath, viewingRevisionId]);
 
-  // Draft reset occurs during the selected-path identity transition above.
-
   const selectInstructionPath = (path) => {
     if (path === selectedPath) return;
-    if (dirty && !window.confirm('Discard unsaved changes?')) return;
     navigate(instructionHref(path));
   };
 
@@ -153,22 +157,31 @@ export default function InstructionsPage() {
 
   const startEdit = () => {
     setParams({});
-    saveAction.clearError();
-    setDraft(instruction?.content || '');
+    setDraft({ editing: true, content: instruction?.content || '' });
   };
 
   const cancelEdit = () => {
-    if (dirty && !window.confirm('Discard unsaved changes?')) return;
-    saveAction.clearError();
-    setDraft(null);
+    if (draftSaving) return;
+    clearDraft();
   };
 
   const save = () => {
-    if (!dirty) return;
-    const content = draft;
-    void saveAction.run('Save instruction', async ({ isCurrent }) => {
-      await dispatch(saveInstruction({ instructionsUrl, path: selectedPath, content })).unwrap();
-      if (isCurrent()) setDraft(null);
+    if (!dirty || draftSaving || !selectedPath) return;
+    const content = draft.content;
+    const ticket = beginDraftSave();
+    if (!ticket) return;
+    const operation = dispatch(saveInstruction({ instructionsUrl, path: selectedPath, content }));
+    trackDraftSave(ticket, {
+      requestId: operation.requestId,
+      events: [],
+    });
+    void operation.unwrap().then((acknowledgement) => {
+      trackDraftSave(ticket, {
+        requestId: acknowledgement.request_id,
+        events: acknowledgement.event_types,
+      });
+    }).catch((error) => {
+      failDraftSave(ticket, error);
     });
   };
 
@@ -191,14 +204,14 @@ export default function InstructionsPage() {
 
   const actions = !selected?.editable ? null : editing ? (
     <DetailHeaderActions menuLabel="Instruction actions">
-      <DetailHeaderAction icon={<RejectActionIcon />} label="Cancel" tooltip="Discard changes" onClick={cancelEdit} disabled={saveAction.busy} />
+      <DetailHeaderAction icon={<RejectActionIcon />} label="Cancel" tooltip="Discard changes" onClick={cancelEdit} disabled={draftSaving} />
       <DetailHeaderAction
         icon={<SaveActionIcon />}
         label="Save"
         tooltip={dirty ? 'Save instruction' : 'No changes to save'}
         variant="success"
         onClick={save}
-        disabled={!dirty || saveAction.busy || !realtime.connected}
+        disabled={!dirty || draftSaving || !realtime.connected}
       />
     </DetailHeaderActions>
   ) : viewingRevisionId && !viewingCurrent ? (
@@ -281,7 +294,7 @@ export default function InstructionsPage() {
               ]}
             />
             <div className="task-detail__body instructions-detail__body">
-              {editing ? <InlineFailure failure={saveAction.error} operation="Save instruction" /> : null}
+              {editing ? <InlineFailure failure={draftSaveError} operation="Save instruction" /> : null}
               {!editing && restoreAction.error ? <InlineFailure failure={restoreAction.error} operation="Restore instruction revision" /> : null}
               {contentRequest.error ? (
                 <InlineFailure
@@ -308,10 +321,9 @@ export default function InstructionsPage() {
                 <textarea
                   className="instructions-editor"
                   aria-label="Instruction file"
-                  value={draft}
+                  value={draft.content}
                   onChange={(event) => {
-                    saveAction.clearError();
-                    setDraft(event.target.value);
+                    setDraft((current) => ({ ...current, content: event.target.value }));
                   }}
                   onKeyDown={(event) => {
                     if (event.key === 's' && (event.metaKey || event.ctrlKey)) {
@@ -323,7 +335,7 @@ export default function InstructionsPage() {
                     }
                   }}
                   spellCheck={false}
-                  disabled={saveAction.busy}
+                  disabled={draftSaving}
                 />
               ) : !shown ? (
                 (viewingRevisionId ? revisionRequest.error : contentRequest.error)

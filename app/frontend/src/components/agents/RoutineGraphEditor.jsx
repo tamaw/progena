@@ -1,4 +1,7 @@
-import { useDispatch, useSelector } from 'react-redux';
+import { useDispatch, useSelector, useStore } from 'react-redux';
+import { draftDiscarded, draftSaveStarted, entityDraftKey } from '../../store/editorDraftsSlice';
+import { createUuid } from '../../lib/uuid';
+import useEntityDraft from '../../hooks/useEntityDraft';
 import { useConfig } from '../../context/ConfigContext';
 import React, { useState, useRef, useEffect, useCallback, useMemo, useLayoutEffect } from 'react';
 import {
@@ -74,6 +77,49 @@ const ZOOM_MAX = 2;
 const ZOOM_STEP = 0.1;
 
 const EMPTY_RUN_STATE = { run_meta: {}, data: {}, pending_approvals: [], found: false };
+
+function graphDraftFromGraph(graph) {
+  const nodes = (graph?.nodes || []).map((node) => ({ ...node }));
+  return {
+    meta: {
+      status: graph?.status || 'Draft',
+      version: graph?.version || '2.0.0',
+      summary: graph?.summary || '',
+      entry: graph?.entry || nodes[0]?.id || null,
+      policy_id: graph?.policy_id || 'default',
+      input_schema: graph?.input_schema || null,
+      output_schema: graph?.output_schema || null,
+      $defs: graph?.$defs || {},
+    },
+    nodes,
+    edges: (graph?.edges || []).map((edge) => ({ ...edge })),
+  };
+}
+
+function useRoutineGraphDraft(agentId, graph) {
+  const key = useMemo(() => entityDraftKey('routine', agentId, 'graph'), [agentId]);
+  const initialValue = useMemo(() => graphDraftFromGraph(graph), [graph]);
+  const [draft, setDraft, controls] = useEntityDraft(key, initialValue);
+  const setMeta = useCallback((next) => {
+    setDraft((current) => ({
+      ...current,
+      meta: typeof next === 'function' ? next(current.meta) : next,
+    }));
+  }, [setDraft]);
+  const setNodes = useCallback((next) => {
+    setDraft((current) => ({
+      ...current,
+      nodes: typeof next === 'function' ? next(current.nodes) : next,
+    }));
+  }, [setDraft]);
+  const setEdges = useCallback((next) => {
+    setDraft((current) => ({
+      ...current,
+      edges: typeof next === 'function' ? next(current.edges) : next,
+    }));
+  }, [setDraft]);
+  return { ...draft, setMeta, setNodes, setEdges, controls };
+}
 
 // The page watches checkpoint detail; lifecycle events arrive globally.
 function useRoutineRunEvents(agentId, parameters, inputSchema) {
@@ -312,23 +358,27 @@ function useRunStaleness(agentId, runRevisionId, currentGraph) {
 
 function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, onDelete, jsonOpen, onOpenJson, onCloseJson, runsOpen, onOpenRuns, onCloseRuns }) {
   const dispatch = useDispatch();
+  const store = useStore();
   const { getApiUrl } = useConfig();
   const persistRef = useRef(onPersist);
-  const lastSavedRef = useRef(null);
   const inFlightSavesRef = useRef(new Map());
+  const {
+    meta,
+    nodes,
+    edges,
+    setMeta,
+    setNodes,
+    setEdges,
+    controls: graphDraftControls,
+  } = useRoutineGraphDraft(agent.id, graph);
+  const {
+    beginSave: beginGraphSave,
+    failSave: failGraphSave,
+    trackSave: trackGraphSave,
+  } = graphDraftControls;
   // Values the user fills in for the routine's declared input_schema.properties
   // (see RunParametersModal) -- session-local only, never persisted to the
   // graph document; startRun sends the current snapshot with every POST.
-  const [meta, setMeta] = useState({
-    status: graph.status || 'Draft',
-    version: graph.version || '2.0.0',
-    summary: graph.summary || '',
-    entry: graph.entry || (graph.nodes || [])[0]?.id || null,
-    policy_id: graph.policy_id || 'default',
-    input_schema: graph.input_schema || null,
-    output_schema: graph.output_schema || null,
-    $defs: graph.$defs || {},
-  });
   const [parameterValues, setParameterValues] = useState({});
   const runtimeProfiles = useSelector(selectAgentProfiles);
   const policies = useSelector(selectPolicies);
@@ -406,8 +456,6 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, o
   const zoomOut = useCallback(() => setZoom((z) => Math.max(ZOOM_MIN, Math.round((z - ZOOM_STEP) * 100) / 100)), []);
   const zoomIn = useCallback(() => setZoom((z) => Math.min(ZOOM_MAX, Math.round((z + ZOOM_STEP) * 100) / 100)), []);
   const resetZoom = useCallback(() => setZoom(1), []);
-  const [nodes, setNodes] = useState(() => (graph.nodes || []).map((node) => ({ ...node })));
-  const [edges, setEdges] = useState(() => (graph.edges || []).map((edge) => ({ ...edge })));
   const [saveState, setSaveState] = useState('idle');
   const [saveError, setSaveError] = useState(null);
   // Snapshotted alongside `saveState` (never read live from the `incomplete`
@@ -439,28 +487,74 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, o
   useEffect(() => { selectedNodeIdRef.current = selectedNodeId; }, [selectedNodeId]);
 
   useEffect(() => { persistRef.current = onPersist; }, [onPersist]);
+  const bindBufferedFieldSaves = useCallback((requestId, payload) => {
+    const nodeIds = new Set(payload.nodes.map((node) => node.id));
+    for (const [key, entry] of Object.entries(store.getState().editorDrafts.entries)) {
+      const [kind, identity] = JSON.parse(key);
+      if (kind !== 'routine-field' || entry.save || !entry.value.complete) continue;
+      const [routineId, nodeId] = JSON.parse(identity);
+      if (routineId !== agent.id || !nodeIds.has(nodeId)) continue;
+      const ticket = { key, revision: entry.revision, token: createUuid() };
+      store.dispatch(draftSaveStarted(ticket));
+      trackGraphSave(ticket, { requestId, events: ['agent.graph.updated'] });
+    }
+  }, [agent.id, store, trackGraphSave]);
+
+  const discardNodeFieldDrafts = useCallback((ids) => {
+    const nodeIds = new Set(ids);
+    if (!nodeIds.size) return;
+    for (const key of Object.keys(store.getState().editorDrafts.entries)) {
+      const [kind, identity] = JSON.parse(key);
+      if (kind !== 'routine-field') continue;
+      const [routineId, nodeId] = JSON.parse(identity);
+      if (routineId === agent.id && nodeIds.has(nodeId)) dispatch(draftDiscarded(key));
+    }
+  }, [agent.id, dispatch, store]);
+
+  const discardNodeDrafts = useCallback((ids) => {
+    const nodeIds = [...new Set(ids)];
+    discardNodeFieldDrafts(nodeIds);
+    nodeIds.forEach((nodeId) => {
+      dispatch(draftDiscarded(entityDraftKey('routine-label', JSON.stringify([agent.id, nodeId]))));
+    });
+  }, [agent.id, dispatch, discardNodeFieldDrafts]);
 
   // JSON Apply and the autosave effect can observe the same state update. Share
   // one request for an identical graph signature so a direct Apply doesn't
-  // race its own debounced autosave into issuing a second PATCH.
+  // race its own debounced autosave into issuing a second PATCH. The 202 only
+  // acknowledges dispatch: the ticket remains pending until the correlated
+  // graph event reaches the retained draft reducer.
   const persistGraph = useCallback((payload) => {
     const signature = stableStringify(payload);
     const existing = inFlightSavesRef.current.get(signature);
     if (existing) return existing;
+    const ticket = beginGraphSave();
+    if (!ticket) return null;
 
-    const request = Promise.resolve()
-      .then(() => persistRef.current(payload))
-      .then((result) => {
-        lastSavedRef.current = signature;
-        return result;
-      });
+    let operation;
+    try {
+      operation = persistRef.current(payload, agent.id);
+    } catch (error) {
+      failGraphSave(ticket, error);
+      return Promise.reject(error);
+    }
+    trackGraphSave(ticket, {
+      requestId: operation.requestId,
+      events: ['agent.graph.updated'],
+    });
+    bindBufferedFieldSaves(operation.requestId, payload);
+    const request = operation.unwrap().catch((error) => {
+      failGraphSave(ticket, error);
+      throw error;
+    });
+    request.requestId = operation.requestId;
     inFlightSavesRef.current.set(signature, request);
     request.then(
       () => { if (inFlightSavesRef.current.get(signature) === request) inFlightSavesRef.current.delete(signature); },
       () => { if (inFlightSavesRef.current.get(signature) === request) inFlightSavesRef.current.delete(signature); },
     );
     return request;
-  }, []);
+  }, [agent.id, beginGraphSave, bindBufferedFieldSaves, failGraphSave, trackGraphSave]);
 
   // Refs mirror the latest state synchronously so insertAt and friends
   // can compute a consistent next state without nesting setState calls
@@ -574,10 +668,11 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, o
 
   const updateNode = useCallback((id, patch) => {
     setNodes((current) => current.map((node) => (node.id === id ? { ...node, ...patch } : node)));
-  }, []);
+  }, [setNodes]);
 
   const deleteNode = useCallback((id) => {
     confirmedNodeIdsRef.current.delete(id);
+    discardNodeDrafts([id]);
     // A loop's start and tail are its structural boundary: the guard edge
     // is `to` the start (found from the tail) or `from` the tail (found
     // from the start) -- either way it's the same edge, and it never
@@ -696,7 +791,7 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, o
     // to the deleted node -- splice it through to singleTarget exactly like
     // every other incoming edge above, rather than leaving `entry` null.
     setMeta((current) => (current.entry === id ? { ...current, entry: singleTarget } : current));
-  }, []);
+  }, [discardNodeDrafts, setEdges, setMeta, setNodes]);
 
   // The × button's close: an invalid step behaves like the Delete step
   // button if it never had a valid prior state (a freshly inserted node
@@ -896,32 +991,32 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, o
     if (kind !== 'loop') pendingSelectRef.current = id;
     setNodes((current) => [...current, ...added]);
     setEdges(nextEdges);
-  }, []);
+  }, [setEdges, setMeta, setNodes]);
 
   const onChangeStateKey = useCallback((sourceId, value) => {
     setEdges((current) => current.map((edge) => (
       edge.from === sourceId && edge.router ? { ...edge, state_key: value } : edge
     )));
-  }, []);
+  }, [setEdges]);
 
   const updateLoopGuard = useCallback((fromId, patch) => {
     setEdges((current) => current.map((edge) => (
       edge.from === fromId && edge.loop_guard ? { ...edge, loop_guard: { ...edge.loop_guard, ...patch } } : edge
     )));
-  }, []);
+  }, [setEdges]);
 
   const removeBranching = useCallback((sourceId) => {
     setEdges((current) => current.map((edge) => {
       if (edge.from !== sourceId || !edge.router) return edge;
       return edge.default ? { from: sourceId, to: edge.default, level: 'normal' } : null;
     }).filter(Boolean));
-  }, []);
+  }, [setEdges]);
 
   const addLane = useCallback((sourceId, isDefault) => {
     const laneId = uniqueNodeId('noop', nodesRef.current);
     setEdges((current) => addForkLane(current, sourceId, laneId, isDefault));
     setNodes((current) => [...current, { ...makeNode('noop'), id: laneId }]);
-  }, []);
+  }, [setEdges, setNodes]);
 
   const onAddBranch = useCallback((sourceId) => addLane(sourceId, false), [addLane]);
 
@@ -942,7 +1037,7 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, o
       ...(kind === 'noop' ? { label: 'Join branches' } : {}),
     }]);
     setEdges(nextEdges);
-  }, []);
+  }, [setEdges, setNodes]);
 
   // Both halves of a lane drop have to land together: the edge rewrite decides
   // which steps the lane owned, and those steps are then deleted rather than
@@ -951,10 +1046,11 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, o
     const { edges: nextEdges, removedNodeIds } = drop(edgesRef.current, metaRef.current.entry);
     setEdges(nextEdges);
     if (removedNodeIds.length) {
+      discardNodeDrafts(removedNodeIds);
       const removed = new Set(removedNodeIds);
       setNodes((current) => current.filter((node) => !removed.has(node.id)));
     }
-  }, []);
+  }, [discardNodeDrafts, setEdges, setNodes]);
 
   const onRemoveBranch = useCallback((sourceId, value) => {
     dropLane((edges, entry) => removeForkBranch(edges, entry, sourceId, value));
@@ -973,7 +1069,7 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, o
       });
       return { ...edge, branches };
     }));
-  }, []);
+  }, [setEdges]);
 
   // Restoring pushes the browsed run's revision straight into the live
   // draft AND persists it immediately (unlike a normal edit, which only
@@ -1016,16 +1112,21 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, o
     };
     const nextNodes = (browsed.nodes || []).map((node) => ({ ...node }));
     const nextEdges = (browsed.edges || []).map((edge) => ({ ...edge }));
+    discardNodeFieldDrafts([
+      ...nodesRef.current.map((node) => node.id),
+      ...nextNodes.map((node) => node.id),
+    ]);
     setMeta(nextMeta);
     setNodes(nextNodes);
     setEdges(nextEdges);
-    const payload = serializeGraph(nextNodes, nextEdges, nextMeta);
-    await persistGraph(payload);
+    const request = persistGraph(serializeGraph(nextNodes, nextEdges, nextMeta));
+    if (!request) throw new Error('A graph save is already in progress.');
     setSaveError(null);
-    setSaveState('saved');
+    setSaveState('saving');
+    await request;
     runNav.resetToLatest();
     setRestoreConfirmOpen(false);
-  }, [runNav, persistGraph]);
+  }, [discardNodeFieldDrafts, persistGraph, runNav, setEdges, setMeta, setNodes]);
 
   const displayNodes = useMemo(
     () => (runNav.isBrowsingHistory ? (runNav.browsedGraph?.nodes || []) : nodes),
@@ -1073,6 +1174,7 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, o
   const isRunInProgress = !runNav.isBrowsingHistory && (runStatus === 'discovering' || runStatus === 'running');
   const loopMembership = useMemo(() => buildLoopMembership(displayEdges), [displayEdges]);
   const editContext = useMemo(() => ({
+    draftScope: agent.id,
     updateNode,
     deleteNode,
     insertAt,
@@ -1111,15 +1213,12 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, o
     resetInteractiveSession,
     pendingApprovals: runNav.pendingApprovals,
     answerApproval: submitApproval,
-  }), [updateNode, deleteNode, insertAt, onChangeStateKey, updateLoopGuard, removeBranching, onAddBranch, onJoinBranches, selectNode, selectedNodeId, onAddDefault, onRemoveBranch, onRemoveDefault, onRenameBranch, executionPolicy, displayEdges, displayNodes, meta.input_schema, meta.output_schema, runNav.isBrowsingHistory, runNav.pendingApprovals, submitApproval, runMeta, runData, activeNodeIds, estimatedActiveStartMs, staleNodeIds, runStatus, warmingUp, isRunInProgress, loopMembership, loopIterations, setLoopIteration, startRunAndTrackLatest, hasInteractiveSession, resetInteractiveSession]);
+  }), [agent.id, updateNode, deleteNode, insertAt, onChangeStateKey, updateLoopGuard, removeBranching, onAddBranch, onJoinBranches, selectNode, selectedNodeId, onAddDefault, onRemoveBranch, onRemoveDefault, onRenameBranch, executionPolicy, displayEdges, displayNodes, meta.input_schema, meta.output_schema, runNav.isBrowsingHistory, runNav.pendingApprovals, submitApproval, runMeta, runData, activeNodeIds, estimatedActiveStartMs, staleNodeIds, runStatus, warmingUp, isRunInProgress, loopMembership, loopIterations, setLoopIteration, startRunAndTrackLatest, hasInteractiveSession, resetInteractiveSession]);
 
-  // Debounced autosave: serialize the working graph and PATCH it. The first
-  // run records the baseline so simply opening the tab does not trigger a save.
-  // A graph carrying a node with unfilled required config is withheld rather
-  // than sent: the backend would reject it, and an author midway through
-  // filling in a step they just inserted has not made a mistake worth a red
-  // banner. `lastSavedRef` is deliberately left alone so the moment the last
-  // field lands the signature still differs and the save goes out on its own.
+  // Debounced autosave preserves the existing active-editor cadence. Local
+  // edits already live in the draft registry, so cancelling this timer during
+  // unmount only postpones the request; it never discards the graph.
+  // Incomplete nodes are withheld until their required fields are filled.
   const incomplete = useMemo(
     () => incompleteNodes(nodes).length + incompleteLoopEdges(edges).length,
     [nodes, edges],
@@ -1145,13 +1244,7 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, o
   // a routine with nothing declared just runs immediately, same as before.
   const hasDeclaredParams = Object.keys(meta.input_schema?.properties || {}).length > 0;
   useEffect(() => {
-    const payload = serializeGraph(nodes, edges, meta);
-    const signature = stableStringify(payload);
-    if (lastSavedRef.current === null) {
-      lastSavedRef.current = signature;
-      return undefined;
-    }
-    if (signature === lastSavedRef.current) {
+    if (!graphDraftControls.hasDraft) {
       setSaveError(null);
       setSaveState(saveStatusWhenInSync);
       return undefined;
@@ -1162,42 +1255,35 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, o
       setSaveState('incomplete');
       return undefined;
     }
+    if (graphDraftControls.saving) {
+      setSaveState('saving');
+      return undefined;
+    }
+    if (graphDraftControls.error) {
+      setSaveError(graphDraftControls.error);
+      setSaveState('error');
+      return undefined;
+    }
+    const payload = serializeGraph(nodes, edges, meta);
     const timer = setTimeout(async () => {
-      // An explicit JSON Apply may have persisted this exact payload while
-      // this debounce was waiting. Re-check at fire time, because that save
-      // may have finished and been removed from inFlightSavesRef already.
-      if (signature === lastSavedRef.current) {
-        setSaveError(null);
-        setSaveState(saveStatusWhenInSync);
-        return;
-      }
+      const request = persistGraph(payload);
+      if (!request) return;
       setSaveState('saving');
       try {
-        await persistGraph(payload);
-        setSaveError(null);
-        setSaveState('saved');
+        await request;
       } catch (error) {
         setSaveError(error.message || 'Save failed');
         setSaveState('error');
       }
     }, 700);
     return () => clearTimeout(timer);
-  }, [nodes, edges, meta, incomplete, persistGraph]);
+  }, [nodes, edges, meta, incomplete, persistGraph, graphDraftControls.error, graphDraftControls.hasDraft, graphDraftControls.saving]);
 
   const workingGraph = useMemo(() => serializeGraph(nodes, edges, meta), [nodes, edges, meta]);
-  // `nodes`/`edges`/`meta` above are seeded from `graph` only once, at
-  // mount (React state initializers don't re-run on prop changes) -- so an
-  // `agent.graph.updated` SSE event (progenitor writing /routines/<id>.json
-  // directly, another tab saving, a revision restore) lands in Redux and
-  // changes `confirmedGraph` under this already-mounted canvas, but nothing
-  // adopts it: the JSON sidebar and RunParametersModal both read off this
-  // local copy, so they'd stay stale until a full reload. Pull a
-  // genuinely external change in here, but only when this tab has no
-  // unsaved edit of its own in flight (`workingGraph` still matches
-  // `lastSavedRef`) -- otherwise the user's in-progress edit would be
-  // silently discarded. `adoptedSignatureRef` tracks the last confirmed
-  // signature already reflected locally (by mount or a prior adoption) so
-  // this doesn't refire for e.g. this tab's own save simply echoing back.
+  // Canonical snapshots become the clean default only when this editor has no
+  // retained edit or save pending. `useEntityDraft` then follows `graph`
+  // directly; writing snapshot data through a setter here would incorrectly
+  // manufacture a retained record and freeze subsequent server updates.
   const confirmedSignature = useMemo(
     () => stableStringify(serializeGraph(confirmedGraph?.nodes || [], confirmedGraph?.edges || [], confirmedGraph || {})),
     [confirmedGraph],
@@ -1206,30 +1292,14 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, o
   useEffect(() => {
     if (confirmedSignature === adoptedSignatureRef.current) return;
     adoptedSignatureRef.current = confirmedSignature;
-    const localSignature = stableStringify(workingGraph);
-    if (confirmedSignature === localSignature) return;
-    if (localSignature !== lastSavedRef.current) return;
-    const nextNodes = (confirmedGraph.nodes || []).map((node) => ({ ...node }));
-    const nextEdges = (confirmedGraph.edges || []).map((edge) => ({ ...edge }));
-    setNodes(nextNodes);
-    setEdges(nextEdges);
-    setMeta({
-      status: confirmedGraph.status || 'Draft',
-      version: confirmedGraph.version || '2.0.0',
-      summary: confirmedGraph.summary || '',
-      entry: confirmedGraph.entry || nextNodes[0]?.id || null,
-      policy_id: confirmedGraph.policy_id || 'default',
-      input_schema: confirmedGraph.input_schema || null,
-      output_schema: confirmedGraph.output_schema || null,
-      $defs: confirmedGraph.$defs || {},
-    });
+    if (graphDraftControls.hasDraft || graphDraftControls.saving) return;
+    const nextNodes = confirmedGraph.nodes || [];
     confirmedNodeIdsRef.current = new Set(nextNodes.map((node) => node.id));
-    lastSavedRef.current = confirmedSignature;
     if (!selectedNodeIdRef.current || !nextNodes.some((node) => node.id === selectedNodeIdRef.current)) {
       setSelectedNodeId(null);
       setInspectorPosition(null);
     }
-  }, [confirmedSignature, confirmedGraph, workingGraph]);
+  }, [confirmedSignature, confirmedGraph, graphDraftControls.hasDraft, graphDraftControls.saving]);
 
   // Run must match what the server actually has, not just what this tab
   // optimistically believes it sent -- `confirmedGraph` is the live
@@ -1260,7 +1330,7 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, o
     if (!validationErrors.length || runNav.isBrowsingHistory) setValidationPanelOpen(false);
   }, [validationErrors.length, runNav.isBrowsingHistory]);
 
-  const handleJsonApply = useCallback(async (parsed) => {
+  const handleJsonApply = useCallback(async (parsed, onStarted) => {
     const nextMeta = {
       status: parsed.status || 'Draft',
       version: parsed.version || '2.0.0',
@@ -1272,14 +1342,20 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, o
       $defs: parsed.$defs || {},
     };
     const nextNodes = normalizeGraphNodes(parsed.nodes || []);
+    discardNodeFieldDrafts([
+      ...nodesRef.current.map((node) => node.id),
+      ...nextNodes.map((node) => node.id),
+    ]);
     setMeta(nextMeta);
     setNodes(nextNodes);
     setEdges((parsed.edges || []).map((edge) => ({ ...edge })));
-    const payload = serializeGraph(nextNodes, parsed.edges || [], nextMeta);
-    await persistGraph(payload);
+    const request = persistGraph(serializeGraph(nextNodes, parsed.edges || [], nextMeta));
+    if (!request) throw new Error('A graph save is already in progress.');
+    onStarted?.(request.requestId);
     setSaveError(null);
-    setSaveState('saved');
-  }, [persistGraph]);
+    setSaveState('saving');
+    await request;
+  }, [discardNodeFieldDrafts, persistGraph, setEdges, setMeta, setNodes]);
 
   return (
     <>
@@ -1494,6 +1570,7 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, o
       ) : jsonOpen ? (
         <RoutineJsonEditor
           key={agent.id}
+          routineId={agent.id}
           graph={workingGraph}
           onSave={handleJsonApply}
           onClose={onCloseJson}
@@ -1675,35 +1752,14 @@ function graphToJson(graph) {
   );
 }
 
-// Edit the agent graph by describing it as JSON conforming to the published
-// schema. The PATCH endpoint validates and persists; the broadcast updates the
-// canvas, whose `workingGraph` this panel's `graph` prop already tracks --
-// keyed by agent id so switching agents remounts and resets the draft; the
-// effect below additionally resyncs a still-mounted draft when `graph`
-// changes out from under it (e.g. an external write) with nothing unsaved.
-function RoutineJsonEditor({ graph, onSave, onClose }) {
+// Edit the agent graph as raw JSON. Its source has a separate retained entry
+// from the applied graph so invalid text survives navigation without ever
+// becoming an autosave payload.
+function RoutineJsonEditor({ routineId, graph, onSave, onClose }) {
   const initialJson = useMemo(() => graphToJson(graph), [graph]);
-  const [draft, setDraft] = useState(initialJson);
+  const sourceKey = useMemo(() => entityDraftKey('routine', routineId, 'json-source'), [routineId]);
+  const [draft, setDraft, controls] = useEntityDraft(sourceKey, initialJson);
   const [error, setError] = useState(null);
-  const [saving, setSaving] = useState(false);
-  const [saved, setSaved] = useState(false);
-  const lastAdoptedJsonRef = useRef(initialJson);
-  // Same "only pull in an external change if there's nothing unsaved
-  // locally" rule as GraphCanvas's own graph-prop resync (see the comment
-  // above its `confirmedSignature` effect) -- `graph` here is that
-  // canvas's `workingGraph`, so this panel needs its own copy of the rule:
-  // a user mid-edit in this textarea should never have their draft
-  // silently overwritten by an unrelated external update arriving while
-  // the panel happens to be open.
-  useEffect(() => {
-    if (initialJson === lastAdoptedJsonRef.current) return;
-    const previousAdopted = lastAdoptedJsonRef.current;
-    lastAdoptedJsonRef.current = initialJson;
-    if (draft !== previousAdopted) return;
-    setDraft(initialJson);
-    setError(null);
-    setSaved(false);
-  }, [initialJson, draft]);
 
   async function handleApply() {
     let parsed;
@@ -1717,16 +1773,17 @@ function RoutineJsonEditor({ graph, onSave, onClose }) {
       setError('Graph must include "nodes" and "edges" arrays.');
       return;
     }
-    setSaving(true);
+    const ticket = controls.beginSave();
+    if (!ticket) return;
     setError(null);
-    setSaved(false);
     try {
-      await onSave(parsed);
-      setSaved(true);
+      await onSave(parsed, (requestId) => controls.trackSave(ticket, {
+        requestId,
+        events: ['agent.graph.updated'],
+      }));
     } catch (saveError) {
+      controls.failSave(ticket, saveError);
       setError(saveError.message || 'Failed to save graph');
-    } finally {
-      setSaving(false);
     }
   }
 
@@ -1746,14 +1803,13 @@ function RoutineJsonEditor({ graph, onSave, onClose }) {
       </header>
       <JsonCodeEditor
         value={draft}
-        onChange={(event) => { setDraft(event.target.value); setSaved(false); }}
+        onChange={(event) => setDraft(event.target.value)}
       />
-      {error ? <p className="agents-graph-editor__error">{error}</p> : null}
-      {saved ? <p className="agents-graph-editor__saved">Graph saved.</p> : null}
+      {(error || controls.error) ? <p className="agents-graph-editor__error">{error || controls.error}</p> : null}
       <div className="agents-graph-editor__actions">
-        <button type="button" className="repo-btn repo-btn--ghost" onClick={() => { setDraft(initialJson); setError(null); setSaved(false); }}>Reset</button>
-        <button type="button" className="repo-btn" onClick={handleApply} disabled={saving}>
-          {saving ? 'Saving…' : 'Apply changes'}
+        <button type="button" className="repo-btn repo-btn--ghost" onClick={() => { controls.clear(); setError(null); }}>Reset</button>
+        <button type="button" className="repo-btn" onClick={handleApply} disabled={controls.saving}>
+          {controls.saving ? 'Saving…' : 'Apply changes'}
         </button>
       </div>
     </aside>

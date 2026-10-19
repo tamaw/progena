@@ -10,6 +10,7 @@ import {
   textToInputs,
   schemaFieldsToText,
   textToSchemaFields,
+  isCompleteSchemaFieldText,
 } from './graphFieldHelpers';
 import { useDispatch, useSelector } from 'react-redux';
 import { fetchModelProfiles, selectAgentProfiles, selectModelProfiles, selectModelProfilesState } from '../../store/uiDataSlice';
@@ -376,8 +377,17 @@ function StatePathSuggestionsMenu({ items, activeIndex, position, onHover, onSel
   );
 }
 
+function isCompleteStructuredText(text) {
+  return text.split('\n').every((line) => {
+    if (!line.trim()) return true;
+    const separator = line.indexOf(':');
+    return separator > 0 && line.slice(0, separator).trim() && line.slice(separator + 1).trim();
+  });
+}
+
 function InputsField({ id, config, updateNodeConfig }) {
-  const [text, setText, setTrackedInputs] = useBufferedFieldText(id, config?.inputs, inputsToText);
+  const { draftScope } = useContext(GraphEditContext) || {};
+  const [text, setText] = useBufferedFieldText(draftScope, id, 'inputs', config?.inputs, inputsToText, isCompleteStructuredText);
   return (
     <label className="agents-graph-node__field">
       <span className="agents-graph-node__field-label">Inputs (name: path, e.g. host: parse_json.host)</span>
@@ -388,9 +398,7 @@ function InputsField({ id, config, updateNodeConfig }) {
         onChange={(event) => {
           const nextText = event.target.value;
           setText(nextText);
-          const parsed = textToInputs(nextText);
-          setTrackedInputs(parsed);
-          updateNodeConfig(id, { inputs: parsed });
+          updateNodeConfig(id, { inputs: textToInputs(nextText) });
         }}
       />
     </label>
@@ -398,7 +406,8 @@ function InputsField({ id, config, updateNodeConfig }) {
 }
 
 function ResponseSchemaField({ id, config, field, label, updateNodeConfig }) {
-  const [text, setText, setTrackedValue] = useBufferedFieldText(id, config?.[field], schemaFieldsToText);
+  const { draftScope } = useContext(GraphEditContext) || {};
+  const [text, setText] = useBufferedFieldText(draftScope, id, field, config?.[field], schemaFieldsToText, isCompleteSchemaFieldText);
   return (
     <label className="agents-graph-node__field">
       <span className="agents-graph-node__field-label">{label}</span>
@@ -409,9 +418,7 @@ function ResponseSchemaField({ id, config, field, label, updateNodeConfig }) {
         onChange={(event) => {
           const nextText = event.target.value;
           setText(nextText);
-          const parsed = textToSchemaFields(nextText);
-          setTrackedValue(parsed);
-          updateNodeConfig(id, { [field]: parsed });
+          updateNodeConfig(id, { [field]: textToSchemaFields(nextText) });
         }}
       />
     </label>
@@ -420,7 +427,8 @@ function ResponseSchemaField({ id, config, field, label, updateNodeConfig }) {
 
 
 function KeyValueMapField({ id, config, field, label, placeholder, updateNodeConfig }) {
-  const [text, setText, setTrackedValue] = useBufferedFieldText(id, config?.[field], inputsToText);
+  const { draftScope } = useContext(GraphEditContext) || {};
+  const [text, setText] = useBufferedFieldText(draftScope, id, field, config?.[field], inputsToText, isCompleteStructuredText);
   return (
     <label className="agents-graph-node__field">
       <span className="agents-graph-node__field-label">{label}</span>
@@ -431,9 +439,7 @@ function KeyValueMapField({ id, config, field, label, placeholder, updateNodeCon
         onChange={(event) => {
           const nextText = event.target.value;
           setText(nextText);
-          const parsed = textToInputs(nextText);
-          setTrackedValue(parsed);
-          updateNodeConfig(id, { [field]: parsed });
+          updateNodeConfig(id, { [field]: textToInputs(nextText) });
         }}
       />
     </label>

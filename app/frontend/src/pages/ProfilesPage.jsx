@@ -15,12 +15,14 @@ import Select from '../components/common/Select';
 import PopupModal from '../components/common/PopupModal';
 import InlineFailure from '../components/common/InlineFailure';
 import useConfirmAction from '../hooks/useConfirmAction';
+import useEntityDraft from '../hooks/useEntityDraft';
 import useMissingEntityRoute from '../hooks/useMissingEntityRoute';
 import { useConfig } from '../context/ConfigContext';
 import {
   deleteModelProfile, fetchModelProfiles, patchModelProfile, selectModelProfiles, selectModelProfilesState,
 } from '../store/uiDataSlice';
 import { selectRealtimeStreamReady } from '../store/realtimeSlice';
+import { draftDiscarded, entityDraftKey } from '../store/editorDraftsSlice';
 import { useSnapshotSave } from '../store/uiData/snapshotSave';
 import '../styles/profiles.css';
 
@@ -33,15 +35,22 @@ const REASONING_ENABLED_OPTIONS = [
   { value: 'false', label: 'Disabled' },
 ];
 
+const EMPTY_PROFILE_EDIT = Object.freeze({ draft: null, baseline: null, validationError: null });
+const PROFILE_SNAPSHOT_EVENTS = Object.freeze(['profiles.snapshot']);
+
 const isCustomized = (profile) => EDITABLE_FIELDS.slice(1).some((field) => profile[field] != null);
 
 function toDraft(profile) {
   return {
-    deployment: profile.deployment,
+    deployment: profile.deployment ?? '',
     reasoning_enabled: profile.reasoning_enabled == null ? '' : String(profile.reasoning_enabled),
-    reasoning_effort: profile.reasoning_effort || '',
-    reasoning_summary: profile.reasoning_summary || '',
+    reasoning_effort: profile.reasoning_effort ?? '',
+    reasoning_summary: profile.reasoning_summary ?? '',
   };
+}
+
+function toBaseline(profile) {
+  return Object.fromEntries(EDITABLE_FIELDS.map((field) => [field, profile[field]]));
 }
 
 function buildPatch(draft, base) {
@@ -56,66 +65,65 @@ function buildPatch(draft, base) {
     .map((field) => [field, values[field]]));
 }
 
-function ProfileDetails({ profile, profiles, catalogue, url, connected }) {
+function ProfileDetails({ profile, catalogue, url, connected }) {
   const dispatch = useDispatch();
   const navigate = useNavigate();
-  const [draft, setDraft] = useState(null);
-  const [baseline, setBaseline] = useState(null);
-  const [saving, setSaving] = useState(false);
-  const [pendingSave, setPendingSave] = useState(null);
-  const [statusMessage, setStatusMessage] = useState('');
-  const [error, setError] = useState(null);
+  const profileKey = useMemo(
+    () => entityDraftKey('profile', JSON.stringify([profile.provider, profile.name])),
+    [profile.name, profile.provider],
+  );
+  const [editState, setEditState, draftControls] = useEntityDraft(profileKey, EMPTY_PROFILE_EDIT);
+  const {
+    clear, beginSave, trackSave, failSave, saving, error: saveError,
+  } = draftControls;
+  const draft = editState.draft;
+  const baseline = editState.baseline;
+  const error = saveError || editState.validationError;
   const deleteAction = useConfirmAction(`profile-delete:${url}:${profile.name}`);
-  const completedRequestId = catalogue.saveRequest.completedRequestId;
-  const ownSnapshot = pendingSave && completedRequestId === pendingSave.requestId;
-  const conflict = Boolean(draft && baseline && !ownSnapshot
+  const conflict = Boolean(draft && baseline
     && EDITABLE_FIELDS.some((field) => (baseline[field] ?? null) !== (profile[field] ?? null)));
   const startEdit = () => {
-    setBaseline(profile);
-    setDraft(toDraft(profile));
-    setError(null);
-    setStatusMessage('');
+    setEditState({
+      draft: toDraft(profile),
+      baseline: toBaseline(profile),
+      validationError: null,
+    });
   };
-  const closeEdit = useCallback(() => {
-    setDraft(null);
-    setBaseline(null);
-  }, []);
   const cancelEdit = () => {
-    closeEdit();
-    setError(null);
-    setStatusMessage('');
+    clear();
   };
-  const items = useMemo(() => profiles.map((item) => ({
-    path: item.name, content: JSON.stringify(toDraft(item)),
-  })), [profiles]);
-  const buildArgs = useCallback(({ path, content, requestId }) => ({
-    modelProfilesUrl: url, name: path, patch: buildPatch(JSON.parse(content), baseline), requestId,
+  const buildArgs = useCallback(({ path, content }) => ({
+    modelProfilesUrl: url, name: path, patch: buildPatch(JSON.parse(content), baseline),
   }), [url, baseline]);
   const save = useSnapshotSave({
-    items, snapshotRequestId: completedRequestId, pendingSave, dispatch,
-    thunk: patchModelProfile, buildArgs, path: profile.name,
+    dispatch, thunk: patchModelProfile, buildArgs, path: profile.name,
     content: draft ? JSON.stringify(draft) : '',
     savedContent: baseline ? JSON.stringify(toDraft(baseline)) : '',
     saving, realtimeConnected: connected,
-    setDraftContent: closeEdit, setSaving, setPendingSave, setStatusMessage, setError,
+    beginSave, trackSave, failSave, events: PROFILE_SNAPSHOT_EVENTS,
   });
   const handleSave = () => {
     if (!draft || conflict || saving) return;
     if (!draft.deployment.trim()) {
-      setError(new Error('Deployment is required.'));
+      setEditState((current) => ({ ...current, validationError: 'Deployment is required.' }));
       return;
     }
     if (!Object.keys(buildPatch(draft, baseline)).length) {
       cancelEdit();
       return;
     }
-    save();
+    void save();
   };
-  const updateDraft = (field, value) => setDraft((current) => ({ ...current, [field]: value }));
+  const updateDraft = (field, value) => setEditState((current) => ({
+    ...current,
+    draft: { ...current.draft, [field]: value },
+    validationError: null,
+  }));
 
   const handleDelete = () => {
     deleteAction.request('Delete profile', async ({ isCurrent }) => {
       await dispatch(deleteModelProfile({ modelProfilesUrl: url, name: profile.name })).unwrap();
+      dispatch(draftDiscarded(profileKey));
       if (isCurrent()) navigate('/profiles', { replace: true });
     });
   };
@@ -141,7 +149,6 @@ function ProfileDetails({ profile, profiles, catalogue, url, connected }) {
       )} />
       <div className="detail-pane__body">
         {error && !draft ? <InlineFailure failure={error} operation="Save profile" /> : null}
-        {statusMessage ? <div className="profiles-alert profiles-alert--status" role="status">{statusMessage}</div> : null}
         {conflict ? (
           <div className="profiles-alert profiles-alert--conflict" role="status">
             <span>This profile has been updated remotely. Your draft has been kept.</span>
@@ -294,7 +301,7 @@ export default function ProfilesPage() {
         </PaneListFooter>
       </PaneList>
       <DetailPane className="detail-pane--dense profiles-detail" label="Model profile detail">
-        {selected ? <ProfileDetails key={`${url}:${selected.name}`} profile={selected} profiles={profiles} catalogue={catalogue} url={url} connected={connected} />
+        {selected ? <ProfileDetails key={`${url}:${selected.name}`} profile={selected} catalogue={catalogue} url={url} connected={connected} />
           : <div className="detail-pane__body">{!catalogue.error ? <PaneEmptyState detail>{catalogue.loaded ? 'Select a profile to view its configuration.' : loadingMessage}</PaneEmptyState> : null}</div>}
       </DetailPane>
     </PageShell>

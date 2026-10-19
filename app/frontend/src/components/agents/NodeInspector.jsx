@@ -7,6 +7,8 @@ import { GRAPH_KIND_COLORS, GRAPH_KIND_LABELS } from './graphNodeKinds';
 import { KindIcon, ChevronLeftSmall, ChevronRightPointSmall } from './RoutineGraphIcons';
 import { ExpressionField, NodeConfigBody } from './NodeConfigFields';
 import PopupModal from '../common/PopupModal';
+import { entityDraftKey } from '../../store/editorDraftsSlice';
+import useEntityDraft from '../../hooks/useEntityDraft';
 import { HumanApprovalControls } from './HumanApprovalControls';
 
 // Routing controls belong to the inspected node; fixed condition/split lanes
@@ -32,18 +34,19 @@ function RoutingFooter({ id, kind, routerEdge }) {
 // Full configuration for the selected node. It floats inside the canvas and
 // is deliberately separate from the chain so large prompts never resize it.
 export function NodeInspector({ node, routerEdge, guardEdge, onClose, onDismiss, isNew, style, panelRef }) {
-  const { updateNode, deleteNode, updateLoopGuard, runMeta, runData, staleNodeIds, edges: graphEdges, nodes: graphNodes, readOnly, runStatus, startRun, hasInteractiveSession, resetInteractiveSession, loopMembership, loopIterations, setLoopIteration, pendingApprovals, answerApproval } = useContext(GraphEditContext);
+  const editContext = useContext(GraphEditContext);
+  const { updateNode, deleteNode, updateLoopGuard, runMeta, runData, staleNodeIds, edges: graphEdges, nodes: graphNodes, readOnly, runStatus, startRun, hasInteractiveSession, resetInteractiveSession, loopMembership, loopIterations, setLoopIteration, pendingApprovals, answerApproval, draftScope } = editContext;
   const [isEditingLabel, setIsEditingLabel] = useState(false);
   const [confirmRunOpen, setConfirmRunOpen] = useState(false);
-  const [labelDraft, setLabelDraft] = useState('');
-  const labelInputRef = useRef(null);
+  const labelKey = entityDraftKey('routine-label', JSON.stringify([draftScope, node?.id]));
+  const [labelDraft, setLabelDraft, labelControls] = useEntityDraft(labelKey, node?.label || '');
   const inspectedNodeIdRef = useRef(node?.id);
+  const labelInputRef = useRef(null);
 
-  // A different node was selected -- drop any in-flight edit on the old one
-  // rather than let it leak into the newly opened step. Adjusted during
-  // render (React's documented "reset state when a prop changes" pattern)
-  // instead of an effect, since an effect would commit the stale label
-  // input for one extra frame before catching up.
+  // A different node was selected: close only the transient editing UI. The
+  // label source itself is keyed by routine and node in the draft registry, so
+  // it remains available when this inspector returns without leaking to the
+  // newly selected step.
   if (inspectedNodeIdRef.current !== node?.id) {
     inspectedNodeIdRef.current = node?.id;
     if (isEditingLabel) setIsEditingLabel(false);
@@ -109,12 +112,12 @@ export function NodeInspector({ node, routerEdge, guardEdge, onClose, onDismiss,
   // behind it, so the only ways out are filling the fields or deleting it.
   const locked = unmet.length > 0 || guardIncomplete;
   const startLabelEdit = () => {
-    setLabelDraft(node.label || '');
     setIsEditingLabel(true);
   };
   const cancelLabelEdit = () => setIsEditingLabel(false);
   const saveLabelEdit = () => {
     updateNode(node.id, { label: labelDraft.replace(/\s+/g, ' ').trim() });
+    labelControls.clear();
     setIsEditingLabel(false);
   };
   return (
@@ -144,6 +147,7 @@ export function NodeInspector({ node, routerEdge, guardEdge, onClose, onDismiss,
                     saveLabelEdit();
                   } else if (event.key === 'Escape') {
                     event.preventDefault();
+                    labelControls.clear();
                     cancelLabelEdit();
                   }
                 }}

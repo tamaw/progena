@@ -73,14 +73,16 @@ import {
 import InlineFailure from '../components/common/InlineFailure';
 import { reportFailure } from '../lib/failures';
 import useConfirmAction from '../hooks/useConfirmAction';
+import useEntityDraft from '../hooks/useEntityDraft';
 import useMissingEntityRoute from '../hooks/useMissingEntityRoute';
 import useUiAction from '../hooks/useUiAction';
+import { entityDraftKey } from '../store/editorDraftsSlice';
 import JsonCodeEditor from '../components/common/JsonCodeEditor';
 import WorkflowNodeTitle from '../components/canvas/WorkflowNodeTitle';
 import PopupModal from '../components/common/PopupModal';
 import Modal from '../components/common/Modal';
-import '../styles/canvas.css';
 import { canvasToolSettings } from './workflowCanvasTools';
+import '../styles/canvas.css';
 import '../styles/nodes.css';
 
 
@@ -425,6 +427,21 @@ function workflowPath(workflowId) {
 
 function cloneValue(value) {
   return value ? JSON.parse(JSON.stringify(value)) : value;
+}
+
+function workflowEditorDraft(workflow) {
+  if (!workflow) return null;
+  const cloned = cloneValue(workflow);
+  return {
+    workflow: cloned,
+    jsonDraft: `${JSON.stringify(cloned, null, 2)}\n`,
+    jsonError: '',
+    jsonDirty: false,
+    activeSidePanel: null,
+    nodeOptionsId: null,
+    canvasTool: 'pointer',
+    isDirty: false,
+  };
 }
 
 // Mirrors the server-side placeholder grammar: {root} or {root.a.b} where each
@@ -2441,21 +2458,31 @@ function WorkflowsInner() {
   const [filter, setFilter] = useState('all');
   const [query, setQuery] = useState('');
   const [sortMode, setSortMode] = useState('Recent');
-  const [activeSidePanel, setActiveSidePanel] = useState(null);
-  const [draftWorkflow, setDraftWorkflow] = useState(null);
-  const [graphNodes, setGraphNodes] = useState([]);
-  const [graphEdges, setGraphEdges] = useState([]);
-  const [jsonDraft, setJsonDraft] = useState('');
-  const [jsonError, setJsonError] = useState('');
-  const [localDraftDirty, setLocalDraftDirty] = useState(false);
   const selectedDetail = useSelector((state) => selectWorkflowDetailByPath(state, selectedPath));
   const detailRequest = useSelector((state) => selectWorkflowDetailRequest(state, selectedPath));
-  const saveAction = useUiAction(selectedPath);
+  const workflowDraftKey = useMemo(
+    () => entityDraftKey('workflow', selectedWorkflowId, 'editor'),
+    [selectedWorkflowId],
+  );
+  const canonicalEditorDraft = useMemo(
+    () => workflowEditorDraft(selectedDetail?.workflow),
+    [selectedDetail?.workflow],
+  );
+  const [editorDraft, setEditorDraft, workflowDraftControls] = useEntityDraft(
+    workflowDraftKey,
+    canonicalEditorDraft,
+  );
+  const draftWorkflow = editorDraft?.workflow || null;
+  const jsonDraft = editorDraft?.jsonDraft || '';
+  const jsonError = editorDraft?.jsonError || '';
+  const activeSidePanel = editorDraft?.activeSidePanel || null;
+  const nodeOptionsId = editorDraft?.nodeOptionsId || null;
+  const canvasTool = editorDraft?.canvasTool || 'pointer';
+  const [graphNodes, setGraphNodes] = useState([]);
+  const [graphEdges, setGraphEdges] = useState([]);
   const workflowAction = useUiAction(selectedWorkflowId);
   const deleteAction = useConfirmAction(selectedWorkflowId);
   const [nodeMenuAnchor, setNodeMenuAnchor] = useState(null);
-  const [nodeOptionsId, setNodeOptionsId] = useState(null);
-  const [canvasTool, setCanvasTool] = useState('pointer');
   const canvasInteraction = canvasToolSettings(canvasTool);
   const rightPointerRef = useRef(null);
   const [rightPanning, setRightPanning] = useState(false);
@@ -2471,6 +2498,7 @@ function WorkflowsInner() {
   const viewportRef = useRef(DEFAULT_VIEWPORT);
   const syncedPathRef = useRef('');
   const syncedHashRef = useRef('');
+  const hydrationTokenRef = useRef(0);
   const hydratingGraphRef = useRef(false);
 
   // A row click updates the URL before the selection effect below commits the
@@ -2559,6 +2587,45 @@ function WorkflowsInner() {
     return workflowRuns.filter((run) => !workflowId || run.workflow_id === workflowId);
   }, [selectedDetail, workflowRuns]);
 
+  const updateEditorDraft = useCallback((field, nextValue) => {
+    setEditorDraft((current) => {
+      if (!current) return current;
+      const previous = current[field];
+      const value = typeof nextValue === 'function' ? nextValue(previous) : nextValue;
+      if (Object.is(previous, value)) return current;
+      const changesContent = field === 'workflow' || field === 'jsonDraft';
+      return {
+        ...current,
+        [field]: value,
+        ...(changesContent ? { isDirty: true } : {}),
+        ...(field === 'jsonDraft' ? { jsonDirty: true } : {}),
+      };
+    });
+  }, [setEditorDraft]);
+  const setDraftWorkflow = useCallback(
+    (nextValue) => updateEditorDraft('workflow', nextValue),
+    [updateEditorDraft],
+  );
+  const setJsonDraft = useCallback(
+    (nextValue) => updateEditorDraft('jsonDraft', nextValue),
+    [updateEditorDraft],
+  );
+  const setJsonError = useCallback(
+    (nextValue) => updateEditorDraft('jsonError', nextValue),
+    [updateEditorDraft],
+  );
+  const setActiveSidePanel = useCallback(
+    (nextValue) => updateEditorDraft('activeSidePanel', nextValue),
+    [updateEditorDraft],
+  );
+  const setNodeOptionsId = useCallback(
+    (nextValue) => updateEditorDraft('nodeOptionsId', nextValue),
+    [updateEditorDraft],
+  );
+  const setCanvasTool = useCallback(
+    (nextValue) => updateEditorDraft('canvasTool', nextValue),
+    [updateEditorDraft],
+  );
   const draftHash = useMemo(
     () => (draftWorkflow ? JSON.stringify(draftWorkflow) : ''),
     [draftWorkflow],
@@ -2567,18 +2634,27 @@ function WorkflowsInner() {
     () => (selectedDetail?.workflow ? JSON.stringify(selectedDetail.workflow) : ''),
     [selectedDetail],
   );
-  const hasUnsavedChanges = Boolean(localDraftDirty && selectedDetail?.workflow && draftHash && draftHash !== selectedHash);
+  const hasUnsavedChanges = Boolean(
+    editorDraft?.isDirty && selectedDetail?.workflow && draftHash && draftHash !== selectedHash,
+  );
   const nodeOptionsNode = graphNodes.find((node) => node.id === nodeOptionsId) || null;
 
-  const syncWorkflowFromGraph = useCallback((nextNodes, nextEdges, nextViewport = viewportRef.current, markDirty = true) => {
+  const syncWorkflowFromGraph = useCallback((
+    nextNodes,
+    nextEdges,
+    nextViewport = viewportRef.current,
+    shouldRetain = true,
+  ) => {
     nodesRef.current = nextNodes;
     edgesRef.current = nextEdges;
     viewportRef.current = nextViewport;
-    if (markDirty) {
-      setLocalDraftDirty(true);
+    if (!shouldRetain) {
+      return;
     }
-    setDraftWorkflow((current) => (current ? flowToWorkflow(current, nextNodes, nextEdges, nextViewport) : current));
-  }, []);
+    setDraftWorkflow((current) => (
+      current ? flowToWorkflow(current, nextNodes, nextEdges, nextViewport) : current
+    ));
+  }, [setDraftWorkflow]);
 
   // One callback set for every node, whichever path created it (hydration,
   // JSON apply, palette, Unpack). Reads graph state through refs, so it is
@@ -2662,7 +2738,7 @@ function WorkflowsInner() {
         data: { [node.data.expanded ? 'settingsSize' : 'dataSize']: size },
       })),
     };
-  }, [setGraphEdges, setGraphNodes, syncWorkflowFromGraph]);
+  }, [setGraphEdges, setGraphNodes, setNodeOptionsId, syncWorkflowFromGraph]);
 
   // Node data fields expected by the node components, for nodes built here
   // rather than through workflowToFlow/buildNodeData.
@@ -2675,64 +2751,89 @@ function WorkflowsInner() {
     onResize: nodeCallbacks.onResize,
   }), [nodeCallbacks]);
 
-  const syncDraftFromWorkflow = useCallback((workflow, latestRun, path, preserveDirty = false) => {
+  const hydrateWorkflowDraft = useCallback((workflow, latestRun, path) => {
     if (!workflow) {
-      setDraftWorkflow(null);
+      nodesRef.current = [];
+      edgesRef.current = [];
       setGraphNodes([]);
       setGraphEdges([]);
-      setJsonDraft('');
-      setJsonError('');
-      return;
-    }
-    const nextHash = JSON.stringify(workflow);
-    if (preserveDirty && hasUnsavedChanges && syncedPathRef.current === path) {
       return;
     }
     syncedPathRef.current = path;
+    syncedHashRef.current = JSON.stringify(workflow);
     hydratingGraphRef.current = true;
-    setLocalDraftDirty(false);
-    syncedHashRef.current = nextHash;
-    const cloned = cloneValue(workflow);
-    const flow = workflowToFlow(cloned, nodeCallbacks, latestRun);
+    const hydrationToken = hydrationTokenRef.current + 1;
+    hydrationTokenRef.current = hydrationToken;
+    const flow = workflowToFlow(workflow, nodeCallbacks, latestRun);
     flow.nodes = sizeUnpackNodes(flow.nodes, flow.edges);
     nodesRef.current = flow.nodes;
     edgesRef.current = flow.edges;
     viewportRef.current = flow.viewport;
-    setDraftWorkflow(cloned);
     setGraphNodes(flow.nodes);
     setGraphEdges(flow.edges);
-    setJsonDraft(`${JSON.stringify(cloned, null, 2)}\n`);
-    setJsonError('');
     requestAnimationFrame(() => {
+      if (hydrationTokenRef.current !== hydrationToken) {
+        return;
+      }
       if (flow.nodes.length) {
         reactFlow.setViewport(flow.viewport || DEFAULT_VIEWPORT);
-        // Preserve the workflow's stored viewport without emitting synthetic
-        // node-position changes that look like unsaved edits.
       }
       setTimeout(() => {
-        hydratingGraphRef.current = false;
+        if (hydrationTokenRef.current === hydrationToken) {
+          hydratingGraphRef.current = false;
+        }
       }, 250);
     });
-  }, [hasUnsavedChanges, nodeCallbacks, reactFlow]);
-
+  }, [nodeCallbacks, reactFlow]);
   useEffect(() => {
-    if (!selectedDetail?.workflow || !selectedPath) {
+    if (!selectedPath || !workflowDraftKey || !draftWorkflow) {
       return;
     }
-    const selectedWorkflowHash = JSON.stringify(selectedDetail.workflow);
-    if (syncedPathRef.current === selectedPath && syncedHashRef.current === selectedWorkflowHash && hasUnsavedChanges) {
+    const selectionChanged = syncedPathRef.current !== selectedPath;
+    const canonicalChanged = !editorDraft?.isDirty
+      && syncedHashRef.current !== selectedHash;
+    if (!selectionChanged && !canonicalChanged) {
       return;
     }
-    syncDraftFromWorkflow(selectedDetail.workflow, selectedLatestRun, selectedPath, true);
-  }, [hasUnsavedChanges, selectedDetail, selectedLatestRun, selectedPath, syncDraftFromWorkflow]);
-
+    if (canonicalChanged && workflowDraftControls.hasDraft) {
+      const refreshedDraft = workflowEditorDraft(selectedDetail?.workflow);
+      if (refreshedDraft) {
+        setEditorDraft((current) => (current ? {
+          ...refreshedDraft,
+          activeSidePanel: current.activeSidePanel,
+          nodeOptionsId: current.nodeOptionsId,
+          canvasTool: current.canvasTool,
+        } : current));
+        hydrateWorkflowDraft(refreshedDraft.workflow, selectedLatestRun, selectedPath);
+        return;
+      }
+    }
+    hydrateWorkflowDraft(draftWorkflow, selectedLatestRun, selectedPath);
+  }, [
+    draftWorkflow,
+    editorDraft?.isDirty,
+    hydrateWorkflowDraft,
+    selectedDetail,
+    selectedHash,
+    selectedLatestRun,
+    selectedPath,
+    setEditorDraft,
+    workflowDraftControls.hasDraft,
+    workflowDraftKey,
+  ]);
   useEffect(() => {
-    if (!draftWorkflow) {
-      setJsonDraft('');
+    if (!draftWorkflow || editorDraft?.jsonDirty) {
       return;
     }
-    setJsonDraft(`${JSON.stringify(draftWorkflow, null, 2)}\n`);
-  }, [draftWorkflow]);
+    const nextJsonDraft = `${JSON.stringify(draftWorkflow, null, 2)}\n`;
+    if (jsonDraft === nextJsonDraft) {
+      return;
+    }
+    setEditorDraft((current) => (
+      current ? { ...current, jsonDraft: nextJsonDraft, jsonError: '' } : current
+    ));
+  }, [draftWorkflow, editorDraft?.jsonDirty, jsonDraft, setEditorDraft]);
+
 
   useEffect(() => {
     if (!nodesRef.current.length) {
@@ -2747,14 +2848,10 @@ function WorkflowsInner() {
 
   const updateDraft = useCallback((updater) => {
     setDraftWorkflow((current) => {
-      if (!current) {
-        return current;
-      }
-      const next = typeof updater === 'function' ? updater(current) : updater;
-    setLocalDraftDirty(true);
-      return next;
+      if (!current) return current;
+      return typeof updater === 'function' ? updater(current) : updater;
     });
-  }, []);
+  }, [setDraftWorkflow]);
 
   // Graph handlers compute from the refs synchronously and only then set
   // state. Side effects inside a state updater run later, against the state
@@ -2765,10 +2862,15 @@ function WorkflowsInner() {
     nodesRef.current = nextNodes;
     setGraphNodes(nextNodes);
     if (hydratingGraphRef.current) return;
-    const marksDirty = changes.some((change) => (
-      change.type === 'add' || change.type === 'remove' || change.dragging === true
+    const changesWorkflow = changes.some((change) => (
+      change.type === 'add'
+      || change.type === 'remove'
+      || change.dragging === true
+      || (change.type === 'position' && change.position)
     ));
-    syncWorkflowFromGraph(nextNodes, edgesRef.current, viewportRef.current, marksDirty);
+    if (changesWorkflow) {
+      syncWorkflowFromGraph(nextNodes, edgesRef.current, viewportRef.current);
+    }
   }, [syncWorkflowFromGraph]);
 
   const portFromHandle = useCallback((handleId) => (
@@ -2808,10 +2910,12 @@ function WorkflowsInner() {
     edgesRef.current = nextEdges;
     setGraphEdges(nextEdges);
     if (hydratingGraphRef.current) return;
-    const marksDirty = changes.some((change) => change.type === 'add' || change.type === 'remove');
+    const changesWorkflow = changes.some((change) => change.type === 'add' || change.type === 'remove');
     const recomputed = recomputeUnpackSchemas(nodesRef.current, nextEdges);
     if (recomputed !== nodesRef.current) setGraphNodes(recomputed);
-    syncWorkflowFromGraph(recomputed, nextEdges, viewportRef.current, marksDirty);
+    if (changesWorkflow) {
+      syncWorkflowFromGraph(recomputed, nextEdges, viewportRef.current);
+    }
   }, [syncWorkflowFromGraph, portFromHandle]);
 
   const handleEdgeClick = useCallback((event, edge) => {
@@ -2886,13 +2990,15 @@ function WorkflowsInner() {
 
   const handleViewportChange = useCallback((_event, viewport) => {
     viewportRef.current = viewport;
-    if (nodesRef.current.length && edgesRef.current.length >= 0) {
-      setDraftWorkflow((current) => (current ? flowToWorkflow(current, nodesRef.current, edgesRef.current, viewport) : current));
+    if (hydratingGraphRef.current || !nodesRef.current.length) {
+      return;
     }
-  }, []);
+    setDraftWorkflow((current) => (
+      current ? flowToWorkflow(current, nodesRef.current, edgesRef.current, viewport) : current
+    ));
+  }, [setDraftWorkflow]);
 
   const handleSelectWorkflow = useCallback((workflowId) => {
-    setJsonError('');
     const workflow = workflows.find((w) => w.id === workflowId);
     navigate(buildEntityPath('/workflows', workflowId, workflow?.title), { replace: true });
   }, [navigate, workflows]);
@@ -3029,14 +3135,18 @@ function WorkflowsInner() {
       const parsed = JSON.parse(jsonDraft);
       const flow = workflowToFlow(parsed, nodeCallbacks, selectedLatestRun);
       const nextNodes = sizeUnpackNodes(flow.nodes, flow.edges);
-      setDraftWorkflow(parsed);
+      setEditorDraft((current) => (current ? {
+        ...current,
+        workflow: parsed,
+        jsonError: '',
+        jsonDirty: false,
+        isDirty: true,
+      } : current));
       setGraphNodes(nextNodes);
       setGraphEdges(flow.edges);
       nodesRef.current = nextNodes;
       edgesRef.current = flow.edges;
       viewportRef.current = flow.viewport;
-      setLocalDraftDirty(true);
-      setJsonError('');
       setActiveSidePanel(null);
     } catch (error) {
       setJsonError(error.message || 'Invalid workflow JSON');
@@ -3044,22 +3154,42 @@ function WorkflowsInner() {
   };
 
   const handleResetJson = () => {
-    if (!draftWorkflow) {
-      return;
+    workflowDraftControls.clear();
+    if (selectedDetail?.workflow && selectedPath) {
+      hydrateWorkflowDraft(selectedDetail.workflow, selectedLatestRun, selectedPath);
     }
-    setJsonDraft(`${JSON.stringify(draftWorkflow, null, 2)}\n`);
-    setJsonError('');
   };
 
   const handleSaveWorkflow = async () => {
-    if (!selectedPath || !draftWorkflow) {
+    if (!selectedPath || !draftWorkflow || workflowDraftControls.saving) {
       return;
     }
-    await saveAction.run('Save workflow', async () => dispatch(saveWorkflow({
-      workflowsUrl,
-      path: selectedPath,
-      workflow: draftWorkflow,
-    })).unwrap());
+    const savedPath = selectedPath;
+    const savedWorkflow = cloneValue(draftWorkflow);
+    const preserveUnappliedJson = Boolean(editorDraft?.jsonDirty);
+    const ticket = workflowDraftControls.beginSave();
+    if (!ticket) {
+      return;
+    }
+    if (preserveUnappliedJson) {
+      // The raw source is not in this graph payload. Retain it as a newer
+      // revision so graph confirmation releases the save without discarding it.
+      setEditorDraft((current) => (current ? { ...current } : current));
+    }
+    try {
+      const operation = dispatch(saveWorkflow({
+        workflowsUrl,
+        path: savedPath,
+        workflow: savedWorkflow,
+      }));
+      workflowDraftControls.trackSave(ticket, {
+        requestId: operation.requestId,
+        events: ['workflow.updated'],
+      });
+      await operation.unwrap();
+    } catch (error) {
+      workflowDraftControls.failSave(ticket, error);
+    }
   };
 
   const handlePauseResume = async () => {
@@ -3195,9 +3325,9 @@ function WorkflowsInner() {
                     onPointerMove={onCanvasPointerMove}
                   >
                     <div className="agents-graph-floating">
-                      {saveAction.error ? (
+                      {workflowDraftControls.error ? (
                         <InlineFailure
-                          failure={saveAction.error}
+                          failure={workflowDraftControls.error}
                           operation="Save workflow"
                           onRetry={handleSaveWorkflow}
                         />
@@ -3225,7 +3355,7 @@ function WorkflowsInner() {
                           tooltip="Save workflow"
                           ariaLabel="Save workflow"
                           onClick={handleSaveWorkflow}
-                          disabled={!hasUnsavedChanges || saveAction.busy}
+                          disabled={!hasUnsavedChanges || workflowDraftControls.saving}
                         />
                         <DetailHeaderAction
                           icon={<DeleteActionIcon />}

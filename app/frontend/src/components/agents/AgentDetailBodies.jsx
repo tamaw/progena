@@ -1,5 +1,6 @@
-import { useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
+import useEntityDraft from '../../hooks/useEntityDraft';
+import { entityDraftKey } from '../../store/editorDraftsSlice';
 import { PaneEmptyState } from '../layout/PaneList';
 import { MetricCard, CardFact, CapabilityChip, DraftField } from '../common/DetailCards';
 import InlineFailure from '../common/InlineFailure';
@@ -282,13 +283,18 @@ function formatFrontMatterValue(value) {
 // YAML front matter + a markdown body) when expanded, and edited in place --
 // native skills are rewritten on disk, marketplace skills in the document
 // store, mirroring ObjectAgentDetailBody below.
-function AgentSkillRow({ skillPath, agentsUrl }) {
+function skillSourceFromPath(skillPath) {
+  return skillPath.split('/').filter(Boolean).length > 2 ? 'marketplace' : 'native';
+}
+
+function AgentSkillRow({ agentId, skillPath, agentsUrl }) {
   const dispatch = useDispatch();
   const skill = useSelector((state) => selectAgentSkillContent(state, skillPath));
-  const [expanded, setExpanded] = useState(false);
-  const [draftContent, setDraftContent] = useState(null);
-  const [error, setError] = useState('');
-  const [saving, setSaving] = useState(false);
+  const source = skill?.source || skillSourceFromPath(skillPath);
+  const contentKey = entityDraftKey('agent-skill', agentId, `${source}:${skillPath}:content`);
+  const expansionKey = entityDraftKey('agent-skill', agentId, `${source}:${skillPath}:expanded`);
+  const [draftContent, setDraftContent, draftControls] = useEntityDraft(contentKey, null);
+  const [expanded, setExpanded] = useEntityDraft(expansionKey, false);
 
   const toggle = () => {
     const next = !expanded;
@@ -300,25 +306,25 @@ function AgentSkillRow({ skillPath, agentsUrl }) {
 
   const startEdit = () => {
     setDraftContent(skill?.raw_content ?? '');
-    setError('');
   };
 
   const cancelEdit = () => {
-    setDraftContent(null);
-    setError('');
+    draftControls.clear();
   };
 
   const save = async () => {
-    if (draftContent === null) return;
-    setSaving(true);
-    setError('');
+    if (draftContent === null || draftControls.saving) return;
+    const ticket = draftControls.beginSave();
+    if (!ticket) return;
+    const operation = dispatch(updateAgentSkillContent({ agentsUrl, skillPath, content: draftContent }));
+    draftControls.trackSave(ticket, {
+      requestId: operation.requestId,
+      events: ['agent.skill.content.updated'],
+    });
     try {
-      await dispatch(updateAgentSkillContent({ agentsUrl, skillPath, content: draftContent })).unwrap();
-      setDraftContent(null);
+      await operation.unwrap();
     } catch (saveError) {
-      setError(saveError.message || 'Failed to save skill.');
-    } finally {
-      setSaving(false);
+      draftControls.failSave(ticket, saveError);
     }
   };
 
@@ -337,21 +343,21 @@ function AgentSkillRow({ skillPath, agentsUrl }) {
           </span>
         ) : null}
       </header>
-      {!expanded ? null : draftContent !== null ? (
+      {!expanded ? null : draftControls.hasDraft ? (
         <div className="agents-draft">
-          {error ? <p className="agents-draft__note agents-draft__note--error">{error}</p> : null}
+          {draftControls.error ? <p className="agents-draft__note agents-draft__note--error">{draftControls.error}</p> : null}
           <DraftField label="Front matter + body" hint="The literal SKILL.md file: YAML front matter between --- fences, then the markdown body. Any front-matter key can be added, renamed, or removed.">
             <textarea
               rows="14"
               className="agents-json-field"
-              value={draftContent}
+              value={draftContent ?? ''}
               onChange={(event) => setDraftContent(event.target.value)}
               spellCheck={false}
             />
           </DraftField>
           <div className="agents-graph-editor__actions">
-            <button type="button" className="repo-btn repo-btn--ghost" onClick={cancelEdit} disabled={saving}>Cancel</button>
-            <button type="button" className="repo-btn repo-btn--primary" onClick={save} disabled={saving}>{saving ? 'Saving…' : 'Save'}</button>
+            <button type="button" className="repo-btn repo-btn--ghost" onClick={cancelEdit} disabled={draftControls.saving}>Cancel</button>
+            <button type="button" className="repo-btn repo-btn--primary" onClick={save} disabled={draftControls.saving}>{draftControls.saving ? 'Saving…' : 'Save'}</button>
           </div>
         </div>
       ) : skill === undefined ? (
@@ -459,7 +465,7 @@ export function ObjectAgentDetailBody({
           {skills.length
             ? skills.map((skill) => {
                 const skillPath = skill.name || skill;
-                return <AgentSkillRow key={skillPath} skillPath={skillPath} agentsUrl={agentsUrl} />;
+                return <AgentSkillRow key={skillPath} agentId={agent.id} skillPath={skillPath} agentsUrl={agentsUrl} />;
               })
             : <PaneEmptyState>No skills attached.</PaneEmptyState>}
         </div>

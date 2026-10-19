@@ -8,6 +8,7 @@ import RealtimeBridge from './store/RealtimeBridge';
 import { buildWorkspacePath } from './lib/workspace';
 import { localDesignLibraryEnabled } from './lib/localDesignLibrary';
 import InlineFailure from './components/common/InlineFailure';
+import EditorNavigationBoundary from './components/layout/EditorNavigationBoundary';
 
 // Import styles
 import './styles/main.css';
@@ -74,11 +75,13 @@ function SequencesRedirect() {
 
 function DeferredRoute({ Page, fallback, ...pageProps }) {
   return (
-    <Suspense fallback={<div className="chrome-route-loading">{fallback}</div>}>
-      <RouteErrorBoundary>
-        {createElement(Page, pageProps)}
-      </RouteErrorBoundary>
-    </Suspense>
+    <EditorNavigationBoundary>
+      <Suspense fallback={<div className="chrome-route-loading">{fallback}</div>}>
+        <RouteErrorBoundary>
+          {createElement(Page, pageProps)}
+        </RouteErrorBoundary>
+      </Suspense>
+    </EditorNavigationBoundary>
   );
 }
 
