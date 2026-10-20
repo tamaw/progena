@@ -11,8 +11,19 @@ class AgentResponse:
     """Normalized non-stream response payload returned from Progenitor."""
 
     response: str
-    reasoning: str | None
-    reasoning_tokens: int | None
+    reasoning: str | None = None
+    reasoning_tokens: int | None = None
+    usage: dict[str, int] | None = None
+
+
+def normalize_token_usage(value: Any) -> dict[str, int] | None:
+    """Return a complete provider usage record only when every count is valid."""
+    if not isinstance(value, dict):
+        return None
+    keys = ("input_tokens", "output_tokens", "total_tokens")
+    if any(type(value.get(key)) is not int or value[key] < 0 for key in keys):
+        return None
+    return {key: value[key] for key in keys}
 
 
 class ResponseInputMessage(BaseModel):

@@ -706,6 +706,49 @@ def test_event_match_distinguishes_booleans_from_numbers():
     assert node.matches({"document_type": "kanban_card", "after": {"flag": True}})
 
 
+def test_acp_task_react_trigger_saves_and_fires_only_for_its_stage_usage_limit():
+    payload = default_workflow_definition()
+    payload["graph"]["nodes"] = {
+        "limited": {
+            "kind": "event",
+            "title": "Build hit usage limit",
+            "document_type": "acp_task",
+            "operations": ["updated"],
+            "changed_fields": ["status"],
+            "match": {
+                "after.request_metadata.stage": "build",
+                "after.status": "failed",
+                "after.failure_kind": "usage_limit",
+            },
+        },
+        "note": {"kind": "format", "title": "Note", "template": "Blocked: {error}"},
+    }
+    payload["graph"]["edges"] = [
+        {"from": {"node": "limited", "port": "after"}, "to": {"node": "note", "port": "error"}}
+    ]
+
+    derived = derive_workflow_port_schemas(payload, _TYPES)
+    validate_workflow_definition_payload(derived)
+
+    trigger = WorkflowNodeEvent.model_validate(derived["graph"]["nodes"]["limited"])
+
+    def event(**after):
+        return {
+            "document_type": "acp_task",
+            "op": "updated",
+            "changed_fields": ["status"],
+            "after": {"status": "failed", **after},
+        }
+
+    build_limit = {"request_metadata": {"stage": "build"}, "failure_kind": "usage_limit"}
+    assert trigger.matches(event(**build_limit))
+    assert not trigger.matches(event(**{**build_limit, "failure_kind": "error"}))
+    assert not trigger.matches(
+        event(request_metadata={"stage": "plan"}, failure_kind="usage_limit")
+    )
+    assert not trigger.matches(event(request_metadata={}, failure_kind="usage_limit"))
+
+
 @pytest.mark.parametrize("filters", [42, {"field": "title"}, [{"field": 1, "op": "eq"}]])
 def test_query_filters_must_be_a_list_of_filter_objects(filters):
     payload = _with_query(default_workflow_definition(), "query", "kanban_card", filters)

@@ -52,28 +52,45 @@ Node kinds:
 - `approval` — pauses for an approve/reject decision. Fields `kind`, `title`, `message`, optional `approver`: `any` (default; you may decide it with `resolve_workflow_approval` when the user asks) or `human` (only a person, in the UI; the tool refuses).
 - To alert the user, use `format` to render any dynamic message and wire its `text` output to a `document_create` node for document type `alert`. Supply title and message; alert defaults supply type `info`, `urgent` false, `requires_response` false, and `viewed` false.
 
-ACP tasks (driving Claude and other ACP agents):
-- Prefer an `agent` or `routine` step whose runner has the `acp_*` tools and
-  `driving-acp-agents` skill. It can use `acp_start`, `acp_status` (with a wait
-  of at most 300 seconds), `acp_answer`, and `acp_send` to drive one interactive
-  session while it owns the work.
-- An `acp_task` document is one agent session run by the backend. Workflows that
-  need durable event-driven orchestration use the generic document nodes; see
-  `/schemas/acp_task.schema.v1.json`.
-  - Start: `document_create(acp_task)` with `agent_name` (e.g. `claude`),
-    `prompt`, and optionally `cwd` (a repo-manager worktree path), `card_id`,
-    and `mode`. It starts `queued`.
-  - To supply a follow-up request, append a pending `messages` entry rather
-    than replacing `prompt`; the supervisor steers a running turn or starts the
-    next idle turn. Write `answers[input_id]` to answer a pending input and
-    `cancel_requested: true` to cancel.
-- The backend sets `status` to `working`, then `completed`, `failed`, `canceled`,
-  or `interrupted`, and records output, progress, turn, history, and stalled.
-  `pending_input` is set when Claude needs a question or plan answer; answer it
-  promptly because Claude remains blocked until it is cleared.
-- Do not wait inside one document-driven run. React in another workflow:
+ACP tasks (driving Claude and other ACP agents) — orchestrate, never babysit:
+- Never start or wait on an ACP agent from an `agent`/`extract` step with
+  `acp_status`. Every poll is a full model turn that resends your whole
+  context, so a 20-minute Claude run costs dozens of large turns. The agent does
+  the work; you only decide at its turn boundaries.
+- An `acp_task` document is one agent session run by the backend; see
+  `/schemas/acp_task.schema.v1.json`. Starting, steering and reacting are plain
+  document nodes, so none of it calls a model.
+- Split each stage into two workflows:
+  1. Kick-off: trigger (e.g. card moved to `build`) → `format` the prompt from
+     the card → `document_create(acp_task)` with `agent_name` (e.g. `claude`),
+     `prompt`, `card_id`, `request_metadata` from a `data` node such as
+     `{"stage": "build"}`, and optionally `cwd` (a repo-manager worktree path)
+     and `mode`. It starts `queued`; the backend runs it. Optionally
+     `document_write` the card (status `running`, the created task `id`).
+  2. React: `event` on `acp_task` with `changed_fields: ["status"]`, one
+     trigger per outcome, each also matching `"after.request_metadata.stage"`
+     so only this stage's tasks (not chat-started ones) fire it. Then
+     `document_read` the card by `after.card_id`:
+     - `"after.status": "completed"`: the agent finished the turn. Its reply is
+       `after.output`. Feed only that (and the card) to one short `extract`
+       step to decide what happens next, or route it without a model.
+     - `"after.status": "failed", "after.failure_kind": "usage_limit"`: the
+       agent's account hit its session/usage/rate limit. Stop: mark the card
+       `blocked` with `after.last_error`; retry only after it resets.
+     - `"after.status": "failed", "after.failure_kind": "error"`: any other
+       failure. Mark the card `failed` with `after.last_error`.
+- Steer: to give the agent its next instruction, `document_write` the task with
+  a new `prompt` and `status: "queued"`. The next turn resumes the same session,
+  and its completion fires the react workflow again. To change course while a
+  turn is still running, append a pending `messages` entry instead (the
+  supervisor injects it into that turn).
+- Questions: `pending_input` is set when the agent needs a question or plan
+  answered; it stays blocked until then. React with
   `{"kind": "event", "document_type": "acp_task", "changed_fields": ["pending_input"]}`
-  handles questions/plans; status and stalled events handle completion and silence.
+  and write `answers[input_id]`; `cancel_requested: true` cancels.
+- The backend sets `status` to `working`, then `completed`, `failed`,
+  `canceled`, or `interrupted`, and records `output`, `last_error`,
+  `failure_kind`, progress, turn, history, and `stalled`.
 
 Set `"notify_on_pause": true` on the workflow to raise an alert whenever a run pauses at an `approval` node or at a routine's `human` step. Pause alerts are under `/alerts/<id>.json` with a `context` saying what is waiting (`workflow_id`/`run_id`, or a routine `thread_id`) and its `approver`. Answer one only when the user asks you to: `resolve_workflow_approval` for approvals, `resume_routine` for routine steps; `approver: "human"` ones must be answered by the user in the UI.
 

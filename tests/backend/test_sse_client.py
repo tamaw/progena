@@ -150,6 +150,12 @@ async def test_send_message_folds_reasoning_and_collects_chunks() -> None:
             "content": "thinking summary",
             "metadata": {"reasoning_tokens": 42},
         },
+        {
+            "type": "stream_event",
+            "event_type": "usage_update",
+            "content": "",
+            "metadata": {"usage": {"input_tokens": 13, "output_tokens": 29, "total_tokens": 42}},
+        },
         {"type": "stream_chunk", "content": "Hello ", "is_final": False},
         {"type": "stream_chunk", "content": "world", "is_final": False},
         {"type": "stream_chunk", "content": "", "is_final": True},
@@ -165,6 +171,7 @@ async def test_send_message_folds_reasoning_and_collects_chunks() -> None:
     assert response.response == "Hello world"
     assert response.reasoning == "thinking summary"
     assert response.reasoning_tokens == 42
+    assert response.usage == {"input_tokens": 13, "output_tokens": 29, "total_tokens": 42}
 
 
 async def test_stream_events_translate_back_to_internal_chunks_and_events() -> None:
