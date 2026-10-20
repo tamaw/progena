@@ -15,6 +15,7 @@
  * below.
  */
 import { createSelector, createSlice } from '@reduxjs/toolkit';
+import { addKeyedStreamFailureLifecycle } from './uiData/async';
 import * as chats from './uiData/chats';
 import * as agents from './uiData/agents';
 import * as tasks from './uiData/tasks';
@@ -133,6 +134,7 @@ const uiDataSlice = createSlice({
     for (const domain of domains) {
       domain.buildExtraReducers?.(builder);
     }
+    addKeyedStreamFailureLifecycle(builder);
   },
 });
 
@@ -220,6 +222,7 @@ export {
   selectTasksState,
   selectTaskContentEntry,
   selectTaskActivityEntry,
+  selectTaskActivityRequest,
 } from './uiData/tasks';
 
 export {
@@ -235,6 +238,9 @@ export {
   selectKnowledgePage,
   selectKnowledgeRevisions,
   selectKnowledgeRevision,
+  selectKnowledgePageRequest,
+  selectKnowledgePageRevisionsRequest,
+  selectKnowledgePageRevisionRequest,
 } from './uiData/knowledge';
 
 export {
@@ -254,6 +260,9 @@ export {
   selectInstruction,
   selectInstructionRevisions,
   selectInstructionRevision,
+  selectInstructionContentRequest,
+  selectInstructionRevisionsRequest,
+  selectInstructionRevisionRequest,
 } from './uiData/instructions';
 
 export {
@@ -268,6 +277,7 @@ export {
   selectMcpServers,
   selectMcpState,
   selectMcpServerDetail,
+  selectMcpServerDetailRequest,
 } from './uiData/mcp';
 
 export {
@@ -312,6 +322,7 @@ export {
   selectWorkflowsState,
   selectWorkflowRuns,
   selectWorkflowDetailByPath,
+  selectWorkflowDetailRequest,
   selectWorkflowLatestRunById,
 } from './uiData/workflows';
 
@@ -337,12 +348,13 @@ export {
   selectCatalogByMarketplace,
   selectMarketplaceCatalog,
   selectPluginSkillContent,
+  selectMarketplaceCatalogRequest,
+  selectPluginSkillContentRequest,
 } from './uiData/marketplaces';
 
 export {
   fetchRepos,
   fetchRepoDetail,
-  createRepo,
   updateRepo,
   deleteRepo,
   fetchRepoUpstream,

@@ -1,6 +1,6 @@
 import { useCallback } from 'react';
 import { useConfig } from '../../context/ConfigContext';
-import { requestAcknowledged } from '../../store/http';
+import { createOperationRequestId, requestAcknowledged } from '../../store/http';
 import { createUuid } from '../../lib/uuid';
 
 /** Widget operations acknowledge immediately; state arrives on /api/ui/stream. */
@@ -21,10 +21,12 @@ export function useWidgetsApi() {
     [getApiUrl],
   );
 
+  // Draft saves pass their own requestId so the save is correlated (and
+  // failed by a disconnect) before the HTTP acknowledgement arrives.
   const updateWidget = useCallback(
-    (widgetId, updates) => requestAcknowledged(
+    (widgetId, updates, { requestId } = {}) => requestAcknowledged(
       `${getApiUrl('widgets')}/${encodeURIComponent(widgetId)}`,
-      { method: 'PATCH', body: updates, requestId: createUuid() },
+      { method: 'PATCH', body: updates, requestId: createOperationRequestId({ requestId }) },
     ),
     [getApiUrl],
   );

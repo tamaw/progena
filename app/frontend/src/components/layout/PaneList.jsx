@@ -1,6 +1,8 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { usePaneCollapse, NARROW_MQ } from './usePaneCollapse';
+import { useMenuDismiss } from '../../hooks/useMenuDismiss';
+
 
 /** Provided by PaneSection; consumed by pane list rows to auto-collapse on selection. */
 const PaneAutoCollapseCtx = createContext(null);
@@ -212,23 +214,7 @@ function PaneListSortMenu({ title, options, value, onSelect }) {
   const items = options.map((option) => (typeof option === 'string' ? { value: option, label: option } : option));
   const current = items.find((item) => item.value === value) || items[0];
 
-  useEffect(() => {
-    if (!open) return undefined;
-    const handlePointer = (event) => {
-      if (wrapRef.current && !wrapRef.current.contains(event.target)) {
-        setOpen(false);
-      }
-    };
-    const handleKey = (event) => {
-      if (event.key === 'Escape') setOpen(false);
-    };
-    document.addEventListener('mousedown', handlePointer);
-    document.addEventListener('keydown', handleKey);
-    return () => {
-      document.removeEventListener('mousedown', handlePointer);
-      document.removeEventListener('keydown', handleKey);
-    };
-  }, [open]);
+  useMenuDismiss(open, wrapRef, () => setOpen(false));
 
   return (
     <div className="sess-sort-wrap" ref={wrapRef}>

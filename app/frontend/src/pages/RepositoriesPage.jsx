@@ -19,10 +19,15 @@ import DetailHeader, {
 } from '../components/layout/DetailHeader';
 import PageShell from '../components/layout/PageShell';
 import DetailPane from '../components/layout/DetailPane';
+import PopupModal from '../components/common/PopupModal';
+import InlineFailure from '../components/common/InlineFailure';
+import useUiAction from '../hooks/useUiAction';
+import useConfirmAction from '../hooks/useConfirmAction';
+import useEntityDraft from '../hooks/useEntityDraft';
+import { entityDraftKey } from '../store/editorDraftsSlice';
 import { useConfig } from '../context/ConfigContext';
 import { selectRealtimeConnected } from '../store/realtimeSlice';
 import {
-  createRepo,
   deleteRepo,
   fetchRepoDetail,
   fetchRepoUpstream,
@@ -35,10 +40,6 @@ import {
 
 const SOURCE_FILTERS = ['All', 'Remote', 'Local', 'Dirty'];
 
-const ACCESS_OPTIONS = [
-  { value: 'read', label: 'Read only' },
-  { value: 'write', label: 'Read / write' },
-];
 
 // A repo's row status is entirely derived from its latest heartbeat scan —
 // there is no PR/CI signal available (that needs a GitHub API integration
@@ -92,65 +93,6 @@ function groupRepositories(rows) {
   }, new Map());
 }
 
-function RepoCreateForm({ onCancel, onCreate, submitting, error }) {
-  const [name, setName] = useState('');
-  const [localPath, setLocalPath] = useState('');
-  const [access, setAccess] = useState('read');
-  const [remoteUrl, setRemoteUrl] = useState('');
-  const [owner, setOwner] = useState('');
-
-  const submit = (event) => {
-    event.preventDefault();
-    onCreate({ name, localPath, access, remoteUrl, owner });
-  };
-
-  return (
-    <form className="repo-create-form" onSubmit={submit}>
-      <label className="repo-create-form__field">
-        <span>Name</span>
-        <input value={name} onChange={(e) => setName(e.target.value)} placeholder="progenitor" required />
-      </label>
-      <label className="repo-create-form__field">
-        <span>Local worktree path</span>
-        <input
-          value={localPath}
-          onChange={(e) => setLocalPath(e.target.value)}
-          placeholder="progenitor"
-          required
-        />
-      </label>
-      <label className="repo-create-form__field">
-        <span>Remote URL (optional)</span>
-        <input
-          value={remoteUrl}
-          onChange={(e) => setRemoteUrl(e.target.value)}
-          placeholder="github.com/tamaw/progenitor"
-        />
-      </label>
-      <label className="repo-create-form__field">
-        <span>Owner (optional)</span>
-        <input value={owner} onChange={(e) => setOwner(e.target.value)} placeholder="Progenitor" />
-      </label>
-      <label className="repo-create-form__field">
-        <span>Access</span>
-        <select value={access} onChange={(e) => setAccess(e.target.value)}>
-          {ACCESS_OPTIONS.map((option) => (
-            <option key={option.value} value={option.value}>{option.label}</option>
-          ))}
-        </select>
-      </label>
-      {error ? <div className="repo-create-form__error">{error}</div> : null}
-      <div className="repo-create-form__actions">
-        <button type="button" className="repo-btn repo-btn--ghost" onClick={onCancel} disabled={submitting}>
-          Cancel
-        </button>
-        <button type="submit" className="repo-btn repo-btn--primary" disabled={submitting}>
-          {submitting ? 'Adding…' : 'Add repository'}
-        </button>
-      </div>
-    </form>
-  );
-}
 
 export default function RepositoriesPage() {
   const dispatch = useDispatch();
@@ -162,20 +104,13 @@ export default function RepositoriesPage() {
 
   const [activeFilter, setActiveFilter] = useState(SOURCE_FILTERS[0]);
   const [query, setQuery] = useState('');
-  const [selectedId, setSelectedId] = useState(null);
-  const [isCreating, setIsCreating] = useState(false);
-  const [createError, setCreateError] = useState(null);
-  const [creating, setCreating] = useState(false);
-  const [fetching, setFetching] = useState(false);
-  const [fetchError, setFetchError] = useState(null);
+  const [selectedId, setSelectedId] = useEntityDraft(entityDraftKey('view', 'repositories', 'selection'), null);
 
-  const { loading } = useSelector(selectReposState);
+  const { loading, error: loadError } = useSelector(selectReposState);
 
   useEffect(() => {
     if (!realtimeConnected) return undefined;
-    dispatch(fetchRepos({ reposUrl })).unwrap().catch(() => {
-      // Failure is surfaced via repos.error in the store; nothing local to reset.
-    });
+    dispatch(fetchRepos({ reposUrl }));
     return undefined;
   }, [dispatch, realtimeConnected, reposUrl]);
 
@@ -195,48 +130,29 @@ export default function RepositoriesPage() {
   const selectedRepoId = selectedRow?.id || null;
 
   const detail = useSelector((state) => selectRepoDetail(state, selectedRepoId));
+  const fetchAction = useUiAction(`repository-fetch:${selectedRepoId || ''}`);
+  const deleteAction = useConfirmAction(`repository-delete:${selectedRepoId || ''}`);
 
   useEffect(() => {
     if (!selectedRepoId) return;
     dispatch(fetchRepoDetail({ reposUrl, repoId: selectedRepoId }));
   }, [dispatch, reposUrl, selectedRepoId]);
 
-  useEffect(() => {
-    setFetchError(null);
-  }, [selectedRepoId]);
+  const openCreateChat = useCallback(() => {
+    window.dispatchEvent(new CustomEvent('progenitor:open-quick-chat', {
+      detail: { mode: 'repository-create' },
+    }));
+  }, []);
 
-  const handleCreate = useCallback(async ({ name, localPath, access, remoteUrl, owner }) => {
-    if (!name.trim() || !localPath.trim()) {
-      setCreateError('Name and local worktree path are required.');
-      return;
-    }
-    setCreating(true);
-    setCreateError(null);
-    try {
-      await dispatch(createRepo({
-        reposUrl,
-        name,
-        localPath,
-        access,
-        remoteUrl,
-        owner,
-      })).unwrap();
-      // The response is just an ack; the created entry arrives on the next
-      // `repositories.snapshot` broadcast, same as every other CRUD flow here.
-      setSelectedId(null);
-      setIsCreating(false);
-    } catch (err) {
-      setCreateError(err?.message || 'Failed to add repository.');
-    } finally {
-      setCreating(false);
-    }
-  }, [dispatch, reposUrl]);
 
   const handleDelete = useCallback(() => {
     if (!selectedRow) return;
-    dispatch(deleteRepo({ reposUrl, repoId: selectedRow.id }));
-    setSelectedId(null);
-  }, [dispatch, reposUrl, selectedRow]);
+    const repo = selectedRow;
+    deleteAction.request('Remove repository', async ({ isCurrent }) => {
+      await dispatch(deleteRepo({ reposUrl, repoId: repo.id })).unwrap();
+      if (isCurrent()) setSelectedId(null);
+    });
+  }, [deleteAction, dispatch, reposUrl, selectedRow, setSelectedId]);
 
   const handleOpen = useCallback(() => {
     if (!selectedRow?.declared?.remote_url) return;
@@ -245,18 +161,10 @@ export default function RepositoriesPage() {
 
   const handleFetch = useCallback(async () => {
     if (!selectedRow?.declared?.remote_url) return;
-    setFetching(true);
-    setFetchError(null);
-    try {
-      await dispatch(fetchRepoUpstream({ reposUrl, repoId: selectedRow.id })).unwrap();
-      // Just an ack; the refreshed branch/upstream state arrives on the next
-      // `repositories.snapshot` + `repo.detail.updated` broadcast.
-    } catch (err) {
-      setFetchError(err?.message || 'Fetch failed.');
-    } finally {
-      setFetching(false);
-    }
-  }, [dispatch, reposUrl, selectedRow]);
+    await fetchAction.run('Fetch repository', async () => dispatch(
+      fetchRepoUpstream({ reposUrl, repoId: selectedRow.id }),
+    ).unwrap());
+  }, [dispatch, fetchAction, reposUrl, selectedRow]);
 
   const status = scanStatus(selectedRow?.scan);
   const declared = selectedRow?.declared || {};
@@ -270,24 +178,24 @@ export default function RepositoriesPage() {
           activeFilter={activeFilter}
           onFilterChange={setActiveFilter}
           actionLabel="+ New"
-          onAction={() => setIsCreating(true)}
+          onAction={openCreateChat}
         />
         <PaneListToolbar>
           <PaneListSearch value={query} placeholder="Search sources" onChange={setQuery} />
         </PaneListToolbar>
 
-        {isCreating ? (
-          <RepoCreateForm
-            onCancel={() => { setIsCreating(false); setCreateError(null); }}
-            onCreate={handleCreate}
-            submitting={creating}
-            error={createError}
+        {loadError ? (
+          <InlineFailure
+            failure={loadError}
+            operation="Load repositories"
+            onRetry={() => dispatch(fetchRepos({ reposUrl }))}
           />
-        ) : loading && rows.length === 0 ? (
+        ) : null}
+        {loading && rows.length === 0 ? (
           <PaneEmptyState>Loading repositories…</PaneEmptyState>
-        ) : rows.length === 0 ? (
+        ) : rows.length === 0 && !loadError ? (
           <PaneEmptyState>No repositories declared.</PaneEmptyState>
-        ) : filteredRows.length === 0 ? (
+        ) : filteredRows.length === 0 && !loadError ? (
           <PaneEmptyState>No repositories match the current filters.</PaneEmptyState>
         ) : (
           <PaneListRows
@@ -326,7 +234,7 @@ export default function RepositoriesPage() {
       <DetailPane className="repositories-main repo-profile">
         {!selectedRow ? (
           <div className="detail-pane__body">
-            <PaneEmptyState>Select a repository, or use + New to add one.</PaneEmptyState>
+            {!loadError ? <PaneEmptyState>Select a repository, or use + New to add one.</PaneEmptyState> : null}
           </div>
         ) : (
           <>
@@ -349,9 +257,16 @@ export default function RepositoriesPage() {
                     ariaLabel="Fetch from remote"
                     variant="primary"
                     onClick={handleFetch}
-                    disabled={!declared.remote_url || fetching}
+                    disabled={!declared.remote_url || fetchAction.busy}
                   />
-                  <DetailHeaderAction icon={<DeleteActionIcon />} label="Remove" tooltip="Remove declared repo" ariaLabel="Remove declared repo" onClick={handleDelete} />
+                  <DetailHeaderAction
+                    icon={<DeleteActionIcon />}
+                    label="Remove"
+                    tooltip="Remove declared repo"
+                    ariaLabel="Remove declared repo"
+                    onClick={handleDelete}
+                    disabled={deleteAction.busy}
+                  />
                 </DetailHeaderActions>
               )}
               meta={[
@@ -359,11 +274,11 @@ export default function RepositoriesPage() {
                 <span key="access" className="muted">{declared.access === 'write' ? 'read · write' : 'read only'}</span>,
                 <span key="commits"><strong>{scan?.commit_count ?? '—'}</strong> commits</span>,
                 <span key="branches"><strong>{scan?.branch_count ?? '—'}</strong> branches</span>,
-                fetchError ? <DetailStatus key="fetch-error" tone="error">{fetchError}</DetailStatus> : null,
               ]}
             />
 
             <div className="repo-profile__body">
+              {fetchAction.error ? <InlineFailure failure={fetchAction.error} operation="Fetch repository" onRetry={handleFetch} /> : null}
               <section className="repo-stat-row" aria-label="Repository metrics">
                 <article className="repo-stat-cell">
                   <div className="repo-stat-cell__label">Commits (30d)</div>
@@ -438,6 +353,19 @@ export default function RepositoriesPage() {
           </>
         )}
       </DetailPane>
+      {deleteAction.open ? (
+        <PopupModal
+          eyebrow="Remove repository"
+          title={`Remove “${declared.name}”?`}
+          message="This removes the repository declaration. It does not delete the local worktree."
+          error={deleteAction.error}
+          confirmLabel="Remove repository"
+          busyLabel="Removing…"
+          onClose={deleteAction.close}
+          onConfirm={deleteAction.confirm}
+          busy={deleteAction.busy}
+        />
+      ) : null}
     </PageShell>
   );
 }

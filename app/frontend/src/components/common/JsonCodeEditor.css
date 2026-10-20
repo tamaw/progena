@@ -1,0 +1,72 @@
+.app-json-editor {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+.app-json-editor__highlight,
+.app-json-editor .app-json-editor__textarea {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  font-family: var(--font-family-mono);
+  font-size: 12px;
+  line-height: 1.5;
+  tab-size: 2;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  overflow: auto;
+}
+
+.app-json-editor__highlight {
+  position: absolute;
+  inset: 0;
+  background: var(--color-bg-primary);
+  pointer-events: none;
+}
+
+.app-json-editor__highlight code.hljs {
+  padding: 0;
+  background: transparent;
+  font: inherit;
+  color: var(--color-text-primary);
+}
+
+.app-json-editor__highlight .hljs-attr,
+.app-json-editor__highlight .hljs-punctuation {
+  color: var(--color-text-primary);
+}
+
+.app-json-editor__highlight .hljs-string {
+  color: var(--color-text-secondary);
+}
+
+.app-json-editor__highlight .hljs-number,
+.app-json-editor__highlight .hljs-literal {
+  color: var(--color-accent);
+}
+
+.app-json-editor__highlight .hljs-keyword {
+  color: inherit;
+}
+
+.app-json-editor .app-json-editor__textarea {
+  position: relative;
+  flex: 1;
+  resize: none;
+  background: transparent;
+  color: transparent;
+  caret-color: var(--color-text-primary);
+}
+
+.app-json-editor .app-json-editor__textarea::selection {
+  background: var(--color-accent-soft);
+}
+
+.app-json-editor__textarea:focus {
+  outline: none;
+  border-color: color-mix(in oklab, var(--color-accent) 45%, var(--color-border));
+  box-shadow: 0 0 0 3px var(--color-accent-soft);
+}

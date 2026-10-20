@@ -4,6 +4,7 @@ import { defineConfig } from 'vitest/config';
 // shim (see vitest.setup.js) — no jsdom needed. Component/e2e layers can add
 // their own environment later.
 export default defineConfig({
+  esbuild: { jsx: 'automatic' },
   test: {
     environment: 'node',
     include: ['src/**/*.test.{js,jsx}'],

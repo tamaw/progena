@@ -1,5 +1,5 @@
-import { useMemo, useRef, useState } from 'react';
-import hljs from 'highlight.js/lib/common';
+import { useState } from 'react';
+import JsonCodeEditor from '../common/JsonCodeEditor';
 
 // Chevrons for the right-edge dock / collapse seam (point toward the action:
 // left = expand the panel leftward, right = collapse it away).
@@ -16,48 +16,6 @@ function ChevronRightSmall() {
     <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
       <path d="m6.2 4.2 3.6 3.8-3.6 3.8" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" />
     </svg>
-  );
-}
-
-// A lightweight JSON editor: an editable textarea overlaid on a highlight.js
-// rendered <pre> so the user gets JSON syntax highlighting while typing. The two
-// layers share identical typography so the caret/text line up; the textarea text
-// is transparent and the highlighted layer shows through. Mirrors the Routines
-// page editor on the Agents canvas.
-export function JsonCodeEditor({ value, onChange }) {
-  const highlightRef = useRef(null);
-  const highlighted = useMemo(() => {
-    try {
-      return hljs.highlight(value, { language: 'json' }).value;
-    } catch {
-      return value;
-    }
-  }, [value]);
-
-  function syncScroll(event) {
-    const target = highlightRef.current;
-    if (target) {
-      target.scrollTop = event.target.scrollTop;
-      target.scrollLeft = event.target.scrollLeft;
-    }
-  }
-
-  return (
-    <div className="canvas-json__code">
-      <pre ref={highlightRef} className="canvas-json__highlight" aria-hidden="true">
-        <code
-          className="hljs language-json"
-          dangerouslySetInnerHTML={{ __html: `${highlighted}\n` }}
-        />
-      </pre>
-      <textarea
-        className="canvas-json__textarea"
-        spellCheck={false}
-        value={value}
-        onChange={onChange}
-        onScroll={syncScroll}
-      />
-    </div>
   );
 }
 

@@ -4,7 +4,7 @@
  * carries scalar fields only (enabled/transport/url/kind) — per-tool schemas
  * and log history are fetched on demand per server via `mcp.server.detail.updated`.
  */
-import { createAcknowledgedThunk, requestAcknowledged, addRequestLifecycle } from './async';
+import { createAcknowledgedThunk, requestAcknowledged, addRequestLifecycle, addKeyedRequestLifecycle, completeKeyedRequest, selectKeyedRequest } from './async';
 import { withQuery } from '../http';
 
 export const initialState = {
@@ -15,6 +15,7 @@ export const initialState = {
     error: null,
     requestId: null,
     detailById: {},
+    detailRequestById: {},
   },
 };
 
@@ -43,14 +44,20 @@ export const eventHandlers = {
   'mcp.server.detail.updated': (state, payload) => {
     if (typeof payload?.id === 'string' && payload.id) {
       state.mcp.detailById[payload.id] = payload;
+      completeKeyedRequest(state.mcp.detailRequestById, payload.id, payload.request_id);
     }
   },
 };
 
 export function buildExtraReducers(builder) {
-  return addRequestLifecycle(builder, fetchMcp, {
+  addRequestLifecycle(builder, fetchMcp, {
     select: (state) => state.mcp,
     errorMessage: 'Failed to load MCP servers',
+  });
+  return addKeyedRequestLifecycle(builder, fetchMcpServerDetail, {
+    selectRequests: (state) => state.mcp.detailRequestById,
+    keyFromArgs: ({ id } = {}) => id,
+    errorMessage: 'Failed to load MCP server detail',
   });
 }
 
@@ -58,4 +65,7 @@ export const selectMcpServers = (state) => state.uiData.mcp.servers;
 export const selectMcpState = (state) => state.uiData.mcp;
 export const selectMcpServerDetail = (state, id) => (
   id ? state.uiData.mcp.detailById[id] || null : null
+);
+export const selectMcpServerDetailRequest = (state, id) => (
+  selectKeyedRequest(state.uiData.mcp.detailRequestById, id)
 );

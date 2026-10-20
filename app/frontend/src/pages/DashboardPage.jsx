@@ -1,6 +1,7 @@
 import { useMemo, useState, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import { useDashboardData } from '../components/dashboard/useDashboardData';
+import InlineFailure from '../components/common/InlineFailure';
 
 const EMPTY_LIST = [];
 
@@ -130,6 +131,7 @@ export default function DashboardPage() {
     connected,
     streamReady,
     collectionState,
+    retryRuns, retrySchedules, retryInbox,
   } = useDashboardData();
 
   const [widgetFilter, setWidgetFilter] = useState('all');
@@ -272,11 +274,10 @@ export default function DashboardPage() {
               </span>
             </div>
             <div className="dashboard-panel__body">
+              <InlineFailure failure={collectionState.runs.error} operation="Load workflow runs" onRetry={retryRuns} />
               {(!collectionState.runs.loaded || collectionState.runs.loading) && !runs.length && !collectionState.runs.error ? (
                 <EmptyState small>Loading workflow runs…</EmptyState>
-              ) : collectionState.runs.error ? (
-                <EmptyState small>Could not load workflow runs</EmptyState>
-              ) : runs.length === 0 ? (
+              ) : runs.length === 0 && collectionState.runs.error ? null : runs.length === 0 ? (
                 <EmptyState small>
                   No recent workflow runs.
                   <br />
@@ -407,11 +408,11 @@ export default function DashboardPage() {
               </span>
             </div>
             <div className="dashboard-panel__body">
+              <InlineFailure failure={collectionState.runs.error} operation="Load workflow reviews" onRetry={retryRuns} />
+              <InlineFailure failure={collectionState.inbox.error} operation="Load review messages" onRetry={retryInbox} />
               {unreadAlerts.length === 0 && pendingReview.length === 0 && pendingApprovals.length === 0 && unavailableResources.length === 0 ? (
-                <EmptyState small>
-                  {collectionState.runs.error || collectionState.inbox.error
-                    ? 'Some review data is unavailable.'
-                    : attentionReady ? 'Nothing needs attention right now' : 'Waiting for review data…'}
+                !collectionState.runs.error && !collectionState.inbox.error && <EmptyState small>
+                  {attentionReady ? 'Nothing needs attention right now' : 'Waiting for review data…'}
                 </EmptyState>
               ) : (
                 <div className="dashboard-attention-group">
@@ -492,11 +493,10 @@ export default function DashboardPage() {
               </span>
             </div>
             <div className="dashboard-panel__body">
+              <InlineFailure failure={collectionState.schedules.error} operation="Load schedules" onRetry={retrySchedules} />
               {(!collectionState.schedules.loaded || collectionState.schedules.loading) && !schedules.length && !collectionState.schedules.error ? (
                 <EmptyState small>Loading schedules…</EmptyState>
-              ) : collectionState.schedules.error ? (
-                <EmptyState small>Could not load schedules</EmptyState>
-              ) : upcomingSchedules.length === 0 ? (
+              ) : upcomingSchedules.length === 0 && collectionState.schedules.error ? null : upcomingSchedules.length === 0 ? (
                 <EmptyState small>
                   {schedules.length ? 'No enabled schedules.' : 'No schedules configured.'}
                   <br />

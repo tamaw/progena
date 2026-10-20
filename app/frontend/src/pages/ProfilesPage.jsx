@@ -11,27 +11,46 @@ import DetailPane from '../components/layout/DetailPane';
 import DetailHeader, {
   DeleteActionIcon, DetailHeaderActions, DetailHeaderAction,
 } from '../components/layout/DetailHeader';
+import Select from '../components/common/Select';
 import PopupModal from '../components/common/PopupModal';
+import InlineFailure from '../components/common/InlineFailure';
+import useConfirmAction from '../hooks/useConfirmAction';
+import useEntityDraft from '../hooks/useEntityDraft';
+import useMissingEntityRoute from '../hooks/useMissingEntityRoute';
 import { useConfig } from '../context/ConfigContext';
 import {
   deleteModelProfile, fetchModelProfiles, patchModelProfile, selectModelProfiles, selectModelProfilesState,
 } from '../store/uiDataSlice';
 import { selectRealtimeStreamReady } from '../store/realtimeSlice';
+import { draftDiscarded, entityDraftKey } from '../store/editorDraftsSlice';
 import { useSnapshotSave } from '../store/uiData/snapshotSave';
 import '../styles/profiles.css';
 
 const FILTERS = ['All', 'Inherited', 'Customized'];
 const EDITABLE_FIELDS = ['deployment', 'reasoning_enabled', 'reasoning_effort', 'reasoning_summary'];
 const providerLabel = (provider) => provider === 'azure_openai' ? 'Azure OpenAI' : provider;
+const REASONING_ENABLED_OPTIONS = [
+  { value: '', label: 'Inherit' },
+  { value: 'true', label: 'Enabled' },
+  { value: 'false', label: 'Disabled' },
+];
+
+const EMPTY_PROFILE_EDIT = Object.freeze({ draft: null, baseline: null, validationError: null });
+const PROFILE_SNAPSHOT_EVENTS = Object.freeze(['profiles.snapshot']);
+
 const isCustomized = (profile) => EDITABLE_FIELDS.slice(1).some((field) => profile[field] != null);
 
 function toDraft(profile) {
   return {
-    deployment: profile.deployment,
+    deployment: profile.deployment ?? '',
     reasoning_enabled: profile.reasoning_enabled == null ? '' : String(profile.reasoning_enabled),
-    reasoning_effort: profile.reasoning_effort || '',
-    reasoning_summary: profile.reasoning_summary || '',
+    reasoning_effort: profile.reasoning_effort ?? '',
+    reasoning_summary: profile.reasoning_summary ?? '',
   };
+}
+
+function toBaseline(profile) {
+  return Object.fromEntries(EDITABLE_FIELDS.map((field) => [field, profile[field]]));
 }
 
 function buildPatch(draft, base) {
@@ -46,80 +65,67 @@ function buildPatch(draft, base) {
     .map((field) => [field, values[field]]));
 }
 
-function ProfileDetails({ profile, profiles, catalogue, url, connected }) {
+function ProfileDetails({ profile, catalogue, url, connected }) {
   const dispatch = useDispatch();
   const navigate = useNavigate();
-  const [draft, setDraft] = useState(null);
-  const [baseline, setBaseline] = useState(null);
-  const [saving, setSaving] = useState(false);
-  const [pendingSave, setPendingSave] = useState(null);
-  const [statusMessage, setStatusMessage] = useState('');
-  const [error, setError] = useState(null);
-  const [deleteConfirmationOpen, setDeleteConfirmationOpen] = useState(false);
-  const [deleteBusy, setDeleteBusy] = useState(false);
-  const [deleteError, setDeleteError] = useState('');
-  const completedRequestId = catalogue.saveRequest.completedRequestId;
-  const ownSnapshot = pendingSave && completedRequestId === pendingSave.requestId;
-  const conflict = Boolean(draft && baseline && !ownSnapshot
+  const profileKey = useMemo(
+    () => entityDraftKey('profile', JSON.stringify([profile.provider, profile.name])),
+    [profile.name, profile.provider],
+  );
+  const [editState, setEditState, draftControls] = useEntityDraft(profileKey, EMPTY_PROFILE_EDIT);
+  const {
+    clear, beginSave, trackSave, failSave, saving, error: saveError,
+  } = draftControls;
+  const draft = editState.draft;
+  const baseline = editState.baseline;
+  const error = saveError || editState.validationError;
+  const deleteAction = useConfirmAction(`profile-delete:${url}:${profile.name}`);
+  const conflict = Boolean(draft && baseline
     && EDITABLE_FIELDS.some((field) => (baseline[field] ?? null) !== (profile[field] ?? null)));
   const startEdit = () => {
-    setBaseline(profile);
-    setDraft(toDraft(profile));
-    setError(null);
-    setStatusMessage('');
+    setEditState({
+      draft: toDraft(profile),
+      baseline: toBaseline(profile),
+      validationError: null,
+    });
   };
-  const closeEdit = useCallback(() => {
-    setDraft(null);
-    setBaseline(null);
-  }, []);
   const cancelEdit = () => {
-    closeEdit();
-    setError(null);
-    setStatusMessage('');
+    clear();
   };
-  const items = useMemo(() => profiles.map((item) => ({
-    path: item.name, content: JSON.stringify(toDraft(item)),
-  })), [profiles]);
-  const buildArgs = useCallback(({ path, content, requestId }) => ({
-    modelProfilesUrl: url, name: path, patch: buildPatch(JSON.parse(content), baseline), requestId,
+  const buildArgs = useCallback(({ path, content }) => ({
+    modelProfilesUrl: url, name: path, patch: buildPatch(JSON.parse(content), baseline),
   }), [url, baseline]);
   const save = useSnapshotSave({
-    items, snapshotRequestId: completedRequestId, pendingSave, dispatch,
-    thunk: patchModelProfile, buildArgs, path: profile.name,
+    dispatch, thunk: patchModelProfile, buildArgs, path: profile.name,
     content: draft ? JSON.stringify(draft) : '',
     savedContent: baseline ? JSON.stringify(toDraft(baseline)) : '',
     saving, realtimeConnected: connected,
-    setDraftContent: closeEdit, setSaving, setPendingSave, setStatusMessage, setError,
+    beginSave, trackSave, failSave, events: PROFILE_SNAPSHOT_EVENTS,
   });
   const handleSave = () => {
     if (!draft || conflict || saving) return;
     if (!draft.deployment.trim()) {
-      setError(new Error('Deployment is required.'));
+      setEditState((current) => ({ ...current, validationError: 'Deployment is required.' }));
       return;
     }
     if (!Object.keys(buildPatch(draft, baseline)).length) {
       cancelEdit();
       return;
     }
-    save();
+    void save();
   };
-  const updateDraft = (field, value) => setDraft((current) => ({ ...current, [field]: value }));
+  const updateDraft = (field, value) => setEditState((current) => ({
+    ...current,
+    draft: { ...current.draft, [field]: value },
+    validationError: null,
+  }));
 
   const handleDelete = () => {
-    setDeleteError('');
-    setDeleteConfirmationOpen(true);
-  };
-  const confirmDelete = async () => {
-    setDeleteBusy(true);
-    try {
+    deleteAction.request('Delete profile', async ({ isCurrent }) => {
       await dispatch(deleteModelProfile({ modelProfilesUrl: url, name: profile.name })).unwrap();
-      setDeleteConfirmationOpen(false);
-      navigate('/profiles', { replace: true });
-    } catch (deleteFailure) {
-      setDeleteError(deleteFailure.message || 'Failed to delete profile.');
-    } finally {
-      setDeleteBusy(false);
-    }
+      dispatch(draftDiscarded(profileKey));
+      if (isCurrent()) navigate('/profiles', { replace: true });
+    });
   };
 
   return (
@@ -137,21 +143,20 @@ function ProfileDetails({ profile, profiles, catalogue, url, connected }) {
             tooltip="Delete profile"
             variant="danger"
             onClick={handleDelete}
-            disabled={saving || !connected || catalogue.loading || Boolean(catalogue.error)}
+            disabled={saving || deleteAction.busy || !connected || catalogue.loading || Boolean(catalogue.error)}
           />
         </DetailHeaderActions>
       )} />
       <div className="detail-pane__body">
-        {error ? <div className="profiles-alert profiles-alert--error" role="alert">{error.message || String(error)}</div> : null}
-        {statusMessage ? <div className="profiles-alert profiles-alert--status" role="status">{statusMessage}</div> : null}
+        {error && !draft ? <InlineFailure failure={error} operation="Save profile" /> : null}
         {conflict ? (
           <div className="profiles-alert profiles-alert--conflict" role="status">
             <span>This profile has been updated remotely. Your draft has been kept.</span>
             <button type="button" className="repo-btn repo-btn--ghost" onClick={startEdit} disabled={saving}>Restart edit</button>
           </div>
         ) : null}
-        <section className="agents-section profiles-section">
-          <header className="agents-section__head profiles-section__head">
+        <section className="agents-section">
+          <header className="agents-section__head">
             <h2>Configuration</h2>
             {draft ? (
               <div className="profiles-section__actions">
@@ -170,9 +175,13 @@ function ProfileDetails({ profile, profiles, catalogue, url, connected }) {
               </label>
               <label className="agents-draft-field profiles-field">
                 <span className="agents-draft-field__label">Reasoning enabled</span>
-                <select value={draft.reasoning_enabled} onChange={(event) => updateDraft('reasoning_enabled', event.target.value)} disabled={saving}>
-                  <option value="">Inherit</option><option value="true">Enabled</option><option value="false">Disabled</option>
-                </select>
+                <Select
+                  value={draft.reasoning_enabled}
+                  onChange={(value) => updateDraft('reasoning_enabled', value)}
+                  options={REASONING_ENABLED_OPTIONS}
+                  ariaLabel="Reasoning enabled"
+                  disabled={saving}
+                />
               </label>
               {['reasoning_effort', 'reasoning_summary'].map((field) => (
                 <label className="agents-draft-field profiles-field" key={field}>
@@ -180,6 +189,7 @@ function ProfileDetails({ profile, profiles, catalogue, url, connected }) {
                   <input type="text" value={draft[field]} onChange={(event) => updateDraft(field, event.target.value)} disabled={saving} placeholder="Inherit" />
                 </label>
               ))}
+              {error ? <InlineFailure failure={error} operation="Save profile" /> : null}
               <p className="profiles-form__hint">{saving ? 'Saving…' : 'Inherit uses runtime environment settings. Clear effort or summary to remove its override.'}</p>
             </form>
           ) : (
@@ -194,16 +204,17 @@ function ProfileDetails({ profile, profiles, catalogue, url, connected }) {
           )}
         </section>
       </div>
-      {deleteConfirmationOpen ? (
+      {deleteAction.open ? (
         <PopupModal
           eyebrow="Delete profile"
           title={`Delete “${profile.name}”?`}
-          message={deleteError || 'This model profile will be permanently deleted.'}
+          message="This model profile will be permanently deleted."
+          error={deleteAction.error}
           confirmLabel="Delete profile"
           busyLabel="Deleting…"
-          onClose={() => setDeleteConfirmationOpen(false)}
-          onConfirm={confirmDelete}
-          busy={deleteBusy}
+          onClose={deleteAction.close}
+          onConfirm={deleteAction.confirm}
+          busy={deleteAction.busy}
         />
       ) : null}
     </>
@@ -222,6 +233,11 @@ export default function ProfilesPage() {
   const [filter, setFilter] = useState('All');
   const [query, setQuery] = useState('');
   const [sort, setSort] = useState('Name');
+  useEffect(() => {
+    if (!connected) return undefined;
+    dispatch(fetchModelProfiles({ modelProfilesUrl: url }));
+    return undefined;
+  }, [connected, dispatch, url]);
   const visible = useMemo(() => profiles.filter((profile) => (
     (filter === 'All' || isCustomized(profile) === (filter === 'Customized'))
     && `${profile.name} ${providerLabel(profile.provider)} ${profile.deployment}`.toLowerCase().includes(query.trim().toLowerCase())
@@ -229,20 +245,21 @@ export default function ProfilesPage() {
   const selected = profiles.find((profile) => profile.name === profileName)
     || (!profileName ? visible[0] || profiles[0] : null);
   useEntityUrlSync('/profiles', selected?.name, selected?.name);
-  useEffect(() => {
-    if (catalogue.loaded && profileName && !profiles.some((profile) => profile.name === profileName)) {
-      navigate('/profiles', { replace: true });
-    }
-  }, [catalogue.loaded, profileName, profiles, navigate]);
+  useMissingEntityRoute({
+    hydrated: catalogue.loaded,
+    entityId: profileName,
+    entities: profiles,
+    getEntityId: (profile) => profile.name,
+    fallbackPath: '/profiles',
+  });
 
   const openCreateProfileChat = useCallback(() => {
     window.dispatchEvent(new CustomEvent('progenitor:open-quick-chat', {
       detail: { mode: 'profile-create' },
     }));
   }, []);
-  const loadingMessage = catalogue.error ? 'Model profiles could not be loaded.'
-    : !connected ? 'Waiting for the live connection…'
-      : !catalogue.loaded ? 'Loading model profiles…' : 'No model profiles configured.';
+  const loadingMessage = !connected ? 'Waiting for the live connection…'
+    : !catalogue.loaded ? 'Loading model profiles…' : 'No model profiles configured.';
 
   return (
     <PageShell className="profiles-page" label="Model profiles">
@@ -260,13 +277,15 @@ export default function ProfilesPage() {
         </PaneListToolbar>
         {!connected ? <div className="profiles-list-notice" role="status">Offline — reconnecting. {catalogue.loaded ? 'Saved configuration remains visible.' : 'Waiting for profile data.'}</div> : null}
         {catalogue.error ? (
-          <div className="profiles-list-notice profiles-alert--error" role="alert">
-            <span>{catalogue.error}</span>
-            <button type="button" className="repo-btn repo-btn--ghost" disabled={!connected || catalogue.loading} onClick={() => dispatch(fetchModelProfiles({ modelProfilesUrl: url }))}>Retry</button>
-          </div>
+          <InlineFailure
+            failure={catalogue.error}
+            operation="Load model profiles"
+            onRetry={() => dispatch(fetchModelProfiles({ modelProfilesUrl: url }))}
+          />
         ) : null}
-        {!profiles.length ? <PaneEmptyState>{loadingMessage}</PaneEmptyState>
-          : !visible.length ? <PaneEmptyState>No model profiles match this view.</PaneEmptyState>
+        {!profiles.length && !catalogue.error ? <PaneEmptyState>{loadingMessage}</PaneEmptyState>
+          : !profiles.length ? null
+            : !visible.length ? <PaneEmptyState>No model profiles match this view.</PaneEmptyState>
             : <PaneListRows items={visible} getItemKey={(profile) => profile.name} renderItem={(profile) => (
               <button type="button" className={`sess-row profiles-pane-row ${selected?.name === profile.name ? 'is-selected' : ''}`}
                 aria-current={selected?.name === profile.name ? 'true' : undefined}
@@ -282,8 +301,8 @@ export default function ProfilesPage() {
         </PaneListFooter>
       </PaneList>
       <DetailPane className="detail-pane--dense profiles-detail" label="Model profile detail">
-        {selected ? <ProfileDetails key={`${url}:${selected.name}`} profile={selected} profiles={profiles} catalogue={catalogue} url={url} connected={connected} />
-          : <div className="detail-pane__body"><PaneEmptyState detail>{catalogue.loaded && !catalogue.error ? 'Select a profile to view its configuration.' : loadingMessage}</PaneEmptyState></div>}
+        {selected ? <ProfileDetails key={`${url}:${selected.name}`} profile={selected} catalogue={catalogue} url={url} connected={connected} />
+          : <div className="detail-pane__body">{!catalogue.error ? <PaneEmptyState detail>{catalogue.loaded ? 'Select a profile to view its configuration.' : loadingMessage}</PaneEmptyState> : null}</div>}
       </DetailPane>
     </PageShell>
   );

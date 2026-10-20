@@ -6,8 +6,10 @@ import { useChatApi } from '../hooks/api/useChatApi';
 import { useConfig } from '../context/ConfigContext';
 import { useNotifications } from '../context/NotificationContext';
 import { useChatStream } from '../hooks/useChatStream';
+import useInlineTitleEditor from '../hooks/useInlineTitleEditor';
+import useUiAction from '../hooks/useUiAction';
 import { useChatSessionPrefs, usePrunedSelection } from '../hooks/useChatSessionPrefs';
-import { subscribeUiEvent } from '../store/realtimeEvents';
+import { reportFailure } from '../lib/failures';
 import { createUuid } from '../lib/uuid';
 import {
   clearChatErrored,
@@ -28,12 +30,15 @@ import {
   selectPreferencesSaveRequest,
   updateChatSessionMetadata,
 } from '../store/uiDataSlice';
+import { subscribeUiEvent } from '../store/realtimeEvents';
 import ChatInput from '../components/chat/ChatInput';
 import { Message } from '../components/chat/Message';
 import { RegenerateDisabledContext } from '../components/chat/RegenerateDisabledContext';
 import QuickActions from '../components/chat/QuickActions';
 import StreamFilterMenu from '../components/chat/StreamFilterMenu';
 import DetailHeader, { DetailHeaderAction, DetailHeaderActions } from '../components/layout/DetailHeader';
+import EditableDetailTitle from '../components/common/EditableDetailTitle';
+import InlineFailure from '../components/common/InlineFailure';
 import {
   PaneCollapseSeam,
   PaneEmptyState,
@@ -291,13 +296,7 @@ const LiveConversationHeader = memo(function LiveConversationHeader({
   updateStreamFilters,
   threadId,
   chatStatus,
-  isEditingTitle,
-  titleInputRef,
-  titleDraft,
-  setTitleDraft,
-  saveTitleEdit,
-  cancelTitleEdit,
-  startTitleEdit,
+  titleEditor,
   chatActions,
   title,
   canRename,
@@ -351,52 +350,14 @@ const LiveConversationHeader = memo(function LiveConversationHeader({
         className="chat-detail-header"
         titleClassName="chat-detail-header__title"
         title={(
-          <>
-            {isEditingTitle ? (
-              <input
-                ref={titleInputRef}
-                type="text"
-                className="chat-page-header__title-input"
-                value={titleDraft}
-                maxLength={120}
-                aria-label="Conversation title"
-                onChange={(event) => setTitleDraft(event.target.value)}
-                onBlur={cancelTitleEdit}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter') {
-                    event.preventDefault();
-                    saveTitleEdit();
-                  } else if (event.key === 'Escape') {
-                    event.preventDefault();
-                    cancelTitleEdit();
-                  }
-                }}
-              />
-            ) : (
-              <span className="chat-detail-header__title-text">
-                {isContentLoading ? '' : isRouteDetailError ? 'Conversation unavailable' : (isEmptyConversationPane ? 'No conversation selected' : title)}
-              </span>
-            )}
-            <button
-              type="button"
-              className="chat-icon-button chat-detail-header__rename"
-              data-tooltip={isEditingTitle ? 'Save conversation name' : 'Rename conversation'}
-              aria-label={isEditingTitle ? 'Save conversation name' : 'Rename conversation'}
-              disabled={!canRename}
-              onMouseDown={isEditingTitle ? (event) => event.preventDefault() : undefined}
-              onClick={isEditingTitle ? saveTitleEdit : startTitleEdit}
-            >
-              {isEditingTitle ? (
-                <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
-                  <path d="M3.25 8.25 6.5 11.5l6.25-6.75" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-                </svg>
-              ) : (
-                <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
-                  <path d="M2 14h3l8-8-3-3-8 8z" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" />
-                </svg>
-              )}
-            </button>
-          </>
+          <EditableDetailTitle
+            title={isContentLoading ? '' : isRouteDetailError ? 'Conversation unavailable' : (isEmptyConversationPane ? 'No conversation selected' : title)}
+            editor={titleEditor}
+            maxLength={120}
+            ariaLabel="Conversation title"
+            entityLabel="conversation"
+            disabled={!canRename}
+          />
         )}
         actions={(
           <DetailHeaderActions menuLabel="Conversation actions">
@@ -427,6 +388,7 @@ const LiveConversationHeader = memo(function LiveConversationHeader({
           threadId ? <span key="id" className="chat-session-id">{threadId}</span> : null,
         ]}
       />
+      {titleEditor.error ? <InlineFailure failure={titleEditor.error} operation="Rename conversation" /> : null}
       {!isContentLoading && !isEmptyConversationPane && showEventFilters && (
         <StreamFilterMenu
           storageKey={streamFiltersStorageKey}
@@ -491,6 +453,62 @@ function ConversationPage() {
   const [threadId, setThreadId] = useState(() => (
     typeof initialQuickChatHandoff?.threadId === 'string' ? initialQuickChatHandoff.threadId : null
   ));
+  const derivedChatTitle = useMemo(() => deriveChatTitle(messages), [messages]);
+  // The open thread's session document, once Postgres has created it. Its title
+  // is authoritative: anyone (the header, a workflow, Progenitor) may rename it.
+  const threadSession = useMemo(
+    () => backendChatSessions.find((session) => session.thread_id === threadId) ?? null,
+    [backendChatSessions, threadId],
+  );
+  const chatTitle = threadSession?.title || derivedChatTitle;
+  const [selectedBackendChatId, setSelectedBackendChatId] = useState(() => urlThreadId || null);
+  // Rename only the session that is both open and selected: opening another chat
+  // changes the selection before its detail replaces `threadId`, and the previous
+  // session's draft, pending rename or failure must not surface under it.
+  const titleScopeKey = threadSession && threadSession.thread_id === selectedBackendChatId
+    ? threadSession.thread_id
+    : null;
+  const titleAction = useUiAction(titleScopeKey);
+  const { run: runTitleAction } = titleAction;
+  const commitTitle = useCallback((nextTitle, { ticket, trackSave, failSave }) => {
+    if (!titleScopeKey) {
+      failSave(ticket, 'Conversation is no longer selected. Please try again.');
+      return Promise.resolve({ ok: false, stale: true });
+    }
+
+    let dispatched = false;
+    return runTitleAction('Rename conversation', async () => {
+      dispatched = true;
+      const operation = dispatch(updateChatSessionMetadata({
+        chatsUrl: getApiUrl('chats'),
+        threadId: titleScopeKey,
+        patch: { title: nextTitle },
+      }));
+      trackSave(ticket, {
+        requestId: operation.requestId,
+        events: ['chat.session.metadata.updated', 'chat.sessions.snapshot'],
+      });
+      try {
+        return await operation.unwrap();
+      } catch (commitError) {
+        // The stale UI-action fence must not leave the originating title
+        // ticket pending after the user moved to another conversation.
+        failSave(ticket, commitError);
+        throw commitError;
+      }
+    }).then((result) => {
+      if (!dispatched && !result.ok) {
+        failSave(ticket, result.error || 'Conversation is no longer selected. Please try again.');
+      }
+      return result;
+    });
+  }, [dispatch, getApiUrl, runTitleAction, titleScopeKey]);
+  const titleEditor = useInlineTitleEditor({
+    kind: 'chat',
+    scopeKey: titleScopeKey,
+    title: chatTitle,
+    onCommit: commitTitle,
+  });
   const [streamFilters, setStreamFilters] = useState(() =>
     loadStreamFilters(config.storage.streamFilters),
   );
@@ -498,15 +516,12 @@ function ConversationPage() {
   const [sidebarFilter, setSidebarFilter] = useState('all');
   const [sidebarQuery, setSidebarQuery] = useState('');
   const [sidebarSort, setSidebarSort] = useState('Recent');
-  const [selectedBackendChatId, setSelectedBackendChatId] = useState(() => urlThreadId || null);
   // The no-route bootstrap creates a fresh draft session asynchronously. Keep
   // initial roster auto-selection behind that bootstrap; otherwise the two
   // mount effects race and the selected chat can oscillate between the draft
   // UUID and the first backend session.
   const [draftBootstrapSettled, setDraftBootstrapSettled] = useState(Boolean(urlThreadId));
   const [foregroundReconciliationIntent, setForegroundReconciliationIntent] = useState(null);
-  const [isEditingTitle, setIsEditingTitle] = useState(false);
-  const [titleDraft, setTitleDraft] = useState('');
   const [composerFocusTick, setComposerFocusTick] = useState(0);
   const messagesContainerRef = useRef(null);
   const isPinnedToBottomRef = useRef(true);
@@ -555,7 +570,6 @@ function ConversationPage() {
   const [loadingOlderMessages, setLoadingOlderMessages] = useState(false);
   const appliedOlderPageRequestIdRef = useRef(null);
   const pendingScrollAdjustmentRef = useRef(null);
-  const titleInputRef = useRef(null);
   // Tracks the requestId of the fetch last applied to local `messages` state.
   // Each dispatch of requestChatSessionDetail carries a fresh requestId
   // (chats.js's active.requestId), so this differs across any two distinct
@@ -687,8 +701,6 @@ function ConversationPage() {
         setMessages([]);
         setOldestMessageCursor(null);
         recentScheduledContent.current.clear();
-        setTitleDraft('');
-        setIsEditingTitle(false);
       }
       materializedDraftThreadIdRef.current = null;
       selectedBackendChatIdRef.current = null;
@@ -708,7 +720,6 @@ function ConversationPage() {
     beginForegroundStream();
     activeStreamIdRef.current = null;
     setIsGenerating(false);
-    setIsEditingTitle(false);
     selectedBackendChatIdRef.current = requestedThreadId;
     setSelectedBackendChatId(requestedThreadId);
     dispatch(clearChatGenerating(requestedThreadId));
@@ -746,14 +757,6 @@ function ConversationPage() {
     return { thread_id: requestedThreadId || createUuid() };
   }, []);
 
-  const derivedChatTitle = useMemo(() => deriveChatTitle(messages), [messages]);
-  // The open thread's session document, once Postgres has created it. Its title
-  // is authoritative: anyone (the header, a workflow, Progenitor) may rename it.
-  const threadSession = useMemo(
-    () => backendChatSessions.find((session) => session.thread_id === threadId) ?? null,
-    [backendChatSessions, threadId],
-  );
-
   useEffect(() => {
     if (!shouldAdoptMaterializedDraft({
       selectedBackendChatId,
@@ -770,7 +773,6 @@ function ConversationPage() {
     selectedBackendChatIdRef.current = threadSession.thread_id;
     setSelectedBackendChatId(threadSession.thread_id);
   }, [selectedBackendChatId, threadId, threadSession]);
-  const chatTitle = threadSession?.title || derivedChatTitle;
 
   const streamEventFilter = useCallback(
     (event) => isEventVisible(event, streamFilters),
@@ -790,42 +792,6 @@ function ConversationPage() {
     [config.storage.streamFilters],
   );
 
-  useEffect(() => {
-    if (!isEditingTitle) {
-      return undefined;
-    }
-    titleInputRef.current?.focus();
-    titleInputRef.current?.select();
-    return undefined;
-  }, [isEditingTitle]);
-
-  const cancelTitleEdit = useCallback(() => {
-    setTitleDraft(chatTitle);
-    setIsEditingTitle(false);
-  }, [chatTitle]);
-
-  const startTitleEdit = useCallback(() => {
-    setTitleDraft(chatTitle);
-    setIsEditingTitle(true);
-  }, [chatTitle]);
-
-  // Renames the session document; the sidebar and header follow its event.
-  const saveTitleEdit = useCallback(async () => {
-    const normalizedTitle = titleDraft.replace(/\s+/g, ' ').trim();
-    setIsEditingTitle(false);
-    if (!normalizedTitle || !threadSession || normalizedTitle === threadSession.title) {
-      return;
-    }
-    try {
-      await dispatch(updateChatSessionMetadata({
-        chatsUrl: getApiUrl('chats'),
-        threadId: threadSession.thread_id,
-        patch: { title: normalizedTitle },
-      })).unwrap();
-    } catch (error) {
-      show('error', 'Rename failed', error.message);
-    }
-  }, [dispatch, getApiUrl, show, threadSession, titleDraft]);
 
   useEffect(() => {
     // A routed detail owns initialization. Do not create an unrelated draft
@@ -941,8 +907,6 @@ function ConversationPage() {
       setMessages(normalizedMessages);
       setIsGenerating(false);
       setLiveAssistantTurn(null);
-      setIsEditingTitle(false);
-      setTitleDraft('');
       if (typeof event.detail?.threadId === 'string') {
         setThreadId(event.detail.threadId);
       }
@@ -1082,8 +1046,6 @@ function ConversationPage() {
     // not here), so drop it rather than let it render under the new chat.
     setLiveAssistantTurn(null);
     setIsClearingSession(false);
-    setTitleDraft(activeBackendChat.title || '');
-    setIsEditingTitle(false);
     setThreadId(nextSessionId);
     lastAppliedBackendChatRequestIdRef.current = activeBackendChatState?.requestId ?? null;
     if (backendMessages.length === 0) {
@@ -1167,7 +1129,7 @@ function ConversationPage() {
         beforeMessageId: oldestMessageCursor,
       })).unwrap();
     } catch (loadError) {
-      show('error', 'Failed to load earlier messages', loadError.message);
+      reportFailure(show, 'Load earlier messages', loadError);
     } finally {
       setLoadingOlderMessages(false);
     }
@@ -1298,7 +1260,11 @@ function ConversationPage() {
         ))
       : null;
     if (!prompt) {
-      current.show('error', 'Regeneration unavailable', 'The original user message is no longer available.');
+      reportFailure(
+        current.show,
+        'Regenerate response',
+        new Error('The original user message is no longer available.'),
+      );
       return false;
     }
     void current.handleSend(prompt.content);
@@ -1329,8 +1295,6 @@ function ConversationPage() {
     setLiveAssistantTurn(null);
     setIsClearingSession(false);
     clearBackendSelection({ clearRoute });
-    setTitleDraft('');
-    setIsEditingTitle(false);
     setThreadId(null);
     localStorage.removeItem(config.storage.chatHistory);
   }, [activeStreamIdRef, clearBackendSelection, config.storage.chatHistory, setIsGenerating, setLiveAssistantTurn]);
@@ -1400,7 +1364,6 @@ function ConversationPage() {
     const session = await acquireDraftChat(forceFreshSession ? null : threadId);
     const draftThreadId = session.thread_id;
 
-    setIsEditingTitle(false);
     // Local draft: switch to it without calling the backend (the session
     // document is created by Postgres once the first message is checkpointed).
     // Register the intent first so the route reconciler doesn't reopen the
@@ -1421,7 +1384,6 @@ function ConversationPage() {
   const startNewChatSession = useCallback(async ({ archive = false } = {}) => {
     // Already on an empty local draft: nothing new to start.
     if (!selectedBackendChatId && threadId && messages.length === 0) {
-      setIsEditingTitle(false);
       focusComposer();
       return;
     }
@@ -1477,12 +1439,11 @@ function ConversationPage() {
       });
       focusComposer();
       if (archiveError) {
-        show('error', 'Archive failed', archiveError.message);
+        reportFailure(show, 'Archive conversation', archiveError);
       }
     } catch (error) {
       setIsGenerating(false);
-      setIsEditingTitle(false);
-      show('error', 'New chat failed', error.message);
+      reportFailure(show, 'Start new conversation', error);
     } finally {
       setIsClearingSession(false);
     }
@@ -1527,8 +1488,8 @@ function ConversationPage() {
     preserveStreamInBackground();
     try {
       await openBackendChat(sessionItem.threadId);
-    } catch (error) {
-      show('error', 'Chat load failed', error.message);
+    } catch {
+      // The active detail retains and renders this load failure in place.
     }
   }, [
     activeBackendChat,
@@ -1537,7 +1498,6 @@ function ConversationPage() {
     openBackendChat,
     preserveStreamInBackground,
     selectionIntentRef,
-    show,
   ]);
 
   const handleCommand = useCallback(async (commandName) => {
@@ -1662,7 +1622,7 @@ function ConversationPage() {
     persist: persistPinnedSessionIds,
     sessionItems,
     show,
-    errorTitle: 'Pinned chats sync failed',
+    operation: 'Update pinned chats',
   });
 
   // On mount, a URL that already names a thread (bookmark, reload, shared
@@ -1756,7 +1716,7 @@ function ConversationPage() {
           patch: { archived: true },
         })).unwrap();
       } catch (error) {
-        show('error', 'Archive failed', error.message);
+        reportFailure(show, 'Archive conversation', error);
         return;
       }
       if (sessionItem.selected) {
@@ -1792,7 +1752,7 @@ function ConversationPage() {
           threadId: sessionItem.threadId,
         })).unwrap();
       } catch (error) {
-        show('error', 'Delete failed', error.message);
+        reportFailure(show, 'Delete conversation', error);
         return;
       }
       if (sessionItem.selected) {
@@ -1996,16 +1956,10 @@ function ConversationPage() {
           updateStreamFilters={updateStreamFilters}
           chatStatus={currentSessionItem?.status || 'idle'}
           threadId={threadId}
-          isEditingTitle={isEditingTitle}
-          titleInputRef={titleInputRef}
-          titleDraft={titleDraft}
-          setTitleDraft={setTitleDraft}
-          saveTitleEdit={saveTitleEdit}
-          cancelTitleEdit={cancelTitleEdit}
-          startTitleEdit={startTitleEdit}
+          titleEditor={titleEditor}
           chatActions={chatActions}
           title={chatTitle}
-          canRename={Boolean(threadSession)}
+          canRename={Boolean(titleScopeKey)}
         />
 
         <div
@@ -2033,10 +1987,15 @@ function ConversationPage() {
           >
             <div className="chat-messages__inner">
               {isRouteDetailError ? (
-                <div className="chat-load-error" role="alert">
-                  <h2>Unable to load conversation</h2>
-                  <p>{chatDetailError}</p>
-                </div>
+                <InlineFailure
+                  failure={chatDetailError}
+                  operation="Load conversation"
+                  onRetry={() => {
+                    if (selectedBackendChatId) {
+                      void openBackendChat(selectedBackendChatId);
+                    }
+                  }}
+                />
               ) : isContentLoading ? (
                 <div className="chat-loading">Loading...</div>
               ) : isEmptyConversationPane ? (

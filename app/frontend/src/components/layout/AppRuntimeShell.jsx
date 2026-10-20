@@ -36,12 +36,17 @@ import { useNotifications } from '../../context/NotificationContext';
 import { playNotificationSound } from '../../lib/notificationSound';
 import { CHAT_STATUS } from '../../lib/chatStatus';
 import { useTheme } from '../../hooks/useTheme';
+import { localDesignLibraryEnabled } from '../../lib/localDesignLibrary';
 import { useChatApi } from '../../hooks/api/useChatApi';
-import { renderMarkdownToHtml } from '../../lib/markdown';
+import { useMenuDismiss } from '../../hooks/useMenuDismiss';
+
+import MarkdownContent from '../common/MarkdownContent';
 import { createUuid } from '../../lib/uuid';
 import ChatInput from '../chat/ChatInput';
 import NotificationContainer from '../common/NotificationContainer';
 import Select from '../common/Select';
+import EventDebugPanel from './EventDebugPanel';
+import ConnectionRecoveryModal from './ConnectionRecoveryModal';
 import {
   createSolutionFromName,
   createProjectFromName,
@@ -97,6 +102,7 @@ import {
 import { derivePageContext, formatPageContextBlock, stripPageContextBlock } from '../../lib/pageContext';
 
 import PopupModal from '../common/PopupModal';
+import Modal from '../common/Modal';
 import { createSpectatorReplayState } from './quickChatStreamModel';
 
 // Grouped by owner/level (see the entity-relationship model):
@@ -176,11 +182,11 @@ const breadcrumbRoutes = [
   ...navItems,
   { to: '/sessions', label: 'Sessions' },
   { to: '/logs', label: 'Logs' },
+  ...(localDesignLibraryEnabled ? [{ to: '/design', label: 'Design library' }] : []),
 ];
 
-// Panels PanelHost actually grants isPinned/onTogglePin to (Settings/Account
-// are modal popups, never pinned) - the only values worth persisting as
-// preferences.pinnedPanel.
+// Only these panels persist as preferences.pinnedPanel. The hidden event
+// debugger may dock for this session, but never restores itself on reload.
 const PINNABLE_PANELS = new Set(['quickChat', 'alerts', 'insights']);
 const SIDEBAR_COLLAPSED_STORAGE_KEY = 'progenitor_sidebar_collapsed';
 const PINNED_PANEL_STORAGE_KEY = 'progenitor_pinned_panel';
@@ -244,12 +250,6 @@ function PanelIconButton({ label, children, onClick, type = 'button', disabled =
       {children}
     </button>
   );
-}
-
-function QuickChatMarkdown({ content }) {
-  const html = useMemo(() => renderMarkdownToHtml(content), [content]);
-  if (!content) return null;
-  return <div className="markdown-content" dangerouslySetInnerHTML={{ __html: html }} />;
 }
 
 function SegmentedControl({ items, value, onChange, ariaLabel, className = '' }) {
@@ -345,6 +345,7 @@ function SidebarCreateModal({
 }) {
   const [name, setName] = useState('');
   const [summary, setSummary] = useState('');
+  const nameInputRef = useRef(null);
   const isSolution = mode === 'solution';
   const title = isSolution ? 'New solution' : `New project in ${solutionName}`;
   const placeholder = isSolution ? 'Solution name' : 'Project name';
@@ -363,8 +364,14 @@ function SidebarCreateModal({
   }, [isSolution, name, onCreateProject, onCreateSolution, summary]);
 
   return (
-    <div className="sidebar-modal-backdrop" role="presentation" onMouseDown={onClose}>
-      <form className="sidebar-modal" aria-label={title} onSubmit={handleSubmit} onMouseDown={(event) => event.stopPropagation()}>
+    <Modal
+      className="sidebar-modal"
+      backdropClassName="sidebar-modal-backdrop"
+      ariaLabel={title}
+      initialFocusRef={nameInputRef}
+      onClose={onClose}
+    >
+      <form onSubmit={handleSubmit}>
         <header className="sidebar-modal__head">
           <div>
             <span className="sidebar-modal__eyebrow">{isSolution ? 'Solution' : 'Project'}</span>
@@ -374,7 +381,7 @@ function SidebarCreateModal({
         </header>
         <label className="sidebar-modal__field">
           <span>{placeholder}</span>
-          <input value={name} onChange={(event) => setName(event.target.value)} autoFocus />
+          <input ref={nameInputRef} value={name} onChange={(event) => setName(event.target.value)} />
         </label>
         {isSolution ? (
           <label className="sidebar-modal__field">
@@ -387,7 +394,7 @@ function SidebarCreateModal({
           <button type="submit" className="task-btn task-btn--primary">{isSolution ? 'Create solution' : 'Create project'}</button>
         </footer>
       </form>
-    </div>
+    </Modal>
   );
 }
 
@@ -398,23 +405,7 @@ function WorkspaceSwitcher() {
   const [hosts, setHosts] = useState(() => getWorkspaceRegistry());
   const rootRef = useRef(null);
 
-  useEffect(() => {
-    if (!isOpen) return undefined;
-    const handlePointer = (event) => {
-      if (rootRef.current && !rootRef.current.contains(event.target)) {
-        setIsOpen(false);
-      }
-    };
-    const handleKey = (event) => {
-      if (event.key === 'Escape') setIsOpen(false);
-    };
-    document.addEventListener('mousedown', handlePointer);
-    document.addEventListener('keydown', handleKey);
-    return () => {
-      document.removeEventListener('mousedown', handlePointer);
-      document.removeEventListener('keydown', handleKey);
-    };
-  }, [isOpen]);
+  useMenuDismiss(isOpen, rootRef, () => setIsOpen(false));
 
   const switchTo = (host) => {
     setIsOpen(false);
@@ -1297,7 +1288,8 @@ function QuickChatPanel({
   }, [pendingComposerDraft, onComposerDraftConsumed]);
 
   const openInChat = useCallback(() => {
-    if (history.length > 0) {
+    const hasQuickChatHandoff = history.length > 0;
+    if (hasQuickChatHandoff) {
       const promotedMessages = history.map((turn, index) => ({
         id: `msg_quick_${Date.now()}_${index}`,
         role: turn.role,
@@ -1325,7 +1317,7 @@ function QuickChatPanel({
     }
     onClose();
     if (!isOnChatPage) {
-      navigate('/chat');
+      navigate('/chat', hasQuickChatHandoff ? { state: { quickChatHandoff: true } } : undefined);
     }
   }, [config.storage.chatHistory, config.storage.quickChatHandoff, history, isOnChatPage, navigate, onClose, scratchThreadId]);
 
@@ -1395,7 +1387,7 @@ function QuickChatPanel({
                   <span className="qchat-typing"><span /><span /><span /></span>
                 </>
               ) : (
-                <QuickChatMarkdown content={turn.content} />
+                <MarkdownContent content={turn.content} hiddenWhenEmpty />
               )}
             </div>
           </article>
@@ -2286,7 +2278,12 @@ function PanelHost({ activePanel, settingsOpen, quickChatConfig, quickChatSubmis
   if (displayed === 'alerts') panelContent = <AlertsPanel onClose={closePanel} {...shared} />;
   if (displayed === 'search') panelContent = <SearchPanel query={searchQuery} onClose={closePanel} {...shared} />;
   if (displayed === 'insights') panelContent = <InsightsPanel onClose={closePanel} {...shared} />;
-  const showScrim = ['alerts', 'quickChat', 'search', 'insights'].includes(displayed);
+  if (displayed === 'events') panelContent = (
+    <TopNavPane title="Event stream" subtitle="Redux UI events · Ctrl/Cmd+Shift+E" onClose={closePanel} bodyClassName="event-debug" {...shared}>
+      <EventDebugPanel />
+    </TopNavPane>
+  );
+  const showScrim = ['alerts', 'quickChat', 'search', 'insights', 'events'].includes(displayed);
   return (
     <>
       {quickChatHost}
@@ -2512,6 +2509,11 @@ function AppRuntimeShell() {
 
   useEffect(() => {
     const handleKeyDown = (event) => {
+      if ((event.metaKey || event.ctrlKey) && event.shiftKey && !event.altKey && event.code === 'KeyE') {
+        event.preventDefault();
+        if (!event.repeat) setActivePanel((current) => (current === 'events' ? null : 'events'));
+        return;
+      }
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
         event.preventDefault();
         setQuickChatConfig(defaultQuickChatConfig);
@@ -2675,6 +2677,7 @@ function AppRuntimeShell() {
         onResetLiveUiState={resetLiveUiState}
       />
       <NotificationContainer />
+      <ConnectionRecoveryModal />
     </div>
   );
 }

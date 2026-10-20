@@ -3,17 +3,22 @@ import {
 } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { useSearchParams } from 'react-router-dom';
-import { useMermaidRender } from '../../hooks/useMermaidRender';
 import { stripYamlFrontmatter } from '../../lib/markdown';
+import MarkdownContent from '../common/MarkdownContent';
+import InlineFailure from '../common/InlineFailure';
 import { renderSafeMarkdown } from '../chat/messageRenderUtils';
+import { useMenuDismiss } from '../../hooks/useMenuDismiss';
 import {
   fetchKnowledgePage,
   fetchKnowledgePageRevision,
   fetchKnowledgePageRevisions,
   fetchKnowledgePages,
   selectKnowledgePage,
+  selectKnowledgePageRequest,
   selectKnowledgePages,
   selectKnowledgeRevision,
+  selectKnowledgePageRevisionRequest,
+  selectKnowledgePageRevisionsRequest,
   selectKnowledgeRevisions,
 } from '../../store/uiDataSlice';
 import {
@@ -47,15 +52,7 @@ function PathIcon({ kind }) {
 function Breadcrumbs({ baseName, tree, selectedPath, onSelect }) {
   const [openDir, setOpenDir] = useState(null);
   const ref = useRef(null);
-  useEffect(() => {
-    if (openDir === null) return undefined;
-    const close = (event) => {
-      if (event.type === 'keydown' ? event.key === 'Escape' : !ref.current?.contains(event.target)) setOpenDir(null);
-    };
-    document.addEventListener('mousedown', close);
-    document.addEventListener('keydown', close);
-    return () => { document.removeEventListener('mousedown', close); document.removeEventListener('keydown', close); };
-  }, [openDir]);
+  useMenuDismiss(openDir !== null, ref, () => setOpenDir(null));
 
   const dirs = dirOf(selectedPath).split('/').filter(Boolean);
   // The root crumb is the base's top folder: icon only, its name is in the header.
@@ -159,9 +156,7 @@ function withReaderLinks(html, path) {
 }
 
 function PageBody({ content, path, onNavigate }) {
-  const html = useMemo(() => withReaderLinks(renderSafeMarkdown(content), path), [content, path]);
-  const containerRef = useRef(null);
-  useMermaidRender(containerRef, content);
+  const transformHtml = useCallback((html) => withReaderLinks(html, path), [path]);
   // Links between pages load in place instead of reloading the app.
   const handleClick = (event) => {
     const anchor = event.target.closest?.('a[href]');
@@ -176,7 +171,15 @@ function PageBody({ content, path, onNavigate }) {
       window.open(href, '_blank', 'noopener,noreferrer');
     }
   };
-  return <div ref={containerRef} className="markdown-content" onClick={handleClick} dangerouslySetInnerHTML={{ __html: html }} />;
+  return (
+    <MarkdownContent
+      content={content}
+      onClick={handleClick}
+      renderMarkdown={renderSafeMarkdown}
+      renderMermaid
+      transformHtml={transformHtml}
+    />
+  );
 }
 
 export default function KnowledgePagesTab({ baseId, baseName, knowledgeUrl }) {
@@ -185,48 +188,52 @@ export default function KnowledgePagesTab({ baseId, baseName, knowledgeUrl }) {
   const pages = useSelector((state) => selectKnowledgePages(state, baseId));
   const selectedPath = params.get('page') || 'index.md';
   const page = useSelector((state) => (selectedPath ? selectKnowledgePage(state, baseId, selectedPath) : null));
+  const pageRequest = useSelector((state) => selectKnowledgePageRequest(state, baseId, selectedPath));
   const tree = useMemo(() => buildPageTree(pages), [pages]);
   const revisions = useSelector((state) => (selectedPath ? selectKnowledgeRevisions(state, baseId, selectedPath) : []));
+  const revisionsRequest = useSelector((state) => selectKnowledgePageRevisionsRequest(state, baseId, selectedPath));
   // The revision being previewed lives in ?revision= so the detail header can show it.
   const viewingRevisionId = params.get('revision');
   const revision = useSelector((state) => (viewingRevisionId ? selectKnowledgeRevision(state, baseId, selectedPath, viewingRevisionId) : null));
+  const revisionRequest = useSelector((state) => selectKnowledgePageRevisionRequest(
+    state, baseId, selectedPath, viewingRevisionId,
+  ));
   const selectedPageMeta = useMemo(() => pages.find((p) => p.path === selectedPath) || null, [pages, selectedPath]);
   const lastFetchedAtRef = useRef(null);
-  // Failed load of the open page (e.g. a link to a missing page), keyed by base and
-  // path. Only the latest request may set or clear it, so a slow response for a
-  // page or base the user already left can't overwrite the current one.
-  const [loadError, setLoadError] = useState(null);
-  const latestLoadRef = useRef(0);
 
   useEffect(() => { dispatch(fetchKnowledgePages({ knowledgeUrl, baseId })); }, [dispatch, knowledgeUrl, baseId]);
 
-  const loadPage = useCallback((path) => {
-    const request = latestLoadRef.current + 1;
-    latestLoadRef.current = request;
-    const key = `${baseId}/${path}`;
-    dispatch(fetchKnowledgePage({ knowledgeUrl, baseId, path })).unwrap()
-      .then(() => { if (latestLoadRef.current === request) setLoadError(null); })
-      .catch((error) => {
-        if (latestLoadRef.current === request) setLoadError({ key, message: error?.message || '' });
-      });
-  }, [dispatch, knowledgeUrl, baseId]);
+  const loadPage = useCallback(
+    (path = selectedPath) => dispatch(fetchKnowledgePage({ knowledgeUrl, baseId, path })),
+    [baseId, dispatch, knowledgeUrl, selectedPath],
+  );
+  const loadRevisions = useCallback(
+    (path = selectedPath) => dispatch(fetchKnowledgePageRevisions({ knowledgeUrl, baseId, path })),
+    [baseId, dispatch, knowledgeUrl, selectedPath],
+  );
+  const loadRevision = useCallback(
+    (revisionId = viewingRevisionId) => dispatch(fetchKnowledgePageRevision({
+      knowledgeUrl, baseId, path: selectedPath, revisionId,
+    })),
+    [baseId, dispatch, knowledgeUrl, selectedPath, viewingRevisionId],
+  );
 
   useEffect(() => {
     if (selectedPath) {
       loadPage(selectedPath);
-      dispatch(fetchKnowledgePageRevisions({ knowledgeUrl, baseId, path: selectedPath }));
+      loadRevisions(selectedPath);
       lastFetchedAtRef.current = null;
     }
-  }, [dispatch, loadPage, knowledgeUrl, baseId, selectedPath]);
+  }, [loadPage, loadRevisions, selectedPath]);
 
   // Refetch the selected page and its revisions when its updated_at in the snapshot changes.
   useEffect(() => {
     if (selectedPath && selectedPageMeta?.updated_at && selectedPageMeta.updated_at !== lastFetchedAtRef.current) {
       lastFetchedAtRef.current = selectedPageMeta.updated_at;
       loadPage(selectedPath);
-      dispatch(fetchKnowledgePageRevisions({ knowledgeUrl, baseId, path: selectedPath }));
+      loadRevisions(selectedPath);
     }
-  }, [dispatch, loadPage, knowledgeUrl, baseId, selectedPath, selectedPageMeta?.updated_at]);
+  }, [loadPage, loadRevisions, selectedPath, selectedPageMeta?.updated_at]);
 
   // A generated index.md isn't a stored page, so it has no updated_at of its own:
   // refetch it whenever the base's pages snapshot changes (any page added,
@@ -242,10 +249,8 @@ export default function KnowledgePagesTab({ baseId, baseName, knowledgeUrl }) {
   }, [loadPage, pagesSignature, selectedPath]);
 
   useEffect(() => {
-    if (viewingRevisionId) {
-      dispatch(fetchKnowledgePageRevision({ knowledgeUrl, baseId, path: selectedPath, revisionId: viewingRevisionId }));
-    }
-  }, [dispatch, knowledgeUrl, baseId, selectedPath, viewingRevisionId]);
+    if (viewingRevisionId) loadRevision(viewingRevisionId);
+  }, [loadRevision, viewingRevisionId]);
 
   const selectPage = (path) => setParams(path === 'index.md' ? {} : { page: path });
   const revisionParams = (revisionId) => {
@@ -261,30 +266,33 @@ export default function KnowledgePagesTab({ baseId, baseName, knowledgeUrl }) {
 
   // The breadcrumb is the page heading, so the rendered body drops its leading H1; stored files keep it.
   const dropTitle = (text) => text.replace(/^\s*# [^\n]*\n*/, '');
-  const displayContent = viewingRevisionId
-    ? (revision === null ? 'Loading…' : dropTitle(stripYamlFrontmatter(revision.content)))
-    : dropTitle(page?.body ?? page?.content ?? '');
+  const isViewingRevision = Boolean(viewingRevisionId);
+  const displayedDocument = isViewingRevision ? revision : page;
+  const displayContent = displayedDocument
+    ? dropTitle(stripYamlFrontmatter(displayedDocument.content ?? displayedDocument.body ?? ''))
+    : '';
   // An open revision shows its own sources, not the current page's.
-  const sources = frontMatterSources(viewingRevisionId ? revision?.front_matter : page?.front_matter);
-  const pageError = loadError?.key === `${baseId}/${selectedPath}` ? loadError.message : null;
+  const sources = frontMatterSources(displayedDocument?.front_matter);
+  const missingPage = !isViewingRevision && !page && !pageRequest.error;
+  const missingRevision = isViewingRevision && !revision && !revisionRequest.error;
 
   return (
     <div className="knowledge-pages-tab">
       <article>
-        {pageError ? (
+        <header className="knowledge-page-header">
+          <Breadcrumbs baseName={baseName || baseId} tree={tree} selectedPath={selectedPath} onSelect={selectPage} />
+        </header>
+        {pageRequest.error ? (
+          <InlineFailure failure={pageRequest.error} operation="Load knowledge page" onRetry={() => loadPage(selectedPath)} />
+        ) : null}
+        {revisionsRequest.error ? (
+          <InlineFailure failure={revisionsRequest.error} operation="Load page revisions" onRetry={() => loadRevisions(selectedPath)} />
+        ) : null}
+        {viewingRevisionId && revisionRequest.error ? (
+          <InlineFailure failure={revisionRequest.error} operation="Load page revision" onRetry={() => loadRevision(viewingRevisionId)} />
+        ) : null}
+        {missingPage || missingRevision ? <p>Loading…</p> : displayedDocument ? (
           <>
-            <header className="knowledge-page-header">
-              <Breadcrumbs baseName={baseName || baseId} tree={tree} selectedPath={selectedPath} onSelect={selectPage} />
-            </header>
-            <p className="knowledge-page-missing" role="alert">
-              {/not found/i.test(pageError) ? 'Page not found.' : pageError}
-            </p>
-          </>
-        ) : !page ? <p>Loading…</p> : (
-          <>
-            <header className="knowledge-page-header">
-              <Breadcrumbs baseName={baseName || baseId} tree={tree} selectedPath={selectedPath} onSelect={selectPage} />
-            </header>
             <PageBody content={displayContent} path={selectedPath} onNavigate={selectPage} />
             {sources.length > 0 && (
               <section className="knowledge-page-sources">
@@ -319,7 +327,7 @@ export default function KnowledgePagesTab({ baseId, baseName, knowledgeUrl }) {
               </section>
             )}
           </>
-        )}
+        ) : null}
       </article>
     </div>
   );

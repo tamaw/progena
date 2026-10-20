@@ -1,6 +1,8 @@
-import { createSlice } from '@reduxjs/toolkit';
+import { createSlice, original } from '@reduxjs/toolkit';
 
 const MAX_RECEIVED_EVENTS_PER_REQUEST = 100;
+const MAX_EVENT_QUEUE = 500;
+const MAX_RECEIVED_IDS = 300;
 
 
 const initialState = {
@@ -90,7 +92,8 @@ const realtimeSlice = createSlice({
     },
     uiEventReceived(state, action) {
       const event = action.payload;
-      if (!isUiEventEnvelope(event) || state.receivedIds.includes(event.id)) {
+      const knownIds = original(state.receivedIds);
+      if (!isUiEventEnvelope(event) || knownIds.includes(event.id)) {
         return;
       }
       state.lastEventId = event.id;
@@ -98,15 +101,12 @@ const realtimeSlice = createSlice({
       if (event.type !== 'connection.heartbeat' && event.type !== 'status.heartbeat') {
         state.lastEvent = event;
       }
-      state.receivedIds.push(event.id);
+      state.receivedIds = [...knownIds.slice(-(MAX_RECEIVED_IDS - 1)), event.id];
       state.eventSequence += 1;
-      state.eventQueue.push({ sequence: state.eventSequence, event });
-      if (state.eventQueue.length > 500) {
-        state.eventQueue.splice(0, state.eventQueue.length - 500);
-      }
-      if (state.receivedIds.length > 300) {
-        state.receivedIds.splice(0, state.receivedIds.length - 300);
-      }
+      const entry = { sequence: state.eventSequence, event };
+      // Rebuild from the frozen base: splicing the draft makes Immer proxy all
+      // 500 retained entries on every event once the buffer is full.
+      state.eventQueue = [...original(state.eventQueue).slice(-(MAX_EVENT_QUEUE - 1)), entry];
       // Keep a bounded request-correlated record even when an event wins the
       // race with its 202 acknowledgement. The acknowledgement is reconciled
       // against this record by registerPendingOp.

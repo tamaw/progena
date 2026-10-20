@@ -210,7 +210,7 @@ body,
   background: var(--color-bg-tertiary);
   border-color: var(--color-border);
   border-radius: 4px;
-  box-shadow: inset 0 -1px 0 color-mix(in srgb, var(--color-border-strong) 45%, transparent);
+  box-shadow: inset 0 -1px 0 color-mix(in srgb, var(--color-border-light) 45%, transparent);
   font-size: 10px;
   line-height: 1.35;
   text-align: center;
@@ -2830,7 +2830,7 @@ body,
   justify-content: space-between;
   width: 100%;
   padding: 5px 8px;
-  color: var(--color-text);
+  color: var(--color-text-primary);
   background: transparent;
   border: 0;
   border-radius: 5px;
@@ -3942,6 +3942,20 @@ body,
   transform: translateX(16px);
 }
 
+.set-switch:has(input:focus-visible) {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 3px;
+}
+
+.set-switch:has(input:disabled),
+.set-switch input:disabled {
+  cursor: not-allowed;
+}
+
+.set-switch:has(input:disabled) {
+  opacity: 0.6;
+}
+
 .set-slider {
   width: 200px;
   height: 4px;
@@ -4255,7 +4269,7 @@ body,
 .repo-btn:hover {
   color: var(--color-text-primary);
   background: var(--color-bg-hover);
-  border-color: var(--color-border-strong);
+  border-color: var(--color-border-light);
 }
 
 .repo-btn--primary {
@@ -4274,56 +4288,6 @@ body,
 .repo-btn--ghost {
   background: transparent;
   border-color: transparent;
-}
-
-.repo-create-form {
-  display: grid;
-  gap: 10px;
-  padding: 14px;
-  margin: 0 10px 10px;
-  background: var(--color-bg-secondary);
-  border: 1px solid var(--color-border);
-  border-radius: 8px;
-}
-
-.repo-create-form__field {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  font-size: 12px;
-}
-
-.repo-create-form__field span {
-  color: var(--color-text-muted);
-  font-size: 11px;
-  font-weight: 600;
-}
-
-.repo-create-form__field input,
-.repo-create-form__field select {
-  padding: 7px 9px;
-  color: var(--color-text-primary);
-  background: var(--color-bg-primary);
-  border: 1px solid var(--color-border);
-  border-radius: 6px;
-  font-size: 12.5px;
-}
-
-.repo-create-form__field input:focus,
-.repo-create-form__field select:focus {
-  outline: none;
-  border-color: var(--color-accent);
-}
-
-.repo-create-form__error {
-  color: var(--color-error);
-  font-size: 11.5px;
-}
-
-.repo-create-form__actions {
-  display: flex;
-  gap: 8px;
-  justify-content: flex-end;
 }
 
 .repo-profile__body {
@@ -4606,36 +4570,6 @@ body,
   margin-bottom: 22px;
 }
 
-.tools-metric-card {
-  min-width: 0;
-  padding: 13px 14px;
-  background: var(--color-bg-secondary);
-  border: 1px solid var(--color-border);
-  border-radius: 8px;
-}
-
-.tools-metric-card span,
-.tools-metric-card small {
-  display: block;
-  color: var(--color-text-muted);
-  font-size: 11px;
-}
-
-.tools-metric-card span {
-  font-weight: 700;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
-}
-
-.tools-metric-card strong {
-  display: block;
-  margin: 8px 0 5px;
-  color: var(--color-text-primary);
-  font-size: 22px;
-  line-height: 1;
-  letter-spacing: -0.02em;
-}
-
 .tools-section {
   margin-bottom: 22px;
 }
@@ -4718,7 +4652,7 @@ body,
 
 .tools-tool-row {
   display: grid;
-  grid-template-columns: 24px minmax(0, 1fr) auto 28px;
+  grid-template-columns: 24px minmax(0, 1fr) auto 36px;
   gap: 10px;
   align-items: center;
   min-width: 0;
@@ -4771,45 +4705,8 @@ body,
   white-space: nowrap;
 }
 
-.tools-toggle {
-  position: relative;
-  width: 28px;
-  height: 17px;
-  padding: 0;
-  background: var(--color-bg-tertiary);
-  border: 1px solid var(--color-border);
-  border-radius: 999px;
-  cursor: pointer;
-}
-
-.tools-toggle span {
-  position: absolute;
-  top: 2px;
-  left: 2px;
-  width: 11px;
-  height: 11px;
-  background: var(--color-text-muted);
-  border-radius: 50%;
-  transition: transform 120ms ease, background-color 120ms ease;
-}
-
-.tools-toggle.is-on {
-  background: var(--color-accent);
-  border-color: var(--color-accent);
-}
-
-.tools-toggle.is-on span {
-  background: #fff;
-  transform: translateX(11px);
-}
-
-.tools-toggle:disabled {
-  cursor: progress;
-  opacity: 0.6;
-}
-
 /* Keep the per-tool toggle pinned to the card's reserved right-hand column. */
-.tools-tool-row > .tools-toggle {
+.tools-tool-row > .set-switch {
   grid-column: 4;
 }
 
@@ -5423,63 +5320,6 @@ body,
   color: var(--color-text-primary);
 }
 
-/* JSON editor: a transparent <textarea> stacked over a highlight.js <pre> so the
-   syntax-highlighted layer shows through while the user types. Both layers must
-   share identical box metrics for the caret to line up. */
-.agents-graph-editor__code {
-  position: relative;
-  flex: 1;
-  min-height: 0;
-  display: flex;
-}
-
-.agents-graph-editor__highlight,
-.agents-graph-editor__code .agents-graph-editor__textarea {
-  margin: 0;
-  padding: 10px 12px;
-  border: 1px solid var(--color-border);
-  border-radius: 8px;
-  font-family: var(--font-family-mono);
-  font-size: 12px;
-  line-height: 1.5;
-  tab-size: 2;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  overflow: auto;
-}
-
-.agents-graph-editor__highlight {
-  position: absolute;
-  inset: 0;
-  background: var(--color-bg-primary);
-  pointer-events: none;
-}
-
-.agents-graph-editor__highlight code.hljs {
-  padding: 0;
-  background: transparent;
-  font: inherit;
-}
-
-.agents-graph-editor__code .agents-graph-editor__textarea {
-  position: relative;
-  flex: 1;
-  resize: none;
-  background: transparent;
-  color: transparent;
-  caret-color: var(--color-text-primary);
-}
-
-.agents-graph-editor__code .agents-graph-editor__textarea::selection {
-  background: var(--color-accent-soft);
-}
-
-.agents-graph-editor__textarea:focus {
-  outline: none;
-  border-color: color-mix(in oklab, var(--color-accent) 45%, var(--color-border));
-  box-shadow: 0 0 0 3px var(--color-accent-soft);
-}
-
 .agents-graph-editor__error {
   margin: 0;
   color: var(--color-error, #ef4444);
@@ -5773,6 +5613,10 @@ body,
   display: flex;
   flex-direction: column;
   gap: 10px;
+}
+
+.agents-card-facts,
+.agents-section__body {
   padding: 14px 16px;
   background: var(--color-bg-secondary);
   border: 1px solid var(--color-border);
@@ -5898,10 +5742,6 @@ body,
 
 .agents-section {
   margin-bottom: 22px;
-  padding: 14px 16px;
-  background: var(--color-bg-secondary);
-  border: 1px solid var(--color-border);
-  border-radius: 8px;
 }
 
 .agents-section__head {
@@ -5934,23 +5774,6 @@ body,
   gap: 5px;
 }
 
-/* On the Agents/Routines detail pane, drop the outer .agents-section card
-   chrome so each section's heading sits as plain text above its content --
-   the content itself (.agents-card-facts, .agents-prompt, individual
-   .agents-skill-card/.agents-chip rows) already carries its own box, so no
-   double border remains. Scoped to .agents-detail: .agents-section is a
-   shared class also used unboxed-header-inside on Channels/Knowledge/
-   Models/Tasks, which keep their current look. */
-.agents-detail .agents-section {
-  padding: 0;
-  background: transparent;
-  border: none;
-  border-radius: 0;
-}
-
-.agents-detail .agents-section__head {
-  margin-bottom: 10px;
-}
 
 .agents-prompt {
   max-height: 220px;
@@ -6320,7 +6143,8 @@ body,
 /* Step content inputs. */
 .agents-graph-node__prompt,
 .agents-graph-node__toolinput,
-.agents-graph-parameters__input {
+.agents-graph-parameters__input,
+.agents-graph-parameters__select .app-listbox__trigger {
   width: 100%;
   padding: 6px 8px;
   color: var(--color-text-secondary);
@@ -6330,6 +6154,10 @@ body,
   font-family: var(--font-family-mono);
   font-size: 12px;
   line-height: 1.4;
+}
+
+.agents-graph-parameters__select {
+  width: 100%;
 }
 
 .agents-graph-node__prompt {
@@ -6354,14 +6182,15 @@ body,
 
 /* Not inside a .canvas-node, so no --node-color custom property to key off
    -- use the plain accent color like every other non-canvas form control. */
-.agents-graph-parameters__input:focus {
+.agents-graph-parameters__input:focus,
+.agents-graph-parameters__select .app-listbox__trigger:focus-visible {
   outline: none;
   border-color: color-mix(in oklab, var(--color-accent) 45%, var(--color-border));
   box-shadow: 0 0 0 3px var(--color-accent-soft);
 }
 
 /* Expression field: a transparent <textarea> over a highlight.js <pre>, same
-   technique as .agents-graph-editor__code, sized to match
+   technique as JsonCodeEditor, sized to match
    .agents-graph-node__prompt's box metrics so it drops into the same layout. */
 .agents-graph-node__expr {
   position: relative;
@@ -7093,7 +6922,7 @@ body,
   background: var(--color-bg-primary);
   border: 1px solid var(--color-border);
   border-radius: 6px;
-  font-family: var(--font-mono, monospace);
+  font-family: var(--font-family-mono);
   font-size: 11px;
   white-space: pre-wrap;
   word-break: break-word;
@@ -8677,6 +8506,11 @@ body,
 
   .tools-tool-row__icon {
     display: none;
+  }
+
+  .tools-tool-row > .set-switch {
+    grid-column: 2;
+    grid-row: 1;
   }
 
   .agents-connection-row__icon,
