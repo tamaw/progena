@@ -4810,6 +4810,8 @@ body,
 .structured-document-body {
   width: 100%;
   min-width: 0;
+  font-size: var(--font-size-doc);
+  line-height: 1.6;
 }
 
 .structured-document-body > .markdown-content:first-child > :first-child {
@@ -4846,6 +4848,32 @@ body,
 
 .inbox-section.is-selected > .inbox-section__content {
   border-left-color: var(--color-accent, var(--color-text-primary));
+}
+
+/* No title row: float the toolbar over the corner instead of reserving a
+   30px empty strip above the text. */
+.inbox-section--default {
+  position: relative;
+}
+
+.inbox-section--default .inbox-section__select--hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.inbox-section--default > .inbox-section__head {
+  position: absolute;
+  top: 0;
+  right: 0;
+  z-index: 1;
+  min-height: 0;
+  justify-content: flex-end;
 }
 
 .inbox-section__head {
