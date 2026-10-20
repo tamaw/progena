@@ -1095,7 +1095,7 @@ class LLMClient:
         action_results: list[dict[str, Any]] | None = None,
     ) -> str:
         """Generate a response to the user."""
-        system_prompt = self.prompts.get_genesis_prompt()
+        system_prompt = self.prompts.get_system_prompt()
         messages = conversation_history[-20:]
 
         if action_results:

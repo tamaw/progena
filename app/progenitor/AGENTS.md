@@ -172,7 +172,7 @@ graph = await create_conversation_graph(config=config, state_manager=state_manag
 background = create_heartbeat_graph(state_manager=state_manager)
 
 # Direct instruction loading (Postgres-backed; render_instruction drops the front matter)
-prompt = render_instruction(await state_manager.get_content_document("instruction", "progenitor/genesis.md"))
+prompt = render_instruction(await state_manager.get_content_document("instruction", "progenitor/SYSTEM.md"))
 ```
 
 #### Secret Redaction

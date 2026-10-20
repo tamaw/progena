@@ -17,7 +17,7 @@ from app.backend.document_store import (
     set_default_document_store,
 )
 
-GENESIS = "---\ntitle: System\ndescription: Main prompt\n---\nYou are Progenitor.\n"
+SYSTEM_PROMPT = "---\ntitle: System\ndescription: Main prompt\n---\nYou are Progenitor.\n"
 DISCOVERY = "---\ntitle: Discovery\ndescription: Analyse folders\n---\nAnalyse {folders}.\n"
 CARD = "---\ntitle: Card\ninputs:\n  card: kanban_card\n---\nSummarise {card.title}.\n"
 THINK = "---\ntitle: Think\ndescription: Approaches\n---\nThink hard.\n"
@@ -29,7 +29,7 @@ def harness(monkeypatch):
     set_default_document_store(store)
     seed_document_types(store)
     for path, content in (
-        ("progenitor/genesis.md", GENESIS),
+        ("progenitor/SYSTEM.md", SYSTEM_PROMPT),
         ("progenitor/discovery.md", DISCOVERY),
         ("builder_agent/think.md", THINK),
         ("workflows/card.md", CARD),
@@ -69,7 +69,7 @@ def test_list_reports_front_matter_and_which_instructions_are_editable(harness):
     assert listed["progenitor/discovery.md"]["title"] == "Discovery"
     assert listed["progenitor/discovery.md"]["placeholders"] == ["folders"]
     assert listed["workflows/card.md"]["editable"] is True
-    assert listed["progenitor/genesis.md"]["editable"] is True
+    assert listed["progenitor/SYSTEM.md"]["editable"] is True
     assert listed["builder_agent/think.md"]["editable"] is False
     assert listed["builder_agent/think.md"]["group"] == "builder_agent"
 
@@ -77,39 +77,39 @@ def test_list_reports_front_matter_and_which_instructions_are_editable(harness):
 def test_read_returns_body_without_front_matter(harness):
     client, _, events = harness
     assert_acknowledged(
-        client.get("/api/ui/instructions/content", params={"path": "progenitor/genesis.md"}),
+        client.get("/api/ui/instructions/content", params={"path": "progenitor/SYSTEM.md"}),
         ["instruction.loaded"],
     )
     loaded = _last(events, "instruction.loaded")
-    assert loaded["content"] == GENESIS
+    assert loaded["content"] == SYSTEM_PROMPT
     assert loaded["body"] == "You are Progenitor.\n"
     assert client.get("/api/ui/instructions/content", params={"path": "x/y.md"}).status_code == 404
 
 
 def test_edit_saves_a_runtime_instruction(harness):
     client, store, _ = harness
-    edited = GENESIS.replace("You are", "You remain")
+    edited = SYSTEM_PROMPT.replace("You are", "You remain")
     response = client.put(
-        "/api/ui/instructions/content", json={"path": "progenitor/genesis.md", "content": edited}
+        "/api/ui/instructions/content", json={"path": "progenitor/SYSTEM.md", "content": edited}
     )
     assert_acknowledged(response, ["instruction.loaded", "instructions.snapshot"])
-    assert _stored(store, "progenitor/genesis.md") == edited
+    assert _stored(store, "progenitor/SYSTEM.md") == edited
 
 
 @pytest.mark.parametrize(
     ("path", "content", "status"),
     [
         ("builder_agent/think.md", THINK.replace("hard", "soft"), 403),
-        ("progenitor/genesis.md", "---\nunknown: 1\n---\nYou are Progenitor.\n", 400),
+        ("progenitor/SYSTEM.md", "---\nunknown: 1\n---\nYou are Progenitor.\n", 400),
         ("progenitor/discovery.md", DISCOVERY.replace("{folders}", "the folders"), 400),
         ("progenitor/discovery.md", DISCOVERY.replace("{folders}", "{dirs}"), 400),
-        ("progenitor/missing.md", GENESIS, 404),
+        ("progenitor/missing.md", SYSTEM_PROMPT, 404),
     ],
     ids=["bundled", "unknown-key", "placeholder-dropped", "placeholder-renamed", "missing"],
 )
 def test_rejected_edits_leave_the_instruction_unchanged(harness, path, content, status):
     client, store, _ = harness
-    before = {p: _stored(store, p) for p in ("progenitor/genesis.md", "progenitor/discovery.md")}
+    before = {p: _stored(store, p) for p in ("progenitor/SYSTEM.md", "progenitor/discovery.md")}
     response = client.put("/api/ui/instructions/content", json={"path": path, "content": content})
     assert response.status_code == status
     assert {p: _stored(store, p) for p in before} == before
@@ -117,13 +117,13 @@ def test_rejected_edits_leave_the_instruction_unchanged(harness, path, content, 
 
 def test_revisions_mark_the_live_one_and_restore_brings_back_old_content(harness):
     client, store, events = harness
-    edited = GENESIS.replace("You are", "You remain")
+    edited = SYSTEM_PROMPT.replace("You are", "You remain")
     client.put(
-        "/api/ui/instructions/content", json={"path": "progenitor/genesis.md", "content": edited}
+        "/api/ui/instructions/content", json={"path": "progenitor/SYSTEM.md", "content": edited}
     )
 
     assert_acknowledged(
-        client.get("/api/ui/instructions/revisions", params={"path": "progenitor/genesis.md"}),
+        client.get("/api/ui/instructions/revisions", params={"path": "progenitor/SYSTEM.md"}),
         ["instruction.revisions.loaded"],
     )
     revisions = _last(events, "instruction.revisions.loaded")["revisions"]
@@ -132,24 +132,24 @@ def test_revisions_mark_the_live_one_and_restore_brings_back_old_content(harness
 
     client.get(
         f"/api/ui/instructions/revisions/{original['revision_id']}",
-        params={"path": "progenitor/genesis.md"},
+        params={"path": "progenitor/SYSTEM.md"},
     )
-    assert _last(events, "instruction.revision.loaded")["content"] == GENESIS
+    assert _last(events, "instruction.revision.loaded")["content"] == SYSTEM_PROMPT
 
     assert_acknowledged(
         client.post(
             f"/api/ui/instructions/revisions/{original['revision_id']}/restore",
-            params={"path": "progenitor/genesis.md"},
+            params={"path": "progenitor/SYSTEM.md"},
         ),
         ["instruction.loaded", "instructions.snapshot"],
     )
-    assert _stored(store, "progenitor/genesis.md") == GENESIS
+    assert _stored(store, "progenitor/SYSTEM.md") == SYSTEM_PROMPT
 
 
 def test_unknown_revision_is_404(harness):
     client, _, _ = harness
     response = client.get(
-        "/api/ui/instructions/revisions/nope", params={"path": "progenitor/genesis.md"}
+        "/api/ui/instructions/revisions/nope", params={"path": "progenitor/SYSTEM.md"}
     )
     assert response.status_code == 404
 

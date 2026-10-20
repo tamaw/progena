@@ -2,8 +2,8 @@
 
 from .documents import (
     BUNDLED_INSTRUCTION_GROUPS,
-    GENESIS_INSTRUCTION,
     RUNTIME_INSTRUCTION_GROUP,
+    SYSTEM_INSTRUCTION,
     check_instruction_write,
     instruction_group,
     is_bundled_instruction,
@@ -22,9 +22,9 @@ __all__ = [
     "BUNDLED_INSTRUCTION_GROUPS",
     "DEFAULT_DATA_DIR",
     "DEFAULT_INSTRUCTIONS_DIR",
-    "GENESIS_INSTRUCTION",
     "PROJECT_ROOT",
     "RUNTIME_INSTRUCTION_GROUP",
+    "SYSTEM_INSTRUCTION",
     "check_instruction_write",
     "instruction_group",
     "is_bundled_instruction",

@@ -184,22 +184,22 @@ class TestBackendFactory:
 
         self._patch_runtime_free_state_backend(monkeypatch)
         state_manager = FakeContentStateManager()
-        state_manager._docs["instruction"]["progenitor/genesis.md"] = "# Genesis\n"
+        state_manager._docs["instruction"]["progenitor/SYSTEM.md"] = "# System\n"
 
         backend = create_progenitor_backend(project_root=".", state_manager=state_manager)
 
-        instruction_read = await backend.aread("/instructions/progenitor/genesis.md")
+        instruction_read = await backend.aread("/instructions/progenitor/SYSTEM.md")
         assert instruction_read.error is None
-        assert instruction_read.file_data["content"] == "# Genesis\n"
+        assert instruction_read.file_data["content"] == "# System\n"
 
         assert isinstance(backend.routes["/instructions/"], InstructionDocumentDirectoryBackend)
 
-        valid = await backend.awrite("/instructions/progenitor/genesis.md", "# Updated\n")
+        valid = await backend.awrite("/instructions/progenitor/SYSTEM.md", "# Updated\n")
         assert valid.error is None
-        assert state_manager._docs["instruction"]["progenitor/genesis.md"] == "# Updated\n"
+        assert state_manager._docs["instruction"]["progenitor/SYSTEM.md"] == "# Updated\n"
 
         invalid = await backend.awrite(
-            "/instructions/progenitor/genesis.md",
+            "/instructions/progenitor/SYSTEM.md",
             "---\nunknown_key: 1\n---\n# Body\n",
         )
         assert invalid.error is not None

@@ -44,7 +44,7 @@ def test_default_directory_is_the_checked_in_one(monkeypatch):
     monkeypatch.delenv("PROGENITOR_DATA_DIR", raising=False)
     instructions_dir = resolve_instructions_dir()
     assert instructions_dir == DEFAULT_INSTRUCTIONS_DIR
-    assert (instructions_dir / "progenitor" / "genesis.md").exists()
+    assert (instructions_dir / "progenitor" / "SYSTEM.md").exists()
 
 
 def test_invalid_data_dir_env_raises(monkeypatch, tmp_path):
@@ -69,8 +69,8 @@ def test_render_drops_front_matter_and_fills_variables():
 @pytest.mark.parametrize(
     ("path", "content", "error"),
     [
-        ("progenitor/genesis.md", "Hello {other}.\n", "{name}"),
-        ("progenitor/genesis.md", "Hello.\n", "{name}"),
+        ("progenitor/SYSTEM.md", "Hello {other}.\n", "{name}"),
+        ("progenitor/SYSTEM.md", "Hello.\n", "{name}"),
         ("builder_agent/think.md", VALID, "bundled with builder_agent"),
         ("workflows/card.md", "---\nvariables: [x]\n---\nx\n", "unknown front matter key"),
         # A bare JSON type name is not a type ref: rejected at write, naming the input.
@@ -104,13 +104,13 @@ def test_workflow_templates_may_change_placeholders():
 
 
 async def test_sync_keeps_edited_runtime_instructions_and_mirrors_bundled_ones(tmp_path):
-    _write(tmp_path, "progenitor/genesis.md", VALID)
+    _write(tmp_path, "progenitor/SYSTEM.md", VALID)
     _write(tmp_path, "progenitor/new.md", VALID)
     _write(tmp_path, "builder_agent/think.md", VALID)
     edited = VALID.replace("Hello", "Hi")
     state_manager = FakeStateManager(
         {
-            "progenitor/genesis.md": edited,
+            "progenitor/SYSTEM.md": edited,
             "builder_agent/think.md": edited,
             "builder_agent/removed.md": VALID,
             "workflows/card.md": VALID,
@@ -120,7 +120,7 @@ async def test_sync_keeps_edited_runtime_instructions_and_mirrors_bundled_ones(t
     await sync_instruction_documents(state_manager, tmp_path)
 
     assert state_manager.docs == {
-        "progenitor/genesis.md": edited,
+        "progenitor/SYSTEM.md": edited,
         "progenitor/new.md": VALID,
         "builder_agent/think.md": VALID,
         "workflows/card.md": VALID,
@@ -128,6 +128,40 @@ async def test_sync_keeps_edited_runtime_instructions_and_mirrors_bundled_ones(t
 
 
 async def test_sync_rejects_an_invalid_file(tmp_path):
-    _write(tmp_path, "progenitor/genesis.md", "---\nunknown: 1\n---\nBody\n")
-    with pytest.raises(ValueError, match="genesis.md"):
+    _write(tmp_path, "progenitor/SYSTEM.md", "---\nunknown: 1\n---\nBody\n")
+    with pytest.raises(ValueError, match="SYSTEM.md"):
         await sync_instruction_documents(FakeStateManager(), tmp_path)
+
+
+LEGACY = "progenitor/genesis.md"
+
+
+async def test_sync_moves_an_edited_legacy_system_prompt_to_system_md(tmp_path):
+    _write(tmp_path, "progenitor/SYSTEM.md", VALID)
+    edited = VALID.replace("Hello", "Hi")
+    state_manager = FakeStateManager({LEGACY: edited})
+
+    await sync_instruction_documents(state_manager, tmp_path)
+    assert state_manager.docs == {"progenitor/SYSTEM.md": edited}
+
+    await sync_instruction_documents(state_manager, tmp_path)
+    assert state_manager.docs == {"progenitor/SYSTEM.md": edited}
+
+
+async def test_sync_keeps_system_md_when_the_legacy_prompt_is_also_stored(tmp_path):
+    _write(tmp_path, "progenitor/SYSTEM.md", VALID)
+    current = VALID.replace("Hello", "Hi")
+    state_manager = FakeStateManager({"progenitor/SYSTEM.md": current, LEGACY: VALID})
+
+    await sync_instruction_documents(state_manager, tmp_path)
+
+    assert state_manager.docs == {"progenitor/SYSTEM.md": current}
+
+
+async def test_sync_seeds_system_md_from_disk_on_a_fresh_store(tmp_path):
+    _write(tmp_path, "progenitor/SYSTEM.md", VALID)
+    state_manager = FakeStateManager()
+
+    await sync_instruction_documents(state_manager, tmp_path)
+
+    assert state_manager.docs == {"progenitor/SYSTEM.md": VALID}
