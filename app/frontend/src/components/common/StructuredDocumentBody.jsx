@@ -35,10 +35,25 @@ function describeNode(node) {
 
 // Text outside any heading or question tag gets a default group, so every
 // piece of content is selectable and highlightable like a headed section.
+// A leading H1 is the document title: like other headings it stays outside
+// the highlight bar, which covers only the content below it.
+const LEADING_TITLE = /^(?:[ \t]*\r?\n)*[ \t]*# [^\n]*(?:\n|$)/;
+
 function withDefaultGroups(nodes) {
-  return nodes.map((node) => (node.type === 'text' && node.content.trim()
-    ? { type: 'group', start: node.start, end: node.end, children: [node] }
-    : node));
+  return nodes.flatMap((node) => {
+    if (node.type !== 'text') return [node];
+    const title = LEADING_TITLE.exec(node.content)?.[0] ?? '';
+    const rest = node.content.slice(title.length);
+    const out = [];
+    if (title) out.push({ type: 'text', content: title, start: node.start, end: node.start + title.length });
+    if (rest.trim()) {
+      const start = node.start + title.length;
+      out.push({ type: 'group', start, end: node.end, children: [{ type: 'text', content: rest, start, end: node.end }] });
+    } else if (!title) {
+      out.push(node);
+    }
+    return out;
+  });
 }
 
 export default function StructuredDocumentBody({ content = '', onAskAgent, onAnswerQuestion }) {

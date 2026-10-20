@@ -114,6 +114,16 @@ describe('StructuredDocumentBody', () => {
     expect(groups[0].querySelector('[role="toolbar"]')).not.toBeNull();
   });
 
+  it('keeps a leading H1 title outside the default group', () => {
+    const source = '# Title\n\nIntro paragraph.';
+    parseStructuredContent.mockReturnValue([nText(source, 0, source.length)]);
+    const document = documentFor({ content: source, onAskAgent: () => {} });
+    const group = document.querySelector('.inbox-section--default');
+    expect(group.textContent).toContain('Intro paragraph.');
+    expect(group.textContent).not.toContain('Title');
+    expect(document.querySelector('.structured-document-body > .markdown-content').textContent).toContain('Title');
+  });
+
   it('groups preamble text but not whitespace or text already inside a heading', () => {
     parseStructuredContent.mockReturnValue([
       nText('Intro.\n', 0, 7),
@@ -177,7 +187,8 @@ describe('StructuredDocumentBody', () => {
     ]);
     const document = documentFor({ content: '# Title\n\n## Plan\nContent.', onAskAgent: () => {}, onAnswerQuestion: () => {} });
     expect(document.querySelector('.inbox-section__title')).toBeNull();
-    expect(document.querySelector('.markdown-content').textContent).toContain('Title');
-    expect(document.querySelector('.markdown-content').textContent).toContain('Plan');
+    const rendered = [...document.querySelectorAll('.markdown-content')].map((node) => node.textContent).join(' ');
+    expect(rendered).toContain('Title');
+    expect(rendered).toContain('Plan');
   });
 });
