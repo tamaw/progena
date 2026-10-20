@@ -37,7 +37,7 @@ function describeNode(node) {
 // piece of content is selectable and highlightable like a headed section.
 // A leading H1 is the document title: like other headings it stays outside
 // the highlight bar, which covers only the content below it.
-const LEADING_TITLE = /^(?:[ \t]*\r?\n)*[ \t]*# [^\n]*(?:\n|$)/;
+const LEADING_TITLE = /^(?:[ \t]*\r?\n)*[ ]{0,3}#[ \t]+[^\n]*(?:\n|$)/;
 
 function withDefaultGroups(nodes) {
   return nodes.flatMap((node) => {
@@ -212,6 +212,15 @@ export default function StructuredDocumentBody({ content = '', onAskAgent, onAns
       return (
         <section key={key} className={`inbox-section inbox-section--default${active ? ' is-selected' : ''}`}>
           <div className="inbox-section__head">
+            {onAskAgent ? (
+              <button
+                type="button"
+                className="inbox-section__select inbox-section__select--hidden"
+                aria-pressed={active}
+                onClick={() => select(node)}
+                aria-label="Select text section"
+              />
+            ) : null}
             {renderSectionActions(node, active)}
           </div>
           <div className="inbox-section__content" onClick={(event) => selectSectionContent(event, node)}>{node.children.map(renderNode)}</div>
