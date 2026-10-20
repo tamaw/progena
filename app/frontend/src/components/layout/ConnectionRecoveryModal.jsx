@@ -3,6 +3,7 @@ import { useDispatch } from 'react-redux';
 import { useConfig } from '../../context/ConfigContext';
 import { subscribeUiEvent } from '../../store/realtimeEvents';
 import { startRealtimeStream } from '../../store/realtimeListener';
+import { createOperationRequestId, requestAcknowledged, subscribeSessionExpiry } from '../../store/http';
 import Modal from '../common/Modal';
 
 const STATUS_GRACE_MS = 20000;
@@ -15,13 +16,32 @@ export default function ConnectionRecoveryModal() {
   const titleId = useId();
   const reconnectRef = useRef(null);
   const timingRef = useRef({ lastStatusAt: 0, retryAt: null });
+  const preferencesUrl = getApiUrl('preferences');
   const [countdown, setCountdown] = useState(null);
+  const [sessionExpired, setSessionExpired] = useState(false);
+  const [checking, setChecking] = useState(false);
 
   const reconnect = useCallback(() => {
     timingRef.current.retryAt = Date.now() + RECONNECT_INTERVAL_MS;
     setCountdown(RECONNECT_INTERVAL_MS / 1000);
     dispatch(startRealtimeStream({ streamUrl, force: true }));
   }, [dispatch, streamUrl]);
+
+  // The proxy's sign-in lapsed: requests fail while the open stream still looks
+  // healthy. Retrying is a real request; success clears the dialog and resyncs.
+  const retrySignIn = useCallback(async () => {
+    setChecking(true);
+    try {
+      await requestAcknowledged(preferencesUrl, { requestId: createOperationRequestId() });
+      dispatch(startRealtimeStream({ streamUrl, force: true }));
+    } catch {
+      // Still rejected or offline; the dialog stays open and reports it.
+    } finally {
+      setChecking(false);
+    }
+  }, [dispatch, preferencesUrl, streamUrl]);
+
+  useEffect(() => subscribeSessionExpiry(setSessionExpired), []);
 
   useEffect(() => {
     const timing = timingRef.current;
@@ -48,7 +68,7 @@ export default function ConnectionRecoveryModal() {
     };
   }, [reconnect]);
 
-  if (countdown === null) return null;
+  if (countdown === null && !sessionExpired) return null;
 
   return (
     <Modal
@@ -60,21 +80,36 @@ export default function ConnectionRecoveryModal() {
     >
       <header className="sidebar-modal__head">
         <div>
-          <span className="sidebar-modal__eyebrow">Connection interrupted</span>
-          <h3 id={titleId}>Waiting to reconnect</h3>
+          <span className="sidebar-modal__eyebrow">{sessionExpired ? 'Sign-in expired' : 'Connection interrupted'}</span>
+          <h3 id={titleId}>{sessionExpired ? 'Sign in again' : 'Waiting to reconnect'}</h3>
         </div>
       </header>
-      <p className="sidebar-modal__field">
-        No status updates have arrived for at least 20 seconds. This dialog will close when updates resume.
-      </p>
-      <p className="sidebar-modal__field">Next reconnect attempt in {countdown}s.</p>
+      {sessionExpired ? (
+        <p className="sidebar-modal__field">
+          The server rejected a request because your sign-in has expired, so changes cannot be saved
+          and the page may be out of date. Reload to sign in again, or retry if you have signed in elsewhere.
+        </p>
+      ) : (
+        <>
+          <p className="sidebar-modal__field">
+            No status updates have arrived for at least 20 seconds. This dialog will close when updates resume.
+          </p>
+          <p className="sidebar-modal__field">Next reconnect attempt in {countdown}s.</p>
+        </>
+      )}
       <p className="sidebar-modal__field">Refreshing the page discards unsaved changes.</p>
       <footer className="sidebar-modal__foot">
         <button type="button" className="task-btn task-btn--secondary" onClick={() => window.location.reload()}>
           Refresh page
         </button>
-        <button ref={reconnectRef} type="button" className="task-btn task-btn--primary" onClick={reconnect}>
-          Reconnect now
+        <button
+          ref={reconnectRef}
+          type="button"
+          className="task-btn task-btn--primary"
+          disabled={checking}
+          onClick={sessionExpired ? retrySignIn : reconnect}
+        >
+          {sessionExpired ? 'Retry' : 'Reconnect now'}
         </button>
       </footer>
     </Modal>
