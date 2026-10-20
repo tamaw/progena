@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { miniSerializeError } from '@reduxjs/toolkit';
 import { failureMessage } from '../lib/failures';
-import { requestAcknowledged } from './http';
+import { requestAcknowledged, subscribeSessionExpiry } from './http';
 
 const requestId = 'f0e1d2c3-b4a5-4678-9abc-def012345678';
 
@@ -75,6 +75,24 @@ describe('requestAcknowledged', () => {
     const serialized = miniSerializeError(error);
     expect(serialized.code).toBe('HTTP_403');
     expect(failureMessage(serialized, 'Save record')).toEqual(failureMessage(error, 'Save record'));
+  });
+
+  it('reports a lapsed sign-in on 401 until the proxy accepts a request again', async () => {
+    const states = [];
+    const unsubscribe = subscribeSessionExpiry((expired) => states.push(expired));
+    const acknowledgement = { request_id: requestId, event_types: ['preferences.snapshot'] };
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(response(401, {}))
+      .mockResolvedValueOnce(response(500, { detail: 'boom' }))
+      .mockResolvedValueOnce(response(202, acknowledgement));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(requestAcknowledged('/api/ui/preferences', { requestId })).rejects.toMatchObject({ code: 'HTTP_401' });
+    await expect(requestAcknowledged('/api/ui/preferences', { requestId })).rejects.toMatchObject({ code: 'HTTP_500' });
+    expect(states).toEqual([true]);
+    await requestAcknowledged('/api/ui/preferences', { requestId });
+    expect(states).toEqual([true, false]);
+    unsubscribe();
   });
 
   it('distinguishes network errors from cancellation', async () => {

@@ -1589,7 +1589,8 @@ function MarketplacesSettingsRow() {
 }
 
 function SettingsPanel({ onClose, isPinned, onTogglePin, isOpen, onResetLiveUiState }) {
-  const { getApiUrl, resetSettings } = useConfig();
+  const { config, getApiUrl, resetSettings, setIdleTimeoutMinutes } = useConfig();
+  const idleTimeoutMinutes = config.session.idleTimeoutMinutes;
   const dispatch = useDispatch();
   const preferences = useSelector(selectPreferences);
   const preferencesUrl = getApiUrl('preferences');
@@ -1652,9 +1653,18 @@ function SettingsPanel({ onClose, isPinned, onTogglePin, isOpen, onResetLiveUiSt
                 <div className="set-row">
                   <div className="set-row__label">
                     <div className="set-row__title">Session timeout</div>
-                    <div className="set-row__sub">Auto sign-out after inactivity (30 min).</div>
+                    <div className="set-row__sub">Pause live updates after {idleTimeoutMinutes} min without activity.</div>
                   </div>
-                  <input className="set-slider" type="range" min="5" max="120" step="5" defaultValue="30" />
+                  <input
+                    className="set-slider"
+                    type="range"
+                    min="5"
+                    max="120"
+                    step="5"
+                    value={idleTimeoutMinutes}
+                    aria-label="Session timeout in minutes"
+                    onChange={(event) => setIdleTimeoutMinutes(Number(event.target.value))}
+                  />
                 </div>
 
                 <div className="set-row set-row--danger">

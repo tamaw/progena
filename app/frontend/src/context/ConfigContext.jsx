@@ -47,6 +47,9 @@ const defaultConfig = {
     maxReconnectAttempts: 10,
     keepaliveTimeout: 35000
   },
+  session: {
+    idleTimeoutMinutes: 30
+  },
   theme: {
     default: 'system',
     options: ['system', 'dark', 'light']
@@ -59,7 +62,8 @@ const defaultConfig = {
     sidebarCollapsed: 'progenitor_sidebar_collapsed',
     pinnedPanel: 'progenitor_pinned_panel',
     streamFilters: 'progenitor_stream_filters',
-    quickChatHandoff: 'progenitor_quick_chat_handoff'
+    quickChatHandoff: 'progenitor_quick_chat_handoff',
+    idleTimeoutMinutes: 'progenitor_idle_timeout_minutes'
   }
 };
 
@@ -72,6 +76,7 @@ const defaultConfig = {
 export function ConfigProvider({ children, workspaceHost }) {
   const [config, setConfig] = useState(() => {
     const savedTheme = localStorage.getItem('progenitor_theme');
+    const savedTimeout = Number(localStorage.getItem(defaultConfig.storage.idleTimeoutMinutes));
 
     return {
       ...defaultConfig,
@@ -82,6 +87,9 @@ export function ConfigProvider({ children, workspaceHost }) {
       theme: {
         ...defaultConfig.theme,
         default: savedTheme || defaultConfig.theme.default
+      },
+      session: {
+        idleTimeoutMinutes: savedTimeout > 0 ? savedTimeout : defaultConfig.session.idleTimeoutMinutes
       }
     };
   });
@@ -101,6 +109,10 @@ export function ConfigProvider({ children, workspaceHost }) {
     localStorage.setItem('progenitor_theme', theme);
   };
 
+  const setIdleTimeoutMinutes = (minutes) => {
+    setConfig(prev => ({ ...prev, session: { ...prev.session, idleTimeoutMinutes: minutes } }));
+    localStorage.setItem(defaultConfig.storage.idleTimeoutMinutes, String(minutes));
+  };
 
   const resetSettings = () => {
     setConfig({
@@ -116,6 +128,7 @@ export function ConfigProvider({ children, workspaceHost }) {
       workspaceHost,
       getApiUrl,
       setTheme,
+      setIdleTimeoutMinutes,
       resetSettings
     }}>
       {children}
