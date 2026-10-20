@@ -132,6 +132,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Model profile names must be unique after trimming whitespace**; a catalog with `" general "` and `"general"` is rejected.
 
 ### Fixed
+- **Disposable Postgres works inside containerized test runners**: test servers join the runner's Docker network instead of trying to reach the Docker host through the runner's loopback; ordinary local runs retain loopback-only port publishing.
 - **Navigation text no longer selects on drag**: sidebar navigation labels and group headings are non-selectable while active-route styling, keyboard focus and content text selection remain unchanged.
 - **Skipped database regressions run in isolation**: tests now use fresh per-test pgvector databases on a disposable Docker server or an explicit test-only server, never a development database fallback. Added hard per-test and SQL/lock/connect timeouts, bounded worker waits, and a container lifetime limit. The Windows shell-rejection branch now runs on every platform; missing checked-in skill resources fail instead of silently skipping.
 - **Dependency security updates**: updated Mermaid, React Router, Vite, Vitest and vulnerable frontend transitive dependencies; raised Python dependency minimums to patched releases and replaced the temporary Postgres checkpoint source pin with a released version containing the fix. Full frontend and resolved Python development-environment audits report no known vulnerabilities.

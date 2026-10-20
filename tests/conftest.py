@@ -7,8 +7,10 @@ overrides variables that are already set, so pinning them here, before any
 test the ones in this checkout -- the same ones CI sees.
 """
 
+import json
 import os
 import shutil
+import socket
 import subprocess
 import time
 from contextlib import suppress
@@ -61,6 +63,26 @@ def postgres_admin_url():
     except subprocess.CalledProcessError:
         _docker("pull", image, timeout=30)
 
+    runner_network = None
+    with suppress(subprocess.CalledProcessError):
+        networks = json.loads(
+            _docker(
+                "inspect",
+                "--type",
+                "container",
+                socket.gethostname(),
+                "--format",
+                "{{json .NetworkSettings.Networks}}",
+            )
+        )
+        runner_network = next(
+            (name for name, settings in networks.items() if settings.get("IPAddress")), None
+        )
+    # A containerized runner cannot reach ports bound to the Docker host's loopback.
+    network_args = (
+        ["--network", runner_network] if runner_network else ["--publish", "127.0.0.1::5432"]
+    )
+
     container = f"progenitor-pytest-{uuid4().hex}"
     try:
         # The server expires even if pytest's hard watchdog bypasses teardown.
@@ -71,8 +93,7 @@ def postgres_admin_url():
             "--pull=never",
             "--name",
             container,
-            "--publish",
-            "127.0.0.1::5432",
+            *network_args,
             "--tmpfs",
             "/var/lib/postgresql/data:rw",
             "--env",
@@ -92,8 +113,16 @@ def postgres_admin_url():
             "-c",
             "idle_in_transaction_session_timeout=10000",
         )
-        port = _docker("port", container, "5432/tcp").rsplit(":", 1)[1]
-        url = f"postgresql://postgres:pytest@127.0.0.1:{port}/postgres?connect_timeout=3"
+        if runner_network:
+            networks = json.loads(
+                _docker("inspect", container, "--format", "{{json .NetworkSettings.Networks}}")
+            )
+            host = networks[runner_network]["IPAddress"]
+            port = "5432"
+        else:
+            host = "127.0.0.1"
+            port = _docker("port", container, "5432/tcp").rsplit(":", 1)[1]
+        url = f"postgresql://postgres:pytest@{host}:{port}/postgres?connect_timeout=3"
         deadline = time.monotonic() + 10
         while True:
             try:
