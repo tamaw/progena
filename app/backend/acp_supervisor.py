@@ -19,12 +19,13 @@ from typing import Any
 from app.progenitor.acp import (
     ACPRunner,
     acp_config_from_agent_config,
+    acp_failure_kind,
     runner_for,
     task_command,
     task_cwd,
 )
 from app.progenitor.document_kinds import ACP_TASK_KEY_PREFIX
-from app.progenitor.state.models import ACPTaskRecord, ACPTaskStatus
+from app.progenitor.state.models import ACPFailureKind, ACPTaskRecord, ACPTaskStatus
 from app.progenitor.utils import utcnow
 
 from .document_events import TypedDocumentEvent
@@ -64,6 +65,11 @@ def _now() -> str:
 def _task_id_from_key(key: str) -> str | None:
     task_id = key.removeprefix(ACP_TASK_KEY_PREFIX)
     return task_id if task_id and task_id != key else None
+
+
+def _failure_kind(status: str, error: str | None) -> ACPFailureKind | None:
+    """Classify only failed turns; every other terminal status has no failure kind."""
+    return acp_failure_kind(error) if status == ACPTaskStatus.FAILED.value else None
 
 
 def _record(task_id: str, payload: Any) -> ACPTaskRecord | None:
@@ -362,6 +368,7 @@ class ACPTaskSupervisor:
             payload["completed_at"] = None
             payload["stalled"] = False
             payload["last_error"] = None
+            payload["failure_kind"] = None
             claimed = _record(task_id, payload)
             return payload
 
@@ -762,6 +769,7 @@ class ACPTaskSupervisor:
             "summary": summary,
             "stop_reason": result.stop_reason,
             "last_error": result.error,
+            "failure_kind": _failure_kind(terminal_status, result.error),
             "completed_at": now,
         }
 
@@ -806,6 +814,7 @@ class ACPTaskSupervisor:
                     "summary": summary,
                     "stop_reason": result.stop_reason,
                     "last_error": result.error,
+                    "failure_kind": _failure_kind(terminal, result.error),
                     "tool_calls": list(result.tool_calls[-_TOOL_CALL_LIMIT:]),
                     "progress": dict(active.progress),
                     "stalled": False,
@@ -900,6 +909,7 @@ class ACPTaskSupervisor:
                     "cancel_requested": False,
                     "pending_input": None,
                     "last_error": error,
+                    "failure_kind": acp_failure_kind(error),
                     "updated_at": _now(),
                     "completed_at": _now(),
                     "stalled": False,

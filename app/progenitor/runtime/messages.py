@@ -287,6 +287,31 @@ def extract_reasoning_token_count(msg: Any) -> int | None:
     return None
 
 
+def extract_token_usage(msg: Any) -> dict[str, int] | None:
+    """Extract normalized input, output, and total usage from a model message."""
+    if msg is None:
+        return None
+
+    containers: list[dict[str, Any]] = []
+    if isinstance(msg, dict):
+        for key in ("usage_metadata", "response_metadata"):
+            value = msg.get(key)
+            if isinstance(value, dict):
+                containers.append(value)
+    else:
+        for attr in ("usage_metadata", "response_metadata"):
+            value = getattr(msg, attr, None)
+            if isinstance(value, dict):
+                containers.append(value)
+
+    for container in containers:
+        usage = _extract_token_usage_from_container(container)
+        if usage is not None:
+            return usage
+
+    return None
+
+
 def extract_cache_read_token_count(msg: Any) -> int | None:
     """Extract Azure's reported prompt-cache-read token count from a completed message.
 
@@ -400,6 +425,40 @@ def _extract_reasoning_token_count_from_container(container: dict[str, Any]) -> 
     return None
 
 
+def _extract_token_usage_from_container(container: dict[str, Any]) -> dict[str, int] | None:
+    aliases = {
+        "input_tokens": ("input_tokens", "prompt_tokens"),
+        "output_tokens": ("output_tokens", "completion_tokens"),
+        "total_tokens": ("total_tokens",),
+    }
+    usage: dict[str, int] = {}
+    for normalized, keys in aliases.items():
+        for key in keys:
+            value = container.get(key)
+            if type(value) is int and value >= 0:
+                usage[normalized] = value
+                break
+
+    if usage:
+        input_tokens = usage.get("input_tokens", 0)
+        output_tokens = usage.get("output_tokens", 0)
+        return {
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "total_tokens": usage.get("total_tokens", input_tokens + output_tokens),
+        }
+
+    for key in ("token_usage", "usage"):
+        nested = container.get(key)
+        if not isinstance(nested, dict):
+            continue
+        nested_usage = _extract_token_usage_from_container(nested)
+        if nested_usage is not None:
+            return nested_usage
+
+    return None
+
+
 def _extract_cache_read_token_count_from_container(container: dict[str, Any]) -> int | None:
     detail_candidates = [
         container.get("input_token_details"),
@@ -431,8 +490,9 @@ __all__ = [
     "extract_cache_read_token_count",
     "extract_display_metadata",
     "extract_message_text",
-    "extract_reasoning_trace",
     "extract_reasoning_token_count",
+    "extract_reasoning_trace",
+    "extract_token_usage",
     "get_last_ai_message",
     "summarize_message_schema",
 ]

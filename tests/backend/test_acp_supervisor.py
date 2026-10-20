@@ -32,6 +32,7 @@ class _Runs:
     steered: list[tuple[str, str]] = field(default_factory=list)
     modes: list[str] = field(default_factory=list)
     runners: list[_FakeRunner] = field(default_factory=list)
+    failures: dict[str, str] = field(default_factory=dict)
 
 
 class _FakeRunner:
@@ -97,6 +98,14 @@ class _FakeRunner:
                 output=str(answer),
                 stop_reason="end_turn",
                 session_id=active_session,
+            )
+        if prompt in self.runs.failures:
+            return ACPRunResult(
+                success=False,
+                output="",
+                stop_reason="error",
+                session_id=active_session,
+                error=self.runs.failures[prompt],
             )
         if prompt in self.runs.block_prompts:
             await self.release.wait()
@@ -221,6 +230,35 @@ async def test_queued_continuation_resumes_the_stored_session(monkeypatch) -> No
         )
         assert harness.runs.session_ids == [None, "session-1"]
         assert harness.task("one")["output"] == "completed second"
+    finally:
+        await harness.stop()
+
+
+async def test_failed_turn_records_whether_the_agent_hit_a_usage_limit(monkeypatch) -> None:
+    harness = _Harness(monkeypatch)
+    _registry(harness.store)
+    harness.runs.failures = {
+        "limited": "Internal error: You've hit your session limit · resets 12:50am (UTC)",
+        "broken": "Internal error: tool crashed while editing rate_limiter.py",
+    }
+    await harness.start()
+    try:
+        harness.add_task("limited", "limited")
+        harness.add_task("broken", "broken")
+        await _wait_for(lambda: harness.task("limited").get("status") == "failed")
+        await _wait_for(lambda: harness.task("broken").get("status") == "failed")
+        assert harness.task("limited")["failure_kind"] == "usage_limit"
+        assert harness.task("limited")["history"][-1]["failure_kind"] == "usage_limit"
+        assert harness.task("broken")["failure_kind"] == "error"
+
+        harness.mutate("limited", lambda task: task.update({"prompt": "retry", "status": "queued"}))
+        await _wait_for(
+            lambda: (
+                harness.task("limited").get("turn") == 2
+                and harness.task("limited").get("status") == "completed"
+            )
+        )
+        assert harness.task("limited")["failure_kind"] is None
     finally:
         await harness.stop()
 

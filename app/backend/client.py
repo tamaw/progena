@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import IO, Any
 
 from .config import ChatServerConfig
-from .models import AgentResponse
+from .models import AgentResponse, normalize_token_usage
 
 logger = logging.getLogger(__name__)
 
@@ -270,6 +270,11 @@ class ProgenitorClient:
                 response_metadata = response.get("metadata")
                 reasoning_text: str | None = None
                 reasoning_tokens: int | None = None
+                usage = (
+                    normalize_token_usage(response_metadata.get("usage"))
+                    if isinstance(response_metadata, dict)
+                    else None
+                )
                 if effective_include_reasoning and isinstance(response_metadata, dict):
                     raw_reasoning = response_metadata.get("reasoning")
                     if isinstance(raw_reasoning, str) and raw_reasoning.strip():
@@ -282,6 +287,7 @@ class ProgenitorClient:
                     response=response_text,
                     reasoning=reasoning_text,
                     reasoning_tokens=reasoning_tokens,
+                    usage=usage,
                 )
 
             except TimeoutError:
@@ -292,7 +298,9 @@ class ProgenitorClient:
                 # Return raw text if not JSON
                 self._last_heartbeat = time.time()  # CR-001
                 response_text = response_line.decode().strip() if response_line else ""
-                return AgentResponse(response=response_text, reasoning=None, reasoning_tokens=None)
+                return AgentResponse(
+                    response=response_text, reasoning=None, reasoning_tokens=None, usage=None
+                )
 
     async def send_message_stream_events(
         self,

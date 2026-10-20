@@ -326,6 +326,9 @@ TERMINAL_ACP_TASK_STATUSES = frozenset(
 )
 
 
+ACPFailureKind = Literal["usage_limit", "error"]
+
+
 class ACPTaskRecord(BaseModel):
     """Persisted request and supervisor state for one ACP session.
 
@@ -357,6 +360,9 @@ class ACPTaskRecord(BaseModel):
     summary: str | None = None
     stop_reason: str | None = None
     last_error: str | None = None
+    # Set by the supervisor when a turn ends `failed`: "usage_limit" when the
+    # agent's account is out of capacity, else "error"; null otherwise.
+    failure_kind: ACPFailureKind | None = None
     tool_calls: list[dict[str, Any]] = Field(default_factory=list)
     progress: dict[str, Any] = Field(
         default_factory=lambda: {

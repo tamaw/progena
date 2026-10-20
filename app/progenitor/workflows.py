@@ -873,6 +873,7 @@ class WorkflowRun(BaseModel):
     last_output: str | None = None
     last_error: str | None = None
     step_audit: list[dict[str, Any]] = Field(default_factory=list)
+    tokens: dict[str, int] | None = None
     queued_at: str
     started_at: str | None = None
     updated_at: str
