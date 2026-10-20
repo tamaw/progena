@@ -24,7 +24,7 @@ from urllib.parse import quote
 import httpx
 
 from .config import ChatServerConfig
-from .models import AgentResponse
+from .models import AgentResponse, normalize_token_usage
 
 logger = logging.getLogger(__name__)
 
@@ -230,6 +230,7 @@ class SSEProgenitorClient:
         )
         reasoning_text: str | None = None
         reasoning_tokens: int | None = None
+        usage: dict[str, int] | None = None
         async for event in self.send_message_stream_events(message, request_id, metadata):
             event_type = str(event.get("type", ""))
             if event_type == "stream_event":
@@ -244,6 +245,9 @@ class SSEProgenitorClient:
                     )
                 event_metadata = event.get("metadata")
                 if isinstance(event_metadata, dict):
+                    parsed_usage = normalize_token_usage(event_metadata.get("usage"))
+                    if parsed_usage is not None:
+                        usage = parsed_usage
                     raw_tokens = event_metadata.get("reasoning_tokens")
                     if isinstance(raw_tokens, int):
                         reasoning_tokens = raw_tokens
@@ -259,6 +263,7 @@ class SSEProgenitorClient:
             response=response_text,
             reasoning=reasoning_text if effective_include_reasoning else None,
             reasoning_tokens=reasoning_tokens if effective_include_reasoning else None,
+            usage=usage,
         )
 
     async def send_message_stream_events(

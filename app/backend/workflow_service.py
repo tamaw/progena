@@ -101,6 +101,20 @@ def _bounded_text(value: str, *, limit: int = MAX_WORKFLOW_AUDIT_OUTPUT_CHARS) -
     return f"{value[:limit]}\n[truncated: {len(value) - limit} characters omitted]"
 
 
+def _sum_token_usage(
+    total: dict[str, int] | None, usage: dict[str, int] | None
+) -> dict[str, int] | None:
+    """Add one workflow step's usage without turning absent usage into zeroes."""
+    if usage is None:
+        return total
+    if total is None:
+        return dict(usage)
+    return {
+        name: total[name] + usage[name]
+        for name in ("input_tokens", "output_tokens", "total_tokens")
+    }
+
+
 _ACTIVE_RUN_STATUSES = frozenset({"queued", "running", "paused"})
 # Session id of a routine run started by a routine node: ``<run_id>_<8 hex>``,
 # so a lifecycle event names the workflow run it belongs to.
@@ -113,6 +127,7 @@ class PromptExecutionResult:
 
     response: str
     thread_id: str | None = None
+    usage: dict[str, int] | None = None
 
 
 class WorkflowPromptRunner(Protocol):
@@ -1416,6 +1431,7 @@ class WorkflowExecutor:
 
             node = definition.graph.nodes[node_id]
             output_object: dict[str, Any] | None = None
+            step_tokens: dict[str, int] | None = None
             try:
                 resolved_input = resolve_node_input(definition, node_id, node_outputs)
                 if isinstance(node, WorkflowNodeCondition):
@@ -1573,6 +1589,7 @@ class WorkflowExecutor:
                         raise ValueError(
                             f"extract node '{node.title}' output failed schema validation: {error}"
                         )
+                    step_tokens = prompt_result.usage
                     output_object = {
                         "result": structured,
                         "thread_id": prompt_result.thread_id or thread_id,
@@ -1598,6 +1615,7 @@ class WorkflowExecutor:
                         input_text=input_text,
                         thread_id=thread_id,
                     )
+                    step_tokens = prompt_result.usage
                     output_object = {
                         "message": prompt_result.response,
                         "thread_id": prompt_result.thread_id or thread_id or "",
@@ -1620,15 +1638,15 @@ class WorkflowExecutor:
             if output_object is not None:
                 node_outputs[node_id] = output_object
 
-            audit = [
-                *latest_run.step_audit,
-                {
-                    "node_id": node_id,
-                    "kind": node.kind,
-                    "completed_at": utcnow_isoformat(),
-                    "output": output_text,
-                },
-            ]
+            audit_entry: dict[str, Any] = {
+                "node_id": node_id,
+                "kind": node.kind,
+                "completed_at": utcnow_isoformat(),
+                "output": output_text,
+            }
+            if step_tokens is not None:
+                audit_entry["tokens"] = step_tokens
+            audit = [*latest_run.step_audit, audit_entry]
             # Re-read after the awaited node: a pause requested meanwhile must
             # survive this checkpoint (the loop head then stops the run).
             persisted = get_workflow_run(store, run_id) or latest_run
@@ -1642,6 +1660,7 @@ class WorkflowExecutor:
                     "node_outputs": node_outputs,
                     "last_output": output_text,
                     "step_audit": audit,
+                    "tokens": _sum_token_usage(latest_run.tokens, step_tokens),
                     "updated_at": utcnow_isoformat(),
                 }
             )
