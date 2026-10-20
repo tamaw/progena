@@ -2,12 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import os
-from uuid import uuid4
 
 import psycopg
 import pytest
-from psycopg import sql
 from psycopg.types.json import Jsonb
 from psycopg_pool import PoolClosed
 
@@ -142,19 +139,11 @@ def test_ensure_change_trigger_notifies_state_only():
     assert "progenitor.logs" not in emitted
 
 
-def test_inbox_revisions_capture_backfill_ui_agent_and_deletion():
-    database_url = os.getenv("PROGENITOR_TEST_DATABASE_URL")
-    if not database_url:
-        pytest.skip("Set PROGENITOR_TEST_DATABASE_URL to an isolated test Postgres database")
-
-    schema = f"inbox_revisions_{uuid4().hex}"
-    with psycopg.connect(database_url, autocommit=True) as admin:
-        admin.execute(sql.SQL("CREATE SCHEMA {}").format(sql.Identifier(schema)))
-    scoped_url = psycopg.conninfo.make_conninfo(database_url, options=f"-csearch_path={schema}")
-    store = PostgresDocumentStore(scoped_url)
+def test_inbox_revisions_capture_backfill_ui_agent_and_deletion(postgres_url: str):
+    store = PostgresDocumentStore(postgres_url)
     try:
         # An existing message must be captured at setup without modifying its live row.
-        with psycopg.connect(scoped_url, autocommit=True) as conn:
+        with psycopg.connect(postgres_url, autocommit=True) as conn:
             conn.execute(
                 "CREATE TABLE store (prefix TEXT NOT NULL, key TEXT NOT NULL, value JSONB NOT NULL, "
                 "created_at TIMESTAMPTZ NOT NULL DEFAULT now(), updated_at TIMESTAMPTZ NOT NULL DEFAULT now(), "
@@ -171,7 +160,7 @@ def test_inbox_revisions_capture_backfill_ui_agent_and_deletion():
         store.open()
 
         def revisions(message_id):
-            with psycopg.connect(scoped_url, autocommit=True) as conn:
+            with psycopg.connect(postgres_url, autocommit=True) as conn:
                 return conn.execute(
                     "SELECT document FROM inbox_message_revisions WHERE message_id = %s ORDER BY captured_at, revision_id",
                     (message_id,),
@@ -189,7 +178,7 @@ def test_inbox_revisions_capture_backfill_ui_agent_and_deletion():
             {"id": "backfill", "body": "original", "read": True},
         )
         assert len(revisions("backfill")) == 2
-        with psycopg.connect(scoped_url, autocommit=True) as conn:
+        with psycopg.connect(postgres_url, autocommit=True) as conn:
             # A runtime write to the shared store bypasses backend save_document.
             conn.execute(
                 "UPDATE store SET value = %s WHERE prefix = %s AND key = %s",
@@ -218,14 +207,12 @@ def test_inbox_revisions_capture_backfill_ui_agent_and_deletion():
         store.delete_document("progenitor.state", "inbox_message:backfill")
         assert len(revisions("backfill")) == 3
         with (
-            psycopg.connect(scoped_url, autocommit=True) as conn,
+            psycopg.connect(postgres_url, autocommit=True) as conn,
             pytest.raises(psycopg.errors.RaiseException, match="immutable"),
         ):
             conn.execute("DELETE FROM inbox_message_revisions WHERE message_id = %s", ("backfill",))
     finally:
         store.close()
-        with psycopg.connect(database_url, autocommit=True) as admin:
-            admin.execute(sql.SQL("DROP SCHEMA {} CASCADE").format(sql.Identifier(schema)))
 
 
 class _RowsCursor(_FakeCursor):

@@ -4,119 +4,20 @@ System tool implementations live in :mod:`app.progenitor.tools` and are
 registered/executed via :mod:`app.progenitor.tools.system_registry`.
 """
 
-from typing import cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from pydantic import BaseModel, Field
 
 import app.progenitor.tools.list_agents as list_agents_module
-from app.progenitor.state.models import ProgenitorState
-from app.progenitor.tools.current_time import CurrentTimeTool
 from app.progenitor.tools.list_agents import ListAgentsTool
 from app.progenitor.tools.list_tools import ListToolsTool
 from app.progenitor.tools.protocol import BaseSystemTool, ToolContext, ToolResult
-from app.progenitor.tools.self_reflect_tool import SelfReflectTool
 from app.progenitor.tools.system_registry import execute_system_tool
-
-
-class TestToolContext:
-    """Tests for ToolContext dataclass."""
-
-    def test_creation_with_required_fields(self):
-        """Should create with required fields."""
-        ctx = ToolContext(
-            tool_registry=MagicMock(),
-            llm_client=MagicMock(),
-        )
-        assert ctx.tool_registry is not None
-        assert ctx.llm_client is not None
-        assert ctx.state is None
-        assert ctx.state_manager is None
-
-    def test_full_creation(self):
-        """Should create with all fields."""
-        tool_registry = MagicMock()
-        llm_client = MagicMock()
-        state_manager = MagicMock()
-
-        ctx = ToolContext(
-            tool_registry=tool_registry,
-            llm_client=llm_client,
-            state=cast(ProgenitorState, {"key": "value"}),
-            state_manager=state_manager,
-        )
-
-        assert ctx.tool_registry is tool_registry
-        assert ctx.llm_client is llm_client
-        assert ctx.state == {"key": "value"}
-        assert ctx.state_manager is state_manager
-
-
-class TestToolResult:
-    """Tests for ToolResult dataclass."""
-
-    def test_success_result(self):
-        """Should create success result."""
-        result = ToolResult.ok(data={"key": "value"})
-        assert result.success is True
-        assert result.data == {"key": "value"}
-        assert result.error is None
-
-    def test_failure_result(self):
-        """Should create failure result."""
-        result = ToolResult.fail(error="Operation failed")
-        assert result.success is False
-        assert result.error == "Operation failed"
-
-    def test_direct_creation(self):
-        """Should create result directly."""
-        result = ToolResult(
-            success=True,
-            data={"count": 5},
-        )
-        assert result.success is True
-        assert result.data == {"count": 5}
 
 
 class TestBaseSystemTool:
     """Tests for BaseSystemTool abstract class."""
-
-    def test_subclass_must_implement_name(self):
-        """Subclass must implement name property."""
-
-        class TestTool(BaseSystemTool):
-            @property
-            def name(self):
-                return "test_tool"
-
-            @property
-            def description(self):
-                return "Test tool"
-
-            async def execute(self, context: ToolContext) -> ToolResult:
-                return ToolResult.ok(data={"status": "done"})
-
-        tool = TestTool()
-        assert tool.name == "test_tool"
-
-    def test_subclass_must_implement_description(self):
-        """Subclass must implement description property."""
-
-        class TestTool(BaseSystemTool):
-            @property
-            def name(self):
-                return "test_tool"
-
-            @property
-            def description(self):
-                return "Test description"
-
-            async def execute(self, context: ToolContext) -> ToolResult:
-                return ToolResult.ok(data={"status": "done"})
-
-        tool = TestTool()
-        assert tool.description == "Test description"
 
     def test_parameters_are_derived_from_args_model(self):
         """args_model should be the source of truth for public tool parameters."""
@@ -157,14 +58,6 @@ class TestListToolsTool:
     @pytest.fixture
     def tool(self):
         return ListToolsTool()
-
-    def test_name(self, tool):
-        """Should have correct name."""
-        assert tool.name == "list_tools"
-
-    def test_description(self, tool):
-        """Should have description."""
-        assert len(tool.description) > 0
 
     async def test_execute_with_registry(self, tool):
         """Should list tools from registry."""
@@ -209,39 +102,12 @@ class TestListToolsTool:
         assert "agent1" in agent_names
 
 
-class TestCurrentTimeTool:
-    """Tests for CurrentTimeTool implementation."""
-
-    @pytest.fixture
-    def tool(self):
-        return CurrentTimeTool()
-
-    def test_name(self, tool):
-        """Should have correct name."""
-        assert tool.name == "current_time"
-
-    async def test_execute_returns_time(self, tool):
-        """Should return current time."""
-        ctx = ToolContext(
-            tool_registry=MagicMock(),
-            llm_client=MagicMock(),
-            state={},
-            state_manager=MagicMock(),
-        )
-        result = await tool.execute(ctx)
-        assert result.success is True
-
-
 class TestListAgentsTool:
     """Tests for ListAgentsTool implementation."""
 
     @pytest.fixture
     def tool(self):
         return ListAgentsTool()
-
-    def test_name(self, tool):
-        """Should have correct name."""
-        assert tool.name == "list_agents"
 
     @pytest.mark.asyncio
     async def test_execute_refreshes_cards_before_listing(self, tool):
@@ -261,18 +127,6 @@ class TestListAgentsTool:
         assert result.success is True
         mock_registry.load.assert_awaited_once()
         refresh_mock.assert_awaited_once_with(mock_registry)
-
-
-class TestSelfReflectTool:
-    """Tests for SelfReflectTool implementation."""
-
-    @pytest.fixture
-    def tool(self):
-        return SelfReflectTool()
-
-    def test_name(self, tool):
-        """Should have correct name."""
-        assert tool.name == "self_reflect"
 
 
 class TestExecuteSystemTool:

@@ -1,13 +1,11 @@
 """Postgres session trigger: msgpack decoder and once-per-thread creation.
 
-Opt-in on a scratch database (``PROGENITOR_TEST_DATABASE_URL``): the runtime's
-own setup creates the LangGraph tables and installs the triggers; each test
-runs in a rolled-back transaction.
+Opt-in on a fresh scratch database: the runtime's own setup creates the
+LangGraph tables and installs the triggers.
 """
 
 from __future__ import annotations
 
-import os
 import re
 from typing import Any
 
@@ -22,12 +20,6 @@ from app.progenitor.database.langgraph import _open_saver, _open_store
 from app.progenitor.document_kinds import SESSION_KEY_PREFIX
 from app.progenitor.sessions.titles import ATTACHMENT_CONTEXT_MARKER
 
-DATABASE_URL = (os.getenv("PROGENITOR_TEST_DATABASE_URL") or "").strip() or None
-
-pytestmark = pytest.mark.skipif(
-    DATABASE_URL is None, reason="requires PROGENITOR_TEST_DATABASE_URL (a scratch database)"
-)
-
 _SERDE = JsonPlusSerializer()
 _UTC_STAMP = re.compile(r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{6}\+00:00$")
 
@@ -38,17 +30,18 @@ def _blob(*messages: Any) -> bytes:
 
 
 @pytest.fixture
-async def conn():
-    assert DATABASE_URL is not None
-    _saver, setup_conn = await _open_saver(DATABASE_URL)
+async def conn(postgres_url):
+    _saver, setup_conn = await _open_saver(postgres_url)
     await setup_conn.close()
-    _store, pool = await _open_store(DATABASE_URL)
+    _store, pool = await _open_store(postgres_url)
     await pool.close()
     async with await psycopg.AsyncConnection.connect(
-        DATABASE_URL, autocommit=False, row_factory=dict_row
+        postgres_url, autocommit=False, row_factory=dict_row
     ) as connection:
-        yield connection
-        await connection.rollback()
+        try:
+            yield connection
+        finally:
+            await connection.rollback()
 
 
 async def _write(

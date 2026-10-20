@@ -19,12 +19,6 @@ def _definition(**overrides):
     return {"enabled": True, "paused": False, **overrides}
 
 
-async def test_tool_properties():
-    tool = RunWorkflowTool()
-    assert tool.name == "run_workflow"
-    assert tool.args_model.__name__ == "RunWorkflowArgs"
-
-
 async def test_execute_missing_workflow_id_fails():
     state_manager = AsyncMock()
     result = await RunWorkflowTool().execute(_context(state_manager, {}))

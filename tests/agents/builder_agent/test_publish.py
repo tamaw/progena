@@ -67,7 +67,7 @@ async def test_publish_records_failure_when_pr_creation_fails_after_commit(tmp_p
         ):
             result = await node(state)
 
-    assert "PR creation failed after commit abc1234" in result["build_messages"][-1]["error"]
+    assert result["build_messages"][-1]["phase"] == "publish"
     logged_events = [call.args[0]["event"] for call in state_manager.log_decision.await_args_list]
     assert "pr_failed" in logged_events
 

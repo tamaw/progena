@@ -10,7 +10,6 @@ and all sub-agents. These tests verify:
 - Error feedback to UI
 """
 
-import asyncio
 from datetime import UTC, datetime
 
 import pytest
@@ -25,29 +24,12 @@ from app.backend.state_reader import (
     HealthInfo,
     StateReader,
 )
-from app.backend.ui_routes import (
-    broadcast_ui_event,
-)
 
 
 @pytest.fixture
 def client():
     """Create a test client."""
     return TestClient(app)
-
-
-class TestSSEEventStream:
-    """Tests for Server-Sent Events streaming endpoint."""
-
-    @pytest.mark.skip(reason="SSE streaming tests require special handling - tested via e2e")
-    def test_sse_endpoint_returns_correct_content_type(self, client):
-        """Test that SSE events endpoint returns text/event-stream content type."""
-        pass
-
-    @pytest.mark.skip(reason="SSE streaming tests require special handling - tested via e2e")
-    def test_sse_headers(self, client):
-        """Test that SSE response has proper headers."""
-        pass
 
 
 class TestErrorFeedback:
@@ -429,76 +411,3 @@ class TestLogsEndpoint:
             "event_types": ["logs.page.loaded"],
         }
         # Should not error even if no ERROR logs exist
-
-
-class TestUIPages:
-    """Tests for UI pages.
-
-    Note: Backend is now API-only and does not serve static files.
-    The frontend runs separately via npm/Vite. These tests verify that
-    static file routes are no longer available (404).
-    """
-
-    def test_chat_ui_not_served(self, client):
-        """Test root path no longer serves UI (API-only backend)."""
-        response = client.get("/")
-        # Root path should return 404 - backend is API-only now
-        assert response.status_code in (404, 405, 307)
-
-    def test_dashboard_not_served(self, client):
-        """Test dashboard page no longer served (API-only backend)."""
-        response = client.get("/ui/dashboard")
-        assert response.status_code == 404
-
-    def test_agents_page_not_served(self, client):
-        """Test agents page no longer served (API-only backend)."""
-        response = client.get("/ui/agents")
-        assert response.status_code == 404
-
-    def test_logs_page_not_served(self, client):
-        """Test logs page no longer served (API-only backend)."""
-        response = client.get("/ui/logs")
-        assert response.status_code == 404
-
-
-class TestUIAccessibility:
-    """Tests for UI API responses.
-
-    Note: Accessibility tests for HTML pages are no longer relevant since
-    the backend is API-only. Frontend accessibility should be tested
-    separately with the React app.
-    """
-
-    def test_pages_have_viewport_meta(self, client):
-        """Test removed - UI pages no longer served by backend."""
-        # This test is no longer relevant - backend is API-only
-        pass
-
-    def test_pages_have_favicon(self, client):
-        """Test removed - UI pages no longer served by backend."""
-        # This test is no longer relevant - backend is API-only
-        pass
-
-
-class TestBroadcastEvent:
-    """Tests for event broadcasting to UI subscribers."""
-
-    def test_broadcast_event_structure(self):
-        """Test broadcast_ui_event creates proper structure."""
-        from app.backend.ui_routes import _ui_stream_subscribers
-
-        # Clear any existing subscribers
-        _ui_stream_subscribers.clear()
-
-        # Create a mock queue
-        queue = asyncio.Queue()
-        _ui_stream_subscribers[queue] = None
-
-        try:
-            # Broadcast an event
-            broadcast_ui_event("test_event", {"key": "value"}, scope="chat")
-
-            # Verify event was queued (non-blocking check)
-            assert not queue.empty()
-        finally:
-            _ui_stream_subscribers.pop(queue, None)

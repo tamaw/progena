@@ -715,6 +715,8 @@ body,
   flex-direction: column;
   gap: 16px;
   margin-top: 10px;
+  -webkit-user-select: none;
+  user-select: none;
 }
 
 .app-shell__nav-group {

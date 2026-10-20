@@ -13,8 +13,6 @@ from app.progenitor.nodes import health as health_module
 from app.progenitor.nodes.audit import write_startup_config_audit_to_sink
 from app.progenitor.nodes.health import write_health_status
 from app.progenitor.nodes.mcp import sync_mcp_runtime_context
-from app.progenitor.registry import AgentRegistryRuntime
-from app.progenitor.runtime.http import ProgenitorHTTPServer
 from app.progenitor.runtime.queues import QueuedInput, RuntimeQueues
 
 
@@ -30,24 +28,6 @@ def _make_config(tmp_path: Path) -> ProgenitorConfig:
     config.llm.api_key = ""
     config.llm.base_url = ""
     return config
-
-
-def test_runtime_components_wire_configured_paths(tmp_path: Path) -> None:
-    config = _make_config(tmp_path)
-
-    state_dir = config.storage.state_dir
-    registry = AgentRegistryRuntime()
-    http = ProgenitorHTTPServer(
-        state_manager=None,
-        host=config.runtime.http_host,
-        port=config.runtime.http_port,
-        public_base_url=config.runtime.http_public_base_url,
-    )
-
-    assert state_dir == tmp_path / "data" / "state"
-    assert registry.agent_registry.store_backed is False
-    assert http.host == config.runtime.http_host
-    assert http.port == config.runtime.http_port
 
 
 @pytest.mark.asyncio

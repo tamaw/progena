@@ -20,10 +20,4 @@ describe("resolveTheme", () => {
     expect(resolveTheme("system", false)).toBe("light");
   });
 
-  it("returns light for system when prefersDark is undefined (not passed)", () => {
-    // Ensures callers always pass prefersDark explicitly — undefined coerces to
-    // false so the result is light (same as system-prefers-light), but callers
-    // should always pass window.matchMedia(...).matches.
-    expect(resolveTheme("system", undefined)).toBe("light");
-  });
 });

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import os
+from types import SimpleNamespace
 
 import pytest
 
+from app.progenitor.tools import shell as shell_module
 from app.progenitor.tools.protocol import ToolContext
 from app.progenitor.tools.shell import ShellCheckTool, ShellExecTool
 
@@ -18,8 +20,8 @@ async def test_shell_check_reports_state():
 
 
 @pytest.mark.asyncio
-@pytest.mark.skipif(os.name != "nt", reason="This test asserts Windows behavior")
-async def test_shell_exec_rejects_on_windows():
+async def test_shell_exec_rejects_on_windows(monkeypatch):
+    monkeypatch.setattr(shell_module, "os", SimpleNamespace(name="nt"))
     tool = ShellExecTool()
     ctx = ToolContext(tool_registry=object(), llm_client=object(), user_input="echo hi")
     result = await tool.execute(ctx)

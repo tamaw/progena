@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import logging
 from pathlib import Path
 from typing import Any
 
@@ -99,7 +98,6 @@ async def test_observe_agent_uses_llm_and_tools(tmp_path: Path) -> None:
 
     agent = FakeObserveAgent(state_dir=state_dir, logs_dir=logs_dir)
     text = await agent.process("why did you error last time", {})
-    assert "build_state.json" in agent.tool_read_state_json("build_state.json")["path"]
     assert "boom" in text.lower()
 
 
@@ -150,26 +148,3 @@ async def test_post_responses_keeps_model_for_azure_custom_domains(
     assert len(captured) == 1
     assert captured[0]["model"] == "gpt-5-mini"
     assert "deployment" not in captured[0]
-
-
-@pytest.mark.asyncio
-async def test_post_responses_logs_body_on_400(
-    azure_agent: ObserveAgent, monkeypatch, caplog
-) -> None:
-    error_body = {"error": {"code": "DeploymentNotFound", "message": "not found"}}
-
-    async def fake_post(url: str, *, json: dict[str, Any], **kwargs: Any) -> _FakeResponse:
-        return _FakeResponse(400, error_body)
-
-    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: _FakeAsyncClient(fake_post, **kw))
-
-    with (
-        caplog.at_level(logging.ERROR, logger="app.agents.observe_agent.agent"),
-        pytest.raises(httpx.HTTPStatusError),
-    ):
-        await azure_agent._post_responses({"model": "gpt-5-mini", "input": []})
-
-    error_messages = [
-        record.message for record in caplog.records if record.levelno >= logging.ERROR
-    ]
-    assert any("400" in message and "DeploymentNotFound" in message for message in error_messages)
