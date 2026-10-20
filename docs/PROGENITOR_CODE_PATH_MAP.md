@@ -115,7 +115,7 @@ create_progenitor_agent()  # async; requires state_manager
   -> auto-discover skills from Postgres "skill" content documents
   -> _ensure_default_runtime_memory(state_manager)
   -> _resolve_runtime_memory_paths(state_manager, memory_paths)
-  -> state_manager.get_content_document("instruction", "progenitor/genesis.md")
+  -> state_manager.get_content_document("instruction", "progenitor/SYSTEM.md")
   -> create_progenitor_async_subagents()
   -> create_deep_agent(...)
 ```
@@ -494,7 +494,7 @@ end-user chat is performed by the LangChain model adapter, not by
 
 | Module | Status | Notes |
 | --- | --- | --- |
-| `llm/prompts.py` | Strongly used | DeepAgent genesis prompt and older prompt templates. |
+| `llm/prompts.py` | Strongly used | Progenitor SYSTEM.md prompt and older prompt templates. |
 | ~~`llm/tokenizer.py`~~ | Removed legacy | Token counting and context-window warning logic were removed; history sizing is controlled upstream. |
 | ~~`llm/response_models.py`~~ | Removed legacy | Supported structured legacy decision/model responses and validation. |
 | ~~`llm/mock_client.py`~~ | Removed test/demo | Tests should use test-local mocks instead. |

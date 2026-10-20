@@ -104,10 +104,10 @@ class TestSkillFiles:
 class FakeContentStateManager:
     """Minimal async state_manager stub for get/save/list content documents."""
 
-    def __init__(self, *, prompt: str = "GENESIS") -> None:
+    def __init__(self, *, prompt: str = "SYSTEM") -> None:
         self._docs: dict[str, dict[str, str]] = {
             "instruction": {
-                "progenitor/genesis.md": f"---\ntitle: Genesis\ndescription: Test\n---\n{prompt}"
+                "progenitor/SYSTEM.md": f"---\ntitle: System\ndescription: Test\n---\n{prompt}"
             },
             "skill": {},
             "agent": {},

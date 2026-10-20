@@ -35,7 +35,12 @@ from .document_kinds import (
     MEMORY_DOCUMENT_KEY_PREFIX,
     SKILL_DOCUMENT_KEY_PREFIX,
 )
-from .instructions.documents import is_bundled_instruction, is_runtime_instruction
+from .instructions.documents import (
+    LEGACY_SYSTEM_INSTRUCTIONS,
+    SYSTEM_INSTRUCTION,
+    is_bundled_instruction,
+    is_runtime_instruction,
+)
 from .instructions.templates import parse_instruction_template
 
 logger = logging.getLogger(__name__)
@@ -58,8 +63,33 @@ def content_document_prefix(kind: str) -> str:
 
 
 def content_document_key(kind: str, relative_path: str) -> str:
-    """Build the store key for one content document (e.g. ``instruction:progenitor/genesis.md``)."""
+    """Build the store key for one content document (e.g. ``instruction:progenitor/SYSTEM.md``)."""
     return f"{content_document_prefix(kind)}{relative_path}"
+
+
+async def _migrate_legacy_system_instruction(state_manager: Any, stored: dict[str, str]) -> None:
+    """Move a stored legacy system prompt (e.g. ``progenitor/genesis.md``) to ``SYSTEM.md``.
+
+    Runs before the file sync so an edited copy becomes ``SYSTEM.md`` instead of
+    being orphaned while ``SYSTEM.md`` is seeded from disk. ``stored`` is
+    updated in place.
+    """
+    for legacy in LEGACY_SYSTEM_INSTRUCTIONS:
+        content = stored.pop(legacy, None)
+        if content is None:
+            continue
+        if SYSTEM_INSTRUCTION in stored:
+            logger.warning(
+                "Both %s and legacy %s are stored; keeping %s",
+                SYSTEM_INSTRUCTION,
+                legacy,
+                SYSTEM_INSTRUCTION,
+            )
+        else:
+            await state_manager.save_content_document("instruction", SYSTEM_INSTRUCTION, content)
+            stored[SYSTEM_INSTRUCTION] = content
+            logger.info("Moved stored instruction %s to %s", legacy, SYSTEM_INSTRUCTION)
+        await state_manager.delete_content_document("instruction", legacy)
 
 
 async def sync_instruction_documents(state_manager: Any, source_dir: Path | str) -> None:
@@ -84,6 +114,7 @@ async def sync_instruction_documents(state_manager: Any, source_dir: Path | str)
         except ValueError as exc:
             raise ValueError(f"{root / relative_path}: {exc}") from exc
     stored = dict(await state_manager.list_content_documents("instruction"))
+    await _migrate_legacy_system_instruction(state_manager, stored)
     written = 0
     for relative_path, content in files.items():
         current = stored.get(relative_path)

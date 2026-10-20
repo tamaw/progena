@@ -29,7 +29,9 @@ if TYPE_CHECKING:
     from app.progenitor.document_types import DocumentType
 
 RUNTIME_INSTRUCTION_GROUP = "progenitor"
-GENESIS_INSTRUCTION = "progenitor/genesis.md"
+SYSTEM_INSTRUCTION = "progenitor/SYSTEM.md"
+# Earlier stored names of SYSTEM_INSTRUCTION, moved over by sync_instruction_documents.
+LEGACY_SYSTEM_INSTRUCTIONS = ("progenitor/genesis.md",)
 BUNDLED_INSTRUCTION_GROUPS = frozenset({"builder_agent", "builder_progenitor", "observe_agent"})
 
 

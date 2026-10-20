@@ -4,6 +4,8 @@ Tests for Phase 1: DeepAgent foundation — LangChain adapter and agent factory.
 
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from app.progenitor.agent.adapters import create_langchain_model
 from app.progenitor.config import LLMConfig
 
@@ -265,10 +267,10 @@ class TestSchemaCompaction:
 class FakeContentStateManager:
     """Minimal async state_manager stub for get/save/list content documents."""
 
-    def __init__(self, *, prompt: str = "GENESIS") -> None:
+    def __init__(self, *, prompt: str = "SYSTEM") -> None:
         self._docs: dict[str, dict[str, str]] = {
             "instruction": {
-                "progenitor/genesis.md": f"---\ntitle: Genesis\ndescription: Test\n---\n{prompt}"
+                "progenitor/SYSTEM.md": f"---\ntitle: System\ndescription: Test\n---\n{prompt}"
             },
             "skill": {},
             "agent": {},
@@ -351,8 +353,8 @@ class TestDeepAgentFactory:
             call_kwargs = mock_create_deep_agent.call_args
             assert call_kwargs.kwargs["checkpointer"] is custom_checkpointer
 
-    async def test_create_agent_uses_genesis_prompt(self):
-        """DeepAgent factory uses the canonical genesis prompt."""
+    async def test_create_agent_uses_system_prompt(self):
+        """DeepAgent factory uses the canonical SYSTEM.md prompt."""
         with (
             patch("app.progenitor.agent.agent.create_langchain_model") as mock_create_model,
             patch("app.progenitor.agent.agent.create_deep_agent") as mock_create_deep_agent,
@@ -366,7 +368,7 @@ class TestDeepAgentFactory:
             from app.progenitor.config import ProgenitorConfig
 
             config = ProgenitorConfig()
-            state_manager = FakeContentStateManager(prompt="GENESIS")
+            state_manager = FakeContentStateManager(prompt="SYSTEM")
             await create_progenitor_agent(
                 config=config,
                 checkpointer=MagicMock(),
@@ -374,4 +376,28 @@ class TestDeepAgentFactory:
             )
 
             call_kwargs = mock_create_deep_agent.call_args
-            assert call_kwargs.kwargs["system_prompt"] == "GENESIS"
+            assert call_kwargs.kwargs["system_prompt"] == "SYSTEM"
+
+    async def test_create_agent_fails_without_system_prompt(self, tmp_path):
+        """A store and instructions dir with no SYSTEM.md fail boot, naming the path."""
+        (tmp_path / "progenitor").mkdir()
+        with (
+            patch("app.progenitor.agent.agent.create_langchain_model") as mock_create_model,
+            patch("app.progenitor.agent.agent.create_deep_agent"),
+            patch("app.progenitor.agent.agent.create_progenitor_backend"),
+        ):
+            mock_create_model.return_value = MagicMock()
+
+            from app.progenitor.agent.agent import create_progenitor_agent
+            from app.progenitor.config import ProgenitorConfig
+
+            config = ProgenitorConfig()
+            config.storage.instructions_dir = tmp_path
+            state_manager = FakeContentStateManager()
+            state_manager._docs["instruction"].clear()
+            with pytest.raises(RuntimeError, match="progenitor/SYSTEM.md"):
+                await create_progenitor_agent(
+                    config=config,
+                    checkpointer=MagicMock(),
+                    state_manager=state_manager,
+                )

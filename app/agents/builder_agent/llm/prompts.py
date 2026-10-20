@@ -25,7 +25,7 @@ class PromptTemplates:
         """Load a prompt from file.
 
         Args:
-            filename: Name of the prompt file (e.g., 'genesis.md')
+            filename: Name of the prompt file (e.g., 'progenitor/SYSTEM.md')
 
         Returns:
             The prompt content as a string.
@@ -51,9 +51,9 @@ class PromptTemplates:
         """
         return render_prompt_template(self._load_prompt(filename), **replacements)
 
-    def get_genesis_prompt(self) -> str:
-        """Get the system genesis prompt (loaded on startup)."""
-        return self._load_prompt("progenitor/genesis.md")
+    def get_system_prompt(self) -> str:
+        """Get Progenitor's system prompt (progenitor/SYSTEM.md)."""
+        return self._load_prompt("progenitor/SYSTEM.md")
 
     def get_decide_prompt(self, tool_context: str) -> str:
         """Get the decision routing prompt with full tool/agent context."""
