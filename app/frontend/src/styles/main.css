@@ -65,7 +65,7 @@
     --font-size-md: 13px;
     --font-size-lg: 14px;
     --font-size-xl: 20px;
-    --font-size-doc: 15px; /* long-form reading: inbox documents */
+    --font-size-doc: 14px; /* long-form reading: inbox documents */
 
     /* Borders */
     --border-radius-sm: 6px;
@@ -93,7 +93,7 @@
     --font-size-md: 12px;
     --font-size-lg: 13px;
     --font-size-xl: 18px;
-    --font-size-doc: 14px;
+    --font-size-doc: 13px;
 }
 
 [data-density="presentation"] {
@@ -102,7 +102,7 @@
     --font-size-md: 16px;
     --font-size-lg: 17px;
     --font-size-xl: 24px;
-    --font-size-doc: 19px;
+    --font-size-doc: 18px;
 }
 
 [data-theme="light"] {
