@@ -78,7 +78,7 @@ The current schema supports: `prompt`, `eval`, `condition`, `switch`, `split`,
 - `agent` invokes a local object agent; `a2a` invokes a registered A2A peer.
   An agent's request is exactly one of inline `prompt_template`, reusable
   `instruction` (a path relative to `/instructions/`, such as
-  `workflows/build-card.md`), or `inputs`. Instruction placeholders resolve
+  `workflows/card-summary.md`), or `inputs`. Instruction placeholders resolve
   from routine state just like prompt-template placeholders.
   Agent nodes default to `execution: "wait"`, which waits for the response. Use
   `execution: "background"` only when later steps can proceed without that answer.
@@ -88,9 +88,10 @@ The current schema supports: `prompt`, `eval`, `condition`, `switch`, `split`,
   Every node stops after 120 seconds unless it sets `timeout` (seconds; `0`
   means no limit). Agent steps that run shell work (cloning, worktrees, builds)
   usually need more: set e.g. `"timeout": 900`.
-  A build-supervisor user agent that drives Claude should list
-  `acp_start`, `acp_send`, `acp_status`, `acp_answer`, `acp_cancel`, and
-  `acp_list` in its `tools`, and use the `driving-acp-agents` skill.
+  Do not make an agent step that starts Claude and polls `acp_status`: every
+  poll is a full model turn. Start ACP work from a workflow with
+  `document_create(acp_task)` and react to its status events instead (see the
+  managing-workflows skill).
   Repository work goes to the bundled `repo-manager` agent: it clones declared
   repos (`/config/repos/<id>.json`), creates and removes per-branch worktrees
   under `$PROGENITOR_REPOS_DIR/<repo-id>.worktrees/`, and publishes branches
@@ -127,6 +128,14 @@ The current user is {context[user_id]}.
 Every node shares `id`, `description`, and `output_key`, with optional `label`,
 `x`, and `y` editor metadata. Layout coordinates are not required for
 execution.
+
+A node stores its whole result under `data[<output_key>]` (default: its `id`);
+it never spreads an object's fields into `data`. The routine's `output_schema`
+returns each declared field from top-level `data`, so an agent node with
+`output_key: "result"` and `response_schema` `{worktree_path, branch_name}`
+returns nothing for those fields on its own. Lift each one with an `eval` node
+whose `output_key` is the field name, e.g. `output_key: "worktree_path"`,
+`expression: "result.worktree_path"`.
 
 Use only the fields allowed by the selected node kind. For example:
 
