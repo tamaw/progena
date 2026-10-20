@@ -397,6 +397,7 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, o
     watchThread,
     pendingApprovals: livePendingApprovals,
     answerApproval,
+    error: runError,
   } = useRoutineRunEvents(agent.id, parameterValues, meta.input_schema);
   const runNav = useRunHistoryNav(agent.id, {
     status: runStatus,
@@ -1561,6 +1562,7 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, o
             ) : null}
           </div>
           {saveError ? <div className="agents-graph-save-error">{saveError}</div> : null}
+          {runError && !runNav.isBrowsingHistory ? <div className="agents-graph-save-error" role="alert">{runError}</div> : null}
         </div>
       </section>
       {policyOpen ? (
