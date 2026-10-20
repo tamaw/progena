@@ -886,3 +886,41 @@ def test_invalid_approval_does_not_enqueue(harness, monkeypatch, thread, interru
     assert (
         client.app.state.doc_store.get_document(PROGENITOR_STATE_PREFIX, "background_tasks") is None
     )
+
+
+def _runtime_gated_client(live: dict[str, bool]) -> tuple[TestClient, InMemoryDocumentStore]:
+    doc_store = InMemoryDocumentStore()
+    app = FastAPI()
+    _install_request_id_middleware(app)
+    app.include_router(
+        create_agent_profile_router(
+            get_agent_store=lambda: FakeAgentStore(),
+            get_document_store=lambda: doc_store,
+            broadcast_ui_event=lambda *_args, **_kwargs: None,
+            is_runtime_live=lambda: live["value"],
+        ),
+        prefix="/api/ui",
+    )
+    return TestClient(app), doc_store
+
+
+def test_run_and_approval_are_refused_while_the_runtime_is_down():
+    """Nothing would claim the queued task, so it must not be accepted as 'Running'."""
+    live = {"value": False}
+    client, doc_store = _runtime_gated_client(live)
+    approval = {
+        "thread_id": "routine:alpha:revision:session",
+        "interrupt_id": "i",
+        "answer": "approve",
+    }
+
+    run = client.post("/api/ui/agent-profiles/alpha/run", json={})
+    resume = client.post("/api/ui/agent-profiles/alpha/approval", json=approval)
+
+    assert (run.status_code, resume.status_code) == (503, 503)
+    assert "runtime is not running" in run.json()["detail"]
+    assert doc_store.get_document(PROGENITOR_STATE_PREFIX, "background_tasks") is None
+
+    live["value"] = True
+    assert client.post("/api/ui/agent-profiles/alpha/run", json={}).status_code == 202
+    assert len(doc_store.get_document(PROGENITOR_STATE_PREFIX, "background_tasks").payload) == 1
