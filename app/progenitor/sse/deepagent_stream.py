@@ -21,6 +21,7 @@ from ..runtime.messages import (
     extract_message_text,
     extract_reasoning_token_count,
     extract_reasoning_trace,
+    extract_token_usage,
     get_last_ai_message,
     summarize_message_schema,
 )
@@ -145,15 +146,13 @@ class DeepAgentSSEStream:
         # turn -- no cross-turn leakage, so no eviction is needed.
         self._subagent_namespace_bindings: dict[tuple[Any, ...], tuple[str, str]] = {}
         self._last_emitted_assistant_metadata: dict[str, Any] | None = None
-        # Per-turn reasoning-token accumulator. A multi-step turn runs the
-        # model once per tool round-trip; each call reports its own usage on
-        # its own AIMessage. The finalize summary must carry the SUM across
-        # calls, not just the last call's count (the UI header totals it).
-        # Track the highest reasoning-token count observed per message id so a
-        # later repeated update can fill in or increase usage without double-
-        # counting already-accounted tokens.
+        # Per-turn model-usage accumulators. Update events may re-deliver a
+        # message with a higher finalized count, so both trackers only add
+        # positive deltas per provider message id.
         self._turn_reasoning_tokens = 0
         self._counted_usage_by_message_id: dict[str, int] = {}
+        self._turn_usage = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
+        self._counted_token_usage_by_message_id: dict[str, dict[str, int]] = {}
         # Per-node wall-time tracer (PROGENITOR_TRACE_TIMING). Reset per
         # stream() invocation so a reused instance does not carry stale
         # timestamps across turns.
@@ -173,6 +172,11 @@ class DeepAgentSSEStream:
         source: str | None = None,
     ) -> AsyncGenerator[dict[str, Any]]:
         """Yield SSE stream items from ``graph.astream``."""
+
+        self._turn_reasoning_tokens = 0
+        self._counted_usage_by_message_id.clear()
+        self._turn_usage = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
+        self._counted_token_usage_by_message_id.clear()
 
         additional_kwargs: dict[str, Any] = {
             "created_at": received_at if received_at is not None else time.time()
@@ -377,6 +381,13 @@ class DeepAgentSSEStream:
             return [item, *expanded] if expanded else []
         return [item, *expanded]
 
+    @staticmethod
+    def _message_usage_key(msg: Any) -> str:
+        msg_id = msg.get("id") if isinstance(msg, dict) else getattr(msg, "id", None)
+        # Id-less messages (some direct/A2A replies and unit fixtures) retain
+        # object identity across updates held in state.
+        return msg_id if isinstance(msg_id, str) and msg_id else f"obj:{id(msg)}"
+
     def _accumulate_reasoning_usage(self, messages: Any) -> None:
         """Accumulate only positive per-message reasoning-usage deltas."""
         if not isinstance(messages, list):
@@ -386,12 +397,7 @@ class DeepAgentSSEStream:
             role = msg.get("role") if isinstance(msg, dict) else getattr(msg, "role", None)
             if msg_type != "ai" and role != "assistant":
                 continue
-            msg_id = msg.get("id") if isinstance(msg, dict) else getattr(msg, "id", None)
-            # Dedupe by provider message id; id-less messages (some direct/A2A
-            # replies, unit fixtures) fall back to object identity — the state
-            # dict holds the coerced objects for the whole turn, so identity is
-            # stable between the update event and finalize.
-            key = msg_id if isinstance(msg_id, str) and msg_id else f"obj:{id(msg)}"
+            key = self._message_usage_key(msg)
             count = extract_reasoning_token_count(msg)
             if not isinstance(count, int) or count <= 0:
                 continue
@@ -400,6 +406,28 @@ class DeepAgentSSEStream:
                 continue
             self._counted_usage_by_message_id[key] = count
             self._turn_reasoning_tokens += count - previous
+
+    def _accumulate_token_usage(self, messages: Any) -> None:
+        """Accumulate only positive per-message input/output/total deltas."""
+        if not isinstance(messages, list):
+            return
+        for msg in messages:
+            msg_type = msg.get("type") if isinstance(msg, dict) else getattr(msg, "type", None)
+            role = msg.get("role") if isinstance(msg, dict) else getattr(msg, "role", None)
+            if msg_type != "ai" and role != "assistant":
+                continue
+            usage = extract_token_usage(msg)
+            if usage is None:
+                continue
+            key = self._message_usage_key(msg)
+            previous = self._counted_token_usage_by_message_id.get(key, {})
+            updated = dict(previous)
+            for name, count in usage.items():
+                prior_count = previous.get(name, 0)
+                if count > prior_count:
+                    updated[name] = count
+                    self._turn_usage[name] += count - prior_count
+            self._counted_token_usage_by_message_id[key] = updated
 
     async def _handle_update_event(self, event: dict[str, Any]) -> AsyncIterator[dict[str, Any]]:
         for node_name, node_output in event.items():
@@ -417,6 +445,7 @@ class DeepAgentSSEStream:
                     "messages": coerce_messages_list(node_output.get("messages")),
                 }
                 self._accumulate_reasoning_usage(node_output["messages"])
+                self._accumulate_token_usage(node_output["messages"])
             self.state.update(node_output)
 
             if "todos" in node_output:
@@ -496,7 +525,9 @@ class DeepAgentSSEStream:
         # a no-op when its usage was already accumulated.
         if last_ai_msg is not None:
             self._accumulate_reasoning_usage([last_ai_msg])
+            self._accumulate_token_usage([last_ai_msg])
         turn_reasoning_tokens = self._turn_reasoning_tokens or reasoning_tokens
+        turn_usage = dict(self._turn_usage) if self._counted_token_usage_by_message_id else None
         # Unlike reasoning tokens, cache-read is NOT cumulative work across a
         # multi-step turn's tool round-trips -- each model call reports the
         # cache-hit depth of *that call's own* (largely repeated) input, not
@@ -506,12 +537,17 @@ class DeepAgentSSEStream:
         cache_read_tokens = (
             extract_cache_read_token_count(last_ai_msg) if last_ai_msg is not None else None
         )
-        if last_ai_msg is not None and cache_read_tokens is not None:
+        usage_metadata: dict[str, Any] = {}
+        if turn_usage is not None:
+            usage_metadata["usage"] = turn_usage
+        if cache_read_tokens is not None:
+            usage_metadata["cache_read_tokens"] = cache_read_tokens
+        if usage_metadata:
             yield {
                 "type": "stream_event",
                 "event_type": "usage_update",
                 "content": "",
-                "metadata": {"cache_read_tokens": cache_read_tokens},
+                "metadata": usage_metadata,
             }
         reasoning_trace = extract_reasoning_trace(last_ai_msg) if last_ai_msg is not None else None
         if not reasoning_trace and self._streamed_reasoning_content:

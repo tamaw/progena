@@ -1,3 +1,6 @@
+// @vitest-environment jsdom
+import React, { act } from 'react';
+import { createRoot } from 'react-dom/client';
 import { describe, expect, it, vi } from 'vitest';
 import {
   NODE_MENU_CATEGORIES,
@@ -20,6 +23,7 @@ import {
   createPaletteNode,
   nodeInputPorts,
   schemasAreCompatible,
+  WorkflowRunsList,
 } from './WorkflowsPage';
 import { canvasToolSettings } from './workflowCanvasTools';
 
@@ -1096,4 +1100,36 @@ describe('extract node round-trip', () => {
       schema: 'kanban_card',
     });
   });
+});
+
+
+it('renders workflow run token totals and per-step usage', async () => {
+  vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
+  const host = document.createElement('div');
+  document.body.append(host);
+  const root = createRoot(host);
+  try {
+    await act(async () => root.render(React.createElement(WorkflowRunsList, {
+      workflowId: 'workflow_1',
+      loading: false,
+      runs: [{
+        run_id: 'run_1',
+        status: 'completed',
+        updated_at: new Date().toISOString(),
+        tokens: { input_tokens: 40, output_tokens: 65, total_tokens: 105 },
+        step_audit: [
+          { node_id: 'extract_1', tokens: { input_tokens: 15, output_tokens: 25, total_tokens: 40 } },
+          { node_id: 'agent_1', tokens: { input_tokens: 25, output_tokens: 40, total_tokens: 65 } },
+        ],
+      }],
+    })));
+
+    expect(host.textContent).toContain('Total: 105 tok');
+    expect(host.textContent).toContain('extract_1: 40 tok');
+    expect(host.textContent).toContain('agent_1: 65 tok');
+  } finally {
+    await act(async () => root.unmount());
+    host.remove();
+    vi.unstubAllGlobals();
+  }
 });

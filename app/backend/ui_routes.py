@@ -598,10 +598,14 @@ async def _workflow_prompt_runner(
         invocation_source=widget_id,
         root_widget_id=f"workflow:{workflow.id}",
     )
-    thread_id, _response_obj, response_text = await _execute_action_run(
+    thread_id, response_obj, response_text = await _execute_action_run(
         request, workflow_run_id=run_id
     )
-    return PromptExecutionResult(response=response_text, thread_id=thread_id)
+    return PromptExecutionResult(
+        response=response_text,
+        thread_id=thread_id,
+        usage=getattr(response_obj, "usage", None),
+    )
 
 
 def get_workflow_executor() -> WorkflowExecutor:

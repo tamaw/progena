@@ -1339,3 +1339,66 @@ async def test_late_reasoning_usage_update_for_same_message_id_contributes_only_
     assert len(summaries) == 1
     assert summaries[0]["content"] == "Thought it through."
     assert summaries[0]["metadata"]["reasoning_tokens"] == 64
+
+
+@pytest.mark.asyncio
+async def test_usage_update_sums_model_calls_and_deduplicates_repeated_message_ids():
+    first_partial = AIMessage(
+        id="ai-1",
+        content="",
+        usage_metadata={"input_tokens": 10, "output_tokens": 4, "total_tokens": 14},
+    )
+    first_final = AIMessage(
+        id="ai-1",
+        content="",
+        usage_metadata={"input_tokens": 10, "output_tokens": 6, "total_tokens": 16},
+    )
+    second_call = AIMessage(
+        id="ai-2",
+        content="Done",
+        usage_metadata={"input_tokens": 20, "output_tokens": 10, "total_tokens": 30},
+    )
+    graph = _FakeGraph(
+        [
+            ("updates", {"model": {"messages": [first_partial]}}),
+            ("updates", {"model": {"messages": [first_final]}}),
+            ("updates", {"respond": {"pending_response": "Done", "messages": [second_call]}}),
+        ]
+    )
+
+    items = await _collect_items(
+        DeepAgentSSEStream(graph, config=_make_config(reasoning_enabled=False), state={})
+    )
+
+    usage_updates = [item for item in items if item.get("event_type") == "usage_update"]
+    assert usage_updates == [
+        {
+            "type": "stream_event",
+            "event_type": "usage_update",
+            "content": "",
+            "metadata": {"usage": {"input_tokens": 30, "output_tokens": 16, "total_tokens": 46}},
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_usage_update_is_omitted_when_no_model_message_reports_usage():
+    graph = _FakeGraph(
+        [
+            (
+                "updates",
+                {
+                    "respond": {
+                        "pending_response": "Done",
+                        "messages": [AIMessage(id="ai-1", content="Done")],
+                    }
+                },
+            )
+        ]
+    )
+
+    items = await _collect_items(
+        DeepAgentSSEStream(graph, config=_make_config(reasoning_enabled=False), state={})
+    )
+
+    assert not [item for item in items if item.get("event_type") == "usage_update"]
