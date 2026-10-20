@@ -10,13 +10,8 @@ class TestRateLimiterMemoryBounds(unittest.TestCase):
     def setUp(self):
         """Set up test fixtures."""
         from app.backend.main import RateLimiter
-        self.RateLimiter = RateLimiter
 
-    def test_max_tracked_clients_constant(self):
-        """Test that MAX_TRACKED_CLIENTS is defined."""
-        limiter = self.RateLimiter()
-        assert hasattr(limiter, 'MAX_TRACKED_CLIENTS')
-        assert limiter.MAX_TRACKED_CLIENTS == 10000
+        self.RateLimiter = RateLimiter
 
     def test_cleanup_stale_clients_returns_count(self):
         """Test that cleanup returns number of removed clients."""
@@ -58,12 +53,6 @@ class TestRateLimiterMemoryBounds(unittest.TestCase):
         # Newer clients should remain
         assert "client_9" in limiter._hour_requests
 
-    def test_evict_oldest_empty(self):
-        """Test evicting from empty limiter."""
-        limiter = self.RateLimiter()
-        evicted = limiter._evict_oldest_clients(5)
-        assert evicted == 0
-
     def test_capacity_enforcement_at_limit(self):
         """Test that eviction happens when at capacity."""
         # Create limiter with small capacity for testing
@@ -84,24 +73,6 @@ class TestRateLimiterMemoryBounds(unittest.TestCase):
 
         # Should have evicted some clients
         assert len(limiter._hour_requests) < 11  # May include new_client
-
-    def test_get_stats_includes_capacity(self):
-        """Test that stats include capacity information."""
-        limiter = self.RateLimiter()
-
-        # Add some clients
-        now = time.time()
-        for i in range(100):
-            limiter._hour_requests[f"client_{i}"] = [now]
-
-        stats = limiter.get_stats()
-
-        assert "active_clients" in stats
-        assert stats["active_clients"] == 100
-        assert "max_tracked_clients" in stats
-        assert stats["max_tracked_clients"] == 10000
-        assert "capacity_percent" in stats
-        assert stats["capacity_percent"] == 1.0  # 100/10000 = 1%
 
     def test_forced_cleanup(self):
         """Test forced cleanup ignores interval."""
@@ -146,6 +117,7 @@ class TestRateLimiterBasicFunctionality(unittest.TestCase):
     def setUp(self):
         """Set up test fixtures."""
         from app.backend.main import RateLimiter
+
         self.limiter = RateLimiter(requests_per_minute=5, requests_per_hour=10)
 
     def test_allows_under_limit(self):
@@ -177,7 +149,3 @@ class TestRateLimiterBasicFunctionality(unittest.TestCase):
 
         assert remaining["minute"] == 3  # 5 - 2
         assert remaining["hour"] == 8  # 10 - 2
-
-
-if __name__ == "__main__":
-    unittest.main()

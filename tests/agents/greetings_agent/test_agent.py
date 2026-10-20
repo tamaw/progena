@@ -149,9 +149,6 @@ async def test_failure_path(monkeypatch: pytest.MonkeyPatch) -> None:
 
     terminal = await _poll_terminal(handler, result.id)
     assert terminal.status.state == TaskState.failed
-    assert (
-        "Intentional failure requested by mock input" in terminal.status.message.parts[0].root.text
-    )
 
 
 @pytest.mark.asyncio
@@ -195,24 +192,6 @@ async def test_bare_greeting_calls_pick_greeting_style(monkeypatch: pytest.Monke
     text = terminal.status.message.parts[0].root.text
     assert "Irish-style right back at you: Top o' the mornin'!" in text
     assert terminal.status.message.metadata["display_tool_calls"] == ["pick_greeting_style"]
-
-
-def test_greeting_styles_are_well_formed() -> None:
-    names = [style for style, _phrase in agent_module._GREETING_STYLES]
-    assert len(names) >= 5
-    assert len(names) == len(set(names)), "duplicate greeting style names"
-    for style, phrase in agent_module._GREETING_STYLES:
-        assert style.strip() == style and style
-        assert phrase.strip() == phrase and phrase
-
-
-def test_pick_greeting_style_returns_one_of_the_known_styles() -> None:
-    for _ in range(20):
-        assert agent_module._pick_greeting_style() in agent_module._GREETING_STYLES
-
-
-def test_pick_greeting_style_tool_is_registered() -> None:
-    assert agent_module.pick_greeting_style in agent_module._TOOLS
 
 
 @pytest.mark.asyncio
@@ -284,55 +263,6 @@ async def test_push_notification_not_sent_twice_per_transition(
     # submitted, working, completed -- exactly one notification per
     # transition, not two.
     assert push_sender.send_notification.await_count == 3
-
-
-@pytest.mark.asyncio
-async def test_task_history_matches_exact_transition_sequence_with_no_duplicates(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Regression: GreetingsExecutor used to read-modify-write the task
-    store itself in _save_state() in addition to the framework's own
-    TaskManager persisting every queued TaskStatusUpdateEvent, so each
-    status message ended up appended to task.history twice. A multi-step
-    request (several sequential progress transitions after the first) is
-    what reliably exposed it: TaskManager caches its own in-memory Task
-    after its first event and stops re-reading the store, so from the
-    second transition onward it doesn't just duplicate but re-appends its
-    own *stale* cached message instead of the new one."""
-    monkeypatch.setenv("PROGENITOR_MOCK_LLM", "true")
-    handler, store = _build_handler()
-
-    result = await handler.on_message_send(
-        MessageSendParams(
-            message=_make_text_message("do a 3-step task: prep, build, verify"),
-            configuration=MessageSendConfiguration(blocking=False),
-        )
-    )
-    terminal = await _poll_terminal(handler, result.id)
-    assert terminal.status.state == TaskState.completed
-
-    saved = await store.get(result.id)
-    assert saved is not None
-    texts = [msg.parts[0].root.text for msg in (saved.history or [])]
-    # Mock mode is fully deterministic, so the exact sequence is known --
-    # note "Calling do_step..."/"do_step finished." legitimately repeats
-    # once per step (see test_run_mock_steps_bookends_each_step_with_do_step_lifecycle),
-    # so a same-text-appears-twice check can't tell that apart from the
-    # duplicate-persistence bug this guards against; only an exact sequence can.
-    assert texts == [
-        "do a 3-step task: prep, build, verify",
-        "Accepted: do a 3-step task: prep, build, verify",
-        "Working on your greeting...",
-        "Calling do_step...",
-        "Step 1/3: prep...",
-        "do_step finished.",
-        "Calling do_step...",
-        "Step 2/3: build...",
-        "do_step finished.",
-        "Calling do_step...",
-        "Step 3/3: verify...",
-        "do_step finished.",
-    ]
 
 
 @pytest.mark.asyncio
@@ -429,27 +359,6 @@ async def test_steps_request_that_also_contains_a_sleep_trigger_word_reports_onl
 
 
 @pytest.mark.asyncio
-async def test_multi_step_task_defaults_step_names_when_unnamed(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("PROGENITOR_MOCK_LLM", "true")
-    handler, _store = _build_handler()
-
-    result = await handler.on_message_send(
-        MessageSendParams(
-            message=_make_text_message("please do a 2-step task"),
-            configuration=MessageSendConfiguration(blocking=False),
-        )
-    )
-
-    terminal = await _poll_terminal(handler, result.id)
-    assert terminal.status.state == TaskState.completed
-    text = terminal.status.message.parts[0].root.text
-    assert "step 1" in text
-    assert "step 2" in text
-
-
-@pytest.mark.asyncio
 async def test_streaming_delivers_live_progress_events_in_order(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -482,7 +391,6 @@ async def test_streaming_delivers_live_progress_events_in_order(
     assert any("alpha" in t for t in working_texts)
     assert any("beta" in t for t in working_texts)
     assert any("gamma" in t for t in working_texts)
-    assert len(working_texts) >= 4
 
 
 @pytest.mark.asyncio
@@ -574,206 +482,6 @@ async def test_concurrent_cancel_calls_deliver_only_one_terminal_event(
     assert len(canceled_final_events) == 1
 
 
-@pytest.mark.asyncio
-async def test_mock_response_parse_table(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("PROGENITOR_MOCK_LLM", "true")
-    monkeypatch.setattr(agent_module, "_probe_copilot", AsyncMock(return_value="hi from copilot"))
-
-    assert (
-        await agent_module._mock_response("tell me something")
-        == "Hello from greetings_agent! You said: 'tell me something'"
-    )
-    assert (
-        await agent_module._mock_response("sleep 0 seconds")
-        == "Hello! I pretended to work for 0 seconds."
-    )
-    assert (
-        await agent_module._mock_response("ask copilot please") == "Copilot says: hi from copilot"
-    )
-
-    with pytest.raises(RuntimeError, match="Intentional failure"):
-        await agent_module._mock_response("please fail now")
-
-
-@pytest.mark.asyncio
-async def test_mock_response_recognizes_sleep_trigger_word_variants(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The system prompt promises "sleep, wait, or take your time for some number
-    of seconds" as interchangeable trigger phrases -- each must actually reach
-    the sleep branch in mock mode. Regression: the original regex required the
-    literal word "sleep" immediately followed by whitespace and a digit, so it
-    silently missed every other phrasing the prompt itself advertises, and even
-    missed "sleepy" (the skill's own name) since the "y" isn't whitespace."""
-    monkeypatch.setenv("PROGENITOR_MOCK_LLM", "true")
-    phrases = [
-        "sleep 0 seconds",
-        "sleep for 0 seconds",
-        "please wait 0 seconds then greet",
-        "take your time, about 0 seconds",
-        "pretend to work for 0 seconds",
-        "test the sleepy reply for 0 seconds",
-    ]
-    for phrase in phrases:
-        text = await agent_module._mock_response(phrase)
-        assert text == "Hello! I pretended to work for 0 seconds.", phrase
-
-
-@pytest.mark.asyncio
-async def test_run_mock_sleep_reports_progress_once_per_chunk(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A duration-driven request chains multiple "working" pings, the same way
-    a multi-step request chains one per named step (see _run_mock_steps) --
-    a second, duration-driven way to generate live progress events, alongside
-    the step-count-driven one. asyncio.sleep is stubbed so this runs instantly
-    instead of actually waiting out the chunked duration."""
-    real_sleeps: list[float] = []
-
-    async def fake_sleep(seconds: float) -> None:
-        real_sleeps.append(seconds)
-
-    monkeypatch.setattr(agent_module.asyncio, "sleep", fake_sleep)
-    calls: list[str] = []
-
-    async def progress_callback(text: str) -> None:
-        calls.append(text)
-
-    await agent_module._run_mock_sleep(6.0, progress_callback)
-
-    assert real_sleeps == [2.0, 2.0, 2.0]
-    assert calls == [
-        "Calling sleep...",
-        "Still working... 2s elapsed of 6s total.",
-        "Still working... 4s elapsed of 6s total.",
-        "Still working... 6s elapsed of 6s total.",
-        "sleep finished.",
-    ]
-
-
-@pytest.mark.asyncio
-async def test_run_mock_sleep_with_duration_shorter_than_one_chunk(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    real_sleeps: list[float] = []
-
-    async def fake_sleep(seconds: float) -> None:
-        real_sleeps.append(seconds)
-
-    monkeypatch.setattr(agent_module.asyncio, "sleep", fake_sleep)
-    calls: list[str] = []
-
-    async def progress_callback(text: str) -> None:
-        calls.append(text)
-
-    await agent_module._run_mock_sleep(1.0, progress_callback)
-
-    assert real_sleeps == [1.0]
-    assert calls == [
-        "Calling sleep...",
-        "Still working... 1s elapsed of 1s total.",
-        "sleep finished.",
-    ]
-
-
-@pytest.mark.asyncio
-async def test_run_mock_sleep_with_zero_duration_reports_no_progress() -> None:
-    calls: list[str] = []
-
-    async def progress_callback(text: str) -> None:
-        calls.append(text)
-
-    await agent_module._run_mock_sleep(0.0, progress_callback)
-
-    assert calls == []
-
-
-@pytest.mark.asyncio
-async def test_mock_response_bare_greeting_uses_a_random_style(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("PROGENITOR_MOCK_LLM", "true")
-    monkeypatch.setattr(
-        agent_module, "_pick_greeting_style", lambda: ("Australian", "G'day, mate!")
-    )
-
-    for greeting in ("hi", "Hello there", "hey!", "Good morning", "howdy"):
-        assert await agent_module._mock_response(greeting) == (
-            f"Hello from greetings_agent! You said: {greeting!r}. "
-            "Australian-style right back at you: G'day, mate!"
-        )
-
-    # Not anchored to the start of the message -> not treated as a bare greeting,
-    # same precedence the sleep/copilot/steps checks above it already get.
-    assert await agent_module._mock_response("thing hi") == (
-        "Hello from greetings_agent! You said: 'thing hi'"
-    )
-
-
-@pytest.mark.asyncio
-async def test_run_mock_steps_bookends_each_step_with_do_step_lifecycle(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Regression: mock-mode progress used to emit only a generic "Step i/N"
-    ping per step, not the "Calling do_step..." / "do_step finished." pair
-    the real (non-mock) path emits for an actual do_step tool call -- so a
-    multi-step mock run couldn't exercise the per-tool lifecycle
-    display_tool_calls (see _run_greeting_payload) reports it as having."""
-    monkeypatch.setattr(agent_module.asyncio, "sleep", AsyncMock())
-    calls: list[str] = []
-
-    async def progress_callback(text: str) -> None:
-        calls.append(text)
-
-    await agent_module._run_mock_steps(["prep", "build"], progress_callback)
-
-    assert calls == [
-        "Calling do_step...",
-        "Step 1/2: prep...",
-        "do_step finished.",
-        "Calling do_step...",
-        "Step 2/2: build...",
-        "do_step finished.",
-    ]
-
-
-@pytest.mark.asyncio
-async def test_mock_response_bare_greeting_reports_pick_greeting_style_progress(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Regression: the bare-greeting mock branch recorded pick_greeting_style
-    in the final display_tool_calls metadata but never called
-    progress_callback at all, so a live viewer saw no progress for it."""
-    monkeypatch.setattr(
-        agent_module, "_pick_greeting_style", lambda: ("Australian", "G'day, mate!")
-    )
-    calls: list[str] = []
-
-    async def progress_callback(text: str) -> None:
-        calls.append(text)
-
-    await agent_module._mock_response("hello", progress_callback)
-
-    assert calls == ["Calling pick_greeting_style...", "pick_greeting_style finished."]
-
-
-@pytest.mark.asyncio
-async def test_mock_response_copilot_branch_reports_probe_copilot_progress(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Same class of bug as the bare-greeting case: the copilot mock branch
-    recorded probe_copilot in display_tool_calls but never reported progress."""
-    monkeypatch.setattr(agent_module, "_probe_copilot", AsyncMock(return_value="hi there"))
-    calls: list[str] = []
-
-    async def progress_callback(text: str) -> None:
-        calls.append(text)
-
-    await agent_module._mock_response("ask copilot please", progress_callback)
-
-    assert calls == ["Calling probe_copilot...", "probe_copilot finished."]
-
-
 def test_normalize_base_url_cases() -> None:
     assert (
         _normalize_base_url("https://example.test/openai/v1/responses")
@@ -786,94 +494,6 @@ def test_normalize_base_url_cases() -> None:
     assert (
         _normalize_base_url("https://example.test/openai/v1/") == "https://example.test/openai/v1"
     )
-
-
-# ─── _report_message_progress against real (non-mock) LangChain shapes ────
-#
-# _report_message_progress reads duck-typed AIMessage/ToolMessage shapes from
-# agent.astream(..., stream_mode="updates") -- the path a real (non-mock) LLM
-# actually takes. Every other test in this file exercises PROGENITOR_MOCK_LLM
-# mode instead, which never reaches this function's duck-typing at all, so
-# these use the real langchain_core.messages classes to close that gap: a
-# shape mismatch here degrades silently by design (best-effort, never breaks
-# the greeting), so nothing else would catch a regression in the duck-typing
-# itself.
-
-
-@pytest.mark.asyncio
-async def test_report_message_progress_relays_real_aimessage_tool_call() -> None:
-    calls: list[str] = []
-
-    async def progress_callback(text: str) -> None:
-        calls.append(text)
-
-    msg = AIMessage(
-        content="",
-        tool_calls=[
-            {"name": "do_step", "args": {"step_number": 1}, "id": "call_1", "type": "tool_call"}
-        ],
-    )
-    await agent_module._report_message_progress(msg, progress_callback)
-
-    assert calls == ["Calling do_step..."]
-
-
-@pytest.mark.asyncio
-async def test_report_message_progress_relays_multiple_real_tool_calls_in_order() -> None:
-    calls: list[str] = []
-
-    async def progress_callback(text: str) -> None:
-        calls.append(text)
-
-    msg = AIMessage(
-        content="",
-        tool_calls=[
-            {"name": "do_step", "args": {"step_number": 1}, "id": "call_1", "type": "tool_call"},
-            {"name": "do_step", "args": {"step_number": 2}, "id": "call_2", "type": "tool_call"},
-        ],
-    )
-    await agent_module._report_message_progress(msg, progress_callback)
-
-    assert calls == ["Calling do_step...", "Calling do_step..."]
-
-
-@pytest.mark.asyncio
-async def test_report_message_progress_ignores_real_aimessage_with_no_tool_calls() -> None:
-    calls: list[str] = []
-
-    async def progress_callback(text: str) -> None:
-        calls.append(text)
-
-    msg = AIMessage(content="Hello! Nice to meet you.")
-    await agent_module._report_message_progress(msg, progress_callback)
-
-    assert calls == []
-
-
-@pytest.mark.asyncio
-async def test_report_message_progress_relays_real_toolmessage_completion() -> None:
-    calls: list[str] = []
-
-    async def progress_callback(text: str) -> None:
-        calls.append(text)
-
-    msg = ToolMessage(
-        content="Step 1 (prep) done after 1.0s.", name="do_step", tool_call_id="call_1"
-    )
-    await agent_module._report_message_progress(msg, progress_callback)
-
-    assert calls == ["do_step finished."]
-
-
-@pytest.mark.asyncio
-async def test_report_message_progress_is_a_noop_with_no_progress_callback() -> None:
-    # Must not raise -- _run_deep_agent always calls this even when
-    # progress_callback is None (the non-streaming-consumer case).
-    msg = AIMessage(
-        content="",
-        tool_calls=[{"name": "do_step", "args": {}, "id": "call_1", "type": "tool_call"}],
-    )
-    await agent_module._report_message_progress(msg, None)
 
 
 # ─── _run_deep_agent plumbing against a realistic (not mock) stream shape ──

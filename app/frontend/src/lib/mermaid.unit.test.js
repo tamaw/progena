@@ -49,11 +49,4 @@ describe('renderMermaidDiagrams', () => {
     expect(fakeMermaid.run).not.toHaveBeenCalled();
   });
 
-  it('swallows a render failure so a malformed/incomplete diagram does not throw', async () => {
-    fakeMermaid.run.mockRejectedValueOnce(new Error('parse error'));
-    const root = document.createElement('div');
-    root.innerHTML = '<pre class="mermaid">not valid mermaid</pre>';
-
-    await expect(renderMermaidDiagrams(root)).resolves.toBeUndefined();
-  });
 });

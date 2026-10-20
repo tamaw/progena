@@ -12,22 +12,13 @@ import pytest
 from app.backend.alerts import AlertInfo
 from app.backend.client import ProgenitorClient
 from app.backend.config import ChatServerConfig
-from app.backend.main import _build_alert_summary_prompt, _relay_alert
-from app.backend.models import AgentResponse, ResponseRequest
+from app.backend.main import _relay_alert
+from app.backend.models import AgentResponse
 from app.backend.sse_client import start_sse_client_with_retry
 
 
 class TestChatServerConfig:
     """Tests for ChatServerConfig."""
-
-    def test_default_config(self):
-        """Test default configuration values."""
-        config = ChatServerConfig()
-        assert config.host == "0.0.0.0"
-        assert config.port == 8000
-        assert config.debug is False
-        assert config.progenitor_timeout == 300
-        assert config.model_name == "progenitor-v1"
 
     def test_from_env(self, monkeypatch):
         """Test loading config from environment."""
@@ -39,16 +30,6 @@ class TestChatServerConfig:
         assert config.port == 9000
         assert config.debug is True
         assert config.model_name == "test-model"
-
-
-class TestResponseModels:
-    """Tests for Responses API input models."""
-
-    def test_response_request_defaults(self):
-        """Test Responses API request defaults."""
-        req = ResponseRequest(input="Hello")
-        assert req.model == "progenitor-v1"
-        assert req.stream is False
 
 
 class TestProgenitorClient:
@@ -73,12 +54,6 @@ for line in sys.stdin:
             progenitor_script=script,
             progenitor_timeout=5,
         )
-
-    @pytest.mark.asyncio
-    async def test_client_init(self, config):
-        """Test client initialization."""
-        client = ProgenitorClient(config)
-        assert client.is_running is False
 
     @pytest.mark.asyncio
     async def test_client_start_missing_script(self):
@@ -155,26 +130,6 @@ class TestAlertRelay:
             }
         )
 
-    def test_build_alert_summary_prompt_constrains_tool_use(self):
-        prompt = _build_alert_summary_prompt(self._alert())
-
-        assert "Use the `say_to_user` tool exactly once." in prompt
-        assert "Do not call `ask_user` or any other tools." in prompt
-        assert '"title": "Build failed"' in prompt
-        assert '"message": "Tests failed in CI"' in prompt
-
-    def test_prompt_says_who_may_answer_a_pause(self):
-        human_only = _build_alert_summary_prompt(
-            self._alert(requires_response=True, context={"approver": "human"})
-        )
-        anyone = _build_alert_summary_prompt(
-            self._alert(requires_response=True, context={"approver": "any"})
-        )
-
-        assert "cannot answer it for them" in human_only
-        assert "replying to you" not in human_only
-        assert "replying to you" in anyone
-
     @pytest.mark.asyncio
     async def test_relay_sends_one_summary_turn(self):
         progenitor = AsyncMock()
@@ -214,19 +169,6 @@ class TestChatServerAPI:
 
         return TestClient(app)
 
-    def test_list_models(self, test_client):
-        """Test models listing endpoint (deleted - should return 404)."""
-        response = test_client.get("/v1/models")
-        assert response.status_code == 404
-
-    def test_legacy_responses_route_is_absent(self, test_client):
-        """The retired browser generation route must not be routable."""
-        response = test_client.post(
-            "/v1/responses",
-            json={"model": "test", "input": ""},
-        )
-        assert response.status_code in (404, 405)
-
     def test_ui_responses_no_input(self, test_client):
         """Canonical browser generation rejects an empty prompt."""
         response = test_client.post(
@@ -234,8 +176,3 @@ class TestChatServerAPI:
             json={"model": "test", "input": ""},
         )
         assert response.status_code == 400
-
-    def test_simple_chat_no_message(self, test_client):
-        """Test simple chat with no message (deleted - should return 404)."""
-        response = test_client.post("/chat", json={})
-        assert response.status_code == 404

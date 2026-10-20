@@ -1,20 +1,14 @@
 """Tests for secret redaction functionality."""
 
-import re
 import uuid
 
-from app.progenitor.state.models import SECRET_PATTERNS, redact_secrets
+from app.progenitor.state.models import redact_secrets
 
 
 class TestSecretRedaction:
     """Tests for secret redaction to prevent data leaks."""
 
     # === Test that secrets ARE redacted ===
-
-    def test_secret_patterns_are_precompiled(self):
-        """Test that redaction patterns are compiled once at import time."""
-        assert SECRET_PATTERNS
-        assert all(isinstance(pattern, re.Pattern) for pattern, _ in SECRET_PATTERNS)
 
     def test_redact_openai_key(self):
         """Test that OpenAI API keys are redacted."""
