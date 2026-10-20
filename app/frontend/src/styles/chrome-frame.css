@@ -4810,6 +4810,8 @@ body,
 .structured-document-body {
   width: 100%;
   min-width: 0;
+  font-size: var(--font-size-doc);
+  line-height: 1.6;
 }
 
 .structured-document-body > .markdown-content:first-child > :first-child {
@@ -4846,6 +4848,10 @@ body,
 
 .inbox-section.is-selected > .inbox-section__content {
   border-left-color: var(--color-accent, var(--color-text-primary));
+}
+
+.inbox-section--default > .inbox-section__head {
+  justify-content: flex-end;
 }
 
 .inbox-section__head {

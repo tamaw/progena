@@ -98,8 +98,31 @@ describe('StructuredDocumentBody', () => {
       nText('<plan>Before.</plan>', 0, 21),
     ]);
     const document = documentFor({ content: '<plan>Before.</plan>', onAskAgent: () => {}, onAnswerQuestion: () => {} });
-    expect(document.querySelector('.inbox-section')).toBeNull();
+    expect(document.querySelector('.inbox-section:not(.inbox-section--default)')).toBeNull();
     expect(document.querySelector('.markdown-content')).not.toBeNull();
+  });
+
+  it('wraps text outside any heading or question in a default group with actions', () => {
+    parseStructuredContent.mockReturnValue([
+      nText('Just a plain message.', 0, 21),
+    ]);
+    const document = documentFor({ content: 'Just a plain message.', onAskAgent: () => {} });
+    const groups = document.querySelectorAll('.inbox-section--default');
+    expect(groups).toHaveLength(1);
+    expect(groups[0].querySelector('.inbox-section__content .markdown-content').textContent).toBe('Just a plain message.');
+    expect(groups[0].querySelector('.inbox-section__title')).toBeNull();
+    expect(groups[0].querySelector('[role="toolbar"]')).not.toBeNull();
+  });
+
+  it('groups preamble text but not whitespace or text already inside a heading', () => {
+    parseStructuredContent.mockReturnValue([
+      nText('Intro.\n', 0, 7),
+      nHeading(2, 'Plan', 7, 30, [nText('Body.', 15, 30)]),
+      nText('\n\n', 30, 32),
+    ]);
+    const document = documentFor({ content: 'Intro.\n## Plan\nBody.\n\n', onAskAgent: () => {} });
+    expect(document.querySelectorAll('.inbox-section--default')).toHaveLength(1);
+    expect(document.querySelectorAll('.inbox-section')).toHaveLength(2);
   });
 
   it('hides actions when onAskAgent is absent', () => {
@@ -153,7 +176,7 @@ describe('StructuredDocumentBody', () => {
       nText('# Title\n\n## Plan\nContent.', 0, 28),
     ]);
     const document = documentFor({ content: '# Title\n\n## Plan\nContent.', onAskAgent: () => {}, onAnswerQuestion: () => {} });
-    expect(document.querySelector('.inbox-section')).toBeNull();
+    expect(document.querySelector('.inbox-section__title')).toBeNull();
     expect(document.querySelector('.markdown-content').textContent).toContain('Title');
     expect(document.querySelector('.markdown-content').textContent).toContain('Plan');
   });

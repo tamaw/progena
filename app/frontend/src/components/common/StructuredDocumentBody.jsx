@@ -26,10 +26,25 @@ function positionAiPopover(button) {
   };
 }
 
+// Describes a node for agent instructions and confirmations.
+function describeNode(node) {
+  if (node.type === 'heading') return `${'#'.repeat(node.level)} ${node.title}`;
+  if (node.type === 'group') return 'untitled text';
+  return `<${node.tag}>`;
+}
+
+// Text outside any heading or question tag gets a default group, so every
+// piece of content is selectable and highlightable like a headed section.
+function withDefaultGroups(nodes) {
+  return nodes.map((node) => (node.type === 'text' && node.content.trim()
+    ? { type: 'group', start: node.start, end: node.end, children: [node] }
+    : node));
+}
+
 export default function StructuredDocumentBody({ content = '', onAskAgent, onAnswerQuestion }) {
   const [selected, setSelected] = useState(null);
   const [mode, setMode] = useState(null);
-  const nodes = useMemo(() => parseStructuredContent(content), [content]);
+  const nodes = useMemo(() => withDefaultGroups(parseStructuredContent(content)), [content]);
   const [instruction, setInstruction] = useState('');
   const [popoverPosition, setPopoverPosition] = useState(null);
   const [aiJob, setAiJob] = useState(null);
@@ -102,7 +117,7 @@ export default function StructuredDocumentBody({ content = '', onAskAgent, onAns
   function submitAgent(node, action, options) {
     if (node.source !== undefined && node.source !== content) return false;
     const exact = content.slice(node.start, node.end);
-    const label = node.type === 'heading' ? `${'#'.repeat(node.level)} ${node.title}` : `<${node.tag}>`;
+    const label = describeNode(node);
     onAskAgent?.(`Find this exact ${label} section (including its content):\n${exact}\n\n${action} Keep other sections intact. If the section changed, ask before editing.`, options);
     return true;
   }
@@ -121,7 +136,7 @@ export default function StructuredDocumentBody({ content = '', onAskAgent, onAns
 
   function renderSectionActions(node, active) {
     if (!onAskAgent) return null;
-    const label = node.type === 'heading' ? `${'#'.repeat(node.level)} ${node.title}` : node.tag;
+    const label = node.type === 'heading' ? `${'#'.repeat(node.level)} ${node.title}` : node.type === 'group' ? 'Text' : node.tag;
     return (
       <div className="inbox-section__actions" role="toolbar" aria-label={`${label} section actions`}>
         <button
@@ -143,7 +158,7 @@ export default function StructuredDocumentBody({ content = '', onAskAgent, onAns
           <QuickChatIcon /><span className="msg-action-btn__label">Explain</span>
         </button>
         <button type="button" className="msg-action-btn" aria-label="Remove" onClick={() => {
-          if (window.confirm(`Ask Progenitor to remove the entire ${node.type === 'heading' ? label : `<${label}>`} section and its contents?`)) {
+          if (window.confirm(`Ask Progenitor to remove the entire ${describeNode(node)} section and its contents?`)) {
             submitAgent(node, 'Remove this entire section and its contents from the document.');
           }
         }}>
@@ -169,6 +184,19 @@ export default function StructuredDocumentBody({ content = '', onAskAgent, onAns
         <section key={key} className={`inbox-section${active ? ' is-selected' : ''}`}>
           <div className="inbox-section__head">
             <HeadingTag className="inbox-section__title"><button type="button" className="inbox-section__select" aria-pressed={active} disabled={!onAskAgent} onClick={() => select(node)} aria-label={`Select ${levelPrefix} ${node.title} section`}>{node.title}</button></HeadingTag>
+            {renderSectionActions(node, active)}
+          </div>
+          <div className="inbox-section__content" onClick={(event) => selectSectionContent(event, node)}>{node.children.map(renderNode)}</div>
+        </section>
+      );
+    }
+
+    if (node.type === 'group') {
+      const key = `${node.start}-${node.end}`;
+      const active = selectionCurrent && selected.start === node.start && selected.end === node.end && aiJob?.phase !== 'completed';
+      return (
+        <section key={key} className={`inbox-section inbox-section--default${active ? ' is-selected' : ''}`}>
+          <div className="inbox-section__head">
             {renderSectionActions(node, active)}
           </div>
           <div className="inbox-section__content" onClick={(event) => selectSectionContent(event, node)}>{node.children.map(renderNode)}</div>
