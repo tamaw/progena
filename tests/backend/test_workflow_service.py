@@ -36,7 +36,10 @@ class RecordingRunner:
 
     async def __call__(self, **kwargs):
         self.calls.append(kwargs)
-        return PromptExecutionResult(response=next(self.responses), thread_id=kwargs["thread_id"])
+        response = next(self.responses)
+        if isinstance(response, PromptExecutionResult):
+            return response
+        return PromptExecutionResult(response=response, thread_id=kwargs["thread_id"])
 
 
 def _executor(store, runner):
@@ -640,3 +643,84 @@ def test_query_filter_tells_json_true_from_1():
     output = _execute_document_node(store, node, {"metadata": {"ready": True}})
 
     assert output["keys"] == ["kanban_card:yes"]
+
+
+@pytest.mark.asyncio
+async def test_executor_records_step_and_run_token_usage():
+    store = InMemoryDocumentStore()
+    seed_document_types(store)
+    workflow = default_workflow_definition()
+    event_id = _node_id(workflow, "event")
+    extract_id = "extract_1"
+    agent_id = _node_id(workflow, "agent")
+    final_agent_id = "agent_without_usage"
+    workflow["graph"]["nodes"][extract_id] = {
+        "kind": "extract",
+        "title": "Extract",
+        "template": "Extract: {key}",
+        "schema": {"type": "string"},
+    }
+    workflow["graph"]["nodes"][agent_id].update(
+        {
+            "template": "Use extracted value: {result}",
+            "input_schema": {
+                "type": "object",
+                "required": ["result"],
+                "properties": {"result": {"type": "string"}},
+            },
+        }
+    )
+    workflow["graph"]["nodes"][final_agent_id] = {
+        "kind": "agent",
+        "title": "Finish",
+        "template": "Finish: {message}",
+        "input_schema": {
+            "type": "object",
+            "required": ["message"],
+            "properties": {"message": {"type": "string"}},
+        },
+        "output_schema": {"type": "object", "properties": {}},
+    }
+    workflow["graph"]["edges"] = [
+        {"from": {"node": event_id, "port": "key"}, "to": {"node": extract_id, "port": "key"}},
+        {
+            "from": {"node": extract_id, "port": "result"},
+            "to": {"node": agent_id, "port": "result"},
+        },
+        {
+            "from": {"node": agent_id, "port": "message"},
+            "to": {"node": final_agent_id, "port": "message"},
+        },
+    ]
+    definition = save_workflow_definition(store, workflow)
+    extract_usage = {"input_tokens": 2, "output_tokens": 3, "total_tokens": 5}
+    agent_usage = {"input_tokens": 7, "output_tokens": 11, "total_tokens": 18}
+    runner = RecordingRunner(
+        [
+            PromptExecutionResult(
+                response='{"value": "structured_result"}',
+                thread_id=None,
+                usage=extract_usage,
+            ),
+            PromptExecutionResult(response="handled", thread_id=None, usage=agent_usage),
+            PromptExecutionResult(response="finished", thread_id=None, usage=None),
+        ]
+    )
+
+    run = await _executor(store, runner).trigger_workflow(
+        definition.id, build_manual_trigger_event(definition)
+    )
+    completed = await _wait_for(
+        lambda: (
+            get_workflow_run(store, run.run_id)
+            if get_workflow_run(store, run.run_id).status == "completed"
+            else None
+        )
+    )
+
+    assert [entry.get("tokens") for entry in completed.step_audit] == [
+        extract_usage,
+        agent_usage,
+        None,
+    ]
+    assert completed.tokens == {"input_tokens": 9, "output_tokens": 14, "total_tokens": 23}

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..state.models import ACPAgentConfig, ACPTaskRecord, ACPTaskStatus
+from ..state.models import ACPAgentConfig, ACPFailureKind, ACPTaskRecord, ACPTaskStatus
 from ..utils import utcnow
 from .agents import build_agent_args
 from .runner import ACPRunner
@@ -31,6 +31,29 @@ def task_command(acp_config: ACPAgentConfig) -> str:
     if acp_config.port is not None:
         return f"{acp_config.host or '127.0.0.1'}:{acp_config.port}"
     return acp_config.command
+
+
+# Phrases agents use when the provider account, not the task, is out of
+# capacity, e.g. Claude Code's "You've hit your session limit · resets 12:50am".
+# Spaced phrases only: an identifier such as `rate_limiter.py` in an ordinary
+# error must not read as a limit.
+_USAGE_LIMIT_MARKERS = (
+    "session limit",
+    "usage limit",
+    "rate limit",
+    "quota",
+    "too many requests",
+)
+
+
+def acp_failure_kind(error: str | None) -> ACPFailureKind:
+    """Classify a failed turn's error so workflows can match on it without a model.
+
+    Only the error is inspected: a failed turn's output may legitimately
+    discuss rate limits in the code it was changing.
+    """
+    text = (error or "").lower()
+    return "usage_limit" if any(marker in text for marker in _USAGE_LIMIT_MARKERS) else "error"
 
 
 def runner_for(acp_config: ACPAgentConfig, cwd: str) -> ACPRunner:

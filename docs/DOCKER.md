@@ -82,7 +82,6 @@ to a one-off override file; do not expose it in the public deployment.
 
 ## Volumes and ephemeral storage
 
-- `progenitor`: `${PROGENITOR_HOST_SCHEMAS_DIR:-../data/schemas}:/app/data/schemas:ro` (the only content mount left — see note below)
 - `progenitor` and `backend`: `${PROGENITOR_HOST_LOGS_DIR:-../logs}:/app/logs`, `${PROGENITOR_HOST_REPOS_DIR:-../repos}:/app/repos`
 
 Ephemeral storage:
@@ -103,11 +102,11 @@ Notes:
 - `current_state`, `schedule`, `registry/agents`, `mcp`, `knowledge`, `health`,
   `kanban`, `attachments`, `sessions`, `prompts`, `skills`, and `memories` all
   persist through the shared LangGraph/Postgres document store with no
-  filesystem fallback anywhere in the stack. `schemas/` (static JSON Schema
-  contracts read by `structured_output`) is the only remaining disk mount for
-  `progenitor`, checked into git and mounted explicitly from the checkout
-  (`PROGENITOR_HOST_SCHEMAS_DIR`, default `../data/schemas`) so schema updates
-  land on every deploy without relying on a persistent host directory.
+  filesystem fallback anywhere in the stack. `data/schemas/` (static JSON
+  Schema contracts read by `structured_output` and document types) is
+  `COPY`'d into the images, so the schemas a container reads always match its
+  code. It is not bind-mounted: the deploy's runner checkout is reused by later
+  CI jobs on other branches, so a mount from it served whatever branch ran last.
 - Repository/worktree state mounts from `${PROGENITOR_HOST_REPOS_DIR:-../repos}` to `/app/repos`.
 - `PROGENITOR_WORKTREE_DIR` is set to `/app/repos` in `progenitor` and `backend`.
 
