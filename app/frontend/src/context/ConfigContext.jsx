@@ -99,7 +99,7 @@ export function ConfigProvider({ children, workspaceHost }) {
         default: defaultConfig.density.options.includes(savedDensity) ? savedDensity : defaultConfig.density.default
       },
       session: {
-        idleTimeoutMinutes: savedTimeout > 0 ? savedTimeout : defaultConfig.session.idleTimeoutMinutes
+        idleTimeoutMinutes: savedTimeout >= 5 && savedTimeout <= 120 ? savedTimeout : defaultConfig.session.idleTimeoutMinutes
       }
     };
   });

@@ -124,6 +124,29 @@ describe('StructuredDocumentBody', () => {
     expect(document.querySelector('.structured-document-body > .markdown-content').textContent).toContain('Title');
   });
 
+  it('splits a tab-separated H1 title out of the group', () => {
+    const source = '#\tTab title\n\nBody.';
+    parseStructuredContent.mockReturnValue([nText(source, 0, source.length)]);
+    const group = documentFor({ content: source, onAskAgent: () => {} }).querySelector('.inbox-section--default');
+    expect(group.textContent).toContain('Body.');
+    expect(group.textContent).not.toContain('Tab title');
+  });
+
+  it('keeps indented-code lookalikes in the group instead of treating them as a title', () => {
+    const source = '    # Not a title\n\nBody.';
+    parseStructuredContent.mockReturnValue([nText(source, 0, source.length)]);
+    const group = documentFor({ content: source, onAskAgent: () => {} }).querySelector('.inbox-section--default');
+    expect(group.textContent).toContain('Not a title');
+  });
+
+  it('gives a default group a focusable select control for keyboard users', () => {
+    parseStructuredContent.mockReturnValue([nText('Plain.', 0, 6)]);
+    const withAgent = documentFor({ content: 'Plain.', onAskAgent: () => {} });
+    expect(withAgent.querySelector('.inbox-section--default button[aria-label="Select text section"]')).not.toBeNull();
+    const readOnly = documentFor({ content: 'Plain.' });
+    expect(readOnly.querySelector('button')).toBeNull();
+  });
+
   it('groups preamble text but not whitespace or text already inside a heading', () => {
     parseStructuredContent.mockReturnValue([
       nText('Intro.\n', 0, 7),
