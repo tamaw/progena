@@ -65,6 +65,7 @@
     --font-size-md: 13px;
     --font-size-lg: 14px;
     --font-size-xl: 20px;
+    --font-size-doc: 15px; /* long-form reading: inbox documents */
 
     /* Borders */
     --border-radius-sm: 6px;
@@ -84,6 +85,26 @@
 }
 
 /* Light Theme */
+/* Interface density (Settings → Appearance). Comfortable is the :root default.
+   The root font-size follows --font-size-md, so rem-based sizes scale too. */
+[data-density="compact"] {
+    --font-size-xs: 10px;
+    --font-size-sm: 11px;
+    --font-size-md: 12px;
+    --font-size-lg: 13px;
+    --font-size-xl: 18px;
+    --font-size-doc: 14px;
+}
+
+[data-density="presentation"] {
+    --font-size-xs: 13px;
+    --font-size-sm: 14px;
+    --font-size-md: 16px;
+    --font-size-lg: 17px;
+    --font-size-xl: 24px;
+    --font-size-doc: 19px;
+}
+
 [data-theme="light"] {
     --color-bg-primary: #f4f5f7;
     --color-bg-secondary: #ffffff;
