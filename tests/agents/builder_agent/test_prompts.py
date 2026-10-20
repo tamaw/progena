@@ -73,3 +73,8 @@ async def test_builder_skill_context_missing_skill_raises():
 
     with pytest.raises(FileNotFoundError, match="does-not-exist/SKILL.md"):
         await prompts.get_builder_skill_context(["does-not-exist"])
+
+
+def test_system_prompt_loads_progenitor_system_md():
+    prompt = PromptTemplates().get_system_prompt()
+    assert "Progenitor System Prompt" in prompt

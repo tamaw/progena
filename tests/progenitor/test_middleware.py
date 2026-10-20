@@ -409,7 +409,7 @@ class TestMiddlewareIntegration:
                     def __init__(self):
                         self._docs = {
                             "instruction": {
-                                "progenitor/genesis.md": "---\ntitle: Genesis\ndescription: Test\n---\nGenesis"
+                                "progenitor/SYSTEM.md": "---\ntitle: System\ndescription: Test\n---\nSystem"
                             },
                             "skill": {},
                             "agent": {},

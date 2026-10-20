@@ -13,12 +13,12 @@ class Instructions:
         self.content = content
 
     async def get_content_document(self, kind: str, path: str) -> str | None:
-        assert (kind, path) == ("instruction", "progenitor/genesis.md")
+        assert (kind, path) == ("instruction", "progenitor/SYSTEM.md")
         return self.content
 
 
 def _instruction(body: str) -> str:
-    return f"---\ntitle: Genesis\ndescription: Test\n---\n{body}\n"
+    return f"---\ntitle: System\ndescription: Test\n---\n{body}\n"
 
 
 async def _system_text_sent(middleware: LiveInstructionMiddleware, system: SystemMessage) -> str:
@@ -38,7 +38,7 @@ async def _system_text_sent(middleware: LiveInstructionMiddleware, system: Syste
 
 async def test_edited_instruction_replaces_the_boot_text_and_keeps_appended_sections():
     store = Instructions(_instruction("You are Progenitor."))
-    middleware = LiveInstructionMiddleware(store, "progenitor/genesis.md", "You are Progenitor.")
+    middleware = LiveInstructionMiddleware(store, "progenitor/SYSTEM.md", "You are Progenitor.")
     system = SystemMessage(
         content_blocks=[
             {"type": "text", "text": "You are Progenitor.\n\nBase agent prompt."},
