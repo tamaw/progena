@@ -1,5 +1,5 @@
 /* eslint-disable react-refresh/only-export-components */
-import { createContext, useContext, useState } from 'react';
+import { createContext, useContext, useLayoutEffect, useState } from 'react';
 import { resolveWorkspaceOrigin } from '../lib/workspace';
 
 const ConfigContext = createContext(null);
@@ -50,6 +50,10 @@ const defaultConfig = {
   session: {
     idleTimeoutMinutes: 30
   },
+  density: {
+    default: 'comfortable',
+    options: ['comfortable', 'compact', 'presentation']
+  },
   theme: {
     default: 'system',
     options: ['system', 'dark', 'light']
@@ -63,7 +67,8 @@ const defaultConfig = {
     pinnedPanel: 'progenitor_pinned_panel',
     streamFilters: 'progenitor_stream_filters',
     quickChatHandoff: 'progenitor_quick_chat_handoff',
-    idleTimeoutMinutes: 'progenitor_idle_timeout_minutes'
+    idleTimeoutMinutes: 'progenitor_idle_timeout_minutes',
+    density: 'progenitor_density'
   }
 };
 
@@ -76,6 +81,7 @@ const defaultConfig = {
 export function ConfigProvider({ children, workspaceHost }) {
   const [config, setConfig] = useState(() => {
     const savedTheme = localStorage.getItem('progenitor_theme');
+    const savedDensity = localStorage.getItem(defaultConfig.storage.density);
     const savedTimeout = Number(localStorage.getItem(defaultConfig.storage.idleTimeoutMinutes));
 
     return {
@@ -88,11 +94,20 @@ export function ConfigProvider({ children, workspaceHost }) {
         ...defaultConfig.theme,
         default: savedTheme || defaultConfig.theme.default
       },
+      density: {
+        ...defaultConfig.density,
+        default: defaultConfig.density.options.includes(savedDensity) ? savedDensity : defaultConfig.density.default
+      },
       session: {
-        idleTimeoutMinutes: savedTimeout > 0 ? savedTimeout : defaultConfig.session.idleTimeoutMinutes
+        idleTimeoutMinutes: savedTimeout >= 5 && savedTimeout <= 120 ? savedTimeout : defaultConfig.session.idleTimeoutMinutes
       }
     };
   });
+
+  const density = config.density.default;
+  useLayoutEffect(() => {
+    document.documentElement.dataset.density = density;
+  }, [density]);
 
   const getApiUrl = (endpoint) => {
     const path = config.api.endpoints[endpoint] || endpoint;
@@ -107,6 +122,11 @@ export function ConfigProvider({ children, workspaceHost }) {
       theme: { ...prev.theme, default: theme }
     }));
     localStorage.setItem('progenitor_theme', theme);
+  };
+
+  const setDensity = (density) => {
+    setConfig(prev => ({ ...prev, density: { ...prev.density, default: density } }));
+    localStorage.setItem(defaultConfig.storage.density, density);
   };
 
   const setIdleTimeoutMinutes = (minutes) => {
@@ -129,6 +149,7 @@ export function ConfigProvider({ children, workspaceHost }) {
       getApiUrl,
       setTheme,
       setIdleTimeoutMinutes,
+      setDensity,
       resetSettings
     }}>
       {children}
