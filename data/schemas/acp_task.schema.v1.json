@@ -45,6 +45,7 @@
     "summary": {"type": ["string", "null"], "readOnly": true, "description": "First line of the last output."},
     "stop_reason": {"type": ["string", "null"], "readOnly": true},
     "last_error": {"type": ["string", "null"], "readOnly": true},
+    "failure_kind": {"type": ["string", "null"], "enum": ["usage_limit", "error", null], "readOnly": true, "description": "Why the last turn failed: usage_limit when the agent's account hit a session, usage, or rate limit (retry after it resets); error for anything else; null unless status is failed."},
     "tool_calls": {"type": "array", "items": {"type": "object"}, "readOnly": true, "description": "Recent tool calls (bounded)."},
     "progress": {
       "type": "object",
