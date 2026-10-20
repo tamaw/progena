@@ -286,8 +286,19 @@ def create_agent_profile_router(
     get_agent_store: Callable[[], AgentStore | None],
     get_document_store: Callable[[], BackendDocumentStore],
     broadcast_ui_event: BroadcastUiEvent,
+    is_runtime_live: Callable[[], bool] | None = None,
 ) -> APIRouter:
     router = APIRouter()
+
+    def _require_runtime() -> None:
+        # Runs and approval answers only enqueue a task for the runtime to claim.
+        # With no runtime consuming the queue they would sit as "Running…" forever,
+        # so fail the request instead. ``None`` means no live signal is available.
+        if is_runtime_live is not None and not is_runtime_live():
+            raise HTTPException(
+                status_code=503,
+                detail="Progenitor runtime is not running; the routine cannot start",
+            )
 
     def _require_store() -> AgentStore:
         store = get_agent_store()
@@ -616,6 +627,7 @@ def create_agent_profile_router(
                     detail=f"Run parameters failed validation: {validation_error}",
                 )
 
+        _require_runtime()
         lifecycle = enqueue_routine_run(
             get_document_store(),
             agent_id,
@@ -651,6 +663,7 @@ def create_agent_profile_router(
             or len(body.thread_id.split(":")) != 4
         ):
             raise HTTPException(status_code=400, detail="thread_id does not belong to this routine")
+        _require_runtime()
         request_id = _request_correlation_id(request, x_request_id)
         doc_store = get_document_store()
         try:
