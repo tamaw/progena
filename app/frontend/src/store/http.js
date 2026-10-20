@@ -11,6 +11,25 @@ export class RequestError extends Error {
     this.detail = detail;
   }
 }
+const sessionListeners = new Set();
+
+/**
+ * Observe whether the reverse proxy in front of the app accepts our sign-in.
+ * Listeners receive `true` after a 401 and `false` after the next accepted
+ * request. The open event stream keeps delivering after the sign-in lapses, so
+ * request outcomes are the only signal that it did.
+ */
+export function subscribeSessionExpiry(listener) {
+  sessionListeners.add(listener);
+  return () => {
+    sessionListeners.delete(listener);
+  };
+}
+
+export function reportSessionExpiry(expired) {
+  for (const listener of [...sessionListeners]) listener(expired);
+}
+
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
@@ -77,6 +96,9 @@ export async function requestAcknowledged(url, { method = 'GET', body, requestId
     if (isCancellation(cause)) throw cause;
     throw new RequestError('Check your connection and try again.', { requestId, code: 'NETWORK_ERROR', cause });
   }
+
+  if (response.status === 401) reportSessionExpiry(true);
+  else if (response.status === 202) reportSessionExpiry(false);
 
   // Only 202 confirms that a finite browser request was dispatched.
   if (response.status !== 202) {
