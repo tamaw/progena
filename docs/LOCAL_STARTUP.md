@@ -36,6 +36,8 @@ container and create a separate database for each test. They never fall back to
 `PROGENITOR_DATABASE_URL` or `DATABASE_URL`. Without Docker, set
 `PROGENITOR_TEST_DATABASE_URL` to a test server with database create/drop privileges
 and pgvector installed; otherwise database tests skip with the missing prerequisite.
+Local runs use a loopback-only published port; containerized runners connect over
+their own Docker network instead of the Docker host's loopback.
 
 Connections time out after 3 seconds, SQL statements after 5 seconds, and lock
 waits after 2 seconds. Scratch databases are dropped at teardown. The Docker
