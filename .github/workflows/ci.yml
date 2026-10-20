@@ -142,8 +142,8 @@ jobs:
           BACKEND="$(changed "${PYTHON_COMMON[@]}" docker/backend data/agents/objects)"
           FRONTEND="$(changed app/frontend docker/frontend)"
           CLAUDE="$(changed docker/claude)"
-          # The stack also restarts for compose/deploy-step changes (schemas are bind-mounted).
-          STACK="$(changed docker/docker-compose.progenitor.yml .github/workflows/ci.yml data/schemas)"
+          # The stack also restarts for compose/deploy-step changes.
+          STACK="$(changed docker/docker-compose.progenitor.yml .github/workflows/ci.yml)"
           REDEPLOY=false
           for flag in "$PROGENITOR" "$BACKEND" "$FRONTEND" "$CLAUDE" "$STACK"; do
             if [ "$flag" = true ]; then REDEPLOY=true; fi
@@ -251,7 +251,6 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          PROGENITOR_HOST_SCHEMAS_DIR: ${{ github.workspace }}/data/schemas
           PROGENITOR_HOST_LOGS_DIR: /var/lib/progenitor/logs
           # Outside the runner checkout: the runtime's managed clones must survive
           # a clean checkout, and a root-owned folder there breaks other jobs.
@@ -266,7 +265,6 @@ jobs:
           docker image inspect ghcr.io/tamaw/progenitor-backend:${PROGENITOR_IMAGE_TAG} >/dev/null
           docker image inspect ghcr.io/tamaw/progenitor-frontend:${PROGENITOR_IMAGE_TAG} >/dev/null
           docker image inspect ghcr.io/tamaw/progenitor-claude:${PROGENITOR_IMAGE_TAG} >/dev/null
-          test -d "$PROGENITOR_HOST_SCHEMAS_DIR"
           # If a manual/dev container exists with the same name, docker compose will fail.
           # Removing containers keeps bind-mounted state (logs/repos, plus Postgres) intact.
           docker rm -f progenitor progenitor-backend progenitor-frontend progenitor-agent-claude 2>/dev/null || true

@@ -73,7 +73,6 @@ services:
       # State is transient in the hardened read-only runtime image.
       PROGENITOR_STATE_DIR: /app/tmp/state
     volumes:
-      - ${PROGENITOR_HOST_SCHEMAS_DIR:-../data/schemas}:/app/data/schemas:ro
       - ${PROGENITOR_HOST_LOGS_DIR:-../logs}:/app/logs
       - ${PROGENITOR_HOST_REPOS_DIR:-../repos}:/app/repos
       # A fresh named volume inherits UID 10001 ownership from the image directory.
