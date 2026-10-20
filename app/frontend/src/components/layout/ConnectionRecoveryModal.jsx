@@ -2,8 +2,9 @@ import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { useDispatch } from 'react-redux';
 import { useConfig } from '../../context/ConfigContext';
 import { subscribeUiEvent } from '../../store/realtimeEvents';
-import { startRealtimeStream } from '../../store/realtimeListener';
+import { startRealtimeStream, stopRealtimeStream } from '../../store/realtimeListener';
 import { createOperationRequestId, requestAcknowledged, subscribeSessionExpiry } from '../../store/http';
+import useIdleTimeout from '../../hooks/useIdleTimeout';
 import Modal from '../common/Modal';
 
 const STATUS_GRACE_MS = 20000;
@@ -11,15 +12,17 @@ const RECONNECT_INTERVAL_MS = 10000;
 
 export default function ConnectionRecoveryModal() {
   const dispatch = useDispatch();
-  const { getApiUrl } = useConfig();
+  const { config, getApiUrl } = useConfig();
   const streamUrl = getApiUrl('stream');
   const titleId = useId();
   const reconnectRef = useRef(null);
+  const pausedRef = useRef(false);
   const timingRef = useRef({ lastStatusAt: 0, retryAt: null });
   const preferencesUrl = getApiUrl('preferences');
   const [countdown, setCountdown] = useState(null);
   const [sessionExpired, setSessionExpired] = useState(false);
   const [checking, setChecking] = useState(false);
+  const [paused, resumeIdle] = useIdleTimeout(config.session.idleTimeoutMinutes * 60_000);
 
   const reconnect = useCallback(() => {
     timingRef.current.retryAt = Date.now() + RECONNECT_INTERVAL_MS;
@@ -41,6 +44,21 @@ export default function ConnectionRecoveryModal() {
     }
   }, [dispatch, preferencesUrl, streamUrl]);
 
+  // Idle: stop the stream so nothing updates behind the dialog. Resuming opens
+  // a fresh stream; RealtimeBridge refetches its snapshots once it connects.
+  useEffect(() => {
+    pausedRef.current = paused;
+    if (paused) dispatch(stopRealtimeStream());
+  }, [dispatch, paused]);
+
+  const resume = useCallback(() => {
+    timingRef.current.lastStatusAt = Date.now();
+    timingRef.current.retryAt = null;
+    setCountdown(null);
+    resumeIdle();
+    dispatch(startRealtimeStream({ streamUrl }));
+  }, [dispatch, resumeIdle, streamUrl]);
+
   useEffect(() => subscribeSessionExpiry(setSessionExpired), []);
 
   useEffect(() => {
@@ -57,6 +75,7 @@ export default function ConnectionRecoveryModal() {
     });
     const timer = setInterval(() => {
       const now = Date.now();
+      if (pausedRef.current) return;
       if (now - timing.lastStatusAt < STATUS_GRACE_MS) return;
       timing.retryAt ??= now + RECONNECT_INTERVAL_MS;
       if (now >= timing.retryAt) reconnect();
@@ -67,6 +86,34 @@ export default function ConnectionRecoveryModal() {
       clearInterval(timer);
     };
   }, [reconnect]);
+
+  if (paused) {
+    return (
+      <Modal
+        busy
+        className="sidebar-modal popup-modal"
+        backdropClassName="sidebar-modal-backdrop popup-modal-backdrop"
+        ariaLabelledby={titleId}
+        initialFocusRef={reconnectRef}
+      >
+        <header className="sidebar-modal__head">
+          <div>
+            <span className="sidebar-modal__eyebrow">Session timed out</span>
+            <h3 id={titleId}>Updates paused</h3>
+          </div>
+        </header>
+        <p className="sidebar-modal__field">
+          You have been inactive for {config.session.idleTimeoutMinutes} minutes, so live updates are paused.
+          Resume to catch up; nothing you have entered is lost.
+        </p>
+        <footer className="sidebar-modal__foot">
+          <button ref={reconnectRef} type="button" className="task-btn task-btn--primary" onClick={resume}>
+            Resume
+          </button>
+        </footer>
+      </Modal>
+    );
+  }
 
   if (countdown === null && !sessionExpired) return null;
 
