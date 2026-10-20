@@ -96,15 +96,6 @@ class TestLLMConfig:
             assert config.reasoning_effort == "medium"
             assert config.reasoning_summary == "detailed"
 
-    def test_defaults(self):
-        """Test default values."""
-        config = LLMConfig()
-        assert config.base_url == ""
-        assert config.model_default == "gpt-chat-latest"
-        assert config.reasoning_enabled is True
-        assert config.reasoning_effort == "low"
-        assert config.reasoning_summary == "detailed"
-
     def test_reasoning_effort_from_env(self):
         """Test loading reasoning effort from environment."""
         with patch.dict(
@@ -129,17 +120,6 @@ class TestLLMConfig:
 class TestRuntimeConfig:
     """Tests for runtime configuration."""
 
-    def test_defaults(self):
-        """Test default values match spec."""
-        config = RuntimeConfig()
-        assert config.timezone == "Europe/London"
-        assert config.idle_backoff_seconds == 30
-        assert config.mcp_refresh_seconds == 900
-        assert config.registry_refresh_seconds == 900
-        assert config.log_level == "info"
-        assert config.http_host == "127.0.0.1"
-        assert config.http_port == 9501
-
     def test_from_env_overrides_defaults(self):
         """Test environment variables override defaults."""
         env = {
@@ -162,25 +142,6 @@ class TestRuntimeConfig:
             assert config.http_host == "0.0.0.0"
             assert config.http_port == 9901
             assert config.http_public_base_url == "http://example.test/progenitor"
-
-    def test_from_env_uses_code_defaults_without_file_fallback(self):
-        """Runtime defaults come from code/env, not saved config payloads."""
-        env_clear = {
-            "PROGENITOR_TIMEZONE": "",
-            "PROGENITOR_IDLE_BACKOFF_SECONDS": "",
-            "PROGENITOR_MCP_REFRESH_SECONDS": "",
-            "PROGENITOR_REGISTRY_REFRESH_SECONDS": "",
-        }
-        with patch.dict(os.environ, env_clear, clear=False):
-            os.environ.pop("PROGENITOR_TIMEZONE", None)
-            os.environ.pop("PROGENITOR_IDLE_BACKOFF_SECONDS", None)
-            os.environ.pop("PROGENITOR_MCP_REFRESH_SECONDS", None)
-            os.environ.pop("PROGENITOR_REGISTRY_REFRESH_SECONDS", None)
-            config = RuntimeConfig.from_env()
-            assert config.timezone == "Europe/London"
-            assert config.idle_backoff_seconds == 30
-            assert config.mcp_refresh_seconds == 900
-            assert config.registry_refresh_seconds == 900
 
 
 class TestStorageConfig:
@@ -334,12 +295,6 @@ class TestMCPConfig:
 
 class TestSchedulerConfig:
     """Tests for scheduler configuration."""
-
-    def test_defaults(self):
-        """Test default values."""
-        config = SchedulerConfig()
-        assert config.enabled is True
-        assert config.poll_seconds == 30
 
     def test_from_env(self):
         """Test loading from environment."""

@@ -2,12 +2,7 @@
 
 from __future__ import annotations
 
-import os
-import uuid
-from urllib.parse import quote
-
 import psycopg
-import pytest
 
 from app.progenitor.knowledge import index as kindex
 from app.progenitor.tools import search as search_module
@@ -15,7 +10,6 @@ from app.progenitor.tools.protocol import ToolContext
 from app.progenitor.tools.search import SearchTool
 
 DIMS = 1536
-DB_URL = (os.getenv("PROGENITOR_DATABASE_URL") or os.getenv("DATABASE_URL") or "").strip()
 
 
 def _vector(axis: int) -> list[float]:
@@ -77,21 +71,8 @@ async def test_granted_agent_cannot_name_another_base(monkeypatch):
     assert not result.success and "granted: eng" in (result.error or "")
 
 
-@pytest.fixture
-def schema_url():
-    """A throwaway schema so the test never touches the dev ``knowledge_chunks`` table."""
-    schema = f"pytest_stool_{uuid.uuid4().hex[:8]}"
-    with psycopg.connect(DB_URL, autocommit=True) as conn:
-        conn.execute(f'CREATE SCHEMA "{schema}"')
-    separator = "&" if "?" in DB_URL else "?"
-    yield f"{DB_URL}{separator}options={quote(f'-c search_path={schema},public')}"
-    with psycopg.connect(DB_URL, autocommit=True) as conn:
-        conn.execute(f'DROP SCHEMA "{schema}" CASCADE')
-
-
-@pytest.mark.skipif(not DB_URL, reason="requires PROGENITOR_DATABASE_URL")
-async def test_search_ranks_pages_scopes_bases_and_reports_pending(monkeypatch, schema_url):
-    monkeypatch.setenv("PROGENITOR_DATABASE_URL", schema_url)
+async def test_search_ranks_pages_scopes_bases_and_reports_pending(monkeypatch, postgres_url):
+    monkeypatch.setenv("PROGENITOR_DATABASE_URL", postgres_url)
     eng, ops = "eng", "ops"
     election = _page("Leader Election", "A candidate wins with a majority quorum.")
     replication = _page("Log Replication", "Followers append entries.")
@@ -99,7 +80,7 @@ async def test_search_ranks_pages_scopes_bases_and_reports_pending(monkeypatch, 
     retired = _page("Old Election", "A candidate wins with a majority quorum.").replace(
         "---\n", "---\nstatus: deprecated\n", 1
     )
-    with psycopg.connect(schema_url) as conn:
+    with psycopg.connect(postgres_url) as conn:
         kindex.ensure_index_schema(conn, DIMS)
         for base, path, content, axis in (
             (eng, "election.md", election, 1),

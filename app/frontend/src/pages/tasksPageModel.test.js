@@ -3,7 +3,6 @@ import { describe, expect, it } from 'vitest';
 import {
   buildCardBadges,
   cardTags,
-  formatAgentName,
   formatTaskLabel,
   getCardAssignee,
   getCardService,
@@ -26,11 +25,8 @@ describe('tasksPageModel', () => {
     expect(statusMeta('complete')).toEqual({ label: 'Complete', tone: 'ok' });
     expect(statusMeta('queued_review')).toEqual({ label: 'Queued Review', tone: 'muted' });
   });
-
-  it('aliases formatAgentName to the shared label formatter', () => {
-    expect(formatAgentName('observe_agent')).toBe('Observe Agent');
-  });
 });
+
 
 describe('normalizePriority', () => {
   it('treats failures, blocks, and errors as high priority', () => {

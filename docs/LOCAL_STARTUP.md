@@ -18,6 +18,29 @@ Locally this defaults to `data/shell-workspaces`. Docker Compose mounts the pers
 a fresh volume from the image directory owned by runtime UID/GID `10001:10001`.
 Scratch files survive container restarts. Repository paths continue to come from `/repos/`.
 
+## Running tests safely
+
+Install development dependencies in the activated virtual environment:
+
+```bash
+source .venv/bin/activate
+pip install -e ".[dev]"
+timeout --kill-after=5s 300s pytest tests/backend tests/progenitor tests/agents tests/test_scheduler.py -q -rs
+```
+
+The `timeout` command above is the Linux whole-run limit. Pytest also has a
+60-second hard timeout per test, including fixture setup and teardown.
+
+Postgres tests automatically start a disposable `pgvector/pgvector:pg16` Docker
+container and create a separate database for each test. They never fall back to
+`PROGENITOR_DATABASE_URL` or `DATABASE_URL`. Without Docker, set
+`PROGENITOR_TEST_DATABASE_URL` to a test server with database create/drop privileges
+and pgvector installed; otherwise database tests skip with the missing prerequisite.
+
+Connections time out after 3 seconds, SQL statements after 5 seconds, and lock
+waits after 2 seconds. Scratch databases are dropped at teardown. The Docker
+container expires after five minutes even if the hard watchdog bypasses teardown.
+
 ## Recommended `.env` improvements
 
 To make local startup more predictable:

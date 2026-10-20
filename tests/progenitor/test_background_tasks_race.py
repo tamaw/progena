@@ -6,7 +6,6 @@ document without serialization.
 """
 
 import asyncio
-import os
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
@@ -18,39 +17,26 @@ from app.progenitor.state.langgraph_store import LangGraphRuntimeStore
 from app.progenitor.state.manager import StateManager
 from app.progenitor.state.models import BackgroundTaskEntry
 
-# Opt-in and deliberately NOT PROGENITOR_DATABASE_URL (which .env points at the
-# dev database): this test rewrites the shared background_tasks queue, which a
-# running runtime would race with.
-DATABASE_URL = (os.getenv("PROGENITOR_TEST_DATABASE_URL") or "").strip() or None
-
-pytestmark = pytest.mark.skipif(
-    DATABASE_URL is None, reason="requires PROGENITOR_TEST_DATABASE_URL (a scratch database)"
-)
+_CONCURRENCY_TIMEOUT = 15
 
 
 @pytest.fixture
-async def pg_stores():
-    """Provide a backend document store and a runtime state manager backed by real Postgres."""
-    assert DATABASE_URL is not None
-    doc_store = PostgresDocumentStore(DATABASE_URL)
+async def pg_stores(postgres_url):
+    """Provide a backend document store and runtime state manager on an isolated database."""
+    doc_store = PostgresDocumentStore(postgres_url)
     doc_store.open()
 
-    native_store, pool = await _open_store(DATABASE_URL)
+    native_store, pool = await _open_store(postgres_url)
     runtime_store = LangGraphRuntimeStore(native_store)
-    state_manager = StateManager(runtime_store=runtime_store, database_url=DATABASE_URL)
+    state_manager = StateManager(runtime_store=runtime_store, database_url=postgres_url)
     await state_manager.initialize()
 
-    # Start from an empty queue, restoring whatever the database held afterwards.
-    original = doc_store.get_document(PROGENITOR_STATE_PREFIX, "background_tasks", [])
-    doc_store.save_document(PROGENITOR_STATE_PREFIX, "background_tasks", [])
-
-    yield doc_store, state_manager
-
-    restored = list(original.payload) if original is not None else []
-    doc_store.save_document(PROGENITOR_STATE_PREFIX, "background_tasks", restored)
-    await state_manager.close()
-    await pool.close()
-    doc_store.close()
+    try:
+        yield doc_store, state_manager
+    finally:
+        await state_manager.close()
+        await pool.close()
+        doc_store.close()
 
 
 @pytest.mark.asyncio
@@ -79,13 +65,21 @@ async def test_concurrent_backend_and_runtime_enqueues_no_lost_updates(pg_stores
             )
         )
 
-    with ThreadPoolExecutor(max_workers=10) as executor:
+    executor = ThreadPoolExecutor(max_workers=10)
+    try:
         backend_futures = [executor.submit(backend_enqueue, i) for i in range(10)]
         runtime_tasks = [asyncio.create_task(runtime_enqueue(i)) for i in range(10)]
-
-        await asyncio.gather(*runtime_tasks)
-        for f in backend_futures:
-            f.result()
+        completed = await asyncio.wait_for(
+            asyncio.gather(
+                *runtime_tasks,
+                *(asyncio.wrap_future(f) for f in backend_futures),
+                return_exceptions=True,
+            ),
+            timeout=_CONCURRENCY_TIMEOUT,
+        )
+        assert not [result for result in completed if isinstance(result, BaseException)]
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
 
     final = doc_store.get_document(PROGENITOR_STATE_PREFIX, "background_tasks", [])
     payload = list(final.payload) if final is not None else []
@@ -98,8 +92,7 @@ async def test_concurrent_backend_and_runtime_enqueues_no_lost_updates(pg_stores
 
 @pytest.mark.asyncio
 async def test_concurrent_enqueue_and_dequeue_no_duplicates_or_loss(pg_stores):
-    """Enqueue 10 tasks, then concurrently enqueue 5 more and dequeue 5.
-    Exactly 15 tasks should remain (no loss or duplication) and the 5 dequeued IDs should be unique."""
+    """Race five backend enqueues, five runtime enqueues and five dequeues after ten seeds."""
     doc_store, state_manager = pg_stores
 
     def backend_enqueue(i: int) -> None:
@@ -127,20 +120,33 @@ async def test_concurrent_enqueue_and_dequeue_no_duplicates_or_loss(pg_stores):
         task = await state_manager.dequeue_background_task()
         return task.id if task else None
 
-    # Seed with 10 backend tasks
     for i in range(10):
         backend_enqueue(i)
 
-    # Concurrently enqueue 5 runtime tasks and dequeue 5 tasks
-    with ThreadPoolExecutor(max_workers=5) as executor:
+    executor = ThreadPoolExecutor(max_workers=5)
+    try:
         enqueue_futures = [executor.submit(backend_enqueue, i + 10) for i in range(5)]
         runtime_enqueue_tasks = [asyncio.create_task(runtime_enqueue(i)) for i in range(5)]
         dequeue_tasks = [asyncio.create_task(runtime_dequeue()) for _ in range(5)]
-
-        await asyncio.gather(*runtime_enqueue_tasks)
-        for f in enqueue_futures:
-            f.result()
-        dequeued_ids = [tid for tid in await asyncio.gather(*dequeue_tasks) if tid is not None]
+        completed = await asyncio.wait_for(
+            asyncio.gather(
+                *runtime_enqueue_tasks,
+                *dequeue_tasks,
+                *(asyncio.wrap_future(f) for f in enqueue_futures),
+                return_exceptions=True,
+            ),
+            timeout=_CONCURRENCY_TIMEOUT,
+        )
+        assert not [result for result in completed if isinstance(result, BaseException)]
+        dequeued_ids = [
+            task_id
+            for task_id in completed[
+                len(runtime_enqueue_tasks) : len(runtime_enqueue_tasks) + len(dequeue_tasks)
+            ]
+            if task_id is not None
+        ]
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
 
     final = doc_store.get_document(PROGENITOR_STATE_PREFIX, "background_tasks", [])
     payload = list(final.payload) if final is not None else []
@@ -149,6 +155,9 @@ async def test_concurrent_enqueue_and_dequeue_no_duplicates_or_loss(pg_stores):
     # Should have exactly 15 remaining (10 seeded + 5 backend + 5 runtime - 5 dequeued)
     expected_remaining = {f"be-{i}" for i in range(15)} | {f"rt-{i}" for i in range(5)}
     expected_remaining -= set(dequeued_ids)
+    assert final_ids == expected_remaining, (
+        f"Missing: {expected_remaining - final_ids}; extra: {final_ids - expected_remaining}"
+    )
     assert len(final_ids) == 15, f"Expected 15 remaining, got {len(final_ids)}: {final_ids}"
     assert len(dequeued_ids) == 5, f"Expected 5 dequeued, got {len(dequeued_ids)}: {dequeued_ids}"
     assert len(set(dequeued_ids)) == len(dequeued_ids), f"Duplicate dequeues: {dequeued_ids}"

@@ -1,12 +1,10 @@
-"""Backend knowledge indexer against Postgres (isolated schema) with a fake embedder."""
+"""Backend knowledge indexer against a fresh Postgres database with a fake embedder."""
 
 from __future__ import annotations
 
 import asyncio
-import os
 import uuid
 from typing import Any
-from urllib.parse import quote
 
 import psycopg
 import pytest
@@ -18,9 +16,6 @@ from app.backend.document_store import (
 )
 from app.backend.knowledge_indexer import KnowledgeIndexer
 from app.progenitor.knowledge.indexer_config import INDEX_STATUS_DOC_KEY
-
-DB_URL = (os.getenv("PROGENITOR_DATABASE_URL") or os.getenv("DATABASE_URL") or "").strip()
-pytestmark = pytest.mark.skipif(not DB_URL, reason="requires PROGENITOR_DATABASE_URL")
 
 PROFILES = {"embeddings": {"provider": "azure_openai", "deployment": "text-embedding-3-small"}}
 
@@ -41,12 +36,8 @@ class FakeEmbedder:
 
 
 @pytest.fixture
-def harness():
-    schema = f"pytest_kidx_{uuid.uuid4().hex[:8]}"
-    with psycopg.connect(DB_URL, autocommit=True) as conn:
-        conn.execute(f'CREATE SCHEMA "{schema}"')
-    separator = "&" if "?" in DB_URL else "?"
-    url = f"{DB_URL}{separator}options={quote(f'-c search_path={schema},public')}"
+def harness(postgres_url: str):
+    url = postgres_url
     store = InMemoryDocumentStore()
     set_default_document_store(store)
     store.save_document(
@@ -66,8 +57,6 @@ def harness():
     )
     yield indexer, store, state, url
     set_default_document_store(InMemoryDocumentStore())
-    with psycopg.connect(DB_URL, autocommit=True) as conn:
-        conn.execute(f'DROP SCHEMA "{schema}" CASCADE')
 
 
 def _record(store, base_id: str) -> dict[str, Any] | None:
@@ -223,14 +212,16 @@ async def test_a_waiting_backend_takes_over_when_the_lock_holder_stops(harness):
         await second.stop()
 
 
-async def test_losing_the_lock_connection_stops_the_worker_and_reacquires(harness):
+async def test_losing_the_lock_connection_stops_the_worker_and_reacquires(
+    harness, postgres_url: str
+):
     _, _, _, url = harness
     indexer = _competing_indexer(url, f"pytest-{uuid.uuid4().hex}")
     try:
         await indexer.start()
         await _until(lambda: indexer.running and indexer._lock_conn is not None)
         old_pid = indexer._lock_conn.info.backend_pid
-        with psycopg.connect(DB_URL, autocommit=True) as conn:
+        with psycopg.connect(postgres_url, autocommit=True) as conn:
             conn.execute("SELECT pg_terminate_backend(%s)", (old_pid,))
         await _until(
             lambda: (

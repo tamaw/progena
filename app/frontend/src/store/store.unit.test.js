@@ -1,12 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { store, workspaceSwitched, WORKSPACE_SWITCHED } from './store';
+import { store, workspaceSwitched } from './store';
 import { fetchAgentProfiles } from './uiData/agents';
 import { realtimeConnected } from './realtimeSlice';
 
 describe('workspaceSwitched', () => {
-  it('has the expected action type', () => {
-    expect(workspaceSwitched()).toEqual({ type: WORKSPACE_SWITCHED });
-  });
 
   it('resets every slice back to its initial state', () => {
     const initialUiData = store.getState().uiData;

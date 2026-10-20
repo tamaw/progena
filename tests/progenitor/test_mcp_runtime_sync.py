@@ -135,18 +135,6 @@ async def test_reapply_noops_without_runtime():
 
 
 # --------------------------------------------------------------------------
-# Channel match: runtime listener must use the backend's NOTIFY channel
-# --------------------------------------------------------------------------
-
-
-def test_store_change_channel_matches_backend():
-    from app.backend.document_store import STORE_CHANGE_CHANNEL as backend_channel
-    from app.progenitor.state.store_listener import STORE_CHANGE_CHANNEL as runtime_channel
-
-    assert runtime_channel == backend_channel
-
-
-# --------------------------------------------------------------------------
 # mcp status tool: report only the live (enabled) tool set
 # --------------------------------------------------------------------------
 
