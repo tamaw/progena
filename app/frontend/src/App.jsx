@@ -6,6 +6,9 @@ import { WorkspaceProvider, useWorkspace } from './context/WorkspaceContext';
 import AppRuntimeShell from './components/layout/AppRuntimeShell';
 import RealtimeBridge from './store/RealtimeBridge';
 import { buildWorkspacePath } from './lib/workspace';
+import { localDesignLibraryEnabled } from './lib/localDesignLibrary';
+import InlineFailure from './components/common/InlineFailure';
+import EditorNavigationBoundary from './components/layout/EditorNavigationBoundary';
 
 // Import styles
 import './styles/main.css';
@@ -41,6 +44,10 @@ const ChannelsPage = lazy(() => import('./pages/ChannelsPage'));
 const WorkflowsPage = lazy(() => import('./pages/WorkflowsPage'));
 const AgentsPage = lazy(() => import('./pages/AgentsPage'));
 const RoutinesPage = lazy(() => import('./pages/RoutinesPage'));
+// Keep the import behind the compile-time flag so the catalogue is absent from production assets.
+const DesignLibraryPage = import.meta.env.DEV
+  ? lazy(() => import('./pages/DesignLibraryPage'))
+  : null;
 
 class RouteErrorBoundary extends Component {
   state = { error: null };
@@ -55,7 +62,7 @@ class RouteErrorBoundary extends Component {
 
   render() {
     if (this.state.error) {
-      return <div className="chrome-route-error">Error loading page: {this.state.error.message}</div>;
+      return <div className="chrome-route-error"><InlineFailure failure={this.state.error} operation="Load page" onRetry={() => window.location.reload()} /></div>;
     }
     return this.props.children;
   }
@@ -68,11 +75,13 @@ function SequencesRedirect() {
 
 function DeferredRoute({ Page, fallback, ...pageProps }) {
   return (
-    <Suspense fallback={<div className="chrome-route-loading">{fallback}</div>}>
-      <RouteErrorBoundary>
-        {createElement(Page, pageProps)}
-      </RouteErrorBoundary>
-    </Suspense>
+    <EditorNavigationBoundary>
+      <Suspense fallback={<div className="chrome-route-loading">{fallback}</div>}>
+        <RouteErrorBoundary>
+          {createElement(Page, pageProps)}
+        </RouteErrorBoundary>
+      </Suspense>
+    </EditorNavigationBoundary>
   );
 }
 
@@ -123,6 +132,9 @@ function WorkspaceScopedApp() {
                     <Route path="/repositories" element={<DeferredRoute Page={RepositoriesPage} fallback="Loading repositories..." />} />
                     <Route path="/knowledge/:baseId?/:titleSlug?" element={<DeferredRoute Page={KnowledgePage} fallback="Loading knowledge..." />} />
                     <Route path="/workflows/:workflowId?/:slug?" element={<DeferredRoute Page={WorkflowsPage} fallback="Loading workflows..." />} />
+                    {localDesignLibraryEnabled && (
+                      <Route path="/design" element={<DeferredRoute Page={DesignLibraryPage} fallback="Loading design library..." />} />
+                    )}
                   </Route>
                   <Route path="*" element={<Navigate to="/chat" replace />} />
                 </Routes>

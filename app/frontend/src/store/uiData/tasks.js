@@ -3,7 +3,7 @@
  * kept live by `kanban.snapshot` / `task.content.updated` / `task.activity.updated`
  * events on /api/ui/stream.
  */
-import { createAcknowledgedThunk, requestAcknowledged, addRequestLifecycle } from './async';
+import { createAcknowledgedThunk, requestAcknowledged, addRequestLifecycle, addKeyedRequestLifecycle, completeKeyedRequest, selectKeyedRequest } from './async';
 
 
 export const initialState = {
@@ -15,6 +15,7 @@ export const initialState = {
     requestId: null,
     contentById: {},
     activityById: {},
+    activityRequestById: {},
   },
 };
 
@@ -75,14 +76,20 @@ export const eventHandlers = {
     const cardId = cardIdOf(payload);
     if (cardId) {
       state.tasks.activityById[cardId] = payload;
+      completeKeyedRequest(state.tasks.activityRequestById, cardId, payload.request_id);
     }
   },
 };
 
 export function buildExtraReducers(builder) {
-  return addRequestLifecycle(builder, fetchKanbanBoard, {
+  addRequestLifecycle(builder, fetchKanbanBoard, {
     select: (state) => state.tasks,
     errorMessage: 'Failed to load tasks',
+  });
+  return addKeyedRequestLifecycle(builder, fetchTaskActivity, {
+    selectRequests: (state) => state.tasks.activityRequestById,
+    keyFromArgs: ({ cardId } = {}) => cardId,
+    errorMessage: 'Failed to load task activity',
   });
 }
 
@@ -93,4 +100,7 @@ export const selectTaskContentEntry = (state, cardId) => (
 );
 export const selectTaskActivityEntry = (state, cardId) => (
   cardId ? state.uiData.tasks.activityById[cardId] || null : null
+);
+export const selectTaskActivityRequest = (state, cardId) => (
+  selectKeyedRequest(state.uiData.tasks.activityRequestById, cardId)
 );

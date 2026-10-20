@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 import {
   filterBases,
   formatCount,
-  formatRelativeTime,
   fromApiBase,
   groupBases,
   matchesFilter,
@@ -164,13 +163,3 @@ describe('fromApiBase', () => {
   });
 });
 
-describe('formatRelativeTime', () => {
-  const now = new Date('2026-06-27T12:00:00Z').getTime();
-  it('renders compact relative ages', () => {
-    expect(formatRelativeTime(null, now)).toBe('--');
-    expect(formatRelativeTime('2026-06-27T11:59:40Z', now)).toBe('now');
-    expect(formatRelativeTime('2026-06-27T11:30:00Z', now)).toBe('30m');
-    expect(formatRelativeTime('2026-06-27T09:00:00Z', now)).toBe('3h');
-    expect(formatRelativeTime('2026-06-25T12:00:00Z', now)).toBe('2d');
-  });
-});

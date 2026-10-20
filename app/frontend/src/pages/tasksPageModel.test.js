@@ -4,7 +4,6 @@ import {
   buildCardBadges,
   cardTags,
   formatAgentName,
-  formatRelativeTime,
   formatTaskLabel,
   getCardAssignee,
   getCardService,
@@ -177,17 +176,4 @@ describe('groupVisibleCards', () => {
   });
 });
 
-describe('formatRelativeTime', () => {
-  it('returns a placeholder for missing or invalid input', () => {
-    expect(formatRelativeTime('')).toBe('--');
-    expect(formatRelativeTime('not-a-date')).toBe('--');
-  });
 
-  it('formats recent timestamps in compact units', () => {
-    const now = Date.now();
-    expect(formatRelativeTime(new Date(now - 30 * 1000).toISOString())).toBe('now');
-    expect(formatRelativeTime(new Date(now - 5 * 60 * 1000).toISOString())).toBe('5m');
-    expect(formatRelativeTime(new Date(now - 3 * 60 * 60 * 1000).toISOString())).toBe('3h');
-    expect(formatRelativeTime(new Date(now - 2 * 24 * 60 * 60 * 1000).toISOString())).toBe('2d');
-  });
-});

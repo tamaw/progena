@@ -9,6 +9,7 @@ import { createSelector } from '@reduxjs/toolkit';
 import { createAcknowledgedThunk, requestAcknowledged } from './async';
 import { withQuery } from '../http';
 import { deriveChatStatus } from '../../lib/chatStatus';
+import { failureMessage } from '../../lib/failures';
 
 
 const emptyActive = () => ({
@@ -409,7 +410,7 @@ export function buildExtraReducers(builder) {
         return;
       }
       state.chats.loading = false;
-      state.chats.error = action.error?.message || 'Failed to load chats';
+      state.chats.error = failureMessage(action.error?.message ? action.error : 'Failed to load chats').message;
       state.chats.requestId = null;
     })
     .addCase(requestChatSessionDetail.pending, (state, action) => {
@@ -421,7 +422,7 @@ export function buildExtraReducers(builder) {
     .addCase(requestChatSessionDetail.rejected, (state, action) => {
       if (state.chats.active.requestId === action.meta.requestId) {
         state.chats.active.loading = false;
-        state.chats.active.error = action.error?.message || 'Failed to load chat';
+        state.chats.active.error = failureMessage(action.error?.message ? action.error : 'Failed to load chat').message;
       }
     })
     .addCase(requestChatSessionReconciliation.pending, (state, action) => {
@@ -432,7 +433,7 @@ export function buildExtraReducers(builder) {
     })
     .addCase(requestChatSessionReconciliation.rejected, (state, action) => {
       if (state.chats.reconciliation.requestId === action.meta.requestId) {
-        state.chats.reconciliation.error = action.error?.message || 'Failed to reconcile chat';
+        state.chats.reconciliation.error = failureMessage(action.error?.message ? action.error : 'Failed to reconcile chat').message;
         state.chats.reconciliation.requestId = null;
       }
     });

@@ -1,39 +1,102 @@
 // @vitest-environment jsdom
-import { createElement, act, useState } from 'react';
+import { act, createElement } from 'react';
 import { createRoot } from 'react-dom/client';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { SNAPSHOT_EVENT_TIMEOUT_MS, useSnapshotSave } from './snapshotSave';
+import { Provider, useDispatch } from 'react-redux';
+import { configureStore, createAsyncThunk } from '@reduxjs/toolkit';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import useEntityDraft from '../../hooks/useEntityDraft';
+import editorDraftsReducer, { draftChanged, entityDraftKey } from '../editorDraftsSlice';
+import realtimeReducer, { failPendingOp } from '../realtimeSlice';
+import uiDataReducer, { applyUiEvent } from '../uiDataSlice';
+import { useSnapshotSave } from './snapshotSave';
 
 let root;
 let container;
-const items = [{ path: 'profile', content: 'canonical' }];
-const identity = (value) => value;
-const defaultDispatch = () => ({ unwrap: async () => ({}) });
+let store;
+let thunkNumber = 0;
 
-function Editor({ resolvedContent, resolveContent = false, pending, snapshotRequestId, dispatch = defaultDispatch, realtimeConnected = true }) {
-  const [content, setContent] = useState('draft');
-  const [saving, setSaving] = useState(Boolean(pending));
-  const [pendingSave, setPendingSave] = useState(pending || null);
-  const [status, setStatus] = useState('');
-  const [error, setError] = useState(null);
-  const save = useSnapshotSave({
-    items, snapshotRequestId, pendingSave, dispatch, thunk: identity, buildArgs: identity,
-    path: 'profile', content, savedContent: 'original', saving, realtimeConnected,
-    setDraftContent: setContent, setSaving, setPendingSave,
-    setStatusMessage: setStatus, setError,
-    resolveSavedContent: resolveContent ? () => resolvedContent : undefined,
+function createStore() {
+  return configureStore({
+    reducer: {
+      editorDrafts: editorDraftsReducer,
+      realtime: realtimeReducer,
+      uiData: uiDataReducer,
+    },
   });
-  return createElement('div', null,
-    createElement('input', { value: content, readOnly: true }),
-    createElement('button', { disabled: saving, onClick: () => { void save(); } }, 'Save'),
-    createElement('output', { role: 'status' }, status),
-    error ? createElement('div', { role: 'alert' }, error.message) : null,
+}
+
+function deferredSave() {
+  let resolve;
+  let reject;
+  const acknowledgement = new Promise((accept, fail) => {
+    resolve = accept;
+    reject = fail;
+  });
+  return {
+    thunk: createAsyncThunk(`test/snapshot-save/${++thunkNumber}`, async () => acknowledgement),
+    resolve,
+    reject,
+  };
+}
+
+function ProfileEditor({ profileId, canonical, thunk, connected = true }) {
+  const dispatch = useDispatch();
+  const key = entityDraftKey('profile', profileId);
+  const [editor, setEditor, controls] = useEntityDraft(key, {
+    draft: null,
+    baseline: null,
+  });
+  const draft = editor.draft;
+  const save = useSnapshotSave({
+    dispatch,
+    thunk,
+    buildArgs: ({ path, content }) => ({ path, content }),
+    path: profileId,
+    content: draft?.raw ?? '',
+    savedContent: editor.baseline ?? '',
+    saving: controls.saving,
+    realtimeConnected: connected,
+    beginSave: controls.beginSave,
+    trackSave: controls.trackSave,
+    failSave: controls.failSave,
+    events: ['profiles.snapshot'],
+  });
+  const startEdit = () => {
+    setEditor({
+      draft: { raw: canonical },
+      baseline: canonical,
+    });
+  };
+  const updateDraft = (event) => {
+    const raw = event.target.value;
+    setEditor((current) => ({
+      ...current,
+      draft: { ...current.draft, raw },
+    }));
+  };
+
+  return createElement('section', { 'data-profile': profileId },
+    createElement('button', { type: 'button', onClick: startEdit }, 'Edit'),
+    createElement('input', {
+      'aria-label': `Profile draft ${profileId}`,
+      value: draft?.raw ?? canonical,
+      disabled: !draft || controls.saving,
+      onChange: updateDraft,
+    }),
+    createElement('button', {
+      type: 'button',
+      disabled: !draft || controls.saving,
+      onClick: () => { void save(); },
+    }, 'Save'),
+    createElement('output', { 'data-testid': `draft-${profileId}` }, controls.hasDraft ? 'draft' : 'clean'),
+    createElement('output', { 'data-testid': `saving-${profileId}` }, controls.saving ? 'saving' : 'idle'),
+    createElement('output', { 'data-testid': `error-${profileId}` }, controls.error || ''),
   );
 }
 
 beforeEach(() => {
-  vi.useFakeTimers();
   globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+  store = createStore();
   container = document.createElement('div');
   document.body.append(container);
   root = createRoot(container);
@@ -42,66 +105,164 @@ beforeEach(() => {
 afterEach(async () => {
   await act(async () => root.unmount());
   container.remove();
-  vi.useRealTimers();
   delete globalThis.IS_REACT_ACT_ENVIRONMENT;
 });
 
-const render = async (props) => { await act(async () => root.render(createElement(Editor, props))); };
-const completed = { requestId: 'save-1', path: 'profile', acknowledged: true };
+async function render(props) {
+  await act(async () => root.render(createElement(
+    Provider,
+    { store },
+    createElement(ProfileEditor, props),
+  )));
+}
 
-describe('snapshot save observable state', () => {
-  it('keeps success when the causal snapshot is already present as the acknowledgement arrives', async () => {
-    await render({ pending: completed, snapshotRequestId: 'save-1' });
-    expect(container.querySelector('[role="status"]').textContent).toBe('Saved profile.');
-    expect(container.querySelector('input').value).toBe('canonical');
-    expect(container.querySelector('button').disabled).toBe(false);
-    await act(async () => vi.advanceTimersByTime(SNAPSHOT_EVENT_TIMEOUT_MS + 1));
-    expect(container.querySelector('[role="alert"]')).toBeNull();
-    expect(container.querySelector('[role="status"]').textContent).toBe('Saved profile.');
+async function click(label) {
+  await act(async () => {
+    [...container.querySelectorAll('button')].find((button) => button.textContent === label).click();
+  });
+}
+
+async function typeDraft(profileId, value) {
+  const input = container.querySelector(`[aria-label="Profile draft ${profileId}"]`);
+  await act(async () => {
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+    setter.call(input, value);
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+}
+
+function entry(profileId) {
+  return store.getState().editorDrafts.entries[entityDraftKey('profile', profileId)];
+}
+
+async function acknowledge(save) {
+  await act(async () => {
+    save.resolve({ accepted: true });
+    await Promise.resolve();
+  });
+}
+
+async function applySnapshot(requestId) {
+  await act(async () => {
+    store.dispatch(applyUiEvent({
+      type: 'profiles.snapshot',
+      payload: { request_id: requestId, profiles: [] },
+    }));
+  });
+}
+
+describe('snapshot save draft correlation', () => {
+  it('keeps a 202-acknowledged edit pending until its canonical snapshot clears the submitted revision', async () => {
+    const save = deferredSave();
+    await render({ profileId: 'A', canonical: 'baseline A', thunk: save.thunk });
+    await click('Edit');
+    await typeDraft('A', 'submitted A');
+    await click('Save');
+    const requestId = entry('A').save.requestId;
+
+    await acknowledge(save);
+    expect(container.querySelector('[aria-label="Profile draft A"]').value).toBe('submitted A');
+    expect(container.querySelector('[aria-label="Profile draft A"]').disabled).toBe(true);
+    expect(container.querySelector('[data-testid="draft-A"]').textContent).toBe('draft');
+    expect(container.querySelector('[data-testid="saving-A"]').textContent).toBe('saving');
+
+    await render({ profileId: 'A', canonical: 'canonical A', thunk: save.thunk });
+    await applySnapshot(requestId);
+    expect(container.querySelector('[aria-label="Profile draft A"]').value).toBe('canonical A');
+    expect(container.querySelector('[data-testid="draft-A"]').textContent).toBe('clean');
+    expect(container.querySelector('[data-testid="saving-A"]').textContent).toBe('idle');
   });
 
-  it('waits for canonical content without discarding a draft, then cancels the timeout on completion', async () => {
-    await render({ pending: completed, snapshotRequestId: 'save-1', resolveContent: true });
-    expect(container.querySelector('input').value).toBe('draft');
-    expect(container.querySelector('button').disabled).toBe(true);
-    await render({ pending: completed, snapshotRequestId: 'save-1', resolveContent: true, resolvedContent: 'fresh' });
-    expect(container.querySelector('input').value).toBe('fresh');
-    expect(container.querySelector('button').disabled).toBe(false);
-    await act(async () => vi.advanceTimersByTime(SNAPSHOT_EVENT_TIMEOUT_MS + 1));
-    expect(container.querySelector('[role="alert"]')).toBeNull();
+  it('unlocks a failed save while retaining the exact raw edit', async () => {
+    const save = deferredSave();
+    await render({ profileId: 'A', canonical: 'baseline A', thunk: save.thunk });
+    await click('Edit');
+    await typeDraft('A', '  exact raw value  ');
+    await click('Save');
+
+    await act(async () => {
+      save.reject(new Error('network unavailable'));
+      await Promise.resolve();
+    });
+
+    expect(container.querySelector('[aria-label="Profile draft A"]').value).toBe('  exact raw value  ');
+    expect(container.querySelector('[aria-label="Profile draft A"]').disabled).toBe(false);
+    expect(container.querySelector('[data-testid="saving-A"]').textContent).toBe('idle');
+    expect(container.querySelector('[data-testid="error-A"]').textContent).toContain('network unavailable');
   });
 
-  it('shows request failure and preserves an editable draft', async () => {
-    const dispatch = () => ({ unwrap: async () => { throw new Error('network unavailable'); } });
-    await render({ dispatch });
-    await act(async () => container.querySelector('button').click());
-    expect(container.querySelector('[role="alert"]').textContent).toBe('network unavailable');
-    expect(container.querySelector('input').value).toBe('draft');
-    expect(container.querySelector('button').disabled).toBe(false);
+  it('leaves an offline save editable with its retained raw value', async () => {
+    const save = deferredSave();
+    await render({ profileId: 'A', canonical: 'baseline A', thunk: save.thunk, connected: false });
+    await click('Edit');
+    await typeDraft('A', 'offline raw');
+    await click('Save');
+
+    expect(container.querySelector('[aria-label="Profile draft A"]').value).toBe('offline raw');
+    expect(container.querySelector('[aria-label="Profile draft A"]').disabled).toBe(false);
+    expect(container.querySelector('[data-testid="saving-A"]').textContent).toBe('idle');
+    expect(container.querySelector('[data-testid="error-A"]').textContent).not.toBe('');
   });
 
-  it('times out an unconfirmed save even while unrelated re-renders keep arriving', async () => {
-    for (let elapsed = 0; elapsed < SNAPSHOT_EVENT_TIMEOUT_MS + 5000; elapsed += 5000) {
-      // A new inline resolver each render, as PromptsPage passes one.
-      await render({ pending: completed, snapshotRequestId: 'other', resolveContent: true });
-      await act(async () => vi.advanceTimersByTime(5000));
-    }
-    expect(container.querySelector('[role="alert"]').textContent).toMatch(/did not arrive/);
-    expect(container.querySelector('button').disabled).toBe(false);
+  it('settles an unmounted profile save without changing the active profile or a newer retained revision', async () => {
+    const save = deferredSave();
+    await render({ profileId: 'A', canonical: 'baseline A', thunk: save.thunk });
+    await click('Edit');
+    await typeDraft('A', 'submitted A');
+    await click('Save');
+    const requestId = entry('A').save.requestId;
+
+    await render({ profileId: 'B', canonical: 'baseline B', thunk: save.thunk });
+    await click('Edit');
+    await typeDraft('B', 'draft B');
+    await act(async () => {
+      store.dispatch(draftChanged({
+        key: entityDraftKey('profile', 'A'),
+        value: {
+          draft: { raw: 'newer A' },
+          baseline: 'baseline A',
+        },
+      }));
+    });
+
+    await acknowledge(save);
+    await applySnapshot(requestId);
+
+    expect(container.querySelector('[aria-label="Profile draft B"]').value).toBe('draft B');
+    expect(entry('B').value.draft.raw).toBe('draft B');
+    expect(entry('A').value.draft.raw).toBe('newer A');
+    expect(entry('A').save).toBeNull();
   });
 
-  it('drops a late rejection from a save that the disconnect already cancelled', async () => {
-    let reject;
-    const dispatch = () => ({ unwrap: () => new Promise((_resolve, fail) => { reject = fail; }) });
-    await render({ dispatch });
-    await act(async () => container.querySelector('button').click());
-    await render({ dispatch, realtimeConnected: false });
-    const cancelled = container.querySelector('[role="alert"]').textContent;
-    expect(cancelled).toMatch(/realtime stream disconnected/);
+  it('unlocks an acknowledged retained save when its connection is replaced', async () => {
+    const save = deferredSave();
+    await render({ profileId: 'A', canonical: 'baseline A', thunk: save.thunk });
+    await click('Edit');
+    await typeDraft('A', 'unsaved across reconnect');
+    await click('Save');
+    await acknowledge(save);
+    await act(async () => {
+      for (const requestId of Object.keys(store.getState().realtime.pendingOps)) {
+        store.dispatch(failPendingOp({ requestId, error: 'Connection replaced' }));
+      }
+    });
+    expect(container.querySelector('[aria-label="Profile draft A"]').value).toBe('unsaved across reconnect');
+    expect(container.querySelector('[aria-label="Profile draft A"]').disabled).toBe(false);
+    expect(container.querySelector('[data-testid="error-A"]').textContent).toContain('Connection replaced');
+  });
 
-    await render({ dispatch, realtimeConnected: true });
-    await act(async () => reject(new Error('late failure')));
+  it('settles a canonical event that arrives before the HTTP acknowledgement', async () => {
+    const save = deferredSave();
+    await render({ profileId: 'A', canonical: 'baseline A', thunk: save.thunk });
+    await click('Edit');
+    await typeDraft('A', 'submitted A');
+    await click('Save');
+    const requestId = entry('A').save.requestId;
 
-    expect(container.querySelector('[role="alert"]').textContent).toBe(cancelled);
+    await applySnapshot(requestId);
+    expect(container.querySelector('[data-testid="draft-A"]').textContent).toBe('clean');
+
+    await acknowledge(save);
+    expect(container.querySelector('[data-testid="draft-A"]').textContent).toBe('clean');
   });
 });

@@ -96,12 +96,31 @@ export default function Select({
   }, [isOpen, portal]);
 
   useLayoutEffect(() => {
-    if (!isOpen || !portal || !triggerRef.current) {
+    if (!isOpen) {
+      // A portal panel is remounted on every open. Clear its previous
+      // constrained geometry before the next mount is measured.
+      setPanelRect(null);
+      return;
+    }
+    if (!portal || !triggerRef.current || !panelRef.current) {
       return;
     }
     const rect = triggerRef.current.getBoundingClientRect();
-    setPanelRect({ top: rect.bottom + 6, left: rect.left, minWidth: rect.width });
-  }, [isOpen, portal]);
+    const margin = 8;
+    const gap = 6;
+    const below = Math.max(0, window.innerHeight - rect.bottom - gap - margin);
+    const above = Math.max(0, rect.top - gap - margin);
+    const height = panelRef.current.scrollHeight;
+    const opensAbove = height > below && above > below;
+    const maxHeight = opensAbove ? above : below;
+    const width = Math.min(Math.max(rect.width, panelRef.current.scrollWidth), window.innerWidth - margin * 2);
+    setPanelRect({
+      top: opensAbove ? Math.max(margin, rect.top - gap - Math.min(height, maxHeight)) : rect.bottom + gap,
+      left: Math.max(margin, Math.min(rect.left, window.innerWidth - width - margin)),
+      width,
+      maxHeight,
+    });
+  }, [isOpen, portal, filtered.length]);
 
   useEffect(() => {
     if (!isOpen) {
@@ -123,12 +142,21 @@ export default function Select({
     listRef.current?.querySelector(`[data-index="${activeIndex}"]`)?.scrollIntoView({ block: 'nearest' });
   }, [isOpen, activeIndex]);
 
+  // Like a native select: closing from the menu keeps focus on the control, and
+  // choosing the current option is not a change.
+  const close = useCallback(() => {
+    setIsOpen(false);
+    triggerRef.current?.focus();
+  }, []);
+
   const commit = useCallback(
     (nextValue) => {
-      onChange(nextValue);
-      setIsOpen(false);
+      if (nextValue !== value) {
+        onChange(nextValue);
+      }
+      close();
     },
-    [onChange],
+    [close, onChange, value],
   );
 
   const handlePanelKeyDown = useCallback(
@@ -146,17 +174,25 @@ export default function Select({
         }
       } else if (event.key === 'Escape') {
         event.preventDefault();
-        setIsOpen(false);
+        close();
       }
     },
-    [filtered, activeIndex, commit],
+    [filtered, activeIndex, commit, close],
   );
 
   const panel = isOpen ? (
     <div
       className="app-listbox__panel"
       ref={panelRef}
-      style={portal && panelRect ? { position: 'fixed', top: panelRect.top, left: panelRect.left, minWidth: panelRect.minWidth } : undefined}
+      style={portal ? {
+        position: 'fixed',
+        minWidth: 0,
+        top: panelRect?.top,
+        left: panelRect?.left,
+        width: panelRect?.width,
+        maxHeight: panelRect?.maxHeight,
+        overflowY: 'auto',
+      } : undefined}
     >
       {searchable ? (
         <input

@@ -153,6 +153,22 @@ export function textToSchemaFields(text) {
   return { type: 'object', properties, required, additionalProperties: false };
 }
 
+// Whether every line is a finished "name: type" declaration that
+// parseSchemaFieldType reads as written (unknown/partial types such as
+// `inte` or an unclosed `enum(` would silently become `string`).
+export function isCompleteSchemaFieldText(text) {
+  return text.split('\n').every((line) => {
+    if (!line.trim()) return true;
+    const separator = line.indexOf(':');
+    if (separator <= 0 || !line.slice(0, separator).trim()) return false;
+    const type = line.slice(separator + 1).split('#', 1)[0].trim();
+    const enumMatch = type.match(/^enum\((.*)\)$/i);
+    if (enumMatch) return enumMatch[1].split(',').every((value) => value.trim());
+    const base = (type.match(/^(\w+)\[\]$/)?.[1] ?? type).toLowerCase();
+    return SCHEMA_FIELD_PRIMITIVE_TYPES.includes(SCHEMA_FIELD_TYPE_ALIASES[base] || base);
+  });
+}
+
 // The candidate state paths a node at `nodeId` could reference -- Expression
 // (eval/condition/switch/loop_guard) resolves these as direct name/attribute
 // access; Inputs (agent) still binds them under an author-chosen local alias.

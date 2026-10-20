@@ -16,7 +16,6 @@ export function useLogsApi() {
     });
     return requestAcknowledged(withQuery(getApiUrl('logs'), filtered), {
       requestId: createUuid(),
-      errorLabel: 'getLogs failed',
     });
   }, [getApiUrl]);
 

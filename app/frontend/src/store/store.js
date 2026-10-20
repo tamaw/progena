@@ -1,6 +1,7 @@
 import { combineReducers, configureStore } from '@reduxjs/toolkit';
 import realtimeReducer from './realtimeSlice';
 import uiDataReducer from './uiDataSlice';
+import editorDraftsReducer from './editorDraftsSlice';
 import { realtimeListenerMiddleware } from './realtimeListener';
 
 export const WORKSPACE_SWITCHED = 'workspace/switched';
@@ -9,6 +10,7 @@ export const workspaceSwitched = () => ({ type: WORKSPACE_SWITCHED });
 const appReducer = combineReducers({
   realtime: realtimeReducer,
   uiData: uiDataReducer,
+  editorDrafts: editorDraftsReducer,
 });
 
 // Switching workspaces targets a different backend entirely -- every fetched

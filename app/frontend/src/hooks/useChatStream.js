@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSelector } from 'react-redux';
+import { reportFailure } from '../lib/failures';
 import {
   clearChatErrored,
   clearChatGenerating,
@@ -485,7 +486,7 @@ export function useChatStream({
             return;
           }
           flushPendingText(streamId);
-          show('error', 'Chat Error', error.message);
+          reportFailure(show, 'Generate response', error);
           const turn = liveTurnRef.current;
           if (turn) {
             const committed = finalizeLiveAssistantTurn(turn, {
@@ -531,7 +532,7 @@ export function useChatStream({
       if (isStale()) {
         return;
       }
-      show('error', 'Chat Error', error.message);
+      reportFailure(show, 'Generate response', error);
       setIsGenerating(false);
       discardPendingText();
       clearLiveTurnForStream(streamId);

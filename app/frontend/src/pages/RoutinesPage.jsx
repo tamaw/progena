@@ -1,20 +1,16 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
-import { useNavigate, useParams } from 'react-router-dom';
-import { getTimeBucket } from '../components/chat/conversationModel';
+import { useNavigate } from 'react-router-dom';
+import { entityDraftKey } from '../store/editorDraftsSlice';
+import useEntityDraft from '../hooks/useEntityDraft';
+import InlineFailure from '../components/common/InlineFailure';
 import PopupModal from '../components/common/PopupModal';
-import { useConfig } from '../context/ConfigContext';
-import { selectRealtimeConnected, selectRealtimeStreamReady } from '../store/realtimeSlice';
+import useAgentCatalogue from '../hooks/useAgentCatalogue';
+import useConfirmAction from '../hooks/useConfirmAction';
 import {
-  fetchAgentProfiles,
-  requestAgentDetail,
-  selectActiveAgentProfile,
-  selectActiveAgentProfileState,
-  selectAgentProfiles,
-  selectAgentProfilesState,
-  updateAgentGraph,
   deleteAgentProfile,
   selectRoutineLatestRunStatusByAgentId,
+  updateAgentGraph,
 } from '../store/uiDataSlice';
 import {
   PaneEmptyState,
@@ -30,20 +26,11 @@ import PageShell from '../components/layout/PageShell';
 import DetailPane from '../components/layout/DetailPane';
 import { RoutineGraphEditor } from '../components/agents/RoutineGraphEditor';
 import { formatAge } from '../components/agents/agentFormat';
+import { catalogueRoutines } from './agentCatalogueModel';
+
 
 const ROUTINE_FILTERS = ['All', 'Running', 'Paused', 'Failed'];
-
-// Every row is a routine, so there is no Type sort.
 const SORT_MODES = ['Name', 'Recent'];
-
-const RECENCY_BUCKETS = [
-  ['today', 'Today'],
-  ['yesterday', 'Yesterday'],
-  ['this-week', 'This Week'],
-  ['last-week', 'Last Week'],
-  ['later', 'Later'],
-];
-
 const FALLBACK_GRAPH = {
   status: 'Draft',
   summary: '',
@@ -51,44 +38,6 @@ const FALLBACK_GRAPH = {
   nodes: [],
   edges: [],
 };
-
-function updatedTime(agent) {
-  const ms = new Date(agent.updated || 0).getTime();
-  return Number.isNaN(ms) ? 0 : ms;
-}
-
-function sortRoutines(routines, mode) {
-  const byName = (a, b) => (a.name || '').localeCompare(b.name || '');
-  const comparators = {
-    Name: byName,
-    Recent: (a, b) => updatedTime(b) - updatedTime(a) || byName(a, b),
-  };
-  return [...routines].sort(comparators[mode] || comparators.Name);
-}
-
-function matchesRoutine(routine, filter, search, runStatus) {
-  const matchesFilter = filter === 'All'
-    || (filter === 'Running' && runStatus === 'Running')
-    || (filter === 'Paused' && runStatus === 'Paused')
-    || (filter === 'Failed' && runStatus === 'Failed');
-  if (!matchesFilter) {
-    return false;
-  }
-  if (!search) {
-    return true;
-  }
-  const haystack = [
-    routine.name,
-    routine.handle,
-    routine.model,
-    routine.role,
-    routine.summary,
-  ]
-    .filter(Boolean)
-    .join(' ')
-    .toLowerCase();
-  return haystack.includes(search.toLowerCase());
-}
 
 // Routines card list: a two-line card matching the Chat/Workflows pattern —
 // a leading status dot (empty unless running/failed/paused), name + last-activity
@@ -118,31 +67,30 @@ function RoutineRow({ routine, selected, onSelect, runStatus }) {
 
 export default function RoutinesPage() {
   const dispatch = useDispatch();
-  const { getApiUrl } = useConfig();
-  const realtimeConnected = useSelector(selectRealtimeConnected);
-  const fetchedAgents = useSelector(selectAgentProfiles);
-  const { agentId: routeAgentId } = useParams();
-  const routines = useMemo(
-    () => fetchedAgents.filter((agent) => agent.kind === 'routine'),
-    [fetchedAgents],
-  );
-  const agentsState = useSelector(selectAgentProfilesState);
-  const activeAgent = useSelector(selectActiveAgentProfile);
-  const activeAgentState = useSelector(selectActiveAgentProfileState);
-  const streamReady = useSelector(selectRealtimeStreamReady);
-  const runStatusById = useSelector(selectRoutineLatestRunStatusByAgentId);
-
   const navigate = useNavigate();
-
+  const {
+    agents: routines,
+    agentsState,
+    agentsUrl,
+    detailFailure,
+    detailPending,
+    effectiveAgentId,
+    rosterFailure,
+    retryDetail,
+    retryRoster,
+    selectAgent,
+    selectedAgent,
+  } = useAgentCatalogue({ kind: 'routines', routeBase: '/routines' });
+  const runStatusById = useSelector(selectRoutineLatestRunStatusByAgentId);
   const [activeFilter, setActiveFilter] = useState('All');
   const [search, setSearch] = useState('');
   const [sortMode, setSortMode] = useState('Name');
-  const [graphEditorOpen, setGraphEditorOpen] = useState(false);
-  const [routineRunsOpen, setRoutineRunsOpen] = useState(false);
-  const [deleteConfirmationOpen, setDeleteConfirmationOpen] = useState(false);
-  const [deleteBusy, setDeleteBusy] = useState(false);
-  const [deleteError, setDeleteError] = useState('');
-  const agentsUrl = getApiUrl('agentProfiles');
+  const viewKey = entityDraftKey('routine', effectiveAgentId, 'view');
+  const [editorView, setEditorView] = useEntityDraft(viewKey, { jsonOpen: false, runsOpen: false });
+  const graphEditorOpen = editorView.jsonOpen;
+  const routineRunsOpen = editorView.runsOpen;
+  const [deleteTarget, setDeleteTarget] = useState(null);
+  const deleteAction = useConfirmAction(effectiveAgentId);
 
   const handleNewAgent = useCallback(() => {
     window.dispatchEvent(new CustomEvent('progenitor:open-quick-chat', {
@@ -150,123 +98,43 @@ export default function RoutinesPage() {
     }));
   }, []);
 
-  // Selection is derived from the URL (/routines/<id>) so the view is
-  // refreshable and shareable; user actions navigate rather than setState.
-  const selectedAgentId = routeAgentId ?? null;
+  const requestDeleteAgent = useCallback(() => {
+    if (!selectedAgent) return;
+    const target = { id: selectedAgent.id, name: selectedAgent.name };
+    setDeleteTarget(target);
+    deleteAction.request('Delete routine', async ({ isCurrent }) => {
+      await dispatch(deleteAgentProfile({ agentsUrl, agentId: target.id })).unwrap();
+      if (isCurrent()) navigate('/routines', { replace: true });
+    });
+  }, [agentsUrl, deleteAction, dispatch, navigate, selectedAgent]);
 
-  const requestedListRef = useRef(null);
+  const closeDeleteAgent = useCallback(() => {
+    if (deleteAction.busy) return;
+    deleteAction.close();
+    setDeleteTarget(null);
+  }, [deleteAction]);
 
-  // Load profiles once the realtime stream is connected. The GET acknowledges
-  // the request and the snapshot arrives on the stream.
-  useEffect(() => {
-    if (!realtimeConnected) {
-      requestedListRef.current = null;
-      return;
-    }
-    if (requestedListRef.current === agentsUrl) {
-      return;
-    }
-    requestedListRef.current = agentsUrl;
-    dispatch(fetchAgentProfiles({ agentsUrl }));
-  }, [agentsUrl, dispatch, realtimeConnected]);
-
-  // Selection defaults to the first routine without writing state in an effect.
-  const effectiveAgentId = selectedAgentId ?? routines[0]?.id ?? null;
-
-  const selectAgent = useCallback((id) => {
-    navigate(`/routines/${encodeURIComponent(id)}`);
-  }, [navigate]);
-
-  const handleDeleteAgent = useCallback(() => {
-    if (effectiveAgentId) {
-      setDeleteError('');
-      setDeleteConfirmationOpen(true);
-    }
-  }, [effectiveAgentId]);
-
-  const confirmDeleteAgent = useCallback(async () => {
-    if (!effectiveAgentId) {
-      setDeleteConfirmationOpen(false);
-      return;
-    }
-    setDeleteBusy(true);
-    try {
-      await dispatch(deleteAgentProfile({ agentsUrl, agentId: effectiveAgentId })).unwrap();
-      setDeleteConfirmationOpen(false);
-      navigate('/routines', { replace: true });
-    } catch (error) {
-      setDeleteError(error.message || 'Failed to delete.');
-    } finally {
-      setDeleteBusy(false);
-    }
-  }, [agentsUrl, dispatch, effectiveAgentId, navigate]);
-
-  // The detail only ever comes back as a one-shot `agent.selected` broadcast,
-  // and the backend replays nothing to a subscriber it did not have at publish
-  // time (replay needs a Last-Event-ID, which a first load has none of). Ask
-  // before the stream is ready and the answer is published into the void: the
-  // graph pane then waits on `graphDetailPending` forever, since nothing
-  // retries. Wait for the subscriber to exist, then ask.
-  useEffect(() => {
-    if (!effectiveAgentId || !streamReady) {
-      return;
-    }
-    if (activeAgent?.id === effectiveAgentId) {
-      return;
-    }
-    dispatch(requestAgentDetail({ agentsUrl, agentId: effectiveAgentId }));
-  }, [activeAgent?.id, agentsUrl, dispatch, effectiveAgentId, streamReady]);
-
-  const listAgent = useMemo(
-    () => routines.find((agent) => agent.id === effectiveAgentId) || null,
-    [routines, effectiveAgentId],
-  );
-  const selectedAgent = activeAgent && activeAgent.id === effectiveAgentId ? activeAgent : listAgent;
-  const selectedGraph = selectedAgent?.graph || FALLBACK_GRAPH;
-  const graphDetailPending = !activeAgentState.error
-    && (!activeAgent || activeAgent.id !== effectiveAgentId);
-
-  // Reflect the active routine in the URL so the view is refreshable and shareable.
-  useEffect(() => {
-    if (!effectiveAgentId) return;
-    const target = `/routines/${encodeURIComponent(effectiveAgentId)}`;
-    if (`${window.location.pathname}` !== target) {
-      navigate(target, { replace: true });
-    }
-  }, [effectiveAgentId, navigate]);
-
-  const visibleRoutines = useMemo(
-    () => sortRoutines(
-      routines.filter((routine) => matchesRoutine(routine, activeFilter, search, runStatusById[routine.id])),
+  const { visible: visibleRoutines, sections } = useMemo(
+    () => catalogueRoutines(routines, {
+      filter: activeFilter,
+      search,
       sortMode,
-    ),
-    [activeFilter, routines, search, sortMode, runStatusById],
+      runStatusById,
+    }),
+    [activeFilter, routines, runStatusById, search, sortMode],
   );
-
-  const sections = useMemo(() => {
-    if (sortMode === 'Recent') {
-      const buckets = new Map(RECENCY_BUCKETS.map(([key]) => [key, []]));
-      visibleRoutines.forEach((routine) => {
-        const bucket = getTimeBucket(routine.updated);
-        (buckets.get(bucket) || buckets.get('later')).push(routine);
-      });
-      return RECENCY_BUCKETS
-        .map(([key, label]) => ({ key, title: label, routines: buckets.get(key) }))
-        .filter((section) => section.routines.length);
-    }
-    return [{ key: 'all', title: null, routines: visibleRoutines }];
-  }, [sortMode, visibleRoutines]);
-
   // Footer counts use the same latest-run status as the filters and dots.
   const countByStatus = (status) => routines.filter((routine) => runStatusById[routine.id] === status).length;
   const runningCount = countByStatus('Running');
   const pausedCount = countByStatus('Paused');
   const failedCount = countByStatus('Failed');
+  const selectedGraph = selectedAgent?.graph || FALLBACK_GRAPH;
+  const hasCachedGraph = selectedAgent?.graph != null;
 
-  async function handleSaveGraph(parsed) {
+  function handleSaveGraph(parsed, agentId) {
     return dispatch(updateAgentGraph({
       agentsUrl,
-      agentId: effectiveAgentId,
+      agentId,
       entry: parsed.entry,
       nodes: parsed.nodes,
       edges: parsed.edges,
@@ -276,7 +144,7 @@ export default function RoutinesPage() {
       input_schema: parsed.input_schema,
       output_schema: parsed.output_schema,
       $defs: parsed.$defs,
-    })).unwrap();
+    }));
   }
 
   return (
@@ -298,10 +166,11 @@ export default function RoutinesPage() {
             onSelect={setSortMode}
           />
         </PaneListToolbar>
+        {rosterFailure ? <InlineFailure failure={rosterFailure} onRetry={retryRoster} /> : null}
         {visibleRoutines.length ? (
           <PaneListRows
             groups={sections}
-            getGroupItems={(section) => section.routines}
+            getGroupItems={(section) => section.items}
             renderItem={(routine) => (
               <RoutineRow
                 routine={routine}
@@ -311,9 +180,9 @@ export default function RoutinesPage() {
               />
             )}
           />
-        ) : (
+        ) : !rosterFailure ? (
           <PaneEmptyState>{agentsState.loading || !agentsState.loaded ? 'Loading routines…' : 'No routines match this view.'}</PaneEmptyState>
-        )}
+        ) : null}
         <PaneListFooter>
           <span><span className="num">{runningCount}</span> running</span>
           <span><span className="num">{pausedCount}</span> paused</span>
@@ -324,7 +193,10 @@ export default function RoutinesPage() {
       {selectedAgent ? (
         <DetailPane className="detail-pane--dense agents-detail is-graph-mode" label={`${selectedAgent.name} profile`}>
           <div className="detail-pane__body detail-pane__body--graph">
-            {graphDetailPending ? (
+            {detailFailure && hasCachedGraph ? <InlineFailure failure={detailFailure} onRetry={retryDetail} /> : null}
+            {detailFailure && !hasCachedGraph ? (
+              <InlineFailure failure={detailFailure} onRetry={retryDetail} />
+            ) : detailPending ? (
               <PaneEmptyState detail>Loading graph…</PaneEmptyState>
             ) : (
               <div className={`agents-graph-layout ${graphEditorOpen || routineRunsOpen ? 'is-editing' : ''}`}>
@@ -335,13 +207,13 @@ export default function RoutinesPage() {
                   confirmedGraph={selectedGraph}
                   onPersist={handleSaveGraph}
                   onShowProfile={null}
-                  onDelete={handleDeleteAgent}
+                  onDelete={requestDeleteAgent}
                   jsonOpen={graphEditorOpen}
-                  onOpenJson={() => { setGraphEditorOpen(true); setRoutineRunsOpen(false); }}
-                  onCloseJson={() => setGraphEditorOpen(false)}
+                  onOpenJson={() => setEditorView((current) => ({ ...current, jsonOpen: true, runsOpen: false }))}
+                  onCloseJson={() => setEditorView((current) => ({ ...current, jsonOpen: false }))}
                   runsOpen={routineRunsOpen}
-                  onOpenRuns={() => { setRoutineRunsOpen(true); setGraphEditorOpen(false); }}
-                  onCloseRuns={() => setRoutineRunsOpen(false)}
+                  onOpenRuns={() => setEditorView((current) => ({ ...current, runsOpen: true, jsonOpen: false }))}
+                  onCloseRuns={() => setEditorView((current) => ({ ...current, runsOpen: false }))}
                 />
               </div>
             )}
@@ -349,20 +221,23 @@ export default function RoutinesPage() {
         </DetailPane>
       ) : (
         <DetailPane className="detail-pane--dense agents-detail" label="Routine profile">
-          <PaneEmptyState detail>{agentsState.loading || !agentsState.loaded ? 'Loading routines…' : 'Select a routine to view its graph.'}</PaneEmptyState>
+          {detailFailure
+            ? <InlineFailure failure={detailFailure} onRetry={retryDetail} />
+            : <PaneEmptyState detail>{agentsState.loading || !agentsState.loaded ? 'Loading routines…' : 'Select a routine to view its graph.'}</PaneEmptyState>}
         </DetailPane>
       )}
 
-      {deleteConfirmationOpen && selectedAgent ? (
+      {deleteAction.open && deleteTarget ? (
         <PopupModal
           eyebrow="Delete routine"
-          title={`Delete “${selectedAgent.name}”?`}
-          message={deleteError || 'This routine and its graph will be permanently deleted.'}
+          title={`Delete “${deleteTarget.name}”?`}
+          message="This routine and its graph will be permanently deleted."
+          error={deleteAction.error}
           confirmLabel="Delete routine"
           busyLabel="Deleting…"
-          onClose={() => setDeleteConfirmationOpen(false)}
-          onConfirm={confirmDeleteAgent}
-          busy={deleteBusy}
+          onClose={closeDeleteAgent}
+          onConfirm={deleteAction.confirm}
+          busy={deleteAction.busy}
         />
       ) : null}
     </PageShell>

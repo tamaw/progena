@@ -1,18 +1,21 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
-import { useNavigate, useParams } from 'react-router-dom';
-import { getTimeBucket } from '../components/chat/conversationModel';
-import Select from '../components/common/Select';
+import { useNavigate } from 'react-router-dom';
 import { DraftField } from '../components/common/DetailCards';
+import InlineFailure from '../components/common/InlineFailure';
 import PopupModal from '../components/common/PopupModal';
-import { useConfig } from '../context/ConfigContext';
-import { selectRealtimeConnected, selectRealtimeStreamReady } from '../store/realtimeSlice';
+import Modal from '../components/common/Modal';
+import useEntityDraft from '../hooks/useEntityDraft';
+import useAgentCatalogue from '../hooks/useAgentCatalogue';
+import useConfirmAction from '../hooks/useConfirmAction';
+import { createUuid } from '../lib/uuid';
+import { requestAcknowledged } from '../store/http';
 import {
-  fetchAgentProfiles,
-  requestAgentDetail,
-  selectActiveAgentProfile,
-  selectAgentProfiles,
-  selectAgentProfilesState,
+  draftChanged,
+  draftDiscarded,
+  entityDraftKey,
+} from '../store/editorDraftsSlice';
+import {
   deleteAgentProfile,
   updateObjectAgentProfile,
 } from '../store/uiDataSlice';
@@ -37,8 +40,10 @@ import DetailHeader, {
 } from '../components/layout/DetailHeader';
 import { A2ADetailBody, ACPDetailBody, ObjectAgentDetailBody } from '../components/agents/AgentDetailBodies';
 import { formatAge } from '../components/agents/agentFormat';
+import { catalogueAgents } from './agentCatalogueModel';
 
 const AGENT_FILTERS = ['All', 'Running', 'Failed', 'Stopped', 'Disabled'];
+const SORT_MODES = ['Type', 'Name', 'Recent'];
 // Object agents are portable SYSTEM.md manifests. A2A and ACP are protocol
 // integrations, not internal agents, and are intentionally absent here.
 const AGENT_TYPES = [
@@ -51,6 +56,8 @@ const AGENT_TYPES = [
 
 const AGENT_TYPE_LABELS = Object.fromEntries(AGENT_TYPES.map((type) => [type.kind, type.label]));
 
+const NEW_AGENT_SENTINEL = 'create';
+
 function makeDraftAgent(kind) {
   return {
     kind,
@@ -62,81 +69,6 @@ function makeDraftAgent(kind) {
     tools: '',
     skills: '',
   };
-}
-
-const SORT_MODES = ['Type', 'Name', 'Recent'];
-const TYPE_RANK = { object: 0 };
-// Recency buckets for the "Recent" sort, mirroring the chat sidebar's headers.
-const RECENCY_BUCKETS = [
-  ['today', 'Today'],
-  ['yesterday', 'Yesterday'],
-  ['this-week', 'This Week'],
-  ['last-week', 'Last Week'],
-  ['later', 'Later'],
-];
-
-function normalizeStatus(status) {
-  if (!status || status === 'draft') {
-    return 'Drafts';
-  }
-  return status.charAt(0).toUpperCase() + status.slice(1);
-}
-
-function matchesAgent(agent, filter, search) {
-  // Object agents have no runtime status/enabled concept (see AgentRow);
-  // they only ever match the unfiltered "All" view.
-  const matchesFilter = filter === 'All'
-    || (agent.kind !== 'object' && normalizeStatus(agent.enabled === false ? 'disabled' : agent.status) === filter);
-  if (!matchesFilter) {
-    return false;
-  }
-  if (!search) {
-    return true;
-  }
-  const haystack = [
-    agent.name,
-    agent.handle,
-    agent.model,
-    agent.role,
-    agent.summary,
-    ...(agent.skills || []).map((skill) => skill.name),
-    ...(agent.tools || []).map((tool) => tool.name),
-  ]
-    .filter(Boolean)
-    .join(' ')
-    .toLowerCase();
-  return haystack.includes(search.toLowerCase());
-}
-
-function updatedTime(agent) {
-  const ms = new Date(agent.updated || 0).getTime();
-  return Number.isNaN(ms) ? 0 : ms;
-}
-
-// Returns a new array; the comparators are total orders with a stable name
-// tiebreak so the list never jitters between equal entries.
-function sortAgents(agents, mode) {
-  const byName = (a, b) => (a.name || '').localeCompare(b.name || '');
-  const comparators = {
-    Name: byName,
-    Recent: (a, b) => updatedTime(b) - updatedTime(a) || byName(a, b),
-    Type: (a, b) => {
-      const rank = (TYPE_RANK[a.kind] ?? 9) - (TYPE_RANK[b.kind] ?? 9);
-      return rank || byName(a, b);
-    },
-  };
-  return [...agents].sort(comparators[mode] || comparators.Type);
-}
-
-function groupAgents(agents) {
-  return agents.reduce((groups, agent) => {
-    const key = agent.group || 'Agents';
-    if (!groups[key]) {
-      groups[key] = [];
-    }
-    groups[key].push(agent);
-    return groups;
-  }, {});
 }
 
 function StatusPill({ status }) {
@@ -179,34 +111,32 @@ function AgentRow({ agent, selected, onSelect }) {
 // Picking a type opens the editable draft in the detail pane.
 function NewAgentModal({ onPick, onClose }) {
   return (
-    <div className="agents-modal-backdrop" onClick={onClose}>
-      <section
-        className="agents-modal"
-        role="dialog"
-        aria-modal="true"
-        aria-label="New agent"
-        onClick={(event) => event.stopPropagation()}
-      >
-        <header className="agents-modal__head">
-          <h3>New agent</h3>
-          <button type="button" className="agents-modal__close" onClick={onClose} aria-label="Close">×</button>
-        </header>
-        <p className="agents-modal__lead">Pick the kind of agent to create.</p>
-        <div className="agents-modal__types">
-          {AGENT_TYPES.map((type) => (
-            <button
-              key={type.kind}
-              type="button"
-              className={`agents-type-card agents-type-card--${type.kind}`}
-              onClick={() => onPick(type.kind)}
-            >
-              <strong>{type.label}</strong>
-              <span>{type.blurb}</span>
-            </button>
-          ))}
-        </div>
-      </section>
-    </div>
+    <Modal
+      className="agents-modal"
+      backdropClassName="agents-modal-backdrop"
+      ariaLabel="New agent"
+      backdropDismissEvent="click"
+      onClose={onClose}
+    >
+      <header className="agents-modal__head">
+        <h3>New agent</h3>
+        <button type="button" className="agents-modal__close" onClick={onClose} aria-label="Close">×</button>
+      </header>
+      <p className="agents-modal__lead">Pick the kind of agent to create.</p>
+      <div className="agents-modal__types">
+        {AGENT_TYPES.map((type) => (
+          <button
+            key={type.kind}
+            type="button"
+            className={`agents-type-card agents-type-card--${type.kind}`}
+            onClick={() => onPick(type.kind)}
+          >
+            <strong>{type.label}</strong>
+            <span>{type.blurb}</span>
+          </button>
+        ))}
+      </div>
+    </Modal>
   );
 }
 
@@ -253,65 +183,131 @@ function DraftAgentDetailBody({ draft, onChange }) {
 
 export default function AgentsPage() {
   const dispatch = useDispatch();
-  const { getApiUrl } = useConfig();
-  const realtimeConnected = useSelector(selectRealtimeConnected);
-  const fetchedAgents = useSelector(selectAgentProfiles);
-  const { agentId: routeAgentId } = useParams();
-  const agents = useMemo(
-    () => fetchedAgents.filter((agent) => agent.kind !== 'routine'),
-    [fetchedAgents],
-  );
-  const agentsState = useSelector(selectAgentProfilesState);
-  const activeAgent = useSelector(selectActiveAgentProfile);
-  const streamReady = useSelector(selectRealtimeStreamReady);
-
   const navigate = useNavigate();
-
+  const {
+    agents,
+    agentsUrl,
+    agentsState,
+    detailFailure,
+    effectiveAgentId,
+    rosterFailure,
+    retryDetail,
+    retryRoster,
+    selectAgent,
+    selectedAgent,
+  } = useAgentCatalogue({ kind: 'agents', routeBase: '/agents', detailSuffix: '/details' });
   const [activeFilter, setActiveFilter] = useState('All');
   const [search, setSearch] = useState('');
   const [sortMode, setSortMode] = useState('Type');
-  const [deleteConfirmationOpen, setDeleteConfirmationOpen] = useState(false);
-  const [deleteBusy, setDeleteBusy] = useState(false);
-  const [deleteError, setDeleteError] = useState('');
-  // Object agents only -- `null` means read-only, a string is the in-progress
-  // manifest draft. Lifted out of ObjectAgentDetailBody so the DetailHeader's
-  // top-level Edit action (detail-header__actions) and the inline "Edit"
-  // button inside the Manifest section drive the same state.
-  const [objectAgentDraft, setObjectAgentDraft] = useState(null);
-  const [objectAgentSaving, setObjectAgentSaving] = useState(false);
-  const [objectAgentError, setObjectAgentError] = useState('');
-  // "+ New" creates a portable SYSTEM.md manifest through the profile API.
+  const createDraftKey = entityDraftKey('agent-create', NEW_AGENT_SENTINEL, 'object');
+  const [draftAgent, setDraftAgent, createDraftControls] = useEntityDraft(createDraftKey, null);
+  const agentViewKey = entityDraftKey('agents', 'page', 'view');
+  const [agentView, setAgentView] = useEntityDraft(agentViewKey, null);
+  const showNewAgentDraft = agentView === 'create' && Boolean(draftAgent);
+  const objectDraftKey = entityDraftKey('agent-system', effectiveAgentId, 'system');
+  const [objectAgentDraft, setObjectAgentDraft, objectDraftControls] = useEntityDraft(objectDraftKey, null);
+  const {
+    clear: clearCreateDraft,
+    beginSave: beginCreateDraftSave,
+    trackSave: trackCreateDraftSave,
+    failSave: failCreateDraftSave,
+    saving: createDraftSaving,
+    error: createDraftError,
+  } = createDraftControls;
+  const {
+    clear: clearObjectDraft,
+    beginSave: beginObjectDraftSave,
+    trackSave: trackObjectDraftSave,
+    failSave: failObjectDraftSave,
+    hasDraft: hasObjectDraft,
+    saving: objectDraftSaving,
+    error: objectDraftError,
+  } = objectDraftControls;
+  const [renameIntent, setRenameIntent] = useState(null);
+  // The confirmation effect runs once per intent; a ref (not state) records
+  // that, so applying an external confirmation never re-renders from an effect.
+  const appliedRenameRef = useRef(null);
+  const renameSourceDraft = useSelector((state) => (
+    renameIntent
+      ? state.editorDrafts?.entries[entityDraftKey('agent-system', renameIntent.agentId, 'system')]
+      : null
+  ));
+  const renameConfirmed = useSelector((state) => (
+    renameIntent?.requestId
+      && state.realtime?.receivedRequestEvents?.[renameIntent.requestId]?.some(
+        (event) => event.type === 'agents.snapshot',
+      )
+  ));
   const [newAgentOpen, setNewAgentOpen] = useState(false);
-  const [draftAgent, setDraftAgent] = useState(null);
-  const [draftError, setDraftError] = useState('');
-  const agentsUrl = getApiUrl('agentProfiles');
+  const [deleteTarget, setDeleteTarget] = useState(null);
+  const deleteAction = useConfirmAction(effectiveAgentId);
+
+  useEffect(() => {
+    if (agentView === 'create' && !draftAgent && !createDraftSaving) {
+      setAgentView('selected');
+    }
+  }, [agentView, createDraftSaving, draftAgent, setAgentView]);
+
+  useEffect(() => {
+    if (
+      !renameIntent
+      || !renameConfirmed
+      || appliedRenameRef.current === renameIntent
+      || effectiveAgentId !== renameIntent.agentId
+    ) {
+      return;
+    }
+    appliedRenameRef.current = renameIntent;
+
+    if (renameSourceDraft) {
+      const destinationKey = entityDraftKey('agent-system', renameIntent.newId, 'system');
+      dispatch(draftChanged({ key: destinationKey, value: renameSourceDraft.value }));
+      dispatch(draftDiscarded(objectDraftKey));
+    }
+    selectAgent(renameIntent.newId);
+  }, [
+    dispatch,
+    effectiveAgentId,
+    objectDraftKey,
+    renameConfirmed,
+    renameIntent,
+    renameSourceDraft,
+    selectAgent,
+  ]);
 
   const handleNewAgent = useCallback(() => {
     setNewAgentOpen(true);
   }, []);
 
   const handlePickType = useCallback((kind) => {
-    setDraftAgent(makeDraftAgent(kind));
+    setDraftAgent((current) => current ?? makeDraftAgent(kind));
+    setAgentView('create');
     setNewAgentOpen(false);
-  }, []);
+  }, [setAgentView, setDraftAgent]);
 
   const updateDraft = useCallback((field, value) => {
     setDraftAgent((current) => (current ? { ...current, [field]: value } : current));
-  }, []);
+  }, [setDraftAgent]);
 
   const discardDraft = useCallback(() => {
-    setDraftAgent(null);
-  }, []);
+    clearCreateDraft();
+    setAgentView('selected');
+  }, [clearCreateDraft, setAgentView]);
 
   const createDraft = useCallback(async () => {
-    if (!draftAgent) return;
+    if (!draftAgent || createDraftSaving) return;
+    const ticket = beginCreateDraftSave();
+    if (!ticket) return;
     const list = (value) => value.split(',').map((item) => item.trim()).filter(Boolean);
+    const requestId = createUuid();
+    trackCreateDraftSave(ticket, {
+      requestId,
+      events: ['agents.snapshot'],
+    });
     try {
-      setDraftError('');
-      const response = await fetch(`${agentsUrl}/object`, {
+      await requestAcknowledged(`${agentsUrl}/object`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+        body: {
           name: draftAgent.name,
           description: draftAgent.summary,
           version: draftAgent.version,
@@ -319,145 +315,49 @@ export default function AgentsPage() {
           system_prompt: draftAgent.prompt,
           tools: list(draftAgent.tools),
           skills: list(draftAgent.skills),
-        }),
+        },
+        requestId,
       });
-      if (!response.ok) {
-        const body = await response.json().catch(() => ({}));
-        throw new Error(body.detail || 'Unable to create object agent.');
-      }
-      setDraftAgent(null);
-      dispatch(fetchAgentProfiles({ agentsUrl }));
     } catch (error) {
-      setDraftError(error instanceof Error ? error.message : 'Unable to create object agent.');
+      failCreateDraftSave(ticket, error);
     }
-  }, [agentsUrl, dispatch, draftAgent]);
+  }, [
+    agentsUrl,
+    beginCreateDraftSave,
+    createDraftSaving,
+    draftAgent,
+    failCreateDraftSave,
+    trackCreateDraftSave,
+  ]);
 
-  // Selection is derived from the URL (/agents/<id>) so the view is
-  // refreshable and shareable; user actions navigate rather than setState.
-  const selectedAgentId = routeAgentId ?? null;
 
-  const requestedListRef = useRef(null);
+  const handleSelectAgent = useCallback((id) => {
+    setAgentView('selected');
+    selectAgent(id);
+  }, [selectAgent, setAgentView]);
 
-  // Load profiles once the realtime stream is connected. The GET acknowledges
-  // the request and the snapshot arrives on the stream.
-  useEffect(() => {
-    if (!realtimeConnected) {
-      requestedListRef.current = null;
-      return;
-    }
-    if (requestedListRef.current === agentsUrl) {
-      return;
-    }
-    requestedListRef.current = agentsUrl;
-    dispatch(fetchAgentProfiles({ agentsUrl }));
-  }, [agentsUrl, dispatch, realtimeConnected]);
+  const requestDeleteAgent = useCallback(() => {
+    if (!selectedAgent) return;
+    const target = { id: selectedAgent.id, name: selectedAgent.name };
+    setDeleteTarget(target);
+    deleteAction.request('Delete agent', async ({ isCurrent }) => {
+      await dispatch(deleteAgentProfile({ agentsUrl, agentId: target.id })).unwrap();
+      if (isCurrent()) navigate('/agents', { replace: true });
+    });
+  }, [agentsUrl, deleteAction, dispatch, navigate, selectedAgent]);
 
-  // Selection defaults to the first agent without writing state in an effect.
-  const effectiveAgentId = selectedAgentId ?? agents[0]?.id ?? null;
+  const closeDeleteAgent = useCallback(() => {
+    if (deleteAction.busy) return;
+    deleteAction.close();
+    setDeleteTarget(null);
+  }, [deleteAction]);
 
-  const selectAgent = useCallback((id) => {
-    setDraftAgent(null);
-    navigate(`/agents/${encodeURIComponent(id)}/details`);
-  }, [navigate]);
-
-  // Author-created ("source: user") object agents only --
-  // native object agents are repo files, marketplace ones are plugin-managed
-  // (Plugins > Uninstall), and A2A/ACP are read through external registries.
-  // The eligibility check lives at each call site (button visibility); this
-  // handler just needs an id. Mirrors Workflows' delete flow (PopupModal
-  // confirm -> DELETE -> navigate back to the list).
-  const handleDeleteAgent = useCallback(() => {
-    if (effectiveAgentId) {
-      setDeleteError('');
-      setDeleteConfirmationOpen(true);
-    }
-  }, [effectiveAgentId]);
-
-  const confirmDeleteAgent = useCallback(async () => {
-    if (!effectiveAgentId) {
-      setDeleteConfirmationOpen(false);
-      return;
-    }
-    setDeleteBusy(true);
-    try {
-      await dispatch(deleteAgentProfile({ agentsUrl, agentId: effectiveAgentId })).unwrap();
-      setDeleteConfirmationOpen(false);
-      navigate('/agents', { replace: true });
-    } catch (error) {
-      setDeleteError(error.message || 'Failed to delete.');
-    } finally {
-      setDeleteBusy(false);
-    }
-  }, [agentsUrl, dispatch, effectiveAgentId, navigate]);
-
-  // The detail only ever comes back as a one-shot `agent.selected` broadcast,
-  // and the backend replays nothing to a subscriber it did not have at publish
-  // time (replay needs a Last-Event-ID, which a first load has none of). Ask
-  // before the stream is ready and the answer is published into the void: the
-  // graph pane then waits on `graphDetailPending` forever, since nothing
-  // retries. Wait for the subscriber to exist, then ask.
-  useEffect(() => {
-    if (!effectiveAgentId || !streamReady) {
-      return;
-    }
-    // A reconnect flips `streamReady` again; re-asking for a detail already in
-    // hand would restart the request for no new information.
-    if (activeAgent?.id === effectiveAgentId) {
-      return;
-    }
-    dispatch(requestAgentDetail({ agentsUrl, agentId: effectiveAgentId }));
-  }, [activeAgent?.id, agentsUrl, dispatch, effectiveAgentId, streamReady]);
-
-  // Object agents only. Switching agents mid-edit must never leave a draft
-  // bound to the wrong one underneath the newly-selected agent's page.
-  useEffect(() => {
-    setObjectAgentDraft(null);
-    setObjectAgentError('');
-  }, [effectiveAgentId]);
-
-  const listAgent = useMemo(
-    () => agents.find((agent) => agent.id === effectiveAgentId) || null,
-    [agents, effectiveAgentId],
-  );
-  const selectedAgent = activeAgent && activeAgent.id === effectiveAgentId ? activeAgent : listAgent;
-  const isA2A = selectedAgent?.kind === 'a2a';
-  const isACP = selectedAgent?.kind === 'acp';
-
-  // Reflect the active agent in the URL so the view is refreshable and shareable
-  // (e.g. /agents/subagent-code-reviewer/details).
-  useEffect(() => {
-    if (!effectiveAgentId) return;
-    const target = `/agents/${encodeURIComponent(effectiveAgentId)}/details`;
-    if (`${window.location.pathname}` !== target) {
-      navigate(target, { replace: true });
-    }
-  }, [effectiveAgentId, navigate]);
-
-  const visibleAgents = useMemo(
-    () => sortAgents(agents.filter((agent) => matchesAgent(agent, activeFilter, search)), sortMode),
+  const { visible: visibleAgents, sections } = useMemo(
+    () => catalogueAgents(agents, { filter: activeFilter, search, sortMode }),
     [activeFilter, agents, search, sortMode],
   );
-
-  const sections = useMemo(() => {
-    if (sortMode === 'Name') {
-      return [{ key: 'all', title: null, agents: visibleAgents }];
-    }
-    if (sortMode === 'Recent') {
-      const buckets = new Map(RECENCY_BUCKETS.map(([key]) => [key, []]));
-      visibleAgents.forEach((agent) => {
-        const bucket = getTimeBucket(agent.updated);
-        (buckets.get(bucket) || buckets.get('later')).push(agent);
-      });
-      return RECENCY_BUCKETS
-        .map(([key, label]) => ({ key, title: label, agents: buckets.get(key) }))
-        .filter((section) => section.agents.length);
-    }
-    const grouped = groupAgents(visibleAgents);
-    return [...new Set(visibleAgents.map((agent) => agent.group || 'Agents'))]
-      .map((group) => ({ key: group, title: group, agents: grouped[group] || [] }))
-      .filter((section) => section.agents.length);
-  }, [sortMode, visibleAgents]);
-
+  const isA2A = selectedAgent?.kind === 'a2a';
+  const isACP = selectedAgent?.kind === 'acp';
   const runningCount = agents.filter((agent) => agent.status === 'running').length;
   const taskCount = agents.reduce((total, agent) => total + (agent.tasks?.length || 0), 0);
 
@@ -473,45 +373,51 @@ export default function AgentsPage() {
     return nameLine.replace(/^name:\s*/, '').trim().replace(/^['"]|['"]$/g, '') || null;
   }
 
-  async function handleSaveObjectAgent(manifest) {
-    if (!effectiveAgentId) return;
-    await dispatch(updateObjectAgentProfile({
-      agentsUrl,
-      agentId: effectiveAgentId,
-      manifest,
-    })).unwrap();
-    const name = extractManifestName(manifest.content);
-    if (name) {
-      const newId = `object-${slugifyAgentName(name)}`;
-      if (newId !== effectiveAgentId) {
-        selectAgent(newId);
-      }
-    }
-  }
-
-  function startEditObjectAgent() {
+  const startEditObjectAgent = useCallback(() => {
     setObjectAgentDraft(selectedAgent?.card?.raw_content ?? '');
-    setObjectAgentError('');
-  }
+  }, [selectedAgent, setObjectAgentDraft]);
 
-  function cancelEditObjectAgent() {
-    setObjectAgentDraft(null);
-    setObjectAgentError('');
-  }
+  const cancelEditObjectAgent = useCallback(() => {
+    clearObjectDraft();
+    setRenameIntent(null);
+  }, [clearObjectDraft]);
 
-  async function saveObjectAgentDraft() {
-    if (objectAgentDraft === null) return;
-    setObjectAgentSaving(true);
-    setObjectAgentError('');
+  const saveObjectAgentDraft = useCallback(async () => {
+    if (objectAgentDraft === null || !effectiveAgentId || objectDraftSaving) return;
+    const agentId = effectiveAgentId;
+    const content = objectAgentDraft;
+    const ticket = beginObjectDraftSave();
+    if (!ticket) return;
+    const name = extractManifestName(content);
+    const newId = name ? `object-${slugifyAgentName(name)}` : null;
+    const operation = dispatch(updateObjectAgentProfile({
+      agentsUrl,
+      agentId,
+      manifest: { content },
+    }));
+    setRenameIntent(
+      newId && newId !== agentId ? { agentId, newId, requestId: operation.requestId } : null,
+    );
+    trackObjectDraftSave(ticket, {
+      requestId: operation.requestId,
+      events: ['agents.snapshot'],
+    });
     try {
-      await handleSaveObjectAgent({ content: objectAgentDraft });
-      setObjectAgentDraft(null);
+      await operation.unwrap();
     } catch (error) {
-      setObjectAgentError(error.message || 'Failed to save agent.');
-    } finally {
-      setObjectAgentSaving(false);
+      setRenameIntent(null);
+      failObjectDraftSave(ticket, error);
     }
-  }
+  }, [
+    agentsUrl,
+    beginObjectDraftSave,
+    dispatch,
+    effectiveAgentId,
+    failObjectDraftSave,
+    objectAgentDraft,
+    objectDraftSaving,
+    trackObjectDraftSave,
+  ]);
 
   return (
     <PageShell>
@@ -532,28 +438,29 @@ export default function AgentsPage() {
             onSelect={setSortMode}
           />
         </PaneListToolbar>
+        {rosterFailure ? <InlineFailure failure={rosterFailure} onRetry={retryRoster} /> : null}
         {visibleAgents.length ? (
           <PaneListRows
             groups={sections}
-            getGroupItems={(section) => section.agents}
+            getGroupItems={(section) => section.items}
             renderItem={(agent) => (
               <AgentRow
                 agent={agent}
                 selected={selectedAgent?.id === agent.id}
-                onSelect={selectAgent}
+                onSelect={handleSelectAgent}
               />
             )}
           />
-        ) : (
+        ) : !rosterFailure ? (
           <PaneEmptyState>{agentsState.loading || !agentsState.loaded ? 'Loading agents…' : 'No agents match this view.'}</PaneEmptyState>
-        )}
+        ) : null}
         <PaneListFooter>
           <span><span className="num">{runningCount}</span> running</span>
           <span><span className="num">{taskCount}</span> tasks</span>
         </PaneListFooter>
       </PaneList>
 
-      {draftAgent ? (
+      {showNewAgentDraft && draftAgent ? (
         <DetailPane className="detail-pane--dense agents-detail agents-detail--draft" label="New agent">
           <DetailHeader
             title={(
@@ -567,8 +474,8 @@ export default function AgentsPage() {
             )}
             actions={(
               <DetailHeaderActions>
-                <DetailHeaderAction icon={<DeleteActionIcon />} label="Discard" tooltip="Discard draft" ariaLabel="Discard draft" onClick={discardDraft} />
-                <DetailHeaderAction icon={<SaveActionIcon />} label="Create" tooltip="Create agent" ariaLabel="Create agent" variant="primary" onClick={createDraft} />
+                <DetailHeaderAction icon={<DeleteActionIcon />} label="Discard" tooltip="Discard draft" ariaLabel="Discard draft" onClick={discardDraft} disabled={createDraftSaving} />
+                <DetailHeaderAction icon={<SaveActionIcon />} label={createDraftSaving ? 'Creating…' : 'Create'} tooltip="Create agent" ariaLabel="Create agent" variant="primary" onClick={createDraft} disabled={createDraftSaving} />
               </DetailHeaderActions>
             )}
             meta={[
@@ -576,7 +483,7 @@ export default function AgentsPage() {
               <span key="hint" className="muted">Unsaved draft</span>,
             ]}
           />
-          {draftError ? <p className="agents-draft__note agents-draft__note--error">{draftError}</p> : null}
+          <InlineFailure failure={createDraftError} operation="Create agent" />
           <DraftAgentDetailBody draft={draftAgent} onChange={updateDraft} />
         </DetailPane>
       ) : selectedAgent ? (
@@ -599,7 +506,7 @@ export default function AgentsPage() {
                     tooltip="Delete agent"
                     ariaLabel="Delete agent"
                     variant="danger"
-                    onClick={handleDeleteAgent}
+                    onClick={requestDeleteAgent}
                   />
                 ) : null}
               </DetailHeaderActions>
@@ -627,6 +534,7 @@ export default function AgentsPage() {
               ) : null,
             ]}
           />
+          {detailFailure ? <InlineFailure failure={detailFailure} onRetry={retryDetail} /> : null}
           {isA2A
             ? <A2ADetailBody agent={selectedAgent} />
             : isACP
@@ -635,34 +543,37 @@ export default function AgentsPage() {
                 <ObjectAgentDetailBody
                   agent={selectedAgent}
                   agentsUrl={agentsUrl}
-                  editing={objectAgentDraft !== null}
+                  editing={hasObjectDraft}
                   draft={objectAgentDraft}
                   onDraftChange={setObjectAgentDraft}
                   onStartEdit={startEditObjectAgent}
                   onCancelEdit={cancelEditObjectAgent}
                   onSaveEdit={saveObjectAgentDraft}
-                  saving={objectAgentSaving}
-                  error={objectAgentError}
+                  saving={objectDraftSaving}
+                  error={objectDraftError}
                 />
               )}
         </DetailPane>
       ) : (
         <DetailPane className="detail-pane--dense agents-detail" label="Agent profile">
-          <PaneEmptyState detail>{agentsState.loading || !agentsState.loaded ? 'Loading agents…' : 'Select an agent to view its profile.'}</PaneEmptyState>
+          {detailFailure
+            ? <InlineFailure failure={detailFailure} onRetry={retryDetail} />
+            : <PaneEmptyState detail>{agentsState.loading || !agentsState.loaded ? 'Loading agents…' : 'Select an agent to view its profile.'}</PaneEmptyState>}
         </DetailPane>
       )}
 
       {newAgentOpen ? <NewAgentModal onPick={handlePickType} onClose={() => setNewAgentOpen(false)} /> : null}
-      {deleteConfirmationOpen && selectedAgent ? (
+      {deleteAction.open && deleteTarget?.id === effectiveAgentId ? (
         <PopupModal
           eyebrow="Delete agent"
-          title={`Delete “${selectedAgent.name}”?`}
-          message={deleteError || 'This agent and its manifest will be permanently deleted.'}
+          title={`Delete “${deleteTarget.name}”?`}
+          message="This agent and its manifest will be permanently deleted."
+          error={deleteAction.error}
           confirmLabel="Delete agent"
           busyLabel="Deleting…"
-          onClose={() => setDeleteConfirmationOpen(false)}
-          onConfirm={confirmDeleteAgent}
-          busy={deleteBusy}
+          onClose={closeDeleteAgent}
+          onConfirm={deleteAction.confirm}
+          busy={deleteAction.busy}
         />
       ) : null}
     </PageShell>

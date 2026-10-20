@@ -4,8 +4,10 @@ import { useDispatch, useSelector } from 'react-redux';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { selectRealtime } from '../store/realtimeSlice';
 import { useConfig } from '../context/ConfigContext';
-import { renderMarkdownToHtml } from '../lib/markdown';
-import { formatRelativeTime } from './tasksPageModel';
+import MarkdownContent from '../components/common/MarkdownContent';
+import InlineFailure from '../components/common/InlineFailure';
+import useUiAction from '../hooks/useUiAction';
+import { formatCompactRelativeAge } from '../lib/displayTime';
 import {
   PLUGIN_FILTERS,
   PLUGIN_SORT_MODES,
@@ -23,9 +25,13 @@ import {
   uninstallPlugin,
   fetchPluginSkillContent,
   selectMarketplaces,
+  selectMarketplacesState,
   selectPlugins,
+  selectPluginsState,
   selectMarketplaceCatalog,
+  selectMarketplaceCatalogRequest,
   selectPluginSkillContent,
+  selectPluginSkillContentRequest,
 } from '../store/uiDataSlice';
 import DetailHeader, {
   DetailHeaderAction,
@@ -92,37 +98,32 @@ export default function PluginsPage() {
   const [query, setQuery] = useState('');
   const [activeFilter, setActiveFilter] = useState('All');
   const [sort, setSort] = useState('Recent');
-  const [error, setError] = useState(null);
   const [statusMessage, setStatusMessage] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [needsNewConversation, setNeedsNewConversation] = useState(false);
+  const [awaitingPluginChange, setAwaitingPluginChange] = useState(null);
+  const [dismissedPluginChangeId, setDismissedPluginChangeId] = useState(null);
   const [previewSkill, setPreviewSkill] = useState(null);
-  const [marketplaceSkills, setMarketplaceSkills] = useState([]);
-  const [marketplaceSkillsKey, setMarketplaceSkillsKey] = useState('');
-  const [marketplaceSkillsLoading, setMarketplaceSkillsLoading] = useState(false);
+  const [marketplaceSkillsByKey, setMarketplaceSkillsByKey] = useState({});
+  const [marketplaceSkillsRetry, setMarketplaceSkillsRetry] = useState(0);
 
+  const marketplacesState = useSelector(selectMarketplacesState);
+  const pluginsState = useSelector(selectPluginsState);
   const catalog = useSelector((state) => selectMarketplaceCatalog(state, selectedMarketplace));
+  const catalogRequest = useSelector((state) => selectMarketplaceCatalogRequest(state, selectedMarketplace));
   const skillPreview = useSelector((state) => (
     selectPluginSkillContent(state, selectedMarketplace, selectedPlugin?.name, previewSkill)
   ));
-  const [skillPreviewLoading, setSkillPreviewLoading] = useState(false);
-  const [skillPreviewError, setSkillPreviewError] = useState(null);
+  const skillPreviewRequest = useSelector((state) => (
+    selectPluginSkillContentRequest(state, selectedMarketplace, selectedPlugin?.name, previewSkill)
+  ));
+  const pluginAction = useUiAction(`plugin-action:${selectedMarketplace}/${selectedPlugin?.name || ''}`);
+  const initialFailure = marketplacesState.error || pluginsState.error;
 
-  // Load marketplaces and installed plugins on mount.
+  // Seed the two stream-backed documents when a live connection is available.
   useEffect(() => {
-    if (!realtime.connected) {
-      return undefined;
-    }
-    let active = true;
-    queueMicrotask(() => {
-      if (active) {
-        void dispatch(fetchMarketplaces({ marketplacesUrl })).unwrap().catch((fetchError) => setError(fetchError));
-        void dispatch(fetchPlugins({ pluginsUrl })).unwrap().catch((fetchError) => setError(fetchError));
-      }
-    });
-    return () => {
-      active = false;
-    };
+    if (!realtime.connected) return undefined;
+    dispatch(fetchMarketplaces({ marketplacesUrl }));
+    dispatch(fetchPlugins({ pluginsUrl }));
+    return undefined;
   }, [dispatch, realtime.connected, marketplacesUrl, pluginsUrl]);
 
   // Default to the marketplace named in the URL if it's actually registered,
@@ -145,101 +146,54 @@ export default function PluginsPage() {
     };
   }, [marketplaces, selectedMarketplace, urlMarketplace]);
 
-  // Revalidate the selected marketplace's catalog whenever it becomes selected
-  // (mount, marketplace switch, or reconnect) -- always asks the backend, which
-  // serves its own 5-minute cache when fresh and only re-fetches from GitHub
-  // once that's expired, so this is cheap in the common case while still
-  // catching upstream changes without the user having to click Update first.
-  // Keyed on the marketplace name (not `catalog`) so a snapshot arriving
-  // mid-flight doesn't re-trigger this same effect.
+  // Each selected catalog tracks its own causal request lifecycle. A 202 only
+  // starts that lifecycle; the matching stream snapshot finishes it.
   useEffect(() => {
-    if (!realtime.connected || !selectedMarketplace) {
-      return undefined;
-    }
-    let active = true;
-    queueMicrotask(() => {
-      if (!active) {
-        return;
-      }
-      setLoading(true);
-      dispatch(fetchMarketplaceCatalog({ marketplacesUrl, name: selectedMarketplace }))
-        .unwrap()
-        .catch((catalogError) => {
-          if (active) setError(catalogError);
-        })
-        .finally(() => {
-          if (active) setLoading(false);
-        });
-    });
-    return () => {
-      active = false;
-    };
+    if (!realtime.connected || !selectedMarketplace) return undefined;
+    dispatch(fetchMarketplaceCatalog({ marketplacesUrl, name: selectedMarketplace }));
+    return undefined;
   }, [realtime.connected, selectedMarketplace, dispatch, marketplacesUrl]);
 
   // Discover skills from the marketplace source before installation.
   useEffect(() => {
-    if (!realtime.connected || !selectedMarketplace || !selectedPlugin) {
-      return undefined;
-    }
+    if (!realtime.connected || !selectedMarketplace || !selectedPlugin) return undefined;
     let active = true;
-    queueMicrotask(() => {
-      if (active) setMarketplaceSkillsLoading(true);
-    });
+    const pluginKey = `${selectedMarketplace}/${selectedPlugin.name}`;
     fetch(`${pluginsUrl}/${encodeURIComponent(selectedMarketplace)}/${encodeURIComponent(selectedPlugin.name)}/preview`)
       .then((response) => {
-        if (!response.ok) {
-          throw new Error(`Unable to preview plugin skills (${response.status})`);
-        }
+        if (!response.ok) throw new Error(`Unable to preview plugin skills (${response.status})`);
         return response.json();
       })
       .then((payload) => {
-        if (active) {
-          setMarketplaceSkillsKey(`${selectedMarketplace}/${selectedPlugin.name}`);
-          setMarketplaceSkills(Array.isArray(payload.skills) ? payload.skills : []);
-        }
+        if (!active) return;
+        setMarketplaceSkillsByKey((current) => ({
+          ...current,
+          [pluginKey]: { skills: Array.isArray(payload.skills) ? payload.skills : [], error: null },
+        }));
       })
-      .catch(() => {
-        if (active) {
-          setMarketplaceSkillsKey(`${selectedMarketplace}/${selectedPlugin.name}`);
-          setMarketplaceSkills([]);
-        }
-      })
-      .finally(() => {
-        if (active) setMarketplaceSkillsLoading(false);
+      .catch((previewError) => {
+        if (!active) return;
+        setMarketplaceSkillsByKey((current) => ({
+          ...current,
+          [pluginKey]: { skills: [], error: previewError },
+        }));
       });
-    return () => {
-      active = false;
-    };
-  }, [realtime.connected, selectedMarketplace, selectedPlugin, pluginsUrl]);
+    return () => { active = false; };
+  }, [realtime.connected, selectedMarketplace, selectedPlugin, pluginsUrl, marketplaceSkillsRetry]);
 
-  // Fetch a skill's SKILL.md body on demand when its preview is opened.
+  // Fetch a skill's SKILL.md body on demand. Its keyed request stays loading
+  // until the matching stream event updates the store.
   useEffect(() => {
     if (!realtime.connected || !previewSkill || !selectedPlugin || !selectedMarketplace || skillPreview) {
       return undefined;
     }
-    let active = true;
-    queueMicrotask(() => {
-      if (!active) {
-        return;
-      }
-      setSkillPreviewLoading(true);
-      dispatch(fetchPluginSkillContent({
-        pluginsUrl,
-        marketplace: selectedMarketplace,
-        plugin: selectedPlugin.name,
-        skill: previewSkill,
-      }))
-        .unwrap()
-        .catch((previewError) => {
-          if (active) setSkillPreviewError(previewError);
-        })
-        .finally(() => {
-          if (active) setSkillPreviewLoading(false);
-        });
-    });
-    return () => {
-      active = false;
-    };
+    dispatch(fetchPluginSkillContent({
+      pluginsUrl,
+      marketplace: selectedMarketplace,
+      plugin: selectedPlugin.name,
+      skill: previewSkill,
+    }));
+    return undefined;
   }, [realtime.connected, previewSkill, selectedPlugin, selectedMarketplace, skillPreview, dispatch, pluginsUrl]);
 
   const marketplaceOptions = useMemo(
@@ -278,9 +232,7 @@ export default function PluginsPage() {
         : null;
       setSelectedPlugin(matched || visiblePlugins[0]);
       setStatusMessage('');
-      setError(null);
       setPreviewSkill(null);
-      setSkillPreviewError(null);
     });
     return () => {
       active = false;
@@ -334,41 +286,33 @@ export default function PluginsPage() {
   const handleSelectPlugin = (plugin) => {
     setSelectedPlugin(plugin);
     setStatusMessage('');
-    setError(null);
     setPreviewSkill(null);
-    setSkillPreviewError(null);
   };
 
   const handleTogglePreviewSkill = (skill) => {
     setPreviewSkill((current) => (current === skill ? null : skill));
-    setSkillPreviewError(null);
   };
 
-  const performInstall = async ({ isUpdate = false } = {}) => {
-    if (!selectedPlugin || !selectedMarketplace) {
-      return;
-    }
-    if (!realtime.connected) {
-      setError(new Error(`Reconnect the realtime stream before ${isUpdate ? 'updating' : 'installing'} a plugin.`));
-      return;
-    }
-    setError(null);
-    setStatusMessage(isUpdate ? 'Updating plugin…' : 'Installing plugin…');
-    try {
-      await dispatch(
-        installPlugin({
-          pluginsUrl,
-          marketplace: selectedMarketplace,
-          plugin: selectedPlugin.name,
-        }),
-      ).unwrap();
-      const label = selectedPlugin.displayName || selectedPlugin.name;
-      setStatusMessage(isUpdate ? `Plugin ${label} updated.` : `Plugin ${label} installed.`);
-      setNeedsNewConversation(true);
-    } catch (installError) {
-      setError(installError);
-      setStatusMessage('');
-    }
+  const runPluginAction = async (kind) => {
+    if (!selectedPlugin || !selectedMarketplace || !realtime.connected) return;
+    const plugin = selectedPlugin;
+    const marketplace = selectedMarketplace;
+    const key = `${marketplace}/${plugin.name}`;
+    const operation = kind === 'uninstall' ? 'Uninstall plugin' : kind === 'update' ? 'Update plugin' : 'Install plugin';
+    const result = await pluginAction.run(operation, async () => dispatch(
+      kind === 'uninstall'
+        ? uninstallPlugin({ pluginsUrl, marketplace, plugin: plugin.name })
+        : installPlugin({ pluginsUrl, marketplace, plugin: plugin.name }),
+    ).unwrap());
+    if (!result.ok) return;
+    setStatusMessage(`${operation} request acknowledged. Waiting for the live plugin update…`);
+    setDismissedPluginChangeId(null);
+    setAwaitingPluginChange({
+      key,
+      kind,
+      label: plugin.displayName || plugin.name,
+      requestId: result.value.request_id,
+    });
   };
 
   const handleInstallPlugin = () => {
@@ -377,41 +321,18 @@ export default function PluginsPage() {
       setStatusMessage(`Plugin ${key} is already installed.`);
       return;
     }
-    void performInstall();
+    void runPluginAction('install');
   };
 
-  const handleUpdatePlugin = () => {
-    void performInstall({ isUpdate: true });
-  };
+  const handleUpdatePlugin = () => { void runPluginAction('update'); };
 
-  const handleUninstallPlugin = async () => {
-    if (!selectedPlugin || !selectedMarketplace) {
-      return;
-    }
-    if (!realtime.connected) {
-      setError(new Error('Reconnect the realtime stream before uninstalling a plugin.'));
-      return;
-    }
-    const key = `${selectedMarketplace}/${selectedPlugin.name}`;
-    if (!installedPlugins[key]) {
+  const handleUninstallPlugin = () => {
+    const key = `${selectedMarketplace}/${selectedPlugin?.name}`;
+    if (selectedPlugin && !installedPlugins[key]) {
       setStatusMessage(`Plugin ${key} is not installed.`);
       return;
     }
-    setError(null);
-    setStatusMessage('Uninstalling plugin…');
-    try {
-      await dispatch(
-        uninstallPlugin({
-          pluginsUrl,
-          marketplace: selectedMarketplace,
-          plugin: selectedPlugin.name,
-        }),
-      ).unwrap();
-      setStatusMessage(`Plugin ${selectedPlugin.displayName || selectedPlugin.name} uninstalled.`);
-    } catch (uninstallError) {
-      setError(uninstallError);
-      setStatusMessage('');
-    }
+    void runPluginAction('uninstall');
   };
 
   const pluginTree = useMemo(() => {
@@ -425,14 +346,32 @@ export default function PluginsPage() {
   }, [visiblePlugins, selectedMarketplace]);
 
   const selectedPluginKey = `${selectedMarketplace}/${selectedPlugin?.name || ''}`;
-  const previewSkills = marketplaceSkillsKey === selectedPluginKey ? marketplaceSkills : [];
+  const marketplaceSkillsResult = marketplaceSkillsByKey[selectedPluginKey];
+  const previewSkills = marketplaceSkillsResult?.skills || [];
+  const marketplaceSkillsFailure = marketplaceSkillsResult?.error || null;
+  const marketplaceSkillsPending = realtime.connected && !isPluginInstalled && !marketplaceSkillsResult;
   const displayedSkills = isPluginInstalled ? (installedEntry?.skills || []) : previewSkills;
+  // The backend publishes the correlated snapshot only after saving, possibly before
+  // its 202 or followed by other snapshots, so match the per-request event record
+  // rather than the latest snapshot ID, then latch the result for this view.
+  if (awaitingPluginChange
+    && !awaitingPluginChange.completed
+    && (realtime.receivedRequestEvents[awaitingPluginChange.requestId] || [])
+      .some((event) => event.type === 'plugins.snapshot')) {
+    setAwaitingPluginChange({ ...awaitingPluginChange, completed: true });
+  }
+  const completedPluginChange = awaitingPluginChange?.completed
+    && awaitingPluginChange.key === selectedPluginKey
+    ? awaitingPluginChange : null;
+  const completedPluginMessage = completedPluginChange
+    ? `Plugin ${completedPluginChange.label} ${completedPluginChange.kind === 'uninstall' ? 'uninstalled' : completedPluginChange.kind === 'update' ? 'updated' : 'installed'}.`
+    : '';
   return (
     <div className="plugins-page">
-      {needsNewConversation ? (
+      {completedPluginChange && completedPluginChange.kind !== 'uninstall' && dismissedPluginChangeId !== completedPluginChange.requestId ? (
         <div className="plugins-page__banner" role="status">
           <span>A plugin install or update just finished. Its skills will only be available starting in a new conversation.</span>
-          <button type="button" onClick={() => setNeedsNewConversation(false)} aria-label="Dismiss">×</button>
+          <button type="button" onClick={() => setDismissedPluginChangeId(completedPluginChange.requestId)} aria-label="Dismiss">×</button>
         </div>
       ) : null}
       <div className="plugins-page__row">
@@ -460,19 +399,33 @@ export default function PluginsPage() {
         {!realtime.connected && (
           <PaneEmptyState>Reconnect the realtime stream to load plugins.</PaneEmptyState>
         )}
-        {realtime.connected && !marketplaceOptions.length && (
+        {realtime.connected && initialFailure ? (
+          <InlineFailure
+            failure={initialFailure}
+            operation="Load plugins"
+            onRetry={() => {
+              dispatch(fetchMarketplaces({ marketplacesUrl }));
+              dispatch(fetchPlugins({ pluginsUrl }));
+            }}
+          />
+        ) : null}
+        {realtime.connected && !initialFailure && !marketplaceOptions.length && (
           <PaneEmptyState>No marketplaces registered. Add one in Settings → Marketplaces.</PaneEmptyState>
         )}
         {realtime.connected && marketplaceOptions.length > 0 && !selectedMarketplace && (
           <PaneEmptyState>Select a marketplace to browse its plugins.</PaneEmptyState>
         )}
-        {realtime.connected && selectedMarketplace && loading && !catalog && (
+        {realtime.connected && selectedMarketplace && catalogRequest.loading && !catalog ? (
           <PaneEmptyState>Loading marketplace catalog…</PaneEmptyState>
-        )}
-        {realtime.connected && selectedMarketplace && error && !catalog && (
-          <PaneEmptyState>{error.message}</PaneEmptyState>
-        )}
-        {realtime.connected && selectedMarketplace && catalog && visiblePlugins.length === 0 && (
+        ) : null}
+        {realtime.connected && selectedMarketplace && catalogRequest.error ? (
+          <InlineFailure
+            failure={catalogRequest.error}
+            operation="Load marketplace catalog"
+            onRetry={() => dispatch(fetchMarketplaceCatalog({ marketplacesUrl, name: selectedMarketplace }))}
+          />
+        ) : null}
+        {realtime.connected && selectedMarketplace && catalog && !catalogRequest.error && visiblePlugins.length === 0 && (
           <PaneEmptyState>No plugins match the current filters.</PaneEmptyState>
         )}
         {pluginTree.length ? (
@@ -495,7 +448,7 @@ export default function PluginsPage() {
       </PaneSection>
 
       <main className="plugins-editor">
-        {!selectedPlugin && (
+        {!selectedPlugin && !initialFailure && !(selectedMarketplace && catalogRequest.error) && (
           <PaneEmptyState>Select a plugin to view details and install.</PaneEmptyState>
         )}
 
@@ -519,7 +472,7 @@ export default function PluginsPage() {
                   ? <span key="version" className="taskid">{formatPluginVersion(installedEntry?.installed_version || selectedPlugin.version)}</span>
                   : null,
                 installedEntry?.installed_at
-                  ? <span key="installed-at" className="taskid">Installed {formatRelativeTime(installedEntry.installed_at)} ago</span>
+                  ? <span key="installed-at" className="taskid">Installed {formatCompactRelativeAge(installedEntry.installed_at)} ago</span>
                   : null,
                 selectedPlugin.author ? <span key="author" className="taskid">{typeof selectedPlugin.author === 'string' ? selectedPlugin.author : selectedPlugin.author.name}</span> : null,
                 selectedPlugin.license ? <span key="license" className="taskid">{selectedPlugin.license}</span> : null,
@@ -534,7 +487,7 @@ export default function PluginsPage() {
                       ariaLabel="Update plugin"
                       variant="primary"
                       onClick={handleUpdatePlugin}
-                      disabled={!realtime.connected}
+                      disabled={!realtime.connected || pluginAction.busy}
                     />
                   ) : null}
                   {isPluginInstalled ? (
@@ -544,7 +497,7 @@ export default function PluginsPage() {
                       tooltip="Uninstall plugin"
                       ariaLabel="Uninstall plugin"
                       onClick={handleUninstallPlugin}
-                      disabled={!realtime.connected}
+                      disabled={!realtime.connected || pluginAction.busy}
                     />
                   ) : (
                     <DetailHeaderAction
@@ -554,7 +507,7 @@ export default function PluginsPage() {
                       ariaLabel="Install plugin"
                       variant="primary"
                       onClick={handleInstallPlugin}
-                      disabled={!realtime.connected}
+                      disabled={!realtime.connected || pluginAction.busy}
                     />
                   )}
                 </DetailHeaderActions>
@@ -565,6 +518,7 @@ export default function PluginsPage() {
               {installedEntry?.status === 'error' && installedEntry.status_message ? (
                 <PaneEmptyState>{installedEntry.status_message}</PaneEmptyState>
               ) : null}
+              {pluginAction.error ? <InlineFailure failure={pluginAction.error} operation="Update plugin" /> : null}
 
               <p className="plugins-detail__description">{selectedPlugin.description || 'No description provided.'}</p>
 
@@ -583,7 +537,7 @@ export default function PluginsPage() {
                     <div><dt>Tags</dt><dd>{selectedPlugin.tags.join(', ')}</dd></div>
                   ) : null}
                   {installedEntry?.installed_at ? (
-                    <div><dt>Installed</dt><dd title={installedEntry.installed_at}>{formatRelativeTime(installedEntry.installed_at)} ago</dd></div>
+                    <div><dt>Installed</dt><dd title={installedEntry.installed_at}>{formatCompactRelativeAge(installedEntry.installed_at)} ago</dd></div>
                   ) : null}
                 </dl>
               </section>
@@ -611,9 +565,15 @@ export default function PluginsPage() {
                         </div>
                       </button>
                     ))
+                  ) : marketplaceSkillsFailure && !isPluginInstalled ? (
+                    <InlineFailure
+                      failure={marketplaceSkillsFailure}
+                      operation="Load plugin skills"
+                      onRetry={() => setMarketplaceSkillsRetry((attempt) => attempt + 1)}
+                    />
                   ) : (
                     <PaneEmptyState>
-                      {marketplaceSkillsLoading
+                      {marketplaceSkillsPending
                         ? 'Loading skills…'
                         : isPluginInstalled
                           ? 'No skills reported for this install.'
@@ -624,14 +584,23 @@ export default function PluginsPage() {
 
                 {previewSkill ? (
                   <div className="plugins-skill-preview">
-                    {skillPreviewLoading && !skillPreview ? (
+                    {skillPreviewRequest.loading && !skillPreview ? (
                       <PaneEmptyState>Loading {previewSkill}…</PaneEmptyState>
-                    ) : skillPreviewError && !skillPreview ? (
-                      <PaneEmptyState>{skillPreviewError.message}</PaneEmptyState>
+                    ) : skillPreviewRequest.error && !skillPreview ? (
+                      <InlineFailure
+                        failure={skillPreviewRequest.error}
+                        operation="Load skill preview"
+                        onRetry={() => dispatch(fetchPluginSkillContent({
+                          pluginsUrl,
+                          marketplace: selectedMarketplace,
+                          plugin: selectedPlugin.name,
+                          skill: previewSkill,
+                        }))}
+                      />
                     ) : skillPreview ? (
-                      <div
+                      <MarkdownContent
                         className="markdown-content plugins-skill-preview__body"
-                        dangerouslySetInnerHTML={{ __html: renderMarkdownToHtml(skillPreview.content) }}
+                        content={skillPreview.content}
                       />
                     ) : null}
                   </div>
@@ -640,7 +609,7 @@ export default function PluginsPage() {
             </div>
 
             <div className="plugins-editor-footer">
-              <span>{statusMessage || error?.message || (!realtime.connected ? 'Reconnect the realtime stream to install or uninstall plugins.' : '')}</span>
+              <span>{completedPluginMessage || statusMessage || (!realtime.connected ? 'Reconnect the realtime stream to install or uninstall plugins.' : '')}</span>
             </div>
           </>
         )}

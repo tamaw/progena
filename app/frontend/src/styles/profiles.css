@@ -78,19 +78,6 @@
   gap: var(--spacing-md);
 }
 
-/* Match the Agents detail: a plain section heading above one bordered data surface. */
-.profiles-detail .profiles-section {
-  margin: 0 0 22px;
-  padding: 0;
-  background: transparent;
-  border: 0;
-  border-radius: 0;
-}
-
-.profiles-section__head {
-  margin-bottom: 10px;
-}
-
 .profiles-section__actions {
   display: inline-flex;
   gap: 5px;
@@ -117,12 +104,16 @@
   min-width: 0;
 }
 
+.profiles-field .app-listbox,
+.profiles-field .app-listbox__trigger {
+  width: 100%;
+}
+
 .profiles-field__required {
   color: var(--color-error);
 }
 
-.profiles-field input:disabled,
-.profiles-field select:disabled {
+.profiles-field input:disabled {
   opacity: 0.6;
   cursor: not-allowed;
 }

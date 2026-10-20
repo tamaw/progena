@@ -866,63 +866,6 @@
   color: var(--color-text-primary);
 }
 
-/* JSON editor: a transparent <textarea> stacked over a highlight.js <pre> so the
-   syntax-highlighted layer shows through while the user types. Both layers must
-   share identical box metrics for the caret to line up. */
-.canvas-json__code {
-  position: relative;
-  flex: 1;
-  min-height: 0;
-  display: flex;
-}
-
-.canvas-json__highlight,
-.canvas-json__code .canvas-json__textarea {
-  margin: 0;
-  padding: 10px 12px;
-  border: 1px solid var(--color-border);
-  border-radius: 8px;
-  font-family: var(--font-family-mono);
-  font-size: 12px;
-  line-height: 1.5;
-  tab-size: 2;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  overflow: auto;
-}
-
-.canvas-json__highlight {
-  position: absolute;
-  inset: 0;
-  background: var(--color-bg-primary);
-  pointer-events: none;
-}
-
-.canvas-json__highlight code.hljs {
-  padding: 0;
-  background: transparent;
-  font: inherit;
-}
-
-.canvas-json__code .canvas-json__textarea {
-  position: relative;
-  flex: 1;
-  resize: none;
-  background: transparent;
-  color: transparent;
-  caret-color: var(--color-text-primary);
-}
-
-.canvas-json__code .canvas-json__textarea::selection {
-  background: var(--color-accent-soft);
-}
-
-.canvas-json__textarea:focus {
-  outline: none;
-  border-color: color-mix(in oklab, var(--color-accent) 45%, var(--color-border));
-  box-shadow: 0 0 0 3px var(--color-accent-soft);
-}
-
 .canvas-json-editor__error {
   margin: 0;
   color: var(--color-error, #ef4444);
@@ -962,7 +905,7 @@
 
 .workflow-node-port {
   align-items: center;
-  color: var(--color-text);
+  color: var(--color-text-primary);
   display: flex;
   font-size: 0.82rem;
   gap: 7px;
@@ -1016,7 +959,7 @@
 
 .workflow-node-options-backdrop {
   align-items: center;
-  background: color-mix(in srgb, var(--color-bg, #111) 72%, transparent);
+  background: color-mix(in srgb, var(--color-bg-primary) 72%, transparent);
   display: flex;
   inset: 0;
   justify-content: center;
@@ -1026,7 +969,7 @@
 }
 
 .workflow-node-options {
-  background: var(--color-surface, #1d1d1d);
+  background: var(--color-bg-secondary);
   border: 1px solid var(--color-border);
   border-radius: 12px;
   box-shadow: 0 24px 80px rgb(0 0 0 / 45%);
@@ -1076,7 +1019,7 @@
 }
 
 .workflow-node-options code {
-  color: var(--color-text);
+  color: var(--color-text-primary);
   font-size: 0.78rem;
 }
 
@@ -1110,27 +1053,27 @@
 }
 
 .workflow-node-options__field textarea {
-  background: var(--color-input-bg, transparent);
+  background: var(--color-bg-primary);
   border: 1px solid var(--color-border);
   border-radius: 5px;
-  color: var(--color-text);
+  color: var(--color-text-primary);
   padding: 7px 8px;
   resize: vertical;
 }
 .workflow-node-options__mapping-form input {
-  background: var(--color-input-bg, transparent);
+  background: var(--color-bg-primary);
   border: 1px solid var(--color-border);
   border-radius: 5px;
-  color: var(--color-text);
+  color: var(--color-text-primary);
   min-width: 0;
   padding: 7px 8px;
 }
 
 .workflow-node-options__field input {
-  background: var(--color-input-bg, transparent);
+  background: var(--color-bg-primary);
   border: 1px solid var(--color-border);
   border-radius: 5px;
-  color: var(--color-text);
+  color: var(--color-text-primary);
   min-width: 0;
   padding: 7px 8px;
 }
@@ -1144,7 +1087,7 @@
 
 .workflow-node-options__checkbox {
   align-items: center;
-  color: var(--color-text);
+  color: var(--color-text-primary);
   cursor: pointer;
   display: inline-flex;
   font-size: 0.8rem;
@@ -1165,7 +1108,7 @@
 
 .workflow-node-options__tag {
   align-items: center;
-  background: var(--color-surface-raised, rgb(255 255 255 / 4%));
+  background: var(--color-bg-tertiary);
   border: 1px solid var(--color-border);
   border-radius: 6px;
   display: inline-flex;
@@ -1185,7 +1128,7 @@
 }
 
 .workflow-node-options__tag button:hover {
-  color: var(--color-text);
+  color: var(--color-text-primary);
 }
 
 .workflow-node-options__next-runs {
@@ -1202,7 +1145,7 @@
 }
 
 .workflow-node-options__error {
-  color: var(--color-danger, #f85149);
+  color: var(--color-error);
   font-size: 12px;
   margin-top: 4px;
 }

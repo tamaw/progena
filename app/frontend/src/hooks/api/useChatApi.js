@@ -436,7 +436,6 @@ export function useChatApi() {
           method: 'POST',
           body,
           requestId,
-          errorLabel: 'sendMessage failed',
           signal: acknowledgementController.signal,
         });
         if (activeAcknowledgementRef.current?.requestId === requestId) {
@@ -592,7 +591,6 @@ export function useChatApi() {
     await requestAcknowledged(`${responsesUrl}/${encodeURIComponent(requestId)}/cancel`, {
       method: 'PUT',
       requestId: createUuid(),
-      errorLabel: 'cancelStream failed',
     }).catch((error) => {
       console.warn('Failed to cancel backend response stream', error);
     });

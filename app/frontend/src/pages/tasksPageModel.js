@@ -20,26 +20,6 @@ export function statusMeta(status) {
 const priorityOrder = { high: 0, medium: 1, low: 2 };
 export const agentColors = ['#2f6ff6', '#a78bfa', '#22a06b', '#ef6c2a', '#6f86c4'];
 
-export function formatRelativeTime(value) {
-  if (!value) {
-    return '--';
-  }
-
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) {
-    return '--';
-  }
-
-  const diff = Math.max(0, Date.now() - parsed.getTime());
-  const minutes = Math.floor(diff / 60000);
-  if (minutes < 1) return 'now';
-  if (minutes < 60) return `${minutes}m`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h`;
-  const days = Math.floor(hours / 24);
-  if (days < 7) return `${days}d`;
-  return parsed.toLocaleDateString([], { month: 'short', day: 'numeric' });
-}
 
 export function formatAgentName(value) {
   return formatTaskLabel(value);

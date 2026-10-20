@@ -29,11 +29,13 @@ import {
   archiveInboxMessage,
   decideInboxMessage,
   deleteInboxMessage,
+  fetchInbox,
   markInboxMessageRead,
   selectInboxMessages,
   selectInboxState,
 } from '../store/uiDataSlice';
-import { formatRelativeTime } from './tasksPageModel';
+import { formatCompactRelativeAge } from '../lib/displayTime';
+import InlineFailure from '../components/common/InlineFailure';
 import StructuredInboxBody from './StructuredInboxBody';
 import {
   filterInboxMessages,
@@ -226,9 +228,7 @@ export default function InboxPage() {
     }));
   }, [selectedMessageId, selectedMessageTitle]);
 
-  const listEmptyMessage = inboxState.error
-    ? inboxState.error
-    : query.trim()
+  const listEmptyMessage = query.trim()
       ? 'No messages match your search'
       : filter === 'unread'
         ? 'No unread messages'
@@ -257,8 +257,9 @@ export default function InboxPage() {
             onSelect={setSort}
           />
         </PaneListToolbar>
+        <InlineFailure failure={inboxState.error} operation="Load messages" onRetry={() => dispatch(fetchInbox({ inboxUrl }))} />
         {visibleMessages.length === 0 ? (
-          <PaneEmptyState>{listEmptyMessage}</PaneEmptyState>
+          !inboxState.error && <PaneEmptyState>{listEmptyMessage}</PaneEmptyState>
         ) : (
           <PaneListRows
             items={visibleMessages}
@@ -286,7 +287,7 @@ export default function InboxPage() {
                       aria-hidden="true"
                     />
                     <span className="chat-session-card__title">{message.title || message.id}</span>
-                    <span className="chat-session-card__age">{formatRelativeTime(message.created_at)}</span>
+                    <span className="chat-session-card__age">{formatCompactRelativeAge(message.created_at)}</span>
                   </div>
                   {previewText(message.body) ? (
                     <div className="chat-session-card__preview">{previewText(message.body)}</div>

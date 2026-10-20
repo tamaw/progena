@@ -5,6 +5,8 @@ import { isNodeRunValid } from '../../lib/routineGraphDiff';
 import { isNodeComplete } from './graphValidation';
 import { GRAPH_KIND_COLORS, GRAPH_KIND_LABELS, GRAPH_NODE_KINDS } from './graphNodeKinds';
 import { KindIcon } from './RoutineGraphIcons';
+import { useMenuDismiss } from '../../hooks/useMenuDismiss';
+
 import {
   splitForeachBody,
   chainTerminus,
@@ -243,23 +245,7 @@ function ConnectorInsert({ slot }) {
   const [open, setOpen] = useState(false);
   const wrapRef = useRef(null);
 
-  useEffect(() => {
-    if (!open) return undefined;
-    const handlePointer = (event) => {
-      if (wrapRef.current && !wrapRef.current.contains(event.target)) {
-        setOpen(false);
-      }
-    };
-    const handleKey = (event) => {
-      if (event.key === 'Escape') setOpen(false);
-    };
-    document.addEventListener('mousedown', handlePointer);
-    document.addEventListener('keydown', handleKey);
-    return () => {
-      document.removeEventListener('mousedown', handlePointer);
-      document.removeEventListener('keydown', handleKey);
-    };
-  }, [open]);
+  useMenuDismiss(open, wrapRef, () => setOpen(false));
 
   return (
     <div className="routine-connector" ref={wrapRef}>

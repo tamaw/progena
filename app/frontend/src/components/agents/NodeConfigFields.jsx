@@ -10,6 +10,7 @@ import {
   textToInputs,
   schemaFieldsToText,
   textToSchemaFields,
+  isCompleteSchemaFieldText,
 } from './graphFieldHelpers';
 import { useDispatch, useSelector } from 'react-redux';
 import { fetchModelProfiles, selectAgentProfiles, selectModelProfiles, selectModelProfilesState } from '../../store/uiDataSlice';
@@ -27,25 +28,29 @@ function ModelProfileField({ id, config, updateNodeConfig }) {
   const profilesState = useSelector(selectModelProfilesState);
   const value = config?.model_profile || '';
 
+  const options = [
+    { value: '', label: 'Use default' },
+    ...(value && !profiles.some((profile) => profile.name === value)
+      ? [{ value, label: `${value} (unavailable)` }]
+      : []),
+    ...profiles.map((profile) => ({
+      value: profile.name,
+      label: `${profile.name} — ${profile.deployment}`,
+    })),
+  ];
   return (
     <div className="agents-graph-node__field">
       <span className="agents-graph-node__field-label">Model profile</span>
-      <select
-        className="agents-graph-node__toolinput"
-        aria-label="Model profile"
-        value={value}
-        onChange={(event) => updateNodeConfig(id, { model_profile: event.target.value || null })}
-      >
-        <option value="">Use default</option>
-        {value && !profiles.some((profile) => profile.name === value) ? (
-          <option value={value}>{value} (unavailable)</option>
-        ) : null}
-        {profiles.map((profile) => (
-          <option key={profile.name} value={profile.name}>
-            {profile.name} — {profile.deployment}
-          </option>
-        ))}
-      </select>
+      <div className="agents-graph-node__select">
+        <Select
+          value={value}
+          onChange={(next) => updateNodeConfig(id, { model_profile: next || null })}
+          options={options}
+          ariaLabel="Model profile"
+          portal
+          className="nodrag nowheel"
+        />
+      </div>
       {profilesState.error ? (
         <>
           <span role="alert">{profilesState.error}</span>
@@ -292,16 +297,18 @@ function AgentSelectField({ id, config, field = 'agent_name', label, agentKind, 
         {label}
         {required ? <span className="agents-graph-node__required" title="Required before this routine can be saved">Required</span> : null}
       </span>
-      <Select
-        value={value}
-        onChange={(next) => updateNodeConfig(id, { [field]: next })}
-        options={options}
-        placeholder="Select an agent…"
-        searchable
-        portal
-        ariaLabel={label}
-        className={`agents-graph-node__select${required ? ' agents-graph-node__select--required' : ''}`}
-      />
+      <div className={`agents-graph-node__select${required ? ' agents-graph-node__select--required' : ''}`}>
+        <Select
+          value={value}
+          onChange={(next) => updateNodeConfig(id, { [field]: next })}
+          options={options}
+          placeholder="Select an agent…"
+          searchable
+          portal
+          ariaLabel={label}
+          className="nodrag nowheel"
+        />
+      </div>
     </label>
   );
 }
@@ -370,8 +377,17 @@ function StatePathSuggestionsMenu({ items, activeIndex, position, onHover, onSel
   );
 }
 
+function isCompleteStructuredText(text) {
+  return text.split('\n').every((line) => {
+    if (!line.trim()) return true;
+    const separator = line.indexOf(':');
+    return separator > 0 && line.slice(0, separator).trim() && line.slice(separator + 1).trim();
+  });
+}
+
 function InputsField({ id, config, updateNodeConfig }) {
-  const [text, setText, setTrackedInputs] = useBufferedFieldText(id, config?.inputs, inputsToText);
+  const { draftScope } = useContext(GraphEditContext) || {};
+  const [text, setText] = useBufferedFieldText(draftScope, id, 'inputs', config?.inputs, inputsToText, isCompleteStructuredText);
   return (
     <label className="agents-graph-node__field">
       <span className="agents-graph-node__field-label">Inputs (name: path, e.g. host: parse_json.host)</span>
@@ -382,9 +398,7 @@ function InputsField({ id, config, updateNodeConfig }) {
         onChange={(event) => {
           const nextText = event.target.value;
           setText(nextText);
-          const parsed = textToInputs(nextText);
-          setTrackedInputs(parsed);
-          updateNodeConfig(id, { inputs: parsed });
+          updateNodeConfig(id, { inputs: textToInputs(nextText) });
         }}
       />
     </label>
@@ -392,7 +406,8 @@ function InputsField({ id, config, updateNodeConfig }) {
 }
 
 function ResponseSchemaField({ id, config, field, label, updateNodeConfig }) {
-  const [text, setText, setTrackedValue] = useBufferedFieldText(id, config?.[field], schemaFieldsToText);
+  const { draftScope } = useContext(GraphEditContext) || {};
+  const [text, setText] = useBufferedFieldText(draftScope, id, field, config?.[field], schemaFieldsToText, isCompleteSchemaFieldText);
   return (
     <label className="agents-graph-node__field">
       <span className="agents-graph-node__field-label">{label}</span>
@@ -403,9 +418,7 @@ function ResponseSchemaField({ id, config, field, label, updateNodeConfig }) {
         onChange={(event) => {
           const nextText = event.target.value;
           setText(nextText);
-          const parsed = textToSchemaFields(nextText);
-          setTrackedValue(parsed);
-          updateNodeConfig(id, { [field]: parsed });
+          updateNodeConfig(id, { [field]: textToSchemaFields(nextText) });
         }}
       />
     </label>
@@ -414,7 +427,8 @@ function ResponseSchemaField({ id, config, field, label, updateNodeConfig }) {
 
 
 function KeyValueMapField({ id, config, field, label, placeholder, updateNodeConfig }) {
-  const [text, setText, setTrackedValue] = useBufferedFieldText(id, config?.[field], inputsToText);
+  const { draftScope } = useContext(GraphEditContext) || {};
+  const [text, setText] = useBufferedFieldText(draftScope, id, field, config?.[field], inputsToText, isCompleteStructuredText);
   return (
     <label className="agents-graph-node__field">
       <span className="agents-graph-node__field-label">{label}</span>
@@ -425,9 +439,7 @@ function KeyValueMapField({ id, config, field, label, placeholder, updateNodeCon
         onChange={(event) => {
           const nextText = event.target.value;
           setText(nextText);
-          const parsed = textToInputs(nextText);
-          setTrackedValue(parsed);
-          updateNodeConfig(id, { [field]: parsed });
+          updateNodeConfig(id, { [field]: textToInputs(nextText) });
         }}
       />
     </label>
@@ -505,12 +517,19 @@ export function NodeConfigBody({ id, kind, config, updateNodeConfig, replaceNode
         <AgentSelectField id={id} config={config} label="Agent" agentKind="object" updateNodeConfig={updateNodeConfig} />
         <label className="agents-graph-node__field">
           <span className="agents-graph-node__field-label">Execution</span>
-          <select className="agents-graph-node__toolinput" aria-label="Execution"
-            value={config?.execution || 'wait'}
-            onChange={(event) => updateNodeConfig(id, { execution: event.target.value })}>
-            <option value="wait">Wait for response</option>
-            <option value="background">Run in background</option>
-          </select>
+          <div className="agents-graph-node__select">
+            <Select
+              value={config?.execution || 'wait'}
+              onChange={(next) => updateNodeConfig(id, { execution: next })}
+              options={[
+                { value: 'wait', label: 'Wait for response' },
+                { value: 'background', label: 'Run in background' },
+              ]}
+              ariaLabel="Execution"
+              portal
+              className="nodrag nowheel"
+            />
+          </div>
         </label>
         <p className="agents-graph-node__field-label">
           {config?.execution === 'background'
@@ -537,15 +556,19 @@ export function NodeConfigBody({ id, kind, config, updateNodeConfig, replaceNode
         <StringListField id={id} config={config} field="allowed_responses" label="Allowed responses (comma-separated)" placeholder="approve, reject" updateNodeConfig={updateNodeConfig} />
         <label className="agents-graph-node__field">
           <span className="agents-graph-node__field-label">Who can answer</span>
-          <select
-            className="agents-graph-node__toolinput"
-            aria-label="Who can answer"
-            value={config?.approver || 'any'}
-            onChange={(event) => updateNodeConfig(id, { approver: event.target.value })}
-          >
-            <option value="any">A person or Progenitor</option>
-            <option value="human">Only a person</option>
-          </select>
+          <div className="agents-graph-node__select">
+            <Select
+              value={config?.approver || 'any'}
+              onChange={(next) => updateNodeConfig(id, { approver: next })}
+              options={[
+                { value: 'any', label: 'A person or Progenitor' },
+                { value: 'human', label: 'Only a person' },
+              ]}
+              ariaLabel="Who can answer"
+              portal
+              className="nodrag nowheel"
+            />
+          </div>
         </label>
       </>
     );
@@ -556,18 +579,23 @@ export function NodeConfigBody({ id, kind, config, updateNodeConfig, replaceNode
       <>
         <label className="agents-graph-node__field">
           <span className="agents-graph-node__field-label">Execution mode</span>
-          <select
-            className="agents-graph-node__toolinput"
-            value={mode}
-            onChange={(event) => replaceNodeConfig(
-              event.target.value === 'agent'
-                ? { mode: 'agent', items_from: '', agent_name: '', prompt_template: '', item_key: 'item' }
-                : { mode: 'send', items_from: '', item_key: 'item' },
-            )}
-          >
-            <option value="send">Send to connected node</option>
-            <option value="agent">Invoke named agent</option>
-          </select>
+          <div className="agents-graph-node__select">
+            <Select
+              value={mode}
+              onChange={(next) => replaceNodeConfig(
+                next === 'agent'
+                  ? { mode: 'agent', items_from: '', agent_name: '', prompt_template: '', item_key: 'item' }
+                  : { mode: 'send', items_from: '', item_key: 'item' },
+              )}
+              options={[
+                { value: 'send', label: 'Send to connected node' },
+                { value: 'agent', label: 'Invoke named agent' },
+              ]}
+              ariaLabel="Execution mode"
+              portal
+              className="nodrag nowheel"
+            />
+          </div>
         </label>
         <ConfigField id={id} config={config} field="items_from" label="Items from data path" placeholder="items" updateNodeConfig={updateNodeConfig} />
         <ConfigField id={id} config={config} field="item_key" label="Item state key" placeholder="item" updateNodeConfig={updateNodeConfig} />
@@ -597,18 +625,23 @@ export function NodeConfigBody({ id, kind, config, updateNodeConfig, replaceNode
         <ConfigField id={id} config={config} field="source_node" label="Map output node ID" placeholder="e.g. transform" updateNodeConfig={updateNodeConfig} />
         <label className="agents-graph-node__field">
           <span className="agents-graph-node__field-label">Operation</span>
-          <select
-            className="agents-graph-node__toolinput"
-            value={config?.operation || 'collect'}
-            onChange={(event) => updateNodeConfig(id, { operation: event.target.value })}
-          >
-            <option value="collect">Collect values</option>
-            <option value="sum">Sum</option>
-            <option value="product">Product</option>
-            <option value="count">Count</option>
-            <option value="min">Minimum</option>
-            <option value="max">Maximum</option>
-          </select>
+          <div className="agents-graph-node__select">
+            <Select
+              value={config?.operation || 'collect'}
+              onChange={(next) => updateNodeConfig(id, { operation: next })}
+              options={[
+                { value: 'collect', label: 'Collect values' },
+                { value: 'sum', label: 'Sum' },
+                { value: 'product', label: 'Product' },
+                { value: 'count', label: 'Count' },
+                { value: 'min', label: 'Minimum' },
+                { value: 'max', label: 'Maximum' },
+              ]}
+              ariaLabel="Operation"
+              portal
+              className="nodrag nowheel"
+            />
+          </div>
         </label>
         <p className="routine-node-inspector__hint">Collects each execution of that node, such as the final step in a Send foreach body. Empty input reduces to an empty list, zero for sum/count, one for product, and null for min/max.</p>
       </>

@@ -3,7 +3,7 @@
  * events. The list carries front matter summaries; one instruction's content,
  * its revisions and a viewed revision are loaded on demand.
  */
-import { createAcknowledgedThunk, requestAcknowledged, addRequestLifecycle } from './async';
+import { createAcknowledgedThunk, requestAcknowledged, addRequestLifecycle, addKeyedRequestLifecycle, completeKeyedRequest, selectKeyedRequest } from './async';
 import { withQuery } from '../http';
 
 export const initialState = {
@@ -16,6 +16,9 @@ export const initialState = {
     byPath: {},
     revisionsByPath: {},
     revisionByKey: {},
+    contentRequestByPath: {},
+    revisionsRequestByPath: {},
+    revisionRequestByKey: {},
   },
 };
 
@@ -80,20 +83,41 @@ export const eventHandlers = {
   'instruction.loaded': (state, payload) => {
     if (typeof payload?.path === 'string' && payload.path) {
       state.instructions.byPath[payload.path] = payload;
+      completeKeyedRequest(state.instructions.contentRequestByPath, payload.path, payload.request_id);
     }
   },
   'instruction.revisions.loaded': (state, payload) => {
     state.instructions.revisionsByPath[payload.path] = Array.isArray(payload.revisions) ? payload.revisions : [];
+    completeKeyedRequest(state.instructions.revisionsRequestByPath, payload.path, payload.request_id);
   },
   'instruction.revision.loaded': (state, payload) => {
-    state.instructions.revisionByKey[revisionKey(payload.path, payload.revision_id)] = payload;
+    const key = revisionKey(payload.path, payload.revision_id);
+    state.instructions.revisionByKey[key] = payload;
+    completeKeyedRequest(state.instructions.revisionRequestByKey, key, payload.request_id);
   },
 };
 
 export function buildExtraReducers(builder) {
-  return addRequestLifecycle(builder, fetchInstructions, {
+  addRequestLifecycle(builder, fetchInstructions, {
     select: (state) => state.instructions,
     errorMessage: 'Failed to load instructions',
+  });
+  addKeyedRequestLifecycle(builder, fetchInstruction, {
+    selectRequests: (state) => state.instructions.contentRequestByPath,
+    keyFromArgs: ({ path } = {}) => path,
+    errorMessage: 'Failed to load instruction content',
+  });
+  addKeyedRequestLifecycle(builder, fetchInstructionRevisions, {
+    selectRequests: (state) => state.instructions.revisionsRequestByPath,
+    keyFromArgs: ({ path } = {}) => path,
+    errorMessage: 'Failed to load instruction revisions',
+  });
+  return addKeyedRequestLifecycle(builder, fetchInstructionRevision, {
+    selectRequests: (state) => state.instructions.revisionRequestByKey,
+    keyFromArgs: ({ path, revisionId } = {}) => (
+      path && revisionId ? revisionKey(path, revisionId) : null
+    ),
+    errorMessage: 'Failed to load instruction revision',
   });
 }
 
@@ -106,4 +130,16 @@ export const selectInstructionRevisions = (state, path) => (
 // One captured revision `{ content, front_matter, body }`, or null until loaded.
 export const selectInstructionRevision = (state, path, revisionId) => (
   path && revisionId ? state.uiData.instructions.revisionByKey[revisionKey(path, revisionId)] || null : null
+);
+export const selectInstructionContentRequest = (state, path) => (
+  selectKeyedRequest(state.uiData.instructions.contentRequestByPath, path)
+);
+export const selectInstructionRevisionsRequest = (state, path) => (
+  selectKeyedRequest(state.uiData.instructions.revisionsRequestByPath, path)
+);
+export const selectInstructionRevisionRequest = (state, path, revisionId) => (
+  selectKeyedRequest(
+    state.uiData.instructions.revisionRequestByKey,
+    path && revisionId ? revisionKey(path, revisionId) : null,
+  )
 );
