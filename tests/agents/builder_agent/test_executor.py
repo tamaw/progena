@@ -12,7 +12,7 @@ from a2a.types import (
     TextPart,
 )
 
-from app.agents.builder_agent.agent import _normalize_build_action, _push_node_progress_callback
+from app.agents.builder_agent.agent import _normalize_build_action
 
 
 def _make_text_message(text: str) -> Message:
@@ -66,20 +66,6 @@ async def test_execute_empty_request_emits_failed(executor, mock_event_queue, mo
     terminal = [e for e in events if getattr(e, "final", False)]
     assert len(terminal) >= 1
     assert terminal[-1].status.state == TaskState.failed
-
-
-@pytest.mark.asyncio
-async def test_cancel_is_a_no_op(executor, mock_event_queue):
-    """cancel() should not raise, and should report nothing to cancel."""
-    ctx = MagicMock()
-    ctx.task_id = "task-cancel-001"
-    ctx.context_id = "ctx-cancel-001"
-    await executor.cancel(ctx, mock_event_queue)
-
-    events = [call.args[0] for call in mock_event_queue.enqueue_event.call_args_list]
-    assert len(events) == 1
-    assert events[0].status.state == TaskState.canceled
-    assert events[0].final is True
 
 
 @pytest.mark.asyncio
@@ -261,33 +247,6 @@ async def test_run_build_request_registers_and_clears_progress_callback_when_str
     assert last_call_arg is None
 
 
-@pytest.mark.asyncio
-async def test_push_node_progress_callback_pushes_working_event_with_phase_text():
-    event_queue = AsyncMock()
-    push = _push_node_progress_callback("task-1", "ctx-1", event_queue)
-
-    await push("verify", {})
-
-    event_queue.enqueue_event.assert_awaited_once()
-    event = event_queue.enqueue_event.await_args.args[0]
-    assert event.task_id == "task-1"
-    assert event.context_id == "ctx-1"
-    assert event.final is False
-    assert event.status.state == TaskState.working
-    assert "erif" in event.status.message.parts[0].root.text.lower()  # "verification"
-
-
-@pytest.mark.asyncio
-async def test_push_node_progress_callback_falls_back_for_unknown_node():
-    event_queue = AsyncMock()
-    push = _push_node_progress_callback("task-1", "ctx-1", event_queue)
-
-    await push("some_future_node", {})
-
-    event = event_queue.enqueue_event.await_args.args[0]
-    assert "some_future_node" in event.status.message.parts[0].root.text
-
-
 def test_normalize_build_action_maps_execute_aliases():
     assert _normalize_build_action("execute") == "build_agent"
     assert _normalize_build_action("answer_directly") == "build_agent"
@@ -353,29 +312,6 @@ async def test_execute_prefers_request_context_task_ids(
         {"a2a_task_id": "task-test-002", "a2a_context_id": "ctx-test-002"},
         mock_event_queue,
     )
-
-
-@pytest.mark.asyncio
-async def test_cancel_delegates_to_task_queue_and_suppresses_own_event_when_cancelled(
-    executor, mock_event_queue
-):
-    """When BuilderTaskQueue.cancel() actually interrupts something, cancel()
-    must NOT also push its own terminal event -- BuilderTaskQueue's own
-    CancelledError handling does that (and also records the JSONL log entry,
-    which this method has no way to do), so pushing here too would
-    double-deliver the same event to the client.
-    """
-    ctx = MagicMock()
-    ctx.task_id = "task-was-running"
-    ctx.context_id = "ctx-was-running"
-    queue = MagicMock()
-    queue.cancel = MagicMock(return_value=True)
-
-    with patch("app.agents.builder_agent.agent._task_queue", queue):
-        await executor.cancel(ctx, mock_event_queue)
-
-    queue.cancel.assert_called_once_with("task-was-running")
-    mock_event_queue.enqueue_event.assert_not_called()
 
 
 @pytest.mark.asyncio

@@ -20,12 +20,8 @@ dependencies = [
     "a2a-sdk[http-server]>=0.3.24,<1.0.0",
     "openai>=1.0.0",
     "langgraph>=0.4.0",
-    "langgraph-checkpoint-sqlite>=3.0.0",
-    # Pinned to the merge commit of langgraph#8556 (fixes #8448: DeltaChannel
-    # history reads of checkpoints >1024 back silently returned no messages).
-    # Not in a PyPI release yet (latest 3.1.2); go back to a version pin
-    # (">=3.1.3") once one ships with it.
-    "langgraph-checkpoint-postgres @ https://github.com/langchain-ai/langgraph/archive/c0279f09103de4e52194217e103e8b3d59ce16c1.tar.gz#subdirectory=libs/checkpoint-postgres",
+    "langgraph-checkpoint-sqlite>=3.1.1",
+    "langgraph-checkpoint-postgres>=3.1.3,<4.0.0",
     "psycopg[binary,pool]>=3.2.0",
     "deepagents>=0.6.12,<0.7.0",
     "langchain-openai>=0.3.0",
@@ -34,11 +30,18 @@ dependencies = [
     # `RequestContext`; langchain-mcp-adapters (as of 0.3.1) still imports it
     # from the old location, so a fresh unpinned resolve breaks at import
     # time. Pin below the breaking major until adapters catches up.
-    "mcp>=1.9.2,<2.0.0",
+    "mcp>=1.30.0,<2.0.0",
     "pydantic>=2.0.0",
     "croniter>=2.0.5",
     "wcmatch>=10.1",  # glob over virtual /config, /tasks, ... (same matcher deepagents uses)
-    "aiohttp>=3.9.0",
+    "aiohttp>=3.14.4",
+    "anyio>=4.14.2",
+    "cryptography>=50.0.0",
+    "langgraph-sdk>=0.4.4",
+    "multidict>=6.9.1",
+    "pyasn1>=0.6.4",
+    "PyJWT>=2.15.0",
+    "urllib3>=2.8.0",
     "aiofiles>=24.1.0",
     "pytz>=2024.1",
     "python-dotenv>=1.0.0",
@@ -55,10 +58,13 @@ dev = [
     "build>=1.2.0",
     "pytest>=8.0.0",
     "pytest-asyncio>=0.23.0",
+    "pytest-timeout>=2.4.0",
     "httpx>=0.26.0",
     "hypothesis>=6.100.0",
     "locust>=2.20.0",
     "pre-commit>=3.6.0",
+    "virtualenv>=21.7.13",
+    "Werkzeug>=3.1.9",
     "ruff>=0.3.0",
     # Pinned: a floating pyright means CI and local can disagree on strictness,
     # which is the exact failure mode this toolchain was consolidated to remove.

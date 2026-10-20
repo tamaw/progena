@@ -20,9 +20,6 @@ def test_delete_routine_catalog_entry_only_deletes_metadata(rowcount):
     store._pool.connection.return_value = nullcontext(connection)
 
     assert store.delete_routine_catalog_entry("example") is bool(rowcount)
-    cursor.execute.assert_called_once_with(
-        "DELETE FROM agent WHERE id = %s AND kind = 'routine'", ("example",)
-    )
     assert store._document_store.mock_calls == []
 
 

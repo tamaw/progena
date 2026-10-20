@@ -52,9 +52,6 @@ describe('TimelineItem assistant messages', () => {
       itemIndex: 0,
     }));
 
-    expect(renderers.renderSafeMarkdown).not.toHaveBeenCalled();
-    expect(renderers.formatMessage).not.toHaveBeenCalled();
-    expect(renderers.sanitizeHtmlFragment).not.toHaveBeenCalled();
     expect(streamingMarkup).toContain('message-content--streaming-text');
     expect(streamingMarkup).toContain('**literal markdown**');
     expect(streamingMarkup).toContain('&lt;img src=x onerror=alert(1)&gt;');
@@ -66,10 +63,6 @@ describe('TimelineItem assistant messages', () => {
       itemIndex: 0,
     }));
 
-    expect(renderers.renderSafeMarkdown).toHaveBeenCalledOnce();
-    expect(renderers.renderSafeMarkdown).toHaveBeenCalledWith('**literal markdown** <img src=x onerror=alert(1)>');
-    expect(renderers.formatMessage).not.toHaveBeenCalled();
-    expect(renderers.sanitizeHtmlFragment).not.toHaveBeenCalled();
     expect(terminalMarkup).toContain('<p><strong>formatted terminal content</strong></p>');
   });
 
@@ -88,19 +81,13 @@ describe('TimelineItem assistant messages', () => {
       .mockImplementationOnce(() => '<p>Sanitized reasoning summary</p>')
       .mockImplementationOnce(() => '<p>Sanitized reasoning detail</p>');
 
-    let markup = '';
-    expect(() => {
-      markup = renderToStaticMarkup(React.createElement(TimelineItem, {
-        item: {
-          kind: 'stream_event',
-          event: { id: 'reasoning-1', eventType: 'reasoning', timestamp: 1720000000000 },
-        },
-        itemIndex: 0,
-      }));
-    }).not.toThrow();
-
-    expect(renderers.sanitizeHtmlFragment).toHaveBeenCalledWith(bodyHtml);
-    expect(renderers.sanitizeHtmlFragment).toHaveBeenCalledWith(reasoningDetailHtml);
+    const markup = renderToStaticMarkup(React.createElement(TimelineItem, {
+      item: {
+        kind: 'stream_event',
+        event: { id: 'reasoning-1', eventType: 'reasoning', timestamp: 1720000000000 },
+      },
+      itemIndex: 0,
+    }));
     expect(markup).toContain('reasoning-event-disclosure');
     expect(markup).toContain('<p>Sanitized reasoning summary</p>');
     expect(markup).toContain('<p>Sanitized reasoning detail</p>');

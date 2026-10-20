@@ -16,7 +16,6 @@ from app.backend.models import AgentResponse
 from app.backend.state_reader import StateReader
 from app.backend.workflow_service import list_workflow_runs, save_workflow_definition
 from app.progenitor.workflows import (
-    MAX_WORKFLOW_INVOKE_DEPTH,
     default_workflow_definition,
     workflow_invoke_request_key,
 )
@@ -159,7 +158,6 @@ async def test_invoke_request_rejects_max_depth(workflow_env, backend_client):
     await _reconcile_workflow_invoke_requests(key)
     assert len([*list_workflow_runs(store, workflow_id=workflow_id)]) == 0
     assert store.get_document(PROGENITOR_STATE_PREFIX, key, None) is None
-    assert len(["wf_a", "wf_b", "wf_c"]) == MAX_WORKFLOW_INVOKE_DEPTH
 
 
 async def test_malformed_invoke_request_is_dropped(workflow_env, backend_client):

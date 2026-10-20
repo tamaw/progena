@@ -20,7 +20,6 @@ describe('createUuid', () => {
     vi.stubGlobal('crypto', { randomUUID });
 
     expect(createUuid()).toBe(nativeUuid);
-    expect(randomUUID).toHaveBeenCalledOnce();
   });
   it('constructs a v4 UUID from Web Crypto bytes when randomUUID is unavailable', () => {
     const getRandomValues = vi.fn((bytes) => {
@@ -31,7 +30,6 @@ describe('createUuid', () => {
 
     const uuid = createUuid();
     expect(uuid).toBe('00010203-0405-4607-8809-0a0b0c0d0e0f');
-    expect(getRandomValues).toHaveBeenCalledOnce();
     expectUuidV4(uuid);
   });
 

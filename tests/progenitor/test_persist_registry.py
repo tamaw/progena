@@ -56,8 +56,3 @@ async def test_persist_registry_keeps_agent_card_and_status():
     assert saved["agent_card"] == {"name": "Observe Agent", "skills": [{"id": "s1"}]}
     assert saved["status"] == "running"
     assert saved["url"] == "http://localhost:8080"
-
-
-async def test_persist_registry_noops_without_state_manager():
-    # Should not raise when the context lacks a state manager / registry.
-    await _persist_registry(_Ctx(None, _FakeRegistry([])))

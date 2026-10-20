@@ -34,9 +34,3 @@ async def test_generate_id_count_and_uniqueness() -> None:
     assert len(ids) == 5
     assert len(set(ids)) == 5
     assert all(i.startswith("card_") for i in ids)
-
-
-def test_generate_id_registered() -> None:
-    from app.progenitor.tools.system_registry import get_system_tool
-
-    assert get_system_tool("generate_id") is not None

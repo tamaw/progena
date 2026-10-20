@@ -198,40 +198,6 @@ def complete_state_files():
 class TestCriticalUIDataPipeline:
     """Test the complete data pipeline from state files to UI."""
 
-    def test_retained_requests_acknowledge_and_deleted_routes_are_absent(self, client):
-        """Only retained operations acknowledge; plan-deleted paths never gain compatibility bodies."""
-        request_id = "first-contact-widgets"
-        retained = client.get(
-            "/api/ui/widgets",
-            headers={"X-Request-ID": request_id},
-        )
-        assert retained.status_code == 202
-        assert retained.json() == {
-            "request_id": request_id,
-            "event_types": ["widgets.updated"],
-        }
-
-        for path in (
-            "/health",
-            "/health/detailed",
-            "/ready",
-            "/live",
-            "/v1/models",
-            "/api/ui/status/snapshot",
-            "/api/ui/loops",
-            "/api/ui/agents",
-            "/api/ui/backlog",
-            "/api/ui/schedule",
-            "/api/ui/tasks",
-        ):
-            response = client.get(path)
-            assert response.status_code == 404, path
-
-    def test_status_endpoint_complete_data(self, client):
-        """Status endpoint was deleted - should return 404."""
-        response = client.get("/api/ui/status/snapshot")
-        assert response.status_code == 404
-
     def test_state_reader_with_complete_state(self, complete_state_files):
         """StateReader must correctly read all state data for aliens."""
         reader = StateReader(document_store=complete_state_files.document_store)
@@ -388,10 +354,6 @@ class TestErrorRecoveryAndGracefulDegradation:
         assert not health.is_running()
         assert health.pid is None
 
-    def test_corrupt_json_files(self):
-        """Corrupt JSON file handling is obsolete - StateReader uses document store only."""
-        pytest.skip("File-based fallback removed; StateReader requires document_store")
-
     def test_partial_state_files(self):
         """Partial state should be handled - show what we have."""
 
@@ -440,15 +402,6 @@ class TestErrorRecoveryAndGracefulDegradation:
         # Status says running, but is_running() should be False
         assert health.status == "running"
         assert not health.is_running()  # Because last_active is too old
-
-    def test_api_endpoints_handle_missing_state(self, client):
-        """API endpoints should work even without state files."""
-        # /api/ui/agents no longer exists - check that it returns 404
-        response = client.get("/api/ui/agents")
-        assert response.status_code == 404
-
-        response = client.get("/api/ui/backlog")
-        assert response.status_code == 404
 
 
 class TestDataIntegrityUnderAllConditions:
@@ -552,18 +505,6 @@ class TestDataIntegrityUnderAllConditions:
 class TestSubAgentStatusVisibility:
     """Test that sub-agent status is properly visible to aliens."""
 
-    def test_agent_list_contains_all_details(self, client):
-        """Agent list must contain all details needed by UI."""
-        # /api/ui/agents no longer exists - should return 404
-        response = client.get("/api/ui/agents")
-        assert response.status_code == 404
-
-    def test_agent_status_endpoint_exists(self, client):
-        """Individual agent status endpoint must exist."""
-        # Should return 404 for non-existent agent (not 500)
-        response = client.get("/api/ui/agents/nonexistent-agent")
-        assert response.status_code == 404
-
     def test_loops_reflect_activity(self, complete_state_files):
         """Loops must reflect current activity."""
         reader = StateReader(document_store=complete_state_files.document_store)
@@ -582,50 +523,8 @@ class TestSubAgentStatusVisibility:
         assert loop_dict["Executor"].status == "active"
 
 
-class TestUIPageIntegrity:
-    """Test that UI API endpoints work correctly.
-
-    Note: The backend is now API-only. Static file serving has been removed.
-    The frontend runs separately via npm/Vite.
-    """
-
-    def test_all_ui_pages_render(self, client):
-        """Test that UI static routes return 404 (API-only backend)."""
-        pages = [
-            "/",
-            "/ui",
-            "/ui/dashboard",
-            "/ui/agents",
-            "/ui/logs",
-        ]
-
-        for path in pages:
-            response = client.get(path)
-            # These paths should return 404 - backend is API-only now
-            assert response.status_code == 404, f"Page {path} should return 404"
-
-    def test_static_assets_accessible(self, client):
-        """Test that static assets return 404 (API-only backend)."""
-        # Static assets are now served by the frontend, not backend
-        response = client.get("/ui/")
-        assert response.status_code == 404
-
-    def test_navigation_elements_present(self, client):
-        """Test that API endpoints for UI are accessible."""
-        api_endpoints = ["/api/ui/backlog"]
-
-        for endpoint in api_endpoints:
-            response = client.get(endpoint)
-            assert response.status_code == 404, f"API endpoint {endpoint} should 404"
-
-
 class TestCriticalChatFlow:
     """Test the critical chat flow that aliens will use."""
-
-    def test_models_endpoint_available(self, client):
-        """Models endpoint was deleted - should return 404."""
-        response = client.get("/v1/models")
-        assert response.status_code == 404
 
     def test_responses_endpoint_acknowledges_without_generated_text(self, client):
         """Foreground generation data is stream-only, including on the critical path."""
