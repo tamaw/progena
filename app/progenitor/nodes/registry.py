@@ -8,7 +8,7 @@ from typing import Any
 from langgraph.runtime import Runtime
 
 from ..registry import (
-    discover_local_agents,
+    discover_external_agents,
     refresh_agent_metadata,
 )
 from ..state.models import ProgenitorState
@@ -44,14 +44,14 @@ async def discover_agents_node(
     _state: ProgenitorState,
     runtime: Runtime[HeartbeatContext],
 ) -> dict[str, Any]:
-    """Discover local agents when the heartbeat runtime marks it due."""
+    """Discover agents from configured external repositories when due."""
     context = runtime.context
-    if context.project_root is None or context.tool_registry is None or context.llm_client is None:
+    if context.tool_registry is None or context.llm_client is None:
         return {}
     if "registry_discover" not in context.due_maintenance:
         return {}
-    summary = await discover_local_agents(
-        project_root=context.project_root,
+    summary = await discover_external_agents(
+        agent_repositories=context.agent_repositories,
         llm_client=context.llm_client,
         registry=context.tool_registry,
         state_manager=getattr(context, "state_manager", None),
@@ -67,17 +67,16 @@ async def startup_discover_agents_node(
     _state: ProgenitorState,
     runtime: Runtime[HeartbeatContext],
 ) -> dict[str, Any]:
-    """Run local agent discovery once during startup."""
+    """Run external-agent discovery once during startup."""
     context = runtime.context
     if (
         "startup_registry_discover" in context.startup_flags
-        or context.project_root is None
         or context.tool_registry is None
         or context.llm_client is None
     ):
         return {}
-    summary = await discover_local_agents(
-        project_root=context.project_root,
+    summary = await discover_external_agents(
+        agent_repositories=context.agent_repositories,
         llm_client=context.llm_client,
         registry=context.tool_registry,
         state_manager=getattr(context, "state_manager", None),

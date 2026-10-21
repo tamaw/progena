@@ -86,7 +86,6 @@ class TestSkillFiles:
     def test_expected_skills_exist(self):
         """All planned skills should be present."""
         expected = {
-            "build-agent",
             "managing-mcp",
             "managing-plugins",
             "managing-schedules",

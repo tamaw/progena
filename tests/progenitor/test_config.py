@@ -157,6 +157,7 @@ class TestStorageConfig:
             "PROGENITOR_WORKTREE_DIR": "",
             "PROGENITOR_WORKTREES_ROOT": "",
             "PROGENITOR_INSTRUCTIONS_DIR": "",
+            "PROGENITOR_AGENT_REPOSITORIES": "",
         }
         with patch.dict(os.environ, env, clear=False):
             for key in env:
@@ -167,6 +168,7 @@ class TestStorageConfig:
         assert config.log_dir == project_root / "logs"
         assert config.worktree_dir == project_root / "data" / "repos"
         assert config.instructions_dir == project_root / "data" / "instructions"
+        assert config.agent_repositories == ()
 
     def test_default_instructions_dir_uses_checked_in_repo_path(self):
         """Storage defaults should use the checked-in repo paths when env is unset."""
@@ -177,6 +179,7 @@ class TestStorageConfig:
             os.environ.pop("PROGENITOR_WORKTREE_DIR", None)
             os.environ.pop("PROGENITOR_WORKTREES_ROOT", None)
             os.environ.pop("PROGENITOR_INSTRUCTIONS_DIR", None)
+            os.environ.pop("PROGENITOR_AGENT_REPOSITORIES", None)
             config = StorageConfig.from_env()
         repo_root = Path(__file__).resolve().parents[2]
         assert config.data_dir == repo_root / "data"
@@ -184,6 +187,7 @@ class TestStorageConfig:
         assert config.log_dir == repo_root / "logs"
         assert config.worktree_dir == repo_root / "data" / "repos"
         assert config.instructions_dir == DEFAULT_INSTRUCTIONS_DIR
+        assert config.agent_repositories == ()
 
     def test_env_overrides(self):
         """Test environment variables override defaults."""
@@ -191,6 +195,7 @@ class TestStorageConfig:
             "PROGENITOR_DATA_DIR": "/custom/data",
             "PROGENITOR_LOG_DIR": "/custom/logs",
             "PROGENITOR_WORKTREE_DIR": "/custom/worktrees",
+            "PROGENITOR_AGENT_REPOSITORIES": f"/agents/one{os.pathsep}/agents/two",
         }
         with patch.dict(os.environ, env, clear=False):
             os.environ.pop("PROGENITOR_STATE_DIR", None)
@@ -201,6 +206,7 @@ class TestStorageConfig:
             assert config.log_dir == Path("/custom/logs")
             assert config.worktree_dir == Path("/custom/worktrees")
             assert config.instructions_dir == Path("/custom/data/instructions")
+            assert config.agent_repositories == (Path("/agents/one"), Path("/agents/two"))
 
 
 class TestMCPConfig:

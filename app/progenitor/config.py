@@ -201,6 +201,7 @@ class StorageConfig:
     log_dir: Path = field(default_factory=_default_log_dir)
     worktree_dir: Path = field(default_factory=_default_worktree_dir)
     instructions_dir: Path = field(default_factory=_default_instructions_dir)
+    agent_repositories: tuple[Path, ...] = ()
     shim_bin_dir: Path = field(default_factory=_default_shim_bin_dir)
     shell_home_dir: Path = field(default_factory=_default_shell_home_dir)
     shell_workspace_dir: Path = field(default_factory=_default_shell_workspace_dir)
@@ -221,6 +222,11 @@ class StorageConfig:
         default_instructions = default_data / "instructions"
         default_shim_bin = default_data / "shims" / "bin"
         default_shell_home = default_data / "shell-home"
+        agent_repositories = tuple(
+            Path(value.strip()).expanduser()
+            for value in os.getenv("PROGENITOR_AGENT_REPOSITORIES", "").split(os.pathsep)
+            if value.strip()
+        )
 
         return cls(
             data_dir=default_data,
@@ -230,6 +236,7 @@ class StorageConfig:
             instructions_dir=Path(
                 os.getenv("PROGENITOR_INSTRUCTIONS_DIR", str(default_instructions))
             ),
+            agent_repositories=agent_repositories,
             shim_bin_dir=Path(os.getenv("PROGENITOR_SHELL_SHIM_BIN", str(default_shim_bin))),
             shell_home_dir=Path(os.getenv("PROGENITOR_SHELL_HOME", str(default_shell_home))),
             shell_workspace_dir=Path(
