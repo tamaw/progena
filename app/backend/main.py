@@ -63,6 +63,7 @@ from .models import (
     ResponseRequest,
     StreamingResponseRequest,
 )
+from .module_routes import router as modules_router
 from .plugin_routes import router as plugins_router
 from .preferences_routes import router as preferences_router
 from .repo_routes import router as repos_router
@@ -1067,6 +1068,7 @@ app.include_router(marketplaces_router)
 app.include_router(repos_router)
 app.include_router(plugins_router)
 app.include_router(preferences_router)
+app.include_router(modules_router)
 app.include_router(attachments_router)
 
 # Note: This backend is API-only. Frontend is served separately via npm/vite.

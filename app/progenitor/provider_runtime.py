@@ -69,6 +69,8 @@ async def resolve_provider_config(
         reasoning_enabled=template.reasoning_enabled,
         reasoning_effort=template.reasoning_effort,
         reasoning_summary=template.reasoning_summary,
+        timeout_seconds=template.timeout_seconds,
+        max_retries=template.max_retries,
     )
     return _validated_override(config, model_override)
 
@@ -130,6 +132,8 @@ class ProviderTurn:
                 reasoning_enabled=behavior.reasoning_enabled,
                 reasoning_effort=behavior.reasoning_effort,
                 reasoning_summary=behavior.reasoning_summary,
+                timeout_seconds=behavior.timeout_seconds,
+                max_retries=behavior.max_retries,
             )
         return _validated_override(base, model_override)
 

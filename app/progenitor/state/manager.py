@@ -12,6 +12,7 @@ from ..document_kinds import (
     ALERT_KEY_PREFIX,
     DOCUMENT_TYPE_KEY_PREFIX,
     INBOX_MESSAGE_KEY_PREFIX,
+    MODULE_STATUS_KEY_PREFIX,
     REPO_KEY_PREFIX,
     SESSION_KEY_PREFIX,
     WORKFLOW_APPROVAL_REQUEST_KEY_PREFIX,
@@ -843,6 +844,11 @@ class StateManager:
             if isinstance(payload, dict) and isinstance(payload.get("content"), str):
                 results.append((key[len(prefix) :], payload["content"]))
         return results
+
+    async def get_module_status(self, name: str) -> dict[str, Any] | None:
+        """Return a module host's last reported status, if it is well-formed."""
+        payload = await self._runtime_store.peek_document(f"{MODULE_STATUS_KEY_PREFIX}{name}")
+        return payload if isinstance(payload, dict) else None
 
     async def get_knowledge_page(self, base_id: str, path: str) -> dict[str, Any] | None:
         payload = await self._runtime_store.peek_document(knowledge_page_key(base_id, path))

@@ -386,12 +386,6 @@
 .detail-status--info {
     color: var(--color-info);
 }
-.inbox-detail__status--read .detail-status__dot {
-    background: transparent;
-    border: 1.5px solid var(--color-text-muted);
-    box-sizing: border-box;
-}
-
 .detail-status--warning {
     color: var(--color-warning);
 }
@@ -402,6 +396,18 @@
 
 .detail-status--muted {
     color: var(--color-text-muted);
+}
+
+/* Quiet default ("read", "not installed", "available"): a hollow ring, so
+   filled colour is left for states that need the user. */
+.detail-status--idle {
+    color: var(--color-text-muted);
+}
+
+.detail-status--idle .detail-status__dot {
+    background: transparent;
+    border: 1.5px solid currentColor;
+    box-sizing: border-box;
 }
 
 /* Chat detail header: the title hosts an editable input/text plus a rename

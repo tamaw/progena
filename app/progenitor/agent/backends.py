@@ -57,6 +57,7 @@ from deepagents.backends.protocol import EditResult, FileUploadResponse, WriteRe
 
 from .attachment_backend import AttachmentDirectoryBackend
 from .knowledge_backend import KnowledgePageBackend
+from .module_backend import ModuleDirectoryBackend
 from .session_backend import SessionDirectoryBackend
 from .state_backend import (
     AlertDirectoryBackend,
@@ -245,6 +246,7 @@ def create_progenitor_backend(
         )
         routes["/memories/"] = ContentDocumentDirectoryBackend(state_manager, "memory")
         routes["/instructions/"] = InstructionDocumentDirectoryBackend(state_manager, "instruction")
+        routes["/modules/"] = ModuleDirectoryBackend(state_manager)
         routes["/knowledge/"] = KnowledgePageBackend(state_manager)
         for segment in plugin_skill_segments or []:
             routes[f"/skills/{segment}/"] = ReadOnlyBackend(

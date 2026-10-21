@@ -83,6 +83,29 @@ and decision changes can also produce revisions; writing identical content
 again does not. History is stored only; the inbox has no revision browser or
 restore action.
 
+## Modules
+
+Agent-built UI modules (dashboards, diagrams, games) are directories the agent
+writes at `/modules/<name>/` (`ModuleDirectoryBackend`,
+`app/progenitor/agent/module_backend.py`). Each file is one `module:<name>/<path>`
+content document (`{content, updated_at}`); `manifest.json`
+(`module_manifest.schema.v1.json`) must be written first. Names, paths, file
+types and size caps are shared by the runtime mount and the backend in
+`app/progenitor/modules.py`. The mount also projects read-only
+`/modules/_catalogue.json` (vendored libraries from `data/modules/libraries.json`,
+document types, host API) and `/modules/<name>/status.json` (last load result
+reported by the browser, `module_status:<name>`).
+
+A module's own runtime state lives in `module_data:<name>/<key>` documents
+(`{value, updated_at}`), written only by the backend on the module's behalf; a
+module cannot write any other document. Backend startup installs
+`module_revisions`, an immutable per-file history captured by trigger on
+`module:` rows (writes with changed content and deletes); the Modules page can
+view any revision and restore the module to a point in time, which is itself a
+normal write. `module`, `module_data` and `module_status` are built-in document
+types, so workflows and other modules can react to them. Routes, events and the
+sandbox loading design are in `docs/MODULES.md`.
+
 ## Surface 1: agent-facing virtual files (`app/progenitor/agent/state_backend.py`)
 
 `StateFile` is the unit: a virtual file backed by `load`/`save`/`validate`
