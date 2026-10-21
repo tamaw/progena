@@ -362,7 +362,6 @@ class TestInstructionDocumentDirectoryBackend:
         [
             ("/workflows/card.md", "---\nunknown: 1\n---\nBody\n", "unknown front matter key"),
             ("/workflows/card.txt", "Body\n", ".md"),
-            ("/builder_agent/think.md", "Think {task}\n", "bundled with builder_agent"),
             ("/progenitor/discovery.md", "Analyse {other}.\n", "{folders}"),
             (
                 "/workflows/fix.md",
@@ -370,13 +369,10 @@ class TestInstructionDocumentDirectoryBackend:
                 "inputs 'fix_list': unknown type ref: 'string'",
             ),
         ],
-        ids=["unknown-key", "not-markdown", "bundled", "runtime-placeholders", "bare-type"],
+        ids=["unknown-key", "not-markdown", "runtime-placeholders", "bare-type"],
     )
     async def test_rejected_writes_leave_documents_unchanged(self, path, content, error):
-        docs = {
-            "builder_agent/think.md": "Think {task}.\n",
-            "progenitor/discovery.md": "Analyse {folders}.\n",
-        }
+        docs = {"progenitor/discovery.md": "Analyse {folders}.\n"}
         backend, store = self._backend(docs)
         result = await backend.awrite(path, content)
         assert result.error is not None and error in result.error

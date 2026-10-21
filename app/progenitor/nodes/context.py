@@ -39,6 +39,7 @@ class HeartbeatContext:
     startup_flags: set[str] = field(default_factory=set)
     llm_model: str = ""
     llm_reasoning_effort: str = ""
+    agent_repositories: tuple[Path, ...] = ()
     # Ephemeral routine execution entry point.  It resolves the routine
     # document from Postgres for each invocation; it is deliberately not a
     # registry of compiled routines.

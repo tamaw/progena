@@ -63,9 +63,10 @@ point of `summary` is that the task is inferable from it alone, without needing
 the full body. Save the body's markdown description for detail that genuinely
 doesn't fit in one sentence — background, acceptance criteria, links.
 
-Columns and their typical responsible agent: `backlog` (user), `plan`
-(planner_agent), `build` (builder_progenitor), `validate` (validate_agent), `done`
-(release_agent). A card can be written straight into any column, not just backlog.
+Columns such as `backlog`, `plan`, `build`, `validate` and `done` belong to the
+board. Assign responsible agents through the board's stage configuration; no
+standalone planner, builder, validator or release agent is bundled here. A card
+can be written straight into any column, not just backlog.
 
 ## Common Operations
 

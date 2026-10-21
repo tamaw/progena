@@ -11,7 +11,6 @@ progenitor/
 ├── docker/       # Container definitions for the main stack
 ├── docs/         # Project documentation
 ├── logs/         # Runtime logs
-├── scripts/      # Utility scripts
 ├── AGENTS.md
 ├── CHANGELOG.md
 ├── README.md
@@ -72,5 +71,9 @@ docker/
 ├── docker-compose.progenitor.yml
 ├── progenitor/Dockerfile
 ├── backend/Dockerfile
-└── frontend/Dockerfile
+├── frontend/Dockerfile
+├── claude/Dockerfile       # deployed ACP sidecar
+├── codex/Dockerfile        # standalone ACP runtime tooling
+├── ghcopilot/Dockerfile    # standalone ACP runtime tooling
+└── gha-runner/Dockerfile   # standalone GitHub Actions runner tooling
 ```

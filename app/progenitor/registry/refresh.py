@@ -25,34 +25,43 @@ async def _tcp_reachable(host: str, port: int, timeout: float) -> bool:
     return True
 
 
-async def discover_local_agents(
+async def discover_external_agents(
     *,
-    project_root: Path,
+    agent_repositories: tuple[Path, ...],
     llm_client: Any,
     registry: Any,
     state_manager: Any = None,
 ) -> dict[str, Any]:
-    """Run local agent discovery against app/agents."""
+    """Discover agents from explicitly configured external repository roots.
+
+    Each repository must expose its agents beneath ``app/agents``. An empty
+    configuration deliberately performs no source-tree discovery.
+    """
     try:
         from .discovery import discover_agents
 
-        agents_dir = project_root / "app" / "agents"
-        if not agents_dir.exists():
+        summaries = []
+        for repository in agent_repositories:
+            agents_dir = repository / "app" / "agents"
+            if not agents_dir.is_dir():
+                logger.warning(
+                    "Configured external agent repository has no app/agents: %s", repository
+                )
+                continue
+            summary = await discover_agents(
+                agents_dir=agents_dir,
+                llm_client=llm_client,
+                registry=registry,
+                state_manager=state_manager,
+            )
+            summaries.append(summary)
+            if summary.get("agents_registered", 0):
+                break
+        if not summaries:
             return {"agents_found": 0, "agents_registered": 0}
-        discovery = await discover_agents(
-            agents_dir=agents_dir,
-            llm_client=llm_client,
-            registry=registry,
-            state_manager=state_manager,
-        )
-        logger.info(
-            "Startup discovery: found=%d registered=%d",
-            discovery.get("agents_found", 0),
-            discovery.get("agents_registered", 0),
-        )
-        return dict(discovery)
+        return summaries[-1]
     except Exception as exc:
-        logger.debug("Startup local agent discovery skipped: %s", exc)
+        logger.debug("External agent discovery skipped: %s", exc)
         return {"error": str(exc)}
 
 

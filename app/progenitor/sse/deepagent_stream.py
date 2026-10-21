@@ -41,13 +41,11 @@ logger = logging.getLogger(__name__)
 # Per-node wall-time trace for the graph stream. Enable with
 # PROGENITOR_TRACE_TIMING=1; off by default so production logs are unaffected.
 # Emits one line per node boundary (via LangGraph "updates" mode), a first-
-# visible-token marker, and a turn-summary total. Use with
-# scripts/measure_first_token.py to localise where request->first-token time
-# is spent inside the DeepAgent loop.
+# visible-token marker, and a turn-summary total.
 TRACE_TIMING = os.getenv("PROGENITOR_TRACE_TIMING", "").lower() in {"1", "true", "yes"}
 if TRACE_TIMING:
     # Independent stderr handler so tracing survives callers that clamp the
-    # root logger (e.g. measure_first_token.py sets level=ERROR).
+    # root logger.
     _trace_handler = logging.StreamHandler()
     _trace_handler.setLevel(logging.INFO)
     logger.addHandler(_trace_handler)
