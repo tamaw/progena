@@ -23,7 +23,6 @@ eggs/
 lib/
 !app/frontend/src/lib/
 !app/frontend/src/lib/indexedDb.js
-app/frontend/src/lib/module-vendor/
 lib64/
 parts/
 sdist/

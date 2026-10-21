@@ -7,10 +7,8 @@
 // cross-library imports (OrbitControls -> three) stay bare and resolve through
 // the same map, so `three` is loaded exactly once.
 //
-// Bundles are generated, not committed: `npm run dev` and `npm run build` run
-// this first (predev/prebuild). Versions come from the pinned devDependencies,
-// so the output is reproducible. Run `npm run build:module-vendor` directly
-// after changing a pinned version to refresh the committed catalogue.
+// The bundles, libraries.js and the catalogue are committed. Run from
+// app/frontend after changing a pinned version: `npm run build:module-vendor`.
 import { build } from 'esbuild';
 import { existsSync } from 'node:fs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
