@@ -79,7 +79,7 @@ Agents communicate via HTTP:
 - `app/progenitor/tools/`: System tools (23+)
 - `app/progenitor/runtime/`: Loop execution
 - `app/progenitor/sse/`: HTTP+SSE stream envelope helpers
-- `app/agents/`: A2A agent implementations
+- Standalone A2A implementations: [progentior.agents](https://github.com/tamaw/progentior.agents), installed separately
 - `app/mcp/`: MCP tool implementations
 
 ## Configuration

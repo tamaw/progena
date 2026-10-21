@@ -39,7 +39,7 @@ timezone, or `--:--:--` when the time is unknown.
 | `-!- repo-manager [subagent] has joined #id8` | A delegation starts. `[subagent]`, `[async]`, or `[a2a]` says how. |
 | `-> *repo-manager* request` | The request handed to that agent. For `[subagent]` its own thinking and tool calls follow, then `has left`. `[async]` and `[a2a]` agents only reply later as `<@agent>` lines. |
 | `-!- repo-manager [subagent] has left #id8 [reason]` | The delegation ended; a `[reason]` at the end means it failed. |
-| `<Tama> greetings_agent: hi` | The user typed `@greetings_agent hi`, talking to that agent directly instead of to you. |
+| `<Tama> research-agent: hi` | The user typed `@research-agent hi`, talking to a registered agent directly instead of to you. |
 | `-!- nobody_agent: No such nick/channel` | A direct agent call failed; the reason follows the colon. |
 | `-!- progenitor has quit [cancelled by Tama]` | The user stopped that reply part-way. |
 | `--- Day changed Tue Oct 13 2026` | Later lines are on that day. |

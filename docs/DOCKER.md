@@ -14,6 +14,12 @@ Supporting Dockerfiles:
 - `docker/backend/Dockerfile`
 - `docker/frontend/Dockerfile`
 
+Standalone A2A agents are maintained in
+[progentior.agents](https://github.com/tamaw/progentior.agents). To enable discovery
+from that checkout, use a Compose override that mounts it read-only into the
+runtime and sets `PROGENITOR_AGENT_REPOSITORIES` to its in-container path. No
+external repository is required for Progenitor or its built-in object agents.
+
 ## Before starting
 
 Required runtime environment:
@@ -95,10 +101,10 @@ Notes:
   a host directory for them. `data/instructions/` is checked into git and
   `COPY`'d into the `progenitor` image (not `backend`'s); every boot syncs it
   into Postgres: Progenitor's own instructions (`progenitor/`) are added when
-  missing and otherwise kept, since they are edited on the Instructions page,
-  while every other group mirrors its file, because those A2A agents read
-  their own copy from disk. `data/skills/` is a read-only disk mount
-  (`/skills/`), not stored in Postgres.
+  missing and otherwise kept, since they are edited on the Instructions page.
+  Standalone A2A agents keep their own instruction files in the separate
+  [agents repository](https://github.com/tamaw/progentior.agents), not in this
+  image. `data/skills/` is a read-only disk mount (`/skills/`), not stored in Postgres.
 - `current_state`, `schedule`, `registry/agents`, `mcp`, `knowledge`, `health`,
   `kanban`, `attachments`, `sessions`, `prompts`, `skills`, and `memories` all
   persist through the shared LangGraph/Postgres document store with no

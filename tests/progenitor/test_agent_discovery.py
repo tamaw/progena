@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from app.progenitor.registry import discover_external_agents
 from app.progenitor.registry.discovery import AgentDiscovery, DiscoveredAgentSpec
 
 
@@ -185,7 +186,7 @@ class TestAgentDiscoveryIntegration:
             registry=mock_registry,
         )
         spec = DiscoveredAgentSpec(
-            name="builder_agent",
+            name="external_builder",
             description="External builder",
             entrypoint="agent.py",
             capabilities=["build_progenitor"],
@@ -226,3 +227,27 @@ class TestAgentDiscoveryIntegration:
         assert entry.url is None
         assert entry.port is None
         assert entry.agent_card_url is None
+
+    @pytest.mark.asyncio
+    async def test_discovers_agents_from_configured_external_repository(self, tmp_path):
+        repository = tmp_path / "external-agents"
+        agent_dir = repository / "app" / "agents" / "external_agent"
+        agent_dir.mkdir(parents=True)
+        (agent_dir / "agent.py").write_text('"""External agent."""\n', encoding="utf-8")
+        (agent_dir / "agent.yml").write_text("runtime:\n  port: 8111\n", encoding="utf-8")
+        registry = MagicMock()
+        registry.load = AsyncMock()
+        registry.get_agents.return_value = []
+        registry.register_agent = AsyncMock()
+
+        summary = await discover_external_agents(
+            agent_repositories=(repository,),
+            llm_client=AsyncMock(),
+            registry=registry,
+        )
+
+        assert summary["agents_found"] == 1
+        assert summary["agents_registered"] == 1
+        entry = registry.register_agent.await_args.args[0]
+        assert entry.entrypoint == "agent.py"
+        assert entry.url == "http://localhost:8111"

@@ -25,7 +25,7 @@ Install development dependencies in the activated virtual environment:
 ```bash
 source .venv/bin/activate
 pip install -e ".[dev]"
-timeout --kill-after=5s 300s pytest tests/backend tests/progenitor tests/agents tests/test_scheduler.py -q -rs
+timeout --kill-after=5s 300s pytest tests/backend tests/progenitor tests/test_scheduler.py -q -rs
 ```
 
 The `timeout` command above is the Linux whole-run limit. Pytest also has a
@@ -141,36 +141,34 @@ npm install
 npm run dev -- --port 5173
 ```
 
-## Start the Observe Agent (optional, A2A)
+## External A2A agents (optional)
 
-The Observe Agent is an A2A monitoring agent. It runs with plain Python (no Docker) and, like
-progenitor and the backend, keeps its own database on the same Postgres server. The database name
-defaults to `observe` and is configurable via `OBSERVE_DATABASE_NAME`; it is created automatically
-on startup if it does not exist (deriving its URL from `PROGENITOR_DATABASE_URL`).
+The standalone Builder, Builder Progenitor, Observe and Greetings agents live in
+[progentior.agents](https://github.com/tamaw/progentior.agents), not this checkout.
+Follow that repository's installation and service instructions. Progenitor's
+built-in object agents, including `repo-manager`, remain here.
 
-In a fourth shell:
-
-```bash
-source .venv/bin/activate
-export PYTHONPATH="$PWD"
-export PROGENITOR_DATABASE_URL="postgresql://progenitor:progenitor@127.0.0.1:15433/progenitor"
-export PORT=8080 AGENT_NAME=observe_agent A2A_PUBLIC_HOST=localhost
-python -m uvicorn app.agents.observe_agent.agent:app --host 0.0.0.0 --port 8080
-```
-
-Endpoint checks (the agent card and health respond without LLM credentials; executing a
-monitoring task additionally needs `AZURE_OPENAI_BASE_URL` / `AZURE_OPENAI_API_KEY`):
+To discover the separately installed agents, start their services and point the
+Progenitor runtime at the external checkout before starting it:
 
 ```bash
-curl -s http://localhost:8080/health
-curl -s http://localhost:8080/.well-known/agent-card.json | jq '{name, version, skills: [.skills[].id]}'
+export PROGENITOR_AGENT_REPOSITORIES="/absolute/path/to/progentior.agents"
 ```
 
-When the progenitor runtime is running, it auto-discovers this agent by scanning
-`app/agents/`, registers it in the Postgres-backed `registry` document, and
-exposes the result to the agent as `/config/agents.json` through the virtual
-filesystem. The backend then surfaces it on the Agents page under the
-**A2A agents** group. No `data/config/agents.json` file is required.
+On Linux, separate fallback repository roots with `:`; the first checkout that
+registers agents seeds an empty registry. Existing saved registry entries remain
+authoritative. For containerized Progenitor, mount the external checkout read-only
+and use its container-visible path in this variable.
+
+For browser integration tests that start a real Greetings Agent, install that
+repository's development environment and set:
+
+```bash
+export PROGENITOR_TEST_AGENTS_ROOT="/absolute/path/to/progentior.agents"
+```
+
+The browser fixture launches the agent with that checkout's `.venv`; it does not
+reuse or copy the standalone implementation into Progenitor.
 
 ## Quick checks
 

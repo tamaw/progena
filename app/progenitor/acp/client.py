@@ -5,9 +5,6 @@ ACP agent. It collects the streamed session updates (agent message text,
 thoughts, plans, and tool calls) emitted during a ``session/prompt``, routes
 form elicitations and plan approval requests through an input callback, and
 auto-approves ordinary tool permissions.
-
-Generalised from ``app/agents/builder_agent/runtime/copilot_acp.py``
-(``ProgenitorACPClient``); nothing here is Copilot-specific.
 """
 
 from __future__ import annotations

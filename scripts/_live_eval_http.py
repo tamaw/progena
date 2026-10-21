@@ -1,8 +1,8 @@
 """Shared HTTP + SSE helpers for the live evaluation scripts.
 
-Both ``evaluate_progenitor_live.py`` and ``evaluate_heartbeat_live.py`` talk to
-the Progenitor runtime's persistent HTTP server (chat over ``POST /v1/responses``,
-background events over ``GET /v1/events``) instead of the old TCP IPC socket.
+``evaluate_progenitor_live.py`` talks to the Progenitor runtime's persistent
+HTTP server (chat over ``POST /v1/responses``, background events over
+``GET /v1/events``) instead of the old TCP IPC socket.
 """
 
 from __future__ import annotations

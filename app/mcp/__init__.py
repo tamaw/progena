@@ -1,8 +1,7 @@
 """
 FastMCP Tools Package.
-
 This directory contains self-hosted FastMCP tools that can be used by:
-- A2A agents in app/agents/
+- local or external A2A agents
 - The Progenitor system itself
 - External MCP clients
 

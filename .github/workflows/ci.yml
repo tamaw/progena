@@ -6,9 +6,7 @@ on:
     # still runs after validation even when no push-based diff is available.
   push:
     paths-ignore:
-      - 'app/agents/**'
       - 'app/mcp/**'
-      - '.github/workflows/agents.yml'
       - '.github/workflows/mcp.yml'
 
 concurrency:
@@ -65,9 +63,6 @@ jobs:
           ruff check app/progenitor tests/progenitor tests/test_scheduler.py
 
       - name: Type-check (pyright)
-        # Covers all of app/, not just app/progenitor -- pyright reports zero
-        # errors across the tree, so the wider scope costs nothing and keeps
-        # app/backend and app/agents from drifting untyped.
         # --pythonpath keeps this identical to the pre-commit hook, so the
         # interpreter never depends on activation state.
         run: |

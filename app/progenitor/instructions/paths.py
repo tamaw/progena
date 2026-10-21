@@ -1,4 +1,4 @@
-"""Path resolution for the data directory and its bundled instructions."""
+"""Path resolution for the data directory and its checked-in instructions."""
 
 from __future__ import annotations
 
