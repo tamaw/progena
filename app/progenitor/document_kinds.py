@@ -39,6 +39,9 @@ REPO_KEY_PREFIX = "repo:"
 ALERT_KEY_PREFIX = "alert:"
 KNOWLEDGE_PAGE_KEY_PREFIX = "knowledge:"
 ACP_TASK_KEY_PREFIX = "acp_task:"
+MODULE_DOCUMENT_KEY_PREFIX = "module:"
+MODULE_DATA_KEY_PREFIX = "module_data:"
+MODULE_STATUS_KEY_PREFIX = "module_status:"
 
 # Internal-plumbing prefixes: real ``store`` key prefixes, centralized here to
 # avoid re-drift, but not registered as document types.
@@ -160,6 +163,7 @@ DOCUMENT_KINDS: tuple[DocumentKind, ...] = (
             title_field="title",
         ),
     ),
+    DocumentKind("Module", MODULE_DOCUMENT_KEY_PREFIX, search=None),
 )
 
 
