@@ -6,7 +6,6 @@ import asyncio
 import json
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from types import SimpleNamespace
 from typing import Annotated, Any, TypedDict
 
 import httpx
@@ -20,7 +19,8 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 from langgraph.store.memory import InMemoryStore
 
-from app.progenitor.config import RuntimeConfig
+from app.progenitor import provider_runtime
+from app.progenitor.config import LLMConfig, ProgenitorConfig, RuntimeConfig
 from app.progenitor.runtime.http_chat import RuntimeChatService
 from app.progenitor.runtime.queues import RuntimeQueues
 from app.progenitor.sse.deepagent_stream import DeepAgentSSEStream
@@ -147,11 +147,29 @@ class FakeLoopRunner:
     thread_id: str = "progenitor_main"
 
     def __post_init__(self) -> None:
-        self.config = SimpleNamespace(llm=SimpleNamespace(reasoning_enabled=False))
+        self.config = ProgenitorConfig(
+            llm=LLMConfig(provider_id="test-provider", reasoning_enabled=False)
+        )
         self.state: dict[str, Any] = {"thread_id": self.thread_id, "cycle_count": 0}
         self.state_manager = FakeStateManager()
         self.heartbeat_context = FakeHeartbeatContext(self.state_manager)
         self.queues = RuntimeQueues(RuntimeConfig())
+
+
+class _ProviderRepository:
+    """Isolated persisted-provider boundary for the real bridge test."""
+
+    def resolve(
+        self, provider_id: str | None = None, model_override: str | None = None
+    ) -> dict[str, Any]:
+        return {
+            "provider_id": provider_id or "test-provider",
+            "provider_kind": "foundry",
+            "base_url": "https://example.openai.azure.com/openai/v1",
+            "api_key": "test-key",
+            "model_default": model_override or "gpt-4.1",
+            "revision": 1,
+        }
 
 
 @dataclass
@@ -868,8 +886,12 @@ class _SlowStreamingModel(GenericFakeChatModel):
             yield chunk
 
 
-async def test_cancelled_turn_keeps_partial_reply_and_next_turn_continues() -> None:
+async def test_cancelled_turn_keeps_partial_reply_and_next_turn_continues(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Real create_agent graph + real SSE bridge: Stop keeps what was streamed."""
+    repository = _ProviderRepository()
+    monkeypatch.setattr(provider_runtime, "get_provider_repository", lambda: repository)
     _MODEL_INPUTS.clear()
     model = _SlowStreamingModel(
         messages=iter(

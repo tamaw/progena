@@ -23,10 +23,12 @@ import './styles/instructions.css';
 import './styles/chrome-frame.css';
 import './styles/detail-header.css';
 import './styles/forms.css';
+import './styles/insights.css';
 
 const ConversationPage = lazy(() => import('./pages/ConversationPage'));
 const InboxPage = lazy(() => import('./pages/InboxPage'));
 const DashboardPage = lazy(() => import('./pages/DashboardPage'));
+const InsightsPage = lazy(() => import('./pages/InsightsPage'));
 const TasksPage = lazy(() => import('./pages/TasksPage'));
 const KanbanPage = lazy(() => import('./pages/KanbanPage'));
 const LogsPage = lazy(() => import('./pages/LogsPage'));
@@ -44,6 +46,7 @@ const ChannelsPage = lazy(() => import('./pages/ChannelsPage'));
 const WorkflowsPage = lazy(() => import('./pages/WorkflowsPage'));
 const AgentsPage = lazy(() => import('./pages/AgentsPage'));
 const RoutinesPage = lazy(() => import('./pages/RoutinesPage'));
+const ModulesPage = lazy(() => import('./pages/ModulesPage'));
 // Keep the import behind the compile-time flag so the catalogue is absent from production assets.
 const DesignLibraryPage = import.meta.env.DEV
   ? lazy(() => import('./pages/DesignLibraryPage'))
@@ -113,6 +116,7 @@ function WorkspaceScopedApp() {
                     <Route path="/chat/:threadId?/:titleSlug?" element={<DeferredRoute Page={ConversationPage} fallback="Loading chat..." />} />
                     <Route path="/inbox/:messageId?/:titleSlug?" element={<DeferredRoute Page={InboxPage} fallback="Loading inbox..." />} />
                     <Route path="/dashboard" element={<DeferredRoute Page={DashboardPage} fallback="Loading dashboard..." />} />
+                    <Route path="/insights" element={<DeferredRoute Page={InsightsPage} fallback="Loading insights..." />} />
                     <Route path="/models" element={<DeferredRoute Page={ModelsPage} fallback="Loading models..." />} />
                     <Route path="/profiles/:profileName?/:titleSlug?" element={<DeferredRoute Page={ProfilesPage} fallback="Loading profiles..." />} />
                     <Route path="/channels" element={<DeferredRoute Page={ChannelsPage} fallback="Loading channels..." />} />
@@ -132,6 +136,7 @@ function WorkspaceScopedApp() {
                     <Route path="/repositories" element={<DeferredRoute Page={RepositoriesPage} fallback="Loading repositories..." />} />
                     <Route path="/knowledge/:baseId?/:titleSlug?" element={<DeferredRoute Page={KnowledgePage} fallback="Loading knowledge..." />} />
                     <Route path="/workflows/:workflowId?/:slug?" element={<DeferredRoute Page={WorkflowsPage} fallback="Loading workflows..." />} />
+                    <Route path="/modules/:name?" element={<DeferredRoute Page={ModulesPage} fallback="Loading modules..." />} />
                     {localDesignLibraryEnabled && (
                       <Route path="/design" element={<DeferredRoute Page={DesignLibraryPage} fallback="Loading design library..." />} />
                     )}

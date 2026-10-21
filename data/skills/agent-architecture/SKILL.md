@@ -37,6 +37,14 @@ The agent uses virtual paths, validated on write where applicable:
 
 Use `read_file`, `write_file`, and `edit_file` against these virtual paths. The backend validates supported writes and publishes the resulting state change; paths are not local filesystem locations.
 
+## Configuration
+Model connections are ordinary database-backed application settings, managed in **Settings → Providers**:
+- Foundry and OpenCode Go use the Responses API; Go accepts only the supported Responses model IDs.
+- `/config/profile.json` selects a `provider_id` and `deployment`, or inherits the default connection when `provider_id` is absent. Never put endpoints or API keys in agent state.
+- Credentials use encrypted database storage (`PROGENITOR_PROVIDER_ENCRYPTION_KEY` shared by backend/runtime) or an explicit provider API-key environment reference.
+- `AZURE_OPENAI_BASE_URL` and `PROGENITOR_MODEL_DEFAULT` are imported once for existing installations, not ongoing runtime overrides.
+- Saved provider changes apply on the next turn; active turns retain their connection snapshot.
+
 ## Registered Agents
 
 - **Object agents** are local conversational subagents defined by manifests. User-owned manifests under `/agents/user/<name>/SYSTEM.md` are writable; bundled and plugin-provided manifests are read-only.

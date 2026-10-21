@@ -9,6 +9,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+pytestmark = pytest.mark.usefixtures("model_provider")
+
 
 @pytest.mark.asyncio
 async def test_new_conversation_tool_is_exposed_and_mutates_loop_state() -> None:

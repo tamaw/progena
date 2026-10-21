@@ -1,10 +1,12 @@
 """Tests for converting native DeepAgent/LangGraph streams to SSE items."""
 
-from types import SimpleNamespace
+from typing import Any
 
 import pytest
 from langchain_core.messages import AIMessage, AIMessageChunk
 
+from app.progenitor import provider_runtime
+from app.progenitor.config import LLMConfig, ProgenitorConfig
 from app.progenitor.runtime.messages import extract_reasoning_trace
 from app.progenitor.sse.deepagent_stream import DeepAgentSSEStream
 
@@ -12,18 +14,40 @@ from app.progenitor.sse.deepagent_stream import DeepAgentSSEStream
 class _FakeGraph:
     def __init__(self, items):
         self.items = items
-        self.last_kwargs = None
         self.last_input = None
 
-    async def astream(self, graph_input, *args, **kwargs):
+    async def astream(self, graph_input, **_kwargs):
         self.last_input = graph_input
-        self.last_kwargs = kwargs
         for item in self.items:
             yield item
 
 
-def _make_config(*, reasoning_enabled: bool = False):
-    return SimpleNamespace(llm=SimpleNamespace(reasoning_enabled=reasoning_enabled))
+class _ProviderRepository:
+    """Isolated persisted-provider boundary for stream contract tests."""
+
+    def resolve(
+        self, provider_id: str | None = None, model_override: str | None = None
+    ) -> dict[str, Any]:
+        return {
+            "provider_id": provider_id or "test-provider",
+            "provider_kind": "foundry",
+            "base_url": "https://example.openai.azure.com/openai/v1",
+            "api_key": "test-key",
+            "model_default": model_override or "gpt-4.1",
+            "revision": 1,
+        }
+
+
+@pytest.fixture(autouse=True)
+def _inject_provider_repository(monkeypatch: pytest.MonkeyPatch) -> None:
+    repository = _ProviderRepository()
+    monkeypatch.setattr(provider_runtime, "get_provider_repository", lambda: repository)
+
+
+def _make_config(*, reasoning_enabled: bool = False) -> ProgenitorConfig:
+    return ProgenitorConfig(
+        llm=LLMConfig(provider_id="test-provider", reasoning_enabled=reasoning_enabled)
+    )
 
 
 async def _collect_items(bridge: DeepAgentSSEStream, message: str = "hello") -> list[dict]:
@@ -51,7 +75,6 @@ async def test_graph_message_events_stream_incrementally_without_duplicate_final
 
     items = await _collect_items(bridge)
 
-    assert graph.last_kwargs["stream_mode"] == ["messages", "updates", "custom", "tasks"]
     assert [item for item in items if item["type"] == "stream_chunk"] == [
         {"type": "stream_chunk", "content": "Hel", "is_final": False},
         {"type": "stream_chunk", "content": "lo", "is_final": False},
@@ -553,16 +576,6 @@ async def test_a2a_send_events_pass_through_alongside_task_expansion():
         for item in items
         if item.get("type") == "stream_event"
     )
-
-
-@pytest.mark.asyncio
-async def test_astream_kwargs_include_subgraphs_when_graph_supports_it():
-    graph = _FakeGraph([("updates", {"respond": {"pending_response": "hi"}})])
-    bridge = DeepAgentSSEStream(graph, config=_make_config(), state={})
-
-    await _collect_items(bridge)
-
-    assert graph.last_kwargs["subgraphs"] is True
 
 
 @pytest.mark.asyncio

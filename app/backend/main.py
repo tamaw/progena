@@ -32,6 +32,11 @@ from fastapi.sse import EventSourceResponse, format_sse_event
 from starlette.middleware.gzip import GZipMiddleware
 
 from app.progenitor.document_kinds import SESSION_KEY_PREFIX
+from app.progenitor.providers import (
+    configure_provider_repository,
+    provider_database_url,
+    shutdown_provider_repository,
+)
 from app.progenitor.sessions.titles import ATTACHMENT_CONTEXT_MARKER
 
 from .agent_store import configure_agent_store
@@ -58,6 +63,7 @@ from .models import (
     ResponseRequest,
     StreamingResponseRequest,
 )
+from .module_routes import router as modules_router
 from .plugin_routes import router as plugins_router
 from .preferences_routes import router as preferences_router
 from .repo_routes import router as repos_router
@@ -783,6 +789,21 @@ async def lifespan(app: FastAPI):
     seed_document_types(document_store)
     attachment_blob_store = configure_attachment_blob_store(config.database_url)
 
+    # Provider credentials and connection metadata are backend-owned settings,
+    # deliberately separate from the runtime's LangGraph document store.
+    provider_repository = None
+    try:
+        if config.database_url:
+            provider_repository = configure_provider_repository(
+                provider_database_url(config.database_url)
+            )
+    except Exception:  # noqa: BLE001 - Settings routes report provider DB availability
+        logger.exception("Failed to configure provider repository")
+
+    async def close_provider_repository() -> None:
+        if provider_repository is not None:
+            shutdown_provider_repository()
+
     async def close_document_store() -> None:
         document_store.close()
 
@@ -825,6 +846,12 @@ async def lifespan(app: FastAPI):
     graceful_shutdown.register_callback(
         "close_document_store",
         close_document_store,
+        priority=45,
+        timeout=5.0,
+    )
+    graceful_shutdown.register_callback(
+        "close_provider_repository",
+        close_provider_repository,
         priority=45,
         timeout=5.0,
     )
@@ -1041,6 +1068,7 @@ app.include_router(marketplaces_router)
 app.include_router(repos_router)
 app.include_router(plugins_router)
 app.include_router(preferences_router)
+app.include_router(modules_router)
 app.include_router(attachments_router)
 
 # Note: This backend is API-only. Frontend is served separately via npm/vite.

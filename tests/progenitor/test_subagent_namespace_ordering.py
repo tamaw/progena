@@ -17,7 +17,7 @@ here is a real signal worth investigating, not noise to suppress.
 
 from __future__ import annotations
 
-from types import SimpleNamespace
+from typing import Any
 
 import pytest
 from deepagents import create_deep_agent
@@ -28,7 +28,9 @@ from langchain_core.language_models.fake_chat_models import (
 )
 from langchain_core.messages import AIMessage
 
+from app.progenitor import provider_runtime
 from app.progenitor.agent.middleware import AuditLoggingMiddleware
+from app.progenitor.config import LLMConfig, ProgenitorConfig
 from app.progenitor.sse.deepagent_stream import DeepAgentSSEStream
 
 REPEAT_COUNT = 10
@@ -59,8 +61,30 @@ class _StreamingFakeModel(GenericFakeChatModel):
         return self
 
 
-def _make_config() -> SimpleNamespace:
-    return SimpleNamespace(llm=SimpleNamespace(reasoning_enabled=False))
+class _ProviderRepository:
+    """Isolated persisted-provider boundary for the real graph contract."""
+
+    def resolve(
+        self, provider_id: str | None = None, model_override: str | None = None
+    ) -> dict[str, Any]:
+        return {
+            "provider_id": provider_id or "test-provider",
+            "provider_kind": "foundry",
+            "base_url": "https://example.openai.azure.com/openai/v1",
+            "api_key": "test-key",
+            "model_default": model_override or "gpt-4.1",
+            "revision": 1,
+        }
+
+
+@pytest.fixture(autouse=True)
+def _inject_provider_repository(monkeypatch: pytest.MonkeyPatch) -> None:
+    repository = _ProviderRepository()
+    monkeypatch.setattr(provider_runtime, "get_provider_repository", lambda: repository)
+
+
+def _make_config() -> ProgenitorConfig:
+    return ProgenitorConfig(llm=LLMConfig(provider_id="test-provider", reasoning_enabled=False))
 
 
 def _build_parallel_subagent_graph():

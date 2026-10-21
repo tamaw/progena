@@ -1,9 +1,11 @@
 import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 const databaseUrl = process.env.PROGENITOR_DATABASE_URL || 'postgresql://progenitor:progenitor@127.0.0.1:15433/progenitor';
+const providerDatabaseUrl = new URL(databaseUrl);
+providerDatabaseUrl.pathname = `/${process.env.BACKEND_DATABASE_NAME || 'backend'}`;
 const quote = (value) => `'${value.replaceAll("'", "''")}'`;
-function sql(command) {
-  return execFileSync('psql', [databaseUrl, '-v', 'ON_ERROR_STOP=1', '-tAq'], { input: command, encoding: 'utf8' }).trim();
+function sql(command, url = databaseUrl) {
+  return execFileSync('psql', [url, '-v', 'ON_ERROR_STOP=1', '-tAq'], { input: command, encoding: 'utf8' }).trim();
 }
 export function seedModelProfileRoutine(kind, execution = 'wait') {
   const suffix = randomUUID().replaceAll('-', '');
@@ -12,8 +14,15 @@ export function seedModelProfileRoutine(kind, execution = 'wait') {
   const profile = `e2e_profile_${suffix}`;
   const existing = sql("SELECT value->'payload' FROM store WHERE prefix='progenitor.state' AND key='profile';");
   const profiles = existing ? JSON.parse(existing) : {};
-  const deployment = profiles.general?.deployment || Object.values(profiles)[0]?.deployment || 'gpt-chat-latest';
-  const selected = { [profile]: { provider: 'azure_openai', deployment } };
+  const baseline = profiles.general?.provider_id
+    ? profiles.general
+    : Object.values(profiles).find((candidate) => candidate?.provider_id);
+  const providerId = baseline?.provider_id
+    || sql('SELECT id FROM provider_connection WHERE is_default LIMIT 1;', providerDatabaseUrl.href);
+  const deployment = baseline?.deployment
+    || sql(`SELECT default_model FROM provider_connection WHERE id = ${quote(providerId)};`, providerDatabaseUrl.href);
+  if (!providerId || !deployment) throw new Error('A persisted default provider is required for model profile E2E tests.');
+  const selected = { [profile]: { provider_id: providerId, deployment } };
   sql(`INSERT INTO store(prefix,key,value,created_at,updated_at) VALUES ('progenitor.state','profile',${quote(JSON.stringify({ payload: selected }))}::jsonb,now(),now()) ON CONFLICT(prefix,key) DO UPDATE SET value=jsonb_set(store.value,'{payload}',COALESCE(store.value->'payload','{}'::jsonb)||(EXCLUDED.value->'payload')),updated_at=now();`);
   const config = kind === 'classify'
     ? { rubric_prompt: 'Return answer PROFILE_DONE.', response_schema: { type: 'object', properties: { answer: { type: 'string', enum: ['PROFILE_DONE'] } }, required: ['answer'], additionalProperties: false } }

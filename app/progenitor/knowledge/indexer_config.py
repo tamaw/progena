@@ -28,15 +28,17 @@ NOT_CONFIGURED_MESSAGE = (
 
 @dataclass(frozen=True)
 class EmbeddingTarget:
-    """The resolved embedding model the index is built with."""
+    """The resolved embedding model and Foundry provider for the index."""
 
     profile: str
     deployment: str
     dimensions: int
+    provider_id: str = ""
 
     def as_dict(self) -> dict[str, Any]:
         return {
             "profile": self.profile,
+            "provider_id": self.provider_id,
             "deployment": self.deployment,
             "dimensions": self.dimensions,
         }
@@ -88,9 +90,15 @@ def resolve_embedding_target(
     name = str(data.get("profile") or "").strip()
     profile = (profiles or {}).get(name) if name else None
     deployment = str(profile.get("deployment") or "").strip() if isinstance(profile, dict) else ""
-    if not deployment:
+    provider_id = str(profile.get("provider_id") or "").strip() if isinstance(profile, dict) else ""
+    if not deployment or not provider_id:
         raise ValueError(NOT_CONFIGURED_MESSAGE)
-    return EmbeddingTarget(name, deployment, int(data.get("dimensions") or DEFAULT_DIMENSIONS))
+    return EmbeddingTarget(
+        name,
+        deployment,
+        int(data.get("dimensions") or DEFAULT_DIMENSIONS),
+        provider_id,
+    )
 
 
 def min_similarity(settings: Mapping[str, Any] | None) -> float:

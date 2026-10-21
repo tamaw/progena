@@ -53,25 +53,25 @@ describe('pluginRowStatus', () => {
 });
 
 describe('pluginDetailStatus', () => {
-  it('is muted "Not installed" with a hollow ring for no install record', () => {
-    expect(pluginDetailStatus(null)).toEqual({ tone: 'muted', label: 'Not installed', ring: true });
+  it('is an idle (hollow ring) "Not installed" for no install record', () => {
+    expect(pluginDetailStatus(null)).toEqual({ tone: 'idle', label: 'Not installed' });
   });
 
   it('is error "Install failed" for a failed install', () => {
-    expect(pluginDetailStatus({ status: 'error' })).toEqual({ tone: 'error', label: 'Install failed', ring: false });
+    expect(pluginDetailStatus({ status: 'error' })).toEqual({ tone: 'error', label: 'Install failed' });
   });
 
   it('is warning "Installing…" while pending', () => {
-    expect(pluginDetailStatus({ status: 'pending' })).toEqual({ tone: 'warning', label: 'Installing…', ring: false });
+    expect(pluginDetailStatus({ status: 'pending' })).toEqual({ tone: 'warning', label: 'Installing…' });
   });
 
   it('is ok "Update available" when an upstream change was detected', () => {
     expect(pluginDetailStatus({ status: 'installed', available_version: '2.0.0' }))
-      .toEqual({ tone: 'ok', label: 'Update available', ring: false });
+      .toEqual({ tone: 'ok', label: 'Update available' });
   });
 
   it('is muted "Installed" with a solid (non-ring) dot when up to date', () => {
-    expect(pluginDetailStatus({ status: 'installed' })).toEqual({ tone: 'muted', label: 'Installed', ring: false });
+    expect(pluginDetailStatus({ status: 'installed' })).toEqual({ tone: 'muted', label: 'Installed' });
   });
 
   it('never contradicts pluginRowStatus\'s precedence (error > pending > update > steady)', () => {
@@ -87,7 +87,7 @@ describe('pluginDetailStatus', () => {
       expect(pluginRowStatus(entry)).toBe(expectedRowStatuses[index]);
       const detail = pluginDetailStatus(entry);
       // A hollow ring in the header should only ever occur for "not installed".
-      expect(detail.ring).toBe(expectedRowStatuses[index] === 'ring');
+      expect(detail.tone === 'idle').toBe(expectedRowStatuses[index] === 'ring');
     });
   });
 });

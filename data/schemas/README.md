@@ -29,7 +29,8 @@ the native `write`/`edit` file tools.
 | `preferences.schema.v1.json` | The whole `preferences` document | object | `managing-preferences` |
 | `definition.workflow.schema.v1.json` | A whole `workflow:<id>` document | object | `managing-workflows` |
 | `workflow_run.schema.v1.json` | A whole `workflow_run:<id>` document | object | `workflow_run` document type |
-| `content_document.schema.v1.json` | A whole text document (`agent:`/`skill:`/`memory:`/`instruction:`/`kanban_task_content:`) | object | content document types |
+| `content_document.schema.v1.json` | A whole text document (`agent:`/`skill:`/`memory:`/`instruction:`/`kanban_task_content:`/`module:`) | object | content document types |
+| `module_manifest.schema.v1.json` | One module's required `manifest.json` | object | `building-modules` |
 | `acp_task.schema.v1.json` | A whole `acp_task:<id>` document | object | ACP supervisor, workflows |
 | `alert.schema.v1.json` | A whole `alert:<id>` document | object | alert validation, `raising-alerts` |
 | `agent-manifest.schema.v1.json` | Native object-agent YAML front matter | object | agent manifest validation, `managing-agents` |

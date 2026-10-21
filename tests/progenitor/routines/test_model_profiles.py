@@ -7,10 +7,39 @@ import pytest
 from langchain_core.messages import AIMessage
 from langchain_core.runnables import RunnableLambda
 
+from app.progenitor import provider_runtime
 from app.progenitor.routines.factory import compile_routine_graph
 from app.progenitor.routines.graph import validate_routine_graph_payload
 from app.progenitor.state.model_profiles import resolve_model_profile
 from tests.progenitor.routines.test_factory import FakeModel, FakeStructuredModel
+
+
+class _ProviderRepository:
+    def resolve(self, provider_id=None, model_override=None):
+        return {
+            "provider_id": provider_id or "foundry-1",
+            "provider_kind": "foundry",
+            "base_url": "https://example.openai.azure.com/openai/v1/responses",
+            "api_key": "test-key",
+            "model_default": model_override or "default",
+            "revision": 1,
+        }
+
+
+class _ConfigurableFakeModel(FakeModel):
+    async def ainvoke(self, messages, config=None, **kwargs):
+        return await super().ainvoke(messages)
+
+
+class _ConfigurableFakeStructuredModel(FakeStructuredModel):
+    def with_structured_output(self, *args, **kwargs):
+        target = super().with_structured_output(*args, **kwargs)
+
+        class _ConfigurableStructuredRunnable:
+            async def ainvoke(self, messages, config=None, **invoke_kwargs):
+                return await target.ainvoke(messages)
+
+        return _ConfigurableStructuredRunnable()
 
 
 def graph_for(kind, profile="selected", execution="wait"):
@@ -44,21 +73,22 @@ def graph_for(kind, profile="selected", execution="wait"):
 @pytest.mark.parametrize("kind", ["prompt", "classify"])
 async def test_named_profile_is_live_even_when_compiled_graph_is_reused(kind, monkeypatch):
     profile = {
-        "selected": {"provider": "azure_openai", "deployment": "first", "reasoning_enabled": False}
+        "selected": {"provider_id": "foundry-1", "deployment": "first", "reasoning_enabled": False}
     }
     state = SimpleNamespace(get_model_profiles_config=AsyncMock(side_effect=lambda: profile))
     deployments = []
 
-    def create(config):
+    def create(config, *, profile_name=None):
         deployments.append(config.model_default)
         assert config.reasoning_enabled is False
         return (
-            FakeStructuredModel([{"answer": config.model_default}])
+            _ConfigurableFakeStructuredModel([{"answer": config.model_default}])
             if kind == "classify"
-            else FakeModel([config.model_default])
+            else _ConfigurableFakeModel([config.model_default])
         )
 
     monkeypatch.setattr("app.progenitor.agent.adapters.create_langchain_model", create)
+    monkeypatch.setattr(provider_runtime, "get_provider_repository", lambda: _ProviderRepository())
     parent = FakeModel([])
     compiled = compile_routine_graph(
         graph_for(kind),

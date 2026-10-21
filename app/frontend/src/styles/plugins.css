@@ -65,17 +65,6 @@
   min-width: 0;
 }
 
-/* Same hollow-ring override Inbox uses for its "read" status dot
-   (.inbox-detail__status--read in detail-header.css) -- only "not installed"
-   gets a hollow dot; "installed, up to date" gets a solid muted dot instead
-   (tone="muted" already gives that by default, no override needed). Green
-   stays reserved for "update available", matching the row dots. */
-.plugins-detail__status--ring .detail-status__dot {
-  background: transparent;
-  border: 1.5px solid var(--color-text-muted);
-  box-sizing: border-box;
-}
-
 /* The available-update version sits right next to the status dot in full
    primary text (not the muted secondary tone every other meta chip uses)
    so it reads as the one actionable, eye-catching piece of information. */

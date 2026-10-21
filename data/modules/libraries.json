@@ -1,0 +1,23 @@
+{
+  "libraries": [
+    {
+      "id": "three",
+      "version": "0.186.1",
+      "description": "3D rendering (WebGL): scenes, cameras, meshes, lights, materials.",
+      "specifiers": [
+        "three",
+        "three/addons/controls/OrbitControls.js"
+      ],
+      "usage": "import * as THREE from 'three'; import { OrbitControls } from 'three/addons/controls/OrbitControls.js';"
+    },
+    {
+      "id": "d3",
+      "version": "7.9.0",
+      "description": "Data-driven SVG/canvas: scales, axes, shapes, force graphs, hierarchies, transitions.",
+      "specifiers": [
+        "d3"
+      ],
+      "usage": "import * as d3 from 'd3';"
+    }
+  ]
+}

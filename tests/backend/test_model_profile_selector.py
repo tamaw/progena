@@ -16,8 +16,17 @@ from app.backend.document_store import PROGENITOR_STATE_PREFIX, InMemoryDocument
 from app.backend.model_profile_routes import create_model_profile_router
 
 
+class FakeProviderRepository:
+    def __init__(self, providers: list[dict[str, Any]]) -> None:
+        self._providers = providers
+
+    def list_public(self) -> list[dict[str, Any]]:
+        return self._providers
+
+
 def _make_app(
     store: InMemoryDocumentStore,
+    provider_repository: FakeProviderRepository | None = None,
 ) -> tuple[FastAPI, list[tuple[str, dict[str, Any], dict[str, Any]]]]:
     events: list[tuple[str, dict[str, Any], dict[str, Any]]] = []
 
@@ -32,24 +41,35 @@ def _make_app(
         request.state.request_id = request.headers.get("X-Request-ID", "profile-test")
         return await call_next(request)
 
-    app.include_router(create_model_profile_router(lambda: store, broadcast))
+    app.include_router(
+        create_model_profile_router(
+            lambda: store,
+            broadcast,
+            (lambda: provider_repository) if provider_repository is not None else None,
+        )
+    )
     return app, events
 
 
 class TestPublicLeakageGuard:
-    def test_private_fields_are_not_exposed(self):
+    def test_canonical_fields_are_exposed(self):
         store = InMemoryDocumentStore()
         store.save_document(
             PROGENITOR_STATE_PREFIX,
             "profile",
             {
                 "general": {
-                    "provider": "azure_openai",
+                    "provider_id": "foundry-1",
                     "deployment": "greeting",
-                    "api_key": "must-not-be-exposed",
                     "reasoning_enabled": True,
                     "reasoning_effort": "medium",
                     "reasoning_summary": "concise",
+                    "pricing": {
+                        "currency": "USD",
+                        "input_per_million": "0.25",
+                        "cached_input_per_million": "0.03",
+                        "output_per_million": "2.00",
+                    },
                 }
             },
         )
@@ -63,24 +83,29 @@ class TestPublicLeakageGuard:
         assert len(profiles) == 1
         public = profiles[0]
         assert public["name"] == "general"
-        assert public["provider"] == "azure_openai"
+        assert public["provider_id"] == "foundry-1"
         assert public["deployment"] == "greeting"
         assert public["reasoning_enabled"] is True
         assert public["reasoning_effort"] == "medium"
         assert public["reasoning_summary"] == "concise"
         assert "api_key" not in public
+        assert public["pricing"] == {
+            "currency": "USD",
+            "input_per_million": "0.25",
+            "cached_input_per_million": "0.03",
+            "output_per_million": "2.00",
+        }
 
 
 class TestGetAcknowledgement:
     @pytest.mark.parametrize(
         "payload",
         [
-            None,
             "not-a-dict",
-            {"invalid": {"provider": "wrong", "deployment": "greeting"}},
+            {"invalid": {"provider_id": "", "deployment": "greeting"}},
             {
                 "general": {
-                    "provider": "azure_openai",
+                    "provider_id": "foundry-1",
                     "deployment": "greeting",
                     "reasoning_summary": {"nested": "must-not-leak"},
                 }
@@ -97,6 +122,65 @@ class TestGetAcknowledgement:
         assert events == []
         assert "must-not-leak" not in response.text
 
+    def test_get_allows_an_empty_profile_catalog(self):
+        app, events = _make_app(InMemoryDocumentStore())
+        with TestClient(app) as client:
+            response = client.get("/model-profiles")
+        assert response.status_code == 202
+        assert events[-1][1] == {"profiles": []}
+
+    def test_get_migrates_legacy_azure_profile_to_default_foundry(self):
+        store = InMemoryDocumentStore()
+        store.save_document(
+            PROGENITOR_STATE_PREFIX,
+            "profile",
+            {"general": {"provider": "azure_openai", "deployment": "legacy"}},
+        )
+        repository = FakeProviderRepository(
+            [{"id": "foundry-1", "kind": "foundry", "is_default": True}]
+        )
+        app, events = _make_app(store, repository)
+        with TestClient(app) as client:
+            response = client.get("/model-profiles")
+        assert response.status_code == 202
+        assert store.get_document(PROGENITOR_STATE_PREFIX, "profile").payload == {
+            "general": {"provider_id": "foundry-1", "deployment": "legacy"}
+        }
+        assert events[-1][1]["profiles"][0]["provider_id"] == "foundry-1"
+
+    def test_get_migration_removes_legacy_connection_fields(self):
+        store = InMemoryDocumentStore()
+        store.save_document(
+            PROGENITOR_STATE_PREFIX,
+            "profile",
+            {
+                "general": {
+                    "provider": "azure_openai",
+                    "deployment": "legacy",
+                    "api_key": "previously-valid-secret",
+                    "endpoint": "https://old-resource.openai.azure.com",
+                    "reasoning_effort": "high",
+                }
+            },
+        )
+        repository = FakeProviderRepository(
+            [{"id": "foundry-1", "kind": "foundry", "is_default": True}]
+        )
+        app, events = _make_app(store, repository)
+
+        with TestClient(app) as client:
+            response = client.get("/model-profiles")
+
+        assert response.status_code == 202
+        assert store.get_document(PROGENITOR_STATE_PREFIX, "profile").payload == {
+            "general": {
+                "provider_id": "foundry-1",
+                "deployment": "legacy",
+                "reasoning_effort": "high",
+            }
+        }
+        assert events[-1][1]["profiles"][0]["reasoning_effort"] == "high"
+
 
 class TestPatchEdits:
     def test_patch_updates_deployment(self):
@@ -106,9 +190,8 @@ class TestPatchEdits:
             "profile",
             {
                 "general": {
-                    "provider": "azure_openai",
+                    "provider_id": "foundry-1",
                     "deployment": "old",
-                    "api_key": "secret",
                 }
             },
         )
@@ -121,10 +204,8 @@ class TestPatchEdits:
         assert events[-1][0] == "profiles.snapshot"
         profiles = events[-1][1]["profiles"]
         assert profiles[0]["deployment"] == "new"
-        # Store preserved private fields
         saved = store.get_document(PROGENITOR_STATE_PREFIX, "profile").payload
         assert saved["general"]["deployment"] == "new"
-        assert saved["general"]["api_key"] == "secret"
 
     def test_patch_preserves_sibling_profiles(self):
         store = InMemoryDocumentStore()
@@ -132,8 +213,8 @@ class TestPatchEdits:
             PROGENITOR_STATE_PREFIX,
             "profile",
             {
-                "general": {"provider": "azure_openai", "deployment": "general-deployment"},
-                "review": {"provider": "azure_openai", "deployment": "review-deployment"},
+                "general": {"provider_id": "foundry-1", "deployment": "general-deployment"},
+                "review": {"provider_id": "foundry-1", "deployment": "review-deployment"},
             },
         )
         app, events = _make_app(store)
@@ -151,7 +232,7 @@ class TestPatchEdits:
             "profile",
             {
                 "general": {
-                    "provider": "azure_openai",
+                    "provider_id": "foundry-1",
                     "deployment": "greeting",
                 }
             },
@@ -190,12 +271,67 @@ class TestPatchEdits:
         assert "reasoning_effort" not in saved["general"]
         assert "reasoning_summary" not in saved["general"]
 
+    def test_patch_persists_pricing_and_null_removes_it(self):
+        store = InMemoryDocumentStore()
+        store.save_document(
+            PROGENITOR_STATE_PREFIX,
+            "profile",
+            {"general": {"provider_id": "foundry-1", "deployment": "greeting"}},
+        )
+        app, events = _make_app(store)
+        pricing = {
+            "currency": "USD",
+            "input_per_million": "0",
+            "cached_input_per_million": "0.00",
+            "output_per_million": "0",
+        }
+        with TestClient(app) as client:
+            saved = client.patch("/model-profiles/general", json={"pricing": pricing})
+            removed = client.patch("/model-profiles/general", json={"pricing": None})
+
+        assert saved.status_code == 202
+        assert events[-2][1]["profiles"][0]["pricing"] == pricing
+        assert removed.status_code == 202
+        assert (
+            "pricing"
+            not in store.get_document(PROGENITOR_STATE_PREFIX, "profile").payload["general"]
+        )
+
+    @pytest.mark.parametrize("rate", ["NaN", "Infinity", "-0.01"])
+    def test_patch_rejects_nonfinite_or_negative_pricing(self, rate):
+        store = InMemoryDocumentStore()
+        store.save_document(
+            PROGENITOR_STATE_PREFIX,
+            "profile",
+            {"general": {"provider_id": "foundry-1", "deployment": "greeting"}},
+        )
+        app, events = _make_app(store)
+        with TestClient(app) as client:
+            response = client.patch(
+                "/model-profiles/general",
+                json={
+                    "pricing": {
+                        "currency": "USD",
+                        "input_per_million": rate,
+                        "cached_input_per_million": "0",
+                        "output_per_million": "1",
+                    }
+                },
+            )
+
+        assert response.status_code == 422
+        assert events == []
+        assert (
+            "pricing"
+            not in store.get_document(PROGENITOR_STATE_PREFIX, "profile").payload["general"]
+        )
+
     def test_patch_missing_profile_returns_404(self):
         store = InMemoryDocumentStore()
         store.save_document(
             PROGENITOR_STATE_PREFIX,
             "profile",
-            {"general": {"provider": "azure_openai", "deployment": "greeting"}},
+            {"general": {"provider_id": "foundry-1", "deployment": "greeting"}},
         )
         app, _ = _make_app(store)
         with TestClient(app) as client:
@@ -207,7 +343,7 @@ class TestPatchEdits:
         store.save_document(
             PROGENITOR_STATE_PREFIX,
             "profile",
-            {"general": {"provider": "azure_openai", "deployment": "greeting"}},
+            {"general": {"provider_id": "foundry-1", "deployment": "greeting"}},
         )
         app, _ = _make_app(store)
         with TestClient(app) as client:
@@ -219,7 +355,7 @@ class TestPatchEdits:
         store.save_document(
             PROGENITOR_STATE_PREFIX,
             "profile",
-            {"general": {"provider": "azure_openai", "deployment": "greeting"}},
+            {"general": {"provider_id": "foundry-1", "deployment": "greeting"}},
         )
         app, _ = _make_app(store)
         with TestClient(app) as client:
@@ -231,7 +367,7 @@ class TestPatchEdits:
         store.save_document(
             PROGENITOR_STATE_PREFIX,
             "profile",
-            {"general": {"provider": "azure_openai", "deployment": "greeting"}},
+            {"general": {"provider_id": "foundry-1", "deployment": "greeting"}},
         )
         app, _ = _make_app(store)
         with TestClient(app) as client:
@@ -243,7 +379,7 @@ class TestPatchEdits:
         store.save_document(
             PROGENITOR_STATE_PREFIX,
             "profile",
-            {"general": {"provider": "azure_openai", "deployment": "greeting"}},
+            {"general": {"provider_id": "foundry-1", "deployment": "greeting"}},
         )
         app, _ = _make_app(store)
         with TestClient(app) as client:
@@ -255,7 +391,7 @@ class TestPatchEdits:
         store.save_document(
             PROGENITOR_STATE_PREFIX,
             "profile",
-            {"general": {"provider": "azure_openai", "deployment": "greeting"}},
+            {"general": {"provider_id": "foundry-1", "deployment": "greeting"}},
         )
         app, _ = _make_app(store)
         with TestClient(app) as client:
@@ -272,7 +408,7 @@ class TestPatchEdits:
             "profile",
             {
                 "smoke profile/review": {
-                    "provider": "azure_openai",
+                    "provider_id": "foundry-1",
                     "deployment": "reviewer",
                 }
             },
@@ -287,6 +423,34 @@ class TestPatchEdits:
         saved = store.get_document(PROGENITOR_STATE_PREFIX, "profile").payload
         assert saved["smoke profile/review"]["deployment"] == "updated"
 
+    def test_patch_rejects_unsupported_go_deployment(self):
+        store = InMemoryDocumentStore()
+        store.save_document(
+            PROGENITOR_STATE_PREFIX,
+            "profile",
+            {"general": {"provider_id": "foundry-1", "deployment": "greeting"}},
+        )
+        repository = FakeProviderRepository([{"id": "go-1", "kind": "opencode_go"}])
+        app, _ = _make_app(store, repository)
+        with TestClient(app) as client:
+            response = client.patch(
+                "/model-profiles/general",
+                json={"provider_id": "go-1", "deployment": "unsupported"},
+            )
+        assert response.status_code == 422
+
+    def test_patch_rejects_unknown_provider_id(self):
+        store = InMemoryDocumentStore()
+        store.save_document(
+            PROGENITOR_STATE_PREFIX,
+            "profile",
+            {"general": {"provider_id": "foundry-1", "deployment": "greeting"}},
+        )
+        app, _ = _make_app(store, FakeProviderRepository([]))
+        with TestClient(app) as client:
+            response = client.patch("/model-profiles/general", json={"provider_id": "missing"})
+        assert response.status_code == 422
+
 
 class TestDeleteProfiles:
     def test_delete_preserves_remaining_raw_profiles_and_broadcasts_snapshot(self):
@@ -296,14 +460,12 @@ class TestDeleteProfiles:
             "profile",
             {
                 "general": {
-                    "provider": "azure_openai",
+                    "provider_id": "foundry-1",
                     "deployment": "general-deployment",
-                    "private": "must-remain-server-side",
                 },
                 "review/profile": {
-                    "provider": "azure_openai",
+                    "provider_id": "foundry-1",
                     "deployment": "review-deployment",
-                    "private": "also-server-side",
                 },
             },
         )
@@ -315,9 +477,8 @@ class TestDeleteProfiles:
         assert_acknowledged(response, ["profiles.snapshot"], request_id="delete-test")
         assert store.get_document(PROGENITOR_STATE_PREFIX, "profile").payload == {
             "general": {
-                "provider": "azure_openai",
+                "provider_id": "foundry-1",
                 "deployment": "general-deployment",
-                "private": "must-remain-server-side",
             }
         }
         assert events == [
@@ -327,7 +488,7 @@ class TestDeleteProfiles:
                     "profiles": [
                         {
                             "name": "general",
-                            "provider": "azure_openai",
+                            "provider_id": "foundry-1",
                             "deployment": "general-deployment",
                         }
                     ]
@@ -336,9 +497,59 @@ class TestDeleteProfiles:
             )
         ]
 
+    def test_delete_migrates_legacy_catalog_before_removing_profile(self):
+        store = InMemoryDocumentStore()
+        store.save_document(
+            PROGENITOR_STATE_PREFIX,
+            "profile",
+            {
+                "general": {
+                    "provider": "azure_openai",
+                    "deployment": "general-deployment",
+                    "api_key": "previously-valid-secret",
+                },
+                "review": {
+                    "provider": "azure_openai",
+                    "deployment": "review-deployment",
+                    "reasoning_summary": "concise",
+                },
+            },
+        )
+        repository = FakeProviderRepository(
+            [{"id": "foundry-1", "kind": "foundry", "is_default": True}]
+        )
+        app, events = _make_app(store, repository)
+
+        with TestClient(app, headers={"X-Request-ID": "delete-migration-test"}) as client:
+            response = client.delete("/model-profiles/general")
+
+        assert response.status_code == 202
+        assert_acknowledged(response, ["profiles.snapshot"], request_id="delete-migration-test")
+        assert store.get_document(PROGENITOR_STATE_PREFIX, "profile").payload == {
+            "review": {
+                "provider_id": "foundry-1",
+                "deployment": "review-deployment",
+                "reasoning_summary": "concise",
+            }
+        }
+        assert events[-1] == (
+            "profiles.snapshot",
+            {
+                "profiles": [
+                    {
+                        "name": "review",
+                        "provider_id": "foundry-1",
+                        "deployment": "review-deployment",
+                        "reasoning_summary": "concise",
+                    }
+                ]
+            },
+            {"request_id": "delete-migration-test"},
+        )
+
     def test_delete_unknown_profile_does_not_persist_or_broadcast(self):
         store = InMemoryDocumentStore()
-        original = {"general": {"provider": "azure_openai", "deployment": "general"}}
+        original = {"general": {"provider_id": "foundry-1", "deployment": "general"}}
         store.save_document(PROGENITOR_STATE_PREFIX, "profile", original)
         app, events = _make_app(store)
 
@@ -352,8 +563,8 @@ class TestDeleteProfiles:
     def test_whitespace_aliases_of_one_name_are_rejected_not_half_deleted(self):
         store = InMemoryDocumentStore()
         original = {
-            " general ": {"provider": "azure_openai", "deployment": "a"},
-            "general": {"provider": "azure_openai", "deployment": "b"},
+            " general ": {"provider_id": "foundry-1", "deployment": "a"},
+            "general": {"provider_id": "foundry-1", "deployment": "b"},
         }
         store.save_document(PROGENITOR_STATE_PREFIX, "profile", original)
         app, events = _make_app(store)
@@ -381,7 +592,7 @@ class TestNotificationSameTransactionDiffConsumption:
         store.save_document(
             PROGENITOR_STATE_PREFIX,
             "profile",
-            {"general": {"provider": "azure_openai", "deployment": "greeting"}},
+            {"general": {"provider_id": "foundry-1", "deployment": "greeting"}},
         )
         state_reader = StateReader(document_store=store)
         state_reader._last_snapshot = state_reader.get_snapshot()
@@ -402,8 +613,8 @@ class TestNotificationSameTransactionDiffConsumption:
 def test_invalid_sibling_rejects_patch_without_persisting():
     store = InMemoryDocumentStore()
     original = {
-        "general": {"provider": "azure_openai", "deployment": "original"},
-        "broken": {"provider": "azure_openai", "deployment": "other", "reasoning_enabled": "wrong"},
+        "general": {"provider_id": "foundry-1", "deployment": "original"},
+        "broken": {"provider_id": "foundry-1", "deployment": "other", "reasoning_enabled": "wrong"},
     }
     store.save_document(PROGENITOR_STATE_PREFIX, "profile", original)
     app, events = _make_app(store)
@@ -420,7 +631,7 @@ def test_patch_preserves_normalized_profile_identity_without_duplicating_store_k
         PROGENITOR_STATE_PREFIX,
         "profile",
         {
-            " general ": {"provider": "azure_openai", "deployment": "original", "private": "kept"},
+            " general ": {"provider_id": "foundry-1", "deployment": "original"},
         },
     )
     app, _ = _make_app(store)
@@ -428,5 +639,5 @@ def test_patch_preserves_normalized_profile_identity_without_duplicating_store_k
         response = client.patch("/model-profiles/general", json={"deployment": "changed"})
     assert response.status_code == 202
     assert store.get_document(PROGENITOR_STATE_PREFIX, "profile").payload == {
-        " general ": {"provider": "azure_openai", "deployment": "changed", "private": "kept"},
+        " general ": {"provider_id": "foundry-1", "deployment": "changed"},
     }
