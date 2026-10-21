@@ -211,6 +211,30 @@ a blank line and the IRC-style `content`. Only the `title`, `pinned`, and
 `archived` front-matter fields are editable; the body is read-only. Listing,
 grep, and read operate directly on the store documents (no cache).
 
+## Insights
+
+**Spectate → Insights** (`/insights`) displays checkpoint-backed token totals,
+time buckets, profile/deployment rankings and estimated costs for 24-hour,
+7-day and 30-day windows. The top-bar Insights panel uses the same reporting
+contract as a compact summary and preserves docking/pinning.
+Range/profile filters use the shared `Select` component; pricing fields use
+the `.set-text-input` treatment showcased at `/design`. Surfaces retain labels,
+coverage counts and actionable errors without explanatory helper paragraphs.
+
+Model profile pricing is editable in Profiles and persisted in the profile
+state document exposed through `/config/profiles.json`. Costs use current
+configured decimal rates, remain separated by currency, and show incomplete
+pricing/usage explicitly. Historical messages without reliable profile
+identity remain **Unattributed**. Azure model messages now retain non-secret
+profile/deployment/call-time metadata in checkpoints, including streamed
+responses; no deployment-to-profile guess is made for old history.
+
+Reporting uses retained checkpoint messages, including committed message
+deltas, deduplicated across versions. Checkpoint deletion/retention affects
+available history. SQL reads serialized sources and the trusted LangGraph
+serializer normalizes them before aggregation. See [BACKEND.md](BACKEND.md)
+for the acknowledgement/SSE API, pricing semantics and scaling constraints.
+
 ## Public interfaces
 
 - **Browser transports:** app-lifetime `GET /api/ui/stream` plus request-scoped

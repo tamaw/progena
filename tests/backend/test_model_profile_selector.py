@@ -50,6 +50,12 @@ class TestPublicLeakageGuard:
                     "reasoning_enabled": True,
                     "reasoning_effort": "medium",
                     "reasoning_summary": "concise",
+                    "pricing": {
+                        "currency": "USD",
+                        "input_per_million": "0.25",
+                        "cached_input_per_million": "0.03",
+                        "output_per_million": "2.00",
+                    },
                 }
             },
         )
@@ -69,6 +75,12 @@ class TestPublicLeakageGuard:
         assert public["reasoning_effort"] == "medium"
         assert public["reasoning_summary"] == "concise"
         assert "api_key" not in public
+        assert public["pricing"] == {
+            "currency": "USD",
+            "input_per_million": "0.25",
+            "cached_input_per_million": "0.03",
+            "output_per_million": "2.00",
+        }
 
 
 class TestGetAcknowledgement:
@@ -189,6 +201,61 @@ class TestPatchEdits:
         assert "reasoning_enabled" not in saved["general"]
         assert "reasoning_effort" not in saved["general"]
         assert "reasoning_summary" not in saved["general"]
+
+    def test_patch_persists_pricing_and_null_removes_it(self):
+        store = InMemoryDocumentStore()
+        store.save_document(
+            PROGENITOR_STATE_PREFIX,
+            "profile",
+            {"general": {"provider": "azure_openai", "deployment": "greeting"}},
+        )
+        app, events = _make_app(store)
+        pricing = {
+            "currency": "USD",
+            "input_per_million": "0",
+            "cached_input_per_million": "0.00",
+            "output_per_million": "0",
+        }
+        with TestClient(app) as client:
+            saved = client.patch("/model-profiles/general", json={"pricing": pricing})
+            removed = client.patch("/model-profiles/general", json={"pricing": None})
+
+        assert saved.status_code == 202
+        assert events[-2][1]["profiles"][0]["pricing"] == pricing
+        assert removed.status_code == 202
+        assert (
+            "pricing"
+            not in store.get_document(PROGENITOR_STATE_PREFIX, "profile").payload["general"]
+        )
+
+    @pytest.mark.parametrize("rate", ["NaN", "Infinity", "-0.01"])
+    def test_patch_rejects_nonfinite_or_negative_pricing(self, rate):
+        store = InMemoryDocumentStore()
+        store.save_document(
+            PROGENITOR_STATE_PREFIX,
+            "profile",
+            {"general": {"provider": "azure_openai", "deployment": "greeting"}},
+        )
+        app, events = _make_app(store)
+        with TestClient(app) as client:
+            response = client.patch(
+                "/model-profiles/general",
+                json={
+                    "pricing": {
+                        "currency": "USD",
+                        "input_per_million": rate,
+                        "cached_input_per_million": "0",
+                        "output_per_million": "1",
+                    }
+                },
+            )
+
+        assert response.status_code == 422
+        assert events == []
+        assert (
+            "pricing"
+            not in store.get_document(PROGENITOR_STATE_PREFIX, "profile").payload["general"]
+        )
 
     def test_patch_missing_profile_returns_404(self):
         store = InMemoryDocumentStore()

@@ -49,7 +49,7 @@ async def test_named_profile_is_live_even_when_compiled_graph_is_reused(kind, mo
     state = SimpleNamespace(get_model_profiles_config=AsyncMock(side_effect=lambda: profile))
     deployments = []
 
-    def create(config):
+    def create(config, *, profile_name=None):
         deployments.append(config.model_default)
         assert config.reasoning_enabled is False
         return (

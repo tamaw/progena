@@ -27,6 +27,7 @@ const defaultConfig = {
       repos: '/api/ui/repos',
       modelProfiles: '/api/ui/model-profiles',
       logs: '/api/ui/logs',
+      tokenUsage: '/api/ui/insights/token-usage',
       actionRun: '/api/ui/actions/run',
       actionGenerate: '/api/ui/actions/generate',
       attachments: '/api/attachments',

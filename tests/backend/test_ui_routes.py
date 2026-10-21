@@ -1153,7 +1153,7 @@ class TestLogsEndpoint:
             encoding="utf-8",
         )
         (builder_dir / "builder.log").write_text(
-            "2026-03-08 00:33:35 - app.agents.builder_progenitor.agent - INFO - Builder ready\n",
+            "2026-03-08 00:33:35 - external.builder - INFO - Builder ready\n",
             encoding="utf-8",
         )
 

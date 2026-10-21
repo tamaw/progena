@@ -29,6 +29,8 @@ def _safe_public_profile(name: str, profile: dict[str, Any]) -> dict[str, Any]:
     """Expose supported configuration only, never arbitrary private fields."""
     public = {field: profile[field] for field in ("provider", "deployment")}
     public["name"] = name
+    if "pricing" in profile:
+        public["pricing"] = dict(profile["pricing"])
     for field in ("reasoning_enabled", "reasoning_effort", "reasoning_summary"):
         if field not in profile:
             continue
@@ -131,6 +133,7 @@ def create_model_profile_router(
         # Reject unknown / arbitrary fields at the top level of the PATCH body.
         allowed_patch_keys = {
             "deployment",
+            "pricing",
             "reasoning_enabled",
             "reasoning_effort",
             "reasoning_summary",
@@ -149,6 +152,11 @@ def create_model_profile_router(
                         status_code=422, detail="deployment must be a non-empty string"
                     )
                 profile["deployment"] = deployment.strip()
+            if "pricing" in body:
+                if body["pricing"] is None:
+                    profile.pop("pricing", None)
+                else:
+                    profile["pricing"] = body["pricing"]
             for field in ("reasoning_enabled", "reasoning_effort", "reasoning_summary"):
                 if field not in body:
                     continue

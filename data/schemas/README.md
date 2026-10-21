@@ -1,10 +1,10 @@
-# State document schemas
+# Runtime document and agent schemas
 
-JSON Schema files in this directory describe the shape of runtime **state
-documents** (or one entry within one) stored in the shared Postgres-backed
-store (the `("progenitor", "state")` namespace). This directory is also
-mounted read-only in the agent's virtual filesystem at `/schemas/`, so a skill
-can `ls`/`read` a schema directly instead of only referencing it by name.
+JSON Schema files in this directory describe runtime documents, entries within
+configuration documents, and native agent manifest front matter. Runtime
+documents are stored in the shared Postgres-backed store; bundled native agent
+manifests remain read-only source files.
+All schemas are mounted read-only at `/schemas/` for agents and skills.
 
 They are consumed by the `structured_output` tool, which runs a
 structured-output LLM call constrained by the schema and validates the result
@@ -22,7 +22,7 @@ the native `write`/`edit` file tools.
 | `mcp_tool_entry.schema.v1.json` | One object in `mcp_tools`'s `tools` array (only `enabled` is editable) | object | `managing-mcp` |
 | `plugin_entry.schema.v1.json` | One plugin under `plugins` (keyed by `<marketplace>/<plugin>`) | object | `managing-plugins` |
 | `marketplace_entry.schema.v1.json` | One marketplace under `marketplaces` (keyed by marketplace name) | object | `managing-marketplaces` |
-| `agent_entry.schema.v1.json` | One object in `registry`'s `agents` array | object | `managing-agents` |
+| `agent_entry.schema.v1.json` | One object in `registry`'s `agents` array | object | registry validation, `managing-a2a` |
 | `knowledge_base_entry.schema.v1.json` | One object in `knowledge`'s `bases` array | object | `managing-knowledge` |
 | `task.schema.v1.json` | A single kanban card (`kanban_card:<id>`) | object | `managing-tasks` |
 | `inbox_message.schema.v1.json` | A single inbox message (`inbox_message:<id>`) | object | `managing-inbox` |
@@ -31,6 +31,15 @@ the native `write`/`edit` file tools.
 | `workflow_run.schema.v1.json` | A whole `workflow_run:<id>` document | object | `workflow_run` document type |
 | `content_document.schema.v1.json` | A whole text document (`agent:`/`skill:`/`memory:`/`instruction:`/`kanban_task_content:`/`module:`) | object | content document types |
 | `module_manifest.schema.v1.json` | One module's required `manifest.json` | object | `building-modules` |
+| `acp_task.schema.v1.json` | A whole `acp_task:<id>` document | object | ACP supervisor, workflows |
+| `alert.schema.v1.json` | A whole `alert:<id>` document | object | alert validation, `raising-alerts` |
+| `agent-manifest.schema.v1.json` | Native object-agent YAML front matter | object | agent manifest validation, `managing-agents` |
+| `graph.routine.schema.v1.json` | A routine graph definition | object | routine validation, `managing-routines` |
+| `indexer.schema.v1.json` | The whole `indexer` configuration document | object | indexer validation, `managing-knowledge` |
+| `knowledge_index.schema.v1.json` | A whole `knowledge_index:<id>` status document | object | indexer, workflow document ports |
+| `policy.schema.v1.json` | A policy document | object | policy validation, `managing-policies` |
+| `repo_entry.schema.v1.json` | A repository declaration | object | repository validation, `managing-repos` |
+| `session.schema.v1.json` | A whole `session:<id>` document | object | sessions, workflow document ports |
 
 Whole-document schemas also back **document types** (`document_type:<id>` rows
 in Postgres, see `app/progenitor/document_types.py`): a type's `schema` names
@@ -38,20 +47,15 @@ the file here that types its documents. Workflow event/read/query nodes expose
 each document as one port typed with the document type's label (e.g. `after:
 Kanban Card`); an Unpack node exposes its top-level properties as ports.
 
-**Most schemas here describe one entry, not a whole document** — that's the
-default for `mcp.json`/`schedule.json` (objects keyed by name/id: adding is
-inserting a key, updating is replacing one key's value) and `agents.json`/
-`knowledge.json` (arrays: adding is appending, updating is replacing one
-element) — `edit_file` never has to touch anything else. This matters most for
-`agents.json`, whose `tools` array is runtime-managed and must survive
-byte-for-byte; asking `structured_output` to regenerate the *whole* document
-would mean the model retyping data nobody asked it to touch.
+Entry schemas scope changes to one item in a collection: `mcp.json` and
+`schedule.json` are keyed maps, while `agents.json` and `knowledge.json`
+contain arrays. Preserve unrelated entries and runtime-managed fields rather
+than asking the model to regenerate the whole collection.
 
-**Whole-document schemas are the exception**, used when the document isn't a
-collection: `definition.workflow.schema.v1.json` (one workflow is one
-self-contained document, not an entry in something bigger) and
-`preferences.schema.v1.json` (a small, fixed-shape object with no array/map of
-entries to scope down to).
+Whole-document schemas cover standalone records such as workflows, routines,
+sessions, alerts and preferences. Native agent manifests are a separate case:
+their schema validates the YAML front matter of `SYSTEM.md`, not a Postgres
+state document.
 
 ## Naming convention
 

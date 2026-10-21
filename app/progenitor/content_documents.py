@@ -5,12 +5,10 @@ Each persists as a document in the shared Postgres ``store`` table (the same
 one used for ``mcp.json``/``schedule.json``/etc, see ``state/manager.py``),
 keyed by kind + relative path.
 
-Instructions are synced from the git-tracked ``data/instructions/`` directory
-(baked into the container image) on every runtime boot, see
-``sync_instruction_documents``. The ``progenitor`` group is read by the runtime
-from Postgres and edited through the Instructions page, so a stored copy is
-never overwritten; every other group is bundled with its A2A agent, which reads
-its own files from disk, so the stored copy mirrors the file.
+Instructions are seeded from the git-tracked ``data/instructions/`` directory
+(baked into the container image), see ``sync_instruction_documents``.
+Existing documents remain user-owned: boot never overwrites edited instructions
+or deletes documents removed from the source tree.
 
 Native agent manifests remain read-only files in ``data/agents/objects/``.
 They are not imported into Postgres; user and plugin agents use documents.
@@ -36,7 +34,6 @@ from .document_kinds import (
     MODULE_DOCUMENT_KEY_PREFIX,
     SKILL_DOCUMENT_KEY_PREFIX,
 )
-from .instructions.documents import is_bundled_instruction, is_runtime_instruction
 from .instructions.templates import parse_instruction_template
 
 logger = logging.getLogger(__name__)
@@ -65,13 +62,7 @@ def content_document_key(kind: str, relative_path: str) -> str:
 
 
 async def sync_instruction_documents(state_manager: Any, source_dir: Path | str) -> None:
-    """Bring the stored instructions in line with ``source_dir`` (``data/instructions/``).
-
-    Runtime instructions (the ``progenitor`` group) are added when missing and
-    otherwise left alone, since they are edited in place. Bundled instructions
-    mirror their file, and bundled ones with no file are removed. Instructions
-    in any other group (workflow templates) are never touched.
-    """
+    """Seed missing checked-in instructions without changing stored user content."""
     root = Path(source_dir)
     if not root.is_dir():
         raise FileNotFoundError(f"Instructions directory not found: {root}")
@@ -88,15 +79,9 @@ async def sync_instruction_documents(state_manager: Any, source_dir: Path | str)
     stored = dict(await state_manager.list_content_documents("instruction"))
     written = 0
     for relative_path, content in files.items():
-        current = stored.get(relative_path)
-        if current == content or (current is not None and is_runtime_instruction(relative_path)):
+        if relative_path in stored:
             continue
         await state_manager.save_content_document("instruction", relative_path, content)
         written += 1
-    removed = [path for path in stored if is_bundled_instruction(path) and path not in files]
-    for relative_path in removed:
-        await state_manager.delete_content_document("instruction", relative_path)
-    if written or removed:
-        logger.info(
-            "Synced instructions from %s: %d written, %d removed", root, written, len(removed)
-        )
+    if written:
+        logger.info("Seeded instructions from %s: %d written", root, written)
