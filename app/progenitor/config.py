@@ -118,6 +118,13 @@ class LLMConfig:
     reasoning_effort: str = "low"
     reasoning_summary: str = "detailed"
 
+    # Model request limits. The model streams, so the timeout bounds silence
+    # between chunks (connect/read/write), not the length of a whole answer; a
+    # stalled request is retried up to max_retries times. The OpenAI SDK
+    # defaults (600s, 2) let one stalled call hang a turn for ten minutes.
+    timeout_seconds: int = 120
+    max_retries: int = 2
+
     @classmethod
     def from_env(cls) -> "LLMConfig":
         """Load LLM config from environment."""
@@ -131,6 +138,8 @@ class LLMConfig:
             reasoning_enabled=env_bool("PROGENITOR_REASONING_ENABLED", True),
             reasoning_effort=reasoning_effort or cls.reasoning_effort,
             reasoning_summary=reasoning_summary or cls.reasoning_summary,
+            timeout_seconds=max(1, env_int("PROGENITOR_LLM_TIMEOUT_SECONDS", cls.timeout_seconds)),
+            max_retries=max(0, env_int("PROGENITOR_LLM_MAX_RETRIES", cls.max_retries)),
         )
 
 
