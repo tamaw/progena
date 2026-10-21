@@ -460,7 +460,6 @@ export default function PluginsPage() {
                 <DetailStatus
                   key="status"
                   tone={pluginDetailStatus(installedEntry).tone}
-                  className={pluginDetailStatus(installedEntry).ring ? 'plugins-detail__status--ring' : ''}
                 >
                   {pluginDetailStatus(installedEntry).label}
                 </DetailStatus>,

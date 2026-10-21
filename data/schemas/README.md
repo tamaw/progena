@@ -29,7 +29,8 @@ the native `write`/`edit` file tools.
 | `preferences.schema.v1.json` | The whole `preferences` document | object | `managing-preferences` |
 | `definition.workflow.schema.v1.json` | A whole `workflow:<id>` document | object | `managing-workflows` |
 | `workflow_run.schema.v1.json` | A whole `workflow_run:<id>` document | object | `workflow_run` document type |
-| `content_document.schema.v1.json` | A whole text document (`agent:`/`skill:`/`memory:`/`instruction:`/`kanban_task_content:`) | object | content document types |
+| `content_document.schema.v1.json` | A whole text document (`agent:`/`skill:`/`memory:`/`instruction:`/`kanban_task_content:`/`module:`) | object | content document types |
+| `module_manifest.schema.v1.json` | One module's required `manifest.json` | object | `building-modules` |
 
 Whole-document schemas also back **document types** (`document_type:<id>` rows
 in Postgres, see `app/progenitor/document_types.py`): a type's `schema` names

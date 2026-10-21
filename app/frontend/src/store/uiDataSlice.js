@@ -32,10 +32,10 @@ import * as repos from './uiData/repos';
 import * as policies from './uiData/policies';
 import * as documentTypes from './uiData/documentTypes';
 import * as modelProfiles from './uiData/modelProfiles';
+import * as modules from './uiData/modules';
 
 import * as search from './uiData/search';
-
-const domains = [runtime, mcp, knowledge, instructions, tasks, workflows, agents, chats, inbox, logs, preferences, marketplaces, repos, documentTypes, policies, modelProfiles, search];
+const domains = [runtime, mcp, knowledge, instructions, tasks, workflows, agents, chats, inbox, logs, preferences, marketplaces, repos, documentTypes, policies, modelProfiles, modules, search];
 
 const initialState = domains.reduce(
   (acc, domain) => ({ ...acc, ...domain.initialState }),
@@ -84,6 +84,7 @@ const NAV_ACTIVITY_EVENT_ROUTES = {
   'workflow.run.failed': '/workflows',
   'repositories.snapshot': '/repositories',
   'profiles.snapshot': '/profiles',
+  'modules.snapshot': '/modules',
 };
 
 const navActivityInitialState = {
@@ -373,5 +374,28 @@ export {
 } from './uiData/modelProfiles';
 
 export default uiDataSlice.reducer;
+
+export {
+  fetchModules,
+  fetchModuleFiles,
+  fetchModuleRevisions,
+  fetchModuleRevision,
+  restoreModuleRevision,
+  deleteModule,
+  reportModuleStatus,
+  requestModuleDocuments,
+  requestModuleData,
+  updateModuleSubscription,
+  clearModuleSubscription,
+  selectModules,
+  selectModulesState,
+  selectModule,
+  selectModuleFiles,
+  selectModuleRevisions,
+  selectModuleRevision,
+  selectModuleFilesRequest,
+  selectModuleRevisionsRequest,
+  selectModuleRevisionRequest,
+} from './uiData/modules';
 
 export { fetchPolicies, savePolicy, selectPolicies } from './uiData/policies';

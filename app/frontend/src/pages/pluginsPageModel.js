@@ -42,26 +42,26 @@ export function pluginRowStatus(entry) {
   return 'installed';
 }
 
-// Detail-header status badge tone/label/ring, sharing the exact same status
+// Detail-header status badge tone/label, sharing the exact same status
 // precedence as pluginRowStatus (error > pending > update > steady state) so
 // the header dot never contradicts the row dot. Only "not installed" gets
-// the hollow ring; "installed, up to date" gets a solid muted dot. Green is
-// reserved for "something needs your attention" (an update), not for
-// "installed and fine."
+// the hollow ring (tone "idle"); "installed, up to date" gets a solid muted
+// dot. Green is reserved for "something needs your attention" (an update),
+// not for "installed and fine."
 export function pluginDetailStatus(entry) {
   if (!entry) {
-    return { tone: 'muted', label: 'Not installed', ring: true };
+    return { tone: 'idle', label: 'Not installed' };
   }
   if (entry.status === 'error') {
-    return { tone: 'error', label: 'Install failed', ring: false };
+    return { tone: 'error', label: 'Install failed' };
   }
   if (entry.status === 'pending') {
-    return { tone: 'warning', label: 'Installing…', ring: false };
+    return { tone: 'warning', label: 'Installing…' };
   }
   if (entry.available_version) {
-    return { tone: 'ok', label: 'Update available', ring: false };
+    return { tone: 'ok', label: 'Update available' };
   }
-  return { tone: 'muted', label: 'Installed', ring: false };
+  return { tone: 'muted', label: 'Installed' };
 }
 
 export function sortPlugins(plugins, sort) {

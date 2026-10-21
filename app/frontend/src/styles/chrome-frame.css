@@ -2954,6 +2954,18 @@ body,
   border-radius: 50%;
 }
 
+/* Row dot tones, matching DetailStatus tones; idle is the hollow quiet default. */
+.sess-row__dot--ok { background: var(--color-success); }
+.sess-row__dot--info { background: var(--color-info); }
+.sess-row__dot--warning { background: var(--color-warning); }
+.sess-row__dot--error { background: var(--color-error); }
+.sess-row__dot--muted { background: var(--color-text-muted); }
+.sess-row__dot--idle {
+  background: transparent;
+  border: 1.5px solid var(--color-text-muted);
+  box-sizing: border-box;
+}
+
 .sess-row__agent {
   flex: 0 0 auto;
   font-size: 11.5px;

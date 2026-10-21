@@ -87,6 +87,10 @@ to the backend and receives browser application data through two SSE roles:
   events hydrate Redux; pages read Redux selectors.
 - Generates an `X-Request-ID` UUID for every finite application request and
   waits for matching causal canonical stream events after acknowledgement.
+- Renders agent-built modules (`/modules`) in sandboxed, network-less iframes
+  (`sandbox="allow-scripts"`, `srcdoc`); module files, vendored libraries,
+  documents and events reach the frame only through the parent's postMessage
+  bridge over the canonical stream (`docs/MODULES.md`).
 
 There are no browser `/api/ui/events` or `/api/ui/status` streams, no
 response-body fallback, and no inline response-body token SSE.

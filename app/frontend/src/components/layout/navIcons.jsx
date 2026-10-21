@@ -200,6 +200,15 @@ export function KnowledgeNavIcon() {
   );
 }
 
+export function ModulesNavIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <rect x="3.5" y="3.5" width="17" height="17" rx="2" />
+      <path d="m8 9 2.5 3L8 15M13 15h3" />
+    </svg>
+  );
+}
+
 
 export function PluginsNavIcon() {
   return (
