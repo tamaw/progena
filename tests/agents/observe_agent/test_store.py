@@ -1,56 +1,19 @@
-"""Integration tests for the observe agent's Postgres-backed store.
-
-These require a reachable Postgres server (the same one the runtime uses) and are
-skipped otherwise. They run against a throwaway ``observe_test`` database that is
-dropped on teardown.
-"""
+"""Integration tests for the observe agent's Postgres-backed store."""
 
 from __future__ import annotations
 
-import os
-
-import psycopg
 import pytest
 
-from app.agents.observe_agent.config import DatabaseConfig, _swap_database_name
+from app.agents.observe_agent.config import DatabaseConfig
 from app.agents.observe_agent.store import ObserveStore
-
-_ADMIN_URL = os.getenv(
-    "PROGENITOR_DATABASE_URL",
-    "postgresql://progenitor:progenitor@127.0.0.1:15433/progenitor",
-)
-_TEST_DB = "observe_test"
-
-
-def _postgres_reachable() -> bool:
-    try:
-        psycopg.connect(_ADMIN_URL, connect_timeout=3).close()
-        return True
-    except Exception:
-        return False
-
-
-pytestmark = pytest.mark.skipif(
-    not _postgres_reachable(), reason="Postgres is not reachable for observe store tests"
-)
-
-
-def _drop_test_db() -> None:
-    with psycopg.connect(_ADMIN_URL, autocommit=True) as conn, conn.cursor() as cur:
-        cur.execute(
-            "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = %s",
-            (_TEST_DB,),
-        )
-        cur.execute(f'DROP DATABASE IF EXISTS "{_TEST_DB}"')
 
 
 @pytest.fixture
-async def store():
-    _drop_test_db()
+async def store(postgres_url):
     config = DatabaseConfig(
-        admin_url=_ADMIN_URL,
-        database_url=_swap_database_name(_ADMIN_URL, _TEST_DB),
-        db_name=_TEST_DB,
+        admin_url="",
+        database_url=postgres_url,
+        db_name="",
         setup=True,
     )
     observe_store = ObserveStore(config)
@@ -59,7 +22,6 @@ async def store():
         yield observe_store
     finally:
         await observe_store.close()
-        _drop_test_db()
 
 
 async def test_seed_and_read_system_prompt(store):

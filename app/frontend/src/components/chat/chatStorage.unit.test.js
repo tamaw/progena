@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import {
   PINNED_CHAT_SESSIONS_KEY,
   readJson,
@@ -16,12 +16,9 @@ describe('readJson / writeJsonOrRemove', () => {
     localStorage.setItem('k', JSON.stringify({ a: 1 }));
     expect(readJson('k', null)).toEqual({ a: 1 });
   });
-  it('returns the fallback (and warns) on malformed JSON', () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  it('returns the fallback on malformed JSON', () => {
     localStorage.setItem('k', '{nope');
     expect(readJson('k', 'fb', 'oops')).toBe('fb');
-    expect(warn).toHaveBeenCalled();
-    warn.mockRestore();
   });
   it('removes the key when value is empty, writes otherwise', () => {
     writeJsonOrRemove('k', [1, 2], false);

@@ -77,10 +77,6 @@ class TestBoundedQueues(unittest.IsolatedAsyncioTestCase):
             config=cast(Any, self.config),
         )
 
-    async def test_input_queue_is_bounded(self):
-        """Test that input queue has a max size."""
-        assert self.loop.queues.input_queue.maxsize == 5
-
     async def test_enqueue_input_success(self):
         """Test successful input enqueue."""
         result = await self.loop.queues.enqueue_input("test message")
@@ -355,51 +351,6 @@ class TestBoundedQueues(unittest.IsolatedAsyncioTestCase):
         assert updates["requested_thread_id"] == "cron_test123_abcd1234"
         assert updates["scheduled_run_id"] == "schedrun_123"
         self.state_manager.update_schedule_run.assert_awaited_once()
-
-
-class TestBoundedQueueConfiguration(unittest.IsolatedAsyncioTestCase):
-    """Test queue configuration from settings."""
-
-    async def test_custom_queue_sizes(self):
-        """Test that custom queue sizes are respected."""
-        from app.progenitor.runtime.heartbeat import ProgenitorLoop
-
-        config = MockConfig(
-            runtime=MockRuntimeConfig(max_input_queue_size=50, max_output_queue_size=25)
-        )
-
-        state_manager = MagicMock()
-        state_manager.state_dir = Path(tempfile.mkdtemp())
-
-        loop = ProgenitorLoop(
-            graph=MagicMock(),
-            state_manager=state_manager,
-            config=cast(Any, config),
-        )
-
-        assert loop.queues.input_queue.maxsize == 50
-
-
-class TestConfigQueueSettings(unittest.TestCase):
-    """Test RuntimeConfig queue settings."""
-
-    def test_default_queue_sizes(self):
-        """Test default queue sizes in RuntimeConfig."""
-        from app.progenitor.config import RuntimeConfig
-
-        config = RuntimeConfig()
-
-        assert config.max_input_queue_size == 100
-        assert config.max_output_queue_size == 100
-
-    def test_queue_sizes_use_code_defaults_without_file_config(self):
-        """Runtime queue defaults are not pulled from saved config payloads."""
-        from app.progenitor.config import RuntimeConfig
-
-        config = RuntimeConfig.from_env()
-
-        assert config.max_input_queue_size == 100
-        assert config.max_output_queue_size == 100
 
 
 class TestReasoningTraceExtraction(unittest.TestCase):

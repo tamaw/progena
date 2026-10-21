@@ -17,8 +17,6 @@ class TestSkillFiles:
 
     def _get_skill_dirs(self):
         """Get all skill directories."""
-        if not SKILLS_DIR.is_dir():
-            pytest.skip("data/skills/ not found")
         return [d for d in SKILLS_DIR.iterdir() if d.is_dir()]
 
     def test_skills_directory_exists(self):

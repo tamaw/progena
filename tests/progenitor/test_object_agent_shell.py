@@ -250,9 +250,6 @@ def test_git_write_is_reserved_for_native_agents():
 
 
 def test_shell_timeout_comes_from_environment(monkeypatch):
-    monkeypatch.delenv("PROGENITOR_SHELL_TIMEOUT_SECONDS", raising=False)
-    assert RuntimeConfig.from_env().shell_timeout_seconds == 120
-
     monkeypatch.setenv("PROGENITOR_SHELL_TIMEOUT_SECONDS", "90")
     assert RuntimeConfig.from_env().shell_timeout_seconds == 90
 

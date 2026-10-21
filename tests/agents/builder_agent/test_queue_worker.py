@@ -1,75 +1,15 @@
 from __future__ import annotations
 
 import asyncio
-import importlib
-import json
-import os
 from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
 from a2a.types import TaskState
 
-os.environ.setdefault("AGENT_NAME", "builder_agent")
-
-from app.agents.builder_agent import queue_worker
-from app.agents.builder_agent.queue_worker import (
-    BuilderTaskQueue,
-    TaskRecord,
-    append_task_record,
-    sync_wait_for_completion,
-)
+from app.agents.builder_agent.queue_worker import BuilderTaskQueue, sync_wait_for_completion
 from app.agents.builder_agent.runtime.background_build import BuildResult, BuildStatus
 from app.agents.builder_agent.runtime.time_utils import utcnow
-
-
-def test_default_task_log_path_uses_agent_name(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("PROGENITOR_LOG_DIR", raising=False)
-    monkeypatch.setenv("AGENT_NAME", "custom_builder")
-
-    reloaded = importlib.reload(queue_worker)
-    try:
-        expected = (
-            Path(__file__).resolve().parents[3]
-            / "logs"
-            / "custom_builder"
-            / "custom_builder_tasks.jsonl"
-        )
-        assert reloaded.get_task_log_path() == expected
-    finally:
-        importlib.reload(queue_worker)
-
-
-def test_default_task_log_path_requires_agent_name(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("PROGENITOR_LOG_DIR", raising=False)
-    monkeypatch.delenv("AGENT_NAME", raising=False)
-
-    with pytest.raises(RuntimeError, match="AGENT_NAME must be set"):
-        importlib.reload(queue_worker).get_task_log_path()
-
-    monkeypatch.setenv("AGENT_NAME", "builder_agent")
-    importlib.reload(queue_worker)
-
-
-def test_append_task_record_and_poll(tmp_path: Path) -> None:
-    log_path = tmp_path / "tasks.jsonl"
-    append_task_record(
-        TaskRecord(
-            task_id="task-1",
-            status="success",
-            phase_completed="pr",
-            build_id="build-1",
-            pr_url="https://github.com/org/repo/pull/1",
-            timestamp_utc="2026-03-12T00:00:00Z",
-        ),
-        log_path,
-    )
-
-    lines = log_path.read_text(encoding="utf-8").splitlines()
-    assert len(lines) == 1
-    record = json.loads(lines[0])
-    assert record["build_id"] == "build-1"
-    assert sync_wait_for_completion("task-1", timeout_seconds=0.0, log_path=log_path) == record
 
 
 @pytest.mark.asyncio

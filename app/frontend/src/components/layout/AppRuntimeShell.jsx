@@ -1591,7 +1591,7 @@ function MarketplacesSettingsRow() {
 }
 
 function SettingsPanel({ onClose, isPinned, onTogglePin, isOpen, onResetLiveUiState }) {
-  const { config, getApiUrl, resetSettings, setIdleTimeoutMinutes } = useConfig();
+  const { config, getApiUrl, resetSettings, setIdleTimeoutMinutes, setDensity } = useConfig();
   const idleTimeoutMinutes = config.session.idleTimeoutMinutes;
   const dispatch = useDispatch();
   const preferences = useSelector(selectPreferences);
@@ -1689,12 +1689,20 @@ function SettingsPanel({ onClose, isPinned, onTogglePin, isOpen, onResetLiveUiSt
                 <div className="set-row">
                   <div className="set-row__label">
                     <div className="set-row__title">Density</div>
-                    <div className="set-row__sub">Adjust spacing across navigation and panes.</div>
+                    <div className="set-row__sub">Scale text size across the app.</div>
                   </div>
-                  <div className="set-seg" aria-label="Interface density">
-                    <button type="button" className="set-seg__btn is-active">Comfortable</button>
-                    <button type="button" className="set-seg__btn">Compact</button>
-                    <button type="button" className="set-seg__btn">Presentation</button>
+                  <div className="set-seg" role="group" aria-label="Interface density">
+                    {config.density.options.map((option) => (
+                      <button
+                        key={option}
+                        type="button"
+                        className={`set-seg__btn${config.density.default === option ? ' is-active' : ''}`}
+                        aria-pressed={config.density.default === option}
+                        onClick={() => setDensity(option)}
+                      >
+                        {option.charAt(0).toUpperCase() + option.slice(1)}
+                      </button>
+                    ))}
                   </div>
                 </div>
               </section>
