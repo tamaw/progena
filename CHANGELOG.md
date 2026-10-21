@@ -102,6 +102,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 - **In-process ACP runs and per-run ACP sandboxes** (`dispatch_tracked_acp_task`, `PROGENITOR_ACP_WORKSPACE`): ACP turns run only in the backend supervisor, in the task's `cwd` (else the agent's configured `cwd`). Stdio ACP agents now need their CLI in the backend image.
+- **Repository TLS assets**: removed the checked-in frontend/backend certificate pairs and their generator. Internal frontend and backend traffic now uses HTTP; host nginx continues to own public TLS certificates and OAuth2 authentication, with its loopback upstream changed from HTTPS to HTTP during rollout.
 - **`app/progenitor/tools/gh.py`**: unused.
 - **Workflow `notify` nodes and the `notify_user` agent tool**: workflows now create `alert` documents with `document_create`, optionally using a `format` node for the message; Progenitor raises alerts by writing `/alerts/<id>.json`.
 - **Legacy pgvector knowledge stores**: the `knowledge_search` tool, folder sources and `index_folder`, the hash embedding (`progenitor-hash-256`), the `knowledge_documents` table (dropped on indexer start), the `POST /api/ui/knowledge/{base_id}/sources/{source_id}/index` and `GET /api/ui/knowledge/search` routes, and the catalog fields `status`, `embedding_model`, `dimensions`, `metric`, `index_type`, `connection_string`, and `sources` (dropped from stored bases on the next save). Superseded by the knowledge page index and `search` tool.
