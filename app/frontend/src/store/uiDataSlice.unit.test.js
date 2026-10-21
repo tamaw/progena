@@ -50,6 +50,8 @@ import reducer, {
   setErroredChatIds,
   setGeneratingChatIds,
   setUnreadChatIds,
+  fetchTokenUsage,
+  selectInsightsQueryState,
 } from './uiDataSlice';
 import { CHAT_STATUS } from '../lib/chatStatus';
 
@@ -992,6 +994,49 @@ describe('schedule snapshot recovery', () => {
     }));
     expect(selectSchedulesState({ uiData: state })).toMatchObject({
       items: [schedule], loaded: true, error: null,
+    });
+  });
+});
+
+describe('Insights token usage snapshots', () => {
+  const allProfiles = { tokenUsageUrl: '/api/ui/insights/token-usage', range: '7d', profile: null };
+  const alphaProfile = { tokenUsageUrl: '/api/ui/insights/token-usage', range: '7d', profile: 'alpha' };
+
+  it('keeps queries independent and ignores a stale response for a newer matching query', () => {
+    let state = reducer(undefined, fetchTokenUsage.pending('all-first', allProfiles));
+    state = reducer(state, fetchTokenUsage.pending('alpha-request', alphaProfile));
+    state = reducer(state, applyUiEvent({
+      type: 'insights.token_usage.snapshot',
+      payload: { request_id: 'all-first', range: '7d', profile: null, totals: { total_tokens: 10 } },
+    }));
+    expect(selectInsightsQueryState({ uiData: state }, allProfiles)).toMatchObject({
+      loading: false, snapshot: { totals: { total_tokens: 10 } },
+    });
+    state = reducer(state, fetchTokenUsage.pending('all-newer', allProfiles));
+    state = reducer(state, applyUiEvent({
+      type: 'insights.token_usage.snapshot',
+      payload: { request_id: 'all-first', range: '7d', profile: null, totals: { total_tokens: 1 } },
+    }));
+    expect(selectInsightsQueryState({ uiData: state }, allProfiles)).toMatchObject({
+      loading: true, requestId: 'all-newer', snapshot: { totals: { total_tokens: 10 } },
+    });
+    state = reducer(state, applyUiEvent({
+      type: 'insights.token_usage.snapshot',
+      payload: { request_id: 'alpha-request', range: '7d', profile: 'alpha', totals: { total_tokens: 4 } },
+    }));
+    expect(selectInsightsQueryState({ uiData: state }, alphaProfile)).toMatchObject({
+      loading: false, snapshot: { totals: { total_tokens: 4 } },
+    });
+    state = reducer(state, applyUiEvent({
+      type: 'insights.token_usage.snapshot',
+      payload: { request_id: 'all-newer', range: '7d', profile: null, totals: { total_tokens: 20 } },
+    }));
+    state = reducer(state, applyUiEvent({
+      type: 'insights.token_usage.snapshot',
+      payload: { request_id: 'all-first', range: '7d', profile: null, totals: { total_tokens: 1 } },
+    }));
+    expect(selectInsightsQueryState({ uiData: state }, allProfiles)).toMatchObject({
+      loading: false, snapshot: { totals: { total_tokens: 20 } },
     });
   });
 });

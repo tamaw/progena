@@ -116,6 +116,7 @@ from .inbox_routes import (
     broadcast_inbox_snapshot,
     create_inbox_router,
 )
+from .insights_routes import create_insights_router
 from .knowledge_service import snapshot_bases as snapshot_knowledge_bases
 from .marketplace_service import load_marketplaces
 from .model_profile_routes import create_model_profile_router
@@ -4938,3 +4939,5 @@ router.include_router(
         broadcast=broadcast_ui_event,
     )
 )
+
+router.include_router(create_insights_router(get_default_document_store, broadcast_ui_event))

@@ -100,6 +100,36 @@
   max-width: none;
 }
 
+.profiles-pricing {
+  display: grid;
+  gap: 12px;
+  margin: 4px 0 0;
+  padding: 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--border-radius-md);
+}
+
+.profiles-pricing legend {
+  padding: 0 4px;
+  color: var(--color-text-primary);
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+}
+
+
+.profiles-pricing__preset {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  color: var(--color-text-muted);
+  font-size: 11px;
+}
+
+.profiles-pricing__preset a {
+  color: inherit;
+}
+
 .profiles-field {
   min-width: 0;
 }
@@ -118,11 +148,6 @@
   cursor: not-allowed;
 }
 
-.profiles-form__hint {
-  margin: 0;
-  color: var(--color-text-muted);
-  font-size: 11px;
-}
 
 .profiles-list-notice {
   padding: 12px;
