@@ -5,11 +5,8 @@
   "description": "Progenitor Chat UI - React Application",
   "type": "module",
   "scripts": {
-    "predev": "node scripts/build-module-vendor.mjs",
     "dev": "vite",
-    "prebuild": "node scripts/build-module-vendor.mjs",
     "build": "vite build",
-    "preprod": "node scripts/build-module-vendor.mjs",
     "prod": "vite build && vite preview",
     "preview": "vite preview",
     "lint": "eslint .",

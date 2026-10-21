@@ -184,9 +184,8 @@ snapshot-diff bypass in `state_reader.py`.
 pinned `three@0.186.1` and `d3@7.9.0` with esbuild into `app/frontend/src/lib/module-vendor/`
 (`three.mjs`, `three-orbit-controls.mjs` with `three` external, `d3.mjs`), generates
 `libraries.js` (specifier → lazy `?raw` loader) and `data/modules/libraries.json` (agent
-catalogue). The bundles and `libraries.js` are generated, not committed (gitignored; the
-three.js bundle exceeds the 500 KB pre-commit limit): `npm run dev`, `build` and `prod` run the
-script first. The catalogue is committed; rerun the script after changing a pinned version.
+catalogue). Bundles, `libraries.js` and the catalogue are committed (the pre-commit large-file
+limit is 1 MB to fit the 742 KB three.js bundle); rerun the script after changing a pinned version.
 
 ## Frontend
 
