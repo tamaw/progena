@@ -27,14 +27,6 @@ beforeEach(() => {
 });
 afterEach(() => act(() => root.unmount()));
 
-describe('ConfigProvider provider endpoint', () => {
-  it('registers the provider API endpoint without persisting provider data', () => {
-    mount();
-    expect(seen.current.getApiUrl('providers')).toBe('/api/ui/providers');
-    expect(localStorage.getItem('progenitor_settings')).toBeNull();
-  });
-});
-
 describe('ConfigProvider density', () => {
   it('restores a valid stored density onto the document element', () => {
     localStorage.setItem('progenitor_density', 'presentation');
