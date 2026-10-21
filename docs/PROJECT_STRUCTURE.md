@@ -11,7 +11,6 @@ progenitor/
 ├── docker/       # Container definitions for the main stack
 ├── docs/         # Project documentation
 ├── logs/         # Runtime logs
-├── scripts/      # Utility scripts
 ├── AGENTS.md
 ├── CHANGELOG.md
 ├── README.md

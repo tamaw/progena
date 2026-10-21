@@ -11,7 +11,6 @@ WORKDIR /app
 # Copy project metadata and source
 COPY pyproject.toml README.md ./
 COPY app/ ./app/
-COPY scripts/ ./scripts/
 # data/schemas/ is a static, git-checked-in contract (JSON Schemas for
 # preferences, workflow nodes, MCP entries, ...) baked into the image --
 # schemas are read from disk on every load_schema() call, so this directory

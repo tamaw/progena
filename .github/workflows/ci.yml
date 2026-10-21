@@ -132,7 +132,7 @@ jobs:
           echo "Deployed commit: $DEPLOYED"
           changed() { [ -n "$(git diff --name-only "$DEPLOYED" HEAD -- "$@")" ] && echo true || echo false; }
           # Both Python images copy all of app/ (the backend imports app.progenitor).
-          PYTHON_COMMON=(app ':!app/frontend' pyproject.toml README.md scripts data/schemas .dockerignore)
+          PYTHON_COMMON=(app ':!app/frontend' pyproject.toml README.md data/schemas .dockerignore)
           PROGENITOR="$(changed "${PYTHON_COMMON[@]}" docker/progenitor data/instructions data/skills data/agents data/shims)"
           BACKEND="$(changed "${PYTHON_COMMON[@]}" docker/backend data/agents/objects)"
           FRONTEND="$(changed app/frontend docker/frontend)"
