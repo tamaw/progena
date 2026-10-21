@@ -36,7 +36,9 @@ Start the stack from the repository root:
 docker compose --env-file .env -f docker/docker-compose.progenitor.yml up --build -d
 ```
 
-Open [https://localhost:8081](https://localhost:8081). The local certificate is self-signed, so the browser will display a certificate warning.
+Open [http://127.0.0.1:8081](http://127.0.0.1:8081) for loopback-only access. In a public deployment, use the host nginx public HTTPS URL: the host owns TLS certificates and OAuth2 authentication, while the Compose frontend and backend communicate over HTTP.
+
+When rolling out this stack, change the host nginx upstream for `127.0.0.1:8081` from `https://` to `http://` at the same time as the Compose frontend port mapping changes to container port 80. This does not change public HTTPS; TLS remains terminated at host nginx.
 
 Useful commands:
 
