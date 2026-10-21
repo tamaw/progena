@@ -326,8 +326,9 @@ async def test_deleted_live_routine_does_not_fall_back_to_a_revision():
 
 
 @pytest.mark.asyncio
-async def test_actual_agent_factory_runner_preserves_nested_data(monkeypatch):
+async def test_actual_agent_factory_runner_preserves_nested_data(monkeypatch, tmp_path):
     from app.progenitor.agent.agent import create_progenitor_agent
+    from app.progenitor.config import ProgenitorConfig
     from tests.progenitor.test_memory import FakeContentStateManager
 
     child = graph(
@@ -372,7 +373,11 @@ async def test_actual_agent_factory_runner_preserves_nested_data(monkeypatch):
     monkeypatch.setattr(
         "app.progenitor.agent.agent.create_progenitor_backend", lambda **_kwargs: object()
     )
-    compiled = await create_progenitor_agent(state_manager=Store(), checkpointer=MemorySaver())
+    config = ProgenitorConfig()
+    config.storage.shell_home_dir = tmp_path / "shell-home"
+    compiled = await create_progenitor_agent(
+        config=config, state_manager=Store(), checkpointer=MemorySaver()
+    )
     result = await compiled.routine_runner("parent", {"messages": [HumanMessage("calculate")]})
     assert result["data"]["result"] == 42
     child_call = result["run_meta"]["nested"][0]["routine"]

@@ -14,6 +14,7 @@ from langchain_core.messages import ToolMessage
 from langchain_core.tools import BaseTool
 
 from .object_agent_manifest import ObjectAgentSource, discover_object_agents
+from .shell_backend import ShellHomeLifecycle
 
 logger = logging.getLogger(__name__)
 
@@ -33,11 +34,13 @@ class ObjectAgentRegistry:
         proxy_factory: Callable[[ObjectAgentSource], CompiledSubAgent],
         reserved_names: Iterable[str] = (),
         native_root: Path | None = None,
+        shell_homes: ShellHomeLifecycle | None = None,
     ) -> None:
         self._state_manager = state_manager
         self._native_root = native_root
         self._proxy_factory = proxy_factory
         self._reserved_names = frozenset({"general-purpose", *reserved_names})
+        self._shell_homes = shell_homes
         self._lock = asyncio.Lock()
         self.callables: dict[str, Any] = {}
         self.descriptors: tuple[CompiledSubAgent, ...] = ()
@@ -56,6 +59,12 @@ class ObjectAgentRegistry:
             self.callables.clear()
             self.callables.update(callables)
             self.descriptors = tuple(specs)
+            if self._shell_homes is not None:
+                self._shell_homes.reconcile(
+                    source.name
+                    for source in sources
+                    if source.manifest.shell is not None and source.name in callables
+                )
 
 
 class RoutineSubagentRegistry:

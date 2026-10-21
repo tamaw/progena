@@ -63,7 +63,7 @@ from .object_agent_registry import (
     RoutineSubagentRegistry,
 )
 from .object_agents import create_object_agent_proxy
-from .shell_backend import ShellPaths
+from .shell_backend import ShellHomeLifecycle, ShellPaths
 from .state import ProgenitorAgentState
 
 logger = logging.getLogger(__name__)
@@ -372,6 +372,10 @@ async def create_progenitor_agent(
 
     live_tools = _LiveTools()
 
+    shell_homes = ShellHomeLifecycle(
+        Path(getattr(config.storage, "shell_home_dir", data_dir / "shell-home"))
+    )
+
     def object_proxy(source):
         return create_object_agent_proxy(
             source,
@@ -384,9 +388,10 @@ async def create_progenitor_agent(
             worktree_dir=worktree_dir,
             shell_paths=ShellPaths(
                 shim_bin=Path(config.storage.shim_bin_dir),
-                agent_home=Path(config.storage.shell_home_dir),
+                agent_home=shell_homes.root,
                 timeout_seconds=config.runtime.shell_timeout_seconds,
                 workspace_root=Path(config.storage.shell_workspace_dir),
+                home_lifecycle=shell_homes,
             ),
         )
 
@@ -395,6 +400,7 @@ async def create_progenitor_agent(
         proxy_factory=object_proxy,
         reserved_names=reserved_names,
         native_root=data_dir / "agents" / "objects",
+        shell_homes=shell_homes,
     )
     await live_objects.refresh()
     live_async = LiveAsyncSubagentMiddleware(
