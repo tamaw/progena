@@ -1,12 +1,10 @@
 """Generic ACP runner: spawn an ACP agent over stdio and run one prompt.
 
-``ACPRunner`` is the agent-agnostic equivalent of the Builder Agent's
-``CopilotACPManager`` (``app/agents/builder_agent/runtime/copilot_acp.py``). It
-connects to an ACP agent — either by spawning ``command *args`` as a local stdio
-subprocess, or by connecting over **TCP** to an already-running server (e.g.
-``copilot --acp --port 3000``) — performs the ACP handshake (``initialize`` →
-``session/new`` → ``session/prompt``), collects the streamed output via
-:class:`ACPSessionClient`, and returns a normalised result.
+``ACPRunner`` connects to an ACP agent — either by spawning ``command *args`` as
+a local stdio subprocess, or by connecting over **TCP** to an already-running
+server (e.g. ``copilot --acp --port 3000``) — performs the ACP handshake
+(``initialize`` → ``session/new`` → ``session/prompt``), collects the streamed
+output via :class:`ACPSessionClient`, and returns a normalised result.
 """
 
 from __future__ import annotations

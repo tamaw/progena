@@ -48,7 +48,6 @@ COPY data/modules/ ./data/modules/
 # Native manifests are read-only runtime files, never imported into Postgres.
 COPY data/agents/ ./data/agents/
 COPY data/shims/ ./data/shims/
-COPY scripts/ ./scripts/
 RUN pip install --no-cache-dir . \
     && chown -R root:root /app/data/shims \
     && chmod 0755 /app/data/shims/bin/* \

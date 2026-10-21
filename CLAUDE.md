@@ -40,7 +40,6 @@ curl http://127.0.0.1:5173/health
 pytest tests/ -v                          # all tests
 pytest tests/progenitor/ -v               # progenitor only
 pytest tests/backend/ -v                  # backend only
-pytest tests/agents/builder_agent/ -v     # builder agent only
 pytest -m "not slow" tests/               # skip slow tests
 ```
 
@@ -125,11 +124,12 @@ React + Vite SPA. State management via Redux Toolkit (`app/frontend/src/store/`)
 
 Router in `App.jsx` wraps all routes under `AppRuntimeShell`. Pages: ConversationPage, DashboardPage, AgentsPage, WorkspacePage, and more.
 
-### A2A agents (`app/agents/`)
+### External A2A agents
 
-- **Builder Agent** (`builder_agent/`) — code-generation A2A server on port 8107; owns all repo-mutation capabilities (worktrees, Copilot CLI, gh CLI). Skills: `build_agent`, `build_mcp`, `build_progenitor`, `upgrade_repo`. Checkpoints in SQLite per-build.
-- **Observe Agent** (`observe_agent/`) — monitoring A2A agent.
-- **Builder Progenitor** (`builder_progenitor/`) — ACP-based builder variant.
+Standalone A2A implementations and their deployment assets live in
+[progentior.agents](https://github.com/tamaw/progentior.agents). This repository keeps
+generic A2A discovery/invocation plus the built-in `repo-manager` object agent. Configure
+external checkout discovery with `PROGENITOR_AGENT_REPOSITORIES`.
 
 ### Configuration
 
@@ -154,4 +154,4 @@ def create_node(state_manager, llm_client=None) -> Callable[[ProgenitorState], A
 
 ### Repo safety (do not merge PRs)
 
-Builder Agent creates PRs and waits for human approval. Do not merge PRs programmatically. Do not trigger deployments unless explicitly instructed.
+Agents that create PRs wait for human approval. Do not merge PRs programmatically. Do not trigger deployments unless explicitly instructed.

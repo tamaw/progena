@@ -133,6 +133,26 @@ class CheckpointThreadSnapshot:
 
 
 @dataclass(frozen=True)
+class CheckpointMessageBlob:
+    """One durable LangGraph ``messages`` value and its checkpoint context.
+
+    Values may be immutable channel snapshots or pending message deltas. They
+    remain in LangGraph's trusted serialization format; consumers must decode
+    them with LangGraph's serializer rather than treating them as application
+    JSON or accepting pickle payloads.
+    """
+
+    thread_id: str
+    checkpoint_ns: str
+    checkpoint_id: str
+    checkpoint_ts: datetime
+    checkpoint_metadata: dict[str, Any]
+    blob_type: str
+    blob: bytes
+    source: Literal["channel_blob", "checkpoint_write"] = "channel_blob"
+
+
+@dataclass(frozen=True)
 class RoutineRunSummary:
     """One routine execution, reconstructed from its checkpoint thread.
 
@@ -262,6 +282,12 @@ class BackendDocumentStore(Protocol):
     def list_checkpoint_thread_snapshots(
         self, *, limit: int = 50
     ) -> list[CheckpointThreadSnapshot]: ...
+
+    def list_checkpoint_message_blobs(
+        self, *, before: datetime, limit: int | None = None
+    ) -> tuple[list[CheckpointMessageBlob], bool]:
+        """Read durable ``messages`` snapshots and deltas before ``before``."""
+        ...
 
     def get_checkpoint_thread_snapshot(
         self,
@@ -728,6 +754,12 @@ class InMemoryDocumentStore:
             reverse=True,
         )
         return snapshots[:limit] if limit > 0 else snapshots
+
+    def list_checkpoint_message_blobs(
+        self, *, before: datetime, limit: int | None = None
+    ) -> tuple[list[CheckpointMessageBlob], bool]:
+        """In-memory stores do not synthesize LangGraph serialization."""
+        return [], False
 
     def get_checkpoint_thread_snapshot(
         self,
@@ -1918,6 +1950,126 @@ class PostgresDocumentStore:
             {"table": table_name, "columns": columns, "source": "postgres"}
             for table_name, columns in tables.items()
         ]
+
+    def list_checkpoint_message_blobs(
+        self, *, before: datetime, limit: int | None = None
+    ) -> tuple[list[CheckpointMessageBlob], bool]:
+        """Return recent durable message snapshots and persisted message deltas.
+
+        LangGraph stores a compact state snapshot in ``checkpoint_blobs`` and
+        writes individual channel updates to ``checkpoint_writes``. Both are
+        needed: a delta can contain a completed AI message before a later state
+        snapshot references it. Accounting reads all retained history unless a
+        caller explicitly supplies a limit; silently capping rows could both
+        undercount calls and move first-observed messages into the wrong range.
+        """
+        if limit is not None and limit <= 0:
+            return [], False
+        with self._cursor() as cur:
+            cur.execute(
+                """
+                WITH message_versions AS (
+                    SELECT DISTINCT ON (
+                        c.thread_id,
+                        c.checkpoint_ns,
+                        c.checkpoint->'channel_versions'->>'messages'
+                    )
+                        c.thread_id,
+                        c.checkpoint_ns,
+                        c.checkpoint_id,
+                        (c.checkpoint->>'ts')::timestamptz AS checkpoint_ts,
+                        c.metadata AS checkpoint_metadata,
+                        c.checkpoint->'channel_versions'->>'messages' AS version
+                    FROM checkpoints c
+                    WHERE c.checkpoint ? 'channel_versions'
+                      AND c.checkpoint->'channel_versions' ? 'messages'
+                      AND (c.checkpoint->>'ts')::timestamptz < %s
+                    ORDER BY
+                        c.thread_id,
+                        c.checkpoint_ns,
+                        c.checkpoint->'channel_versions'->>'messages',
+                        (c.checkpoint->>'ts')::timestamptz ASC,
+                        c.checkpoint_id ASC
+                ),
+                message_values AS (
+                    SELECT
+                        v.thread_id,
+                        v.checkpoint_ns,
+                        v.checkpoint_id,
+                        v.checkpoint_ts,
+                        v.checkpoint_metadata,
+                        b.type AS blob_type,
+                        b.blob,
+                        'channel_blob'::text AS source,
+                        0 AS source_rank
+                    FROM message_versions v
+                    JOIN checkpoint_blobs b
+                      ON b.thread_id = v.thread_id
+                     AND b.checkpoint_ns = v.checkpoint_ns
+                     AND b.channel = 'messages'
+                     AND b.version = v.version
+                ),
+                message_deltas AS (
+                    SELECT
+                        c.thread_id,
+                        c.checkpoint_ns,
+                        c.checkpoint_id,
+                        (c.checkpoint->>'ts')::timestamptz AS checkpoint_ts,
+                        c.metadata AS checkpoint_metadata,
+                        w.type AS blob_type,
+                        w.blob,
+                        'checkpoint_write'::text AS source,
+                        1 AS source_rank
+                    FROM checkpoint_writes w
+                    JOIN checkpoints c
+                      ON c.thread_id = w.thread_id
+                     AND c.checkpoint_ns = w.checkpoint_ns
+                     AND c.checkpoint_id = w.checkpoint_id
+                    WHERE w.channel = 'messages'
+                      AND (c.checkpoint->>'ts')::timestamptz < %s
+                ),
+                all_message_values AS (
+                    SELECT * FROM message_values
+                    UNION ALL
+                    SELECT * FROM message_deltas
+                )
+                SELECT
+                    thread_id,
+                    checkpoint_ns,
+                    checkpoint_id,
+                    checkpoint_ts,
+                    checkpoint_metadata,
+                    blob_type,
+                    blob,
+                    source
+                FROM all_message_values
+                ORDER BY checkpoint_ts DESC, source_rank DESC, thread_id DESC, checkpoint_id DESC
+                LIMIT %s
+                """,
+                (before, before, limit + 1 if limit is not None else None),
+            )
+            rows = cast(list[dict[str, Any]], cur.fetchall())
+        has_more = limit is not None and len(rows) > limit
+        return (
+            [
+                CheckpointMessageBlob(
+                    thread_id=str(row["thread_id"]),
+                    checkpoint_ns=str(row["checkpoint_ns"]),
+                    checkpoint_id=str(row["checkpoint_id"]),
+                    checkpoint_ts=cast(datetime, row["checkpoint_ts"]),
+                    checkpoint_metadata=(
+                        dict(row["checkpoint_metadata"])
+                        if isinstance(row.get("checkpoint_metadata"), dict)
+                        else {}
+                    ),
+                    blob_type=str(row["blob_type"]),
+                    blob=bytes(row["blob"]),
+                    source=cast(Literal["channel_blob", "checkpoint_write"], row["source"]),
+                )
+                for row in rows[:limit]
+            ],
+            has_more,
+        )
 
     def list_checkpoint_thread_snapshots(
         self, *, limit: int = 50

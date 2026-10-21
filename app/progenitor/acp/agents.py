@@ -25,9 +25,8 @@ def build_copilot_args(
 ) -> list[str]:
     """Build ``copilot`` ACP args: ``--acp --yolo [--model M] [--add-dir D]...``.
 
-    Mirrors ``CopilotACPManager._build_args`` in the Builder Agent
-    (``app/agents/builder_agent/runtime/copilot_acp.py``). ``--yolo`` auto-approves
-    tool calls; the sandbox ``--add-dir`` is the guardrail.
+    ``--yolo`` auto-approves tool calls; the sandbox ``--add-dir`` is the
+    guardrail.
     """
     args = ["--acp", "--yolo"]
     if model:

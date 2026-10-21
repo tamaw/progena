@@ -1,75 +1,57 @@
 ---
 name: self-improvement
-description: Reflect on build iterations, extract reusable patterns, and improve agent behavior over time. Use when reviewing completed work, capturing lessons learned, or updating long-term agent capabilities.
-allowed-tools: read_file write_file shell
+description: Reflect on completed conversations, delegated work, routines, or incidents; record durable lessons in persistent memory without modifying source skills.
+allowed-tools: ls read_file write_file edit_file grep glob
 ---
 
-# Self-Improvement Skill
+# Self-Improvement
 
 ## When to Use
-- After a build iteration completes (learn phase)
-- User asks for self-reflection
-- Patterns need to be extracted from past successes/failures
-- Agent capabilities need assessment
+- After a completed conversation, delegated task, routine, or incident
+- The user asks for a retrospective or reusable lessons
+- Repeated successes or failures suggest a durable operating pattern
 
-## Iteration Analysis Framework
-After each build iteration, analyze:
+## Reflection Framework
 
-1. **Was the experiment plan achieved?** Compare planned vs actual outcome
-2. **Are we progressing toward the ideal state?** Gap analysis
-3. **What worked?** Identify successful patterns with confidence scores
-4. **What failed?** Identify anti-patterns and root causes
-5. **What adjustments to make?** Prioritized, actionable next steps
+Keep the review tied to evidence:
 
-## Lesson Format
-Each lesson should include:
-- **Pattern**: What was observed
-- **Confidence**: How reliable (0.0-1.0) based on repetition
-- **Category**: code_quality, testing, architecture, performance, user_interaction
-- **Action**: Concrete adjustment for next iteration
+1. **Outcome** — compare the intended result with what actually happened.
+2. **Evidence** — identify the relevant conversation, runtime status, logs, or work artifact.
+3. **What worked** — capture repeatable decisions or conditions.
+4. **What failed** — identify root causes and anti-patterns rather than suppressing symptoms.
+5. **Adjustment** — state one concrete behavior for a similar future situation.
 
-## Anti-Criteria Learning
-Track conditions that indicate BAD solutions:
-- "If the solution requires X, it's probably wrong because..."
-- These are as valuable as positive criteria for convergence
+Do not treat a single event as a universal rule. Record confidence from `0.0` to `1.0` and raise it only with independent supporting examples.
 
-## Storing Lessons
-Store lessons as category-based Markdown files under `/memories/` so they stay
-easy to scan with `ls`, `glob`, `grep`, and `read_file`.
+## Store Lessons in Memory
 
-`/memories/` is the writable persistent-memory mount. It is separate from the
-read-only `/self/`, `/data/`, `/logs/`, and `/instructions/` mounts.
+`/memories/` is the writable persistent-memory domain. Organize concise Markdown notes by category, for example:
 
-- `/memories/patterns/code_quality.md`
+- `/memories/patterns/code-quality.md`
 - `/memories/patterns/testing.md`
 - `/memories/patterns/architecture.md`
 - `/memories/patterns/performance.md`
-- `/memories/patterns/user_interaction.md`
+- `/memories/patterns/user-interaction.md`
 - `/memories/anti-patterns.md`
 
-These files persist across sessions and restarts.
-High-confidence patterns (>0.8) should be promoted to skill instructions.
+Before adding a lesson:
 
-Before writing a new lesson:
-1. Read the relevant category file first.
-2. Merge with an existing lesson when it describes the same pattern.
-3. Prefer short Markdown bullets with pattern, confidence, and action.
-4. Put anti-patterns in `/memories/anti-patterns.md` instead of mixing them
-   into positive pattern files.
+1. Read the relevant memory file.
+2. Merge equivalent observations instead of duplicating them.
+3. Record the pattern, evidence or conditions, confidence, and next action as short bullets.
+4. Keep negative guidance in `anti-patterns.md` rather than mixing it with positive patterns.
 
-## Memory Compaction
-Do not let memory files grow forever.
+When a file becomes repetitive, compact it: retain durable high-confidence lessons and useful recent evidence, while removing duplicates and stale low-confidence notes.
 
-1. When a category file becomes repetitive or hard to skim, rewrite it into a
-   compact summary instead of appending more bullets.
-2. Keep durable high-confidence lessons and the most useful recent examples.
-3. Remove duplicates, stale low-confidence notes, and wording that no longer
-   helps future iterations.
-4. Preserve concise anti-patterns separately in `/memories/anti-patterns.md`.
+## Writable Documents and Source Assets
 
-## File Analysis
-When reflecting on source code:
-1. Summarize main purpose
-2. Identify key components and their roles
-3. Note capabilities provided
-4. Map relationships to other modules
+- `/memories/` is writable for durable lessons.
+- `/instructions/` contains validated, Postgres-backed instruction documents and can be changed only when an instruction change is deliberately requested; runtime instruction placeholders must remain valid.
+- `/skills/` is read-only. Native skills are static source assets from `data/skills/`; marketplace-plugin skills are also exposed read-only.
+- `/self/`, `/repos/`, `/logs/`, and `/schemas/` are read-only mounts.
+
+A lesson does **not** promote itself to a skill. For a high-confidence capability change, propose the concrete skill or instruction change with its evidence. A maintainer must change the source skill and deliver that change; never attempt to write it through `/skills/`. Existing stored instructions are user-owned, so a changed seed does not overwrite them on restart.
+
+## Source Analysis
+
+When a retrospective needs code context, summarize the component's purpose, key collaborators, observed behavior, and the narrow lesson supported by the evidence. Do not make source changes as part of reflection unless the user separately asks for them.

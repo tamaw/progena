@@ -308,6 +308,57 @@ The following are intentionally absent rather than compatibility endpoints:
 
 A deleted path returns `404`; it is not a fallback for a stream failure.
 
+## Insights and estimated model cost
+
+`GET /api/ui/insights/token-usage?range=24h|7d|30d&profile=<optional-name>`
+returns a `202` acknowledgement. The correlated
+`insights.token_usage.snapshot` event carries `request_id`, range/profile,
+UTC start/end, generated time, totals, per-profile/deployment rows, time
+buckets, coverage warnings and `pricing_basis: "current_profile_rates"`.
+Missing profile means all profiles, including unattributed usage. Totals
+include separate input/output/total/cache-read/reasoning counts, call and
+incomplete/unpriced counts, and a per-currency array of decimal cost amounts.
+Never combine currencies or add cache/reasoning subsets to total tokens.
+
+The backend reads committed `checkpoint_writes` message deltas as well as
+message-channel versions in `checkpoint_blobs`. Messages are deduplicated by
+thread/message identity, preserving the first observation when no explicit
+call/provider timestamp exists. Repeated checkpoint snapshots and workflow
+summaries are not additional model calls. Orphan writes without a committed
+checkpoint are excluded. Usage retention follows checkpoint retention:
+deleting checkpoints may remove reportable history. Missing/unreadable
+usage and missing profile identity are reported rather than assigned to
+today's deployment catalog.
+
+SQL retrieves the retained serialized message sources in one read; the
+LangGraph serializer decodes msgpack and Python aggregates normalized usage.
+There is no stored procedure, second authoritative ledger, or hard row cap
+on accounting reads. All retained history before the report end is examined
+so old messages copied into recent checkpoints are not retimestamped.
+This work runs off the async request loop. Measure large installations before
+adding a checkpoint-derived projection; current request cost scales with
+retained message history, not just the selected range.
+
+Profiles expose optional public/PATCH `pricing` with `currency` and
+`input_per_million`, `cached_input_per_million`, `output_per_million` decimal
+strings. All rates must be finite/nonnegative; zero is valid; PATCH `null`
+removes pricing. Cached-input tokens use the cache rate instead of the input
+rate. Unknown cache detail is labelled as an estimate charged at the input
+rate; unknown pricing is unpriced, not zero cost. Editing rates recalculates
+history and does not claim invoice-grade historical tariffs.
+
+The Profiles editor provides an explicit Azure GPT-5 mini Global Standard
+USD preset, verified against the [Azure pricing page](https://azure.microsoft.com/en-us/pricing/details/azure-openai/)
+on 2026-10-20: input `0.25`, cached input `0.025`, output `2.00` per million
+tokens. Displayed rounded prices are not used for calculation. This preset
+does not establish prices for other models, regions or deployment tiers.
+An absent catalog is seeded with this pricing only when
+`PROGENITOR_MODEL_DEFAULT_MODEL=gpt-5-mini` and
+`PROGENITOR_MODEL_DEFAULT_PRICING_TIER=global_standard` are both explicit.
+Existing catalogs are never silently repriced; arbitrary deployment names
+remain unpriced until configured.
+
+
 ## Local development
 
 Start the runtime and backend separately:

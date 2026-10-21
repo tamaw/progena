@@ -2,10 +2,10 @@
 
 Instructions are ``instruction:<group>/<file>.md`` store documents in the
 template format of ``app.progenitor.instructions.templates``. ``progenitor/``
-and the bundled agent groups are synced from ``data/instructions/`` by the
-runtime; other groups (workflow templates) are created by users and agents.
-Ownership rules live in ``app.progenitor.instructions.documents``. Every write
-is captured in ``instruction_revisions``.
+is seeded from ``data/instructions/`` by the runtime; other groups are created
+by users and agents. Ownership rules live in
+``app.progenitor.instructions.documents``. Every write is captured in
+``instruction_revisions``.
 """
 
 from __future__ import annotations
@@ -15,11 +15,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from app.progenitor.content_documents import content_document_key, content_document_prefix
-from app.progenitor.instructions import (
-    check_instruction_write,
-    instruction_group,
-    is_bundled_instruction,
-)
+from app.progenitor.instructions import check_instruction_write, instruction_group
 from app.progenitor.instructions.templates import (
     InstructionTemplate,
     instruction_relative_path,
@@ -63,7 +59,7 @@ def _summary(path: str, content: str, updated_at: datetime | None) -> dict[str, 
         "title": template.title or path.rsplit("/", 1)[-1],
         "description": template.description or "",
         "placeholders": template.roots,
-        "editable": not is_bundled_instruction(path),
+        "editable": True,
         "updated_at": updated_at.isoformat() if updated_at else None,
     }
 

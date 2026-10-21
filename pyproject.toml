@@ -136,10 +136,6 @@ unfixable = []
     "ARG",    # Unused arguments OK in tests
     "S101",   # assert OK in tests
 ]
-"scripts/**/*.py" = [
-    "ARG",    # Unused arguments OK in scripts
-    "E402",   # Allow sys.path bootstrap before local imports
-]
 "tests/integration/**/*.py" = [
     "E402",   # Allow sys.path bootstrap before local imports
 ]
@@ -186,7 +182,7 @@ markers = [
 
 # Bandit security scanner configuration
 [tool.bandit]
-exclude_dirs = ["tests", "scripts", "examples"]
+exclude_dirs = ["tests", "examples"]
 skips = [
     "B101",  # assert used (OK in production for invariants)
     "B311",  # random not for crypto (OK for jitter)
@@ -199,7 +195,6 @@ branch = true
 omit = [
     "app/chat-ui/*",
     "tests/*",
-    "scripts/*",
 ]
 
 [tool.coverage.report]

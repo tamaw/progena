@@ -27,7 +27,7 @@ repos:
       # Linting
       - id: ruff
         args: [--fix, --exit-non-zero-on-fix]
-        exclude: ^(tests/|scripts/)
+        exclude: ^tests/
       # Formatting (replaces black)
       - id: ruff-format
         exclude: ^app/frontend/

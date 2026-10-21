@@ -349,7 +349,7 @@ class AgentDiscovery:
     async def _register_agent(self, spec: DiscoveredAgentSpec) -> None:
         from ..state.models import AgentRegistryEntry, AgentStatus
 
-        entrypoint = f"app/agents/{spec.name}/{spec.entrypoint}"
+        entrypoint = spec.entrypoint
         port = spec.port
         url = spec.url.strip().rstrip("/") if spec.url else None
         if not url and port is not None:

@@ -69,9 +69,6 @@ class TestListToolsTool:
             {"name": "tool1", "description": "First tool"},
             {"name": "tool2", "description": "Second tool"},
         ]
-        mock_registry.get_local_mcp_tools.return_value = [
-            {"name": "local_tool", "description": "Local MCP tool"},
-        ]
 
         mock_llm = MagicMock()
         mock_llm.mcp_runtime = MagicMock()
@@ -93,7 +90,7 @@ class TestListToolsTool:
         assert "mcp_tools" in result.data
 
         mcp_names = {t.get("name") for t in result.data["mcp_tools"]}
-        assert {"tool1", "tool2", "local_tool", "remote_tool"} <= mcp_names
+        assert mcp_names == {"tool1", "tool2", "remote_tool"}
 
         system_names = {t.get("name") for t in result.data["system_tools"]}
         assert len(system_names) > 0

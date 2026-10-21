@@ -83,21 +83,6 @@ class TestSkillFiles:
                 f"Invalid skill name '{name}' — must be lowercase with hyphens"
             )
 
-    def test_expected_skills_exist(self):
-        """All planned skills should be present."""
-        expected = {
-            "build-agent",
-            "managing-mcp",
-            "managing-plugins",
-            "managing-schedules",
-            "git-workflow",
-            "self-improvement",
-            "agent-architecture",
-        }
-        actual = {d.name for d in self._get_skill_dirs()}
-        missing = expected - actual
-        assert not missing, f"Missing expected skills: {missing}"
-
 
 class FakeContentStateManager:
     """Minimal async state_manager stub for get/save/list content documents."""

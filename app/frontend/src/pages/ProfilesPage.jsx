@@ -28,6 +28,7 @@ import '../styles/profiles.css';
 
 const FILTERS = ['All', 'Inherited', 'Customized'];
 const EDITABLE_FIELDS = ['deployment', 'reasoning_enabled', 'reasoning_effort', 'reasoning_summary'];
+const PRICING_FIELDS = ['currency', 'input_per_million', 'cached_input_per_million', 'output_per_million'];
 const providerLabel = (provider) => provider === 'azure_openai' ? 'Azure OpenAI' : provider;
 const REASONING_ENABLED_OPTIONS = [
   { value: '', label: 'Inherit' },
@@ -35,10 +36,19 @@ const REASONING_ENABLED_OPTIONS = [
   { value: 'false', label: 'Disabled' },
 ];
 
+const GPT_5_MINI_GLOBAL_STANDARD_PRICING = Object.freeze({
+  currency: 'USD',
+  input_per_million: '0.25',
+  cached_input_per_million: '0.025',
+  output_per_million: '2.00',
+});
+
 const EMPTY_PROFILE_EDIT = Object.freeze({ draft: null, baseline: null, validationError: null });
 const PROFILE_SNAPSHOT_EVENTS = Object.freeze(['profiles.snapshot']);
 
-const isCustomized = (profile) => EDITABLE_FIELDS.slice(1).some((field) => profile[field] != null);
+const emptyPricing = () => Object.fromEntries(PRICING_FIELDS.map((field) => [field, '']));
+const isCustomized = (profile) => Boolean(profile.pricing)
+  || EDITABLE_FIELDS.slice(1).some((field) => profile[field] != null);
 
 function toDraft(profile) {
   return {
@@ -46,11 +56,30 @@ function toDraft(profile) {
     reasoning_enabled: profile.reasoning_enabled == null ? '' : String(profile.reasoning_enabled),
     reasoning_effort: profile.reasoning_effort ?? '',
     reasoning_summary: profile.reasoning_summary ?? '',
+    pricing: profile.pricing ? { ...profile.pricing } : emptyPricing(),
   };
 }
 
-function toBaseline(profile) {
-  return Object.fromEntries(EDITABLE_FIELDS.map((field) => [field, profile[field]]));
+function buildPricing(draft) {
+  const pricing = Object.fromEntries(
+    PRICING_FIELDS.map((field) => [field, draft.pricing[field].trim()]),
+  );
+  return Object.values(pricing).some(Boolean) ? pricing : null;
+}
+
+function validatePricing(draft) {
+  const pricing = buildPricing(draft);
+  if (!pricing) return null;
+  if (PRICING_FIELDS.some((field) => !pricing[field])) {
+    return 'Complete currency and all per-million rates, or clear every pricing field to mark this deployment unpriced.';
+  }
+  if (!/^[A-Z]{3}$/.test(pricing.currency)) {
+    return 'Currency must be a three-letter uppercase ISO 4217 code.';
+  }
+  if (PRICING_FIELDS.slice(1).some((field) => !/^\d+(?:\.\d+)?$/.test(pricing[field]))) {
+    return 'Rates must be non-negative decimal strings.';
+  }
+  return null;
 }
 
 function buildPatch(draft, base) {
@@ -60,9 +89,13 @@ function buildPatch(draft, base) {
     reasoning_effort: draft.reasoning_effort.trim() || null,
     reasoning_summary: draft.reasoning_summary.trim() || null,
   };
-  return Object.fromEntries(EDITABLE_FIELDS
+  const patch = Object.fromEntries(EDITABLE_FIELDS
     .filter((field) => values[field] !== (base[field] ?? null))
     .map((field) => [field, values[field]]));
+  const pricing = buildPricing(draft);
+  const basePricing = buildPricing(base);
+  if (JSON.stringify(pricing) !== JSON.stringify(basePricing)) patch.pricing = pricing;
+  return patch;
 }
 
 function ProfileDetails({ profile, catalogue, url, connected }) {
@@ -81,11 +114,11 @@ function ProfileDetails({ profile, catalogue, url, connected }) {
   const error = saveError || editState.validationError;
   const deleteAction = useConfirmAction(`profile-delete:${url}:${profile.name}`);
   const conflict = Boolean(draft && baseline
-    && EDITABLE_FIELDS.some((field) => (baseline[field] ?? null) !== (profile[field] ?? null)));
+    && JSON.stringify(baseline) !== JSON.stringify(toDraft(profile)));
   const startEdit = () => {
     setEditState({
       draft: toDraft(profile),
-      baseline: toBaseline(profile),
+      baseline: toDraft(profile),
       validationError: null,
     });
   };
@@ -98,7 +131,7 @@ function ProfileDetails({ profile, catalogue, url, connected }) {
   const save = useSnapshotSave({
     dispatch, thunk: patchModelProfile, buildArgs, path: profile.name,
     content: draft ? JSON.stringify(draft) : '',
-    savedContent: baseline ? JSON.stringify(toDraft(baseline)) : '',
+    savedContent: baseline ? JSON.stringify(baseline) : '',
     saving, realtimeConnected: connected,
     beginSave, trackSave, failSave, events: PROFILE_SNAPSHOT_EVENTS,
   });
@@ -106,6 +139,11 @@ function ProfileDetails({ profile, catalogue, url, connected }) {
     if (!draft || conflict || saving) return;
     if (!draft.deployment.trim()) {
       setEditState((current) => ({ ...current, validationError: 'Deployment is required.' }));
+      return;
+    }
+    const pricingError = validatePricing(draft);
+    if (pricingError) {
+      setEditState((current) => ({ ...current, validationError: pricingError }));
       return;
     }
     if (!Object.keys(buildPatch(draft, baseline)).length) {
@@ -117,6 +155,22 @@ function ProfileDetails({ profile, catalogue, url, connected }) {
   const updateDraft = (field, value) => setEditState((current) => ({
     ...current,
     draft: { ...current.draft, [field]: value },
+    validationError: null,
+  }));
+  const updatePricing = (field, value) => setEditState((current) => ({
+    ...current,
+    draft: {
+      ...current.draft,
+      pricing: { ...current.draft.pricing, [field]: value },
+    },
+    validationError: null,
+  }));
+  const applyGpt5MiniGlobalStandardPricing = () => setEditState((current) => ({
+    ...current,
+    draft: {
+      ...current.draft,
+      pricing: { ...GPT_5_MINI_GLOBAL_STANDARD_PRICING },
+    },
     validationError: null,
   }));
 
@@ -171,7 +225,7 @@ function ProfileDetails({ profile, catalogue, url, connected }) {
             <form className="agents-card-facts agents-draft profiles-form" onSubmit={(event) => { event.preventDefault(); handleSave(); }}>
               <label className="agents-draft-field profiles-field">
                 <span className="agents-draft-field__label">Deployment <span aria-hidden="true" className="profiles-field__required">*</span></span>
-                <input type="text" value={draft.deployment} onChange={(event) => updateDraft('deployment', event.target.value)} disabled={saving} required />
+                <input className="set-text-input" type="text" value={draft.deployment} onChange={(event) => updateDraft('deployment', event.target.value)} disabled={saving} required />
               </label>
               <label className="agents-draft-field profiles-field">
                 <span className="agents-draft-field__label">Reasoning enabled</span>
@@ -186,11 +240,31 @@ function ProfileDetails({ profile, catalogue, url, connected }) {
               {['reasoning_effort', 'reasoning_summary'].map((field) => (
                 <label className="agents-draft-field profiles-field" key={field}>
                   <span className="agents-draft-field__label">{field === 'reasoning_effort' ? 'Reasoning effort' : 'Reasoning summary'}</span>
-                  <input type="text" value={draft[field]} onChange={(event) => updateDraft(field, event.target.value)} disabled={saving} placeholder="Inherit" />
+                  <input className="set-text-input" type="text" value={draft[field]} onChange={(event) => updateDraft(field, event.target.value)} disabled={saving} placeholder="Inherit" />
                 </label>
               ))}
+              <fieldset className="profiles-pricing">
+                <legend>Estimated token pricing</legend>
+                <div className="profiles-pricing__preset">
+                  <button type="button" className="repo-btn repo-btn--ghost" onClick={applyGpt5MiniGlobalStandardPricing} disabled={saving}>Use GPT-5 mini Global Standard preset</button>
+                  <a href="https://azure.microsoft.com/en-us/pricing/details/azure-openai/" target="_blank" rel="noreferrer">Pricing source</a>
+                </div>
+                <label className="agents-draft-field profiles-field">
+                  <span className="agents-draft-field__label">Currency</span>
+                  <input className="set-text-input" type="text" value={draft.pricing.currency} onChange={(event) => updatePricing('currency', event.target.value)} disabled={saving} placeholder="USD" maxLength="3" />
+                </label>
+                {[
+                  ['input_per_million', 'Input per 1M tokens', '0.25'],
+                  ['cached_input_per_million', 'Cached input per 1M tokens', '0.025'],
+                  ['output_per_million', 'Output per 1M tokens', '2.00'],
+                ].map(([field, label, placeholder]) => (
+                  <label className="agents-draft-field profiles-field" key={field}>
+                    <span className="agents-draft-field__label">{label}</span>
+                    <input className="set-text-input" type="text" inputMode="decimal" value={draft.pricing[field]} onChange={(event) => updatePricing(field, event.target.value)} disabled={saving} placeholder={placeholder} />
+                  </label>
+                ))}
+              </fieldset>
               {error ? <InlineFailure failure={error} operation="Save profile" /> : null}
-              <p className="profiles-form__hint">{saving ? 'Saving…' : 'Inherit uses runtime environment settings. Clear effort or summary to remove its override.'}</p>
             </form>
           ) : (
             <dl className="agents-card-facts profiles-config-grid">
@@ -200,6 +274,14 @@ function ProfileDetails({ profile, catalogue, url, connected }) {
               <div className="agents-card-fact"><dt className="agents-card-fact__label">Reasoning enabled</dt><dd className="agents-card-fact__value">{profile.reasoning_enabled == null ? 'Inherit' : profile.reasoning_enabled ? 'Enabled' : 'Disabled'}</dd></div>
               <div className="agents-card-fact"><dt className="agents-card-fact__label">Reasoning effort</dt><dd className="agents-card-fact__value">{profile.reasoning_effort || 'Inherit'}</dd></div>
               <div className="agents-card-fact"><dt className="agents-card-fact__label">Reasoning summary</dt><dd className="agents-card-fact__value">{profile.reasoning_summary || 'Inherit'}</dd></div>
+              <div className="agents-card-fact"><dt className="agents-card-fact__label">Estimated pricing</dt><dd className="agents-card-fact__value">{profile.pricing ? `${profile.pricing.currency} current rates` : 'Unpriced'}</dd></div>
+              {profile.pricing ? (
+                <>
+                  <div className="agents-card-fact"><dt className="agents-card-fact__label">Input per 1M</dt><dd className="agents-card-fact__value">{profile.pricing.input_per_million}</dd></div>
+                  <div className="agents-card-fact"><dt className="agents-card-fact__label">Cached input per 1M</dt><dd className="agents-card-fact__value">{profile.pricing.cached_input_per_million}</dd></div>
+                  <div className="agents-card-fact"><dt className="agents-card-fact__label">Output per 1M</dt><dd className="agents-card-fact__value">{profile.pricing.output_per_million}</dd></div>
+                </>
+              ) : null}
             </dl>
           )}
         </section>
