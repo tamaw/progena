@@ -63,8 +63,8 @@ class TestToolRegistry:
             "kind": "mcp_server",
             "description": "A test tool",
             "capabilities": ["fetch_data"],
-            "command": "python /app/mcp/test/server.py",
-            "transport": "stdio",
+            "endpoint": "https://mcp.example.test/mcp",
+            "transport": "http",
         }
 
         await registry.register_tool(tool)
