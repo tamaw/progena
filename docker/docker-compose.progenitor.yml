@@ -2,16 +2,21 @@
 # Shared Configuration (YAML Anchors)
 # ==============================================================================
 x-progenitor-llm-env: &progenitor-llm-env
+  # Imported exactly once by provider persistence for legacy installations.
   AZURE_OPENAI_API_KEY: ${AZURE_OPENAI_API_KEY:-}
   AZURE_OPENAI_BASE_URL: ${AZURE_OPENAI_BASE_URL:-}
-  JINA_API_KEY: ${JINA_API_KEY:-}
   PROGENITOR_MODEL_DEFAULT: ${PROGENITOR_MODEL_DEFAULT:-gpt-5.1-codex-max}
+  # Selected environment-backed provider credentials.
+  OPENCODE_GO_API_KEY: ${OPENCODE_GO_API_KEY:-}
+  PROGENITOR_PROVIDER_ENCRYPTION_KEY: ${PROGENITOR_PROVIDER_ENCRYPTION_KEY:-}
+  JINA_API_KEY: ${JINA_API_KEY:-}
   PROGENITOR_REASONING_ENABLED: ${PROGENITOR_REASONING_ENABLED:-true}
   PROGENITOR_REASONING_EFFORT: ${PROGENITOR_REASONING_EFFORT:-low}
   PROGENITOR_REASONING_SUMMARY: ${PROGENITOR_REASONING_SUMMARY:-auto}
 
 x-progenitor-database-env: &progenitor-database-env
   PROGENITOR_DATABASE_URL: ${PROGENITOR_DATABASE_URL:-postgresql://progenitor:progenitor@postgres:5432/progenitor}
+  BACKEND_DATABASE_NAME: ${BACKEND_DATABASE_NAME:-backend}
   PROGENITOR_DATABASE_SETUP: ${PROGENITOR_DATABASE_SETUP:-true}
   PROGENITOR_DATABASE_POOL_MIN_SIZE: ${PROGENITOR_DATABASE_POOL_MIN_SIZE:-1}
   PROGENITOR_DATABASE_POOL_MAX_SIZE: ${PROGENITOR_DATABASE_POOL_MAX_SIZE:-10}

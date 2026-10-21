@@ -110,7 +110,8 @@ class SearchTool(BaseSystemTool):
         settings = await sm.get_indexer_config()
         try:
             target = resolve_embedding_target(settings, await sm.get_model_profiles_config())
-            vector = (await embedder_for(target).embed([query]))[0]
+            embedder = await embedder_for(target)
+            vector = (await embedder.embed([query]))[0]
         except ValueError as exc:
             return ToolResult.fail(str(exc))
         except Exception as exc:

@@ -83,9 +83,9 @@ Agents communicate via HTTP:
 - `app/mcp/`: MCP tool implementations
 
 ## Configuration
-Environment variables take precedence over JSON config:
-- `PROGENITOR_LLM_PROVIDER`: azure | openai
-- `AZURE_OPENAI_BASE_URL`: Azure OpenAI base URL (without `/responses`)
-- `AZURE_OPENAI_API_KEY`: Azure OpenAI API key
-- `PROGENITOR_MODEL_DEFAULT`: Default model name
-- `PROGENITOR_MOCK_LLM`: Enable mock mode for testing
+Model connections are ordinary database-backed application settings, managed in **Settings → Providers**:
+- Foundry and OpenCode Go use the Responses API; Go accepts only the supported Responses model IDs.
+- `/config/profile.json` selects a `provider_id` and `deployment`, or inherits the default connection when `provider_id` is absent. Never put endpoints or API keys in agent state.
+- Credentials use encrypted database storage (`PROGENITOR_PROVIDER_ENCRYPTION_KEY` shared by backend/runtime) or an explicit provider API-key environment reference.
+- `AZURE_OPENAI_BASE_URL` and `PROGENITOR_MODEL_DEFAULT` are imported once for existing installations, not ongoing runtime overrides.
+- Saved provider changes apply on the next turn; active turns retain their connection snapshot.

@@ -49,6 +49,7 @@ from app.progenitor.document_kinds import (
 )
 from app.progenitor.document_types import DOCUMENT_OPERATIONS, DocumentType
 from app.progenitor.knowledge.indexer_config import INDEX_STATUS_DOC_KEY
+from app.progenitor.providers import get_provider_repository
 from app.progenitor.routines.events import RUN_EVENT_PREFIX
 from app.progenitor.routines.store import ROUTINE_GRAPH_KEY_PREFIX
 from app.progenitor.schedule import Scheduler
@@ -121,6 +122,7 @@ from .marketplace_service import load_marketplaces
 from .model_profile_routes import create_model_profile_router
 from .policy_routes import create_policy_router
 from .preferences_service import load_preferences
+from .provider_routes import create_provider_router
 from .repo_service import load_repo, merged_repo_detail, merged_repo_rows, workspace_signal
 from .request_utils import request_correlation_id as _request_correlation_id
 from .routine_events import routine_events
@@ -4934,6 +4936,15 @@ router.include_router(create_policy_router(get_default_document_store, broadcast
 
 router.include_router(
     create_model_profile_router(
+        get_store=get_default_document_store,
+        broadcast=broadcast_ui_event,
+        get_provider_repository=get_provider_repository,
+    )
+)
+
+router.include_router(
+    create_provider_router(
+        get_repository=get_provider_repository,
         get_store=get_default_document_store,
         broadcast=broadcast_ui_event,
     )

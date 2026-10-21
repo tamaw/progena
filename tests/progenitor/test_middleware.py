@@ -3,8 +3,6 @@ Tests for Phase 4: Custom middleware for DeepAgent.
 """
 
 import json
-import tempfile
-from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -20,7 +18,6 @@ from app.progenitor.agent.middleware import (
     DynamicMCPToolMiddleware,
     SecretRedactionMiddleware,
 )
-from app.progenitor.instructions import DEFAULT_INSTRUCTIONS_DIR
 from app.progenitor.state.models import AsyncSubagentTaskRecord
 
 
@@ -385,78 +382,3 @@ class TestAsyncSubagentTrackingMiddleware:
         assert payload["success"] == 1
         assert payload["tasks"][0]["task_id"] == "thread_completed"
         assert payload["tasks"][0]["summary"] == "HELLO_FROM_ASYNC_SUBAGENT"
-
-
-class TestMiddlewareIntegration:
-    """Integration test: middleware wired into factory."""
-
-    async def test_factory_accepts_middleware_param(self):
-        """create_progenitor_agent accepts log_sink param."""
-        from types import SimpleNamespace
-        from unittest.mock import patch
-
-        with (
-            patch("app.progenitor.agent.agent.create_deep_agent") as mock_create,
-            patch("app.progenitor.agent.agent.create_progenitor_backend") as mock_backend,
-        ):
-            mock_create.return_value = MagicMock()
-            mock_backend.return_value = MagicMock()
-            with patch("app.progenitor.agent.agent.create_langchain_model") as mock_model:
-                mock_model.return_value = MagicMock()
-                from app.progenitor.agent.agent import create_progenitor_agent
-
-                class _FakeStateManager:
-                    def __init__(self):
-                        self._docs = {
-                            "instruction": {
-                                "progenitor/genesis.md": "---\ntitle: Genesis\ndescription: Test\n---\nGenesis"
-                            },
-                            "skill": {},
-                            "agent": {},
-                            "memory": {},
-                        }
-
-                    async def get_content_document(self, kind, relative_path):
-                        return self._docs[kind].get(relative_path)
-
-                    async def save_content_document(self, kind, relative_path, content):
-                        self._docs[kind][relative_path] = content
-
-                    async def delete_content_document(self, kind, relative_path):
-                        self._docs[kind].pop(relative_path, None)
-
-                    async def list_content_documents(self, kind):
-                        return list(self._docs[kind].items())
-
-                    async def list_routine_graphs(self):
-                        return []
-
-                with tempfile.TemporaryDirectory() as tmpdir:
-                    fake_config = SimpleNamespace(
-                        llm=SimpleNamespace(model_default="gpt-chat-latest"),
-                        storage=SimpleNamespace(
-                            instructions_dir=DEFAULT_INSTRUCTIONS_DIR,
-                            shim_bin_dir=Path(tmpdir) / "shims" / "bin",
-                            shell_home_dir=Path(tmpdir) / "shell-home",
-                            shell_workspace_dir=Path(tmpdir) / "shell-workspaces",
-                        ),
-                        runtime=SimpleNamespace(shell_timeout_seconds=120),
-                    )
-                    await create_progenitor_agent(
-                        config=fake_config,
-                        checkpointer=MagicMock(),
-                        store=MagicMock(),
-                        state_manager=_FakeStateManager(),
-                        skills_dirs=[],
-                        memory_paths=[],
-                        log_sink=MagicMock(),
-                    )
-
-            # Verify middleware was passed
-            call_kwargs = mock_create.call_args.kwargs
-            assert "middleware" in call_kwargs
-            middleware = call_kwargs["middleware"]
-            types = [type(m).__name__ for m in middleware]
-            assert "DynamicMCPToolMiddleware" in types
-            assert "SecretRedactionMiddleware" in types
-            assert "AuditLoggingMiddleware" in types

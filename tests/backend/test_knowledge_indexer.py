@@ -22,7 +22,7 @@ from app.progenitor.knowledge.indexer_config import INDEX_STATUS_DOC_KEY
 DB_URL = (os.getenv("PROGENITOR_DATABASE_URL") or os.getenv("DATABASE_URL") or "").strip()
 pytestmark = pytest.mark.skipif(not DB_URL, reason="requires PROGENITOR_DATABASE_URL")
 
-PROFILES = {"embeddings": {"provider": "azure_openai", "deployment": "text-embedding-3-small"}}
+PROFILES = {"embeddings": {"provider_id": "foundry-1", "deployment": "text-embedding-3-small"}}
 
 
 def _page(title: str, body: str) -> dict[str, str]:
@@ -57,11 +57,13 @@ def harness():
         PROGENITOR_STATE_PREFIX, "indexer", {"profile": "embeddings", "dimensions": 8}
     )
     state: dict[str, Any] = {"events": [], "calls": [], "fail": False}
+
+    async def make_embedder(target):
+        return FakeEmbedder(target.dimensions, state["calls"], state["fail"])
+
     indexer = KnowledgeIndexer(
         database_url=url,
-        embedder_factory=lambda target: FakeEmbedder(
-            target.dimensions, state["calls"], state["fail"]
-        ),
+        embedder_factory=make_embedder,
         publish=lambda event_type, payload: state["events"].append((event_type, payload)),
     )
     yield indexer, store, state, url
@@ -189,10 +191,12 @@ async def test_dimension_change_rebuilds_the_index(harness):
 
 
 def _competing_indexer(url: str, lock_key: str) -> KnowledgeIndexer:
+    async def make_embedder(target):
+        return FakeEmbedder(target.dimensions, [])
 
     return KnowledgeIndexer(
         database_url=url,
-        embedder_factory=lambda target: FakeEmbedder(target.dimensions, []),
+        embedder_factory=make_embedder,
         publish=lambda event_type, payload: None,
         lock_retry_seconds=0.05,
         lock_key=lock_key,

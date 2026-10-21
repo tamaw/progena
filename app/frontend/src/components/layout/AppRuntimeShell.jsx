@@ -103,6 +103,8 @@ import { derivePageContext, formatPageContextBlock, stripPageContextBlock } from
 
 import PopupModal from '../common/PopupModal';
 import Modal from '../common/Modal';
+import ProvidersSettings from './ProvidersSettings';
+
 import { createSpectatorReplayState } from './quickChatStreamModel';
 
 // Grouped by owner/level (see the entity-relationship model):
@@ -195,6 +197,7 @@ const settingsSections = [
   { id: 'general', label: 'General', icon: <SettingsGeneralIcon /> },
   { id: 'appearance', label: 'Appearance', icon: <SettingsAppearanceIcon /> },
   { id: 'marketplaces', label: 'Marketplaces', icon: <SettingsMarketplacesIcon /> },
+  { id: 'providers', label: 'Providers', icon: <SettingsIntegrationsIcon /> },
   { id: 'agents', label: 'Agents & Models', icon: <SettingsAgentsIcon /> },
   { id: 'keyboard', label: 'Keyboard', icon: <SettingsKeyboardIcon /> },
   { id: 'integrations', label: 'Integrations', icon: <SettingsIntegrationsIcon /> },
@@ -1495,6 +1498,15 @@ function MarketplacesSettingsRow() {
   const [newName, setNewName] = useState('');
   const [newSource, setNewSource] = useState('');
   const [error, setError] = useState('');
+  const [creating, setCreating] = useState(false);
+  const [pendingName, setPendingName] = useState(null);
+
+  if (pendingName && marketplaces[pendingName]?.source === newSource.trim()) {
+    setCreating(false);
+    setPendingName(null);
+    setNewName('');
+    setNewSource('');
+  }
 
   const handleRefresh = useCallback(async () => {
     setError('');
@@ -1511,6 +1523,7 @@ function MarketplacesSettingsRow() {
       await dispatch(saveMarketplaces({ marketplacesUrl, marketplaces: nextMarketplaces })).unwrap();
     } catch (err) {
       setError(err?.message || 'Failed to save marketplaces');
+      setPendingName(null);
     }
   }, [dispatch, marketplacesUrl]);
 
@@ -1532,12 +1545,43 @@ function MarketplacesSettingsRow() {
       return;
     }
     const next = { ...marketplaces, [name]: { source, added_at: new Date().toISOString() } };
+    setPendingName(name);
     void handleSave(next);
+  };
+
+  const cancelCreate = () => {
+    setCreating(false);
     setNewName('');
     setNewSource('');
     setError('');
   };
 
+  if (creating) {
+    return (
+      <section className="set-section is-active">
+        <button type="button" className="set-back" disabled={!!pendingName} onClick={cancelCreate}>← Marketplaces</button>
+        <header className="set-section__head">
+          <h3>Add marketplace</h3>
+          <p>Register a source to browse and install plugins.</p>
+        </header>
+        <form onSubmit={(event) => { event.preventDefault(); handleAdd(); }}>
+          <label className="set-row set-connection-field">
+            <span className="set-row__title">Name</span>
+            <input className="set-text-input" value={newName} placeholder="my-marketplace" disabled={!!pendingName} onChange={(event) => { setNewName(event.target.value); setError(''); }} />
+          </label>
+          <label className="set-row set-connection-field">
+            <span className="set-row__title">Source</span>
+            <input className="set-text-input" value={newSource} placeholder="https://github.com/owner/repo" disabled={!!pendingName} onChange={(event) => { setNewSource(event.target.value); setError(''); }} />
+          </label>
+          {error ? <p className="set-workspace-list__error" role="alert">{error}</p> : null}
+          <div className="set-editor-footer">
+            <button type="button" className="task-btn task-btn--secondary" disabled={!!pendingName} onClick={cancelCreate}>Cancel</button>
+            <button type="submit" className="task-btn task-btn--primary" disabled={!!pendingName}>{pendingName ? 'Adding…' : 'Add marketplace'}</button>
+          </div>
+        </form>
+      </section>
+    );
+  }
   return (
     <section className="set-section is-active">
       <header className="set-section__head">
@@ -1545,45 +1589,34 @@ function MarketplacesSettingsRow() {
         <p>Registered plugin marketplace sources.</p>
       </header>
 
-      <div className="set-row">
-        <ul className="set-workspace-list">
+      <ul className="set-connection-list">
           {Object.entries(marketplaces).map(([name, entry]) => (
-            <li key={name} className="set-workspace-list__item">
-              <span className="set-workspace-list__host">{name}</span>
-              <span className="set-workspace-list__current">{entry?.source}</span>
-              <button type="button" className="set-btn set-btn--danger" onClick={() => handleRemove(name)}>
+            <li key={name} className="set-row">
+              <div className="set-row__label">
+                <span className="set-row__title">{name}</span>
+                <span className="set-row__sub">{entry?.source}</span>
+              </div>
+              <button type="button" className="task-btn task-btn--secondary set-btn--danger" onClick={() => handleRemove(name)}>
                 Remove
               </button>
             </li>
           ))}
-        </ul>
-        <span className="set-inline-control">
-          <input
-            className="set-text-input"
-            value={newName}
-            placeholder="my-marketplace"
-            onChange={(event) => { setNewName(event.target.value); if (error) setError(''); }}
-            onKeyDown={(event) => { if (event.key === 'Enter') handleAdd(); }}
-          />
-          <input
-            className="set-text-input"
-            value={newSource}
-            placeholder="https://github.com/owner/repo"
-            onChange={(event) => { setNewSource(event.target.value); if (error) setError(''); }}
-            onKeyDown={(event) => { if (event.key === 'Enter') handleAdd(); }}
-          />
-          <button type="button" className="set-btn" onClick={handleAdd}>
-            Add
-          </button>
-        </span>
-        {error ? <p className="set-workspace-list__error">{error}</p> : null}
-      </div>
-
+      </ul>
       <div className="set-row">
-        <button type="button" className="set-btn" onClick={handleRefresh}>
-          Refresh
-        </button>
+        <div className="set-row__label">
+          <span className="set-row__title">Add a marketplace</span>
+          <span className="set-row__sub">Connect a plugin source using its repository address.</span>
+        </div>
+        <button type="button" className="task-btn task-btn--secondary" onClick={() => { setCreating(true); setError(''); }}>Add marketplace</button>
       </div>
+      <div className="set-row">
+        <div className="set-row__label">
+          <span className="set-row__title">Refresh sources</span>
+          <span className="set-row__sub">Reload the registered marketplace list.</span>
+        </div>
+        <button type="button" className="task-btn task-btn--secondary" onClick={handleRefresh}>Refresh</button>
+      </div>
+      {error ? <p className="set-workspace-list__error" role="alert">{error}</p> : null}
     </section>
   );
 }
@@ -1709,8 +1742,12 @@ function SettingsPanel({ onClose, isPinned, onTogglePin, isOpen, onResetLiveUiSt
             {section === 'marketplaces' ? (
               <MarketplacesSettingsRow />
             ) : null}
+            {section === 'providers' ? (
+              <ProvidersSettings />
+            ) : null}
 
-            {!['general', 'appearance', 'marketplaces'].includes(section) ? (
+
+            {!['general', 'appearance', 'marketplaces', 'providers'].includes(section) ? (
               <section className="set-section is-active">
                 <div className="set-stub">
                   <div className="set-stub__glyph">{settingsSections.find((item) => item.id === section)?.icon}</div>

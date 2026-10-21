@@ -96,11 +96,17 @@ def test_indexer_settings_validate_profile_and_dimensions():
         validate_indexer_payload({"profile": "", "min_similarity": 1.5})
 
 
-def test_resolve_embedding_target_needs_a_profile_with_a_deployment():
-    profiles = {"embeddings": {"provider": "azure_openai", "deployment": "text-embedding-3-small"}}
+def test_resolve_embedding_target_needs_a_profile_with_a_foundry_provider():
+    profiles = {
+        "embeddings": {
+            "provider_id": "foundry-1",
+            "deployment": "text-embedding-3-small",
+        }
+    }
     target = resolve_embedding_target({"profile": "embeddings", "dimensions": 512}, profiles)
     assert target.as_dict() == {
         "profile": "embeddings",
+        "provider_id": "foundry-1",
         "deployment": "text-embedding-3-small",
         "dimensions": 512,
     }

@@ -35,7 +35,7 @@ Create a new {kind} named "{agent_name}" in `app/agents/{agent_name}/`
     - POST `/` with `{request, context}` and respond with `{success, response, error, metadata}`
   - Emit stdout status lines: `STATUS:<status>:<message>`
   - Keep the `response` field plain text unless the task explicitly requires structured output.
-- If the agent is LLM-backed, use the same Azure `/responses` integration pattern as Progenitor:
+- If the standalone agent is LLM-backed, use its Azure `/responses` integration (Progenitor itself now resolves database-backed Providers):
   - Read `AZURE_OPENAI_BASE_URL` + `AZURE_OPENAI_API_KEY`
   - Use `PROGENITOR_MODEL_DEFAULT` for model selection
   - Support multi-round tool calling (LangGraph is acceptable for this loop) to gather data before responding

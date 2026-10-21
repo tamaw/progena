@@ -53,7 +53,7 @@ class TestCreateDeepAgentForLoop:
             mock_graph = MagicMock()
             mock_create.return_value = mock_graph
             mock_backend.return_value = MagicMock()
-            with patch("app.progenitor.agent.agent.create_langchain_model") as mock_model:
+            with patch("app.progenitor.agent.agent.ProviderChatModel") as mock_model:
                 mock_model.return_value = MagicMock()
 
                 result = await create_deep_agent_for_runtime(
@@ -70,7 +70,7 @@ class TestCreateDeepAgentForLoop:
         ):
             mock_da.return_value = MagicMock()
             mock_backend.return_value = MagicMock()
-            with patch("app.progenitor.agent.agent.create_langchain_model") as mock_model:
+            with patch("app.progenitor.agent.agent.ProviderChatModel") as mock_model:
                 mock_model.return_value = MagicMock()
 
                 mock_registry = MagicMock()
@@ -102,7 +102,7 @@ class TestDeepAgentAstreamCompatibility:
             mock_graph.astream = AsyncMock()
             mock_create.return_value = mock_graph
             mock_backend.return_value = MagicMock()
-            with patch("app.progenitor.agent.agent.create_langchain_model") as mock_model:
+            with patch("app.progenitor.agent.agent.ProviderChatModel") as mock_model:
                 mock_model.return_value = MagicMock()
 
                 result = await create_deep_agent_for_runtime(

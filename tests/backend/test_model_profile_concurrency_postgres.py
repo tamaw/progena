@@ -23,7 +23,7 @@ pytestmark = pytest.mark.skipif(
 
 
 def _profile(deployment: str) -> dict:
-    return {"provider": "azure_openai", "deployment": deployment}
+    return {"provider_id": "foundry-1", "deployment": deployment}
 
 
 @pytest.fixture
