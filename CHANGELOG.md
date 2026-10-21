@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 - **Obsolete root scripts retired**: removed the obsolete diagnostics, live evaluators, helper, and one-off migration utilities with their live-evaluation reports. Historical migration and review records remain for context; none of the retired scripts are runnable.
+- **Obsolete Git skill removed**: repository setup and publication remain with `repo-manager`; removed the legacy build-loop Git instructions.
+
+### Changed
+- **Bundled guidance matches the current runtime**: made the default system prompt user-neutral, corrected conversation/heartbeat architecture and virtual-document permissions, refreshed runtime inspection and session ingestion paths, fixed the plugin configuration target, and documented all 22 bundled schemas. Existing saved instruction edits remain untouched.
 
 ### Added
 - **MIT license and setup guide**: added the complete license text and shortened the README with explicit Docker network/volume prerequisites, environment setup, the correct local HTTPS URL, and links to detailed documentation.
