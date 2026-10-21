@@ -25,6 +25,7 @@ from ..config import LLMConfig
 from ..runtime.thread_context import get_current_thread_id
 from ..tools.protocol import ToolContext
 from ..tools.system_registry import get_all_system_tools
+from .checkpoint_usage import CheckpointChatOpenAI
 
 logger = logging.getLogger(__name__)
 
@@ -48,11 +49,14 @@ def _normalize_langchain_base_url(base_url: str) -> str:
     return urlunsplit((parsed.scheme, parsed.netloc, path, "", ""))
 
 
-def create_langchain_model(config: LLMConfig | None = None) -> ChatOpenAI:
+def create_langchain_model(
+    config: LLMConfig | None = None, *, profile_name: str | None = None
+) -> ChatOpenAI:
     """Create a LangChain ChatOpenAI instance routed through Azure.
 
     Args:
         config: LLM configuration. If None, loads from environment.
+        profile_name: Resolved catalog name retained on checkpointed messages.
     Returns:
         ChatOpenAI instance pointing at configured Azure endpoint.
     """
@@ -85,7 +89,7 @@ def create_langchain_model(config: LLMConfig | None = None) -> ChatOpenAI:
             config.reasoning_summary,
         )
 
-    model = ChatOpenAI(
+    model = CheckpointChatOpenAI(
         model=model_name,
         base_url=base_url,
         api_key=SecretStr(config.api_key or "not-needed"),
@@ -98,6 +102,7 @@ def create_langchain_model(config: LLMConfig | None = None) -> ChatOpenAI:
         reasoning_effort=reasoning_effort,
         extra_body=extra_body or None,
     )
+    model.set_usage_profile(profile_name)
 
     logger.info(
         "Created LangChain model adapter: model=%s, base_url=%s, responses_api=%s, reasoning=%s",
