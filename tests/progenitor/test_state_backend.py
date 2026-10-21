@@ -789,46 +789,46 @@ def _routine_backend(graphs=None) -> tuple[RoutineDirectoryBackend, _FakeRoutine
 
 
 async def test_routine_aread_and_ls():
-    graph = default_routine_graph("subagent-observe", name="Observe Agent")
+    graph = default_routine_graph("subagent-example", name="Example Agent")
     backend, _sm = _routine_backend([graph])
     listed = await backend.als("/")
-    assert [entry["path"] for entry in listed.entries] == ["/subagent-observe.json"]
-    read = await backend.aread("/subagent-observe.json")
+    assert [entry["path"] for entry in listed.entries] == ["/subagent-example.json"]
+    read = await backend.aread("/subagent-example.json")
     assert read.error is None
-    assert json.loads(read.file_data["content"])["name"] == "Observe Agent"
+    assert json.loads(read.file_data["content"])["name"] == "Example Agent"
 
 
 async def test_routine_awrite_persists_valid_graph():
-    graph = default_routine_graph("subagent-observe", name="Observe Agent")
+    graph = default_routine_graph("subagent-example", name="Example Agent")
     backend, sm = _routine_backend([])
-    result = await backend.awrite("/subagent-observe.json", json.dumps(graph))
+    result = await backend.awrite("/subagent-example.json", json.dumps(graph))
     assert result.error is None
-    assert sm.graphs["subagent-observe"]["name"] == "Observe Agent"
+    assert sm.graphs["subagent-example"]["name"] == "Example Agent"
 
 
 async def test_routine_awrite_rejects_filename_id_mismatch():
-    graph = default_routine_graph("subagent-observe", name="Observe Agent")
+    graph = default_routine_graph("subagent-example", name="Example Agent")
     graph["id"] = "wrong-id"
     backend, sm = _routine_backend([])
-    result = await backend.awrite("/subagent-observe.json", json.dumps(graph))
+    result = await backend.awrite("/subagent-example.json", json.dumps(graph))
     assert result.error and "must match filename" in result.error
     assert sm.graphs == {}
 
 
 async def test_routine_awrite_rejects_invalid_schema():
     backend, sm = _routine_backend([])
-    result = await backend.awrite("/subagent-observe.json", json.dumps({"id": "subagent-observe"}))
+    result = await backend.awrite("/subagent-example.json", json.dumps({"id": "subagent-example"}))
     assert result.error is not None
     assert sm.graphs == {}
 
 
 async def test_routine_aedit_and_adelete_round_trip():
-    graph = default_routine_graph("subagent-observe", name="Observe Agent")
+    graph = default_routine_graph("subagent-example", name="Example Agent")
     backend, sm = _routine_backend([graph])
-    edited = await backend.aedit("/subagent-observe.json", "Observe Agent", "Watcher Agent")
+    edited = await backend.aedit("/subagent-example.json", "Example Agent", "Watcher Agent")
     assert edited.error is None
-    assert sm.graphs["subagent-observe"]["name"] == "Watcher Agent"
-    deleted = await backend.adelete("/subagent-observe.json")
+    assert sm.graphs["subagent-example"]["name"] == "Watcher Agent"
+    deleted = await backend.adelete("/subagent-example.json")
     assert deleted.error is None
     assert sm.graphs == {}
 

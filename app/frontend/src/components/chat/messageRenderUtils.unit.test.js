@@ -200,7 +200,7 @@ describe('describeStreamEvent (a2a_call_progress)', () => {
   it('never returns the accidental "Agent" badge', () => {
     const description = describeStreamEvent({
       eventType: 'a2a_call_progress',
-      metadata: { agent_name: 'greetings_agent', state: 'working', message_text: 'Step 1/3: prep...' },
+      metadata: { agent_name: 'example_agent', state: 'working', message_text: 'Step 1/3: prep...' },
     });
     expect(description.badge).toBe('A2A');
   });
@@ -208,9 +208,9 @@ describe('describeStreamEvent (a2a_call_progress)', () => {
   it('titles the entry with the agent name and surfaces state/message', () => {
     const description = describeStreamEvent({
       eventType: 'a2a_call_progress',
-      metadata: { agent_name: 'greetings_agent', state: 'working', message_text: 'Step 1/3: prep...' },
+      metadata: { agent_name: 'example_agent', state: 'working', message_text: 'Step 1/3: prep...' },
     });
-    expect(description.title).toBe('greetings_agent');
+    expect(description.title).toBe('example_agent');
     expect(description.metaDetail).toBe('working');
     expect(description.bodyDetail).toBe('Step 1/3: prep...');
   });
@@ -231,7 +231,7 @@ describe('describeStreamEvent (a2a_send tool_start/tool_result/tool_error)', () 
   it('badges an A2A tool_start as Tool, same as any other tool', () => {
     const description = describeStreamEvent({
       eventType: 'tool_start',
-      metadata: { tool_name: 'a2a_send', args_preview: { agent: 'greetings_agent' } },
+      metadata: { tool_name: 'a2a_send', args_preview: { agent: 'example_agent' } },
     });
     expect(description.badge).toBe('Tool');
     expect(description.title).toBe('→ A2a Send');
@@ -264,12 +264,12 @@ describe('extractA2ASummary', () => {
   });
 
   it('extracts summary from complete, valid JSON', () => {
-    const json = JSON.stringify({ task_id: 't1', agent: 'greetings_agent', summary: 'Hello there.' });
+    const json = JSON.stringify({ task_id: 't1', agent: 'example_agent', summary: 'Hello there.' });
     expect(extractA2ASummary(json)).toBe('Hello there.');
   });
 
   it('returns empty string when valid JSON has no summary field', () => {
-    const json = JSON.stringify({ task_id: 't1', agent: 'greetings_agent' });
+    const json = JSON.stringify({ task_id: 't1', agent: 'example_agent' });
     expect(extractA2ASummary(json)).toBe('');
   });
 
@@ -355,7 +355,7 @@ describe('normal tool detail rendering', () => {
       eventType: 'tool_start',
       metadata: {
         tool_name: 'a2a_send',
-        args_preview: { agent: 'greetings_agent', request: 'hi' },
+        args_preview: { agent: 'example_agent', request: 'hi' },
       },
     };
     const result = {
@@ -373,8 +373,8 @@ describe('normal tool detail rendering', () => {
     expect(startDetails).toMatchObject({
       kind: 'a2a_send',
       isNormal: true,
-      summary: 'agent: greetings_agent • request: hi',
-      command: '{"agent":"greetings_agent","request":"hi"}',
+      summary: 'agent: example_agent • request: hi',
+      command: '{"agent":"example_agent","request":"hi"}',
       body: '',
     });
     expect(resultDetails).toMatchObject({

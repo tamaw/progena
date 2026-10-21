@@ -88,22 +88,17 @@ Current compose behavior:
 - The backend connects to the runtime with `PROGENITOR_RUNTIME_URL=http://progenitor:9501`
 - The compose file attaches services to an internal bridge network and the external `progenitor_network`
 
-The intended public deployment places a host-level nginx and an external OAuth2
-proxy in front of the stack. Host nginx terminates public TLS with host-managed
-certificates, calls the OAuth2 proxy's `/oauth2/auth` endpoint for authentication,
-and proxies authenticated traffic over HTTP to `http://127.0.0.1:8081`. The OAuth2
-proxy and public certificates are deliberately not part of this Compose project;
-keep their credentials, provider configuration, and certificate management on the
-host. See `docs/nginx/progena.tama.id.au.conf.example` for a template.
+For public deployment, terminate TLS and enforce authentication at a trusted
+reverse proxy outside this Compose project. Forward requests to
+`http://127.0.0.1:8081`; keep certificates and authentication credentials outside
+the repository.
 
-During rollout, change the host nginx upstream from `https://127.0.0.1:8081` to
-`http://127.0.0.1:8081` together with the frontend's container port change from
-443 to 80. Public client traffic remains HTTPS and authentication remains at the
-host boundary.
+When upgrading from the old HTTPS containers, switch the reverse-proxy upstream
+from HTTPS to HTTP together with the frontend container port change from 443 to
+80. Public client traffic should remain HTTPS.
 
-Because the frontend is localhost-bound, direct public access cannot bypass the
-nginx/OAuth2 authentication layer. The backend and runtime remain internal to
-the Docker networks.
+The localhost binding prevents direct remote access to the frontend; the backend
+and runtime remain internal to the Docker networks.
 Frontend nginx preserves the host proxy's `X-Forwarded-Proto: https` header,
 and Uvicorn trusts forwarded headers on its Docker-internal port so redirects
 retain the public HTTPS scheme. Do not publish the backend directly.
@@ -115,6 +110,12 @@ to a one-off override file; do not expose it in the public deployment.
 ## Volumes and ephemeral storage
 
 - `progenitor` and `backend`: `${PROGENITOR_HOST_LOGS_DIR:-../logs}:/app/logs`, `${PROGENITOR_HOST_REPOS_DIR:-../repos}:/app/repos`
+
+The CI deployment uses the GitHub Environment `production`. Store credentials in
+its secrets and deployment options such as `PROGENITOR_TIMEZONE` in its variables.
+CI derives the host `logs`, `repos`, and `claude` directories from the single
+installation root `/var/lib/progenitor`; changing example timezone values does
+not override an environment's configured timezone.
 
 Ephemeral storage:
 - `/app/tmp` is a `tmpfs` mount in `progenitor` and `backend`
@@ -156,3 +157,27 @@ Current health probes are implemented as follows (run the container-local probes
 - `frontend` container process: `docker compose -f docker/docker-compose.progenitor.yml exec -T frontend wget -q -O /dev/null http://127.0.0.1/`
 - `progenitor` container: `docker compose -f docker/docker-compose.progenitor.yml exec -T progenitor curl -fsS http://127.0.0.1:9501/health` (the runtime's own HTTP endpoint)
 - `claude` container: Docker probes its `socat` listener; the ACP endpoint is internal only.
+
+## Self-hosted Actions runners
+
+`docker/gha-runner/Dockerfile` builds the runner image with GitHub Actions runner
+2.338.0, Node.js 24, Python 3.12, and the Docker CLI/Buildx plugin.
+Build it from the repository root:
+
+```bash
+docker build -f docker/gha-runner/Dockerfile -t local/gha-runner:2.338.0 .
+```
+
+Repository-scoped runners need a separate registration for each repository, even
+when their containers share a Docker host. Generate a short-lived registration
+token using `gh api --method POST repos/OWNER/REPO/actions/runners/registration-token`;
+never reuse another runner's credentials or commit tokens.
+
+Use a distinct runner name, persistent registration volume, and work directory
+per runner. Bind the work directory at the same absolute path on the host and
+inside the container so Docker-based actions can mount job files correctly.
+The container needs `/var/run/docker.sock`; this grants host-level Docker access,
+so restrict it to trusted workflows. Deployment jobs require the `docker` label.
+
+Configure the destination repository's deployment environment, secrets, variables,
+and host mounts before allowing queued deployment jobs onto a new runner.

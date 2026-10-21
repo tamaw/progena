@@ -160,26 +160,26 @@ describe('matchesPluginFilter', () => {
 describe('filterPlugins', () => {
   const plugins = [
     { name: 'hello-world', description: 'greeting' },
-    { name: 'builder-agent', description: 'build things' },
-    { name: 'builder-progenitor', description: 'build more things' },
+    { name: 'build-tools', description: 'build things' },
+    { name: 'build-workflows', description: 'build more things' },
   ];
   const installed = {
-    'builder-agent': { status: 'installed' },
-    'builder-progenitor': { status: 'installed', available_version: '2.0.0' },
+    'build-tools': { status: 'installed' },
+    'build-workflows': { status: 'installed', available_version: '2.0.0' },
   };
   const getEntry = (plugin) => installed[plugin.name];
 
   it('combines filter and query', () => {
     expect(filterPlugins(plugins, { query: '', filter: 'All', getEntry }).map((p) => p.name))
-      .toEqual(['hello-world', 'builder-agent', 'builder-progenitor']);
+      .toEqual(['hello-world', 'build-tools', 'build-workflows']);
     expect(filterPlugins(plugins, { query: '', filter: 'New', getEntry }).map((p) => p.name))
       .toEqual(['hello-world']);
     expect(filterPlugins(plugins, { query: '', filter: 'Installed', getEntry }).map((p) => p.name))
-      .toEqual(['builder-agent', 'builder-progenitor']);
+      .toEqual(['build-tools', 'build-workflows']);
     expect(filterPlugins(plugins, { query: '', filter: 'Available', getEntry }).map((p) => p.name))
-      .toEqual(['builder-progenitor']);
+      .toEqual(['build-workflows']);
     expect(filterPlugins(plugins, { query: 'build', filter: 'All', getEntry }).map((p) => p.name))
-      .toEqual(['builder-agent', 'builder-progenitor']);
+      .toEqual(['build-tools', 'build-workflows']);
   });
 
   it('returns an empty array for non-array input', () => {
@@ -188,6 +188,6 @@ describe('filterPlugins', () => {
 
   it('treats a missing getEntry as "not installed" for every plugin', () => {
     expect(filterPlugins(plugins, { query: '', filter: 'New' }).map((p) => p.name))
-      .toEqual(['hello-world', 'builder-agent', 'builder-progenitor']);
+      .toEqual(['hello-world', 'build-tools', 'build-workflows']);
   });
 });

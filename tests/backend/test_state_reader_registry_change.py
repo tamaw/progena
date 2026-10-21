@@ -14,7 +14,7 @@ def _reader(enabled: bool) -> tuple[StateReader, InMemoryDocumentStore]:
         {
             "agents": [
                 {
-                    "name": "greetings_agent",
+                    "name": "example_agent",
                     "kind": "a2a_agent",
                     "enabled": enabled,
                     "status": "running",
@@ -38,7 +38,7 @@ def test_in_place_enabled_change_is_detected():
         {
             "agents": [
                 {
-                    "name": "greetings_agent",
+                    "name": "example_agent",
                     "kind": "a2a_agent",
                     "enabled": False,
                     "status": "running",

@@ -65,7 +65,7 @@ class _Sessions:
 @pytest.fixture
 async def sessions() -> _Sessions:
     s = _Sessions()
-    await s.preferences("Tama")
+    await s.preferences("Alex")
     return s
 
 

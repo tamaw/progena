@@ -167,8 +167,8 @@ export function A2ADetailBody({ agent }) {
   );
 }
 
-// Detail pane for ACP agents (Agent Client Protocol over stdio, e.g. the GitHub
-// Copilot CLI the Builder Agent drives). Card-driven like the A2A pane: the
+// Detail pane for ACP agents (Agent Client Protocol over stdio, such as a
+// generic Copilot CLI integration). Card-driven like the A2A pane: the
 // connection facts, capabilities, and exposed tools come from the agent's ACP
 // card, since there is no in-process subagent definition behind it.
 export function ACPDetailBody({ agent }) {

@@ -555,7 +555,7 @@ def test_extract_schema_no_targets_rejected():
         derive_workflow_port_schemas(payload, {t.id: t for t in BUILTIN_DOCUMENT_TYPES})
 
 
-def cron_workflow(*, expression="0 9 * * 1-5", timezone="Australia/Melbourne", overlap="skip"):
+def cron_workflow(*, expression="0 9 * * 1-5", timezone="Europe/London", overlap="skip"):
     """Cron trigger feeding ``scheduled_for`` into an agent template."""
 
     payload = default_workflow_definition()

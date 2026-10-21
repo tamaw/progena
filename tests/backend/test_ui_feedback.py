@@ -357,10 +357,10 @@ class TestStateReaderFileOperations:
             {
                 "agents": [
                     {
-                        "name": "observe_agent",
+                        "name": "example_agent",
                         "kind": "a2a_agent",
                         "version": "1.0.0",
-                        "description": "Observer",
+                        "description": "Example agent",
                         "capabilities": [],
                         "entrypoint": "python",
                         "transport": "http",
@@ -372,7 +372,7 @@ class TestStateReaderFileOperations:
                 ]
             },
         )
-        (logs_dir / "observe_agent.log").write_text('1\n{"message":"started"}\n', encoding="utf-8")
+        (logs_dir / "example_agent.log").write_text('1\n{"message":"started"}\n', encoding="utf-8")
 
         reader = StateReader(
             document_store=store,
@@ -382,7 +382,7 @@ class TestStateReaderFileOperations:
         payload = reader.get_workspace_payload()
 
         assert "widgets" in payload
-        assert any(widget["name"] == "observe_agent" for widget in payload["widgets"])
+        assert any(widget["name"] == "example_agent" for widget in payload["widgets"])
 
 
 class TestLogsEndpoint:

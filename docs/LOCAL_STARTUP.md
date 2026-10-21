@@ -115,6 +115,7 @@ From the repository root:
 source .venv/bin/activate
 export PYTHONPATH="$PWD"
 export PROGENITOR_DATABASE_URL="postgresql://progenitor:progenitor@127.0.0.1:15433/progenitor"
+export AGENT_NAME=progenitor
 python -m app.progenitor.main
 ```
 

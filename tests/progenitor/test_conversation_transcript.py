@@ -29,7 +29,7 @@ def _thread(*messages: BaseMessage, nick: str = "progenitor") -> ThreadMessages:
 
 def _lines(root: ThreadMessages, subagents: dict[str, ThreadMessages] | None = None) -> list[str]:
     transcript = render_transcript(
-        root, subagents=subagents or {}, channel="abcd1234", user_nick="Tama"
+        root, subagents=subagents or {}, channel="abcd1234", user_nick="Alex"
     )
     return [line.text for line in transcript.lines]
 
@@ -51,12 +51,12 @@ def test_direct_agent_turns_join_before_the_address_and_part_when_the_user_moves
     )
     assert lines == [
         "-!- greeter [a2a] has joined #abcd1234",
-        "<Tama> greeter: hi there",
+        "<Alex> greeter: hi there",
         "<@greeter> Ahoy!",
-        "<Tama> greeter: bye",
+        "<Alex> greeter: bye",
         "<@greeter> Farewell!",
         "-!- greeter [a2a] has left #abcd1234",
-        "<Tama> what did it say?",
+        "<Alex> what did it say?",
         "<@progenitor> It said farewell.",
     ]
 
@@ -71,9 +71,9 @@ def test_failed_direct_agent_calls_never_join() -> None:
         )
     )
     assert lines == [
-        "<Tama> nobody: are you there?",
+        "<Alex> nobody: are you there?",
         "-!- nobody: No such nick/channel",
-        "<Tama> greeter: hi",
+        "<Alex> greeter: hi",
         "-!- greeter: Agent is in failed state: None",
     ]
 
@@ -92,7 +92,7 @@ def test_failed_task_subagent_parts_once_with_the_reason_and_unnamed_child_uses_
     )
     child = _thread(HumanMessage("List repos"), nick="")
     assert _lines(root, {"call-1": child}) == [
-        "<Tama> which repos?",
+        "<Alex> which repos?",
         "-!- repo-manager [subagent] has joined #abcd1234",
         "-> *repo-manager* List repos",
         "-!- repo-manager [subagent] has left #abcd1234 [subagent crashed]",
@@ -143,7 +143,7 @@ def test_task_subagent_is_inlined_between_join_and_part_without_repeating_its_re
         nick="repo-manager",
     )
     assert _lines(root, {"call-1": child}) == [
-        "<Tama> which repos?",
+        "<Alex> which repos?",
         "-!- repo-manager [subagent] has joined #abcd1234",
         "-> *repo-manager* List repos",
         "* repo-manager can't read /config/repos.json (File '/config/repos.json' not found)",
@@ -197,13 +197,13 @@ def test_reasoning_titles_become_actions_and_cancelled_turns_quit() -> None:
         )
     )
     assert lines == [
-        "<Tama> write an essay",
+        "<Alex> write an essay",
         "* progenitor is checking available agents",
         "* progenitor thinks about schedule options",
         "<@progenitor> Once upon",
-        "<Tama> again",
+        "<Alex> again",
         "<@progenitor> Part of a repl",
-        "-!- progenitor has quit [cancelled by Tama]",
+        "-!- progenitor has quit [cancelled by Alex]",
     ]
 
 
@@ -220,7 +220,7 @@ def test_a2a_send_completed_speaks_the_reply_and_failure_parts_with_the_reason()
                 response_metadata=MODEL,
             ),
             ToolMessage(
-                '{"status": "completed", "latest_message": "Bonjour, Tama !"}', tool_call_id="a1"
+                '{"status": "completed", "latest_message": "Bonjour, Alex !"}', tool_call_id="a1"
             ),
             ToolMessage(
                 '{"success": false, "error": "Agent is in failed state"}', tool_call_id="a2"
@@ -232,7 +232,7 @@ def test_a2a_send_completed_speaks_the_reply_and_failure_parts_with_the_reason()
         "-> *greeter* Bonjour please",
         "-!- greeter [a2a] has joined #abcd1234",
         "-> *greeter* Again",
-        "<@greeter> Bonjour, Tama !",
+        "<@greeter> Bonjour, Alex !",
         "-!- greeter [a2a] has left #abcd1234",
         "-!- greeter [a2a] has left #abcd1234 [Agent is in failed state]",
     ]
@@ -244,27 +244,27 @@ def test_log_header_lists_participants_and_marks_day_changes_in_the_users_timezo
     root = ThreadMessages(
         messages=[late, reply],
         committed_at={
-            "late": T0.replace(hour=12, minute=59),
-            "reply": T0.replace(hour=13, minute=1),
+            "late": T0.replace(hour=22, minute=59),
+            "reply": T0.replace(hour=23, minute=1),
         },
     )
-    transcript = render_transcript(root, subagents={}, channel="abcd1234", user_nick="Tama")
+    transcript = render_transcript(root, subagents={}, channel="abcd1234", user_nick="Alex")
 
     log = format_log(
         transcript,
         channel="abcd1234",
-        user_nick="Tama",
+        user_nick="Alex",
         title="late night",
-        topic_set=T0.replace(hour=12, minute=58),
-        tz=ZoneInfo("Australia/Melbourne"),
-        tz_name="Australia/Melbourne",
+        topic_set=T0.replace(hour=22, minute=58),
+        tz=ZoneInfo("Europe/London"),
+        tz_name="Europe/London",
     )
     assert log.splitlines() == [
-        "--- Log opened Mon Oct 12 23:59:00 2026 (Australia/Melbourne)",
+        "--- Log opened Mon Oct 12 23:59:00 2026 (Europe/London)",
         "-!- Topic for #abcd1234: late night",
-        "-!- Topic set by Tama [Mon Oct 12 23:58:00 2026]",
-        "-!- [Users #abcd1234] [@progenitor] [Tama]",
-        "23:59:00 <Tama> late night",
+        "-!- Topic set by Alex [Mon Oct 12 23:58:00 2026]",
+        "-!- [Users #abcd1234] [@progenitor] [Alex]",
+        "23:59:00 <Alex> late night",
         "--- Day changed Tue Oct 13 2026",
         "00:01:00 <@progenitor> good morning",
     ]
@@ -286,11 +286,11 @@ def test_image_blocks_render_as_sends_an_image() -> None:
             response_metadata=MODEL,
         ),
     )
-    transcript = render_transcript(root, subagents={}, channel="abcd1234", user_nick="Tama")
+    transcript = render_transcript(root, subagents={}, channel="abcd1234", user_nick="Alex")
     lines = [line.text for line in transcript.lines]
     assert lines == [
-        "<Tama> what is this",
-        "* Tama sends an image",
+        "<Alex> what is this",
+        "* Alex sends an image",
         "* progenitor sends an image",
         "<@progenitor> a cat",
     ]

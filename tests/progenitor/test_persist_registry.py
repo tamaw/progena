@@ -41,11 +41,11 @@ class _Ctx:
 async def test_persist_registry_keeps_agent_card_and_status():
     agents = [
         {
-            "name": "observe_agent",
+            "name": "example_agent",
             "status": "running",
             "transport": "http",
             "url": "http://localhost:8080",
-            "agent_card": {"name": "Observe Agent", "skills": [{"id": "s1"}]},
+            "agent_card": {"name": "Example Agent", "skills": [{"id": "s1"}]},
         }
     ]
     state_manager = _FakeStateManager()
@@ -53,6 +53,6 @@ async def test_persist_registry_keeps_agent_card_and_status():
 
     assert state_manager.saved is not None
     saved = state_manager.saved["agents"][0]
-    assert saved["agent_card"] == {"name": "Observe Agent", "skills": [{"id": "s1"}]}
+    assert saved["agent_card"] == {"name": "Example Agent", "skills": [{"id": "s1"}]}
     assert saved["status"] == "running"
     assert saved["url"] == "http://localhost:8080"

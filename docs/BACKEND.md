@@ -22,12 +22,13 @@ response. It carries only response-content frames for that request plus its
 transport keepalive/resync signals.
 
 Every retained finite application route—whether it is `GET`, `POST`, `PUT`,
-`PATCH`, or `DELETE`—returns only an HTTP `202 Accepted` acknowledgement. Its
-body is exactly `{request_id, event_types}`. A finite response MUST NOT contain
-an entity, list, query result, status snapshot, generated text, attachment,
-download, or an inline response-body SSE stream. When browser chat requests use
-streaming, the client opens the dedicated response SSE endpoint separately after
-the `202` acknowledgement.
+`PATCH`, or `DELETE`—returns only an HTTP `202 Accepted` acknowledgement,
+except the active attachment API. Its acknowledgement body is exactly
+`{request_id, event_types}`. An acknowledgement MUST NOT contain an entity,
+list, query result, status snapshot, generated text, attachment, download, or
+an inline response-body SSE stream. When browser chat requests use streaming,
+the client opens the dedicated response SSE endpoint separately after the `202`
+acknowledgement.
 
 Direct `/health`, `/ready`, `/live`, and `/health/detailed` routes are absent.
 `/healthz` is the sole explicit Docker/container liveness exception: it returns
@@ -295,8 +296,10 @@ The following are intentionally absent rather than compatibility endpoints:
 
 - `GET /health`, `GET /health/detailed`, `GET /ready`, `GET /live`,
   `GET /v1/models`, and `POST /chat`.
-- Attachment upload/download routes and legacy session, preferences, settings,
-  and conversation APIs.
+- Legacy session, preferences, settings, and conversation APIs. The active
+  attachment API remains mounted at `/api/attachments`: `POST` uploads,
+  `GET` lists metadata or downloads a thread-scoped blob, and `DELETE` removes
+  a thread-scoped blob.
 - `POST /agents/register`.
 - `GET /api/ui/status/snapshot`, `/loops`, `/agents`, `/backlog`, `/schedule`,
   `/tasks`, `/agents/{agent_name}`, `/database/schema`, and
@@ -365,6 +368,7 @@ Start the runtime and backend separately:
 
 ```bash
 source .venv/bin/activate
+export AGENT_NAME=progenitor
 python -m app.progenitor.main
 ```
 

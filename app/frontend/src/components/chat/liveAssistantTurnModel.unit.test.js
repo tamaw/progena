@@ -645,7 +645,7 @@ describe('applyAssistantStreamEvent', () => {
     const turn = baseTurn();
     const evt = rawStreamEvent('tool_start', {
       content: 'a2a_send',
-      metadata: { tool_name: 'a2a_send', tool_call_id: 'call_1', args_preview: { agent: 'greetings_agent' } },
+      metadata: { tool_name: 'a2a_send', tool_call_id: 'call_1', args_preview: { agent: 'example_agent' } },
     });
     const next = applyAssistantStreamEvent(turn, evt, NOW);
 
@@ -655,7 +655,7 @@ describe('applyAssistantStreamEvent', () => {
     expect(next.timelineItems.map((item) => item.kind)).toEqual(['stream_event', 'a2a_call']);
     const a2aItem = next.timelineItems.find((item) => item.kind === 'a2a_call');
     expect(a2aItem.id).toBe('a2a-call_1');
-    expect(a2aItem.agentName).toBe('greetings_agent');
+    expect(a2aItem.agentName).toBe('example_agent');
     expect(a2aItem.status).toBe('running');
     const streamItem = next.timelineItems.find((item) => item.kind === 'stream_event');
     expect(streamItem.event.eventType).toBe('tool_start');
@@ -1021,14 +1021,14 @@ describe('applyA2ACallEvent', () => {
 
   it('creates a new card on a2a_send tool_start with running status', () => {
     const items = applyA2ACallEvent([], a2aEvent('tool_start', {
-      metadata: { tool_name: 'a2a_send', tool_call_id: 'call_1', args_preview: { agent: 'greetings_agent' } },
+      metadata: { tool_name: 'a2a_send', tool_call_id: 'call_1', args_preview: { agent: 'example_agent' } },
     }));
     expect(items).toHaveLength(1);
     expect(items[0]).toMatchObject({
       kind: 'a2a_call',
       id: 'a2a-call_1',
       toolCallId: 'call_1',
-      agentName: 'greetings_agent',
+      agentName: 'example_agent',
       status: 'running',
       messages: [],
     });
@@ -1043,7 +1043,7 @@ describe('applyA2ACallEvent', () => {
 
   it('does not use args_preview.agent_name as an alias', () => {
     const items = applyA2ACallEvent([], a2aEvent('tool_start', {
-      metadata: { tool_name: 'a2a_send', tool_call_id: 'call_1', args_preview: { agent_name: 'greetings_agent' } },
+      metadata: { tool_name: 'a2a_send', tool_call_id: 'call_1', args_preview: { agent_name: 'example_agent' } },
     }));
     expect(items[0].agentName).toBe('');
   });
@@ -1064,15 +1064,15 @@ describe('applyA2ACallEvent', () => {
 
   it('appends a2a_call_progress messages without changing args.agent display name', () => {
     let items = applyA2ACallEvent([], a2aEvent('tool_start', {
-      metadata: { tool_name: 'a2a_send', tool_call_id: 'call_1', args_preview: { agent: 'greetings_agent' } },
+      metadata: { tool_name: 'a2a_send', tool_call_id: 'call_1', args_preview: { agent: 'example_agent' } },
     }));
     items = applyA2ACallEvent(items, a2aEvent('a2a_call_progress', {
-      metadata: { tool_call_id: 'call_1', agent_name: 'greetings_agent', state: 'working', message_text: 'Step 1/3: prep...' },
+      metadata: { tool_call_id: 'call_1', agent_name: 'example_agent', state: 'working', message_text: 'Step 1/3: prep...' },
     }));
     items = applyA2ACallEvent(items, a2aEvent('a2a_call_progress', {
-      metadata: { tool_call_id: 'call_1', agent_name: 'greetings_agent', state: 'working', message_text: 'Step 2/3: build...' },
+      metadata: { tool_call_id: 'call_1', agent_name: 'example_agent', state: 'working', message_text: 'Step 2/3: build...' },
     }));
-    expect(items[0].agentName).toBe('greetings_agent');
+    expect(items[0].agentName).toBe('example_agent');
     expect(items[0].messages.map((m) => m.text)).toEqual(['Step 1/3: prep...', 'Step 2/3: build...']);
     expect(items[0].messages.map((m) => m.state)).toEqual(['working', 'working']);
     // Still running -- only tool_result/tool_error finalize status.
@@ -1119,7 +1119,7 @@ describe('applyA2ACallEvent', () => {
 
   it('ignores stale start/progress events after an A2A card has completed', () => {
     let items = applyA2ACallEvent([], a2aEvent('tool_start', {
-      metadata: { tool_name: 'a2a_send', tool_call_id: 'call_1', args_preview: { agent: 'greetings_agent' } },
+      metadata: { tool_name: 'a2a_send', tool_call_id: 'call_1', args_preview: { agent: 'example_agent' } },
     }));
     items = applyA2ACallEvent(items, a2aEvent('a2a_call_progress', {
       metadata: { tool_call_id: 'call_1', state: 'working', message_text: 'Step 1' },
@@ -1143,7 +1143,7 @@ describe('applyA2ACallEvent', () => {
 
   it('keeps the first terminal A2A outcome when a later terminal error arrives', () => {
     let items = applyA2ACallEvent([], a2aEvent('tool_start', {
-      metadata: { tool_name: 'a2a_send', tool_call_id: 'call_1', args_preview: { agent: 'greetings_agent' } },
+      metadata: { tool_name: 'a2a_send', tool_call_id: 'call_1', args_preview: { agent: 'example_agent' } },
     }));
     items = applyA2ACallEvent(items, a2aEvent('tool_result', {
       metadata: { tool_name: 'a2a_send', tool_call_id: 'call_1', result_preview: 'done' },
@@ -1574,19 +1574,19 @@ describe('buildDefaultAssistantTimeline', () => {
           id: 'e1',
           eventType: 'tool_start',
           timestamp: 1000,
-          metadata: { tool_name: 'a2a_send', tool_call_id: 'call_1', args_preview: { agent: 'greetings_agent' } },
+          metadata: { tool_name: 'a2a_send', tool_call_id: 'call_1', args_preview: { agent: 'example_agent' } },
         },
         {
           id: 'e2',
           eventType: 'a2a_call_progress',
           timestamp: 1100,
-          metadata: { tool_call_id: 'call_1', agent_name: 'greetings_agent', state: 'working', message_text: 'Step 1/3: prep...' },
+          metadata: { tool_call_id: 'call_1', agent_name: 'example_agent', state: 'working', message_text: 'Step 1/3: prep...' },
         },
         {
           id: 'e3',
           eventType: 'a2a_call_progress',
           timestamp: 1150,
-          metadata: { tool_call_id: 'call_1', agent_name: 'greetings_agent', state: 'working', message_text: 'Step 2/3: build...' },
+          metadata: { tool_call_id: 'call_1', agent_name: 'example_agent', state: 'working', message_text: 'Step 2/3: build...' },
         },
         {
           id: 'e4',
@@ -1603,7 +1603,7 @@ describe('buildDefaultAssistantTimeline', () => {
     expect(a2aItems[0]).toMatchObject({
       id: 'a2a-call_1',
       toolCallId: 'call_1',
-      agentName: 'greetings_agent',
+      agentName: 'example_agent',
       status: 'success',
       durationMs: 187,
       resultPreview: 'Hello!',
@@ -1653,7 +1653,7 @@ describe('buildDefaultAssistantTimeline', () => {
       content: 'done',
       timestamp: 5000,
       streamEvents: [
-        { id: 'e1', eventType: 'tool_start', timestamp: 1000, metadata: { tool_name: 'a2a_send', args_preview: { agent: 'greetings_agent' } } },
+        { id: 'e1', eventType: 'tool_start', timestamp: 1000, metadata: { tool_name: 'a2a_send', args_preview: { agent: 'example_agent' } } },
         { id: 'e2', eventType: 'a2a_call_progress', timestamp: 1010, metadata: { state: 'working', message_text: 'orphaned' } },
       ],
     };

@@ -308,14 +308,12 @@ def test_build_tool_error_event_redacts_and_truncates():
 
 
 def test_build_a2a_call_progress_event_shape():
-    event = build_a2a_call_progress_event(
-        "call_1", "greetings_agent", "working", "Step 1/3: prep..."
-    )
+    event = build_a2a_call_progress_event("call_1", "example_agent", "working", "Step 1/3: prep...")
     assert event["event_type"] == "a2a_call_progress"
     assert event["content"] == "Step 1/3: prep..."
     assert event["metadata"] == {
         "tool_call_id": "call_1",
-        "agent_name": "greetings_agent",
+        "agent_name": "example_agent",
         "state": "working",
         "message_text": "Step 1/3: prep...",
     }
@@ -325,7 +323,7 @@ def test_build_a2a_call_progress_event_shape():
 def test_build_a2a_call_progress_event_redacts_and_truncates():
     api_key = "sk-" + "c" * 48
     big = f"{api_key} " + "x" * (DEFAULT_STREAM_PREVIEW_BYTES * 4)
-    event = build_a2a_call_progress_event("call_1", "greetings_agent", "working", big)
+    event = build_a2a_call_progress_event("call_1", "example_agent", "working", big)
     assert api_key not in event["content"]
     assert api_key not in event["metadata"]["message_text"]
     assert len(event["content"].encode("utf-8")) <= DEFAULT_STREAM_PREVIEW_BYTES
