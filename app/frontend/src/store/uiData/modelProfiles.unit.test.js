@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import reducer, { applyUiEvent } from '../uiDataSlice';
 import { fetchModelProfiles, patchModelProfile } from './modelProfiles';
 
-const profile = { name: 'review', provider: 'azure_openai', deployment: 'review-v1' };
+const profile = { name: 'review', provider_id: 'foundry-1', deployment: 'review-v1' };
 const snapshot = (profiles, requestId) => applyUiEvent({
   type: 'profiles.snapshot', payload: { profiles, request_id: requestId },
 });

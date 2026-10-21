@@ -1,8 +1,15 @@
-"""Validation and migration for the virtual ``/config/profiles.json`` document."""
+"""Validation, migration and optional pricing for ``/config/profiles.json``.
+
+Model profiles refer exclusively to persisted providers. Legacy Azure discriminator
+profiles are migrated once after a default Foundry provider exists. Optional pricing
+rates are explicit estimates; they never infer a deployment's model or service tier.
+"""
 
 from __future__ import annotations
 
 import json
+import re
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 MODEL_PROFILES_DOC_KEY = "profile"
@@ -12,8 +19,18 @@ _OPTIONAL_REASONING_FIELDS = (
     "reasoning_effort",
     "reasoning_summary",
 )
-
-_SUPPORTED_PROFILE_FIELDS = frozenset({"provider_id", "deployment", *_OPTIONAL_REASONING_FIELDS})
+_PRICING_RATE_FIELDS = (
+    "input_per_million",
+    "cached_input_per_million",
+    "output_per_million",
+)
+_PRICING_FIELDS = ("currency", *_PRICING_RATE_FIELDS)
+_SUPPORTED_PROFILE_FIELDS = frozenset(
+    {"provider_id", "deployment", "pricing", *_OPTIONAL_REASONING_FIELDS}
+)
+_CURRENCY_PATTERN = re.compile(r"^[A-Z]{3}$")
+_DECIMAL_STRING_PATTERN = re.compile(r"^(?:0|[1-9]\d*)(?:\.\d+)?$")
+_MAX_PRICING_DECIMAL_PLACES = 12
 
 
 def default_model_profiles_payload() -> dict[str, Any]:
@@ -25,6 +42,57 @@ def _normalize_provider_id(value: Any, *, profile_name: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"profile {profile_name!r}: provider_id must be a non-empty string")
     return value.strip()
+
+
+def _normalize_pricing(name: str, pricing: Any) -> dict[str, str] | None:
+    """Validate the optional current-rate estimate stored with one profile."""
+    if pricing is None:
+        return None
+    if not isinstance(pricing, dict):
+        raise ValueError(f"profile {name!r}: pricing must be an object or null")
+    extra_fields = set(pricing) - set(_PRICING_FIELDS)
+    missing_fields = set(_PRICING_FIELDS) - set(pricing)
+    if extra_fields or missing_fields:
+        details = []
+        if extra_fields:
+            details.append(f"unsupported fields {sorted(extra_fields)}")
+        if missing_fields:
+            details.append(f"missing fields {sorted(missing_fields)}")
+        raise ValueError(f"profile {name!r}: pricing has {', '.join(details)}")
+
+    currency = pricing["currency"]
+    if not isinstance(currency, str) or not _CURRENCY_PATTERN.fullmatch(currency):
+        raise ValueError(f"profile {name!r}: pricing.currency must be an uppercase ISO 4217 code")
+
+    normalized = {"currency": currency}
+    for field in _PRICING_RATE_FIELDS:
+        value = pricing[field]
+        if (
+            not isinstance(value, str)
+            or not value.strip()
+            or not _DECIMAL_STRING_PATTERN.fullmatch(value.strip())
+        ):
+            raise ValueError(
+                f"profile {name!r}: pricing.{field} must be a finite non-negative decimal"
+            )
+        try:
+            decimal = Decimal(value)
+        except InvalidOperation as exc:
+            raise ValueError(
+                f"profile {name!r}: pricing.{field} must be a finite non-negative decimal"
+            ) from exc
+        if not decimal.is_finite() or decimal < 0:
+            raise ValueError(
+                f"profile {name!r}: pricing.{field} must be a finite non-negative decimal"
+            )
+        exponent = decimal.as_tuple().exponent
+        if isinstance(exponent, int) and -exponent > _MAX_PRICING_DECIMAL_PLACES:
+            raise ValueError(
+                f"profile {name!r}: pricing.{field} has more than "
+                f"{_MAX_PRICING_DECIMAL_PLACES} decimal places"
+            )
+        normalized[field] = value.strip()
+    return normalized
 
 
 def _normalize_profile(name: str, profile: Any) -> dict[str, Any]:
@@ -42,6 +110,9 @@ def _normalize_profile(name: str, profile: Any) -> dict[str, Any]:
         "provider_id": _normalize_provider_id(profile.get("provider_id"), profile_name=name),
         "deployment": deployment.strip(),
     }
+    pricing = _normalize_pricing(name, profile.get("pricing"))
+    if pricing is not None:
+        normalized["pricing"] = pricing
     for field in _OPTIONAL_REASONING_FIELDS:
         if field not in profile:
             continue
@@ -122,4 +193,5 @@ async def resolve_model_profile(state_manager: Any, name: str) -> Any:
         template=template,
         provider_id=profile["provider_id"],
         model_override=profile["deployment"],
+        profile_name=name,
     )

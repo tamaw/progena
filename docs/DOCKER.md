@@ -1,18 +1,29 @@
 # Docker stack
 
-This document covers the main Progenitor container stack only: runtime, backend, and frontend.
+This document covers the main Progenitor container stack: Postgres, runtime, backend,
+frontend, and the internal Claude ACP sidecar.
 
 ## What the repo currently ships
 
-`docker/docker-compose.progenitor.yml` defines a three-container stack:
+`docker/docker-compose.progenitor.yml` defines a five-container stack:
+- `postgres` - PostgreSQL with pgvector
 - `progenitor` - runs `python -m app.progenitor.main`
 - `backend` - runs `uvicorn app.backend.main:app`
 - `frontend` - builds the Vite app and serves it with nginx
+- `claude` - provides Claude Code over internal ACP transport
 
 Supporting Dockerfiles:
 - `docker/progenitor/Dockerfile`
 - `docker/backend/Dockerfile`
 - `docker/frontend/Dockerfile`
+- `docker/claude/Dockerfile`
+
+Standalone A2A services, their images, and their deployment workflows are owned by
+[progentior.agents](https://github.com/tamaw/progentior.agents), not this repository.
+Progenitor can discover an external checkout through a Compose override that mounts it
+read-only into the runtime and sets `PROGENITOR_AGENT_REPOSITORIES` to its
+in-container path. No external repository is required for Progenitor or its built-in
+object agents.
 
 ## Before starting
 
@@ -64,27 +75,39 @@ docker compose -f docker/docker-compose.progenitor.yml logs -f
 docker compose -f docker/docker-compose.progenitor.yml logs -f progenitor
 docker compose -f docker/docker-compose.progenitor.yml logs -f backend
 docker compose -f docker/docker-compose.progenitor.yml logs -f frontend
+docker compose -f docker/docker-compose.progenitor.yml logs -f claude
 ```
 
 ## Network and ports
 
 Current compose behavior:
-- Only the frontend is published to the host, bound to localhost: `127.0.0.1:8081:443`
-- The backend listens on port `8000` **inside** the compose networks only
+- Only the frontend is published to the host, bound to localhost: `127.0.0.1:8081:80` over HTTP
+- The backend listens on port `8000` over HTTP **inside** the compose networks only
 - The Progenitor HTTP server listens on port `9501` inside the compose networks
+- Claude ACP listens at `tcp://progenitor-agent-claude:3001` inside the compose networks only
 - The backend connects to the runtime with `PROGENITOR_RUNTIME_URL=http://progenitor:9501`
 - The compose file attaches services to an internal bridge network and the external `progenitor_network`
 
 The intended public deployment places a host-level nginx and an external OAuth2
-proxy in front of the stack. Nginx terminates TLS, calls the OAuth2 proxy's
-`/oauth2/auth` endpoint for authentication, and proxies authenticated traffic to
-`https://127.0.0.1:8081`. The OAuth2 proxy is deliberately not part of this
-Compose project; keep its credentials and provider configuration in the host
-deployment. See `docs/nginx/progena.tama.id.au.conf.example` for a template.
+proxy in front of the stack. Host nginx terminates public TLS with host-managed
+certificates, calls the OAuth2 proxy's `/oauth2/auth` endpoint for authentication,
+and proxies authenticated traffic over HTTP to `http://127.0.0.1:8081`. The OAuth2
+proxy and public certificates are deliberately not part of this Compose project;
+keep their credentials, provider configuration, and certificate management on the
+host. See `docs/nginx/progena.tama.id.au.conf.example` for a template.
+
+During rollout, change the host nginx upstream from `https://127.0.0.1:8081` to
+`http://127.0.0.1:8081` together with the frontend's container port change from
+443 to 80. Public client traffic remains HTTPS and authentication remains at the
+host boundary.
 
 Because the frontend is localhost-bound, direct public access cannot bypass the
 nginx/OAuth2 authentication layer. The backend and runtime remain internal to
 the Docker networks.
+Frontend nginx preserves the host proxy's `X-Forwarded-Proto: https` header,
+and Uvicorn trusts forwarded headers on its Docker-internal port so redirects
+retain the public HTTPS scheme. Do not publish the backend directly.
+
 
 If you need direct host access to backend port `8000`, add your own port mapping
 to a one-off override file; do not expose it in the public deployment.
@@ -104,10 +127,11 @@ Notes:
   a host directory for them. `data/instructions/` is checked into git and
   `COPY`'d into the `progenitor` image (not `backend`'s); every boot syncs it
   into Postgres: Progenitor's own instructions (`progenitor/`) are added when
-  missing and otherwise kept, since they are edited on the Instructions page,
-  while every other group mirrors its file, because those A2A agents read
-  their own copy from disk. `data/skills/` is a read-only disk mount
-  (`/skills/`), not stored in Postgres.
+  missing and otherwise kept, since they are edited on the Instructions page.
+  Standalone A2A agents own their instructions, images, and service lifecycle in the
+  separate [agents repository](https://github.com/tamaw/progentior.agents); they are
+  not copied into this image. `data/skills/` is a read-only disk mount (`/skills/`),
+  not stored in Postgres.
 - `current_state`, `schedule`, `registry/agents`, `mcp`, `knowledge`, `health`,
   `kanban`, `attachments`, `sessions`, `prompts`, `skills`, and `memories` all
   persist through the shared LangGraph/Postgres document store with no
@@ -128,6 +152,7 @@ data.
 Current health probes are implemented as follows (run the container-local probes with
 `docker compose exec`; only the frontend is published on the host):
 - `backend` container: `docker compose -f docker/docker-compose.progenitor.yml exec -T backend curl -fsS http://127.0.0.1:8000/healthz`
-- `frontend` through the published Nginx port: `curl -fsS http://localhost/healthz` (proxied to `backend`)
+- `frontend` through the published nginx port: `curl -fsS http://127.0.0.1:8081/healthz` (proxied to `backend`)
 - `frontend` container process: `docker compose -f docker/docker-compose.progenitor.yml exec -T frontend wget -q -O /dev/null http://127.0.0.1/`
 - `progenitor` container: `docker compose -f docker/docker-compose.progenitor.yml exec -T progenitor curl -fsS http://127.0.0.1:9501/health` (the runtime's own HTTP endpoint)
+- `claude` container: Docker probes its `socat` listener; the ACP endpoint is internal only.

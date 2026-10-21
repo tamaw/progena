@@ -5,7 +5,6 @@ import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-do
 import {
   fetchChatMessages,
   fetchPreferences,
-  fetchWidgets,
   markAlertsViewed,
   savePreferences,
   selectChatIndicators,
@@ -17,8 +16,6 @@ import {
   selectPreferencesSaveRequest,
   selectRequestIdByThreadId,
   selectUnseenNavRoutes,
-  selectUiStatus,
-  selectUiWidgets,
   selectUiAlerts,
   setActiveNavRoute,
   selectMarketplaces,
@@ -106,6 +103,7 @@ import Modal from '../common/Modal';
 import ProvidersSettings from './ProvidersSettings';
 
 import { createSpectatorReplayState } from './quickChatStreamModel';
+import CompactInsights from '../insights/CompactInsights';
 
 // Grouped by owner/level (see the entity-relationship model):
 //   Operate  — the surfaces you work in (Progenitor chat, overview, projects)
@@ -126,6 +124,7 @@ const navGroups = [
     label: 'Spectate',
     items: [
       { to: '/dashboard', icon: <DashboardNavIcon />, label: 'Dashboard', trackActivity: true },
+      { to: '/insights', icon: <InsightsIcon />, label: 'Insights' },
     ],
   },
   {
@@ -227,7 +226,6 @@ function getPageLabel(pathname) {
   return match?.label ?? 'Chat';
 }
 
-const insightRanges = ['24h', '7d', '30d'];
 
 function formatTimestamp(timestamp) {
   if (!timestamp) return '';
@@ -1919,35 +1917,9 @@ function SearchPanel({ query, onClose, isPinned, onTogglePin, isOpen }) {
 }
 
 function InsightsPanel({ onClose, isPinned, onTogglePin, isOpen }) {
-  const dispatch = useDispatch();
-  const { getApiUrl } = useConfig();
-  const status = useSelector(selectUiStatus);
-  const widgets = useSelector(selectUiWidgets);
-  const [range, setRange] = useState('7d');
-  const agentWidgets = widgets.filter((widget) => widget.type === 'agent' || widget.type === 'mcp');
-  const scheduleWidgets = widgets.filter((widget) => widget.type === 'schedule');
-  const running = agentWidgets.filter((widget) => ['running', 'busy', 'executing'].includes(widget.status || widget.data?.agentStatus)).length;
-  const ready = agentWidgets.filter((widget) => (widget.status || widget.data?.agentStatus) === 'ready').length;
-  const cycleCount = status?.cycle_count ?? 0;
-  const totalActivity = Math.max(1, agentWidgets.length + scheduleWidgets.length + cycleCount);
-  const runtimeOnline = Boolean(status?.progenitor_running);
-  const runtimeSubtitle = status?.last_active
-    ? `Status updated ${formatRelativeTimestamp(status.last_active)}`
-    : 'Real-time status stream';
-  const runtimeDelta = status?.last_active
-    ? `Last active ${formatRelativeTimestamp(status.last_active)}`
-    : runtimeOnline
-      ? 'Live'
-      : 'Awaiting signal';
-  const refreshWidgets = useCallback(
-    () => dispatch(fetchWidgets({ widgetsUrl: getApiUrl('widgets') })),
-    [dispatch, getApiUrl],
-  );
-
   return (
     <TopNavPane
       title="Token consumption"
-      subtitle={runtimeSubtitle}
       onClose={onClose}
       isPinned={isPinned}
       onTogglePin={onTogglePin}
@@ -1955,92 +1927,7 @@ function InsightsPanel({ onClose, isPinned, onTogglePin, isOpen }) {
       className="topnav-pane--insights"
       bodyClassName="ins-pane__body"
     >
-      <div className="ins-pane__toolbar">
-        <SegmentedControl
-          className="ins-range"
-          ariaLabel="Insight range"
-          value={range}
-          onChange={setRange}
-          items={insightRanges.map((value) => ({ value, label: value }))}
-        />
-        <button type="button" className="topnav-pane__text-btn" onClick={refreshWidgets}>Refresh</button>
-      </div>
-      <div className="ins-kpis">
-        <div className="ins-kpi">
-          <div className="ins-kpi__label">Runtime</div>
-          <div className="ins-kpi__value">{runtimeOnline ? 'Online' : 'Offline'}</div>
-          <div className="ins-kpi__delta ins-kpi__delta--muted">{runtimeDelta}</div>
-        </div>
-        <div className="ins-kpi">
-          <div className="ins-kpi__label">Agents</div>
-          <div className="ins-kpi__value">{agentWidgets.length}</div>
-          <div className="ins-kpi__delta ins-kpi__delta--up">{ready} ready</div>
-        </div>
-        <div className="ins-kpi">
-          <div className="ins-kpi__label">Running</div>
-          <div className="ins-kpi__value">{running}</div>
-          <div className="ins-kpi__delta ins-kpi__delta--muted">{scheduleWidgets.length} schedules</div>
-        </div>
-        <div className="ins-kpi">
-          <div className="ins-kpi__label">Cycles</div>
-          <div className="ins-kpi__value">{cycleCount}</div>
-          <div className="ins-kpi__delta ins-kpi__delta--muted">{range} window</div>
-        </div>
-      </div>
-
-      <section className="ins-chart-card">
-        <header className="ins-chart-card__head">
-          <h3>Stacked usage by agent</h3>
-          <div className="ins-legend">
-            <span className="ins-legend__item"><span className="ins-legend__sw sw-blue" /> agents</span>
-            <span className="ins-legend__item"><span className="ins-legend__sw sw-green" /> schedules</span>
-            <span className="ins-legend__item"><span className="ins-legend__sw sw-purple" /> cycles</span>
-          </div>
-        </header>
-        <div className="ins-stack-chart">
-          {agentWidgets.slice(0, 18).map((widget, index) => {
-            const label = widget.title || widget.data?.title || widget.id;
-            return (
-              <span
-                key={widget.id}
-                title={label}
-                style={{ height: `${Math.max(18, 38 + ((index * 17) % 110))}px` }}
-              />
-            );
-          })}
-        </div>
-      </section>
-
-      <section className="ins-agents">
-        <header className="ins-agents__head">
-          <h3>Agents</h3>
-          <span className="muted">Sorted by usage</span>
-        </header>
-        <ul className="ins-agent-list">
-        {agentWidgets.slice(0, 8).map((widget, index) => {
-          const label = widget.title || widget.data?.title || widget.id;
-          const tone = widget.status || widget.data?.agentStatus || 'idle';
-          const share = Math.max(8, Math.round(((agentWidgets.length - index) / totalActivity) * 100));
-          return (
-              <li key={widget.id} className="ins-agent">
-                <span className="ins-agent__chip">{label.slice(0, 1).toUpperCase()}</span>
-                <span>
-                  <span className="ins-agent__name">{label}</span>
-                  <span className="ins-agent__sub">{tone}</span>
-                </span>
-                <span className="ins-agent__spark" aria-hidden="true">
-                  <span style={{ width: `${Math.max(18, 92 - index * 8)}%` }} />
-                </span>
-                <span className="ins-agent__value">{Math.max(1, cycleCount + index * 37).toLocaleString()}</span>
-                <span className="ins-agent__share">
-                  <span className="ins-agent__share-bar"><span className="ins-agent__share-fill" style={{ width: `${share}%` }} /></span>
-                  {share}%
-                </span>
-              </li>
-          );
-        })}
-        </ul>
-      </section>
+      <CompactInsights onNavigate={onClose} />
     </TopNavPane>
   );
 }
@@ -2675,11 +2562,7 @@ function AppRuntimeShell() {
       detail: { clientId, status, error },
     }));
   }, []);
-  const handleOpenPanel = useCallback((panel) => {
-    if (panel === 'insights') {
-      // Widgets refreshed on mount by InsightsPanel
-    }
-  }, []);
+  const handleOpenPanel = useCallback(() => {}, []);
   return (
     <div className={shellClass}>
       <PrimaryNav

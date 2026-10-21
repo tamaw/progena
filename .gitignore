@@ -98,16 +98,15 @@ data/shell-workspaces/
 tmp/
 .tmp/
 
-# Secrets
+# Secrets and local TLS assets
 .env
 .env.local
 *.key
 *.pem
-# Self-signed dev certs, intentionally committed -- see docker/backend/certs
-# and app/frontend/certs. Not real secrets: generated for local/LAN TLS
-# enforcement, not a production CA-issued cert.
-!app/frontend/certs/*.pem
-!docker/backend/certs/*.pem
+*.crt
+*.cer
+app/frontend/certs/
+docker/backend/certs/
 
 *-cwd
 .ruff_cache

@@ -1,34 +1,18 @@
-"""``PostgresDocumentStore.search_documents`` against a real Postgres (isolated schema)."""
+"""``PostgresDocumentStore.search_documents`` against a fresh Postgres database."""
 
 from __future__ import annotations
 
-import os
-import uuid
-from urllib.parse import quote
-
-import psycopg
 import pytest
 
 from app.backend.document_store import PROGENITOR_STATE_PREFIX, PostgresDocumentStore
 
-DB_URL = (os.getenv("PROGENITOR_DATABASE_URL") or os.getenv("DATABASE_URL") or "").strip()
-pytestmark = pytest.mark.skipif(not DB_URL, reason="requires PROGENITOR_DATABASE_URL")
-
 
 @pytest.fixture
-def store():
-    schema = f"pytest_search_{uuid.uuid4().hex[:8]}"
-    with psycopg.connect(DB_URL, autocommit=True) as conn:
-        conn.execute(f'CREATE SCHEMA "{schema}"')
-    separator = "&" if "?" in DB_URL else "?"
-    store = PostgresDocumentStore(
-        f"{DB_URL}{separator}options={quote(f'-c search_path={schema},public')}"
-    )
+def store(postgres_url: str):
+    store = PostgresDocumentStore(postgres_url)
     store.open()
     yield store
     store.close()
-    with psycopg.connect(DB_URL, autocommit=True) as conn:
-        conn.execute(f'DROP SCHEMA "{schema}" CASCADE')
 
 
 def _keys(rows):

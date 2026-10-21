@@ -1,74 +1,11 @@
 """Tests for agent discovery functionality."""
 
-from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from app.progenitor.registry.discovery import (
-    SKIP_FILES,
-    SKIP_FOLDERS,
-    AgentDiscovery,
-    AgentFolderInfo,
-    DiscoveredAgentSpec,
-)
-
-
-class TestAgentFolderInfo:
-    """Tests for AgentFolderInfo dataclass."""
-
-    def test_to_prompt_string(self):
-        """Test conversion to LLM prompt format."""
-        info = AgentFolderInfo(
-            folder_name="test_agent",
-            folder_path=Path("app/agents/test_agent"),
-            files=["agent.py", "README.md"],
-            file_contents={"agent.py": "print('hello')"},
-        )
-        result = info.to_prompt_string()
-        assert "## Agent Folder: test_agent" in result
-        assert "Files: agent.py, README.md" in result
-        assert "print('hello')" in result
-
-    def test_to_prompt_string_truncates_long_content(self):
-        """Test that long file contents are truncated."""
-        long_content = "x" * 5000
-        info = AgentFolderInfo(
-            folder_name="test_agent",
-            folder_path=Path("app/agents/test_agent"),
-            files=["agent.py"],
-            file_contents={"agent.py": long_content},
-        )
-        result = info.to_prompt_string()
-        assert "... (truncated)" in result
-        assert len(result) < 5000
-
-
-class TestDiscoveredAgentSpec:
-    """Tests for DiscoveredAgentSpec model."""
-
-    def test_default_values(self):
-        """Test default values are set correctly."""
-        spec = DiscoveredAgentSpec(
-            name="test",
-            description="Test agent",
-            entrypoint="agent.py",
-        )
-        assert spec.transport == "http"
-        assert spec.version == "0.1.0"
-        assert spec.is_valid_agent is True
-        assert spec.reason_if_invalid is None
-
-    def test_with_capabilities(self):
-        """Test spec with capabilities."""
-        spec = DiscoveredAgentSpec(
-            name="test",
-            description="Test agent",
-            capabilities=["greeting", "file_ops"],
-            entrypoint="http_agent.py",
-            transport="http",
-        )
-        assert spec.capabilities == ["greeting", "file_ops"]
+from app.progenitor.registry import discover_external_agents
+from app.progenitor.registry.discovery import AgentDiscovery, DiscoveredAgentSpec
 
 
 class TestAgentDiscovery:
@@ -210,22 +147,6 @@ class TestAgentDiscovery:
         assert "greeting agent" in result.agents[0].description.lower()
 
 
-class TestSkipPatterns:
-    """Test skip folder and file patterns."""
-
-    def test_skip_folders_includes_common_patterns(self):
-        """Test that common skip patterns are included."""
-        assert "__pycache__" in SKIP_FOLDERS
-        assert ".git" in SKIP_FOLDERS
-        assert "base" in SKIP_FOLDERS
-        assert "node_modules" in SKIP_FOLDERS
-
-    def test_skip_files_includes_common_patterns(self):
-        """Test that common skip files are included."""
-        assert "__init__.py" in SKIP_FILES
-        assert ".gitkeep" in SKIP_FILES
-
-
 class TestAgentDiscoveryIntegration:
     """Integration tests for agent discovery."""
 
@@ -265,7 +186,7 @@ class TestAgentDiscoveryIntegration:
             registry=mock_registry,
         )
         spec = DiscoveredAgentSpec(
-            name="builder_agent",
+            name="external_builder",
             description="External builder",
             entrypoint="agent.py",
             capabilities=["build_progenitor"],
@@ -306,3 +227,27 @@ class TestAgentDiscoveryIntegration:
         assert entry.url is None
         assert entry.port is None
         assert entry.agent_card_url is None
+
+    @pytest.mark.asyncio
+    async def test_discovers_agents_from_configured_external_repository(self, tmp_path):
+        repository = tmp_path / "external-agents"
+        agent_dir = repository / "app" / "agents" / "external_agent"
+        agent_dir.mkdir(parents=True)
+        (agent_dir / "agent.py").write_text('"""External agent."""\n', encoding="utf-8")
+        (agent_dir / "agent.yml").write_text("runtime:\n  port: 8111\n", encoding="utf-8")
+        registry = MagicMock()
+        registry.load = AsyncMock()
+        registry.get_agents.return_value = []
+        registry.register_agent = AsyncMock()
+
+        summary = await discover_external_agents(
+            agent_repositories=(repository,),
+            llm_client=AsyncMock(),
+            registry=registry,
+        )
+
+        assert summary["agents_found"] == 1
+        assert summary["agents_registered"] == 1
+        entry = registry.register_agent.await_args.args[0]
+        assert entry.entrypoint == "agent.py"
+        assert entry.url == "http://localhost:8111"

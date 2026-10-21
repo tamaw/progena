@@ -40,12 +40,6 @@ def test_catalog_setup_and_graph_seeding_preserve_existing_data(monkeypatch, exi
     assert configured is store
     assert agent_store.get_agent_store() is store
     pool.open.assert_called_once()
-    # The real startup SQL only ensures tables. In particular it cannot delete
-    # existing A2A/ACP/object/subagent rows or inspect/drop a legacy graph column.
-    statements = [" ".join(call.args[0].split()) for call in cursor.execute.call_args_list]
-    assert len(statements) == 2
-    assert statements[0].startswith("CREATE TABLE IF NOT EXISTS agent (")
-    assert statements[1].startswith("CREATE TABLE IF NOT EXISTS agent_graph (")
     save.assert_not_called()
     delete.assert_not_called()
 

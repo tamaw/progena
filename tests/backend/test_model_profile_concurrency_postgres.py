@@ -1,11 +1,7 @@
-"""Concurrent model-profile mutations serialize instead of losing updates.
-
-Opt-in on a scratch database (``PROGENITOR_TEST_DATABASE_URL``).
-"""
+"""Concurrent model-profile mutations serialize instead of losing updates."""
 
 from __future__ import annotations
 
-import os
 import threading
 import time
 
@@ -15,21 +11,14 @@ from app.backend.document_store import PROGENITOR_STATE_PREFIX, PostgresDocument
 from app.backend.model_profile_routes import _mutate_profile
 from app.progenitor.state.model_profiles import MODEL_PROFILES_DOC_KEY
 
-DATABASE_URL = (os.getenv("PROGENITOR_TEST_DATABASE_URL") or "").strip() or None
-
-pytestmark = pytest.mark.skipif(
-    DATABASE_URL is None, reason="requires PROGENITOR_TEST_DATABASE_URL (a scratch database)"
-)
-
 
 def _profile(deployment: str) -> dict:
     return {"provider_id": "foundry-1", "deployment": deployment}
 
 
 @pytest.fixture
-def store():
-    assert DATABASE_URL is not None
-    store = PostgresDocumentStore(DATABASE_URL)
+def store(postgres_url: str):
+    store = PostgresDocumentStore(postgres_url)
     store.open()
     store.save_document(
         PROGENITOR_STATE_PREFIX,
@@ -37,7 +26,6 @@ def store():
         {"general": _profile("g1"), "fast": _profile("f1")},
     )
     yield store
-    store.delete_document(PROGENITOR_STATE_PREFIX, MODEL_PROFILES_DOC_KEY)
     store.close()
 
 
@@ -54,13 +42,26 @@ def _interleave(store, first, second):
     """Run ``first`` (which holds its read open), then ``second`` against it."""
 
     holding = threading.Event()
-    slow = threading.Thread(
-        target=_mutate_profile, args=(store, *first[:1], _slow(first[1], holding))
-    )
+    errors: list[Exception] = []
+
+    def mutate_first() -> None:
+        try:
+            _mutate_profile(store, *first[:1], _slow(first[1], holding))
+        except Exception as exc:
+            errors.append(exc)
+
+    slow = threading.Thread(target=mutate_first)
     slow.start()
-    assert holding.wait(2)
-    _mutate_profile(store, *second)
-    slow.join(5)
+    first_holding = holding.wait(timeout=2)
+    try:
+        if first_holding:
+            _mutate_profile(store, *second)
+    finally:
+        slow.join(timeout=5)
+        assert not slow.is_alive()
+    if errors:
+        raise errors[0]
+    assert first_holding
 
 
 def _stored(store) -> dict:

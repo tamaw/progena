@@ -19,7 +19,7 @@
     },
     "source": {
       "type": "string",
-      "description": "Which agent or skill produced this message (e.g. 'managing-inbox', 'observe_agent'), for traceability once several agents report into the same inbox."
+      "description": "Which agent or skill produced this message (e.g. 'managing-inbox', 'repo-manager'), for traceability once several agents report into the same inbox."
     },
     "read": {
       "type": "boolean",

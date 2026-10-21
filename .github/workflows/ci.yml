@@ -5,11 +5,6 @@ on:
     # Manual runs are used as an explicit deploy signal; build-and-deploy
     # still runs after validation even when no push-based diff is available.
   push:
-    paths-ignore:
-      - 'app/agents/**'
-      - 'app/mcp/**'
-      - '.github/workflows/agents.yml'
-      - '.github/workflows/mcp.yml'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -65,9 +60,6 @@ jobs:
           ruff check app/progenitor tests/progenitor tests/test_scheduler.py
 
       - name: Type-check (pyright)
-        # Covers all of app/, not just app/progenitor -- pyright reports zero
-        # errors across the tree, so the wider scope costs nothing and keeps
-        # app/backend and app/agents from drifting untyped.
         # --pythonpath keeps this identical to the pre-commit hook, so the
         # interpreter never depends on activation state.
         run: |
@@ -137,7 +129,7 @@ jobs:
           echo "Deployed commit: $DEPLOYED"
           changed() { [ -n "$(git diff --name-only "$DEPLOYED" HEAD -- "$@")" ] && echo true || echo false; }
           # Both Python images copy all of app/ (the backend imports app.progenitor).
-          PYTHON_COMMON=(app ':!app/frontend' pyproject.toml README.md scripts data/schemas .dockerignore)
+          PYTHON_COMMON=(app ':!app/frontend' pyproject.toml README.md data/schemas .dockerignore)
           PROGENITOR="$(changed "${PYTHON_COMMON[@]}" docker/progenitor data/instructions data/skills data/agents data/shims)"
           BACKEND="$(changed "${PYTHON_COMMON[@]}" docker/backend data/agents/objects)"
           FRONTEND="$(changed app/frontend docker/frontend)"

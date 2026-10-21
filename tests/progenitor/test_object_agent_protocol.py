@@ -417,7 +417,7 @@ async def test_actual_object_agent_uses_profile_override_for_both_modes(
     )
     configs = []
 
-    def selected_model(config):
+    def selected_model(config, *, profile_name=None):
         configs.append(config.model_default)
         return Model(responses=[AIMessage(content="profile greeting")])
 

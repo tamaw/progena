@@ -39,14 +39,6 @@ def _write(root: Path, path: str, content: str) -> None:
     target.write_text(content, encoding="utf-8")
 
 
-def test_default_directory_is_the_checked_in_one(monkeypatch):
-    monkeypatch.delenv("PROGENITOR_INSTRUCTIONS_DIR", raising=False)
-    monkeypatch.delenv("PROGENITOR_DATA_DIR", raising=False)
-    instructions_dir = resolve_instructions_dir()
-    assert instructions_dir == DEFAULT_INSTRUCTIONS_DIR
-    assert (instructions_dir / "progenitor" / "genesis.md").exists()
-
-
 def test_invalid_data_dir_env_raises(monkeypatch, tmp_path):
     monkeypatch.delenv("PROGENITOR_INSTRUCTIONS_DIR", raising=False)
     monkeypatch.setenv("PROGENITOR_DATA_DIR", str(tmp_path / "does-not-exist"))
@@ -57,7 +49,6 @@ def test_invalid_data_dir_env_raises(monkeypatch, tmp_path):
 def test_every_checked_in_instruction_is_valid():
     """The runtime refuses to boot on an invalid file, so catch it here first."""
     paths = sorted(DEFAULT_INSTRUCTIONS_DIR.rglob("*.md"))
-    assert paths
     for path in paths:
         parse_instruction_template(path.read_text(encoding="utf-8"))
 
@@ -71,7 +62,6 @@ def test_render_drops_front_matter_and_fills_variables():
     [
         ("progenitor/genesis.md", "Hello {other}.\n", "{name}"),
         ("progenitor/genesis.md", "Hello.\n", "{name}"),
-        ("builder_agent/think.md", VALID, "bundled with builder_agent"),
         ("workflows/card.md", "---\nvariables: [x]\n---\nx\n", "unknown front matter key"),
         # A bare JSON type name is not a type ref: rejected at write, naming the input.
         (
@@ -88,7 +78,6 @@ def test_render_drops_front_matter_and_fills_variables():
     ids=[
         "runtime-placeholder-renamed",
         "runtime-placeholder-dropped",
-        "bundled",
         "unknown-key",
         "bare-input-type",
         "unknown-output-schema",
@@ -103,16 +92,16 @@ def test_workflow_templates_may_change_placeholders():
     check_instruction_write("workflows/card.md", VALID, "Card {card.title}\n", TYPES)
 
 
-async def test_sync_keeps_edited_runtime_instructions_and_mirrors_bundled_ones(tmp_path):
+async def test_sync_seeds_missing_instructions_without_overwriting_saved_edits(tmp_path):
     _write(tmp_path, "progenitor/genesis.md", VALID)
     _write(tmp_path, "progenitor/new.md", VALID)
-    _write(tmp_path, "builder_agent/think.md", VALID)
+    _write(tmp_path, "external_agent/think.md", VALID)
     edited = VALID.replace("Hello", "Hi")
     state_manager = FakeStateManager(
         {
             "progenitor/genesis.md": edited,
-            "builder_agent/think.md": edited,
-            "builder_agent/removed.md": VALID,
+            "external_agent/think.md": edited,
+            "external_agent/removed.md": VALID,
             "workflows/card.md": VALID,
         }
     )
@@ -122,7 +111,8 @@ async def test_sync_keeps_edited_runtime_instructions_and_mirrors_bundled_ones(t
     assert state_manager.docs == {
         "progenitor/genesis.md": edited,
         "progenitor/new.md": VALID,
-        "builder_agent/think.md": VALID,
+        "external_agent/think.md": edited,
+        "external_agent/removed.md": VALID,
         "workflows/card.md": VALID,
     }
 

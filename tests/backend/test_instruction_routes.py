@@ -20,7 +20,7 @@ from app.backend.document_store import (
 GENESIS = "---\ntitle: System\ndescription: Main prompt\n---\nYou are Progenitor.\n"
 DISCOVERY = "---\ntitle: Discovery\ndescription: Analyse folders\n---\nAnalyse {folders}.\n"
 CARD = "---\ntitle: Card\ninputs:\n  card: kanban_card\n---\nSummarise {card.title}.\n"
-THINK = "---\ntitle: Think\ndescription: Approaches\n---\nThink hard.\n"
+EXTERNAL = "---\ntitle: External\ndescription: Configurable prompt\n---\nWork carefully.\n"
 
 
 @pytest.fixture
@@ -31,7 +31,7 @@ def harness(monkeypatch):
     for path, content in (
         ("progenitor/genesis.md", GENESIS),
         ("progenitor/discovery.md", DISCOVERY),
-        ("builder_agent/think.md", THINK),
+        ("external_agent/think.md", EXTERNAL),
         ("workflows/card.md", CARD),
     ):
         store.save_document(PROGENITOR_STATE_PREFIX, f"instruction:{path}", {"content": content})
@@ -62,7 +62,7 @@ def _stored(store, path):
     return store.get_document(PROGENITOR_STATE_PREFIX, f"instruction:{path}").payload["content"]
 
 
-def test_list_reports_front_matter_and_which_instructions_are_editable(harness):
+def test_list_reports_front_matter_and_editable_instructions(harness):
     client, _, events = harness
     assert_acknowledged(client.get("/api/ui/instructions"), ["instructions.snapshot"])
     listed = {item["path"]: item for item in _last(events, "instructions.snapshot")["instructions"]}
@@ -70,8 +70,8 @@ def test_list_reports_front_matter_and_which_instructions_are_editable(harness):
     assert listed["progenitor/discovery.md"]["placeholders"] == ["folders"]
     assert listed["workflows/card.md"]["editable"] is True
     assert listed["progenitor/genesis.md"]["editable"] is True
-    assert listed["builder_agent/think.md"]["editable"] is False
-    assert listed["builder_agent/think.md"]["group"] == "builder_agent"
+    assert listed["external_agent/think.md"]["editable"] is True
+    assert listed["external_agent/think.md"]["group"] == "external_agent"
 
 
 def test_read_returns_body_without_front_matter(harness):
@@ -99,13 +99,12 @@ def test_edit_saves_a_runtime_instruction(harness):
 @pytest.mark.parametrize(
     ("path", "content", "status"),
     [
-        ("builder_agent/think.md", THINK.replace("hard", "soft"), 403),
         ("progenitor/genesis.md", "---\nunknown: 1\n---\nYou are Progenitor.\n", 400),
         ("progenitor/discovery.md", DISCOVERY.replace("{folders}", "the folders"), 400),
         ("progenitor/discovery.md", DISCOVERY.replace("{folders}", "{dirs}"), 400),
         ("progenitor/missing.md", GENESIS, 404),
     ],
-    ids=["bundled", "unknown-key", "placeholder-dropped", "placeholder-renamed", "missing"],
+    ids=["unknown-key", "placeholder-dropped", "placeholder-renamed", "missing"],
 )
 def test_rejected_edits_leave_the_instruction_unchanged(harness, path, content, status):
     client, store, _ = harness

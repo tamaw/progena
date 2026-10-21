@@ -122,17 +122,6 @@ def document_store():
 class TestUIRoutes:
     """Tests for /api/ui endpoints."""
 
-    def test_ui_index_returns_404(self, client):
-        """Test that / returns 404 (API-only backend)."""
-        response = client.get("/")
-        # Root path should return 404 - backend is API-only now
-        assert response.status_code in (404, 405, 307)
-
-    def test_ui_assets_not_served(self, client):
-        """Test that /ui/ returns 404 (API-only backend)."""
-        response = client.get("/ui/")
-        assert response.status_code == 404
-
     def test_widgets_endpoint(self, client):
         request_id = "widgets-request"
         response = client.get("/api/ui/widgets", headers={"X-Request-ID": request_id})
@@ -615,15 +604,6 @@ class TestUIRoutes:
             is None
         )
 
-    def test_widget_schemas_endpoint_is_deleted(self, client):
-        """Widget schema data is no longer part of the finite UI API."""
-        response = client.get(
-            "/api/ui/widget-schemas",
-            headers={"X-Request-ID": "deleted-widget-schemas"},
-        )
-
-        assert response.status_code == 404
-
     def test_kanban_endpoint_returns_default_board(self, client, tasks_state_reader):
         response = client.get("/api/ui/kanban")
         assert response.status_code == 202
@@ -948,8 +928,6 @@ class TestUIRoutes:
         assert move_response.status_code == 202
         data = move_response.json()
         assert_acknowledgement_body(data)
-        assert True
-        assert True
 
         from app.backend import ui_routes
 
@@ -1160,55 +1138,8 @@ class TestUIRoutes:
         assert response.status_code == 404
 
 
-class TestDashboardRoutes:
-    """Tests for Dashboard UI routes (now API-only)."""
-
-    def test_dashboard_not_served(self, client):
-        """Test that /ui/dashboard returns 404 (API-only backend)."""
-        response = client.get("/ui/dashboard")
-        assert response.status_code == 404
-
-    def test_ui_alias_not_served(self, client):
-        """Test that /ui returns 404 (API-only backend)."""
-        response = client.get("/ui")
-        assert response.status_code == 404
-
-
 class TestLogsEndpoint:
     """Tests for /api/ui/logs endpoint."""
-
-    def test_logs_returns_valid_structure(self, client):
-        """Test that /api/ui/logs returns accepted response."""
-        response = client.get("/api/ui/logs")
-        assert response.status_code == 202
-        data = response.json()
-        assert_acknowledgement_body(data)
-        assert "request_id" in data
-        assert "event_types" in data
-
-    def test_logs_json_format(self, client):
-        """Test that /api/ui/logs can return JSON format."""
-        response = client.get("/api/ui/logs?format=json")
-        assert response.status_code == 202
-        data = response.json()
-        assert_acknowledgement_body(data)
-        assert "request_id" in data
-        assert "event_types" in data
-
-    def test_logs_with_limit(self, client):
-        """Test that /api/ui/logs respects limit parameter."""
-        response = client.get("/api/ui/logs?limit=10")
-        assert response.status_code == 202
-
-    def test_logs_with_level_filter(self, client):
-        """Test that /api/ui/logs accepts level filter."""
-        response = client.get("/api/ui/logs?level=error")
-        assert response.status_code == 202
-
-    def test_logs_with_search(self, client):
-        """Test that /api/ui/logs accepts search parameter."""
-        response = client.get("/api/ui/logs?search=test")
-        assert response.status_code == 202
 
     def test_logs_json_groups_sources_by_folder_and_preserves_log_timestamp(
         self, client, kanban_state_reader
@@ -1222,7 +1153,7 @@ class TestLogsEndpoint:
             encoding="utf-8",
         )
         (builder_dir / "builder.log").write_text(
-            "2026-03-08 00:33:35 - app.agents.builder_progenitor.agent - INFO - Builder ready\n",
+            "2026-03-08 00:33:35 - external.builder - INFO - Builder ready\n",
             encoding="utf-8",
         )
 
@@ -1639,58 +1570,8 @@ class TestLogsPage:
         }
 
 
-# Note: These tests used to check for server-rendered navigation HTML content.
-# With the React SPA, navigation is rendered client-side, so these tests are simplified
-# to just verify the SPA HTML shell is returned correctly. Navigation behavior
-# should be tested with end-to-end tests using a browser.
-
-# Note: The following test classes were removed as they tested server-rendered HTML elements:
-# - TestUIEnhancedFeatures (dashboard charts, stats grids, logs controls)
-# - These elements are now rendered client-side by React
-
-
-class TestUIAccessibility:
-    """The API backend must not resurrect removed server-rendered UI assets."""
-
-    def test_chat_ui_has_no_backend_favicon(self, client):
-        assert client.get("/ui/favicon.ico").status_code == 404
-
-    def test_backend_does_not_serve_ui_document_shell(self, client):
-        assert client.get("/ui/").status_code == 404
-
-
-class TestSplitSSEEndpoints:
-    """Tests for the split SSE endpoints (/chat and /status/stream).
-
-    Note: SSE streaming tests are skipped as they hang waiting for the infinite stream.
-    The endpoints are verified indirectly via route registration checks.
-    """
-
-    def test_stream_endpoint_is_registered(self, client):
-        """Test that /api/ui/stream canonical SSE endpoint is registered."""
-        response = client.get("/openapi.json")
-        assert response.status_code == 200
-        openapi = response.json()
-        paths = openapi.get("paths", {})
-        assert "/api/ui/stream" in paths, "Canonical SSE stream endpoint should be registered"
-
-    def test_status_stream_endpoint_is_registered(self, client):
-        """Test that /api/ui/stream (SSE) is registered (snapshot path removed)."""
-        response = client.get("/openapi.json")
-        assert response.status_code == 200
-        openapi = response.json()
-        paths = openapi.get("paths", {})
-        assert "/api/ui/stream" in paths, "Canonical SSE stream endpoint should be registered"
-
-    def test_broadcast_functions_exist(self):
-        """Test that the broadcast functions are available."""
-        from app.backend.ui_routes import (
-            broadcast_alert,
-            broadcast_ui_event,
-        )
-
-        assert callable(broadcast_ui_event)
-        assert callable(broadcast_alert)
+class TestUIStreamEvents:
+    """Tests for browser-visible UI stream events."""
 
     def test_broadcast_alerts_state_pushes_full_alert_payload(self):
         from app.backend import ui_routes
@@ -1742,10 +1623,6 @@ class TestSplitSSEEndpoints:
 
 class TestWorkspaceBridgeActions:
     """Tests for backend action bridge endpoints."""
-
-    @pytest.mark.skip(reason="File-based fallback removed; tests document-store-only StateReader")
-    def test_state_reader_uses_document_store_over_legacy_state_files(self, tmp_path):
-        pass
 
     def test_patch_schedule_widget_updates_schedule_document(self, client, monkeypatch):
         store = InMemoryDocumentStore()

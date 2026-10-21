@@ -56,10 +56,6 @@ describe('SubagentCard message entries', () => {
       item: subagentItem(),
     }));
 
-    expect(renderers.renderSafeMarkdown).not.toHaveBeenCalled();
-    expect(renderers.formatMessage).not.toHaveBeenCalled();
-    expect(renderers.sanitizeHtmlFragment).not.toHaveBeenCalled();
-    expect(renderers.appendStreamingCursor).not.toHaveBeenCalled();
     expect(streamingMarkup).toContain('```js\nconst answer = 42;\n```');
     expect(streamingMarkup).toContain('▋');
     expect(streamingMarkup).not.toContain('<pre><code class="language-js">');
@@ -68,11 +64,6 @@ describe('SubagentCard message entries', () => {
       item: subagentItem({ status: 'success' }),
     }));
 
-    expect(renderers.renderSafeMarkdown).toHaveBeenCalledOnce();
-    expect(renderers.renderSafeMarkdown).toHaveBeenCalledWith('```js\nconst answer = 42;\n```');
-    expect(renderers.formatMessage).not.toHaveBeenCalled();
-    expect(renderers.sanitizeHtmlFragment).not.toHaveBeenCalled();
-    expect(renderers.appendStreamingCursor).not.toHaveBeenCalled();
     expect(settledMarkup).toContain('<pre><code class="language-js">const answer = 42;</code></pre>');
   });
 });

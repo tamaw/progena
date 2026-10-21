@@ -130,6 +130,7 @@ class ProgenitorLoop:
             registry_refresh_seconds=float(config.runtime.registry_refresh_seconds),
             repo_scan_seconds=float(config.runtime.repo_scan_seconds),
             worktree_dir=Path(config.storage.worktree_dir),
+            agent_repositories=tuple(getattr(config.storage, "agent_repositories", ())),
             heartbeat_health_seconds=float(
                 getattr(self.config.runtime, "checkpoint_interval_seconds", 30.0)
             ),

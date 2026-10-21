@@ -61,9 +61,6 @@ class ListToolsTool(BaseSystemTool):
         mcp_tools = (
             context.tool_registry.get_tools() if hasattr(context.tool_registry, "get_tools") else []
         )
-        local_mcp_tools = []
-        if hasattr(context.tool_registry, "get_local_mcp_tools"):
-            local_mcp_tools = context.tool_registry.get_local_mcp_tools()
 
         # Include in-memory discovered MCP tools even if they haven't been
         # persisted to agents.json yet (e.g. in-process service path).
@@ -76,7 +73,6 @@ class ListToolsTool(BaseSystemTool):
                 discovered_mcp_tools = []
 
         combined_mcp_tools = list(mcp_tools or [])
-        combined_mcp_tools.extend(local_mcp_tools or [])
         combined_mcp_tools.extend(discovered_mcp_tools or [])
 
         # De-duplicate by name

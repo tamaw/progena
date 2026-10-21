@@ -28,6 +28,7 @@ from ..provider_runtime import (
 from ..runtime.thread_context import get_current_thread_id
 from ..tools.protocol import ToolContext
 from ..tools.system_registry import get_all_system_tools
+from .checkpoint_usage import CheckpointChatOpenAI
 
 logger = logging.getLogger(__name__)
 
@@ -52,9 +53,16 @@ def _normalize_langchain_base_url(base_url: str) -> str:
 
 
 def create_langchain_model(
-    config: LLMConfig | None = None, *, session_id: str | None = None
+    config: LLMConfig | None = None,
+    *,
+    session_id: str | None = None,
+    profile_name: str | None = None,
 ) -> ChatOpenAI:
-    """Create a Responses-only model from an already resolved provider snapshot."""
+    """Create a Responses-only model from an already resolved provider snapshot.
+
+    ``session_id`` scopes OpenCode Go requests, while ``profile_name`` is retained
+    on checkpointed messages for model-usage attribution.
+    """
     config = config or LLMConfig()
     if not config.base_url or not config.api_key or not config.model_default:
         raise ProviderNotConfiguredError(
@@ -89,7 +97,7 @@ def create_langchain_model(
             else None
         )
 
-    model = ChatOpenAI(
+    model = CheckpointChatOpenAI(
         model=model_name,
         base_url=base_url,
         api_key=SecretStr(config.api_key),
@@ -100,6 +108,7 @@ def create_langchain_model(
         reasoning_effort=reasoning_effort,
         extra_body=extra_body,
     )
+    model.set_usage_profile(profile_name)
     logger.info(
         "Created LangChain model adapter: provider=%s model=%s responses_api=%s reasoning=%s",
         config.provider_kind,
@@ -153,6 +162,7 @@ class ProviderChatModel(BaseChatModel):
 
     template: LLMConfig = Field(default_factory=LLMConfig, exclude=True)
     provider_id: str | None = None
+    profile_name: str | None = None
     model_override: str | None = None
     bound_tools: tuple[Any, ...] = Field(default_factory=tuple, exclude=True)
     bound_tool_choice: Any = Field(default=None, exclude=True)
@@ -171,6 +181,7 @@ class ProviderChatModel(BaseChatModel):
     def _identifying_params(self) -> dict[str, Any]:
         return {
             "provider_id": self.provider_id,
+            "profile_name": self.profile_name,
             "model_override": self.model_override,
         }
 
@@ -184,7 +195,7 @@ class ProviderChatModel(BaseChatModel):
             provider_id=self.provider_id,
             model_override=self.model_override,
         )
-        target: Any = create_langchain_model(config)
+        target: Any = create_langchain_model(config, profile_name=self.profile_name)
         if self.structured_schema is not None:
             return target.with_structured_output(
                 self.structured_schema,
