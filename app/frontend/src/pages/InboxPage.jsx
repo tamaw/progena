@@ -308,7 +308,6 @@ export default function InboxPage() {
             <DetailStatus
               key="status"
               tone={INBOX_STATUS_META[selectedMessageStatus].tone}
-              className={`inbox-detail__status--${selectedMessageStatus}`}
             >
               {INBOX_STATUS_META[selectedMessageStatus].label}
             </DetailStatus>,

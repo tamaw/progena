@@ -34,6 +34,9 @@ from app.progenitor.document_kinds import (
     ACP_TASK_KEY_PREFIX,
     INBOX_MESSAGE_KEY_PREFIX,
     KNOWLEDGE_PAGE_KEY_PREFIX,
+    MODULE_DATA_KEY_PREFIX,
+    MODULE_DOCUMENT_KEY_PREFIX,
+    MODULE_STATUS_KEY_PREFIX,
     REPO_KEY_PREFIX,
 )
 from app.progenitor.knowledge.indexer_config import INDEX_STATUS_DOC_KEY
@@ -1889,6 +1892,9 @@ class StateReader:
                     or changed_key.startswith(ROUTINE_GRAPH_KEY_PREFIX)
                     or changed_key.startswith(REPO_KEY_PREFIX)
                     or changed_key.startswith(KNOWLEDGE_PAGE_KEY_PREFIX)
+                    or changed_key.startswith(MODULE_DOCUMENT_KEY_PREFIX)
+                    or changed_key.startswith(MODULE_DATA_KEY_PREFIX)
+                    or changed_key.startswith(MODULE_STATUS_KEY_PREFIX)
                 )
             )
             # Reconnect must reach reconciliation even with unchanged state.

@@ -67,6 +67,7 @@ import {
   DashboardNavIcon,
   InsightsIcon,
   KnowledgeNavIcon,
+  ModulesNavIcon,
   MoonIcon,
   OpenChatIcon,
   PinIcon,
@@ -124,6 +125,7 @@ const navGroups = [
     label: 'Spectate',
     items: [
       { to: '/dashboard', icon: <DashboardNavIcon />, label: 'Dashboard', trackActivity: true },
+      { to: '/modules', icon: <ModulesNavIcon />, label: 'Modules', trackActivity: true },
     ],
   },
   {
