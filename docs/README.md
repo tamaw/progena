@@ -15,4 +15,3 @@ This folder intentionally contains a small, maintained set of docs centered on t
 
 - [Main README](../README.md)
 - [Tests](../tests/)
-- [Scripts](../scripts/)

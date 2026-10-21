@@ -7,9 +7,6 @@ path segment is the group:
 
 * ``progenitor/`` is read by the runtime, which fills each placeholder from
   code, so edits must keep the same placeholders;
-* bundled groups (:data:`BUNDLED_INSTRUCTION_GROUPS`) belong to A2A agents that
-  read their own copy from ``data/instructions/``; the stored copy mirrors that
-  file and cannot be edited;
 * any other group (e.g. ``workflows/``) is a template that workflow nodes
   reference, freely editable by the user and the agent.
 """
@@ -30,7 +27,6 @@ if TYPE_CHECKING:
 
 RUNTIME_INSTRUCTION_GROUP = "progenitor"
 GENESIS_INSTRUCTION = "progenitor/genesis.md"
-BUNDLED_INSTRUCTION_GROUPS = frozenset({"builder_agent", "builder_progenitor", "observe_agent"})
 
 
 def instruction_group(path: str) -> str:
@@ -41,11 +37,6 @@ def instruction_group(path: str) -> str:
 def is_runtime_instruction(path: str) -> bool:
     """Whether the Progenitor runtime reads this instruction and fills it from code."""
     return instruction_group(path) == RUNTIME_INSTRUCTION_GROUP
-
-
-def is_bundled_instruction(path: str) -> bool:
-    """Whether an A2A agent reads this instruction from its own disk copy."""
-    return instruction_group(path) in BUNDLED_INSTRUCTION_GROUPS
 
 
 def check_instruction_write(
@@ -60,11 +51,6 @@ def check_instruction_write(
     type fails the write that introduced it rather than a later workflow save.
     """
     instruction_relative_path(path)
-    if is_bundled_instruction(path):
-        raise PermissionError(
-            f"'{path}' is bundled with {instruction_group(path)}, which reads it from disk; "
-            "change it in data/instructions/ instead"
-        )
     template = parse_instruction_template(content)
     check_template_type_refs(template, document_types)
     roots = template.roots

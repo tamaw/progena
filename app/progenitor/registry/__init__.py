@@ -2,7 +2,7 @@
 
 from .discovery import AgentDiscovery, AgentDiscoveryResult, DiscoveredAgentSpec, discover_agents
 from .refresh import (
-    discover_local_agents,
+    discover_external_agents,
     refresh_agent_cards,
     refresh_agent_health,
     refresh_agent_metadata,
@@ -19,7 +19,7 @@ __all__ = [
     "RegistryTool",
     "ToolRegistry",
     "discover_agents",
-    "discover_local_agents",
+    "discover_external_agents",
     "normalize_tool_name",
     "refresh_agent_cards",
     "refresh_agent_health",

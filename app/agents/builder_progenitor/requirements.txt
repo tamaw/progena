@@ -1,8 +1,0 @@
-# Builder Copilot dependencies
-
-# A2A protocol server
-a2a-sdk[http-server]>=0.3.24
-
-# Copilot validation + LSP runtime
-pyright>=1.1.408
-ruff>=0.15.9

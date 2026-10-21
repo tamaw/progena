@@ -17,8 +17,11 @@ allowed-tools: ls read_file write_file edit_file grep glob
 | Group | Read by | Editable | Placeholders |
 |---|---|---|---|
 | `progenitor/` | this runtime (`genesis.md` is your own system prompt) | yes; applies on the next model call | fixed by code: keep exactly the same `{names}` |
-| `builder_agent/`, `builder_progenitor/`, `observe_agent/` | that A2A agent, from its own disk copy | no (writes fail); change `data/instructions/` in git | fixed by that agent's code |
 | anything else, e.g. `workflows/` | workflow steps and routine `agent` nodes that reference the path | yes | free; each root becomes an input port or resolves from routine state |
+
+Standalone A2A agents maintain their own instructions in
+[progentior.agents](https://github.com/tamaw/progentior.agents); they are not bundled
+instruction groups in this runtime.
 
 ## Format
 
