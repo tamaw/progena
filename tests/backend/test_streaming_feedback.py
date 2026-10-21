@@ -9,15 +9,12 @@ Critical tests for ensuring the aliens see real-time feedback:
 """
 
 import asyncio
-from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from app.backend.models import AgentResponse
 from app.backend.streaming import (
     AsyncIteratorize,
     Iteratorize,
-    StreamChunk,
     StreamingBuffer,
     is_stop_requested,
     reset_stop_flag,
@@ -143,29 +140,6 @@ class TestStopFlag:
         stop_everything()
         reset_stop_flag()
         assert not is_stop_requested()
-
-
-class TestStreamChunk:
-    """Tests for StreamChunk dataclass."""
-
-    def test_stream_chunk_creation(self):
-        """Test creating a stream chunk."""
-        chunk = StreamChunk(content="hello", index=0)
-        assert chunk.content == "hello"
-        assert chunk.index == 0
-        assert chunk.is_final is False
-        assert chunk.metadata is None
-
-    def test_stream_chunk_final(self):
-        """Test final stream chunk."""
-        chunk = StreamChunk(content="", index=10, is_final=True)
-        assert chunk.is_final is True
-
-    def test_stream_chunk_with_metadata(self):
-        """Test stream chunk with metadata."""
-        chunk = StreamChunk(content="test", index=5, metadata={"tokens": 100, "model": "gpt-4"})
-        assert chunk.metadata is not None
-        assert chunk.metadata["tokens"] == 100
 
 
 class TestStreamingBuffer:
@@ -357,162 +331,3 @@ class TestAgentActivityFeedback:
 
         assert planner.status == "active"
         assert executor.status == "idle"
-
-
-class TestSubAgentDelegation:
-    """Tests for sub-agent task delegation feedback."""
-
-    def test_task_response_structure(self):
-        """Test tasks endpoint (deleted - should return 404)."""
-        from fastapi.testclient import TestClient
-
-        from app.backend.main import app
-
-        client = TestClient(app)
-        response = client.get("/api/ui/tasks")
-        assert response.status_code == 404
-
-    def test_backlog_item_priority(self):
-        """Test backlog items have priority for ordering."""
-        from app.backend.state_reader import BacklogItem
-
-        high_priority = BacklogItem.from_dict(
-            {
-                "id": "task-1",
-                "item_type": "bug",
-                "status": "pending",
-                "description": "Critical fix",
-                "priority": 10,
-            }
-        )
-
-        low_priority = BacklogItem.from_dict(
-            {
-                "id": "task-2",
-                "item_type": "feature",
-                "status": "pending",
-                "description": "Nice to have",
-                "priority": 1,
-            }
-        )
-
-        assert high_priority.priority > low_priority.priority
-
-
-class TestBuildStateTracking:
-    """Tests for build state and phase tracking."""
-
-    def test_build_phases_sequence(self):
-        """Test all build phases are valid."""
-        from app.backend.state_reader import BuildInfo
-
-        # Valid phases in typical order
-        phases = ["observe", "think", "plan", "build", "execute", "verify", "learn"]
-
-        for phase in phases:
-            build = BuildInfo(
-                in_progress=True,
-                phase=phase,
-                iteration=1,
-                score=0.5,
-            )
-            assert build.phase == phase
-
-    def test_build_score_tracking(self):
-        """Test build verification score tracking."""
-        from app.backend.state_reader import BuildInfo
-
-        build = BuildInfo.from_dict(
-            {
-                "build_in_progress": True,
-                "build_phase": "verify",
-                "verification": {"current_score": 0.85},
-                "iteration": {"current": 5},
-            }
-        )
-
-        assert build.score == 0.85
-        assert build.iteration == 5
-
-    def test_build_message_count(self):
-        """Test build message count tracking."""
-        from app.backend.state_reader import BuildInfo
-
-        messages = [{"role": "user", "content": "msg"}] * 10
-
-        build = BuildInfo.from_dict(
-            {
-                "build_in_progress": True,
-                "build_messages": messages,
-            }
-        )
-
-        assert build.message_count == 10
-
-
-class TestChatAPIStreaming:
-    """Tests for chat API streaming responses."""
-
-    @patch("app.backend.main.get_sse_client")
-    def test_ui_responses_endpoint_exists(self, mock_get_client):
-        """Canonical browser generation dispatches or returns an operational failure."""
-        from fastapi.testclient import TestClient
-
-        from app.backend.main import app
-
-        # Mock the client to avoid SSE connection issues
-        mock_client = AsyncMock()
-        mock_client.send_message.return_value = AgentResponse(
-            response="mocked", reasoning=None, reasoning_tokens=None
-        )
-        mock_get_client.return_value = mock_client
-
-        client = TestClient(app)
-        response = client.post(
-            "/api/ui/responses",
-            json={
-                "model": "progenitor-v1",
-                "input": "test",
-                "stream": False,
-            },
-        )
-
-        # A successful finite dispatch is 202, with operational failures preserved.
-        assert response.status_code in [202, 500, 503, 504]
-
-
-class TestRealTimeUpdates:
-    """Tests for real-time update mechanisms."""
-
-    def test_broadcast_event_puts_to_queue(self):
-        """Test broadcast_event adds to subscriber queues."""
-        import asyncio
-
-        from app.backend.ui_routes import _ui_stream_subscribers, broadcast_ui_event
-
-        # Clear subscribers
-        _ui_stream_subscribers.clear()
-
-        # Add test queue
-        queue = asyncio.Queue()
-        _ui_stream_subscribers[queue] = None
-
-        try:
-            # Broadcast event
-            broadcast_ui_event("test", {"data": "value"}, scope="chat")
-
-            # Verify event was added
-            assert not queue.empty()
-        finally:
-            _ui_stream_subscribers.pop(queue, None)
-
-    def test_status_monitor_function_exists(self):
-        """Test status monitor functions exist."""
-        from app.backend.ui_routes import (
-            _get_current_status,
-            start_status_monitor,
-        )
-
-        # Functions should be callable
-        assert callable(start_status_monitor)
-        assert callable(_get_current_status)

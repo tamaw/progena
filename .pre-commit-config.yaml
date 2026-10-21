@@ -17,9 +17,8 @@ repos:
       - id: check-added-large-files
         args: ['--maxkb=500']
       - id: check-merge-conflict
-      - id: detect-private-key
-        exclude: ^(app/frontend/certs|docker/backend/certs)/
       - id: check-case-conflict
+      - id: detect-private-key
 
   # Python code formatting with Ruff (fast, replaces black + isort + flake8)
   - repo: https://github.com/astral-sh/ruff-pre-commit

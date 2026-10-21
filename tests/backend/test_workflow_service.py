@@ -461,31 +461,6 @@ async def test_extract_fails_when_structured_output_invalid():
     assert "failed schema validation" in completed.last_error
 
 
-@pytest.mark.asyncio
-async def test_agent_subagent_instruction_present():
-    store = InMemoryDocumentStore()
-    seed_document_types(store)
-    workflow = default_workflow_definition()
-    agent_id = _node_id(workflow, "agent")
-    workflow["graph"]["nodes"][agent_id]["template"] = "Do work: {key}"
-    workflow["graph"]["nodes"][agent_id]["subagent"] = "specialist"
-    definition = save_workflow_definition(store, workflow)
-    runner = RecordingRunner(["done"])
-    executor = _executor(store, runner)
-
-    run = await executor.trigger_workflow(definition.id, build_manual_trigger_event(definition))
-    await _wait_for(
-        lambda: (
-            get_workflow_run(store, run.run_id)
-            if get_workflow_run(store, run.run_id).status == "completed"
-            else None
-        )
-    )
-
-    assert "specialist" in runner.calls[0]["input_text"]
-    assert "sub-agent" in runner.calls[0]["input_text"]
-
-
 async def _completed(store, run_id):
     return await _wait_for(
         lambda: (

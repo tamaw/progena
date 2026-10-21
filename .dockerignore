@@ -28,3 +28,7 @@ data/*
 # Frontend build artifacts / deps (not needed in Python images)
 app/frontend/node_modules
 app/frontend/dist
+
+# TLS is terminated by host nginx; no certificate assets belong in image contexts.
+app/frontend/certs/
+docker/backend/certs/

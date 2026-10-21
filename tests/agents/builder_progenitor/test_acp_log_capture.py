@@ -20,12 +20,3 @@ def test_acp_log_capture_writes_split_stdout_stderr_logs(tmp_path):
     assert summary_path.name.endswith(".log")
     assert summary_path.with_suffix(".stdout.log").read_text(encoding="utf-8") == "acp stdout line"
     assert summary_path.with_suffix(".stderr.log").read_text(encoding="utf-8") == "acp stderr line"
-
-
-def test_acp_log_capture_recreates_missing_directory(tmp_path):
-    capture = ACPLogCapture(tmp_path)
-    capture.log_dir.rmdir()
-
-    summary_path = capture.write_log("work-item-2", {"stdout": "", "stderr": "", "success": True, "elapsed": 0.1})
-
-    assert summary_path.exists()

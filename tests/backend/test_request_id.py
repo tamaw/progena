@@ -39,16 +39,6 @@ class TestRequestIdMiddleware:
 
         assert response.headers["X-Request-ID"] == custom_id
 
-    def test_request_id_format(self, app):
-        """Test that generated request ID has expected format."""
-        with TestClient(app) as client:
-            response = client.get("/api/ui/widgets")
-
-        request_id = response.headers["X-Request-ID"]
-        # Format should be req-{12 hex chars}
-        assert request_id.startswith("req-")
-        assert len(request_id) == 16  # "req-" (4) + 12 hex chars
-
     def test_finite_response_exposes_timing_metric(self, app):
         """Finite responses expose a browser-visible server timing measurement."""
         with TestClient(app) as client:

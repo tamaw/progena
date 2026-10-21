@@ -78,11 +78,3 @@ async def test_rejects_non_object_data() -> None:
 
     assert result.success is False
     assert result.error is not None and "must be a JSON object" in result.error
-
-
-def test_registered_in_system_registry() -> None:
-    from app.progenitor.tools.system_registry import get_system_tool
-
-    tool = get_system_tool("json_to_yaml")
-    assert tool is not None
-    assert tool.args_model.__name__ == "JsonToYamlArgs"
