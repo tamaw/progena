@@ -5,7 +5,6 @@ import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-do
 import {
   fetchChatMessages,
   fetchPreferences,
-  fetchWidgets,
   markAlertsViewed,
   savePreferences,
   selectChatIndicators,
@@ -17,8 +16,6 @@ import {
   selectPreferencesSaveRequest,
   selectRequestIdByThreadId,
   selectUnseenNavRoutes,
-  selectUiStatus,
-  selectUiWidgets,
   selectUiAlerts,
   setActiveNavRoute,
   selectMarketplaces,
@@ -67,6 +64,7 @@ import {
   DashboardNavIcon,
   InsightsIcon,
   KnowledgeNavIcon,
+  ModulesNavIcon,
   MoonIcon,
   OpenChatIcon,
   PinIcon,
@@ -103,7 +101,10 @@ import { derivePageContext, formatPageContextBlock, stripPageContextBlock } from
 
 import PopupModal from '../common/PopupModal';
 import Modal from '../common/Modal';
+import ProvidersSettings from './ProvidersSettings';
+
 import { createSpectatorReplayState } from './quickChatStreamModel';
+import CompactInsights from '../insights/CompactInsights';
 
 // Grouped by owner/level (see the entity-relationship model):
 //   Operate  — the surfaces you work in (Progenitor chat, overview, projects)
@@ -124,6 +125,8 @@ const navGroups = [
     label: 'Spectate',
     items: [
       { to: '/dashboard', icon: <DashboardNavIcon />, label: 'Dashboard', trackActivity: true },
+      { to: '/modules', icon: <ModulesNavIcon />, label: 'Modules', trackActivity: true },
+      { to: '/insights', icon: <InsightsIcon />, label: 'Insights' },
     ],
   },
   {
@@ -195,6 +198,7 @@ const settingsSections = [
   { id: 'general', label: 'General', icon: <SettingsGeneralIcon /> },
   { id: 'appearance', label: 'Appearance', icon: <SettingsAppearanceIcon /> },
   { id: 'marketplaces', label: 'Marketplaces', icon: <SettingsMarketplacesIcon /> },
+  { id: 'providers', label: 'Providers', icon: <SettingsIntegrationsIcon /> },
   { id: 'agents', label: 'Agents & Models', icon: <SettingsAgentsIcon /> },
   { id: 'keyboard', label: 'Keyboard', icon: <SettingsKeyboardIcon /> },
   { id: 'integrations', label: 'Integrations', icon: <SettingsIntegrationsIcon /> },
@@ -224,7 +228,6 @@ function getPageLabel(pathname) {
   return match?.label ?? 'Chat';
 }
 
-const insightRanges = ['24h', '7d', '30d'];
 
 function formatTimestamp(timestamp) {
   if (!timestamp) return '';
@@ -1495,6 +1498,15 @@ function MarketplacesSettingsRow() {
   const [newName, setNewName] = useState('');
   const [newSource, setNewSource] = useState('');
   const [error, setError] = useState('');
+  const [creating, setCreating] = useState(false);
+  const [pendingName, setPendingName] = useState(null);
+
+  if (pendingName && marketplaces[pendingName]?.source === newSource.trim()) {
+    setCreating(false);
+    setPendingName(null);
+    setNewName('');
+    setNewSource('');
+  }
 
   const handleRefresh = useCallback(async () => {
     setError('');
@@ -1511,6 +1523,7 @@ function MarketplacesSettingsRow() {
       await dispatch(saveMarketplaces({ marketplacesUrl, marketplaces: nextMarketplaces })).unwrap();
     } catch (err) {
       setError(err?.message || 'Failed to save marketplaces');
+      setPendingName(null);
     }
   }, [dispatch, marketplacesUrl]);
 
@@ -1532,12 +1545,43 @@ function MarketplacesSettingsRow() {
       return;
     }
     const next = { ...marketplaces, [name]: { source, added_at: new Date().toISOString() } };
+    setPendingName(name);
     void handleSave(next);
+  };
+
+  const cancelCreate = () => {
+    setCreating(false);
     setNewName('');
     setNewSource('');
     setError('');
   };
 
+  if (creating) {
+    return (
+      <section className="set-section is-active">
+        <button type="button" className="set-back" disabled={!!pendingName} onClick={cancelCreate}>← Marketplaces</button>
+        <header className="set-section__head">
+          <h3>Add marketplace</h3>
+          <p>Register a source to browse and install plugins.</p>
+        </header>
+        <form onSubmit={(event) => { event.preventDefault(); handleAdd(); }}>
+          <label className="set-row set-connection-field">
+            <span className="set-row__title">Name</span>
+            <input className="set-text-input" value={newName} placeholder="my-marketplace" disabled={!!pendingName} onChange={(event) => { setNewName(event.target.value); setError(''); }} />
+          </label>
+          <label className="set-row set-connection-field">
+            <span className="set-row__title">Source</span>
+            <input className="set-text-input" value={newSource} placeholder="https://github.com/owner/repo" disabled={!!pendingName} onChange={(event) => { setNewSource(event.target.value); setError(''); }} />
+          </label>
+          {error ? <p className="set-workspace-list__error" role="alert">{error}</p> : null}
+          <div className="set-editor-footer">
+            <button type="button" className="task-btn task-btn--secondary" disabled={!!pendingName} onClick={cancelCreate}>Cancel</button>
+            <button type="submit" className="task-btn task-btn--primary" disabled={!!pendingName}>{pendingName ? 'Adding…' : 'Add marketplace'}</button>
+          </div>
+        </form>
+      </section>
+    );
+  }
   return (
     <section className="set-section is-active">
       <header className="set-section__head">
@@ -1545,45 +1589,34 @@ function MarketplacesSettingsRow() {
         <p>Registered plugin marketplace sources.</p>
       </header>
 
-      <div className="set-row">
-        <ul className="set-workspace-list">
+      <ul className="set-connection-list">
           {Object.entries(marketplaces).map(([name, entry]) => (
-            <li key={name} className="set-workspace-list__item">
-              <span className="set-workspace-list__host">{name}</span>
-              <span className="set-workspace-list__current">{entry?.source}</span>
-              <button type="button" className="set-btn set-btn--danger" onClick={() => handleRemove(name)}>
+            <li key={name} className="set-row">
+              <div className="set-row__label">
+                <span className="set-row__title">{name}</span>
+                <span className="set-row__sub">{entry?.source}</span>
+              </div>
+              <button type="button" className="task-btn task-btn--secondary set-btn--danger" onClick={() => handleRemove(name)}>
                 Remove
               </button>
             </li>
           ))}
-        </ul>
-        <span className="set-inline-control">
-          <input
-            className="set-text-input"
-            value={newName}
-            placeholder="my-marketplace"
-            onChange={(event) => { setNewName(event.target.value); if (error) setError(''); }}
-            onKeyDown={(event) => { if (event.key === 'Enter') handleAdd(); }}
-          />
-          <input
-            className="set-text-input"
-            value={newSource}
-            placeholder="https://github.com/owner/repo"
-            onChange={(event) => { setNewSource(event.target.value); if (error) setError(''); }}
-            onKeyDown={(event) => { if (event.key === 'Enter') handleAdd(); }}
-          />
-          <button type="button" className="set-btn" onClick={handleAdd}>
-            Add
-          </button>
-        </span>
-        {error ? <p className="set-workspace-list__error">{error}</p> : null}
-      </div>
-
+      </ul>
       <div className="set-row">
-        <button type="button" className="set-btn" onClick={handleRefresh}>
-          Refresh
-        </button>
+        <div className="set-row__label">
+          <span className="set-row__title">Add a marketplace</span>
+          <span className="set-row__sub">Connect a plugin source using its repository address.</span>
+        </div>
+        <button type="button" className="task-btn task-btn--secondary" onClick={() => { setCreating(true); setError(''); }}>Add marketplace</button>
       </div>
+      <div className="set-row">
+        <div className="set-row__label">
+          <span className="set-row__title">Refresh sources</span>
+          <span className="set-row__sub">Reload the registered marketplace list.</span>
+        </div>
+        <button type="button" className="task-btn task-btn--secondary" onClick={handleRefresh}>Refresh</button>
+      </div>
+      {error ? <p className="set-workspace-list__error" role="alert">{error}</p> : null}
     </section>
   );
 }
@@ -1709,8 +1742,12 @@ function SettingsPanel({ onClose, isPinned, onTogglePin, isOpen, onResetLiveUiSt
             {section === 'marketplaces' ? (
               <MarketplacesSettingsRow />
             ) : null}
+            {section === 'providers' ? (
+              <ProvidersSettings />
+            ) : null}
 
-            {!['general', 'appearance', 'marketplaces'].includes(section) ? (
+
+            {!['general', 'appearance', 'marketplaces', 'providers'].includes(section) ? (
               <section className="set-section is-active">
                 <div className="set-stub">
                   <div className="set-stub__glyph">{settingsSections.find((item) => item.id === section)?.icon}</div>
@@ -1882,35 +1919,9 @@ function SearchPanel({ query, onClose, isPinned, onTogglePin, isOpen }) {
 }
 
 function InsightsPanel({ onClose, isPinned, onTogglePin, isOpen }) {
-  const dispatch = useDispatch();
-  const { getApiUrl } = useConfig();
-  const status = useSelector(selectUiStatus);
-  const widgets = useSelector(selectUiWidgets);
-  const [range, setRange] = useState('7d');
-  const agentWidgets = widgets.filter((widget) => widget.type === 'agent' || widget.type === 'mcp');
-  const scheduleWidgets = widgets.filter((widget) => widget.type === 'schedule');
-  const running = agentWidgets.filter((widget) => ['running', 'busy', 'executing'].includes(widget.status || widget.data?.agentStatus)).length;
-  const ready = agentWidgets.filter((widget) => (widget.status || widget.data?.agentStatus) === 'ready').length;
-  const cycleCount = status?.cycle_count ?? 0;
-  const totalActivity = Math.max(1, agentWidgets.length + scheduleWidgets.length + cycleCount);
-  const runtimeOnline = Boolean(status?.progenitor_running);
-  const runtimeSubtitle = status?.last_active
-    ? `Status updated ${formatRelativeTimestamp(status.last_active)}`
-    : 'Real-time status stream';
-  const runtimeDelta = status?.last_active
-    ? `Last active ${formatRelativeTimestamp(status.last_active)}`
-    : runtimeOnline
-      ? 'Live'
-      : 'Awaiting signal';
-  const refreshWidgets = useCallback(
-    () => dispatch(fetchWidgets({ widgetsUrl: getApiUrl('widgets') })),
-    [dispatch, getApiUrl],
-  );
-
   return (
     <TopNavPane
       title="Token consumption"
-      subtitle={runtimeSubtitle}
       onClose={onClose}
       isPinned={isPinned}
       onTogglePin={onTogglePin}
@@ -1918,92 +1929,7 @@ function InsightsPanel({ onClose, isPinned, onTogglePin, isOpen }) {
       className="topnav-pane--insights"
       bodyClassName="ins-pane__body"
     >
-      <div className="ins-pane__toolbar">
-        <SegmentedControl
-          className="ins-range"
-          ariaLabel="Insight range"
-          value={range}
-          onChange={setRange}
-          items={insightRanges.map((value) => ({ value, label: value }))}
-        />
-        <button type="button" className="topnav-pane__text-btn" onClick={refreshWidgets}>Refresh</button>
-      </div>
-      <div className="ins-kpis">
-        <div className="ins-kpi">
-          <div className="ins-kpi__label">Runtime</div>
-          <div className="ins-kpi__value">{runtimeOnline ? 'Online' : 'Offline'}</div>
-          <div className="ins-kpi__delta ins-kpi__delta--muted">{runtimeDelta}</div>
-        </div>
-        <div className="ins-kpi">
-          <div className="ins-kpi__label">Agents</div>
-          <div className="ins-kpi__value">{agentWidgets.length}</div>
-          <div className="ins-kpi__delta ins-kpi__delta--up">{ready} ready</div>
-        </div>
-        <div className="ins-kpi">
-          <div className="ins-kpi__label">Running</div>
-          <div className="ins-kpi__value">{running}</div>
-          <div className="ins-kpi__delta ins-kpi__delta--muted">{scheduleWidgets.length} schedules</div>
-        </div>
-        <div className="ins-kpi">
-          <div className="ins-kpi__label">Cycles</div>
-          <div className="ins-kpi__value">{cycleCount}</div>
-          <div className="ins-kpi__delta ins-kpi__delta--muted">{range} window</div>
-        </div>
-      </div>
-
-      <section className="ins-chart-card">
-        <header className="ins-chart-card__head">
-          <h3>Stacked usage by agent</h3>
-          <div className="ins-legend">
-            <span className="ins-legend__item"><span className="ins-legend__sw sw-blue" /> agents</span>
-            <span className="ins-legend__item"><span className="ins-legend__sw sw-green" /> schedules</span>
-            <span className="ins-legend__item"><span className="ins-legend__sw sw-purple" /> cycles</span>
-          </div>
-        </header>
-        <div className="ins-stack-chart">
-          {agentWidgets.slice(0, 18).map((widget, index) => {
-            const label = widget.title || widget.data?.title || widget.id;
-            return (
-              <span
-                key={widget.id}
-                title={label}
-                style={{ height: `${Math.max(18, 38 + ((index * 17) % 110))}px` }}
-              />
-            );
-          })}
-        </div>
-      </section>
-
-      <section className="ins-agents">
-        <header className="ins-agents__head">
-          <h3>Agents</h3>
-          <span className="muted">Sorted by usage</span>
-        </header>
-        <ul className="ins-agent-list">
-        {agentWidgets.slice(0, 8).map((widget, index) => {
-          const label = widget.title || widget.data?.title || widget.id;
-          const tone = widget.status || widget.data?.agentStatus || 'idle';
-          const share = Math.max(8, Math.round(((agentWidgets.length - index) / totalActivity) * 100));
-          return (
-              <li key={widget.id} className="ins-agent">
-                <span className="ins-agent__chip">{label.slice(0, 1).toUpperCase()}</span>
-                <span>
-                  <span className="ins-agent__name">{label}</span>
-                  <span className="ins-agent__sub">{tone}</span>
-                </span>
-                <span className="ins-agent__spark" aria-hidden="true">
-                  <span style={{ width: `${Math.max(18, 92 - index * 8)}%` }} />
-                </span>
-                <span className="ins-agent__value">{Math.max(1, cycleCount + index * 37).toLocaleString()}</span>
-                <span className="ins-agent__share">
-                  <span className="ins-agent__share-bar"><span className="ins-agent__share-fill" style={{ width: `${share}%` }} /></span>
-                  {share}%
-                </span>
-              </li>
-          );
-        })}
-        </ul>
-      </section>
+      <CompactInsights onNavigate={onClose} />
     </TopNavPane>
   );
 }
@@ -2637,11 +2563,7 @@ function AppRuntimeShell() {
       detail: { clientId, status, error },
     }));
   }, []);
-  const handleOpenPanel = useCallback((panel) => {
-    if (panel === 'insights') {
-      // Widgets refreshed on mount by InsightsPanel
-    }
-  }, []);
+  const handleOpenPanel = useCallback(() => {}, []);
   return (
     <div className={shellClass}>
       <PrimaryNav

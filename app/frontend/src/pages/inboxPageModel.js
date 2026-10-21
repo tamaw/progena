@@ -14,7 +14,7 @@ export const INBOX_FILTERS = [
 
 export const INBOX_STATUS_META = {
   unread: { label: 'Unread', tone: 'ok', dotClass: 'chat-session-card__dot--inbox-unread' },
-  read: { label: 'Read', tone: 'muted', dotClass: 'chat-session-card__dot--inbox-read' },
+  read: { label: 'Read', tone: 'idle', dotClass: 'chat-session-card__dot--inbox-read' },
 };
 
 export function getInboxMessageStatus(message) {

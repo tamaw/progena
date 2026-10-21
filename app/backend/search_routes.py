@@ -161,7 +161,8 @@ async def _knowledge_provider(q: str, limit: int = 5) -> dict[str, Any]:
             for key in (INDEXER_DOC_KEY, "profile")
         )
         target = resolve_embedding_target(settings, profiles)
-        vector = (await embedder_for(target).embed([q]))[0]
+        embedder = await embedder_for(target)
+        vector = (await embedder.embed([q]))[0]
         rows = await asyncio.to_thread(_knowledge_rows, q, vector, limit, min_similarity(settings))
     except Exception as exc:
         logger.info("Knowledge search failed: %s", exc)

@@ -1,30 +1,34 @@
-"""
-LangChain model adapter for Progenitor's direct Azure endpoint.
-
-Routes all LLM calls through the configured Azure endpoint using LangChain's
-ChatOpenAI, which is compatible with any OpenAI-compatible endpoint.
-This preserves Progenitor's model routing and auth while enabling DeepAgent integration.
-
-Supports optional extended thinking/reasoning for models that support it
-(e.g., GPT-5.2-chat with reasoning enabled).
-"""
+"""LangChain Responses API adapters backed by persisted providers."""
 
 import asyncio
 import contextlib
 import inspect
 import logging
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable, Iterator, Sequence
 from typing import Annotated, Any, cast
 from urllib.parse import urlsplit, urlunsplit
+from uuid import uuid4
 
+from langchain_core.language_models import BaseChatModel
+from langchain_core.messages import BaseMessage
+from langchain_core.outputs import ChatGenerationChunk, ChatResult
 from langchain_core.tools import BaseTool, InjectedToolCallId, StructuredTool
 from langchain_openai import ChatOpenAI
-from pydantic import SecretStr
+from pydantic import ConfigDict, Field, SecretStr
 
+from .. import __version__
 from ..config import LLMConfig
+from ..provider_runtime import (
+    ProviderNotConfiguredError,
+    ProviderTurn,
+    activate_provider_turn,
+    current_provider_turn,
+    provider_config_for_call,
+)
 from ..runtime.thread_context import get_current_thread_id
 from ..tools.protocol import ToolContext
 from ..tools.system_registry import get_all_system_tools
+from .checkpoint_usage import CheckpointChatOpenAI
 
 logger = logging.getLogger(__name__)
 
@@ -48,65 +52,288 @@ def _normalize_langchain_base_url(base_url: str) -> str:
     return urlunsplit((parsed.scheme, parsed.netloc, path, "", ""))
 
 
-def create_langchain_model(config: LLMConfig | None = None) -> ChatOpenAI:
-    """Create a LangChain ChatOpenAI instance routed through Azure.
+def create_langchain_model(
+    config: LLMConfig | None = None,
+    *,
+    session_id: str | None = None,
+    profile_name: str | None = None,
+) -> ChatOpenAI:
+    """Create a Responses-only model from an already resolved provider snapshot.
 
-    Args:
-        config: LLM configuration. If None, loads from environment.
-    Returns:
-        ChatOpenAI instance pointing at configured Azure endpoint.
+    ``session_id`` scopes OpenCode Go requests, while ``profile_name`` is retained
+    on checkpointed messages for model-usage attribution.
     """
-    if config is None:
-        config = LLMConfig.from_env()
-
-    model_name = config.model_default
-
-    base_url = _normalize_langchain_base_url(config.base_url)
-
-    # Azure's Responses-compatible endpoint returns reliable reasoning usage
-    # when effort is passed through ChatOpenAI's legacy reasoning_effort option
-    # and the summary is supplied in the request body. The OpenAI SDK shallowly
-    # merges extra_body into its generated request, so extra_body must repeat
-    # effort or it replaces the generated {"effort": ...} reasoning object.
-    # Keep this shape because the native reasoning parameter produced summaries
-    # with zero usage counts.
-    reasoning_effort: str | None = None
-    extra_body: dict[str, Any] = {}
-    if config.reasoning_enabled:
-        reasoning_effort = config.reasoning_effort
-        extra_body["reasoning"] = {
-            "effort": config.reasoning_effort,
-            "summary": config.reasoning_summary,
-        }
-        logger.info(
-            "Reasoning enabled for model %s (effort=%s, summary=%s)",
-            model_name,
-            config.reasoning_effort,
-            config.reasoning_summary,
+    config = config or LLMConfig()
+    if not config.base_url or not config.api_key or not config.model_default:
+        raise ProviderNotConfiguredError(
+            "No model provider is configured. Add and select a provider in Settings."
         )
 
-    model = ChatOpenAI(
+    if session_id is None:
+        turn = current_provider_turn()
+        session_id = turn.session_id if turn is not None else None
+    model_name = config.model_default
+    base_url = _normalize_langchain_base_url(config.base_url)
+    if config.provider_kind == "opencode_go":
+        headers = {
+            "Authorization": f"Bearer {config.api_key}",
+            "User-Agent": f"progenitor/{__version__}",
+        }
+        if session_id:
+            headers["x-opencode-session"] = session_id
+        reasoning_effort: str | None = None
+        extra_body: dict[str, Any] | None = None
+    else:
+        headers = {"api-key": config.api_key}
+        reasoning_effort = config.reasoning_effort if config.reasoning_enabled else None
+        extra_body = (
+            {
+                "reasoning": {
+                    "effort": config.reasoning_effort,
+                    "summary": config.reasoning_summary,
+                }
+            }
+            if config.reasoning_enabled
+            else None
+        )
+
+    model = CheckpointChatOpenAI(
         model=model_name,
         base_url=base_url,
-        api_key=SecretStr(config.api_key or "not-needed"),
-        default_headers={
-            "api-key": config.api_key or "",
-        },
+        api_key=SecretStr(config.api_key),
+        default_headers=headers,
         use_responses_api=True,
         output_version="responses/v1",
         streaming=True,
         reasoning_effort=reasoning_effort,
         extra_body=extra_body or None,
+        timeout=config.timeout_seconds,
+        max_retries=config.max_retries,
     )
-
+    model.set_usage_profile(profile_name)
     logger.info(
-        "Created LangChain model adapter: model=%s, base_url=%s, responses_api=%s, reasoning=%s",
+        "Created LangChain model adapter: provider=%s model=%s responses_api=%s reasoning=%s",
+        config.provider_kind,
         model_name,
-        base_url,
         True,
-        config.reasoning_enabled,
+        bool(reasoning_effort),
     )
     return model
+
+
+def _generation_source(target: Any) -> tuple[BaseChatModel, dict[str, Any]]:
+    """Extract a chat model and its bound invocation settings from a runnable.
+
+    ``bind`` and ``bind_tools`` return a runnable binding, while structured-output
+    helpers add parser runnables after that binding.  The private chat-model hooks
+    must return generation objects, so they call the source chat model rather than
+    executing those parsers.
+    """
+    if isinstance(target, BaseChatModel):
+        return target, {}
+
+    bound = getattr(target, "bound", None)
+    bound_kwargs = getattr(target, "kwargs", None)
+    if isinstance(bound, BaseChatModel) and isinstance(bound_kwargs, dict):
+        return bound, bound_kwargs
+
+    first = getattr(target, "first", None)
+    if first is not None:
+        return _generation_source(first)
+
+    steps = getattr(target, "steps__", None)
+    if isinstance(steps, dict) and "raw" in steps:
+        return _generation_source(steps["raw"])
+
+    raise TypeError("Configured provider runnable does not expose a chat model for generation")
+
+
+def _generation_kwargs(
+    bound_kwargs: dict[str, Any], invocation_kwargs: dict[str, Any]
+) -> dict[str, Any]:
+    """Apply runnable binding settings with normal invocation override precedence."""
+    if not bound_kwargs:
+        return invocation_kwargs
+    if not invocation_kwargs:
+        return bound_kwargs
+    return {**bound_kwargs, **invocation_kwargs}
+
+
+class ProviderChatModel(BaseChatModel):
+    """Lazily bind every model invocation to the active provider-turn snapshot."""
+
+    template: LLMConfig = Field(default_factory=LLMConfig, exclude=True)
+    provider_id: str | None = None
+    profile_name: str | None = None
+    model_override: str | None = None
+    bound_tools: tuple[Any, ...] = Field(default_factory=tuple, exclude=True)
+    bound_tool_choice: Any = Field(default=None, exclude=True)
+    bound_settings: dict[str, Any] = Field(default_factory=dict, exclude=True)
+    structured_schema: Any = Field(default=None, exclude=True)
+    structured_include_raw: bool = Field(default=False, exclude=True)
+    structured_settings: dict[str, Any] = Field(default_factory=dict, exclude=True)
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    @property
+    def _llm_type(self) -> str:
+        return "progenitor_provider"
+
+    @property
+    def _identifying_params(self) -> dict[str, Any]:
+        return {
+            "provider_id": self.provider_id,
+            "profile_name": self.profile_name,
+            "model_override": self.model_override,
+        }
+
+    def with_model_override(self, model_override: str) -> "ProviderChatModel":
+        """Return an immutable manifest model override on the same connection."""
+        return self.model_copy(update={"model_override": model_override})
+
+    async def _configured_model(self) -> Any:
+        config = await provider_config_for_call(
+            self.template,
+            provider_id=self.provider_id,
+            model_override=self.model_override,
+        )
+        target: Any = create_langchain_model(config, profile_name=self.profile_name)
+        if self.structured_schema is not None:
+            return target.with_structured_output(
+                self.structured_schema,
+                include_raw=self.structured_include_raw,
+                **self.structured_settings,
+            )
+        if self.bound_tools:
+            return target.bind_tools(
+                list(self.bound_tools),
+                tool_choice=self.bound_tool_choice,
+                **self.bound_settings,
+            )
+        if self.bound_settings:
+            return target.bind(**self.bound_settings)
+        return target
+
+    async def _model_for_invocation(self) -> Any:
+        """Resolve a direct invocation with an isolated immutable turn if needed."""
+        if current_provider_turn() is not None:
+            return await self._configured_model()
+        turn = await ProviderTurn.create(
+            self.template,
+            session_id=f"direct-model:{uuid4().hex}",
+            provider_id=self.provider_id,
+        )
+        with activate_provider_turn(turn):
+            return await self._configured_model()
+
+    def _configured_model_sync(self) -> Any:
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return asyncio.run(self._model_for_invocation())
+        raise RuntimeError("ProviderChatModel must be invoked asynchronously")
+
+    def bind_tools(
+        self,
+        tools: Sequence[dict[str, Any] | type | Callable[..., Any] | BaseTool],
+        *,
+        tool_choice: str | None = None,
+        **kwargs: Any,
+    ) -> "ProviderChatModel":
+        return self.model_copy(
+            update={
+                "bound_tools": tuple(tools),
+                "bound_tool_choice": tool_choice,
+                "bound_settings": dict(kwargs),
+            }
+        )
+
+    def with_structured_output(
+        self, schema: dict[str, Any] | type, *, include_raw: bool = False, **kwargs: Any
+    ) -> "ProviderChatModel":
+        return self.model_copy(
+            update={
+                "structured_schema": schema,
+                "structured_include_raw": include_raw,
+                "structured_settings": dict(kwargs),
+            }
+        )
+
+    def invoke(self, input: Any, config: Any = None, **kwargs: Any) -> Any:
+        return self._configured_model_sync().invoke(input, config=config, **kwargs)
+
+    async def ainvoke(self, input: Any, config: Any = None, **kwargs: Any) -> Any:
+        return await (await self._model_for_invocation()).ainvoke(input, config=config, **kwargs)
+
+    def stream(self, input: Any, config: Any = None, **kwargs: Any) -> Iterator[Any]:
+        yield from self._configured_model_sync().stream(input, config=config, **kwargs)
+
+    async def astream(self, input: Any, config: Any = None, **kwargs: Any) -> AsyncIterator[Any]:
+        async for chunk in (await self._model_for_invocation()).astream(
+            input, config=config, **kwargs
+        ):
+            yield chunk
+
+    def _generate(
+        self,
+        messages: list[BaseMessage],
+        stop: list[str] | None = None,
+        run_manager: Any = None,
+        **kwargs: Any,
+    ) -> ChatResult:
+        target, bound_kwargs = _generation_source(self._configured_model_sync())
+        return target._generate(
+            messages,
+            stop=stop,
+            run_manager=run_manager,
+            **{**_generation_kwargs(bound_kwargs, kwargs), "stream": False},
+        )
+
+    async def _agenerate(
+        self,
+        messages: list[BaseMessage],
+        stop: list[str] | None = None,
+        run_manager: Any = None,
+        **kwargs: Any,
+    ) -> ChatResult:
+        target, bound_kwargs = _generation_source(await self._model_for_invocation())
+        return await target._agenerate(
+            messages,
+            stop=stop,
+            run_manager=run_manager,
+            **{**_generation_kwargs(bound_kwargs, kwargs), "stream": False},
+        )
+
+    def _stream(
+        self,
+        messages: list[BaseMessage],
+        stop: list[str] | None = None,
+        run_manager: Any = None,
+        **kwargs: Any,
+    ) -> Iterator[ChatGenerationChunk]:
+        target, bound_kwargs = _generation_source(self._configured_model_sync())
+        yield from target._stream(
+            messages,
+            stop=stop,
+            run_manager=run_manager,
+            **_generation_kwargs(bound_kwargs, kwargs),
+        )
+
+    async def _astream(
+        self,
+        messages: list[BaseMessage],
+        stop: list[str] | None = None,
+        run_manager: Any = None,
+        **kwargs: Any,
+    ) -> AsyncIterator[ChatGenerationChunk]:
+        target, bound_kwargs = _generation_source(await self._model_for_invocation())
+        async for chunk in target._astream(
+            messages,
+            stop=stop,
+            run_manager=run_manager,
+            **_generation_kwargs(bound_kwargs, kwargs),
+        ):
+            yield chunk
 
 
 def create_dynamic_mcp_tools(llm_client: Any = None) -> list[BaseTool]:

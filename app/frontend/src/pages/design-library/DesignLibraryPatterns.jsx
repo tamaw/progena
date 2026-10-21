@@ -237,6 +237,15 @@ function FeedbackPatterns() {
           <div className="task-progress" aria-hidden="true"><span style={{ width: `${progress}%` }} /></div>
           <input id="catalogue-progress" type="range" min="0" max="100" value={progress} onChange={(event) => setProgress(Number(event.target.value))} />
         </article>
+        <article className="dlp-card">
+          <div className="dlp-card__head"><h3>Status tones</h3><span className="dlp-pattern-tag">shared component</span></div>
+          <p className="dlp-note">Idle (hollow ring) is the quiet default; filled colour is for states that need the user. List rows use the matching <code>sess-row__dot--&lt;tone&gt;</code>.</p>
+          <div className="dlp-button-row">
+            {[['idle', 'Available'], ['muted', 'Installed'], ['ok', 'Update available'], ['info', 'Updated'], ['warning', 'Installing…'], ['error', 'Error']].map(([tone, label]) => (
+              <DetailStatus key={tone} tone={tone}>{label}</DetailStatus>
+            ))}
+          </div>
+        </article>
       </div>
       {modalOpen ? <PopupModal eyebrow="Local demonstration" title="Archive this fixture?" message="No item is changed; this only demonstrates the shared modal's focus restoration and Escape handling." confirmLabel="Archive fixture" onClose={closeModal} onConfirm={closeModal} /> : null}
     </section>
