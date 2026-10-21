@@ -1,0 +1,37 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Module manifest",
+  "description": "The manifest.json of an agent-built UI module at /modules/<name>/manifest.json (stored as module:<name>/manifest.json). The module renders in a sandboxed, network-less iframe under Modules.",
+  "type": "object",
+  "properties": {
+    "name": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]{1,47}$",
+      "description": "Module name; must equal the /modules/<name>/ directory."
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 80,
+      "description": "Display title in the Modules list and page header."
+    },
+    "description": {
+      "type": "string",
+      "maxLength": 500,
+      "description": "One or two sentences on what the module shows or does."
+    },
+    "entry": {
+      "type": "string",
+      "pattern": "^([A-Za-z0-9][A-Za-z0-9._-]*/)*[A-Za-z0-9][A-Za-z0-9._-]*\\.mjs$",
+      "description": "Module-relative path of the entry .mjs file; its default export is mount(root, host)."
+    },
+    "libraries": {
+      "type": "array",
+      "items": {"type": "string"},
+      "uniqueItems": true,
+      "description": "Vendored library ids the module imports (see /modules/_catalogue.json)."
+    }
+  },
+  "required": ["name", "title", "entry"],
+  "additionalProperties": false
+}

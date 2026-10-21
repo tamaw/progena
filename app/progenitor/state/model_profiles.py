@@ -184,10 +184,13 @@ async def resolve_model_profile(state_manager: Any, name: str) -> Any:
     if name not in profiles:
         raise ValueError(f"Unknown model profile {name!r}")
     profile = profiles[name]
+    defaults = LLMConfig.from_env()
     template = LLMConfig(
         reasoning_enabled=profile.get("reasoning_enabled", True),
         reasoning_effort=profile.get("reasoning_effort", LLMConfig.reasoning_effort),
         reasoning_summary=profile.get("reasoning_summary", LLMConfig.reasoning_summary),
+        timeout_seconds=defaults.timeout_seconds,
+        max_retries=defaults.max_retries,
     )
     return ProviderChatModel(
         template=template,
