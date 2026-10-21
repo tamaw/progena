@@ -115,4 +115,4 @@ class MyModel(BaseModel):
 - Project AGENTS.md files in each directory
 - `docs/PROJECT_STRUCTURE.md` - Codebase structure
 - `pyproject.toml` - Dependencies and config
-- `pytest.ini` - Test configuration
+- `pyproject.toml` (`[tool.pytest.ini_options]`) - Test configuration
