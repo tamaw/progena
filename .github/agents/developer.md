@@ -64,7 +64,7 @@ class MyModel(BaseModel):
 1. Create/update tests first (TDD approach)
 2. Implement feature with minimal changes
 3. Run tests: `pytest tests/path/ -v`
-4. Check types: `pyright app/`
+4. Check types: `pyright --pythonpath .venv/bin/python app/`
 5. Lint: `ruff check app/`
 6. Manual testing if UI changes involved
 

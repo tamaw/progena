@@ -41,7 +41,7 @@ progenitor/
    & .\.venv\Scripts\Activate.ps1  # Windows
    ```
 2. **Testing**: `pytest` (auto-discovers all tests)
-3. **Type Checking**: `mypy app/`
+3. **Type Checking**: `pyright --pythonpath .venv/bin/python app/` (matches CI and pre-commit)
 4. **Linting**: `ruff check app/`
 5. **Run Dev**: VS Code Task "Start All (dev)"
 

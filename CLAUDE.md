@@ -50,7 +50,7 @@ pytest -m "not slow" tests/               # skip slow tests
 ```bash
 ruff check app/           # lint
 ruff format app/          # format
-mypy app/                 # type check
+pyright --pythonpath .venv/bin/python app/  # type check; matches CI and pre-commit
 bandit -c pyproject.toml -r app/  # security scan
 pre-commit run --all-files        # run all checks
 ```

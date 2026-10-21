@@ -149,11 +149,9 @@ indent-style = "space"
 skip-magic-trailing-comma = false
 line-ending = "auto"
 
-# Pyright configuration. Note the interpreter is NOT set here: pyright ignores
-# `venvPath`/`venv` and `pythonPath` from pyproject.toml (verified -- every
-# third-party import still failed to resolve), so both call sites pass
-# `--pythonpath .venv/bin/python` explicitly. Getting this wrong is silent:
-# an unresolved dependency degrades to Any and the run reports success.
+# Single Pyright configuration, shared by CI, pre-commit, and editor tooling.
+# CI and pre-commit pass --pythonpath .venv/bin/python explicitly so dependency
+# resolution does not depend on whether the project environment is activated.
 [tool.pyright]
 # Oldest interpreter we support, per requires-python.
 pythonVersion = "3.11"
@@ -161,6 +159,9 @@ pythonVersion = "3.11"
 typeCheckingMode = "standard"
 include = ["app"]
 exclude = [
+    ".venv",
+    "worktrees",
+    "tests",
     "**/__pycache__",
     "app/chat-ui",
     "app/frontend",
