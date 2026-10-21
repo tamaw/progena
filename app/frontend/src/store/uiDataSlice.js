@@ -32,12 +32,13 @@ import * as repos from './uiData/repos';
 import * as policies from './uiData/policies';
 import * as documentTypes from './uiData/documentTypes';
 import * as modelProfiles from './uiData/modelProfiles';
+import * as providers from './uiData/providers';
 import * as modules from './uiData/modules';
 
 import * as search from './uiData/search';
 import * as insights from './uiData/insights';
 
-const domains = [runtime, mcp, knowledge, instructions, tasks, workflows, agents, chats, inbox, logs, preferences, marketplaces, repos, documentTypes, policies, modelProfiles, modules, search, insights];
+const domains = [runtime, mcp, knowledge, instructions, tasks, workflows, agents, chats, inbox, logs, preferences, marketplaces, repos, documentTypes, policies, modelProfiles, providers, modules, search, insights];
 
 const initialState = domains.reduce(
   (acc, domain) => ({ ...acc, ...domain.initialState }),
@@ -374,6 +375,19 @@ export {
   selectModelProfiles,
   selectModelProfilesState,
 } from './uiData/modelProfiles';
+
+export {
+  fetchProviders,
+  createProvider,
+  patchProvider,
+  deleteProvider,
+  testProviderConnection,
+  selectProviders,
+  selectGoResponsesModels,
+  selectProvidersState,
+  selectProviderRequest,
+  selectProviderTest,
+} from './uiData/providers';
 
 export {
   INSIGHT_RANGES,

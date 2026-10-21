@@ -26,6 +26,7 @@ const defaultConfig = {
       schedules: '/api/ui/schedules',
       repos: '/api/ui/repos',
       modelProfiles: '/api/ui/model-profiles',
+      providers: '/api/ui/providers',
       logs: '/api/ui/logs',
       tokenUsage: '/api/ui/insights/token-usage',
       actionRun: '/api/ui/actions/run',

@@ -8,6 +8,7 @@ from typing import Any
 from langchain_core.messages import HumanMessage
 from langgraph.runtime import Runtime
 
+from ..provider_runtime import ProviderTurn, activate_provider_turn
 from ..state.models import ProgenitorState
 from .context import HeartbeatContext
 
@@ -25,10 +26,15 @@ async def chat_node(
     additional_kwargs: dict[str, Any] = {"created_at": time.time()}
     if isinstance(input_metadata, dict) and isinstance(input_metadata.get("attachments"), list):
         additional_kwargs["attachments"] = input_metadata["attachments"]
-    # DeepAgent returns the updated conversation state for this turn.
+    # DeepAgent returns the updated conversation state for this turn. Snapshot
+    # the selected DB provider before graph execution so a Settings save cannot
+    # mix models or credentials into a running heartbeat turn.
     human_message = HumanMessage(content=current_input, additional_kwargs=additional_kwargs)
-    result = await runtime.context.agent_graph.ainvoke(
-        {"messages": [human_message]},
-        config={"configurable": {"thread_id": thread_id}},
-    )
+    llm_config = getattr(getattr(runtime.context, "llm_client", None), "config", None)
+    turn = await ProviderTurn.create(llm_config, session_id=thread_id)
+    with activate_provider_turn(turn):
+        result = await runtime.context.agent_graph.ainvoke(
+            {"messages": [human_message]},
+            config={"configurable": {"thread_id": thread_id}},
+        )
     return result if isinstance(result, dict) else {"messages": []}

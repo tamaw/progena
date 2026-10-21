@@ -14,6 +14,12 @@ from ..config import ProgenitorConfig, get_config
 from ..document_kinds import AGENT_DOCUMENT_KEY_PREFIX, ROUTINE_GRAPH_KEY_PREFIX
 from ..llm.client import LLMClient
 from ..mcp import MCPRuntime
+from ..providers import (
+    configure_provider_repository,
+    get_provider_repository,
+    provider_database_url,
+    shutdown_provider_repository,
+)
 from ..registry import AgentRegistryRuntime
 from ..state.langgraph_store import LangGraphRuntimeStore
 from ..state.manager import StateManager
@@ -64,6 +70,7 @@ class Progenitor:
         self._mcp_scheduler: MCPSyncScheduler | None = None
         self._plugin_scheduler: PluginSyncScheduler | None = None
         self._agent_scheduler: AgentSyncScheduler | None = None
+        self._provider_repository_open = False
 
     def _on_store_change(self, payload: str) -> None:
         """Refresh the chat-facing live registries a ``store`` NOTIFY touches.
@@ -143,8 +150,44 @@ class Progenitor:
             self._agent_scheduler.request()
         logger.info("Reconciled plugins from config change: %s", summary)
 
+    async def _migrate_legacy_model_profiles(self) -> None:
+        """Persist the one-time Azure-profile conversion when a Foundry exists."""
+        if self.state_manager is None:
+            return
+        payload = await self.state_manager.get_model_profiles_config()
+        if not any(
+            isinstance(profile, dict)
+            and profile.get("provider") == "azure_openai"
+            and "provider_id" not in profile
+            for profile in payload.values()
+        ):
+            return
+        providers = await asyncio.to_thread(get_provider_repository().list_public)
+        foundry = next(
+            (
+                provider
+                for provider in providers
+                if provider.get("kind") == "foundry" and provider.get("is_default")
+            ),
+            next((provider for provider in providers if provider.get("kind") == "foundry"), None),
+        )
+        if foundry is None:
+            logger.warning("Legacy Azure model profiles are awaiting a Foundry provider migration")
+            return
+        from ..state.model_profiles import migrate_legacy_model_profiles_payload
+
+        migrated = migrate_legacy_model_profiles_payload(payload, str(foundry["id"]))
+        if migrated != payload:
+            await self.state_manager.save_model_profiles_config(migrated)
+
     async def initialize(self) -> None:
         """Initialize all components."""
+        await asyncio.to_thread(
+            configure_provider_repository,
+            provider_database_url(self.config.database.url),
+        )
+        self._provider_repository_open = True
+
         self.logs_dir.mkdir(parents=True, exist_ok=True)
 
         from ..database import open_langgraph_persistence
@@ -171,6 +214,7 @@ class Progenitor:
             database_url=self.config.database.url,
         )
         await self.state_manager.initialize()
+        await self._migrate_legacy_model_profiles()
         mcp_payload = await self.state_manager.get_mcp_config()
         self.config.mcp = type(self.config.mcp).from_payload(mcp_payload)
         self.llm_client.mcp_config = self.config.mcp
@@ -328,5 +372,8 @@ class Progenitor:
         await self._persistence_stack.aclose()
         self.log_store = None
         await self.llm_client.close()
+        if self._provider_repository_open:
+            await asyncio.to_thread(shutdown_provider_repository)
+            self._provider_repository_open = False
 
         logger.info("State persisted. Goodbye.")

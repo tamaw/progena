@@ -67,11 +67,10 @@ class TestRuntimeMemoryWiring:
 
         with (
             patch("app.progenitor.agent.agent.create_deep_agent") as mock_create,
-            patch("app.progenitor.agent.agent.create_langchain_model") as mock_model,
+            patch("app.progenitor.agent.agent.ProviderChatModel"),
             patch("app.progenitor.agent.agent.create_progenitor_backend") as mock_backend,
         ):
             mock_create.return_value = MagicMock()
-            mock_model.return_value = MagicMock()
             mock_backend.return_value = MagicMock()
 
             from app.progenitor.agent.agent import create_progenitor_agent
@@ -94,11 +93,10 @@ class TestRuntimeMemoryWiring:
 
         with (
             patch("app.progenitor.agent.agent.create_deep_agent") as mock_create,
-            patch("app.progenitor.agent.agent.create_langchain_model") as mock_model,
+            patch("app.progenitor.agent.agent.ProviderChatModel"),
             patch("app.progenitor.agent.agent.create_progenitor_backend") as mock_backend,
         ):
             mock_create.return_value = MagicMock()
-            mock_model.return_value = MagicMock()
             mock_backend.return_value = MagicMock()
 
             from app.progenitor.agent.agent import (
@@ -123,11 +121,10 @@ class TestRuntimeMemoryWiring:
 
         with (
             patch("app.progenitor.agent.agent.create_deep_agent") as mock_create,
-            patch("app.progenitor.agent.agent.create_langchain_model") as mock_model,
+            patch("app.progenitor.agent.agent.ProviderChatModel"),
             patch("app.progenitor.agent.agent.create_progenitor_backend") as mock_backend,
         ):
             mock_create.return_value = MagicMock()
-            mock_model.return_value = MagicMock()
             mock_backend.return_value = MagicMock()
 
             from app.progenitor.agent.agent import create_progenitor_agent

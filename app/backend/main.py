@@ -32,6 +32,11 @@ from fastapi.sse import EventSourceResponse, format_sse_event
 from starlette.middleware.gzip import GZipMiddleware
 
 from app.progenitor.document_kinds import SESSION_KEY_PREFIX
+from app.progenitor.providers import (
+    configure_provider_repository,
+    provider_database_url,
+    shutdown_provider_repository,
+)
 from app.progenitor.sessions.titles import ATTACHMENT_CONTEXT_MARKER
 
 from .agent_store import configure_agent_store
@@ -784,6 +789,21 @@ async def lifespan(app: FastAPI):
     seed_document_types(document_store)
     attachment_blob_store = configure_attachment_blob_store(config.database_url)
 
+    # Provider credentials and connection metadata are backend-owned settings,
+    # deliberately separate from the runtime's LangGraph document store.
+    provider_repository = None
+    try:
+        if config.database_url:
+            provider_repository = configure_provider_repository(
+                provider_database_url(config.database_url)
+            )
+    except Exception:  # noqa: BLE001 - Settings routes report provider DB availability
+        logger.exception("Failed to configure provider repository")
+
+    async def close_provider_repository() -> None:
+        if provider_repository is not None:
+            shutdown_provider_repository()
+
     async def close_document_store() -> None:
         document_store.close()
 
@@ -826,6 +846,12 @@ async def lifespan(app: FastAPI):
     graceful_shutdown.register_callback(
         "close_document_store",
         close_document_store,
+        priority=45,
+        timeout=5.0,
+    )
+    graceful_shutdown.register_callback(
+        "close_provider_repository",
+        close_provider_repository,
         priority=45,
         timeout=5.0,
     )

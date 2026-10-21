@@ -25,6 +25,7 @@ from ..async_subagents.tasks import create_agent_background_runner
 from ..config import ProgenitorConfig, get_config
 from ..content_documents import sync_instruction_documents
 from ..instructions import GENESIS_INSTRUCTION, render_instruction
+from ..provider_runtime import ProviderTurn, activate_provider_turn, current_provider_turn
 from ..routines.approvals import approval_lock
 from ..routines.graph import validate_routine_graph_payload
 from ..routines.revisions import (
@@ -39,9 +40,9 @@ from ..routines.subagent import (
 )
 from ..state.model_profiles import resolve_model_profile
 from .adapters import (
+    ProviderChatModel,
     create_deepagent_tools,
     create_dynamic_mcp_tools,
-    create_langchain_model,
 )
 from .async_subagents import create_progenitor_async_subagents
 from .backends import create_progenitor_backend
@@ -230,8 +231,9 @@ async def create_progenitor_agent(
         .resolve()
     )
 
-    # Create LangChain model routed through Azure endpoint
-    model = create_langchain_model(config.llm)
+    # Provider resolution is deliberately lazy so the runtime can boot before
+    # Settings has a connection. Each invocation uses its turn snapshot.
+    model = ProviderChatModel(template=config.llm)
 
     # Default to SQLite checkpointer for persistence; fall back to MemorySaver
     if checkpointer is None:
@@ -438,13 +440,22 @@ async def create_progenitor_agent(
             checkpointer=checkpointer,
             context=dict(getattr(runtime, "context", None) or {}),
         )
-        resume = state.get("_routine_resume")
-        if resume:
-            # Share the UI/chat approval lock so answering a child directly
-            # cannot race with answering its approval through the parent.
-            async with approval_lock(resume["thread_id"], database_url, wait=True):
-                return await executor.ainvoke(state)
-        return await executor.ainvoke(state)
+
+        async def invoke() -> dict[str, Any]:
+            resume = state.get("_routine_resume")
+            if resume:
+                # Share the UI/chat approval lock so answering a child directly
+                # cannot race with answering its approval through the parent.
+                async with approval_lock(resume["thread_id"], database_url, wait=True):
+                    return await executor.ainvoke(state)
+            return await executor.ainvoke(state)
+
+        if current_provider_turn() is not None:
+            return await invoke()
+        session_id = str(state.get("thread_id") or f"routine:{routine_id}")
+        turn = await ProviderTurn.create(config.llm, session_id=session_id, resolve_default=False)
+        with activate_provider_turn(turn):
+            return await invoke()
 
     def _routine_subagent(graph_doc: dict[str, Any]) -> CompiledSubAgent | None:
         routine_id = str(graph_doc.get("id") or "").strip()

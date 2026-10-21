@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from contextlib import suppress
 from typing import Any
 
@@ -53,7 +53,7 @@ _LOCK_RETRY_SECONDS = 5.0
 _ALL = "*"
 SETTINGS_KEYS = frozenset({"knowledge", INDEXER_DOC_KEY, "profile"})
 
-EmbedderFactory = Callable[[EmbeddingTarget], Embedder]
+EmbedderFactory = Callable[[EmbeddingTarget], Awaitable[Embedder]]
 Publisher = Callable[[str, dict[str, Any]], None]
 
 
@@ -331,7 +331,7 @@ class KnowledgeIndexer:
         }
         await self._write(base_id, record, "knowledge.index.started")
         try:
-            embedder = self._embedder_factory(target)
+            embedder = await self._embedder_factory(target)
             for path in pending:
                 front_matter, chunks = chunk_page(live[path])
                 vectors = await embedder.embed([embedding_text(front_matter, c) for c in chunks])

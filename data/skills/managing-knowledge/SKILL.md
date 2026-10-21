@@ -29,7 +29,7 @@ Pages are embedded for the `search` tool by the backend indexer. Its settings ar
 {"profile": "embeddings", "dimensions": 1536, "min_similarity": 0.25}
 ```
 
-`profile` must name an entry in `/config/profile.json` whose `deployment` is an Azure OpenAI embeddings model (e.g. `{"provider": "azure_openai", "deployment": "text-embedding-3-small"}`). `dimensions` is 1–2000. Changing either rebuilds the whole index. With no profile set, every base reports `failed` and `search` explains what to set.
+`profile` must name an entry in `/config/profile.json` whose `provider_id` explicitly selects an existing Foundry connection from **Settings → Providers** and whose `deployment` is an embeddings deployment (e.g. `{"provider_id": "<foundry-connection-id>", "deployment": "text-embedding-3-small"}`). OpenCode Go is not an embeddings provider. Legacy `provider: "azure_openai"` profiles are migrated to a Foundry connection when available. `dimensions` is 1–2000. Changing the profile, deployment, provider, or dimensions rebuilds the index. With no valid profile set, every base reports `failed` and `search` explains what to set.
 
 `min_similarity` (0–1, default 0.25) is the search cut-off: a page is returned only if it matches the query by keyword or its cosine similarity is at least this value. Raise it when searches return loosely related pages; lower it when relevant pages are missed. Changing it takes effect immediately and does not rebuild the index.
 

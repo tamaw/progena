@@ -1,4 +1,4 @@
-"""Azure Responses API client for Progenitor."""
+"""Responses API client for auxiliary model calls."""
 
 import json
 import logging
@@ -6,11 +6,20 @@ import re
 from copy import deepcopy
 from typing import TYPE_CHECKING, Any, TypeVar, cast
 from urllib.parse import urlsplit, urlunsplit
+from uuid import uuid4
 
 import httpx
 from pydantic import BaseModel
 
+from .. import __version__
 from ..config import LLMConfig, MCPConfig
+from ..provider_runtime import (
+    ProviderTurn,
+    activate_provider_turn,
+    current_provider_turn,
+    provider_config_for_call,
+)
+from ..runtime.thread_context import get_current_thread_id
 from ..tools.user_communication import EventPusher
 
 if TYPE_CHECKING:
@@ -132,34 +141,22 @@ def _build_json_schema_format_from_dict(
 
 
 class LLMClient:
-    """Simple wrapper for Azure OpenAI /responses endpoint."""
+    """Responses API helper that resolves its provider at call time."""
 
     def __init__(
         self,
         config: LLMConfig | None = None,
         mcp_config: MCPConfig | None = None,
     ):
-        """Initialize the LLM client.
-
-        Args:
-            config: LLM configuration. If None, loads from environment.
-            mcp_config: MCP configuration. If None, starts empty until runtime init refreshes it.
-        """
-        self.config = config or LLMConfig.from_env()
+        """Initialize reusable transport and model-behaviour defaults."""
+        # ``config`` contains only non-connection behavior at runtime. The
+        # concrete endpoint, model and credential are resolved from Postgres at
+        # the beginning of each provider turn.
+        self.config = config or LLMConfig()
         self.mcp_config = mcp_config or MCPConfig()
-        self.model = self.config.model_default
-
-        self.endpoint_url = _build_responses_endpoint(self.config.base_url)
-
-        api_key = self.config.api_key or ""
-        headers = {
-            "Content-Type": "application/json",
-            "api-key": api_key,
-        }
-
         self.client = httpx.AsyncClient(
             timeout=httpx.Timeout(120.0),
-            headers=headers,
+            headers={"Content-Type": "application/json"},
             transport=httpx.AsyncHTTPTransport(retries=2),
         )
 
@@ -169,7 +166,7 @@ class LLMClient:
         # Optional event pusher for realtime progress updates via SSE
         self._event_pusher: EventPusher | None = None
 
-        logger.info("LLM client configured (endpoint=%s, model=%s)", self.endpoint_url, self.model)
+        logger.info("LLM client initialized with persisted provider resolution")
 
     def set_event_pusher(self, event_pusher: EventPusher | None) -> None:
         """Attach an event pusher used to stream progress updates to clients."""
@@ -193,6 +190,26 @@ class LLMClient:
         """Close the HTTP client."""
         await self.client.aclose()
         await self.close_mcp_context()
+
+    async def _responses_connection(self) -> tuple[LLMConfig, str, dict[str, str]]:
+        """Resolve request-local endpoint and immutable protocol headers."""
+        config = await provider_config_for_call(self.config)
+        endpoint = _build_responses_endpoint(config.base_url)
+        if config.provider_kind == "opencode_go":
+            turn = current_provider_turn()
+            session_id = turn.session_id if turn is not None else ""
+            if not session_id:
+                raise RuntimeError("OpenCode Go requests require an active conversation session")
+            return (
+                config,
+                endpoint,
+                {
+                    "Authorization": f"Bearer {config.api_key}",
+                    "User-Agent": f"progenitor/{__version__}",
+                    "x-opencode-session": session_id,
+                },
+            )
+        return config, endpoint, {"api-key": config.api_key or ""}
 
     @property
     def mcp_runtime(self) -> "MCPRuntime | None":
@@ -636,11 +653,10 @@ class LLMClient:
         # Normalize accidental leading blank lines introduced by stripping.
         return cleaned.lstrip()
 
-    def _supports_temperature(self) -> bool:
-        """Return True if temperature parameter is supported for the current model."""
-        # Some models don't support temperature parameter
+    def _supports_temperature(self, model: str) -> bool:
+        """Return True if temperature parameter is supported for ``model``."""
         unsupported_keywords = {"gpt-5.2-chat"}
-        model_lower = self.model.lower()
+        model_lower = model.lower()
         return not any(keyword in model_lower for keyword in unsupported_keywords)
 
     def _is_temperature_unsupported(self, response: httpx.Response | None) -> bool:
@@ -668,10 +684,11 @@ class LLMClient:
         system_tool_context: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Call /responses endpoint with optional tool calling loop."""
+        config, endpoint_url, headers = await self._responses_connection()
         merged_tools = self._resolve_request_tools(tools, response_format)
 
         payload: dict[str, Any] = {
-            "model": self.model,
+            "model": config.model_default,
             "input": input_messages,
             "max_output_tokens": max_tokens,
         }
@@ -690,14 +707,14 @@ class LLMClient:
                 # Be explicit: some providers default tool calling off unless
                 # tool_choice is set.
                 payload["tool_choice"] = "auto"
-        if include_reasoning:
-            payload["reasoning"] = {"summary": "auto"}
-        if self._supports_temperature():
+        if include_reasoning and config.provider_kind == "foundry":
+            payload["reasoning"] = {"summary": config.reasoning_summary}
+        if self._supports_temperature(config.model_default):
             payload["temperature"] = temperature
 
         # Initial call
         try:
-            response = await self.client.post(self.endpoint_url, json=payload)
+            response = await self.client.post(endpoint_url, json=payload, headers=headers)
             response.raise_for_status()
             data = response.json()
         except httpx.HTTPStatusError as exc:
@@ -705,7 +722,7 @@ class LLMClient:
             if self._is_temperature_unsupported(exc.response):
                 logger.debug("Temperature unsupported, retrying without it")
                 payload.pop("temperature", None)
-                response = await self.client.post(self.endpoint_url, json=payload)
+                response = await self.client.post(endpoint_url, json=payload, headers=headers)
                 response.raise_for_status()
                 data = response.json()
             else:
@@ -817,7 +834,7 @@ class LLMClient:
             payload["input"] = input_messages
 
             # Next round
-            response = await self.client.post(self.endpoint_url, json=payload)
+            response = await self.client.post(endpoint_url, json=payload, headers=headers)
             try:
                 response.raise_for_status()
             except httpx.HTTPStatusError as exc:
@@ -885,16 +902,25 @@ class LLMClient:
             system_prompt = f"{system_prompt}\n\n{instruction}" if system_prompt else instruction
         input_messages = self._build_input_messages(messages, system_prompt)
 
-        data = await self._post_response(
-            input_messages=input_messages,
-            response_format=response_format,
-            include_reasoning=False,
-            temperature=temperature,
-            max_tokens=max_tokens,
-            tools=tools,
-            max_tool_rounds=max_tool_rounds,
-            system_tool_context=system_tool_context,
-        )
+        async def post() -> dict[str, Any]:
+            return await self._post_response(
+                input_messages=input_messages,
+                response_format=response_format,
+                include_reasoning=False,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                tools=tools,
+                max_tool_rounds=max_tool_rounds,
+                system_tool_context=system_tool_context,
+            )
+
+        if current_provider_turn() is None:
+            session_id = get_current_thread_id() or f"auxiliary:{uuid4().hex}"
+            turn = await ProviderTurn.create(self.config, session_id=session_id)
+            with activate_provider_turn(turn):
+                data = await post()
+        else:
+            data = await post()
         text, _reasoning = self._extract_text_and_reasoning(data)
         return text
 

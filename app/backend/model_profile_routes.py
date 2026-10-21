@@ -14,9 +14,11 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
 
+from app.progenitor.providers import GO_RESPONSES_MODELS, ProviderRepository
 from app.progenitor.state.model_profiles import (
     MODEL_PROFILES_DOC_KEY,
     default_model_profiles_payload,
+    migrate_legacy_model_profiles_payload,
     validate_model_profiles_payload,
 )
 
@@ -27,8 +29,14 @@ from .request_utils import BroadcastUiEvent, request_correlation_id
 
 def _safe_public_profile(name: str, profile: dict[str, Any]) -> dict[str, Any]:
     """Expose supported configuration only, never arbitrary private fields."""
-    public = {field: profile[field] for field in ("provider", "deployment")}
-    public["name"] = name
+    provider_id = profile.get("provider_id")
+    if not isinstance(provider_id, str) or not provider_id:
+        raise HTTPException(status_code=422, detail=f"Profile {name!r}: invalid provider_id")
+    public = {
+        "name": name,
+        "provider_id": provider_id,
+        "deployment": profile["deployment"],
+    }
     if "pricing" in profile:
         public["pricing"] = dict(profile["pricing"])
     for field in ("reasoning_enabled", "reasoning_effort", "reasoning_summary"):
@@ -110,16 +118,55 @@ def _mutate_profile(
     store.mutate_document(PROGENITOR_STATE_PREFIX, MODEL_PROFILES_DOC_KEY, mutator)
 
 
+def _migrate_legacy_profiles(
+    store: BackendDocumentStore, repository: ProviderRepository | None
+) -> None:
+    """Persist legacy Azure profile references once a default Foundry exists."""
+    if repository is None:
+        return
+    document = store.get_document(PROGENITOR_STATE_PREFIX, MODEL_PROFILES_DOC_KEY)
+    payload = document.payload if document is not None else None
+    if not isinstance(payload, dict) or not any(
+        isinstance(profile, dict) and profile.get("provider") == "azure_openai"
+        for profile in payload.values()
+    ):
+        return
+    foundry_id = next(
+        (
+            str(provider["id"])
+            for provider in repository.list_public()
+            if provider["kind"] == "foundry" and provider["is_default"]
+        ),
+        None,
+    )
+    if foundry_id is None:
+        return
+
+    def migrate(current: Any) -> Any:
+        return migrate_legacy_model_profiles_payload(current, foundry_id)
+
+    store.mutate_document(PROGENITOR_STATE_PREFIX, MODEL_PROFILES_DOC_KEY, migrate)
+
+
 def create_model_profile_router(
     get_store: Callable[[], BackendDocumentStore],
     broadcast: BroadcastUiEvent,
+    get_provider_repository: Callable[[], ProviderRepository] | None = None,
 ) -> APIRouter:
     router = APIRouter()
 
     @router.get("/model-profiles", status_code=202, response_model=UiRequestAcknowledgement)
     async def list_model_profiles(request: Request) -> UiRequestAcknowledgement:
         request_id = request_correlation_id(request, request.headers.get("x-request-id"))
-        await broadcast_model_profiles_snapshot(get_store(), broadcast, request_id=request_id)
+        store = get_store()
+        repository: ProviderRepository | None = None
+        if get_provider_repository is not None:
+            try:
+                repository = get_provider_repository()
+            except RuntimeError:
+                repository = None
+        await asyncio.to_thread(_migrate_legacy_profiles, store, repository)
+        await broadcast_model_profiles_snapshot(store, broadcast, request_id=request_id)
         return acknowledgement_response(request_id, ["profiles.snapshot"])
 
     @router.patch(
@@ -130,8 +177,8 @@ def create_model_profile_router(
     ) -> UiRequestAcknowledgement:
         request_id = request_correlation_id(request, request.headers.get("x-request-id"))
 
-        # Reject unknown / arbitrary fields at the top level of the PATCH body.
         allowed_patch_keys = {
+            "provider_id",
             "deployment",
             "pricing",
             "reasoning_enabled",
@@ -143,8 +190,23 @@ def create_model_profile_router(
             raise HTTPException(
                 status_code=422, detail=f"Unsupported fields in patch body: {sorted(extra_keys)}"
             )
+        repository: ProviderRepository | None = None
+        if get_provider_repository is not None:
+            try:
+                repository = get_provider_repository()
+            except RuntimeError as exc:
+                raise HTTPException(
+                    status_code=503, detail="Provider settings are unavailable"
+                ) from exc
 
         def patch(profile: dict[str, Any]) -> dict[str, Any] | None:
+            if "provider_id" in body:
+                provider_id = body["provider_id"]
+                if not isinstance(provider_id, str) or not provider_id.strip():
+                    raise HTTPException(
+                        status_code=422, detail="provider_id must be a non-empty string"
+                    )
+                profile["provider_id"] = provider_id.strip()
             if "deployment" in body:
                 deployment = body["deployment"]
                 if not isinstance(deployment, str) or not deployment.strip():
@@ -173,9 +235,28 @@ def create_model_profile_router(
                             status_code=422, detail=f"{field} must be a non-empty string"
                         )
                     profile[field] = value.strip()
+            if repository is not None:
+                provider_id = profile.get("provider_id")
+                provider = next(
+                    (item for item in repository.list_public() if item["id"] == provider_id),
+                    None,
+                )
+                if provider is None:
+                    raise HTTPException(
+                        status_code=422, detail="provider_id does not reference a provider"
+                    )
+                if (
+                    provider["kind"] == "opencode_go"
+                    and profile["deployment"] not in GO_RESPONSES_MODELS
+                ):
+                    raise HTTPException(
+                        status_code=422,
+                        detail="deployment is not supported by OpenCode Go",
+                    )
             return profile
 
         store = get_store()
+        await asyncio.to_thread(_migrate_legacy_profiles, store, repository)
         await asyncio.to_thread(_mutate_profile, store, name, patch)
         await broadcast_model_profiles_snapshot(store, broadcast, request_id=request_id)
         return acknowledgement_response(request_id, ["profiles.snapshot"])
@@ -185,7 +266,14 @@ def create_model_profile_router(
     )
     async def delete_model_profile(name: str, request: Request) -> UiRequestAcknowledgement:
         request_id = request_correlation_id(request, request.headers.get("x-request-id"))
+        repository: ProviderRepository | None = None
+        if get_provider_repository is not None:
+            try:
+                repository = get_provider_repository()
+            except RuntimeError:
+                repository = None
         store = get_store()
+        await asyncio.to_thread(_migrate_legacy_profiles, store, repository)
         await asyncio.to_thread(_mutate_profile, store, name, lambda _profile: None)
         await broadcast_model_profiles_snapshot(store, broadcast, request_id=request_id)
         return acknowledgement_response(request_id, ["profiles.snapshot"])

@@ -22,6 +22,7 @@ class Documents:
 
     async def get_execution_policy(self, policy_id):
         from app.progenitor.policies import ExecutionPolicy
+
         return ExecutionPolicy(id=policy_id, name="Default").model_dump(mode="json")
 
     def __init__(self, *graphs):
@@ -357,6 +358,7 @@ async def test_actual_agent_factory_runner_preserves_nested_data(monkeypatch):
     class Store(FakeContentStateManager):
         async def get_execution_policy(self, policy_id):
             from app.progenitor.policies import ExecutionPolicy
+
             return ExecutionPolicy(id=policy_id, name="Default").model_dump(mode="json")
 
         async def get_routine_graph(self, routine_id):
@@ -366,9 +368,6 @@ async def test_actual_agent_factory_runner_preserves_nested_data(monkeypatch):
             return [parent, child]
 
     agent = SimpleNamespace()
-    monkeypatch.setattr(
-        "app.progenitor.agent.agent.create_langchain_model", lambda _config: object()
-    )
     monkeypatch.setattr("app.progenitor.agent.agent.create_deep_agent", lambda **_kwargs: agent)
     monkeypatch.setattr(
         "app.progenitor.agent.agent.create_progenitor_backend", lambda **_kwargs: object()
