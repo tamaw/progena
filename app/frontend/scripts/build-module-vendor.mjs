@@ -10,7 +10,6 @@
 // The bundles, libraries.js and the catalogue are committed. Run from
 // app/frontend after changing a pinned version: `npm run build:module-vendor`.
 import { build } from 'esbuild';
-import { existsSync } from 'node:fs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -95,13 +94,8 @@ for (const library of LIBRARIES) {
   });
 }
 
-// The runtime catalogue lives in the repo's data/ (committed); the frontend
-// Docker build only has app/frontend, so it just regenerates the bundles.
-const writeCatalogue = existsSync(resolve(repoRoot, 'data'));
-if (writeCatalogue) {
-  await mkdir(dirname(cataloguePath), { recursive: true });
-  await writeFile(cataloguePath, `${JSON.stringify(catalogue, null, 2)}\n`);
-}
+await mkdir(dirname(cataloguePath), { recursive: true });
+await writeFile(cataloguePath, `${JSON.stringify(catalogue, null, 2)}\n`);
 await writeFile(
   resolve(vendorDir, 'libraries.js'),
   [
@@ -114,4 +108,4 @@ await writeFile(
   ].join('\n'),
 );
 
-console.log(`Wrote ${loaderLines.length} bundles to ${vendorDir}${writeCatalogue ? ` and ${cataloguePath}` : ''}`);
+console.log(`Wrote ${loaderLines.length} bundles to ${vendorDir} and ${cataloguePath}`);
