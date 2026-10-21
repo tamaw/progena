@@ -203,8 +203,9 @@ export function KnowledgeNavIcon() {
 export function ModulesNavIcon() {
   return (
     <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <rect x="3.5" y="3.5" width="17" height="17" rx="2" />
-      <path d="m8 9 2.5 3L8 15M13 15h3" />
+      <path d="M12 3 16.5 10.5h-9Z" />
+      <rect x="3.5" y="13.5" width="7" height="7" rx="1.2" />
+      <circle cx="17" cy="17" r="3.5" />
     </svg>
   );
 }
