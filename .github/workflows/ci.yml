@@ -5,9 +5,6 @@ on:
     # Manual runs are used as an explicit deploy signal; build-and-deploy
     # still runs after validation even when no push-based diff is available.
   push:
-    paths-ignore:
-      - 'app/mcp/**'
-      - '.github/workflows/mcp.yml'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
