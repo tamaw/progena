@@ -97,6 +97,8 @@ def create_langchain_model(config: LLMConfig | None = None) -> ChatOpenAI:
         streaming=True,
         reasoning_effort=reasoning_effort,
         extra_body=extra_body or None,
+        timeout=config.timeout_seconds,
+        max_retries=config.max_retries,
     )
 
     logger.info(
