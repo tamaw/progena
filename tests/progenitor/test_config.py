@@ -75,23 +75,20 @@ class TestEnvParsers:
 class TestLLMConfig:
     """Tests for LLM configuration."""
 
-    def test_from_env(self):
-        """Test loading LLM config from environment."""
+    def test_from_env_loads_only_model_behavior(self):
+        """Provider connection values must not become runtime env fallbacks."""
         env = {
             "AZURE_OPENAI_BASE_URL": "https://example.openai.azure.com/openai/v1",
             "AZURE_OPENAI_API_KEY": "sk-test-key",
             "PROGENITOR_MODEL_DEFAULT": "gpt-4o",
-            # Set explicitly so the test is hermetic: a local .env sets this to
-            # "medium" but CI leaves it unset (code default "low"). Pinning the
-            # env value keeps the assertion stable in both.
             "PROGENITOR_REASONING_EFFORT": "medium",
             "PROGENITOR_REASONING_SUMMARY": "detailed",
         }
         with patch.dict(os.environ, env, clear=False):
             config = LLMConfig.from_env()
-            assert config.base_url == "https://example.openai.azure.com/openai/v1"
-            assert config.api_key == "sk-test-key"
-            assert config.model_default == "gpt-4o"
+            assert config.base_url == ""
+            assert config.api_key is None
+            assert config.model_default == ""
             assert config.reasoning_enabled is True
             assert config.reasoning_effort == "medium"
             assert config.reasoning_summary == "detailed"

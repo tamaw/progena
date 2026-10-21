@@ -102,16 +102,21 @@ def default_schedule_config_payload() -> dict[str, Any]:
 
 @dataclass
 class LLMConfig:
-    """LLM provider configuration.
+    """Snapshot of one persisted Responses API provider connection.
 
-    All LLM calls are routed directly to Azure OpenAI Responses API.
+    Connection values are resolved from ``provider_connection`` at the start of
+    a turn.  Environment variables are intentionally not a runtime connection
+    fallback: they are only consulted by the provider repository while seeding
+    its one-time legacy connection or resolving an explicitly selected
+    environment credential.
     """
 
-    # Azure OpenAI base URL (without trailing /responses)
     base_url: str = ""
-    api_key: str | None = None
-
-    model_default: str = "gpt-chat-latest"
+    api_key: str | None = field(default=None, repr=False)
+    model_default: str = ""
+    provider_kind: str = "foundry"
+    provider_id: str | None = None
+    revision: int = 0
 
     # Reasoning/thinking feature (for models that support it)
     reasoning_enabled: bool = True
@@ -127,20 +132,35 @@ class LLMConfig:
 
     @classmethod
     def from_env(cls) -> "LLMConfig":
-        """Load LLM config from environment."""
+        """Load only non-connection model behaviour from environment.
+
+        Provider credentials and endpoints live in Postgres.  Returning an
+        unconfigured snapshot here allows the runtime and Settings UI to boot
+        before an administrator has created a provider.
+        """
         reasoning_effort = os.getenv("PROGENITOR_REASONING_EFFORT", "").strip()
         reasoning_summary = os.getenv("PROGENITOR_REASONING_SUMMARY", "").strip()
-
         return cls(
-            base_url=os.getenv("AZURE_OPENAI_BASE_URL", "").rstrip("/"),
-            api_key=os.getenv("AZURE_OPENAI_API_KEY"),
-            model_default=os.getenv("PROGENITOR_MODEL_DEFAULT", "gpt-chat-latest"),
             reasoning_enabled=env_bool("PROGENITOR_REASONING_ENABLED", True),
             reasoning_effort=reasoning_effort or cls.reasoning_effort,
             reasoning_summary=reasoning_summary or cls.reasoning_summary,
             timeout_seconds=max(1, env_int("PROGENITOR_LLM_TIMEOUT_SECONDS", cls.timeout_seconds)),
             max_retries=max(0, env_int("PROGENITOR_LLM_MAX_RETRIES", cls.max_retries)),
         )
+
+    @classmethod
+    def from_provider(cls, provider: dict[str, Any], **overrides: Any) -> "LLMConfig":
+        """Create a connection snapshot from ``ProviderRepository.resolve``."""
+        fields = {
+            "base_url": provider.get("base_url"),
+            "api_key": provider.get("api_key"),
+            "model_default": provider.get("model_default"),
+            "provider_kind": provider.get("provider_kind"),
+            "provider_id": provider.get("provider_id"),
+            "revision": provider.get("revision"),
+            **overrides,
+        }
+        return cls(**fields)
 
 
 @dataclass
@@ -372,10 +392,6 @@ class ProgenitorConfig:
         """
         errors = []
 
-        # Validate LLM configuration
-        if not self.llm.base_url:
-            errors.append("AZURE_OPENAI_BASE_URL must be set")
-
         # Validate storage paths are sensible
         for name, path in [
             ("state_dir", self.storage.state_dir),
@@ -439,11 +455,6 @@ def _redact_url_password(url: str) -> str:
 def _collect_validation_issues(config: ProgenitorConfig) -> list[str]:
     """Collect non-fatal configuration issues for startup diagnostics."""
     issues: list[str] = []
-
-    if not config.llm.base_url:
-        issues.append("LLM Config Error: base_url must not be empty")
-    if not config.llm.model_default:
-        issues.append("LLM Config Error: model_default must not be empty")
 
     runtime_rules = [
         ("timezone", config.runtime.timezone, lambda v: isinstance(v, str) and len(v) >= 1),

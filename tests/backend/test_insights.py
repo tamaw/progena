@@ -66,7 +66,7 @@ def _message(
 def _profiles() -> dict:
     return {
         "fast": {
-            "provider": "azure_openai",
+            "provider_id": "foundry-1",
             "deployment": "deployed-fast",
             "pricing": {
                 "currency": "USD",
@@ -76,7 +76,7 @@ def _profiles() -> dict:
             },
         },
         "euro": {
-            "provider": "azure_openai",
+            "provider_id": "foundry-1",
             "deployment": "deployed-euro",
             "pricing": {
                 "currency": "EUR",

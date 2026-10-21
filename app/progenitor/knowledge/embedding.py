@@ -1,9 +1,4 @@
-"""Embedding clients for the knowledge search index.
-
-Embeddings come from the Azure OpenAI deployment named by the indexer settings
-(``/config/indexer.json`` → a ``/config/profile.json`` entry). The endpoint and key
-are the ones the chat models already use; only the deployment differs.
-"""
+"""Foundry-compatible embeddings backed by persisted provider connections."""
 
 from __future__ import annotations
 
@@ -11,6 +6,8 @@ from typing import Protocol
 
 from openai import AsyncOpenAI
 
+from ..config import LLMConfig
+from ..provider_runtime import provider_config_for_call
 from .indexer_config import EmbeddingTarget
 
 EMBED_BATCH_SIZE = 64
@@ -23,7 +20,7 @@ class Embedder(Protocol):
 
 
 def embeddings_base_url(responses_base_url: str) -> str:
-    """Derive the OpenAI-compatible root from ``AZURE_OPENAI_BASE_URL``.
+    """Derive the OpenAI-compatible root from a Foundry Responses endpoint.
 
     The configured URL targets the Responses API (``…/openai/v1/responses?…``);
     embeddings live beside it at ``…/openai/v1/embeddings``.
@@ -57,11 +54,14 @@ class AzureEmbedder:
         return vectors
 
 
-def embedder_for(target: EmbeddingTarget) -> Embedder:
-    """Build the Azure embedder for ``target`` from the process LLM settings."""
-    from ..config import LLMConfig
-
-    config = LLMConfig.from_env()
-    if not config.base_url:
-        raise ValueError("AZURE_OPENAI_BASE_URL is not configured")
+async def embedder_for(target: EmbeddingTarget) -> Embedder:
+    """Build an embeddings client from the profile's persisted Foundry provider."""
+    if not target.provider_id:
+        raise ValueError("Embedding profile must select a persisted Foundry provider")
+    config = await provider_config_for_call(
+        LLMConfig(reasoning_enabled=False),
+        provider_id=target.provider_id,
+    )
+    if config.provider_kind != "foundry":
+        raise ValueError("Embeddings require a Foundry provider")
     return AzureEmbedder(target, base_url=config.base_url, api_key=config.api_key or "")

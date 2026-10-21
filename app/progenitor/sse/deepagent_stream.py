@@ -13,6 +13,7 @@ from urllib.parse import urlsplit, urlunsplit
 import httpx
 from langchain_core.messages import AIMessageChunk, HumanMessage
 
+from ..provider_runtime import ProviderTurn, activate_provider_turn, current_provider_turn
 from ..runtime.messages import (
     attach_reasoning_trace,
     coerce_messages_list,
@@ -196,39 +197,44 @@ class DeepAgentSSEStream:
             astream_kwargs["stream_mode"] = ["messages", "updates", "custom", "tasks"]
         if self._graph_accepts_kwarg("subgraphs"):
             astream_kwargs["subgraphs"] = True
-
         try:
-            async for stream_item in self.graph.astream(graph_input, **astream_kwargs):
-                namespace, mode, event = self._unpack_stream_item(stream_item)
+            turn = await ProviderTurn.create(
+                getattr(self.config, "llm", None), session_id=thread_id
+            )
+            with activate_provider_turn(turn):
+                async for stream_item in self.graph.astream(graph_input, **astream_kwargs):
+                    namespace, mode, event = self._unpack_stream_item(stream_item)
 
-                if mode == "tasks":
-                    self._record_pending_dispatch_task_id(namespace, event)
-                    continue
+                    if mode == "tasks":
+                        self._record_pending_dispatch_task_id(namespace, event)
+                        continue
 
-                if namespace:
-                    async for item in self._handle_namespaced_stream_item(namespace, mode, event):
+                    if namespace:
+                        async for item in self._handle_namespaced_stream_item(
+                            namespace, mode, event
+                        ):
+                            yield item
+                        continue
+
+                    if mode == "messages":
+                        async for item in self._handle_message_stream_event(event):
+                            yield item
+                        continue
+
+                    if mode == "custom":
+                        for custom_item in self._handle_custom_stream_event(event):
+                            yield custom_item
+                        continue
+
+                    if mode != "updates" or not isinstance(event, dict):
+                        logger.debug("Ignoring graph stream item for mode=%s", mode)
+                        continue
+
+                    async for item in self._handle_update_event(event):
                         yield item
-                    continue
 
-                if mode == "messages":
-                    async for item in self._handle_message_stream_event(event):
-                        yield item
-                    continue
-
-                if mode == "custom":
-                    for custom_item in self._handle_custom_stream_event(event):
-                        yield custom_item
-                    continue
-
-                if mode != "updates" or not isinstance(event, dict):
-                    logger.debug("Ignoring graph stream item for mode=%s", mode)
-                    continue
-
-                async for item in self._handle_update_event(event):
+                async for item in self._finalize_stream():
                     yield item
-
-            async for item in self._finalize_stream():
-                yield item
         finally:
             self._trace_end()
 
@@ -598,22 +604,26 @@ class DeepAgentSSEStream:
         yield {"type": "stream_chunk", "content": "", "is_final": True}
 
     async def _retrieve_reasoning_summary(self, msg: Any) -> str | None:
+        """Recover a Foundry summary from this turn's immutable connection."""
         response_metadata = getattr(msg, "response_metadata", None)
         response_id = response_metadata.get("id") if isinstance(response_metadata, dict) else None
-        llm_config = getattr(self.config, "llm", None)
-        base_url = getattr(llm_config, "base_url", "") if llm_config is not None else ""
-        api_key = getattr(llm_config, "api_key", "") if llm_config is not None else ""
-        if (
-            not isinstance(response_id, str)
-            or not response_id
-            or not isinstance(base_url, str)
-            or not base_url
-        ):
+        turn = current_provider_turn()
+        if not isinstance(response_id, str) or not response_id or turn is None:
             return None
-        if not isinstance(api_key, str) or not api_key:
+        try:
+            config = await turn.resolve()
+        except Exception:
+            logger.debug("Unable to resolve provider for reasoning recovery", exc_info=True)
+            return None
+        # OpenCode Go has no verified retrieval capability. Do not issue its
+        # Responses GET endpoint speculatively, which would drop usage/reasoning
+        # data behind an incompatible request.
+        if config.provider_kind != "foundry":
+            return None
+        if not config.base_url or not config.api_key:
             return None
 
-        parsed = urlsplit(base_url.strip())
+        parsed = urlsplit(config.base_url.strip())
         path = (parsed.path or "").rstrip("/")
         base_path = path[: -len("/responses")] if path.endswith("/responses") else path
         endpoint = urlunsplit(
@@ -625,11 +635,10 @@ class DeepAgentSSEStream:
                 parsed.fragment,
             )
         )
-
         try:
             async with httpx.AsyncClient(
                 timeout=httpx.Timeout(30.0),
-                headers={"api-key": api_key},
+                headers={"api-key": config.api_key},
             ) as client:
                 response = await client.get(endpoint)
                 response.raise_for_status()

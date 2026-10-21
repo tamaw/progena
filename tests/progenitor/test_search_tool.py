@@ -30,6 +30,13 @@ class FakeEmbedder:
         return [_vector(self.axis) for _ in texts]
 
 
+def _fake_embedder_factory(axis: int):
+    async def resolve(_target):
+        return FakeEmbedder(axis)
+
+    return resolve
+
+
 class FakeStateManager:
     def __init__(self, bases: list[str], pages: dict[tuple[str, str], str], profile: str) -> None:
         self.bases = bases
@@ -43,7 +50,7 @@ class FakeStateManager:
         return {"profile": self.profile, "dimensions": DIMS}
 
     async def get_model_profiles_config(self):
-        return {"embeddings": {"provider": "azure_openai", "deployment": "text-embedding-3-small"}}
+        return {"embeddings": {"provider_id": "foundry-1", "deployment": "text-embedding-3-small"}}
 
     async def list_knowledge_pages(self):
         return [(b, p, {"content": c}) for (b, p), c in self.pages.items()]
@@ -106,7 +113,7 @@ async def test_search_ranks_pages_scopes_bases_and_reports_pending(monkeypatch, 
         (ops, "majority.md"): other,
     }
     sm = FakeStateManager([eng, ops], pages, profile="embeddings")
-    monkeypatch.setattr(search_module, "embedder_for", lambda target: FakeEmbedder(1))
+    monkeypatch.setattr(search_module, "embedder_for", _fake_embedder_factory(1))
     everything = await _run(SearchTool(), sm, query="majority quorum")
     assert everything.success
     paths = [hit["path"] for hit in everything.data["results"]]
@@ -123,14 +130,14 @@ async def test_search_ranks_pages_scopes_bases_and_reports_pending(monkeypatch, 
     assert election_hit["similarity"] == 1.0 and election_hit["keyword_match"] is True
 
     # A keyword match is kept even when its meaning is unrelated.
-    monkeypatch.setattr(search_module, "embedder_for", lambda target: FakeEmbedder(7))
+    monkeypatch.setattr(search_module, "embedder_for", _fake_embedder_factory(7))
     keyword_only = await _run(SearchTool(), sm, query="followers")
     assert [hit["path"] for hit in keyword_only.data["results"]] == [
         f"/knowledge/{eng}/replication.md"
     ]
     nothing = await _run(SearchTool(), sm, query="pizza recipe")
     assert nothing.success and nothing.data["results"] == []
-    monkeypatch.setattr(search_module, "embedder_for", lambda target: FakeEmbedder(1))
+    monkeypatch.setattr(search_module, "embedder_for", _fake_embedder_factory(1))
 
     scoped = await _run(SearchTool(allowed_bases=frozenset({eng})), sm, query="majority quorum")
     assert scoped.success

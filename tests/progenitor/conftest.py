@@ -77,3 +77,23 @@ def patch_checkpointer(monkeypatch):
         "app.progenitor.agent.agent._build_checkpointer",
         lambda db_path: MemorySaver(),
     )
+
+
+@pytest.fixture
+def model_provider(monkeypatch):
+    """Provide an isolated connection for graph tests with fake model graphs."""
+    from types import SimpleNamespace
+
+    from app.progenitor import provider_runtime
+
+    repository = SimpleNamespace(
+        resolve=lambda provider_id=None, model_override=None: {
+            "provider_id": provider_id or "test-provider",
+            "provider_kind": "foundry",
+            "base_url": "https://example.openai.azure.com/openai/v1",
+            "api_key": "test-key",
+            "model_default": model_override or "test-model",
+            "revision": 1,
+        }
+    )
+    monkeypatch.setattr(provider_runtime, "get_provider_repository", lambda: repository)

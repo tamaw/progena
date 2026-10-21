@@ -19,7 +19,14 @@ import useEntityDraft from '../hooks/useEntityDraft';
 import useMissingEntityRoute from '../hooks/useMissingEntityRoute';
 import { useConfig } from '../context/ConfigContext';
 import {
-  deleteModelProfile, fetchModelProfiles, patchModelProfile, selectModelProfiles, selectModelProfilesState,
+  deleteModelProfile,
+  fetchModelProfiles,
+  fetchProviders,
+  patchModelProfile,
+  selectGoResponsesModels,
+  selectModelProfiles,
+  selectModelProfilesState,
+  selectProviders,
 } from '../store/uiDataSlice';
 import { selectRealtimeStreamReady } from '../store/realtimeSlice';
 import { draftDiscarded, entityDraftKey } from '../store/editorDraftsSlice';
@@ -27,9 +34,12 @@ import { useSnapshotSave } from '../store/uiData/snapshotSave';
 import '../styles/profiles.css';
 
 const FILTERS = ['All', 'Inherited', 'Customized'];
-const EDITABLE_FIELDS = ['deployment', 'reasoning_enabled', 'reasoning_effort', 'reasoning_summary'];
+const EDITABLE_FIELDS = ['provider_id', 'deployment', 'reasoning_enabled', 'reasoning_effort', 'reasoning_summary'];
 const PRICING_FIELDS = ['currency', 'input_per_million', 'cached_input_per_million', 'output_per_million'];
-const providerLabel = (provider) => provider === 'azure_openai' ? 'Azure OpenAI' : provider;
+const providerLabel = (profile, providers) => {
+  const provider = profile.provider_id ? providers.find((candidate) => candidate.id === profile.provider_id) : null;
+  return provider ? provider.name : 'Provider unavailable';
+};
 const REASONING_ENABLED_OPTIONS = [
   { value: '', label: 'Inherit' },
   { value: 'true', label: 'Enabled' },
@@ -48,10 +58,12 @@ const PROFILE_SNAPSHOT_EVENTS = Object.freeze(['profiles.snapshot']);
 
 const emptyPricing = () => Object.fromEntries(PRICING_FIELDS.map((field) => [field, '']));
 const isCustomized = (profile) => Boolean(profile.pricing)
-  || EDITABLE_FIELDS.slice(1).some((field) => profile[field] != null);
+  || ['provider_id', 'reasoning_enabled', 'reasoning_effort', 'reasoning_summary']
+    .some((field) => profile[field] != null);
 
 function toDraft(profile) {
   return {
+    provider_id: profile.provider_id ?? '',
     deployment: profile.deployment ?? '',
     reasoning_enabled: profile.reasoning_enabled == null ? '' : String(profile.reasoning_enabled),
     reasoning_effort: profile.reasoning_effort ?? '',
@@ -84,6 +96,7 @@ function validatePricing(draft) {
 
 function buildPatch(draft, base) {
   const values = {
+    provider_id: draft.provider_id || null,
     deployment: draft.deployment.trim(),
     reasoning_enabled: draft.reasoning_enabled === '' ? null : draft.reasoning_enabled === 'true',
     reasoning_effort: draft.reasoning_effort.trim() || null,
@@ -98,12 +111,12 @@ function buildPatch(draft, base) {
   return patch;
 }
 
-function ProfileDetails({ profile, catalogue, url, connected }) {
+function ProfileDetails({ profile, catalogue, providers, goModels, url, connected }) {
   const dispatch = useDispatch();
   const navigate = useNavigate();
   const profileKey = useMemo(
-    () => entityDraftKey('profile', JSON.stringify([profile.provider, profile.name])),
-    [profile.name, profile.provider],
+    () => entityDraftKey('profile', profile.name),
+    [profile.name],
   );
   const [editState, setEditState, draftControls] = useEntityDraft(profileKey, EMPTY_PROFILE_EDIT);
   const {
@@ -112,6 +125,17 @@ function ProfileDetails({ profile, catalogue, url, connected }) {
   const draft = editState.draft;
   const baseline = editState.baseline;
   const error = saveError || editState.validationError;
+  const providerOptions = useMemo(
+    () => providers.map((provider) => ({ value: provider.id, label: provider.name })),
+    [providers],
+  );
+  const selectedProviderId = draft?.provider_id ?? profile.provider_id;
+  const selectedProvider = providers.find((provider) => provider.id === selectedProviderId);
+  const isGoProvider = selectedProvider?.kind === 'opencode_go';
+  const goModelOptions = useMemo(
+    () => goModels.map((model) => ({ value: model, label: model })),
+    [goModels],
+  );
   const deleteAction = useConfirmAction(`profile-delete:${url}:${profile.name}`);
   const conflict = Boolean(draft && baseline
     && JSON.stringify(baseline) !== JSON.stringify(toDraft(profile)));
@@ -138,7 +162,11 @@ function ProfileDetails({ profile, catalogue, url, connected }) {
   const handleSave = () => {
     if (!draft || conflict || saving) return;
     if (!draft.deployment.trim()) {
-      setEditState((current) => ({ ...current, validationError: 'Deployment is required.' }));
+      setEditState((current) => ({ ...current, validationError: isGoProvider ? 'A Responses model is required.' : 'Deployment is required.' }));
+      return;
+    }
+    if (isGoProvider && !goModels.includes(draft.deployment)) {
+      setEditState((current) => ({ ...current, validationError: 'Choose a supported OpenCode Go Responses model.' }));
       return;
     }
     const pricingError = validatePricing(draft);
@@ -185,7 +213,7 @@ function ProfileDetails({ profile, catalogue, url, connected }) {
   return (
     <>
       <DetailHeader title={profile.name} meta={[
-        <span key="provider" className="profiles-badge profiles-badge--provider">{providerLabel(profile.provider)}</span>,
+        <span key="provider" className="profiles-badge profiles-badge--provider">{providerLabel(profile, providers)}</span>,
         <span key="deployment" className="profiles-badge profiles-badge--deployment">{profile.deployment}</span>,
         isCustomized(profile) ? <span key="custom" className="profiles-badge profiles-badge--customized">Customized</span> : null,
       ]} actions={(
@@ -224,8 +252,29 @@ function ProfileDetails({ profile, catalogue, url, connected }) {
           {draft ? (
             <form className="agents-card-facts agents-draft profiles-form" onSubmit={(event) => { event.preventDefault(); handleSave(); }}>
               <label className="agents-draft-field profiles-field">
-                <span className="agents-draft-field__label">Deployment <span aria-hidden="true" className="profiles-field__required">*</span></span>
-                <input className="set-text-input" type="text" value={draft.deployment} onChange={(event) => updateDraft('deployment', event.target.value)} disabled={saving} required />
+                <span className="agents-draft-field__label">Provider</span>
+                <Select
+                  value={draft.provider_id}
+                  onChange={(value) => updateDraft('provider_id', value)}
+                  options={providerOptions}
+                  ariaLabel="Provider"
+                  disabled={saving || !providers.length}
+                />
+              </label>
+              <label className="agents-draft-field profiles-field">
+                <span className="agents-draft-field__label">{isGoProvider ? 'Responses model' : 'Deployment'} <span aria-hidden="true" className="profiles-field__required">*</span></span>
+                {isGoProvider ? (
+                  <Select
+                    value={draft.deployment}
+                    onChange={(value) => updateDraft('deployment', value)}
+                    options={goModelOptions}
+                    ariaLabel="OpenCode Go Responses model"
+                    placeholder="Choose a supported model"
+                    disabled={saving || !goModels.length}
+                  />
+                ) : (
+                  <input className="set-text-input" type="text" value={draft.deployment} onChange={(event) => updateDraft('deployment', event.target.value)} disabled={saving} required />
+                )}
               </label>
               <label className="agents-draft-field profiles-field">
                 <span className="agents-draft-field__label">Reasoning enabled</span>
@@ -234,13 +283,13 @@ function ProfileDetails({ profile, catalogue, url, connected }) {
                   onChange={(value) => updateDraft('reasoning_enabled', value)}
                   options={REASONING_ENABLED_OPTIONS}
                   ariaLabel="Reasoning enabled"
-                  disabled={saving}
+                  disabled={saving || isGoProvider}
                 />
               </label>
               {['reasoning_effort', 'reasoning_summary'].map((field) => (
                 <label className="agents-draft-field profiles-field" key={field}>
                   <span className="agents-draft-field__label">{field === 'reasoning_effort' ? 'Reasoning effort' : 'Reasoning summary'}</span>
-                  <input className="set-text-input" type="text" value={draft[field]} onChange={(event) => updateDraft(field, event.target.value)} disabled={saving} placeholder="Inherit" />
+                  <input className="set-text-input" type="text" value={draft[field]} onChange={(event) => updateDraft(field, event.target.value)} disabled={saving || isGoProvider} placeholder="Inherit" />
                 </label>
               ))}
               <fieldset className="profiles-pricing">
@@ -265,12 +314,13 @@ function ProfileDetails({ profile, catalogue, url, connected }) {
                 ))}
               </fieldset>
               {error ? <InlineFailure failure={error} operation="Save profile" /> : null}
+              <p className="profiles-form__hint">{saving ? 'Saving…' : isGoProvider ? 'Foundry reasoning overrides do not apply to OpenCode Go.' : 'Clear effort or summary to remove its override.'}</p>
             </form>
           ) : (
             <dl className="agents-card-facts profiles-config-grid">
               <div className="agents-card-fact"><dt className="agents-card-fact__label">Name</dt><dd className="agents-card-fact__value">{profile.name}</dd></div>
-              <div className="agents-card-fact"><dt className="agents-card-fact__label">Provider</dt><dd className="agents-card-fact__value">{providerLabel(profile.provider)}</dd></div>
-              <div className="agents-card-fact"><dt className="agents-card-fact__label">Deployment</dt><dd className="agents-card-fact__value">{profile.deployment}</dd></div>
+              <div className="agents-card-fact"><dt className="agents-card-fact__label">Provider</dt><dd className="agents-card-fact__value">{providerLabel(profile, providers)}</dd></div>
+              <div className="agents-card-fact"><dt className="agents-card-fact__label">{selectedProvider?.kind === 'opencode_go' ? 'Responses model' : 'Deployment'}</dt><dd className="agents-card-fact__value">{profile.deployment}</dd></div>
               <div className="agents-card-fact"><dt className="agents-card-fact__label">Reasoning enabled</dt><dd className="agents-card-fact__value">{profile.reasoning_enabled == null ? 'Inherit' : profile.reasoning_enabled ? 'Enabled' : 'Disabled'}</dd></div>
               <div className="agents-card-fact"><dt className="agents-card-fact__label">Reasoning effort</dt><dd className="agents-card-fact__value">{profile.reasoning_effort || 'Inherit'}</dd></div>
               <div className="agents-card-fact"><dt className="agents-card-fact__label">Reasoning summary</dt><dd className="agents-card-fact__value">{profile.reasoning_summary || 'Inherit'}</dd></div>
@@ -309,21 +359,25 @@ export default function ProfilesPage() {
   const { profileName } = useParams();
   const { getApiUrl } = useConfig();
   const url = getApiUrl('modelProfiles');
+  const providersUrl = getApiUrl('providers');
   const connected = useSelector(selectRealtimeStreamReady);
   const profiles = useSelector(selectModelProfiles);
   const catalogue = useSelector(selectModelProfilesState);
+  const providers = useSelector(selectProviders);
+  const goModels = useSelector(selectGoResponsesModels);
   const [filter, setFilter] = useState('All');
   const [query, setQuery] = useState('');
   const [sort, setSort] = useState('Name');
   useEffect(() => {
     if (!connected) return undefined;
     dispatch(fetchModelProfiles({ modelProfilesUrl: url }));
+    dispatch(fetchProviders({ providersUrl }));
     return undefined;
-  }, [connected, dispatch, url]);
+  }, [connected, dispatch, providersUrl, url]);
   const visible = useMemo(() => profiles.filter((profile) => (
     (filter === 'All' || isCustomized(profile) === (filter === 'Customized'))
-    && `${profile.name} ${providerLabel(profile.provider)} ${profile.deployment}`.toLowerCase().includes(query.trim().toLowerCase())
-  )).sort((a, b) => (sort === 'Provider' ? a.provider.localeCompare(b.provider) : 0) || a.name.localeCompare(b.name)), [profiles, filter, query, sort]);
+    && `${profile.name} ${providerLabel(profile, providers)} ${profile.deployment}`.toLowerCase().includes(query.trim().toLowerCase())
+  )).sort((a, b) => (sort === 'Provider' ? providerLabel(a, providers).localeCompare(providerLabel(b, providers)) : 0) || a.name.localeCompare(b.name)), [profiles, providers, filter, query, sort]);
   const selected = profiles.find((profile) => profile.name === profileName)
     || (!profileName ? visible[0] || profiles[0] : null);
   useEntityUrlSync('/profiles', selected?.name, selected?.name);
@@ -372,9 +426,9 @@ export default function ProfilesPage() {
               <button type="button" className={`sess-row profiles-pane-row ${selected?.name === profile.name ? 'is-selected' : ''}`}
                 aria-current={selected?.name === profile.name ? 'true' : undefined}
                 onClick={() => navigate(buildEntityPath('/profiles', profile.name, profile.name), { replace: true })}
-                aria-label={`${profile.name}, ${providerLabel(profile.provider)}, ${profile.deployment}`}>
+                aria-label={`${profile.name}, ${providerLabel(profile, providers)}, ${profile.deployment}`}>
                 <span className="sess-row__top"><span className="profiles-pane-row__name">{profile.name}</span>{isCustomized(profile) ? <span className="profiles-badge profiles-badge--customized">Customized</span> : null}</span>
-                <span className="sess-row__title"><span className="profiles-badge profiles-badge--provider">{providerLabel(profile.provider)}</span><span className="profiles-badge profiles-badge--deployment">{profile.deployment}</span></span>
+                <span className="sess-row__title"><span className="profiles-badge profiles-badge--provider">{providerLabel(profile, providers)}</span><span className="profiles-badge profiles-badge--deployment">{profile.deployment}</span></span>
               </button>
             )} />}
         <PaneListFooter>
@@ -383,7 +437,7 @@ export default function ProfilesPage() {
         </PaneListFooter>
       </PaneList>
       <DetailPane className="detail-pane--dense profiles-detail" label="Model profile detail">
-        {selected ? <ProfileDetails key={`${url}:${selected.name}`} profile={selected} catalogue={catalogue} url={url} connected={connected} />
+        {selected ? <ProfileDetails key={`${url}:${selected.name}`} profile={selected} catalogue={catalogue} providers={providers} goModels={goModels} url={url} connected={connected} />
           : <div className="detail-pane__body">{!catalogue.error ? <PaneEmptyState detail>{catalogue.loaded ? 'Select a profile to view its configuration.' : loadingMessage}</PaneEmptyState> : null}</div>}
       </DetailPane>
     </PageShell>

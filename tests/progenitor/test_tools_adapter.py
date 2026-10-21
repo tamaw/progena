@@ -227,22 +227,56 @@ async def test_a2a_status_kwargs_populate_tool_args(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_tool_call_id_reaches_tool_context(monkeypatch) -> None:
-    """Wrapped A2A tools receive LangGraph's real tool-call ID."""
-    tools = create_deepagent_tools(state_manager=MagicMock())
-    tool = _tool_by_name(tools, "a2a_status")
-    captured: dict[str, Any] = {}
+async def test_parallel_a2a_progress_stays_on_its_originating_tool_row(monkeypatch) -> None:
+    """Real wrapped sends retain each call's UI progress correlation."""
+    import asyncio
+    from unittest.mock import AsyncMock
 
-    async def _fake_execute(self, context):  # type: ignore[no-untyped-def]
-        from app.progenitor.tools.protocol import ToolResult
+    events = []
 
-        captured["tool_call_id"] = context.tool_call_id
-        return ToolResult.ok({"status": "ok"})
+    class Client:
+        async def send_message(self, *, request, on_progress, **kwargs):
+            await asyncio.sleep(0)
+            await on_progress(
+                {
+                    "status": {
+                        "state": "working",
+                        "message": {"parts": [{"kind": "text", "text": request}]},
+                    }
+                }
+            )
+            return {
+                "success": True,
+                "result": {
+                    "kind": "task",
+                    "id": f"task-{request}",
+                    "contextId": "context",
+                    "status": {"state": "completed"},
+                },
+            }
 
-    monkeypatch.setattr(
-        "app.progenitor.tools.a2a_sessions.A2AStatusTool.execute",
-        _fake_execute,
-        raising=True,
+    monkeypatch.setattr("app.progenitor.a2a.tasks.A2AClient", Client)
+    monkeypatch.setattr("app.progenitor.tools.a2a_sessions.emit_stream_event", events.append)
+    registry = MagicMock()
+    registry.find_by_name.return_value = {
+        "name": "builder",
+        "url": "https://example.test",
+        "transport": "http",
+    }
+    state = AsyncMock()
+    state.get_current_state.return_value = {"thread_id": "thread"}
+    state.get_a2a_task.return_value = None
+    tool = _tool_by_name(
+        create_deepagent_tools(tool_registry=registry, state_manager=state), "a2a_send"
     )
-    await _invoke(tool, {"task_id": "task-xyz"}, tool_call_id="call_specific_id_789")
-    assert captured["tool_call_id"] == "call_specific_id_789"
+
+    first, second = await asyncio.gather(
+        _invoke(tool, {"agent": "builder", "message": "first"}, tool_call_id="call-first"),
+        _invoke(tool, {"agent": "builder", "message": "second"}, tool_call_id="call-second"),
+    )
+    assert first["task_id"] == "task-first"
+    assert second["task_id"] == "task-second"
+    assert {(event["metadata"]["tool_call_id"], event["content"]) for event in events} == {
+        ("call-first", "first"),
+        ("call-second", "second"),
+    }

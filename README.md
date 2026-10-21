@@ -24,10 +24,25 @@ Copy the environment template, then set your Azure endpoint, API key and deploym
 cp .env.example .env
 ```
 
+Configure model connections in **Settings → Providers**. Foundry and OpenCode Go use the **Responses API only**. Profiles can select an explicit connection or inherit the default. Saved changes apply to new turns; active turns retain their connection.
+
+Connections live in ordinary `provider_connection` / `provider_settings` tables in the backend PostgreSQL database (`BACKEND_DATABASE_NAME`, default `backend`), not agent state. Both services need access to this database.
+
+Keys are write-only and either reference `AZURE_OPENAI_API_KEY`, `OPENCODE_GO_API_KEY`, or `PROGENITOR_PROVIDER_*_API_KEY`, or are encrypted in the database. Database credentials require the same stable `PROGENITOR_PROVIDER_ENCRYPTION_KEY` Fernet key in backend and runtime; losing it makes stored keys unreadable. Custom environment sources must be supplied to both services.
+
+A legacy Azure endpoint is imported once on initial provider-database setup. `/openai/responses?api-version=...` becomes `/openai/v1`. An invalid initial endpoint leaves setup retryable; after setup completes, legacy endpoint environment changes are ignored. An empty installation starts without making model calls so providers can be configured.
+
+Go uses conversation-scoped `x-opencode-session` headers and does not receive Foundry reasoning overrides. Knowledge embeddings require an explicitly selected Foundry connection. Independent A2A credentials and Claude ACP authentication are unchanged.
+
+Optional environment credentials and legacy first-run import settings:
+
 ```dotenv
 AZURE_OPENAI_BASE_URL=https://<resource>.openai.azure.com/openai/v1
 AZURE_OPENAI_API_KEY=<your-api-key>
+OPENCODE_GO_API_KEY=<your-go-api-key>
 PROGENITOR_MODEL_DEFAULT=<your-deployment-name>
+# Required only for database-stored keys:
+PROGENITOR_PROVIDER_ENCRYPTION_KEY=<shared-fernet-key>
 ```
 
 Start the stack from the repository root:

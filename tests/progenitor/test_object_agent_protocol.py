@@ -15,6 +15,7 @@ from langchain_core.tools import tool
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph_sdk import get_client
 
+from app.progenitor import provider_runtime
 from app.progenitor.agent.live_async_subagents import LiveAsyncSubagentMiddleware
 from app.progenitor.agent.middleware.async_subagent_tracking import AsyncSubagentTrackingMiddleware
 from app.progenitor.agent.object_agent_registry import LiveSubagentMiddleware, ObjectAgentRegistry
@@ -34,6 +35,18 @@ class Model(FakeMessagesListChatModel):
         for generation in result.generations:
             generation.message = generation.message.model_copy(update={"id": uuid.uuid4().hex})
         return result
+
+
+class _ProviderRepository:
+    def resolve(self, provider_id=None, model_override=None):
+        return {
+            "provider_id": provider_id or "foundry-1",
+            "provider_kind": "foundry",
+            "base_url": "https://example.openai.azure.com/openai/v1/responses",
+            "api_key": "test-key",
+            "model_default": model_override or "default",
+            "revision": 1,
+        }
 
 
 def manifest(name):
@@ -400,7 +413,7 @@ async def test_actual_object_agent_uses_profile_override_for_both_modes(
 ):
     state, registry, _ = await setup_registry(tmp_path)
     await state.save_model_profiles_config(
-        {"selected": {"provider": "azure_openai", "deployment": "profile-greeter"}}
+        {"selected": {"provider_id": "foundry-1", "deployment": "profile-greeter"}}
     )
     configs = []
 
@@ -409,6 +422,7 @@ async def test_actual_object_agent_uses_profile_override_for_both_modes(
         return Model(responses=[AIMessage(content="profile greeting")])
 
     monkeypatch.setattr("app.progenitor.agent.adapters.create_langchain_model", selected_model)
+    monkeypatch.setattr(provider_runtime, "get_provider_repository", lambda: _ProviderRepository())
     server = server_for(state, registry)
     await server.start()
     try:

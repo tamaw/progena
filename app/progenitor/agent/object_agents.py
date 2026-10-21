@@ -40,8 +40,8 @@ from langchain.agents.middleware import (
 from langchain_core.messages import AIMessage
 from langchain_core.runnables import RunnableConfig, RunnableLambda
 
-from ..config import LLMConfig
-from .adapters import create_langchain_model
+from ..provider_runtime import ProviderTurn, activate_provider_turn, current_provider_turn
+from .adapters import ProviderChatModel
 from .backends import ReadOnlyBackend, create_object_agent_plugin_skill_routes
 from .middleware import AuditLoggingMiddleware, ToolErrorMiddleware
 from .object_agent_manifest import (
@@ -423,10 +423,12 @@ def _scoped_routes(
 
 
 def _model_for_manifest(manifest: ObjectAgentManifest, parent_model: Any) -> Any:
-    """Resolve overrides through the Azure adapter, never LangChain's default client."""
+    """Apply a manifest override to the current persisted-provider connection."""
     if manifest.model is None:
         return parent_model
-    return create_langchain_model(replace(LLMConfig.from_env(), model_default=manifest.model))
+    if isinstance(parent_model, ProviderChatModel):
+        return parent_model.with_model_override(manifest.model)
+    return ProviderChatModel(model_override=manifest.model)
 
 
 AGENT_MEMORY_FILE = "AGENTS.md"
@@ -717,11 +719,26 @@ def create_object_agent_proxy(
             memory_sources=memory_sources,
         )
         thread_id = config.get("configurable", {}).get("object_agent_thread_id")
-        result = (
-            await agent.ainvoke(state, config={"configurable": {"thread_id": thread_id}})
-            if thread_id
-            else await agent.ainvoke({"messages": state.get("messages") or []})
-        )
+
+        async def invoke() -> dict[str, Any]:
+            if thread_id:
+                return await agent.ainvoke(state, config={"configurable": {"thread_id": thread_id}})
+            return await agent.ainvoke({"messages": state.get("messages") or []})
+
+        if current_provider_turn() is not None or not isinstance(selected_model, ProviderChatModel):
+            result = await invoke()
+        else:
+            session_id = str(
+                thread_id
+                or config.get("configurable", {}).get("thread_id")
+                or f"object-agent:{manifest.name}"
+            )
+            turn = await ProviderTurn.create(
+                session_id=session_id,
+                provider_id=selected_model.provider_id,
+            )
+            with activate_provider_turn(turn):
+                result = await invoke()
         if warnings and isinstance(result, dict):
             messages = list(result.get("messages") or [])
             for index in range(len(messages) - 1, -1, -1):
