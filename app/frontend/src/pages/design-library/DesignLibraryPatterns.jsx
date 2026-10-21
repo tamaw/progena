@@ -270,7 +270,7 @@ function DataPatterns() {
           <div className="dlp-card__head"><h3>Activity timeline</h3><span className="dlp-pattern-tag">existing markup pattern</span></div>
           <ol className="dlp-timeline">
             <li><span className="task-act-avatar dlp-avatar--system">S</span><p><strong>System</strong> created the review <time>just now</time></p></li>
-            <li><span className="task-act-avatar dlp-avatar--user">T</span><p><strong>Tama</strong> added acceptance criteria <time>4m ago</time></p></li>
+            <li><span className="task-act-avatar dlp-avatar--user">A</span><p><strong>Alex</strong> added acceptance criteria <time>4m ago</time></p></li>
             <li><span className="task-act-avatar dlp-avatar--agent">A</span><p><strong>Researcher</strong> returned a summary <time>12m ago</time></p></li>
           </ol>
         </article>

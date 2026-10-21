@@ -97,7 +97,7 @@ jobs:
 
   build-and-deploy:
     runs-on: [self-hosted, Linux, docker]
-    environment: cronix
+    environment: production
     needs: [backend, progenitor, frontend]
     # Build deployment images and deploy them on the same self-hosted Docker runner.
     if: ${{ github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch' }}
@@ -243,12 +243,12 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          PROGENITOR_HOST_LOGS_DIR: /var/lib/progenitor/logs
-          # Outside the runner checkout: the runtime's managed clones must survive
-          # a clean checkout, and a root-owned folder there breaks other jobs.
-          PROGENITOR_HOST_REPOS_DIR: /var/lib/progenitor/repos
-          PROGENITOR_HOST_CLAUDE_DIR: /var/lib/progenitor/claude
+          # Outside the runner checkout; preserve the existing installation layout.
+          PROGENITOR_INSTALL_ROOT: /var/lib/progenitor
         run: |
+          export PROGENITOR_HOST_LOGS_DIR="$PROGENITOR_INSTALL_ROOT/logs"
+          export PROGENITOR_HOST_REPOS_DIR="$PROGENITOR_INSTALL_ROOT/repos"
+          export PROGENITOR_HOST_CLAUDE_DIR="$PROGENITOR_INSTALL_ROOT/claude"
           # Check every image before touching the running stack, so a missing image
           # fails the deploy without taking production down. Postgres comes from a
           # registry (compose runs with --pull never), so pull it first.

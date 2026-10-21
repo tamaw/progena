@@ -16,7 +16,7 @@ import {
 
 describe('tasksPageModel', () => {
   it('formats task labels consistently', () => {
-    expect(formatTaskLabel('builder_progenitor')).toBe('Builder Progenitor');
+    expect(formatTaskLabel('build_worker')).toBe('Build Worker');
     expect(formatTaskLabel('review:queue')).toBe('Review Queue');
   });
 
@@ -82,8 +82,8 @@ describe('getCardService', () => {
 
 describe('getCardAssignee', () => {
   it('derives name, initial, and a stable color by index', () => {
-    const assignee = getCardAssignee({ agent_name: 'builder_progenitor' }, 0);
-    expect(assignee.name).toBe('Builder Progenitor');
+    const assignee = getCardAssignee({ agent_name: 'build_worker' }, 0);
+    expect(assignee.name).toBe('Build Worker');
     expect(assignee.initial).toBe('B');
     expect(assignee.color).toBe('#2f6ff6');
   });

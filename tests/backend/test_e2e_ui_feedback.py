@@ -261,6 +261,25 @@ class TestUIFeedbackIntegration:
         assert tech_widget["logs"][0]["message"] == "analysis delayed"
         assert tech_widget["logs"][0]["level"] == "warn"
 
+    def test_nested_agent_log_sources_use_the_directory_name(self, tmp_path):
+        logs_dir = tmp_path / "logs"
+        for agent in ("builder", "reviewer"):
+            agent_dir = logs_dir / agent
+            agent_dir.mkdir(parents=True)
+            (agent_dir / "task.log").write_text("task started\n", encoding="utf-8")
+
+        reader = StateReader(document_store=None, logs_dir=logs_dir)
+        sources = {
+            option["path"]: option["source"]
+            for group in reader.get_log_sources()
+            for option in group["options"]
+        }
+
+        assert sources == {
+            "builder/task.log": "builder",
+            "reviewer/task.log": "reviewer",
+        }
+
 
 class TestAgentFeedbackVisibility:
     """Tests that agent activity is visible to the UI."""

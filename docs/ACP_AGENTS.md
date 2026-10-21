@@ -83,7 +83,7 @@ No ACP agents are seeded by default — register the ones you want with the
 `register_acp_agent` tool, which persists to the database. The simplest form is a
 **connection string**:
 
-- `tcp://192.168.0.2:3000?model=claude-haiku-4.5&cwd=/tmp` — connect to a running
+- `tcp://192.0.2.10:3000?model=claude-haiku-4.5&cwd=/tmp` — connect to a running
   `copilot --acp --port 3000` server (TCP; the primary mode).
 - `stdio://copilot` or a bare `copilot` — spawn a local stdio agent.
 

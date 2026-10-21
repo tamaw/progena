@@ -597,16 +597,16 @@ describe('agent reducers', () => {
   });
 
   it('agents.snapshot refreshes the active detail when enabled changes', () => {
-    let s = reducer(undefined, agentsSnapshot(['a2a-greetings']));
+    let s = reducer(undefined, agentsSnapshot(['a2a-example']));
     s = reducer(s, applyUiEvent({
       type: 'agent.selected',
-      payload: { agent: { id: 'a2a-greetings', enabled: false } },
+      payload: { agent: { id: 'a2a-example', enabled: false } },
     }));
     s = reducer(s, applyUiEvent({
       type: 'agents.snapshot',
-      payload: { agents: [{ id: 'a2a-greetings', name: 'Greetings', enabled: true }] },
+      payload: { agents: [{ id: 'a2a-example', name: 'Example Agent', enabled: true }] },
     }));
-    expect(s.agents.byId['a2a-greetings'].enabled).toBe(true);
+    expect(s.agents.byId['a2a-example'].enabled).toBe(true);
     expect(s.agents.active.detail.enabled).toBe(true);
   });
 
@@ -673,8 +673,8 @@ describe('agent reducers', () => {
       type: 'agents.snapshot',
       payload: {
         agents: [{
-          id: 'a2a-observe',
-          name: 'Observe Agent',
+          id: 'a2a-example',
+          name: 'Example Agent',
           kind: 'a2a',
           group: 'A2A agents',
           transport: 'JSONRPC',
@@ -684,7 +684,7 @@ describe('agent reducers', () => {
             capabilities: { streaming: false, stateTransitionHistory: true },
             inputModes: ['text/plain'],
           },
-          skills: [{ id: 'progenitor_health_report', name: 'Health', tags: ['observe'], examples: ['Run it'] }],
+          skills: [{ id: 'progenitor_health_report', name: 'Health', tags: ['example'], examples: ['Run it'] }],
         }],
       },
     }));

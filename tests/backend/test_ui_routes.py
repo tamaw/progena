@@ -761,7 +761,7 @@ class TestUIRoutes:
             json={
                 "column_id": "build",
                 "status": "running",
-                "agent_name": "builder_progenitor",
+                "agent_name": "build_worker",
                 "branch_name": "feat/kanban-board",
                 "labels": ["frontend", "live-first"],
             },
@@ -776,7 +776,7 @@ class TestUIRoutes:
         assert stored_card is not None
         assert stored_card.payload["column_id"] == "build"
         assert stored_card.payload["status"] == "running"
-        assert stored_card.payload["agent_name"] == "builder_progenitor"
+        assert stored_card.payload["agent_name"] == "build_worker"
         assert stored_card.payload["branch_name"] == "feat/kanban-board"
         assert stored_card.payload["labels"] == ["frontend", "live-first"]
         assert stored_card.payload["started_at"] is not None
@@ -1843,14 +1843,14 @@ class TestWorkspaceBridgeActions:
             {
                 "agents": [
                     {
-                        "name": "observe_agent",
+                        "name": "example_agent",
                         "kind": "a2a_agent",
                         "version": "0.2.0",
-                        "description": "Observe health",
-                        "entrypoint": "python observe.py",
+                        "description": "Example health",
+                        "entrypoint": "python example.py",
                         "transport": "http",
                         "enabled": True,
-                        "url": "http://example.test/observe",
+                        "url": "http://example.test/example",
                         "created_at": "2026-04-01T00:00:00Z",
                         "updated_at": "2026-04-01T00:00:00Z",
                         "status": "running",
@@ -1866,7 +1866,7 @@ class TestWorkspaceBridgeActions:
         monkeypatch.setattr("app.backend.ui_routes.get_state_reader", lambda: state_reader)
 
         async def fake_inspect_agent_widget(widget, reader):
-            assert widget["id"] == "agent:observe_agent"
+            assert widget["id"] == "agent:example_agent"
             assert reader is state_reader
             return {
                 **widget,
@@ -1878,8 +1878,8 @@ class TestWorkspaceBridgeActions:
                         {"id": "diagnose", "name": "Diagnose", "description": "Run diagnostics"}
                     ],
                 },
-                "agent_card_url": "http://example.test/observe/.well-known/agent-card.json",
-                "url": "http://example.test/observe",
+                "agent_card_url": "http://example.test/example/.well-known/agent-card.json",
+                "url": "http://example.test/example",
                 "version": "0.2.0",
             }
 
@@ -1888,7 +1888,7 @@ class TestWorkspaceBridgeActions:
             fake_inspect_agent_widget,
         )
 
-        response = client.post("/api/ui/widgets/agent:observe_agent/refresh")
+        response = client.post("/api/ui/widgets/agent:example_agent/refresh")
 
         assert response.status_code == 202
         data = response.json()

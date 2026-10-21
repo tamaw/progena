@@ -339,7 +339,7 @@ async def test_preserves_non_plugin_namespaces(state_manager, fake_files, fake_d
     state_manager._docs["skill"]["progenitor/managing-mcp/SKILL.md"] = (
         "---\nname: managing-mcp\n---\n"
     )
-    state_manager._docs["skill"]["builder_agent/build/SKILL.md"] = "---\nname: build\n---\n"
+    state_manager._docs["skill"]["external_agent/build/SKILL.md"] = "---\nname: build\n---\n"
     state_manager._docs["agent"]["native/repo-manager/SYSTEM.md"] = "native"
     state_manager._docs["agent"]["user/reviewer/SYSTEM.md"] = "user"
     state_manager._plugins = {"plugins": {}}
@@ -348,7 +348,7 @@ async def test_preserves_non_plugin_namespaces(state_manager, fake_files, fake_d
 
     assert summary["removed"] == []
     assert "progenitor/managing-mcp/SKILL.md" in state_manager._docs["skill"]
-    assert "builder_agent/build/SKILL.md" in state_manager._docs["skill"]
+    assert "external_agent/build/SKILL.md" in state_manager._docs["skill"]
     assert "native/repo-manager/SYSTEM.md" in state_manager._docs["agent"]
     assert "user/reviewer/SYSTEM.md" in state_manager._docs["agent"]
 

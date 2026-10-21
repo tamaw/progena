@@ -70,12 +70,12 @@ describe('normalizeBackendChatMessage', () => {
       id: 'm3',
       role: 'assistant',
       content: 'hello',
-      display_agent_name: 'greetings_agent',
+      display_agent_name: 'example_agent',
       display_model_name: 'gpt-5-mini',
       display_tool_calls: ['sleep'],
       raw: { response_metadata: {} },
     }, 0);
-    expect(m.displayAgentName).toBe('greetings_agent');
+    expect(m.displayAgentName).toBe('example_agent');
     expect(m.displayModelName).toBe('gpt-5-mini');
     expect(m.displayToolCalls).toEqual(['sleep']);
     expect(m.model).toBe('gpt-5-mini');
@@ -282,7 +282,7 @@ describe('normalizeBackendChatMessage', () => {
   it('reconstructs an a2a_call timeline card and uses summary (not raw JSON) as its reload result_preview', () => {
     const resultJson = JSON.stringify({
       task_id: 'task-123',
-      agent: 'greetings_agent',
+      agent: 'example_agent',
       status: 'completed',
       summary: 'Hello! Completed a 3-step task.',
       task: { history: [{ role: 'agent', parts: [{ text: 'Accepted' }] }] },
@@ -294,7 +294,7 @@ describe('normalizeBackendChatMessage', () => {
       tool_calls: [{
         id: 'call_1',
         name: 'a2a_send',
-        args: { agent: 'greetings_agent', request: 'hi' },
+        args: { agent: 'example_agent', request: 'hi' },
         result: resultJson,
       }],
     }, 1);
@@ -318,7 +318,7 @@ describe('normalizeBackendChatMessage', () => {
   it('reconstructs the a2a_call sub-chain from a persisted progress_log', () => {
     const resultJson = JSON.stringify({
       task_id: 'task-123',
-      agent: 'greetings_agent',
+      agent: 'example_agent',
       status: 'completed',
       summary: "Hello! Irish-style right back at you: Top o' the mornin'!",
     });
@@ -329,7 +329,7 @@ describe('normalizeBackendChatMessage', () => {
       tool_calls: [{
         id: 'call_1',
         name: 'a2a_send',
-        args: { agent: 'greetings_agent', request: 'hi' },
+        args: { agent: 'example_agent', request: 'hi' },
         result: resultJson,
         progress_log: [
           { state: 'submitted', message_text: 'Accepted: hi' },
@@ -363,7 +363,7 @@ describe('normalizeBackendChatMessage', () => {
       tool_calls: [{
         id: 'call_1',
         name: 'a2a_send',
-        args: { agent: 'greetings_agent', request: 'hi' },
+        args: { agent: 'example_agent', request: 'hi' },
         result: resultJson,
         created_at: '2026-07-11T02:31:00+00:00',
         progress_log: [
@@ -386,7 +386,7 @@ describe('normalizeBackendChatMessage', () => {
       tool_calls: [{
         id: 'call-duration-derived',
         name: 'a2a_send',
-        args: { agent: 'greetings_agent', request: 'hi' },
+        args: { agent: 'example_agent', request: 'hi' },
         result: JSON.stringify({ task_id: 'task-123', status: 'completed' }),
         progress_log: [
           { state: 'submitted', message_text: 'Accepted', timestamp: '2026-07-11T02:31:02.000Z' },
@@ -407,7 +407,7 @@ describe('normalizeBackendChatMessage', () => {
       tool_calls: [{
         id: 'call-duration-explicit',
         name: 'a2a_send',
-        args: { agent: 'greetings_agent', request: 'hi' },
+        args: { agent: 'example_agent', request: 'hi' },
         result: JSON.stringify({ task_id: 'task-123', status: 'completed' }),
         duration_ms: 42,
         progress_log: [
@@ -430,7 +430,7 @@ describe('normalizeBackendChatMessage', () => {
       tool_calls: [{
         id: 'call_1',
         name: 'a2a_send',
-        args: { agent: 'greetings_agent', request: 'hi' },
+        args: { agent: 'example_agent', request: 'hi' },
         result: resultJson,
         created_at: '2026-07-11T02:31:00+00:00',
         progress_log: [{ state: 'submitted', message_text: 'Accepted' }],
@@ -448,8 +448,8 @@ describe('normalizeBackendChatMessage', () => {
       tool_calls: [{
         id: 'call_1',
         name: 'a2a_send',
-        args: { agent: 'greetings_agent', request: 'hi' },
-        result: JSON.stringify({ task_id: 'task-123', agent: 'greetings_agent', status: 'completed' }),
+        args: { agent: 'example_agent', request: 'hi' },
+        result: JSON.stringify({ task_id: 'task-123', agent: 'example_agent', status: 'completed' }),
         progress_log: [
           { state: 'submitted', message_text: 'Accepted: hi', agent_name: 'different_agent' },
           { state: 'completed', message_text: 'Hello!', agent_name: 'different_agent' },
@@ -457,7 +457,7 @@ describe('normalizeBackendChatMessage', () => {
       }],
     }, 1);
     const a2aItems = m.timelineItems.filter((item) => item.kind === 'a2a_call');
-    expect(a2aItems[0].agentName).toBe('greetings_agent');
+    expect(a2aItems[0].agentName).toBe('example_agent');
   });
 
   it('pulls summary out via regex when the JSON is truncated after it (the realistic case)', () => {
@@ -466,7 +466,7 @@ describe('normalizeBackendChatMessage', () => {
     // way through a later key, never on a clean closing brace. A naive
     // JSON.parse-or-nothing approach fails this case entirely even though
     // summary itself is fully intact.
-    const truncated = '{"task_id": "task-123", "agent": "greetings_agent", "status": "completed", '
+    const truncated = '{"task_id": "task-123", "agent": "example_agent", "status": "completed", '
       + '"summary": "Hello! Completed a 3-step task:\\n1. prep done", '
       + '"latest_message": "Hello! Completed a 3-step task:\\n1. prep done", "last_error": null, "no…';
     const m = normalizeBackendChatMessage({
@@ -480,7 +480,7 @@ describe('normalizeBackendChatMessage', () => {
   });
 
   it('falls back to the raw result string when even the summary field itself was truncated', () => {
-    const truncated = '{"task_id": "task-123", "agent": "greetings_agent", "summary": "Hello! Comp…';
+    const truncated = '{"task_id": "task-123", "agent": "example_agent", "summary": "Hello! Comp…';
     const m = normalizeBackendChatMessage({
       id: 'm11',
       role: 'assistant',

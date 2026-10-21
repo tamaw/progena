@@ -72,14 +72,14 @@ describe('resolveWorkspaceOrigin', () => {
   });
 
   it('always uses https for RFC 1918 private-network hosts -- a private IP is not inherently a dev backend', () => {
-    expect(resolveWorkspaceOrigin('192.168.0.2')).toBe('https://192.168.0.2');
+    expect(resolveWorkspaceOrigin('192.168.1.10')).toBe('https://192.168.1.10');
     expect(resolveWorkspaceOrigin('10.0.4.12:8080')).toBe('https://10.0.4.12:8080');
     expect(resolveWorkspaceOrigin('172.20.0.5')).toBe('https://172.20.0.5');
   });
 
   it('always uses https for a public-looking host -- no insecure fallback for a switched backend', () => {
     expect(resolveWorkspaceOrigin('team-a.example.com')).toBe('https://team-a.example.com');
-    expect(resolveWorkspaceOrigin('cronix')).toBe('https://cronix');
+    expect(resolveWorkspaceOrigin('server.example.com')).toBe('https://server.example.com');
     expect(resolveWorkspaceOrigin('172.32.0.5')).toBe('https://172.32.0.5');
   });
 });

@@ -29,7 +29,7 @@ class RegisterACPAgentArgs(BaseModel):
         default=None,
         description=(
             "Connection string; the simplest way to add an agent. "
-            "e.g. 'tcp://192.168.0.2:3000?model=claude-haiku-4.5&cwd=/tmp' or 'stdio://copilot'. "
+            "e.g. 'tcp://192.0.2.10:3000?model=claude-haiku-4.5&cwd=/tmp' or 'stdio://copilot'. "
             "Explicit fields below override anything derived from it."
         ),
     )
@@ -48,7 +48,7 @@ class RegisterACPAgentArgs(BaseModel):
     )
     host: str | None = Field(
         default=None,
-        description="TCP mode: host of an already-running ACP server (e.g. '192.168.0.2').",
+        description="TCP mode: host of an already-running ACP server (e.g. '192.0.2.10').",
     )
     port: int | None = Field(
         default=None,
