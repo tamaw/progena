@@ -67,7 +67,7 @@ class TestLangChainAdapter:
             reasoning_effort="medium",
             reasoning_summary="detailed",
         )
-        with patch("app.progenitor.agent.adapters.ChatOpenAI") as mock_chat_openai:
+        with patch("app.progenitor.agent.adapters.CheckpointChatOpenAI") as mock_chat_openai:
             mock_chat_openai.return_value = MagicMock()
             create_langchain_model(config)
 
@@ -86,7 +86,7 @@ class TestLangChainAdapter:
             model_default="gpt-chat-latest",
             reasoning_enabled=True,
         )
-        with patch("app.progenitor.agent.adapters.ChatOpenAI") as mock_chat_openai:
+        with patch("app.progenitor.agent.adapters.CheckpointChatOpenAI") as mock_chat_openai:
             mock_chat_openai.return_value = MagicMock()
             create_langchain_model(config)
 
@@ -105,7 +105,7 @@ class TestLangChainAdapter:
             reasoning_enabled=True,
             reasoning_effort="medium",
         )
-        with patch("app.progenitor.agent.adapters.ChatOpenAI") as mock_chat_openai:
+        with patch("app.progenitor.agent.adapters.CheckpointChatOpenAI") as mock_chat_openai:
             mock_chat_openai.return_value = MagicMock()
             create_langchain_model(config)
 
@@ -123,7 +123,7 @@ class TestLangChainAdapter:
             model_default="gpt-chat-latest",
             reasoning_enabled=True,
         )
-        with patch("app.progenitor.agent.adapters.ChatOpenAI") as mock_chat_openai:
+        with patch("app.progenitor.agent.adapters.CheckpointChatOpenAI") as mock_chat_openai:
             mock_chat_openai.return_value = MagicMock()
             create_langchain_model(config)
 

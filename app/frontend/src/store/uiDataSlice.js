@@ -34,8 +34,9 @@ import * as documentTypes from './uiData/documentTypes';
 import * as modelProfiles from './uiData/modelProfiles';
 
 import * as search from './uiData/search';
+import * as insights from './uiData/insights';
 
-const domains = [runtime, mcp, knowledge, instructions, tasks, workflows, agents, chats, inbox, logs, preferences, marketplaces, repos, documentTypes, policies, modelProfiles, search];
+const domains = [runtime, mcp, knowledge, instructions, tasks, workflows, agents, chats, inbox, logs, preferences, marketplaces, repos, documentTypes, policies, modelProfiles, search, insights];
 
 const initialState = domains.reduce(
   (acc, domain) => ({ ...acc, ...domain.initialState }),
@@ -371,6 +372,16 @@ export {
   selectModelProfiles,
   selectModelProfilesState,
 } from './uiData/modelProfiles';
+
+export {
+  INSIGHT_RANGES,
+  fetchTokenUsage,
+  insightsQueryKey,
+  normalizeInsightsQuery,
+  selectInsightsQueryState,
+  selectInsightsRequest,
+  selectInsightsSnapshot,
+} from './uiData/insights';
 
 export default uiDataSlice.reducer;
 

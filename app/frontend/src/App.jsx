@@ -23,10 +23,12 @@ import './styles/instructions.css';
 import './styles/chrome-frame.css';
 import './styles/detail-header.css';
 import './styles/forms.css';
+import './styles/insights.css';
 
 const ConversationPage = lazy(() => import('./pages/ConversationPage'));
 const InboxPage = lazy(() => import('./pages/InboxPage'));
 const DashboardPage = lazy(() => import('./pages/DashboardPage'));
+const InsightsPage = lazy(() => import('./pages/InsightsPage'));
 const TasksPage = lazy(() => import('./pages/TasksPage'));
 const KanbanPage = lazy(() => import('./pages/KanbanPage'));
 const LogsPage = lazy(() => import('./pages/LogsPage'));
@@ -113,6 +115,7 @@ function WorkspaceScopedApp() {
                     <Route path="/chat/:threadId?/:titleSlug?" element={<DeferredRoute Page={ConversationPage} fallback="Loading chat..." />} />
                     <Route path="/inbox/:messageId?/:titleSlug?" element={<DeferredRoute Page={InboxPage} fallback="Loading inbox..." />} />
                     <Route path="/dashboard" element={<DeferredRoute Page={DashboardPage} fallback="Loading dashboard..." />} />
+                    <Route path="/insights" element={<DeferredRoute Page={InsightsPage} fallback="Loading insights..." />} />
                     <Route path="/models" element={<DeferredRoute Page={ModelsPage} fallback="Loading models..." />} />
                     <Route path="/profiles/:profileName?/:titleSlug?" element={<DeferredRoute Page={ProfilesPage} fallback="Loading profiles..." />} />
                     <Route path="/channels" element={<DeferredRoute Page={ChannelsPage} fallback="Loading channels..." />} />
