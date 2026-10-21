@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Module catalogue included in deployment images**: allow bundled `data/modules/` through the Docker build context and include catalogue changes in both Python-image rebuild decisions. This fixes the missing-directory `COPY` failure and keeps manifest validation aligned with deployed libraries.
+
 ### Removed
 - **Obsolete root scripts retired**: removed the obsolete diagnostics, live evaluators, helper, and one-off migration utilities with their live-evaluation reports. Retired scripts remain available in Git history.
 - **Obsolete Git skill removed**: repository setup and publication remain with `repo-manager`; removed the legacy build-loop Git instructions.
