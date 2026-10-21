@@ -1288,7 +1288,7 @@ class StateReader:
             else resolved_path.parts
         )
         for part in reversed(relative_parts[:-1]):
-            if part not in {"logs", "builder", "progenitor"}:
+            if part not in {"logs", "progenitor"}:
                 return part
         return path.stem
 

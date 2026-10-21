@@ -52,7 +52,7 @@ def parse_acp_connection(connection: str) -> dict[str, Any]:
 
     TCP is the primary mode; stdio is still supported. Examples::
 
-        tcp://192.168.0.2:3000?model=claude-haiku-4.5&cwd=/tmp
+        tcp://192.0.2.10:3000?model=claude-haiku-4.5&cwd=/tmp
         stdio://copilot
         copilot                      # bare command -> stdio
 

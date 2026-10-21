@@ -17,8 +17,8 @@ const SCHEME_RE = /^[a-z][a-z0-9+.-]*:\/\//i;
 // just breaks a plain-http local dev server. Gated to `import.meta.env.DEV`
 // (a real Vite build flag, not a runtime guess) so a production build never
 // carries this allowance. RFC 1918 private/LAN hosts get NO such exemption:
-// a private IP is not inherently a dev backend -- e.g. cronix is a
-// TLS-enforced LAN deployment -- and the host string alone can't say
+// a private IP is not inherently a dev backend -- a TLS-enforced LAN
+// deployment still needs HTTPS -- and the host string alone can't say
 // whether it actually speaks plain http, so those always resolve to https
 // like any other switched-to host.
 const LOCALHOST_RE = /^(localhost|127(\.\d{1,3}){3}|\[?::1\]?)(:\d{1,5})?$/i;

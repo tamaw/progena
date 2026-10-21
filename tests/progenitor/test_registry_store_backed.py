@@ -35,21 +35,21 @@ async def test_store_backed_save_and_reload(tmp_path):
 
     await reg.register_agent(
         AgentRegistryEntry(
-            name="cronix_copilot",
+            name="remote_copilot",
             kind="acp_agent",
             transport="acp",
-            acp=ACPAgentConfig(host="192.168.0.2", port=3000, model="claude-haiku-4.5"),
+            acp=ACPAgentConfig(host="192.0.2.10", port=3000, model="claude-haiku-4.5"),
         )
     )
     # Persisted to the store document, not a file.
     assert not (tmp_path / "agents.json").exists()
-    assert [a["name"] for a in backing["registry"]["agents"]] == ["cronix_copilot"]
+    assert [a["name"] for a in backing["registry"]["agents"]] == ["remote_copilot"]
 
     # A fresh registry bound to the same store (simulating a restart) sees it.
     reg2 = ToolRegistry()
     reg2.bind_store(loader, saver)
     await reg2.load()
-    cfg = reg2.find_by_name("cronix_copilot")
+    cfg = reg2.find_by_name("remote_copilot")
     assert cfg is not None
     assert cfg["acp"]["port"] == 3000
 

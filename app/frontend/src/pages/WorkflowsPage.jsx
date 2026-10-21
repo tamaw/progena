@@ -1712,7 +1712,7 @@ function WorkflowNodeOptionsModal({ node, onChange, onClose }) {
                   <input
                     value={node.data?.timezone || ''}
                     onChange={(event) => onChange(node.id, { timezone: event.target.value })}
-                    placeholder="Australia/Melbourne"
+                    placeholder="Europe/London"
                   />
                 </label>
                 <label className="workflow-node-options__field">

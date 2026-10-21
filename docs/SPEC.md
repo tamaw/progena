@@ -241,7 +241,9 @@ for the acknowledgement/SSE API, pricing semantics and scaling constraints.
   `GET /api/ui/responses/{request_id}/stream` for active streaming chat
   responses.
 - **Finite browser routes:** retained `/api/ui/*` routes return only HTTP `202`
-  acknowledgements on success.
+  acknowledgements on success. The active `/api/attachments` API is the
+  attachment exception: it supports upload, thread-scoped metadata listing or
+  blob download, and deletion.
 - **Operational probes:** `GET /healthz` is the sole explicit Docker/container
   liveness exception to the event-stream-oriented browser API rule. It returns
   an empty `200 OK`, carries no application data, and is not part of the
@@ -250,8 +252,9 @@ for the acknowledgement/SSE API, pricing semantics and scaling constraints.
   distinct from the browser SSE transports.
 
 The legacy `/health`, `/ready`, `/live`, `/health/detailed`, direct
-attachment/session/conversation surfaces, response-body data routes, and legacy
-status/events streams are not public browser interfaces.
+session/conversation surfaces, response-body data routes, and legacy
+status/events streams are not public browser interfaces. This does not remove
+the active `/api/attachments` API.
 
 ## External integration
 

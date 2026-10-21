@@ -17,21 +17,21 @@ from app.progenitor.routines.store import (
 
 
 def test_routine_graph_key_prefixes_id():
-    assert routine_graph_key("subagent-observe") == "routine:subagent-observe"
+    assert routine_graph_key("subagent-example") == "routine:subagent-example"
     assert ROUTINE_GRAPH_KEY_PREFIX == "routine:"
 
 
 def test_routine_file_name():
-    assert routine_file_name("subagent-observe") == "subagent-observe.json"
+    assert routine_file_name("subagent-example") == "subagent-example.json"
 
 
 @pytest.mark.parametrize(
     "raw,expected",
     [
-        ("subagent-observe", "subagent-observe"),
-        ("subagent-observe.json", "subagent-observe"),
-        ("/routines/subagent-observe.json", "subagent-observe"),
-        ("/subagent-observe.json", "subagent-observe"),
+        ("subagent-example", "subagent-example"),
+        ("subagent-example.json", "subagent-example"),
+        ("/routines/subagent-example.json", "subagent-example"),
+        ("/subagent-example.json", "subagent-example"),
     ],
 )
 def test_routine_id_from_path_normalizes(raw, expected):
@@ -45,14 +45,14 @@ def test_routine_id_from_path_rejects_empty(raw):
 
 
 def test_default_routine_graph_is_schema_valid_and_round_trips():
-    graph = default_routine_graph("subagent-observe", name="Observe Agent", description="Watches.")
-    assert graph["id"] == "subagent-observe"
-    assert graph["name"] == "Observe Agent"
+    graph = default_routine_graph("subagent-example", name="Example Agent", description="Watches.")
+    assert graph["id"] == "subagent-example"
+    assert graph["name"] == "Example Agent"
     assert graph["entry"] == "prompt"
     # Must itself parse+validate cleanly, proving it satisfies the same schema
     # RoutineDirectoryBackend.awrite enforces.
     parsed = parse_routine_graph_document(json.dumps(graph))
-    assert parsed["id"] == "subagent-observe"
+    assert parsed["id"] == "subagent-example"
     assert parsed["nodes"][0]["id"] == "prompt"
 
 

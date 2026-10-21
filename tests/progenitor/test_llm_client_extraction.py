@@ -320,7 +320,7 @@ async def test_execute_tool_call_routes_url_only_registry_entry_to_a2a():
     tool_registry = SimpleNamespace(
         find_by_name=lambda _name: {
             "name": "builder",
-            "url": "http://progenitor-agent-builder:8108",
+            "url": "http://external-agent:8100",
         }
     )
 

@@ -133,7 +133,7 @@ class TestDirectA2AFastPathMiddleware:
     async def test_matching_prefix_bypasses_handler_and_returns_agent_text(self):
         registry = MagicMock()
         registry.find_by_name.return_value = {
-            "name": "greetings_agent",
+            "name": "example_agent",
             "transport": "http",
             "url": "http://localhost:8109",
         }
@@ -144,8 +144,8 @@ class TestDirectA2AFastPathMiddleware:
                 "result": {
                     "status": {
                         "message": {
-                            "parts": [{"root": {"text": "Hello from greetings_agent!"}}],
-                            "metadata": {"display_agent_name": "greetings_agent"},
+                            "parts": [{"root": {"text": "Example result from example_agent!"}}],
+                            "metadata": {"display_agent_name": "example_agent"},
                         }
                     }
                 },
@@ -153,11 +153,11 @@ class TestDirectA2AFastPathMiddleware:
         )
         mw = DirectA2AFastPathMiddleware(tool_registry=registry, client_factory=lambda: client)
 
-        result = await mw.awrap_model_call(self._request("@greetings_agent hey"), AsyncMock())
+        result = await mw.awrap_model_call(self._request("@example_agent hey"), AsyncMock())
 
         client.send_message.assert_awaited_once()
-        assert result.result[0].content == "Hello from greetings_agent!"
-        assert result.result[0].response_metadata["display_agent_name"] == "greetings_agent"
+        assert result.result[0].content == "Example result from example_agent!"
+        assert result.result[0].response_metadata["display_agent_name"] == "example_agent"
 
     async def test_prefix_only_matches_at_start_of_latest_user_message(self):
         registry = MagicMock()
@@ -166,7 +166,7 @@ class TestDirectA2AFastPathMiddleware:
         mw = DirectA2AFastPathMiddleware(tool_registry=registry, client_factory=lambda: client)
         handler = AsyncMock(return_value=ModelResponse(result=[AIMessage(content="llm")]))
 
-        result = await mw.awrap_model_call(self._request("hello @greetings_agent hey"), handler)
+        result = await mw.awrap_model_call(self._request("hello @example_agent hey"), handler)
 
         handler.assert_awaited_once()
         client.send_message.assert_not_called()
@@ -193,14 +193,14 @@ class TestDirectA2AFastPathMiddleware:
     async def test_empty_body_returns_direct_error(self):
         mw = DirectA2AFastPathMiddleware(tool_registry=MagicMock())
 
-        result = await mw.awrap_model_call(self._request("@greetings_agent "), AsyncMock())
+        result = await mw.awrap_model_call(self._request("@example_agent "), AsyncMock())
 
         assert "requires a request" in result.result[0].content
 
     async def test_blocking_invocation_passes_thread_metadata(self):
         registry = MagicMock()
         registry.find_by_name.return_value = {
-            "name": "greetings_agent",
+            "name": "example_agent",
             "transport": "http",
             "url": "http://localhost:8109",
         }
@@ -211,7 +211,7 @@ class TestDirectA2AFastPathMiddleware:
         mw = DirectA2AFastPathMiddleware(tool_registry=registry, client_factory=lambda: client)
 
         await mw.awrap_model_call(
-            self._request("@greetings_agent hello", state={"thread_id": "thread-direct"}),
+            self._request("@example_agent hello", state={"thread_id": "thread-direct"}),
             AsyncMock(),
         )
 

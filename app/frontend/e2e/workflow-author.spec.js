@@ -119,7 +119,7 @@ test.afterAll(async ({ request }) => {
 test('Progenitor builds a cron workflow that runs on demand and on schedule', async ({ page, request }) => {
   const errors = trackPageErrors(page);
   await askProgenitor(page,
-    `Create a NEW workflow titled exactly "${CRON_TITLE}". Trigger: a cron node firing every minute ("* * * * *") in timezone Australia/Melbourne. ` +
+    `Create a NEW workflow titled exactly "${CRON_TITLE}". Trigger: a cron node firing every minute ("* * * * *") in timezone Europe/London. ` +
     'Then one agent node whose inline template is: "Automated workflow test. Reply with exactly one line: CRON_OK {scheduled_for}. Do not call any tools." ' +
     "Wire the cron node's scheduled_for output into the agent's scheduled_for input. Do not edit any other workflow.");
 
@@ -128,7 +128,7 @@ test('Progenitor builds a cron workflow that runs on demand and on schedule', as
   created.push(workflow.id);
   const nodes = Object.values(workflow.graph.nodes);
   expect(nodes.find((node) => node.kind === 'cron'), JSON.stringify(workflow.graph))
-    .toMatchObject({ expression: '* * * * *', timezone: 'Australia/Melbourne' });
+    .toMatchObject({ expression: '* * * * *', timezone: 'Europe/London' });
   expect(nodes.some((node) => node.kind === 'agent')).toBe(true);
 
   await closeQuickChat(page);

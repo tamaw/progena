@@ -294,11 +294,11 @@ def test_graph_update_unknown_agent_returns_404(harness):
     assert client.patch("/api/ui/agent-profiles/missing/graph", json=payload).status_code == 404
 
 
-def _a2a_profile(agent_id: str = "a2a-observe") -> dict[str, Any]:
+def _a2a_profile(agent_id: str = "a2a-example-agent") -> dict[str, Any]:
     return {
         "id": agent_id,
         "kind": "a2a",
-        "name": "Observe",
+        "name": "Example Agent",
         "group": "A2A agents",
         "status": "running",
         "version": "0.2.0",
@@ -328,7 +328,7 @@ def test_list_includes_protocol_agents_from_registry(harness, monkeypatch):
     ]
     assert len(snapshot_events) == 1
     snapshot = snapshot_events[0][1]
-    assert {agent["id"] for agent in snapshot["agents"]} == {"alpha", "beta", "a2a-observe"}
+    assert {agent["id"] for agent in snapshot["agents"]} == {"alpha", "beta", "a2a-example-agent"}
 
 
 def test_detail_a2a_reads_through_registry(harness, monkeypatch):
@@ -336,7 +336,7 @@ def test_detail_a2a_reads_through_registry(harness, monkeypatch):
     import app.backend.agent_catalog_routes as routes
 
     monkeypatch.setattr(routes, "a2a_profiles_from_registry", lambda: [_a2a_profile()])
-    response = client.get("/api/ui/agent-profiles/a2a-observe?request_id=r2")
+    response = client.get("/api/ui/agent-profiles/a2a-example-agent?request_id=r2")
     assert_acknowledged(
         response, ["agent.upserted", "agent.selected"], "test-middleware-request-id"
     )
@@ -351,7 +351,10 @@ def test_detail_a2a_reads_through_registry(harness, monkeypatch):
 def test_graph_update_rejected_for_a2a(harness):
     client, _ = harness
     payload = {"nodes": [{"id": "a", "kind": "noop", "output_key": "a"}], "edges": []}
-    assert client.patch("/api/ui/agent-profiles/a2a-observe/graph", json=payload).status_code == 409
+    assert (
+        client.patch("/api/ui/agent-profiles/a2a-example-agent/graph", json=payload).status_code
+        == 409
+    )
 
 
 def test_runs_route_publishes_run_summaries():
@@ -662,7 +665,7 @@ def test_list_without_editable_store_publishes_registry_profiles(monkeypatch):
     event_type, snapshot = events[0]
     assert event_type == "agents.snapshot"
     assert snapshot["total"] == 1
-    assert snapshot["agents"][0]["id"] == "a2a-observe"
+    assert snapshot["agents"][0]["id"] == "a2a-example-agent"
 
 
 class TestBroadcastAgentProfilesSnapshot:

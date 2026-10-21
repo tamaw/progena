@@ -377,7 +377,7 @@ describe('Message with timelineItems', () => {
           timestamp: MS_EPOCH,
           content: '',
           metadata: {
-            agent_name: 'greetings_agent',
+            agent_name: 'example_agent',
             state: 'working',
             message_text: 'Step 1/3: prep...',
           },
@@ -869,7 +869,7 @@ describe('normal tool content and metadata display', () => {
   });
 
   it('renders a2a_send outer start and result rows as closed readable disclosures', () => {
-    const rawArgs = '{"agent":"greetings_agent","request":"hi"}';
+    const rawArgs = '{"agent":"example_agent","request":"hi"}';
     const rawResult = 'Agent finished successfully';
     const message = baseMessage({
       timelineItems: [
@@ -908,7 +908,7 @@ describe('normal tool content and metadata display', () => {
 
     expect(disclosures).toHaveLength(2);
     expect(disclosures.every((disclosure) => !/<details[^>]*\bopen(?:=|\s|>)/.test(disclosure))).toBe(true);
-    expect(disclosures[0]).toContain('agent: greetings_agent • request: hi');
+    expect(disclosures[0]).toContain('agent: example_agent • request: hi');
     expect(disclosures[0]).toContain(rawArgs.replaceAll('"', '&quot;'));
     expect(disclosures[1]).toContain('Agent finished successfully');
     expect(html).toContain('187ms');
@@ -990,7 +990,7 @@ describe('normal tool content and metadata display', () => {
   });
 
   it('renders persisted a2a_send stream events as closed readable disclosures', () => {
-    const rawArgs = '{"agent":"greetings_agent","request":"hi"}';
+    const rawArgs = '{"agent":"example_agent","request":"hi"}';
     const rawResult = 'Legacy route completed';
     const message = baseMessage({
       timelineItems: undefined,
@@ -1020,7 +1020,7 @@ describe('normal tool content and metadata display', () => {
 
     expect(disclosures).toHaveLength(2);
     expect(disclosures.every((disclosure) => !/<details[^>]*\bopen(?:=|\s|>)/.test(disclosure))).toBe(true);
-    expect(disclosures[0]).toContain('agent: greetings_agent • request: hi');
+    expect(disclosures[0]).toContain('agent: example_agent • request: hi');
     expect(disclosures[0]).toContain(rawArgs.replaceAll('"', '&quot;'));
     expect(disclosures[1]).toContain('Legacy route completed');
     expect(html).toContain('91ms');
