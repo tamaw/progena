@@ -43,6 +43,8 @@ from app.progenitor.document_kinds import (
     KANBAN_CARD_KEY_PREFIX,
     KANBAN_TASK_CONTENT_KEY_PREFIX,
     KNOWLEDGE_PAGE_KEY_PREFIX,
+    MODULE_DOCUMENT_KEY_PREFIX,
+    MODULE_STATUS_KEY_PREFIX,
     REPO_KEY_PREFIX,
     SESSION_KEY_PREFIX,
     WORKFLOW_APPROVAL_REQUEST_KEY_PREFIX,
@@ -120,6 +122,7 @@ from .insights_routes import create_insights_router
 from .knowledge_service import snapshot_bases as snapshot_knowledge_bases
 from .marketplace_service import load_marketplaces
 from .model_profile_routes import create_model_profile_router
+from .module_events import module_events
 from .policy_routes import create_policy_router
 from .preferences_service import load_preferences
 from .repo_service import load_repo, merged_repo_detail, merged_repo_rows, workspace_signal
@@ -3911,6 +3914,12 @@ def _queue_state_watch_status(snapshot, changed_key: str | None = None) -> None:
             broadcast_marketplaces_snapshot()
         if changed_key in (None, "plugins"):
             broadcast_plugins_snapshot()
+        if (
+            changed_key is None
+            or changed_key.startswith(MODULE_DOCUMENT_KEY_PREFIX)
+            or changed_key.startswith(MODULE_STATUS_KEY_PREFIX)
+        ):
+            broadcast_modules_snapshot()
         if changed_key in (None, "profile"):
             profile_task = asyncio.create_task(_broadcast_model_profiles_safe())
             _active_model_profile_broadcast_tasks.add(profile_task)
@@ -4002,6 +4011,7 @@ def get_document_event_dispatcher() -> DocumentEventDispatcher:
         dispatcher.add_handler(_record_kanban_card_activity)
         dispatcher.add_handler(_sync_kanban_card_order)
         dispatcher.add_handler(_publish_chat_session_document_event)
+        dispatcher.add_handler(module_events.document_event)
         _document_event_dispatcher = dispatcher
     return _document_event_dispatcher
 
@@ -4521,6 +4531,7 @@ async def _generate_ui_stream(
         # A reconnect may already have replaced this socket.
         if client_id not in _ui_stream_clients.values():
             routine_events.disconnected(client_id)
+            module_events.disconnected(client_id)
         if current_task:
             _active_ui_stream_tasks.discard(current_task)
         if not _ui_stream_subscribers:
@@ -4762,6 +4773,15 @@ def broadcast_plugins_snapshot(
         raw = document.payload if document is not None else default
         plugins = raw if isinstance(raw, dict) else default
     return broadcast_ui_event("plugins.snapshot", plugins, request_id=request_id)
+
+
+def broadcast_modules_snapshot(*, request_id: str | None = None) -> UiEventEnvelope:
+    """Broadcast the live summary of every agent-built module."""
+
+    from .module_routes import module_summaries
+
+    items = [summary.model_dump(mode="json") for summary in module_summaries()]
+    return broadcast_ui_event("modules.snapshot", {"items": items}, request_id=request_id)
 
 
 def broadcast_plugin_catalog_snapshot(

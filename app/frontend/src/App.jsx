@@ -46,6 +46,7 @@ const ChannelsPage = lazy(() => import('./pages/ChannelsPage'));
 const WorkflowsPage = lazy(() => import('./pages/WorkflowsPage'));
 const AgentsPage = lazy(() => import('./pages/AgentsPage'));
 const RoutinesPage = lazy(() => import('./pages/RoutinesPage'));
+const ModulesPage = lazy(() => import('./pages/ModulesPage'));
 // Keep the import behind the compile-time flag so the catalogue is absent from production assets.
 const DesignLibraryPage = import.meta.env.DEV
   ? lazy(() => import('./pages/DesignLibraryPage'))
@@ -135,6 +136,7 @@ function WorkspaceScopedApp() {
                     <Route path="/repositories" element={<DeferredRoute Page={RepositoriesPage} fallback="Loading repositories..." />} />
                     <Route path="/knowledge/:baseId?/:titleSlug?" element={<DeferredRoute Page={KnowledgePage} fallback="Loading knowledge..." />} />
                     <Route path="/workflows/:workflowId?/:slug?" element={<DeferredRoute Page={WorkflowsPage} fallback="Loading workflows..." />} />
+                    <Route path="/modules/:name?" element={<DeferredRoute Page={ModulesPage} fallback="Loading modules..." />} />
                     {localDesignLibraryEnabled && (
                       <Route path="/design" element={<DeferredRoute Page={DesignLibraryPage} fallback="Loading design library..." />} />
                     )}

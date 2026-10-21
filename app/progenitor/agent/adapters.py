@@ -101,6 +101,8 @@ def create_langchain_model(
         streaming=True,
         reasoning_effort=reasoning_effort,
         extra_body=extra_body or None,
+        timeout=config.timeout_seconds,
+        max_retries=config.max_retries,
     )
     model.set_usage_profile(profile_name)
 
