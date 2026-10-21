@@ -14,6 +14,8 @@ from app.progenitor.graph.progenitor_graph import create_conversation_graph
 from app.progenitor.nodes.context import HeartbeatContext
 from app.progenitor.state.models import A2ATaskRecord, AsyncSubagentTaskRecord
 
+pytestmark = pytest.mark.usefixtures("model_provider")
+
 
 @pytest.mark.asyncio
 async def test_create_conversation_graph_returns_native_deepagent_graph() -> None:
