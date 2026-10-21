@@ -180,7 +180,7 @@ Define tools as OpenAI function-calling objects. Dispatch in `_execute_tool`.
 
 ### Azure /responses helpers
 
-All LLM calls go directly to Azure at `AZURE_OPENAI_BASE_URL/responses`.
+Standalone generated agents send LLM calls directly to Azure at `AZURE_OPENAI_BASE_URL/responses`. This is separate from Progenitor's database-backed Settings → Providers connections.
 
 ```python
     def _responses_endpoint(self) -> str:

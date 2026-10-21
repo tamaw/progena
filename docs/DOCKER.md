@@ -16,9 +16,18 @@ Supporting Dockerfiles:
 
 ## Before starting
 
-Required runtime environment:
-- `AZURE_OPENAI_BASE_URL`
-- `AZURE_OPENAI_API_KEY`
+Model connections are configured in **Settings → Providers**, not required endpoint environment variables. Foundry and OpenCode Go currently use the Responses API only.
+
+For database-stored API keys, generate one Fernet key and set `PROGENITOR_PROVIDER_ENCRYPTION_KEY` in the deployment `.env`; Compose passes it to backend and runtime:
+
+```bash
+# Activate the project virtual environment first.
+python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+```
+
+Keep that key outside version control and retain it across restarts. Alternatively select environment credentials using `AZURE_OPENAI_API_KEY` or `OPENCODE_GO_API_KEY`. Custom `PROGENITOR_PROVIDER_*_API_KEY` names must be passed explicitly to both containers.
+
+Provider tables live in `BACKEND_DATABASE_NAME` (default `backend`) on the configured PostgreSQL server; both services need access to it. Compose must give both services the same database name and encryption key. Existing `AZURE_OPENAI_BASE_URL` and `PROGENITOR_MODEL_DEFAULT` are imported once on initial provider-table setup; subsequent connection edits come from the database. An installation with no configured provider starts normally but rejects model calls until configured.
 
 Common optional overrides:
 - `PROGENITOR_MODEL_DEFAULT`
@@ -28,9 +37,9 @@ Common optional overrides:
 - `PROGENITOR_REASONING_SUMMARY`
 - `TELEGRAM_*` backend settings
 
-By default, Progenitor now starts with reasoning enabled. `PROGENITOR_REASONING_EFFORT`
-controls the effort sent to the provider, and `PROGENITOR_REASONING_SUMMARY` controls
-whether the provider is asked for `auto` or `detailed` visible reasoning summaries.
+Foundry starts with reasoning enabled by default. `PROGENITOR_REASONING_EFFORT`
+controls the default effort and `PROGENITOR_REASONING_SUMMARY` the visible reasoning
+summary preference. These Foundry-specific overrides are not sent to OpenCode Go.
 
 The compose file also expects the external Docker network `progenitor_network` to exist:
 

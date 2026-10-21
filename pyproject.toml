@@ -36,6 +36,7 @@ dependencies = [
     # time. Pin below the breaking major until adapters catches up.
     "mcp>=1.9.2,<2.0.0",
     "pydantic>=2.0.0",
+    "cryptography>=42.0.0",
     "croniter>=2.0.5",
     "wcmatch>=10.1",  # glob over virtual /config, /tasks, ... (same matcher deepagents uses)
     "aiohttp>=3.9.0",

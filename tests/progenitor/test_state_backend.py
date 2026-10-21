@@ -87,7 +87,7 @@ def _knowledge_backend(
 
 class _FakeModelProfilesStateManager:
     def __init__(self) -> None:
-        self.payload = {"general": {"provider": "azure_openai", "deployment": "general-v1"}}
+        self.payload = {"general": {"provider_id": "foundry-1", "deployment": "general-v1"}}
         self.saved: list[dict[str, Any]] = []
 
     async def get_model_profiles_config(self) -> dict[str, Any]:
@@ -109,8 +109,8 @@ async def test_model_profiles_file_adds_edits_and_removes_profiles_for_the_agent
         "/profiles.json",
         json.dumps(
             {
-                "general": {"provider": "azure_openai", "deployment": "general-v1"},
-                "review": {"provider": "azure_openai", "deployment": "review-v1"},
+                "general": {"provider_id": "foundry-1", "deployment": "general-v1"},
+                "review": {"provider_id": "foundry-1", "deployment": "review-v1"},
             }
         ),
     )
@@ -124,7 +124,7 @@ async def test_model_profiles_file_adds_edits_and_removes_profiles_for_the_agent
 
     removed = await backend.awrite(
         "/profiles.json",
-        json.dumps({"general": {"provider": "azure_openai", "deployment": "general-v1"}}),
+        json.dumps({"general": {"provider_id": "foundry-1", "deployment": "general-v1"}}),
     )
     assert removed.error is None
     assert "review" not in state_manager.payload

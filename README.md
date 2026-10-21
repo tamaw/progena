@@ -27,9 +27,11 @@ Build/upgrade functionality (Copilot/worktrees/PRs) is owned by a separate A2A a
 # Activate venv (Windows)
 & .\.venv\Scripts\Activate.ps1
 
-# Set Azure Responses endpoint credentials
-export AZURE_OPENAI_BASE_URL=https://<resource>.openai.azure.com/openai/v1
-export AZURE_OPENAI_API_KEY=your_key_here
+# Optional environment-backed API keys; select the credential source in Settings.
+export AZURE_OPENAI_API_KEY=your_foundry_key_here
+# export OPENCODE_GO_API_KEY=your_go_key_here
+# For database-stored keys, generate PROGENITOR_PROVIDER_ENCRYPTION_KEY once:
+# python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
 
 # Install dependencies
 pip install -e ".[dev]"
@@ -164,7 +166,21 @@ through backend-managed conversation/session stores.
 
 ## Configuration
 
-Configuration is sourced from environment variables plus the shared runtime state. See `.env.example` for defaults.
+Configure model connections in **Settings → Providers**, then select a connection in each model profile or inherit the default. Foundry and OpenCode Go currently use the **Responses API only**; Go's model selector excludes models requiring other APIs.
+
+Provider configuration lives in ordinary `provider_connection` / `provider_settings` tables in the backend PostgreSQL database (`BACKEND_DATABASE_NAME`, default `backend`), not the agent store. Backend and runtime require access to that database. Saved changes apply to subsequent turns; active turns keep their existing connection.
+
+API keys can come from an explicitly selected environment variable or be encrypted in the database. For database-stored keys, set the same `PROGENITOR_PROVIDER_ENCRYPTION_KEY` Fernet key in backend and runtime and keep it stable across restarts. Never commit it; losing it makes stored credentials unreadable. Environment sources may reference `AZURE_OPENAI_API_KEY`, `OPENCODE_GO_API_KEY`, or `PROGENITOR_PROVIDER_*_API_KEY`; custom variables must be supplied to both services. Keys are write-only in the API/UI.
+
+On first provider-database initialization only, an existing `AZURE_OPENAI_BASE_URL` / `PROGENITOR_MODEL_DEFAULT` connection is imported with an environment-backed `AZURE_OPENAI_API_KEY`. Later endpoint environment changes do not override saved connections. An empty installation still starts so Settings can be used; model requests explain that a provider must be configured.
+
+Legacy `/openai/responses?api-version=...` endpoints are normalized to `/openai/v1` during this import. Before initial setup completes, an invalid configured endpoint reports a startup error without completing the import; correct it and restart to retry. After initial setup completes, the legacy endpoint is ignored, including invalid values. Legacy profile migration removes obsolete connection/private fields and retains model behavior settings.
+
+Go sends a conversation-scoped `x-opencode-session`, its own User-Agent and bearer authentication. Foundry reasoning overrides are not sent to Go. Embeddings use a separately resolved Foundry connection; a Go default does not redirect indexing to an unsupported API.
+
+These settings configure Progenitor's models and local agents; independent A2A service credentials and Claude ACP authentication are unchanged.
+
+See `.env.example` for deployment defaults. MCP and other agent configuration continue to use shared runtime state.
 
 Progenitor loads external MCP servers from the shared `mcp` state document. A typical payload looks like:
 
@@ -190,11 +206,11 @@ PROGENITOR_IDLE_BACKOFF_SECONDS=30
 PROGENITOR_MAX_BACKOFF_SECONDS=300
 PROGENITOR_MAX_ACTIONS_PER_CYCLE=10
 
-# LLM
-PROGENITOR_LLM_PROVIDER=azure
-AZURE_OPENAI_ENDPOINT=https://...
-AZURE_OPENAI_API_KEY=...
-AZURE_OPENAI_DEPLOYMENT_DEFAULT=gpt-4o
+# Optional provider credential sources (connections/defaults live in the database)
+AZURE_OPENAI_API_KEY=
+OPENCODE_GO_API_KEY=
+# Needed for database-stored keys; generate once and share with backend/runtime
+PROGENITOR_PROVIDER_ENCRYPTION_KEY=
 
 # MCP auth referenced by the shared MCP registry
 JINA_API_KEY=

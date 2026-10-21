@@ -48,7 +48,7 @@ Default endpoint:
 
 - HTTP: `127.0.0.1:9501`
 
-Minimum environment for starting Progenitor from Python:
+Start with an existing database-backed connection selected in **Settings → Providers**. The endpoint/model below seed only a fresh provider database; they do not override saved settings. Supply the selected environment API key, or the shared `PROGENITOR_PROVIDER_ENCRYPTION_KEY` for a database-stored credential.
 
 ```bash
 source .venv/bin/activate

@@ -46,7 +46,7 @@ Default surfaces:
 - Postgres: `PROGENITOR_DATABASE_URL` and the `("progenitor", "state")` namespace
 - Agent state surface: `/config/*.json` virtual files backed by Postgres
 
-Minimum runtime startup:
+Minimum runtime startup (endpoint/key below seed only a fresh provider database; otherwise configure the connection in **Settings → Providers**, and supply its environment key or the shared database-credential encryption key):
 
 ```bash
 source .venv/bin/activate

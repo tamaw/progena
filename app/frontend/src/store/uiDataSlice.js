@@ -32,10 +32,11 @@ import * as repos from './uiData/repos';
 import * as policies from './uiData/policies';
 import * as documentTypes from './uiData/documentTypes';
 import * as modelProfiles from './uiData/modelProfiles';
+import * as providers from './uiData/providers';
 
 import * as search from './uiData/search';
 
-const domains = [runtime, mcp, knowledge, instructions, tasks, workflows, agents, chats, inbox, logs, preferences, marketplaces, repos, documentTypes, policies, modelProfiles, search];
+const domains = [runtime, mcp, knowledge, instructions, tasks, workflows, agents, chats, inbox, logs, preferences, marketplaces, repos, documentTypes, policies, modelProfiles, providers, search];
 
 const initialState = domains.reduce(
   (acc, domain) => ({ ...acc, ...domain.initialState }),
@@ -371,6 +372,19 @@ export {
   selectModelProfiles,
   selectModelProfilesState,
 } from './uiData/modelProfiles';
+
+export {
+  fetchProviders,
+  createProvider,
+  patchProvider,
+  deleteProvider,
+  testProviderConnection,
+  selectProviders,
+  selectGoResponsesModels,
+  selectProvidersState,
+  selectProviderRequest,
+  selectProviderTest,
+} from './uiData/providers';
 
 export default uiDataSlice.reducer;
 
