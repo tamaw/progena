@@ -57,7 +57,7 @@ pip install -e ".[dev]"
 
 A local run also needs PostgreSQL with pgvector, the Azure OpenAI environment variables above, the runtime, backend, and frontend processes. Follow the complete [local startup guide](docs/LOCAL_STARTUP.md).
 
-Standalone A2A agents (Builder Agent, Builder Progenitor, Observe and Greetings) live in [progentior.agents](https://github.com/tamaw/progentior.agents). This repository contains Progenitor and its built-in object agents.
+Standalone A2A agents and their image/deployment ownership live in [progentior.agents](https://github.com/tamaw/progentior.agents). This repository contains Progenitor and its built-in object agents.
 
 ## Documentation
 

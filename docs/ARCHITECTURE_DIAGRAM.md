@@ -231,7 +231,7 @@ snapshots/detail loads.
 
 ## Deployment shape
 
-The default checked-in container stack runs frontend, backend, and Progenitor
-runtime services. The backend-to-runtime transport is internal; it must not be
-confused with the browser's canonical lifecycle stream or its request-scoped
-chat response stream.
+The default checked-in container stack runs Postgres, frontend, backend, the
+Progenitor runtime, and an internal Claude ACP sidecar. The backend-to-runtime
+transport is internal; it must not be confused with the browser's canonical lifecycle
+stream or its request-scoped chat response stream.

@@ -143,10 +143,10 @@ npm run dev -- --port 5173
 
 ## External A2A agents (optional)
 
-The standalone Builder, Builder Progenitor, Observe and Greetings agents live in
-[progentior.agents](https://github.com/tamaw/progentior.agents), not this checkout.
-Follow that repository's installation and service instructions. Progenitor's
-built-in object agents, including `repo-manager`, remain here.
+The standalone A2A agents, including their images and service deployment, are owned
+by [progentior.agents](https://github.com/tamaw/progentior.agents), not this checkout.
+Follow that repository's installation and service instructions. Progenitor's built-in
+object agents, including `repo-manager`, remain here.
 
 To discover the separately installed agents, start their services and point the
 Progenitor runtime at the external checkout before starting it:
