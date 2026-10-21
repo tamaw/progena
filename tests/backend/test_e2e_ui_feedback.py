@@ -12,7 +12,6 @@ Tests the complete feedback path:
 5. UI receives and displays updates
 """
 
-import asyncio
 import json
 from datetime import UTC, datetime
 from types import SimpleNamespace
@@ -142,11 +141,6 @@ def mock_state_files():
 
 class TestUIFeedbackIntegration:
     """Integration tests for UI feedback during agent operations."""
-
-    def test_status_endpoint_provides_complete_info(self, client):
-        """Test status endpoint (deleted - should return 404)."""
-        response = client.get("/api/ui/status/snapshot")
-        assert response.status_code == 404
 
     def test_state_reader_with_mock_files(self, mock_state_files):
         """Test StateReader correctly reads simulated state files."""
@@ -394,116 +388,6 @@ class TestErrorFeedbackPath:
         health = reader.get_health()
         assert health.status == "unknown"
         assert not health.is_running()
-
-    def test_alerts_endpoint_for_errors(self, client):
-        """Test alerts endpoint returns the finite UI acknowledgement contract."""
-        request_id = "alerts-error-feedback"
-        response = client.get("/api/ui/alerts", headers={"X-Request-ID": request_id})
-        assert response.status_code == 202
-        assert response.json() == {
-            "request_id": request_id,
-            "event_types": ["alerts.updated"],
-        }
-
-
-class TestRealTimeSSEFeedback:
-    """Tests for SSE real-time feedback mechanism."""
-
-    @pytest.mark.skip(reason="SSE streaming test requires special async handling - tested via e2e")
-    def test_sse_endpoint_accessible(self, client):
-        """Test SSE events endpoint is accessible."""
-        pass
-
-    def test_broadcast_mechanism_works(self):
-        """Test broadcast_event puts events in subscriber queues."""
-        from app.backend.ui_routes import _ui_stream_subscribers, broadcast_ui_event
-
-        # Clear existing subscribers
-        _ui_stream_subscribers.clear()
-
-        # Add test subscriber
-        queue = asyncio.Queue()
-        _ui_stream_subscribers[queue] = None
-
-        try:
-            # Broadcast test event
-            broadcast_ui_event(
-                "alien_contact",
-                {
-                    "message": "First contact initiated",
-                    "species": "Unknown",
-                },
-                scope="chat",
-            )
-
-            # Verify event was queued
-            assert not queue.empty()
-
-            # Check event content
-            event = queue.get_nowait()
-            assert event["type"] == "ui.event"
-            assert event["envelope"].type == "alien_contact"
-        finally:
-            _ui_stream_subscribers.pop(queue, None)
-
-
-class TestChatFlowFeedback:
-    """Tests for chat flow with UI feedback."""
-
-    def test_models_endpoint_accessible(self, client):
-        """Test models endpoint (deleted - should return 404)."""
-        response = client.get("/v1/models")
-        assert response.status_code == 404
-
-    def test_responses_endpoint(self, client):
-        """Test responses endpoint handles requests."""
-        response = client.post(
-            "/api/ui/responses",
-            json={
-                "model": "progenitor-v1",
-                "input": "Greetings from the Galactic Federation",
-                "stream": False,
-            },
-        )
-
-        # Endpoint should acknowledge dispatch or surface the pre-dispatch failure.
-        assert response.status_code in [202, 500, 503]
-
-
-class TestUIPageContent:
-    """Tests for UI page content.
-
-    Note: The backend is now API-only and does not serve static files.
-    The frontend runs separately via npm/Vite. These tests verify that
-    the UI static routes are no longer available (404) since they've been removed.
-    """
-
-    def test_root_path_not_served(self, client):
-        """Test root path no longer serves UI (API-only backend)."""
-        response = client.get("/")
-        # Root path should return 404 or redirect - backend is API-only now
-        assert response.status_code in (404, 405, 307)
-
-    def test_ui_dashboard_not_served(self, client):
-        """Test /ui/dashboard no longer served (API-only backend)."""
-        response = client.get("/ui/dashboard")
-        assert response.status_code == 404
-
-    def test_ui_agents_not_served(self, client):
-        """Test /ui/agents no longer served (API-only backend)."""
-        response = client.get("/ui/agents")
-        assert response.status_code == 404
-
-    def test_ui_logs_not_served(self, client):
-        """Test /ui/logs no longer served (API-only backend)."""
-        response = client.get("/ui/logs")
-        assert response.status_code == 404
-
-    def test_api_ui_routes_still_work(self, client):
-        """Test /api/ui/* routes that exist still work."""
-        # /api/ui/status/snapshot was deleted - should return 404
-        response = client.get("/api/ui/status/snapshot")
-        assert response.status_code == 404
 
 
 class TestDataIntegrity:

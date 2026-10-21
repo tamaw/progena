@@ -195,11 +195,18 @@ not a candidate for dict-entry helper reuse.
 `GET /api/ui/model-profiles`, `PATCH /api/ui/model-profiles/{name}`, and
 `DELETE /api/ui/model-profiles/{name}` publish `profiles.snapshot` with
 `{profiles, request_id}` before returning the standard `202` acknowledgement.
-Each public entry contains `name`, `provider`, `deployment`, and any supported
-reasoning overrides; unrelated private fields are never published. PATCH accepts
-only deployment and `reasoning_enabled`, `reasoning_effort`, or
-`reasoning_summary`. A null optional field removes its override (runtime
-environment inheritance); deployment remains required. DELETE removes the named
+Each public entry contains `name`, `provider`, `deployment`, supported reasoning
+overrides, and optional `pricing`; unrelated private fields are never published.
+PATCH accepts deployment, `reasoning_enabled`, `reasoning_effort`,
+`reasoning_summary`, and `pricing`. A null optional field removes its override;
+deployment remains required. Pricing is an object with a three-letter currency
+and nonnegative finite decimal-string `input_per_million`,
+`cached_input_per_million`, and `output_per_million` rates. Zero is valid;
+absent pricing means unpriced, and PATCH `pricing: null` removes all rates.
+Insights applies current configured rates to retained checkpoint usage, with
+separate currency totals and explicit cache/attribution coverage. See
+[BACKEND.md](BACKEND.md#insights-and-estimated-model-cost).
+DELETE removes the named
 raw entry while retaining raw sibling configuration. Unsupported fields and
 malformed configuration produce `422`; unknown profiles produce `404`. The full
 public snapshot is validated before persistence, and unchanged raw

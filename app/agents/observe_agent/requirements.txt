@@ -1,3 +1,0 @@
-# Observe agent dependencies
-
-a2a-sdk[http-server]>=0.3.24

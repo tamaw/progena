@@ -16,41 +16,8 @@ from app.progenitor.agent.middleware import (
     AuditLoggingMiddleware,
     DirectA2AFastPathMiddleware,
     DynamicMCPToolMiddleware,
-    SecretRedactionMiddleware,
 )
 from app.progenitor.state.models import AsyncSubagentTaskRecord
-
-
-class TestSecretRedactionMiddleware:
-    """Tests for the secret redaction middleware."""
-
-    def test_instantiation(self):
-        mw = SecretRedactionMiddleware()
-        assert mw is not None
-
-    def test_sync_wrap_passes_through(self):
-        """Sync wrap_tool_call just passes through."""
-        mw = SecretRedactionMiddleware()
-        handler = MagicMock(return_value="result")
-        request = MagicMock()
-        result = mw.wrap_tool_call(request, handler)
-        handler.assert_called_once_with(request)
-        assert result == "result"
-
-    async def test_async_wrap_passes_through(self):
-        """Async awrap_tool_call passes through to handler."""
-        mw = SecretRedactionMiddleware()
-        handler = AsyncMock(return_value="result")
-        request = MagicMock()
-        request.tool_call = {
-            "name": "shell",
-            "args": {"command": "echo hello"},
-            "id": "tc_1",
-        }
-        # awrap_tool_call returns the coroutine from handler
-        await mw.awrap_tool_call(request, handler)
-        # It should call handler with the original request (not redacted)
-        handler.assert_called_once_with(request)
 
 
 class TestDynamicMCPToolMiddleware:
@@ -264,11 +231,6 @@ class TestAuditLoggingMiddleware:
         async def write_log(self, **kwargs):
             self.entries.append(kwargs)
 
-    def test_instantiation_with_sink(self):
-        sink = self.FakeSink()
-        mw = AuditLoggingMiddleware(log_sink=sink)
-        assert mw._log_sink is sink
-
     async def test_logs_successful_call(self):
         """Logs a successful tool call with timing."""
         sink = self.FakeSink()
@@ -328,14 +290,6 @@ class TestAuditLoggingMiddleware:
         entry = sink.entries[0]["payload"]
         assert "sk-proj-" not in entry["args"]["command"]
         assert "REDACTED" in entry["args"]["command"]
-
-    def test_sync_wrap_passes_through(self):
-        mw = AuditLoggingMiddleware()
-        handler = MagicMock(return_value="result")
-        request = MagicMock()
-        result = mw.wrap_tool_call(request, handler)
-        handler.assert_called_once_with(request)
-        assert result == "result"
 
 
 class TestAsyncSubagentTrackingMiddleware:

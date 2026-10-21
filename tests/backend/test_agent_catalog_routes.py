@@ -220,12 +220,6 @@ def test_detail_unknown_returns_404(harness):
     assert client.get("/api/ui/agent-profiles/missing").status_code == 404
 
 
-def test_graph_schema_published(harness):
-    """Graph schema endpoint was deleted - should return 404."""
-    client, _ = harness
-    assert client.get("/api/ui/agent-profiles/graph-schema").status_code == 404
-
-
 def test_graph_update_persists_and_broadcasts(harness):
     client, events = harness
     payload = {

@@ -32,7 +32,12 @@ def _message_with_usage(text: str, source: BaseMessage | None) -> AIMessage:
     `messages`, see factory.py) still sees a real LLM call's usage even
     though this node reconstructs the message instead of returning `source`
     verbatim."""
-    return AIMessage(content=text, usage_metadata=getattr(source, "usage_metadata", None))
+    return AIMessage(
+        content=text,
+        usage_metadata=getattr(source, "usage_metadata", None),
+        response_metadata=dict(getattr(source, "response_metadata", None) or {}),
+        id=getattr(source, "id", None),
+    )
 
 
 def extract_json_object(text: str) -> dict[str, Any] | None:

@@ -5,7 +5,6 @@ from __future__ import annotations
 import logging
 import re
 from collections.abc import Awaitable, Callable
-from pathlib import Path
 from typing import Any, TypedDict
 
 from ..state.models import AgentRegistryEntry, AgentStatus
@@ -139,50 +138,6 @@ class ToolRegistry:
             capabilities.extend(tool.get("capabilities", []))
         return list(set(capabilities))
 
-    def get_local_mcp_tools(self) -> list[dict[str, Any]]:
-        """Discover local FastMCP tools under app/mcp/."""
-        tools_dir = Path(__file__).resolve().parents[3] / "app" / "mcp"
-        if not tools_dir.exists():
-            return []
-
-        local_tools: list[dict[str, Any]] = []
-        for entry in tools_dir.iterdir():
-            if not entry.is_dir():
-                continue
-            if entry.name.startswith(".") or entry.name == "__pycache__":
-                continue
-
-            server_path = entry / "server.py"
-            if not server_path.exists():
-                continue
-
-            spec_path = entry / "spec.md"
-            description = (
-                f"Local FastMCP tool (HTTP). Start with: python app/mcp/{entry.name}/server.py"
-            )
-            if spec_path.exists():
-                try:
-                    with open(spec_path, encoding="utf-8") as handle:
-                        for line in handle:
-                            line = line.strip()
-                            if not line:
-                                continue
-                            description = line.lstrip("#").strip() if line.startswith("#") else line
-                            break
-                except OSError:
-                    pass
-
-            local_tools.append(
-                {
-                    "name": entry.name,
-                    "description": description,
-                    "type": "mcp_tool",
-                    "source": "local",
-                }
-            )
-
-        return local_tools
-
     def get_tool_context(self) -> str:
         """Get formatted tool and agent descriptions for the LLM context window."""
         sections: list[str] = []
@@ -211,11 +166,6 @@ class ToolRegistry:
             sections.append("\n".join(lines))
 
         tools = self._registry.get("tools", [])
-        local_tools = self.get_local_mcp_tools()
-        seen_names = {tool.get("name") for tool in tools}
-        for local_tool in local_tools:
-            if local_tool.get("name") not in seen_names:
-                tools.append(local_tool)
 
         if tools:
             lines = ["### MCP Tools"]

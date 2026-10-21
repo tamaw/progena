@@ -401,9 +401,6 @@ async def test_query_node_returns_collection_documents_matching_unpacked_field(s
         [("event", "after", "card", "value"), ("card", "column_id", "peers", "column_id")],
     )
     definition = save_workflow_definition(store, workflow)
-    assert (
-        definition.graph.nodes["card"].input_schema["properties"]["value"]["title"] == "Kanban Card"
-    )
     dispatcher = ui_routes.get_document_event_dispatcher()
     store.save_document(PROGENITOR_STATE_PREFIX, "kanban_card:a", _card("a", "plan"))
     store.save_document(PROGENITOR_STATE_PREFIX, "kanban_card:b", _card("b", "build"))

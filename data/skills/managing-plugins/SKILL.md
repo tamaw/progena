@@ -65,7 +65,7 @@ conversation's already-loaded skill list is unaffected.
 1. `read_file /config/plugins.json`
 2. `read_file /schemas/plugin_entry.schema.v1.json`
 3. `structured_output json_schema=<content from step 2> instruction="Build a minimal plugin entry for '<marketplace>/<plugin>' sourced from GitHub repo '<repo>' at ref '<ref>'."`
-4. `edit_file /config/mcp.json` to insert `"<marketplace>/<plugin>": <result from step 3>` under
+4. `edit_file /config/plugins.json` to insert `"<marketplace>/<plugin>": <result from step 3>` under
    `plugins`, keeping every other entry untouched. Minimal shape:
 ```json
 "acme-tools/formatter": {

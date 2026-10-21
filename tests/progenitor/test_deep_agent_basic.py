@@ -58,7 +58,7 @@ def test_generation_uses_completed_responses_with_real_client(monkeypatch, async
             },
         )
 
-    real_client = adapters.ChatOpenAI
+    real_client = adapters.CheckpointChatOpenAI
     transport = httpx.MockTransport(respond)
 
     def client(**kwargs):
@@ -75,7 +75,7 @@ def test_generation_uses_completed_responses_with_real_client(monkeypatch, async
             model_default="test-model",
         )
 
-    monkeypatch.setattr(adapters, "ChatOpenAI", client)
+    monkeypatch.setattr(adapters, "CheckpointChatOpenAI", client)
     turn = ProviderTurn(template=LLMConfig(), session_id="generation-test", _connections={})
     monkeypatch.setattr(adapters, "current_provider_turn", lambda: turn)
     monkeypatch.setattr(adapters, "provider_config_for_call", resolve)
@@ -180,7 +180,7 @@ def _install_generation_boundary(
 
     monkeypatch.setattr(adapters, "current_provider_turn", lambda: object())
     monkeypatch.setattr(adapters, "provider_config_for_call", resolve_provider_config)
-    monkeypatch.setattr(adapters, "create_langchain_model", lambda config: boundary)
+    monkeypatch.setattr(adapters, "create_langchain_model", lambda config, **kwargs: boundary)
 
 
 class TestLangChainAdapter:
@@ -236,7 +236,7 @@ class TestLangChainAdapter:
             reasoning_effort="medium",
             reasoning_summary="detailed",
         )
-        with patch("app.progenitor.agent.adapters.ChatOpenAI") as mock_chat_openai:
+        with patch("app.progenitor.agent.adapters.CheckpointChatOpenAI") as mock_chat_openai:
             mock_chat_openai.return_value = MagicMock()
             create_langchain_model(config)
 
@@ -255,7 +255,7 @@ class TestLangChainAdapter:
             model_default="gpt-chat-latest",
             reasoning_enabled=True,
         )
-        with patch("app.progenitor.agent.adapters.ChatOpenAI") as mock_chat_openai:
+        with patch("app.progenitor.agent.adapters.CheckpointChatOpenAI") as mock_chat_openai:
             mock_chat_openai.return_value = MagicMock()
             create_langchain_model(config)
 
@@ -274,7 +274,7 @@ class TestLangChainAdapter:
             reasoning_enabled=True,
             reasoning_effort="medium",
         )
-        with patch("app.progenitor.agent.adapters.ChatOpenAI") as mock_chat_openai:
+        with patch("app.progenitor.agent.adapters.CheckpointChatOpenAI") as mock_chat_openai:
             mock_chat_openai.return_value = MagicMock()
             create_langchain_model(config)
 
@@ -292,7 +292,7 @@ class TestLangChainAdapter:
             model_default="gpt-chat-latest",
             reasoning_enabled=True,
         )
-        with patch("app.progenitor.agent.adapters.ChatOpenAI") as mock_chat_openai:
+        with patch("app.progenitor.agent.adapters.CheckpointChatOpenAI") as mock_chat_openai:
             mock_chat_openai.return_value = MagicMock()
             create_langchain_model(config)
 

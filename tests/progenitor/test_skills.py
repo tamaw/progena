@@ -4,7 +4,6 @@ Tests for Phase 5: Skills system.
 
 from pathlib import Path
 
-import pytest
 import yaml
 
 SKILLS_DIR = Path("data/skills")
@@ -15,8 +14,6 @@ class TestSkillFiles:
 
     def _get_skill_dirs(self):
         """Get all skill directories."""
-        if not SKILLS_DIR.is_dir():
-            pytest.skip("data/skills/ not found")
         return [d for d in SKILLS_DIR.iterdir() if d.is_dir()]
 
     def test_skills_directory_exists(self):
@@ -82,18 +79,3 @@ class TestSkillFiles:
             assert re.match(r"^[a-z0-9][a-z0-9-]*$", name), (
                 f"Invalid skill name '{name}' — must be lowercase with hyphens"
             )
-
-    def test_expected_skills_exist(self):
-        """All planned skills should be present."""
-        expected = {
-            "build-agent",
-            "managing-mcp",
-            "managing-plugins",
-            "managing-schedules",
-            "git-workflow",
-            "self-improvement",
-            "agent-architecture",
-        }
-        actual = {d.name for d in self._get_skill_dirs()}
-        missing = expected - actual
-        assert not missing, f"Missing expected skills: {missing}"

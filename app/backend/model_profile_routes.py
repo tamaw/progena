@@ -37,6 +37,8 @@ def _safe_public_profile(name: str, profile: dict[str, Any]) -> dict[str, Any]:
         "provider_id": provider_id,
         "deployment": profile["deployment"],
     }
+    if "pricing" in profile:
+        public["pricing"] = dict(profile["pricing"])
     for field in ("reasoning_enabled", "reasoning_effort", "reasoning_summary"):
         if field not in profile:
             continue
@@ -178,6 +180,7 @@ def create_model_profile_router(
         allowed_patch_keys = {
             "provider_id",
             "deployment",
+            "pricing",
             "reasoning_enabled",
             "reasoning_effort",
             "reasoning_summary",
@@ -211,6 +214,11 @@ def create_model_profile_router(
                         status_code=422, detail="deployment must be a non-empty string"
                     )
                 profile["deployment"] = deployment.strip()
+            if "pricing" in body:
+                if body["pricing"] is None:
+                    profile.pop("pricing", None)
+                else:
+                    profile["pricing"] = body["pricing"]
             for field in ("reasoning_enabled", "reasoning_effort", "reasoning_summary"):
                 if field not in body:
                     continue
