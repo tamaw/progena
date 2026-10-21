@@ -190,32 +190,32 @@ class TestStateManager:
         await manager.initialize()
 
         record = A2ATaskRecord(
-            task_id="observe_123",
-            agent_name="observe_agent",
-            agent_url="http://localhost:8108",
+            task_id="example_123",
+            agent_name="example_agent",
+            agent_url="http://example-agent:8100",
             context_id="ctx-123",
             source="a2a_send",
             request_text="Inspect logs",
         )
 
         await manager.upsert_a2a_task(record)
-        loaded = await manager.get_a2a_task("observe_123")
+        loaded = await manager.get_a2a_task("example_123")
         assert loaded is not None
-        assert loaded.agent_name == "observe_agent"
+        assert loaded.agent_name == "example_agent"
         assert loaded.status == "submitted"
 
         updated = await manager.update_a2a_task(
-            "observe_123",
+            "example_123",
             {
                 "status": "completed",
-                "summary": "Observe task completed.",
+                "summary": "Example task completed.",
             },
         )
         assert updated is True
-        refreshed = await manager.get_a2a_task("observe_123")
+        refreshed = await manager.get_a2a_task("example_123")
         assert refreshed is not None
         assert refreshed.status == "completed"
-        assert refreshed.summary == "Observe task completed."
+        assert refreshed.summary == "Example task completed."
 
     # ------------------------------------------------------------------
     # Background task queue

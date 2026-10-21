@@ -157,7 +157,7 @@ describe('workflowToFlow', () => {
       graph: {
         nodes: {
           event: { kind: 'event', title: 'Event', document_type: 'kanban_card', output_schema: KANBAN_EVENT_OUTPUT_SCHEMA },
-          cron: { kind: 'cron', title: 'Cron', expression: '0 9 * * 1-5', timezone: 'Australia/Melbourne', overlap: 'skip', output_schema: { type: 'object', required: ['scheduled_for', 'fired_at', 'timezone'], properties: { scheduled_for: { type: 'string', format: 'date-time' }, fired_at: { type: 'string', format: 'date-time' }, timezone: { type: 'string' } } } },
+          cron: { kind: 'cron', title: 'Cron', expression: '0 9 * * 1-5', timezone: 'Europe/London', overlap: 'skip', output_schema: { type: 'object', required: ['scheduled_for', 'fired_at', 'timezone'], properties: { scheduled_for: { type: 'string', format: 'date-time' }, fired_at: { type: 'string', format: 'date-time' }, timezone: { type: 'string' } } } },
           agent: { kind: 'agent', title: 'Agent', instruction: null, template: 'Go', subagent: null, input_schema: { type: 'object', properties: {} }, output_schema: { type: 'object', properties: {} } },
           data: { kind: 'data', title: 'Data', value: 1, output_schema: { type: 'number' } },
           extract: { kind: 'extract', title: 'Extract', instruction: null, template: '', schema: null, input_schema: { type: 'object', properties: {} }, output_schema: { type: 'object', properties: {} } },
@@ -335,7 +335,7 @@ describe('workflowToFlow', () => {
             kind: 'cron',
             title: 'Weekdays 9am',
             expression: '0 9 * * 1-5',
-            timezone: 'Australia/Melbourne',
+            timezone: 'Europe/London',
             overlap: 'skip',
             output_schema: {
               type: 'object',
@@ -357,7 +357,7 @@ describe('workflowToFlow', () => {
     const node = flow.nodes.find((n) => n.id === 'cron_1');
     expect(node.type).toBe('cron');
     expect(node.data.expression).toBe('0 9 * * 1-5');
-    expect(node.data.timezone).toBe('Australia/Melbourne');
+    expect(node.data.timezone).toBe('Europe/London');
     expect(node.data.overlap).toBe('skip');
     expect(node.data.canDelete).toBe(false);
 
@@ -365,7 +365,7 @@ describe('workflowToFlow', () => {
     expect(persisted.graph.nodes.cron_1).toMatchObject({
       kind: 'cron',
       expression: '0 9 * * 1-5',
-      timezone: 'Australia/Melbourne',
+      timezone: 'Europe/London',
       overlap: 'skip',
     });
   });

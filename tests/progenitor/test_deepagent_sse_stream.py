@@ -525,7 +525,7 @@ async def test_a2a_send_events_pass_through_alongside_task_expansion():
                     "metadata": {
                         "tool_name": "a2a_send",
                         "tool_call_id": "call_9",
-                        "args_preview": {"agent": "greetings_agent"},
+                        "args_preview": {"agent": "example_agent"},
                     },
                 },
             ),

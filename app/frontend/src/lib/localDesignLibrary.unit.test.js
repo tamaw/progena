@@ -18,7 +18,7 @@ describe('local design library access', () => {
     expect(await catalogueEnabled(hostname)).toBe(true);
   });
 
-  it.each(['192.168.0.2', 'progena.ai', 'localhost.example.com', '127.0.0.1.example.com'])('rejects non-loopback hosts including lookalikes: %s', async (hostname) => {
+  it.each(['192.168.1.10', 'app.example.com', 'localhost.example.com', '127.0.0.1.example.com'])('rejects non-loopback hosts including lookalikes: %s', async (hostname) => {
     expect(await catalogueEnabled(hostname)).toBe(false);
   });
 

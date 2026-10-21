@@ -22,7 +22,7 @@ def _fake_store() -> tuple:
 class _FakeA2AClient:
     async def get_agent_card(self, _agent_config, timeout: float = 2.0):  # noqa: ARG002
         return {
-            "name": "Observe Agent",
+            "name": "Example Agent",
             "description": "Card description",
             "version": "9.9.9",
             "protocol": "a2a",
@@ -41,7 +41,7 @@ async def test_refresh_agent_cards_updates_registry() -> None:
 
     # Register agent with initial metadata
     entry = AgentRegistryEntry(
-        name="observe_agent",
+        name="example_agent",
         description="Old",
         version="0.1.0",
         capabilities=[],

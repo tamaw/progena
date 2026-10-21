@@ -19,7 +19,7 @@ from app.backend import agent_store
 class _Info:
     """Stand-in for ``state_reader.AgentInfo`` (only the attributes used here)."""
 
-    name: str = "Observe Agent"
+    name: str = "Example Agent"
     description: str = "Monitors the runtime."
     version: str = "9.9.9"
     kind: str = "a2a_agent"
@@ -122,7 +122,7 @@ def test_acp_profile_from_info_maps_config():
 
 def test_acp_profiles_from_registry_filters_by_transport(monkeypatch):
     acp_info = _Info(name="github_copilot", transport="acp", acp={"command": "copilot"})
-    http_info = _Info(name="Observe Agent", transport="http")
+    http_info = _Info(name="Example Agent", transport="http")
     fake_reader = type(
         "R",
         (),
@@ -146,12 +146,12 @@ def test_acp_profiles_from_registry_filters_by_transport(monkeypatch):
 
 def test_acp_profiles_from_registry_detects_acp_kind_without_transport(monkeypatch):
     acp_info = _Info(
-        name="cronix_copilot",
+        name="remote_copilot",
         kind="acp_agent",
         transport="http",
         acp={"command": "copilot", "port": 4173},
     )
-    http_info = _Info(name="Observe Agent", transport="http")
+    http_info = _Info(name="Example Agent", transport="http")
     fake_reader = type(
         "R",
         (),
@@ -166,17 +166,17 @@ def test_acp_profiles_from_registry_detects_acp_kind_without_transport(monkeypat
     monkeypatch.setattr(state_reader, "get_state_reader", lambda: fake_reader)
 
     acp_profiles = agent_store.acp_profiles_from_registry()
-    assert [p["id"] for p in acp_profiles] == ["acp-cronix-copilot"]
+    assert [p["id"] for p in acp_profiles] == ["acp-remote-copilot"]
     assert acp_profiles[0]["transport"] == "tcp"
 
     a2a_profiles = agent_store.a2a_profiles_from_registry()
-    assert [p["id"] for p in a2a_profiles] == ["a2a-observe-agent"]
+    assert [p["id"] for p in a2a_profiles] == ["a2a-example-agent"]
 
 
 def test_a2a_profile_from_info_maps_card():
     info = _Info(
         agent_card={
-            "name": "Observe Agent",
+            "name": "Example Agent",
             "description": "Live description from card.",
             "version": "0.2.0",
             "preferredTransport": "JSONRPC",
@@ -186,7 +186,7 @@ def test_a2a_profile_from_info_maps_card():
         }
     )
     profile = agent_store.a2a_profile_from_info(info)
-    assert profile["id"] == "a2a-observe-agent"
+    assert profile["id"] == "a2a-example-agent"
     assert profile["kind"] == "a2a"
     assert profile["group"] == "A2A agents"
     assert profile["enabled"] is True
@@ -228,7 +228,7 @@ def test_a2a_profiles_from_registry(monkeypatch):
     monkeypatch.setattr(state_reader, "get_state_reader", lambda: fake_reader)
 
     profiles = agent_store.a2a_profiles_from_registry()
-    assert [p["id"] for p in profiles] == ["a2a-observe-agent", "a2a-other"]
+    assert [p["id"] for p in profiles] == ["a2a-example-agent", "a2a-other"]
     assert all(p["kind"] == "a2a" for p in profiles)
 
 
@@ -244,7 +244,7 @@ def test_a2a_profiles_from_registry_handles_failure(monkeypatch):
 
 def test_a2a_profile_attaches_tasks_and_checkpoint_count():
     tasks_by_agent = {
-        "Observe Agent": [
+        "Example Agent": [
             {"id": "t1", "status": "completed", "context_id": "ctx-1", "title": "do x"},
             {"id": "t2", "status": "failed", "context_id": "ctx-1", "title": "do y"},
             {"id": "t3", "status": "working", "context_id": "ctx-2", "title": "do z"},
@@ -261,7 +261,7 @@ def test_a2a_tasks_by_agent_groups_sorts_and_shapes(monkeypatch):
     records = [
         {
             "task_id": "a",
-            "agent_name": "Observe Agent",
+            "agent_name": "Example Agent",
             "status": "completed",
             "request_text": "older request",
             "context_id": "c1",
@@ -269,7 +269,7 @@ def test_a2a_tasks_by_agent_groups_sorts_and_shapes(monkeypatch):
         },
         {
             "task_id": "b",
-            "agent_name": "Observe Agent",
+            "agent_name": "Example Agent",
             "status": "working",
             "request_text": "newer request",
             "context_id": "c2",
@@ -285,7 +285,7 @@ def test_a2a_tasks_by_agent_groups_sorts_and_shapes(monkeypatch):
     monkeypatch.setattr(state_reader, "get_state_reader", lambda: fake_reader)
 
     grouped = agent_store._a2a_tasks_by_agent()
-    assert set(grouped) == {"Observe Agent", "Other"}
+    assert set(grouped) == {"Example Agent", "Other"}
     # newest-updated first, and request_text becomes the task title
-    assert [t["id"] for t in grouped["Observe Agent"]] == ["b", "a"]
-    assert grouped["Observe Agent"][0]["title"] == "newer request"
+    assert [t["id"] for t in grouped["Example Agent"]] == ["b", "a"]
+    assert grouped["Example Agent"][0]["title"] == "newer request"

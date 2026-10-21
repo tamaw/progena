@@ -15,12 +15,12 @@ run_as_runner() {
 }
 
 prune_stale_venvs() {
-    find /home/runner/_probe/_work -path '*/.venv/bin/python' -type l 2>/dev/null | while read -r python_link; do
+    find "${RUNNER_WORKDIR}" -path '*/.venv/bin/python' -type l 2>/dev/null | while read -r python_link; do
         python_target="$(readlink "$python_link" || true)"
         if [[ -z "$python_target" ]]; then
             continue
         fi
-        if [[ "$python_target" == /home/runner/_probe/_work/_tool/* ]] && [[ ! -e "$python_link" ]]; then
+        if [[ "$python_target" == "${RUNNER_WORKDIR}/_tool/"* ]] && [[ ! -e "$python_link" ]]; then
             rm -rf "$(dirname "$(dirname "$python_link")")"
         fi
     done

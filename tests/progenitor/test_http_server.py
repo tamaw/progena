@@ -73,7 +73,7 @@ async def test_http_server_records_a2a_task_callback() -> None:
         }
         async with httpx.AsyncClient() as client:
             response = await client.post(
-                f"{server.base_url}/a2a/tasks/callback?agent=observe_agent",
+                f"{server.base_url}/a2a/tasks/callback?agent=example_agent",
                 json=payload,
             )
 
@@ -83,7 +83,7 @@ async def test_http_server_records_a2a_task_callback() -> None:
         assert body["task_id"] == "task-1"
         assert body["status"] == "completed"
         saved = state_manager.tasks["task-1"]
-        assert saved.agent_name == "observe_agent"
+        assert saved.agent_name == "example_agent"
         assert saved.summary == "Finished callback task."
         loop_runner.queues.enqueue_a2a_completions.assert_called_once_with([saved])
     finally:

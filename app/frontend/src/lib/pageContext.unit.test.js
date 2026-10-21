@@ -23,8 +23,8 @@ describe('derivePageContext', () => {
   });
 
   it('reads the plugin id from the second segment, not the marketplace', () => {
-    expect(derivePageContext('/plugins/tamaw/some-plugin')).toEqual({ page: 'plugins', id: 'some-plugin' });
-    expect(derivePageContext('/plugins/tamaw')).toEqual({ page: 'plugins', id: null });
+    expect(derivePageContext('/plugins/acme/some-plugin')).toEqual({ page: 'plugins', id: 'some-plugin' });
+    expect(derivePageContext('/plugins/acme')).toEqual({ page: 'plugins', id: null });
     expect(derivePageContext('/plugins')).toEqual({ page: 'plugins', id: null });
   });
 

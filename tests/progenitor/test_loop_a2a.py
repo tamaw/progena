@@ -16,10 +16,10 @@ async def test_a2a_completion_node_persists_one_tool_message() -> None:
     state_manager.log_conversation = AsyncMock()
 
     record = A2ATaskRecord(
-        task_id="observe-5",
-        agent_name="observe_agent",
+        task_id="example-5",
+        agent_name="example_agent",
         status="completed",
-        summary="Observe task completed.",
+        summary="Example task completed.",
     )
     state = {"messages": [], "a2a_completed_tasks": [record, record]}
     agent_graph = AsyncMock()
@@ -55,6 +55,6 @@ async def test_a2a_completion_node_persists_one_tool_message() -> None:
     message = updates["messages"][0]
     assert message.role == "tool"
     assert message.metadata["type"] == "a2a_task_completion"
-    assert message.metadata["task_id"] == "observe-5"
-    assert "observe agent task completed" in message.content
+    assert message.metadata["task_id"] == "example-5"
+    assert "example agent task completed" in message.content
     state_manager.log_conversation.assert_awaited_once()

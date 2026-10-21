@@ -28,9 +28,12 @@ After a short header (topic = chat title, who set it, and everyone who took
 part; `@` marks agents), each line starts with `HH:MM:SS` in the user's
 timezone, or `--:--:--` when the time is unknown.
 
+`Alex` below is an example display name. Use the actual user nick from the
+session header when searching; do not assume every session has the same user.
+
 | Line | Meaning |
 |---|---|
-| `<Tama> text` | The user said this (their display name, or `user`). |
+| `<Alex> text` | The user said this (their display name, or `user`). |
 | `<@progenitor> text` | An agent said this. One line per line of the message. |
 | `* progenitor sends an image` | An image content block (human or AI). |
 | `* progenitor is checking the schedule` | Reasoning: what the agent was doing. |
@@ -39,9 +42,9 @@ timezone, or `--:--:--` when the time is unknown.
 | `-!- repo-manager [subagent] has joined #id8` | A delegation starts. `[subagent]`, `[async]`, or `[a2a]` says how. |
 | `-> *repo-manager* request` | The request handed to that agent. For `[subagent]` its own thinking and tool calls follow, then `has left`. `[async]` and `[a2a]` agents only reply later as `<@agent>` lines. |
 | `-!- repo-manager [subagent] has left #id8 [reason]` | The delegation ended; a `[reason]` at the end means it failed. |
-| `<Tama> research-agent: hi` | The user typed `@research-agent hi`, talking to a registered agent directly instead of to you. |
+| `<Alex> research-agent: hi` | The user typed `@research-agent hi`, talking to a registered agent directly instead of to you. |
 | `-!- nobody_agent: No such nick/channel` | A direct agent call failed; the reason follows the colon. |
-| `-!- progenitor has quit [cancelled by Tama]` | The user stopped that reply part-way. |
+| `-!- progenitor has quit [cancelled by Alex]` | The user stopped that reply part-way. |
 | `--- Day changed Tue Oct 13 2026` | Later lines are on that day. |
 
 Tool results are not in the log. The agent's next message says what came
@@ -51,10 +54,10 @@ back.
 
 - Find a chat: `ls /sessions/`, then narrow by date or title in the name.
 - Search everything: `grep` with a literal pattern over `/sessions/`, e.g.
-  `schedule` or `<Tama>`.
+  `schedule` or the user's nick from a session header.
 - Search one period first: `grep` with `glob` set to a date prefix such as
   `2026-10-*` reads far fewer logs.
-- What the user asked: grep for `<Tama>` (their nick) in that file.
+- What the user asked: grep for their `<nick>` in that file.
 - Failures: grep for `can't` or `has quit`; for delegations grep `has left` and
   look for a trailing `[reason]`.
 - Delegations: grep for `has joined`.

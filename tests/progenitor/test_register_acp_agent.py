@@ -33,11 +33,11 @@ class _FakeRegistry:
 
 
 def test_parse_acp_connection_tcp_stdio_and_bare():
-    tcp = parse_acp_connection("tcp://192.168.0.2:3000?model=claude-haiku-4.5&cwd=/tmp")
+    tcp = parse_acp_connection("tcp://192.0.2.10:3000?model=claude-haiku-4.5&cwd=/tmp")
     assert tcp == {
         "model": "claude-haiku-4.5",
         "cwd": "/tmp",
-        "host": "192.168.0.2",
+        "host": "192.0.2.10",
         "port": 3000,
         "profile": "copilot",
     }
@@ -53,8 +53,8 @@ async def test_register_acp_agent_via_connection_string():
         tool_registry=registry,
         llm_client=None,
         tool_args={
-            "name": "cronix_copilot",
-            "connection": "tcp://192.168.0.2:3000?model=claude-haiku-4.5&cwd=/tmp",
+            "name": "remote_copilot",
+            "connection": "tcp://192.0.2.10:3000?model=claude-haiku-4.5&cwd=/tmp",
         },
     )
     result = await tool.execute(context)
@@ -64,7 +64,7 @@ async def test_register_acp_agent_via_connection_string():
     assert entry.transport == "acp"
     assert entry.acp is not None
     assert (entry.acp.host, entry.acp.port, entry.acp.model) == (
-        "192.168.0.2",
+        "192.0.2.10",
         3000,
         "claude-haiku-4.5",
     )
@@ -159,14 +159,14 @@ async def test_register_a2a_agent_writes_entry_and_validates_url():
 
 async def test_unregister_agent_removes_and_reports_missing():
     registry = _FakeRegistry()
-    registry.entries.append(AgentRegistryEntry(name="cronix_copilot", kind="acp_agent"))
+    registry.entries.append(AgentRegistryEntry(name="remote_copilot", kind="acp_agent"))
 
     def ctx(args):
         return ToolContext(tool_registry=registry, llm_client=None, tool_args=args)
 
-    removed = await UnregisterAgentTool().execute(ctx({"name": "cronix_copilot"}))
+    removed = await UnregisterAgentTool().execute(ctx({"name": "remote_copilot"}))
     assert removed.success is True
     assert registry.entries == []
 
-    missing = await UnregisterAgentTool().execute(ctx({"name": "cronix_copilot"}))
+    missing = await UnregisterAgentTool().execute(ctx({"name": "remote_copilot"}))
     assert missing.success is False

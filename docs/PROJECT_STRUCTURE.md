@@ -7,8 +7,8 @@ This document focuses on the checked-in main stack only. For runtime relationshi
 ```text
 progenitor/
 ├── app/          # Main application code
-├── data/         # Runtime state and application data
-├── docker/       # Container definitions for the main stack
+├── data/         # Bundled assets and managed-repository workspace
+├── docker/       # Container definitions
 ├── docs/         # Project documentation
 ├── logs/         # Runtime logs
 ├── AGENTS.md
@@ -45,24 +45,30 @@ app/
     └── src/styles/
 ```
 
-## Runtime data and logs
+## Bundled data assets and runtime persistence
 
-Most runtime data is created while the system is running.
+`data/` contains repository-managed assets and a local managed-repository
+workspace; it is not the runtime state store:
 
 ```text
 data/
-├── state/         # Runtime checkpoints, schedules, and health data
-├── config/        # Runtime-managed agent registry and MCP config data
-├── sessions/      # Backend session persistence
-├── attachments/   # Uploaded file storage
-├── prompts/       # Checked-in markdown prompt templates by agent
-└── skills/        # Checked-in DeepAgent skill bundles by agent
+├── agents/        # Bundled native agent manifests
+├── instructions/  # Bundled instruction templates, seeded into Postgres
+├── repos/         # Local managed-repository/worktree root
+├── schemas/       # Static JSON Schema contracts
+├── shims/          # Bundled command shims
+└── skills/         # Bundled native skill bundles
 
-logs/              # Runtime and backend logs
+logs/               # Runtime and backend logs
 ```
 
-Live Progenitor MCP server definitions live in the shared Postgres-backed `mcp`
-state document so the backend and runtime share the same mutable registry.
+Runtime state, mutable configuration, chat/session records, schedules, and
+agent-facing virtual documents are Postgres-backed. They are exposed through
+virtual mounts
+rather than physical `data/state/`, `data/config/`, `data/sessions/`,
+`data/attachments/`, or `data/prompts/` directories. Uploaded attachments are
+stored in the Postgres attachment table. See
+[`STATE_DOCUMENTS.md`](STATE_DOCUMENTS.md) for the virtual-document layout.
 
 ## Docker assets
 

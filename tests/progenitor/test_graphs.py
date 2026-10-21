@@ -38,9 +38,9 @@ async def test_runtime_heartbeat_graph_records_a2a_completion() -> None:
     state_manager.update_a2a_task = AsyncMock()
     record = A2ATaskRecord(
         task_id="task-1",
-        agent_name="observe_agent",
+        agent_name="example_agent",
         status="completed",
-        summary="Observed logs.",
+        summary="Example task completed.",
     )
     queues = _FakeQueues(a2a_completions=[record])
     graph = create_runtime_heartbeat_graph()
@@ -68,11 +68,11 @@ async def test_runtime_heartbeat_graph_queues_same_thread_followup_for_a2a_compl
     state_manager.update_a2a_task = AsyncMock()
     record = A2ATaskRecord(
         task_id="task-2",
-        agent_name="greetings_agent",
+        agent_name="example_agent",
         status="completed",
-        request_text="Ask for a greeting.",
+        request_text="Ask the external agent for an example.",
         request_metadata={"thread_id": "thread-1"},
-        summary="Hello from greetings_agent!",
+        summary="Example result from example_agent!",
     )
     queues = _FakeQueues(a2a_completions=[record])
     graph = create_runtime_heartbeat_graph()
@@ -88,7 +88,7 @@ async def test_runtime_heartbeat_graph_queues_same_thread_followup_for_a2a_compl
     enqueued_message = queues.enqueue_input.await_args.args[0]
     enqueued_metadata = queues.enqueue_input.await_args.kwargs["metadata"]
     assert "async external agent task" in enqueued_message
-    assert "Hello from greetings_agent!" in enqueued_message
+    assert "Example result from example_agent!" in enqueued_message
     assert enqueued_metadata["thread_id"] == "thread-1"
     assert enqueued_metadata["source"] == "a2a_task_completion_followup"
 

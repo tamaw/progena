@@ -4,7 +4,10 @@ Quick reference for the two-stream chat page.
 
 ## Event-driven chat contract
 
-Chat state and generation output do not arrive in a finite HTTP response.
+Durable application state and chat lifecycle arrive on the app-lifetime
+`/api/ui/stream` as `ui.event` envelopes; streaming chat content arrives only
+on the request-scoped `/api/ui/responses/{request_id}/stream`. Neither arrives
+in a finite HTTP response.
 
 1. The frontend generates one UUID for each finite chat operation and sends it
    in `X-Request-ID`.
