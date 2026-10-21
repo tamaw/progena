@@ -72,5 +72,9 @@ docker/
 ├── docker-compose.progenitor.yml
 ├── progenitor/Dockerfile
 ├── backend/Dockerfile
-└── frontend/Dockerfile
+├── frontend/Dockerfile
+├── claude/Dockerfile       # deployed ACP sidecar
+├── codex/Dockerfile        # standalone ACP runtime tooling
+├── ghcopilot/Dockerfile    # standalone ACP runtime tooling
+└── gha-runner/Dockerfile   # standalone GitHub Actions runner tooling
 ```
