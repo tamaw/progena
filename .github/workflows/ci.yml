@@ -2,9 +2,9 @@ name: ci
 
 on:
   workflow_dispatch:
-    # Manual runs are used as an explicit deploy signal; build-and-deploy
-    # still runs after validation even when no push-based diff is available.
+    # Manual deploys must select main; other refs are rejected before scheduling.
   push:
+    branches: [main]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -16,11 +16,13 @@ permissions:
 
 jobs:
   backend:
+    if: ${{ github.repository == 'tamaw/progena' && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
     runs-on: [self-hosted, Linux, python]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           clean: false
+          persist-credentials: false
 
       - name: Install Python deps
         run: |
@@ -40,12 +42,14 @@ jobs:
           pytest tests/backend
 
   progena:
+    if: ${{ github.repository == 'tamaw/progena' && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
     # Pyright uses a system Node runtime on the self-hosted runner.
     runs-on: [self-hosted, Linux, node, python]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           clean: false
+          persist-credentials: false
 
       - name: Install Python deps
         run: |
@@ -73,11 +77,13 @@ jobs:
           tests/progena
 
   frontend:
+    if: ${{ github.repository == 'tamaw/progena' && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
     runs-on: [self-hosted, Linux, node]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           clean: false
+          persist-credentials: false
 
       - name: Install deps
         run: npm ci --prefer-offline
@@ -96,11 +102,12 @@ jobs:
     environment: production
     needs: [backend, progena, frontend]
     # Build deployment images and deploy them on the same self-hosted Docker runner.
-    if: ${{ github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch' }}
+    if: ${{ github.repository == 'tamaw/progena' && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           clean: false
+          persist-credentials: false
           fetch-depth: 0
 
       # Compare against the commit last deployed, not just this push: a push whose
@@ -144,11 +151,11 @@ jobs:
             echo "redeploy=$REDEPLOY"
           } | tee -a "$GITHUB_OUTPUT"
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
       - name: Build and load progena image
         if: ${{ github.event_name == 'workflow_dispatch' || steps.changes.outputs.progena_image == 'true' }}
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
           file: docker/progena/Dockerfile
@@ -166,7 +173,7 @@ jobs:
 
       - name: Build and load backend image
         if: ${{ github.event_name == 'workflow_dispatch' || steps.changes.outputs.backend_image == 'true' }}
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
           file: docker/backend/Dockerfile
@@ -182,7 +189,7 @@ jobs:
 
       - name: Build and load frontend image
         if: ${{ github.event_name == 'workflow_dispatch' || steps.changes.outputs.frontend_image == 'true' }}
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
           file: docker/frontend/Dockerfile
@@ -198,7 +205,7 @@ jobs:
 
       - name: Build and load claude image
         if: ${{ github.event_name == 'workflow_dispatch' || steps.changes.outputs.claude_image == 'true' }}
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
           file: docker/claude/Dockerfile

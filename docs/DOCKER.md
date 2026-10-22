@@ -190,3 +190,46 @@ so restrict it to trusted workflows. Deployment jobs require the `docker` label.
 
 Configure the destination repository's deployment environment, secrets, variables,
 and host mounts before allowing queued deployment jobs onto a new runner.
+
+### Workflow trust boundary
+
+The checked-in CI workflow runs only for pushes to `main` and manual runs that
+select `main` in `tamaw/progena`. The Docker-prune workflow accepts only scheduled
+or manual runs on that same repository and branch. Feature-branch pushes and
+pull requests do not run on these persistent, Docker-capable hosts; run the
+checks in the root repository guide locally before merging. Fork installations
+must deliberately configure their own repository identity and runners.
+
+External actions are pinned to full commit SHAs. Checkouts do not persist the
+GitHub token in Git configuration, and workflow tokens have read-only contents
+permission. Pin updates must be reviewed like executable dependency updates.
+Configure the `production` Environment with a custom deployment branch policy
+allowing only the branch `main` (not tags); the job condition alone is not an
+independent secrets boundary.
+
+### Before making a repository public
+
+Workflow conditions are defense in depth, not a sandbox: a pull request can
+propose a different workflow. Never approve an untrusted workflow to run on
+these self-hosted runners, even when GitHub requires approval.
+
+1. Merge the reviewed hardening changes while the repository is still private.
+   Follow the repository's explicit approval policy for merges and deployments.
+2. Disable Actions before changing visibility. Keep private-fork workflows
+   disabled and do not send fork workflows write tokens, secrets or variables.
+3. After publication, require workflow approval for **all external contributors**,
+   protect `main` with reviewed pull requests, and verify that `production` still
+   allows deployments only from `main`. GitHub does not expose the public-fork
+   contributor-approval setting while the repository is private.
+4. Re-enable Actions only after those protections are verified. If fork PR checks
+   are added later, run them on isolated GitHub-hosted runners without production
+   credentials, not these persistent hosts. Do not use `pull_request_target` to
+   execute PR code.
+
+Scan all fetched Git refs before publication; deleting a secret from the current
+tree does not remove it from history. The history contains retired frontend and
+backend TLS private keys: never reuse those keys, and replace any still-active
+certificate that uses them. Secret scanners are not proof that history contains
+no credentials. Historic hostnames, private-network addresses and commit-author
+email addresses will also become public; these are privacy metadata, not by
+themselves authentication secrets.
