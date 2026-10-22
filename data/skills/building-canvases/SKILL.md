@@ -62,7 +62,7 @@ Respect the catalogue limits: at most 32 files, 256 KiB per file, and 1 MiB per 
 
 ## Data artifacts
 
-Put data a canvas visualises in `/artifacts/<path>`, not in the canvas folder: other agents and workflows can update it, other canvases can reuse it, and changes do not create canvas revisions. Artifacts are `.csv`, `.tsv`, `.json`, `.jsonl`, `.md` or `.txt` files of at most 1 MiB, with relative paths whose segments start with a letter or digit (e.g. `/artifacts/sales/q3.csv`). Only the latest content is kept. Delete an artifact by deleting its file.
+Put data a canvas visualises in `/artifacts/<path>`, not in the canvas folder: other agents and workflows can update it, other canvases can reuse it, and changes do not create canvas revisions. Artifacts are `.csv`, `.tsv`, `.json`, `.jsonl`, `.md` or `.txt` files of at most 1 MiB, with relative paths whose segments start with a letter or digit (e.g. `/artifacts/sales/q3.csv`). Only the latest content is kept. You cannot delete files with your tools: overwrite an artifact instead, or remove it with a workflow `document_delete` node on the `artifact` type.
 
 - `host.artifacts.get('sales/q3.csv')` resolves `{path, content, data, updated_at}` or `null`. `data` is parsed by extension: JSON value, JSONL array, CSV/TSV array of header-keyed records whose values are **strings** (convert numbers yourself, e.g. `+row.revenue`), otherwise the text. It rejects when the content does not parse.
 - `host.artifacts.list('sales/')` resolves `[{path, updated_at, bytes}]` for every artifact under the prefix (`''` lists all).

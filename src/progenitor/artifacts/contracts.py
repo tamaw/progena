@@ -46,7 +46,7 @@ def validate_artifact_path(path: str) -> str:
     if not path or path.startswith("/") or "\\" in path:
         raise ArtifactValidationError(f"Invalid artifact path {path!r}: must be relative.")
     for segment in path.split("/"):
-        if not _SEGMENT_RE.match(segment):
+        if not _SEGMENT_RE.fullmatch(segment):
             raise ArtifactValidationError(
                 f"Invalid artifact path {path!r}: segment {segment!r} must start with a "
                 "letter or digit and contain only letters, digits, '.', '_' and '-'."

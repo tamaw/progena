@@ -30,7 +30,7 @@ function importSpecifier(source, item) {
   return raw.startsWith('"') || raw.startsWith("'") ? raw.slice(1, -1) : raw;
 }
 
-/** Rewrite all literal canvas import specifiers and report every invalid import. */
+/** Rewrite all literal module import specifiers and report every invalid import. */
 export async function rewriteCanvasFiles(name, files, librarySources = {}) {
   await init;
   const rewrittenFiles = {};
@@ -61,7 +61,7 @@ export async function rewriteCanvasFiles(name, files, librarySources = {}) {
         } else if (specifier in librarySources) {
           replacement = specifier;
         } else {
-          throw new Error(`Unknown bare canvas specifier: ${specifier}`);
+          throw new Error(`Unknown bare module specifier: ${specifier}`);
         }
       } catch (error) {
         errors.push({ path, message: error.message });
@@ -128,37 +128,47 @@ function themeCss(tokens) {
  */
 export function artifactFromDocument(item) {
   function parseDelimited(text, separator) {
+    // RFC 4180: a field is unquoted, or wholly quoted with "" as an escaped quote.
+    // A line with nothing on it is skipped; a line holding "" is an empty record.
     const rows = [];
     let row = [];
     let field = '';
-    let quoted = false;
+    let state = 'start'; // start | unquoted | quoted | closed
+    let touched = false;
+    const endField = () => { row.push(field); field = ''; state = 'start'; };
+    const endRow = () => {
+      endField();
+      if (touched) rows.push(row);
+      row = [];
+      touched = false;
+    };
     for (let index = 0; index < text.length; index += 1) {
       const char = text[index];
-      if (quoted) {
+      if (state === 'quoted') {
         if (char !== '"') field += char;
         else if (text[index + 1] === '"') { field += '"'; index += 1; }
-        else quoted = false;
-      } else if (char === '"' && field === '') {
-        quoted = true;
+        else state = 'closed';
       } else if (char === separator) {
-        row.push(field);
-        field = '';
+        touched = true;
+        endField();
       } else if (char === '\n' || char === '\r') {
         if (char === '\r' && text[index + 1] === '\n') index += 1;
-        row.push(field);
-        rows.push(row);
-        row = [];
-        field = '';
+        endRow();
+      } else if (state === 'closed') {
+        throw new Error('unexpected character after a closing quote at offset ' + index);
+      } else if (char === '"') {
+        if (state !== 'start') throw new Error('unexpected quote inside an unquoted field at offset ' + index);
+        state = 'quoted';
+        touched = true;
       } else {
         field += char;
+        state = 'unquoted';
+        touched = true;
       }
     }
-    if (quoted) throw new Error('unterminated quoted field');
-    if (field !== '' || row.length) {
-      row.push(field);
-      rows.push(row);
-    }
-    const [header = [], ...body] = rows.filter((cells) => cells.length > 1 || cells[0] !== '');
+    if (state === 'quoted') throw new Error('unterminated quoted field');
+    if (touched) endRow();
+    const [header = [], ...body] = rows;
     return body.map((cells) => Object.fromEntries(header.map((name, column) => [name, cells[column] ?? ''])));
   }
   const path = String(item.id);

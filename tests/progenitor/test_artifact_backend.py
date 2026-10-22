@@ -53,6 +53,7 @@ async def test_artifact_mount_rejects_bad_paths_types_and_size_without_persistin
         ("/noext", "x"),
         ("/../escape.csv", "x"),
         ("/sales/.hidden.csv", "x"),
+        ("/sales\n/q3.csv", "x"),
         ("/big.txt", "x" * (MAX_ARTIFACT_BYTES + 1)),
     ):
         result = await backend.awrite(path, content)

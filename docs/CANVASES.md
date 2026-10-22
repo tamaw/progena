@@ -119,7 +119,7 @@ NOTIFY and `document_events` triggers fire with no trigger change.
 
 | Key | Payload | Writer |
 |---|---|---|
-| `canvas:<name>/<path>` | `{content: str, updated_at: iso}` (content document) | Agent mount; backend restore/delete |
+| `canvas:<name>/<path>` | `{content: str, updated_at: iso}` (content document) | Agent mount; backend delete |
 | `canvas_data:<name>/<key>` | `{value: <any JSON>, updated_at: iso}` | Backend on canvas request |
 | `canvas_status:<name>` | `{state: "loaded"\|"error", revision: str, errors: [{message, stack?}], reported_at: iso}` | Backend on host report |
 
@@ -177,7 +177,7 @@ POST/PUT).
 `CanvasSummary`: `{name, title, description, entry, libraries, artifacts, files: [path], revision,
 updated_at, manifest_error: str|null, status: {state, revision, errors, reported_at}|null}`.
 
-Errors (unknown canvas/type/revision, invalid key or pattern) are HTTP 4xx before the 202,
+Errors (unknown canvas/type, invalid key or pattern) are HTTP 4xx before the 202,
 like other UI routes.
 
 Documents request: resolve `type` with the live registry; exact-key types return one item;

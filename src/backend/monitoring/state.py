@@ -1,5 +1,5 @@
 """
-State Reader Canvas.
+State Reader Module.
 
 Reads state documents from the shared Postgres document store and operational
 logs from the configured log store. The backend uses this as a read/write

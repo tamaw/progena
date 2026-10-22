@@ -71,7 +71,7 @@ class CanvasValidationError(ValueError):
 def validate_canvas_name(name: str) -> str:
     """Return ``name`` if it is a valid canvas name, else raise."""
 
-    if not _NAME_RE.match(name or ""):
+    if not _NAME_RE.fullmatch(name or ""):
         raise CanvasValidationError(
             f"Invalid canvas name {name!r}: use 2-48 chars of a-z, 0-9 and '-', "
             "starting with a letter."
@@ -89,7 +89,7 @@ def validate_canvas_path(path: str) -> str:
         raise CanvasValidationError(f"Invalid canvas file path {path!r}: must be relative.")
     segments = path.split("/")
     for segment in segments:
-        if not _SEGMENT_RE.match(segment):
+        if not _SEGMENT_RE.fullmatch(segment):
             raise CanvasValidationError(
                 f"Invalid canvas file path {path!r}: segment {segment!r} must start with a "
                 "letter or digit and contain only letters, digits, '.', '_' and '-'."
@@ -135,7 +135,7 @@ def canvas_status_key(name: str) -> str:
 def validate_canvas_data_key(key: str) -> str:
     """Return a canvas data key if valid, else raise."""
 
-    if not _DATA_KEY_RE.match(key or ""):
+    if not _DATA_KEY_RE.fullmatch(key or ""):
         raise CanvasValidationError(
             f"Invalid canvas data key {key!r}: use 1-128 chars of letters, digits, '.', '_' "
             "and '-', starting with a letter or digit."

@@ -29,7 +29,7 @@ describe('canvasHostModel', () => {
     }, libraries);
     expect(result.errors.map((error) => error.message)).toEqual(expect.arrayContaining([
       'Import escapes canvas root: ../../escape.mjs',
-      'Unknown bare canvas specifier: not-in-catalogue',
+      'Unknown bare module specifier: not-in-catalogue',
     ]));
   });
 
@@ -82,6 +82,15 @@ describe('canvasHostModel', () => {
   it('rejects artifacts whose content does not parse, naming the path', () => {
     expect(() => artifactFromDocument({ id: 'bad.json', document: { content: '{' } })).toThrow(/^Artifact bad\.json is not valid json/);
     expect(() => artifactFromDocument({ id: 'bad.csv', document: { content: 'a\n"open' } })).toThrow(/unterminated quoted field/);
+    expect(() => artifactFromDocument({ id: 'bad.csv', document: { content: 'a\nfoo"bar' } })).toThrow(/unexpected quote inside an unquoted field/);
+    expect(() => artifactFromDocument({ id: 'bad.csv', document: { content: 'a\n"foo"bar' } })).toThrow(/unexpected character after a closing quote/);
+  });
+
+  it('keeps a quoted empty record that a blank line would otherwise drop', () => {
+    const parse = (content) => artifactFromDocument({ id: 'x.csv', document: { content } }).data;
+    expect(parse('name\n""\n')).toEqual([{ name: '' }]);
+    expect(parse('name\n""')).toEqual([{ name: '' }]);
+    expect(parse('name\n\nAda\n\n')).toEqual([{ name: 'Ada' }]);
   });
 
   it('keeps the artifact parser self-contained so its source runs inside the iframe', () => {
