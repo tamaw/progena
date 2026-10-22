@@ -127,8 +127,10 @@ Notes:
   `app/progenitor/state/manager.py`). Neither `progenitor` nor `backend` mounts
   a host directory for them. `data/instructions/` is checked into git and
   `COPY`'d into the `progenitor` image (not `backend`'s); every boot syncs it
-  into Postgres: Progenitor's own instructions (`progenitor/`) are added when
-  missing and otherwise kept, since they are edited on the Instructions page.
+  into Postgres: top-level Markdown files retain logical paths such as
+  `progenitor/genesis.md`. They are added when missing and otherwise kept,
+  since they are edited on the Instructions page. Explicit subdirectories in
+  custom instruction sources retain their own group names.
   Standalone A2A agents own their instructions, images, and service lifecycle in the
   separate [agents repository](https://github.com/tamaw/progentior.agents); they are
   not copied into this image. `data/skills/` is a read-only disk mount (`/skills/`),
