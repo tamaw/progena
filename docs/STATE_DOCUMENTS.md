@@ -27,6 +27,8 @@ mounts:
   a stored legacy `instruction:progenitor/genesis.md` (edits included) there
   before seeding missing instructions, then deletes the legacy key. If both
   exist with different text, `SYSTEM.md` is used and the legacy key is kept.
+  `python scripts/smoke_system_prompt.py` (run in CI) checks this migration and
+  next-call prompt edits against an in-memory store, without Postgres.
 - Postgres-backed virtual document directories: `/tasks/`, `/workflows/`,
   `/routines/`, `/policies/`, `/inbox/`, `/alerts/`, `/sessions/`, `/canvases/`,
   `/artifacts/`, and `/config/repos/`. These are collections of documents, not subdirectories on

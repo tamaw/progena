@@ -66,6 +66,11 @@ jobs:
           . .venv/bin/activate
           pyright --pythonpath .venv/bin/python src/
 
+      - name: Smoke system prompt (in-memory store)
+        run: |
+          . .venv/bin/activate
+          python scripts/smoke_system_prompt.py
+
       - name: Tests progenitor (pytest)
         run: >
           . .venv/bin/activate &&
