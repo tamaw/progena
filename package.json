@@ -15,7 +15,7 @@
     "test:watch": "vitest --config src/frontend/vitest.config.js",
     "test:e2e": "playwright test --config src/frontend/playwright.config.js",
     "smoke:routes": "node src/frontend/scripts/smoke-routes.mjs",
-    "build:module-vendor": "node src/frontend/scripts/build-module-vendor.mjs",
+    "build:canvas-vendor": "node src/frontend/scripts/build-canvas-vendor.mjs",
     "clean": "node --input-type=module -e \"import { rmSync } from 'node:fs'; rmSync('src/frontend/dist', { recursive: true, force: true });\""
   },
   "dependencies": {

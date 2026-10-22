@@ -25,12 +25,12 @@ import * as policies from '../features/settings/state/policies';
 import * as documentTypes from '../features/documents/state';
 import * as modelProfiles from '../features/settings/state/modelProfiles';
 import * as providers from '../features/settings/state/providers';
-import * as modules from '../features/modules/state';
+import * as canvases from '../features/canvases/state';
 
 import * as search from '../features/search/state';
 import * as insights from '../features/insights/state';
 
-const domains = [status, alerts, widgets, schedules, mcp, knowledge, instructions, tasks, workflows, agents, chats, inbox, logs, preferences, marketplaces, repos, documentTypes, policies, modelProfiles, providers, modules, search, insights];
+const domains = [status, alerts, widgets, schedules, mcp, knowledge, instructions, tasks, workflows, agents, chats, inbox, logs, preferences, marketplaces, repos, documentTypes, policies, modelProfiles, providers, canvases, search, insights];
 
 const initialState = domains.reduce(
   (acc, domain) => ({ ...acc, ...domain.initialState }),
@@ -83,7 +83,7 @@ const NAV_ACTIVITY_EVENT_ROUTES = {
   'workflow.run.failed': '/workflows',
   'repositories.snapshot': '/repositories',
   'profiles.snapshot': '/profiles',
-  'modules.snapshot': '/modules',
+  'canvases.snapshot': '/canvases',
 };
 
 const navActivityInitialState = {

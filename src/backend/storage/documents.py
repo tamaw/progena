@@ -24,9 +24,9 @@ from psycopg_pool import ConnectionPool, PoolClosed
 
 from src.backend.integrations.runtime_history import RuntimeConversationReader, RuntimeUnavailable
 from src.progenitor.documents.kinds import (
+    CANVAS_DOCUMENT_KEY_PREFIX,
     INBOX_MESSAGE_KEY_PREFIX,
     INSTRUCTION_DOCUMENT_KEY_PREFIX,
-    MODULE_DOCUMENT_KEY_PREFIX,
     SESSION_KEY_PREFIX,
 )
 from src.progenitor.routines.store import ROUTINE_GRAPH_KEY_PREFIX
@@ -202,8 +202,8 @@ class InstructionRevisionSummary:
 
 
 @dataclass(frozen=True)
-class ModuleRevision:
-    """One immutable file change captured for a UI module."""
+class CanvasRevision:
+    """One immutable file change captured for a UI canvas."""
 
     id: int
     name: str
@@ -319,9 +319,7 @@ class BackendDocumentStore(Protocol):
     ) -> list[InstructionRevisionSummary]: ...
 
     def get_instruction_revision(self, path: str, revision_id: str) -> str | None: ...
-    def list_module_revisions(self, name: str, *, limit: int = 100) -> list[ModuleRevision]: ...
-    def get_module_revision(self, name: str, revision_id: int) -> ModuleRevision | None: ...
-    def module_state_at(self, name: str, captured_at: datetime) -> dict[str, str]: ...
+    def list_canvas_revisions(self, name: str, *, limit: int = 100) -> list[CanvasRevision]: ...
     def close(self) -> None: ...
 
 
@@ -365,8 +363,8 @@ class InMemoryDocumentStore:
         self._instruction_revisions: dict[
             tuple[str, str], tuple[InstructionRevisionSummary, str]
         ] = {}
-        self._module_revisions: list[ModuleRevision] = []
-        self._last_module_revision_id = 0
+        self._canvas_revisions: list[CanvasRevision] = []
+        self._last_canvas_revision_id = 0
 
     def get_document(
         self, prefix: str, key: str, default: Any | None = None
@@ -454,7 +452,7 @@ class InMemoryDocumentStore:
             elif changed:
                 self._record_event(prefix, key, "updated", previous.payload, stored)
             if changed:
-                self._capture_module_revision(prefix, key, "write", stored)
+                self._capture_canvas_revision(prefix, key, "write", stored)
             if prefix == PROGENITOR_STATE_PREFIX and key.startswith("knowledge:"):
                 remainder = key[len("knowledge:") :]
                 base_id, separator, path = remainder.partition("/")
@@ -495,20 +493,20 @@ class InMemoryDocumentStore:
                     ),
                 )
 
-    def _capture_module_revision(
+    def _capture_canvas_revision(
         self, prefix: str, key: str, op: Literal["write", "delete"], payload: Any
     ) -> None:
-        if prefix != PROGENITOR_STATE_PREFIX or not key.startswith(MODULE_DOCUMENT_KEY_PREFIX):
+        if prefix != PROGENITOR_STATE_PREFIX or not key.startswith(CANVAS_DOCUMENT_KEY_PREFIX):
             return
-        remainder = key.removeprefix(MODULE_DOCUMENT_KEY_PREFIX)
+        remainder = key.removeprefix(CANVAS_DOCUMENT_KEY_PREFIX)
         name, separator, path = remainder.partition("/")
         content = payload.get("content") if isinstance(payload, dict) else None
         if not name or not separator or not path or not isinstance(content, str):
             return
-        self._last_module_revision_id += 1
-        self._module_revisions.append(
-            ModuleRevision(
-                id=self._last_module_revision_id,
+        self._last_canvas_revision_id += 1
+        self._canvas_revisions.append(
+            CanvasRevision(
+                id=self._last_canvas_revision_id,
                 name=name,
                 path=path,
                 op=op,
@@ -518,31 +516,9 @@ class InMemoryDocumentStore:
             )
         )
 
-    def list_module_revisions(self, name: str, *, limit: int = 100) -> list[ModuleRevision]:
-        rows = [revision for revision in self._module_revisions if revision.name == name]
+    def list_canvas_revisions(self, name: str, *, limit: int = 100) -> list[CanvasRevision]:
+        rows = [revision for revision in self._canvas_revisions if revision.name == name]
         return sorted(rows, key=lambda revision: revision.id, reverse=True)[:limit]
-
-    def get_module_revision(self, name: str, revision_id: int) -> ModuleRevision | None:
-        return next(
-            (
-                revision
-                for revision in self._module_revisions
-                if revision.name == name and revision.id == revision_id
-            ),
-            None,
-        )
-
-    def module_state_at(self, name: str, captured_at: datetime) -> dict[str, str]:
-        latest: dict[str, ModuleRevision] = {}
-        for revision in self._module_revisions:
-            timestamp = datetime.fromisoformat(revision.captured_at or "")
-            if revision.name == name and timestamp <= captured_at:
-                latest[revision.path] = revision
-        return {
-            path: revision.content
-            for path, revision in latest.items()
-            if revision.op == "write" and revision.content is not None
-        }
 
     def list_instruction_revisions(
         self, path: str, *, limit: int = 50
@@ -584,7 +560,7 @@ class InMemoryDocumentStore:
         with self._lock:
             previous = self._documents.pop((prefix, key), None)
             if previous is not None:
-                self._capture_module_revision(prefix, key, "delete", previous.payload)
+                self._capture_canvas_revision(prefix, key, "delete", previous.payload)
                 self._record_event(prefix, key, "deleted", previous.payload, None)
 
     def pop_document(self, prefix: str, key: str) -> Any | None:
@@ -594,7 +570,7 @@ class InMemoryDocumentStore:
             previous = self._documents.pop((prefix, key), None)
             if previous is None:
                 return None
-            self._capture_module_revision(prefix, key, "delete", previous.payload)
+            self._capture_canvas_revision(prefix, key, "delete", previous.payload)
             self._record_event(prefix, key, "deleted", previous.payload, None)
             return copy.deepcopy(previous.payload)
 
@@ -612,7 +588,7 @@ class InMemoryDocumentStore:
             elif changed:
                 self._record_event(prefix, key, "updated", previous.payload, stored)
             if changed:
-                self._capture_module_revision(prefix, key, "write", stored)
+                self._capture_canvas_revision(prefix, key, "write", stored)
             return new_payload
 
     def merge_document(self, prefix: str, key: str, payload: Any) -> bool:
@@ -624,7 +600,7 @@ class InMemoryDocumentStore:
             self._documents[(prefix, key)] = StoredDocument(stored, datetime.now(UTC))
             if previous.payload != stored:
                 self._record_event(prefix, key, "updated", previous.payload, stored)
-                self._capture_module_revision(prefix, key, "write", stored)
+                self._capture_canvas_revision(prefix, key, "write", stored)
             return True
 
     def add_document_event_listener(self, listener: Callable[[int], None]) -> None:
@@ -873,7 +849,7 @@ class PostgresDocumentStore:
                 self._ensure_policy_revision_history()
                 self._ensure_knowledge_page_revision_history()
                 self._ensure_instruction_revision_history()
-                self._ensure_module_revision_history()
+                self._ensure_canvas_revision_history()
             finally:
                 conn.execute(
                     "SELECT pg_advisory_unlock(hashtext('progenitor_document_store_setup'))"
@@ -1245,15 +1221,15 @@ class PostgresDocumentStore:
                 """.replace("__STATE_PREFIX__", state_prefix).replace("__KEY_PREFIX__", key_prefix)  # nosec B608
             )
 
-    def _ensure_module_revision_history(self) -> None:
-        """Capture an immutable timeline for every module file."""
+    def _ensure_canvas_revision_history(self) -> None:
+        """Capture an immutable timeline for every canvas file."""
 
         state_prefix = PROGENITOR_STATE_PREFIX
-        key_prefix = MODULE_DOCUMENT_KEY_PREFIX
+        key_prefix = CANVAS_DOCUMENT_KEY_PREFIX
         with self._cursor() as cur:
             cur.execute(
                 """
-                CREATE TABLE IF NOT EXISTS module_revisions (
+                CREATE TABLE IF NOT EXISTS canvas_revisions (
                     id BIGSERIAL PRIMARY KEY,
                     name TEXT NOT NULL,
                     path TEXT NOT NULL,
@@ -1266,16 +1242,16 @@ class PostgresDocumentStore:
                         OR (op = 'delete' AND content IS NULL)
                     )
                 );
-                CREATE INDEX IF NOT EXISTS module_revisions_name_latest
-                    ON module_revisions (name, captured_at DESC, id DESC);
-                CREATE OR REPLACE FUNCTION progenitor_capture_module_revision()
+                CREATE INDEX IF NOT EXISTS canvas_revisions_name_latest
+                    ON canvas_revisions (name, captured_at DESC, id DESC);
+                CREATE OR REPLACE FUNCTION progenitor_capture_canvas_revision()
                 RETURNS trigger AS $$
                 DECLARE
                     source_row store%ROWTYPE;
                     body TEXT;
                     remainder TEXT;
-                    module_name TEXT;
-                    module_path TEXT;
+                    canvas_name TEXT;
+                    canvas_path TEXT;
                 BEGIN
                     IF TG_OP = 'DELETE' THEN source_row := OLD; ELSE source_row := NEW; END IF;
                     IF source_row.prefix <> '__STATE_PREFIX__'
@@ -1289,16 +1265,16 @@ class PostgresDocumentStore:
                     END IF;
                     body := source_row.value -> 'payload' ->> 'content';
                     remainder := substring(source_row.key from length('__KEY_PREFIX__') + 1);
-                    module_name := split_part(remainder, '/', 1);
-                    module_path := substring(remainder from position('/' in remainder) + 1);
-                    IF body IS NULL OR module_name = '' OR position('/' in remainder) = 0
-                       OR module_path = '' THEN
+                    canvas_name := split_part(remainder, '/', 1);
+                    canvas_path := substring(remainder from position('/' in remainder) + 1);
+                    IF body IS NULL OR canvas_name = '' OR position('/' in remainder) = 0
+                       OR canvas_path = '' THEN
                         RETURN source_row;
                     END IF;
-                    INSERT INTO module_revisions(name, path, op, content, content_hash)
+                    INSERT INTO canvas_revisions(name, path, op, content, content_hash)
                     VALUES (
-                        module_name,
-                        module_path,
+                        canvas_name,
+                        canvas_path,
                         CASE WHEN TG_OP = 'DELETE' THEN 'delete' ELSE 'write' END,
                         CASE WHEN TG_OP = 'DELETE' THEN NULL ELSE body END,
                         encode(sha256(convert_to(body, 'UTF8')), 'hex')
@@ -1306,22 +1282,22 @@ class PostgresDocumentStore:
                     RETURN source_row;
                 END;
                 $$ LANGUAGE plpgsql;
-                CREATE OR REPLACE TRIGGER progenitor_capture_module_revision
+                CREATE OR REPLACE TRIGGER progenitor_capture_canvas_revision
                     AFTER INSERT OR UPDATE ON store FOR EACH ROW
-                    EXECUTE FUNCTION progenitor_capture_module_revision();
-                CREATE OR REPLACE TRIGGER progenitor_capture_deleted_module_revision
+                    EXECUTE FUNCTION progenitor_capture_canvas_revision();
+                CREATE OR REPLACE TRIGGER progenitor_capture_deleted_canvas_revision
                     BEFORE DELETE ON store FOR EACH ROW
-                    EXECUTE FUNCTION progenitor_capture_module_revision();
-                CREATE OR REPLACE FUNCTION progenitor_module_revisions_immutable()
+                    EXECUTE FUNCTION progenitor_capture_canvas_revision();
+                CREATE OR REPLACE FUNCTION progenitor_canvas_revisions_immutable()
                 RETURNS trigger AS $$
                 BEGIN
-                    RAISE EXCEPTION 'module_revisions rows are immutable';
+                    RAISE EXCEPTION 'canvas_revisions rows are immutable';
                 END;
                 $$ LANGUAGE plpgsql;
-                CREATE OR REPLACE TRIGGER progenitor_module_revisions_immutable
-                    BEFORE UPDATE OR DELETE ON module_revisions FOR EACH ROW
-                    EXECUTE FUNCTION progenitor_module_revisions_immutable();
-                INSERT INTO module_revisions(name, path, op, content, content_hash)
+                CREATE OR REPLACE TRIGGER progenitor_canvas_revisions_immutable
+                    BEFORE UPDATE OR DELETE ON canvas_revisions FOR EACH ROW
+                    EXECUTE FUNCTION progenitor_canvas_revisions_immutable();
+                INSERT INTO canvas_revisions(name, path, op, content, content_hash)
                 SELECT
                     split_part(substring(key from length('__KEY_PREFIX__') + 1), '/', 1),
                     substring(
@@ -1336,7 +1312,7 @@ class PostgresDocumentStore:
                   AND key LIKE '__KEY_PREFIX__%'
                   AND position('/' in substring(key from length('__KEY_PREFIX__') + 1)) > 1
                   AND value -> 'payload' ->> 'content' IS NOT NULL
-                  AND NOT EXISTS (SELECT 1 FROM module_revisions)
+                  AND NOT EXISTS (SELECT 1 FROM canvas_revisions)
                 """.replace("__STATE_PREFIX__", state_prefix).replace("__KEY_PREFIX__", key_prefix)  # nosec B608
             )
 
@@ -2375,12 +2351,12 @@ class PostgresDocumentStore:
             row = cast(dict[str, Any] | None, cur.fetchone())
         return str(row["content"]) if row is not None else None
 
-    def list_module_revisions(self, name: str, *, limit: int = 100) -> list[ModuleRevision]:
+    def list_canvas_revisions(self, name: str, *, limit: int = 100) -> list[CanvasRevision]:
         with self._cursor() as cur:
             cur.execute(
                 """
                 SELECT id, name, path, op, content, content_hash, captured_at
-                FROM module_revisions
+                FROM canvas_revisions
                 WHERE name = %s
                 ORDER BY captured_at DESC, id DESC
                 LIMIT %s
@@ -2389,7 +2365,7 @@ class PostgresDocumentStore:
             )
             rows = cast(list[dict[str, Any]], cur.fetchall())
         return [
-            ModuleRevision(
+            CanvasRevision(
                 id=int(row["id"]),
                 name=str(row["name"]),
                 path=str(row["path"]),
@@ -2400,46 +2376,6 @@ class PostgresDocumentStore:
             )
             for row in rows
         ]
-
-    def get_module_revision(self, name: str, revision_id: int) -> ModuleRevision | None:
-        with self._cursor() as cur:
-            cur.execute(
-                """
-                SELECT id, name, path, op, content, content_hash, captured_at
-                FROM module_revisions WHERE name = %s AND id = %s
-                """,
-                (name, revision_id),
-            )
-            row = cast(dict[str, Any] | None, cur.fetchone())
-        if row is None:
-            return None
-        return ModuleRevision(
-            id=int(row["id"]),
-            name=str(row["name"]),
-            path=str(row["path"]),
-            op=cast(Literal["write", "delete"], row["op"]),
-            content=str(row["content"]) if row.get("content") is not None else None,
-            content_hash=str(row["content_hash"]),
-            captured_at=str(row["captured_at"]) if row.get("captured_at") else None,
-        )
-
-    def module_state_at(self, name: str, captured_at: datetime) -> dict[str, str]:
-        with self._cursor() as cur:
-            cur.execute(
-                """
-                SELECT DISTINCT ON (path) path, op, content
-                FROM module_revisions
-                WHERE name = %s AND captured_at <= %s
-                ORDER BY path, captured_at DESC, id DESC
-                """,
-                (name, captured_at),
-            )
-            rows = cast(list[dict[str, Any]], cur.fetchall())
-        return {
-            str(row["path"]): str(row["content"])
-            for row in rows
-            if row["op"] == "write" and row.get("content") is not None
-        }
 
 
 def store_database_url(store: BackendDocumentStore | None) -> str | None:

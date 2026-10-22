@@ -67,6 +67,8 @@ and domain rules:
 - `/alerts/` and `/inbox/` for their supported request and message documents.
 - `/agents/user/` for validated user object-agent manifests.
 - `/instructions/` for validated instruction templates.
+- `/canvases/` for canvas files and `/artifacts/` for data files (CSV, JSON,
+  text) that canvases visualise.
 - `/sessions/` only for its allowed front-matter fields; session bodies are
   read-only.
 

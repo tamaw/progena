@@ -60,6 +60,7 @@ src/
 └── features/
     ├── agents/              # Catalogue, agent details and catalogue/run state
     ├── alerts/              # Alert panel, model and state
+    ├── canvases/            # Canvas pages, sandbox host and generated vendor bundles
     ├── chat/                # Conversation/sessions, quick chat and response streams
     │   ├── pages/
     │   ├── components/
@@ -74,7 +75,6 @@ src/
     ├── insights/
     ├── instructions/
     ├── knowledge/
-    ├── modules/             # Module pages, sandbox host and generated vendor bundles
     ├── monitoring/          # Runtime status, logs and status presentation
     ├── plugins/             # Plugins, marketplaces and marketplace settings
     ├── projects/            # Browser-local projects/solutions
@@ -156,14 +156,14 @@ Master-detail features compose `PaneList*`, `DetailHeader`, `DetailPane`,
 in the feature rather than introducing a generic master-detail page framework.
 
 General Markdown rendering/sanitization lives in `lib/markdown.js` and
-`lib/safeMarkdown.js`; instructions, knowledge and modules do not depend on chat
+`lib/safeMarkdown.js`; instructions, knowledge and canvases do not depend on chat
 rendering helpers. Chat-specific event presentation stays in chat.
 
 `styles/main.css` owns design tokens. `App.jsx` preserves the order of existing
 global/feature stylesheets. `styles/chrome-frame.css` remains shared legacy
 styling; extract styles incrementally with visual checks. New component styles
-should use colocated CSS Modules. The generated module vendor bundles under
-`features/modules/vendor/` are rebuilt with `npm run build:module-vendor`.
+should use colocated CSS Modules. The generated canvas vendor bundles under
+`features/canvases/vendor/` are rebuilt with `npm run build:canvas-vendor`.
 
 ## Validation and repository safety
 

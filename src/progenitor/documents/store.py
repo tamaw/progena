@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from src.progenitor.documents.content import content_document_key, content_document_prefix
-from src.progenitor.documents.kinds import DOCUMENT_TYPE_KEY_PREFIX, MODULE_STATUS_KEY_PREFIX
+from src.progenitor.documents.kinds import CANVAS_STATUS_KEY_PREFIX, DOCUMENT_TYPE_KEY_PREFIX
 from src.progenitor.documents.types import (
     DocumentType,
     builtin_document_type_rows,
@@ -60,7 +60,7 @@ class DocumentStore:
                 results.append((key[len(prefix) :], payload["content"]))
         return results
 
-    async def get_module_status(self, name: str) -> dict[str, Any] | None:
-        """Return a module host's last reported status, if it is well-formed."""
-        payload = await self._access.store.peek_document(f"{MODULE_STATUS_KEY_PREFIX}{name}")
+    async def get_canvas_status(self, name: str) -> dict[str, Any] | None:
+        """Return a canvas host's last reported status, if it is well-formed."""
+        payload = await self._access.store.peek_document(f"{CANVAS_STATUS_KEY_PREFIX}{name}")
         return payload if isinstance(payload, dict) else None

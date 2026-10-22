@@ -5,9 +5,9 @@ from __future__ import annotations
 import logging
 
 import src.backend.alerts.routes as alerts_routes
+import src.backend.canvases.events as canvases_events
 import src.backend.chat.routes as chat_routes
 import src.backend.events.documents as events_documents
-import src.backend.modules.events as modules_events
 import src.backend.schedules.service as schedules_service
 import src.backend.storage.documents as storage_documents
 import src.backend.tasks.service as tasks_service
@@ -36,6 +36,6 @@ def get_document_event_dispatcher() -> events_documents.DocumentEventDispatcher:
         dispatcher.add_handler(tasks_service._record_kanban_card_activity)
         dispatcher.add_handler(tasks_service._sync_kanban_card_order)
         dispatcher.add_handler(chat_routes._publish_chat_session_document_event)
-        dispatcher.add_handler(modules_events.module_events.document_event)
+        dispatcher.add_handler(canvases_events.canvas_events.document_event)
         _document_event_dispatcher = dispatcher
     return _document_event_dispatcher

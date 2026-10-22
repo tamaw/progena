@@ -42,9 +42,9 @@ COPY data/skills/ ./data/skills/
 # preferences, workflow nodes, MCP entries, ...), read from disk on every
 # load_schema() call.
 COPY data/schemas/ ./data/schemas/
-# Vendored module library catalogue: validates manifests and backs
-# /modules/_catalogue.json.
-COPY data/modules/ ./data/modules/
+# Vendored canvas library catalogue: validates manifests and backs
+# /canvases/_catalogue.json.
+COPY data/canvases/ ./data/canvases/
 # Native manifests are read-only runtime files, never imported into Postgres.
 COPY data/agents/ ./data/agents/
 COPY data/shims/ ./data/shims/

@@ -37,7 +37,7 @@ progenitor/
 ├── sessions/               # Context, messages, history, transcript and store
 ├── attachments/            # Uploaded attachment persistence
 ├── tasks/ / inbox/         # Document rules, Markdown representations and stores
-├── alerts/ / modules/      # Domain contracts and document operations
+├── alerts/ / canvases/     # Domain contracts and document operations
 ├── settings/               # Providers, profiles, preferences and policies
 ├── instructions/ / knowledge/ / plugins/
 ├── registry/ / a2a/ / acp/ / async_subagents/ / mcp/

@@ -33,6 +33,7 @@ The agent uses virtual paths, validated on write where applicable:
 - `/tasks/board.json` and `/tasks/<id>.md`, `/workflows/<id>.json`, `/routines/<id>.json`, and `/policies/<id>.json` — persisted work-management and execution definitions.
 - `/sessions/<date>_<title-slug>_<id8>.md` — chat records; only `title`, `pinned`, and `archived` front-matter fields are editable.
 - `/memories/` and `/knowledge/<base-id>/` — persistent memories and catalogued knowledge pages.
+- `/canvases/<name>/` and `/artifacts/<path>` — sandboxed UI canvases and the CSV/JSON/text data artifacts they visualise (see `building-canvases`).
 - `/instructions/` — validated stored instruction documents. Checked-in instruction files seed missing documents only; existing stored instructions remain user-owned.
 
 Use `read_file`, `write_file`, and `edit_file` against these virtual paths. The backend validates supported writes and publishes the resulting state change; paths are not local filesystem locations.

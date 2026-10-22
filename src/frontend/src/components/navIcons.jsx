@@ -200,12 +200,12 @@ export function KnowledgeNavIcon() {
   );
 }
 
-export function ModulesNavIcon() {
+export function CanvasesNavIcon() {
   return (
     <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <path d="M12 3 16.5 10.5h-9Z" />
-      <rect x="3.5" y="13.5" width="7" height="7" rx="1.2" />
-      <circle cx="17" cy="17" r="3.5" />
+      <rect x="3" y="3" width="18" height="12" rx="1.5" />
+      <path d="M7 10.5c1.5-3 3.5-3 5 0s3.5 3 5 0" />
+      <path d="m8 21 2.5-6M16 21l-2.5-6" />
     </svg>
   );
 }

@@ -24,15 +24,15 @@ mounts:
   plugin skills and agents receive scoped read-only paths below `/skills/` and
   `/agents/`; native skills and native agent manifests remain bundled files.
 - Postgres-backed virtual document directories: `/tasks/`, `/workflows/`,
-  `/routines/`, `/policies/`, `/inbox/`, `/alerts/`, `/sessions/`, `/modules/`, and
-  `/config/repos/`. These are collections of documents, not subdirectories on
+  `/routines/`, `/policies/`, `/inbox/`, `/alerts/`, `/sessions/`, `/canvases/`,
+  `/artifacts/`, and `/config/repos/`. These are collections of documents, not subdirectories on
   disk. `/config/repos/` shadows the broader `/config/` route for repository
   declarations.
 - Postgres attachment blobs: `/attachments/` is read-only and exposes uploaded
   files for the active conversation. It is not a state-document mount.
 
 `/tasks/` exposes `board.json` plus one Markdown file per card; `/workflows/`,
-`/routines/`, `/policies/`, `/inbox/`, `/alerts/`, `/sessions/`, `/modules/`, and
+`/routines/`, `/policies/`, `/inbox/`, `/alerts/`, `/sessions/`, `/canvases/`, `/artifacts/`, and
 `/config/repos/` likewise map document collections to files. Session files
 render the chat body with YAML front matter; only supported front-matter fields
 are editable.
@@ -82,28 +82,40 @@ and decision changes can also produce revisions; writing identical content
 again does not. History is stored only; the inbox has no revision browser or
 restore action.
 
-## Modules
+## Canvases
 
-Agent-built UI modules (dashboards, diagrams, games) are directories the agent
-writes at `/modules/<name>/` (`ModuleDirectoryBackend`,
-`src/progenitor/agent/filesystem/modules.py`). Each file is one `module:<name>/<path>`
+Agent-built UI canvases (dashboards, diagrams, games) are directories the agent
+writes at `/canvases/<name>/` (`CanvasDirectoryBackend`,
+`src/progenitor/agent/filesystem/canvases.py`). Each file is one `canvas:<name>/<path>`
 content document (`{content, updated_at}`); `manifest.json`
-(`module_manifest.schema.v1.json`) must be written first. Names, paths, file
+(`canvas_manifest.schema.v1.json`) must be written first. Names, paths, file
 types and size caps are shared by the runtime mount and the backend in
-`src/progenitor/modules/contracts.py`. The mount also projects read-only
-`/modules/_catalogue.json` (vendored libraries from `data/modules/libraries.json`,
-document types, host API) and `/modules/<name>/status.json` (last load result
-reported by the browser, `module_status:<name>`).
+`src/progenitor/canvases/contracts.py`. The mount also projects read-only
+`/canvases/_catalogue.json` (vendored libraries from `data/canvases/libraries.json`,
+document types, host API) and `/canvases/<name>/status.json` (last load result
+reported by the browser, `canvas_status:<name>`).
 
-A module's own runtime state lives in `module_data:<name>/<key>` documents
-(`{value, updated_at}`), written only by the backend on the module's behalf; a
-module cannot write any other document. Backend startup installs
-`module_revisions`, an immutable per-file history captured by trigger on
-`module:` rows (writes with changed content and deletes); the Modules page can
-view any revision and restore the module to a point in time, which is itself a
-normal write. `module`, `module_data` and `module_status` are built-in document
-types, so workflows and other modules can react to them. Routes, events and the
-sandbox loading design are in [MODULES.md](MODULES.md).
+A canvas's own runtime state lives in `canvas_data:<name>/<key>` documents
+(`{value, updated_at}`), written only by the backend on the canvas's behalf; a
+canvas cannot write any other document. Backend startup installs
+`canvas_revisions`, an immutable per-file history captured by trigger on
+`canvas:` rows (writes with changed content and deletes); like inbox history it
+is stored only, with no browser or restore. `canvas`, `canvas_data` and `canvas_status` are built-in document
+types, so workflows and other canvases can react to them. Routes, events and the
+sandbox loading design are in [CANVASES.md](CANVASES.md).
+
+## Artifacts
+
+Data files that canvases visualise live at `/artifacts/<path>`
+(`ArtifactDirectoryBackend`, `src/progenitor/agent/filesystem/artifacts.py`), one
+`artifact:<path>` content document (`{content, updated_at}`) per file. Paths,
+types (`.csv`, `.tsv`, `.json`, `.jsonl`, `.md`, `.txt`) and the 1 MiB cap are in
+`src/progenitor/artifacts/contracts.py`; workflow `document_write` and
+`document_create` nodes on the `artifact` type are held to the same rules. Only
+the latest content is kept. Progenitor has the whole mount; an object agent
+writes only below a declared `mounts` path such as `/artifacts/research/`.
+Canvases read artifacts with `host.artifacts` and stay live through `artifact.*`
+document events (see [CANVASES.md](CANVASES.md)).
 
 ## Model profiles
 

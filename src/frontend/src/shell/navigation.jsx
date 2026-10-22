@@ -1,5 +1,5 @@
 import { localDesignLibraryEnabled } from '../lib/localDesignLibrary';
-import { AgentsNavIcon, InstructionsNavIcon, ChannelsNavIcon, ChatNavIcon, InboxNavIcon, DashboardNavIcon, InsightsIcon, KnowledgeNavIcon, ModulesNavIcon, RepositoriesNavIcon, SchedulesNavIcon, RoutinesNavIcon, PluginsNavIcon, ProfilesNavIcon, TasksNavIcon, ToolsNavIcon, WorkspaceNavIcon } from '../components/navIcons';
+import { AgentsNavIcon, InstructionsNavIcon, ChannelsNavIcon, ChatNavIcon, InboxNavIcon, DashboardNavIcon, InsightsIcon, KnowledgeNavIcon, CanvasesNavIcon, RepositoriesNavIcon, SchedulesNavIcon, RoutinesNavIcon, PluginsNavIcon, ProfilesNavIcon, TasksNavIcon, ToolsNavIcon, WorkspaceNavIcon } from '../components/navIcons';
 
 // Grouped by owner/level (see the entity-relationship model):
 //   Operate  — the surfaces you work in (Progenitor chat, overview, projects)
@@ -20,7 +20,7 @@ export const navGroups = [
     label: 'Spectate',
     items: [
       { to: '/dashboard', icon: <DashboardNavIcon />, label: 'Dashboard', trackActivity: true },
-      { to: '/modules', icon: <ModulesNavIcon />, label: 'Modules', trackActivity: true },
+      { to: '/canvases', icon: <CanvasesNavIcon />, label: 'Canvases', trackActivity: true },
       { to: '/insights', icon: <InsightsIcon />, label: 'Insights' },
     ],
   },
