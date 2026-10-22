@@ -4,7 +4,7 @@ Shared by the DeepAgent virtual filesystem mount
 (``agent/attachment_backend.py``, mounted at ``/attachments/``) and the
 ``convert_attachment`` system tool -- both need to read (and occasionally
 update) the same table the backend writes to
-(``app/backend/attachment_blob_store.py``), via a raw SQL connection, not an
+(``app/backend/attachments/store.py``), via a raw SQL connection, not an
 SSE round-trip to the backend process. One connection pool per database URL
 is cached for the life of the process instead of opened per call/instance.
 """

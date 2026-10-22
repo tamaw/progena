@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from app.backend import knowledge_service as svc
-from app.backend.document_store import InMemoryDocumentStore, set_default_document_store
+from app.backend.knowledge import service as svc
+from app.backend.storage.documents import InMemoryDocumentStore, set_default_document_store
 
 
 @pytest.fixture(autouse=True)

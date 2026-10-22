@@ -5,27 +5,27 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from app.backend import ui_routes
-from app.backend.document_store import (
+import app.backend.events.stream as events_stream
+from app.backend.storage.documents import (
     EVENT_LOG_START,
     PROGENITOR_STATE_PREFIX,
     CheckpointThreadSnapshot,
     InMemoryDocumentStore,
 )
-from app.backend.routine_events import RoutineEvents
+from app.backend.workflows.events import RoutineEvents
 from app.progenitor.routines.events import RUN_EVENT_PREFIX
 
 
 @pytest.fixture
 def feed(monkeypatch):
-    import app.backend.routine_events as module
+    import app.backend.workflows.events as module
 
     store = InMemoryDocumentStore()
     feed = RoutineEvents()
     events = []
     monkeypatch.setattr(module, "get_document_store", lambda: store)
     monkeypatch.setattr(
-        ui_routes,
+        events_stream,
         "broadcast_ui_event",
         lambda kind, payload, **kw: events.append((kind, payload, kw)),
     )
@@ -62,7 +62,7 @@ async def test_global_lifecycle_survives_no_page_subscription(feed):
 
 
 async def test_detail_only_reads_selected_threads_and_stops_after_unsubscribe(feed, monkeypatch):
-    import app.backend.routine_events as module
+    import app.backend.workflows.events as module
 
     listener, store, events = feed
     for session in ["one", "two"]:
@@ -107,16 +107,16 @@ async def test_recovery_snapshot_keeps_latest_attempt_status_without_outputs(fee
 
 async def test_targeted_detail_never_enters_global_replay(monkeypatch):
     first, other = asyncio.Queue(), asyncio.Queue()
-    monkeypatch.setattr(ui_routes, "_ui_stream_subscribers", {first: None, other: None})
-    monkeypatch.setattr(ui_routes, "_ui_stream_clients", {first: "first", other: "other"})
+    monkeypatch.setattr(events_stream, "_ui_stream_subscribers", {first: None, other: None})
+    monkeypatch.setattr(events_stream, "_ui_stream_clients", {first: "first", other: "other"})
     replay = []
-    monkeypatch.setattr(ui_routes, "_ui_event_replay", replay)
-    ui_routes.broadcast_ui_event(
+    monkeypatch.setattr(events_stream, "_ui_event_replay", replay)
+    events_stream.broadcast_ui_event(
         "agent.routine.run_state.loaded", {"data": {"answer": 9}}, client_id="first"
     )
     assert first.qsize() == 1
     assert other.empty()
     assert not replay
-    ui_routes.broadcast_ui_event("agent.routine.run.completed", {"agent_id": "demo"})
+    events_stream.broadcast_ui_event("agent.routine.run.completed", {"agent_id": "demo"})
     assert first.qsize() == 2 and other.qsize() == 1
     assert len(replay) == 1

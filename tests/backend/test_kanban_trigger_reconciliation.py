@@ -13,16 +13,20 @@ from unittest.mock import AsyncMock
 import pytest
 from fastapi.testclient import TestClient
 
-from app.backend.document_events import seed_document_types
-from app.backend.document_store import (
+import app.backend.events.dispatch as events_dispatch
+import app.backend.events.stream as events_stream
+import app.backend.lifecycle.state as lifecycle_state
+import app.backend.workflows.runtime as workflows_runtime
+from app.backend.chat.models import AgentResponse
+from app.backend.events.documents import seed_document_types
+from app.backend.main import app
+from app.backend.monitoring.state import StateReader
+from app.backend.storage.documents import (
     PROGENITOR_STATE_PREFIX,
     InMemoryDocumentStore,
     set_default_document_store,
 )
-from app.backend.main import app
-from app.backend.models import AgentResponse
-from app.backend.state_reader import StateReader
-from app.backend.workflow_service import list_workflow_runs, save_workflow_definition
+from app.backend.workflows.service import list_workflow_runs, save_workflow_definition
 from app.progenitor.workflows import default_workflow_definition
 
 
@@ -32,27 +36,24 @@ def workflow_env(tmp_path, monkeypatch):
     set_default_document_store(store)
     seed_document_types(store)
     monkeypatch.setattr(
-        "app.backend.main.configure_default_document_store", lambda *_a, **_k: store
+        "app.backend.storage.documents.configure_default_document_store", lambda *_a, **_k: store
     )
 
     state_reader = StateReader(document_store=store)
-    monkeypatch.setattr("app.backend.ui_routes.get_state_reader", lambda: state_reader)
+    monkeypatch.setattr("app.backend.monitoring.state.get_state_reader", lambda: state_reader)
 
-    import app.backend.ui_routes as ui_routes
-
-    ui_routes._workflow_executor = None
-    ui_routes._document_event_dispatcher = None
-    ui_routes._ui_event_replay.clear()
+    workflows_runtime._workflow_executor = None
+    events_dispatch._document_event_dispatcher = None
+    events_stream._ui_event_replay.clear()
     yield store, state_reader
-    ui_routes._workflow_executor = None
-    ui_routes._document_event_dispatcher = None
-    ui_routes._ui_event_replay.clear()
+    workflows_runtime._workflow_executor = None
+    events_dispatch._document_event_dispatcher = None
+    events_stream._ui_event_replay.clear()
     set_default_document_store(InMemoryDocumentStore())
 
 
 @pytest.fixture
 def backend_client(monkeypatch):
-    import app.backend.main as backend_main
 
     mock_client = AsyncMock()
     mock_client.send_message.return_value = AgentResponse(
@@ -60,8 +61,10 @@ def backend_client(monkeypatch):
         reasoning=None,
         reasoning_tokens=None,
     )
-    monkeypatch.setattr("app.backend.main.get_sse_client", lambda *_a, **_k: mock_client)
-    backend_main.client = mock_client
+    monkeypatch.setattr(
+        "app.backend.integrations.runtime.get_sse_client", lambda *_a, **_k: mock_client
+    )
+    lifecycle_state.client = mock_client
     yield mock_client
 
 
@@ -100,8 +103,6 @@ async def test_agent_card_move_fires_matching_workflow(workflow_env, backend_cli
         store, _matching_workflow_definition(workflow_id, "Agent move workflow")
     )
 
-    from app.backend.ui_routes import get_document_event_dispatcher
-
     # Direct store write simulating the runtime agent's filesystem tool.
     store.save_document(
         PROGENITOR_STATE_PREFIX,
@@ -115,7 +116,7 @@ async def test_agent_card_move_fires_matching_workflow(workflow_env, backend_cli
             "owner": "user",
         },
     )
-    await get_document_event_dispatcher().drain()
+    await events_dispatch.get_document_event_dispatcher().drain()
     # Non-matching creation should not start the workflow.
     assert list_workflow_runs(store, workflow_id=workflow_id) == []
 
@@ -132,7 +133,7 @@ async def test_agent_card_move_fires_matching_workflow(workflow_env, backend_cli
             "owner": "user",
         },
     )
-    await get_document_event_dispatcher().drain()
+    await events_dispatch.get_document_event_dispatcher().drain()
 
     run = await _wait_for_completed_run(store, workflow_id)
     assert run["status"] == "completed", run["last_error"]
@@ -146,10 +147,9 @@ async def test_agent_card_move_fires_matching_workflow(workflow_env, backend_cli
 async def test_rest_driven_move_is_not_double_dispatched(workflow_env, backend_client):
     """A persisted REST move emits its event once; draining again cannot rerun it."""
     store, state_reader = workflow_env
-    from app.backend import ui_routes
 
     queue = asyncio.Queue()
-    ui_routes._ui_stream_subscribers[queue] = None
+    events_stream._ui_stream_subscribers[queue] = None
     try:
         with TestClient(app) as client:
             workflow_id = "workflow_rest_move"
@@ -214,7 +214,7 @@ async def test_rest_driven_move_is_not_double_dispatched(workflow_env, backend_c
             matches = [item.model_dump(mode="json") for item in items]
             assert len(matches) == 1
     finally:
-        ui_routes._ui_stream_subscribers.pop(queue, None)
+        events_stream._ui_stream_subscribers.pop(queue, None)
 
 
 @pytest.mark.asyncio
@@ -223,8 +223,6 @@ async def test_non_matching_move_does_not_fire_workflow(workflow_env, backend_cl
     store, _state_reader = workflow_env
     workflow_id = "workflow_no_match"
     save_workflow_definition(store, _matching_workflow_definition(workflow_id, "No match workflow"))
-
-    from app.backend.ui_routes import get_document_event_dispatcher
 
     store.save_document(
         PROGENITOR_STATE_PREFIX,
@@ -238,7 +236,7 @@ async def test_non_matching_move_does_not_fire_workflow(workflow_env, backend_cl
             "owner": "user",
         },
     )
-    await get_document_event_dispatcher().drain()
+    await events_dispatch.get_document_event_dispatcher().drain()
 
     # Update a field other than column_id — match requires after.column_id == done.
     store.save_document(
@@ -253,6 +251,6 @@ async def test_non_matching_move_does_not_fire_workflow(workflow_env, backend_cl
             "owner": "user",
         },
     )
-    await get_document_event_dispatcher().drain()
+    await events_dispatch.get_document_event_dispatcher().drain()
 
     assert list_workflow_runs(store, workflow_id=workflow_id) == []

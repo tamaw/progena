@@ -3,15 +3,16 @@
 import time
 import unittest
 
+import app.backend.http.middleware as http_middleware
+
 
 class TestRateLimiterMemoryBounds(unittest.TestCase):
     """Test rate limiter memory bounding functionality."""
 
     def setUp(self):
         """Set up test fixtures."""
-        from app.backend.main import RateLimiter
 
-        self.RateLimiter = RateLimiter
+        self.RateLimiter = http_middleware.RateLimiter
 
     def test_cleanup_stale_clients_returns_count(self):
         """Test that cleanup returns number of removed clients."""
@@ -116,9 +117,8 @@ class TestRateLimiterBasicFunctionality(unittest.TestCase):
 
     def setUp(self):
         """Set up test fixtures."""
-        from app.backend.main import RateLimiter
 
-        self.limiter = RateLimiter(requests_per_minute=5, requests_per_hour=10)
+        self.limiter = http_middleware.RateLimiter(requests_per_minute=5, requests_per_hour=10)
 
     def test_allows_under_limit(self):
         """Test requests are allowed under the limit."""

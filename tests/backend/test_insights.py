@@ -7,9 +7,10 @@ from typing import Literal
 from fastapi.testclient import TestClient
 from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 
-from app.backend.document_store import CheckpointMessageBlob, StoredDocument
-from app.backend.insights import build_token_usage_snapshot
+import app.backend.events.stream as events_stream
+from app.backend.insights.service import build_token_usage_snapshot
 from app.backend.main import app
+from app.backend.storage.documents import CheckpointMessageBlob, StoredDocument
 
 
 class _InsightsStore:
@@ -303,7 +304,7 @@ def test_usage_marks_missing_usage_and_missing_cache_detail_without_calling_them
 
 
 def test_token_usage_route_acknowledges_and_correlates_snapshot(monkeypatch):
-    from app.backend import insights_routes, ui_routes
+    from app.backend.insights import routes as insights_routes
 
     payload = {
         "range": "24h",
@@ -325,9 +326,9 @@ def test_token_usage_route_acknowledges_and_correlates_snapshot(monkeypatch):
     monkeypatch.setattr(
         insights_routes, "build_token_usage_snapshot", lambda *_args, **_kwargs: payload
     )
-    monkeypatch.setattr(ui_routes, "_ui_event_replay", [])
+    monkeypatch.setattr(events_stream, "_ui_event_replay", [])
     request_id = "insights-request"
-    event_start = len(ui_routes._ui_event_replay)
+    event_start = len(events_stream._ui_event_replay)
 
     response = TestClient(app).get(
         "/api/ui/insights/token-usage?range=24h", headers={"X-Request-ID": request_id}
@@ -337,7 +338,7 @@ def test_token_usage_route_acknowledges_and_correlates_snapshot(monkeypatch):
     assert response.json()["event_types"] == ["insights.token_usage.snapshot"]
     event = next(
         event
-        for event in ui_routes._ui_event_replay[event_start:]
+        for event in events_stream._ui_event_replay[event_start:]
         if event.payload.get("request_id") == request_id
     )
     assert event.type == "insights.token_usage.snapshot"

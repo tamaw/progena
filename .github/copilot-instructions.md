@@ -94,6 +94,6 @@ See `app/progenitor/config.py` for full dataclass definitions.
 - `app/progenitor/runtime/loop.py` - Perpetual loop execution
 - `app/progenitor/state/models.py` - All Pydantic models
 - `app/progenitor/config.py` - Configuration dataclasses
-- `app/backend/main.py` - FastAPI endpoints
+- `app/backend/main.py` - FastAPI application assembly; endpoints live in backend feature packages
 - `docs/SPEC.md` - Checked-in main system specification
 - `docs/ARCHITECTURE_DIAGRAM.md` - Visual architecture

@@ -2,6 +2,8 @@
 Backend Configuration.
 """
 
+from __future__ import annotations
+
 import os
 import sys
 from dataclasses import dataclass, field
@@ -10,7 +12,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 from dotenv import load_dotenv
 
-from .env_utils import env_bool, env_float, env_int
+from app.backend.env_utils import env_bool, env_float, env_int
 
 # Load .env file from project root
 load_dotenv()
@@ -94,7 +96,7 @@ class ChatServerConfig:
         return urlunsplit(parts._replace(path=f"/{self.backend_database_name}"))
 
     @classmethod
-    def from_env(cls) -> "ChatServerConfig":
+    def from_env(cls) -> ChatServerConfig:
         """Load config from environment variables."""
         return cls(
             host=os.getenv("CHAT_SERVER_HOST", "0.0.0.0"),  # nosec B104 - same runtime default as above

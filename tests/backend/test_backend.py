@@ -9,12 +9,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from app.backend.alerts import AlertInfo
-from app.backend.client import ProgenitorClient
+import app.backend.alerts.relay as alerts_relay
+from app.backend.alerts.service import AlertInfo
+from app.backend.chat.models import AgentResponse
 from app.backend.config import ChatServerConfig
-from app.backend.main import _relay_alert
-from app.backend.models import AgentResponse
-from app.backend.sse_client import start_sse_client_with_retry
+from app.backend.integrations.runtime import start_sse_client_with_retry
+from app.backend.integrations.subprocess import ProgenitorClient
 
 
 class TestChatServerConfig:
@@ -106,7 +106,7 @@ class TestSSEEventForwardingStartup:
         client.start = AsyncMock(side_effect=[RuntimeError("offline"), None])
 
         sleep = AsyncMock()
-        with patch("app.backend.sse_client.asyncio.sleep", sleep):
+        with patch("app.backend.integrations.runtime.asyncio.sleep", sleep):
             await start_sse_client_with_retry(client, retry_delay=0.25)
 
         assert client.start.await_count == 2
@@ -138,7 +138,7 @@ class TestAlertRelay:
             return_value=AgentResponse(response="sent", reasoning=None, reasoning_tokens=None)
         )
 
-        await _relay_alert(progenitor, self._alert(id="alert-42"))
+        await alerts_relay._relay_alert(progenitor, self._alert(id="alert-42"))
 
         progenitor.start.assert_not_awaited()
         progenitor.send_message.assert_awaited_once()
@@ -152,7 +152,7 @@ class TestAlertRelay:
             return_value=AgentResponse(response="sent", reasoning=None, reasoning_tokens=None)
         )
 
-        await _relay_alert(progenitor, self._alert())
+        await alerts_relay._relay_alert(progenitor, self._alert())
 
         progenitor.start.assert_awaited_once()
 

@@ -2,9 +2,9 @@ import asyncio
 
 import pytest
 
-from app.backend.document_events import seed_document_types
-from app.backend.document_store import InMemoryDocumentStore
-from app.backend.workflow_service import (
+from app.backend.events.documents import seed_document_types
+from app.backend.storage.documents import InMemoryDocumentStore
+from app.backend.workflows.service import (
     PromptExecutionResult,
     WorkflowExecutor,
     build_manual_trigger_event,
@@ -599,7 +599,7 @@ async def test_format_node_renders_nested_and_non_string_values_without_a_runner
 
 
 def test_query_filter_tells_json_true_from_1():
-    from app.backend.workflow_service import _execute_document_node
+    from app.backend.workflows.service import _execute_document_node
     from app.progenitor.workflows import WorkflowNodeDocumentQuery
 
     store = InMemoryDocumentStore()

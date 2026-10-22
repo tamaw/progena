@@ -7,9 +7,9 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-from app.backend.acp_supervisor import ACPTaskSupervisor
-from app.backend.document_events import DocumentEventDispatcher, seed_document_types
-from app.backend.document_store import PROGENITOR_STATE_PREFIX, InMemoryDocumentStore
+from app.backend.events.documents import DocumentEventDispatcher, seed_document_types
+from app.backend.storage.documents import PROGENITOR_STATE_PREFIX, InMemoryDocumentStore
+from app.backend.workflows.acp_supervisor import ACPTaskSupervisor
 from app.progenitor.acp.runner import ACPRunResult
 from app.progenitor.document_kinds import ACP_TASK_KEY_PREFIX
 

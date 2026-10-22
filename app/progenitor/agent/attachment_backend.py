@@ -1,7 +1,7 @@
 """DeepAgent backend exposing uploaded chat attachments as files.
 
 Backed directly by the same Postgres ``attachments`` blob table the backend
-writes to (``app/backend/attachment_blob_store.py``), via
+writes to (``app/backend/attachments/store.py``), via
 ``app.progenitor.attachments_db`` -- a raw SQL read, not routed through the
 LangGraph ``store``/StateManager document abstraction, since attachments
 are opaque blobs the agent only needs to browse and read as text (via

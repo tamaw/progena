@@ -5,8 +5,8 @@ from unittest.mock import Mock
 
 import pytest
 
-from app.backend.agent_store import AgentStore
-from app.backend.document_store import PROGENITOR_STATE_PREFIX, InMemoryDocumentStore
+from app.backend.agents.store import AgentStore
+from app.backend.storage.documents import PROGENITOR_STATE_PREFIX, InMemoryDocumentStore
 
 
 @pytest.mark.parametrize("rowcount", [0, 1])

@@ -49,7 +49,7 @@ export const deleteRepo = createAcknowledgedThunk('uiData/deleteRepo', async ({ 
 
 // On-demand "Fetch": runs `git fetch` against the repo's remote and merges a
 // fresh scan into the repo_scan document server-side (see
-// app/backend/repo_service.py:fetch_and_rescan_repo), instead of waiting out
+// app/backend/repositories/service.py:fetch_and_rescan_repo), instead of waiting out
 // the heartbeat's own scan interval. Updated branch/upstream state arrives
 // on `repositories.snapshot` + `repo.detail.updated`, same as every other
 // write here.

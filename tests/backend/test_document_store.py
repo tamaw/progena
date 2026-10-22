@@ -8,7 +8,7 @@ import pytest
 from psycopg.types.json import Jsonb
 from psycopg_pool import PoolClosed
 
-from app.backend.document_store import (
+from app.backend.storage.documents import (
     STORE_CHANGE_CHANNEL,
     InMemoryDocumentStore,
     PostgresDocumentStore,

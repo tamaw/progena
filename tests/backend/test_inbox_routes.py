@@ -6,12 +6,12 @@ import pytest
 from ack_helpers import assert_acknowledged
 from fastapi.testclient import TestClient
 
-from app.backend.document_store import (
+from app.backend.main import app
+from app.backend.storage.documents import (
     PROGENITOR_STATE_PREFIX,
     InMemoryDocumentStore,
     set_default_document_store,
 )
-from app.backend.main import app
 
 
 def _message_payload(message_id: str, *, title: str, created_at: str, read: bool = False) -> dict:
@@ -58,17 +58,17 @@ class _StreamCapture:
     """Subscribe to the UI event stream for the duration of a request."""
 
     def __init__(self):
-        from app.backend import ui_routes
+        from app.backend.events import stream as events_stream
 
-        self._ui_routes = ui_routes
+        self.events_stream = events_stream
         self.queue = asyncio.Queue()
 
     def __enter__(self):
-        self._ui_routes._ui_stream_subscribers[self.queue] = None
+        self.events_stream._ui_stream_subscribers[self.queue] = None
         return self
 
     def __exit__(self, *exc_info):
-        self._ui_routes._ui_stream_subscribers.pop(self.queue, None)
+        self.events_stream._ui_stream_subscribers.pop(self.queue, None)
         return False
 
     def event_types(self):

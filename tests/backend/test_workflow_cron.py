@@ -3,10 +3,10 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from app.backend.document_events import seed_document_types
-from app.backend.document_store import BACKEND_STATE_PREFIX, InMemoryDocumentStore
-from app.backend.workflow_cron import WorkflowCronClock, workflow_cron_state_key
-from app.backend.workflow_service import (
+from app.backend.events.documents import seed_document_types
+from app.backend.storage.documents import BACKEND_STATE_PREFIX, InMemoryDocumentStore
+from app.backend.workflows.cron import WorkflowCronClock, workflow_cron_state_key
+from app.backend.workflows.service import (
     PromptExecutionResult,
     WorkflowExecutor,
     get_workflow_run,

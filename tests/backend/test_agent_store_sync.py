@@ -12,7 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from app.backend import agent_store
+from app.backend.agents import store as agent_store
 
 
 @dataclass
@@ -131,7 +131,7 @@ def test_acp_profiles_from_registry_filters_by_transport(monkeypatch):
             "get_acp_tasks": lambda self: [],
         },
     )()
-    import app.backend.state_reader as state_reader
+    import app.backend.monitoring.state as state_reader
 
     monkeypatch.setattr(state_reader, "get_state_reader", lambda: fake_reader)
 
@@ -161,7 +161,7 @@ def test_acp_profiles_from_registry_detects_acp_kind_without_transport(monkeypat
             "get_a2a_tasks": lambda self: [],
         },
     )()
-    import app.backend.state_reader as state_reader
+    import app.backend.monitoring.state as state_reader
 
     monkeypatch.setattr(state_reader, "get_state_reader", lambda: fake_reader)
 
@@ -223,7 +223,7 @@ def test_a2a_profiles_from_registry(monkeypatch):
         (),
         {"get_registry": lambda self: ([_Info(status="running"), _Info(name="Other")], [])},
     )()
-    import app.backend.state_reader as state_reader
+    import app.backend.monitoring.state as state_reader
 
     monkeypatch.setattr(state_reader, "get_state_reader", lambda: fake_reader)
 
@@ -233,7 +233,7 @@ def test_a2a_profiles_from_registry(monkeypatch):
 
 
 def test_a2a_profiles_from_registry_handles_failure(monkeypatch):
-    import app.backend.state_reader as state_reader
+    import app.backend.monitoring.state as state_reader
 
     def _boom():
         raise RuntimeError("no reader")
@@ -280,7 +280,7 @@ def test_a2a_tasks_by_agent_groups_sorts_and_shapes(monkeypatch):
         {"task_id": "d", "status": "working"},  # no agent_name -> skipped
     ]
     fake_reader = type("R", (), {"get_a2a_tasks": lambda self: records})()
-    import app.backend.state_reader as state_reader
+    import app.backend.monitoring.state as state_reader
 
     monkeypatch.setattr(state_reader, "get_state_reader", lambda: fake_reader)
 

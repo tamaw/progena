@@ -9,7 +9,7 @@ import psycopg
 import pytest
 from psycopg import sql
 
-from app.backend.document_store import PROGENITOR_STATE_PREFIX, PostgresDocumentStore
+from app.backend.storage.documents import PROGENITOR_STATE_PREFIX, PostgresDocumentStore
 from app.progenitor.modules import module_file_key
 
 DATABASE_URL = (os.getenv("PROGENITOR_TEST_DATABASE_URL") or "").strip() or None

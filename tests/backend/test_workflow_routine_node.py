@@ -4,9 +4,9 @@ import asyncio
 
 import pytest
 
-from app.backend.document_events import seed_document_types
-from app.backend.document_store import PROGENITOR_STATE_PREFIX, InMemoryDocumentStore
-from app.backend.workflow_service import (
+from app.backend.events.documents import seed_document_types
+from app.backend.storage.documents import PROGENITOR_STATE_PREFIX, InMemoryDocumentStore
+from app.backend.workflows.service import (
     PromptExecutionResult,
     WorkflowExecutor,
     build_manual_trigger_event,

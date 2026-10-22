@@ -9,12 +9,12 @@ import pytest
 from ack_helpers import assert_acknowledged
 from fastapi.testclient import TestClient
 
-from app.backend.document_store import (
+from app.backend.main import app
+from app.backend.storage.documents import (
     PROGENITOR_STATE_PREFIX,
     InMemoryDocumentStore,
     set_default_document_store,
 )
-from app.backend.main import app
 
 
 @pytest.fixture
@@ -24,7 +24,7 @@ def client():
 
 @pytest.fixture(autouse=True)
 def _clear_catalog_cache():
-    from app.backend.marketplace_service import _CATALOG_CACHE
+    from app.backend.plugins.marketplaces import _CATALOG_CACHE
 
     _CATALOG_CACHE.clear()
 
@@ -41,17 +41,17 @@ class _StreamCapture:
     """Subscribe to the UI event stream for the duration of a request."""
 
     def __init__(self):
-        from app.backend import ui_routes
+        from app.backend.events import stream as events_stream
 
-        self._ui_routes = ui_routes
+        self.events_stream = events_stream
         self.queue = asyncio.Queue()
 
     def __enter__(self):
-        self._ui_routes._ui_stream_subscribers[self.queue] = None
+        self.events_stream._ui_stream_subscribers[self.queue] = None
         return self
 
     def __exit__(self, *exc_info):
-        self._ui_routes._ui_stream_subscribers.pop(self.queue, None)
+        self.events_stream._ui_stream_subscribers.pop(self.queue, None)
         return False
 
     def event_types(self):
@@ -82,7 +82,10 @@ class TestMarketplaceRoutes:
         assert_acknowledged(response, ["marketplaces.snapshot"])
         envelopes = capture.event_types()
         assert [e.type for e in envelopes] == ["marketplaces.snapshot"]
-        assert envelopes[0].payload["marketplaces"]["acme"]["source"] == "https://github.com/acme/plugins"
+        assert (
+            envelopes[0].payload["marketplaces"]["acme"]["source"]
+            == "https://github.com/acme/plugins"
+        )
 
     def test_get_empty_defaults(self, client, document_store):
         with _StreamCapture() as capture:
@@ -150,7 +153,7 @@ class TestMarketplaceRoutes:
         )()
 
         monkeypatch.setattr(
-            "app.backend.marketplace_routes.fetch_marketplace",
+            "app.backend.plugins.marketplace_routes.fetch_marketplace",
             AsyncMock(return_value=fake_catalog),
         )
 
@@ -183,7 +186,7 @@ class TestMarketplaceRoutes:
             },
         )
         monkeypatch.setattr(
-            "app.backend.marketplace_routes.fetch_marketplace",
+            "app.backend.plugins.marketplace_routes.fetch_marketplace",
             AsyncMock(side_effect=PluginFetchError("network error")),
         )
 

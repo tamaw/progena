@@ -15,10 +15,30 @@ OpenAI-compatible API server providing responses and streaming endpoints.
 ### Architecture
 ```
 backend/
-├── main.py              # FastAPI app and endpoints
-├── models.py            # Request/response models
-├── sse_client.py        # HTTP + SSE client for Progenitor runtime
-└── client.py            # Legacy subprocess client
+├── main.py              # ASGI app, middleware and router assembly
+├── config.py            # Backend environment configuration
+├── http/                # Acknowledgements, request IDs, middleware, UI router assembly
+├── events/              # SSE transport, event envelopes and document dispatch
+├── storage/             # Shared Postgres document store and document-type routes
+├── lifecycle/           # Startup/shutdown, shared process state and watchers
+├── chat/                # Chat routes/read model, responses, sessions and streaming
+├── attachments/         # Upload routes, processing and blob storage
+├── agents/              # Agent catalog, store and routine reconciliation
+├── instructions/        # Instruction routes and service
+├── knowledge/           # Knowledge routes, pages, catalog and indexer
+├── plugins/             # Plugins and marketplace sources
+├── repositories/        # Declared repositories and scan/fetch operations
+├── modules/             # Module routes and connection-scoped event interests
+├── workflows/           # Routes, execution service, cron, ACP and routine events
+├── tasks/               # Kanban/task routes, models and persistence helpers
+├── schedules/           # Schedule/widget routes, models and service helpers
+├── settings/            # Preferences, providers, model profiles, policies and MCP
+├── insights/            # Usage accounting and routes
+├── inbox/               # Inbox routes
+├── alerts/              # Alert store, routes and user-message relay
+├── search/              # Cross-domain search routes
+├── monitoring/          # State reader, status/metrics and log routes
+└── integrations/        # Runtime HTTP/SSE client, legacy client and Telegram
 ```
 
 - `POST /api/ui/responses` - Browser generation acknowledgement endpoint
@@ -71,7 +91,14 @@ The canonical frontend event feed is `GET /api/ui/stream`. It emits named SSE fr
 }
 ```
 
-Use `broadcast_ui_event()` for new backend-owned UI changes after persistence succeeds. The stream keeps a bounded in-memory replay buffer and honors `Last-Event-ID`; replayed events are sent before the fresh `connection.ready` event so reconnects apply in order.
+Use `events.stream.broadcast_ui_event()` for new backend-owned UI changes after persistence succeeds. Shared envelopes live in `events.contracts`; finite-request acknowledgements live in `http.contracts`. The stream keeps a bounded in-memory replay buffer and honors `Last-Event-ID`; replayed events are sent before the fresh `connection.ready` event so reconnects apply in order.
+
+Add endpoints to their feature's `routes.py`; register them in `http/router.py`
+or `main.py`. Keep domain persistence and execution in feature services. Shared
+storage/event code must not import `main.py` or a catch-all route module.
+Process-wide clients, session management and shutdown state live in
+`lifecycle/state.py`; startup orchestration lives in `lifecycle/startup.py`.
+Importing `app.backend` itself does not construct the application.
 
 Frontend React code consumes this through Redux Toolkit listener middleware in `app/frontend/src/store/realtimeListener.js`. That listener owns the single `EventSource`, deduplicates events by id in `realtimeSlice.js`, then reducers in `uiDataSlice.js` apply domain updates. Pages should read selectors instead of opening their own long-lived UI streams.
 

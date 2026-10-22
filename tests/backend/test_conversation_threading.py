@@ -1,20 +1,20 @@
 from fastapi.testclient import TestClient
 
-from app.backend.document_store import (
+import app.backend.lifecycle.state as lifecycle_state
+from app.backend.chat.session import SessionConfig, SessionManager
+from app.backend.main import app
+from app.backend.monitoring.state import StateReader
+from app.backend.storage.documents import (
     BACKEND_STATE_PREFIX,
     PROGENITOR_STATE_PREFIX,
     InMemoryDocumentStore,
 )
-from app.backend.main import app
-from app.backend.session import SessionConfig, SessionManager
-from app.backend.state_reader import StateReader
 
 
 def test_legacy_session_route_is_deleted_without_creating_a_cookie(monkeypatch):
-    import app.backend.main as backend_main
 
     session_manager = SessionManager(SessionConfig(persist_dir=None))
-    monkeypatch.setattr(backend_main, "session_manager", session_manager)
+    monkeypatch.setattr(lifecycle_state, "session_manager", session_manager)
 
     with TestClient(app) as client:
         response = client.get("/v1/session")
@@ -24,10 +24,9 @@ def test_legacy_session_route_is_deleted_without_creating_a_cookie(monkeypatch):
 
 
 def test_deleted_session_route_does_not_restore_stale_conversation_state(monkeypatch):
-    import app.backend.main as backend_main
 
     session_manager = SessionManager(SessionConfig(persist_dir=None))
-    monkeypatch.setattr(backend_main, "session_manager", session_manager)
+    monkeypatch.setattr(lifecycle_state, "session_manager", session_manager)
 
     with TestClient(app) as client:
         client.cookies.set("progenitor_session", "stale-session")

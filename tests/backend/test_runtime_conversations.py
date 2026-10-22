@@ -14,8 +14,8 @@ import httpx
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, messages_to_dict
 
-from app.backend import runtime_conversations
-from app.backend.runtime_conversations import RuntimeConversationReader, RuntimeUnavailable
+from app.backend.integrations import runtime_history as runtime_conversations
+from app.backend.integrations.runtime_history import RuntimeConversationReader, RuntimeUnavailable
 
 MESSAGES = [HumanMessage(content="hi", id="h1"), AIMessage(content="hello", id="a1")]
 

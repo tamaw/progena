@@ -117,7 +117,7 @@ Built-in document types: `module` (prefix `module:`, schema `content_document`),
 ### Revision history
 
 `module_revisions` table installed alongside the other revision installers in
-`app/backend/document_store.py`, modelled on `instruction_revisions`:
+`app/backend/storage/documents.py`, modelled on `instruction_revisions`:
 `(id, name, path, op 'write'|'delete', content NULL on delete, content_hash, captured_at)`,
 captured by trigger on `module:` rows (insert/update with changed content, delete), with an
 immutability trigger. Restore to time T: every path whose latest revision ≤ T is a write is
@@ -138,7 +138,7 @@ writes, so they are themselves revisions and fire NOTIFY.
 
 ## Backend
 
-`app/backend/module_routes.py`, router prefix `/api/ui`, included in `main.py`. Every route
+`app/backend/modules/routes.py`, router prefix `/api/ui`, included in `main.py`. Every route
 returns HTTP 202 `UiRequestAcknowledgement` and replies on `/api/ui/stream`. Requests carry
 `X-Request-ID`; detail replies are **targeted** with `broadcast_ui_event(..., request_id=,
 client_id=)`. `client_id` is the tab's `realtimeClientId` (query param on GET/DELETE, body on
@@ -176,7 +176,7 @@ changed_fields, document}}` to each interested client (`document` = `after`, nul
 
 Watcher: `_queue_state_watch_status` rebroadcasts `modules.snapshot` for `module:` and
 `module_status:` keys (and on resync); add `module:`, `module_data:`, `module_status:` to the
-snapshot-diff bypass in `state_reader.py`.
+snapshot-diff bypass in `app/backend/monitoring/state.py`.
 
 ## Vendored libraries
 

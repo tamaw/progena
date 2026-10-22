@@ -8,10 +8,7 @@ import psycopg
 import pytest
 from psycopg.types.json import Jsonb
 
-from app.backend.document_store import (
-    PROGENITOR_STATE_PREFIX,
-    PostgresDocumentStore,
-)
+from app.backend.storage.documents import PROGENITOR_STATE_PREFIX, PostgresDocumentStore
 
 
 @pytest.fixture

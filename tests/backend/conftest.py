@@ -7,8 +7,8 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from app.backend.alerts import clear_alerts
-from app.backend.models import AgentResponse
+from app.backend.alerts.service import clear_alerts
+from app.backend.chat.models import AgentResponse
 
 
 @pytest.fixture(autouse=True)
@@ -45,8 +45,8 @@ def mock_progenitor_client():
     mock_client.stop = AsyncMock()
 
     with (
-        patch("app.backend.main.get_sse_client", return_value=mock_client),
-        patch("app.backend.main.config.telegram_enabled", False),
+        patch("app.backend.integrations.runtime.get_sse_client", return_value=mock_client),
+        patch("app.backend.lifecycle.state.config.telegram_enabled", False),
     ):
         yield
 

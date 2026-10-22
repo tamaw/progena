@@ -4,15 +4,15 @@ import asyncio
 
 import pytest
 
-from app.backend import alerts as alert_store
-from app.backend.document_events import seed_document_types
-from app.backend.document_store import (
+from app.backend.alerts import service as alert_store
+from app.backend.events.documents import seed_document_types
+from app.backend.storage.documents import (
     EVENT_LOG_START,
     PROGENITOR_STATE_PREFIX,
     InMemoryDocumentStore,
     set_default_document_store,
 )
-from app.backend.workflow_service import (
+from app.backend.workflows.service import (
     PromptExecutionResult,
     WorkflowExecutor,
     build_manual_trigger_event,

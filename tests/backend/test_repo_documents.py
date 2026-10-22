@@ -2,9 +2,9 @@
 
 import pytest
 
-from app.backend import repo_service
-from app.backend.document_events import seed_document_types
-from app.backend.document_store import (
+from app.backend.events.documents import seed_document_types
+from app.backend.repositories import service as repo_service
+from app.backend.storage.documents import (
     EVENT_LOG_START,
     PROGENITOR_STATE_PREFIX,
     InMemoryDocumentStore,
@@ -25,7 +25,7 @@ def store():
 def test_direct_repo_document_write_reaches_ui_watchers(store):
     """The agent writes repo:<id> straight to the store; the NOTIFY must still
     reach the Repositories page even though no snapshot field changes."""
-    from app.backend.state_reader import StateReader
+    from app.backend.monitoring.state import StateReader
 
     reader = StateReader(document_store=store)
     reader._last_snapshot = reader.get_snapshot()

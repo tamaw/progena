@@ -12,14 +12,14 @@ from pathlib import Path
 
 import pytest
 
-from app.backend.agent_store import AgentStore
-from app.backend.document_store import PROGENITOR_STATE_PREFIX, InMemoryDocumentStore
+from app.backend.agents.store import AgentStore
+from app.backend.storage.documents import PROGENITOR_STATE_PREFIX, InMemoryDocumentStore
 from app.progenitor.content_documents import content_document_key
 
 
 def _make_store(monkeypatch: pytest.MonkeyPatch) -> AgentStore:
     monkeypatch.setattr(
-        "app.backend.agent_store._NATIVE_OBJECT_AGENTS_ROOT", Path("/missing-test-agents")
+        "app.backend.agents.store._NATIVE_OBJECT_AGENTS_ROOT", Path("/missing-test-agents")
     )
     store = object.__new__(AgentStore)
     store._document_store = InMemoryDocumentStore()  # noqa: SLF001
@@ -107,7 +107,7 @@ def test_native_manifest_cannot_be_updated_or_deleted(
         _manifest_markdown("Native Agent", "Ships with the repo.", "Old prompt."),
         encoding="utf-8",
     )
-    monkeypatch.setattr("app.backend.agent_store._NATIVE_OBJECT_AGENTS_ROOT", tmp_path)
+    monkeypatch.setattr("app.backend.agents.store._NATIVE_OBJECT_AGENTS_ROOT", tmp_path)
     store._document_store.save_document(
         PROGENITOR_STATE_PREFIX,
         content_document_key("agent", "native/native-agent/SYSTEM.md"),
@@ -130,7 +130,7 @@ def test_update_object_agent_rejects_renaming_native_manifest(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     store = _make_store(monkeypatch)
-    monkeypatch.setattr("app.backend.agent_store._NATIVE_OBJECT_AGENTS_ROOT", tmp_path)
+    monkeypatch.setattr("app.backend.agents.store._NATIVE_OBJECT_AGENTS_ROOT", tmp_path)
 
     system_path = tmp_path / "native-agent" / "SYSTEM.md"
     system_path.parent.mkdir(parents=True)
@@ -167,7 +167,7 @@ def test_update_object_agent_rejects_rename_colliding_with_existing(
 
 def test_native_disk_precedence_over_documents(monkeypatch, tmp_path):
     store = _make_store(monkeypatch)
-    monkeypatch.setattr("app.backend.agent_store._NATIVE_OBJECT_AGENTS_ROOT", tmp_path)
+    monkeypatch.setattr("app.backend.agents.store._NATIVE_OBJECT_AGENTS_ROOT", tmp_path)
     system_path = tmp_path / "reviewer" / "SYSTEM.md"
     system_path.parent.mkdir()
     system_path.write_text(_manifest_markdown("Reviewer", "Reviews.", "native prompt."))
@@ -187,7 +187,7 @@ def test_native_disk_precedence_over_documents(monkeypatch, tmp_path):
 
 def test_native_rename_with_same_slug_is_rejected(monkeypatch, tmp_path):
     store = _make_store(monkeypatch)
-    monkeypatch.setattr("app.backend.agent_store._NATIVE_OBJECT_AGENTS_ROOT", tmp_path)
+    monkeypatch.setattr("app.backend.agents.store._NATIVE_OBJECT_AGENTS_ROOT", tmp_path)
     system_path = tmp_path / "native-agent" / "SYSTEM.md"
     system_path.parent.mkdir()
     system_path.write_text(_manifest_markdown("Native Agent", "Ships.", "Prompt."))

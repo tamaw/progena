@@ -15,9 +15,21 @@ import pytest
 from ack_helpers import assert_acknowledged, assert_acknowledgement_body
 from fastapi.testclient import TestClient
 
-from app.backend.alerts import clear_alerts, create_alert
-from app.backend.document_events import seed_document_types
-from app.backend.document_store import (
+import app.backend.alerts.routes as alerts_routes
+import app.backend.chat.routes as chat_routes
+import app.backend.events.dispatch as events_dispatch
+import app.backend.events.routes as events_routes
+import app.backend.events.stream as events_stream
+import app.backend.lifecycle.state as lifecycle_state
+import app.backend.monitoring.status as monitoring_status
+import app.backend.schedules.service as schedules_service
+from app.backend.alerts.service import clear_alerts, create_alert
+from app.backend.chat.models import AgentResponse
+from app.backend.chat.threads import clear_threads
+from app.backend.events.documents import seed_document_types
+from app.backend.main import app
+from app.backend.monitoring.state import StateReader
+from app.backend.storage.documents import (
     BACKEND_STATE_PREFIX,
     PROGENITOR_LOG_PREFIX,
     PROGENITOR_STATE_PREFIX,
@@ -25,10 +37,6 @@ from app.backend.document_store import (
     InMemoryDocumentStore,
     set_default_document_store,
 )
-from app.backend.main import app
-from app.backend.models import AgentResponse
-from app.backend.state_reader import StateReader
-from app.backend.threads import clear_threads
 from app.progenitor.document_kinds import SESSION_KEY_PREFIX
 
 
@@ -77,12 +85,11 @@ def kanban_state_reader(tmp_path, monkeypatch, document_store):
         document_store=document_store,
         logs_dir=logs_dir,
     )
-    monkeypatch.setattr("app.backend.ui_routes.get_state_reader", lambda: state_reader)
-    import app.backend.ui_routes as ui_routes
+    monkeypatch.setattr("app.backend.monitoring.state.get_state_reader", lambda: state_reader)
 
-    ui_routes._document_event_dispatcher = None
+    events_dispatch._document_event_dispatcher = None
     yield state_reader
-    ui_routes._document_event_dispatcher = None
+    events_dispatch._document_event_dispatcher = None
 
 
 @pytest.fixture
@@ -102,12 +109,11 @@ def tasks_state_reader(tmp_path, monkeypatch, document_store):
         document_store=document_store,
         logs_dir=logs_dir,
     )
-    monkeypatch.setattr("app.backend.ui_routes.get_state_reader", lambda: state_reader)
-    import app.backend.ui_routes as ui_routes
+    monkeypatch.setattr("app.backend.monitoring.state.get_state_reader", lambda: state_reader)
 
-    ui_routes._document_event_dispatcher = None
+    events_dispatch._document_event_dispatcher = None
     yield state_reader
-    ui_routes._document_event_dispatcher = None
+    events_dispatch._document_event_dispatcher = None
 
 
 @pytest.fixture
@@ -134,11 +140,10 @@ class TestUIRoutes:
         """The periodic tick carries only process metrics, never DB-derived state.
 
         progenitor_running belongs here too: it's a live SSE heartbeat check,
-        not a Postgres read (see main.get_progenitor_liveness()).
+        not a Postgres read (see integrations.runtime.get_progenitor_liveness()).
         """
-        from app.backend import ui_routes
 
-        metrics = ui_routes._process_metrics()
+        metrics = monitoring_status._process_metrics()
         assert set(metrics) == {"status", "uptime_seconds", "memory_mb", "progenitor_running"}
         assert metrics["status"] in {"healthy", "draining"}
         assert isinstance(metrics["progenitor_running"], bool)
@@ -149,10 +154,9 @@ class TestUIRoutes:
 
     def test_widgets_endpoint_broadcasts_snapshot(self, client):
         """The acknowledgement is backed by a request-correlated canonical event."""
-        from app.backend import ui_routes
 
         request_id = "widgets-stream-request"
-        event_start = len(ui_routes._ui_event_replay)
+        event_start = len(events_stream._ui_event_replay)
         response = client.get("/api/ui/widgets", headers={"X-Request-ID": request_id})
 
         assert_acknowledged(
@@ -160,7 +164,7 @@ class TestUIRoutes:
         )
         envelope = next(
             event
-            for event in ui_routes._ui_event_replay[event_start:]
+            for event in events_stream._ui_event_replay[event_start:]
             if event.payload.get("request_id") == request_id
         )
         assert envelope.type == "widgets.updated"
@@ -168,10 +172,9 @@ class TestUIRoutes:
 
     def test_mcp_endpoint_broadcasts_snapshot(self, client):
         """MCP data is available only from a request-correlated canonical event."""
-        from app.backend import ui_routes
 
         request_id = "mcp-stream-request"
-        event_start = len(ui_routes._ui_event_replay)
+        event_start = len(events_stream._ui_event_replay)
         response = client.get("/api/ui/mcp", headers={"X-Request-ID": request_id})
 
         assert_acknowledged(
@@ -179,7 +182,7 @@ class TestUIRoutes:
         )
         envelope = next(
             event
-            for event in ui_routes._ui_event_replay[event_start:]
+            for event in events_stream._ui_event_replay[event_start:]
             if event.payload.get("request_id") == request_id
         )
         assert envelope.type == "mcp.snapshot"
@@ -220,16 +223,14 @@ class TestUIRoutes:
             request_id=list_request_id,
             check_request_id_header=True,
         )
-        from app.backend import ui_routes
 
-        replay = ui_routes._ui_event_replay[-1]
+        replay = events_stream._ui_event_replay[-1]
         assert replay.type == "chat.sessions.snapshot"
         assert replay.payload["request_id"] == list_request_id
         assert replay.payload["total"] == 1
         assert replay.payload["sessions"][0]["thread_id"] == thread_id
 
     def test_chat_detail_request_emits_request_scoped_selection_event(self, client, document_store):
-        from app.backend import ui_routes
 
         _create_session_document(document_store, "thread-select", "Selectable chat")
         thread_id = "thread-select"
@@ -246,8 +247,8 @@ class TestUIRoutes:
             request_id=request_id,
             check_request_id_header=True,
         )
-        upserted = ui_routes._ui_event_replay[-2]
-        selected = ui_routes._ui_event_replay[-1]
+        upserted = events_stream._ui_event_replay[-2]
+        selected = events_stream._ui_event_replay[-1]
         assert upserted.type == "chat.session.upserted"
         assert upserted.payload["request_id"] == request_id
         assert upserted.payload["session"]["thread_id"] == thread_id
@@ -293,9 +294,8 @@ class TestUIRoutes:
         detail_response = client.get(f"/api/ui/chats/{thread_id}?request_id=request-history")
 
         assert list_response.status_code == 202
-        from app.backend import ui_routes
 
-        replay_list = ui_routes._ui_event_replay[-3]
+        replay_list = events_stream._ui_event_replay[-3]
         assert replay_list.type == "chat.sessions.snapshot"
         listed = next(
             session
@@ -307,7 +307,7 @@ class TestUIRoutes:
         assert listed["preview"] == "99, 98, 97"
 
         assert detail_response.status_code == 202
-        replay_detail_upsert = ui_routes._ui_event_replay[-2]
+        replay_detail_upsert = events_stream._ui_event_replay[-2]
         assert replay_detail_upsert.type == "chat.session.upserted"
         detail = replay_detail_upsert.payload
         assert detail["session"]["thread_id"] == "thread_sess-history"
@@ -338,9 +338,7 @@ class TestUIRoutes:
         detail_response = client.get(f"/api/ui/chats/{thread_id}")
         assert detail_response.status_code == 202
 
-        from app.backend import ui_routes
-
-        replay_selected = ui_routes._ui_event_replay[-1]
+        replay_selected = events_stream._ui_event_replay[-1]
         assert replay_selected.type == "chat.session.selected"
         session = replay_selected.payload["session"]
         assert session["has_more_messages"] is True
@@ -371,9 +369,7 @@ class TestUIRoutes:
         )
         assert older_response.status_code == 202
 
-        from app.backend import ui_routes
-
-        page_event = ui_routes._ui_event_replay[-1]
+        page_event = events_stream._ui_event_replay[-1]
         assert page_event.type == "chat.messages.page.loaded"
         assert page_event.payload["thread_id"] == thread_id
         assert page_event.payload["has_more"] is False
@@ -385,7 +381,6 @@ class TestUIRoutes:
     def test_deleted_chat_stays_deleted_despite_live_runtime_state(
         self, client, document_store, monkeypatch
     ):
-        from app.backend import ui_routes
 
         thread_id = "thread-deleted"
         _create_session_document(document_store, thread_id, "Doomed")
@@ -400,21 +395,23 @@ class TestUIRoutes:
             def get_thread_messages(self, thread_id: str) -> list[Any]:
                 return [{"id": "m1", "type": "human", "content": "hello"}]
 
-        monkeypatch.setattr("app.backend.ui_routes.get_state_reader", lambda: _LiveStateReader())
-        event_start = len(ui_routes._ui_event_replay)
+        monkeypatch.setattr(
+            "app.backend.monitoring.state.get_state_reader", lambda: _LiveStateReader()
+        )
+        event_start = len(events_stream._ui_event_replay)
 
         assert client.get(f"/api/ui/chats/{thread_id}").status_code == 404
         assert client.get(f"/api/ui/chats/{thread_id}/messages").status_code == 404
         assert not [
             event
-            for event in ui_routes._ui_event_replay[event_start:]
+            for event in events_stream._ui_event_replay[event_start:]
             if event.type == "chat.session.upserted"
         ]
 
     def test_chat_detail_reports_runtime_outage_instead_of_empty_chat(
         self, client, document_store, monkeypatch
     ):
-        from app.backend.runtime_conversations import RuntimeUnavailable
+        from app.backend.integrations.runtime_history import RuntimeUnavailable
 
         _create_session_document(document_store, "thread-out", "Has history")
 
@@ -431,7 +428,7 @@ class TestUIRoutes:
     def test_rename_is_accepted_while_the_runtime_is_down(
         self, client, document_store, monkeypatch
     ):
-        from app.backend.runtime_conversations import RuntimeUnavailable
+        from app.backend.integrations.runtime_history import RuntimeUnavailable
 
         _create_session_document(document_store, "thread-rename", "Old")
 
@@ -454,10 +451,9 @@ class TestUIRoutes:
     ):
         """A rename during a runtime outage still reaches the sidebar, and the
         handler does not raise (a raise would stop the event dispatcher)."""
-        from app.backend import ui_routes
-        from app.backend.document_events import TypedDocumentEvent
-        from app.backend.document_store import DocumentEvent
-        from app.backend.runtime_conversations import RuntimeUnavailable
+        from app.backend.events.documents import TypedDocumentEvent
+        from app.backend.integrations.runtime_history import RuntimeUnavailable
+        from app.backend.storage.documents import DocumentEvent
 
         _create_session_document(document_store, "thread-down", "Renamed")
 
@@ -478,13 +474,13 @@ class TestUIRoutes:
             origin=None,
             created_at=datetime.now(UTC),
         )
-        event_start = len(ui_routes._ui_event_replay)
-        await ui_routes._publish_chat_session_document_event(
+        event_start = len(events_stream._ui_event_replay)
+        await chat_routes._publish_chat_session_document_event(
             TypedDocumentEvent(event=event, document_type=None, output=None)
         )
         updated = [
             envelope
-            for envelope in ui_routes._ui_event_replay[event_start:]
+            for envelope in events_stream._ui_event_replay[event_start:]
             if envelope.type == "chat.session.metadata.updated"
         ]
         assert len(updated) == 1
@@ -533,11 +529,10 @@ class TestUIRoutes:
         )
         list_response = client.get("/api/ui/chats?include_archived=true")
         assert list_response.status_code == 202
-        from app.backend import ui_routes
 
         assert all(
             session["thread_id"] != "2026-06-19T09:00:00+00:00"
-            for session in ui_routes._ui_event_replay[-1].payload["sessions"]
+            for session in events_stream._ui_event_replay[-1].payload["sessions"]
         )
 
     def test_chat_delete_removes_session_document(self, client, document_store):
@@ -553,11 +548,10 @@ class TestUIRoutes:
         )
         list_response = client.get("/api/ui/chats?include_archived=true")
         assert list_response.status_code == 202
-        from app.backend import ui_routes
 
         assert all(
             session["thread_id"] != thread_id
-            for session in ui_routes._ui_event_replay[-1].payload["sessions"]
+            for session in events_stream._ui_event_replay[-1].payload["sessions"]
         )
 
     def test_chat_list_shows_session_documents(self, client, document_store):
@@ -566,9 +560,8 @@ class TestUIRoutes:
 
         list_response = client.get("/api/ui/chats?include_archived=true")
         assert list_response.status_code == 202
-        from app.backend import ui_routes
 
-        sessions = ui_routes._ui_event_replay[-1].payload["sessions"]
+        sessions = events_stream._ui_event_replay[-1].payload["sessions"]
         assert len(sessions) == 2
         assert {s["thread_id"] for s in sessions} == {"thread_sess-1", "thread_sess-2"}
 
@@ -609,9 +602,8 @@ class TestUIRoutes:
         assert response.status_code == 202
         data = response.json()
         assert_acknowledgement_body(data)
-        from app.backend import ui_routes
 
-        replay = ui_routes._ui_event_replay[-1]
+        replay = events_stream._ui_event_replay[-1]
         board = replay.payload
         assert board["title"] == "Delivery Kanban"
         assert [column["id"] for column in board["columns"]] == [
@@ -635,7 +627,6 @@ class TestUIRoutes:
         self, client, tasks_state_reader
     ):
         """A headerless retained activity read is acknowledged and replayed consistently."""
-        from app.backend import ui_routes
 
         created = client.post("/api/ui/kanban/cards", json={"title": "Activity task"})
         assert created.status_code == 202
@@ -662,7 +653,7 @@ class TestUIRoutes:
         )
 
         queue = asyncio.Queue()
-        ui_routes._ui_stream_subscribers[queue] = None
+        events_stream._ui_stream_subscribers[queue] = None
         try:
             response = client.get(f"/api/ui/tasks/{card_id}/activity")
             request_id = response.headers["X-Request-ID"]
@@ -674,7 +665,7 @@ class TestUIRoutes:
             )
             envelopes = [queue.get_nowait()["envelope"] for _ in range(queue.qsize())]
         finally:
-            ui_routes._ui_stream_subscribers.pop(queue, None)
+            events_stream._ui_stream_subscribers.pop(queue, None)
 
         assert request_id.startswith("req-")
         assert len(envelopes) == 1
@@ -689,7 +680,6 @@ class TestUIRoutes:
 
     def test_task_content_update_acknowledges_and_persists_body(self, client, tasks_state_reader):
         """Task body writes return an ack while stream state carries the saved content."""
-        from app.backend import ui_routes
 
         created = client.post(
             "/api/ui/kanban/cards",
@@ -703,7 +693,7 @@ class TestUIRoutes:
         card_id = board.payload["card_order"][-1]
         request_id = "task-content-save-42"
         queue = asyncio.Queue()
-        ui_routes._ui_stream_subscribers[queue] = None
+        events_stream._ui_stream_subscribers[queue] = None
         try:
             response = client.put(
                 f"/api/ui/tasks/{card_id}/content",
@@ -712,7 +702,7 @@ class TestUIRoutes:
             )
             emitted = [queue.get_nowait() for _ in range(queue.qsize())]
         finally:
-            ui_routes._ui_stream_subscribers.pop(queue, None)
+            events_stream._ui_stream_subscribers.pop(queue, None)
 
         assert_acknowledged(
             response,
@@ -783,9 +773,8 @@ class TestUIRoutes:
 
         board_response = client.get("/api/ui/kanban")
         assert board_response.status_code == 202
-        from app.backend import ui_routes
 
-        board = ui_routes._ui_event_replay[-1].payload
+        board = events_stream._ui_event_replay[-1].payload
         assert board["cards"][0]["id"] == card_id
         assert board["cards"][0]["column_id"] == "build"
 
@@ -929,11 +918,9 @@ class TestUIRoutes:
         data = move_response.json()
         assert_acknowledgement_body(data)
 
-        from app.backend import ui_routes
-
         board_response = client.get("/api/ui/kanban")
         assert board_response.status_code == 202
-        board = ui_routes._ui_event_replay[-1].payload
+        board = events_stream._ui_event_replay[-1].payload
         backlog_cards = [card for card in board["cards"] if card["column_id"] == "backlog"]
         build_cards = [card for card in board["cards"] if card["column_id"] == "build"]
 
@@ -960,9 +947,8 @@ class TestUIRoutes:
 
         board_response = client.get("/api/ui/kanban")
         assert board_response.status_code == 202
-        from app.backend import ui_routes
 
-        replay = ui_routes._ui_event_replay[-1]
+        replay = events_stream._ui_event_replay[-1]
         board = replay.payload
         assert [column["id"] for column in board["columns"]] == [
             "backlog",
@@ -1003,9 +989,8 @@ class TestUIRoutes:
         assert delete_response.status_code == 202
         board_response = client.get("/api/ui/kanban")
         assert board_response.status_code == 202
-        from app.backend import ui_routes
 
-        replay = ui_routes._ui_event_replay[-1]
+        replay = events_stream._ui_event_replay[-1]
         board = replay.payload
         assert all(card["id"] != card_id for card in board["cards"])
         # Deleting the card also removes its backing document and drops it from
@@ -1043,11 +1028,10 @@ class TestUIRoutes:
         schedule_doc = store.get_document(PROGENITOR_STATE_PREFIX, "schedule", {})
         after_delete = schedule_doc.payload if schedule_doc else {}
         assert after_delete == {}
-        from app.backend import ui_routes
 
         widgets_resp = client.get("/api/ui/widgets")
         assert widgets_resp.status_code == 202
-        widgets = ui_routes._ui_event_replay[-1].payload
+        widgets = events_stream._ui_event_replay[-1].payload
         assert f"schedule:{schedule_id}" not in {widget["id"] for widget in widgets["items"]}
 
         repeated_delete = client.delete(f"/api/ui/widgets/schedule:{schedule_id}")
@@ -1059,9 +1043,8 @@ class TestUIRoutes:
         assert response.status_code == 202
         data = response.json()
         assert_acknowledgement_body(data)
-        from app.backend import ui_routes
 
-        replay = ui_routes._ui_event_replay[-1]
+        replay = events_stream._ui_event_replay[-1]
         assert isinstance(replay.payload.get("items"), list)
 
     def test_ui_alerts_endpoint(self, client):
@@ -1081,11 +1064,9 @@ class TestUIRoutes:
         data = response.json()
         assert_acknowledgement_body(data)
 
-        from app.backend import ui_routes
-
         alerts_resp = client.get("/api/ui/alerts")
         assert alerts_resp.status_code == 202
-        alerts = ui_routes._ui_event_replay[-1].payload
+        alerts = events_stream._ui_event_replay[-1].payload
         first_alert = next(alert for alert in alerts["alerts"] if alert["id"] == first.id)
         assert first_alert["viewed"] is True
 
@@ -1098,11 +1079,9 @@ class TestUIRoutes:
         data = response.json()
         assert_acknowledgement_body(data)
 
-        from app.backend import ui_routes
-
         alerts_resp = client.get("/api/ui/alerts")
         assert alerts_resp.status_code == 202
-        alerts = ui_routes._ui_event_replay[-1].payload
+        alerts = events_stream._ui_event_replay[-1].payload
         assert alerts["total"] == 1
         assert alerts["unread"] == 0
         assert alerts["alerts"][0]["id"] == created.id
@@ -1117,11 +1096,9 @@ class TestUIRoutes:
         data = response.json()
         assert_acknowledgement_body(data)
 
-        from app.backend import ui_routes
-
         alerts_resp = client.get("/api/ui/alerts")
         assert alerts_resp.status_code == 202
-        alerts = ui_routes._ui_event_replay[-1].payload
+        alerts = events_stream._ui_event_replay[-1].payload
         assert alerts["total"] == 1
         assert alerts["unread"] == 0
         assert alerts["alerts"][0]["id"] == created.id
@@ -1237,7 +1214,6 @@ class TestLogsEndpoint:
         self, client, kanban_state_reader
     ):
         """A nonempty export delivers its complete data only on the UI stream."""
-        from app.backend import ui_routes
 
         request_id = "nonempty-log-export-client-request"
         timestamp = datetime.now(UTC).replace(microsecond=0)
@@ -1273,7 +1249,7 @@ class TestLogsEndpoint:
             )
 
         queue = asyncio.Queue()
-        ui_routes._ui_stream_subscribers[queue] = None
+        events_stream._ui_stream_subscribers[queue] = None
         try:
             response = client.get(
                 "/api/ui/logs/export?format=jsonl",
@@ -1289,7 +1265,7 @@ class TestLogsEndpoint:
             while not queue.empty():
                 emitted.append(queue.get_nowait())
         finally:
-            ui_routes._ui_stream_subscribers.pop(queue, None)
+            events_stream._ui_stream_subscribers.pop(queue, None)
 
         assert [event["type"] for event in emitted] == ["ui.event", "ui.event", "ui.event"]
         envelopes = [event["envelope"] for event in emitted]
@@ -1367,12 +1343,11 @@ class TestLogsEndpoint:
 
     def test_logs_export_empty_emits_only_lifecycle_events(self, client, kanban_state_reader):
         """Empty exports do not advertise or emit a data chunk."""
-        from app.backend import ui_routes
 
         request_id = "empty-log-export-request"
         queue = asyncio.Queue()
         assert not any(kanban_state_reader.logs_dir.iterdir())
-        ui_routes._ui_stream_subscribers[queue] = None
+        events_stream._ui_stream_subscribers[queue] = None
         try:
             response = client.get(
                 "/api/ui/logs/export",
@@ -1388,7 +1363,7 @@ class TestLogsEndpoint:
             while not queue.empty():
                 emitted.append(queue.get_nowait())
         finally:
-            ui_routes._ui_stream_subscribers.pop(queue, None)
+            events_stream._ui_stream_subscribers.pop(queue, None)
 
         envelopes = [event["envelope"] for event in emitted]
         assert [envelope.type for envelope in envelopes] == [
@@ -1422,7 +1397,7 @@ class TestScheduleEndpoint:
         store = InMemoryDocumentStore()
         store.save_document(PROGENITOR_STATE_PREFIX, "schedule", {})
         state_reader = StateReader(document_store=store)
-        monkeypatch.setattr("app.backend.ui_routes.get_state_reader", lambda: state_reader)
+        monkeypatch.setattr("app.backend.monitoring.state.get_state_reader", lambda: state_reader)
 
         created = client.post(
             "/api/ui/schedules",
@@ -1458,7 +1433,6 @@ class TestScheduleEndpoint:
 
     def test_broadcast_schedule_snapshot_emits_ui_event(self, monkeypatch):
         """Schedule snapshot broadcasts on the canonical UI event stream."""
-        from app.backend import ui_routes
 
         store = InMemoryDocumentStore()
         created_at = datetime.now(UTC).isoformat()
@@ -1477,18 +1451,18 @@ class TestScheduleEndpoint:
             },
         )
         state_reader = StateReader(document_store=store)
-        monkeypatch.setattr("app.backend.ui_routes.get_state_reader", lambda: state_reader)
+        monkeypatch.setattr("app.backend.monitoring.state.get_state_reader", lambda: state_reader)
 
         queue = asyncio.Queue()
-        ui_routes._ui_stream_subscribers[queue] = None
+        events_stream._ui_stream_subscribers[queue] = None
         try:
-            envelope = ui_routes.broadcast_schedule_snapshot()
+            envelope = schedules_service.broadcast_schedule_snapshot()
         finally:
-            ui_routes._ui_stream_subscribers.pop(queue, None)
+            events_stream._ui_stream_subscribers.pop(queue, None)
 
         assert envelope.type == "schedule.snapshot"
         assert envelope.payload["items"][0]["id"] == "sched-live"
-        assert ui_routes._ui_event_replay[-1].type == "schedule.snapshot"
+        assert events_stream._ui_event_replay[-1].type == "schedule.snapshot"
 
         streamed = queue.get_nowait()
         assert streamed["type"] == "ui.event"
@@ -1503,14 +1477,13 @@ class TestLogsPage:
         self, client, kanban_state_reader
     ):
         """The acknowledgement resolves only through the correlated page payload."""
-        from app.backend import ui_routes
 
         (kanban_state_reader.logs_dir / "progenitor.log").write_text(
             "2026-03-11 21:59:52 - __main__ - INFO - Causal log record\n",
             encoding="utf-8",
         )
         request_id = "59251b89-8ddb-4e18-913b-566e2419c139"
-        event_start = len(ui_routes._ui_event_replay)
+        event_start = len(events_stream._ui_event_replay)
         response = client.get(
             "/api/ui/logs?format=json&folder=root&file=progenitor.log"
             "&start=2026-03-01&end=2026-03-12&limit=10",
@@ -1520,7 +1493,7 @@ class TestLogsPage:
         assert_acknowledged(
             response, ["logs.page.loaded"], request_id=request_id, check_request_id_header=True
         )
-        emitted = ui_routes._ui_event_replay[event_start:]
+        emitted = events_stream._ui_event_replay[event_start:]
         event = next(
             envelope
             for envelope in emitted
@@ -1574,17 +1547,16 @@ class TestUIStreamEvents:
     """Tests for browser-visible UI stream events."""
 
     def test_broadcast_alerts_state_pushes_full_alert_payload(self):
-        from app.backend import ui_routes
 
         clear_alerts()
         alert = create_alert(type="warning", title="Build", message="Build failed")
-        queue = ui_routes.asyncio.Queue()
-        ui_routes._ui_stream_subscribers[queue] = None
+        queue = asyncio.Queue()
+        events_stream._ui_stream_subscribers[queue] = None
         try:
-            ui_routes.broadcast_alerts_state()
+            alerts_routes.broadcast_alerts_state()
             event = queue.get_nowait()
         finally:
-            ui_routes._ui_stream_subscribers.pop(queue, None)
+            events_stream._ui_stream_subscribers.pop(queue, None)
             clear_alerts()
 
         assert event["type"] == "ui.event"
@@ -1597,16 +1569,15 @@ class TestUIStreamEvents:
 
     @pytest.mark.asyncio
     async def test_ui_stream_connected_emits_alerts_in_connection_ready(self, monkeypatch):
-        from app.backend import ui_routes
 
         clear_alerts()
         alert = create_alert(type="info", title="Heads up", message="Alert from SSE")
-        monkeypatch.setattr(ui_routes, "start_status_monitor", lambda: None)
+        monkeypatch.setattr(monitoring_status, "start_status_monitor", lambda: None)
         monkeypatch.setattr(
-            ui_routes, "_get_current_status", AsyncMock(return_value={"connected": True})
+            monitoring_status, "_get_current_status", AsyncMock(return_value={"connected": True})
         )
 
-        generator = ui_routes._generate_ui_stream()
+        generator = events_routes._generate_ui_stream()
         try:
             connected_event = await generator.__anext__()
         finally:
@@ -1643,7 +1614,7 @@ class TestWorkspaceBridgeActions:
             },
         )
         state_reader = StateReader(document_store=store)
-        monkeypatch.setattr("app.backend.ui_routes.get_state_reader", lambda: state_reader)
+        monkeypatch.setattr("app.backend.monitoring.state.get_state_reader", lambda: state_reader)
 
         response = client.patch(
             "/api/ui/widgets/schedule:sched-1",
@@ -1681,7 +1652,7 @@ class TestWorkspaceBridgeActions:
             },
         )
         state_reader = StateReader(document_store=store)
-        monkeypatch.setattr("app.backend.ui_routes.get_state_reader", lambda: state_reader)
+        monkeypatch.setattr("app.backend.monitoring.state.get_state_reader", lambda: state_reader)
 
         response = client.patch(
             "/api/ui/widgets/mcp:jina",
@@ -1743,11 +1714,10 @@ class TestWorkspaceBridgeActions:
             },
         )
         state_reader = StateReader(document_store=store)
-        monkeypatch.setattr("app.backend.ui_routes.get_state_reader", lambda: state_reader)
-        from app.backend import ui_routes
+        monkeypatch.setattr("app.backend.monitoring.state.get_state_reader", lambda: state_reader)
 
         list_request_id = "mcp-list-lean"
-        event_start = len(ui_routes._ui_event_replay)
+        event_start = len(events_stream._ui_event_replay)
         list_response = client.get("/api/ui/mcp", headers={"X-Request-ID": list_request_id})
         assert_acknowledged(
             list_response,
@@ -1757,7 +1727,7 @@ class TestWorkspaceBridgeActions:
         )
         list_envelope = next(
             event
-            for event in ui_routes._ui_event_replay[event_start:]
+            for event in events_stream._ui_event_replay[event_start:]
             if event.payload.get("request_id") == list_request_id
         )
         jina_item = next(item for item in list_envelope.payload["items"] if item["name"] == "jina")
@@ -1765,7 +1735,7 @@ class TestWorkspaceBridgeActions:
         assert jina_item["logs"] == []
 
         detail_request_id = "mcp-detail-fetch"
-        event_start = len(ui_routes._ui_event_replay)
+        event_start = len(events_stream._ui_event_replay)
         detail_response = client.get(
             "/api/ui/mcp/content",
             params={"id": "mcp:jina"},
@@ -1779,7 +1749,7 @@ class TestWorkspaceBridgeActions:
         )
         detail_envelope = next(
             event
-            for event in ui_routes._ui_event_replay[event_start:]
+            for event in events_stream._ui_event_replay[event_start:]
             if event.payload.get("request_id") == detail_request_id
         )
         detail_tools = detail_envelope.payload["data"]["tools"]
@@ -1788,7 +1758,7 @@ class TestWorkspaceBridgeActions:
     def test_mcp_content_route_404s_for_unknown_server(self, client, monkeypatch):
         store = InMemoryDocumentStore()
         state_reader = StateReader(document_store=store)
-        monkeypatch.setattr("app.backend.ui_routes.get_state_reader", lambda: state_reader)
+        monkeypatch.setattr("app.backend.monitoring.state.get_state_reader", lambda: state_reader)
 
         response = client.get("/api/ui/mcp/content", params={"id": "mcp:missing"})
 
@@ -1816,8 +1786,7 @@ class TestWorkspaceBridgeActions:
             {"tools": [{"name": "search", "server": "jina", "description": "", "enabled": True}]},
         )
         state_reader = StateReader(document_store=store)
-        monkeypatch.setattr("app.backend.ui_routes.get_state_reader", lambda: state_reader)
-        from app.backend import ui_routes
+        monkeypatch.setattr("app.backend.monitoring.state.get_state_reader", lambda: state_reader)
 
         response = client.patch("/api/ui/widgets/mcp_tool:search", json={"enabled": False})
 
@@ -1829,7 +1798,7 @@ class TestWorkspaceBridgeActions:
         }
         detail_event = next(
             event
-            for event in reversed(ui_routes._ui_event_replay)
+            for event in reversed(events_stream._ui_event_replay)
             if event.type == "mcp.server.detail.updated"
         )
         detail_tools = detail_event.payload["data"]["tools"]
@@ -1863,7 +1832,7 @@ class TestWorkspaceBridgeActions:
         state_reader = StateReader(
             document_store=store,
         )
-        monkeypatch.setattr("app.backend.ui_routes.get_state_reader", lambda: state_reader)
+        monkeypatch.setattr("app.backend.monitoring.state.get_state_reader", lambda: state_reader)
 
         async def fake_inspect_agent_widget(widget, reader):
             assert widget["id"] == "agent:example_agent"
@@ -1884,7 +1853,7 @@ class TestWorkspaceBridgeActions:
             }
 
         monkeypatch.setattr(
-            "app.backend.ui_routes._inspect_agent_widget",
+            "app.backend.schedules.service._inspect_agent_widget",
             fake_inspect_agent_widget,
         )
 
@@ -1893,10 +1862,9 @@ class TestWorkspaceBridgeActions:
         assert response.status_code == 202
         data = response.json()
         assert_acknowledgement_body(data)
-        from app.backend import ui_routes
 
         # The refresh broadcasts a widgets.updated event (inspection data is ephemeral)
-        widget_event = ui_routes._ui_event_replay[-1]
+        widget_event = events_stream._ui_event_replay[-1]
         assert widget_event.type == "widgets.updated"
 
     def test_refresh_mcp_widget_is_rejected(self, client, monkeypatch):
@@ -1925,7 +1893,7 @@ class TestWorkspaceBridgeActions:
         state_reader = StateReader(
             document_store=store,
         )
-        monkeypatch.setattr("app.backend.ui_routes.get_state_reader", lambda: state_reader)
+        monkeypatch.setattr("app.backend.monitoring.state.get_state_reader", lambda: state_reader)
         response = client.post("/api/ui/widgets/mcp:jina/refresh")
         assert response.status_code == 400
         assert "agent" in response.json()["detail"].lower()
@@ -1934,7 +1902,7 @@ class TestWorkspaceBridgeActions:
         store = InMemoryDocumentStore()
         store.save_document(PROGENITOR_STATE_PREFIX, "schedule", {})
         state_reader = StateReader(document_store=store)
-        monkeypatch.setattr("app.backend.ui_routes.get_state_reader", lambda: state_reader)
+        monkeypatch.setattr("app.backend.monitoring.state.get_state_reader", lambda: state_reader)
 
         response = client.post(
             "/api/ui/schedules",
@@ -1968,7 +1936,7 @@ class TestWorkspaceBridgeActions:
         store = InMemoryDocumentStore()
         store.save_document(PROGENITOR_STATE_PREFIX, "schedule", {})
         state_reader = StateReader(document_store=store)
-        monkeypatch.setattr("app.backend.ui_routes.get_state_reader", lambda: state_reader)
+        monkeypatch.setattr("app.backend.monitoring.state.get_state_reader", lambda: state_reader)
 
         response = client.post(
             "/api/ui/schedules",
@@ -2021,11 +1989,9 @@ class TestWorkspaceBridgeActions:
         assert stored[event_widget_id]["event_type"] == "kanban_card.created"
         assert stored[event_widget_id]["trigger_count"] == 0
 
-        from app.backend import ui_routes
-
         widgets_resp = client.get("/api/ui/widgets")
         assert widgets_resp.status_code == 202
-        widgets_items = ui_routes._ui_event_replay[-1].payload.get("items", [])
+        widgets_items = events_stream._ui_event_replay[-1].payload.get("items", [])
         assert any(widget["id"] == f"event:{event_widget_id}" for widget in widgets_items)
 
     def test_patch_event_widget_updates_config_file(self, client, kanban_state_reader):
@@ -2070,7 +2036,6 @@ class TestWorkspaceBridgeActions:
     async def test_kanban_create_and_update_events_trigger_matching_widgets(
         self, client, tasks_state_reader
     ):
-        from app.backend.ui_routes import get_document_event_dispatcher
 
         store = tasks_state_reader.document_store
         client.post(
@@ -2093,15 +2058,13 @@ class TestWorkspaceBridgeActions:
             "/api/ui/kanban/cards",
             json={"title": "Evented card", "summary": "Initial summary"},
         )
-        await get_document_event_dispatcher().drain()
+        await events_dispatch.get_document_event_dispatcher().drain()
         board = store.get_document(PROGENITOR_STATE_PREFIX, "kanban_board", None)
         card_id = board.payload["card_order"][-1]
 
-        from app.backend import ui_routes
-
         widgets_resp = client.get("/api/ui/widgets")
         assert widgets_resp.status_code == 202
-        widgets_items = ui_routes._ui_event_replay[-1].payload.get("items", [])
+        widgets_items = events_stream._ui_event_replay[-1].payload.get("items", [])
         created_w = next(w for w in widgets_items if w["id"] == f"event:{created_widget_id}")
         created_data = created_w["data"]
         assert created_data["trigger_count"] == 1
@@ -2115,10 +2078,10 @@ class TestWorkspaceBridgeActions:
         )
 
         assert update_response.status_code == 202
-        await get_document_event_dispatcher().drain()
+        await events_dispatch.get_document_event_dispatcher().drain()
         widgets_resp = client.get("/api/ui/widgets")
         assert widgets_resp.status_code == 202
-        widgets_items = ui_routes._ui_event_replay[-1].payload.get("items", [])
+        widgets_items = events_stream._ui_event_replay[-1].payload.get("items", [])
         updated_w = next(w for w in widgets_items if w["id"] == f"event:{updated_widget_id}")
         updated_data = updated_w["data"]
         assert updated_data["trigger_count"] == 1
@@ -2130,7 +2093,6 @@ class TestWorkspaceBridgeActions:
     async def test_kanban_update_and_delete_events_trigger_matching_widgets(
         self, client, tasks_state_reader
     ):
-        from app.backend.ui_routes import get_document_event_dispatcher
 
         store = tasks_state_reader.document_store
         client.post(
@@ -2150,11 +2112,11 @@ class TestWorkspaceBridgeActions:
         deleted_widget_id = next(k for k in stored if k != updated_widget_id)
 
         client.post("/api/ui/kanban/cards", json={"title": "First card"})
-        await get_document_event_dispatcher().drain()
+        await events_dispatch.get_document_event_dispatcher().drain()
         board = store.get_document(PROGENITOR_STATE_PREFIX, "kanban_board", None)
         first_id = board.payload["card_order"][0]
         client.post("/api/ui/kanban/cards", json={"title": "Second card"})
-        await get_document_event_dispatcher().drain()
+        await events_dispatch.get_document_event_dispatcher().drain()
         board = store.get_document(PROGENITOR_STATE_PREFIX, "kanban_board", None)
         second_id = board.payload["card_order"][-1]
 
@@ -2163,13 +2125,11 @@ class TestWorkspaceBridgeActions:
             json={"column_id": "done"},
         )
         assert move_response.status_code == 202
-        await get_document_event_dispatcher().drain()
-
-        from app.backend import ui_routes
+        await events_dispatch.get_document_event_dispatcher().drain()
 
         widgets_resp = client.get("/api/ui/widgets")
         assert widgets_resp.status_code == 202
-        widgets_items = ui_routes._ui_event_replay[-1].payload.get("items", [])
+        widgets_items = events_stream._ui_event_replay[-1].payload.get("items", [])
         updated_w = next(w for w in widgets_items if w["id"] == f"event:{updated_widget_id}")
         updated_data = updated_w["data"]
         assert updated_data["trigger_count"] == 1
@@ -2179,11 +2139,11 @@ class TestWorkspaceBridgeActions:
 
         delete_response = client.delete(f"/api/ui/kanban/cards/{first_id}")
         assert delete_response.status_code == 202
-        await get_document_event_dispatcher().drain()
+        await events_dispatch.get_document_event_dispatcher().drain()
 
         widgets_resp = client.get("/api/ui/widgets")
         assert widgets_resp.status_code == 202
-        widgets_items = ui_routes._ui_event_replay[-1].payload.get("items", [])
+        widgets_items = events_stream._ui_event_replay[-1].payload.get("items", [])
         deleted_w = next(w for w in widgets_items if w["id"] == f"event:{deleted_widget_id}")
         deleted_data = deleted_w["data"]
         assert deleted_data["trigger_count"] == 1
@@ -2192,16 +2152,15 @@ class TestWorkspaceBridgeActions:
         assert deleted_data["last_payload"]["op"] == "deleted"
 
     def test_run_and_generate_actions_use_existing_client(self, client):
-        from app.backend import main as backend_main
 
-        original_client = backend_main.client
+        original_client = lifecycle_state.client
         mock_client = AsyncMock()
         mock_client.send_message = AsyncMock(
             return_value=AgentResponse(
                 response="bridge-response", reasoning=None, reasoning_tokens=None
             )
         )
-        backend_main.client = mock_client
+        lifecycle_state.client = mock_client
         try:
             run_response = client.post(
                 "/api/ui/actions/run",
@@ -2229,19 +2188,18 @@ class TestWorkspaceBridgeActions:
                 "Widget ID: prompt:test\n\nInput:\nGenerated input\n\nGenerate this",
             ]
         finally:
-            backend_main.client = original_client
+            lifecycle_state.client = original_client
 
     def test_workspace_actions_generate_distinct_threads_per_execution(self, client):
-        from app.backend import main as backend_main
 
-        original_client = backend_main.client
+        original_client = lifecycle_state.client
         mock_client = AsyncMock()
         mock_client.send_message = AsyncMock(
             return_value=AgentResponse(
                 response="bridge-response", reasoning=None, reasoning_tokens=None
             )
         )
-        backend_main.client = mock_client
+        lifecycle_state.client = mock_client
         try:
             first = client.post(
                 "/api/ui/actions/run",
@@ -2263,19 +2221,18 @@ class TestWorkspaceBridgeActions:
             assert metadata_values[1]
             assert metadata_values[0] != metadata_values[1]
         finally:
-            backend_main.client = original_client
+            lifecycle_state.client = original_client
 
     def test_workspace_actions_reuse_explicit_thread(self, client):
-        from app.backend import main as backend_main
 
-        original_client = backend_main.client
+        original_client = lifecycle_state.client
         mock_client = AsyncMock()
         mock_client.send_message = AsyncMock(
             return_value=AgentResponse(
                 response="bridge-response", reasoning=None, reasoning_tokens=None
             )
         )
-        backend_main.client = mock_client
+        lifecycle_state.client = mock_client
         try:
             thread_id = "thread_shared_chain"
 
@@ -2310,4 +2267,4 @@ class TestWorkspaceBridgeActions:
             assert metadata_values == [thread_id, thread_id]
 
         finally:
-            backend_main.client = original_client
+            lifecycle_state.client = original_client

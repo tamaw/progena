@@ -10,15 +10,15 @@ import pytest
 from ack_helpers import assert_acknowledged
 from fastapi.testclient import TestClient
 
-from app.backend.document_events import TypedDocumentEvent
-from app.backend.document_store import (
+import app.backend.modules.routes as modules_routes
+from app.backend.events.documents import TypedDocumentEvent
+from app.backend.modules.events import module_events
+from app.backend.storage.documents import (
     PROGENITOR_STATE_PREFIX,
     DocumentEvent,
     InMemoryDocumentStore,
     set_default_document_store,
 )
-from app.backend.module_events import module_events
-from app.backend.ui_routes import broadcast_modules_snapshot
 from app.progenitor.document_kinds import DOCUMENT_TYPE_KEY_PREFIX
 from app.progenitor.document_types import DocumentType
 from app.progenitor.modules import module_file_key
@@ -77,21 +77,21 @@ def _module(store: InMemoryDocumentStore, name: str = "demo") -> None:
 
 class _Capture:
     def __init__(self, client_id: str | None = None):
-        from app.backend import ui_routes
+        from app.backend.events import stream as events_stream
 
-        self.ui_routes = ui_routes
+        self.events_stream = events_stream
         self.queue: asyncio.Queue = asyncio.Queue()
         self.client_id = client_id
 
     def __enter__(self):
-        self.ui_routes._ui_stream_subscribers[self.queue] = None
+        self.events_stream._ui_stream_subscribers[self.queue] = None
         if self.client_id is not None:
-            self.ui_routes._ui_stream_clients[self.queue] = self.client_id
+            self.events_stream._ui_stream_clients[self.queue] = self.client_id
         return self
 
     def __exit__(self, *_exc):
-        self.ui_routes._ui_stream_subscribers.pop(self.queue, None)
-        self.ui_routes._ui_stream_clients.pop(self.queue, None)
+        self.events_stream._ui_stream_subscribers.pop(self.queue, None)
+        self.events_stream._ui_stream_clients.pop(self.queue, None)
         return False
 
     def payloads(self):
@@ -237,7 +237,7 @@ def test_snapshot_reports_manifest_errors_and_status(document_store):
         {"state": "error", "revision": "abc", "errors": [{"message": "bad"}], "reported_at": "now"},
     )
     with _Capture() as capture:
-        broadcast_modules_snapshot()
+        modules_routes.broadcast_modules_snapshot()
         item = capture.payloads()[-1]["items"][0]
     assert item["manifest_error"] == "manifest.json is missing."
     assert item["status"]["state"] == "error"
@@ -247,7 +247,7 @@ def test_snapshot_reports_manifest_errors_and_status(document_store):
 async def test_module_interest_matching_and_disconnect_cleanup(monkeypatch):
     sent = []
     monkeypatch.setattr(
-        "app.backend.ui_routes.broadcast_ui_event",
+        "app.backend.events.stream.broadcast_ui_event",
         lambda *args, **kwargs: sent.append((args, kwargs)),
     )
     module_events.set_interest("one", "demo", ["kanban_card.updated"])

@@ -9,9 +9,10 @@ from ack_helpers import assert_acknowledged
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-import app.backend.instruction_routes as routes
-from app.backend.document_events import seed_document_types
-from app.backend.document_store import (
+import app.backend.events.stream as events_stream
+import app.backend.instructions.routes as routes
+from app.backend.events.documents import seed_document_types
+from app.backend.storage.documents import (
     PROGENITOR_STATE_PREFIX,
     InMemoryDocumentStore,
     set_default_document_store,
@@ -37,7 +38,7 @@ def harness(monkeypatch):
         store.save_document(PROGENITOR_STATE_PREFIX, f"instruction:{path}", {"content": content})
     events: list[tuple[str, dict[str, Any]]] = []
     monkeypatch.setattr(
-        routes,
+        events_stream,
         "broadcast_ui_event",
         lambda event_type, payload, **_kw: events.append((event_type, payload)),
     )

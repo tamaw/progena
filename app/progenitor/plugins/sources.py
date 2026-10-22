@@ -13,7 +13,7 @@ import aiohttp
 import yaml
 
 # ---------------------------------------------------------------------------
-# SSRF hardening (mirrors app/backend/attachments.py:44-63,490-493)
+# SSRF hardening (mirrors app/backend/attachments/processing.py:44-63,490-493)
 # ---------------------------------------------------------------------------
 
 _ALLOWED_URL_SCHEMES = frozenset({"http", "https"})
@@ -149,7 +149,7 @@ def resolve_relative_plugin_source(
 async def _fetch_url(url: str) -> bytes:
     """SSRF-hardened GET that follows redirects explicitly.
 
-    Mirrors the hardening in app/backend/attachments.py:
+    Mirrors the hardening in app/backend/attachments/processing.py:
       * scheme allow-list {http, https}
       * manual redirect loop (max 5)
       * raise_for_status

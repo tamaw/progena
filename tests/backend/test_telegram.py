@@ -10,10 +10,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+import app.backend.events.stream as events_stream
+import app.backend.integrations.telegram_bridge as integrations_telegram_bridge
+from app.backend.chat.models import AgentResponse
 from app.backend.config import ChatServerConfig
-from app.backend.document_store import PROGENITOR_STATE_PREFIX, InMemoryDocumentStore
-from app.backend.models import AgentResponse
-from app.backend.telegram_client import (
+from app.backend.integrations.telegram import (
     TelegramClient,
     TelegramConfig,
     TelegramDraftSession,
@@ -23,6 +24,7 @@ from app.backend.telegram_client import (
     init_telegram_client,
     stop_telegram_client,
 )
+from app.backend.storage.documents import PROGENITOR_STATE_PREFIX, InMemoryDocumentStore
 
 
 async def _async_iter(*chunks: str):
@@ -435,43 +437,34 @@ class TestSubscriberTracking:
 
     def test_has_active_ui_stream_subscribers_empty(self):
         """Test when no subscribers are connected."""
-        from app.backend.ui_routes import (
-            _ui_stream_subscribers,
-            has_active_ui_stream_subscribers,
-        )
 
         # Clear subscribers for test
-        original = _ui_stream_subscribers.copy()
-        _ui_stream_subscribers.clear()
+        original = events_stream._ui_stream_subscribers.copy()
+        events_stream._ui_stream_subscribers.clear()
 
         try:
-            assert has_active_ui_stream_subscribers() is False
+            assert events_stream.has_active_ui_stream_subscribers() is False
         finally:
-            _ui_stream_subscribers.update(original)
+            events_stream._ui_stream_subscribers.update(original)
 
     def test_has_active_ui_stream_subscribers_with_subscriber(self):
         """Test when subscribers are connected."""
-        from app.backend.ui_routes import (
-            _ui_stream_subscribers,
-            has_active_ui_stream_subscribers,
-        )
 
         # Add a mock subscriber
-        original = _ui_stream_subscribers.copy()
-        _ui_stream_subscribers.clear()
-        _ui_stream_subscribers[asyncio.Queue()] = None
+        original = events_stream._ui_stream_subscribers.copy()
+        events_stream._ui_stream_subscribers.clear()
+        events_stream._ui_stream_subscribers[asyncio.Queue()] = None
 
         try:
-            assert has_active_ui_stream_subscribers() is True
+            assert events_stream.has_active_ui_stream_subscribers() is True
         finally:
-            _ui_stream_subscribers.clear()
-            _ui_stream_subscribers.update(original)
+            events_stream._ui_stream_subscribers.clear()
+            events_stream._ui_stream_subscribers.update(original)
 
     def test_get_subscriber_counts(self):
         """Test getting subscriber counts."""
-        from app.backend.ui_routes import get_subscriber_counts
 
-        counts = get_subscriber_counts()
+        counts = events_stream.get_subscriber_counts()
         assert "stream" in counts
         assert "web" in counts
         assert "total" in counts
@@ -812,7 +805,6 @@ class TestTelegramConnectedMessage:
 
     @pytest.mark.asyncio
     async def test_sends_hi(self):
-        from app.backend import main as backend_main
 
         telegram = AsyncMock()
         telegram.send_message.return_value = True
@@ -826,7 +818,7 @@ class TestTelegramConnectedMessage:
             reasoning_tokens=None,
         )
 
-        await backend_main._send_telegram_connected_message(
+        await integrations_telegram_bridge._send_telegram_connected_message(
             telegram, progenitor, InMemoryDocumentStore()
         )
 
@@ -842,7 +834,6 @@ class TestTelegramConnectedMessage:
     @pytest.mark.asyncio
     async def test_existing_session_is_not_greeted_again(self):
         """A restart must not greet a Telegram chat that already exists."""
-        from app.backend import main as backend_main
 
         telegram = AsyncMock()
         telegram.config.chat_id = "555"
@@ -851,14 +842,15 @@ class TestTelegramConnectedMessage:
         store = InMemoryDocumentStore()
         store.save_document(PROGENITOR_STATE_PREFIX, "session:tele_555", {"title": "Telegram"})
 
-        await backend_main._send_telegram_connected_message(telegram, progenitor, store)
+        await integrations_telegram_bridge._send_telegram_connected_message(
+            telegram, progenitor, store
+        )
 
         progenitor.send_message.assert_not_awaited()
         telegram.send_message.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_no_exception_on_send_failure(self):
-        from app.backend import main as backend_main
 
         telegram = AsyncMock()
         telegram.send_message.return_value = False
@@ -871,13 +863,12 @@ class TestTelegramConnectedMessage:
             reasoning_tokens=None,
         )
 
-        await backend_main._send_telegram_connected_message(
+        await integrations_telegram_bridge._send_telegram_connected_message(
             telegram, progenitor, InMemoryDocumentStore()
         )
 
     @pytest.mark.asyncio
     async def test_sends_failure_message_if_agent_greeting_fails(self):
-        from app.backend import main as backend_main
 
         telegram = AsyncMock()
         telegram.send_message.return_value = True
@@ -886,7 +877,7 @@ class TestTelegramConnectedMessage:
         progenitor.is_running = True
         progenitor.send_message.side_effect = RuntimeError("SSE down")
 
-        await backend_main._send_telegram_connected_message(
+        await integrations_telegram_bridge._send_telegram_connected_message(
             telegram, progenitor, InMemoryDocumentStore()
         )
 
@@ -900,7 +891,6 @@ class TestTelegramBackendStreaming:
 
     @pytest.mark.asyncio
     async def test_handle_telegram_agent_message_streams_to_telegram(self):
-        from app.backend import main as backend_main
 
         telegram = AsyncMock()
         telegram.stream_agent_response_to_chat.return_value = len("Hello world")
@@ -915,7 +905,7 @@ class TestTelegramBackendStreaming:
             )
         )
 
-        result = await backend_main._handle_telegram_agent_message(
+        result = await integrations_telegram_bridge._handle_telegram_agent_message(
             telegram,
             progenitor,
             "987654321",
@@ -933,7 +923,6 @@ class TestTelegramBackendStreaming:
 
     @pytest.mark.asyncio
     async def test_handle_telegram_agent_message_surfaces_draft_failures(self):
-        from app.backend import main as backend_main
 
         telegram = AsyncMock()
         telegram.stream_agent_response_to_chat.side_effect = TelegramDraftStreamingError(
@@ -946,7 +935,7 @@ class TestTelegramBackendStreaming:
             return_value=_async_event_iter({"type": "stream_chunk", "content": "Hello"})
         )
 
-        result = await backend_main._handle_telegram_agent_message(
+        result = await integrations_telegram_bridge._handle_telegram_agent_message(
             telegram,
             progenitor,
             "987654321",

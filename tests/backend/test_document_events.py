@@ -3,13 +3,15 @@ from datetime import UTC, datetime
 
 import pytest
 
-from app.backend import ui_routes
-from app.backend.document_events import (
+import app.backend.alerts.routes as alerts_routes
+import app.backend.events.dispatch as events_dispatch
+import app.backend.workflows.runtime as workflows_runtime
+from app.backend.events.documents import (
     DocumentEventDispatcher,
     TypedDocumentEvent,
     seed_document_types,
 )
-from app.backend.document_store import (
+from app.backend.storage.documents import (
     EVENT_LOG_START,
     PROGENITOR_STATE_PREFIX,
     DocumentEvent,
@@ -17,7 +19,7 @@ from app.backend.document_store import (
     document_write_origin,
     set_default_document_store,
 )
-from app.backend.workflow_service import (
+from app.backend.workflows.service import (
     _execute_document_create_node,
     _execute_document_delete_node,
     _execute_document_node,
@@ -46,11 +48,11 @@ def store():
     store = InMemoryDocumentStore()
     seed_document_types(store)
     set_default_document_store(store)
-    ui_routes._workflow_executor = None
-    ui_routes._document_event_dispatcher = None
+    workflows_runtime._workflow_executor = None
+    events_dispatch._document_event_dispatcher = None
     yield store
-    ui_routes._workflow_executor = None
-    ui_routes._document_event_dispatcher = None
+    workflows_runtime._workflow_executor = None
+    events_dispatch._document_event_dispatcher = None
     set_default_document_store(InMemoryDocumentStore())
 
 
@@ -151,11 +153,11 @@ async def test_new_alert_document_is_relayed_to_the_user(monkeypatch):
     async def relay(alert):
         relayed.append(alert)
 
-    monkeypatch.setattr(ui_routes, "broadcast_alerts_state", lambda: None)
-    monkeypatch.setattr(ui_routes, "broadcast_alert", lambda _alert: None)
-    ui_routes.set_alert_relay(relay)
+    monkeypatch.setattr(alerts_routes, "broadcast_alerts_state", lambda: None)
+    monkeypatch.setattr(alerts_routes, "broadcast_alert", lambda _alert: None)
+    alerts_routes.set_alert_relay(relay)
     try:
-        await ui_routes._publish_alert_document(
+        await alerts_routes._publish_alert_document(
             TypedDocumentEvent(
                 event=DocumentEvent(
                     seq=1,
@@ -183,7 +185,7 @@ async def test_new_alert_document_is_relayed_to_the_user(monkeypatch):
         )
         await _wait_for(lambda: relayed)
     finally:
-        ui_routes.set_alert_relay(None)
+        alerts_routes.set_alert_relay(None)
 
     assert relayed[0].id == "agent-alert"
 
@@ -226,7 +228,7 @@ async def test_handler_failure_stops_dispatch_without_acknowledging_the_event():
 async def test_dispatcher_rechecks_while_events_are_deferred(monkeypatch):
     """A committed event hidden behind an open transaction is dispatched once
     that transaction ends, even though nothing wakes the dispatcher."""
-    from app.backend import document_events
+    from app.backend.events import documents as document_events
 
     monkeypatch.setattr(document_events, "_DEFERRED_RETRY_SECONDS", 0.05)
 
@@ -288,7 +290,7 @@ async def test_card_move_to_done_starts_filtered_workflow_once_with_document_por
     assert definition.graph.nodes["event"].output_schema["properties"]["after"]["title"] == (
         "Kanban Card"
     )
-    dispatcher = ui_routes.get_document_event_dispatcher()
+    dispatcher = events_dispatch.get_document_event_dispatcher()
     store.save_document(PROGENITOR_STATE_PREFIX, "kanban_task_content:c1", {"content": "# Brief"})
     store.save_document(PROGENITOR_STATE_PREFIX, "kanban_card:c1", _card("c1", "build"))
     store.save_document(
@@ -337,7 +339,7 @@ async def test_knowledge_page_and_index_events_start_typed_workflows(store):
             [],
         ),
     )
-    dispatcher = ui_routes.get_document_event_dispatcher()
+    dispatcher = events_dispatch.get_document_event_dispatcher()
     store.save_document(PROGENITOR_STATE_PREFIX, "knowledge_index", {"bases": {}})
     store.save_document(PROGENITOR_STATE_PREFIX, "knowledge", {"bases": []})
     await dispatcher.drain()
@@ -372,10 +374,10 @@ async def test_workflow_is_not_retriggered_by_its_own_run_documents(store):
         [("event", "id", "read", "id")],
     )
     definition = save_workflow_definition(store, workflow)
-    dispatcher = ui_routes.get_document_event_dispatcher()
+    dispatcher = events_dispatch.get_document_event_dispatcher()
     await dispatcher.drain()
 
-    await ui_routes.get_workflow_executor().trigger_workflow(
+    await workflows_runtime.get_workflow_executor().trigger_workflow(
         definition.id, build_manual_trigger_event(definition)
     )
     await _wait_for(lambda: _completed_runs(store, definition.id))
@@ -401,7 +403,7 @@ async def test_query_node_returns_collection_documents_matching_unpacked_field(s
         [("event", "after", "card", "value"), ("card", "column_id", "peers", "column_id")],
     )
     definition = save_workflow_definition(store, workflow)
-    dispatcher = ui_routes.get_document_event_dispatcher()
+    dispatcher = events_dispatch.get_document_event_dispatcher()
     store.save_document(PROGENITOR_STATE_PREFIX, "kanban_card:a", _card("a", "plan"))
     store.save_document(PROGENITOR_STATE_PREFIX, "kanban_card:b", _card("b", "build"))
     await dispatcher.drain()
@@ -586,7 +588,7 @@ async def test_document_write_node_executes_merge_and_sets_origin(store):
             "content": "",
         },
     )
-    executor = ui_routes.get_workflow_executor()
+    executor = workflows_runtime.get_workflow_executor()
     await executor.trigger_workflow(
         definition.id, build_manual_trigger_event(definition, payload={"id": "t1"})
     )
@@ -625,7 +627,7 @@ async def test_document_write_node_not_found_returns_false(store):
         ],
     )
     definition = save_workflow_definition(store, workflow)
-    executor = ui_routes.get_workflow_executor()
+    executor = workflows_runtime.get_workflow_executor()
     await executor.trigger_workflow(
         definition.id, build_manual_trigger_event(definition, payload={"id": "missing"})
     )
@@ -657,7 +659,7 @@ async def test_document_write_node_with_nothing_to_write_completes(store):
             "content": "",
         },
     )
-    executor = ui_routes.get_workflow_executor()
+    executor = workflows_runtime.get_workflow_executor()
     await executor.trigger_workflow(
         definition.id, build_manual_trigger_event(definition, payload={"id": "t1"})
     )
@@ -850,7 +852,7 @@ def test_document_write_never_applies_schema_defaults(store, monkeypatch):
     monkeypatch.setattr(DocumentType, "load_schema", lambda self: schema)
     store.save_document(PROGENITOR_STATE_PREFIX, "kanban_card:existing", {"id": "existing"})
 
-    from app.backend.workflow_service import _execute_document_write_node
+    from app.backend.workflows.service import _execute_document_write_node
 
     result = _execute_document_write_node(
         store,
@@ -945,9 +947,9 @@ def test_document_query_datetime_order_total_and_unwired_filter(store):
 async def test_card_documents_written_by_any_writer_keep_the_board_order(store):
     """A card created or deleted outside the card routes (e.g. by a workflow
     document node) appears on, and leaves, the board."""
-    from app.backend.document_store import document_write_origin
+    from app.backend.storage.documents import document_write_origin
 
-    dispatcher = ui_routes.get_document_event_dispatcher()
+    dispatcher = events_dispatch.get_document_event_dispatcher()
     store.save_document(
         PROGENITOR_STATE_PREFIX, "kanban_board", {"columns": [], "card_order": ["old"]}
     )
