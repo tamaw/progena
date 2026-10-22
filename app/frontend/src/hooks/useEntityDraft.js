@@ -1,7 +1,7 @@
 import { useCallback, useMemo } from 'react';
 import { useSelector, useStore } from 'react-redux';
 import { createUuid } from '../lib/uuid';
-import { registerPendingOp } from '../store/realtimeSlice';
+import { registerPendingOp } from '../realtime/realtimeSlice';
 import {
   draftChanged, draftDiscarded, draftSaveStarted, draftSaveTracked,
   draftSaveCompleted, draftSaveFailed,

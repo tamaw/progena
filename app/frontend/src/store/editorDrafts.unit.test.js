@@ -3,8 +3,8 @@ import reducer, {
   draftChanged, draftDiscarded, draftSaveStarted, draftSaveFailed,
   editorLocationRemembered, entityDraftKey,
 } from './editorDraftsSlice';
-import { applyUiEvent } from './uiDataSlice';
-import { failPendingOp } from './realtimeSlice';
+import { applyUiEvent } from './uiEvents';
+import { failPendingOp } from '../realtime/realtimeSlice';
 import { store, workspaceSwitched } from './store';
 
 const A = entityDraftKey('workflow', 'a');

@@ -181,7 +181,7 @@ snapshot-diff bypass in `app/backend/monitoring/state.py`.
 ## Vendored libraries
 
 `app/frontend/scripts/build-module-vendor.mjs` (`npm run build:module-vendor`) bundles
-pinned `three@0.186.1` and `d3@7.9.0` with esbuild into `app/frontend/src/lib/module-vendor/`
+pinned `three@0.186.1` and `d3@7.9.0` with esbuild into `app/frontend/src/features/modules/vendor/`
 (`three.mjs`, `three-orbit-controls.mjs` with `three` external, `d3.mjs`), generates
 `libraries.js` (specifier → lazy `?raw` loader) and `data/modules/libraries.json` (agent
 catalogue). Bundles, `libraries.js` and the catalogue are committed (the pre-commit large-file
@@ -192,7 +192,7 @@ limit is 1 MB to fit the 742 KB three.js bundle); rerun the script after changin
 - Routes `/modules` and `/modules/:name`; **Modules** nav item and icon in the Spectate group;
   `'modules.snapshot': '/modules'` in `NAV_ACTIVITY_EVENT_ROUTES`; `/api/ui/modules` in
   `ConfigContext`.
-- `src/store/uiData/modules.js`: `modules.snapshot` / `module.deleted` handlers and
+- `src/features/modules/state.js`: `modules.snapshot` / `module.deleted` handlers and
   thunks for list, files, revisions, revision, restore, delete, status; module-scoped
   requests (documents, data, subscription) resolve through `subscribeUiEvent` +
   `request_id`, like `routineSubscriptions.js`.

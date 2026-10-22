@@ -27,7 +27,7 @@ def _queue_routine_agent_reconciliation(_snapshot, changed_key: str | None = Non
     never get a canonical event -- this closes that gap so a runtime-authored
     write reaches the frontend the exact same way a UI-driven graph edit does
     (``agent.graph.updated`` / ``agents.snapshot`` on ``/api/ui/stream`` ->
-    Redux, see ``app/frontend/src/store/uiData/agents.js``).
+    Redux, see ``app/frontend/src/features/agents/state/agents.js``).
 
     Registered separately from ``_queue_state_watch_status``, which returns
     immediately with no UI client connected (fine for UI-push optimization,

@@ -3,7 +3,7 @@
 //
 // Modules run in a sandboxed, network-less iframe; their imports resolve through
 // an import map to data: URLs built from these bundles (see
-// src/lib/module-vendor/). Each bundle must therefore have no relative imports;
+// src/features/modules/vendor/). Each bundle must therefore have no relative imports;
 // cross-library imports (OrbitControls -> three) stay bare and resolve through
 // the same map, so `three` is loaded exactly once.
 //
@@ -16,7 +16,7 @@ import { fileURLToPath } from 'node:url';
 
 const frontendRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const repoRoot = resolve(frontendRoot, '../..');
-const vendorDir = resolve(frontendRoot, 'src/lib/module-vendor');
+const vendorDir = resolve(frontendRoot, 'src/features/modules/vendor');
 const cataloguePath = resolve(repoRoot, 'data/modules/libraries.json');
 
 const LIBRARIES = [

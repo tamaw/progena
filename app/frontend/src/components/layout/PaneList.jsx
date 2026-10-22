@@ -1,8 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { usePaneCollapse, NARROW_MQ } from './usePaneCollapse';
+import { usePaneCollapse, NARROW_MQ } from '../../hooks/usePaneCollapse';
 import { useMenuDismiss } from '../../hooks/useMenuDismiss';
-
 
 /** Provided by PaneSection; consumed by pane list rows to auto-collapse on selection. */
 const PaneAutoCollapseCtx = createContext(null);

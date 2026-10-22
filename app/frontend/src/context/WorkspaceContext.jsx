@@ -2,7 +2,7 @@
 import { createContext, useCallback, useContext, useEffect, useState } from 'react';
 import { store, workspaceSwitched } from '../store/store';
 import { parseWorkspacePath, buildWorkspacePath, currentPageHost, ensureWorkspaceRegistered, setDefaultWorkspaceHost } from '../lib/workspace';
-import { clearWorkspaceScopedCaches } from '../lib/workspaceCache';
+import { clearWorkspaceScopedCaches } from './workspaceCache';
 
 const WorkspaceContext = createContext(null);
 

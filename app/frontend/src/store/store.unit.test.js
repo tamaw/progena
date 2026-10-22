@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { store, workspaceSwitched } from './store';
-import { fetchAgentProfiles } from './uiData/agents';
-import { realtimeConnected } from './realtimeSlice';
+import { fetchAgentProfiles } from '../features/agents/state/agents';
+import { realtimeConnected } from '../realtime/realtimeSlice';
 
 describe('workspaceSwitched', () => {
 

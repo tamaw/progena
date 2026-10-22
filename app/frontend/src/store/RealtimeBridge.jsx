@@ -1,9 +1,11 @@
 import { useEffect, useRef } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { useConfig } from '../context/ConfigContext';
-import { startRealtimeStream, stopRealtimeStream } from './realtimeListener';
-import { selectRealtimeConnected, selectRealtimeStreamReady } from './realtimeSlice';
-import { fetchChatSessions, fetchInbox, fetchModelProfiles, selectGeneratingChatIds } from './uiDataSlice';
+import { startRealtimeStream, stopRealtimeStream } from '../realtime/realtimeListener';
+import { selectRealtimeConnected, selectRealtimeStreamReady } from '../realtime/realtimeSlice';
+import { fetchChatSessions, selectGeneratingChatIds } from '../features/chat/state/chats';
+import { fetchInbox } from '../features/inbox/state';
+import { fetchModelProfiles } from '../features/settings/state/modelProfiles';
 
 function selectHasActiveChatGeneration(state) {
   const selectedGeneratingChatIds = selectGeneratingChatIds(state);

@@ -1,130 +1,165 @@
 # Frontend — Agent Guide
 
-React + Vite SPA for Progenitor. This file is the orientation for the next agent:
-the real architecture, the conventions to follow, and the gotchas to avoid.
+React + Vite SPA for Progenitor. Organize code by its owner: application wiring,
+shared infrastructure, or a product feature. Feature names follow the backend
+where responsibilities match; frontend-only composition such as the dashboard
+and routine editor has its own feature.
 
-## Stack
+## Stack and commands
 
-- **React 19** (function components + hooks only; no class components)
-- **Vite 7** dev server / build (`type: module`, JSX in `.jsx`)
-- **Redux Toolkit 2** + **react-redux 9** for shared/realtime state
-- **react-router-dom 7** for routing (`App.jsx` wraps routes in `AppRuntimeShell`)
-- **@xyflow/react** (React Flow) for the workflow/routine canvases
-- **chart.js / react-chartjs-2** for dashboards
-- **vitest 3** for unit tests, **@playwright/test** for e2e
-- **ESLint 9** flat config (`eslint.config.js`)
+React 19, Vite 7, Redux Toolkit 2, React Router 7, React Flow, Vitest 5,
+Playwright and ESLint 9. JavaScript/JSX, plain CSS and CSS Modules.
+Prefer function components and hooks; the route error boundary uses React's
+class-based error-boundary API.
 
-No TypeScript, no Tailwind/styled-components — styling is plain CSS + CSS Modules.
-
-## Commands (run from `app/frontend`)
+Run from `app/frontend` with a Node version supported by the installed packages:
 
 ```bash
-npm install            # after pulling dependency changes
-npm run dev            # Vite dev server on :5173 (proxies to backend :8000)
-npm run build          # production build (must stay green)
-npm run lint           # eslint . — must stay clean
-npm run test           # vitest run (unit tests)
-npm run test:watch     # vitest watch
-npm run test:e2e       # playwright (needs the full stack running)
+npm ci
+npm run dev
+npm run lint
+npm run test:unit
+npm run build
+npm run test:e2e
 ```
 
-> Shell note: the workspace shell is **fish**, not bash. Avoid bash-only syntax
-> (`for..do..done`, `(cmd || cmd)` in command position, `/dev/tcp`).
+Playwright uses an already-running stack; `FRONTEND_BASE_URL` overrides its
+frontend URL. The Vite dev/preview proxy forwards `/api/*` and `/v1/*` to the
+backend at `http://127.0.0.1:8000`, or `VITE_BACKEND_BASE_URL`. The browser never
+calls the runtime directly.
 
-## Backend wiring
+## Directory map
 
-The frontend never talks to the runtime directly. `vite.config.js` has a custom
-proxy plugin that forwards `/api/*` and `/v1/*` to the backend at
-`http://127.0.0.1:8000` (dev **and** preview). Everything else is served by Vite.
-
-## Directory map (`src/`)
-
+```text
+src/
+├── main.jsx                 # Entry point and initial workspace navigation
+├── App.jsx                  # Providers and workspace-scoped application subtree
+├── routes.jsx               # Lazy pages, route registration and error boundary
+├── shell/                   # Navigation, header, panel placement and chrome
+├── components/              # Domain-independent UI and shared layout primitives
+│   ├── layout/              # PaneList, DetailHeader, DetailPane and PageShell
+│   └── panels/              # Shared panel frame/buttons
+├── context/                 # Configuration, notifications and workspace lifecycle
+├── hooks/                   # Reusable selection, draft, menu and editor hooks
+├── lib/                     # General utilities, Markdown and sanitization
+├── store/                   # Redux assembly, HTTP helpers and request/draft lifecycle
+├── realtime/                # Canonical SSE transport, event queue and correlation
+├── styles/                  # Tokens, base styles and shared chrome foundations
+└── features/
+    ├── agents/              # Catalogue, agent details and catalogue/run state
+    ├── alerts/              # Alert panel, model and state
+    ├── chat/                # Conversation/sessions, quick chat and response streams
+    │   ├── pages/
+    │   ├── components/
+    │   ├── hooks/
+    │   ├── models/
+    │   ├── state/
+    │   └── styles/
+    ├── dashboard/           # Overview page and cross-feature data composition
+    ├── design-library/      # Development-only UI catalogue
+    ├── documents/           # Shared document-type catalogue state
+    ├── inbox/
+    ├── insights/
+    ├── instructions/
+    ├── knowledge/
+    ├── modules/             # Module pages, sandbox host and generated vendor bundles
+    ├── monitoring/          # Runtime status, logs and status presentation
+    ├── plugins/             # Plugins, marketplaces and marketplace settings
+    ├── projects/            # Browser-local projects/solutions
+    ├── repositories/
+    ├── routines/            # Routine editor, run subscriptions and pure models
+    ├── schedules/           # Schedules and shared widget operations/state
+    ├── search/
+    ├── settings/            # Preferences, providers, profiles, MCP and policies
+    ├── tasks/               # Tasks/Kanban, metadata models and detail components
+    └── workflows/
+        ├── WorkflowsPage.jsx # Page/data/selection coordination
+        ├── canvas/           # Nodes, ports, palette controls and node registration
+        ├── editor/           # Options editor and draft model
+        ├── models/           # Pure graph conversion, schemas, templates and unpacking
+        ├── runs/             # Run presentation and formatting
+        └── state/
 ```
-App.jsx                 # routes + global CSS imports, wrapped in AppRuntimeShell
-main.jsx                # entry point
-components/
-  layout/               # app chrome + shared master-detail primitives
-    AppRuntimeShell.jsx #   the chrome (rail, header, panels) — large, behaviour-heavy
-    navIcons.jsx        #   presentational SVG icons used by the shell
-    quickChatConfig.js  #   quick-chat panel config + outbound-message helpers (pure)
-    PaneList.jsx        #   list-pane primitives (PaneListSearch/Filters/Group/...)
-    DetailHeader.jsx    #   detail-pane header + shared action icons
-    DetailPane.jsx / PageShell.jsx / Sidebar.jsx
-  common/               # DetailCards (MetricCard/CardFact/CapabilityChip), NumberStepper,
-                        #   NotificationContainer (+ co-located .module.css)
-  chat/                 # chat input/messages + pure models (conversationModel, etc.)
-  canvas/                # React Flow nodes + panels for the Workflows canvas
-  agents/               # RoutineGraphEditor (structured chain), pure graph helpers,
-                        # NodeInspector, RoutineChain, AgentDetailBodies, agentFormat
-  dashboard/
-context/                # React context providers
-  WorkspaceContext.jsx  #   active multi-backend workspace host + in-place switching
-  ConfigContext, HealthContext, AlertCenterContext, ChromeRuntimeContext, NotificationContext
-hooks/
-  api/                  # API layer (see "API hooks" below)
-  useListSelection.js   #   shared list filter/group/select hook used by master-detail pages
-  useChatStream.js, useSSE.js, useTheme.js, useChatSessionPrefs.js
-pages/                  # one component per route; pure logic lives in *PageModel.js siblings
-store/                  # Redux Toolkit (see "State & realtime" below)
-lib/                    # markdown, indexedDb, low-level utils
-styles/                 # global stylesheets imported by App.jsx (+ canvas/nodes by components)
-```
 
-## Core conventions (follow these)
+Keep small features flat. Introduce subdirectories when they describe a real
+responsibility, such as workflow `canvas/`, `editor/` and `runs/`. Tests and CSS
+Modules live beside their implementation. Do not create empty standard folders.
 
-### API requests — `store/`
-`store/http.js` owns acknowledged finite requests and request-ID helpers. Domain
-operations live in the Redux thunks under `store/uiData/`; pages consume their
-selectors and do not add direct JSON API hooks.
+## Ownership and dependencies
 
-### State & realtime — `store/`
-- `store.js` wires the Redux store; `uiDataSlice.js` is split into per-domain modules
-  under `store/uiData/` (`agents`, `chats`, `tasks`, `knowledge`, `mcp`, `runtime`).
-- **Single SSE source**: `realtimeListener.js` owns the one `EventSource` and dedupes
-  by event id (`realtimeSlice.js`); incoming events update `uiData*` reducers.
-  Pages should read via selectors — **don't** open their own streams.
-- `http.js` holds shared fetch helpers for the store layer.
+- Application wiring (`App.jsx`, `routes.jsx`, `shell/`, workspace lifecycle and
+  store assembly) may compose features and shared code.
+- Features import their own state directly and use explicit imports for another
+  feature's capability. Do not import the assembled store, `uiDataSlice`, or
+  shell implementation from feature code. Supply chrome-owned values as props;
+  for example, the shell supplies navigation items to the search panel.
+- Shared `components/`, `hooks/`, `lib/` and `realtime/` code must not import
+  features, shell code, or the assembled store. ESLint enforces these boundaries.
+- Pure models and feature state stay independent of page/editor components.
+  Store registration must not import React Flow, pages, panels or editors.
+- Keep route imports lazy and direct. Avoid a feature barrel that combines state
+  with UI and pulls every editor into the initial bundle.
 
-### Master-detail pages — `pages/`
-Most list/detail pages compose the same primitives instead of re-rolling layout:
-`PaneList*` (left list), `DetailHeader` + `DetailPane` (right detail),
-`DetailCards` (metric/fact/chip cards), and `useListSelection` (filter/group/select).
-Examples: `ChannelsPage`, `ModelsPage`, `RepositoriesPage`, `SessionsPage`,
-`PluginsPage`, `InstructionsPage`, `KnowledgePage`, `TasksPage`.
-Don't build a generic `<MasterDetailPage>` — the primitives are the abstraction.
+The shell owns opening, closing, pinning and placing panels. Features own panel
+behavior: `chat/QuickChatPanel`, `alerts/AlertsPanel`, `search/SearchPanel`,
+`insights/InsightsPanel`, and the settings/account panels. Shared panel framing
+lives in `components/panels/PanelFrame.jsx`.
 
-### Keep components thin — extract pure logic
-Pure, React-free logic lives in sibling modules so it stays testable and the
-component stays focused on rendering/state:
-- Page logic → `pages/<name>PageModel.js` (+ `.test.js`), e.g. `tasksPageModel.js`,
-  `knowledgePageModel.js`.
-- Chat parsing/formatting → `components/chat/*Model.js`.
-- Workflow graph helpers → co-located in `pages/WorkflowsPage.jsx` (`workflowToFlow` is exported for its unit test).
-- Presentational icon sets / static config → dedicated modules
-  (`components/layout/navIcons.jsx`, `quickChatConfig.js`).
-When you delete a component's last caller of an imported helper, drop the import
-too (eslint `no-unused-vars` will flag it).
+## State, requests and realtime
 
-### CSS
-- Global stylesheets are imported once in `App.jsx` (`main.css` is the design-token
-  base — keep it). `workspace.css` / `nodes.css` are imported by their components.
-- New component styles should be **CSS Modules** co-located next to the component
-  (`Foo.module.css`), like `components/common/NotificationContainer.module.css`.
-- `styles/chrome-frame.css` is a large monolith — migrate off it incrementally with
-  visual QA, not in one pass. The Kanban page intentionally keeps hardcoded colours
-  for now (not wired up yet).
+`store/uiDataSlice.js` composes feature modules into the stable `state.uiData.*`
+shape. Each domain exports `initialState`, `eventHandlers`, and optionally
+`reducers` and `buildExtraReducers`. Every registered handler receives a shared
+event such as `connection.ready` or `status.updated`; status, alerts and widgets
+have separate owners. Add an event handler to its feature, not the transport.
 
-## Testing
+Feature actions/selectors/operations are imported directly from their owning
+files. Standalone synchronous action creators retain the existing `uiData/*`
+action types so feature code does not depend on the composer.
 
-- Unit tests are `*.test.js` / `*.unit.test.js` next to the code; run with
-  `npm run test`. Mirror the pattern in `pages/tasksPageModel.test.js` — test the
-  pure model module, not the React component.
-- Playwright e2e lives in `e2e/*.spec.js` (not picked up by vitest) and runs against
-  the **live** local stack (postgres :15433, runtime :9501, backend :8000, frontend
-  :5173). `e2e/discovery.spec.js` mounts every route and asserts no uncaught errors.
+Finite domain operations use `store/async.js` and `store/http.js`. The HTTP 202
+acknowledgement confirms dispatch; the correlated canonical event is the
+completion signal. Hooks such as `useTasksApi` and `useWidgetsApi` bind feature
+operations to Redux and the active workspace. Draft saves retain their supplied
+request IDs, including when the stream event arrives before the HTTP reply.
+Uploads, preview content and cron-preview responses retain their dedicated
+transport contracts.
 
-## Repo safety
+`realtime/realtimeListener.js` owns the single canonical `EventSource`, validates
+and deduplicates envelopes, applies feature events and tracks pending operations.
+`store/RealtimeBridge.jsx` is the application adapter that starts the transport
+and hydrates cross-feature catalogues. Chat's request-scoped response streams
+remain separate under `features/chat/hooks/`; do not combine their generation
+lifecycle with the global UI event feed.
 
-Create PRs and let a human merge — do not merge PRs or trigger deployments. The
-realtime/agent data loads asynchronously over SSE, so e2e/visual checks should wait
-for content (the agents list can take several seconds to populate).
+Workspace changes clear backend-scoped local caches in
+`context/workspaceCache.js`, reset Redux, and remount the subtree keyed by
+`workspaceHost`. Preserve this boundary: data, streams and local page state from
+one backend must not leak into another workspace.
+
+## UI and styling
+
+Master-detail features compose `PaneList*`, `DetailHeader`, `DetailPane`,
+`PageShell`, shared detail cards and `useListSelection`. Keep feature differences
+in the feature rather than introducing a generic master-detail page framework.
+
+General Markdown rendering/sanitization lives in `lib/markdown.js` and
+`lib/safeMarkdown.js`; instructions, knowledge and modules do not depend on chat
+rendering helpers. Chat-specific event presentation stays in chat.
+
+`styles/main.css` owns design tokens. `App.jsx` preserves the order of existing
+global/feature stylesheets. `styles/chrome-frame.css` remains shared legacy
+styling; extract styles incrementally with visual checks. New component styles
+should use colocated CSS Modules. The generated module vendor bundles under
+`features/modules/vendor/` are rebuilt with `npm run build:module-vendor`.
+
+## Validation and repository safety
+
+Run lint, unit tests and the production build after structural changes. Check
+both route rendering and the affected interactive editor/panel in the browser;
+wait for asynchronous SSE data before assessing the result. Keep tests focused
+on models and meaningful behavior such as request correlation, stale events,
+workspace resets and draft completion.
+
+Create PRs and wait for human merge. Do not merge or deploy unless the human
+explicitly requests it.

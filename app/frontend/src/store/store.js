@@ -1,8 +1,8 @@
 import { combineReducers, configureStore } from '@reduxjs/toolkit';
-import realtimeReducer from './realtimeSlice';
+import realtimeReducer from '../realtime/realtimeSlice';
 import uiDataReducer from './uiDataSlice';
 import editorDraftsReducer from './editorDraftsSlice';
-import { realtimeListenerMiddleware } from './realtimeListener';
+import { realtimeListenerMiddleware } from '../realtime/realtimeListener';
 
 export const WORKSPACE_SWITCHED = 'workspace/switched';
 export const workspaceSwitched = () => ({ type: WORKSPACE_SWITCHED });

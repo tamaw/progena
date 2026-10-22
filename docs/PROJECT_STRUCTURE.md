@@ -56,11 +56,14 @@ app/
 │   ├── monitoring/   # State snapshots, logs and metrics
 │   └── integrations/ # Runtime clients and Telegram
 └── frontend/     # React/Vite web client
-    ├── src/pages/
+    ├── src/features/   # Feature pages, components, models and domain state
     ├── src/components/
     ├── src/context/
     ├── src/hooks/
-    └── src/styles/
+    ├── src/shell/      # Application chrome and panel placement
+    ├── src/store/      # Redux assembly and shared request lifecycle
+    ├── src/realtime/   # Canonical SSE transport
+    └── src/styles/     # Shared foundations
 ```
 
 ## Bundled data assets and runtime persistence

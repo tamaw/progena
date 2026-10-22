@@ -10,7 +10,7 @@ This records the checkpoint-first design following the user's clarification that
 
 ## Evidence and remaining checks
 
-- `app/frontend/src/components/layout/AppRuntimeShell.jsx:1884-2009`: the current panel derives values from widget indexes/cycle counts. Range is local state; Refresh fetches widgets. Browser inspection confirmed unchanged usage when switching 7d to 30d.
+- Before the Insights implementation, the top-bar panel derived values from widget indexes/cycle counts. Browser inspection confirmed unchanged usage when switching 7d to 30d. The current panel lives in `app/frontend/src/features/insights/InsightsPanel.jsx`.
 - `app/progenitor/runtime/messages.py`: usage parsing already handles provider input/output/total and separate reasoning/cache metadata.
 - `app/backend/chat/service.py`: checkpoint message projection reads provider usage; its display token count is not a full accounting metric.
 - `app/progenitor/routines/factory.py`: routine `run_meta` contains token summaries. Workflow totals also exist; neither should be added to the same underlying messages again.

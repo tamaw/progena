@@ -1,59 +1,19 @@
 import { describe, it, expect } from 'vitest';
-import reducer, {
-  applyUiEvent,
-  clearChatErrored,
-  clearChatGenerating,
-  clearChatUnread,
-  clearActiveChatSession,
-  deleteChatSession,
-  kanbanSnapshotReceived,
-  markChatErrored,
-  markChatGenerating,
-  markChatUnread,
-  requestAgentDetail,
-  requestChatSessionDetail,
-  requestChatSessionReconciliation,
-  updateChatSessionMetadata,
-  selectActiveAgentProfile,
-  selectRoutineLatestRunStatusByAgentId,
-  selectActiveChatSessionState,
-  selectAgentProfiles,
-  selectChatIndicators,
-  selectChatReconciliationState,
-  selectErroredChatIds,
-  selectGeneratingChatIds,
-  selectRequestIdByThreadId,
-  selectRequestIdForThread,
-  selectChatSessions,
-  selectKanbanBoard,
-  selectTaskActivityEntry,
-  selectTaskContentEntry,
-  selectUnreadChatIds,
-  fetchInbox,
-  fetchSchedules,
-  selectSchedulesState,
-  selectWorkflowDetailByPath,
-  selectWorkflowLatestRunById,
-  selectWorkflowRuns,
-  selectWorkflows,
-  selectWorkflowsState,
-  selectInboxMessages,
-  selectInboxState,
-  selectInboxUnreadCount,
-  selectMcpServers,
-  selectMcpServerDetail,
-  selectMcpState,
-  selectSchedules,
-  selectUnseenNavRoutes,
-  setActiveNavRoute,
-  scheduleSnapshotReceived,
-  setErroredChatIds,
-  setGeneratingChatIds,
-  setUnreadChatIds,
-  fetchTokenUsage,
-  selectInsightsQueryState,
-} from './uiDataSlice';
-import { CHAT_STATUS } from '../lib/chatStatus';
+import reducer, { selectUnseenNavRoutes } from './uiDataSlice';
+import { applyUiEvent } from './uiEvents';
+import { clearChatErrored, clearChatGenerating, clearChatUnread, clearActiveChatSession, markChatErrored, markChatGenerating, markChatUnread, setErroredChatIds, setGeneratingChatIds, setUnreadChatIds } from '../features/chat/state/actions';
+import { deleteChatSession, requestChatSessionDetail, requestChatSessionReconciliation, updateChatSessionMetadata, selectActiveChatSessionState, selectChatIndicators, selectChatReconciliationState, selectErroredChatIds, selectGeneratingChatIds, selectRequestIdByThreadId, selectRequestIdForThread, selectChatSessions, selectUnreadChatIds } from '../features/chat/state/chats';
+import { kanbanSnapshotReceived } from '../features/tasks/actions';
+import { requestAgentDetail, selectActiveAgentProfile, selectRoutineLatestRunStatusByAgentId, selectAgentProfiles } from '../features/agents/state/agents';
+import { selectKanbanBoard, selectTaskActivityEntry, selectTaskContentEntry } from '../features/tasks/state';
+import { fetchInbox, selectInboxMessages, selectInboxState, selectInboxUnreadCount } from '../features/inbox/state';
+import { fetchSchedules, selectSchedulesState, selectSchedules } from '../features/schedules/state';
+import { selectWorkflowDetailByPath, selectWorkflowLatestRunById, selectWorkflowRuns, selectWorkflows, selectWorkflowsState } from '../features/workflows/state/workflows';
+import { selectMcpServers, selectMcpServerDetail, selectMcpState } from '../features/settings/state/mcp';
+import { setActiveNavRoute } from './navigationActions';
+import { scheduleSnapshotReceived } from '../features/schedules/actions';
+import { fetchTokenUsage, selectInsightsQueryState } from '../features/insights/state';
+import { CHAT_STATUS } from '../features/chat/models/chatStatus';
 
 const snapshot = (ids) => applyUiEvent({
   type: 'chat.sessions.snapshot',

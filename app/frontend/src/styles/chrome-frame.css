@@ -175,7 +175,6 @@ body,
   height: 17px;
 }
 
-
 .app-shell__quick-chat > svg {
   flex: 0 0 auto;
 }
@@ -1287,7 +1286,6 @@ body,
   min-height: 0;
 }
 
-
 .app-shell .logs-main {
   height: 100%;
   min-height: 0;
@@ -1355,7 +1353,6 @@ body,
   transition: none;
 }
 
-
 /* Pinned: exits fixed positioning and occupies the third grid column */
 .topnav-pane.is-pinned {
   position: static;
@@ -1372,11 +1369,9 @@ body,
   box-shadow: -4px 0 24px rgba(0, 0, 0, 0.4);
 }
 
-
 [data-theme="dark"] .topnav-pane.is-pinned {
   box-shadow: none;
 }
-
 
 /* Settings & Account are centered modal popups, not the right-side slide-in used
    by the other chrome tools (quick chat, alerts, search, insights). This reverts
@@ -1459,7 +1454,6 @@ body,
   font-size: 15px;
   font-weight: 600;
 }
-
 
 .account-pane .set-section + .set-section {
   border-top: 1px solid var(--color-border);
@@ -2194,7 +2188,6 @@ body,
   padding: 14px 16px 22px;
 }
 
-
 .sess-list {
   display: flex;
   flex-direction: column;
@@ -2377,12 +2370,10 @@ body,
   }
 }
 
-
 /* Scrim hidden on desktop — only active on narrow viewports */
 .pane-mobile-scrim {
   display: none;
 }
-
 
 .muted {
   color: var(--color-text-muted);
@@ -2609,8 +2600,6 @@ body,
   overflow-y: auto;
   padding: 6px 6px 14px;
 }
-
-
 
 .sess-group__head {
   display: flex;
@@ -3602,7 +3591,6 @@ body,
   color: var(--color-error);
 }
 
-
 .set-text-input {
   min-width: 180px;
   color: var(--color-text-primary);
@@ -3625,7 +3613,6 @@ body,
   gap: 8px;
   align-items: center;
 }
-
 
 .set-text-input:focus {
   border-color: var(--color-accent);
@@ -3763,7 +3750,6 @@ body,
   list-style: none;
 }
 
-
 .set-provider-default {
   display: inline-block;
   margin-left: 7px;
@@ -3845,12 +3831,10 @@ body,
   }
 }
 
-
 .set-row--stack {
   flex-direction: column;
   align-items: stretch;
 }
-
 
 .set-workspace-list {
   display: flex;
@@ -4575,7 +4559,6 @@ body,
   text-decoration-color: var(--color-text-muted);
 }
 
-
 /* Shared two-pane page skeleton (PageShell) and detail pane (DetailPane). The
    grid is identical across every list page; only the background differs, so the
    generic class defaults to the lighter secondary surface and the few
@@ -4924,7 +4907,6 @@ body,
   color: var(--color-text-primary);
 }
 
-
 .inbox-section__question {
   margin: 4px 0 0;
 }
@@ -4962,7 +4944,6 @@ body,
   flex: 1;
   min-width: 0;
 }
-
 
 /* Dense meta row: items fit on one line (Agents/Models/Channels/Schedules), so
    widen the gap vs the wrapping chat/tasks rows. */
@@ -5658,7 +5639,6 @@ body,
   gap: 5px;
 }
 
-
 .agents-prompt {
   max-height: 220px;
   margin: 0;
@@ -5904,7 +5884,6 @@ body,
   opacity: 0.5;
 }
 
-
 .agents-graph-floating .agents-graph-run-nav__label {
   padding: 0 4px;
   min-width: 28px;
@@ -6021,7 +6000,6 @@ body,
   background: color-mix(in oklab, var(--node-color) 20%, transparent);
 }
 
-
 /* Editable label in the shared title bar. */
 
 /* Step content inputs. */
@@ -6055,7 +6033,6 @@ body,
   color: var(--node-color);
   font-weight: 700;
 }
-
 
 .agents-graph-node__prompt:focus,
 .agents-graph-node__toolinput:focus {
@@ -6834,7 +6811,6 @@ body,
   word-break: break-word;
 }
 
-
 .routine-node-inspector__foot {
   display: flex;
   justify-content: space-between;
@@ -7046,9 +7022,6 @@ body,
   top: -13px;
 }
 
-
-
-
 .routine-connector__btn {
   position: relative;
   z-index: 1;
@@ -7095,7 +7068,6 @@ body,
   width: 2px;
   height: 12px;
 }
-
 
 .routine-connector__btn:hover {
   color: var(--color-accent);
@@ -7428,7 +7400,6 @@ body,
   transform: translateX(-50%);
 }
 
-
 .routine-fork__branches {
   position: relative;
   width: max-content;
@@ -7464,7 +7435,6 @@ body,
   height: 16px;
 }
 
-
 .routine-fork__head {
   display: flex;
   justify-content: center;
@@ -7488,7 +7458,6 @@ body,
 .routine-fork:not(.routine-fork--joined) > .routine-fork__branches > .routine-fork__lanes {
   align-items: flex-start;
 }
-
 
 .routine-fork__lane {
   position: relative;
@@ -7544,7 +7513,6 @@ body,
   background: transparent;
   border-color: transparent;
 }
-
 
 .routine-fork__wire {
   position: absolute;
@@ -7645,7 +7613,6 @@ body,
   height: calc(100% + 1px);
 }
 
-
 .routine-fork--joined > .routine-fork__branches > .routine-fork__lanes
   > .routine-fork__lane--fanout-first > .routine-fork__wire::after {
   left: calc(50% - 1px);
@@ -7664,7 +7631,6 @@ body,
 .routine-fork__lane--fanin > .routine-connector:last-child .routine-connector__line {
   bottom: -12px;
 }
-
 
 .routine-fork__header {
   position: absolute;
@@ -7737,7 +7703,6 @@ body,
   font-weight: 700;
 }
 
-
 /* No `max-width` cap here: `100%` would resolve against this flex item's own
    containing block (`.routine-fork`), which is itself `width: max-content`
    sized bottom-up from this very join -- a percentage cap on it is circular.
@@ -7757,7 +7722,6 @@ body,
   width: fit-content;
   margin: 0 auto;
 }
-
 
 /* The stem only has to cross the box's bottom padding to reach the fan-in
    rail; the join's own connector supplies the rest. With no margin above it
@@ -8318,7 +8282,6 @@ body,
     padding: 14px;
   }
 
-  
   .tools-metrics,
   .agents-metrics,
   .tools-connection-grid {

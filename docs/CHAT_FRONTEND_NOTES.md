@@ -151,7 +151,7 @@ When modifying these paths, run:
 
 ```bash
 cd app/frontend
-npm test -- src/hooks/useChatStream.test.js src/store/realtimeListener.unit.test.js src/components/chat/Message.copy.unit.test.jsx src/components/chat/conversationModel.unit.test.js src/components/chat/messageRenderUtils.unit.test.js src/components/chat/TimelineItem.unit.test.jsx src/components/chat/SubagentCard.unit.test.jsx src/lib/markdown.unit.test.js src/store/uiDataSlice.unit.test.js
+npm test -- src/features/chat/hooks/useChatStream.test.js src/realtime/realtimeListener.unit.test.js src/features/chat/components/Message.copy.unit.test.jsx src/features/chat/models/conversationModel.unit.test.js src/features/chat/models/messageRenderUtils.unit.test.js src/features/chat/components/TimelineItem.unit.test.jsx src/features/chat/components/SubagentCard.unit.test.jsx src/lib/markdown.unit.test.js src/store/uiDataSlice.unit.test.js
 npm run build
 ```
 

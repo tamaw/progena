@@ -4,8 +4,9 @@ import { Provider } from 'react-redux';
 import { configureStore } from '@reduxjs/toolkit';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { createRoot } from 'react-dom/client';
-import realtimeReducer from '../store/realtimeSlice';
-import uiDataReducer, { applyUiEvent } from '../store/uiDataSlice';
+import realtimeReducer from '../realtime/realtimeSlice';
+import uiDataReducer from '../store/uiDataSlice';
+import { applyUiEvent } from '../store/uiEvents';
 import editorDraftsReducer from '../store/editorDraftsSlice';
 import useInlineTitleEditor from './useInlineTitleEditor';
 

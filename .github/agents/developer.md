@@ -84,9 +84,9 @@ class MyModel(BaseModel):
 4. Register its router in `app/backend/http/router.py` or `app/backend/main.py` and verify the API contract
 
 #### Adding React Component
-1. Create component in `app/frontend/src/components/`
+1. Add feature components under `app/frontend/src/features/<feature>/`; put domain-independent UI in `app/frontend/src/components/`
 2. Follow existing patterns (hooks, props, etc.)
-3. Update parent components
+3. Import feature state directly; keep application assembly and shared UI independent
 4. Test in browser
 
 ### Important Notes

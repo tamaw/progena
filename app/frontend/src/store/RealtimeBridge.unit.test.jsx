@@ -68,21 +68,25 @@ vi.mock('../context/ConfigContext', () => ({
   useConfig: () => ({ getApiUrl: bridge.getApiUrl }),
 }));
 
-vi.mock('./realtimeListener', () => ({
+vi.mock('../realtime/realtimeListener', () => ({
   startRealtimeStream: vi.fn((payload) => ({ type: 'realtime/start', payload })),
   stopRealtimeStream: vi.fn(() => ({ type: 'realtime/stop' })),
 }));
 
-vi.mock('./realtimeSlice', () => ({
+vi.mock('../realtime/realtimeSlice', () => ({
   selectRealtimeConnected: vi.fn(() => bridge.connected),
   selectRealtimeStreamReady: vi.fn(() => bridge.connected),
 }));
 
-vi.mock('./uiDataSlice', () => ({
+vi.mock("../features/chat/state/chats", () => ({
   fetchChatSessions: bridge.fetchChatSessions,
-  fetchInbox: bridge.fetchInbox,
-  fetchModelProfiles: bridge.fetchModelProfiles,
-  selectGeneratingChatIds: vi.fn((state) => state?.uiData?.chatRuntime?.generatingChatIds || []),
+  selectGeneratingChatIds: vi.fn(state => state?.uiData?.chatRuntime?.generatingChatIds || [])
+}));
+vi.mock("../features/inbox/state", () => ({
+  fetchInbox: bridge.fetchInbox
+}));
+vi.mock("../features/settings/state/modelProfiles", () => ({
+  fetchModelProfiles: bridge.fetchModelProfiles
 }));
 
 import RealtimeBridge from './RealtimeBridge';

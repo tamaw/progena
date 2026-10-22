@@ -1,0 +1,172 @@
+/* ============================================================================
+   Profiles page styles
+   ============================================================================ */
+
+/* List pane rows */
+.profiles-pane-row {
+  text-align: left;
+}
+
+.profiles-pane-row__name {
+  font-weight: 500;
+  color: var(--color-text-primary);
+}
+
+.profiles-pane-row .sess-row__title {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 2px;
+}
+
+/* Badges */
+.profiles-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  border-radius: var(--border-radius-sm);
+  font-size: var(--font-size-xs);
+  font-weight: 500;
+  line-height: 1.4;
+}
+
+.profiles-badge--provider {
+  background: var(--color-accent-soft);
+  color: var(--color-accent);
+}
+
+.profiles-badge--deployment {
+  background: var(--color-bg-hover);
+  color: var(--color-text-secondary);
+}
+
+.profiles-badge--customized {
+  background: color-mix(in srgb, var(--color-accent-secondary) 12%, transparent);
+  color: var(--color-accent-secondary);
+}
+
+/* Detail pane */
+.profiles-detail .detail-pane__body {
+  padding: var(--spacing-lg);
+}
+
+/* Alerts */
+.profiles-alert {
+  padding: var(--spacing-md) var(--spacing-lg);
+  border-radius: var(--border-radius-md);
+  font-size: var(--font-size-md);
+  margin-bottom: var(--spacing-lg);
+}
+
+.profiles-alert--error {
+  background: color-mix(in srgb, var(--color-error) 10%, transparent);
+  color: var(--color-error);
+}
+
+.profiles-alert--status {
+  background: var(--color-accent-soft);
+  color: var(--color-accent);
+}
+
+.profiles-alert--conflict {
+  background: color-mix(in srgb, var(--color-warning) 10%, transparent);
+  color: var(--color-warning);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-md);
+}
+
+.profiles-section__actions {
+  display: inline-flex;
+  gap: 5px;
+}
+
+/* Config facts use the shared Agents card treatment. */
+.profiles-config-grid {
+  margin: 0;
+}
+
+.profiles-config-grid dd {
+  margin: 0;
+}
+
+/* Edit fields deliberately occupy that same bordered surface. */
+.profiles-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-width: none;
+}
+
+.profiles-pricing {
+  display: grid;
+  gap: 12px;
+  margin: 4px 0 0;
+  padding: 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--border-radius-md);
+}
+
+.profiles-pricing legend {
+  padding: 0 4px;
+  color: var(--color-text-primary);
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+}
+
+.profiles-pricing__preset {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  color: var(--color-text-muted);
+  font-size: 11px;
+}
+
+.profiles-pricing__preset a {
+  color: inherit;
+}
+
+.profiles-field {
+  min-width: 0;
+}
+
+.profiles-field .app-listbox,
+.profiles-field .app-listbox__trigger {
+  width: 100%;
+}
+
+.profiles-field__required {
+  color: var(--color-error);
+}
+
+.profiles-field input:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.profiles-list-notice {
+  padding: 12px;
+  font-size: var(--font-size-sm);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  overflow-wrap: anywhere;
+}
+
+.profiles-pane-row__name {
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 600px) {
+  .profiles-alert--conflict {
+    flex-wrap: wrap;
+  }
+}
+
+@media (max-width: 767px) {
+  .profiles-detail .detail-pane__body {
+    padding-left: 36px;
+  }
+}

@@ -97,7 +97,7 @@ Process-wide clients, session management and shutdown state live in
 `lifecycle/state.py`; startup orchestration lives in `lifecycle/startup.py`.
 Importing `app.backend` itself does not construct the application.
 
-Frontend React code consumes this through Redux Toolkit listener middleware in `app/frontend/src/store/realtimeListener.js`. That listener owns the single `EventSource`, deduplicates events by id in `realtimeSlice.js`, then reducers in `uiDataSlice.js` apply domain updates. Pages should read selectors instead of opening their own long-lived UI streams.
+Frontend React code consumes this through Redux Toolkit listener middleware in `app/frontend/src/realtime/realtimeListener.js`. That listener owns the single canonical `EventSource`, deduplicates events by id in `realtimeSlice.js`, then the feature handlers registered by `store/uiDataSlice.js` apply domain updates. Pages should read selectors instead of opening their own long-lived UI streams.
 
 Chat session loading follows a request-then-stream pattern. Finite browser routes return HTTP 202 with `{request_id, event_types}` and emit authoritative state on `/api/ui/stream`; the frontend left pane is populated by the streamed `chat.sessions.snapshot`. `GET /api/ui/chats/{id}?request_id=...` emits `chat.session.upserted` for unknown-sidebar safety and `chat.session.selected` with the same `request_id` for active transcript hydration. The frontend only applies matching detail events so one tab cannot steal another tab's selected chat. Mutations emit targeted events such as `chat.session.created`, `chat.session.metadata.updated`, and `chat.session.deleted`, and may also emit a fresh snapshot when the whole list ordering can change.
 

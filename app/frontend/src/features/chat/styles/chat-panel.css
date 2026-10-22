@@ -1,0 +1,2409 @@
+/* ============================================================================
+   Progenitor Chat UI - Chat Styles
+   ============================================================================ */
+
+/* Chat Messages Container */
+.chat-messages {
+    flex: 1;
+    overflow-y: auto;
+    padding: var(--spacing-lg);
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-md);
+}
+
+/* Welcome Message */
+.welcome-message {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    padding: var(--spacing-xl);
+    margin: auto;
+    max-width: 500px;
+}
+
+.welcome-message h2 {
+    font-size: var(--font-size-xl);
+    font-weight: 600;
+    color: var(--color-text-primary);
+    margin-bottom: var(--spacing-sm);
+}
+
+.welcome-message p {
+    font-size: var(--font-size-md);
+    color: var(--color-text-secondary);
+    margin-bottom: var(--spacing-lg);
+}
+
+.quick-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--spacing-sm);
+    justify-content: center;
+}
+
+.quick-action {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-xs);
+    padding: 7px 10px;
+    border: 1px solid var(--color-border);
+    border-radius: 8px;
+    background-color: var(--color-bg-tertiary);
+    color: var(--color-text-primary);
+    font-size: var(--font-size-sm);
+    font-weight: 500;
+    cursor: pointer;
+    transition: all var(--transition-fast);
+}
+
+.quick-action:hover {
+    background-color: var(--color-bg-hover);
+    border-color: var(--color-accent);
+}
+
+/* Message Wrapper */
+.message-wrapper {
+    display: flex;
+    flex-direction: column;
+    animation: fadeIn 0.2s ease;
+}
+
+.message-wrapper.user {
+    align-items: flex-end;
+}
+
+.message-wrapper.assistant {
+    align-items: flex-start;
+}
+
+/* Message Bubble */
+.message {
+    max-width: 80%;
+    padding: var(--spacing-md);
+    border-radius: var(--border-radius-lg);
+    word-wrap: break-word;
+    overflow-wrap: break-word;
+}
+
+.message.user {
+    background-color: var(--color-user-bg);
+    color: var(--color-user-text);
+    border-bottom-right-radius: var(--border-radius-sm);
+}
+
+.message.assistant {
+    background-color: var(--color-assistant-bg);
+    color: var(--color-assistant-text);
+    border-bottom-left-radius: var(--border-radius-sm);
+}
+
+/* Message Content */
+.message-content {
+    font-size: var(--font-size-md);
+    line-height: 1.6;
+}
+
+.message-content--streaming-text {
+    white-space: pre-wrap;
+}
+
+.message-content p {
+    margin-bottom: var(--spacing-sm);
+}
+
+.message-content p:last-child {
+    margin-bottom: 0;
+}
+
+.msg-img-strip {
+    margin-top: var(--spacing-sm);
+}
+
+.message-attachments {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--spacing-xs);
+    margin-top: var(--spacing-sm);
+}
+
+.message-attachment-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 10px 4px 6px;
+    border-radius: var(--border-radius-md, 8px);
+    background-color: var(--color-bg-tertiary, rgba(0, 0, 0, 0.06));
+    border: 1px solid var(--color-border-light, transparent);
+    max-width: 260px;
+}
+
+.attachment-file-icon {
+    flex: 0 0 auto;
+}
+
+.message-attachment-chip__body {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    line-height: 1.3;
+}
+
+.message-attachment-chip__name {
+    font-size: var(--font-size-sm);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.message-attachment-chip__meta {
+    font-size: var(--font-size-xs, 11px);
+    color: var(--color-text-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.message-attachment-chip--error {
+    color: var(--color-error);
+}
+
+.message-attachment-chip--error .message-attachment-chip__meta {
+    color: inherit;
+}
+
+.chat-input-file-picker {
+    display: none;
+}
+
+.chat-input-attachments {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--spacing-xs);
+    padding: 0 var(--spacing-sm);
+    margin-bottom: var(--spacing-xs);
+}
+
+.chat-input-attachment-chip {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 10px 5px 6px;
+    border-radius: var(--border-radius-md, 8px);
+    background-color: var(--color-bg-tertiary, rgba(0, 0, 0, 0.06));
+    border: 1px solid var(--color-border-light, transparent);
+    max-width: 260px;
+    overflow: hidden;
+}
+
+.chat-input-attachment-chip__body {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    line-height: 1.3;
+}
+
+.chat-input-attachment-chip__name {
+    font-size: var(--font-size-sm);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.chat-input-attachment-chip__meta {
+    font-size: var(--font-size-xs, 11px);
+    color: var(--color-text-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* Sits flush along the chip's bottom edge, inside the existing bottom
+   padding. Unlike the uploading dim (opacity: 0.6 on the whole chip), this
+   bar stays fully visible once the upload completes -- see
+   --progress--complete below -- so "this attachment made it to the
+   server" remains legible after the fact, not just mid-transfer. */
+.chat-input-attachment-chip__progress {
+    position: absolute;
+    left: 6px;
+    right: 6px;
+    bottom: 1px;
+    height: 2px;
+    border-radius: 999px;
+    background-color: var(--color-accent);
+    transform-origin: left center;
+    transform: scaleX(0);
+}
+
+.chat-input-attachment-chip__progress--active {
+    animation: chat-attachment-upload-progress 1.1s ease-in-out infinite;
+}
+
+.chat-input-attachment-chip__progress--complete {
+    transform: scaleX(1);
+    transition: transform 0.3s ease;
+}
+
+@keyframes chat-attachment-upload-progress {
+    0% { transform: scaleX(0); }
+    100% { transform: scaleX(1); }
+}
+
+.chat-input-attachment-chip--uploading {
+    opacity: 0.6;
+}
+
+.chat-input-attachment-chip--error {
+    color: var(--color-error);
+}
+
+.chat-input-attachment-chip--error .chat-input-attachment-chip__meta {
+    color: inherit;
+}
+
+.chat-input-attachment-chip__remove {
+    flex: 0 0 auto;
+    border: none;
+    background: none;
+    color: inherit;
+    cursor: pointer;
+    font-size: var(--font-size-md);
+    line-height: 1;
+    padding: 0 2px;
+}
+
+/* Aligns with the content column of the .entry grid (28px gutter + 10px gap)
+   since this sits outside any individual .entry row, after the whole chain. */
+.chat-entry-chain__images {
+    margin-top: var(--spacing-sm);
+    margin-left: 38px;
+}
+
+.message-stream-event {
+    padding: var(--spacing-sm);
+    border: 1px solid var(--color-border);
+    border-radius: var(--border-radius-md);
+    background-color: color-mix(in srgb, var(--color-bg-tertiary) 82%, transparent);
+}
+
+.message-stream-event-header {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-xs);
+    flex-wrap: wrap;
+}
+
+.message-stream-event-detail {
+    margin-top: 4px;
+    font-size: var(--font-size-sm);
+    color: var(--color-text-secondary);
+}
+
+.message-stream-event-body {
+    margin-top: var(--spacing-xs);
+    font-size: var(--font-size-sm);
+    line-height: 1.6;
+    color: var(--color-text-primary);
+}
+
+.message-stream-event-body p {
+    margin-bottom: var(--spacing-xs);
+}
+
+.message-stream-event-body p:last-child {
+    margin-bottom: 0;
+}
+
+.reasoning-event-disclosure {
+    margin-top: var(--spacing-xs);
+}
+
+.reasoning-event-disclosure > summary {
+    align-items: flex-start;
+}
+
+.reasoning-event-disclosure__summary {
+    flex: 1 1 auto;
+    min-width: 0;
+    margin-top: 0;
+}
+
+.reasoning-event-disclosure__summary strong {
+    font-weight: 400;
+}
+
+.reasoning-event-content {
+    margin-top: var(--spacing-xs);
+}
+
+.reasoning-event-disclosure__detail {
+    margin-top: var(--spacing-sm);
+    padding-top: var(--spacing-sm);
+    border-top: 1px solid var(--color-border);
+}
+
+.message-stream-event.reasoning_delta,
+.message-stream-event.reasoning_summary {
+    border-color: rgba(188, 140, 255, 0.24);
+    background-color: color-mix(in srgb, rgba(188, 140, 255, 0.08) 40%, var(--color-bg-tertiary));
+}
+
+.chat-event-entry.entry {
+    margin: 0;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: transparent !important;
+    animation: fadeIn 0.2s ease;
+}
+
+.chat-event-entry .entry__badge--tool {
+    color: color-mix(in srgb, var(--color-success) 82%, white);
+    background: color-mix(in srgb, var(--color-success) 16%, var(--color-bg-tertiary));
+    border: 1px solid color-mix(in srgb, var(--color-success) 34%, var(--color-border-light));
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-success) 7%, transparent);
+}
+
+.chat-event-entry .entry__badge--plan {
+    color: color-mix(in srgb, var(--color-accent) 82%, white);
+    background: color-mix(in srgb, var(--color-accent) 16%, var(--color-bg-tertiary));
+    border: 1px solid color-mix(in srgb, var(--color-accent) 34%, var(--color-border-light));
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-accent) 7%, transparent);
+}
+
+.chat-event-badge--reason {
+    color: #fff;
+    background: #a78bfa;
+}
+
+.chat-event-badge--step {
+    color: var(--color-text-muted);
+    background: color-mix(in srgb, var(--color-text-muted) 14%, var(--color-bg-tertiary));
+    border: 1px solid color-mix(in srgb, var(--color-text-muted) 22%, var(--color-border-light));
+}
+
+.chat-event-tool {
+    margin-top: 6px;
+}
+
+/* Code in messages */
+.message-content code {
+    font-family: var(--font-family-mono);
+    font-size: var(--font-size-sm);
+    padding: 2px 6px;
+    border-radius: var(--border-radius-sm);
+    background-color: rgba(0, 0, 0, 0.2);
+}
+
+.message.user .message-content code {
+    background-color: rgba(255, 255, 255, 0.15);
+}
+
+.message-content pre {
+    margin: var(--spacing-sm) 0;
+    padding: var(--spacing-md);
+    border-radius: var(--border-radius-md);
+    background-color: var(--color-bg-primary);
+    overflow-x: auto;
+}
+
+.message-content pre code {
+    padding: 0;
+    background: transparent;
+}
+
+/* Message Metadata */
+.message-token-count {
+    color: inherit;
+}
+
+.message-meta-separator {
+    width: 4px;
+    height: 4px;
+    border-radius: 999px;
+    background-color: currentColor;
+    opacity: 0.7;
+}
+
+/* Streaming message — cursor is a real trailing element spliced onto the
+   end of the rendered HTML (see appendStreamingCursor in
+   messageRenderUtils.js), not a container-level ::after, so it sits right
+   after the last character instead of on its own line below the last
+   block element. Removed once the turn finishes streaming. */
+.stream-cursor {
+    display: inline;
+    animation: blink 0.7s infinite;
+    color: var(--color-accent);
+}
+
+@keyframes blink {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0; }
+}
+
+/* Pending cursor — rendered as a bare chat-row shell before any assistant
+   output arrives, so the user sees the assistant is responding without
+   committing to a badge/tag/timestamp for an entry type we don't know yet.
+   The word itself is typed out a character at a time by
+   PendingAssistantCursor.jsx; the trailing cursor reuses .stream-cursor so
+   it sits glued to the end of the word exactly like the real streaming
+   cursor does. */
+.pending-cursor__blink {
+    min-height: 1.4em;
+    padding: 6px 4px;
+}
+.pending-cursor__word {
+    color: var(--color-text-primary);
+}
+
+/* Todo panel -- live plan checklist rendered as the body of a `todos_update`
+   timeline entry (see TimelineItem.jsx / chat-event-entry). The entry's own
+   badge/tag/header already provide the "Plan" label and "n/total done"
+   count, so this is just the progress bar + checklist content -- no card
+   chrome of its own, it lives inside entry__content. */
+.todo-panel {
+    animation: fadeIn 0.2s ease;
+}
+
+.todo-panel__bar {
+    height: 4px;
+    border-radius: 999px;
+    background-color: color-mix(in srgb, var(--color-text-muted) 20%, transparent);
+    overflow: hidden;
+}
+
+.todo-panel__bar-fill {
+    height: 100%;
+    border-radius: 999px;
+    background-color: var(--color-accent);
+    transition: width 0.2s ease;
+}
+
+.todo-panel__list {
+    list-style: none;
+    margin: var(--spacing-xs) 0 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.todo-panel__item {
+    display: flex;
+    align-items: baseline;
+    gap: var(--spacing-xs);
+    font-size: var(--font-size-sm);
+    color: var(--color-text-secondary);
+}
+
+.todo-panel__glyph {
+    flex: none;
+    color: var(--color-text-muted);
+}
+
+.todo-panel__item--in_progress .todo-panel__glyph {
+    color: var(--color-accent);
+}
+
+.todo-panel__item--completed .todo-panel__glyph {
+    color: var(--color-success);
+}
+
+.todo-panel__item--completed .todo-panel__content {
+    color: var(--color-text-muted);
+    text-decoration: line-through;
+}
+
+/* Live delegation cards (subagent + A2A) share one fixed-height, always-open
+   scroll pane treatment: growing content (streamed text, tool-call/update
+   list) scrolls within a capped-height body and auto-tails to the latest
+   entry (useStickyScroll.js) instead of a manual collapse/expand toggle --
+   nothing to click, and every concurrent card keeps the same small,
+   predictable footprint on screen regardless of how much it's produced. */
+.subagent-card__body,
+.a2a-call-card__body {
+    max-height: 240px;
+    margin-top: 4px;
+    padding: 8px 10px;
+    border-radius: var(--border-radius-md);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-color: color-mix(in oklab, var(--color-text-muted) 36%, transparent) transparent;
+    scrollbar-width: thin;
+}
+
+/* This body plays the same role .message.assistant plays under a plain
+   entry: the header row above it (badge/tag/role/status) stays bare chrome,
+   identical to every other entry type, and this is the one part that reads
+   as "the answer" -- so the tinted background lives here, not on the header
+   or the outer .entry. See the matching .entry__main comment history: the
+   tint used to live one level up, which visually merged the badge into the
+   card and threw off the chain's connecting line. */
+.subagent-card__body {
+    background-color: color-mix(in srgb, var(--color-success) 6%, transparent);
+}
+
+.subagent-card--error .subagent-card__body {
+    background-color: color-mix(in srgb, var(--color-error) 6%, transparent);
+}
+
+.a2a-call-card__body {
+    background-color: color-mix(in srgb, var(--color-accent-secondary) 6%, transparent);
+}
+
+.a2a-call-card--error .a2a-call-card__body {
+    background-color: color-mix(in srgb, var(--color-error) 6%, transparent);
+}
+
+.subagent-card__body::-webkit-scrollbar,
+.a2a-call-card__body::-webkit-scrollbar {
+    width: 8px;
+}
+
+.subagent-card__body::-webkit-scrollbar-track,
+.a2a-call-card__body::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.subagent-card__body::-webkit-scrollbar-thumb,
+.a2a-call-card__body::-webkit-scrollbar-thumb {
+    background: color-mix(in oklab, var(--color-text-muted) 28%, transparent);
+    border: 2px solid transparent;
+    border-radius: 999px;
+    background-clip: content-box;
+}
+
+/* Subagent card -- one per `task` tool delegation (nested subagent
+   execution), live-updated as its own reply streams and its own tool calls
+   start/finish. Multiple can be running concurrently in one turn, each an
+   independent card (see SubagentCard.jsx / applySubagentEvent in
+   liveAssistantTurnModel.js). Unlike the fully-transparent stream_event
+   entries, this gets a subtle status-tinted background since it's a more
+   prominent, card-like element (closer to .tool than to a plain entry row).
+   Accent reuses --color-success -- the same green already used for the
+   "Tools"/.tool__status--ok accent elsewhere, so "subagent" reads as a
+   member of the same tool-call family rather than a one-off hue. */
+/* Header row (badge/tag/role/status) is bare chrome -- no padding or fill of
+   its own, exactly like assistant_message/stream_event rows -- so the badge/
+   gutter column stays flush with every other entry type and the chain's
+   connecting line runs straight through instead of jogging sideways at this
+   card's edges. Mirrors two existing precedents: .chat-event-entry.entry
+   resets its own box styling to transparent for the same reason, and
+   .message bubbles are scoped to a child of .entry__main, never .entry
+   itself. The tinted "card" look lives on .subagent-card__body below
+   instead -- see its comment. */
+.subagent-card {
+    animation: fadeIn 0.2s ease;
+}
+
+.subagent-card__summary {
+    max-width: 100%;
+    margin-top: 4px;
+    color: var(--color-text-muted);
+    font-size: 11px;
+    line-height: 1.35;
+    overflow-wrap: anywhere;
+    white-space: normal;
+}
+
+/* Compounded with the shared .entry__badge/.entry__tag base class (not just
+   the modifier class alone) so these deterministically win the cascade --
+   chrome-frame.css is imported after chat-panel.css and its .entry__badge/
+   .entry__tag base rules set the same properties (color/background/border)
+   at equal specificity, so a bare single-class selector here would silently
+   lose to it by source order regardless of which hue is configured. */
+.entry__badge.subagent-card__badge {
+    color: color-mix(in srgb, var(--color-success) 82%, white);
+    background: color-mix(in srgb, var(--color-success) 16%, var(--color-bg-tertiary));
+    border: 1px solid color-mix(in srgb, var(--color-success) 34%, var(--color-border-light));
+}
+
+.subagent-card__badge--running {
+    animation: subagent-pulse 1.4s ease-in-out infinite;
+}
+
+.entry__badge.subagent-card__badge--error {
+    color: var(--color-error);
+    background: color-mix(in oklab, var(--color-error) 14%, transparent);
+    border-color: color-mix(in oklab, var(--color-error) 30%, transparent);
+}
+
+@keyframes subagent-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.45; }
+}
+
+.entry__tag.subagent-card__tag {
+    color: color-mix(in srgb, var(--color-success) 82%, white);
+    background: color-mix(in srgb, var(--color-success) 16%, var(--color-bg-tertiary));
+    border-color: color-mix(in srgb, var(--color-success) 34%, var(--color-border-light));
+}
+
+.subagent-card__error {
+    margin-top: 4px;
+    color: var(--color-error);
+    font-size: var(--font-size-sm);
+}
+
+/* Each nested tool call renders as its own mini .entry node (SubagentChild
+   in SubagentCard.jsx) chained together, the same "mini card/event" pattern
+   A2ACallCard's A2ASubEntry uses below for A2A's own per-update sub-entries
+   -- scaled-down 18px gutter/16px badge for the same reason (already
+   indented once as a card in the outer chain). Badge color reuses the outer
+   card's own .subagent-card__badge--running/--error modifiers directly
+   (child.status shares the exact same running/success/error vocabulary as
+   the outer card's item.status) rather than a parallel set of child-specific
+   color rules.
+
+   The four geometry rules below are shared, via a comma-separated selector,
+   with A2ACallCard's own .a2a-call-card__subchain nested chain -- both are
+   the exact same "mini card/event" scale-down, so a single declaration keeps
+   the two families' nested-chain geometry from drifting apart if one is ever
+   tweaked without the other. */
+.subagent-card__children {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin-top: 8px;
+}
+
+.subagent-card__children .entry,
+.a2a-call-card__subchain .entry {
+    grid-template-columns: 18px minmax(0, 1fr);
+    gap: 8px;
+}
+
+.subagent-card__children .entry__gutter::before,
+.a2a-call-card__subchain .entry__gutter::before {
+    top: 16px;
+    bottom: -12px;
+}
+
+.subagent-card__children .entry__badge,
+.a2a-call-card__subchain .entry__badge {
+    width: 16px;
+    height: 16px;
+}
+
+.subagent-card__children .entry__badge svg,
+.a2a-call-card__subchain .entry__badge svg {
+    width: 9px;
+    height: 9px;
+}
+
+/* A2A call card -- one per A2A tool invocation of a deployed agent,
+   live-updated as intermediate status updates stream in. Same card-like
+   treatment as .subagent-card (see A2ACallCard.jsx /
+   applyA2ACallEvent in liveAssistantTurnModel.js). Accent is
+   --color-accent-secondary (main.css) -- the teal .subagent-card used to
+   own before the green swap above -- still its own hue, distinct from the
+   tool-green family, so the two card families stay visually distinguishable
+   at a glance. */
+/* See the matching comment on .subagent-card above -- same bare-header
+   rationale, applied to the A2A card. */
+.a2a-call-card {
+    animation: fadeIn 0.2s ease;
+}
+
+/* Compounded with .entry__badge/.entry__tag -- see the matching comment on
+   .entry__badge.subagent-card__badge above for why the bare class alone
+   isn't enough. */
+.entry__badge.a2a-call-card__badge {
+    color: color-mix(in srgb, var(--color-accent-secondary) 82%, white);
+    background: color-mix(in srgb, var(--color-accent-secondary) 16%, var(--color-bg-tertiary));
+    border: 1px solid color-mix(in srgb, var(--color-accent-secondary) 34%, var(--color-border-light));
+}
+
+.a2a-call-card__badge--running {
+    animation: subagent-pulse 1.4s ease-in-out infinite;
+}
+
+.entry__badge.a2a-call-card__badge--error {
+    color: var(--color-error);
+    background: color-mix(in oklab, var(--color-error) 14%, transparent);
+    border-color: color-mix(in oklab, var(--color-error) 30%, transparent);
+}
+
+.entry__tag.a2a-call-card__tag {
+    color: color-mix(in srgb, var(--color-accent-secondary) 82%, white);
+    background: color-mix(in srgb, var(--color-accent-secondary) 16%, var(--color-bg-tertiary));
+    border-color: color-mix(in srgb, var(--color-accent-secondary) 34%, var(--color-border-light));
+}
+
+.a2a-call-card__error {
+    margin-top: 4px;
+    color: var(--color-error);
+    font-size: var(--font-size-sm);
+}
+
+.a2a-call-card__result {
+    margin-top: 4px;
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-sm);
+}
+
+/* Each update renders as its own mini .entry node (A2ASubEntry in
+   A2ACallCard.jsx) -- a second, nested application of the same
+   .entry/.chat-entry-chain grammar the outer timeline uses, so updates
+   chain together with their own connecting line instead of a boxed .tool
+   block. Scaled down from the outer chain's 28px gutter/22px badge (18px/
+   16px here): this is already indented once as a card in the outer chain,
+   so a second full-size gutter would compound into an oddly deep staircase.
+   The shared entry/gutter/badge geometry lives on the comma-separated
+   selectors above (with .subagent-card__children's matching comment) --
+   only this container's own layout and the sub-entry-specific rules below
+   are declared here. */
+.a2a-call-card__subchain {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin-top: 8px;
+}
+
+.subagent-card__children .entry__head,
+.a2a-call-card__subchain .entry__head {
+    margin-bottom: 2px;
+}
+.subagent-card__children .subagent-child > .entry__main > .tool-event-disclosure > summary .tool__summary {
+    padding: 0;
+    font-size: var(--font-size-sm);
+    line-height: 1.45;
+}
+
+.subagent-card__children .entry__tag,
+.a2a-call-card__subchain .entry__tag {
+    font-size: 9px;
+}
+
+.subagent-card__children .entry__time,
+.a2a-call-card__subchain .entry__time {
+    font-size: 9px;
+}
+
+.subagent-card__children .message-stream-event-body,
+.a2a-sub-entry__text {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-sm);
+    line-height: 1.45;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.subagent-card__children .message-stream-event-body {
+    height: 1.45em;
+    margin-top: 0;
+}
+
+/* Each sub-entry's badge glyph and color are keyed off its own status (see
+   glyphForA2AState in A2ACallCard.jsx) so submitted/working/completed/failed
+   read as distinct visual events instead of one repeated icon. The status
+   text is intentionally omitted because the gutter badge already conveys it.
+   Compounded with .entry__badge.a2a-call-card__badge (not a bare modifier
+   class) for the same specificity-tie-then-source-order reason as
+   .entry__badge.a2a-call-card__badge--error above -- both are two classes,
+   so this deterministically wins by appearing later. States with no rule
+   here (submitted, input-required, auth-required, unknown, ...) fall back to
+   that base a2a-tinted look rather than going unstyled -- submitted used to
+   get its own flat gray here, but sitting next to the teal/green/red others
+   it just read as an off, disconnected hue rather than a deliberate choice;
+   the arrow-vs-ring glyph shape alone already distinguishes it from working. */
+.entry__badge.a2a-sub-entry__badge--working {
+    color: color-mix(in srgb, var(--color-accent-secondary) 82%, white);
+    background: color-mix(in srgb, var(--color-accent-secondary) 16%, var(--color-bg-tertiary));
+    border: 1px solid color-mix(in srgb, var(--color-accent-secondary) 34%, var(--color-border-light));
+}
+
+.entry__badge.a2a-sub-entry__badge--completed {
+    color: color-mix(in srgb, var(--color-success) 82%, white);
+    background: color-mix(in srgb, var(--color-success) 16%, var(--color-bg-tertiary));
+    border: 1px solid color-mix(in srgb, var(--color-success) 34%, var(--color-border-light));
+}
+
+.entry__badge.a2a-sub-entry__badge--failed,
+.entry__badge.a2a-sub-entry__badge--rejected,
+.entry__badge.a2a-sub-entry__badge--canceled {
+    color: var(--color-error);
+    background: color-mix(in oklab, var(--color-error) 14%, transparent);
+    border-color: color-mix(in oklab, var(--color-error) 30%, transparent);
+}
+
+/* Chat Input Container */
+.chat-input-container {
+    padding: 10px var(--chat-content-gutter) 10px;
+    background: var(--chat-pane-bg);
+    border-top: 0;
+}
+
+.chat-input-stack {
+    position: relative;
+    width: min(100%, var(--chat-composer-max-width));
+    max-width: none;
+    margin: 0 auto;
+}
+
+.slash-command-menu {
+    position: absolute;
+    right: 0;
+    bottom: calc(100% + var(--spacing-sm));
+    left: 0;
+    z-index: 20;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 6px;
+    background-color: var(--color-bg-secondary);
+    border: 1px solid var(--color-border);
+    border-radius: 12px;
+    box-shadow: var(--shadow-lg);
+}
+
+.slash-command-item {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    width: 100%;
+    padding: 9px 12px;
+    color: var(--color-text-primary);
+    text-align: left;
+    background: transparent;
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: background-color var(--transition-fast);
+}
+
+.slash-command-item:hover,
+.slash-command-item.active {
+    background-color: var(--color-bg-hover);
+}
+
+.slash-command-item-header {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--spacing-sm);
+}
+
+.slash-command-item-title {
+    font-size: 12.5px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+}
+
+.slash-command-item-syntax {
+    font-family: var(--font-family-mono);
+    font-size: 11px;
+    color: var(--color-accent);
+}
+
+.slash-command-item-description {
+    font-size: 11px;
+    color: var(--color-text-muted);
+}
+
+.input-wrapper {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 10px 10px 6px;
+    background-color: var(--chat-pane-bg);
+    border: 1px solid var(--color-border);
+    border-radius: 12px;
+    transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.input-wrapper--drag-active {
+    border-color: var(--color-accent);
+    box-shadow: 0 0 0 4px var(--color-accent-soft);
+}
+
+/* Whole-window drop zone (ConversationPage): wraps message history +
+   composer, but deliberately excludes LiveConversationHeader (a sibling
+   inside .chat-detail) -- the drop target and its dashed-border overlay
+   should read as "drop it in the conversation", not swallow the header
+   bar too. Mirrors .chat-detail's flex column so .chat-messages' own
+   flex: 1 + overflow-y: auto still works nested one level deeper. */
+.chat-detail-body-wrap {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    flex: 1 1 auto;
+    min-height: 0;
+}
+
+.chat-detail-drop-overlay {
+    position: absolute;
+    inset: 0;
+    z-index: 5;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    background-color: color-mix(in srgb, var(--chat-pane-bg) 92%, transparent);
+    border: 2px dashed var(--color-accent);
+    border-radius: 12px;
+    margin: 8px;
+    font-size: var(--font-size-lg);
+    font-weight: 500;
+    color: var(--color-accent);
+    pointer-events: none;
+}
+
+.chat-input-drop-overlay {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background-color: var(--chat-pane-bg);
+    opacity: 0.92;
+    border-radius: 12px;
+    font-size: var(--font-size-md);
+    font-weight: 500;
+    color: var(--color-accent);
+    pointer-events: none;
+    z-index: 1;
+}
+
+.input-wrapper:focus-within {
+    border-color: var(--color-accent);
+    box-shadow: 0 0 0 4px var(--color-accent-soft);
+}
+
+.chat-input {
+    min-height: 18px;
+    max-height: var(--input-max-height);
+    padding: 0 0 0 2px;
+    border: none;
+    background: transparent;
+    color: var(--color-text-primary);
+    font-family: var(--font-family);
+    font-size: 13.5px;
+    line-height: 1.3;
+    resize: none;
+    outline: none;
+}
+
+.chat-input::placeholder {
+    color: var(--color-text-muted);
+}
+
+.chat-input:focus-visible {
+    box-shadow: none;
+}
+
+.input-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.input-toolbar__left {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.input-toolbar__right {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.chat-info-control {
+    position: relative;
+    display: flex;
+    align-items: center;
+    outline: none;
+}
+
+.chat-info-btn {
+    cursor: default;
+}
+
+.chat-info-tooltip {
+    position: absolute;
+    bottom: calc(100% + 10px);
+    left: 0;
+    z-index: var(--z-tooltip, 1100);
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    width: max-content;
+    max-width: 240px;
+    padding: 8px 10px;
+    background: var(--color-bg-tertiary);
+    border: 1px solid var(--color-border);
+    border-radius: 10px;
+    box-shadow: var(--shadow-md);
+    opacity: 0;
+    transform: translateY(4px);
+    pointer-events: none;
+    transition: opacity var(--transition-fast), transform var(--transition-fast);
+}
+
+.chat-info-control:hover .chat-info-tooltip,
+.chat-info-control:focus-within .chat-info-tooltip,
+.chat-info-control:focus-visible .chat-info-tooltip {
+    opacity: 1;
+    transform: translateY(0);
+}
+
+.chat-info-tooltip__row {
+    font-size: 11px;
+    color: var(--color-text-secondary);
+    white-space: nowrap;
+}
+
+.chat-info-tooltip__row kbd {
+    margin: 0 2px;
+    padding: 1px 5px;
+    font-size: 10px;
+    font-weight: 500;
+    color: var(--color-text-primary);
+    border-radius: 4px;
+    background-color: var(--chat-pane-bg);
+}
+
+.btn-send {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    border: none;
+    border-radius: 9px;
+    background-color: var(--color-accent);
+    color: white;
+    cursor: pointer;
+    transition: filter var(--transition-fast), transform var(--transition-fast);
+}
+
+.btn-send:hover {
+    filter: brightness(1.08);
+    transform: translateY(-1px);
+}
+
+.btn-send:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+    transform: none;
+}
+
+.btn-send--stop {
+    background-color: var(--color-error);
+}
+
+.btn-send--stop:hover {
+    filter: brightness(1.1);
+}
+
+.btn-icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    border: none;
+    border-radius: 8px;
+    background-color: transparent;
+    color: var(--color-text-secondary);
+    cursor: pointer;
+    transition: color var(--transition-fast), background-color var(--transition-fast);
+}
+
+.btn-icon:hover {
+    background-color: var(--color-bg-hover);
+    color: var(--color-text-primary);
+}
+
+.btn-icon:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+/* Scheduled Message */
+.message.scheduled {
+    border-left: 3px solid var(--color-warning, #f0ad4e);
+    background-color: rgba(240, 173, 78, 0.08);
+}
+
+.scheduled-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--spacing-xs);
+    padding: 2px 8px;
+    margin-bottom: var(--spacing-sm);
+    font-size: var(--font-size-xs);
+    font-weight: 500;
+    color: var(--color-warning, #f0ad4e);
+    background-color: rgba(240, 173, 78, 0.15);
+    border-radius: var(--border-radius-sm);
+}
+
+.scheduled-badge svg {
+    stroke: currentColor;
+}
+
+/* Loading State */
+.chat-loading {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: var(--spacing-md);
+    padding: var(--spacing-xl);
+    color: var(--color-text-secondary);
+}
+
+/* Markdown Support */
+.message-content h1,
+.message-content h2,
+.message-content h3,
+.message-content h4,
+.message-content h5,
+.message-content h6 {
+    margin: var(--spacing-md) 0 var(--spacing-sm);
+    font-weight: 600;
+    line-height: 1.3;
+}
+
+.message-content h1 { font-size: 1.5em; }
+.message-content h2 { font-size: 1.3em; }
+.message-content h3 { font-size: 1.1em; }
+
+.message-content ul,
+.message-content ol,
+.md-ul,
+.md-ol {
+    margin: var(--spacing-xs) 0;
+    padding-left: calc(var(--spacing-lg) + 0.35rem);
+}
+
+.message-content li,
+.md-li,
+.md-li-ordered {
+    margin-bottom: 0.2rem;
+    padding-left: 0.1rem;
+}
+
+.message-content li:last-child,
+.md-li:last-child,
+.md-li-ordered:last-child {
+    margin-bottom: 0;
+}
+
+.message-content blockquote {
+    margin: var(--spacing-sm) 0;
+    padding-left: var(--spacing-md);
+    border-left: 3px solid var(--color-border);
+    color: var(--color-text-secondary);
+}
+
+.message-content a {
+    color: var(--color-accent);
+    text-decoration: none;
+}
+
+.message-content a:hover {
+    text-decoration: underline;
+}
+
+.message-content table {
+    width: 100%;
+    margin: var(--spacing-sm) 0;
+    border-collapse: collapse;
+}
+
+.message-content th,
+.message-content td {
+    padding: var(--spacing-sm);
+    border: 1px solid var(--color-border);
+    text-align: left;
+}
+
+.message-content th {
+    background-color: var(--color-bg-tertiary);
+    font-weight: 600;
+}
+
+/* Enhanced Code Block Styling */
+.code-block {
+    position: relative;
+    margin: var(--spacing-sm) 0;
+}
+
+.code-block .code-lang {
+    position: absolute;
+    top: 0;
+    right: 0;
+    padding: 2px 8px;
+    font-size: var(--font-size-xs);
+    color: var(--color-text-muted);
+    background-color: var(--color-bg-hover);
+    border-radius: 0 var(--border-radius-md) 0 var(--border-radius-sm);
+    text-transform: uppercase;
+}
+
+/* Mermaid diagrams: pre.mermaid starts as plain diagram source (see
+   lib/markdown.js) and is replaced in place with an inline SVG once
+   lib/mermaid.js's renderMermaidDiagrams() runs. Sized so the SVG scales
+   down for narrow panels but never blows out the container width. */
+pre.mermaid {
+    margin: var(--spacing-sm) 0;
+    padding: var(--spacing-sm);
+    overflow-x: auto;
+    text-align: center;
+    background-color: var(--color-bg-secondary);
+    border: 1px solid var(--color-border);
+    border-radius: var(--border-radius-md);
+}
+
+pre.mermaid svg {
+    max-width: 100%;
+    height: auto;
+}
+
+.inline-code {
+    padding: 2px 6px;
+    font-family: var(--font-family-mono);
+    font-size: 0.9em;
+    background-color: var(--color-bg-tertiary);
+    border-radius: var(--border-radius-sm);
+}
+
+.message.user .inline-code {
+    background-color: rgba(255, 255, 255, 0.15);
+}
+
+/* Markdown Headings */
+.md-heading {
+    margin: var(--spacing-md) 0 var(--spacing-sm);
+    padding-bottom: var(--spacing-xs);
+    border-bottom: 1px solid var(--color-border-light);
+}
+
+/* Markdown Horizontal Rule */
+.md-hr {
+    border: none;
+    height: 1px;
+    background-color: var(--color-border);
+    margin: var(--spacing-md) 0;
+}
+
+/* Task Lists */
+.task-item {
+    display: block;
+    padding: var(--spacing-xs) 0;
+}
+
+.task-item.completed {
+    color: var(--color-text-muted);
+    text-decoration: line-through;
+}
+
+/* Strikethrough */
+.message-content del {
+    color: var(--color-text-muted);
+}
+
+/* ----------------------------------------------------------------------------
+   Writing blocks (`:::writing … :::`) — a quiet ruled note.
+   Theme-adaptive (sits in the dark/light UI like other surfaces); the note
+   character comes from the faint rules, soft margin, handwriting font and tab
+   rather than a loud paper card. Rules are decorative, not writing lines.
+   ------------------------------------------------------------------------- */
+.writing-block {
+    --wb-line: 25px;          /* ruled-line spacing; text line-height matches */
+    --wb-margin: 32px;        /* left margin rule offset */
+    position: relative;
+    margin: 16px 0 12px;
+    border-radius: var(--border-radius-md);
+    background-color: color-mix(in srgb, var(--color-bg-tertiary) 89%, #5b86d6);
+    border: 1px solid var(--color-border);
+    box-shadow: var(--shadow-sm);
+}
+
+/* Understated taped index tab in the top-left corner. */
+.writing-block__tab {
+    position: absolute;
+    top: -8px;
+    left: 16px;
+    z-index: 1;
+    padding: 1px 8px;
+    font-family: "Shantell Sans", var(--font-family);
+    font-size: 9.5px;
+    font-weight: 600;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+    color: var(--color-text-muted);
+    background-color: color-mix(in srgb, var(--color-bg-hover) 86%, #5b86d6);
+    border: 1px solid var(--color-border);
+    border-radius: 4px;
+    transform: rotate(-1.4deg);
+}
+
+/* The ruled sheet. The rules are intentionally faint — decorative paper
+   texture rather than writing lines, so prose/lists don't need to seat exactly
+   on them. Two background layers: the soft left-margin line and the rules. */
+.writing-block__sheet {
+    position: relative;
+    border-radius: var(--border-radius-md);
+    padding: 12px 16px 12px calc(var(--wb-margin) + 12px);
+    font-family: "Shantell Sans", "Segoe Print", "Comic Sans MS", var(--font-family);
+    font-size: 13.5px;
+    line-height: var(--wb-line);
+    color: var(--color-text-primary);
+    background-image:
+        linear-gradient(
+            to right,
+            transparent calc(var(--wb-margin) - 1px),
+            rgba(214, 96, 88, 0.42) calc(var(--wb-margin) - 1px),
+            rgba(214, 96, 88, 0.42) calc(var(--wb-margin) + 1px),
+            transparent calc(var(--wb-margin) + 1px)
+        ),
+        linear-gradient(to bottom, rgba(216, 190, 96, 0.2) 0, rgba(216, 190, 96, 0.2) 1px, transparent 1px);
+    background-position: 0 0, 0 10px;
+    background-size: auto, 100% var(--wb-line);
+    background-repeat: no-repeat, repeat;
+}
+
+/* Keep every block element on the ruling: zero or one-line vertical rhythm. */
+.writing-block__sheet > :first-child { margin-top: 0; }
+.writing-block__sheet > :last-child { margin-bottom: 0; }
+
+.writing-block__sheet p {
+    margin: 0 0 var(--wb-line);
+    line-height: var(--wb-line);
+}
+
+.writing-block__sheet h1,
+.writing-block__sheet h2,
+.writing-block__sheet h3,
+.writing-block__sheet h4,
+.writing-block__sheet h5,
+.writing-block__sheet h6 {
+    margin: 0 0 var(--wb-line);
+    padding: 0;
+    border: none;
+    line-height: var(--wb-line);
+    font-weight: 600;
+    color: var(--color-text-primary);
+}
+
+.writing-block__sheet h1 { font-size: 1.22em; }
+.writing-block__sheet h2 { font-size: 1.12em; }
+.writing-block__sheet h3 { font-size: 1.05em; }
+
+.writing-block__sheet ul,
+.writing-block__sheet ol {
+    margin: 0 0 var(--wb-line);
+    padding-left: 1.4em;
+}
+
+.writing-block__sheet li {
+    margin: 0;
+    line-height: var(--wb-line);
+}
+
+.writing-block__sheet a {
+    color: var(--color-accent);
+    text-decoration: underline;
+    text-decoration-color: color-mix(in srgb, var(--color-accent) 50%, transparent);
+}
+
+.writing-block__sheet strong { color: var(--color-text-primary); }
+
+.writing-block__sheet blockquote {
+    margin: 0 0 var(--wb-line);
+    padding-left: 10px;
+    border-left: 2px solid rgba(214, 178, 74, 0.45);
+    color: var(--color-text-secondary);
+    font-style: italic;
+}
+
+.writing-block__sheet code,
+.writing-block__sheet .inline-code {
+    padding: 1px 5px;
+    font-size: 0.85em;
+    color: var(--color-text-secondary);
+    background-color: color-mix(in srgb, var(--color-text-muted) 16%, transparent);
+    border-radius: 3px;
+}
+
+.writing-block__sheet .code-block,
+.writing-block__sheet pre {
+    line-height: 1.5;
+}
+
+/* Markdown Tables */
+.md-table {
+    width: 100%;
+    margin: var(--spacing-md) 0;
+    border-collapse: collapse;
+    font-size: var(--font-size-sm);
+}
+
+.md-table th,
+.md-table td {
+    padding: var(--spacing-sm);
+    border: 1px solid var(--color-border);
+    text-align: left;
+}
+
+.md-table .thead th {
+    background-color: var(--color-bg-tertiary);
+    font-weight: 600;
+}
+
+.md-table .tbody:nth-child(even) td {
+    background-color: var(--color-bg-secondary);
+}
+
+/* ============================================================================
+   Search Input (shared with other pages)
+   ============================================================================ */
+
+/* ============================================================================
+   Syntax Highlighting Styles
+   ============================================================================ */
+
+/* Base code styling */
+.code-block pre {
+    margin: 0;
+    padding: var(--spacing-md);
+    overflow-x: auto;
+    font-family: var(--font-family-mono);
+    font-size: var(--font-size-sm);
+    line-height: 1.5;
+    background-color: #0d1117;
+    border-radius: 0 0 var(--border-radius-md) var(--border-radius-md);
+}
+
+.code-block pre code.hljs {
+    background: transparent;
+    border: none;
+    border-radius: 0;
+}
+
+/* Syntax highlighting colors */
+
+/* Light theme overrides */
+
+/* Context Menu */
+
+/* ============================================================================
+   Prototype chat composition
+   ============================================================================ */
+
+.chat-page {
+    --chat-content-max-width: 100%;
+    --chat-composer-max-width: 90%;
+    --chat-content-gutter: clamp(18px, 3vw, 32px);
+    --chat-pane-bg: var(--color-bg-secondary);
+    --chat-pane-subtle-bg: var(--color-bg-tertiary);
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    height: 100%;
+    min-height: 0;
+    overflow: hidden;
+    background: var(--chat-pane-bg);
+}
+
+.chat-sessions-pane {
+    min-width: 0;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    border-right: 1px solid var(--color-border);
+    background: var(--chat-pane-subtle-bg);
+}
+
+.muted {
+    color: var(--color-text-muted);
+    font-weight: 400;
+}
+
+.small {
+    font-size: 11px;
+}
+
+/* .chat-pane-action base/hover/disabled live in chrome-frame.css (shared with
+   .new-task) so the rule isn't duplicated across files. */
+
+.chat-pane-tabs {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+}
+
+.chat-pane-tabs {
+    padding: 0 8px 4px;
+}
+
+.chat-pane-tab {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    padding: 2px 8px;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--color-text-secondary);
+    font-size: 11.5px;
+    font-weight: 500;
+    transition: background var(--transition-fast), border-color var(--transition-fast), color var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.chat-pane-tab:hover {
+    background: var(--color-bg-hover);
+    color: var(--color-text-primary);
+}
+
+.chat-pane-tab.is-active {
+    background: var(--color-bg-primary);
+    border-color: var(--color-border);
+    color: var(--color-text-primary);
+    box-shadow: var(--shadow-sm);
+}
+
+.chat-pane-tab__dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: #22c55e;
+}
+
+/* .chat-pane-group is still used by the workspace sidebar; its __head styling
+   is shared with .task-group__head / .sess-group__head in chrome-frame.css. */
+
+.chat-session-card {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    align-items: start;
+    padding: 7px 10px 8px;
+    cursor: pointer;
+    transition: background-color 120ms ease, border-color 120ms ease;
+}
+
+.chat-session-card:hover {
+    background: var(--color-bg-hover);
+}
+
+.chat-session-card:focus-visible {
+    outline: 1px solid color-mix(in oklab, var(--color-accent) 55%, transparent);
+    outline-offset: 1px;
+}
+
+.chat-session-card.is-selected {
+    border-color: color-mix(in oklab, var(--color-accent) 34%, var(--color-border));
+    background: var(--color-accent-soft);
+}
+
+/* Inline status dot, matching the compact agent/session rows. */
+.chat-session-card__dot {
+    flex: 0 0 7px;
+    align-self: center;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: transparent;
+}
+.chat-session-card__dot--idle {
+    border: 1.5px solid var(--color-text-muted);
+    box-sizing: border-box;
+}
+
+.chat-session-card__dot--complete {
+    background: var(--color-success);
+}
+.chat-session-card__dot--read {
+    border: 1.5px solid var(--color-text-muted);
+    box-sizing: border-box;
+}
+.chat-session-card__dot--unread {
+    background: var(--color-success);
+}
+
+.chat-session-card__dot--error {
+    background: var(--color-error, #ef4444);
+}
+
+/* Inbox message read/unread dots: distinct from the chat-session dot
+   semantics above (unread chat = green/needs attention). Plain two-state --
+   approve/reject is a separate, uncolored signal shown via the action
+   buttons and a plain-text label, not a dot color. */
+.chat-session-card__dot--inbox-unread {
+    background: var(--color-success);
+}
+.chat-session-card__dot--inbox-read {
+    border: 1.5px solid var(--color-text-muted);
+    box-sizing: border-box;
+}
+
+.chat-session-card__dot--generating {
+    background: #f97316;
+    animation: status-dot-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes status-dot-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.35; }
+}
+
+.chat-session-card__top {
+    grid-column: 1;
+    grid-row: 1;
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    min-width: 0;
+}
+
+.chat-session-card__title {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    color: var(--color-text-primary);
+    font-family: var(--font-family-mono);
+    font-size: 12.5px;
+    font-weight: 500;
+    letter-spacing: -0.01em;
+    line-height: 1.35;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+
+.chat-session-card.is-unread .chat-session-card__title {
+    color: var(--color-text-primary);
+    font-weight: 650;
+}
+
+.chat-session-card__age {
+    flex: none;
+    white-space: nowrap;
+    color: var(--color-text-muted);
+    font-size: 10.5px;
+    font-variant-numeric: tabular-nums;
+}
+
+.chat-session-card__preview {
+    grid-column: 1;
+    grid-row: 2;
+    margin-top: 2px;
+    overflow: hidden;
+    color: var(--color-text-muted);
+    font-size: 11px;
+    line-height: 1.35;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+
+.chat-session-card__state {
+    margin-right: 6px;
+    color: var(--color-text-secondary);
+    font-size: 9.5px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+
+.agent-dot--purple {
+    background: #a78bfa;
+}
+
+/* The chat header is the shared DetailHeader; only the editable title input and
+   the model/session meta items keep chat-specific styling below. */
+.chat-page-header__title-input {
+    flex: 0 1 460px;
+    min-width: 0;
+    margin: 0;
+    padding: 4px 8px;
+    border: 1px solid var(--color-border);
+    border-radius: 6px;
+    background: var(--color-bg-secondary);
+    color: var(--color-text-primary);
+    font: inherit;
+    font-family: var(--font-family-mono);
+    font-size: 17px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    line-height: 1.3;
+}
+
+.chat-page-header__title-input:focus {
+    outline: none;
+    border-color: color-mix(in oklab, var(--color-accent) 45%, var(--color-border));
+    box-shadow: 0 0 0 1px color-mix(in oklab, var(--color-accent) 24%, transparent);
+}
+
+.chat-page-header__status {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--color-text-secondary);
+    font-weight: 500;
+    text-transform: capitalize;
+}
+
+.chat-page-header__status-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: transparent;
+}
+.chat-page-header__status--idle .chat-page-header__status-dot {
+    width: 8px;
+    height: 8px;
+    flex: 0 0 8px;
+    border: 1.5px solid var(--color-text-secondary);
+    box-sizing: border-box;
+}
+
+.chat-page-header__status--idle {
+    color: var(--color-text-muted);
+}
+
+.chat-page-header__status--complete {
+    color: var(--color-success);
+}
+
+.chat-page-header__status--complete .chat-page-header__status-dot {
+    background: var(--color-success);
+}
+
+.chat-page-header__status--error .chat-page-header__status-dot {
+    background: var(--color-error, #ef4444);
+}
+
+.chat-page-header__status--generating .chat-page-header__status-dot {
+    background: #f97316;
+    animation: status-dot-pulse 1.2s ease-in-out infinite;
+}
+
+.chat-session-id {
+    max-width: 260px;
+    overflow: hidden;
+    color: var(--color-text-muted);
+    font-family: var(--font-family-mono);
+    font-size: 11px;
+    letter-spacing: -0.015em;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.dot-sep {
+    color: var(--color-border-light);
+}
+
+.chat-icon-button {
+    position: relative;
+    width: 22px;
+    height: 22px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: none;
+    border: 0;
+    border-radius: 5px;
+    background: transparent;
+    color: var(--color-text-secondary);
+    transition: background var(--transition-fast), color var(--transition-fast), transform var(--transition-fast);
+}
+
+.chat-icon-button .detail-header-action__svg {
+    width: 13px;
+    height: 13px;
+}
+
+/* Styled tooltip matching the detail-header actions, nav rail and top-bar
+   chrome buttons. Drops below the button; left-anchored by default (the
+   title-edit button sits toward the left). Resetting left/bottom overrides the
+   global [data-tooltip]::after (dashboard.css). */
+.chat-icon-button[data-tooltip]::before,
+.chat-icon-button[data-tooltip]::after {
+    position: absolute;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 120ms ease, transform 120ms ease;
+    z-index: var(--z-tooltip, 1100);
+}
+
+.chat-icon-button[data-tooltip]::before {
+    content: '';
+    left: 50%;
+    top: calc(100% + 2px);
+    border-width: 5px;
+    border-style: solid;
+    border-color: transparent transparent var(--color-bg-tertiary);
+    transform: translate(-50%, -3px);
+}
+
+.chat-icon-button[data-tooltip]::after {
+    content: attr(data-tooltip);
+    left: 0;
+    right: auto;
+    bottom: auto;
+    top: calc(100% + 11px);
+    padding: 6px 10px;
+    border: 1px solid var(--color-border);
+    border-radius: 8px;
+    background: var(--color-bg-tertiary);
+    box-shadow: var(--shadow-md);
+    color: var(--color-text-primary);
+    font-size: 12px;
+    font-weight: 500;
+    line-height: 1;
+    white-space: nowrap;
+    transform: translate(0, -3px);
+}
+
+.chat-icon-button[data-tooltip]:hover::before,
+.chat-icon-button[data-tooltip]:focus-visible::before {
+    opacity: 1;
+    transform: translate(-50%, 0);
+}
+
+.chat-icon-button[data-tooltip]:hover::after,
+.chat-icon-button[data-tooltip]:focus-visible::after {
+    opacity: 1;
+    transform: translate(0, 0);
+}
+
+.chat-icon-button:hover {
+    background: var(--color-bg-hover);
+    color: var(--color-text-primary);
+}
+
+.chat-icon-button:active {
+    transform: translateY(1px);
+}
+
+.chat-icon-button:disabled {
+    cursor: not-allowed;
+    opacity: 0.4;
+}
+
+.chat-icon-button:disabled:hover {
+    background: transparent;
+    color: var(--color-text-secondary);
+}
+
+.chat-icon-button.is-active {
+    color: var(--color-accent);
+}
+
+.chat-events-filters {
+    flex: none;
+    background: var(--chat-pane-bg);
+}
+
+.chat-events-filters .sess-fchip {
+    white-space: nowrap;
+}
+
+.chat-messages {
+    width: 100%;
+    max-width: none;
+    flex: 1;
+    min-height: 0;
+    margin: 0;
+    padding: 24px var(--chat-content-gutter) 32px;
+    display: block;
+    position: relative;
+    background: transparent;
+}
+
+.chat-messages__inner {
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
+    width: min(100%, var(--chat-content-max-width));
+    min-height: 100%;
+    margin: 0;
+}
+
+.chat-messages__load-older {
+    display: flex;
+    justify-content: center;
+    margin-bottom: 8px;
+}
+
+.chat-messages__load-older-button {
+    padding: 4px 12px;
+    border: 1px solid var(--color-border);
+    border-radius: 999px;
+    background: var(--color-bg-secondary);
+    color: var(--color-text-secondary);
+    font-size: 12px;
+    cursor: pointer;
+    transition: border-color var(--transition-fast), background var(--transition-fast);
+}
+
+.chat-messages__load-older-button:hover:not(:disabled) {
+    border-color: var(--color-border-light);
+    background: var(--color-bg-hover);
+    color: var(--color-text-primary);
+}
+
+.chat-messages__load-older-button:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
+.chat-loading {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex: 1;
+    color: var(--color-text-muted);
+    font-size: 13px;
+}
+
+.welcome-message {
+    max-width: 540px;
+    padding: 44px 28px;
+}
+
+.welcome-message h2 {
+    margin-bottom: 7px;
+    font-size: 19px;
+    letter-spacing: -0.01em;
+}
+
+.welcome-message p {
+    margin-bottom: 16px;
+    color: var(--color-text-tertiary);
+    font-size: 12.5px;
+}
+
+.quick-actions {
+    gap: 8px;
+}
+
+.quick-action {
+    padding: 7px 10px;
+    border-radius: 8px;
+    background: var(--color-bg-secondary);
+    color: var(--color-text-secondary);
+    font-size: 11.5px;
+}
+
+.quick-action:hover {
+    background: var(--color-bg-hover);
+    border-color: var(--color-border-light);
+    color: var(--color-text-primary);
+}
+
+.msg {
+    display: grid;
+    grid-template-columns: 36px minmax(0, 1fr);
+    gap: 0;
+    align-items: stretch;
+    animation: fadeIn 0.2s ease;
+}
+
+.msg--user {
+    align-self: stretch;
+    width: 100%;
+    max-width: none;
+}
+
+.chat-detail-body .msg--user.entry--standalone {
+    margin-bottom: -24px;
+}
+
+.msg--assistant {
+    align-self: stretch;
+    width: 100%;
+}
+
+.msg--user .msg__head {
+    justify-content: flex-start;
+}
+
+.msg__head {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    color: var(--color-text-muted);
+    font-size: 12px;
+}
+
+.msg__role {
+    color: var(--color-text-primary);
+    font-weight: 600;
+}
+
+.msg__model {
+    color: inherit;
+    font-size: inherit;
+    font-weight: 400;
+}
+
+.msg__time {
+    margin-left: auto;
+    color: var(--color-text-muted);
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+}
+
+.msg--user .msg__time {
+    margin-left: auto;
+}
+
+.msg__head.entry__head {
+    margin-bottom: 6px;
+    width: 100%;
+    align-self: stretch;
+}
+
+.msg__head .entry__tag {
+    order: 0;
+}
+
+.msg__head .msg__role {
+    order: 1;
+}
+
+.msg__head .muted {
+    order: 2;
+}
+
+.msg__head-trailing {
+    display: inline-flex;
+    align-items: center;
+    justify-content: flex-end;
+    flex-wrap: wrap;
+    gap: 6px;
+    order: 3;
+    margin-left: auto;
+    min-width: 0;
+}
+
+.msg__head .entry__time {
+    margin-left: 0;
+}
+
+.msg__entry-main {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    min-width: 0;
+    min-height: 100%;
+}
+
+.message {
+    max-width: none;
+    padding: 0;
+    border-radius: 0;
+    background: transparent;
+    color: var(--color-text-primary);
+}
+
+.message.user {
+    display: block;
+    width: 100%;
+    padding: 0 0 8px;
+    border: none;
+    border-radius: 0;
+    background: transparent;
+    color: var(--color-text-primary);
+}
+
+.message.assistant {
+    width: 100%;
+    background: transparent;
+    color: var(--color-text-primary);
+}
+
+.message.scheduled {
+    border-left: 0;
+    background: transparent;
+}
+
+.scheduled-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    margin: 0;
+    padding: 2px 7px;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--color-warning) 15%, transparent);
+    color: var(--color-warning);
+    font-size: 10.5px;
+    font-weight: 600;
+}
+
+.message-content,
+.message-stream-event-body {
+    color: var(--color-text-primary);
+    font-size: 13.5px;
+    line-height: 1.6;
+}
+
+.message-content p {
+    margin: 0 0 8px;
+}
+
+.message-content p:last-child {
+    margin-bottom: 0;
+}
+
+.message-content ul,
+.message-content ol,
+.md-ul,
+.md-ol {
+    margin: 4px 0 10px;
+    padding-left: 18px;
+}
+
+.message-content li,
+.md-li,
+.md-li-ordered {
+    margin: 2px 0;
+    padding-left: 2px;
+}
+
+.message-content em,
+.message-stream-event-body em {
+    color: var(--color-text-secondary);
+    font-style: italic;
+}
+
+.message-content code,
+.inline-code {
+    padding: 1px 6px;
+    border: 1px solid var(--color-border);
+    border-radius: 4px;
+    background: var(--color-code-bg);
+    color: var(--color-text-primary);
+    font-size: 12px;
+}
+
+.message.user .inline-code,
+.message.user .message-content code {
+    background: var(--color-bg-primary);
+}
+
+.chat-entry-chain {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.chat-entry-chain--single {
+    gap: 0;
+}
+
+.chat-detail-body .entry--standalone > .entry__gutter::before,
+.chat-detail-body .entry--chain-end > .entry__gutter::before {
+    display: none;
+}
+
+.chat-detail-body .entry--chain-item > .entry__gutter::before {
+    display: block;
+}
+
+.message-stream-event {
+    margin-left: 30px;
+    padding: 10px 14px;
+    border: 1px solid var(--color-border);
+    border-radius: 8px;
+    background: var(--color-bg-secondary);
+}
+
+.message-stream-event-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    align-self: stretch;
+    color: var(--color-text-primary);
+    font-size: 12px;
+    font-weight: 500;
+}
+
+.message-stream-event-header .msg__head-trailing {
+    margin-left: auto;
+}
+
+.message-stream-event-detail {
+    margin-top: 4px;
+    color: var(--color-text-tertiary);
+    font-family: var(--font-family-mono);
+    font-size: 11.5px;
+}
+
+.message-stream-event.reasoning_delta,
+.message-stream-event.reasoning_summary {
+    border-color: color-mix(in srgb, #a78bfa 24%, var(--color-border));
+    background: color-mix(in srgb, #a78bfa 7%, var(--color-bg-secondary));
+}
+
+.msg--user .entry__gutter,
+.msg--assistant .entry__gutter {
+    align-self: stretch;
+}
+
+.chat-detail-body .entry__badge--user {
+    color: #fff;
+    background: linear-gradient(135deg, var(--color-user-bg), color-mix(in srgb, var(--color-user-bg) 72%, var(--color-accent)));
+    border: 1px solid color-mix(in srgb, var(--color-user-bg) 45%, var(--color-border-light));
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-user-bg) 8%, transparent);
+}
+
+.chat-detail-body .entry__badge--assistant {
+    color: #fff;
+    background: linear-gradient(135deg, color-mix(in srgb, var(--color-accent) 78%, #a78bfa), #8b5cf6);
+    border: 1px solid color-mix(in srgb, var(--color-accent) 34%, var(--color-border-light));
+    box-shadow: 0 0 0 3px color-mix(in srgb, #8b5cf6 8%, transparent);
+}
+
+.msg__stat {
+    font-variant-numeric: tabular-nums;
+}
+
+.message-meta-separator {
+    width: auto;
+    height: auto;
+    border-radius: 0;
+    background: transparent;
+    opacity: 1;
+}
+
+.message-meta-separator::before {
+    content: "·";
+}
+
+.message-actions {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    margin-top: 0;
+    margin-left: 0;
+    opacity: 1;
+}
+
+@media (max-width: 520px) {
+    .msg__head-trailing {
+        flex-basis: 100%;
+        margin-left: 0;
+        justify-content: flex-end;
+    }
+}
+
+.msg-action-btn {
+    height: 22px;
+    max-width: 22px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0;
+    padding: 0 5px;
+    overflow: visible;
+    border: 0;
+    border-radius: 5px;
+    background: transparent;
+    font-size: 11px;
+    font-weight: 500;
+    line-height: 1;
+    color: var(--color-text-tertiary);
+    cursor: pointer;
+    transition: max-width var(--transition-fast), gap var(--transition-fast), padding var(--transition-fast), background var(--transition-fast), color var(--transition-fast);
+}
+
+.msg-action-btn:hover,
+.msg-action-btn:focus-visible {
+    gap: 4px;
+    max-width: 104px;
+    padding: 0 7px;
+    background: var(--color-bg-hover);
+    color: var(--color-text-primary);
+}
+
+.msg-action-btn svg {
+    width: 12px;
+    height: 12px;
+    flex: none;
+}
+
+.msg-action-btn__label {
+    max-width: 0;
+    overflow: hidden;
+    opacity: 0;
+    white-space: nowrap;
+    transition: max-width var(--transition-fast), opacity var(--transition-fast);
+}
+
+.msg-action-btn:hover .msg-action-btn__label,
+.msg-action-btn:focus-visible .msg-action-btn__label {
+    max-width: 80px;
+    opacity: 1;
+}
+
+.msg-action-btn.is-feedback-visible[data-tooltip]::before,
+.msg-action-btn.is-feedback-visible[data-tooltip]::after {
+    opacity: 1;
+    transform: translate(-50%, 0);
+}
+
+.msg-action-btn:disabled {
+    cursor: not-allowed;
+    opacity: 0.45;
+}
+
+@media (max-width: 720px) {
+    .msg-action-btn {
+        max-width: 22px;
+        padding: 0 5px;
+    }
+
+    .msg-action-btn__label {
+        display: none;
+    }
+}
+
+.chat-input-container {
+    flex: none;
+    border-top: 0;
+    background: var(--chat-pane-bg);
+}
+
+@media (max-width: 980px) {
+    .chat-page {
+        grid-template-columns: 1fr;
+    }
+
+    .chat-sessions-pane {
+        display: none;
+    }
+}
+
+@media (max-width: 720px) {
+    .chat-messages {
+        padding: 18px 18px 26px;
+    }
+
+    .msg--user {
+        max-width: 92%;
+    }
+}
+.chat-detail-header .detail-header-action--danger.chat-detail-header__delete {
+    color: var(--color-text-secondary);
+}
+
+.chat-detail-header .detail-header-action--danger.chat-detail-header__delete:hover,
+.chat-detail-header .detail-header-action--danger.chat-detail-header__delete:focus-visible {
+    color: var(--color-text-primary);
+}

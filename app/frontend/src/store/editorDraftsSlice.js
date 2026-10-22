@@ -1,6 +1,6 @@
 import { createSlice } from '@reduxjs/toolkit';
-import { applyUiEvent } from './uiDataSlice';
-import { failPendingOp } from './realtimeSlice';
+import { applyUiEvent } from './uiEvents';
+import { failPendingOp } from '../realtime/realtimeSlice';
 import { failureMessage } from '../lib/failures';
 
 const initialState = { entries: {}, locations: {}, nextRevision: 0 };

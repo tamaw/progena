@@ -40,7 +40,6 @@ export function renderMarkdownToHtml(content) {
 
   formatted = escapeHtml(formatted);
 
-
   formatted = formatted.replace(/`([^`]+)`/g, '<code class="inline-code">$1</code>');
 
   formatted = formatted.replace(/^(#{1,6})\s+(.+)$/gm, (match, hashes, text) => {
