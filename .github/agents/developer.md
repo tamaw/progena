@@ -1,118 +1,35 @@
-# Feature Developer Agent
+# Feature developer
 
-## Role
-You are a **Feature Developer** focused on implementing new features, fixing bugs, and maintaining code quality. You write clean, efficient, and well-tested code.
+Read `AGENTS.md` and the affected component guides before implementing a change.
+Use their setup/check commands and the existing tests as the behavioral contract.
+Python supports the version range in `pyproject.toml`; frontend versions and
+scripts are defined in `src/frontend/package.json`.
 
-## Expertise
-- Python 3.12+ development (async/await, type hints, Pydantic)
-- FastAPI web development and REST APIs
-- React 18 and modern JavaScript/TypeScript
-- LangGraph node implementation
-- Pytest and async testing patterns
-- Git version control and branching strategies
+## Implementation
 
-## Context: Progenitor System
-- **Backend**: FastAPI server with OpenAI-compatible endpoints
-- **Frontend**: React/Vite chat interface
-- **Agent Core**: LangGraph perpetual loop with dual-loop pattern
-- **Testing**: pytest with asyncio mode, mocking patterns
-- **State**: Pydantic v2 models, JSON persistence
+- Put runtime domain contracts, validation and stores under their owning
+  `src/progenitor/` domain. Keep DeepAgent composition in `agent/`, graph assembly
+  in `orchestration/` and process/transport behavior in `runtime/`.
+- Put API endpoints in `src/backend/<feature>/routes.py` and behavior in that
+  feature's service/store. Register routers in `http/router.py` or `main.py`.
+  Follow `docs/BACKEND.md` for acknowledgement bodies, request IDs and causal events.
+- Put product UI/state under `src/frontend/src/features/<feature>/`; reusable UI
+  belongs in `components/`. Keep feature imports out of shared infrastructure and
+  store assembly out of feature code. Preserve lazy route boundaries.
+- Use Pydantic v2 for domain models and typed partial updates for graph nodes.
+  Keep async I/O non-blocking; preserve cancellation and per-thread isolation.
+- Use domain stores/StateManager for persistence. Agent-facing JSON files are
+  virtual views of Postgres documents. Keep historical checkpoint model aliases
+  and use `CheckpointSerializer` for checkpoint reads.
 
-## Guidelines
+Add regression coverage for behavior changes, including useful failure cases.
+Reuse injected fake model/store boundaries and existing fixtures. Run the affected
+checks first and relevant broader checks from the root guide. Inspect UI changes
+in a browser, including the affected interaction and asynchronous event updates.
 
-### Before Starting Work
-1. **Always activate venv**: `& .\.venv\Scripts\Activate.ps1` (Windows)
-2. Review relevant AGENTS.md files for context
-3. Check existing tests to understand expected behavior
-4. Look at similar existing code for patterns
+Inspect database-backed state through the existing services; do not diagnose the
+current app by looking for local state JSON files. Avoid logging credentials or
+private message content. Keep generated artifacts out of commits.
 
-### Code Quality Standards
-- Use type hints for all function signatures
-- Write docstrings for public functions and classes
-- Follow existing code style (use `ruff` for linting)
-- Keep functions focused and single-purpose
-- Use meaningful variable and function names
-- Handle errors gracefully with proper logging
-
-### Testing Requirements
-- Write tests for all new features
-- Use `pytest` with `asyncio_mode = auto`
-- Mock external dependencies (LLM, file system, network)
-- Aim for >80% code coverage
-- Test both success and failure cases
-
-### Node Implementation Pattern
-```python
-def create_node(state_manager, llm_client=None) -> Callable[[ProgenitorState], Awaitable[dict]]:
-    """Node description."""
-    async def node(state: ProgenitorState) -> dict:
-        # Node logic
-        return {"key": "value"}  # Partial state update
-    return node
-```
-
-### State Model Pattern
-```python
-from pydantic import BaseModel, Field
-
-class MyModel(BaseModel):
-    field: str = Field(description="Field description")
-    optional_field: Optional[int] = None
-```
-
-### Development Workflow
-1. Create/update tests first (TDD approach)
-2. Implement feature with minimal changes
-3. Run tests: `pytest tests/path/ -v`
-4. Check types: `pyright src/`
-5. Lint: `ruff check src/`
-6. Manual testing if UI changes involved
-
-### Common Tasks
-
-#### Adding a New Node
-1. Create node in `src/progenitor/orchestration/nodes/my_node.py`
-2. Follow factory pattern
-3. Add to graph in `src/progenitor/orchestration/graphs/heartbeat_graph.py`
-4. Add routing logic if needed
-5. Write tests in `tests/progenitor/test_nodes.py`
-
-#### Adding API Endpoint
-1. Add the route in its feature package under `src/backend/<feature>/routes.py`
-2. Create Pydantic models for request/response
-3. Add tests in `tests/backend/`
-4. Register its router in `src/backend/http/router.py` or `src/backend/main.py` and verify the API contract
-
-#### Adding React Component
-1. Add feature components under `src/frontend/src/features/<feature>/`; put domain-independent UI in `src/frontend/src/components/`
-2. Follow existing patterns (hooks, props, etc.)
-3. Import feature state directly; keep application assembly and shared UI independent
-4. Test in browser
-
-### Important Notes
-- **Always activate venv before Python commands**
-- Use `asyncio` patterns throughout
-- Mock LLM in tests: `mock_llm = AsyncMock()`
-- State updates are partial: return only changed fields
-- Secrets auto-redacted in logs
-- Mock mode: `$env:PROGENITOR_MOCK_LLM = "true"`
-
-### Debugging Tips
-- Check logs in `logs/` directory
-- Use `print()` or `logging.debug()` liberally during development
-- Run single test: `pytest tests/path/test_file.py::test_name -v`
-- Use VS Code debugger for stepping through code
-- Check state files: `current_state.json`, `build_state.json`
-
-## Constraints
-- Make minimal, surgical changes
-- Don't break existing tests
-- Maintain backwards compatibility
-- Don't commit secrets or sensitive data
-- Follow existing patterns and conventions
-
-## References
-- Project AGENTS.md files in each directory
-- `docs/PROJECT_STRUCTURE.md` - Codebase structure
-- `pyproject.toml` - Dependencies and config
-- `pytest.ini` - Test configuration
+Create a reviewable PR with the problem, behavior and actual validation results.
+Follow the root guide's merge/deployment policy.

@@ -12,7 +12,7 @@ Playwright and ESLint 9. JavaScript/JSX, plain CSS and CSS Modules.
 Prefer function components and hooks; the route error boundary uses React's
 class-based error-boundary API.
 
-Run from `src/frontend` with a Node version supported by the installed packages:
+Use Node 24 as described in root `AGENTS.md`. Run from `src/frontend`:
 
 ```bash
 npm ci
@@ -29,8 +29,10 @@ backend at `http://127.0.0.1:8000`, or `VITE_BACKEND_BASE_URL`. The browser neve
 calls the runtime directly.
 
 Browser specs live in `tests/*.spec.js`, with shared helpers in `tests/helpers/`
-and data in `tests/fixtures/`. Unit tests stay beside their source under `src/`;
-Vitest's source-only include keeps the Playwright suite separate.
+and data in `tests/fixtures/`. Unit tests stay beside their source under `src/`.
+The source-only include in `vitest.config.js` keeps the Playwright suite separate.
+`test-results/` and `playwright-report/` are ignored local artifacts; do not commit
+them. Browser discovery (`npx playwright test --list`) does not run the scenarios.
 
 ## Directory map
 

@@ -1,117 +1,91 @@
-# Backend - GitHub Copilot Agent
+# Backend — agent guide
 
-## FastAPI Backend Agent
+Read root `AGENTS.md` for environment setup, shared validation and repository
+safety. This component is the FastAPI gateway; its ASGI entry point is
+`src.backend.main:app`. It serves APIs, while Vite/Nginx serves the frontend.
 
-OpenAI-compatible API server providing responses and streaming endpoints.
+## Ownership
 
-### Agent Capabilities
-- FastAPI application development
-- OpenAI-compatible API implementation
-- SSE (Server-Sent Events) streaming
-- SSE (HTTP streaming) client/server
-- CORS configuration
-- Health checks and monitoring
-
-### Architecture
-```
+```text
 backend/
-├── main.py              # ASGI app, middleware and router assembly
-├── config.py            # Backend environment configuration
-├── http/                # Acknowledgements, request IDs, middleware, UI router assembly
-├── events/              # SSE transport, event envelopes and document dispatch
+├── main.py              # Application, middleware and router assembly
+├── config.py            # Backend environment settings
+├── http/                # Request IDs, acknowledgements, middleware and UI router
+├── events/              # Envelopes, canonical SSE transport and document dispatch
 ├── storage/             # Shared Postgres document store and document-type routes
-├── lifecycle/           # Startup/shutdown, shared process state and watchers
-├── chat/                # Chat routes/read model, responses, sessions and streaming
-├── attachments/         # Upload routes, processing and blob storage
-├── agents/              # Agent catalog, store and routine reconciliation
-├── instructions/        # Instruction routes and service
-├── knowledge/           # Knowledge routes, pages, catalog and indexer
-├── plugins/             # Plugins and marketplace sources
-├── repositories/        # Declared repositories and scan/fetch operations
-├── modules/             # Module routes and connection-scoped event interests
-├── workflows/           # Routes, execution service, cron, ACP and routine events
-├── tasks/               # Kanban/task routes, models and persistence helpers
-├── schedules/           # Schedule/widget routes, models and service helpers
-├── settings/            # Preferences, providers, model profiles, policies and MCP
-├── insights/            # Usage accounting and routes
-├── inbox/               # Inbox routes
-├── alerts/              # Alert store, routes and user-message relay
-├── search/              # Cross-domain search routes
-├── monitoring/          # State reader, status/metrics and log routes
-└── integrations/        # Runtime HTTP/SSE client, legacy client and Telegram
+├── lifecycle/           # Startup, shutdown, process clients/state and watchers
+├── chat/                # Chat routes, sessions, response execution and content streams
+├── attachments/         # Upload processing and blob storage
+├── agents/              # Agent catalogue and routine reconciliation
+├── instructions/        # Instruction routes/service
+├── knowledge/           # Knowledge pages, catalogue and indexing
+├── plugins/             # Plugins and marketplaces
+├── repositories/        # Declared repository operations
+├── modules/             # Module routes and connection-scoped interests
+├── workflows/           # Execution, cron, ACP and routine event handling
+├── tasks/ / schedules/  # Task/Kanban and schedule/widget APIs
+├── settings/            # Preferences, providers, profiles, policies and MCP
+├── insights/            # Checkpoint-backed usage accounting
+├── inbox/ / alerts/ / search/
+├── monitoring/          # State reader, status/metrics and logs
+└── integrations/        # Runtime clients and Telegram adapters
 ```
 
-- `POST /api/ui/responses` - Browser generation acknowledgement endpoint
-- `GET /api/ui/stream` - Canonical browser event stream
-- `GET /healthz` - Docker-only liveness probe (explicit event-stream exception; empty 200 response)
+Put endpoints in their feature's `routes.py`; register routers in `http/router.py`
+or `main.py`. Keep persistence and execution in feature services/stores. Shared
+HTTP/event/storage code must not import application assembly. Importing
+`src.backend` itself must not construct the FastAPI app.
 
-### Development
+Process clients, session management and shutdown state live in `lifecycle/state.py`;
+startup orchestration lives in `lifecycle/startup.py`. Keep blocking database work
+off the event loop. Direct checkpoint readers use `CheckpointSerializer` from
+`src/progenitor/persistence/serialization.py` so historical type identities load.
+
+## Browser request and event contract
+
+`docs/BACKEND.md` is authoritative, including exceptions. Preserve these roles:
+
+- `GET /api/ui/stream`: one app-lifetime canonical feed, emitting `event: ui.event`
+  with `UiEventEnvelope` payloads. It owns retained state and chat lifecycle.
+- Finite application requests: persist/dispatch, enqueue causal canonical events,
+  then return `202` with exactly `{request_id, event_types}`. Preserve the caller's
+  request ID; authoritative application data arrives through events.
+- `POST /api/ui/responses`: acknowledge generation. Its streaming content is
+  delivered on `GET /api/ui/responses/{request_id}/stream`, containing that request's
+  `chat.response.delta` and `chat.response.event` frames. Lifecycle events remain
+  on the canonical stream.
+
+Use `events.stream.broadcast_ui_event()` after persistence succeeds. Envelopes
+live in `events/contracts.py`; acknowledgements live in `http/contracts.py`.
+Preserve bounded replay, `Last-Event-ID`, and replay-before-`connection.ready`
+ordering. Keep connection-scoped interests and response content out of global
+replay where the contract requires isolation.
+
+Chat list requests emit `chat.sessions.snapshot`. Detail requests emit
+`chat.session.upserted` and `chat.session.selected` with the matching request ID;
+selection in one tab must not change another tab's selected chat. Frontend pages
+consume feature state through Redux rather than opening additional app-lifetime
+streams.
+
+## Running and validation
+
+From the repository root, in the activated venv:
+
 ```bash
-# Activate venv first
-& .\.venv\Scripts\Activate.ps1
-
-# Run directly
 python -m uvicorn src.backend.main:app --host 0.0.0.0 --port 8000 --reload
-
-# Or use VS Code task: "Start Backend (dev)"
+pytest tests/backend/
+ruff check src/backend tests/backend
+pyright --pythonpath .venv/bin/python src/
 ```
 
-### Testing
-```bash
-pytest tests/backend/ -v
-```
+The backend's `/healthz` route is an explicit data-free liveness exception,
+returning empty HTTP 200. The runtime's `/health` is on port 9501; do not confuse
+these probes with browser application-data routes. CORS comes from
+`src/backend/config.py`, and Vite's API proxy comes from `src/frontend/vite.config.js`.
+Generated API docs/schema are available at `/docs` and `/openapi.json`; there is
+no checked-in `openapi_spec.json` to maintain.
 
-### Integration Points
-- **Progenitor Loop**: Communicates via SSE (HTTP streaming)
-- **Frontend**: CORS enabled for `http://localhost:5173`
-- **LLM**: Proxies to configured LLM provider (Azure OpenAI, OpenAI, etc.)
-
-### Key Patterns
-- Async/await throughout
-- Pydantic models for validation
-- Streaming responses via SSE
-- `/healthz` is an explicit Docker/container liveness exception to the event-stream-only rule; it returns an empty 200 and no application data
-
-### React UI Event Stream
-
-The canonical frontend event feed is `GET /api/ui/stream`. It emits named SSE frames as `event: ui.event`, where each `data` payload is a `UiEventEnvelope`:
-
-```json
-{
-  "id": "ui-42",
-  "seq": 42,
-  "type": "chat.sessions.snapshot",
-  "scope": "chat",
-  "session_id": null,
-  "payload": {},
-  "timestamp": "2026-01-01T00:00:00Z"
-}
-```
-
-Use `events.stream.broadcast_ui_event()` for new backend-owned UI changes after persistence succeeds. Shared envelopes live in `events.contracts`; finite-request acknowledgements live in `http.contracts`. The stream keeps a bounded in-memory replay buffer and honors `Last-Event-ID`; replayed events are sent before the fresh `connection.ready` event so reconnects apply in order.
-
-Add endpoints to their feature's `routes.py`; register them in `http/router.py`
-or `main.py`. Keep domain persistence and execution in feature services. Shared
-storage/event code must not import `main.py` or a catch-all route module.
-Process-wide clients, session management and shutdown state live in
-`lifecycle/state.py`; startup orchestration lives in `lifecycle/startup.py`.
-Importing `src.backend` itself does not construct the application.
-
-Frontend React code consumes this through Redux Toolkit listener middleware in `src/frontend/src/realtime/realtimeListener.js`. That listener owns the single canonical `EventSource`, deduplicates events by id in `realtimeSlice.js`, then the feature handlers registered by `store/uiDataSlice.js` apply domain updates. Pages should read selectors instead of opening their own long-lived UI streams.
-
-Chat session loading follows a request-then-stream pattern. Finite browser routes return HTTP 202 with `{request_id, event_types}` and emit authoritative state on `/api/ui/stream`; the frontend left pane is populated by the streamed `chat.sessions.snapshot`. `GET /api/ui/chats/{id}?request_id=...` emits `chat.session.upserted` for unknown-sidebar safety and `chat.session.selected` with the same `request_id` for active transcript hydration. The frontend only applies matching detail events so one tab cannot steal another tab's selected chat. Mutations emit targeted events such as `chat.session.created`, `chat.session.metadata.updated`, and `chat.session.deleted`, and may also emit a fresh snapshot when the whole list ordering can change.
-
-### Configuration
-- Port: `8000` (default)
-- CORS: Configured in `main.py`
-- Logging: Standard FastAPI logging
-
-### Important Notes
-- Always runs on port 8000
-- Frontend proxies API calls in dev mode
-- Supports both streaming and non-streaming responses
-- SSE client is initialized at startup
-
-### References
-- API Spec: `openapi_spec.json`
-- Backend Docs: `docs/BACKEND.md`
+Backend tests use shared root Postgres fixtures and local conftest mocks/cleanup.
+Reuse `tests/backend/ack_helpers.py` for acknowledgement assertions and check the
+causal event/persistence behavior separately. Keep source moves and protocol
+changes covered at their owning layer. Follow root merge/deployment rules.

@@ -1,5 +1,7 @@
 # Progenitor runtime — agent guide
 
+Read root `AGENTS.md` for setup and repository safety.
+
 Progenitor hosts the conversational DeepAgent, maintains durable state, runs
 scheduled/background work, and delegates to A2A, ACP and async subagents.
 
@@ -93,12 +95,13 @@ remain repository-managed assets. Preserve document keys, namespaces, seed
 behavior, virtual mount paths and LISTEN/NOTIFY contracts when moving code.
 Repository scans and background work retain read-through access.
 
-Keep the lazy model aliases in state/models.py and workflows/__init__.py for
+Keep the lazy model aliases in `state/models.py` and `workflows/__init__.py` for
 historical LangGraph checkpoints that contain old Python class paths. They are
 deserialization compatibility only; application imports use current domain paths.
-Persistence readers use CheckpointSerializer to translate historical
-app.progenitor.* constructor identities to src.progenitor.* without rewriting
-the database or changing message contents. Use it when opening checkpoint savers
+Persistence readers use `CheckpointSerializer` from `persistence/serialization.py`
+to translate historical `app.progenitor.*` constructor identities to
+`src.progenitor.*` without rewriting the database or changing message contents.
+Use it when opening checkpoint savers
 or decoding checkpoint blobs directly.
 
 Workspace and shell directories are allocated dynamically. The tools registry
@@ -115,6 +118,11 @@ ruff check src/backend src/progenitor tests/backend tests/progenitor
 pyright --pythonpath .venv/bin/python src/
 pytest tests/backend tests/progenitor --timeout=45
 ```
+
+Keep conversation state and mutation coordination scoped by `thread_id`; overlapping
+runs for one conversation are serialized without blocking unrelated conversations.
+Provider/profile configuration is database-backed; resolve credentials through the
+existing provider boundary rather than adding new environment-only model selection.
 
 Use fake model graphs for unit tests. Persistence tests create disposable
 Postgres databases; never point them at production. Cover request correlation,
