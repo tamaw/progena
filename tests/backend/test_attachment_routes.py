@@ -3,7 +3,7 @@
 Regression coverage for the cross-thread attachment leak: an attachment
 uploaded/claimed by one thread must be invisible (list), unreadable
 (download), and undeletable through another thread's requests. See
-app/backend/attachment_routes.py and app/backend/attachment_blob_store.py.
+app/backend/attachments/routes.py and app/backend/attachments/store.py.
 """
 
 from __future__ import annotations
@@ -13,11 +13,11 @@ import uuid
 import pytest
 from fastapi.testclient import TestClient
 
-from app.backend.attachment_blob_store import (
+from app.backend.attachments.routes import get_attachment_manager
+from app.backend.attachments.store import (
     InMemoryAttachmentBlobStore,
     set_default_attachment_blob_store,
 )
-from app.backend.attachment_routes import get_attachment_manager
 from app.backend.main import app
 
 

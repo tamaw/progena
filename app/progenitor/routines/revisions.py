@@ -1,6 +1,6 @@
 """Async readers for immutable routine graph revisions.
 
-The backend (``app/backend/document_store.py``) owns the DDL for the
+The backend (``app/backend/storage/documents.py``) owns the DDL for the
 ``routine_graph_revisions`` table and the trigger that populates it. This
 module only reads: it opens a short-lived ``psycopg.AsyncConnection`` per
 fetch and closes it in ``finally``, because fetches are rare in steady state

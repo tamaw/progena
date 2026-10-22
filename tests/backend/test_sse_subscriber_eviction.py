@@ -16,22 +16,22 @@ import asyncio
 
 import pytest
 
-import app.backend.main as backend_main
-from app.backend import ui_routes
+import app.backend.chat.responses as chat_responses
+import app.backend.events.stream as events_stream
 
 
 @pytest.fixture
 def isolated_subscribers():
     """Run a test against an empty subscriber registry, restoring prior state."""
-    original_subscribers = dict(ui_routes._ui_stream_subscribers)
-    original_replay = list(ui_routes._ui_event_replay)
-    ui_routes._ui_stream_subscribers.clear()
+    original_subscribers = dict(events_stream._ui_stream_subscribers)
+    original_replay = list(events_stream._ui_event_replay)
+    events_stream._ui_stream_subscribers.clear()
     try:
-        yield ui_routes._ui_stream_subscribers
+        yield events_stream._ui_stream_subscribers
     finally:
-        ui_routes._ui_stream_subscribers.clear()
-        ui_routes._ui_stream_subscribers.update(original_subscribers)
-        ui_routes._ui_event_replay[:] = original_replay
+        events_stream._ui_stream_subscribers.clear()
+        events_stream._ui_stream_subscribers.update(original_subscribers)
+        events_stream._ui_event_replay[:] = original_replay
 
 
 def _full_queue() -> asyncio.Queue:
@@ -44,7 +44,7 @@ def _full_queue() -> asyncio.Queue:
 async def _assert_discarded(task: asyncio.Task) -> None:
     """Done callbacks run via loop.call_soon; give the loop a few cycles."""
     for _ in range(10):
-        if task not in backend_main._background_tasks:
+        if task not in chat_responses._background_tasks:
             return
         await asyncio.sleep(0)
     raise AssertionError("completed task still strongly referenced in _background_tasks")
@@ -60,7 +60,7 @@ class TestBroadcastEviction:
         isolated_subscribers[stalled_queue] = handler
         isolated_subscribers[healthy_queue] = None
 
-        envelope = ui_routes.broadcast_ui_event("test.event", {})
+        envelope = events_stream.broadcast_ui_event("test.event", {})
 
         # The stalled subscriber is evicted; the healthy one survives.
         assert stalled_queue not in isolated_subscribers
@@ -77,25 +77,21 @@ class TestBroadcastEviction:
         assert event["envelope"] is envelope
         assert envelope.type == "test.event"
 
-    async def test_eviction_tolerates_subscriber_without_handler_task(
-        self, isolated_subscribers
-    ):
+    async def test_eviction_tolerates_subscriber_without_handler_task(self, isolated_subscribers):
         stalled_queue = _full_queue()
         isolated_subscribers[stalled_queue] = None
 
-        ui_routes.broadcast_ui_event("test.event", {})
+        events_stream.broadcast_ui_event("test.event", {})
 
         assert stalled_queue not in isolated_subscribers
 
-    async def test_eviction_tolerates_already_finished_handler_task(
-        self, isolated_subscribers
-    ):
+    async def test_eviction_tolerates_already_finished_handler_task(self, isolated_subscribers):
         finished = asyncio.create_task(asyncio.sleep(0))
         await finished
         stalled_queue = _full_queue()
         isolated_subscribers[stalled_queue] = finished
 
-        ui_routes.broadcast_ui_event("test.event", {})
+        events_stream.broadcast_ui_event("test.event", {})
 
         assert stalled_queue not in isolated_subscribers
         assert not finished.cancelled()
@@ -111,13 +107,13 @@ class TestSpawnBackgroundTask:
             await release.wait()
             return "done"
 
-        task = backend_main._spawn_background_task(worker())
+        task = chat_responses._spawn_background_task(worker())
         try:
             # Referenced from the moment it is spawned...
-            assert task in backend_main._background_tasks
+            assert task in chat_responses._background_tasks
             await asyncio.wait_for(started.wait(), timeout=1)
             # ...and still referenced while the coroutine is suspended.
-            assert task in backend_main._background_tasks
+            assert task in chat_responses._background_tasks
         finally:
             release.set()
 
@@ -129,8 +125,8 @@ class TestSpawnBackgroundTask:
             await asyncio.sleep(0)
             raise RuntimeError("boom")
 
-        task = backend_main._spawn_background_task(failing())
-        assert task in backend_main._background_tasks
+        task = chat_responses._spawn_background_task(failing())
+        assert task in chat_responses._background_tasks
 
         with pytest.raises(RuntimeError, match="boom"):
             await asyncio.wait_for(task, timeout=1)

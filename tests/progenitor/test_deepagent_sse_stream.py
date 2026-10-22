@@ -85,7 +85,7 @@ async def test_graph_message_events_stream_incrementally_without_duplicate_final
 
 @pytest.mark.asyncio
 async def test_attachments_are_stamped_onto_the_human_message():
-    """See app.backend.main._resolve_message_attachments: the backend
+    """See app.backend.chat.responses._resolve_message_attachments: the backend
     resolves attachment ids into a compact metadata list and passes it
     through as request metadata. RuntimeChatService forwards that list here
     (see app.progenitor.runtime.http_chat._extract_attachments) so

@@ -9,8 +9,9 @@ from ack_helpers import assert_acknowledged
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-import app.backend.knowledge_routes as routes
-from app.backend.document_store import (
+import app.backend.events.stream as events_stream
+import app.backend.knowledge.routes as routes
+from app.backend.storage.documents import (
     PROGENITOR_STATE_PREFIX,
     InMemoryDocumentStore,
     set_default_document_store,
@@ -32,7 +33,7 @@ def harness(monkeypatch):
     store.save_document(PROGENITOR_STATE_PREFIX, "knowledge:eng/log.md", {"content": "## log\n"})
     events: list[tuple[str, dict[str, Any]]] = []
     monkeypatch.setattr(
-        routes,
+        events_stream,
         "broadcast_ui_event",
         lambda event_type, payload, **_kw: events.append((event_type, payload)),
     )

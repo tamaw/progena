@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from app.backend.document_store import PROGENITOR_STATE_PREFIX, InMemoryDocumentStore
-from app.backend.state_reader import StateReader
+from app.backend.monitoring.state import StateReader
+from app.backend.storage.documents import PROGENITOR_STATE_PREFIX, InMemoryDocumentStore
 
 
 def _reader(enabled: bool) -> tuple[StateReader, InMemoryDocumentStore]:

@@ -2,6 +2,8 @@
 Environment variable parsing utilities for Backend.
 """
 
+from __future__ import annotations
+
 import logging
 import os
 

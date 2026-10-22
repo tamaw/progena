@@ -1,0 +1,81 @@
+"""Lifecycle watchers."""
+
+from __future__ import annotations
+
+import logging
+
+import app.backend.agents.reconciliation as agents_reconciliation
+import app.backend.events.dispatch as events_dispatch
+import app.backend.monitoring.state as monitoring_state
+import app.backend.monitoring.status as monitoring_status
+import app.backend.workflows.events as workflows_events
+import app.backend.workflows.runtime as workflows_runtime
+
+logger = logging.getLogger(__name__)
+
+_state_watch_callback = None
+
+
+_workflow_invoke_watch_callback = None
+
+
+_knowledge_index_watch_callback = None
+
+
+def _queue_knowledge_index_resync(_snapshot, changed_key: str | None = None) -> None:
+    """Route state changes to the knowledge indexer."""
+    from app.backend.knowledge.indexer import get_knowledge_indexer
+
+    get_knowledge_indexer().on_store_change(changed_key)
+
+
+_routine_agent_watch_callback = None
+
+
+async def start_state_status_watcher(reconnect_delay: float = 2.0) -> None:
+    global _state_watch_callback
+    global _workflow_invoke_watch_callback, _routine_agent_watch_callback
+    global _knowledge_index_watch_callback
+    state_reader = monitoring_state.get_state_reader()
+    if _state_watch_callback is None:
+        _state_watch_callback = monitoring_status._queue_state_watch_status
+        state_reader.add_watcher(_state_watch_callback)
+    if _workflow_invoke_watch_callback is None:
+        _workflow_invoke_watch_callback = workflows_runtime._queue_workflow_invoke_reconciliation
+        state_reader.add_watcher(_workflow_invoke_watch_callback)
+    if _routine_agent_watch_callback is None:
+        _routine_agent_watch_callback = agents_reconciliation._queue_routine_agent_reconciliation
+        state_reader.add_watcher(_routine_agent_watch_callback)
+    if _knowledge_index_watch_callback is None:
+        _knowledge_index_watch_callback = _queue_knowledge_index_resync
+        state_reader.add_watcher(_knowledge_index_watch_callback)
+    await workflows_events.routine_events.start()
+    await workflows_runtime.get_acp_task_supervisor().start()
+    await events_dispatch.get_document_event_dispatcher().start(reconnect_delay)
+    await workflows_runtime.get_workflow_executor().recover_startup_runs()
+    await workflows_runtime.get_workflow_cron_clock().start()
+    await state_reader.start_watching(reconnect_delay)
+
+
+async def stop_state_status_watcher() -> None:
+    global _state_watch_callback
+    global _workflow_invoke_watch_callback, _routine_agent_watch_callback
+    global _knowledge_index_watch_callback
+    state_reader = monitoring_state.get_state_reader()
+    if _state_watch_callback is not None:
+        state_reader.remove_watcher(_state_watch_callback)
+        _state_watch_callback = None
+    if _workflow_invoke_watch_callback is not None:
+        state_reader.remove_watcher(_workflow_invoke_watch_callback)
+        _workflow_invoke_watch_callback = None
+    if _routine_agent_watch_callback is not None:
+        state_reader.remove_watcher(_routine_agent_watch_callback)
+        _routine_agent_watch_callback = None
+    if _knowledge_index_watch_callback is not None:
+        state_reader.remove_watcher(_knowledge_index_watch_callback)
+        _knowledge_index_watch_callback = None
+    await workflows_events.routine_events.stop()
+    await workflows_runtime.get_workflow_cron_clock().stop()
+    await workflows_runtime.get_acp_task_supervisor().stop()
+    await events_dispatch.get_document_event_dispatcher().stop()
+    await state_reader.stop_watching()

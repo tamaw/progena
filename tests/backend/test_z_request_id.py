@@ -10,17 +10,17 @@ from contextlib import contextmanager
 import httpx
 import uvicorn
 
+import app.backend.events.stream as events_stream
 from app.backend.main import app
 
 
 @contextmanager
 def _live_backend() -> Iterator[str]:
     """Run the ASGI app on a loopback socket so SSE is not transport-buffered."""
-    from app.backend import ui_routes
 
     # Earlier TestClient lifespans close their SSE connections. A live server
     # needs a fresh event bound to its own loop rather than that closed lifecycle.
-    ui_routes._sse_shutdown_event = None
+    events_stream._sse_shutdown_event = None
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
         probe.bind(("127.0.0.1", 0))
         host, port = probe.getsockname()
@@ -41,7 +41,7 @@ def _live_backend() -> Iterator[str]:
     finally:
         server.should_exit = True
         thread.join(timeout=5)
-        ui_routes._sse_shutdown_event = None
+        events_stream._sse_shutdown_event = None
         assert not thread.is_alive(), "Uvicorn did not stop"
 
 

@@ -18,12 +18,12 @@ import asyncio
 import pytest
 from fastapi.testclient import TestClient
 
+import app.backend.chat.responses as chat_responses
+import app.backend.events.stream as events_stream
+import app.backend.http.contracts as http_contracts
+import app.backend.lifecycle.state as lifecycle_state
+from app.backend.chat.models import ResponseInputMessage, ResponseRequest, StreamingResponseRequest
 from app.backend.main import app
-from app.backend.models import (
-    ResponseInputMessage,
-    ResponseRequest,
-    StreamingResponseRequest,
-)
 
 
 @pytest.fixture
@@ -37,10 +37,8 @@ class TestUserMessageEvents:
 
     def test_simple_user_message_accepted(self, client):
         """A chat request is an acknowledgement whose output is only stream events."""
-        import app.backend.main as backend_main
-        from app.backend import ui_routes
 
-        original_client = backend_main.client
+        original_client = lifecycle_state.client
         request_id = "chat-event-request"
 
         class _MockClient:
@@ -52,15 +50,15 @@ class TestUserMessageEvents:
                 include_reasoning: bool | None = None,
             ):
                 del message, request_id, metadata, include_reasoning
-                from app.backend.models import AgentResponse
+                from app.backend.chat.models import AgentResponse
 
                 return AgentResponse(
                     response="Hello from agent", reasoning=None, reasoning_tokens=None
                 )
 
         queue = asyncio.Queue()
-        ui_routes._ui_stream_subscribers[queue] = None
-        backend_main.client = _MockClient()
+        events_stream._ui_stream_subscribers[queue] = None
+        lifecycle_state.client = _MockClient()
         try:
             response = client.post(
                 "/api/ui/responses",
@@ -69,8 +67,8 @@ class TestUserMessageEvents:
             )
             events = [queue.get_nowait()["envelope"] for _ in range(queue.qsize())]
         finally:
-            ui_routes._ui_stream_subscribers.pop(queue, None)
-            backend_main.client = original_client
+            events_stream._ui_stream_subscribers.pop(queue, None)
+            lifecycle_state.client = original_client
 
         assert response.status_code == 202
         assert response.json() == {
@@ -93,10 +91,8 @@ class TestUserMessageEvents:
         fix only handled `input: ""`, so this exact browser payload shape
         still 400'd with "No input provided".
         """
-        import app.backend.main as backend_main
-        from app.backend import ui_routes
 
-        original_client = backend_main.client
+        original_client = lifecycle_state.client
         request_id = "attachment-only-request"
 
         class _MockClient:
@@ -111,8 +107,8 @@ class TestUserMessageEvents:
                 yield {"type": "stream_chunk", "content": "", "is_final": True}
 
         queue = asyncio.Queue()
-        ui_routes._ui_stream_subscribers[queue] = None
-        backend_main.client = _MockClient()
+        events_stream._ui_stream_subscribers[queue] = None
+        lifecycle_state.client = _MockClient()
         try:
             response = client.post(
                 "/api/ui/responses",
@@ -128,8 +124,8 @@ class TestUserMessageEvents:
                 headers={"X-Request-ID": request_id},
             )
         finally:
-            ui_routes._ui_stream_subscribers.pop(queue, None)
-            backend_main.client = original_client
+            events_stream._ui_stream_subscribers.pop(queue, None)
+            lifecycle_state.client = original_client
 
         assert response.status_code == 202
         assert response.json() == {
@@ -201,19 +197,17 @@ class TestExtractResponseInput:
     attachment-only allowance for the non-streaming path."""
 
     def test_empty_text_raises_without_attachments(self):
-        from app.backend.main import _extract_response_input
 
         request = ResponseRequest(model="test", input="   ", stream=False)
         with pytest.raises(ValueError, match="empty"):
-            _extract_response_input(request)
+            chat_responses._extract_response_input(request)
 
     def test_empty_text_allowed_with_attachments(self):
-        from app.backend.main import _extract_response_input
 
         request = ResponseRequest(
             model="test", input="", stream=False, metadata={"attachments": ["att_1"]}
         )
-        assert _extract_response_input(request) == ""
+        assert chat_responses._extract_response_input(request) == ""
 
     def test_empty_message_list_allowed_with_attachments(self):
         """The frontend never sends a plain string -- buildResponsesInput in
@@ -222,19 +216,17 @@ class TestExtractResponseInput:
         text) arrives as `input: []`, not `input: ""`. This is the shape
         that actually reaches the backend from the browser.
         """
-        from app.backend.main import _extract_response_input
 
         request = ResponseRequest(
             model="test", input=[], stream=False, metadata={"attachments": ["att_1"]}
         )
-        assert _extract_response_input(request) == ""
+        assert chat_responses._extract_response_input(request) == ""
 
     def test_empty_message_list_raises_without_attachments(self):
-        from app.backend.main import _extract_response_input
 
         request = ResponseRequest(model="test", input=[], stream=False)
         with pytest.raises(ValueError, match="No input provided"):
-            _extract_response_input(request)
+            chat_responses._extract_response_input(request)
 
 
 class TestResponsesAPIEvents:
@@ -256,15 +248,14 @@ class TestSSEEventDelivery:
 
     def test_broadcast_chat_event_functionality(self):
         """Test broadcast_ui_event delivers chat-scoped events to stream subscribers."""
-        from app.backend.ui_routes import _ui_stream_subscribers, broadcast_ui_event
 
-        _ui_stream_subscribers.clear()
+        events_stream._ui_stream_subscribers.clear()
 
         chat_queue = asyncio.Queue()
-        _ui_stream_subscribers[chat_queue] = None
+        events_stream._ui_stream_subscribers[chat_queue] = None
 
         try:
-            broadcast_ui_event(
+            events_stream.broadcast_ui_event(
                 "agent_message",
                 {"content": "Hello from agent"},
                 scope="chat",
@@ -281,19 +272,18 @@ class TestSSEEventDelivery:
             assert envelope.payload["content"] == "Hello from agent"
             assert envelope.payload["request_id"] == "agent-message-request"
         finally:
-            _ui_stream_subscribers.pop(chat_queue, None)
+            events_stream._ui_stream_subscribers.pop(chat_queue, None)
 
     def test_broadcast_status_event_functionality(self):
         """Test broadcast_ui_event delivers status-typed events to stream subscribers."""
-        from app.backend.ui_routes import _ui_stream_subscribers, broadcast_ui_event
 
-        _ui_stream_subscribers.clear()
+        events_stream._ui_stream_subscribers.clear()
 
         queue = asyncio.Queue()
-        _ui_stream_subscribers[queue] = None
+        events_stream._ui_stream_subscribers[queue] = None
 
         try:
-            broadcast_ui_event(
+            events_stream.broadcast_ui_event(
                 "status.updated",
                 {"uptime": 100},
                 request_id="status-update-request",
@@ -307,16 +297,15 @@ class TestSSEEventDelivery:
             assert envelope.payload["uptime"] == 100
             assert envelope.payload["request_id"] == "status-update-request"
         finally:
-            _ui_stream_subscribers.pop(queue, None)
+            events_stream._ui_stream_subscribers.pop(queue, None)
 
 
 class TestEventPayloadValidation:
     """Finite success responses contain only the acknowledgement contract."""
 
     def test_acknowledged_response_has_no_legacy_response_payload(self):
-        from app.backend.chat_sessions import UiRequestAcknowledgement
 
-        acknowledgement = UiRequestAcknowledgement(
+        acknowledgement = http_contracts.UiRequestAcknowledgement(
             request_id="response-ack-request",
             event_types=["chat.response.started"],
         )
@@ -361,7 +350,7 @@ class TestErrorEvents:
     def test_rate_limit_error_format(self, client):
         """Test rate limit error has correct format."""
         # This tests the error response structure, not actual rate limiting
-        from app.backend.models import ErrorDetail, ErrorResponse
+        from app.backend.chat.models import ErrorDetail, ErrorResponse
 
         error = ErrorResponse(
             error=ErrorDetail(
@@ -395,20 +384,19 @@ class TestTypingIndicatorEvents:
 
     def test_typing_indicator_state_transitions(self):
         """Test typing indicator event state transitions."""
-        from app.backend.ui_routes import _ui_stream_subscribers, broadcast_ui_event
 
-        _ui_stream_subscribers.clear()
+        events_stream._ui_stream_subscribers.clear()
 
         queue = asyncio.Queue()
-        _ui_stream_subscribers[queue] = None
+        events_stream._ui_stream_subscribers[queue] = None
 
         try:
             # Simulate typing indicator sequence
-            broadcast_ui_event("typing_start", {"agent": "progenitor"}, scope="chat")
-            broadcast_ui_event(
+            events_stream.broadcast_ui_event("typing_start", {"agent": "progenitor"}, scope="chat")
+            events_stream.broadcast_ui_event(
                 "typing_update", {"agent": "progenitor", "text": "..."}, scope="chat"
             )
-            broadcast_ui_event("typing_stop", {"agent": "progenitor"}, scope="chat")
+            events_stream.broadcast_ui_event("typing_stop", {"agent": "progenitor"}, scope="chat")
 
             events = []
             while not queue.empty():
@@ -419,7 +407,7 @@ class TestTypingIndicatorEvents:
             assert events[1]["envelope"].type == "typing_update"
             assert events[2]["envelope"].type == "typing_stop"
         finally:
-            _ui_stream_subscribers.pop(queue, None)
+            events_stream._ui_stream_subscribers.pop(queue, None)
 
 
 class TestMessageContentTypes:

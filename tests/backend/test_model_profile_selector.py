@@ -12,8 +12,8 @@ from ack_helpers import assert_acknowledged
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app.backend.document_store import PROGENITOR_STATE_PREFIX, InMemoryDocumentStore
-from app.backend.model_profile_routes import create_model_profile_router
+from app.backend.settings.model_profiles import create_model_profile_router
+from app.backend.storage.documents import PROGENITOR_STATE_PREFIX, InMemoryDocumentStore
 
 
 class FakeProviderRepository:
@@ -586,7 +586,7 @@ class TestNotificationSameTransactionDiffConsumption:
     """
 
     def test_profile_notify_survives_snapshot_consumed_by_sibling_document(self):
-        from app.backend.state_reader import StateReader
+        from app.backend.monitoring.state import StateReader
 
         store = InMemoryDocumentStore()
         store.save_document(

@@ -7,8 +7,8 @@ import time
 
 import pytest
 
-from app.backend.document_store import PROGENITOR_STATE_PREFIX, PostgresDocumentStore
-from app.backend.model_profile_routes import _mutate_profile
+from app.backend.settings.model_profiles import _mutate_profile
+from app.backend.storage.documents import PROGENITOR_STATE_PREFIX, PostgresDocumentStore
 from app.progenitor.state.model_profiles import MODEL_PROFILES_DOC_KEY
 
 

@@ -1,7 +1,7 @@
 """Convert an uploaded chat attachment to markdown on demand, via markitdown.
 
 Attachments upload with best-effort text extraction already applied (see
-``app/backend/attachments.py``), so ``/attachments/<file>`` is usually
+``app/backend/attachments/processing.py``), so ``/attachments/<file>`` is usually
 readable directly with the file tools. This tool exists for the cases that
 extraction misses or does poorly -- PDFs, Word docs, spreadsheets,
 presentations -- by running Microsoft's markitdown converter against the

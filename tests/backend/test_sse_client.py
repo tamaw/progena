@@ -29,8 +29,8 @@ from langgraph.graph import START, StateGraph
 from langgraph.graph.message import add_messages
 
 from app.backend.config import ChatServerConfig
-from app.backend.runtime_conversations import RuntimeConversationReader
-from app.backend.sse_client import SSEProgenitorClient
+from app.backend.integrations.runtime import SSEProgenitorClient
+from app.backend.integrations.runtime_history import RuntimeConversationReader
 from app.progenitor.config import RuntimeConfig
 from app.progenitor.runtime.http import ProgenitorHTTPServer
 from app.progenitor.runtime.queues import RuntimeQueues

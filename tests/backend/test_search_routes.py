@@ -9,8 +9,9 @@ from ack_helpers import assert_acknowledged
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-import app.backend.search_routes as routes
-from app.backend.document_store import (
+import app.backend.events.stream as events_stream
+import app.backend.search.routes as routes
+from app.backend.storage.documents import (
     PROGENITOR_STATE_PREFIX,
     InMemoryDocumentStore,
     set_default_document_store,
@@ -23,7 +24,7 @@ def harness(monkeypatch):
     set_default_document_store(store)
     events: list[tuple[str, dict[str, Any]]] = []
     monkeypatch.setattr(
-        routes,
+        events_stream,
         "broadcast_ui_event",
         lambda event_type, payload, **_kw: events.append((event_type, payload)),
     )
@@ -52,7 +53,7 @@ class _FakeStateReader:
         data = doc.payload if doc is not None else {}
         if not isinstance(data, dict):
             return []
-        from app.backend.state_reader import ScheduleItem
+        from app.backend.monitoring.state import ScheduleItem
 
         return [
             ScheduleItem.from_dict({**item, "id": item.get("id") or entry_id})

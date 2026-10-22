@@ -15,15 +15,9 @@ from datetime import UTC, datetime
 import pytest
 from fastapi.testclient import TestClient
 
-from app.backend.document_store import PROGENITOR_STATE_PREFIX, InMemoryDocumentStore
 from app.backend.main import app
-from app.backend.state_reader import (
-    AgentInfo,
-    BacklogItem,
-    BuildInfo,
-    HealthInfo,
-    StateReader,
-)
+from app.backend.monitoring.state import AgentInfo, BacklogItem, BuildInfo, HealthInfo, StateReader
+from app.backend.storage.documents import PROGENITOR_STATE_PREFIX, InMemoryDocumentStore
 
 
 @pytest.fixture

@@ -1,4 +1,4 @@
-"""Direct unit tests for app.backend.chat_sessions.
+"""Direct unit tests for app.backend.chat.service.
 
 These exercise the ``session:`` document read model, atomic patch merge,
 list ordering, and checkpoint-snapshot rendering.
@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 
-from app.backend.chat_sessions import (
+from app.backend.chat.service import (
     ChatPatchRequest,
     _extract_progress_log_from_content,
     delete_session_document,
@@ -17,7 +17,7 @@ from app.backend.chat_sessions import (
     paginate_chat_messages,
     patch_session_document,
 )
-from app.backend.document_store import (
+from app.backend.storage.documents import (
     PROGENITOR_STATE_PREFIX,
     CheckpointThreadSnapshot,
     InMemoryDocumentStore,
@@ -230,7 +230,7 @@ class TestPaginateChatMessages:
         assert paginate_chat_messages([]) == ([], False)
 
     def test_latest_page_by_default(self):
-        from app.backend.chat_sessions import ChatMessage
+        from app.backend.chat.service import ChatMessage
 
         messages = [ChatMessage(id=f"m{i}", role="user", content=str(i)) for i in range(60)]
         page, has_more = paginate_chat_messages(messages, limit=50)
@@ -238,7 +238,7 @@ class TestPaginateChatMessages:
         assert has_more is True
 
     def test_before_message_id(self):
-        from app.backend.chat_sessions import ChatMessage
+        from app.backend.chat.service import ChatMessage
 
         messages = [ChatMessage(id=f"m{i}", role="user", content=str(i)) for i in range(60)]
         page, has_more = paginate_chat_messages(messages, limit=10, before_message_id="m50")
@@ -247,7 +247,7 @@ class TestPaginateChatMessages:
         assert has_more is True
 
     def test_falls_back_to_oldest_when_id_not_found(self):
-        from app.backend.chat_sessions import ChatMessage
+        from app.backend.chat.service import ChatMessage
 
         messages = [ChatMessage(id=f"m{i}", role="user", content=str(i)) for i in range(20)]
         page, has_more = paginate_chat_messages(messages, limit=10, before_message_id="missing")
@@ -285,11 +285,11 @@ class TestExtractProgressLogFromContent:
 class TestStripAttachmentContext:
     def test_strips_attachment_context_marker(self):
         text = f"Hello world{ATTACHMENT_CONTEXT_MARKER}some attachment info"
-        from app.backend.chat_sessions import _strip_attachment_context
+        from app.backend.chat.service import _strip_attachment_context
 
         assert _strip_attachment_context(text) == "Hello world"
 
     def test_returns_original_when_no_marker(self):
-        from app.backend.chat_sessions import _strip_attachment_context
+        from app.backend.chat.service import _strip_attachment_context
 
         assert _strip_attachment_context("Hello world") == "Hello world"

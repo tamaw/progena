@@ -10,12 +10,12 @@ from typing import Any
 import psycopg
 import pytest
 
-from app.backend.document_store import (
+from app.backend.knowledge.indexer import KnowledgeIndexer
+from app.backend.storage.documents import (
     PROGENITOR_STATE_PREFIX,
     InMemoryDocumentStore,
     set_default_document_store,
 )
-from app.backend.knowledge_indexer import KnowledgeIndexer
 from app.progenitor.knowledge.indexer_config import INDEX_STATUS_DOC_KEY
 
 DB_URL = (os.getenv("PROGENITOR_DATABASE_URL") or os.getenv("DATABASE_URL") or "").strip()

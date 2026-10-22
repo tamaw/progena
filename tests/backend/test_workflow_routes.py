@@ -4,9 +4,11 @@ import pytest
 from ack_helpers import assert_acknowledged
 from fastapi.testclient import TestClient
 
-from app.backend.document_events import seed_document_types
-from app.backend.document_store import InMemoryDocumentStore, set_default_document_store
+import app.backend.events.stream as events_stream
+import app.backend.workflows.runtime as workflows_runtime
+from app.backend.events.documents import seed_document_types
 from app.backend.main import app
+from app.backend.storage.documents import InMemoryDocumentStore, set_default_document_store
 
 
 @pytest.fixture
@@ -15,15 +17,15 @@ def workflow_env(monkeypatch):
     set_default_document_store(store)
     seed_document_types(store)
     monkeypatch.setattr(
-        "app.backend.main.configure_default_document_store", lambda *_args, **_kwargs: store
+        "app.backend.storage.documents.configure_default_document_store",
+        lambda *_args, **_kwargs: store,
     )
-    import app.backend.ui_routes as ui_routes
 
-    ui_routes._workflow_executor = None
-    ui_routes._ui_event_replay.clear()
+    workflows_runtime._workflow_executor = None
+    events_stream._ui_event_replay.clear()
     yield store
-    ui_routes._workflow_executor = None
-    ui_routes._ui_event_replay.clear()
+    workflows_runtime._workflow_executor = None
+    events_stream._ui_event_replay.clear()
     set_default_document_store(InMemoryDocumentStore())
 
 
@@ -32,10 +34,9 @@ def _drain(queue):
 
 
 def test_workflow_create_acknowledges_then_emits_canonical_state(workflow_env):
-    import app.backend.ui_routes as ui_routes
 
     queue = asyncio.Queue()
-    ui_routes._ui_stream_subscribers[queue] = None
+    events_stream._ui_stream_subscribers[queue] = None
     try:
         with TestClient(app) as client:
             response = client.post(
@@ -56,11 +57,11 @@ def test_workflow_create_acknowledges_then_emits_canonical_state(workflow_env):
         assert nodes[edge["to"]["node"]]["kind"] == "agent"
         assert edge["from"]["port"] == edge["to"]["port"] == "key"
     finally:
-        ui_routes._ui_stream_subscribers.pop(queue, None)
+        events_stream._ui_stream_subscribers.pop(queue, None)
 
 
 def test_workflow_content_round_trip_keeps_typed_schemas(workflow_env):
-    from app.backend.workflow_service import save_workflow_definition
+    from app.backend.workflows.service import save_workflow_definition
     from app.progenitor.workflows import default_workflow_definition
 
     payload = default_workflow_definition(title="Typed schemas")

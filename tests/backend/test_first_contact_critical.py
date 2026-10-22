@@ -21,16 +21,11 @@ from types import SimpleNamespace
 import pytest
 from fastapi.testclient import TestClient
 
-from app.backend.document_store import PROGENITOR_STATE_PREFIX, InMemoryDocumentStore
+import app.backend.events.stream as events_stream
+import app.backend.lifecycle.state as lifecycle_state
 from app.backend.main import app
-from app.backend.state_reader import (
-    HealthInfo,
-    StateReader,
-)
-from app.backend.ui_routes import (
-    _ui_stream_subscribers,
-    broadcast_ui_event,
-)
+from app.backend.monitoring.state import HealthInfo, StateReader
+from app.backend.storage.documents import PROGENITOR_STATE_PREFIX, InMemoryDocumentStore
 
 
 @pytest.fixture
@@ -254,16 +249,16 @@ class TestRealTimeFeedbackConsistency:
 
     def test_broadcast_event_reaches_subscribers(self):
         """Events must be broadcast to all subscribers - aliens might be listening."""
-        _ui_stream_subscribers.clear()
+        events_stream._ui_stream_subscribers.clear()
 
         # Create multiple subscriber queues (like multiple alien terminals)
         queues = [asyncio.Queue() for _ in range(5)]
         for q in queues:
-            _ui_stream_subscribers[q] = None
+            events_stream._ui_stream_subscribers[q] = None
 
         try:
             # Broadcast an important message
-            broadcast_ui_event(
+            events_stream.broadcast_ui_event(
                 "first_contact",
                 {
                     "status": "initiated",
@@ -283,13 +278,13 @@ class TestRealTimeFeedbackConsistency:
                 assert envelope.payload["status"] == "initiated"
         finally:
             for q in queues:
-                _ui_stream_subscribers.pop(q, None)
+                events_stream._ui_stream_subscribers.pop(q, None)
 
     def test_multiple_broadcasts_in_sequence(self):
         """Multiple events must arrive in order."""
-        _ui_stream_subscribers.clear()
+        events_stream._ui_stream_subscribers.clear()
         queue = asyncio.Queue()
-        _ui_stream_subscribers[queue] = None
+        events_stream._ui_stream_subscribers[queue] = None
 
         try:
             events = [
@@ -300,7 +295,7 @@ class TestRealTimeFeedbackConsistency:
             ]
 
             for event_type, data in events:
-                broadcast_ui_event(event_type, data, scope="chat")
+                events_stream.broadcast_ui_event(event_type, data, scope="chat")
 
             # Verify all events arrived in order
             received = []
@@ -313,7 +308,7 @@ class TestRealTimeFeedbackConsistency:
             assert received[2]["envelope"].type == "signal_decoded"
             assert received[3]["envelope"].type == "response_sent"
         finally:
-            _ui_stream_subscribers.pop(queue, None)
+            events_stream._ui_stream_subscribers.pop(queue, None)
 
     def test_status_changes_detected(self, complete_state_files):
         """Status changes must be detected between reads."""
@@ -528,17 +523,16 @@ class TestCriticalChatFlow:
 
     def test_responses_endpoint_acknowledges_without_generated_text(self, client):
         """Foreground generation data is stream-only, including on the critical path."""
-        import app.backend.main as backend_main
-        from app.backend.models import AgentResponse
+        from app.backend.chat.models import AgentResponse
 
-        original_client = backend_main.client
+        original_client = lifecycle_state.client
         request_id = "first-contact-generation"
 
         class _MockClient:
             async def send_message(self, *args, **kwargs):
                 return AgentResponse(response="Peace", reasoning=None, reasoning_tokens=None)
 
-        backend_main.client = _MockClient()
+        lifecycle_state.client = _MockClient()
         try:
             response = client.post(
                 "/api/ui/responses",
@@ -550,7 +544,7 @@ class TestCriticalChatFlow:
                 headers={"X-Request-ID": request_id},
             )
         finally:
-            backend_main.client = original_client
+            lifecycle_state.client = original_client
 
         assert response.status_code == 202
         assert response.json() == {

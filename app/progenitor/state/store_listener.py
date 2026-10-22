@@ -19,7 +19,7 @@ from psycopg import sql
 logger = logging.getLogger(__name__)
 
 # Must match the channel of the trigger installed by the backend document store
-# (app/backend/document_store.py STORE_CHANGE_CHANNEL).
+# (app/backend/storage/documents.py STORE_CHANGE_CHANNEL).
 STORE_CHANGE_CHANNEL = "store_changed"
 
 

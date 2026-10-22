@@ -6,15 +6,18 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from app.backend.document_events import seed_document_types
-from app.backend.document_store import (
+import app.backend.lifecycle.state as lifecycle_state
+import app.backend.lifecycle.watchers as lifecycle_watchers
+import app.backend.workflows.runtime as workflows_runtime
+from app.backend.chat.models import AgentResponse
+from app.backend.events.documents import seed_document_types
+from app.backend.monitoring.state import StateReader
+from app.backend.storage.documents import (
     PROGENITOR_STATE_PREFIX,
     InMemoryDocumentStore,
     set_default_document_store,
 )
-from app.backend.models import AgentResponse
-from app.backend.state_reader import StateReader
-from app.backend.workflow_service import list_workflow_runs, save_workflow_definition
+from app.backend.workflows.service import list_workflow_runs, save_workflow_definition
 from app.progenitor.workflows import (
     default_workflow_definition,
     workflow_invoke_request_key,
@@ -27,30 +30,30 @@ def workflow_env(monkeypatch):
     set_default_document_store(store)
     seed_document_types(store)
     monkeypatch.setattr(
-        "app.backend.main.configure_default_document_store", lambda *_a, **_k: store
+        "app.backend.storage.documents.configure_default_document_store", lambda *_a, **_k: store
     )
     state_reader = StateReader(document_store=store)
-    monkeypatch.setattr("app.backend.ui_routes.get_state_reader", lambda: state_reader)
-    import app.backend.ui_routes as ui_routes
+    monkeypatch.setattr("app.backend.monitoring.state.get_state_reader", lambda: state_reader)
 
-    ui_routes._workflow_executor = None
-    ui_routes._workflow_invoke_watch_callback = None
+    workflows_runtime._workflow_executor = None
+    lifecycle_watchers._workflow_invoke_watch_callback = None
     yield store
-    ui_routes._workflow_executor = None
-    ui_routes._workflow_invoke_watch_callback = None
+    workflows_runtime._workflow_executor = None
+    lifecycle_watchers._workflow_invoke_watch_callback = None
     set_default_document_store(InMemoryDocumentStore())
 
 
 @pytest.fixture
 def backend_client(monkeypatch):
-    import app.backend.main as backend_main
 
     mock_client = AsyncMock()
     mock_client.send_message.return_value = AgentResponse(
         response="workflow response", reasoning=None, reasoning_tokens=None
     )
-    monkeypatch.setattr("app.backend.main.get_sse_client", lambda *_a, **_k: mock_client)
-    backend_main.client = mock_client
+    monkeypatch.setattr(
+        "app.backend.integrations.runtime.get_sse_client", lambda *_a, **_k: mock_client
+    )
+    lifecycle_state.client = mock_client
     return mock_client
 
 
@@ -99,9 +102,7 @@ async def test_invoke_request_runs_the_connected_agent_with_typed_trigger_ports(
         store, "request-1", workflow_id, input={"key": "kanban_card:a", "id": "a"}
     )
 
-    from app.backend.ui_routes import _reconcile_workflow_invoke_requests
-
-    await _reconcile_workflow_invoke_requests(key)
+    await workflows_runtime._reconcile_workflow_invoke_requests(key)
     run = await _wait_for_completed_run(store, workflow_id)
     assert run["status"] == "completed", run["last_error"]
     assert run["source"] == "progenitor"
@@ -122,9 +123,7 @@ async def test_invoke_request_with_input_outside_trigger_ports_is_refused(
     save_workflow_definition(store, default_workflow_definition(workflow_id=workflow_id))
     key = _write_invoke_request(store, "request-bad", workflow_id, input={"key": 42})
 
-    from app.backend.ui_routes import _reconcile_workflow_invoke_requests
-
-    await _reconcile_workflow_invoke_requests(key)
+    await workflows_runtime._reconcile_workflow_invoke_requests(key)
     assert list_workflow_runs(store, workflow_id=workflow_id) == []
     assert store.get_document(PROGENITOR_STATE_PREFIX, key, None) is None
 
@@ -135,9 +134,7 @@ async def test_invoke_request_rejects_cycle(workflow_env, backend_client):
     save_workflow_definition(store, default_workflow_definition(workflow_id=workflow_id))
     key = _write_invoke_request(store, "request-cycle", workflow_id, ancestry=[workflow_id])
 
-    from app.backend.ui_routes import _reconcile_workflow_invoke_requests
-
-    await _reconcile_workflow_invoke_requests(key)
+    await workflows_runtime._reconcile_workflow_invoke_requests(key)
     assert list_workflow_runs(store, workflow_id=workflow_id) == []
     assert store.get_document(PROGENITOR_STATE_PREFIX, key, None) is None
 
@@ -153,9 +150,7 @@ async def test_invoke_request_rejects_max_depth(workflow_env, backend_client):
         ancestry=["wf_a", "wf_b", "wf_c"],
     )
 
-    from app.backend.ui_routes import _reconcile_workflow_invoke_requests
-
-    await _reconcile_workflow_invoke_requests(key)
+    await workflows_runtime._reconcile_workflow_invoke_requests(key)
     assert len([*list_workflow_runs(store, workflow_id=workflow_id)]) == 0
     assert store.get_document(PROGENITOR_STATE_PREFIX, key, None) is None
 
@@ -165,9 +160,7 @@ async def test_malformed_invoke_request_is_dropped(workflow_env, backend_client)
     key = workflow_invoke_request_key("bad")
     store.save_document(PROGENITOR_STATE_PREFIX, key, {"request_id": "bad"})
 
-    from app.backend.ui_routes import _reconcile_workflow_invoke_requests
-
-    await _reconcile_workflow_invoke_requests(key)
+    await workflows_runtime._reconcile_workflow_invoke_requests(key)
     assert store.get_document(PROGENITOR_STATE_PREFIX, key, None) is None
 
 
@@ -181,11 +174,9 @@ async def test_failed_invoke_request_is_retained_for_retry(workflow_env, monkeyp
             raise RuntimeError("temporary executor failure")
 
     monkeypatch.setattr(
-        "app.backend.ui_routes.get_workflow_executor",
+        "app.backend.workflows.runtime.get_workflow_executor",
         lambda: FailingExecutor(),
     )
 
-    from app.backend.ui_routes import _reconcile_workflow_invoke_requests
-
-    await _reconcile_workflow_invoke_requests(key)
+    await workflows_runtime._reconcile_workflow_invoke_requests(key)
     assert store.get_document(PROGENITOR_STATE_PREFIX, key, None) is not None

@@ -13,11 +13,8 @@ from ack_helpers import assert_acknowledged
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 
-from app.backend.agent_catalog_routes import (
-    create_agent_profile_router,
-    validate_agent_graph,
-)
-from app.backend.document_store import PROGENITOR_STATE_PREFIX, InMemoryDocumentStore
+from app.backend.agents.routes import create_agent_profile_router, validate_agent_graph
+from app.backend.storage.documents import PROGENITOR_STATE_PREFIX, InMemoryDocumentStore
 from app.progenitor.policies import ExecutionPolicy
 
 _DEFAULT_GRAPH = {
@@ -144,7 +141,7 @@ def harness(monkeypatch):
     # The list/detail routes read A2A/ACP agents through from Progenitor's
     # registry; keep tests hermetic by returning no remote agent profiles by
     # default.
-    import app.backend.agent_catalog_routes as routes
+    import app.backend.agents.routes as routes
 
     monkeypatch.setattr(routes, "a2a_profiles_from_registry", lambda: [])
     monkeypatch.setattr(routes, "acp_profiles_from_registry", lambda: [])
@@ -316,7 +313,7 @@ def _a2a_profile(agent_id: str = "a2a-example-agent") -> dict[str, Any]:
 
 def test_list_includes_protocol_agents_from_registry(harness, monkeypatch):
     client, events = harness
-    import app.backend.agent_catalog_routes as routes
+    import app.backend.agents.routes as routes
 
     monkeypatch.setattr(routes, "a2a_profiles_from_registry", lambda: [_a2a_profile()])
     response = client.get("/api/ui/agent-profiles")
@@ -333,7 +330,7 @@ def test_list_includes_protocol_agents_from_registry(harness, monkeypatch):
 
 def test_detail_a2a_reads_through_registry(harness, monkeypatch):
     client, events = harness
-    import app.backend.agent_catalog_routes as routes
+    import app.backend.agents.routes as routes
 
     monkeypatch.setattr(routes, "a2a_profiles_from_registry", lambda: [_a2a_profile()])
     response = client.get("/api/ui/agent-profiles/a2a-example-agent?request_id=r2")
@@ -359,7 +356,7 @@ def test_graph_update_rejected_for_a2a(harness):
 
 def test_runs_route_publishes_run_summaries():
     """Two distinct routine-run checkpoint threads surface as two runs, newest first."""
-    from app.backend.document_store import CheckpointThreadSnapshot
+    from app.backend.storage.documents import CheckpointThreadSnapshot
 
     doc_store = InMemoryDocumentStore()
     doc_store.save_document(
@@ -426,7 +423,7 @@ def test_runs_route_publishes_run_summaries():
 
 def test_runs_route_pages_backward_with_before_cursor():
     """limit + before page backward through many runs without OFFSET drift."""
-    from app.backend.document_store import CheckpointThreadSnapshot
+    from app.backend.storage.documents import CheckpointThreadSnapshot
 
     doc_store = InMemoryDocumentStore()
     doc_store.save_document(
@@ -641,7 +638,7 @@ def test_run_state_remains_readable_without_live_catalog_entry(harness):
 
 def test_list_without_editable_store_publishes_registry_profiles(monkeypatch):
     events: list[tuple[str, dict[str, Any]]] = []
-    import app.backend.agent_catalog_routes as routes
+    import app.backend.agents.routes as routes
 
     monkeypatch.setattr(routes, "a2a_profiles_from_registry", lambda: [_a2a_profile()])
     monkeypatch.setattr(routes, "acp_profiles_from_registry", lambda: [])
@@ -672,7 +669,7 @@ class TestBroadcastAgentProfilesSnapshot:
     """The standalone broadcast fn the registry-document watcher calls directly."""
 
     async def test_publishes_snapshot(self, monkeypatch):
-        import app.backend.agent_catalog_routes as routes
+        import app.backend.agents.routes as routes
 
         monkeypatch.setattr(routes, "a2a_profiles_from_registry", lambda: [])
         monkeypatch.setattr(routes, "acp_profiles_from_registry", lambda: [])
@@ -691,7 +688,7 @@ class TestBroadcastAgentProfilesSnapshot:
         assert events[-1][0] == "agents.snapshot"
 
     async def test_noop_when_store_unavailable(self):
-        import app.backend.agent_catalog_routes as routes
+        import app.backend.agents.routes as routes
 
         events: list[tuple[str, dict[str, Any]]] = []
         response = await routes.broadcast_agent_profiles_snapshot(
@@ -804,8 +801,8 @@ class TestValidateAgentGraph:
 def test_approval_queues_native_answer_and_rejects_duplicate(harness, monkeypatch, answer):
     from unittest.mock import AsyncMock
 
-    import app.backend.routine_events as events_module
-    from app.backend.document_store import PROGENITOR_STATE_PREFIX
+    import app.backend.workflows.events as events_module
+    from app.backend.storage.documents import PROGENITOR_STATE_PREFIX
     from app.progenitor.routines.approvals import decision_key
 
     client, events = harness
@@ -856,8 +853,8 @@ def test_approval_queues_native_answer_and_rejects_duplicate(harness, monkeypatc
 def test_invalid_approval_does_not_enqueue(harness, monkeypatch, thread, interrupt, answer, status):
     from unittest.mock import AsyncMock
 
-    import app.backend.routine_events as events_module
-    from app.backend.document_store import PROGENITOR_STATE_PREFIX
+    import app.backend.workflows.events as events_module
+    from app.backend.storage.documents import PROGENITOR_STATE_PREFIX
 
     client, _ = harness
     monkeypatch.setattr(

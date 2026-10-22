@@ -33,10 +33,28 @@ app/
 │   └── main.py   # Runtime entry point
 ├── backend/      # FastAPI API and UI data backend
 │   ├── main.py   # HTTP entry point
-│   ├── attachments.py
-│   ├── session.py
-│   ├── state_reader.py
-│   └── ui_routes.py
+│   ├── http/         # Shared API contracts, middleware and router assembly
+│   ├── events/       # Canonical SSE transport and durable event dispatch
+│   ├── storage/      # Shared Postgres document access
+│   ├── lifecycle/    # Startup, shutdown and process state
+│   ├── chat/         # Chat/read-model/response endpoints and session handling
+│   ├── attachments/  # Uploads, text extraction and attachment blobs
+│   ├── agents/       # Agent catalog and live routine reconciliation
+│   ├── instructions/
+│   ├── knowledge/
+│   ├── plugins/      # Plugins and marketplaces
+│   ├── repositories/
+│   ├── modules/
+│   ├── workflows/    # Execution, cron, approvals and ACP supervision
+│   ├── tasks/        # Kanban cards, content and activity
+│   ├── schedules/    # Schedules and event widgets
+│   ├── settings/     # Preferences, providers, profiles, policies and MCP
+│   ├── insights/
+│   ├── inbox/
+│   ├── alerts/
+│   ├── search/
+│   ├── monitoring/   # State snapshots, logs and metrics
+│   └── integrations/ # Runtime clients and Telegram
 └── frontend/     # React/Vite web client
     ├── src/pages/
     ├── src/components/

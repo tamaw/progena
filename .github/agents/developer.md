@@ -78,10 +78,10 @@ class MyModel(BaseModel):
 5. Write tests in `tests/progenitor/test_nodes.py`
 
 #### Adding API Endpoint
-1. Add route in `app/backend/main.py` or `app/backend/routes/`
+1. Add the route in its feature package under `app/backend/<feature>/routes.py`
 2. Create Pydantic models for request/response
 3. Add tests in `tests/backend/`
-4. Update OpenAPI spec if needed
+4. Register its router in `app/backend/http/router.py` or `app/backend/main.py` and verify the API contract
 
 #### Adding React Component
 1. Create component in `app/frontend/src/components/`

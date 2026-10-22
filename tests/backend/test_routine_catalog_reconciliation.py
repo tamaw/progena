@@ -12,15 +12,19 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app.backend import ui_routes
-from app.backend.agent_catalog_routes import create_agent_profile_router
-from app.backend.document_store import (
+import app.backend.agents.reconciliation as agents_reconciliation
+import app.backend.agents.store as agents_store
+import app.backend.events.stream as events_stream
+import app.backend.monitoring.status as monitoring_status
+import app.backend.storage.documents as storage_documents
+from app.backend.agents.routes import create_agent_profile_router
+from app.backend.monitoring.state import StateReader
+from app.backend.storage.documents import (
     PROGENITOR_STATE_PREFIX,
     CheckpointThreadSnapshot,
     InMemoryDocumentStore,
     StoreChangeListener,
 )
-from app.backend.state_reader import StateReader
 
 
 class Catalog:
@@ -79,14 +83,14 @@ class Catalog:
 
 def test_deleted_event_is_accepted_by_canonical_transport(monkeypatch):
     queue = asyncio.Queue()
-    monkeypatch.setattr(ui_routes, "_ui_stream_subscribers", {queue: None})
-    monkeypatch.setattr(ui_routes, "_ui_event_replay", [])
-    envelope = ui_routes.broadcast_ui_event(
+    monkeypatch.setattr(events_stream, "_ui_stream_subscribers", {queue: None})
+    monkeypatch.setattr(events_stream, "_ui_event_replay", [])
+    envelope = events_stream.broadcast_ui_event(
         "agent.deleted", {"agent_id": "gone"}, request_id="delete-request"
     )
     assert envelope.type == "agent.deleted"
     assert envelope.payload == {"agent_id": "gone", "request_id": "delete-request"}
-    assert ui_routes._ui_event_replay == [envelope]
+    assert events_stream._ui_event_replay == [envelope]
     assert queue.get_nowait() == {"type": "ui.event", "envelope": envelope}
 
 
@@ -107,26 +111,26 @@ def harness(monkeypatch):
     )
     catalog = Catalog(documents)
     events = []
-    roster = AsyncMock(wraps=ui_routes._broadcast_agent_profiles_safe)
-    monkeypatch.setattr(ui_routes, "get_agent_store", lambda: catalog)
-    monkeypatch.setattr(ui_routes, "get_default_document_store", lambda: documents)
+    roster = AsyncMock(wraps=monitoring_status._broadcast_agent_profiles_safe)
+    monkeypatch.setattr(agents_store, "get_agent_store", lambda: catalog)
+    monkeypatch.setattr(storage_documents, "get_default_document_store", lambda: documents)
     monkeypatch.setattr(
-        ui_routes,
+        events_stream,
         "broadcast_ui_event",
         lambda kind, payload, **kwargs: events.append((kind, payload)),
     )
-    monkeypatch.setattr(ui_routes, "_broadcast_agent_profiles_safe", roster)
+    monkeypatch.setattr(monitoring_status, "_broadcast_agent_profiles_safe", roster)
     reader = StateReader(document_store=documents)
     # Routine-only changes do not affect the coarse state diff.
     snapshot = reader.get_snapshot()
     reader._last_snapshot = snapshot
     monkeypatch.setattr(reader, "get_snapshot", lambda: snapshot)
-    reader.add_watcher(ui_routes._queue_routine_agent_reconciliation)
+    reader.add_watcher(agents_reconciliation._queue_routine_agent_reconciliation)
     return documents, catalog, events, roster, reader
 
 
 async def drain_reconciliation():
-    tasks = list(ui_routes._active_routine_agent_tasks)
+    tasks = list(agents_reconciliation._active_routine_agent_tasks)
     if tasks:
         await asyncio.gather(*tasks)
 

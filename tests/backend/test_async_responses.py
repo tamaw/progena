@@ -13,8 +13,12 @@ import pytest
 import uvicorn
 from fastapi.testclient import TestClient
 
+import app.backend.chat.responses as chat_responses
+import app.backend.events.stream as events_stream
+import app.backend.http.middleware as http_middleware
+import app.backend.lifecycle.state as lifecycle_state
+from app.backend.chat.streaming import reset_stop_flag
 from app.backend.main import app
-from app.backend.streaming import reset_stop_flag
 
 
 @pytest.fixture
@@ -34,9 +38,8 @@ def reset_stop_flag_fixture():
 @contextmanager
 def _live_backend() -> Iterator[str]:
     """Run the ASGI app on loopback so SSE frames are not transport-buffered."""
-    from app.backend import ui_routes
 
-    ui_routes._sse_shutdown_event = None
+    events_stream._sse_shutdown_event = None
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
         probe.bind(("127.0.0.1", 0))
         host, port = probe.getsockname()
@@ -57,7 +60,7 @@ def _live_backend() -> Iterator[str]:
     finally:
         server.should_exit = True
         thread.join(timeout=5)
-        ui_routes._sse_shutdown_event = None
+        events_stream._sse_shutdown_event = None
         assert not thread.is_alive(), "Uvicorn did not stop"
 
 
@@ -101,11 +104,9 @@ class TestAsyncResponseHandling:
         self, client, monkeypatch
     ):
         """A rejected generation request neither acknowledges nor publishes success."""
-        from app.backend import main as backend_main
-        from app.backend import ui_routes
 
-        event_start = len(ui_routes._ui_event_replay)
-        monkeypatch.setattr(backend_main, "client", None)
+        event_start = len(events_stream._ui_event_replay)
+        monkeypatch.setattr(lifecycle_state, "client", None)
         response = client.post(
             "/api/ui/responses",
             json={"model": "progenitor-v1", "input": "Hello", "stream": False},
@@ -115,15 +116,14 @@ class TestAsyncResponseHandling:
         assert response.status_code == 503
         assert not any(
             event.payload.get("request_id") == "rejected-generation"
-            for event in ui_routes._ui_event_replay[event_start:]
+            for event in events_stream._ui_event_replay[event_start:]
         )
 
     def test_missing_or_expired_response_stream_returns_404_before_sse_commit(self):
         """Unavailable response streams must fail as HTTP 404s, not half-open SSE responses."""
-        import app.backend.main as backend_main
 
         expired_request_id = "expired-response-stream"
-        expired_state = backend_main._ensure_response_stream(
+        expired_state = chat_responses._ensure_response_stream(
             expired_request_id, "resp-expired", "thread-expired", "progenitor-v1"
         )
         expired_state.expires_at = time.time() - 1
@@ -138,7 +138,7 @@ class TestAsyncResponseHandling:
                 )
                 expired_response = live_client.get(f"/api/ui/responses/{expired_request_id}/stream")
         finally:
-            backend_main._response_streams.pop(expired_request_id, None)
+            chat_responses._response_streams.pop(expired_request_id, None)
 
         for response in (missing_response, expired_response):
             assert response.status_code == 404
@@ -146,14 +146,13 @@ class TestAsyncResponseHandling:
             assert response.headers["content-type"].startswith("application/json")
             assert response.json() == {"detail": "Unknown response stream"}
 
-        assert expired_request_id not in backend_main._response_streams
+        assert expired_request_id not in chat_responses._response_streams
 
     def test_terminal_response_stream_without_frames_closes_cleanly_with_sse_headers(self):
         """A terminal request with no replayable content should return SSE headers and EOF immediately."""
-        import app.backend.main as backend_main
 
         request_id = "terminal-empty-response-stream"
-        state = backend_main._ensure_response_stream(
+        state = chat_responses._ensure_response_stream(
             request_id, "resp-empty", "thread-empty", "progenitor-v1"
         )
         state.terminal_reached = True
@@ -168,7 +167,7 @@ class TestAsyncResponseHandling:
             ):
                 response = live_client.get(f"/api/ui/responses/{request_id}/stream")
         finally:
-            backend_main._response_streams.pop(request_id, None)
+            chat_responses._response_streams.pop(request_id, None)
 
         assert response.status_code == 200
         assert response.headers["content-type"].startswith("text/event-stream")
@@ -179,7 +178,6 @@ class TestAsyncResponseHandling:
 
     def test_streaming_responses_use_session_thread_id(self, monkeypatch):
         """Canonical SSE carries lifecycle while its response stream carries text deltas."""
-        import app.backend.main as backend_main
 
         captured: dict[str, object] = {}
         request_id = "dd8db5b9-7ec6-4ea8-b481-7a2a3ef13a5d"
@@ -197,7 +195,7 @@ class TestAsyncResponseHandling:
                 yield {"type": "stream_chunk", "content": "Hello"}
                 yield {"type": "stream_chunk", "content": " world"}
 
-        monkeypatch.setattr(backend_main, "client", _MockClient())
+        monkeypatch.setattr(lifecycle_state, "client", _MockClient())
         with _live_backend() as base_url, httpx.Client(base_url=base_url, timeout=5) as live_client:
             live_client.cookies.set("progenitor_session", "sess_thread_abc")
             with live_client.stream("GET", "/api/ui/stream") as canonical_stream:
@@ -262,7 +260,6 @@ class TestAsyncResponseHandling:
         self, monkeypatch
     ):
         """Dedicated frames preserve runtime timing while canonical SSE gets only terminal state."""
-        import app.backend.main as backend_main
 
         request_id = "runtime-timing-request"
         published: list[tuple[str, dict[str, object]]] = []
@@ -287,16 +284,16 @@ class TestAsyncResponseHandling:
         def record(event_type: str, payload: dict[str, object], **_kwargs: object) -> None:
             published.append((event_type, payload))
 
-        state = backend_main._ensure_response_stream(
+        state = chat_responses._ensure_response_stream(
             request_id,
             "response-runtime-timing",
             "thread-runtime-timing",
             "progenitor-v1",
         )
-        monkeypatch.setattr(backend_main, "client", _MockClient())
-        monkeypatch.setattr(backend_main, "broadcast_ui_event", record)
+        monkeypatch.setattr(lifecycle_state, "client", _MockClient())
+        monkeypatch.setattr(events_stream, "broadcast_ui_event", record)
         try:
-            await backend_main._run_response_event_stream(
+            await chat_responses._run_response_event_stream(
                 "hi",
                 "progenitor-v1",
                 request_id,
@@ -304,7 +301,7 @@ class TestAsyncResponseHandling:
                 "thread-runtime-timing",
             )
         finally:
-            backend_main._response_streams.pop(request_id, None)
+            chat_responses._response_streams.pop(request_id, None)
 
         assert [event_type for event_type, _ in published] == ["chat.response.completed"]
         assert [frame.event_type for frame in state.frames] == [
@@ -334,7 +331,6 @@ class TestAsyncResponseHandling:
 
     def test_streaming_response_forwards_structured_stream_events(self, monkeypatch):
         """Dedicated SSE preserves structured events and their ordering relative to text."""
-        import app.backend.main as backend_main
 
         request_id = "3d1a6c1e-59cb-45cf-88e2-b6f5f7f1a001"
         image_block = {
@@ -376,7 +372,7 @@ class TestAsyncResponseHandling:
                 }
                 yield {"type": "stream_chunk", "content": "done"}
 
-        monkeypatch.setattr(backend_main, "client", _MockClient())
+        monkeypatch.setattr(lifecycle_state, "client", _MockClient())
         with (
             _live_backend() as base_url,
             httpx.Client(base_url=base_url, timeout=5) as live_client,
@@ -434,23 +430,22 @@ class TestAsyncResponseHandling:
 
     def test_response_stream_replays_only_frames_after_cursor(self):
         """A reconnect receives only response-content frames newer than its cursor."""
-        import app.backend.main as backend_main
 
         request_id = "replay-response-request"
-        state = backend_main._ensure_response_stream(
+        state = chat_responses._ensure_response_stream(
             request_id, "resp-replay", "thread-replay", "progenitor-v1"
         )
-        first = backend_main._append_response_stream_frame(
+        first = chat_responses._append_response_stream_frame(
             state,
             "chat.response.delta",
             {"request_id": request_id, "delta": "first"},
         )
-        backend_main._append_response_stream_frame(
+        chat_responses._append_response_stream_frame(
             state,
             "chat.response.event",
             {"request_id": request_id, "event_type": "tool_start", "content": "work"},
         )
-        backend_main._append_response_stream_frame(
+        chat_responses._append_response_stream_frame(
             state,
             "chat.response.delta",
             {"request_id": request_id, "delta": "last"},
@@ -469,7 +464,7 @@ class TestAsyncResponseHandling:
                 replayed_frames = [_next_response_sse_frame(response_lines) for _ in range(2)]
                 assert list(response_lines) == []
         finally:
-            backend_main._response_streams.pop(request_id, None)
+            chat_responses._response_streams.pop(request_id, None)
 
         assert [event_name for event_name, _, _ in replayed_frames] == [
             "chat.response.event",
@@ -486,13 +481,12 @@ class TestAsyncResponseHandling:
 
     def test_response_stream_resyncs_once_for_invalid_or_expired_cursor(self, monkeypatch):
         """Unrecoverable cursors surface one resync frame instead of partial content."""
-        import app.backend.main as backend_main
 
         invalid_request_id = "invalid-cursor-request"
-        invalid_state = backend_main._ensure_response_stream(
+        invalid_state = chat_responses._ensure_response_stream(
             invalid_request_id, "resp-invalid", "thread-invalid", "progenitor-v1"
         )
-        backend_main._append_response_stream_frame(
+        chat_responses._append_response_stream_frame(
             invalid_state,
             "chat.response.delta",
             {"request_id": invalid_request_id, "delta": "must-not-replay"},
@@ -500,12 +494,12 @@ class TestAsyncResponseHandling:
         invalid_state.terminal_reached = True
 
         expired_request_id = "expired-cursor-request"
-        monkeypatch.setattr(backend_main, "RESPONSE_STREAM_REPLAY_LIMIT", 2)
-        expired_state = backend_main._ensure_response_stream(
+        monkeypatch.setattr(chat_responses, "RESPONSE_STREAM_REPLAY_LIMIT", 2)
+        expired_state = chat_responses._ensure_response_stream(
             expired_request_id, "resp-expired", "thread-expired", "progenitor-v1"
         )
         for content in ("discarded", "retained-one", "retained-two"):
-            backend_main._append_response_stream_frame(
+            chat_responses._append_response_stream_frame(
                 expired_state,
                 "chat.response.delta",
                 {"request_id": expired_request_id, "delta": content},
@@ -534,8 +528,8 @@ class TestAsyncResponseHandling:
                     expired_frame = _next_response_sse_frame(expired_lines)
                     assert list(expired_lines) == []
         finally:
-            backend_main._response_streams.pop(invalid_request_id, None)
-            backend_main._response_streams.pop(expired_request_id, None)
+            chat_responses._response_streams.pop(invalid_request_id, None)
+            chat_responses._response_streams.pop(expired_request_id, None)
 
         assert invalid_frame == (
             "chat.response.resync_required",
@@ -550,18 +544,17 @@ class TestAsyncResponseHandling:
 
     def test_last_event_id_header_takes_precedence_over_after_query(self):
         """When both cursors are present, the browser's Last-Event-ID must win over the query string."""
-        import app.backend.main as backend_main
 
         request_id = "last-event-id-precedence"
-        state = backend_main._ensure_response_stream(
+        state = chat_responses._ensure_response_stream(
             request_id, "resp-precedence", "thread-precedence", "progenitor-v1"
         )
-        first = backend_main._append_response_stream_frame(
+        first = chat_responses._append_response_stream_frame(
             state,
             "chat.response.delta",
             {"request_id": request_id, "delta": "first"},
         )
-        backend_main._append_response_stream_frame(
+        chat_responses._append_response_stream_frame(
             state,
             "chat.response.delta",
             {"request_id": request_id, "delta": "second"},
@@ -583,7 +576,7 @@ class TestAsyncResponseHandling:
                 frame = _next_response_sse_frame(response_lines)
                 assert list(response_lines) == []
         finally:
-            backend_main._response_streams.pop(request_id, None)
+            chat_responses._response_streams.pop(request_id, None)
 
         assert frame == (
             "chat.response.resync_required",
@@ -593,7 +586,6 @@ class TestAsyncResponseHandling:
 
     def test_failed_generation_emits_post_acknowledgement_causal_event(self, monkeypatch):
         """A failed generation keeps partial text dedicated and failure canonical."""
-        import app.backend.main as backend_main
 
         request_id = "e234a82e-00c1-4a96-bebe-652485775d92"
 
@@ -602,7 +594,7 @@ class TestAsyncResponseHandling:
                 yield {"type": "stream_chunk", "content": "partial"}
                 raise RuntimeError("stream exploded")
 
-        monkeypatch.setattr(backend_main, "client", _FailingClient())
+        monkeypatch.setattr(lifecycle_state, "client", _FailingClient())
         with (
             _live_backend() as base_url,
             httpx.Client(base_url=base_url, timeout=5) as live_client,
@@ -645,8 +637,6 @@ class TestAsyncResponseHandling:
         self, monkeypatch
     ):
         """A clean iterator exit after cancellation remains terminally cancelled."""
-        import app.backend.main as backend_main
-        from app.backend import ui_routes
 
         target_request_id = "target-request-cancel-race"
         response_id = "response-cancel-race"
@@ -660,12 +650,12 @@ class TestAsyncResponseHandling:
                 if False:
                     yield {}
 
-        event_start = len(ui_routes._ui_event_replay)
-        monkeypatch.setattr(backend_main, "client", _MockClient())
-        backend_main._active_response_streams[target_request_id] = cancel_event
+        event_start = len(events_stream._ui_event_replay)
+        monkeypatch.setattr(lifecycle_state, "client", _MockClient())
+        chat_responses._active_response_streams[target_request_id] = cancel_event
         try:
             runner = asyncio.create_task(
-                backend_main._run_response_event_stream(
+                chat_responses._run_response_event_stream(
                     "cancelled while streaming",
                     "progenitor-v1",
                     target_request_id,
@@ -678,11 +668,11 @@ class TestAsyncResponseHandling:
             await runner
             emitted = [
                 event
-                for event in ui_routes._ui_event_replay[event_start:]
+                for event in events_stream._ui_event_replay[event_start:]
                 if event.payload.get("request_id") == target_request_id
             ]
         finally:
-            backend_main._active_response_streams.pop(target_request_id, None)
+            chat_responses._active_response_streams.pop(target_request_id, None)
 
         event_types = [event.type for event in emitted]
         assert event_types == ["chat.response.cancelled"]
@@ -698,8 +688,6 @@ class TestAsyncResponseHandling:
     @pytest.mark.asyncio
     async def test_cancel_response_sets_active_stream_event(self, client):
         """A cancel acknowledgement differs from the target runner's terminal cancellation."""
-        import app.backend.main as backend_main
-        from app.backend import ui_routes
 
         cancel_event = asyncio.Event()
         captured: dict[str, object] = {}
@@ -715,16 +703,16 @@ class TestAsyncResponseHandling:
                 if False:
                     yield {}
 
-        event_start = len(ui_routes._ui_event_replay)
-        previous_client = backend_main.client
-        backend_main.client = _MockClient()
-        backend_main._active_response_streams[target_request_id] = cancel_event
+        event_start = len(events_stream._ui_event_replay)
+        previous_client = lifecycle_state.client
+        lifecycle_state.client = _MockClient()
+        chat_responses._active_response_streams[target_request_id] = cancel_event
         try:
             response = client.put(
                 f"/api/ui/responses/{target_request_id}/cancel",
                 headers={"X-Request-ID": cancel_request_id},
             )
-            await backend_main._run_response_event_stream(
+            await chat_responses._run_response_event_stream(
                 "cancelled request",
                 "progenitor-v1",
                 target_request_id,
@@ -733,12 +721,12 @@ class TestAsyncResponseHandling:
             )
             emitted = [
                 event
-                for event in ui_routes._ui_event_replay[event_start:]
+                for event in events_stream._ui_event_replay[event_start:]
                 if event.payload.get("request_id") in {cancel_request_id, target_request_id}
             ]
         finally:
-            backend_main._active_response_streams.pop(target_request_id, None)
-            backend_main.client = previous_client
+            chat_responses._active_response_streams.pop(target_request_id, None)
+            lifecycle_state.client = previous_client
 
         assert response.status_code == 202
         assert response.headers["X-Request-ID"] == cancel_request_id
@@ -765,10 +753,8 @@ class TestAsyncResponseHandling:
 
     def test_cancel_response_resolves_browser_response_id_to_request_id(self, client):
         """Cancelling by response id acknowledges the operation without terminally cancelling it."""
-        import app.backend.main as backend_main
-        from app.backend import ui_routes
 
-        previous_client = backend_main.client
+        previous_client = lifecycle_state.client
         request_id = "generation-request-42"
         response_id = "resp-browser-42"
         cancel_event = asyncio.Event()
@@ -779,10 +765,10 @@ class TestAsyncResponseHandling:
                 captured["target_request_id"] = target_request_id
                 return True
 
-        backend_main.client = _MockClient()
-        backend_main._active_response_streams[request_id] = cancel_event
-        backend_main._response_request_ids[response_id] = request_id
-        event_start = len(ui_routes._ui_event_replay)
+        lifecycle_state.client = _MockClient()
+        chat_responses._active_response_streams[request_id] = cancel_event
+        chat_responses._response_request_ids[response_id] = request_id
+        event_start = len(events_stream._ui_event_replay)
         try:
             response = client.put(
                 f"/api/ui/responses/{response_id}/cancel",
@@ -790,13 +776,13 @@ class TestAsyncResponseHandling:
             )
             emitted = [
                 event
-                for event in ui_routes._ui_event_replay[event_start:]
+                for event in events_stream._ui_event_replay[event_start:]
                 if event.payload.get("target_response_id") == response_id
             ]
         finally:
-            backend_main._active_response_streams.pop(request_id, None)
-            backend_main._response_request_ids.pop(response_id, None)
-            backend_main.client = previous_client
+            chat_responses._active_response_streams.pop(request_id, None)
+            chat_responses._response_request_ids.pop(response_id, None)
+            lifecycle_state.client = previous_client
 
         assert response.status_code == 202
         assert response.json() == {
@@ -816,14 +802,13 @@ class TestAsyncResponseHandling:
 
     def test_healthz_bypasses_rate_limiter_when_api_quota_is_exhausted(self, client, monkeypatch):
         """Container liveness must remain probeable after an API rate-limit decision."""
-        import app.backend.main as backend_main
 
         class _RejectingLimiter:
             def is_allowed(self, _client_id: str):
                 raise AssertionError("healthz must not consult the API rate limiter")
 
-        monkeypatch.setattr(backend_main, "rate_limiter", _RejectingLimiter())
-        monkeypatch.setattr(backend_main.config, "rate_limit_enabled", True)
+        monkeypatch.setattr(http_middleware, "rate_limiter", _RejectingLimiter())
+        monkeypatch.setattr(lifecycle_state.config, "rate_limit_enabled", True)
 
         response = client.get("/healthz")
 
@@ -832,16 +817,15 @@ class TestAsyncResponseHandling:
 
     def test_cancel_response_returns_404_for_unknown_request(self, client):
         """Unknown cancellation IDs should not be reported as successful."""
-        import app.backend.main as backend_main
 
-        original_client = backend_main.client
+        original_client = lifecycle_state.client
 
         class _MockClient:
             async def cancel_request(self, request_id: str) -> bool:
                 del request_id
                 return False
 
-        backend_main.client = _MockClient()
+        lifecycle_state.client = _MockClient()
 
         try:
             response = client.put(
@@ -849,16 +833,14 @@ class TestAsyncResponseHandling:
                 headers={"X-Request-ID": "unknown-cancel-request"},
             )
         finally:
-            backend_main.client = original_client
+            lifecycle_state.client = original_client
 
         assert response.status_code == 404
 
     def test_non_streaming_responses_use_session_thread_id(self, client):
         """Non-streaming output is event data, never a finite HTTP response body."""
-        import app.backend.main as backend_main
-        from app.backend import ui_routes
 
-        original_client = backend_main.client
+        original_client = lifecycle_state.client
         captured: dict[str, object] = {}
         request_id = "nonstream-generation-request"
 
@@ -874,12 +856,12 @@ class TestAsyncResponseHandling:
                 captured["request_id"] = request_id
                 captured["metadata"] = metadata
                 captured["include_reasoning"] = include_reasoning
-                from app.backend.models import AgentResponse
+                from app.backend.chat.models import AgentResponse
 
                 return AgentResponse(response="Hello", reasoning=None, reasoning_tokens=None)
 
-        event_start = len(ui_routes._ui_event_replay)
-        backend_main.client = _MockClient()
+        event_start = len(events_stream._ui_event_replay)
+        lifecycle_state.client = _MockClient()
         try:
             client.cookies.set("progenitor_session", "sess_thread_xyz")
             response = client.post(
@@ -889,12 +871,12 @@ class TestAsyncResponseHandling:
             )
             events = [
                 event
-                for event in ui_routes._ui_event_replay[event_start:]
+                for event in events_stream._ui_event_replay[event_start:]
                 if event.payload.get("request_id") == request_id
             ]
         finally:
             client.cookies.clear()
-            backend_main.client = original_client
+            lifecycle_state.client = original_client
 
         assert response.status_code == 202
         assert response.headers["X-Request-ID"] == request_id
@@ -918,10 +900,8 @@ class TestAsyncResponseHandling:
 
     def test_non_streaming_responses_include_reasoning_output(self, client):
         """Non-streaming /api/ui/responses should include reasoning items when available."""
-        import app.backend.main as backend_main
-        from app.backend import ui_routes
 
-        original_client = backend_main.client
+        original_client = lifecycle_state.client
 
         class _MockClient:
             async def send_message(
@@ -933,7 +913,7 @@ class TestAsyncResponseHandling:
             ):
                 del message, request_id, metadata
                 assert include_reasoning is True
-                from app.backend.models import AgentResponse
+                from app.backend.chat.models import AgentResponse
 
                 return AgentResponse(
                     response="10.50. At $0.75 per pencil, 14 pencils cost $10.50.",
@@ -941,8 +921,8 @@ class TestAsyncResponseHandling:
                     reasoning_tokens=17,
                 )
 
-        event_start = len(ui_routes._ui_event_replay)
-        backend_main.client = _MockClient()
+        event_start = len(events_stream._ui_event_replay)
+        lifecycle_state.client = _MockClient()
 
         request_id = "reasoning-generation-request"
         try:
@@ -958,11 +938,11 @@ class TestAsyncResponseHandling:
             )
             events = [
                 event
-                for event in ui_routes._ui_event_replay[event_start:]
+                for event in events_stream._ui_event_replay[event_start:]
                 if event.payload.get("request_id") == request_id
             ]
         finally:
-            backend_main.client = original_client
+            lifecycle_state.client = original_client
 
         assert response.status_code == 202
         assert response.headers["X-Request-ID"] == request_id

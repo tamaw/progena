@@ -9,9 +9,10 @@ from ack_helpers import assert_acknowledged
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-import app.backend.instruction_routes as routes
-from app.backend.document_events import seed_document_types
-from app.backend.document_store import (
+import app.backend.events.stream as events_stream
+import app.backend.instructions.routes as routes
+from app.backend.events.documents import seed_document_types
+from app.backend.storage.documents import (
     PROGENITOR_STATE_PREFIX,
     InMemoryDocumentStore,
     set_default_document_store,
@@ -37,16 +38,9 @@ def harness(monkeypatch):
         store.save_document(PROGENITOR_STATE_PREFIX, f"instruction:{path}", {"content": content})
     events: list[tuple[str, dict[str, Any]]] = []
     monkeypatch.setattr(
-        routes,
+        events_stream,
         "broadcast_ui_event",
         lambda event_type, payload, **_kw: events.append((event_type, payload)),
-    )
-    monkeypatch.setattr(
-        routes,
-        "broadcast_instructions_snapshot",
-        lambda instructions=None, **_kw: events.append(
-            ("instructions.snapshot", {"instructions": instructions})
-        ),
     )
     app = FastAPI()
     app.include_router(routes.router)
@@ -87,13 +81,15 @@ def test_read_returns_body_without_front_matter(harness):
 
 
 def test_edit_saves_a_runtime_instruction(harness):
-    client, store, _ = harness
-    edited = GENESIS.replace("You are", "You remain")
+    client, store, events = harness
+    edited = GENESIS.replace("You are", "You remain").replace("title: System", "title: Updated")
     response = client.put(
         "/api/ui/instructions/content", json={"path": "progenitor/genesis.md", "content": edited}
     )
     assert_acknowledged(response, ["instruction.loaded", "instructions.snapshot"])
     assert _stored(store, "progenitor/genesis.md") == edited
+    listed = {item["path"]: item for item in _last(events, "instructions.snapshot")["instructions"]}
+    assert listed["progenitor/genesis.md"]["title"] == "Updated"
 
 
 @pytest.mark.parametrize(
@@ -116,7 +112,7 @@ def test_rejected_edits_leave_the_instruction_unchanged(harness, path, content, 
 
 def test_revisions_mark_the_live_one_and_restore_brings_back_old_content(harness):
     client, store, events = harness
-    edited = GENESIS.replace("You are", "You remain")
+    edited = GENESIS.replace("You are", "You remain").replace("title: System", "title: Updated")
     client.put(
         "/api/ui/instructions/content", json={"path": "progenitor/genesis.md", "content": edited}
     )
@@ -143,6 +139,8 @@ def test_revisions_mark_the_live_one_and_restore_brings_back_old_content(harness
         ["instruction.loaded", "instructions.snapshot"],
     )
     assert _stored(store, "progenitor/genesis.md") == GENESIS
+    listed = {item["path"]: item for item in _last(events, "instructions.snapshot")["instructions"]}
+    assert listed["progenitor/genesis.md"]["title"] == "System"
 
 
 def test_unknown_revision_is_404(harness):
