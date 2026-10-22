@@ -136,9 +136,6 @@ unfixable = []
     "ARG",    # Unused arguments OK in tests
     "S101",   # assert OK in tests
 ]
-"tests/integration/**/*.py" = [
-    "E402",   # Allow sys.path bootstrap before local imports
-]
 
 [tool.ruff.lint.isort]
 known-first-party = ["app"]

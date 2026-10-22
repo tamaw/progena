@@ -1,6 +1,0 @@
-# Ignore test result files (manual review artifacts)
-*.json
-
-# But keep a sample/template if we add one
-!*sample*.json
-!*template*.json
