@@ -44,9 +44,6 @@ backend/
 - `POST /api/ui/responses` - Browser generation acknowledgement endpoint
 - `GET /api/ui/stream` - Canonical browser event stream
 - `GET /healthz` - Docker-only liveness probe (explicit event-stream exception; empty 200 response)
-- `GET /health` - Legacy application health route (absent)
-- `GET /ready` - Legacy readiness route (absent)
-- `GET /live` - Legacy liveness route (absent)
 
 ### Development
 ```bash
