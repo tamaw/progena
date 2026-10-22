@@ -14,7 +14,7 @@ from fastapi.testclient import TestClient
 @pytest.fixture
 def app():
     """Get the FastAPI app instance."""
-    from app.backend.main import app
+    from src.backend.main import app
 
     return app
 
@@ -64,8 +64,8 @@ class TestClientRequestIdPropagation:
     @pytest.mark.asyncio
     async def test_send_message_accepts_request_id(self):
         """Test that send_message accepts request_id parameter."""
-        from app.backend.config import ChatServerConfig
-        from app.backend.integrations.subprocess import ProgenitorClient
+        from src.backend.config import ChatServerConfig
+        from src.backend.integrations.subprocess import ProgenitorClient
 
         config = MagicMock(spec=ChatServerConfig)
         client = ProgenitorClient(config)
@@ -97,8 +97,8 @@ class TestClientRequestIdPropagation:
     @pytest.mark.asyncio
     async def test_send_message_without_request_id(self):
         """Test that send_message works without request_id."""
-        from app.backend.config import ChatServerConfig
-        from app.backend.integrations.subprocess import ProgenitorClient
+        from src.backend.config import ChatServerConfig
+        from src.backend.integrations.subprocess import ProgenitorClient
 
         config = MagicMock(spec=ChatServerConfig)
         client = ProgenitorClient(config)
@@ -129,8 +129,8 @@ class TestClientRequestIdPropagation:
     @pytest.mark.asyncio
     async def test_send_message_stream_events_accepts_request_id(self):
         """Test that send_message_stream_events accepts request_id parameter."""
-        from app.backend.config import ChatServerConfig
-        from app.backend.integrations.subprocess import ProgenitorClient
+        from src.backend.config import ChatServerConfig
+        from src.backend.integrations.subprocess import ProgenitorClient
 
         config = MagicMock(spec=ChatServerConfig)
         client = ProgenitorClient(config)
@@ -182,7 +182,7 @@ class TestRequestIdInLogs:
         """Test that request ID is logged for incoming requests."""
         import logging
 
-        from app.backend.main import app
+        from src.backend.main import app
 
         with caplog.at_level(logging.INFO), TestClient(app) as client:
             response = client.get("/api/ui/widgets")

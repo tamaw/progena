@@ -4,15 +4,15 @@ from __future__ import annotations
 
 import pytest
 
-from app.progenitor.knowledge.embedding import embeddings_base_url
-from app.progenitor.knowledge.index import (
+from src.progenitor.knowledge.embedding import embeddings_base_url
+from src.progenitor.knowledge.index import (
     MAX_CHUNK_CHARS,
     chunk_page,
     embedding_text,
     page_sha,
     pending_paths,
 )
-from app.progenitor.knowledge.indexer_config import (
+from src.progenitor.knowledge.indexer_config import (
     NOT_CONFIGURED_MESSAGE,
     describe_index_status,
     resolve_embedding_target,

@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import psycopg
 
-from app.progenitor.knowledge import index as kindex
-from app.progenitor.tools import search as search_module
-from app.progenitor.tools.protocol import ToolContext
-from app.progenitor.tools.search import SearchTool
+from src.progenitor.knowledge import index as kindex
+from src.progenitor.tools import search as search_module
+from src.progenitor.tools.protocol import ToolContext
+from src.progenitor.tools.search import SearchTool
 
 DIMS = 1536
 

@@ -114,7 +114,7 @@ services:
     container_name: progenitor-backend
     restart: unless-stopped
     # Docker-internal only: trust the frontend's forwarded public scheme.
-    command: ["python", "-m", "uvicorn", "app.backend.main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--forwarded-allow-ips", "*"]
+    command: ["python", "-m", "uvicorn", "src.backend.main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--forwarded-allow-ips", "*"]
     depends_on:
       postgres:
         condition: service_healthy
@@ -160,7 +160,7 @@ services:
   frontend:
     image: ghcr.io/tamaw/progenitor-frontend:${PROGENITOR_IMAGE_TAG:-latest}
     build:
-      context: ../app/frontend
+      context: ../src/frontend
       dockerfile: ../../docker/frontend/Dockerfile
     container_name: progenitor-frontend
     restart: unless-stopped

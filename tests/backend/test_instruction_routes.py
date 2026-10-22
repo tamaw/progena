@@ -9,10 +9,10 @@ from ack_helpers import assert_acknowledged
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-import app.backend.events.stream as events_stream
-import app.backend.instructions.routes as routes
-from app.backend.events.documents import seed_document_types
-from app.backend.storage.documents import (
+import src.backend.events.stream as events_stream
+import src.backend.instructions.routes as routes
+from src.backend.events.documents import seed_document_types
+from src.backend.storage.documents import (
     PROGENITOR_STATE_PREFIX,
     InMemoryDocumentStore,
     set_default_document_store,

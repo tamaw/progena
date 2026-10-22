@@ -4,8 +4,8 @@ import json
 
 import pytest
 
-from app.progenitor.registry.models import AgentRegistryEntry
-from app.progenitor.registry.store import ToolRegistry
+from src.progenitor.registry.models import AgentRegistryEntry
+from src.progenitor.registry.store import ToolRegistry
 
 
 def _fake_store() -> tuple:

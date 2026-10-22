@@ -9,7 +9,7 @@ from langchain_core.messages import HumanMessage
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, MessagesState, StateGraph
 
-from app.progenitor.agent.checkpoint_usage import CheckpointChatOpenAI
+from src.progenitor.agent.checkpoint_usage import CheckpointChatOpenAI
 
 
 @pytest.mark.parametrize("streaming", [False, True])

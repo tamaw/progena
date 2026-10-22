@@ -5,10 +5,10 @@ from __future__ import annotations
 
 import pytest
 
-import app.progenitor.attachments.store as attachments_db
-from app.progenitor.sessions.context import reset_current_thread_id, set_current_thread_id
-from app.progenitor.tools.convert_attachment import ConvertAttachmentTool
-from app.progenitor.tools.protocol import ToolContext
+import src.progenitor.attachments.store as attachments_db
+from src.progenitor.sessions.context import reset_current_thread_id, set_current_thread_id
+from src.progenitor.tools.convert_attachment import ConvertAttachmentTool
+from src.progenitor.tools.protocol import ToolContext
 
 
 def _context(attachment: str) -> ToolContext:

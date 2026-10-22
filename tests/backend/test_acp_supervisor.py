@@ -7,11 +7,11 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-from app.backend.events.documents import DocumentEventDispatcher, seed_document_types
-from app.backend.storage.documents import PROGENITOR_STATE_PREFIX, InMemoryDocumentStore
-from app.backend.workflows.acp_supervisor import ACPTaskSupervisor
-from app.progenitor.acp.runner import ACPRunResult
-from app.progenitor.documents.kinds import ACP_TASK_KEY_PREFIX
+from src.backend.events.documents import DocumentEventDispatcher, seed_document_types
+from src.backend.storage.documents import PROGENITOR_STATE_PREFIX, InMemoryDocumentStore
+from src.backend.workflows.acp_supervisor import ACPTaskSupervisor
+from src.progenitor.acp.runner import ACPRunResult
+from src.progenitor.documents.kinds import ACP_TASK_KEY_PREFIX
 
 
 async def _wait_for(predicate: Callable[[], bool], timeout: float = 2.0) -> None:

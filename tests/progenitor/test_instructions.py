@@ -4,15 +4,15 @@ from pathlib import Path
 
 import pytest
 
-from app.progenitor.documents.content import sync_instruction_documents
-from app.progenitor.documents.types import BUILTIN_DOCUMENT_TYPES
-from app.progenitor.instructions import (
+from src.progenitor.documents.content import sync_instruction_documents
+from src.progenitor.documents.types import BUILTIN_DOCUMENT_TYPES
+from src.progenitor.instructions import (
     DEFAULT_INSTRUCTIONS_DIR,
     check_instruction_write,
     render_instruction,
     resolve_instructions_dir,
 )
-from app.progenitor.instructions.templates import parse_instruction_template
+from src.progenitor.instructions.templates import parse_instruction_template
 
 VALID = "---\ntitle: T\ndescription: D\n---\nHello {name}.\n"
 TYPES = {item.id: item for item in BUILTIN_DOCUMENT_TYPES}

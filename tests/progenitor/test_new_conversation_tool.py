@@ -14,7 +14,7 @@ pytestmark = pytest.mark.usefixtures("model_provider")
 
 @pytest.mark.asyncio
 async def test_new_conversation_tool_is_exposed_and_mutates_loop_state() -> None:
-    from app.progenitor.agent.adapters import create_deepagent_tools
+    from src.progenitor.agent.adapters import create_deepagent_tools
 
     live_state = {
         "thread_id": "thread_old",
@@ -72,7 +72,7 @@ class _MockConfig:
 
 @pytest.mark.asyncio
 async def test_loop_clears_messages_when_thread_id_changes_mid_cycle(tmp_path: Path) -> None:
-    from app.progenitor.runtime.heartbeat import ProgenitorLoop
+    from src.progenitor.runtime.heartbeat import ProgenitorLoop
 
     state_manager = MagicMock()
     state_manager.save_current_state = AsyncMock()
@@ -122,7 +122,7 @@ async def test_loop_clears_messages_when_thread_id_changes_mid_cycle(tmp_path: P
 
 @pytest.mark.asyncio
 async def test_loop_preserves_persisted_thread_id_on_startup(tmp_path: Path) -> None:
-    from app.progenitor.runtime.heartbeat import ProgenitorLoop
+    from src.progenitor.runtime.heartbeat import ProgenitorLoop
 
     state_manager = MagicMock()
     state_manager.get_current_state = AsyncMock(return_value={"thread_id": "thread_persisted"})

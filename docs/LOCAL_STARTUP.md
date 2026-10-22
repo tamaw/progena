@@ -116,7 +116,7 @@ source .venv/bin/activate
 export PYTHONPATH="$PWD"
 export PROGENITOR_DATABASE_URL="postgresql://progenitor:progenitor@127.0.0.1:15433/progenitor"
 export AGENT_NAME=progenitor
-python -m app.progenitor.main
+python -m src.progenitor.main
 ```
 
 The runtime HTTP server should listen on `127.0.0.1:9501` (`curl http://127.0.0.1:9501/health`).
@@ -129,7 +129,7 @@ In a second shell:
 source .venv/bin/activate
 export PYTHONPATH="$PWD"
 export PROGENITOR_DATABASE_URL="postgresql://progenitor:progenitor@127.0.0.1:15433/progenitor"
-python -m uvicorn app.backend.main:app --host 0.0.0.0 --port 8000
+python -m uvicorn src.backend.main:app --host 0.0.0.0 --port 8000
 ```
 
 ## Start frontend
@@ -137,7 +137,7 @@ python -m uvicorn app.backend.main:app --host 0.0.0.0 --port 8000
 In a third shell:
 
 ```bash
-cd app/frontend
+cd src/frontend
 npm install
 npm run dev -- --port 5173
 ```

@@ -9,9 +9,9 @@ from ack_helpers import assert_acknowledged
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-import app.backend.events.stream as events_stream
-import app.backend.search.routes as routes
-from app.backend.storage.documents import (
+import src.backend.events.stream as events_stream
+import src.backend.search.routes as routes
+from src.backend.storage.documents import (
     PROGENITOR_STATE_PREFIX,
     InMemoryDocumentStore,
     set_default_document_store,
@@ -53,7 +53,7 @@ class _FakeStateReader:
         data = doc.payload if doc is not None else {}
         if not isinstance(data, dict):
             return []
-        from app.backend.monitoring.state import ScheduleItem
+        from src.backend.monitoring.state import ScheduleItem
 
         return [
             ScheduleItem.from_dict({**item, "id": item.get("id") or entry_id})

@@ -4,11 +4,11 @@ import pytest
 from ack_helpers import assert_acknowledged
 from fastapi.testclient import TestClient
 
-import app.backend.events.stream as events_stream
-import app.backend.workflows.runtime as workflows_runtime
-from app.backend.events.documents import seed_document_types
-from app.backend.main import app
-from app.backend.storage.documents import InMemoryDocumentStore, set_default_document_store
+import src.backend.events.stream as events_stream
+import src.backend.workflows.runtime as workflows_runtime
+from src.backend.events.documents import seed_document_types
+from src.backend.main import app
+from src.backend.storage.documents import InMemoryDocumentStore, set_default_document_store
 
 
 @pytest.fixture
@@ -17,7 +17,7 @@ def workflow_env(monkeypatch):
     set_default_document_store(store)
     seed_document_types(store)
     monkeypatch.setattr(
-        "app.backend.storage.documents.configure_default_document_store",
+        "src.backend.storage.documents.configure_default_document_store",
         lambda *_args, **_kwargs: store,
     )
 
@@ -61,8 +61,8 @@ def test_workflow_create_acknowledges_then_emits_canonical_state(workflow_env):
 
 
 def test_workflow_content_round_trip_keeps_typed_schemas(workflow_env):
-    from app.backend.workflows.service import save_workflow_definition
-    from app.progenitor.workflows.documents import default_workflow_definition
+    from src.backend.workflows.service import save_workflow_definition
+    from src.progenitor.workflows.documents import default_workflow_definition
 
     payload = default_workflow_definition(title="Typed schemas")
     agent_id = next(

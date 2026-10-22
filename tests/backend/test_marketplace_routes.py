@@ -9,8 +9,8 @@ import pytest
 from ack_helpers import assert_acknowledged
 from fastapi.testclient import TestClient
 
-from app.backend.main import app
-from app.backend.storage.documents import (
+from src.backend.main import app
+from src.backend.storage.documents import (
     PROGENITOR_STATE_PREFIX,
     InMemoryDocumentStore,
     set_default_document_store,
@@ -24,7 +24,7 @@ def client():
 
 @pytest.fixture(autouse=True)
 def _clear_catalog_cache():
-    from app.backend.plugins.marketplaces import _CATALOG_CACHE
+    from src.backend.plugins.marketplaces import _CATALOG_CACHE
 
     _CATALOG_CACHE.clear()
 
@@ -41,7 +41,7 @@ class _StreamCapture:
     """Subscribe to the UI event stream for the duration of a request."""
 
     def __init__(self):
-        from app.backend.events import stream as events_stream
+        from src.backend.events import stream as events_stream
 
         self.events_stream = events_stream
         self.queue = asyncio.Queue()
@@ -153,7 +153,7 @@ class TestMarketplaceRoutes:
         )()
 
         monkeypatch.setattr(
-            "app.backend.plugins.marketplace_routes.fetch_marketplace",
+            "src.backend.plugins.marketplace_routes.fetch_marketplace",
             AsyncMock(return_value=fake_catalog),
         )
 
@@ -171,7 +171,7 @@ class TestMarketplaceRoutes:
         assert response.status_code == 404
 
     def test_browse_fetch_error_returns_400(self, client, document_store, monkeypatch):
-        from app.progenitor.plugins.sources import PluginFetchError
+        from src.progenitor.plugins.sources import PluginFetchError
 
         document_store.save_document(
             PROGENITOR_STATE_PREFIX,
@@ -186,7 +186,7 @@ class TestMarketplaceRoutes:
             },
         )
         monkeypatch.setattr(
-            "app.backend.plugins.marketplace_routes.fetch_marketplace",
+            "src.backend.plugins.marketplace_routes.fetch_marketplace",
             AsyncMock(side_effect=PluginFetchError("network error")),
         )
 

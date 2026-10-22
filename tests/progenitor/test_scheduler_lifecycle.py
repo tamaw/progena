@@ -9,10 +9,10 @@ import uuid
 
 import pytest
 
-from app.progenitor.schedules.engine import Scheduler
-from app.progenitor.state.manager import StateManager
-from app.progenitor.schedules.models import ScheduleEntry
-from app.progenitor.utils import utcnow
+from src.progenitor.schedules.engine import Scheduler
+from src.progenitor.schedules.models import ScheduleEntry
+from src.progenitor.state.manager import StateManager
+from src.progenitor.utils import utcnow
 from tests.progenitor.conftest import _FakeRuntimeStore
 
 # ---------------------------------------------------------------------------

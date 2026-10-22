@@ -4,22 +4,22 @@ import asyncio
 
 import pytest
 
-from app.backend.alerts import service as alert_store
-from app.backend.events.documents import seed_document_types
-from app.backend.storage.documents import (
+from src.backend.alerts import service as alert_store
+from src.backend.events.documents import seed_document_types
+from src.backend.storage.documents import (
     EVENT_LOG_START,
     PROGENITOR_STATE_PREFIX,
     InMemoryDocumentStore,
     set_default_document_store,
 )
-from app.backend.workflows.service import (
+from src.backend.workflows.service import (
     PromptExecutionResult,
     WorkflowExecutor,
     build_manual_trigger_event,
     get_workflow_run,
     save_workflow_definition,
 )
-from app.progenitor.workflows.documents import default_workflow_definition
+from src.progenitor.workflows.documents import default_workflow_definition
 
 
 @pytest.fixture

@@ -1,10 +1,10 @@
 from fastapi.testclient import TestClient
 
-import app.backend.lifecycle.state as lifecycle_state
-from app.backend.chat.session import SessionConfig, SessionManager
-from app.backend.main import app
-from app.backend.monitoring.state import StateReader
-from app.backend.storage.documents import (
+import src.backend.lifecycle.state as lifecycle_state
+from src.backend.chat.session import SessionConfig, SessionManager
+from src.backend.main import app
+from src.backend.monitoring.state import StateReader
+from src.backend.storage.documents import (
     BACKEND_STATE_PREFIX,
     PROGENITOR_STATE_PREFIX,
     InMemoryDocumentStore,

@@ -10,10 +10,10 @@ from pathlib import Path
 
 import pytest
 
-from app.progenitor.routines.graph import validate_routine_graph_payload
+from src.progenitor.routines.graph import validate_routine_graph_payload
 
 FIXTURES_PATH = (
-    Path(__file__).resolve().parents[2] / "app/frontend/tests/fixtures/routine-graphs.json"
+    Path(__file__).resolve().parents[2] / "src/frontend/tests/fixtures/routine-graphs.json"
 )
 FIXTURES = json.loads(FIXTURES_PATH.read_text())
 

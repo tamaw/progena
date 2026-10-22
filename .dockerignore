@@ -1,4 +1,4 @@
-# Keep Docker build contexts small (especially since app/frontend includes node_modules)
+# Keep Docker build contexts small (especially since src/frontend includes node_modules)
 .git
 .github
 .venv
@@ -28,9 +28,9 @@ data/*
 !data/shims/**
 
 # Frontend build artifacts / deps (not needed in Python images)
-app/frontend/node_modules
-app/frontend/dist
+src/frontend/node_modules
+src/frontend/dist
 
 # TLS is terminated by host nginx; no certificate assets belong in image contexts.
-app/frontend/certs/
+src/frontend/certs/
 docker/backend/certs/

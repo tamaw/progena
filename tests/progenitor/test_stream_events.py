@@ -8,8 +8,8 @@ import pytest
 from langchain_core.messages import ToolMessage
 from langgraph.types import Command
 
-from app.progenitor.agent.middleware import AuditLoggingMiddleware
-from app.progenitor.runtime.streaming.stream_events import (
+from src.progenitor.agent.middleware import AuditLoggingMiddleware
+from src.progenitor.runtime.streaming.stream_events import (
     ALLOWED_CUSTOM_EVENT_TYPES,
     CUSTOM_EVENT_FALLBACK_TYPE,
     build_a2a_call_progress_event,
@@ -20,7 +20,7 @@ from app.progenitor.runtime.streaming.stream_events import (
     build_tool_start_event,
     normalize_custom_event,
 )
-from app.progenitor.runtime.streaming.stream_payloads import (
+from src.progenitor.runtime.streaming.stream_payloads import (
     DEFAULT_STREAM_ARGS_BYTES,
     DEFAULT_STREAM_PREVIEW_BYTES,
 )
@@ -368,7 +368,7 @@ async def test_audit_middleware_emits_tool_start_and_result_events():
     )()
 
     with patch(
-        "app.progenitor.agent.middleware.emit_stream_event",
+        "src.progenitor.agent.middleware.emit_stream_event",
         side_effect=captured.append,
     ):
         result = await middleware.awrap_tool_call(request, handler)
@@ -396,7 +396,7 @@ async def test_audit_middleware_emits_tool_error_on_exception():
 
     with (
         patch(
-            "app.progenitor.agent.middleware.emit_stream_event",
+            "src.progenitor.agent.middleware.emit_stream_event",
             side_effect=captured.append,
         ),
         pytest.raises(RuntimeError),
@@ -428,7 +428,7 @@ async def test_audit_middleware_swallows_writer_failure():
     # get_stream_writer returns a writer that raises when invoked; emit_stream_event
     # must swallow the failure so tool execution is unaffected.
     with patch(
-        "app.progenitor.runtime.streaming.stream_events.get_stream_writer",
+        "src.progenitor.runtime.streaming.stream_events.get_stream_writer",
         return_value=boom,
     ):
         result = await middleware.awrap_tool_call(request, handler)

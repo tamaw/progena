@@ -146,8 +146,8 @@ Would improve readability and testability.
 - Not handling mock mode
 
 ## Tools
-- **Linting**: `ruff check app/`
-- **Type Checking**: `pyright app/`
+- **Linting**: `ruff check src/`
+- **Type Checking**: `pyright src/`
 - **Testing**: `pytest` with coverage
 - **Security**: Manual review + automated scans
 

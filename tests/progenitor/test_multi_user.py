@@ -12,12 +12,12 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from app.progenitor.sessions.context import (
+from src.progenitor.sessions.context import (
     get_current_thread_id,
     reset_current_thread_id,
     set_current_thread_id,
 )
-from app.progenitor.state.manager import StateManager
+from src.progenitor.state.manager import StateManager
 from tests.progenitor.conftest import _FakeRuntimeStore
 
 

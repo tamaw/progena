@@ -7,10 +7,10 @@ from typing import Literal
 from fastapi.testclient import TestClient
 from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 
-import app.backend.events.stream as events_stream
-from app.backend.insights.service import build_token_usage_snapshot
-from app.backend.main import app
-from app.backend.storage.documents import CheckpointMessageBlob, StoredDocument
+import src.backend.events.stream as events_stream
+from src.backend.insights.service import build_token_usage_snapshot
+from src.backend.main import app
+from src.backend.storage.documents import CheckpointMessageBlob, StoredDocument
 
 
 class _InsightsStore:
@@ -304,7 +304,7 @@ def test_usage_marks_missing_usage_and_missing_cache_detail_without_calling_them
 
 
 def test_token_usage_route_acknowledges_and_correlates_snapshot(monkeypatch):
-    from app.backend.insights import routes as insights_routes
+    from src.backend.insights import routes as insights_routes
 
     payload = {
         "range": "24h",

@@ -102,7 +102,7 @@ NOTIFY and `document_events` triggers fire with no trigger change.
 | `module_data:<name>/<key>` | `{value: <any JSON>, updated_at: iso}` | Backend on module request |
 | `module_status:<name>` | `{state: "loaded"\|"error", revision: str, errors: [{message, stack?}], reported_at: iso}` | Backend on host report |
 
-Shared code in `app/progenitor/modules/contracts.py` (pure, used by runtime and backend):
+Shared code in `src/progenitor/modules/contracts.py` (pure, used by runtime and backend):
 key prefixes re-exported from `document_kinds.py` (`MODULE_DOCUMENT_KEY_PREFIX`,
 `MODULE_DATA_KEY_PREFIX`, `MODULE_STATUS_KEY_PREFIX`), name/path/extension validation,
 caps, manifest validation, `load_module_libraries()`, and
@@ -117,7 +117,7 @@ Built-in document types: `module` (prefix `module:`, schema `content_document`),
 ### Revision history
 
 `module_revisions` table installed alongside the other revision installers in
-`app/backend/storage/documents.py`, modelled on `instruction_revisions`:
+`src/backend/storage/documents.py`, modelled on `instruction_revisions`:
 `(id, name, path, op 'write'|'delete', content NULL on delete, content_hash, captured_at)`,
 captured by trigger on `module:` rows (insert/update with changed content, delete), with an
 immutability trigger. Restore to time T: every path whose latest revision ≤ T is a write is
@@ -126,7 +126,7 @@ writes, so they are themselves revisions and fire NOTIFY.
 
 ## Agent side (runtime)
 
-- `ModuleDirectoryBackend` (`app/progenitor/agent/filesystem/modules.py`) at `routes["/modules/"]` in `app/progenitor/agent/filesystem/mounts.py`,
+- `ModuleDirectoryBackend` (`src/progenitor/agent/filesystem/modules.py`) at `routes["/modules/"]` in `src/progenitor/agent/filesystem/mounts.py`,
   on top of `ContentDocumentDirectoryBackend` with content kind `module`, enforcing
   validation and caps on `awrite`/`aedit`.
 - Read-only virtual files: `/modules/_catalogue.json` (libraries from
@@ -138,7 +138,7 @@ writes, so they are themselves revisions and fire NOTIFY.
 
 ## Backend
 
-`app/backend/modules/routes.py`, router prefix `/api/ui`, included in `main.py`. Every route
+`src/backend/modules/routes.py`, router prefix `/api/ui`, included in `main.py`. Every route
 returns HTTP 202 `UiRequestAcknowledgement` and replies on `/api/ui/stream`. Requests carry
 `X-Request-ID`; detail replies are **targeted** with `broadcast_ui_event(..., request_id=,
 client_id=)`. `client_id` is the tab's `realtimeClientId` (query param on GET/DELETE, body on
@@ -176,12 +176,12 @@ changed_fields, document}}` to each interested client (`document` = `after`, nul
 
 Watcher: `_queue_state_watch_status` rebroadcasts `modules.snapshot` for `module:` and
 `module_status:` keys (and on resync); add `module:`, `module_data:`, `module_status:` to the
-snapshot-diff bypass in `app/backend/monitoring/state.py`.
+snapshot-diff bypass in `src/backend/monitoring/state.py`.
 
 ## Vendored libraries
 
-`app/frontend/scripts/build-module-vendor.mjs` (`npm run build:module-vendor`) bundles
-pinned `three@0.186.1` and `d3@7.9.0` with esbuild into `app/frontend/src/features/modules/vendor/`
+`src/frontend/scripts/build-module-vendor.mjs` (`npm run build:module-vendor`) bundles
+pinned `three@0.186.1` and `d3@7.9.0` with esbuild into `src/frontend/src/features/modules/vendor/`
 (`three.mjs`, `three-orbit-controls.mjs` with `three` external, `d3.mjs`), generates
 `libraries.js` (specifier → lazy `?raw` loader) and `data/modules/libraries.json` (agent
 catalogue). Bundles, `libraries.js` and the catalogue are committed (the pre-commit large-file

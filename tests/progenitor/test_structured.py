@@ -1,10 +1,10 @@
-"""Tests for the shared structured-output engine (app.progenitor.llm.structured)."""
+"""Tests for the shared structured-output engine (src.progenitor.llm.structured)."""
 
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-import app.progenitor.llm.structured as structured
+import src.progenitor.llm.structured as structured
 
 # --------------------------------------------------------------------------- #
 # pure helpers

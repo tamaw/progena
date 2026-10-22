@@ -10,18 +10,18 @@ import pytest
 from ack_helpers import assert_acknowledged
 from fastapi.testclient import TestClient
 
-import app.backend.modules.routes as modules_routes
-from app.backend.events.documents import TypedDocumentEvent
-from app.backend.modules.events import module_events
-from app.backend.storage.documents import (
+import src.backend.modules.routes as modules_routes
+from src.backend.events.documents import TypedDocumentEvent
+from src.backend.modules.events import module_events
+from src.backend.storage.documents import (
     PROGENITOR_STATE_PREFIX,
     DocumentEvent,
     InMemoryDocumentStore,
     set_default_document_store,
 )
-from app.progenitor.documents.kinds import DOCUMENT_TYPE_KEY_PREFIX
-from app.progenitor.documents.types import DocumentType
-from app.progenitor.modules.contracts import module_file_key
+from src.progenitor.documents.kinds import DOCUMENT_TYPE_KEY_PREFIX
+from src.progenitor.documents.types import DocumentType
+from src.progenitor.modules.contracts import module_file_key
 
 
 @pytest.fixture
@@ -35,7 +35,7 @@ def document_store():
 
 @pytest.fixture
 def client():
-    from app.backend.main import app
+    from src.backend.main import app
 
     return TestClient(app)
 
@@ -77,7 +77,7 @@ def _module(store: InMemoryDocumentStore, name: str = "demo") -> None:
 
 class _Capture:
     def __init__(self, client_id: str | None = None):
-        from app.backend.events import stream as events_stream
+        from src.backend.events import stream as events_stream
 
         self.events_stream = events_stream
         self.queue: asyncio.Queue = asyncio.Queue()
@@ -247,7 +247,7 @@ def test_snapshot_reports_manifest_errors_and_status(document_store):
 async def test_module_interest_matching_and_disconnect_cleanup(monkeypatch):
     sent = []
     monkeypatch.setattr(
-        "app.backend.events.stream.broadcast_ui_event",
+        "src.backend.events.stream.broadcast_ui_event",
         lambda *args, **kwargs: sent.append((args, kwargs)),
     )
     module_events.set_interest("one", "demo", ["kanban_card.updated"])

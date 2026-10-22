@@ -8,8 +8,8 @@ still trigger a live UI push.
 
 from __future__ import annotations
 
-from app.backend.monitoring.state import StateReader
-from app.backend.storage.documents import PROGENITOR_STATE_PREFIX, InMemoryDocumentStore
+from src.backend.monitoring.state import StateReader
+from src.backend.storage.documents import PROGENITOR_STATE_PREFIX, InMemoryDocumentStore
 
 
 def _reader(servers: dict) -> tuple[StateReader, InMemoryDocumentStore]:

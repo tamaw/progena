@@ -12,7 +12,7 @@ import psycopg
 import pytest
 from cryptography.fernet import Fernet
 
-from app.progenitor.settings.providers import ProviderRepository
+from src.progenitor.settings.providers import ProviderRepository
 
 DATABASE_URL = (os.getenv("PROGENITOR_TEST_DATABASE_URL") or "").strip() or None
 

@@ -6,8 +6,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from app.progenitor.tools.protocol import ToolContext
-from app.progenitor.tools.structured_output import StructuredOutputTool
+from src.progenitor.tools.protocol import ToolContext
+from src.progenitor.tools.structured_output import StructuredOutputTool
 
 
 @pytest.fixture
@@ -51,7 +51,7 @@ async def test_structured_output_inline_schema_returns_value() -> None:
     _, kwargs = llm.chat_structured_json.call_args
     assert "I love this!" in kwargs["prompt"]
 
-    from app.progenitor.tools.system_registry import get_system_tool
+    from src.progenitor.tools.system_registry import get_system_tool
 
     tool = get_system_tool("structured_output")
     assert tool is not None

@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Routine Graph",
-  "description": "A declarative graph compiled by app.progenitor.routines.factory. Version 2 makes every executable node configuration and edge shape explicit; unknown fields are rejected rather than silently ignored.",
+  "description": "A declarative graph compiled by src.progenitor.routines.factory. Version 2 makes every executable node configuration and edge shape explicit; unknown fields are rejected rather than silently ignored.",
   "type": "object",
   "additionalProperties": false,
   "required": ["id", "name", "description", "version", "entry", "nodes", "edges"],

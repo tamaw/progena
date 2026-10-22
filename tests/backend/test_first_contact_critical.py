@@ -21,11 +21,11 @@ from types import SimpleNamespace
 import pytest
 from fastapi.testclient import TestClient
 
-import app.backend.events.stream as events_stream
-import app.backend.lifecycle.state as lifecycle_state
-from app.backend.main import app
-from app.backend.monitoring.state import HealthInfo, StateReader
-from app.backend.storage.documents import PROGENITOR_STATE_PREFIX, InMemoryDocumentStore
+import src.backend.events.stream as events_stream
+import src.backend.lifecycle.state as lifecycle_state
+from src.backend.main import app
+from src.backend.monitoring.state import HealthInfo, StateReader
+from src.backend.storage.documents import PROGENITOR_STATE_PREFIX, InMemoryDocumentStore
 
 
 @pytest.fixture
@@ -523,7 +523,7 @@ class TestCriticalChatFlow:
 
     def test_responses_endpoint_acknowledges_without_generated_text(self, client):
         """Foreground generation data is stream-only, including on the critical path."""
-        from app.backend.chat.models import AgentResponse
+        from src.backend.chat.models import AgentResponse
 
         original_client = lifecycle_state.client
         request_id = "first-contact-generation"

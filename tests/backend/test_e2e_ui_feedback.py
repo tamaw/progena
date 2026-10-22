@@ -19,9 +19,9 @@ from types import SimpleNamespace
 import pytest
 from fastapi.testclient import TestClient
 
-from app.backend.main import app
-from app.backend.monitoring.state import AgentInfo, BuildInfo, HealthInfo, StateReader
-from app.backend.storage.documents import PROGENITOR_STATE_PREFIX, InMemoryDocumentStore
+from src.backend.main import app
+from src.backend.monitoring.state import AgentInfo, BuildInfo, HealthInfo, StateReader
+from src.backend.storage.documents import PROGENITOR_STATE_PREFIX, InMemoryDocumentStore
 
 
 @pytest.fixture

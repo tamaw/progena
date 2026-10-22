@@ -3,7 +3,7 @@
 A developer's local ``.env`` may point the ``PROGENITOR_*_DIR`` variables at
 another checkout (a long-running ``main`` worktree). ``load_dotenv`` never
 overrides variables that are already set, so pinning them here, before any
-``app`` module is imported, makes the shipped schemas and path defaults under
+``src`` module is imported, makes the shipped schemas and path defaults under
 test the ones in this checkout -- the same ones CI sees.
 """
 

@@ -5,10 +5,10 @@ from typing import Any
 import pytest
 from langchain_core.messages import AIMessage, AIMessageChunk
 
-import app.progenitor.llm.provider_context as provider_runtime
-from app.progenitor.config import LLMConfig, ProgenitorConfig
-from app.progenitor.runtime.streaming.deepagent_stream import DeepAgentSSEStream
-from app.progenitor.sessions.messages import extract_reasoning_trace
+import src.progenitor.llm.provider_context as provider_runtime
+from src.progenitor.config import LLMConfig, ProgenitorConfig
+from src.progenitor.runtime.streaming.deepagent_stream import DeepAgentSSEStream
+from src.progenitor.sessions.messages import extract_reasoning_trace
 
 
 class _FakeGraph:
@@ -85,10 +85,10 @@ async def test_graph_message_events_stream_incrementally_without_duplicate_final
 
 @pytest.mark.asyncio
 async def test_attachments_are_stamped_onto_the_human_message():
-    """See app.backend.chat.responses._resolve_message_attachments: the backend
+    """See src.backend.chat.responses._resolve_message_attachments: the backend
     resolves attachment ids into a compact metadata list and passes it
     through as request metadata. RuntimeChatService forwards that list here
-    (see app.progenitor.runtime.http.chat._extract_attachments) so
+    (see src.progenitor.runtime.http.chat._extract_attachments) so
     chat_sessions can surface it as the attachment chip on the user's
     message, independent of the machine-only note appended to the message
     text for the LLM's benefit.

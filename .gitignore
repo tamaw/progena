@@ -21,8 +21,8 @@ downloads/
 eggs/
 .eggs/
 lib/
-!app/frontend/src/lib/
-!app/frontend/src/lib/indexedDb.js
+!src/frontend/src/lib/
+!src/frontend/src/lib/indexedDb.js
 lib64/
 parts/
 sdist/
@@ -104,7 +104,7 @@ tmp/
 *.pem
 *.crt
 *.cer
-app/frontend/certs/
+src/frontend/certs/
 docker/backend/certs/
 
 *-cwd

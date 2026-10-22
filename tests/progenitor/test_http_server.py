@@ -8,9 +8,9 @@ from unittest.mock import MagicMock
 import httpx
 import pytest
 
-from app.progenitor.a2a.models import A2ATaskRecord
-from app.progenitor.async_subagents.tasks import HELLO_WORLD_ASYNC_RESULT
-from app.progenitor.runtime.http.server import ProgenitorHTTPServer
+from src.progenitor.a2a.models import A2ATaskRecord
+from src.progenitor.async_subagents.tasks import HELLO_WORLD_ASYNC_RESULT
+from src.progenitor.runtime.http.server import ProgenitorHTTPServer
 from tests.progenitor.conftest import _FakeRuntimeStore
 
 

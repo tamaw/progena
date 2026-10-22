@@ -36,7 +36,7 @@ services:
 - `docker/docker-compose.progenitor.yml` - Main stack orchestration
 - `.env.example` - Environment variable template
 - `pyproject.toml` - Python dependencies and tool config
-- `app/frontend/package.json` - Node.js dependencies
+- `src/frontend/package.json` - Node.js dependencies
 
 ## Deployment
 
@@ -99,8 +99,8 @@ jobs:
           python-version: '3.12'
       - run: pip install -e ".[dev]"
       - run: pytest --cov
-      - run: pyright app/
-      - run: ruff check app/
+      - run: pyright src/
+      - run: ruff check src/
 
   build:
     runs-on: ubuntu-latest
@@ -158,7 +158,7 @@ PROGENITOR_MOCK_LLM=false
 ### Config Validation
 ```bash
 # Check required env vars
-python -c "from app.progenitor.config import ProgenitorConfig; print(ProgenitorConfig.from_env())"
+python -c "from src.progenitor.config import ProgenitorConfig; print(ProgenitorConfig.from_env())"
 ```
 
 ## Monitoring & Observability

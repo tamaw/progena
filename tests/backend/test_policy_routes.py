@@ -1,9 +1,9 @@
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app.backend.settings.policies import create_policy_router
-from app.backend.storage.documents import PROGENITOR_STATE_PREFIX, InMemoryDocumentStore
-from app.progenitor.settings.policies import ExecutionPolicy
+from src.backend.settings.policies import create_policy_router
+from src.backend.storage.documents import PROGENITOR_STATE_PREFIX, InMemoryDocumentStore
+from src.progenitor.settings.policies import ExecutionPolicy
 
 
 def test_policy_requests_acknowledge_and_stream_validated_persisted_documents():

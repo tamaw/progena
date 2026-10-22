@@ -6,11 +6,11 @@ from unittest.mock import MagicMock
 import pytest
 from langchain_core.tools import StructuredTool
 
-from app.progenitor.agent.adapters import create_deepagent_tools, create_dynamic_mcp_tools
-from app.progenitor.config import MCPConfig
-from app.progenitor.mcp.runtime import MCPRuntime
-from app.progenitor.tools.a2a_sessions import A2ASendArgs
-from app.progenitor.tools.protocol import RequestToolArgs
+from src.progenitor.agent.adapters import create_deepagent_tools, create_dynamic_mcp_tools
+from src.progenitor.config import MCPConfig
+from src.progenitor.mcp.runtime import MCPRuntime
+from src.progenitor.tools.a2a_sessions import A2ASendArgs
+from src.progenitor.tools.protocol import RequestToolArgs
 
 
 def _tool_by_name(tools, name: str):
@@ -170,7 +170,7 @@ def test_dynamic_mcp_tools_skip_non_tool_entries() -> None:
 async def test_shell_exec_receives_structured_kwargs(monkeypatch) -> None:
     """ShellExecTool exposes its structured args_model and execute() reads
     command/timeout/cwd directly from context.tool_args."""
-    from app.progenitor.tools.shell import ShellExecArgs
+    from src.progenitor.tools.shell import ShellExecArgs
 
     tools = create_deepagent_tools()
     shell_tool = _tool_by_name(tools, "shell_exec")
@@ -180,14 +180,14 @@ async def test_shell_exec_receives_structured_kwargs(monkeypatch) -> None:
     captured: dict[str, Any] = {}
 
     async def _fake_execute(self, context):  # type: ignore[no-untyped-def]
-        from app.progenitor.tools.protocol import ToolResult
+        from src.progenitor.tools.protocol import ToolResult
 
         captured["user_input"] = context.user_input
         captured["tool_args"] = context.tool_args
         return ToolResult.ok({"ok": True})
 
     monkeypatch.setattr(
-        "app.progenitor.tools.shell.ShellExecTool.execute", _fake_execute, raising=True
+        "src.progenitor.tools.shell.ShellExecTool.execute", _fake_execute, raising=True
     )
 
     result = await _invoke(
@@ -210,14 +210,14 @@ async def test_a2a_status_kwargs_populate_tool_args(monkeypatch) -> None:
     captured: dict[str, Any] = {}
 
     async def _fake_execute(self, context):  # type: ignore[no-untyped-def]
-        from app.progenitor.tools.protocol import ToolResult
+        from src.progenitor.tools.protocol import ToolResult
 
         captured["user_input"] = context.user_input
         captured["tool_args"] = context.tool_args
         return ToolResult.ok({"status": "ok"})
 
     monkeypatch.setattr(
-        "app.progenitor.tools.a2a_sessions.A2AStatusTool.execute",
+        "src.progenitor.tools.a2a_sessions.A2AStatusTool.execute",
         _fake_execute,
         raising=True,
     )
@@ -255,8 +255,8 @@ async def test_parallel_a2a_progress_stays_on_its_originating_tool_row(monkeypat
                 },
             }
 
-    monkeypatch.setattr("app.progenitor.a2a.tasks.A2AClient", Client)
-    monkeypatch.setattr("app.progenitor.tools.a2a_sessions.emit_stream_event", events.append)
+    monkeypatch.setattr("src.progenitor.a2a.tasks.A2AClient", Client)
+    monkeypatch.setattr("src.progenitor.tools.a2a_sessions.emit_stream_event", events.append)
     registry = MagicMock()
     registry.find_by_name.return_value = {
         "name": "builder",

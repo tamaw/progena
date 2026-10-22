@@ -31,9 +31,9 @@ RUN addgroup --system --gid 10001 agent \
 # Set working directory
 WORKDIR /app
 
-# Copy project metadata and source (including app.chat_server and app.progenitor)
+# Copy project metadata and source (including src.backend and src.progenitor)
 COPY pyproject.toml README.md ./
-COPY app/ ./app/
+COPY src/ ./src/
 # Synced into Postgres on every boot (see content_documents.sync_instruction_documents).
 COPY data/instructions/ ./data/instructions/
 # Progenitor's own skills: the read-only /skills/ mount.
@@ -72,11 +72,11 @@ EXPOSE 8000
 
 # Health check for container orchestration.
 # Progenitor is not the HTTP backend; it serves its own HTTP /health endpoint
-# (see app/progenitor/runtime/http.py) on PROGENITOR_HTTP_PORT (default 9501),
+# (see src/progenitor/runtime/http/server.py) on PROGENITOR_HTTP_PORT (default 9501),
 # checked here via a same-host curl - no state file, no cross-container call.
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
-  CMD curl -f http://127.0.0.1:${PROGENITOR_HTTP_PORT:-9501}/health || exit 1
+  CMD ["sh", "-c", "curl -f http://127.0.0.1:${PROGENITOR_HTTP_PORT:-9501}/health || exit 1"]
 
 # Default command (runs Progenitor agent)
-CMD ["python", "-m", "app.progenitor.main"]
-USER agent
+CMD ["python", "-m", "src.progenitor.main"]
+USER 10001:10001

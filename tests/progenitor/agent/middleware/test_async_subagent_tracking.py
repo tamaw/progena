@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 
 from langchain.agents.middleware.types import ToolCallRequest
 
-from app.progenitor.agent.middleware.async_subagent_tracking import (
+from src.progenitor.agent.middleware.async_subagent_tracking import (
     _async_tasks_result_payload,
     _emit_async_subagent_events,
 )
@@ -36,7 +36,7 @@ class TestEmitAsyncSubagentEvents:
             "t1": {"task_id": "t1", "agent_name": "agent1", "status": "interrupted"},
         }
         with patch(
-            "app.progenitor.agent.middleware.async_subagent_tracking.emit_stream_event"
+            "src.progenitor.agent.middleware.async_subagent_tracking.emit_stream_event"
         ) as mock_emit:
             _emit_async_subagent_events(request, "check_async_task", tasks)
         # _emit_async_subagent_events uses positional args (a dict), not kwargs

@@ -1,4 +1,4 @@
-"""Tests for compiling and running a RoutineGraph (app.progenitor.routines.factory)."""
+"""Tests for compiling and running a RoutineGraph (src.progenitor.routines.factory)."""
 
 from __future__ import annotations
 
@@ -10,14 +10,14 @@ import pytest
 from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.errors import GraphRecursionError
 
-from app.progenitor.routines.factory import (
+from src.progenitor.routines.factory import (
     compile_routine_graph,
     extract_json_object,
     normalize_message_content,
     resolve_data_path,
 )
-from app.progenitor.routines.graph import validate_routine_graph_payload
-from app.progenitor.settings.policies import PolicyValues
+from src.progenitor.routines.graph import validate_routine_graph_payload
+from src.progenitor.settings.policies import PolicyValues
 
 _EXAMPLE_PATH = Path(__file__).parent / "fixtures" / "reference_routine.json"
 
@@ -1197,7 +1197,7 @@ class TestA2ANodeTimeout:
             ),
         )
         with patch(
-            "app.progenitor.a2a.client.A2AClient.send_message",
+            "src.progenitor.a2a.client.A2AClient.send_message",
             new_callable=AsyncMock,
             return_value={
                 "success": True,
@@ -1232,7 +1232,7 @@ class TestA2ANodeTimeout:
             execution_policy=PolicyValues(attempt_timeout=42),
         )
         with patch(
-            "app.progenitor.a2a.client.A2AClient.send_message",
+            "src.progenitor.a2a.client.A2AClient.send_message",
             new_callable=AsyncMock,
             return_value={
                 "success": True,
@@ -1266,7 +1266,7 @@ class TestA2ANodeTimeout:
             ),
         )
         with patch(
-            "app.progenitor.a2a.client.A2AClient.send_message",
+            "src.progenitor.a2a.client.A2AClient.send_message",
             new_callable=AsyncMock,
             return_value={
                 "success": True,
@@ -1276,6 +1276,6 @@ class TestA2ANodeTimeout:
             await runnable.ainvoke({"messages": [HumanMessage(content="go")]})
             assert mock_call.call_count == 1
             _, kwargs = mock_call.call_args
-            from app.progenitor.routines.delegation_nodes import _A2A_NO_LIMIT_TIMEOUT
+            from src.progenitor.routines.delegation_nodes import _A2A_NO_LIMIT_TIMEOUT
 
             assert kwargs["timeout"] == _A2A_NO_LIMIT_TIMEOUT

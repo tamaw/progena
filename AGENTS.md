@@ -17,7 +17,7 @@ This is the main Progenitor agent system - a perpetual, conversational personal 
 ### Project Structure
 ```
 progenitor/
-├── app/
+├── src/
 │   ├── progenitor/     # Core agent logic (LangGraph)
 │   │   ├── agent/      # DeepAgent integration layer
 │   │   ├── orchestration/ # Graphs, nodes and composed loop state
@@ -27,8 +27,6 @@ progenitor/
 │   │   └── runtime/    # Loop runner, scheduler, DeepAgent adapter
 │   ├── backend/        # FastAPI server
 │   ├── frontend/       # React/Vite UI
-│   ├── agents/         # Agent implementations
-│   └── mcp/            # MCP server integrations
 ├── data/
 │   ├── prompts/
 │   └── skills/         # DeepAgent SKILL.md files
@@ -42,15 +40,15 @@ progenitor/
    & .\.venv\Scripts\Activate.ps1  # Windows
    ```
 2. **Testing**: `pytest` (auto-discovers all tests)
-3. **Type Checking**: `pyright --pythonpath .venv/bin/python app/`
-4. **Linting**: `ruff check app/`
+3. **Type Checking**: `pyright --pythonpath .venv/bin/python src/`
+4. **Linting**: `ruff check src/`
 5. **Run Dev**: VS Code Task "Start All (dev)"
 
 ### Key Patterns
-- **State Models**: Domain-owned Pydantic v2 models; composed graph state in `app/progenitor/orchestration/state.py`
+- **State Models**: Domain-owned Pydantic v2 models; composed graph state in `src/progenitor/orchestration/state.py`
 - **Node Pattern**: Factory functions returning async callables
-- **Graph Routing**: Graph builders in `app/progenitor/orchestration/graphs/`
-- **DeepAgent Factory**: `app/progenitor/agent/factory.py` — `create_progenitor_agent()`
+- **Graph Routing**: Graph builders in `src/progenitor/orchestration/graphs/`
+- **DeepAgent Factory**: `src/progenitor/agent/factory.py` — `create_progenitor_agent()`
 - **Configuration**: Environment variables > JSON config files
 - **Testing**: `pytest-asyncio` with `asyncio_mode = auto`
 

@@ -34,7 +34,7 @@ progenitor/
 │   ├── BACKEND.md                 # Backend details
 │   ├── PROJECT_STRUCTURE.md       # Code organization
 │   └── ...
-├── app/
+├── src/
 │   ├── backend/AGENTS.md          # Backend agent context
 │   ├── frontend/AGENTS.md         # Frontend agent context
 │   └── progenitor/AGENTS.md       # Core agent context
@@ -66,7 +66,7 @@ Brief description of what this does.
 
 ```bash
 pip install -e ".[dev]"
-python -m app.progenitor.main
+python -m src.progenitor.main
 ```
 
 See [docs/](docs/) for detailed documentation.

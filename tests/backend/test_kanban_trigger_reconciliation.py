@@ -13,21 +13,21 @@ from unittest.mock import AsyncMock
 import pytest
 from fastapi.testclient import TestClient
 
-import app.backend.events.dispatch as events_dispatch
-import app.backend.events.stream as events_stream
-import app.backend.lifecycle.state as lifecycle_state
-import app.backend.workflows.runtime as workflows_runtime
-from app.backend.chat.models import AgentResponse
-from app.backend.events.documents import seed_document_types
-from app.backend.main import app
-from app.backend.monitoring.state import StateReader
-from app.backend.storage.documents import (
+import src.backend.events.dispatch as events_dispatch
+import src.backend.events.stream as events_stream
+import src.backend.lifecycle.state as lifecycle_state
+import src.backend.workflows.runtime as workflows_runtime
+from src.backend.chat.models import AgentResponse
+from src.backend.events.documents import seed_document_types
+from src.backend.main import app
+from src.backend.monitoring.state import StateReader
+from src.backend.storage.documents import (
     PROGENITOR_STATE_PREFIX,
     InMemoryDocumentStore,
     set_default_document_store,
 )
-from app.backend.workflows.service import list_workflow_runs, save_workflow_definition
-from app.progenitor.workflows.documents import default_workflow_definition
+from src.backend.workflows.service import list_workflow_runs, save_workflow_definition
+from src.progenitor.workflows.documents import default_workflow_definition
 
 
 @pytest.fixture
@@ -36,11 +36,11 @@ def workflow_env(tmp_path, monkeypatch):
     set_default_document_store(store)
     seed_document_types(store)
     monkeypatch.setattr(
-        "app.backend.storage.documents.configure_default_document_store", lambda *_a, **_k: store
+        "src.backend.storage.documents.configure_default_document_store", lambda *_a, **_k: store
     )
 
     state_reader = StateReader(document_store=store)
-    monkeypatch.setattr("app.backend.monitoring.state.get_state_reader", lambda: state_reader)
+    monkeypatch.setattr("src.backend.monitoring.state.get_state_reader", lambda: state_reader)
 
     workflows_runtime._workflow_executor = None
     events_dispatch._document_event_dispatcher = None
@@ -62,7 +62,7 @@ def backend_client(monkeypatch):
         reasoning_tokens=None,
     )
     monkeypatch.setattr(
-        "app.backend.integrations.runtime.get_sse_client", lambda *_a, **_k: mock_client
+        "src.backend.integrations.runtime.get_sse_client", lambda *_a, **_k: mock_client
     )
     lifecycle_state.client = mock_client
     yield mock_client

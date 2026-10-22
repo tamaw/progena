@@ -65,5 +65,5 @@ When proposing architectural changes:
 ## References
 - `docs/ARCHITECTURE_DIAGRAM.md` - System architecture
 - `docs/SPEC.md` - Main system specification
-- `app/progenitor/orchestration/graphs/heartbeat_graph.py` - Graph topology
-- `app/progenitor/orchestration/state.py` - State models
+- `src/progenitor/orchestration/graphs/heartbeat_graph.py` - Graph topology
+- `src/progenitor/orchestration/state.py` - State models

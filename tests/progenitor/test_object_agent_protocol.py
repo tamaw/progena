@@ -15,17 +15,17 @@ from langchain_core.tools import tool
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph_sdk import get_client
 
-import app.progenitor.llm.provider_context as provider_runtime
-from app.progenitor.agent.middleware.async_subagent_tracking import AsyncSubagentTrackingMiddleware
-from app.progenitor.agent.object_agents.factory import create_object_agent_proxy
-from app.progenitor.agent.object_agents.registry import (
+import src.progenitor.llm.provider_context as provider_runtime
+from src.progenitor.agent.middleware.async_subagent_tracking import AsyncSubagentTrackingMiddleware
+from src.progenitor.agent.object_agents.factory import create_object_agent_proxy
+from src.progenitor.agent.object_agents.registry import (
     LiveSubagentMiddleware,
     ObjectAgentRegistry,
 )
-from app.progenitor.agent.subagents.live import LiveAsyncSubagentMiddleware
-from app.progenitor.async_subagents.protocol import RUN_PREFIX, THREAD_PREFIX
-from app.progenitor.runtime.http.server import ProgenitorHTTPServer
-from app.progenitor.state.manager import StateManager
+from src.progenitor.agent.subagents.live import LiveAsyncSubagentMiddleware
+from src.progenitor.async_subagents.protocol import RUN_PREFIX, THREAD_PREFIX
+from src.progenitor.runtime.http.server import ProgenitorHTTPServer
+from src.progenitor.state.manager import StateManager
 from tests.progenitor.conftest import _FakeRuntimeStore
 
 
@@ -326,12 +326,12 @@ async def test_real_object_agent_approval_pauses_and_resumes_same_thread(tmp_pat
 async def test_routine_background_continues_before_agent_and_validates_eventual_result(
     tmp_path, response_type, expected_status
 ):
-    from app.progenitor.async_subagents.tasks import (
+    from src.progenitor.async_subagents.tasks import (
         create_agent_background_runner,
         refresh_tracked_async_subagent_task,
     )
-    from app.progenitor.routines.factory import compile_routine_graph
-    from app.progenitor.routines.graph import validate_routine_graph_payload
+    from src.progenitor.routines.factory import compile_routine_graph
+    from src.progenitor.routines.graph import validate_routine_graph_payload
 
     state, registry, _ = await setup_registry(tmp_path)
     entered, release = asyncio.Event(), asyncio.Event()
@@ -424,7 +424,7 @@ async def test_actual_object_agent_uses_profile_override_for_both_modes(
         configs.append(config.model_default)
         return Model(responses=[AIMessage(content="profile greeting")])
 
-    monkeypatch.setattr("app.progenitor.agent.adapters.create_langchain_model", selected_model)
+    monkeypatch.setattr("src.progenitor.agent.adapters.create_langchain_model", selected_model)
     monkeypatch.setattr(provider_runtime, "get_provider_repository", lambda: _ProviderRepository())
     server = server_for(state, registry)
     await server.start()

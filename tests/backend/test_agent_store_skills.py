@@ -10,9 +10,9 @@ from __future__ import annotations
 
 import pytest
 
-from app.backend.agents.store import AgentStore
-from app.backend.storage.documents import InMemoryDocumentStore
-from app.progenitor.documents.content import content_document_key
+from src.backend.agents.store import AgentStore
+from src.backend.storage.documents import InMemoryDocumentStore
+from src.progenitor.documents.content import content_document_key
 
 
 def _make_store() -> AgentStore:
@@ -90,7 +90,7 @@ def test_update_skill_writes_native_skill_to_disk(tmp_path, monkeypatch) -> None
     skill_dir.mkdir()
     original = "---\nname: managing-agents\ndescription: Old.\n---\nOld body.\n"
     (skill_dir / "SKILL.md").write_text(original, encoding="utf-8")
-    monkeypatch.setattr("app.backend.agents.store._NATIVE_SKILLS_ROOT", tmp_path)
+    monkeypatch.setattr("src.backend.agents.store._NATIVE_SKILLS_ROOT", tmp_path)
 
     updated_content = "---\nname: managing-agents\ndescription: New.\n---\nNew body.\n"
     updated = store.update_skill("/skills/managing-agents", updated_content)

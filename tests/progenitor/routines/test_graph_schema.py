@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from app.progenitor.routines.graph import (
+from src.progenitor.routines.graph import (
     RoutineGraph,
     validate_routine_graph,
     validate_routine_graph_payload,
@@ -31,8 +31,18 @@ class TestValidateRoutineGraphPayload:
             "version": "2.0.0",
             "entry": "mapped",
             "nodes": [
-                {"id": "mapped", "kind": "eval", "output_key": "mapped", "config": {"expression": "1"}},
-                {"id": "reduced", "kind": "reduce", "output_key": "reduced", "config": {"source_node": "mapped", "operation": "sum"}},
+                {
+                    "id": "mapped",
+                    "kind": "eval",
+                    "output_key": "mapped",
+                    "config": {"expression": "1"},
+                },
+                {
+                    "id": "reduced",
+                    "kind": "reduce",
+                    "output_key": "reduced",
+                    "config": {"source_node": "mapped", "operation": "sum"},
+                },
             ],
             "edges": [{"from": "mapped", "to": "reduced", "level": "normal"}],
         }

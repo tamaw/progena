@@ -1,6 +1,6 @@
 import pytest
 
-from app.progenitor.knowledge.pages import (
+from src.progenitor.knowledge.pages import (
     check_log_append,
     classify_page_path,
     render_directory_index,

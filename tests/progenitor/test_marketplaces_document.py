@@ -7,10 +7,10 @@ from typing import Any
 
 import pytest
 
-from app.progenitor.agent.filesystem.base import StateDocumentBackend
-from app.progenitor.agent.filesystem.config import create_marketplaces_state_file
-from app.progenitor.plugins.marketplaces import validate_marketplaces_document
-from app.progenitor.state.manager import StateManager
+from src.progenitor.agent.filesystem.base import StateDocumentBackend
+from src.progenitor.agent.filesystem.config import create_marketplaces_state_file
+from src.progenitor.plugins.marketplaces import validate_marketplaces_document
+from src.progenitor.state.manager import StateManager
 from tests.progenitor.conftest import _FakeRuntimeStore
 
 # ---- validation ------------------------------------------------------------

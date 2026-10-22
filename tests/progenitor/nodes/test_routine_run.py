@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock
 
-from app.progenitor.orchestration.nodes.routine_run import routine_run_node
-from app.progenitor.orchestration.state import ProgenitorState
+from src.progenitor.orchestration.nodes.routine_run import routine_run_node
+from src.progenitor.orchestration.state import ProgenitorState
 
 
 class TestRoutineRunResume:

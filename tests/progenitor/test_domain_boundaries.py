@@ -37,14 +37,14 @@ def _imported_modules(code: str) -> set[str]:
     ],
 )
 def test_contracts_do_not_import_application_assembly(module):
-    loaded = _imported_modules(f"import app.progenitor.{module}")
+    loaded = _imported_modules(f"import src.progenitor.{module}")
     forbidden = (
-        "app.backend",
-        "app.progenitor.agent",
-        "app.progenitor.runtime",
-        "app.progenitor.orchestration",
-        "app.progenitor.tools",
-        "app.progenitor.state.manager",
+        "src.backend",
+        "src.progenitor.agent",
+        "src.progenitor.runtime",
+        "src.progenitor.orchestration",
+        "src.progenitor.tools",
+        "src.progenitor.state.manager",
     )
     assert not {name for name in loaded if name.startswith(forbidden)}
 
@@ -52,22 +52,22 @@ def test_contracts_do_not_import_application_assembly(module):
 def test_instruction_type_resolution_does_not_load_workflows():
     loaded = _imported_modules(
         """
-from app.progenitor.documents.types import DocumentType
-from app.progenitor.instructions.templates import resolve_type_ref
+from src.progenitor.documents.types import DocumentType
+from src.progenitor.instructions.templates import resolve_type_ref
 kind = DocumentType(id="fixture", label="Fixture", key_prefix="fixture:")
 schema, definitions = resolve_type_ref("fixture", {"fixture": kind})
 assert schema == {"type": "object", "title": "Fixture"}
 assert definitions == {}
 """
     )
-    assert not {name for name in loaded if name.startswith("app.progenitor.workflows")}
+    assert not {name for name in loaded if name.startswith("src.progenitor.workflows")}
 
 
 def test_domain_stores_share_cache_and_keep_read_through_documents_live():
     """Composition must preserve cache identity and multi-process coherence."""
     import asyncio
 
-    from app.progenitor.state.manager import StateManager
+    from src.progenitor.state.manager import StateManager
 
     class Store:
         def __init__(self):

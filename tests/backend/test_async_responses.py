@@ -13,12 +13,12 @@ import pytest
 import uvicorn
 from fastapi.testclient import TestClient
 
-import app.backend.chat.responses as chat_responses
-import app.backend.events.stream as events_stream
-import app.backend.http.middleware as http_middleware
-import app.backend.lifecycle.state as lifecycle_state
-from app.backend.chat.streaming import reset_stop_flag
-from app.backend.main import app
+import src.backend.chat.responses as chat_responses
+import src.backend.events.stream as events_stream
+import src.backend.http.middleware as http_middleware
+import src.backend.lifecycle.state as lifecycle_state
+from src.backend.chat.streaming import reset_stop_flag
+from src.backend.main import app
 
 
 @pytest.fixture
@@ -856,7 +856,7 @@ class TestAsyncResponseHandling:
                 captured["request_id"] = request_id
                 captured["metadata"] = metadata
                 captured["include_reasoning"] = include_reasoning
-                from app.backend.chat.models import AgentResponse
+                from src.backend.chat.models import AgentResponse
 
                 return AgentResponse(response="Hello", reasoning=None, reasoning_tokens=None)
 
@@ -913,7 +913,7 @@ class TestAsyncResponseHandling:
             ):
                 del message, request_id, metadata
                 assert include_reasoning is True
-                from app.backend.chat.models import AgentResponse
+                from src.backend.chat.models import AgentResponse
 
                 return AgentResponse(
                     response="10.50. At $0.75 per pencil, 14 pencils cost $10.50.",

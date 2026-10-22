@@ -9,8 +9,8 @@ import psycopg
 import pytest
 from psycopg import sql
 
-from app.backend.storage.documents import PROGENITOR_STATE_PREFIX, PostgresDocumentStore
-from app.progenitor.modules.contracts import module_file_key
+from src.backend.storage.documents import PROGENITOR_STATE_PREFIX, PostgresDocumentStore
+from src.progenitor.modules.contracts import module_file_key
 
 DATABASE_URL = (os.getenv("PROGENITOR_TEST_DATABASE_URL") or "").strip() or None
 pytestmark = pytest.mark.skipif(

@@ -9,9 +9,9 @@ from ack_helpers import assert_acknowledged
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app.backend.settings.providers import create_provider_router
-from app.backend.storage.documents import PROGENITOR_STATE_PREFIX, InMemoryDocumentStore
-from app.progenitor.settings.providers import (
+from src.backend.settings.providers import create_provider_router
+from src.backend.storage.documents import PROGENITOR_STATE_PREFIX, InMemoryDocumentStore
+from src.progenitor.settings.providers import (
     _normalize_foundry_base_url,
     _normalize_legacy_foundry_base_url,
 )

@@ -2,7 +2,7 @@
 
 import uuid
 
-from app.progenitor.security.redaction import redact_secrets
+from src.progenitor.security.redaction import redact_secrets
 
 
 class TestSecretRedaction:

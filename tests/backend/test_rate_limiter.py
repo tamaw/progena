@@ -3,7 +3,7 @@
 import time
 import unittest
 
-import app.backend.http.middleware as http_middleware
+import src.backend.http.middleware as http_middleware
 
 
 class TestRateLimiterMemoryBounds(unittest.TestCase):

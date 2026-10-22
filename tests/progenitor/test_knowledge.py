@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.progenitor.knowledge import schema as kschema
+from src.progenitor.knowledge import schema as kschema
 
 
 def test_validate_payload_normalizes_and_drops_derived_and_retired_fields() -> None:

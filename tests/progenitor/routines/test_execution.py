@@ -8,8 +8,8 @@ from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.errors import NodeTimeoutError
 
-from app.progenitor.routines.revisions import NullRoutineRevisionReader
-from app.progenitor.routines.subagent import (
+from src.progenitor.routines.revisions import NullRoutineRevisionReader
+from src.progenitor.routines.subagent import (
     create_routine_executor,
     create_routine_subagent,
     resume_routine_thread,
@@ -21,7 +21,7 @@ class Documents:
         return {}
 
     async def get_execution_policy(self, policy_id):
-        from app.progenitor.settings.policies import ExecutionPolicy
+        from src.progenitor.settings.policies import ExecutionPolicy
 
         return ExecutionPolicy(id=policy_id, name="Default").model_dump(mode="json")
 
@@ -327,7 +327,7 @@ async def test_deleted_live_routine_does_not_fall_back_to_a_revision():
 
 @pytest.mark.asyncio
 async def test_actual_agent_factory_runner_preserves_nested_data(monkeypatch):
-    from app.progenitor.agent.factory import create_progenitor_agent
+    from src.progenitor.agent.factory import create_progenitor_agent
     from tests.progenitor.test_memory import FakeContentStateManager
 
     child = graph(
@@ -357,7 +357,7 @@ async def test_actual_agent_factory_runner_preserves_nested_data(monkeypatch):
 
     class Store(FakeContentStateManager):
         async def get_execution_policy(self, policy_id):
-            from app.progenitor.settings.policies import ExecutionPolicy
+            from src.progenitor.settings.policies import ExecutionPolicy
 
             return ExecutionPolicy(id=policy_id, name="Default").model_dump(mode="json")
 
@@ -368,9 +368,9 @@ async def test_actual_agent_factory_runner_preserves_nested_data(monkeypatch):
             return [parent, child]
 
     agent = SimpleNamespace()
-    monkeypatch.setattr("app.progenitor.agent.factory.create_deep_agent", lambda **_kwargs: agent)
+    monkeypatch.setattr("src.progenitor.agent.factory.create_deep_agent", lambda **_kwargs: agent)
     monkeypatch.setattr(
-        "app.progenitor.agent.factory.create_progenitor_backend", lambda **_kwargs: object()
+        "src.progenitor.agent.factory.create_progenitor_backend", lambda **_kwargs: object()
     )
     compiled = await create_progenitor_agent(state_manager=Store(), checkpointer=MemorySaver())
     result = await compiled.routine_runner("parent", {"messages": [HumanMessage("calculate")]})
@@ -390,9 +390,9 @@ async def test_actual_agent_factory_runner_preserves_nested_data(monkeypatch):
 async def test_human_ui_answer_routes_once_on_original_checkpoint(answer):
     from unittest.mock import AsyncMock
 
-    from app.progenitor.routines.approvals import pending_approvals
-    from app.progenitor.routines.factory import compile_routine_graph
-    from app.progenitor.routines.graph import validate_routine_graph_payload
+    from src.progenitor.routines.approvals import pending_approvals
+    from src.progenitor.routines.factory import compile_routine_graph
+    from src.progenitor.routines.graph import validate_routine_graph_payload
 
     doc = graph(
         "approval",

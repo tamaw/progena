@@ -9,8 +9,8 @@ Covers two behaviours added for the live Tools page:
 
 from __future__ import annotations
 
-from app.backend.monitoring.state import StateReader
-from app.backend.storage.documents import PROGENITOR_STATE_PREFIX, InMemoryDocumentStore
+from src.backend.monitoring.state import StateReader
+from src.backend.storage.documents import PROGENITOR_STATE_PREFIX, InMemoryDocumentStore
 
 
 def _reader(servers: dict, mcp_tools: dict | None = None):

@@ -1,4 +1,4 @@
-"""Tests for routine graph storage-key helpers (app.progenitor.routines.store)."""
+"""Tests for routine graph storage-key helpers (src.progenitor.routines.store)."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import json
 
 import pytest
 
-from app.progenitor.routines.store import (
+from src.progenitor.routines.store import (
     ROUTINE_GRAPH_KEY_PREFIX,
     default_routine_graph,
     parse_routine_graph_document,
@@ -113,7 +113,7 @@ def test_parse_routine_graph_document_rejects_additional_properties():
     ],
 )
 def test_agent_input_source_survives_save_read_round_trip(source):
-    from app.progenitor.routines.graph import validate_routine_graph_payload
+    from src.progenitor.routines.graph import validate_routine_graph_payload
 
     graph = default_routine_graph("agent-roundtrip")
     graph["nodes"][0].update(kind="agent", config={"agent_name": "reviewer", **source})

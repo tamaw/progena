@@ -4,7 +4,7 @@ from unittest.mock import patch
 import pytest
 from langchain_core.tools import StructuredTool
 
-from app.progenitor.mcp.context import build_mcp_langchain_tool_wrappers
+from src.progenitor.mcp.context import build_mcp_langchain_tool_wrappers
 
 
 def _adapter_tool(name: str) -> StructuredTool:
@@ -49,7 +49,7 @@ async def test_build_mcp_langchain_tool_wrappers_applies_runtime_aliases() -> No
         }
     ]
 
-    with patch("app.progenitor.mcp.context.MultiServerMCPClient", FakeClient):
+    with patch("src.progenitor.mcp.context.MultiServerMCPClient", FakeClient):
         tools = await build_mcp_langchain_tool_wrappers(config, mcp_tools)
 
     assert captured_connections["value"] == {
@@ -66,8 +66,8 @@ async def test_build_mcp_langchain_tool_wrappers_applies_runtime_aliases() -> No
 
 @pytest.mark.asyncio
 async def test_mcp_runtime_disabled_tools_are_hidden_and_rejected() -> None:
-    from app.progenitor.config import MCPConfig
-    from app.progenitor.mcp.runtime import MCPRuntime
+    from src.progenitor.config import MCPConfig
+    from src.progenitor.mcp.runtime import MCPRuntime
 
     runtime = MCPRuntime(MCPConfig(servers=[]))
 

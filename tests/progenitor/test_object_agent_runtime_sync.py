@@ -7,8 +7,8 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
-from app.progenitor.runtime.agent_sync import AgentSyncScheduler
-from app.progenitor.runtime.progenitor import Progenitor
+from src.progenitor.runtime.agent_sync import AgentSyncScheduler
+from src.progenitor.runtime.progenitor import Progenitor
 
 
 def runtime():
@@ -89,7 +89,7 @@ async def test_plugin_reconcile_requests_object_refresh_after_install(monkeypatc
     instance = runtime()
     instance.log_store = None
     reconcile = AsyncMock(return_value={})
-    monkeypatch.setattr("app.progenitor.plugins.install.reconcile_plugins", reconcile)
+    monkeypatch.setattr("src.progenitor.plugins.install.reconcile_plugins", reconcile)
     await instance._do_plugin_reconcile()
     reconcile.assert_awaited_once()
     instance._agent_scheduler.request.assert_called_once_with()

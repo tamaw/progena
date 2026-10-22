@@ -16,8 +16,8 @@ import asyncio
 
 import pytest
 
-import app.backend.chat.responses as chat_responses
-import app.backend.events.stream as events_stream
+import src.backend.chat.responses as chat_responses
+import src.backend.events.stream as events_stream
 
 
 @pytest.fixture

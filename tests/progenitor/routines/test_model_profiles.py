@@ -7,10 +7,10 @@ import pytest
 from langchain_core.messages import AIMessage
 from langchain_core.runnables import RunnableLambda
 
-import app.progenitor.llm.provider_context as provider_runtime
-from app.progenitor.agent.model_profiles import resolve_model_profile
-from app.progenitor.routines.factory import compile_routine_graph
-from app.progenitor.routines.graph import validate_routine_graph_payload
+import src.progenitor.llm.provider_context as provider_runtime
+from src.progenitor.agent.model_profiles import resolve_model_profile
+from src.progenitor.routines.factory import compile_routine_graph
+from src.progenitor.routines.graph import validate_routine_graph_payload
 from tests.progenitor.routines.test_factory import FakeModel, FakeStructuredModel
 
 
@@ -87,7 +87,7 @@ async def test_named_profile_is_live_even_when_compiled_graph_is_reused(kind, mo
             else _ConfigurableFakeModel([config.model_default])
         )
 
-    monkeypatch.setattr("app.progenitor.agent.adapters.create_langchain_model", create)
+    monkeypatch.setattr("src.progenitor.agent.adapters.create_langchain_model", create)
     monkeypatch.setattr(provider_runtime, "get_provider_repository", lambda: _ProviderRepository())
     parent = FakeModel([])
     compiled = compile_routine_graph(

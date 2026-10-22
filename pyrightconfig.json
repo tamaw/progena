@@ -1,13 +1,13 @@
 {
   "include": [
-    "app"
+    "src"
   ],
   "exclude": [
     ".venv",
     "worktrees",
     "tests",
-    "app/chat-ui",
-    "app/frontend",
+    "src/chat-ui",
+    "src/frontend",
     "**/__pycache__"
   ]
 }

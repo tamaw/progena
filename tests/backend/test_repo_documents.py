@@ -2,15 +2,15 @@
 
 import pytest
 
-from app.backend.events.documents import seed_document_types
-from app.backend.repositories import service as repo_service
-from app.backend.storage.documents import (
+from src.backend.events.documents import seed_document_types
+from src.backend.repositories import service as repo_service
+from src.backend.storage.documents import (
     EVENT_LOG_START,
     PROGENITOR_STATE_PREFIX,
     InMemoryDocumentStore,
     set_default_document_store,
 )
-from app.progenitor.agent.filesystem.repositories import RepoDirectoryBackend
+from src.progenitor.agent.filesystem.repositories import RepoDirectoryBackend
 
 
 @pytest.fixture
@@ -25,7 +25,7 @@ def store():
 def test_direct_repo_document_write_reaches_ui_watchers(store):
     """The agent writes repo:<id> straight to the store; the NOTIFY must still
     reach the Repositories page even though no snapshot field changes."""
-    from app.backend.monitoring.state import StateReader
+    from src.backend.monitoring.state import StateReader
 
     reader = StateReader(document_store=store)
     reader._last_snapshot = reader.get_snapshot()
@@ -81,7 +81,7 @@ def test_update_keeps_created_at_and_validates(store):
 
 @pytest.mark.asyncio
 async def test_agent_repo_files_validate_and_keep_created_at(store):
-    from app.progenitor.state.manager import StateManager
+    from src.progenitor.state.manager import StateManager
 
     class _Store:
         async def peek_document(self, key):

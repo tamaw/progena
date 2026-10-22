@@ -4,8 +4,8 @@ import re
 
 import pytest
 
-from app.progenitor.tools.generate_id import GenerateIdTool
-from app.progenitor.tools.protocol import ToolContext
+from src.progenitor.tools.generate_id import GenerateIdTool
+from src.progenitor.tools.protocol import ToolContext
 
 # --------------------------------------------------------------------------- #
 # generate_id

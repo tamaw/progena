@@ -1,11 +1,11 @@
-"""Tests for schema loading helpers (app.progenitor.documents.catalog)."""
+"""Tests for schema loading helpers (src.progenitor.documents.catalog)."""
 
 import json
 from pathlib import Path
 
 import pytest
 
-import app.progenitor.documents.catalog as schemas
+import src.progenitor.documents.catalog as schemas
 
 
 @pytest.fixture

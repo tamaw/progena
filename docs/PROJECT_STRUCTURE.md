@@ -6,7 +6,7 @@ This document focuses on the checked-in main stack only. For runtime relationshi
 
 ```text
 progenitor/
-├── app/          # Main application code
+├── src/          # Main application code
 ├── data/         # Bundled assets and managed-repository workspace
 ├── docker/       # Container definitions
 ├── docs/         # Project documentation
@@ -19,10 +19,17 @@ progenitor/
 
 This overview is intentionally selective and centered on the runtime, backend, and frontend.
 
-## Application code (`app/`)
+The Python package namespace is `src`: start the runtime with
+`python -m src.progenitor.main` and the gateway with
+`python -m uvicorn src.backend.main:app`. Install the repository with
+`pip install -e ".[dev]"` after changing source layouts so editable package
+metadata points at the current tree. Checkpoint readers translate historical
+`app.progenitor.*` constructor identities; saved message contents are unchanged.
+
+## Application code (`src/`)
 
 ```text
-app/
+src/
 ├── progenitor/   # Long-running runtime service
 │   ├── agent/    # DeepAgent setup and runtime integration
 │   ├── orchestration/ # Graphs, nodes and composed loop state

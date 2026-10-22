@@ -17,12 +17,12 @@ Three processes must run concurrently (see `docs/LOCAL_STARTUP.md` for full deta
 
 ```bash
 # Progenitor runtime (HTTP + SSE on :9501)
-python -m app.progenitor.main
+python -m src.progenitor.main
 
 # Backend API (:8000)
-python -m uvicorn app.backend.main:app --host 0.0.0.0 --port 8000
+python -m uvicorn src.backend.main:app --host 0.0.0.0 --port 8000
 
-# Frontend (:5173, from app/frontend/)
+# Frontend (:5173, from src/frontend/)
 npm run dev -- --port 5173
 ```
 
@@ -48,17 +48,17 @@ pytest -m "not slow" tests/               # skip slow tests
 ### Lint and type checking
 
 ```bash
-ruff check app/           # lint
-ruff format app/          # format
-mypy app/                 # type check
-bandit -c pyproject.toml -r app/  # security scan
+ruff check src/           # lint
+ruff format src/          # format
+mypy src/                 # type check
+bandit -c pyproject.toml -r src/  # security scan
 pre-commit run --all-files        # run all checks
 ```
 
 ### Mock LLM mode (no API key needed)
 
 ```bash
-PROGENITOR_MOCK_LLM=true python -m app.progenitor.main
+PROGENITOR_MOCK_LLM=true python -m src.progenitor.main
 ```
 
 ## Architecture
@@ -77,7 +77,7 @@ Browser → Frontend (Vite :5173)
 
 The frontend never talks directly to the runtime. Vite proxies all `/api/`, `/v1/`, and `/health` paths to the backend at `:8000`; the backend forwards conversation requests to the runtime's persistent HTTP server (`POST /v1/responses`, `GET /v1/events`) over HTTP + SSE.
 
-### Progenitor runtime (`app/progenitor/`)
+### Progenitor runtime (`src/progenitor/`)
 
 Perpetual LangGraph agent with two loops:
 
@@ -97,7 +97,7 @@ Key submodules:
 
 State persists via native LangGraph Postgres checkpoint/store tables. The LangGraph `store` uses namespace `("progenitor", "state")` for runtime documents and `("progenitor", "logs", <name>)` for append-only logs.
 
-### Backend (`app/backend/`)
+### Backend (`src/backend/`)
 
 FastAPI app (`main.py`) that is API-only — it does not serve frontend assets.
 
@@ -113,9 +113,9 @@ FastAPI app (`main.py`) that is API-only — it does not serve frontend assets.
 
 **Chat generation**: `POST /api/ui/responses` returns a `202` acknowledgement. Canonical `/api/ui/stream` carries `chat.response.started`, `chat.response.completed`, `chat.response.failed`, and `chat.response.cancelled`. Dedicated `/api/ui/responses/{request_id}/stream` carries the live `chat.response.delta` and `chat.response.event` frames for that one request; structured event payloads preserve `event_type`, `content`, `metadata`, and optional `images`.
 
-### Frontend (`app/frontend/`)
+### Frontend (`src/frontend/`)
 
-React + Vite SPA. State management via Redux Toolkit (`app/frontend/src/store/`):
+React + Vite SPA. State management via Redux Toolkit (`src/frontend/src/store/`):
 - `store.js` — Redux store
 - `realtimeListener.js` — owns the canonical `EventSource`, deduplicates `ui.event` envelopes by event id
 - `realtimeSlice.js` — dedup state

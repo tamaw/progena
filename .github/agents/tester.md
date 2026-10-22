@@ -181,7 +181,7 @@ def test_routing_decisions(action, expected_route):
 ### Running Coverage
 ```bash
 # Run tests with coverage
-pytest --cov=app.progenitor tests/progenitor/ --cov-report=html
+pytest --cov=src.progenitor tests/progenitor/ --cov-report=html
 
 # View coverage report
 open htmlcov/index.html  # or start htmlcov/index.html on Windows

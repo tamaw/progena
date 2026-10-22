@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-from app.progenitor.async_subagents.models import AsyncSubagentTaskRecord, AsyncSubagentTaskStatus
-from app.progenitor.async_subagents.tasks import refresh_tracked_async_subagent_task
+from src.progenitor.async_subagents.models import AsyncSubagentTaskRecord, AsyncSubagentTaskStatus
+from src.progenitor.async_subagents.tasks import refresh_tracked_async_subagent_task
 
 
 class TestRefreshTrackedAsyncSubagentTask:
@@ -27,7 +27,7 @@ class TestRefreshTrackedAsyncSubagentTask:
                     return {"status": "interrupted", "error": None}
 
         state_manager = FakeStateManager({"thread-1": record})
-        with patch("app.progenitor.async_subagents.tasks.get_client", return_value=FakeClient()):
+        with patch("src.progenitor.async_subagents.tasks.get_client", return_value=FakeClient()):
             refreshed = await refresh_tracked_async_subagent_task(state_manager, "thread-1")
         assert refreshed.status == "interrupted"
         assert refreshed.summary == "Awaiting human approval"

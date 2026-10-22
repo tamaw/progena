@@ -9,10 +9,10 @@ from typing import Any
 from acp import text_block
 from acp.schema import AgentMessageChunk, AgentThoughtChunk, ToolCallStart
 
-from app.progenitor.acp import runner as runner_module
-from app.progenitor.acp.agents import build_agent_args, build_copilot_args
-from app.progenitor.acp.client import ACPSessionClient
-from app.progenitor.acp.runner import ACPRunner
+from src.progenitor.acp import runner as runner_module
+from src.progenitor.acp.agents import build_agent_args, build_copilot_args
+from src.progenitor.acp.client import ACPSessionClient
+from src.progenitor.acp.runner import ACPRunner
 
 
 def _message_chunk(text: str) -> AgentMessageChunk:

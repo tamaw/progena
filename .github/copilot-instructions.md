@@ -21,9 +21,9 @@ Progenitor is a **dual-loop LangGraph AI agent** implementing the "Last Algorith
 The agent runs continuously, processing user input and scheduled tasks. When idle, it backs off exponentially.
 
 ### Key Components
-- **Backend** (`app/backend/`): FastAPI server with OpenAI-compatible API at `:8000`
-- **Frontend** (`app/frontend/`): React/Vite app at `:5173` (dev) - proxies API calls to backend
-- **Agent** (`app/progenitor/`): The LangGraph loop orchestrating everything
+- **Backend** (`src/backend/`): FastAPI server with OpenAI-compatible API at `:8000`
+- **Frontend** (`src/frontend/`): React/Vite app at `:5173` (dev) - proxies API calls to backend
+- **Agent** (`src/progenitor/`): The LangGraph loop orchestrating everything
 
 ### Data Flow
 ```
@@ -42,8 +42,8 @@ User → Frontend → Backend (/v1/responses) → HTTP + SSE → ProgenitorLoop 
 | Start all (dev) | VS Code Task: "Start All (dev)" or run each manually |
 | Run tests | `pytest` (auto-discovers, uses `asyncio_mode = auto`) |
 | Run progenitor tests | `pytest tests/progenitor/ -v` |
-| Type check | `pyright app/` |
-| Lint | `ruff check app/` |
+| Type check | `pyright src/` |
+| Lint | `ruff check src/` |
 
 **Mock mode** (no real LLM): `$env:PROGENITOR_MOCK_LLM = "true"`
 
@@ -51,11 +51,11 @@ User → Frontend → Backend (/v1/responses) → HTTP + SSE → ProgenitorLoop 
 
 ### State Models (Pydantic v2)
 Domain models live beside their owners, such as `schedules/models.py`,
-`a2a/models.py`, `acp/models.py` and `sessions/models.py` under app/progenitor.
+`a2a/models.py`, `acp/models.py` and `sessions/models.py` under src/progenitor.
 `ProgenitorState` in `orchestration/state.py` composes the graph's TypedDict state.
 
 ### Node Pattern
-Nodes in `app/progenitor/orchestration/nodes/` follow a factory pattern:
+Nodes in `src/progenitor/orchestration/nodes/` follow a factory pattern:
 ```python
 def create_node(state_manager, llm_client=None) -> Callable[[ProgenitorState], Awaitable[dict]]:
     async def node(state: ProgenitorState) -> dict:
@@ -65,7 +65,7 @@ def create_node(state_manager, llm_client=None) -> Callable[[ProgenitorState], A
 ```
 
 ### Graph Routing
-`app/progenitor/orchestration/graphs/heartbeat_graph.py` assembles background
+`src/progenitor/orchestration/graphs/heartbeat_graph.py` assembles background
 work. The conversational graph delegates to `agent/factory.py`, which composes
 the native DeepAgent. Runtime lifecycle and transport remain under runtime/.
 
@@ -75,7 +75,7 @@ Environment variables > JSON config files. Key configs:
 - `AZURE_OPENAI_*`: Azure deployment settings
 - `PROGENITOR_MOCK_LLM`: Enable mock mode for testing
 
-See `app/progenitor/config.py` for full dataclass definitions.
+See `src/progenitor/config.py` for full dataclass definitions.
 
 ### Testing Conventions
 - Tests use `pytest-asyncio` with `asyncio_mode = auto`
@@ -84,16 +84,16 @@ See `app/progenitor/config.py` for full dataclass definitions.
 - Example: `tests/progenitor/test_nodes.py`
 
 ### Secret Redaction
-`redact_secrets()` in `app/progenitor/security/redaction.py` auto-redacts API keys in logs. Patterns cover OpenAI, Azure, GitHub, Anthropic, and AWS keys.
+`redact_secrets()` in `src/progenitor/security/redaction.py` auto-redacts API keys in logs. Patterns cover OpenAI, Azure, GitHub, Anthropic, and AWS keys.
 
 ## Key Files
 
-- `app/progenitor/orchestration/graphs/heartbeat_graph.py` - LangGraph topology and routing
-- `app/progenitor/runtime/heartbeat.py` - Perpetual loop execution
-- `app/progenitor/orchestration/state.py` - Composed graph state
-- `app/progenitor/persistence/` - Shared storage infrastructure
-- `app/progenitor/state/manager.py` - State lifecycle and domain-store assembly
-- `app/progenitor/config.py` - Configuration dataclasses
-- `app/backend/main.py` - FastAPI application assembly; endpoints live in backend feature packages
+- `src/progenitor/orchestration/graphs/heartbeat_graph.py` - LangGraph topology and routing
+- `src/progenitor/runtime/heartbeat.py` - Perpetual loop execution
+- `src/progenitor/orchestration/state.py` - Composed graph state
+- `src/progenitor/persistence/` - Shared storage infrastructure
+- `src/progenitor/state/manager.py` - State lifecycle and domain-store assembly
+- `src/progenitor/config.py` - Configuration dataclasses
+- `src/backend/main.py` - FastAPI application assembly; endpoints live in backend feature packages
 - `docs/SPEC.md` - Checked-in main system specification
 - `docs/ARCHITECTURE_DIAGRAM.md` - Visual architecture

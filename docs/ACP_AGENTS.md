@@ -16,7 +16,7 @@ remote HTTP servers, ACP agents are local subprocesses Progenitor spawns and dri
 acp_* tools / workflows ─→ acp_task:<id> document (queued or updated)
                                    │ document event
 backend ACPTaskSupervisor ─────────┘
-   └─ ACPRunner (app/progenitor/acp/) ─→ ACP agent (TCP server or stdio CLI)
+   └─ ACPRunner (src/progenitor/acp/) ─→ ACP agent (TCP server or stdio CLI)
 ```
 
 The runtime registry is database-backed: `ToolRegistry` reads and writes the

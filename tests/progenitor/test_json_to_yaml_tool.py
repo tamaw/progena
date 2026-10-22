@@ -2,8 +2,8 @@
 
 import pytest
 
-from app.progenitor.tools.json_to_yaml import JsonToYamlTool
-from app.progenitor.tools.protocol import ToolContext
+from src.progenitor.tools.json_to_yaml import JsonToYamlTool
+from src.progenitor.tools.protocol import ToolContext
 
 
 @pytest.mark.asyncio

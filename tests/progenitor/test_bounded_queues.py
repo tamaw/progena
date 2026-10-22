@@ -57,7 +57,7 @@ class TestBoundedQueues(unittest.IsolatedAsyncioTestCase):
 
     async def asyncSetUp(self):
         """Set up test fixtures."""
-        from app.progenitor.runtime.heartbeat import ProgenitorLoop
+        from src.progenitor.runtime.heartbeat import ProgenitorLoop
 
         self.config = MockConfig()
         self.state_manager = MagicMock()
@@ -85,7 +85,7 @@ class TestBoundedQueues(unittest.IsolatedAsyncioTestCase):
 
     async def test_enqueue_input_stores_queued_input_wrapper(self):
         """Enqueued items should carry both content and enqueue timing."""
-        from app.progenitor.runtime.heartbeat import QueuedInput
+        from src.progenitor.runtime.heartbeat import QueuedInput
 
         await self.loop.queues.enqueue_input("wrapped message")
         queued = self.loop.queues.input_queue.get_nowait()
@@ -165,8 +165,8 @@ class TestBoundedQueues(unittest.IsolatedAsyncioTestCase):
 
     async def test_scheduler_enqueues_all_due_items(self):
         """Scheduler should enqueue every due task in a single poll cycle."""
-        from app.progenitor.orchestration.nodes.schedule import scheduler_tick_node
-        from app.progenitor.utils import utcnow
+        from src.progenitor.orchestration.nodes.schedule import scheduler_tick_node
+        from src.progenitor.utils import utcnow
 
         due_time = utcnow().replace(microsecond=0).isoformat()
         due_items = {
@@ -234,8 +234,8 @@ class TestBoundedQueues(unittest.IsolatedAsyncioTestCase):
         """Due one-off tasks should enqueue input and be marked completed."""
         from datetime import timedelta
 
-        from app.progenitor.orchestration.nodes.schedule import scheduler_tick_node
-        from app.progenitor.utils import utcnow
+        from src.progenitor.orchestration.nodes.schedule import scheduler_tick_node
+        from src.progenitor.utils import utcnow
 
         now = utcnow().replace(microsecond=0)
         due_time = (now - timedelta(minutes=1)).isoformat()
@@ -277,8 +277,8 @@ class TestBoundedQueues(unittest.IsolatedAsyncioTestCase):
         """Due recurring tasks should enqueue input and advance schedule."""
         from datetime import timedelta
 
-        from app.progenitor.orchestration.nodes.schedule import scheduler_tick_node
-        from app.progenitor.utils import utcnow
+        from src.progenitor.orchestration.nodes.schedule import scheduler_tick_node
+        from src.progenitor.utils import utcnow
 
         due_time = (utcnow() - timedelta(minutes=10)).replace(microsecond=0).isoformat()
         self.state_manager.get_schedule = AsyncMock(
@@ -310,7 +310,7 @@ class TestBoundedQueues(unittest.IsolatedAsyncioTestCase):
         self.state_manager.upsert_schedule_run.assert_awaited_once()
 
     async def test_scheduled_completion_updates_run_and_schedule(self):
-        from app.progenitor.schedules.dispatch import emit_scheduled_completion
+        from src.progenitor.schedules.dispatch import emit_scheduled_completion
 
         queues = self.loop.queues
         state = {
@@ -328,7 +328,7 @@ class TestBoundedQueues(unittest.IsolatedAsyncioTestCase):
         self.state_manager.update_schedule_entry.assert_awaited_once()
 
     async def test_cycle_setup_marks_schedule_run_running(self):
-        from app.progenitor.orchestration.nodes.intake import cycle_setup_node
+        from src.progenitor.orchestration.nodes.intake import cycle_setup_node
 
         state = {
             "queued_input": {
@@ -357,21 +357,21 @@ class TestReasoningTraceExtraction(unittest.TestCase):
     """Tests for runtime reasoning extraction helpers."""
 
     def test_extracts_from_response_metadata(self):
-        from app.progenitor.sessions.messages import extract_reasoning_trace
+        from src.progenitor.sessions.messages import extract_reasoning_trace
 
         msg = SimpleNamespace(response_metadata={"reasoning": {"summary": "done"}})
         trace = extract_reasoning_trace(msg)
         assert trace == "done"
 
     def test_extracts_summary_effort_schema(self):
-        from app.progenitor.sessions.messages import extract_reasoning_trace
+        from src.progenitor.sessions.messages import extract_reasoning_trace
 
         msg = SimpleNamespace(response_metadata={"effort": "medium", "summary": "detailed"})
         trace = extract_reasoning_trace(msg)
         assert trace == "detailed"
 
     def test_extracts_from_content_parts(self):
-        from app.progenitor.sessions.messages import extract_reasoning_trace
+        from src.progenitor.sessions.messages import extract_reasoning_trace
 
         msg = {
             "role": "assistant",
@@ -380,13 +380,13 @@ class TestReasoningTraceExtraction(unittest.TestCase):
         assert extract_reasoning_trace(msg) == "step-by-step"
 
     def test_extract_message_text_from_string_content(self):
-        from app.progenitor.sessions.messages import extract_message_text
+        from src.progenitor.sessions.messages import extract_message_text
 
         msg = {"role": "assistant", "content": "hello there"}
         assert extract_message_text(msg) == "hello there"
 
     def test_extract_message_text_from_list_blocks(self):
-        from app.progenitor.sessions.messages import extract_message_text
+        from src.progenitor.sessions.messages import extract_message_text
 
         msg = {
             "role": "assistant",
@@ -398,7 +398,7 @@ class TestReasoningTraceExtraction(unittest.TestCase):
         assert extract_message_text(msg) == "one\ntwo"
 
     def test_finds_last_assistant_message(self):
-        from app.progenitor.sessions.messages import get_last_ai_message
+        from src.progenitor.sessions.messages import get_last_ai_message
 
         messages = [
             {"role": "user", "content": "hi"},

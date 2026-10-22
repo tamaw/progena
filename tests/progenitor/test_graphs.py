@@ -6,14 +6,14 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from app.progenitor.a2a.models import A2ATaskRecord
-from app.progenitor.async_subagents.models import AsyncSubagentTaskRecord
-from app.progenitor.orchestration.graphs.heartbeat_graph import (
+from src.progenitor.a2a.models import A2ATaskRecord
+from src.progenitor.async_subagents.models import AsyncSubagentTaskRecord
+from src.progenitor.orchestration.graphs.heartbeat_graph import (
     create_runtime_heartbeat_graph,
     validate_heartbeat_context,
 )
-from app.progenitor.orchestration.graphs.progenitor_graph import create_conversation_graph
-from app.progenitor.orchestration.nodes.context import HeartbeatContext
+from src.progenitor.orchestration.graphs.progenitor_graph import create_conversation_graph
+from src.progenitor.orchestration.nodes.context import HeartbeatContext
 
 pytestmark = pytest.mark.usefixtures("model_provider")
 
@@ -21,7 +21,7 @@ pytestmark = pytest.mark.usefixtures("model_provider")
 @pytest.mark.asyncio
 async def test_create_conversation_graph_returns_native_deepagent_graph() -> None:
     with patch(
-        "app.progenitor.orchestration.graphs.progenitor_graph.create_progenitor_agent",
+        "src.progenitor.orchestration.graphs.progenitor_graph.create_progenitor_agent",
         new_callable=AsyncMock,
     ) as mock_create:
         mock_graph = MagicMock()
@@ -128,7 +128,7 @@ async def test_runtime_heartbeat_graph_notifies_async_subagent_completion(tmp_pa
     context.due_maintenance = {"async_subagent_poll"}
 
     with patch(
-        "app.progenitor.orchestration.nodes.async_subagents.refresh_tracked_async_subagent_task",
+        "src.progenitor.orchestration.nodes.async_subagents.refresh_tracked_async_subagent_task",
         AsyncMock(
             return_value=AsyncSubagentTaskRecord(
                 task_id="async-task-1",
@@ -324,7 +324,7 @@ async def test_runtime_heartbeat_graph_reports_startup_node_errors() -> None:
         raise RuntimeError("startup audit exploded")
 
     with patch(
-        "app.progenitor.orchestration.graphs.heartbeat_graph.startup_audit_node",
+        "src.progenitor.orchestration.graphs.heartbeat_graph.startup_audit_node",
         _raising_startup_audit,
     ):
         live_state = {

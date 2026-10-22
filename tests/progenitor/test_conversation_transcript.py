@@ -7,7 +7,7 @@ from zoneinfo import ZoneInfo
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 
-from app.progenitor.sessions.transcript import (
+from src.progenitor.sessions.transcript import (
     ThreadMessages,
     format_log,
     render_transcript,

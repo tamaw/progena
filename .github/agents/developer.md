@@ -64,27 +64,27 @@ class MyModel(BaseModel):
 1. Create/update tests first (TDD approach)
 2. Implement feature with minimal changes
 3. Run tests: `pytest tests/path/ -v`
-4. Check types: `pyright app/`
-5. Lint: `ruff check app/`
+4. Check types: `pyright src/`
+5. Lint: `ruff check src/`
 6. Manual testing if UI changes involved
 
 ### Common Tasks
 
 #### Adding a New Node
-1. Create node in `app/progenitor/orchestration/nodes/my_node.py`
+1. Create node in `src/progenitor/orchestration/nodes/my_node.py`
 2. Follow factory pattern
-3. Add to graph in `app/progenitor/orchestration/graphs/heartbeat_graph.py`
+3. Add to graph in `src/progenitor/orchestration/graphs/heartbeat_graph.py`
 4. Add routing logic if needed
 5. Write tests in `tests/progenitor/test_nodes.py`
 
 #### Adding API Endpoint
-1. Add the route in its feature package under `app/backend/<feature>/routes.py`
+1. Add the route in its feature package under `src/backend/<feature>/routes.py`
 2. Create Pydantic models for request/response
 3. Add tests in `tests/backend/`
-4. Register its router in `app/backend/http/router.py` or `app/backend/main.py` and verify the API contract
+4. Register its router in `src/backend/http/router.py` or `src/backend/main.py` and verify the API contract
 
 #### Adding React Component
-1. Add feature components under `app/frontend/src/features/<feature>/`; put domain-independent UI in `app/frontend/src/components/`
+1. Add feature components under `src/frontend/src/features/<feature>/`; put domain-independent UI in `src/frontend/src/components/`
 2. Follow existing patterns (hooks, props, etc.)
 3. Import feature state directly; keep application assembly and shared UI independent
 4. Test in browser

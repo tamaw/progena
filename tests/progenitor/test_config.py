@@ -8,7 +8,7 @@ import os
 from pathlib import Path
 from unittest.mock import patch
 
-from app.progenitor.config import (
+from src.progenitor.config import (
     LLMConfig,
     MCPConfig,
     MCPServerConfig,
@@ -19,10 +19,10 @@ from app.progenitor.config import (
     get_config,
     reload_config,
 )
-from app.progenitor.instructions import DEFAULT_INSTRUCTIONS_DIR
-from app.progenitor.mcp.loader import load_mcp_servers, resolve_required_env_template
-from app.progenitor.runtime.logging import setup_logging
-from app.progenitor.utils import env_bool, env_int
+from src.progenitor.instructions import DEFAULT_INSTRUCTIONS_DIR
+from src.progenitor.mcp.loader import load_mcp_servers, resolve_required_env_template
+from src.progenitor.runtime.logging import setup_logging
+from src.progenitor.utils import env_bool, env_int
 
 
 class TestEnvParsers:
@@ -360,7 +360,7 @@ class TestGlobalConfig:
     def test_get_config_caches_result(self):
         """Test get_config returns cached instance."""
         # Reset global config
-        import app.progenitor.config as config_module
+        import src.progenitor.config as config_module
 
         config_module._config = None
 
@@ -376,7 +376,7 @@ class TestGlobalConfig:
 
     def test_reload_config_creates_new_instance(self):
         """Test reload_config creates new instance."""
-        import app.progenitor.config as config_module
+        import src.progenitor.config as config_module
 
         config_module._config = None
 
@@ -392,7 +392,7 @@ class TestGlobalConfig:
 
     def test_get_config_validate_logs_non_fatal_issues(self, caplog):
         """validate=True should log warning-only config issues."""
-        import app.progenitor.config as config_module
+        import src.progenitor.config as config_module
 
         config_module._config = None
 
@@ -414,7 +414,7 @@ class TestGlobalConfig:
 
     def test_get_config_validate_false_skips_non_fatal_issue_logging(self, caplog):
         """validate=False should skip the warning-only validation pass."""
-        import app.progenitor.config as config_module
+        import src.progenitor.config as config_module
 
         config_module._config = None
 

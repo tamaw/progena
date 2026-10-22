@@ -12,14 +12,14 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-import app.backend.agents.reconciliation as agents_reconciliation
-import app.backend.agents.store as agents_store
-import app.backend.events.stream as events_stream
-import app.backend.monitoring.status as monitoring_status
-import app.backend.storage.documents as storage_documents
-from app.backend.agents.routes import create_agent_profile_router
-from app.backend.monitoring.state import StateReader
-from app.backend.storage.documents import (
+import src.backend.agents.reconciliation as agents_reconciliation
+import src.backend.agents.store as agents_store
+import src.backend.events.stream as events_stream
+import src.backend.monitoring.status as monitoring_status
+import src.backend.storage.documents as storage_documents
+from src.backend.agents.routes import create_agent_profile_router
+from src.backend.monitoring.state import StateReader
+from src.backend.storage.documents import (
     PROGENITOR_STATE_PREFIX,
     CheckpointThreadSnapshot,
     InMemoryDocumentStore,
@@ -253,7 +253,14 @@ def test_deleted_routine_history_routes_remain_available(harness, monkeypatch):
     )
     connection = AsyncMock()
     connection.__aenter__.return_value = saver
-    monkeypatch.setattr(AsyncPostgresSaver, "from_conn_string", lambda _url: connection)
+
+    def open_saver(_url, *, serde):
+        from src.progenitor.persistence.serialization import CheckpointSerializer
+
+        assert isinstance(serde, CheckpointSerializer)
+        return connection
+
+    monkeypatch.setattr(AsyncPostgresSaver, "from_conn_string", open_saver)
     response = client.get(
         "/api/ui/agent-profiles/gone/run-state",
         params={"thread_id": "routine:gone:last:run"},

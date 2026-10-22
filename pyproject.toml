@@ -85,9 +85,14 @@ ml = [
 requires = ["setuptools>=68.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
+[tool.setuptools]
+# Frontend assets are built by Vite, not shipped as Python package data.
+include-package-data = false
+
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["app*", "src*"]
+include = ["src", "src.*"]
+namespaces = false
 
 # Ruff configuration (linting + formatting)
 [tool.ruff]
@@ -104,7 +109,7 @@ exclude = [
     ".venv",
     "__pycache__",
     "node_modules",
-    "app/chat-ui",
+    "src/chat-ui",
     "worktrees",
     "*.json",
 ]
@@ -138,7 +143,7 @@ unfixable = []
 ]
 
 [tool.ruff.lint.isort]
-known-first-party = ["app"]
+known-first-party = ["src"]
 
 [tool.ruff.format]
 quote-style = "double"
@@ -156,11 +161,11 @@ line-ending = "auto"
 pythonVersion = "3.11"
 # Pinned so a pyright upgrade cannot silently change strictness under CI.
 typeCheckingMode = "standard"
-include = ["app"]
+include = ["src"]
 exclude = [
     "**/__pycache__",
-    "app/chat-ui",
-    "app/frontend",
+    "src/chat-ui",
+    "src/frontend",
 ]
 
 # Pytest configuration
@@ -187,10 +192,10 @@ skips = [
 
 # Coverage configuration
 [tool.coverage.run]
-source = ["app"]
+source = ["src"]
 branch = true
 omit = [
-    "app/chat-ui/*",
+    "src/chat-ui/*",
     "tests/*",
 ]
 

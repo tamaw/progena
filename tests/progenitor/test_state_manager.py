@@ -6,17 +6,17 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.progenitor.a2a.models import A2ATaskRecord
-from app.progenitor.async_subagents.models import AsyncSubagentTaskRecord
-from app.progenitor.orchestration.state import BackgroundTaskEntry
-from app.progenitor.persistence.store import (
+from src.progenitor.a2a.models import A2ATaskRecord
+from src.progenitor.async_subagents.models import AsyncSubagentTaskRecord
+from src.progenitor.orchestration.state import BackgroundTaskEntry
+from src.progenitor.persistence.store import (
     LOG_NAMESPACE_PREFIX,
     STATE_NAMESPACE,
     LangGraphRuntimeStore,
 )
-from app.progenitor.schedules.models import ScheduleEntry, ScheduleRunRecord
-from app.progenitor.sessions.models import ConversationMessage
-from app.progenitor.state.manager import StateManager
+from src.progenitor.schedules.models import ScheduleEntry, ScheduleRunRecord
+from src.progenitor.sessions.models import ConversationMessage
+from src.progenitor.state.manager import StateManager
 from tests.progenitor.conftest import _FakeRuntimeStore
 
 
@@ -95,7 +95,7 @@ class TestStateManager:
         manager = StateManager(runtime_store=_FakeRuntimeStore())
         await manager.initialize()
 
-        from app.progenitor.utils import utcnow
+        from src.progenitor.utils import utcnow
 
         entry = ScheduleEntry(
             id="schedule-1",
@@ -114,7 +114,7 @@ class TestStateManager:
     async def test_update_schedule_entry_preserves_extra_fields(self):
         manager = StateManager(runtime_store=_FakeRuntimeStore())
         await manager.initialize()
-        from app.progenitor.utils import utcnow
+        from src.progenitor.utils import utcnow
 
         entry = ScheduleEntry(
             id="schedule-2",
