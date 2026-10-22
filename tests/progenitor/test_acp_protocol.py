@@ -23,7 +23,7 @@ from acp.schema import (
     ToolCallUpdate,
 )
 
-from app.progenitor.acp.runner import ACPRunner
+from src.progenitor.acp.runner import ACPRunner
 
 
 @dataclass

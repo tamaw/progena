@@ -1,4 +1,4 @@
-"""Tests for the routine CompiledSubAgent proxy (app.progenitor.routines.subagent)."""
+"""Tests for the routine CompiledSubAgent proxy (src.progenitor.routines.subagent)."""
 
 from __future__ import annotations
 
@@ -10,15 +10,15 @@ from deepagents import create_deep_agent
 from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
 from langchain_core.messages import AIMessage, HumanMessage
 
-from app.progenitor.agent.state import ProgenitorAgentState
-from app.progenitor.policies import ExecutionPolicy, policy_revision_id
-from app.progenitor.routines.subagent import (
+from src.progenitor.agent.state import ProgenitorAgentState
+from src.progenitor.routines.subagent import (
     ROUTINE_REVISIONS_STATE_KEY,
     create_routine_executor,
     create_routine_subagent,
     resolve_routine_document,
     resume_routine_thread,
 )
+from src.progenitor.settings.policies import ExecutionPolicy, policy_revision_id
 
 ROUTINE_ID = "routine-demo"
 
@@ -265,7 +265,7 @@ async def test_nested_approvals_resume_original_children_across_multiple_levels(
             assert "after" not in values.get("run_meta", {})
             # Native interrupt IDs identify a task, so consecutive approvals
             # inside this routine node need distinct public decision IDs.
-            from app.progenitor.routines.approvals import pending_approvals
+            from src.progenitor.routines.approvals import pending_approvals
 
             current_interrupts = [
                 item

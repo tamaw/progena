@@ -7,9 +7,9 @@ from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.types import Command
 
-from app.progenitor.policies import PolicyValues
-from app.progenitor.routines.factory import compile_routine_graph
-from app.progenitor.routines.graph import validate_routine_graph_payload
+from src.progenitor.routines.factory import compile_routine_graph
+from src.progenitor.routines.graph import validate_routine_graph_payload
+from src.progenitor.settings.policies import PolicyValues
 
 
 class FakeModel:
@@ -93,7 +93,12 @@ async def test_retry_policy_retries_transient_node_failure() -> None:
             "output_key": "say",
             "config": {
                 "prompt_template": "ok",
-                "retry": {"retry_on": "all", "max_retries": 1, "initial_interval": 0, "jitter": False},
+                "retry": {
+                    "retry_on": "all",
+                    "max_retries": 1,
+                    "initial_interval": 0,
+                    "jitter": False,
+                },
             },
         },
     )
@@ -113,7 +118,8 @@ async def test_retry_exhaustion_routes_to_recovery_node() -> None:
             "config": {
                 "prompt_template": "work",
                 "retry": {
-                    "retry_on": "all",                    "max_retries": 1,
+                    "retry_on": "all",
+                    "max_retries": 1,
                     "initial_interval": 0,
                     "jitter": False,
                 },
@@ -154,7 +160,8 @@ async def test_no_error_edge_still_propagates_exception() -> None:
             "config": {
                 "prompt_template": "work",
                 "retry": {
-                    "retry_on": "all",                    "max_retries": 0,
+                    "retry_on": "all",
+                    "max_retries": 0,
                     "initial_interval": 0,
                     "jitter": False,
                 },
@@ -191,7 +198,9 @@ def test_per_node_timeout_overrides_settings() -> None:
             "config": {"prompt_template": "hi", "timeout": 30},
         },
     )
-    compiled = compile_routine_graph(routine, model=FakeModel(), execution_policy=PolicyValues(attempt_timeout=60))
+    compiled = compile_routine_graph(
+        routine, model=FakeModel(), execution_policy=PolicyValues(attempt_timeout=60)
+    )
     assert compiled.nodes["a"].timeout.run_timeout == 30.0
 
 

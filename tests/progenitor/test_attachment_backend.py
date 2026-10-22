@@ -8,12 +8,9 @@ import base64
 
 import pytest
 
-from app.progenitor import attachments_db
-from app.progenitor.agent.attachment_backend import AttachmentDirectoryBackend
-from app.progenitor.runtime.thread_context import (
-    reset_current_thread_id,
-    set_current_thread_id,
-)
+import src.progenitor.attachments.store as attachments_db
+from src.progenitor.agent.filesystem.attachments import AttachmentDirectoryBackend
+from src.progenitor.sessions.context import reset_current_thread_id, set_current_thread_id
 
 
 @pytest.fixture

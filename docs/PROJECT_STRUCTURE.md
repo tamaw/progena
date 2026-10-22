@@ -6,7 +6,10 @@ This document focuses on the checked-in main stack only. For runtime relationshi
 
 ```text
 progenitor/
-├── app/          # Main application code
+├── src/          # Main application code
+├── tests/        # backend/, progenitor/, frontend/{unit,e2e,helpers,fixtures}
+├── package.json  # Shared frontend dependencies and npm scripts
+├── package-lock.json
 ├── data/         # Bundled assets and managed-repository workspace
 ├── docker/       # Container definitions
 ├── docs/         # Project documentation
@@ -19,16 +22,33 @@ progenitor/
 
 This overview is intentionally selective and centered on the runtime, backend, and frontend.
 
-## Application code (`app/`)
+The Python package namespace is `src`: start the runtime with
+`python -m src.progenitor.main` and the gateway with
+`python -m uvicorn src.backend.main:app`. Install the repository with
+`pip install -e ".[dev]"` after changing source layouts so editable package
+metadata points at the current tree. Checkpoint readers translate historical
+`app.progenitor.*` constructor identities; saved message contents are unchanged.
+
+## Application code (`src/`)
 
 ```text
-app/
+src/
 ├── progenitor/   # Long-running runtime service
 │   ├── agent/    # DeepAgent setup and runtime integration
-│   ├── sse/      # Stream-envelope helpers for the HTTP+SSE chat/event path
-│   ├── llm/      # Model and prompt-loading helpers
-│   ├── runtime/  # Loop runner, scheduler, and runtime managers
-│   ├── state/    # State models and persistence helpers
+│   ├── orchestration/ # Graphs, nodes and composed loop state
+│   ├── llm/      # Provider context, model calls, schemas and response parsing
+│   ├── runtime/  # Lifecycle, heartbeat, HTTP server and streaming adapters
+│   ├── documents/ # Shared keys, kinds, schema catalog and document contracts
+│   ├── persistence/ # Database connections, checkpoints, cache, store and listener
+│   ├── workflows/ # Models, ports, derivation, validation and document store
+│   ├── routines/
+│   ├── schedules/
+│   ├── repositories/
+│   ├── sessions/
+│   ├── settings/
+│   ├── knowledge/ / instructions/ / plugins/
+│   ├── a2a/ / acp/ / async_subagents/ / mcp/
+│   ├── state/    # State lifecycle facade over domain stores
 │   ├── tools/    # Runtime tool registry and implementations
 │   └── main.py   # Runtime entry point
 ├── backend/      # FastAPI API and UI data backend
@@ -56,11 +76,14 @@ app/
 │   ├── monitoring/   # State snapshots, logs and metrics
 │   └── integrations/ # Runtime clients and Telegram
 └── frontend/     # React/Vite web client
-    ├── src/pages/
+    ├── src/features/   # Feature pages, components, models and domain state
     ├── src/components/
     ├── src/context/
     ├── src/hooks/
-    └── src/styles/
+    ├── src/shell/      # Application chrome and panel placement
+    ├── src/store/      # Redux assembly and shared request lifecycle
+    ├── src/realtime/   # Canonical SSE transport
+    └── src/styles/     # Shared foundations
 ```
 
 ## Bundled data assets and runtime persistence

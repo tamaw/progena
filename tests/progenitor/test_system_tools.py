@@ -1,7 +1,7 @@
 """System tool tests.
 
-System tool implementations live in :mod:`app.progenitor.tools` and are
-registered/executed via :mod:`app.progenitor.tools.system_registry`.
+System tool implementations live in :mod:`src.progenitor.tools` and are
+registered/executed via :mod:`src.progenitor.tools.system_registry`.
 """
 
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -9,11 +9,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from pydantic import BaseModel, Field
 
-import app.progenitor.tools.list_agents as list_agents_module
-from app.progenitor.tools.list_agents import ListAgentsTool
-from app.progenitor.tools.list_tools import ListToolsTool
-from app.progenitor.tools.protocol import BaseSystemTool, ToolContext, ToolResult
-from app.progenitor.tools.system_registry import execute_system_tool
+import src.progenitor.tools.list_agents as list_agents_module
+from src.progenitor.tools.list_agents import ListAgentsTool
+from src.progenitor.tools.list_tools import ListToolsTool
+from src.progenitor.tools.protocol import BaseSystemTool, ToolContext, ToolResult
+from src.progenitor.tools.system_registry import execute_system_tool
 
 
 class TestBaseSystemTool:

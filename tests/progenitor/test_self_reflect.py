@@ -2,7 +2,7 @@
 
 import pytest
 
-from app.progenitor.tools.self_reflect import SelfReflection, execute_self_reflect
+from src.progenitor.tools.self_reflect import SelfReflection, execute_self_reflect
 
 
 class TestSelfReflectionSafety:

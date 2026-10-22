@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.progenitor.routines.expression import UnsafeExpressionError, evaluate_expression
+from src.progenitor.routines.expression import UnsafeExpressionError, evaluate_expression
 
 
 class TestAllowedConstructs:

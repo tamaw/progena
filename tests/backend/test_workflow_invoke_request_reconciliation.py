@@ -6,19 +6,19 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-import app.backend.lifecycle.state as lifecycle_state
-import app.backend.lifecycle.watchers as lifecycle_watchers
-import app.backend.workflows.runtime as workflows_runtime
-from app.backend.chat.models import AgentResponse
-from app.backend.events.documents import seed_document_types
-from app.backend.monitoring.state import StateReader
-from app.backend.storage.documents import (
+import src.backend.lifecycle.state as lifecycle_state
+import src.backend.lifecycle.watchers as lifecycle_watchers
+import src.backend.workflows.runtime as workflows_runtime
+from src.backend.chat.models import AgentResponse
+from src.backend.events.documents import seed_document_types
+from src.backend.monitoring.state import StateReader
+from src.backend.storage.documents import (
     PROGENITOR_STATE_PREFIX,
     InMemoryDocumentStore,
     set_default_document_store,
 )
-from app.backend.workflows.service import list_workflow_runs, save_workflow_definition
-from app.progenitor.workflows import (
+from src.backend.workflows.service import list_workflow_runs, save_workflow_definition
+from src.progenitor.workflows.documents import (
     default_workflow_definition,
     workflow_invoke_request_key,
 )
@@ -30,10 +30,10 @@ def workflow_env(monkeypatch):
     set_default_document_store(store)
     seed_document_types(store)
     monkeypatch.setattr(
-        "app.backend.storage.documents.configure_default_document_store", lambda *_a, **_k: store
+        "src.backend.storage.documents.configure_default_document_store", lambda *_a, **_k: store
     )
     state_reader = StateReader(document_store=store)
-    monkeypatch.setattr("app.backend.monitoring.state.get_state_reader", lambda: state_reader)
+    monkeypatch.setattr("src.backend.monitoring.state.get_state_reader", lambda: state_reader)
 
     workflows_runtime._workflow_executor = None
     lifecycle_watchers._workflow_invoke_watch_callback = None
@@ -51,7 +51,7 @@ def backend_client(monkeypatch):
         response="workflow response", reasoning=None, reasoning_tokens=None
     )
     monkeypatch.setattr(
-        "app.backend.integrations.runtime.get_sse_client", lambda *_a, **_k: mock_client
+        "src.backend.integrations.runtime.get_sse_client", lambda *_a, **_k: mock_client
     )
     lifecycle_state.client = mock_client
     return mock_client
@@ -174,7 +174,7 @@ async def test_failed_invoke_request_is_retained_for_retry(workflow_env, monkeyp
             raise RuntimeError("temporary executor failure")
 
     monkeypatch.setattr(
-        "app.backend.workflows.runtime.get_workflow_executor",
+        "src.backend.workflows.runtime.get_workflow_executor",
         lambda: FailingExecutor(),
     )
 

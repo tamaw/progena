@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.backend.storage.documents import PROGENITOR_STATE_PREFIX, PostgresDocumentStore
+from src.backend.storage.documents import PROGENITOR_STATE_PREFIX, PostgresDocumentStore
 
 
 @pytest.fixture

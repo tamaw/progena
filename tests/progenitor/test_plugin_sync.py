@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from app.progenitor.runtime.plugin_sync import PluginSyncScheduler
+from src.progenitor.runtime.plugin_sync import PluginSyncScheduler
 
 
 @pytest.mark.asyncio

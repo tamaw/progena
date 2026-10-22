@@ -28,10 +28,10 @@ from langchain_core.language_models.fake_chat_models import (
 )
 from langchain_core.messages import AIMessage
 
-from app.progenitor import provider_runtime
-from app.progenitor.agent.middleware import AuditLoggingMiddleware
-from app.progenitor.config import LLMConfig, ProgenitorConfig
-from app.progenitor.sse.deepagent_stream import DeepAgentSSEStream
+import src.progenitor.llm.provider_context as provider_runtime
+from src.progenitor.agent.middleware import AuditLoggingMiddleware
+from src.progenitor.config import LLMConfig, ProgenitorConfig
+from src.progenitor.runtime.streaming.deepagent_stream import DeepAgentSSEStream
 
 REPEAT_COUNT = 10
 

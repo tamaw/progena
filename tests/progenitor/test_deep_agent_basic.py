@@ -16,10 +16,10 @@ from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResu
 from langchain_core.runnables import RunnableLambda
 from pydantic import Field
 
-from app.progenitor.agent import adapters
-from app.progenitor.agent.adapters import ProviderChatModel, create_langchain_model
-from app.progenitor.config import LLMConfig
-from app.progenitor.provider_runtime import ProviderNotConfiguredError, ProviderTurn
+from src.progenitor.agent import adapters
+from src.progenitor.agent.adapters import ProviderChatModel, create_langchain_model
+from src.progenitor.config import LLMConfig
+from src.progenitor.llm.provider_context import ProviderNotConfiguredError, ProviderTurn
 
 
 @pytest.mark.parametrize("asynchronous", [False, True])
@@ -236,7 +236,7 @@ class TestLangChainAdapter:
             reasoning_effort="medium",
             reasoning_summary="detailed",
         )
-        with patch("app.progenitor.agent.adapters.CheckpointChatOpenAI") as mock_chat_openai:
+        with patch("src.progenitor.agent.adapters.CheckpointChatOpenAI") as mock_chat_openai:
             mock_chat_openai.return_value = MagicMock()
             create_langchain_model(config)
 
@@ -255,7 +255,7 @@ class TestLangChainAdapter:
             model_default="gpt-chat-latest",
             reasoning_enabled=True,
         )
-        with patch("app.progenitor.agent.adapters.CheckpointChatOpenAI") as mock_chat_openai:
+        with patch("src.progenitor.agent.adapters.CheckpointChatOpenAI") as mock_chat_openai:
             mock_chat_openai.return_value = MagicMock()
             create_langchain_model(config)
 
@@ -274,7 +274,7 @@ class TestLangChainAdapter:
             reasoning_enabled=True,
             reasoning_effort="medium",
         )
-        with patch("app.progenitor.agent.adapters.CheckpointChatOpenAI") as mock_chat_openai:
+        with patch("src.progenitor.agent.adapters.CheckpointChatOpenAI") as mock_chat_openai:
             mock_chat_openai.return_value = MagicMock()
             create_langchain_model(config)
 
@@ -292,7 +292,7 @@ class TestLangChainAdapter:
             model_default="gpt-chat-latest",
             reasoning_enabled=True,
         )
-        with patch("app.progenitor.agent.adapters.CheckpointChatOpenAI") as mock_chat_openai:
+        with patch("src.progenitor.agent.adapters.CheckpointChatOpenAI") as mock_chat_openai:
             mock_chat_openai.return_value = MagicMock()
             create_langchain_model(config)
 
@@ -415,7 +415,7 @@ class TestSchemaCompaction:
     def test_compacts_pydantic_model_class_and_strips_noise(self):
         from pydantic import BaseModel, Field
 
-        from app.progenitor.agent.middleware.schema_compaction import _compact_args_model
+        from src.progenitor.agent.middleware.schema_compaction import _compact_args_model
 
         class _Args(BaseModel):
             query: str = Field(description="search query")
@@ -439,7 +439,7 @@ class TestSchemaCompaction:
     def test_pydantic_model_class_compaction_is_idempotent_via_cache(self):
         from pydantic import BaseModel
 
-        from app.progenitor.agent.middleware.schema_compaction import _compact_args_model
+        from src.progenitor.agent.middleware.schema_compaction import _compact_args_model
 
         class _Args(BaseModel):
             query: str
@@ -453,7 +453,7 @@ class TestSchemaCompaction:
         assert third is first
 
     def test_compacts_raw_dict_schema_from_mcp_tools(self):
-        from app.progenitor.agent.middleware.schema_compaction import _compact_args_model
+        from src.progenitor.agent.middleware.schema_compaction import _compact_args_model
 
         # Shape langchain_mcp_adapters produces from an MCP server's inputSchema.
         raw_schema = {
@@ -487,7 +487,7 @@ class TestSchemaCompaction:
         real turn: ``tool.args_schema`` is mutated in place, so the *next*
         turn's ``getattr(tool, "args_schema")`` reads back the already-
         compacted dict, not the original)."""
-        from app.progenitor.agent.middleware.schema_compaction import _compact_args_model
+        from src.progenitor.agent.middleware.schema_compaction import _compact_args_model
 
         raw_schema = {"title": "X", "type": "object", "properties": {}}
         cache: dict[int, object] = {}
@@ -501,7 +501,7 @@ class TestSchemaCompaction:
         assert first is second is third
 
     def test_middleware_compacts_dict_args_schema_tool_in_place(self):
-        from app.progenitor.agent.middleware.schema_compaction import SchemaCompactionMiddleware
+        from src.progenitor.agent.middleware.schema_compaction import SchemaCompactionMiddleware
 
         class _FakeMCPTool:
             """Mimics a langchain_mcp_adapters StructuredTool: args_schema is a dict."""
@@ -565,9 +565,9 @@ class TestDeepAgentFactory:
     async def test_create_agent_returns_compiled_graph(self):
         """Factory returns a compiled LangGraph state graph."""
         with (
-            patch("app.progenitor.agent.agent.ProviderChatModel") as mock_provider_model,
-            patch("app.progenitor.agent.agent.create_deep_agent") as mock_create_deep_agent,
-            patch("app.progenitor.agent.agent.create_progenitor_backend") as mock_backend,
+            patch("src.progenitor.agent.factory.ProviderChatModel") as mock_provider_model,
+            patch("src.progenitor.agent.factory.create_deep_agent") as mock_create_deep_agent,
+            patch("src.progenitor.agent.factory.create_progenitor_backend") as mock_backend,
         ):
             mock_model = MagicMock()
             mock_provider_model.return_value = mock_model
@@ -575,8 +575,8 @@ class TestDeepAgentFactory:
             mock_create_deep_agent.return_value = mock_graph
             mock_backend.return_value = MagicMock()
 
-            from app.progenitor.agent.agent import create_progenitor_agent
-            from app.progenitor.config import ProgenitorConfig
+            from src.progenitor.agent.factory import create_progenitor_agent
+            from src.progenitor.config import ProgenitorConfig
 
             config = ProgenitorConfig()
             result = await create_progenitor_agent(
@@ -598,15 +598,15 @@ class TestDeepAgentFactory:
     async def test_create_agent_uses_custom_checkpointer(self):
         """Custom checkpointer is passed through."""
         with (
-            patch("app.progenitor.agent.agent.ProviderChatModel"),
-            patch("app.progenitor.agent.agent.create_deep_agent") as mock_create_deep_agent,
-            patch("app.progenitor.agent.agent.create_progenitor_backend") as mock_backend,
+            patch("src.progenitor.agent.factory.ProviderChatModel"),
+            patch("src.progenitor.agent.factory.create_deep_agent") as mock_create_deep_agent,
+            patch("src.progenitor.agent.factory.create_progenitor_backend") as mock_backend,
         ):
             mock_create_deep_agent.return_value = MagicMock()
             mock_backend.return_value = MagicMock()
 
-            from app.progenitor.agent.agent import create_progenitor_agent
-            from app.progenitor.config import ProgenitorConfig
+            from src.progenitor.agent.factory import create_progenitor_agent
+            from src.progenitor.config import ProgenitorConfig
 
             custom_checkpointer = MagicMock()
             await create_progenitor_agent(
@@ -621,15 +621,15 @@ class TestDeepAgentFactory:
     async def test_create_agent_uses_genesis_prompt(self):
         """DeepAgent factory uses the canonical genesis prompt."""
         with (
-            patch("app.progenitor.agent.agent.ProviderChatModel"),
-            patch("app.progenitor.agent.agent.create_deep_agent") as mock_create_deep_agent,
-            patch("app.progenitor.agent.agent.create_progenitor_backend") as mock_backend,
+            patch("src.progenitor.agent.factory.ProviderChatModel"),
+            patch("src.progenitor.agent.factory.create_deep_agent") as mock_create_deep_agent,
+            patch("src.progenitor.agent.factory.create_progenitor_backend") as mock_backend,
         ):
             mock_create_deep_agent.return_value = MagicMock()
             mock_backend.return_value = MagicMock()
 
-            from app.progenitor.agent.agent import create_progenitor_agent
-            from app.progenitor.config import ProgenitorConfig
+            from src.progenitor.agent.factory import create_progenitor_agent
+            from src.progenitor.config import ProgenitorConfig
 
             config = ProgenitorConfig()
             state_manager = FakeContentStateManager(prompt="GENESIS")

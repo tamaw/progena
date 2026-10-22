@@ -2,7 +2,7 @@
 
 from types import SimpleNamespace
 
-from app.progenitor.sse.deepagent_stream import DeepAgentSSEStream
+from src.progenitor.runtime.streaming.deepagent_stream import DeepAgentSSEStream
 
 
 class _Graph:

@@ -2,8 +2,8 @@
 
 from unittest.mock import AsyncMock, patch
 
-from app.progenitor.tools.protocol import ToolContext
-from app.progenitor.tools.run_workflow import RunWorkflowTool
+from src.progenitor.tools.protocol import ToolContext
+from src.progenitor.tools.run_workflow import RunWorkflowTool
 
 
 def _context(state_manager, tool_args):
@@ -45,7 +45,7 @@ async def test_execute_disabled_workflow_fails():
 async def test_execute_queues_request_without_active_ancestry():
     state_manager = AsyncMock()
     state_manager.get_workflow_definition.return_value = _definition()
-    with patch("app.progenitor.tools.run_workflow.get_current_thread_id", return_value=None):
+    with patch("src.progenitor.tools.run_workflow.get_current_thread_id", return_value=None):
         result = await RunWorkflowTool().execute(
             _context(state_manager, {"workflow_id": "wf_a", "input": {"x": 1}})
         )
@@ -61,7 +61,7 @@ async def test_execute_resolves_ancestry_from_active_run():
     state_manager.list_workflow_runs.return_value = [
         {"thread_id": "t1", "status": "running", "workflow_id": "wf_a", "ancestry": []}
     ]
-    with patch("app.progenitor.tools.run_workflow.get_current_thread_id", return_value="t1"):
+    with patch("src.progenitor.tools.run_workflow.get_current_thread_id", return_value="t1"):
         result = await RunWorkflowTool().execute(_context(state_manager, {"workflow_id": "wf_b"}))
     assert result.success
     assert state_manager.request_workflow_run.await_args.kwargs["ancestry"] == ["wf_a"]
@@ -73,7 +73,7 @@ async def test_execute_rejects_cycle():
     state_manager.list_workflow_runs.return_value = [
         {"thread_id": "t1", "status": "running", "workflow_id": "wf_a", "ancestry": []}
     ]
-    with patch("app.progenitor.tools.run_workflow.get_current_thread_id", return_value="t1"):
+    with patch("src.progenitor.tools.run_workflow.get_current_thread_id", return_value="t1"):
         result = await RunWorkflowTool().execute(_context(state_manager, {"workflow_id": "wf_a"}))
     assert not result.success
     state_manager.request_workflow_run.assert_not_awaited()
@@ -90,7 +90,7 @@ async def test_execute_rejects_max_depth():
             "ancestry": ["wf_a", "wf_b"],
         }
     ]
-    with patch("app.progenitor.tools.run_workflow.get_current_thread_id", return_value="t1"):
+    with patch("src.progenitor.tools.run_workflow.get_current_thread_id", return_value="t1"):
         result = await RunWorkflowTool().execute(_context(state_manager, {"workflow_id": "wf_d"}))
     assert not result.success
     state_manager.request_workflow_run.assert_not_awaited()

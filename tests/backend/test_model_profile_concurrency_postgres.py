@@ -7,9 +7,9 @@ import time
 
 import pytest
 
-from app.backend.settings.model_profiles import _mutate_profile
-from app.backend.storage.documents import PROGENITOR_STATE_PREFIX, PostgresDocumentStore
-from app.progenitor.state.model_profiles import MODEL_PROFILES_DOC_KEY
+from src.backend.settings.model_profiles import _mutate_profile
+from src.backend.storage.documents import PROGENITOR_STATE_PREFIX, PostgresDocumentStore
+from src.progenitor.settings.model_profiles import MODEL_PROFILES_DOC_KEY
 
 
 def _profile(deployment: str) -> dict:

@@ -28,12 +28,12 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import START, StateGraph
 from langgraph.graph.message import add_messages
 
-from app.backend.config import ChatServerConfig
-from app.backend.integrations.runtime import SSEProgenitorClient
-from app.backend.integrations.runtime_history import RuntimeConversationReader
-from app.progenitor.config import RuntimeConfig
-from app.progenitor.runtime.http import ProgenitorHTTPServer
-from app.progenitor.runtime.queues import RuntimeQueues
+from src.backend.config import ChatServerConfig
+from src.backend.integrations.runtime import SSEProgenitorClient
+from src.backend.integrations.runtime_history import RuntimeConversationReader
+from src.progenitor.config import RuntimeConfig
+from src.progenitor.runtime.http.server import ProgenitorHTTPServer
+from src.progenitor.runtime.queues import RuntimeQueues
 
 pytestmark = pytest.mark.asyncio
 

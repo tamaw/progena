@@ -6,13 +6,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from app.progenitor.config import LLMConfig, MCPConfig
-from app.progenitor.llm.client import (
-    LLMClient,
-    _build_json_schema_format_from_dict,
-    _build_responses_endpoint,
-)
-from app.progenitor.mcp import MCPRuntime
+from src.progenitor.config import LLMConfig, MCPConfig
+from src.progenitor.llm.client import LLMClient
+from src.progenitor.llm.schema import _build_json_schema_format_from_dict
+from src.progenitor.llm.transport import _build_responses_endpoint
+from src.progenitor.mcp.runtime import MCPRuntime
 
 
 def _extract(data: dict):
@@ -97,8 +95,8 @@ def test_llm_client_configures_connect_retries():
     # and can shift between httpx versions; this also avoids leaving a real,
     # unclosed httpx.AsyncClient behind.
     with (
-        patch("app.progenitor.llm.client.httpx.AsyncHTTPTransport") as mock_transport_cls,
-        patch("app.progenitor.llm.client.httpx.AsyncClient") as mock_client_cls,
+        patch("src.progenitor.llm.client.httpx.AsyncHTTPTransport") as mock_transport_cls,
+        patch("src.progenitor.llm.client.httpx.AsyncClient") as mock_client_cls,
     ):
         LLMClient(config=LLMConfig(base_url="https://example.test/openai/v1"))
 
@@ -325,7 +323,7 @@ async def test_execute_tool_call_routes_url_only_registry_entry_to_a2a():
     )
 
     with patch(
-        "app.progenitor.tools.system_registry.execute_system_tool",
+        "src.progenitor.tools.system_registry.execute_system_tool",
         new=AsyncMock(
             return_value=(
                 {

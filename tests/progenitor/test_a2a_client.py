@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from app.progenitor.a2a.client import A2AClient
+from src.progenitor.a2a.client import A2AClient
 
 
 @pytest.mark.asyncio

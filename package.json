@@ -1,0 +1,50 @@
+{
+  "name": "frontend",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Progenitor Chat UI - React Application",
+  "type": "module",
+  "scripts": {
+    "dev": "vite src/frontend --config src/frontend/vite.config.js",
+    "build": "vite build src/frontend --config src/frontend/vite.config.js",
+    "prod": "npm run build && npm run preview",
+    "preview": "vite preview src/frontend --config src/frontend/vite.config.js",
+    "lint": "eslint src/frontend tests/frontend eslint.config.js",
+    "test": "vitest run --config src/frontend/vitest.config.js",
+    "test:unit": "vitest run --config src/frontend/vitest.config.js",
+    "test:watch": "vitest --config src/frontend/vitest.config.js",
+    "test:e2e": "playwright test --config src/frontend/playwright.config.js",
+    "smoke:routes": "node src/frontend/scripts/smoke-routes.mjs",
+    "build:module-vendor": "node src/frontend/scripts/build-module-vendor.mjs",
+    "clean": "node --input-type=module -e \"import { rmSync } from 'node:fs'; rmSync('src/frontend/dist', { recursive: true, force: true });\""
+  },
+  "dependencies": {
+    "@reduxjs/toolkit": "^2.12.0",
+    "@xyflow/react": "^12.10.1",
+    "chart.js": "^4.5.1",
+    "es-module-lexer": "^3.0.4",
+    "highlight.js": "^11.11.1",
+    "mermaid": "^12.2.0",
+    "react": "^19.2.0",
+    "react-chartjs-2": "^5.3.1",
+    "react-dom": "^19.2.0",
+    "react-redux": "^9.3.0",
+    "react-router-dom": "^7.18.4"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.1",
+    "@playwright/test": "^1.61.1",
+    "@types/react": "^19.2.5",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^5.1.1",
+    "d3": "7.9.0",
+    "eslint": "^9.39.1",
+    "eslint-plugin-react-hooks": "^7.0.1",
+    "eslint-plugin-react-refresh": "^0.4.24",
+    "globals": "^16.5.0",
+    "jsdom": "^26.1.0",
+    "three": "0.186.1",
+    "vite": "^7.3.7",
+    "vitest": "^5.0.5"
+  }
+}

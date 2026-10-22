@@ -5,7 +5,7 @@ from unittest.mock import MagicMock
 from langchain.agents.middleware.types import ModelRequest
 from langchain_core.messages import SystemMessage
 
-from app.progenitor.agent.middleware import LiveInstructionMiddleware
+from src.progenitor.agent.middleware import LiveInstructionMiddleware
 
 
 class Instructions:

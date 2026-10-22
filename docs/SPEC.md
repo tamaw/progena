@@ -16,7 +16,7 @@ to the backend and receives browser application data through two SSE roles:
 
 ## Core components
 
-### Runtime (`app/progenitor/`)
+### Runtime (`src/progenitor/`)
 
 - Runs the perpetual conversation service.
 - Restores and checkpoints runtime state.
@@ -55,7 +55,7 @@ to the backend and receives browser application data through two SSE roles:
     non-strings.
 - `GET /v1/events` broadcasts runtime agent events to the backend.
 
-### Backend (`app/backend/`)
+### Backend (`src/backend/`)
 
 - Exposes the browser's finite command/query routes and bridges work to the
   runtime.
@@ -76,7 +76,7 @@ to the backend and receives browser application data through two SSE roles:
 - Keeps successful finite HTTP responses data-free; browser-visible results come
   from canonical events or the dedicated response-content stream.
 
-### Frontend (`app/frontend/`)
+### Frontend (`src/frontend/`)
 
 - Provides the React/Vite web client.
 - Opens one app-lifetime canonical `EventSource` to `/api/ui/stream`.
@@ -205,7 +205,7 @@ broadcast to the canonical UI stream after the write succeeds; details are in
 
 Chat history is exposed through `/sessions/`: one
 `<date>_<title-slug>_<id8>.md` per non-archived chat, backed by `session:`
-documents in Postgres (`app/progenitor/sessions/`). Each file is YAML front
+documents in Postgres (`src/progenitor/sessions/`). Each file is YAML front
 matter (all payload fields except `content`, plus `display_title`) followed by
 a blank line and the IRC-style `content`. Only the `title`, `pinned`, and
 `archived` front-matter fields are editable; the body is read-only. Listing,

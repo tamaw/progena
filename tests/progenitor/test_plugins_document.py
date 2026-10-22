@@ -7,12 +7,10 @@ from typing import Any
 
 import pytest
 
-from app.progenitor.agent.state_backend import (
-    StateDocumentBackend,
-    create_plugins_state_file,
-    validate_plugins_document,
-)
-from app.progenitor.state.manager import StateManager
+from src.progenitor.agent.filesystem.base import StateDocumentBackend
+from src.progenitor.agent.filesystem.config import create_plugins_state_file
+from src.progenitor.plugins.schema import validate_plugins_document
+from src.progenitor.state.manager import StateManager
 from tests.progenitor.conftest import _FakeRuntimeStore
 
 # ---- validation ------------------------------------------------------------
@@ -57,7 +55,7 @@ def test_validate_plugins_document_accepts_valid_with_runtime_fields():
 
 def test_validate_plugins_document_accepts_agents_field():
     """Regression: reconcile_plugins() always writes an "agents" key on every
-    successful install (app/progenitor/plugins/install.py), even for
+    successful install (src/progenitor/plugins/install.py), even for
     skills-only plugins (as an empty list) -- the schema must accept it or
     every real reconcile's save_plugins_config() call fails post-install."""
     doc = validate_plugins_document(

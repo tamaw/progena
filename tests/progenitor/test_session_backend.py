@@ -8,11 +8,11 @@ from typing import Any
 import pytest
 from langgraph.store.memory import InMemoryStore
 
-from app.progenitor.agent.backends import create_progenitor_backend
-from app.progenitor.agent.session_backend import SessionDirectoryBackend
-from app.progenitor.document_kinds import SESSION_KEY_PREFIX
-from app.progenitor.state.langgraph_store import LangGraphRuntimeStore
-from app.progenitor.state.manager import StateManager
+from src.progenitor.agent.filesystem.mounts import create_progenitor_backend
+from src.progenitor.agent.filesystem.sessions import SessionDirectoryBackend
+from src.progenitor.documents.kinds import SESSION_KEY_PREFIX
+from src.progenitor.persistence.store import LangGraphRuntimeStore
+from src.progenitor.state.manager import StateManager
 
 
 class _Sessions:
@@ -200,7 +200,7 @@ async def test_delete_is_not_allowed(sessions: _Sessions) -> None:
 async def test_mount_serves_sessions_through_the_agent_filesystem(
     sessions: _Sessions, monkeypatch: pytest.MonkeyPatch, tmp_path: Any
 ) -> None:
-    monkeypatch.setattr("app.progenitor.agent.backends.StateBackend", lambda: None)
+    monkeypatch.setattr("src.progenitor.agent.filesystem.mounts.StateBackend", lambda: None)
     filesystem = create_progenitor_backend(
         project_root=tmp_path, state_manager=sessions.state_manager
     )

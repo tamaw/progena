@@ -9,12 +9,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-import app.backend.alerts.relay as alerts_relay
-from app.backend.alerts.service import AlertInfo
-from app.backend.chat.models import AgentResponse
-from app.backend.config import ChatServerConfig
-from app.backend.integrations.runtime import start_sse_client_with_retry
-from app.backend.integrations.subprocess import ProgenitorClient
+import src.backend.alerts.relay as alerts_relay
+from src.backend.alerts.service import AlertInfo
+from src.backend.chat.models import AgentResponse
+from src.backend.config import ChatServerConfig
+from src.backend.integrations.runtime import start_sse_client_with_retry
+from src.backend.integrations.subprocess import ProgenitorClient
 
 
 class TestChatServerConfig:
@@ -106,7 +106,7 @@ class TestSSEEventForwardingStartup:
         client.start = AsyncMock(side_effect=[RuntimeError("offline"), None])
 
         sleep = AsyncMock()
-        with patch("app.backend.integrations.runtime.asyncio.sleep", sleep):
+        with patch("src.backend.integrations.runtime.asyncio.sleep", sleep):
             await start_sse_client_with_retry(client, retry_delay=0.25)
 
         assert client.start.await_count == 2
@@ -165,7 +165,7 @@ class TestChatServerAPI:
         """Create a test client."""
         from fastapi.testclient import TestClient
 
-        from app.backend.main import app
+        from src.backend.main import app
 
         return TestClient(app)
 

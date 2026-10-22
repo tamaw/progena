@@ -5,10 +5,10 @@ from unittest.mock import Mock
 
 import pytest
 
-from app.backend.agents import store as agent_store
-from app.backend.storage.documents import PROGENITOR_STATE_PREFIX, InMemoryDocumentStore
-from app.progenitor.routines.graph import validate_routine_graph_payload
-from app.progenitor.routines.store import default_routine_graph, routine_graph_key
+from src.backend.agents import store as agent_store
+from src.backend.storage.documents import PROGENITOR_STATE_PREFIX, InMemoryDocumentStore
+from src.progenitor.routines.graph import validate_routine_graph_payload
+from src.progenitor.routines.store import default_routine_graph, routine_graph_key
 
 
 @pytest.mark.parametrize("existing_graph", [False, True])

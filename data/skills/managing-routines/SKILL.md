@@ -11,8 +11,8 @@ per routine: `/routines/<routine-id>.json`.
 
 The authoritative contract is `/schemas/graph.routine.schema.v1.json`. Read it
 before creating or reshaping a graph. The compiler and topology validator are
-implemented in `app/progenitor/routines/graph.py` and
-`app/progenitor/routines/factory.py`.
+implemented in `src/progenitor/routines/graph.py` and
+`src/progenitor/routines/factory.py`.
 
 ## Operating rules
 

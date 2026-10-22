@@ -10,13 +10,13 @@ from typing import Any
 import psycopg
 import pytest
 
-from app.backend.knowledge.indexer import KnowledgeIndexer
-from app.backend.storage.documents import (
+from src.backend.knowledge.indexer import KnowledgeIndexer
+from src.backend.storage.documents import (
     PROGENITOR_STATE_PREFIX,
     InMemoryDocumentStore,
     set_default_document_store,
 )
-from app.progenitor.knowledge.indexer_config import INDEX_STATUS_DOC_KEY
+from src.progenitor.knowledge.indexer_config import INDEX_STATUS_DOC_KEY
 
 DB_URL = (os.getenv("PROGENITOR_DATABASE_URL") or os.getenv("DATABASE_URL") or "").strip()
 pytestmark = pytest.mark.skipif(not DB_URL, reason="requires PROGENITOR_DATABASE_URL")

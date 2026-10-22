@@ -5,13 +5,13 @@ Tests for Phase 3: Backend configuration and Postgres-backed content routing.
 from pathlib import Path
 from unittest.mock import MagicMock
 
-from app.progenitor.agent.backends import (
+from src.progenitor.agent.filesystem.mounts import (
     ReadOnlyBackend,
     create_object_agent_plugin_skill_routes,
     create_progenitor_backend,
 )
-from app.progenitor.agent.state_backend import RepoDirectoryBackend
-from app.progenitor.document_types import BUILTIN_DOCUMENT_TYPES
+from src.progenitor.agent.filesystem.repositories import RepoDirectoryBackend
+from src.progenitor.documents.types import BUILTIN_DOCUMENT_TYPES
 
 
 class FakeContentStateManager(MagicMock):
@@ -57,7 +57,7 @@ class TestBackendFactory:
                 self.mode = "runtime-free"
 
         monkeypatch.setattr(
-            "app.progenitor.agent.backends.StateBackend",
+            "src.progenitor.agent.filesystem.mounts.StateBackend",
             RuntimeFreeStateBackend,
         )
         return RuntimeFreeStateBackend
@@ -89,7 +89,7 @@ class TestBackendFactory:
         with tempfile.TemporaryDirectory() as tmpdir:
             runtime_free_cls = self._patch_runtime_free_state_backend(monkeypatch)
             root = Path(tmpdir)
-            for rel in ("app", "data/schemas", "data/skills", "logs", "repos"):
+            for rel in ("src", "data/schemas", "data/skills", "logs", "repos"):
                 (root / rel).mkdir(parents=True, exist_ok=True)
 
             state_manager = FakeContentStateManager()
@@ -111,7 +111,7 @@ class TestBackendFactory:
             assert isinstance(backend.routes["/logs/"], ReadOnlyBackend)
             assert isinstance(backend.routes["/schemas/"], ReadOnlyBackend)
             assert isinstance(backend.routes["/schemas/"]._backend, FilesystemBackend)
-            from app.progenitor.agent.state_backend import InstructionDocumentDirectoryBackend
+            from src.progenitor.agent.filesystem.content import InstructionDocumentDirectoryBackend
 
             assert isinstance(backend.routes["/instructions/"], InstructionDocumentDirectoryBackend)
             # /skills/ is disk-backed now (like /schemas/), not Postgres-backed.
@@ -122,13 +122,11 @@ class TestBackendFactory:
         """A state_manager adds /config/, /tasks/, /workflows/, /routines/, /inbox/."""
         from unittest.mock import MagicMock
 
-        from app.progenitor.agent.state_backend import (
-            InboxDirectoryBackend,
-            KanbanTaskDirectoryBackend,
-            RoutineDirectoryBackend,
-            StateDocumentBackend,
-            WorkflowDirectoryBackend,
-        )
+        from src.progenitor.agent.filesystem.base import StateDocumentBackend
+        from src.progenitor.agent.filesystem.inbox import InboxDirectoryBackend
+        from src.progenitor.agent.filesystem.routines import RoutineDirectoryBackend
+        from src.progenitor.agent.filesystem.tasks import KanbanTaskDirectoryBackend
+        from src.progenitor.agent.filesystem.workflows import WorkflowDirectoryBackend
 
         self._patch_runtime_free_state_backend(monkeypatch)
 
@@ -155,7 +153,7 @@ class TestBackendFactory:
         with tempfile.TemporaryDirectory() as tmpdir:
             self._patch_runtime_free_state_backend(monkeypatch)
             root = Path(tmpdir)
-            for rel in ("app", "data/schemas", "logs"):
+            for rel in ("src", "data/schemas", "logs"):
                 (root / rel).mkdir(parents=True, exist_ok=True)
 
             schema = {"type": "object", "properties": {"id": {"type": "string"}}}
@@ -180,7 +178,7 @@ class TestBackendFactory:
 
     async def test_instructions_mount_reads_and_validates_writes(self, monkeypatch):
         """/instructions/ reads Postgres content and validates writes."""
-        from app.progenitor.agent.state_backend import InstructionDocumentDirectoryBackend
+        from src.progenitor.agent.filesystem.content import InstructionDocumentDirectoryBackend
 
         self._patch_runtime_free_state_backend(monkeypatch)
         state_manager = FakeContentStateManager()
@@ -255,9 +253,9 @@ class TestBackendFactory:
         assert (await backend.aread("/agents/objects/reviewer/SYSTEM.md")).error is None
 
     async def test_user_agent_creation_yaml_render_edit_and_discovery(self, monkeypatch):
-        from app.progenitor.agent.object_agent_manifest import discover_object_agents
-        from app.progenitor.tools.json_to_yaml import JsonToYamlTool
-        from app.progenitor.tools.protocol import ToolContext
+        from src.progenitor.agent.object_agents.manifest import discover_object_agents
+        from src.progenitor.tools.json_to_yaml import JsonToYamlTool
+        from src.progenitor.tools.protocol import ToolContext
 
         self._patch_runtime_free_state_backend(monkeypatch)
         sm = FakeContentStateManager()

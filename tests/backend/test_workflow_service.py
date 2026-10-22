@@ -2,16 +2,16 @@ import asyncio
 
 import pytest
 
-from app.backend.events.documents import seed_document_types
-from app.backend.storage.documents import InMemoryDocumentStore
-from app.backend.workflows.service import (
+from src.backend.events.documents import seed_document_types
+from src.backend.storage.documents import InMemoryDocumentStore
+from src.backend.workflows.service import (
     PromptExecutionResult,
     WorkflowExecutor,
     build_manual_trigger_event,
     get_workflow_run,
     save_workflow_definition,
 )
-from app.progenitor.workflows import default_workflow_definition
+from src.progenitor.workflows.documents import default_workflow_definition
 
 
 async def _wait_for(predicate, timeout=2.0):
@@ -599,8 +599,8 @@ async def test_format_node_renders_nested_and_non_string_values_without_a_runner
 
 
 def test_query_filter_tells_json_true_from_1():
-    from app.backend.workflows.service import _execute_document_node
-    from app.progenitor.workflows import WorkflowNodeDocumentQuery
+    from src.backend.workflows.service import _execute_document_node
+    from src.progenitor.workflows.models import WorkflowNodeDocumentQuery
 
     store = InMemoryDocumentStore()
     seed_document_types(store)

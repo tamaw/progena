@@ -5,20 +5,20 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-import app.backend.events.stream as events_stream
-from app.backend.storage.documents import (
+import src.backend.events.stream as events_stream
+from src.backend.storage.documents import (
     EVENT_LOG_START,
     PROGENITOR_STATE_PREFIX,
     CheckpointThreadSnapshot,
     InMemoryDocumentStore,
 )
-from app.backend.workflows.events import RoutineEvents
-from app.progenitor.routines.events import RUN_EVENT_PREFIX
+from src.backend.workflows.events import RoutineEvents
+from src.progenitor.routines.events import RUN_EVENT_PREFIX
 
 
 @pytest.fixture
 def feed(monkeypatch):
-    import app.backend.workflows.events as module
+    import src.backend.workflows.events as module
 
     store = InMemoryDocumentStore()
     feed = RoutineEvents()
@@ -62,7 +62,7 @@ async def test_global_lifecycle_survives_no_page_subscription(feed):
 
 
 async def test_detail_only_reads_selected_threads_and_stops_after_unsubscribe(feed, monkeypatch):
-    import app.backend.workflows.events as module
+    import src.backend.workflows.events as module
 
     listener, store, events = feed
     for session in ["one", "two"]:

@@ -3,15 +3,15 @@ from datetime import UTC, datetime
 
 import pytest
 
-import app.backend.alerts.routes as alerts_routes
-import app.backend.events.dispatch as events_dispatch
-import app.backend.workflows.runtime as workflows_runtime
-from app.backend.events.documents import (
+import src.backend.alerts.routes as alerts_routes
+import src.backend.events.dispatch as events_dispatch
+import src.backend.workflows.runtime as workflows_runtime
+from src.backend.events.documents import (
     DocumentEventDispatcher,
     TypedDocumentEvent,
     seed_document_types,
 )
-from app.backend.storage.documents import (
+from src.backend.storage.documents import (
     EVENT_LOG_START,
     PROGENITOR_STATE_PREFIX,
     DocumentEvent,
@@ -19,7 +19,7 @@ from app.backend.storage.documents import (
     document_write_origin,
     set_default_document_store,
 )
-from app.backend.workflows.service import (
+from src.backend.workflows.service import (
     _execute_document_create_node,
     _execute_document_delete_node,
     _execute_document_node,
@@ -27,18 +27,18 @@ from app.backend.workflows.service import (
     list_workflow_runs,
     save_workflow_definition,
 )
-from app.progenitor.document_kinds import KNOWLEDGE_PAGE_KEY_PREFIX, SESSION_KEY_PREFIX
-from app.progenitor.document_types import BUILTIN_DOCUMENT_TYPES, resolve_document_type
-from app.progenitor.workflows import (
+from src.progenitor.documents.kinds import KNOWLEDGE_PAGE_KEY_PREFIX, SESSION_KEY_PREFIX
+from src.progenitor.documents.types import BUILTIN_DOCUMENT_TYPES, resolve_document_type
+from src.progenitor.workflows.derivation import derive_workflow_port_schemas
+from src.progenitor.workflows.documents import default_workflow_definition
+from src.progenitor.workflows.models import (
     WorkflowNodeDocumentCreate,
     WorkflowNodeDocumentDelete,
     WorkflowNodeDocumentQuery,
     WorkflowNodeDocumentWrite,
     WorkflowNodeEvent,
-    default_workflow_definition,
-    derive_workflow_port_schemas,
-    validate_workflow_definition_payload,
 )
+from src.progenitor.workflows.validation import validate_workflow_definition_payload
 
 BUILTIN_TYPES = {item.id: item for item in BUILTIN_DOCUMENT_TYPES}
 
@@ -228,7 +228,7 @@ async def test_handler_failure_stops_dispatch_without_acknowledging_the_event():
 async def test_dispatcher_rechecks_while_events_are_deferred(monkeypatch):
     """A committed event hidden behind an open transaction is dispatched once
     that transaction ends, even though nothing wakes the dispatcher."""
-    from app.backend.events import documents as document_events
+    from src.backend.events import documents as document_events
 
     monkeypatch.setattr(document_events, "_DEFERRED_RETRY_SECONDS", 0.05)
 
@@ -763,7 +763,7 @@ def test_document_create_stamps_creation_times_by_field_type(store, monkeypatch)
     for a number field (alerts), ISO text otherwise."""
     import time
 
-    from app.progenitor.document_types import DocumentType
+    from src.progenitor.documents.types import DocumentType
 
     schema = {
         "type": "object",
@@ -804,7 +804,7 @@ def test_document_create_alert_with_title_and_message_applies_defaults_and_times
 
 
 def test_document_create_applies_and_copies_schema_defaults(store, monkeypatch):
-    from app.progenitor.document_types import DocumentType
+    from src.progenitor.documents.types import DocumentType
 
     schema = {
         "type": "object",
@@ -840,7 +840,7 @@ def test_document_create_applies_and_copies_schema_defaults(store, monkeypatch):
 
 
 def test_document_write_never_applies_schema_defaults(store, monkeypatch):
-    from app.progenitor.document_types import DocumentType
+    from src.progenitor.documents.types import DocumentType
 
     schema = {
         "type": "object",
@@ -852,7 +852,7 @@ def test_document_write_never_applies_schema_defaults(store, monkeypatch):
     monkeypatch.setattr(DocumentType, "load_schema", lambda self: schema)
     store.save_document(PROGENITOR_STATE_PREFIX, "kanban_card:existing", {"id": "existing"})
 
-    from app.backend.workflows.service import _execute_document_write_node
+    from src.backend.workflows.service import _execute_document_write_node
 
     result = _execute_document_write_node(
         store,
@@ -947,7 +947,7 @@ def test_document_query_datetime_order_total_and_unwired_filter(store):
 async def test_card_documents_written_by_any_writer_keep_the_board_order(store):
     """A card created or deleted outside the card routes (e.g. by a workflow
     document node) appears on, and leaves, the board."""
-    from app.backend.storage.documents import document_write_origin
+    from src.backend.storage.documents import document_write_origin
 
     dispatcher = events_dispatch.get_document_event_dispatcher()
     store.save_document(

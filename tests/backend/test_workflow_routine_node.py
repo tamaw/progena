@@ -4,16 +4,16 @@ import asyncio
 
 import pytest
 
-from app.backend.events.documents import seed_document_types
-from app.backend.storage.documents import PROGENITOR_STATE_PREFIX, InMemoryDocumentStore
-from app.backend.workflows.service import (
+from src.backend.events.documents import seed_document_types
+from src.backend.storage.documents import PROGENITOR_STATE_PREFIX, InMemoryDocumentStore
+from src.backend.workflows.service import (
     PromptExecutionResult,
     WorkflowExecutor,
     build_manual_trigger_event,
     get_workflow_run,
     save_workflow_definition,
 )
-from app.progenitor.workflows import default_workflow_definition
+from src.progenitor.workflows.documents import default_workflow_definition
 
 TYPED_ROUTINE = {
     "id": "summarize",

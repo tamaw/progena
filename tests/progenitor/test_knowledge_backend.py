@@ -1,7 +1,7 @@
 from deepagents.backends import CompositeBackend
 
-from app.progenitor.agent.knowledge_backend import KnowledgePageBackend
-from app.progenitor.front_matter import split_front_matter
+from src.progenitor.agent.filesystem.knowledge import KnowledgePageBackend
+from src.progenitor.documents.front_matter import split_front_matter
 
 PAGE = "---\ntype: Concept\ntitle: A\ndescription: First page\n---\nRetry budget is three.\n"
 

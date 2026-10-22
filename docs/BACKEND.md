@@ -264,7 +264,7 @@ responses never are.
 | Agent profiles | `GET /api/ui/agent-profiles`; `GET /api/ui/agent-profiles/{agent_id}`; `PATCH /api/ui/agent-profiles/{agent_id}/graph` | Canonical `ui.event` envelopes: `agents.snapshot`, `agent.upserted`, request-correlated `agent.selected`, `agent.graph.updated` |
 | Inbox | `GET /api/ui/inbox`; `POST /api/ui/inbox/{message_id}/read`; `POST /api/ui/inbox/{message_id}/decision`; `DELETE /api/ui/inbox/{message_id}` | Canonical `ui.event` envelopes: `inbox.snapshot`, `inbox.message.upserted`, `inbox.message.deleted` |
 | Knowledge | `GET/PUT /api/ui/knowledge`; `POST /api/ui/knowledge/{base_id}/sources/{source_id}/index`; `GET /api/ui/knowledge/{base_id}/search` | Canonical `ui.event` envelopes: `knowledge.snapshot`, request-scoped `knowledge.search.results` |
-| Workflows | `GET/POST /api/ui/workflows`; `GET/PUT /api/ui/workflows/content`; `DELETE /api/ui/workflows/{workflow_id}`; `POST /api/ui/workflows/{workflow_id}/pause`; `POST /api/ui/workflows/{workflow_id}/resume`; `POST /api/ui/workflows/{workflow_id}/trigger`; `GET /api/ui/workflow-runs`; `GET /api/ui/document-types`; `GET /api/ui/workflows/cron-preview?expression=&timezone=&count=` (synchronous: `{"next_runs": [...]}`, `400` with the validation message) | Canonical `ui.event` envelopes: `workflows.snapshot`, `workflow.updated`, `workflow.deleted`, `workflow.runs.snapshot`, `workflow.run.started`, `workflow.run.updated`, `workflow.run.completed`, `workflow.run.failed`, `document_types.snapshot` (registry with each type's document schema and derived event/read/query port schemas). Runs start from the durable `document_events` log (see `app/backend/events/documents.py`) or from `cron` trigger nodes fired by the backend clock (`app/backend/workflows/cron.py`, last handled due time per node in `backend.state` `workflow_cron:<workflow>:<node>`), never inline from routes. |
+| Workflows | `GET/POST /api/ui/workflows`; `GET/PUT /api/ui/workflows/content`; `DELETE /api/ui/workflows/{workflow_id}`; `POST /api/ui/workflows/{workflow_id}/pause`; `POST /api/ui/workflows/{workflow_id}/resume`; `POST /api/ui/workflows/{workflow_id}/trigger`; `GET /api/ui/workflow-runs`; `GET /api/ui/document-types`; `GET /api/ui/workflows/cron-preview?expression=&timezone=&count=` (synchronous: `{"next_runs": [...]}`, `400` with the validation message) | Canonical `ui.event` envelopes: `workflows.snapshot`, `workflow.updated`, `workflow.deleted`, `workflow.runs.snapshot`, `workflow.run.started`, `workflow.run.updated`, `workflow.run.completed`, `workflow.run.failed`, `document_types.snapshot` (registry with each type's document schema and derived event/read/query port schemas). Runs start from the durable `document_events` log (see `src/backend/events/documents.py`) or from `cron` trigger nodes fired by the backend clock (`src/backend/workflows/cron.py`, last handled due time per node in `backend.state` `workflow_cron:<workflow>:<node>`), never inline from routes. |
 | Search | `GET /api/ui/search` | Request-scoped `search.results` (sections: Inbox, Tasks, Agents, Routines, Workflows, Prompts, Knowledge, Tools, Schedules) |
 | Knowledge | `GET/PUT /api/ui/knowledge`; `GET /api/ui/knowledge/{base_id}/pages`; `GET /api/ui/knowledge/{base_id}/page`; `GET /api/ui/knowledge/{base_id}/page/revisions`; `GET /api/ui/knowledge/{base_id}/page/revisions/{revision_id}` | Canonical `ui.event` envelopes: `knowledge.snapshot`, `knowledge.pages.snapshot`, `knowledge.page.loaded`, `knowledge.page.revisions.loaded`, `knowledge.page.revision.loaded`; indexer-originated `knowledge.index.started`, `knowledge.index.progress`, `knowledge.index.completed`, `knowledge.index.failed` |
 | Workflows | `GET/POST /api/ui/workflows`; `GET/PUT /api/ui/workflows/content`; `DELETE /api/ui/workflows/{workflow_id}`; `POST /api/ui/workflows/{workflow_id}/pause`; `POST /api/ui/workflows/{workflow_id}/resume`; `POST /api/ui/workflows/{workflow_id}/trigger`; `GET /api/ui/workflow-runs` | Canonical `ui.event` envelopes: `workflows.snapshot`, `workflow.updated`, `workflow.deleted`, `workflow.runs.snapshot`, `workflow.run.started`, `workflow.run.updated`, `workflow.run.completed`, `workflow.run.failed` |
@@ -369,12 +369,12 @@ Start the runtime and backend separately:
 ```bash
 source .venv/bin/activate
 export AGENT_NAME=progenitor
-python -m app.progenitor.main
+python -m src.progenitor.main
 ```
 
 ```bash
 source .venv/bin/activate
-python -m uvicorn app.backend.main:app --host 0.0.0.0 --port 8000
+python -m uvicorn src.backend.main:app --host 0.0.0.0 --port 8000
 ```
 
 The frontend development server proxies `/api`, `/v1`, and operational health

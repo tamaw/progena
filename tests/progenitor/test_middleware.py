@@ -11,13 +11,13 @@ from langchain.agents.middleware.types import ModelRequest, ModelResponse, ToolC
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.tools import StructuredTool
 
-from app.progenitor.agent.middleware import (
+from src.progenitor.agent.middleware import (
     AsyncSubagentTrackingMiddleware,
     AuditLoggingMiddleware,
     DirectA2AFastPathMiddleware,
     DynamicMCPToolMiddleware,
 )
-from app.progenitor.state.models import AsyncSubagentTaskRecord
+from src.progenitor.async_subagents.models import AsyncSubagentTaskRecord
 
 
 class TestDynamicMCPToolMiddleware:

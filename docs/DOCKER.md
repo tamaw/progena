@@ -7,8 +7,8 @@ frontend, and the internal Claude ACP sidecar.
 
 `docker/docker-compose.progenitor.yml` defines a five-container stack:
 - `postgres` - PostgreSQL with pgvector
-- `progenitor` - runs `python -m app.progenitor.main`
-- `backend` - runs `uvicorn app.backend.main:app`
+- `progenitor` - runs `python -m src.progenitor.main`
+- `backend` - runs `uvicorn src.backend.main:app`
 - `frontend` - builds the Vite app and serves it with nginx
 - `claude` - provides Claude Code over internal ACP transport
 
@@ -122,9 +122,9 @@ Ephemeral storage:
 
 Notes:
 - Instructions and runtime memories are Postgres-backed content documents
-  (`app/progenitor/content_documents.py`, keyed `instruction:`/`memory:` in
+  (`src/progenitor/documents/content.py`, keyed `instruction:`/`memory:` in
   the same shared `store` table as `mcp.json`/`schedule.json`/etc — see
-  `app/progenitor/state/manager.py`). Neither `progenitor` nor `backend` mounts
+  `src/progenitor/state/manager.py`). Neither `progenitor` nor `backend` mounts
   a host directory for them. `data/instructions/` is checked into git and
   `COPY`'d into the `progenitor` image (not `backend`'s); every boot syncs it
   into Postgres: top-level Markdown files retain logical paths such as

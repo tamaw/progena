@@ -5,9 +5,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.progenitor.tools import shell as shell_module
-from app.progenitor.tools.protocol import ToolContext
-from app.progenitor.tools.shell import ShellCheckTool, ShellExecTool
+from src.progenitor.tools import shell as shell_module
+from src.progenitor.tools.protocol import ToolContext
+from src.progenitor.tools.shell import ShellCheckTool, ShellExecTool
 
 
 @pytest.mark.asyncio

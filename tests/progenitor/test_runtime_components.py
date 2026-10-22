@@ -7,13 +7,13 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from app.progenitor.config import ProgenitorConfig, StorageConfig
-from app.progenitor.mcp import MCPRuntime
-from app.progenitor.nodes import health as health_module
-from app.progenitor.nodes.audit import write_startup_config_audit_to_sink
-from app.progenitor.nodes.health import write_health_status
-from app.progenitor.nodes.mcp import sync_mcp_runtime_context
-from app.progenitor.runtime.queues import QueuedInput, RuntimeQueues
+import src.progenitor.orchestration.nodes.health as health_module
+from src.progenitor.config import ProgenitorConfig, StorageConfig
+from src.progenitor.mcp.runtime import MCPRuntime
+from src.progenitor.orchestration.nodes.audit import write_startup_config_audit_to_sink
+from src.progenitor.orchestration.nodes.health import write_health_status
+from src.progenitor.orchestration.nodes.mcp import sync_mcp_runtime_context
+from src.progenitor.runtime.queues import QueuedInput, RuntimeQueues
 
 
 def _make_config(tmp_path: Path) -> ProgenitorConfig:
@@ -84,7 +84,7 @@ async def test_runtime_queues_track_wait_and_pending_counts() -> None:
 
 @pytest.mark.asyncio
 async def test_apply_mcp_runtime_refresh_updates_runtime_and_registry(monkeypatch) -> None:
-    import app.progenitor.mcp as mcp_tools
+    import src.progenitor.mcp.context as mcp_tools
 
     config = ProgenitorConfig().mcp
     runtime = MCPRuntime(config)

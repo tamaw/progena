@@ -10,10 +10,10 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from app.progenitor.state.langgraph_store import LangGraphRuntimeStore
-from app.progenitor.state.manager import StateManager
-from app.progenitor.state.models import ACPTaskRecord, ACPTaskStatus
-from app.progenitor.tools.acp_sessions import (
+from src.progenitor.acp.models import ACPTaskRecord, ACPTaskStatus
+from src.progenitor.persistence.store import LangGraphRuntimeStore
+from src.progenitor.state.manager import StateManager
+from src.progenitor.tools.acp_sessions import (
     ACPAnswerTool,
     ACPCancelTool,
     ACPListTool,
@@ -21,7 +21,7 @@ from app.progenitor.tools.acp_sessions import (
     ACPStartTool,
     ACPStatusTool,
 )
-from app.progenitor.tools.protocol import ToolContext
+from src.progenitor.tools.protocol import ToolContext
 
 
 class _InMemoryStore:
@@ -111,7 +111,7 @@ async def test_start_creates_queued_document(state_manager: StateManager) -> Non
 async def test_send_keeps_concurrent_appends(state_manager: StateManager, monkeypatch) -> None:
     task = ACPTaskRecord(task_id="acp_send", agent_name="Claude", prompt="initial")
     await state_manager.upsert_acp_task(task)
-    monkeypatch.setattr("app.progenitor.tools.acp_sessions._SEND_WAIT_SECONDS", 0.0)
+    monkeypatch.setattr("src.progenitor.tools.acp_sessions._SEND_WAIT_SECONDS", 0.0)
 
     results = await asyncio.gather(
         ACPSendTool().execute(_context(state_manager, {"task_id": task.task_id, "message": "one"})),
@@ -130,7 +130,7 @@ async def test_status_wait_returns_after_turn_change(
 ) -> None:
     task = ACPTaskRecord(task_id="acp_wait", agent_name="Claude", prompt="initial")
     await state_manager.upsert_acp_task(task)
-    monkeypatch.setattr("app.progenitor.tools.acp_sessions._STATUS_POLL_SECONDS", 0.001)
+    monkeypatch.setattr("src.progenitor.tools.acp_sessions._STATUS_POLL_SECONDS", 0.001)
 
     wait = asyncio.create_task(
         ACPStatusTool().execute(
@@ -152,7 +152,7 @@ async def test_status_wait_returns_snapshot_on_timeout(
 ) -> None:
     task = ACPTaskRecord(task_id="acp_timeout", agent_name="Claude", prompt="initial")
     await state_manager.upsert_acp_task(task)
-    monkeypatch.setattr("app.progenitor.tools.acp_sessions._STATUS_POLL_SECONDS", 0.001)
+    monkeypatch.setattr("src.progenitor.tools.acp_sessions._STATUS_POLL_SECONDS", 0.001)
 
     result = await ACPStatusTool().execute(
         _context(state_manager, {"task_id": task.task_id, "wait_seconds": 0.005})

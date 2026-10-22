@@ -10,11 +10,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-import app.backend.events.stream as events_stream
-import app.backend.integrations.telegram_bridge as integrations_telegram_bridge
-from app.backend.chat.models import AgentResponse
-from app.backend.config import ChatServerConfig
-from app.backend.integrations.telegram import (
+import src.backend.events.stream as events_stream
+import src.backend.integrations.telegram_bridge as integrations_telegram_bridge
+from src.backend.chat.models import AgentResponse
+from src.backend.config import ChatServerConfig
+from src.backend.integrations.telegram import (
     TelegramClient,
     TelegramConfig,
     TelegramDraftSession,
@@ -24,7 +24,7 @@ from app.backend.integrations.telegram import (
     init_telegram_client,
     stop_telegram_client,
 )
-from app.backend.storage.documents import PROGENITOR_STATE_PREFIX, InMemoryDocumentStore
+from src.backend.storage.documents import PROGENITOR_STATE_PREFIX, InMemoryDocumentStore
 
 
 async def _async_iter(*chunks: str):
@@ -478,7 +478,7 @@ class TestTelegramRoutes:
         """Create test FastAPI client."""
         from fastapi.testclient import TestClient
 
-        from app.backend.main import app
+        from src.backend.main import app
 
         return TestClient(app)
 

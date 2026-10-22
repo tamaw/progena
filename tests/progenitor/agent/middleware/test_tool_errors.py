@@ -4,7 +4,7 @@ import pytest
 from langchain.agents.middleware.types import ToolCallRequest
 from langgraph.errors import GraphInterrupt
 
-from app.progenitor.agent.middleware import ToolErrorMiddleware
+from src.progenitor.agent.middleware import ToolErrorMiddleware
 
 
 def _request() -> ToolCallRequest:

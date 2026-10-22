@@ -9,8 +9,8 @@ leave the count unchanged.
 
 from __future__ import annotations
 
-from app.backend.monitoring.state import StateReader
-from app.backend.storage.documents import PROGENITOR_STATE_PREFIX, InMemoryDocumentStore
+from src.backend.monitoring.state import StateReader
+from src.backend.storage.documents import PROGENITOR_STATE_PREFIX, InMemoryDocumentStore
 
 
 def _reader(entries: dict[str, dict]) -> tuple[StateReader, InMemoryDocumentStore]:

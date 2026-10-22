@@ -6,7 +6,7 @@ virtual files; they are not files written under `data/state/` or another
 repository state directory. The backend and runtime use the same persisted
 documents, while static assets remain checked in under `data/`.
 
-`app/progenitor/agent/backends.py:create_progenitor_backend` is the source of
+`src/progenitor/agent/filesystem/mounts.py:create_progenitor_backend` is the source of
 truth for mounts. A route is present only when its dependencies are configured:
 the Postgres document routes require a `StateManager`, and `/attachments/`
 requires a database URL.
@@ -16,7 +16,7 @@ requires a database URL.
 The agent sees both ordinary read-only filesystem mounts and virtual document
 mounts:
 
-- Disk-backed, read-only: `/self/` (`app/`), `/repos/` (managed worktrees),
+- Disk-backed, read-only: `/self/` (`src/`), `/repos/` (managed worktrees),
   `/logs/`, `/schemas/`, `/skills/`, and bundled native-agent paths under
   `/agents/objects/` and `/agents/native/`.
 - Postgres-backed content: `/memories/`, `/instructions/`, `/knowledge/`, and
@@ -86,11 +86,11 @@ restore action.
 
 Agent-built UI modules (dashboards, diagrams, games) are directories the agent
 writes at `/modules/<name>/` (`ModuleDirectoryBackend`,
-`app/progenitor/agent/module_backend.py`). Each file is one `module:<name>/<path>`
+`src/progenitor/agent/filesystem/modules.py`). Each file is one `module:<name>/<path>`
 content document (`{content, updated_at}`); `manifest.json`
 (`module_manifest.schema.v1.json`) must be written first. Names, paths, file
 types and size caps are shared by the runtime mount and the backend in
-`app/progenitor/modules.py`. The mount also projects read-only
+`src/progenitor/modules/contracts.py`. The mount also projects read-only
 `/modules/_catalogue.json` (vendored libraries from `data/modules/libraries.json`,
 document types, host API) and `/modules/<name>/status.json` (last load result
 reported by the browser, `module_status:<name>`).

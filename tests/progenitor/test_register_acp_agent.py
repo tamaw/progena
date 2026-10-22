@@ -4,12 +4,12 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.progenitor.acp.agents import parse_acp_connection
-from app.progenitor.state.models import AgentRegistryEntry
-from app.progenitor.tools.protocol import ToolContext
-from app.progenitor.tools.register_a2a_agent import RegisterA2AAgentTool
-from app.progenitor.tools.register_acp_agent import RegisterACPAgentTool
-from app.progenitor.tools.unregister_agent import UnregisterAgentTool
+from src.progenitor.acp.agents import parse_acp_connection
+from src.progenitor.registry.models import AgentRegistryEntry
+from src.progenitor.tools.protocol import ToolContext
+from src.progenitor.tools.register_a2a_agent import RegisterA2AAgentTool
+from src.progenitor.tools.register_acp_agent import RegisterACPAgentTool
+from src.progenitor.tools.unregister_agent import UnregisterAgentTool
 
 
 class _FakeRegistry:

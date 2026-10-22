@@ -8,31 +8,32 @@ from typing import Any
 
 import pytest
 
-from app.progenitor.agent.state_backend import (
-    InboxDirectoryBackend,
-    KanbanTaskDirectoryBackend,
-    RoutineDirectoryBackend,
-    StateDocumentBackend,
-    WorkflowDirectoryBackend,
-    card_to_markdown,
+from src.progenitor.agent.filesystem.base import StateDocumentBackend
+from src.progenitor.agent.filesystem.config import (
     create_health_state_file,
     create_knowledge_state_file,
     create_mcp_state_file,
     create_mcp_tools_state_file,
     create_model_profiles_state_file,
     create_registry_state_file,
-    create_schedule_state_file,
-    inbox_message_to_markdown,
-    markdown_to_card,
-    markdown_to_inbox_message,
-    validate_kanban_structure,
-    validate_mcp_document,
-    validate_registry_document,
-    validate_schedule_document,
 )
-from app.progenitor.routines.store import default_routine_graph
-from app.progenitor.state.models import ScheduleEntry
-from app.progenitor.workflows import default_workflow_definition
+from src.progenitor.agent.filesystem.inbox import InboxDirectoryBackend
+from src.progenitor.agent.filesystem.routines import RoutineDirectoryBackend
+from src.progenitor.agent.filesystem.schedules import create_schedule_state_file
+from src.progenitor.agent.filesystem.tasks import KanbanTaskDirectoryBackend
+from src.progenitor.agent.filesystem.workflows import WorkflowDirectoryBackend
+from src.progenitor.inbox.documents import inbox_message_to_markdown, markdown_to_inbox_message
+from src.progenitor.mcp.validation import validate_mcp_document
+from src.progenitor.registry.validation import validate_registry_document
+from src.progenitor.routines.store import default_routine_graph
+from src.progenitor.schedules.models import ScheduleEntry
+from src.progenitor.schedules.validation import validate_schedule_document
+from src.progenitor.tasks.documents import (
+    card_to_markdown,
+    markdown_to_card,
+    validate_kanban_structure,
+)
+from src.progenitor.workflows.documents import default_workflow_definition
 
 
 class _FakeStateManager:
@@ -530,10 +531,7 @@ def test_markdown_to_inbox_message_filename_id_wins():
 
 
 def test_markdown_to_inbox_message_stamps_thread_id_from_context():
-    from app.progenitor.runtime.thread_context import (
-        reset_current_thread_id,
-        set_current_thread_id,
-    )
+    from src.progenitor.sessions.context import reset_current_thread_id, set_current_thread_id
 
     token = set_current_thread_id("thread_123")
     try:
@@ -549,10 +547,7 @@ def test_markdown_to_inbox_message_no_thread_id_when_no_context():
 
 
 def test_markdown_to_inbox_message_preserves_existing_thread_id_on_edit():
-    from app.progenitor.runtime.thread_context import (
-        reset_current_thread_id,
-        set_current_thread_id,
-    )
+    from src.progenitor.sessions.context import reset_current_thread_id, set_current_thread_id
 
     token = set_current_thread_id("thread_new")
     try:
@@ -676,7 +671,7 @@ class _FakeWorkflowStateManager:
         return [copy.deepcopy(workflow) for workflow in self.workflows.values()]
 
     async def list_document_types(self) -> dict[str, Any]:
-        from app.progenitor.document_types import BUILTIN_DOCUMENT_TYPES
+        from src.progenitor.documents.types import BUILTIN_DOCUMENT_TYPES
 
         return {t.id: t for t in BUILTIN_DOCUMENT_TYPES}
 

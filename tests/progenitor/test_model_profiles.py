@@ -1,6 +1,6 @@
 import pytest
 
-from app.progenitor.state.model_profiles import (
+from src.progenitor.settings.model_profiles import (
     default_model_profiles_payload,
     migrate_legacy_model_profiles_payload,
     validate_model_profiles_document,

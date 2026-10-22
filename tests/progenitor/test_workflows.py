@@ -1,20 +1,15 @@
 import pytest
 
-from app.progenitor.document_types import BUILTIN_DOCUMENT_TYPES, DocumentType
-from app.progenitor.schemas import load_schema
-from app.progenitor.structured import validate_against_schema
-from app.progenitor.workflows import (
-    WorkflowDefinition,
-    WorkflowNodeEvent,
-    coerce_workflow_run,
-    default_workflow_definition,
-    derive_workflow_port_schemas,
-    document_changed_fields,
-    document_create_input_schema,
-    document_write_input_schema,
-    ordered_workflow_node_ids,
-    validate_workflow_definition_payload,
-)
+from src.progenitor.documents.catalog import load_schema
+from src.progenitor.documents.types import BUILTIN_DOCUMENT_TYPES, DocumentType
+from src.progenitor.llm.structured import validate_against_schema
+from src.progenitor.workflows.derivation import derive_workflow_port_schemas
+from src.progenitor.workflows.documents import coerce_workflow_run, default_workflow_definition
+from src.progenitor.workflows.events import document_changed_fields
+from src.progenitor.workflows.graph import ordered_workflow_node_ids
+from src.progenitor.workflows.models import WorkflowDefinition, WorkflowNodeEvent
+from src.progenitor.workflows.ports import document_create_input_schema, document_write_input_schema
+from src.progenitor.workflows.validation import validate_workflow_definition_payload
 
 
 def _node_id(payload, kind):

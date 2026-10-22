@@ -6,15 +6,15 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from app.progenitor.state.models import A2ATaskRecord
-from app.progenitor.tools.a2a_sessions import (
+from src.progenitor.a2a.models import A2ATaskRecord
+from src.progenitor.tools.a2a_sessions import (
     A2ACancelTool,
     A2AListTool,
     A2ASendAsyncTool,
     A2ASendTool,
     A2AStatusTool,
 )
-from app.progenitor.tools.protocol import ToolContext
+from src.progenitor.tools.protocol import ToolContext
 
 
 class _State:
@@ -90,7 +90,7 @@ def _registry(config: dict | None = None) -> MagicMock:
 @pytest.mark.asyncio
 async def test_send_waits_and_returns_settled_task(monkeypatch) -> None:
     client = _Client([_payload(state="completed")])
-    monkeypatch.setattr("app.progenitor.a2a.tasks.A2AClient", lambda: client)
+    monkeypatch.setattr("src.progenitor.a2a.tasks.A2AClient", lambda: client)
     state = _State()
 
     result = await A2ASendTool().execute(
@@ -107,7 +107,7 @@ async def test_send_waits_and_returns_settled_task(monkeypatch) -> None:
 @pytest.mark.asyncio
 async def test_send_returns_in_flight_task_after_wait_timeout(monkeypatch) -> None:
     client = _Client([_payload(state="working")])
-    monkeypatch.setattr("app.progenitor.a2a.tasks.A2AClient", lambda: client)
+    monkeypatch.setattr("src.progenitor.a2a.tasks.A2AClient", lambda: client)
 
     result = await A2ASendTool().execute(
         _context(
@@ -123,7 +123,7 @@ async def test_send_returns_in_flight_task_after_wait_timeout(monkeypatch) -> No
 @pytest.mark.asyncio
 async def test_send_async_returns_immediately_and_notifies(monkeypatch) -> None:
     client = _Client([_payload()])
-    monkeypatch.setattr("app.progenitor.a2a.tasks.A2AClient", lambda: client)
+    monkeypatch.setattr("src.progenitor.a2a.tasks.A2AClient", lambda: client)
 
     result = await A2ASendAsyncTool().execute(
         _context(_State(), _registry(), {"agent": "builder", "message": "build it"})
@@ -137,7 +137,7 @@ async def test_send_async_returns_immediately_and_notifies(monkeypatch) -> None:
 @pytest.mark.asyncio
 async def test_send_followup_carries_task_and_context_ids(monkeypatch) -> None:
     client = _Client([_payload("task-1", "input-required", "ctx-1")])
-    monkeypatch.setattr("app.progenitor.a2a.tasks.A2AClient", lambda: client)
+    monkeypatch.setattr("src.progenitor.a2a.tasks.A2AClient", lambda: client)
     prior = A2ATaskRecord(task_id="task-1", agent_name="builder", status="input-required")
 
     result = await A2ASendTool().execute(
@@ -161,7 +161,7 @@ async def test_send_followup_carries_task_and_context_ids(monkeypatch) -> None:
 @pytest.mark.asyncio
 async def test_status_wait_refreshes_until_settled(monkeypatch) -> None:
     client = _Client([_payload(state="completed")])
-    monkeypatch.setattr("app.progenitor.a2a.tasks.A2AClient", lambda: client)
+    monkeypatch.setattr("src.progenitor.a2a.tasks.A2AClient", lambda: client)
     record = A2ATaskRecord(
         task_id="task-1", agent_name="builder", agent_url="http://example.test", status="working"
     )
@@ -178,7 +178,7 @@ async def test_status_wait_refreshes_until_settled(monkeypatch) -> None:
 @pytest.mark.asyncio
 async def test_cancel_returns_persisted_task(monkeypatch) -> None:
     client = _Client([_payload(state="canceled")])
-    monkeypatch.setattr("app.progenitor.a2a.tasks.A2AClient", lambda: client)
+    monkeypatch.setattr("src.progenitor.a2a.tasks.A2AClient", lambda: client)
     record = A2ATaskRecord(
         task_id="task-1", agent_name="builder", agent_url="http://example.test", status="working"
     )

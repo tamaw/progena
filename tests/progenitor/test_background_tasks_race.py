@@ -10,12 +10,12 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
-from app.backend.storage.documents import PROGENITOR_STATE_PREFIX, PostgresDocumentStore
-from app.backend.workflows.routine_runs import append_background_task
-from app.progenitor.database.langgraph import _open_store
-from app.progenitor.state.langgraph_store import LangGraphRuntimeStore
-from app.progenitor.state.manager import StateManager
-from app.progenitor.state.models import BackgroundTaskEntry
+from src.backend.storage.documents import PROGENITOR_STATE_PREFIX, PostgresDocumentStore
+from src.backend.workflows.routine_runs import append_background_task
+from src.progenitor.orchestration.state import BackgroundTaskEntry
+from src.progenitor.persistence.langgraph import _open_store
+from src.progenitor.persistence.store import LangGraphRuntimeStore
+from src.progenitor.state.manager import StateManager
 
 _CONCURRENCY_TIMEOUT = 15
 

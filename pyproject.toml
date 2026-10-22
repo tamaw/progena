@@ -85,9 +85,14 @@ ml = [
 requires = ["setuptools>=68.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
+[tool.setuptools]
+# Frontend assets are built by Vite, not shipped as Python package data.
+include-package-data = false
+
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["app*", "src*"]
+include = ["src", "src.*"]
+namespaces = false
 
 # Ruff configuration (linting + formatting)
 [tool.ruff]
@@ -104,7 +109,7 @@ exclude = [
     ".venv",
     "__pycache__",
     "node_modules",
-    "app/chat-ui",
+    "src/chat-ui",
     "worktrees",
     "*.json",
 ]
@@ -136,12 +141,9 @@ unfixable = []
     "ARG",    # Unused arguments OK in tests
     "S101",   # assert OK in tests
 ]
-"tests/integration/**/*.py" = [
-    "E402",   # Allow sys.path bootstrap before local imports
-]
 
 [tool.ruff.lint.isort]
-known-first-party = ["app"]
+known-first-party = ["src"]
 
 [tool.ruff.format]
 quote-style = "double"
@@ -149,31 +151,34 @@ indent-style = "space"
 skip-magic-trailing-comma = false
 line-ending = "auto"
 
-# Pyright configuration. Note the interpreter is NOT set here: pyright ignores
-# `venvPath`/`venv` and `pythonPath` from pyproject.toml (verified -- every
-# third-party import still failed to resolve), so both call sites pass
-# `--pythonpath .venv/bin/python` explicitly. Getting this wrong is silent:
-# an unresolved dependency degrades to Any and the run reports success.
+# Shared Pyright configuration. CI and pre-commit pass --pythonpath explicitly
+# so dependency resolution uses the project venv even without activation.
 [tool.pyright]
 # Oldest interpreter we support, per requires-python.
 pythonVersion = "3.11"
 # Pinned so a pyright upgrade cannot silently change strictness under CI.
 typeCheckingMode = "standard"
-include = ["app"]
+include = ["src"]
 exclude = [
+    ".venv",
+    "worktrees",
+    "tests",
     "**/__pycache__",
-    "app/chat-ui",
-    "app/frontend",
+    "src/chat-ui",
+    "src/frontend",
 ]
 
 # Pytest configuration
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+norecursedirs = ["frontend"]
 asyncio_mode = "auto"
-filterwarnings = [
-    "ignore::DeprecationWarning",
-    "ignore::PendingDeprecationWarning",
-]
+asyncio_default_fixture_loop_scope = "function"
+timeout = 60
+timeout_method = "thread"
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
     "integration: marks integration tests",
@@ -190,10 +195,10 @@ skips = [
 
 # Coverage configuration
 [tool.coverage.run]
-source = ["app"]
+source = ["src"]
 branch = true
 omit = [
-    "app/chat-ui/*",
+    "src/chat-ui/*",
     "tests/*",
 ]
 

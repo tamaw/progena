@@ -1,4 +1,4 @@
-"""Tests for app.progenitor.plugins.sources."""
+"""Tests for src.progenitor.plugins.sources."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from app.progenitor.plugins.sources import (
+from src.progenitor.plugins.sources import (
     _MAX_FILE_BYTES,
     MarketplaceCatalog,
     PluginFetchError,
@@ -177,10 +177,10 @@ async def test_fetch_marketplace_reads_manifest_over_http() -> None:
 
     with (
         patch(
-            "app.progenitor.plugins.sources._resolve_commit_sha",
+            "src.progenitor.plugins.sources._resolve_commit_sha",
             new=AsyncMock(return_value="abc123"),
         ),
-        patch("app.progenitor.plugins.sources._fetch_url", side_effect=fetch),
+        patch("src.progenitor.plugins.sources._fetch_url", side_effect=fetch),
     ):
         catalog = await fetch_marketplace("github/awesome-copilot")
     assert catalog.commit_sha == "abc123"
@@ -210,7 +210,7 @@ async def test_fetch_plugin_skills_over_http() -> None:
             ).encode()
         return b"---\nname: review\n---\n# Review"
 
-    with patch("app.progenitor.plugins.sources._fetch_url", side_effect=fetch):
+    with patch("src.progenitor.plugins.sources._fetch_url", side_effect=fetch):
         files, skipped = await fetch_plugin_files_with_report(catalog, "demo")
     assert files == {"review/SKILL.md": "---\nname: review\n---\n# Review"}
     assert skipped == 0
@@ -239,7 +239,7 @@ async def test_fetch_plugin_agents_over_http() -> None:
             ).encode()
         return system.encode()
 
-    with patch("app.progenitor.plugins.sources._fetch_url", side_effect=fetch):
+    with patch("src.progenitor.plugins.sources._fetch_url", side_effect=fetch):
         files = await fetch_plugin_content_files_with_report(catalog, "demo")
     assert files.skills == {"review/SKILL.md": system}
     assert files.agents == {"reviewer/SYSTEM.md": system}
@@ -259,7 +259,7 @@ async def test_missing_skills_directory_is_empty() -> None:
     async def fetch(url: str) -> bytes:
         return json.dumps({"tree": [{"path": "plugins/demo/README.md", "type": "blob"}]}).encode()
 
-    with patch("app.progenitor.plugins.sources._fetch_url", side_effect=fetch):
+    with patch("src.progenitor.plugins.sources._fetch_url", side_effect=fetch):
         files, skipped = await fetch_plugin_files_with_report(catalog, "demo")
     assert files == {}
     assert skipped == 0
@@ -354,7 +354,7 @@ def test_extract_skills_respects_50_file_cap() -> None:
 
 
 def test_extracts_object_agents_alongside_skills() -> None:
-    from app.progenitor.plugins.sources import extract_plugin_content_files
+    from src.progenitor.plugins.sources import extract_plugin_content_files
 
     content = extract_plugin_content_files(
         {

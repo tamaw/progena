@@ -15,21 +15,21 @@ import pytest
 from ack_helpers import assert_acknowledged, assert_acknowledgement_body
 from fastapi.testclient import TestClient
 
-import app.backend.alerts.routes as alerts_routes
-import app.backend.chat.routes as chat_routes
-import app.backend.events.dispatch as events_dispatch
-import app.backend.events.routes as events_routes
-import app.backend.events.stream as events_stream
-import app.backend.lifecycle.state as lifecycle_state
-import app.backend.monitoring.status as monitoring_status
-import app.backend.schedules.service as schedules_service
-from app.backend.alerts.service import clear_alerts, create_alert
-from app.backend.chat.models import AgentResponse
-from app.backend.chat.threads import clear_threads
-from app.backend.events.documents import seed_document_types
-from app.backend.main import app
-from app.backend.monitoring.state import StateReader
-from app.backend.storage.documents import (
+import src.backend.alerts.routes as alerts_routes
+import src.backend.chat.routes as chat_routes
+import src.backend.events.dispatch as events_dispatch
+import src.backend.events.routes as events_routes
+import src.backend.events.stream as events_stream
+import src.backend.lifecycle.state as lifecycle_state
+import src.backend.monitoring.status as monitoring_status
+import src.backend.schedules.service as schedules_service
+from src.backend.alerts.service import clear_alerts, create_alert
+from src.backend.chat.models import AgentResponse
+from src.backend.chat.threads import clear_threads
+from src.backend.events.documents import seed_document_types
+from src.backend.main import app
+from src.backend.monitoring.state import StateReader
+from src.backend.storage.documents import (
     BACKEND_STATE_PREFIX,
     PROGENITOR_LOG_PREFIX,
     PROGENITOR_STATE_PREFIX,
@@ -37,7 +37,7 @@ from app.backend.storage.documents import (
     InMemoryDocumentStore,
     set_default_document_store,
 )
-from app.progenitor.document_kinds import SESSION_KEY_PREFIX
+from src.progenitor.documents.kinds import SESSION_KEY_PREFIX
 
 
 def _create_session_document(store, thread_id, title="New chat", **extra):
@@ -85,7 +85,7 @@ def kanban_state_reader(tmp_path, monkeypatch, document_store):
         document_store=document_store,
         logs_dir=logs_dir,
     )
-    monkeypatch.setattr("app.backend.monitoring.state.get_state_reader", lambda: state_reader)
+    monkeypatch.setattr("src.backend.monitoring.state.get_state_reader", lambda: state_reader)
 
     events_dispatch._document_event_dispatcher = None
     yield state_reader
@@ -109,7 +109,7 @@ def tasks_state_reader(tmp_path, monkeypatch, document_store):
         document_store=document_store,
         logs_dir=logs_dir,
     )
-    monkeypatch.setattr("app.backend.monitoring.state.get_state_reader", lambda: state_reader)
+    monkeypatch.setattr("src.backend.monitoring.state.get_state_reader", lambda: state_reader)
 
     events_dispatch._document_event_dispatcher = None
     yield state_reader
@@ -396,7 +396,7 @@ class TestUIRoutes:
                 return [{"id": "m1", "type": "human", "content": "hello"}]
 
         monkeypatch.setattr(
-            "app.backend.monitoring.state.get_state_reader", lambda: _LiveStateReader()
+            "src.backend.monitoring.state.get_state_reader", lambda: _LiveStateReader()
         )
         event_start = len(events_stream._ui_event_replay)
 
@@ -411,7 +411,7 @@ class TestUIRoutes:
     def test_chat_detail_reports_runtime_outage_instead_of_empty_chat(
         self, client, document_store, monkeypatch
     ):
-        from app.backend.integrations.runtime_history import RuntimeUnavailable
+        from src.backend.integrations.runtime_history import RuntimeUnavailable
 
         _create_session_document(document_store, "thread-out", "Has history")
 
@@ -428,7 +428,7 @@ class TestUIRoutes:
     def test_rename_is_accepted_while_the_runtime_is_down(
         self, client, document_store, monkeypatch
     ):
-        from app.backend.integrations.runtime_history import RuntimeUnavailable
+        from src.backend.integrations.runtime_history import RuntimeUnavailable
 
         _create_session_document(document_store, "thread-rename", "Old")
 
@@ -451,9 +451,9 @@ class TestUIRoutes:
     ):
         """A rename during a runtime outage still reaches the sidebar, and the
         handler does not raise (a raise would stop the event dispatcher)."""
-        from app.backend.events.documents import TypedDocumentEvent
-        from app.backend.integrations.runtime_history import RuntimeUnavailable
-        from app.backend.storage.documents import DocumentEvent
+        from src.backend.events.documents import TypedDocumentEvent
+        from src.backend.integrations.runtime_history import RuntimeUnavailable
+        from src.backend.storage.documents import DocumentEvent
 
         _create_session_document(document_store, "thread-down", "Renamed")
 
@@ -1397,7 +1397,7 @@ class TestScheduleEndpoint:
         store = InMemoryDocumentStore()
         store.save_document(PROGENITOR_STATE_PREFIX, "schedule", {})
         state_reader = StateReader(document_store=store)
-        monkeypatch.setattr("app.backend.monitoring.state.get_state_reader", lambda: state_reader)
+        monkeypatch.setattr("src.backend.monitoring.state.get_state_reader", lambda: state_reader)
 
         created = client.post(
             "/api/ui/schedules",
@@ -1451,7 +1451,7 @@ class TestScheduleEndpoint:
             },
         )
         state_reader = StateReader(document_store=store)
-        monkeypatch.setattr("app.backend.monitoring.state.get_state_reader", lambda: state_reader)
+        monkeypatch.setattr("src.backend.monitoring.state.get_state_reader", lambda: state_reader)
 
         queue = asyncio.Queue()
         events_stream._ui_stream_subscribers[queue] = None
@@ -1614,7 +1614,7 @@ class TestWorkspaceBridgeActions:
             },
         )
         state_reader = StateReader(document_store=store)
-        monkeypatch.setattr("app.backend.monitoring.state.get_state_reader", lambda: state_reader)
+        monkeypatch.setattr("src.backend.monitoring.state.get_state_reader", lambda: state_reader)
 
         response = client.patch(
             "/api/ui/widgets/schedule:sched-1",
@@ -1652,7 +1652,7 @@ class TestWorkspaceBridgeActions:
             },
         )
         state_reader = StateReader(document_store=store)
-        monkeypatch.setattr("app.backend.monitoring.state.get_state_reader", lambda: state_reader)
+        monkeypatch.setattr("src.backend.monitoring.state.get_state_reader", lambda: state_reader)
 
         response = client.patch(
             "/api/ui/widgets/mcp:jina",
@@ -1714,7 +1714,7 @@ class TestWorkspaceBridgeActions:
             },
         )
         state_reader = StateReader(document_store=store)
-        monkeypatch.setattr("app.backend.monitoring.state.get_state_reader", lambda: state_reader)
+        monkeypatch.setattr("src.backend.monitoring.state.get_state_reader", lambda: state_reader)
 
         list_request_id = "mcp-list-lean"
         event_start = len(events_stream._ui_event_replay)
@@ -1758,7 +1758,7 @@ class TestWorkspaceBridgeActions:
     def test_mcp_content_route_404s_for_unknown_server(self, client, monkeypatch):
         store = InMemoryDocumentStore()
         state_reader = StateReader(document_store=store)
-        monkeypatch.setattr("app.backend.monitoring.state.get_state_reader", lambda: state_reader)
+        monkeypatch.setattr("src.backend.monitoring.state.get_state_reader", lambda: state_reader)
 
         response = client.get("/api/ui/mcp/content", params={"id": "mcp:missing"})
 
@@ -1786,7 +1786,7 @@ class TestWorkspaceBridgeActions:
             {"tools": [{"name": "search", "server": "jina", "description": "", "enabled": True}]},
         )
         state_reader = StateReader(document_store=store)
-        monkeypatch.setattr("app.backend.monitoring.state.get_state_reader", lambda: state_reader)
+        monkeypatch.setattr("src.backend.monitoring.state.get_state_reader", lambda: state_reader)
 
         response = client.patch("/api/ui/widgets/mcp_tool:search", json={"enabled": False})
 
@@ -1832,7 +1832,7 @@ class TestWorkspaceBridgeActions:
         state_reader = StateReader(
             document_store=store,
         )
-        monkeypatch.setattr("app.backend.monitoring.state.get_state_reader", lambda: state_reader)
+        monkeypatch.setattr("src.backend.monitoring.state.get_state_reader", lambda: state_reader)
 
         async def fake_inspect_agent_widget(widget, reader):
             assert widget["id"] == "agent:example_agent"
@@ -1853,7 +1853,7 @@ class TestWorkspaceBridgeActions:
             }
 
         monkeypatch.setattr(
-            "app.backend.schedules.service._inspect_agent_widget",
+            "src.backend.schedules.service._inspect_agent_widget",
             fake_inspect_agent_widget,
         )
 
@@ -1893,7 +1893,7 @@ class TestWorkspaceBridgeActions:
         state_reader = StateReader(
             document_store=store,
         )
-        monkeypatch.setattr("app.backend.monitoring.state.get_state_reader", lambda: state_reader)
+        monkeypatch.setattr("src.backend.monitoring.state.get_state_reader", lambda: state_reader)
         response = client.post("/api/ui/widgets/mcp:jina/refresh")
         assert response.status_code == 400
         assert "agent" in response.json()["detail"].lower()
@@ -1902,7 +1902,7 @@ class TestWorkspaceBridgeActions:
         store = InMemoryDocumentStore()
         store.save_document(PROGENITOR_STATE_PREFIX, "schedule", {})
         state_reader = StateReader(document_store=store)
-        monkeypatch.setattr("app.backend.monitoring.state.get_state_reader", lambda: state_reader)
+        monkeypatch.setattr("src.backend.monitoring.state.get_state_reader", lambda: state_reader)
 
         response = client.post(
             "/api/ui/schedules",
@@ -1936,7 +1936,7 @@ class TestWorkspaceBridgeActions:
         store = InMemoryDocumentStore()
         store.save_document(PROGENITOR_STATE_PREFIX, "schedule", {})
         state_reader = StateReader(document_store=store)
-        monkeypatch.setattr("app.backend.monitoring.state.get_state_reader", lambda: state_reader)
+        monkeypatch.setattr("src.backend.monitoring.state.get_state_reader", lambda: state_reader)
 
         response = client.post(
             "/api/ui/schedules",

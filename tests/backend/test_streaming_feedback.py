@@ -12,7 +12,7 @@ import asyncio
 
 import pytest
 
-from app.backend.chat.streaming import (
+from src.backend.chat.streaming import (
     AsyncIteratorize,
     Iteratorize,
     StreamingBuffer,
@@ -284,7 +284,7 @@ class TestAgentActivityFeedback:
 
     def test_agent_info_runtime_status(self):
         """Test AgentInfo includes runtime status fields."""
-        from app.backend.monitoring.state import AgentInfo
+        from src.backend.monitoring.state import AgentInfo
 
         agent = AgentInfo.from_dict(
             {
@@ -313,7 +313,7 @@ class TestAgentActivityFeedback:
 
     def test_loop_info_creation(self):
         """Test LoopInfo for Planner/Executor status."""
-        from app.backend.monitoring.state import LoopInfo
+        from src.backend.monitoring.state import LoopInfo
 
         planner = LoopInfo(
             name="Planner",

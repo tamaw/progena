@@ -12,15 +12,15 @@ from typing import Any
 import psycopg
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage
-from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
-from app.progenitor.database.langgraph import _open_saver, _open_store
-from app.progenitor.document_kinds import SESSION_KEY_PREFIX
-from app.progenitor.sessions.titles import ATTACHMENT_CONTEXT_MARKER
+from src.progenitor.documents.kinds import SESSION_KEY_PREFIX
+from src.progenitor.persistence.langgraph import _open_saver, _open_store
+from src.progenitor.persistence.serialization import CheckpointSerializer
+from src.progenitor.sessions.titles import ATTACHMENT_CONTEXT_MARKER
 
-_SERDE = JsonPlusSerializer()
+_SERDE = CheckpointSerializer()
 _UTC_STAMP = re.compile(r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{6}\+00:00$")
 
 

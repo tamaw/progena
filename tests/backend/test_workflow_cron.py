@@ -3,10 +3,10 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from app.backend.events.documents import seed_document_types
-from app.backend.storage.documents import BACKEND_STATE_PREFIX, InMemoryDocumentStore
-from app.backend.workflows.cron import WorkflowCronClock, workflow_cron_state_key
-from app.backend.workflows.service import (
+from src.backend.events.documents import seed_document_types
+from src.backend.storage.documents import BACKEND_STATE_PREFIX, InMemoryDocumentStore
+from src.backend.workflows.cron import WorkflowCronClock, workflow_cron_state_key
+from src.backend.workflows.service import (
     PromptExecutionResult,
     WorkflowExecutor,
     get_workflow_run,
@@ -14,11 +14,9 @@ from app.backend.workflows.service import (
     list_workflow_runs,
     save_workflow_definition,
 )
-from app.progenitor.workflows import (
-    WorkflowNodeCron,
-    build_cron_trigger_output,
-    default_workflow_definition,
-)
+from src.progenitor.workflows.documents import default_workflow_definition
+from src.progenitor.workflows.events import build_cron_trigger_output
+from src.progenitor.workflows.models import WorkflowNodeCron
 
 START = datetime(2026, 10, 12, 8, 30, tzinfo=UTC)
 

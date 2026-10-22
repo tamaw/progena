@@ -32,7 +32,7 @@ jobs:
       - name: Lint backend (ruff)
         run: |
           . .venv/bin/activate
-          ruff check app/backend tests/backend
+          ruff check src/backend tests/backend
 
       - name: Tests backend (pytest)
         run: |
@@ -57,27 +57,23 @@ jobs:
       - name: Lint progenitor (ruff)
         run: |
           . .venv/bin/activate
-          ruff check app/progenitor tests/progenitor tests/test_scheduler.py
+          ruff check src/progenitor tests/progenitor
 
       - name: Type-check (pyright)
         # --pythonpath keeps this identical to the pre-commit hook, so the
         # interpreter never depends on activation state.
         run: |
           . .venv/bin/activate
-          pyright --pythonpath .venv/bin/python app/
+          pyright --pythonpath .venv/bin/python src/
 
       - name: Tests progenitor (pytest)
         run: >
           . .venv/bin/activate &&
           pytest
           tests/progenitor
-          tests/test_scheduler.py
 
   frontend:
     runs-on: [self-hosted, Linux, node]
-    defaults:
-      run:
-        working-directory: app/frontend
     steps:
       - uses: actions/checkout@v4
         with:
@@ -128,11 +124,11 @@ jobs:
           fi
           echo "Deployed commit: $DEPLOYED"
           changed() { [ -n "$(git diff --name-only "$DEPLOYED" HEAD -- "$@")" ] && echo true || echo false; }
-          # Both Python images copy all of app/ (the backend imports app.progenitor).
-          PYTHON_COMMON=(app ':!app/frontend' pyproject.toml README.md data/schemas data/modules .dockerignore)
+          # Both Python images copy all of src/ (the backend imports src.progenitor).
+          PYTHON_COMMON=(src ':!src/frontend' pyproject.toml README.md data/schemas data/modules .dockerignore)
           PROGENITOR="$(changed "${PYTHON_COMMON[@]}" docker/progenitor data/instructions data/skills data/agents data/shims)"
           BACKEND="$(changed "${PYTHON_COMMON[@]}" docker/backend data/agents/objects)"
-          FRONTEND="$(changed app/frontend docker/frontend)"
+          FRONTEND="$(changed src/frontend docker/frontend package.json package-lock.json)"
           CLAUDE="$(changed docker/claude)"
           # The stack also restarts for compose/deploy-step changes.
           STACK="$(changed docker/docker-compose.progenitor.yml .github/workflows/ci.yml)"
@@ -188,7 +184,7 @@ jobs:
         if: ${{ github.event_name == 'workflow_dispatch' || steps.changes.outputs.frontend_image == 'true' }}
         uses: docker/build-push-action@v6
         with:
-          context: app/frontend
+          context: .
           file: docker/frontend/Dockerfile
           load: true
           labels: |
