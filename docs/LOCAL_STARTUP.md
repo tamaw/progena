@@ -137,8 +137,7 @@ python -m uvicorn src.backend.main:app --host 0.0.0.0 --port 8000
 In a third shell:
 
 ```bash
-cd src/frontend
-npm install
+npm ci
 npm run dev -- --port 5173
 ```
 

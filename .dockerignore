@@ -28,6 +28,7 @@ data/*
 !data/shims/**
 
 # Frontend build artifacts / deps (not needed in Python images)
+node_modules
 src/frontend/node_modules
 src/frontend/dist
 

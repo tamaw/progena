@@ -74,9 +74,6 @@ jobs:
 
   frontend:
     runs-on: [self-hosted, Linux, node]
-    defaults:
-      run:
-        working-directory: src/frontend
     steps:
       - uses: actions/checkout@v4
         with:
@@ -131,7 +128,7 @@ jobs:
           PYTHON_COMMON=(src ':!src/frontend' pyproject.toml README.md data/schemas data/modules .dockerignore)
           PROGENITOR="$(changed "${PYTHON_COMMON[@]}" docker/progenitor data/instructions data/skills data/agents data/shims)"
           BACKEND="$(changed "${PYTHON_COMMON[@]}" docker/backend data/agents/objects)"
-          FRONTEND="$(changed src/frontend docker/frontend)"
+          FRONTEND="$(changed src/frontend docker/frontend package.json package-lock.json)"
           CLAUDE="$(changed docker/claude)"
           # The stack also restarts for compose/deploy-step changes.
           STACK="$(changed docker/docker-compose.progenitor.yml .github/workflows/ci.yml)"
@@ -187,7 +184,7 @@ jobs:
         if: ${{ github.event_name == 'workflow_dispatch' || steps.changes.outputs.frontend_image == 'true' }}
         uses: docker/build-push-action@v6
         with:
-          context: src/frontend
+          context: .
           file: docker/frontend/Dockerfile
           load: true
           labels: |

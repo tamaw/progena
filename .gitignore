@@ -23,6 +23,7 @@ eggs/
 lib/
 !src/frontend/src/lib/
 !src/frontend/src/lib/indexedDb.js
+!tests/frontend/unit/lib/
 lib64/
 parts/
 sdist/

@@ -7,6 +7,9 @@ This document focuses on the checked-in main stack only. For runtime relationshi
 ```text
 progenitor/
 ├── src/          # Main application code
+├── tests/        # backend/, progenitor/, frontend/{unit,e2e,helpers,fixtures}
+├── package.json  # Shared frontend dependencies and npm scripts
+├── package-lock.json
 ├── data/         # Bundled assets and managed-repository workspace
 ├── docker/       # Container definitions
 ├── docs/         # Project documentation

@@ -8,7 +8,7 @@
 // the same map, so `three` is loaded exactly once.
 //
 // The bundles, libraries.js and the catalogue are committed. Run from
-// src/frontend after changing a pinned version: `npm run build:module-vendor`.
+// the repository root after changing a pinned version: `npm run build:module-vendor`.
 import { build } from 'esbuild';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
@@ -49,7 +49,7 @@ const LIBRARIES = [
 
 async function packageVersion(name) {
   const pkg = JSON.parse(
-    await readFile(resolve(frontendRoot, 'node_modules', name, 'package.json'), 'utf8'),
+    await readFile(resolve(repoRoot, 'node_modules', name, 'package.json'), 'utf8'),
   );
   return pkg.version;
 }
@@ -58,7 +58,7 @@ async function bundle(entry) {
   const result = await build({
     stdin: {
       contents: `export * from ${JSON.stringify(entry.source)};`,
-      resolveDir: frontendRoot,
+      resolveDir: repoRoot,
       loader: 'js',
     },
     bundle: true,

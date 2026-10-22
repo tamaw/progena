@@ -11,7 +11,8 @@ import { defineConfig, devices } from '@playwright/test';
  * Override the target with FRONTEND_BASE_URL if the dev server is elsewhere.
  */
 export default defineConfig({
-  testDir: './tests',
+  testDir: '../../tests/frontend/e2e',
+  outputDir: '../../tests/frontend/test-results',
   timeout: 30_000,
   expect: { timeout: 10_000 },
   fullyParallel: true,

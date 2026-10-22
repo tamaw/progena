@@ -160,8 +160,8 @@ services:
   frontend:
     image: ghcr.io/tamaw/progenitor-frontend:${PROGENITOR_IMAGE_TAG:-latest}
     build:
-      context: ../src/frontend
-      dockerfile: ../../docker/frontend/Dockerfile
+      context: ..
+      dockerfile: docker/frontend/Dockerfile
     container_name: progenitor-frontend
     restart: unless-stopped
     depends_on:

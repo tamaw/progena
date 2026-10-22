@@ -14,12 +14,15 @@ A modern React-based chat interface for the Progenitor AI agent system.
 ### Development
 
 ```bash
-# Install dependencies
-npm install
+# From the repository root: install the shared dependency tree
+npm ci
 
 # Start development server with hot reload
 npm run dev
 ```
+
+Unit and browser tests live under root `tests/frontend/`; run `npm run test:unit`
+or `npm run test:e2e` from the repository root. Browser tests require a running stack.
 
 The dev server runs at `http://localhost:5173/`. Its built-in proxy forwards only `/api/*` and `/v1/*` requests to the backend, defaulting to `http://localhost:8000`. Set `VITE_BACKEND_BASE_URL` in `.env` or `.env.local` to point the standalone Vite server at a different backend.
 

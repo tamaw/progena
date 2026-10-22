@@ -12,7 +12,7 @@ Playwright and ESLint 9. JavaScript/JSX, plain CSS and CSS Modules.
 Prefer function components and hooks; the route error boundary uses React's
 class-based error-boundary API.
 
-Use Node 24 as described in root `AGENTS.md`. Run from `src/frontend`:
+Use Node 24 as described in root `AGENTS.md`. Run npm commands from the repository root:
 
 ```bash
 npm ci
@@ -28,11 +28,17 @@ frontend URL. The Vite dev/preview proxy forwards `/api/*` and `/v1/*` to the
 backend at `http://127.0.0.1:8000`, or `VITE_BACKEND_BASE_URL`. The browser never
 calls the runtime directly.
 
-Browser specs live in `tests/*.spec.js`, with shared helpers in `tests/helpers/`
-and data in `tests/fixtures/`. Unit tests stay beside their source under `src/`.
-The source-only include in `vitest.config.js` keeps the Playwright suite separate.
-`test-results/` and `playwright-report/` are ignored local artifacts; do not commit
-them. Browser discovery (`npx playwright test --list`) does not run the scenarios.
+All frontend tests live under root `tests/frontend/`: `unit/` mirrors the source
+layout, `e2e/` holds browser specs, and `helpers/` / `fixtures/` hold support files.
+Vitest maps `@frontend/` to `src/frontend/src/` for unit-test imports and mocks.
+Its include pattern and Playwright's testDir keep the suites separate; pytest
+skips the frontend subtree. Shared unit setup lives in `tests/frontend/unit/setup.js`.
+Generated artifacts under `tests/frontend/test-results/` and report folders are
+ignored. Browser discovery (`npm run test:e2e -- --list`) does not run scenarios.
+
+The root `package.json` / lockfile and `eslint.config.js` own npm dependencies,
+scripts and linting. Vite, Vitest and Playwright configs stay in `src/frontend/`;
+Vite's application root is still that directory.
 
 ## Directory map
 
@@ -88,8 +94,8 @@ src/
 ```
 
 Keep small features flat. Introduce subdirectories when they describe a real
-responsibility, such as workflow `canvas/`, `editor/` and `runs/`. Tests and CSS
-Modules live beside their implementation. Do not create empty standard folders.
+responsibility, such as workflow `canvas/`, `editor/` and `runs/`. CSS Modules live beside their implementation; unit tests mirror those paths
+under `tests/frontend/unit/`. Do not create empty standard folders.
 
 ## Ownership and dependencies
 

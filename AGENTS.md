@@ -14,6 +14,7 @@ src/
 tests/
 ├── backend/        # Backend tests
 ├── progenitor/     # Runtime/domain tests, including scheduler tests
+├── frontend/       # Unit tests, browser specs, helpers and fixtures
 └── conftest.py     # Shared environment setup and disposable Postgres fixtures
 ```
 
@@ -47,7 +48,7 @@ venv interpreter, matching `.github/workflows/ci.yml` and `.pre-commit-config.ya
 Python dependencies and tool configuration live in `pyproject.toml`. Do not add
 parallel Pyright or pytest configuration files.
 
-From `src/frontend`, use Node 24 (compatible with the current Vite/Vitest engines):
+From the repository root, use Node 24 (compatible with the current Vite/Vitest engines):
 
 ```bash
 npm ci
@@ -56,8 +57,10 @@ npm run test:unit
 npm run build
 ```
 
-Frontend unit tests are colocated with source. Browser specs, helpers and fixtures
-live in `src/frontend/tests/`. `npm run test:e2e` requires an already-running stack;
+Frontend tests live under `tests/frontend/`: `unit/` mirrors the source layout,
+`e2e/` contains browser specs, and `helpers/` and `fixtures/` hold shared support.
+The root `package.json` and lockfile provide one dependency tree for both source
+and tests. `npm run test:e2e` requires an already-running stack;
 `FRONTEND_BASE_URL` overrides its URL. Some scenarios invoke real models and mutate
 application data, so run them against a test stack. Listing tests alone does not
 verify their execution.
@@ -75,7 +78,7 @@ Install frontend dependencies and configure `.env` using `.env.example` and
 ```bash
 python -m src.progenitor.main
 python -m uvicorn src.backend.main:app --host 0.0.0.0 --port 8000
-# From src/frontend:
+# From the repository root:
 npm run dev -- --port 5173
 ```
 
