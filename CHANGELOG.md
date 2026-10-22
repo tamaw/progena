@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - **Shared exchange volume**: setting `PROGENITOR_SHARED_DIR` mounts that directory as a writable `/shared/` route for the agent. Compose mounts the external `progenitor-shared` volume there, and deployment creates it, so A2A agent containers that mount the same volume can exchange files with Progenitor. Startup fails when the configured directory is missing.
+- **Object and list literals in routine expressions**: `eval`/`condition`/`switch` expressions accept JSON-style `{...}` and `[...]` literals with `**` mapping unpack, e.g. `{**card.metadata, "review_approval": {"inbox_id": inbox.id, "sha": evidence.commit_sha}}`. Keys must be strings, `**` unpacks only objects, entries merge left to right (later keys win), and the result is a new object that never mutates state. Constructed collections are capped at 100,000 entries within the existing 2000-character expression limit; calls, subscripts, comprehensions, imports, `*` unpacking, `eval`/`exec` and non-object attribute access stay rejected.
+- **Inbox message `context` port**: inbox messages gain an optional generic `context` object (default `{}`), exposed as a writable `document_create` workflow port. Workflow authors may store immutable candidate bindings there; user-owned fields are unchanged.
 
 ### Fixed
 - **Module catalogue included in deployment images**: allow bundled `data/modules/` through the Docker build context and include catalogue changes in both Python-image rebuild decisions. This fixes the missing-directory `COPY` failure and keeps manifest validation aligned with deployed libraries.

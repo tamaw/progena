@@ -108,6 +108,84 @@ class TestAllowedConstructs:
         assert evaluate_expression(expression, namespace) == "dirty_override"
 
 
+RECEIPT = '{**card.metadata, "review_approval": {"inbox_id": inbox.id, "sha": evidence.commit_sha}}'
+
+
+class TestObjectAndListLiterals:
+    def test_approval_receipt_preserves_unrelated_metadata(self):
+        metadata = {"priority": "high", "labels": ["infra"]}
+        namespace = {
+            "card": {"metadata": metadata},
+            "inbox": {"id": "msg-1"},
+            "evidence": {"commit_sha": "abc123"},
+        }
+        result = evaluate_expression(RECEIPT, namespace)
+        assert result == {
+            "priority": "high",
+            "labels": ["infra"],
+            "review_approval": {"inbox_id": "msg-1", "sha": "abc123"},
+        }
+        # A new object: the unpacked state is never mutated.
+        assert result is not metadata
+        assert metadata == {"priority": "high", "labels": ["infra"]}
+
+    def test_list_values(self):
+        assert evaluate_expression("[]", {}) == []
+        assert evaluate_expression("[1, x, 'a', None]", {"x": 2}) == [1, 2, "a", None]
+        assert evaluate_expression('{"tags": [a, [1, 2]], "n": {}}', {"a": "x"}) == {
+            "tags": ["x", [1, 2]],
+            "n": {},
+        }
+
+    def test_later_keys_overwrite_earlier_left_to_right(self):
+        namespace = {"a": {"k": 1, "x": "a"}, "b": {"k": 2}}
+        assert evaluate_expression("{**a, **b}", namespace) == {"k": 2, "x": "a"}
+        assert evaluate_expression('{**a, "k": 3}', namespace) == {"k": 3, "x": "a"}
+        assert evaluate_expression('{"k": 3, **a}', namespace) == {"k": 1, "x": "a"}
+
+    def test_rejects_non_string_keys(self):
+        with pytest.raises(UnsafeExpressionError, match="keys must be strings"):
+            evaluate_expression("{1: 'x'}", {})
+        with pytest.raises(UnsafeExpressionError, match="keys must be strings"):
+            evaluate_expression("{k: 'x'}", {"k": None})
+        with pytest.raises(UnsafeExpressionError, match="keys must be strings"):
+            evaluate_expression("{**m}", {"m": {1: "x"}})
+
+    @pytest.mark.parametrize("value", [[1], "ab", 3, None])
+    def test_rejects_non_dict_unpack(self, value):
+        with pytest.raises(UnsafeExpressionError, match="only objects can be unpacked"):
+            evaluate_expression("{**v}", {"v": value})
+
+    def test_rejects_list_star_unpack(self):
+        with pytest.raises(UnsafeExpressionError, match="list unpacking"):
+            evaluate_expression("[*x]", {"x": [1, 2]})
+
+    @pytest.mark.parametrize(
+        "expression",
+        [
+            '{"k": len(x)}',
+            '{"k": x[0]}',
+            '{"k": [i for i in x]}',
+            "{k: 1 for k in x}",
+            '[__import__("os")]',
+            '{"k": s.upper}',
+            "{1, 2}",
+            "(1, 2)",
+        ],
+    )
+    def test_literals_keep_security_rejections(self, expression):
+        with pytest.raises(UnsafeExpressionError):
+            evaluate_expression(expression, {"x": [1], "s": "hi"})
+
+    def test_size_boundary(self):
+        at_limit = {str(i): i for i in range(100_000)}
+        assert len(evaluate_expression("{**m}", {"m": at_limit})) == 100_000
+        with pytest.raises(UnsafeExpressionError, match="object literal too large"):
+            evaluate_expression('{**m, "extra": 1}', {"m": at_limit})
+        with pytest.raises(UnsafeExpressionError, match="object literal too large"):
+            evaluate_expression("{**m, **m}", {"m": at_limit})
+
+
 class TestRejectedConstructs:
     def test_rejects_call(self):
         with pytest.raises(UnsafeExpressionError):

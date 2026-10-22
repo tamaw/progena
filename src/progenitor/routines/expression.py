@@ -198,4 +198,53 @@ def _eval_node(node: ast.AST, namespace: dict[str, Any]) -> Any:
             return _eval_node(node.body, namespace)
         return _eval_node(node.orelse, namespace)
 
+    if isinstance(node, ast.Dict):
+        return _eval_dict(node, namespace)
+
+    if isinstance(node, ast.List):
+        # `[*x]` would be a sequence unpack; only mapping unpack inside `{}` is supported.
+        if len(node.elts) > _MAX_SEQUENCE_LENGTH:
+            raise UnsafeExpressionError(
+                f"list literal too long (over {_MAX_SEQUENCE_LENGTH} items)"
+            )
+        items: list[Any] = []
+        for element in node.elts:
+            if isinstance(element, ast.Starred):
+                raise UnsafeExpressionError("list unpacking with '*' is not allowed")
+            items.append(_eval_node(element, namespace))
+        return items
+
     raise UnsafeExpressionError(f"unsupported expression syntax: {type(node).__name__}")
+
+
+def _eval_dict(node: ast.Dict, namespace: dict[str, Any]) -> dict[str, Any]:
+    # JSON object literal. `**base` entries and explicit keys merge left to right,
+    # later keys overwriting earlier ones, into a fresh dict -- an unpacked state
+    # object is copied from, never mutated.
+    too_large = f"object literal too large (over {_MAX_SEQUENCE_LENGTH} keys)"
+    result: dict[str, Any] = {}
+    for key_node, value_node in zip(node.keys, node.values, strict=True):
+        if key_node is None:
+            source = _eval_node(value_node, namespace)
+            if not isinstance(source, dict):
+                raise UnsafeExpressionError(
+                    f"cannot unpack '**' from a {type(source).__name__} -- "
+                    "only objects can be unpacked"
+                )
+            # Checked before copying so a huge state object is never duplicated.
+            if len(result) + len(source) > _MAX_SEQUENCE_LENGTH:
+                raise UnsafeExpressionError(too_large)
+            for source_key in source:
+                if not isinstance(source_key, str):
+                    raise UnsafeExpressionError(
+                        f"object keys must be strings, not {type(source_key).__name__}"
+                    )
+            result.update(source)
+            continue
+        key = _eval_node(key_node, namespace)
+        if not isinstance(key, str):
+            raise UnsafeExpressionError(f"object keys must be strings, not {type(key).__name__}")
+        result[key] = _eval_node(value_node, namespace)
+        if len(result) > _MAX_SEQUENCE_LENGTH:
+            raise UnsafeExpressionError(too_large)
+    return result
