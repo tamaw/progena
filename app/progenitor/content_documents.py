@@ -7,6 +7,8 @@ keyed by kind + relative path.
 
 Instructions are seeded from the git-tracked ``data/instructions/`` directory
 (baked into the container image), see ``sync_instruction_documents``.
+Top-level files belong to the logical ``progenitor/`` instruction group;
+explicit subdirectories retain their group for custom instruction sources.
 Existing documents remain user-owned: boot never overwrites edited instructions
 or deletes documents removed from the source tree.
 
@@ -34,6 +36,7 @@ from .document_kinds import (
     MODULE_DOCUMENT_KEY_PREFIX,
     SKILL_DOCUMENT_KEY_PREFIX,
 )
+from .instructions.documents import RUNTIME_INSTRUCTION_GROUP
 from .instructions.templates import parse_instruction_template
 
 logger = logging.getLogger(__name__)
@@ -66,16 +69,24 @@ async def sync_instruction_documents(state_manager: Any, source_dir: Path | str)
     root = Path(source_dir)
     if not root.is_dir():
         raise FileNotFoundError(f"Instructions directory not found: {root}")
-    files = {
-        path.relative_to(root).as_posix(): path.read_text(encoding="utf-8")
-        for path in sorted(root.rglob("*.md"))
-        if path.is_file()
-    }
-    for relative_path, content in files.items():
+    files: dict[str, str] = {}
+    for path in sorted(root.rglob("*.md")):
+        if not path.is_file():
+            continue
+        relative_path = path.relative_to(root).as_posix()
+        document_path = (
+            f"{RUNTIME_INSTRUCTION_GROUP}/{relative_path}"
+            if "/" not in relative_path
+            else relative_path
+        )
+        if document_path in files:
+            raise ValueError(f"Duplicate instruction source for '{document_path}': {path}")
+        content = path.read_text(encoding="utf-8")
         try:
             parse_instruction_template(content)
         except ValueError as exc:
-            raise ValueError(f"{root / relative_path}: {exc}") from exc
+            raise ValueError(f"{path}: {exc}") from exc
+        files[document_path] = content
     stored = dict(await state_manager.list_content_documents("instruction"))
     written = 0
     for relative_path, content in files.items():

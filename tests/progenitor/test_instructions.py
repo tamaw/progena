@@ -50,7 +50,14 @@ def test_every_checked_in_instruction_is_valid():
     """The runtime refuses to boot on an invalid file, so catch it here first."""
     paths = sorted(DEFAULT_INSTRUCTIONS_DIR.rglob("*.md"))
     for path in paths:
-        parse_instruction_template(path.read_text(encoding="utf-8"))
+        content = path.read_text(encoding="utf-8")
+        template = parse_instruction_template(content)
+        assert set(template.inputs) == set(template.roots), (
+            f"{path}: declare a typed input for every placeholder root"
+        )
+        check_instruction_write(
+            path.relative_to(DEFAULT_INSTRUCTIONS_DIR).as_posix(), None, content, TYPES
+        )
 
 
 def test_render_drops_front_matter_and_fills_variables():
@@ -92,9 +99,11 @@ def test_workflow_templates_may_change_placeholders():
     check_instruction_write("workflows/card.md", VALID, "Card {card.title}\n", TYPES)
 
 
-async def test_sync_seeds_missing_instructions_without_overwriting_saved_edits(tmp_path):
-    _write(tmp_path, "progenitor/genesis.md", VALID)
-    _write(tmp_path, "progenitor/new.md", VALID)
+@pytest.mark.parametrize("grouped", [False, True])
+async def test_sync_seeds_missing_instructions_without_overwriting_saved_edits(tmp_path, grouped):
+    prefix = "progenitor/" if grouped else ""
+    _write(tmp_path, f"{prefix}genesis.md", VALID)
+    _write(tmp_path, f"{prefix}new.md", VALID)
     _write(tmp_path, "external_agent/think.md", VALID)
     edited = VALID.replace("Hello", "Hi")
     state_manager = FakeStateManager(
@@ -121,3 +130,22 @@ async def test_sync_rejects_an_invalid_file(tmp_path):
     _write(tmp_path, "progenitor/genesis.md", "---\nunknown: 1\n---\nBody\n")
     with pytest.raises(ValueError, match="genesis.md"):
         await sync_instruction_documents(FakeStateManager(), tmp_path)
+
+
+async def test_shipped_flat_instructions_seed_existing_runtime_document_paths():
+    files = sorted(DEFAULT_INSTRUCTIONS_DIR.glob("*.md"))
+    assert files
+    state_manager = FakeStateManager()
+    await sync_instruction_documents(state_manager, DEFAULT_INSTRUCTIONS_DIR)
+    assert state_manager.docs == {
+        f"progenitor/{path.name}": path.read_text(encoding="utf-8") for path in files
+    }
+
+
+async def test_sync_rejects_flat_and_grouped_sources_with_the_same_document_path(tmp_path):
+    _write(tmp_path, "genesis.md", VALID)
+    _write(tmp_path, "progenitor/genesis.md", VALID.replace("Hello", "Hi"))
+    state_manager = FakeStateManager()
+    with pytest.raises(ValueError, match="Duplicate instruction source.*progenitor/genesis.md"):
+        await sync_instruction_documents(state_manager, tmp_path)
+    assert state_manager.docs == {}
