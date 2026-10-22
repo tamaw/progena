@@ -8,6 +8,7 @@ from src.progenitor.documents.content import sync_instruction_documents
 from src.progenitor.documents.types import BUILTIN_DOCUMENT_TYPES
 from src.progenitor.instructions import (
     DEFAULT_INSTRUCTIONS_DIR,
+    SYSTEM_INSTRUCTION,
     check_instruction_write,
     render_instruction,
     resolve_instructions_dir,
@@ -67,8 +68,8 @@ def test_render_drops_front_matter_and_fills_variables():
 @pytest.mark.parametrize(
     ("path", "content", "error"),
     [
-        ("progenitor/genesis.md", "Hello {other}.\n", "{name}"),
-        ("progenitor/genesis.md", "Hello.\n", "{name}"),
+        ("progenitor/SYSTEM.md", "Hello {other}.\n", "{name}"),
+        ("progenitor/SYSTEM.md", "Hello.\n", "{name}"),
         ("workflows/card.md", "---\nvariables: [x]\n---\nx\n", "unknown front matter key"),
         # A bare JSON type name is not a type ref: rejected at write, naming the input.
         (
@@ -102,13 +103,13 @@ def test_workflow_templates_may_change_placeholders():
 @pytest.mark.parametrize("grouped", [False, True])
 async def test_sync_seeds_missing_instructions_without_overwriting_saved_edits(tmp_path, grouped):
     prefix = "progenitor/" if grouped else ""
-    _write(tmp_path, f"{prefix}genesis.md", VALID)
+    _write(tmp_path, f"{prefix}SYSTEM.md", VALID)
     _write(tmp_path, f"{prefix}new.md", VALID)
     _write(tmp_path, "external_agent/think.md", VALID)
     edited = VALID.replace("Hello", "Hi")
     state_manager = FakeStateManager(
         {
-            "progenitor/genesis.md": edited,
+            "progenitor/SYSTEM.md": edited,
             "external_agent/think.md": edited,
             "external_agent/removed.md": VALID,
             "workflows/card.md": VALID,
@@ -118,7 +119,7 @@ async def test_sync_seeds_missing_instructions_without_overwriting_saved_edits(t
     await sync_instruction_documents(state_manager, tmp_path)
 
     assert state_manager.docs == {
-        "progenitor/genesis.md": edited,
+        "progenitor/SYSTEM.md": edited,
         "progenitor/new.md": VALID,
         "external_agent/think.md": edited,
         "external_agent/removed.md": VALID,
@@ -127,8 +128,8 @@ async def test_sync_seeds_missing_instructions_without_overwriting_saved_edits(t
 
 
 async def test_sync_rejects_an_invalid_file(tmp_path):
-    _write(tmp_path, "progenitor/genesis.md", "---\nunknown: 1\n---\nBody\n")
-    with pytest.raises(ValueError, match="genesis.md"):
+    _write(tmp_path, "progenitor/SYSTEM.md", "---\nunknown: 1\n---\nBody\n")
+    with pytest.raises(ValueError, match="SYSTEM.md"):
         await sync_instruction_documents(FakeStateManager(), tmp_path)
 
 
@@ -143,9 +144,57 @@ async def test_shipped_flat_instructions_seed_existing_runtime_document_paths():
 
 
 async def test_sync_rejects_flat_and_grouped_sources_with_the_same_document_path(tmp_path):
-    _write(tmp_path, "genesis.md", VALID)
-    _write(tmp_path, "progenitor/genesis.md", VALID.replace("Hello", "Hi"))
+    _write(tmp_path, "SYSTEM.md", VALID)
+    _write(tmp_path, "progenitor/SYSTEM.md", VALID.replace("Hello", "Hi"))
     state_manager = FakeStateManager()
-    with pytest.raises(ValueError, match="Duplicate instruction source.*progenitor/genesis.md"):
+    with pytest.raises(ValueError, match="Duplicate instruction source.*progenitor/SYSTEM.md"):
         await sync_instruction_documents(state_manager, tmp_path)
     assert state_manager.docs == {}
+
+
+LEGACY = "progenitor/genesis.md"
+
+
+async def test_sync_moves_an_edited_legacy_system_prompt_to_system_md_once():
+    files = sorted(DEFAULT_INSTRUCTIONS_DIR.glob("*.md"))
+    shipped = {f"progenitor/{path.name}": path.read_text(encoding="utf-8") for path in files}
+    edited = shipped[SYSTEM_INSTRUCTION].replace("Progenitor", "Edited Progenitor", 1)
+    assert edited != shipped[SYSTEM_INSTRUCTION]
+    state_manager = FakeStateManager({LEGACY: edited})
+
+    await sync_instruction_documents(state_manager, DEFAULT_INSTRUCTIONS_DIR)
+    assert state_manager.docs == {**shipped, SYSTEM_INSTRUCTION: edited}
+
+    await sync_instruction_documents(state_manager, DEFAULT_INSTRUCTIONS_DIR)
+    assert state_manager.docs == {**shipped, SYSTEM_INSTRUCTION: edited}
+
+
+async def test_sync_finishes_an_interrupted_move(tmp_path):
+    _write(tmp_path, "SYSTEM.md", VALID)
+    edited = VALID.replace("Hello", "Hi")
+    state_manager = FakeStateManager({LEGACY: edited, SYSTEM_INSTRUCTION: edited})
+
+    await sync_instruction_documents(state_manager, tmp_path)
+
+    assert state_manager.docs == {SYSTEM_INSTRUCTION: edited}
+
+
+async def test_sync_keeps_both_when_system_md_and_the_legacy_prompt_differ(tmp_path):
+    _write(tmp_path, "SYSTEM.md", VALID)
+    current = VALID.replace("Hello", "Hi")
+    legacy = VALID.replace("Hello", "Hey")
+    state_manager = FakeStateManager({SYSTEM_INSTRUCTION: current, LEGACY: legacy})
+
+    await sync_instruction_documents(state_manager, tmp_path)
+    await sync_instruction_documents(state_manager, tmp_path)
+
+    assert state_manager.docs == {SYSTEM_INSTRUCTION: current, LEGACY: legacy}
+
+
+async def test_sync_seeds_system_md_from_disk_on_a_fresh_store(tmp_path):
+    _write(tmp_path, "SYSTEM.md", VALID)
+    state_manager = FakeStateManager()
+
+    await sync_instruction_documents(state_manager, tmp_path)
+
+    assert state_manager.docs == {SYSTEM_INSTRUCTION: VALID}

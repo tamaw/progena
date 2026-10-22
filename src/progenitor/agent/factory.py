@@ -51,7 +51,7 @@ from src.progenitor.agent.subagents.live import LiveAsyncSubagentMiddleware
 from src.progenitor.async_subagents.tasks import create_agent_background_runner
 from src.progenitor.config import ProgenitorConfig, get_config
 from src.progenitor.documents.content import sync_instruction_documents
-from src.progenitor.instructions import GENESIS_INSTRUCTION, render_instruction
+from src.progenitor.instructions import SYSTEM_INSTRUCTION, render_instruction
 from src.progenitor.llm.provider_context import (
     ProviderTurn,
     activate_provider_turn,
@@ -173,7 +173,7 @@ async def create_progenitor_agent(
         state_manager: Progenitor's StateManager. Required: instructions and
                        runtime memories are Postgres-backed content documents
                        (see ``content_documents.py``), installed marketplace-plugin
-                       skills are Postgres-backed too, and the genesis system
+                       skills are Postgres-backed too, and the SYSTEM.md system
                        instruction is loaded from there.
         store: Optional LangGraph BaseStore for DeepAgent features that need one.
                If None, no store is configured by default.
@@ -330,17 +330,17 @@ async def create_progenitor_agent(
         await _ensure_default_runtime_memory(state_manager)
     memory_paths = await _resolve_runtime_memory_paths(state_manager, memory_paths)
 
-    # Every conversation starts with the genesis instruction; edits made on the
+    # Every conversation starts with the SYSTEM.md instruction; edits made on the
     # Instructions page apply on the next model call (LiveInstructionMiddleware).
-    genesis = await state_manager.get_content_document("instruction", GENESIS_INSTRUCTION)
-    if genesis is None:
+    system_instruction = await state_manager.get_content_document("instruction", SYSTEM_INSTRUCTION)
+    if system_instruction is None:
         raise RuntimeError(
-            f"Missing '{GENESIS_INSTRUCTION}' instruction in Postgres after syncing "
+            f"Missing '{SYSTEM_INSTRUCTION}' instruction in Postgres after syncing "
             f"{instructions_dir}"
         )
-    system_prompt = render_instruction(genesis).strip()
+    system_prompt = render_instruction(system_instruction).strip()
     custom_middleware.append(
-        LiveInstructionMiddleware(state_manager, GENESIS_INSTRUCTION, system_prompt)
+        LiveInstructionMiddleware(state_manager, SYSTEM_INSTRUCTION, system_prompt)
     )
     runtime_config = getattr(config, "runtime", None)
     http_host = getattr(runtime_config, "http_host", "127.0.0.1")

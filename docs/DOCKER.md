@@ -128,7 +128,7 @@ Notes:
   a host directory for them. `data/instructions/` is checked into git and
   `COPY`'d into the `progenitor` image (not `backend`'s); every boot syncs it
   into Postgres: top-level Markdown files retain logical paths such as
-  `progenitor/genesis.md`. They are added when missing and otherwise kept,
+  `progenitor/SYSTEM.md`. They are added when missing and otherwise kept,
   since they are edited on the Instructions page. Explicit subdirectories in
   custom instruction sources retain their own group names.
   Standalone A2A agents own their instructions, images, and service lifecycle in the
