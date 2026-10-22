@@ -21,6 +21,7 @@ from src.backend.storage.documents import (
     document_write_origin,
 )
 from src.backend.workflows.routine_runs import enqueue_routine_run
+from src.progenitor.artifacts.contracts import ArtifactValidationError, validate_artifact
 from src.progenitor.documents.content import content_document_key
 from src.progenitor.documents.types import DocumentType
 from src.progenitor.instructions.templates import (
@@ -737,6 +738,19 @@ def _execute_document_node(
     }
 
 
+def _check_artifact_write(
+    document_type: DocumentType, document_id: str, payload: Mapping[str, Any], node_title: str
+) -> None:
+    """Hold workflow writes to the same path, type and size rules as ``/artifacts/``."""
+
+    if document_type.id != "artifact":
+        return
+    try:
+        validate_artifact(document_id, str(payload.get("content") or ""))
+    except ArtifactValidationError as exc:
+        raise ValueError(f"node '{node_title}' wrote an invalid artifact: {exc}") from exc
+
+
 def _execute_document_write_node(
     store: BackendDocumentStore,
     node: WorkflowNodeDocumentWrite,
@@ -746,7 +760,8 @@ def _execute_document_write_node(
     """Atomic partial write of one document; never inserts."""
 
     document_type = _resolve_node_document_type(store, node)
-    key = document_type.document_key(str(resolved_input.get("id") or ""))
+    document_id = str(resolved_input.get("id") or "")
+    key = document_type.document_key(document_id)
     merge_payload = {
         field: resolved_input[field]
         for field in document_type.writable_fields
@@ -759,6 +774,9 @@ def _execute_document_write_node(
         raise ValueError(
             f"document_write node '{node.title}' input failed schema validation: {error}"
         )
+    if document_type.id == "artifact" and "content" in merge_payload:
+        _check_artifact_write(document_type, document_id, merge_payload, node.title)
+        merge_payload["updated_at"] = utcnow_isoformat()
     with document_write_origin(run_id):
         found = store.merge_document(PROGENITOR_STATE_PREFIX, key, merge_payload)
     return {"found": found, **merge_payload}
@@ -802,6 +820,7 @@ def _execute_document_create_node(
         raise ValueError(
             f"document_create node '{node.title}' input failed schema validation: {error}"
         )
+    _check_artifact_write(document_type, document_id, payload, node.title)
 
     def insert(current: Any) -> dict[str, Any]:
         if current is not None:

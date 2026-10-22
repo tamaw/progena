@@ -20,8 +20,8 @@ data/*
 !data/skills/**
 !data/schemas/
 !data/schemas/**
-!data/modules/
-!data/modules/**
+!data/canvases/
+!data/canvases/**
 !data/agents/
 !data/agents/**
 !data/shims/

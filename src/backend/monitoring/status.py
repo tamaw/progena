@@ -9,6 +9,7 @@ import time
 import src.backend.agents.routes as agents_routes
 import src.backend.agents.store as agents_store
 import src.backend.alerts.routes as alerts_routes
+import src.backend.canvases.routes as canvases_routes
 import src.backend.chat.routes as chat_routes
 import src.backend.events.stream as events_stream
 import src.backend.inbox.routes as inbox_routes
@@ -16,7 +17,6 @@ import src.backend.instructions.routes as instructions_routes
 import src.backend.integrations.runtime as integrations_runtime
 import src.backend.knowledge.routes as knowledge_routes
 import src.backend.lifecycle.state as lifecycle_state
-import src.backend.modules.routes as modules_routes
 import src.backend.monitoring.state as monitoring_state
 import src.backend.plugins.marketplace_routes as plugins_marketplace_routes
 import src.backend.plugins.routes as plugins_routes
@@ -30,10 +30,10 @@ import src.backend.tasks.service as tasks_service
 import src.backend.workflows.runtime as workflows_runtime
 from src.progenitor.documents.content import AGENT_DOCUMENT_KEY_PREFIX, SKILL_DOCUMENT_KEY_PREFIX
 from src.progenitor.documents.kinds import (
+    CANVAS_DOCUMENT_KEY_PREFIX,
+    CANVAS_STATUS_KEY_PREFIX,
     INSTRUCTION_DOCUMENT_KEY_PREFIX,
     KNOWLEDGE_PAGE_KEY_PREFIX,
-    MODULE_DOCUMENT_KEY_PREFIX,
-    MODULE_STATUS_KEY_PREFIX,
     REPO_KEY_PREFIX,
     WORKFLOW_DEFINITION_KEY_PREFIX,
     WORKFLOW_QUEUE_KEY_PREFIX,
@@ -287,10 +287,10 @@ def _queue_state_watch_status(snapshot, changed_key: str | None = None) -> None:
             plugins_routes.broadcast_plugins_snapshot()
         if (
             changed_key is None
-            or changed_key.startswith(MODULE_DOCUMENT_KEY_PREFIX)
-            or changed_key.startswith(MODULE_STATUS_KEY_PREFIX)
+            or changed_key.startswith(CANVAS_DOCUMENT_KEY_PREFIX)
+            or changed_key.startswith(CANVAS_STATUS_KEY_PREFIX)
         ):
-            modules_routes.broadcast_modules_snapshot()
+            canvases_routes.broadcast_canvases_snapshot()
         if changed_key in (None, "profile"):
             profile_task = asyncio.create_task(_broadcast_model_profiles_safe())
             _active_model_profile_broadcast_tasks.add(profile_task)

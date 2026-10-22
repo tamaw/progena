@@ -33,7 +33,7 @@ const defaultConfig = {
       actionGenerate: '/api/ui/actions/generate',
       attachments: '/api/attachments',
       preferences: '/api/ui/preferences',
-      modules: '/api/ui/modules',
+      canvases: '/api/ui/canvases',
     },
     timeout: 120000,
     retryAttempts: 3,

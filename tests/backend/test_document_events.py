@@ -867,6 +867,35 @@ def test_document_write_never_applies_schema_defaults(store, monkeypatch):
     }
 
 
+def test_workflow_artifact_writes_follow_the_artifact_contract(store):
+    from src.backend.workflows.service import _execute_document_write_node
+    from src.progenitor.artifacts.contracts import MAX_ARTIFACT_BYTES
+
+    create = WorkflowNodeDocumentCreate(document_type="artifact")
+    with pytest.raises(ValueError, match="invalid artifact"):
+        _execute_document_create_node(store, create, {"content": "a,b"}, "run")
+    created = _execute_document_create_node(
+        store, create, {"id": "sales/q3.csv", "content": "month,revenue\nJul,10"}, "run"
+    )
+    assert created["key"] == "artifact:sales/q3.csv"
+    stamped = created["document"]["updated_at"]
+
+    write = WorkflowNodeDocumentWrite(document_type="artifact")
+    with pytest.raises(ValueError, match="per-artifact limit"):
+        _execute_document_write_node(
+            store, write, {"id": "sales/q3.csv", "content": "x" * (MAX_ARTIFACT_BYTES + 1)}, "run"
+        )
+    result = _execute_document_write_node(
+        store, write, {"id": "sales/q3.csv", "content": "month,revenue\nAug,12"}, "run"
+    )
+
+    assert result["found"] is True
+    stored = store.get_document(PROGENITOR_STATE_PREFIX, "artifact:sales/q3.csv").payload
+    assert stored["content"] == "month,revenue\nAug,12"
+    assert stored["updated_at"] == result["updated_at"]
+    assert datetime.fromisoformat(stored["updated_at"]) >= datetime.fromisoformat(stamped)
+
+
 def test_document_delete_returns_before_and_tags_origin(store):
     store.save_document(PROGENITOR_STATE_PREFIX, "kanban_card:gone", _card("gone", "todo"))
     node = WorkflowNodeDocumentDelete(document_type="kanban_card")

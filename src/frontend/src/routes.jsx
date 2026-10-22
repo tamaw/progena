@@ -47,7 +47,7 @@ const AgentsPage = lazy(() => import('./features/agents/AgentsPage'));
 
 const RoutinesPage = lazy(() => import('./features/routines/RoutinesPage'));
 
-const ModulesPage = lazy(() => import('./features/modules/ModulesPage'));
+const CanvasesPage = lazy(() => import('./features/canvases/CanvasesPage'));
 
 // Keep the import behind the compile-time flag so the catalogue is absent from production assets.
 const DesignLibraryPage = import.meta.env.DEV
@@ -118,7 +118,7 @@ export function AppRoutes() {
                     <Route path="/repositories" element={<DeferredRoute Page={RepositoriesPage} fallback="Loading repositories..." />} />
                     <Route path="/knowledge/:baseId?/:titleSlug?" element={<DeferredRoute Page={KnowledgePage} fallback="Loading knowledge..." />} />
                     <Route path="/workflows/:workflowId?/:slug?" element={<DeferredRoute Page={WorkflowsPage} fallback="Loading workflows..." />} />
-                    <Route path="/modules/:name?" element={<DeferredRoute Page={ModulesPage} fallback="Loading modules..." />} />
+                    <Route path="/canvases/:name?" element={<DeferredRoute Page={CanvasesPage} fallback="Loading canvases..." />} />
                     {localDesignLibraryEnabled && (
                       <Route path="/design" element={<DeferredRoute Page={DesignLibraryPage} fallback="Loading design library..." />} />
                     )}

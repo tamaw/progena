@@ -64,7 +64,7 @@ src/
 │   ├── knowledge/
 │   ├── plugins/      # Plugins and marketplaces
 │   ├── repositories/
-│   ├── modules/
+│   ├── canvases/
 │   ├── workflows/    # Execution, cron, approvals and ACP supervision
 │   ├── tasks/        # Kanban cards, content and activity
 │   ├── schedules/    # Schedules and event widgets

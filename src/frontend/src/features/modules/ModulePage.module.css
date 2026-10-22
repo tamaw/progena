@@ -1,8 +1,0 @@
-.mono { font-family: var(--font-family-mono); }
-.preview { display: flex; flex: 1; flex-direction: column; min-height: 0; }
-.split { display: flex; flex: 1; min-height: 0; border-top: 1px solid var(--color-border); }
-.list { flex: 0 0 280px; overflow: auto; padding: 8px; border-right: 1px solid var(--color-border); }
-.viewer { flex: 1; min-width: 0; overflow: auto; padding: 16px 24px; }
-.problem { margin: 0; padding: 10px 28px; border-bottom: 1px solid var(--color-border); color: var(--color-error); font-size: var(--font-size-sm); list-style: none; }
-.revisionView { display: flex; flex: 1; flex-direction: column; min-width: 0; }
-.pathSwitch { display: flex; gap: 4px; padding: 8px 24px 0; border-bottom: 1px solid var(--color-border); }

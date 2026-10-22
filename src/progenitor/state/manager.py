@@ -486,8 +486,8 @@ class StateManager:
     async def list_content_documents(self, kind: str) -> list[tuple[str, str]]:
         return await self.documents.list_content_documents(kind)
 
-    async def get_module_status(self, name: str) -> dict[str, Any] | None:
-        return await self.documents.get_module_status(name)
+    async def get_canvas_status(self, name: str) -> dict[str, Any] | None:
+        return await self.documents.get_canvas_status(name)
 
     async def get_knowledge_page(self, base_id: str, path: str) -> dict[str, Any] | None:
         return await self.knowledge.get_knowledge_page(base_id, path)

@@ -38,11 +38,11 @@ from src.progenitor.config import default_mcp_config_payload
 from src.progenitor.documents.content import AGENT_DOCUMENT_KEY_PREFIX, SKILL_DOCUMENT_KEY_PREFIX
 from src.progenitor.documents.kinds import (
     ACP_TASK_KEY_PREFIX,
+    CANVAS_DATA_KEY_PREFIX,
+    CANVAS_DOCUMENT_KEY_PREFIX,
+    CANVAS_STATUS_KEY_PREFIX,
     INBOX_MESSAGE_KEY_PREFIX,
     KNOWLEDGE_PAGE_KEY_PREFIX,
-    MODULE_DATA_KEY_PREFIX,
-    MODULE_DOCUMENT_KEY_PREFIX,
-    MODULE_STATUS_KEY_PREFIX,
     REPO_KEY_PREFIX,
     WORKFLOW_DEFINITION_KEY_PREFIX,
     WORKFLOW_INVOKE_REQUEST_KEY_PREFIX,
@@ -1884,9 +1884,9 @@ class StateReader:
                     or changed_key.startswith(ROUTINE_GRAPH_KEY_PREFIX)
                     or changed_key.startswith(REPO_KEY_PREFIX)
                     or changed_key.startswith(KNOWLEDGE_PAGE_KEY_PREFIX)
-                    or changed_key.startswith(MODULE_DOCUMENT_KEY_PREFIX)
-                    or changed_key.startswith(MODULE_DATA_KEY_PREFIX)
-                    or changed_key.startswith(MODULE_STATUS_KEY_PREFIX)
+                    or changed_key.startswith(CANVAS_DOCUMENT_KEY_PREFIX)
+                    or changed_key.startswith(CANVAS_DATA_KEY_PREFIX)
+                    or changed_key.startswith(CANVAS_STATUS_KEY_PREFIX)
                 )
             )
             # Reconnect must reach reconciliation even with unchanged state.

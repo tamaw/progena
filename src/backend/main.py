@@ -9,12 +9,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.gzip import GZipMiddleware
 
 import src.backend.attachments.routes as attachments_routes
+import src.backend.canvases.routes as canvases_routes
 import src.backend.http.router as http_router
 import src.backend.instructions.routes as instructions_routes
 import src.backend.knowledge.routes as knowledge_routes
 import src.backend.lifecycle.startup as lifecycle_startup
 import src.backend.lifecycle.state as lifecycle_state
-import src.backend.modules.routes as modules_routes
 import src.backend.plugins.marketplace_routes as plugins_marketplace_routes
 import src.backend.plugins.routes as plugins_routes
 import src.backend.repositories.routes as repositories_routes
@@ -39,7 +39,7 @@ app.include_router(plugins_marketplace_routes.router)
 app.include_router(repositories_routes.router)
 app.include_router(plugins_routes.router)
 app.include_router(settings_preferences.router)
-app.include_router(modules_routes.router)
+app.include_router(canvases_routes.router)
 app.include_router(attachments_routes.router)
 
 

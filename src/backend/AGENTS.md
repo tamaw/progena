@@ -21,7 +21,7 @@ backend/
 ├── knowledge/           # Knowledge pages, catalogue and indexing
 ├── plugins/             # Plugins and marketplaces
 ├── repositories/        # Declared repository operations
-├── modules/             # Module routes and connection-scoped interests
+├── canvases/            # Canvas routes and connection-scoped interests
 ├── workflows/           # Execution, cron, ACP and routine event handling
 ├── tasks/ / schedules/  # Task/Kanban and schedule/widget APIs
 ├── settings/            # Preferences, providers, profiles, policies and MCP

@@ -14,8 +14,8 @@ from fastapi.responses import Response
 from fastapi.sse import EventSourceResponse, ServerSentEvent
 
 import src.backend.alerts.routes as alerts_routes
+import src.backend.canvases.events as canvases_events
 import src.backend.events.stream as events_stream
-import src.backend.modules.events as modules_events
 import src.backend.monitoring.status as monitoring_status
 import src.backend.workflows.events as workflows_events
 
@@ -146,7 +146,7 @@ async def _generate_ui_stream(
         # A reconnect may already have replaced this socket.
         if client_id not in events_stream._ui_stream_clients.values():
             workflows_events.routine_events.disconnected(client_id)
-            modules_events.module_events.disconnected(client_id)
+            canvases_events.canvas_events.disconnected(client_id)
         if current_task:
             events_stream._active_ui_stream_tasks.discard(current_task)
         if not events_stream._ui_stream_subscribers:

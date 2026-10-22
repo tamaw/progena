@@ -52,8 +52,10 @@ from deepagents.backends import CompositeBackend, FilesystemBackend, StateBacken
 from deepagents.backends.protocol import EditResult, FileUploadResponse, WriteResult
 
 from src.progenitor.agent.filesystem.alerts import AlertDirectoryBackend
+from src.progenitor.agent.filesystem.artifacts import ArtifactDirectoryBackend
 from src.progenitor.agent.filesystem.attachments import AttachmentDirectoryBackend
 from src.progenitor.agent.filesystem.base import StateDocumentBackend, StateFile
+from src.progenitor.agent.filesystem.canvases import CanvasDirectoryBackend
 from src.progenitor.agent.filesystem.config import (
     create_health_state_file,
     create_indexer_state_file,
@@ -74,7 +76,6 @@ from src.progenitor.agent.filesystem.content import (
 )
 from src.progenitor.agent.filesystem.inbox import InboxDirectoryBackend
 from src.progenitor.agent.filesystem.knowledge import KnowledgePageBackend
-from src.progenitor.agent.filesystem.modules import ModuleDirectoryBackend
 from src.progenitor.agent.filesystem.policies import PolicyDirectoryBackend
 from src.progenitor.agent.filesystem.repositories import RepoDirectoryBackend
 from src.progenitor.agent.filesystem.routines import RoutineDirectoryBackend
@@ -243,7 +244,8 @@ def create_progenitor_backend(
         )
         routes["/memories/"] = ContentDocumentDirectoryBackend(state_manager, "memory")
         routes["/instructions/"] = InstructionDocumentDirectoryBackend(state_manager, "instruction")
-        routes["/modules/"] = ModuleDirectoryBackend(state_manager)
+        routes["/canvases/"] = CanvasDirectoryBackend(state_manager)
+        routes["/artifacts/"] = ArtifactDirectoryBackend(state_manager)
         routes["/knowledge/"] = KnowledgePageBackend(state_manager)
         for segment in plugin_skill_segments or []:
             routes[f"/skills/{segment}/"] = ReadOnlyBackend(

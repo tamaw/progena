@@ -20,7 +20,7 @@ tests/
 
 Python imports use `src.backend.*` and `src.progenitor.*`. After changing layouts,
 refresh editable metadata with `pip install -e ".[dev]"` in the activated venv.
-Bundled instructions, skills, schemas, object agents, module libraries and shell
+Bundled instructions, skills, schemas, object agents, canvas libraries and shell
 shims live under `data/`.
 Standalone A2A agents and their tests/deployment assets live in
 [progentior.agents](https://github.com/tamaw/progentior.agents). Configure external
