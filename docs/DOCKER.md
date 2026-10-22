@@ -52,11 +52,18 @@ Foundry starts with reasoning enabled by default. `PROGENITOR_REASONING_EFFORT`
 controls the default effort and `PROGENITOR_REASONING_SUMMARY` the visible reasoning
 summary preference. These Foundry-specific overrides are not sent to OpenCode Go.
 
-The compose file also expects the external Docker network `progenitor_network` to exist:
+The compose file also expects the external Docker network `progenitor_network`
+and the external volume `progenitor-shared` to exist:
 
 ```bash
 docker network create progenitor_network
+docker volume create progenitor-shared
 ```
+
+`progenitor-shared` is mounted at `/shared` in the runtime and exposed to the
+agent as the writable `/shared/` route (`PROGENITOR_SHARED_DIR`). Mount the same
+volume into A2A agent containers to exchange files with them; nothing in it is
+access-controlled, so any container that mounts it can change anything there.
 
 ## Start and stop
 

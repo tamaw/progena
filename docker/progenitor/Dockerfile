@@ -53,8 +53,8 @@ RUN pip install --no-cache-dir . \
     && chmod 0755 /app/data/shims/bin/* \
     && chmod -R a-w /app/data/shims \
     && chmod -R a-w /app/data/agents \
-    && mkdir -p /app/agent-home /app/repos /app/logs /app/tmp /app/shell-workspaces \
-    && chown -R agent:agent /app/agent-home /app/repos /app/logs /app/tmp /app/shell-workspaces
+    && mkdir -p /app/agent-home /app/repos /app/logs /app/tmp /app/shell-workspaces /shared \
+    && chown -R agent:agent /app/agent-home /app/repos /app/logs /app/tmp /app/shell-workspaces /shared
 
 # Set environment variables
 ENV PYTHONPATH=/app

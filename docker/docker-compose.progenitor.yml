@@ -77,11 +77,14 @@ services:
       PROGENITOR_SHELL_TIMEOUT_SECONDS: ${PROGENITOR_SHELL_TIMEOUT_SECONDS:-120}
       # State is transient in the hardened read-only runtime image.
       PROGENITOR_STATE_DIR: /app/tmp/state
+      # Exchange volume shared with A2A agent containers; exposed to the agent as /shared/.
+      PROGENITOR_SHARED_DIR: /shared
     volumes:
       - ${PROGENITOR_HOST_LOGS_DIR:-../logs}:/app/logs
       - ${PROGENITOR_HOST_REPOS_DIR:-../repos}:/app/repos
       # A fresh named volume inherits UID 10001 ownership from the image directory.
       - progenitor-shell-workspaces:/app/shell-workspaces
+      - progenitor-shared:/shared
     # tmpfs mounts are root-owned unless uid/gid are set; the runtime runs as 10001.
     tmpfs:
       - /app/tmp:rw,noexec,nosuid,size=1g,uid=10001,gid=10001,mode=0755
@@ -232,4 +235,8 @@ volumes:
   progenitor-shell-workspaces:
   progenitor-postgres-data:
     name: progenitor-postgres-data
+    external: true
+  # Create once: docker volume create progenitor-shared; agent containers mount it too.
+  progenitor-shared:
+    name: progenitor-shared
     external: true

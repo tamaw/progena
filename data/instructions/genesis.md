@@ -71,6 +71,9 @@ and domain rules:
   text) that canvases visualise.
 - `/sessions/` only for its allowed front-matter fields; session bodies are
   read-only.
+- `/shared/`, when mounted, for plain files exchanged with A2A agents that mount
+  the same volume. It is unvalidated and unprotected: they can change anything
+  there, so keep authoritative records elsewhere.
 
 Instructions already stored by a user are user-owned. Checked-in instruction
 content only seeds a missing stored instruction; it does not overwrite a saved

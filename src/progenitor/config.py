@@ -234,6 +234,8 @@ class StorageConfig:
     shim_bin_dir: Path = field(default_factory=_default_shim_bin_dir)
     shell_home_dir: Path = field(default_factory=_default_shell_home_dir)
     shell_workspace_dir: Path = field(default_factory=_default_shell_workspace_dir)
+    # Optional cross-container exchange volume, mounted writable at /shared/.
+    shared_dir: Path | None = None
 
     @classmethod
     def from_env(cls, project_root: Path | None = None) -> "StorageConfig":
@@ -256,6 +258,7 @@ class StorageConfig:
             for value in os.getenv("PROGENITOR_AGENT_REPOSITORIES", "").split(os.pathsep)
             if value.strip()
         )
+        shared_dir = (os.getenv("PROGENITOR_SHARED_DIR") or "").strip()
 
         return cls(
             data_dir=default_data,
@@ -271,6 +274,7 @@ class StorageConfig:
             shell_workspace_dir=Path(
                 os.getenv("PROGENITOR_SHELL_WORKSPACE_DIR", str(default_data / "shell-workspaces"))
             ),
+            shared_dir=Path(shared_dir).expanduser() if shared_dir else None,
         )
 
 
