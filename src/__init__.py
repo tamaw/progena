@@ -1,1 +1,1 @@
-"""Progenitor application source package."""
+"""Progena application source package."""

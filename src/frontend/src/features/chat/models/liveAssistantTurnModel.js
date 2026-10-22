@@ -20,7 +20,6 @@
  */
 
 import { createStreamEvent, appendStreamEvent, appendReasoningText, extractReasoningTokenCount, extractCacheReadTokenCount, mergeReasoningEvents, isReasoningEvent, hasReasoningContent, isRenderableStreamEvent, MAX_STREAM_EVENTS_PER_MESSAGE } from './streamEventsModel';
-import { CHAT_AGENT_NAME } from './conversationModel';
 import { isA2AToolName } from './a2aTools';
 
 /** Create a fresh live assistant turn with no visible output yet. */
@@ -556,7 +555,7 @@ export function applyAssistantChunk(turn, chunk, materialiseAt) {
         timestamp: next.assistantTimestamp,
         isStreaming: true,
         error: false,
-        displayAgentName: next.displayAgentName || CHAT_AGENT_NAME,
+        displayAgentName: next.displayAgentName || '',
         displayModelName: next.displayModelName,
         displayToolCalls: next.displayToolCalls,
         tokenCount: next.tokenCount,
@@ -754,7 +753,7 @@ export function buildDefaultAssistantTimeline(message) {
     timestamp: message.timestamp,
     isStreaming: !!message.isStreaming,
     error: !!message.error,
-    displayAgentName: typeof message.displayAgentName === 'string' ? message.displayAgentName : CHAT_AGENT_NAME,
+    displayAgentName: typeof message.displayAgentName === 'string' ? message.displayAgentName : '',
     displayModelName: typeof message.displayModelName === 'string' ? message.displayModelName : '',
     displayToolCalls: Array.isArray(message.displayToolCalls) ? message.displayToolCalls : [],
     tokenCount: Number.isFinite(message.tokenCount) ? message.tokenCount : 0,
@@ -860,7 +859,7 @@ export function finalizeLiveAssistantTurn(turn, { status, now, errorMessage }) {
         timestamp: turn.assistantTimestamp || finalTurn.assistantTimestamp,
         isStreaming: false,
         error: false,
-        displayAgentName: finalTurn.displayAgentName || CHAT_AGENT_NAME,
+        displayAgentName: finalTurn.displayAgentName || '',
         displayModelName: finalTurn.displayModelName,
         displayToolCalls: finalTurn.displayToolCalls,
         tokenCount: finalTurn.tokenCount,
@@ -876,7 +875,7 @@ export function finalizeLiveAssistantTurn(turn, { status, now, errorMessage }) {
       timestamp: finalTurn.assistantTimestamp,
       isStreaming: false,
       error: true,
-      displayAgentName: finalTurn.displayAgentName || CHAT_AGENT_NAME,
+      displayAgentName: finalTurn.displayAgentName || '',
       displayModelName: finalTurn.displayModelName,
       displayToolCalls: finalTurn.displayToolCalls,
       tokenCount: finalTurn.tokenCount,
@@ -901,7 +900,7 @@ export function finalizeLiveAssistantTurn(turn, { status, now, errorMessage }) {
         timestamp: finalTurn.assistantTimestamp,
         isStreaming: false,
         error: false,
-        displayAgentName: finalTurn.displayAgentName || CHAT_AGENT_NAME,
+        displayAgentName: finalTurn.displayAgentName || '',
         displayModelName: finalTurn.displayModelName,
         displayToolCalls: finalTurn.displayToolCalls,
         tokenCount: finalTurn.tokenCount,

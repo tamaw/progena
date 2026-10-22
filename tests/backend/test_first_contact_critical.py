@@ -1,7 +1,7 @@
 """
 CRITICAL First Contact Tests.
 
-These tests ensure the Progenitor Agent and Client UI provide proper feedback
+These tests ensure the Progena Agent and Client UI provide proper feedback
 for humanity's first contact with alien civilizations. All edge cases and
 error scenarios must be handled gracefully - the fate of humanity depends on it!
 
@@ -25,7 +25,7 @@ import src.backend.events.stream as events_stream
 import src.backend.lifecycle.state as lifecycle_state
 from src.backend.main import app
 from src.backend.monitoring.state import HealthInfo, StateReader
-from src.backend.storage.documents import PROGENITOR_STATE_PREFIX, InMemoryDocumentStore
+from src.backend.storage.documents import PROGENA_STATE_PREFIX, InMemoryDocumentStore
 
 
 @pytest.fixture
@@ -38,7 +38,7 @@ def client():
 def complete_state_files():
     """
     Create a complete set of state documents simulating a fully operational
-    Progenitor agent with multiple sub-agents - ready for alien inspection.
+    Progena agent with multiple sub-agents - ready for alien inspection.
     """
     store = InMemoryDocumentStore()
 
@@ -50,7 +50,7 @@ def complete_state_files():
         "cycle_count": 1337,
         "pid": 42424,
     }
-    store.save_document(PROGENITOR_STATE_PREFIX, "health", health_data)
+    store.save_document(PROGENA_STATE_PREFIX, "health", health_data)
 
     # Registry with multiple diverse agents
     agents_data = {
@@ -123,8 +123,8 @@ def complete_state_files():
             },
         }
     }
-    store.save_document(PROGENITOR_STATE_PREFIX, "registry", agents_data)
-    store.save_document(PROGENITOR_STATE_PREFIX, "mcp", mcp_data)
+    store.save_document(PROGENA_STATE_PREFIX, "registry", agents_data)
+    store.save_document(PROGENA_STATE_PREFIX, "mcp", mcp_data)
 
     # Build state - actively working on first contact
     build_state = {
@@ -166,7 +166,7 @@ def complete_state_files():
         ],
         "actions_this_cycle": 3,
     }
-    store.save_document(PROGENITOR_STATE_PREFIX, "build_state", build_state)
+    store.save_document(PROGENA_STATE_PREFIX, "build_state", build_state)
 
     # Schedule
     schedule = {
@@ -185,7 +185,7 @@ def complete_state_files():
             "next_run": None,
         },
     }
-    store.save_document(PROGENITOR_STATE_PREFIX, "schedule", schedule)
+    store.save_document(PROGENA_STATE_PREFIX, "schedule", schedule)
 
     return SimpleNamespace(document_store=store)
 
@@ -320,11 +320,11 @@ class TestRealTimeFeedbackConsistency:
 
         # Simulate progress
         store = complete_state_files.document_store
-        health_doc = store.get_document(PROGENITOR_STATE_PREFIX, "health", {})
+        health_doc = store.get_document(PROGENA_STATE_PREFIX, "health", {})
         health = dict(health_doc.payload) if health_doc is not None else {}
         health["cycle_count"] = 1338
         health["last_active"] = datetime.now(UTC).isoformat()
-        store.save_document(PROGENITOR_STATE_PREFIX, "health", health)
+        store.save_document(PROGENA_STATE_PREFIX, "health", health)
 
         # New read should see the change (no cache to clear - reads from store directly)
 
@@ -361,7 +361,7 @@ class TestErrorRecoveryAndGracefulDegradation:
             "pid": 1234,
         }
         store = InMemoryDocumentStore()
-        store.save_document(PROGENITOR_STATE_PREFIX, "health", health_data)
+        store.save_document(PROGENA_STATE_PREFIX, "health", health_data)
 
         reader = StateReader(document_store=store)
         snapshot = reader.get_snapshot()
@@ -389,7 +389,7 @@ class TestErrorRecoveryAndGracefulDegradation:
             "pid": 5678,
         }
         store = InMemoryDocumentStore()
-        store.save_document(PROGENITOR_STATE_PREFIX, "health", health_data)
+        store.save_document(PROGENA_STATE_PREFIX, "health", health_data)
 
         reader = StateReader(document_store=store)
         health = reader.get_health()
@@ -410,12 +410,12 @@ class TestDataIntegrityUnderAllConditions:
 
         for phase in phases:
             build_doc = complete_state_files.document_store.get_document(
-                PROGENITOR_STATE_PREFIX, "build_state", {}
+                PROGENA_STATE_PREFIX, "build_state", {}
             )
             build_state = dict(build_doc.payload) if build_doc is not None else {}
             build_state["build_phase"] = phase
             complete_state_files.document_store.save_document(
-                PROGENITOR_STATE_PREFIX, "build_state", build_state
+                PROGENA_STATE_PREFIX, "build_state", build_state
             )
 
             snapshot = reader.get_snapshot()
@@ -430,12 +430,12 @@ class TestDataIntegrityUnderAllConditions:
 
         for status in valid_statuses:
             registry_doc = complete_state_files.document_store.get_document(
-                PROGENITOR_STATE_PREFIX, "registry", {}
+                PROGENA_STATE_PREFIX, "registry", {}
             )
             registry = dict(registry_doc.payload) if registry_doc is not None else {}
             registry["agents"][0]["status"] = status
             complete_state_files.document_store.save_document(
-                PROGENITOR_STATE_PREFIX, "registry", registry
+                PROGENA_STATE_PREFIX, "registry", registry
             )
 
             agents, _ = reader.get_registry()
@@ -537,7 +537,7 @@ class TestCriticalChatFlow:
             response = client.post(
                 "/api/ui/responses",
                 json={
-                    "model": "progenitor-v1",
+                    "model": "progena-v1",
                     "input": "Greetings, we come in peace.",
                     "stream": False,
                 },

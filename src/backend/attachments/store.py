@@ -4,9 +4,9 @@ A dedicated table -- distinct from the generic ``store`` document/JSONB table
 in ``document_store.py`` -- because attachments are opaque binary blobs
 (images, PDFs, spreadsheets, ...), not small JSON documents. It lives in the
 same Postgres database as the LangGraph ``store`` table
-(``PROGENITOR_DATABASE_URL``), so both the backend (writer, via
-``attachment_routes.py``) and the Progenitor runtime (reader, via
-``src/progenitor/agent/filesystem/attachments.py``) share one source of truth
+(``PROGENA_DATABASE_URL``), so both the backend (writer, via
+``attachment_routes.py``) and the Progena runtime (reader, via
+``src/progena/agent/filesystem/attachments.py``) share one source of truth
 without any SSE round-trip to the runtime.
 """
 
@@ -315,7 +315,7 @@ def configure_attachment_blob_store(database_url: str | None) -> AttachmentBlobS
         logger.info("Attachment blob store connected to Postgres")
     else:
         store = InMemoryAttachmentBlobStore()
-        logger.warning("PROGENITOR_DATABASE_URL is not set; attachment blob store is in-memory")
+        logger.warning("PROGENA_DATABASE_URL is not set; attachment blob store is in-memory")
     _default_store = store
     return _default_store
 

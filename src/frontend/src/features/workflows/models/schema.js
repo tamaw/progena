@@ -31,7 +31,7 @@ export function schemaType(definition) {
   return 'any';
 }
 
-// Mirrors src/progenitor/workflows.py: workflow_node_output_ports /
+// Mirrors src/progena/workflows.py: workflow_node_output_ports /
 // workflow_node_input_ports. A data edge connects one existing output port
 // to one existing input port; it never mutates either schema.
 export function nodeOutputPorts(kind, outputSchema) {
@@ -69,7 +69,7 @@ function schemaTypes(definition) {
 
 // Structural compatibility: every type the source can produce is accepted by
 // the target, and matching title if both declare one. Mirrors
-// _schema_types_compatible() in src/progenitor/workflows.py.
+// _schema_types_compatible() in src/progena/workflows.py.
 export function schemasAreCompatible(sourceDefinition, targetDefinition) {
   const sourceTypes = schemaTypes(sourceDefinition);
   const targetTypes = new Set(schemaTypes(targetDefinition));

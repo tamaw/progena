@@ -193,12 +193,12 @@ export default function KnowledgePage() {
   );
   const deleteAction = useConfirmAction(selectedBase?.id || 'knowledge');
 
-  // Open the quick chat prefilled to create a knowledge base — Progenitor edits
+  // Open the quick chat prefilled to create a knowledge base — Progena edits
   // /config/knowledge.json (managing-knowledge skill) and the new base appears
   // here live via the knowledge.snapshot event.
   const openCreateChat = () => {
     window.dispatchEvent(
-      new CustomEvent('progenitor:open-quick-chat', { detail: { mode: 'knowledge-create' } }),
+      new CustomEvent('progena:open-quick-chat', { detail: { mode: 'knowledge-create' } }),
     );
   };
 

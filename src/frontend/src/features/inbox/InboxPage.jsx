@@ -200,18 +200,18 @@ export default function InboxPage() {
     navigate('/inbox', { replace: true });
   }, [dispatch, inboxUrl, navigate, selectedMessageId]);
 
-  // Composing/editing is delegated to the Progenitor agent via quick chat (same
+  // Composing/editing is delegated to the Progena agent via quick chat (same
   // pattern as Tasks and Schedules): the agent writes /inbox/<id>.md and the
   // new/changed message arrives here live via inbox.snapshot.
   const openCompose = useCallback(() => {
-    window.dispatchEvent(new CustomEvent('progenitor:open-quick-chat', {
+    window.dispatchEvent(new CustomEvent('progena:open-quick-chat', {
       detail: { mode: 'inbox-compose' },
     }));
   }, []);
 
   const openEditInChat = useCallback(() => {
     if (!selectedMessageId) return;
-    window.dispatchEvent(new CustomEvent('progenitor:open-quick-chat', {
+    window.dispatchEvent(new CustomEvent('progena:open-quick-chat', {
       detail: {
         mode: 'inbox-edit',
         subtitle: selectedMessageTitle,

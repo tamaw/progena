@@ -19,7 +19,7 @@
     "thread_id": {"type": ["string", "null"], "readOnly": true},
     "trigger_event": {"type": "object", "readOnly": true},
     "trigger_node_id": {"type": ["string", "null"], "readOnly": true},
-    "source": {"type": "string", "enum": ["document", "manual", "progenitor", "cron"], "readOnly": true},
+    "source": {"type": "string", "enum": ["document", "manual", "progena", "cron"], "readOnly": true},
     "ancestry": {"type": "array", "items": {"type": "string"}, "readOnly": true},
     "node_outputs": {"type": "object", "readOnly": true},
     "last_output": {"type": ["string", "null"], "readOnly": true},

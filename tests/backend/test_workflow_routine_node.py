@@ -5,7 +5,7 @@ import asyncio
 import pytest
 
 from src.backend.events.documents import seed_document_types
-from src.backend.storage.documents import PROGENITOR_STATE_PREFIX, InMemoryDocumentStore
+from src.backend.storage.documents import PROGENA_STATE_PREFIX, InMemoryDocumentStore
 from src.backend.workflows.service import (
     PromptExecutionResult,
     WorkflowExecutor,
@@ -13,7 +13,7 @@ from src.backend.workflows.service import (
     get_workflow_run,
     save_workflow_definition,
 )
-from src.progenitor.workflows.documents import default_workflow_definition
+from src.progena.workflows.documents import default_workflow_definition
 
 TYPED_ROUTINE = {
     "id": "summarize",
@@ -64,7 +64,7 @@ async def _wait_for(predicate, timeout=2.0):
 def _setup(routine, *, port, consumer_template=None):
     store = InMemoryDocumentStore()
     seed_document_types(store)
-    store.save_document(PROGENITOR_STATE_PREFIX, f"routine:{routine['id']}", routine)
+    store.save_document(PROGENA_STATE_PREFIX, f"routine:{routine['id']}", routine)
     workflow = default_workflow_definition()
     event_id = next(i for i, n in workflow["graph"]["nodes"].items() if n["kind"] == "event")
     nodes = {event_id: workflow["graph"]["nodes"][event_id]}
@@ -88,7 +88,7 @@ def _setup(routine, *, port, consumer_template=None):
 
 
 def _queued_tasks(store):
-    document = store.get_document(PROGENITOR_STATE_PREFIX, "background_tasks", [])
+    document = store.get_document(PROGENA_STATE_PREFIX, "background_tasks", [])
     return list(document.payload) if document is not None else []
 
 

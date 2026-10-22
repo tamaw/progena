@@ -1,12 +1,12 @@
-# Progenitor System Specification
+# Progena AI System Specification
 
-This document describes the checked-in main system: the Progenitor runtime, the
+This document describes the checked-in main system: the Progena runtime, the
 backend API, and the React frontend. The browser API contract is defined
 normatively in [BACKEND.md](BACKEND.md).
 
 ## Purpose
 
-Progenitor is a long-running conversational system. The runtime maintains
+Progena is a long-running conversational system. The runtime maintains
 conversation state and executes the main agent graph. The frontend submits work
 to the backend and receives browser application data through two SSE roles:
 
@@ -16,7 +16,7 @@ to the backend and receives browser application data through two SSE roles:
 
 ## Core components
 
-### Runtime (`src/progenitor/`)
+### Runtime (`src/progena/`)
 
 - Runs the perpetual conversation service.
 - Restores and checkpoints runtime state.
@@ -46,9 +46,9 @@ to the backend and receives browser application data through two SSE roles:
     `after` / `limit` (1–100) / `order` paging.
   - `DELETE /v1/conversations/{id}` deletes the thread's checkpoints and its
     runtime `current_state` document (409 while a turn is in flight).
-  - Vendor extensions outside the OpenAI spec: `progenitor.stream_event` SSE
+  - Vendor extensions outside the OpenAI spec: `progena.stream_event` SSE
     events carry the runtime's tool/reasoning/subagent activity; the
-    `include=progenitor.langchain_message` items option adds
+    `include=progena.langchain_message` items option adds
     `source_message_id` to every item and the serialized LangChain message to
     the first item of each message in the page; the `checkpoint_id` query
     parameter reads a specific checkpoint; `metadata` values may be
@@ -196,7 +196,7 @@ The dedicated stream owns response content transport only. It never carries
 - Runtime state is updated after scheduled work is processed.
 
 The system persists runtime conversation/checkpoint state, state documents,
-backend-owned metadata, and operational logs in Postgres. Progenitor exposes
+backend-owned metadata, and operational logs in Postgres. Progena exposes
 selected state documents through a validated virtual filesystem (`/config/*.json`
 and related task/workflow paths); those JSON names are views over database
 documents, not files in `data/state` or `data/config`. State-document changes are
@@ -205,7 +205,7 @@ broadcast to the canonical UI stream after the write succeeds; details are in
 
 Chat history is exposed through `/sessions/`: one
 `<date>_<title-slug>_<id8>.md` per non-archived chat, backed by `session:`
-documents in Postgres (`src/progenitor/sessions/`). Each file is YAML front
+documents in Postgres (`src/progena/sessions/`). Each file is YAML front
 matter (all payload fields except `content`, plus `display_title`) followed by
 a blank line and the IRC-style `content`. Only the `title`, `pinned`, and
 `archived` front-matter fields are editable; the body is read-only. Listing,

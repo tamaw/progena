@@ -1,67 +1,67 @@
 # Docker stack
 
-This document covers the main Progenitor container stack: Postgres, runtime, backend,
+This document covers the main Progena container stack: Postgres, runtime, backend,
 frontend, and the internal Claude ACP sidecar.
 
 ## What the repo currently ships
 
-`docker/docker-compose.progenitor.yml` defines a five-container stack:
+`docker/docker-compose.progena.yml` defines a five-container stack:
 - `postgres` - PostgreSQL with pgvector
-- `progenitor` - runs `python -m src.progenitor.main`
+- `progena` - runs `python -m src.progena.main`
 - `backend` - runs `uvicorn src.backend.main:app`
 - `frontend` - builds the Vite app and serves it with nginx
 - `claude` - provides Claude Code over internal ACP transport
 
 Supporting Dockerfiles:
-- `docker/progenitor/Dockerfile`
+- `docker/progena/Dockerfile`
 - `docker/backend/Dockerfile`
 - `docker/frontend/Dockerfile`
 - `docker/claude/Dockerfile`
 
 Standalone A2A services, their images, and their deployment workflows are owned by
-[progentior.agents](https://github.com/tamaw/progentior.agents), not this repository.
-Progenitor can discover an external checkout through a Compose override that mounts it
-read-only into the runtime and sets `PROGENITOR_AGENT_REPOSITORIES` to its
-in-container path. No external repository is required for Progenitor or its built-in
+[progena.agents](https://github.com/tamaw/progena.agents), not this repository.
+Progena can discover an external checkout through a Compose override that mounts it
+read-only into the runtime and sets `PROGENA_AGENT_REPOSITORIES` to its
+in-container path. No external repository is required for Progena or its built-in
 object agents.
 
 ## Before starting
 
 Model connections are configured in **Settings → Providers**, not required endpoint environment variables. Foundry and OpenCode Go currently use the Responses API only.
 
-For database-stored API keys, generate one Fernet key and set `PROGENITOR_PROVIDER_ENCRYPTION_KEY` in the deployment `.env`; Compose passes it to backend and runtime:
+For database-stored API keys, generate one Fernet key and set `PROGENA_PROVIDER_ENCRYPTION_KEY` in the deployment `.env`; Compose passes it to backend and runtime:
 
 ```bash
 # Activate the project virtual environment first.
 python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
 ```
 
-Keep that key outside version control and retain it across restarts. Alternatively select environment credentials using `AZURE_OPENAI_API_KEY` or `OPENCODE_GO_API_KEY`. Custom `PROGENITOR_PROVIDER_*_API_KEY` names must be passed explicitly to both containers.
+Keep that key outside version control and retain it across restarts. Alternatively select environment credentials using `AZURE_OPENAI_API_KEY` or `OPENCODE_GO_API_KEY`. Custom `PROGENA_PROVIDER_*_API_KEY` names must be passed explicitly to both containers.
 
-Provider tables live in `BACKEND_DATABASE_NAME` (default `backend`) on the configured PostgreSQL server; both services need access to it. Compose must give both services the same database name and encryption key. Existing `AZURE_OPENAI_BASE_URL` and `PROGENITOR_MODEL_DEFAULT` are imported once on initial provider-table setup; subsequent connection edits come from the database. An installation with no configured provider starts normally but rejects model calls until configured.
+Provider tables live in `BACKEND_DATABASE_NAME` (default `backend`) on the configured PostgreSQL server; both services need access to it. Compose must give both services the same database name and encryption key. Existing `AZURE_OPENAI_BASE_URL` and `PROGENA_MODEL_DEFAULT` are imported once on initial provider-table setup; subsequent connection edits come from the database. An installation with no configured provider starts normally but rejects model calls until configured.
 
 Common optional overrides:
-- `PROGENITOR_MODEL_DEFAULT`
+- `PROGENA_MODEL_DEFAULT`
 - `GH_TOKEN`
-- `PROGENITOR_REASONING_ENABLED`
-- `PROGENITOR_REASONING_EFFORT`
-- `PROGENITOR_REASONING_SUMMARY`
+- `PROGENA_REASONING_ENABLED`
+- `PROGENA_REASONING_EFFORT`
+- `PROGENA_REASONING_SUMMARY`
 - `TELEGRAM_*` backend settings
 
-Foundry starts with reasoning enabled by default. `PROGENITOR_REASONING_EFFORT`
-controls the default effort and `PROGENITOR_REASONING_SUMMARY` the visible reasoning
+Foundry starts with reasoning enabled by default. `PROGENA_REASONING_EFFORT`
+controls the default effort and `PROGENA_REASONING_SUMMARY` the visible reasoning
 summary preference. These Foundry-specific overrides are not sent to OpenCode Go.
 
-The compose file also expects the external Docker network `progenitor_network`
-and the external volume `progenitor-shared` to exist:
+The compose file also expects the external Docker network `progena_network`
+and the external volume `progena-shared` to exist:
 
 ```bash
-docker network create progenitor_network
-docker volume create progenitor-shared
+docker network create progena_network
+docker volume create progena-shared
 ```
 
-`progenitor-shared` is mounted at `/shared` in the runtime and exposed to the
-agent as the writable `/shared/` route (`PROGENITOR_SHARED_DIR`). Mount the same
+`progena-shared` is mounted at `/shared` in the runtime and exposed to the
+agent as the writable `/shared/` route (`PROGENA_SHARED_DIR`). Mount the same
 volume into A2A agent containers to exchange files with them; nothing in it is
 access-controlled, so any container that mounts it can change anything there.
 
@@ -70,19 +70,19 @@ access-controlled, so any container that mounts it can change anything there.
 From the repository root:
 
 ```bash
-docker compose -f docker/docker-compose.progenitor.yml up --build -d
-docker compose -f docker/docker-compose.progenitor.yml down
+docker compose -f docker/docker-compose.progena.yml up --build -d
+docker compose -f docker/docker-compose.progena.yml down
 ```
 
 Useful inspection commands:
 
 ```bash
-docker compose -f docker/docker-compose.progenitor.yml ps
-docker compose -f docker/docker-compose.progenitor.yml logs -f
-docker compose -f docker/docker-compose.progenitor.yml logs -f progenitor
-docker compose -f docker/docker-compose.progenitor.yml logs -f backend
-docker compose -f docker/docker-compose.progenitor.yml logs -f frontend
-docker compose -f docker/docker-compose.progenitor.yml logs -f claude
+docker compose -f docker/docker-compose.progena.yml ps
+docker compose -f docker/docker-compose.progena.yml logs -f
+docker compose -f docker/docker-compose.progena.yml logs -f progena
+docker compose -f docker/docker-compose.progena.yml logs -f backend
+docker compose -f docker/docker-compose.progena.yml logs -f frontend
+docker compose -f docker/docker-compose.progena.yml logs -f claude
 ```
 
 ## Network and ports
@@ -90,10 +90,10 @@ docker compose -f docker/docker-compose.progenitor.yml logs -f claude
 Current compose behavior:
 - Only the frontend is published to the host, bound to localhost: `127.0.0.1:8081:80` over HTTP
 - The backend listens on port `8000` over HTTP **inside** the compose networks only
-- The Progenitor HTTP server listens on port `9501` inside the compose networks
-- Claude ACP listens at `tcp://progenitor-agent-claude:3001` inside the compose networks only
-- The backend connects to the runtime with `PROGENITOR_RUNTIME_URL=http://progenitor:9501`
-- The compose file attaches services to an internal bridge network and the external `progenitor_network`
+- The Progena HTTP server listens on port `9501` inside the compose networks
+- Claude ACP listens at `tcp://progena-agent-claude:3001` inside the compose networks only
+- The backend connects to the runtime with `PROGENA_RUNTIME_URL=http://progena:9501`
+- The compose file attaches services to an internal bridge network and the external `progena_network`
 
 For public deployment, terminate TLS and enforce authentication at a trusted
 reverse proxy outside this Compose project. Forward requests to
@@ -116,30 +116,30 @@ to a one-off override file; do not expose it in the public deployment.
 
 ## Volumes and ephemeral storage
 
-- `progenitor` and `backend`: `${PROGENITOR_HOST_LOGS_DIR:-../logs}:/app/logs`, `${PROGENITOR_HOST_REPOS_DIR:-../repos}:/app/repos`
+- `progena` and `backend`: `${PROGENA_HOST_LOGS_DIR:-../logs}:/app/logs`, `${PROGENA_HOST_REPOS_DIR:-../repos}:/app/repos`
 
 The CI deployment uses the GitHub Environment `production`. Store credentials in
-its secrets and deployment options such as `PROGENITOR_TIMEZONE` in its variables.
+its secrets and deployment options such as `PROGENA_TIMEZONE` in its variables.
 CI derives the host `logs`, `repos`, and `claude` directories from the single
-installation root `/var/lib/progenitor`; changing example timezone values does
+installation root `/var/lib/progena`; changing example timezone values does
 not override an environment's configured timezone.
 
 Ephemeral storage:
-- `/app/tmp` is a `tmpfs` mount in `progenitor` and `backend`
+- `/app/tmp` is a `tmpfs` mount in `progena` and `backend`
 
 Notes:
 - Instructions and runtime memories are Postgres-backed content documents
-  (`src/progenitor/documents/content.py`, keyed `instruction:`/`memory:` in
+  (`src/progena/documents/content.py`, keyed `instruction:`/`memory:` in
   the same shared `store` table as `mcp.json`/`schedule.json`/etc — see
-  `src/progenitor/state/manager.py`). Neither `progenitor` nor `backend` mounts
+  `src/progena/state/manager.py`). Neither `progena` nor `backend` mounts
   a host directory for them. `data/instructions/` is checked into git and
-  `COPY`'d into the `progenitor` image (not `backend`'s); every boot syncs it
+  `COPY`'d into the `progena` image (not `backend`'s); every boot syncs it
   into Postgres: top-level Markdown files retain logical paths such as
-  `progenitor/genesis.md`. They are added when missing and otherwise kept,
+  `progena/genesis.md`. They are added when missing and otherwise kept,
   since they are edited on the Instructions page. Explicit subdirectories in
   custom instruction sources retain their own group names.
   Standalone A2A agents own their instructions, images, and service lifecycle in the
-  separate [agents repository](https://github.com/tamaw/progentior.agents); they are
+  separate [agents repository](https://github.com/tamaw/progena.agents); they are
   not copied into this image. `data/skills/` is a read-only disk mount (`/skills/`),
   not stored in Postgres.
 - `current_state`, `schedule`, `registry/agents`, `mcp`, `knowledge`, `health`,
@@ -150,8 +150,8 @@ Notes:
   `COPY`'d into the images, so the schemas a container reads always match its
   code. It is not bind-mounted: the deploy's runner checkout is reused by later
   CI jobs on other branches, so a mount from it served whatever branch ran last.
-- Repository/worktree state mounts from `${PROGENITOR_HOST_REPOS_DIR:-../repos}` to `/app/repos`.
-- `PROGENITOR_WORKTREE_DIR` is set to `/app/repos` in `progenitor` and `backend`.
+- Repository/worktree state mounts from `${PROGENA_HOST_REPOS_DIR:-../repos}` to `/app/repos`.
+- `PROGENA_WORKTREE_DIR` is set to `/app/repos` in `progena` and `backend`.
 
 ## Health checks
 
@@ -161,10 +161,10 @@ data.
 
 Current health probes are implemented as follows (run the container-local probes with
 `docker compose exec`; only the frontend is published on the host):
-- `backend` container: `docker compose -f docker/docker-compose.progenitor.yml exec -T backend curl -fsS http://127.0.0.1:8000/healthz`
+- `backend` container: `docker compose -f docker/docker-compose.progena.yml exec -T backend curl -fsS http://127.0.0.1:8000/healthz`
 - `frontend` through the published nginx port: `curl -fsS http://127.0.0.1:8081/healthz` (proxied to `backend`)
-- `frontend` container process: `docker compose -f docker/docker-compose.progenitor.yml exec -T frontend wget -q -O /dev/null http://127.0.0.1/`
-- `progenitor` container: `docker compose -f docker/docker-compose.progenitor.yml exec -T progenitor curl -fsS http://127.0.0.1:9501/health` (the runtime's own HTTP endpoint)
+- `frontend` container process: `docker compose -f docker/docker-compose.progena.yml exec -T frontend wget -q -O /dev/null http://127.0.0.1/`
+- `progena` container: `docker compose -f docker/docker-compose.progena.yml exec -T progena curl -fsS http://127.0.0.1:9501/health` (the runtime's own HTTP endpoint)
 - `claude` container: Docker probes its `socat` listener; the ACP endpoint is internal only.
 
 ## Self-hosted Actions runners

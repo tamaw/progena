@@ -181,11 +181,11 @@ export default function TasksPage({ context = null }) {
     ? `Blocked by ${selectedDependencies.length} task${selectedDependencies.length === 1 ? '' : 's'}`
     : 'Not blocked';
 
-  // Creation is delegated to the Progenitor agent (same pattern as Tools and
+  // Creation is delegated to the Progena agent (same pattern as Tools and
   // Schedules): there is no local create form. The agent writes `/tasks/`
   // entries and the new card arrives here live via the kanban.snapshot event.
   const openCreateTask = useCallback(() => {
-    window.dispatchEvent(new CustomEvent('progenitor:open-quick-chat', {
+    window.dispatchEvent(new CustomEvent('progena:open-quick-chat', {
       detail: { mode: 'task-create' },
     }));
   }, []);

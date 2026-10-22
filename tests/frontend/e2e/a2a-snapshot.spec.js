@@ -2,8 +2,8 @@ import { test, expect } from '@playwright/test';
 import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 
-const databaseUrl = process.env.PROGENITOR_DATABASE_URL
-  || 'postgresql://progenitor:progenitor@127.0.0.1:15433/progenitor';
+const databaseUrl = process.env.PROGENA_DATABASE_URL
+  || 'postgresql://progena:progena@127.0.0.1:15433/progena';
 const quote = (value) => `'${value.replaceAll("'", "''")}'`;
 
 function sql(command) {
@@ -22,14 +22,14 @@ function addA2AToRegistry(name) {
   });
   sql(`
     INSERT INTO store (prefix, key, value, created_at, updated_at)
-    VALUES ('progenitor.state', 'registry', '{"payload": {"agents": []}}'::jsonb, now(), now())
+    VALUES ('progena.state', 'registry', '{"payload": {"agents": []}}'::jsonb, now(), now())
     ON CONFLICT (prefix, key) DO NOTHING;
 
     UPDATE store
     SET value = jsonb_set(value, '{payload,agents}',
         COALESCE(value->'payload'->'agents', '[]'::jsonb) || ${quote(agentJson)}::jsonb),
         updated_at = now()
-    WHERE prefix = 'progenitor.state' AND key = 'registry';
+    WHERE prefix = 'progena.state' AND key = 'registry';
   `);
 }
 
@@ -43,7 +43,7 @@ function removeA2AFromRegistry(name) {
             WHERE elem->>'name' != ${quote(name)}
         ), '[]'::jsonb)),
         updated_at = now()
-    WHERE prefix = 'progenitor.state' AND key = 'registry';
+    WHERE prefix = 'progena.state' AND key = 'registry';
   `);
 }
 

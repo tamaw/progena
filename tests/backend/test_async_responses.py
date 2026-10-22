@@ -109,7 +109,7 @@ class TestAsyncResponseHandling:
         monkeypatch.setattr(lifecycle_state, "client", None)
         response = client.post(
             "/api/ui/responses",
-            json={"model": "progenitor-v1", "input": "Hello", "stream": False},
+            json={"model": "progena-v1", "input": "Hello", "stream": False},
             headers={"X-Request-ID": "rejected-generation"},
         )
 
@@ -124,7 +124,7 @@ class TestAsyncResponseHandling:
 
         expired_request_id = "expired-response-stream"
         expired_state = chat_responses._ensure_response_stream(
-            expired_request_id, "resp-expired", "thread-expired", "progenitor-v1"
+            expired_request_id, "resp-expired", "thread-expired", "progena-v1"
         )
         expired_state.expires_at = time.time() - 1
 
@@ -153,7 +153,7 @@ class TestAsyncResponseHandling:
 
         request_id = "terminal-empty-response-stream"
         state = chat_responses._ensure_response_stream(
-            request_id, "resp-empty", "thread-empty", "progenitor-v1"
+            request_id, "resp-empty", "thread-empty", "progena-v1"
         )
         state.terminal_reached = True
 
@@ -197,7 +197,7 @@ class TestAsyncResponseHandling:
 
         monkeypatch.setattr(lifecycle_state, "client", _MockClient())
         with _live_backend() as base_url, httpx.Client(base_url=base_url, timeout=5) as live_client:
-            live_client.cookies.set("progenitor_session", "sess_thread_abc")
+            live_client.cookies.set("progena_session", "sess_thread_abc")
             with live_client.stream("GET", "/api/ui/stream") as canonical_stream:
                 assert canonical_stream.status_code == 200
                 assert canonical_stream.headers["content-type"].startswith("text/event-stream")
@@ -208,7 +208,7 @@ class TestAsyncResponseHandling:
 
                 response = live_client.post(
                     "/api/ui/responses",
-                    json={"model": "progenitor-v1", "input": "hi", "stream": True},
+                    json={"model": "progena-v1", "input": "hi", "stream": True},
                     headers={"X-Request-ID": request_id},
                 )
                 with live_client.stream(
@@ -288,14 +288,14 @@ class TestAsyncResponseHandling:
             request_id,
             "response-runtime-timing",
             "thread-runtime-timing",
-            "progenitor-v1",
+            "progena-v1",
         )
         monkeypatch.setattr(lifecycle_state, "client", _MockClient())
         monkeypatch.setattr(events_stream, "broadcast_ui_event", record)
         try:
             await chat_responses._run_response_event_stream(
                 "hi",
-                "progenitor-v1",
+                "progena-v1",
                 request_id,
                 "response-runtime-timing",
                 "thread-runtime-timing",
@@ -310,7 +310,7 @@ class TestAsyncResponseHandling:
         ]
         assert state.frames[0].payload == {
             "id": "response-runtime-timing",
-            "model": "progenitor-v1",
+            "model": "progena-v1",
             "thread_id": "thread-runtime-timing",
             "delta": "Hello",
             "request_id": request_id,
@@ -319,7 +319,7 @@ class TestAsyncResponseHandling:
         }
         assert state.frames[1].payload == {
             "id": "response-runtime-timing",
-            "model": "progenitor-v1",
+            "model": "progena-v1",
             "thread_id": "thread-runtime-timing",
             "event_type": "node_update",
             "content": "respond",
@@ -382,7 +382,7 @@ class TestAsyncResponseHandling:
             _next_sse_frame(canonical_lines)
             response = live_client.post(
                 "/api/ui/responses",
-                json={"model": "progenitor-v1", "input": "delegate", "stream": True},
+                json={"model": "progena-v1", "input": "delegate", "stream": True},
                 headers={"X-Request-ID": request_id},
             )
             with live_client.stream(
@@ -433,7 +433,7 @@ class TestAsyncResponseHandling:
 
         request_id = "replay-response-request"
         state = chat_responses._ensure_response_stream(
-            request_id, "resp-replay", "thread-replay", "progenitor-v1"
+            request_id, "resp-replay", "thread-replay", "progena-v1"
         )
         first = chat_responses._append_response_stream_frame(
             state,
@@ -484,7 +484,7 @@ class TestAsyncResponseHandling:
 
         invalid_request_id = "invalid-cursor-request"
         invalid_state = chat_responses._ensure_response_stream(
-            invalid_request_id, "resp-invalid", "thread-invalid", "progenitor-v1"
+            invalid_request_id, "resp-invalid", "thread-invalid", "progena-v1"
         )
         chat_responses._append_response_stream_frame(
             invalid_state,
@@ -496,7 +496,7 @@ class TestAsyncResponseHandling:
         expired_request_id = "expired-cursor-request"
         monkeypatch.setattr(chat_responses, "RESPONSE_STREAM_REPLAY_LIMIT", 2)
         expired_state = chat_responses._ensure_response_stream(
-            expired_request_id, "resp-expired", "thread-expired", "progenitor-v1"
+            expired_request_id, "resp-expired", "thread-expired", "progena-v1"
         )
         for content in ("discarded", "retained-one", "retained-two"):
             chat_responses._append_response_stream_frame(
@@ -547,7 +547,7 @@ class TestAsyncResponseHandling:
 
         request_id = "last-event-id-precedence"
         state = chat_responses._ensure_response_stream(
-            request_id, "resp-precedence", "thread-precedence", "progenitor-v1"
+            request_id, "resp-precedence", "thread-precedence", "progena-v1"
         )
         first = chat_responses._append_response_stream_frame(
             state,
@@ -604,7 +604,7 @@ class TestAsyncResponseHandling:
             _next_sse_frame(canonical_lines)
             response = live_client.post(
                 "/api/ui/responses",
-                json={"model": "progenitor-v1", "input": "fail", "stream": True},
+                json={"model": "progena-v1", "input": "fail", "stream": True},
                 headers={"X-Request-ID": request_id},
             )
             with live_client.stream(
@@ -657,7 +657,7 @@ class TestAsyncResponseHandling:
             runner = asyncio.create_task(
                 chat_responses._run_response_event_stream(
                     "cancelled while streaming",
-                    "progenitor-v1",
+                    "progena-v1",
                     target_request_id,
                     response_id,
                     "thread-cancel-race",
@@ -679,7 +679,7 @@ class TestAsyncResponseHandling:
         assert "chat.response.completed" not in event_types
         assert emitted[0].payload == {
             "id": response_id,
-            "model": "progenitor-v1",
+            "model": "progena-v1",
             "thread_id": "thread-cancel-race",
             "cancelled": True,
             "request_id": target_request_id,
@@ -714,7 +714,7 @@ class TestAsyncResponseHandling:
             )
             await chat_responses._run_response_event_stream(
                 "cancelled request",
-                "progenitor-v1",
+                "progena-v1",
                 target_request_id,
                 "resp-cancel-test",
                 "thread-cancel-test",
@@ -863,10 +863,10 @@ class TestAsyncResponseHandling:
         event_start = len(events_stream._ui_event_replay)
         lifecycle_state.client = _MockClient()
         try:
-            client.cookies.set("progenitor_session", "sess_thread_xyz")
+            client.cookies.set("progena_session", "sess_thread_xyz")
             response = client.post(
                 "/api/ui/responses",
-                json={"model": "progenitor-v1", "input": "hi", "stream": False},
+                json={"model": "progena-v1", "input": "hi", "stream": False},
                 headers={"X-Request-ID": request_id},
             )
             events = [
@@ -929,7 +929,7 @@ class TestAsyncResponseHandling:
             response = client.post(
                 "/api/ui/responses",
                 json={
-                    "model": "progenitor-v1",
+                    "model": "progena-v1",
                     "input": "hi",
                     "stream": False,
                     "include_reasoning": True,

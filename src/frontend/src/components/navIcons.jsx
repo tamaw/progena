@@ -339,7 +339,7 @@ export function QuickChatIcon() {
   );
 }
 
-export function ProgenitorAiIcon() {
+export function ProgenaAiIcon() {
   return (
     <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
       <path d="m8 1.25 1.9 3.8L8 8.7 6.1 5.05 8 1.25Z" fill="currentColor" opacity="0.92" />

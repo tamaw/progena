@@ -17,12 +17,12 @@ from src.backend.canvases.events import canvas_events
 from src.backend.events.documents import list_document_types
 from src.backend.http.requests import request_correlation_id as _request_correlation_id
 from src.backend.storage.documents import (
-    PROGENITOR_STATE_PREFIX,
+    PROGENA_STATE_PREFIX,
     BackendDocumentStore,
     document_write_origin,
     get_default_document_store,
 )
-from src.progenitor.canvases.contracts import (
+from src.progena.canvases.contracts import (
     CANVAS_MANIFEST_FILE,
     MAX_CANVAS_DATA_BYTES,
     CanvasValidationError,
@@ -35,7 +35,7 @@ from src.progenitor.canvases.contracts import (
     validate_canvas_manifest,
     validate_canvas_name,
 )
-from src.progenitor.documents.types import DOCUMENT_OPERATIONS, DocumentType
+from src.progena.documents.types import DOCUMENT_OPERATIONS, DocumentType
 
 router = APIRouter(prefix="/api/ui", tags=["canvases"])
 _REQUEST_ID_HEADER = Header(default=None, alias="X-Request-ID")
@@ -95,7 +95,7 @@ def _utc_now() -> str:
 def _canvas_rows(store: BackendDocumentStore, name: str) -> list[tuple[str, Any]]:
     prefix = canvas_file_key(name, "").removesuffix("/") + "/"
     rows: list[tuple[str, Any]] = []
-    for key, document in store.list_documents(PROGENITOR_STATE_PREFIX, prefix):
+    for key, document in store.list_documents(PROGENA_STATE_PREFIX, prefix):
         split = split_canvas_file_key(key)
         if split is None or split[0] != name or not isinstance(document.payload, dict):
             continue
@@ -141,7 +141,7 @@ def _summary(store: BackendDocumentStore, name: str) -> CanvasSummary:
         for _path, document in rows
     ]
     updated_at = max((timestamp for timestamp in timestamps if timestamp), default=None)
-    status_document = store.get_document(PROGENITOR_STATE_PREFIX, canvas_status_key(name), None)
+    status_document = store.get_document(PROGENA_STATE_PREFIX, canvas_status_key(name), None)
     status = (
         status_document.payload
         if status_document and isinstance(status_document.payload, dict)
@@ -167,7 +167,7 @@ def canvas_summaries(store: BackendDocumentStore | None = None) -> list[CanvasSu
 
     store = store or get_default_document_store()
     names: set[str] = set()
-    for key, _document in store.list_documents(PROGENITOR_STATE_PREFIX, "canvas:"):
+    for key, _document in store.list_documents(PROGENA_STATE_PREFIX, "canvas:"):
         split = split_canvas_file_key(key)
         if split is not None:
             names.add(split[0])
@@ -234,11 +234,11 @@ async def delete_canvas(
     files = await asyncio.to_thread(_canvas_files, store, name)
     with document_write_origin("user"):
         for path in files:
-            store.delete_document(PROGENITOR_STATE_PREFIX, canvas_file_key(name, path))
-        store.delete_document(PROGENITOR_STATE_PREFIX, canvas_status_key(name))
+            store.delete_document(PROGENA_STATE_PREFIX, canvas_file_key(name, path))
+        store.delete_document(PROGENA_STATE_PREFIX, canvas_status_key(name))
         data_prefix = canvas_data_key(name, "")
-        for key, _document in store.list_documents(PROGENITOR_STATE_PREFIX, data_prefix):
-            store.delete_document(PROGENITOR_STATE_PREFIX, key)
+        for key, _document in store.list_documents(PROGENA_STATE_PREFIX, data_prefix):
+            store.delete_document(PROGENA_STATE_PREFIX, key)
     request_id = _request_correlation_id(request, x_request_id)
     events_stream.broadcast_ui_event("canvas.deleted", {"name": name}, request_id=request_id)
     return http_contracts.acknowledgement_response(request_id, ["canvas.deleted"])
@@ -264,7 +264,7 @@ async def save_canvas_status(
         "reported_at": _utc_now(),
     }
     with document_write_origin("user"):
-        store.save_document(PROGENITOR_STATE_PREFIX, canvas_status_key(name), payload)
+        store.save_document(PROGENA_STATE_PREFIX, canvas_status_key(name), payload)
     request_id = _request_correlation_id(request, x_request_id)
     events_stream.broadcast_ui_event(
         "canvas.status.saved",
@@ -297,15 +297,15 @@ async def get_canvas_documents(
         rows = [
             (
                 document_type.key,
-                store.get_document(PROGENITOR_STATE_PREFIX, document_type.key, None),
+                store.get_document(PROGENA_STATE_PREFIX, document_type.key, None),
             )
         ]
     elif body.id is not None:
         key = document_type.document_key(body.id)
-        rows = [(key, store.get_document(PROGENITOR_STATE_PREFIX, key, None))]
+        rows = [(key, store.get_document(PROGENA_STATE_PREFIX, key, None))]
     else:
         rows = store.list_documents(
-            PROGENITOR_STATE_PREFIX, (document_type.key_prefix or "") + body.prefix
+            PROGENA_STATE_PREFIX, (document_type.key_prefix or "") + body.prefix
         )
         if body.cursor is not None:
             rows = [item for item in rows if item[0] > body.cursor]
@@ -351,14 +351,14 @@ async def canvas_data(
         prefix = canvas_data_key(name, "")
         items = [
             {"key": item_key.removeprefix(prefix), "value": document.payload.get("value")}
-            for item_key, document in store.list_documents(PROGENITOR_STATE_PREFIX, prefix)
+            for item_key, document in store.list_documents(PROGENA_STATE_PREFIX, prefix)
             if isinstance(document.payload, dict)
         ]
     else:
         assert key is not None
         store_key = canvas_data_key(name, key)
         if body.op == "get":
-            document = store.get_document(PROGENITOR_STATE_PREFIX, store_key, None)
+            document = store.get_document(PROGENA_STATE_PREFIX, store_key, None)
             value = (
                 document.payload.get("value")
                 if document and isinstance(document.payload, dict)
@@ -380,14 +380,14 @@ async def canvas_data(
                 )
             with document_write_origin("user"):
                 store.save_document(
-                    PROGENITOR_STATE_PREFIX,
+                    PROGENA_STATE_PREFIX,
                     store_key,
                     {"value": body.value, "updated_at": _utc_now()},
                 )
             value = body.value
         else:
             with document_write_origin("user"):
-                store.delete_document(PROGENITOR_STATE_PREFIX, store_key)
+                store.delete_document(PROGENA_STATE_PREFIX, store_key)
     payload: dict[str, Any] = {"name": name, "op": body.op, "key": key, "value": value}
     if items is not None:
         payload["items"] = items

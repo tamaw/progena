@@ -502,7 +502,7 @@ export function QuickChatPanel({
           threadId: scratchThreadId,
         }),
       );
-      window.dispatchEvent(new CustomEvent('progenitor:load-chat-history', {
+      window.dispatchEvent(new CustomEvent('progena:load-chat-history', {
         detail: {
           messages: promotedMessages,
           threadId: scratchThreadId,

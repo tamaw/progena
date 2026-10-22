@@ -1,4 +1,4 @@
-"""FastAPI gateway to Progenitor. The ASGI entry point is src.backend.main:app."""
+"""FastAPI gateway to Progena. The ASGI entry point is src.backend.main:app."""
 
 from __future__ import annotations
 

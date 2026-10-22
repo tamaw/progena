@@ -13,13 +13,14 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Any, Literal, cast
 
+from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
+
 from src.backend.storage.documents import (
-    PROGENITOR_STATE_PREFIX,
+    PROGENA_STATE_PREFIX,
     BackendDocumentStore,
     CheckpointMessageBlob,
 )
-from src.progenitor.persistence.serialization import CheckpointSerializer
-from src.progenitor.settings.model_profiles import (
+from src.progena.settings.model_profiles import (
     MODEL_PROFILES_DOC_KEY,
     default_model_profiles_payload,
     validate_model_profiles_payload,
@@ -188,7 +189,7 @@ def build_token_usage_snapshot(
 
 def _unique_usage_calls(blobs: list[CheckpointMessageBlob]) -> tuple[list[_UsageCall], set[str]]:
     """Decode trusted message blobs and retain the final state of each call."""
-    serializer = CheckpointSerializer(pickle_fallback=False)
+    serializer = JsonPlusSerializer(pickle_fallback=False)
     calls: dict[tuple[str], _UsageCall] = {}
     warnings: set[str] = set()
     # The store fetches newest-first for bounded current-window coverage; merge
@@ -453,7 +454,7 @@ def _decimal_rate(value: Any) -> Decimal | None:
 
 
 def _load_profiles(store: BackendDocumentStore) -> dict[str, dict[str, Any]]:
-    document = store.get_document(PROGENITOR_STATE_PREFIX, MODEL_PROFILES_DOC_KEY)
+    document = store.get_document(PROGENA_STATE_PREFIX, MODEL_PROFILES_DOC_KEY)
     raw = document.payload if document is not None else default_model_profiles_payload()
     return validate_model_profiles_payload(raw)
 

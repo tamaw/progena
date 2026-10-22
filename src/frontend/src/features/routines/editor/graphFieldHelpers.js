@@ -175,7 +175,7 @@ export function isCompleteSchemaFieldText(text) {
 // predecessor carrying a `response_schema` (Select/classify always; prompt/
 // agent when authored with one), a `<output_key>.<property>` entry per
 // schema field, since both consumers already walk nested dicts
-// (`src/progenitor/routines/state.py`'s `resolve_data_path`/`_resolve_inputs`, and
+// (`src/progena/routines/state.py`'s `resolve_data_path`/`_resolve_inputs`, and
 // `expression.py`'s `ast.Attribute` handling) with no synthetic flattening
 // needed. `eval`/`switch`/`condition` predecessors offer only their bare key
 // -- their result has no declared shape to drill into.

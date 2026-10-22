@@ -1,6 +1,6 @@
-# Progenitor Documentation
+# Progena AI Documentation
 
-This folder intentionally contains a small, maintained set of docs centered on the checked-in main system: the Progenitor runtime, backend API, and frontend UI.
+This folder intentionally contains a small, maintained set of docs centered on the checked-in main system: the Progena runtime, backend API, and frontend UI.
 
 ## Core system docs
 

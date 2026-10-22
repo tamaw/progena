@@ -12,7 +12,7 @@ import src.backend.http.requests as http_requests
 import src.backend.monitoring.state as monitoring_state
 import src.backend.tasks.models as tasks_models
 import src.backend.tasks.service as tasks_service
-from src.progenitor.utils import utcnow
+from src.progena.utils import utcnow
 
 logger = logging.getLogger(__name__)
 

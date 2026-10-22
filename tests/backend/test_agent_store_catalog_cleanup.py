@@ -6,7 +6,7 @@ from unittest.mock import Mock
 import pytest
 
 from src.backend.agents.store import AgentStore
-from src.backend.storage.documents import PROGENITOR_STATE_PREFIX, InMemoryDocumentStore
+from src.backend.storage.documents import PROGENA_STATE_PREFIX, InMemoryDocumentStore
 
 
 @pytest.mark.parametrize("rowcount", [0, 1])
@@ -33,7 +33,7 @@ def test_missing_graph_detail_is_read_only():
     assert store._graph_payload("deleted", {"status": "Ready"}) is None
     documents.save_document.assert_not_called()
     store.ensure_graph.assert_not_called()
-    assert documents.list_documents(PROGENITOR_STATE_PREFIX, "routine:") == []
+    assert documents.list_documents(PROGENA_STATE_PREFIX, "routine:") == []
 
 
 def _store_with_cursor(cursor):
@@ -66,7 +66,7 @@ def test_routine_catalog_ids_include_ghosts_while_visible_list_hides_them():
         [{"id": "deleted"}, {"id": "live"}],
     ]
     store = _store_with_cursor(cursor)
-    store._document_store.save_document(PROGENITOR_STATE_PREFIX, "routine:live", {"nodes": []})
+    store._document_store.save_document(PROGENA_STATE_PREFIX, "routine:live", {"nodes": []})
     store._document_store.save_document = Mock()
     assert [agent["id"] for agent in store.list_agents()] == ["live", "external"]
     assert store.list_routine_catalog_ids() == ["deleted", "live"]

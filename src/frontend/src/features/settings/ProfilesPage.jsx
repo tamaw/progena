@@ -382,7 +382,7 @@ export default function ProfilesPage() {
   });
 
   const openCreateProfileChat = useCallback(() => {
-    window.dispatchEvent(new CustomEvent('progenitor:open-quick-chat', {
+    window.dispatchEvent(new CustomEvent('progena:open-quick-chat', {
       detail: { mode: 'profile-create' },
     }));
   }, []);

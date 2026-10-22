@@ -18,11 +18,11 @@ from src.backend.plugins.marketplaces import (
     load_marketplaces,
     set_cached_catalog,
 )
-from src.backend.storage.documents import PROGENITOR_STATE_PREFIX, get_default_document_store
-from src.progenitor.config import default_plugins_config_payload
-from src.progenitor.documents.content import content_document_key
-from src.progenitor.plugins.schema import validate_plugins_payload
-from src.progenitor.plugins.sources import (
+from src.backend.storage.documents import PROGENA_STATE_PREFIX, get_default_document_store
+from src.progena.config import default_plugins_config_payload
+from src.progena.documents.content import content_document_key
+from src.progena.plugins.schema import validate_plugins_payload
+from src.progena.plugins.sources import (
     PluginFetchError,
     fetch_marketplace,
     fetch_plugin_skill_content,
@@ -40,9 +40,7 @@ router = APIRouter(prefix="/api/ui/plugins", tags=["plugins"])
 def _load_plugins_document() -> dict[str, Any]:
     """Read the installed-plugins document from the shared store."""
     default = default_plugins_config_payload()
-    document = get_default_document_store().get_document(
-        PROGENITOR_STATE_PREFIX, "plugins", default
-    )
+    document = get_default_document_store().get_document(PROGENA_STATE_PREFIX, "plugins", default)
     payload = document.payload if document is not None else default
     return payload if isinstance(payload, dict) else default
 
@@ -50,7 +48,7 @@ def _load_plugins_document() -> dict[str, Any]:
 def _save_plugins_document(payload: dict[str, Any]) -> dict[str, Any]:
     """Persist the installed-plugins document after validating it."""
     validated = validate_plugins_payload(payload)
-    get_default_document_store().save_document(PROGENITOR_STATE_PREFIX, "plugins", validated)
+    get_default_document_store().save_document(PROGENA_STATE_PREFIX, "plugins", validated)
     return validated
 
 
@@ -71,7 +69,7 @@ async def _resolve_catalog(marketplace_name: str) -> Any:
 
     source_url = _marketplace_source_url(marketplace_name)
     if not source_url:
-        from src.progenitor.plugins.sources import PluginFetchError
+        from src.progena.plugins.sources import PluginFetchError
 
         raise PluginFetchError(f"marketplace '{marketplace_name}' not found")
 
@@ -245,7 +243,7 @@ async def get_plugin_skill_content(
     request_id = _request_correlation_id(request, x_request_id)
     segment = f"{marketplace}__{plugin}"
     key = content_document_key("skill", f"{segment}/{skill_name}/SKILL.md")
-    document = get_default_document_store().get_document(PROGENITOR_STATE_PREFIX, key, None)
+    document = get_default_document_store().get_document(PROGENA_STATE_PREFIX, key, None)
     if (
         document is None
         or not isinstance(document.payload, dict)
@@ -292,7 +290,7 @@ def broadcast_plugins_snapshot(
     if plugins is None:
         default = default_plugins_config_payload()
         document = storage_documents.get_default_document_store().get_document(
-            storage_documents.PROGENITOR_STATE_PREFIX, "plugins", default
+            storage_documents.PROGENA_STATE_PREFIX, "plugins", default
         )
         raw = document.payload if document is not None else default
         plugins = raw if isinstance(raw, dict) else default

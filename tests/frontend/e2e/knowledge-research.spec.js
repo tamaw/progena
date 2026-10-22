@@ -4,8 +4,8 @@ import { attachJsonEvidence } from '../helpers/routineFixture.mjs';
 
 // End-to-end knowledge-base journey against a live stack with a real model and
 // the Jina web MCP server (needs JINA_API_KEY in the runtime's environment):
-//   1. Progenitor registers the Jina MCP server.
-//   2. Progenitor creates a knowledge base and a researcher object agent with
+//   1. Progena registers the Jina MCP server.
+//   2. Progena creates a knowledge base and a researcher object agent with
 //      write access to it, then the researcher fills it from web research.
 //   3. The pages are browsed in the Knowledge UI: index, breadcrumbs, revisions,
 //      and a page another curator marked deprecated.
@@ -13,8 +13,8 @@ import { attachJsonEvidence } from '../helpers/routineFixture.mjs';
 // Set KEEP_KNOWLEDGE_E2E=1 to keep the created base/agents for manual viewing.
 // Pick the research topic with KNOWLEDGE_E2E_TOPIC=mcp|raft (default mcp).
 
-const databaseUrl = process.env.PROGENITOR_DATABASE_URL
-  || 'postgresql://progenitor:progenitor@127.0.0.1:15433/progenitor';
+const databaseUrl = process.env.PROGENA_DATABASE_URL
+  || 'postgresql://progena:progena@127.0.0.1:15433/progena';
 const RUN = Date.now().toString(36).slice(-5);
 // Research topics. `keyPage` names the page the answerer should cite;
 // `keyFact` must appear in that page and the answer.
@@ -57,7 +57,7 @@ const quote = (value) => `'${value.replaceAll("'", "''")}'`;
 
 function storedPaths() {
   const out = sql(`SELECT key FROM store
-    WHERE prefix = 'progenitor.state' AND key LIKE ${quote(`knowledge:${BASE_ID}/%`)} ORDER BY key`);
+    WHERE prefix = 'progena.state' AND key LIKE ${quote(`knowledge:${BASE_ID}/%`)} ORDER BY key`);
   return out ? out.split('\n').map((key) => key.slice(`knowledge:${BASE_ID}/`.length)) : [];
 }
 const conceptPaths = () => storedPaths()
@@ -65,7 +65,7 @@ const conceptPaths = () => storedPaths()
 
 function agentManifest(name) {
   return sql(`SELECT value->'payload'->>'content' FROM store
-    WHERE prefix = 'progenitor.state' AND key = ${quote(`agent:user/${name}/SYSTEM.md`)}`);
+    WHERE prefix = 'progena.state' AND key = ${quote(`agent:user/${name}/SYSTEM.md`)}`);
 }
 
 async function poll(fn, message, timeout = 300_000) {
@@ -96,18 +96,18 @@ async function openKnowledgeBase(page) {
 
 test.afterAll(() => {
   if (process.env.KEEP_KNOWLEDGE_E2E) return;
-  sql(`DELETE FROM store WHERE prefix = 'progenitor.state' AND (key LIKE ${quote(`knowledge:${BASE_ID}/%`)}
+  sql(`DELETE FROM store WHERE prefix = 'progena.state' AND (key LIKE ${quote(`knowledge:${BASE_ID}/%`)}
     OR key IN (${quote(`agent:user/${RESEARCHER}/SYSTEM.md`)}, ${quote(`agent:user/${ANSWERER}/SYSTEM.md`)}))`);
   sql(`UPDATE store SET value = jsonb_set(value, '{payload,bases}', coalesce((
       SELECT jsonb_agg(base) FROM jsonb_array_elements(value->'payload'->'bases') base
       WHERE base->>'id' <> ${quote(BASE_ID)}), '[]'::jsonb))
-    WHERE prefix = 'progenitor.state' AND key = 'knowledge'`);
+    WHERE prefix = 'progena.state' AND key = 'knowledge'`);
 });
 
 test('research agent fills a knowledge base from the web and a second agent answers from it', async ({ page }, testInfo) => {
   const evidence = { run: RUN, baseId: BASE_ID };
 
-  await test.step('Progenitor registers the Jina web MCP server', async () => {
+  await test.step('Progena registers the Jina web MCP server', async () => {
     const existing = sql(`SELECT value->'payload'->'mcpServers' ? 'jina' FROM store WHERE key = 'mcp'`);
     if (existing !== 't') {
       await chat(page, 'Add the Jina MCP server named "jina": url https://mcp.jina.ai/v1?include_tags=search,read, '
@@ -122,7 +122,7 @@ test('research agent fills a knowledge base from the web and a second agent answ
     evidence.mcp = 'jina';
   });
 
-  await test.step('Progenitor creates the knowledge base and a researcher agent', async () => {
+  await test.step('Progena creates the knowledge base and a researcher agent', async () => {
     await chat(page, `Create a knowledge base named "${BASE_NAME}" (its id will be ${BASE_ID}) with the description `
       + `"Research notes on ${TOPIC.subject}". Then create a user object agent named ${RESEARCHER} (description "Researches topics `
       + 'on the web and writes knowledge pages") that can use the Jina web search and read tools and has knowledge '
@@ -211,7 +211,7 @@ test('research agent fills a knowledge base from the web and a second agent answ
     await expect(index.locator(`a[data-page="${retired}"]`)).toHaveCount(1);
     sql(`UPDATE store SET value = jsonb_set(value, '{payload,content}', to_jsonb(regexp_replace(
         value->'payload'->>'content', '^---\\n', E'---\\nstatus: deprecated\\n')))
-      WHERE prefix = 'progenitor.state' AND key = ${quote(`knowledge:${BASE_ID}/${retired}`)}`);
+      WHERE prefix = 'progena.state' AND key = ${quote(`knowledge:${BASE_ID}/${retired}`)}`);
     await expect(index.locator(`a[data-page="${retired}"]`)).toHaveCount(0, { timeout: 30_000 });
     await page.goto(page.url().split('?')[0]);
     await expect(index.locator(`a[data-page="${keyPath}"]`)).toHaveCount(keyPath.includes('/') ? 0 : 1);

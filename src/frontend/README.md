@@ -1,6 +1,6 @@
-# Progenitor Chat UI (React)
+# Progena AI Chat UI (React)
 
-A modern React-based chat interface for the Progenitor AI agent system.
+A modern React-based chat interface for the Progena AI agent system.
 
 ## Features
 
@@ -172,7 +172,7 @@ environment defaults. Only supported public fields are sent to the browser.
 The canonical stream also keeps routine profile selectors current. On a remote
 change, an open draft is retained and must be restarted or cancelled before
 saving. Offline edits cannot be submitted; reconnect refreshes the catalogue.
-Progenitor can add, edit, or remove entries by writing its agent-writable
+Progena can add, edit, or remove entries by writing its agent-writable
 `/config/profiles.json` virtual file; those Postgres writes update the page live.
 
 Browser generation uses `/api/ui/responses`. The backend-to-runtime `/v1/responses`
@@ -184,7 +184,7 @@ and `/v1/events` protocols are internal and are not frontend APIs.
 
 Use the VS Code tasks to run the full stack:
 
-- **Start All (dev)**: Runs progenitor agent, backend, and frontend (dev mode)
-- **Start All (prod)**: Runs progenitor agent, backend, and frontend (prod mode)
+- **Start All (dev)**: Runs progena agent, backend, and frontend (dev mode)
+- **Start All (prod)**: Runs progena agent, backend, and frontend (prod mode)
 - **Start frontend (dev)**: Just the frontend in dev mode
 - **Start frontend (prod)**: Frontend build + preview

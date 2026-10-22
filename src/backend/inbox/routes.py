@@ -2,7 +2,7 @@
 
 Inbox messages are written by the runtime agent as ``/inbox/<id>.md`` virtual
 files and persist as individual ``inbox_message:<id>`` rows under the
-``progenitor.state`` prefix. The backend reads those rows directly and owns the
+``progena.state`` prefix. The backend reads those rows directly and owns the
 user-side mutations (mark read/unread, delete), which is safe because the
 runtime always reads these documents through the store, never a cache.
 """
@@ -21,8 +21,8 @@ import src.backend.http.contracts as http_contracts
 import src.backend.storage.documents as storage_documents
 from src.backend.http.requests import BroadcastUiEvent
 from src.backend.http.requests import request_correlation_id as _request_correlation_id
-from src.backend.storage.documents import PROGENITOR_STATE_PREFIX, BackendDocumentStore
-from src.progenitor.documents.kinds import INBOX_MESSAGE_KEY_PREFIX
+from src.backend.storage.documents import PROGENA_STATE_PREFIX, BackendDocumentStore
+from src.progena.documents.kinds import INBOX_MESSAGE_KEY_PREFIX
 
 
 class InboxMessage(BaseModel):
@@ -85,7 +85,7 @@ def list_inbox_messages(store: BackendDocumentStore) -> list[InboxMessage]:
     """Load all inbox messages from the store, newest first."""
     messages = [
         message
-        for key, document in store.list_documents(PROGENITOR_STATE_PREFIX, INBOX_MESSAGE_KEY_PREFIX)
+        for key, document in store.list_documents(PROGENA_STATE_PREFIX, INBOX_MESSAGE_KEY_PREFIX)
         if (message := _normalize_message(key, document.payload)) is not None
     ]
     messages.sort(key=lambda message: message.created_at or "", reverse=True)
@@ -127,7 +127,7 @@ def create_inbox_router(
         )
 
     def load_message(store: BackendDocumentStore, message_id: str) -> dict[str, Any]:
-        document = store.get_document(PROGENITOR_STATE_PREFIX, _message_key(message_id), None)
+        document = store.get_document(PROGENA_STATE_PREFIX, _message_key(message_id), None)
         if document is None or not isinstance(document.payload, dict):
             raise HTTPException(status_code=404, detail="Inbox message not found")
         return document.payload
@@ -151,7 +151,7 @@ def create_inbox_router(
             # load_message already confirmed payload is a dict keyed by this
             # message_id, so normalization only fails here on data corruption.
             raise HTTPException(status_code=500, detail="Inbox message could not be loaded")
-        store.save_document(PROGENITOR_STATE_PREFIX, _message_key(message_id), payload)
+        store.save_document(PROGENA_STATE_PREFIX, _message_key(message_id), payload)
         broadcast_ui_event(
             "inbox.message.upserted",
             {"message": message.model_dump()},
@@ -249,7 +249,7 @@ def create_inbox_router(
         request_id = _request_correlation_id(request, x_request_id)
         store = get_document_store()
         load_message(store, message_id)
-        store.delete_document(PROGENITOR_STATE_PREFIX, _message_key(message_id))
+        store.delete_document(PROGENA_STATE_PREFIX, _message_key(message_id))
         broadcast_ui_event(
             "inbox.message.deleted",
             {"message_id": message_id},

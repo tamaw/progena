@@ -18,8 +18,8 @@ import src.backend.schedules.models as schedules_models
 import src.backend.storage.access as storage_access
 import src.backend.storage.documents as storage_documents
 import src.backend.tasks.models as tasks_models
-from src.progenitor.documents.kinds import KANBAN_CARD_KEY_PREFIX, KANBAN_TASK_CONTENT_KEY_PREFIX
-from src.progenitor.utils import utcnow
+from src.progena.documents.kinds import KANBAN_CARD_KEY_PREFIX, KANBAN_TASK_CONTENT_KEY_PREFIX
+from src.progena.utils import utcnow
 
 logger = logging.getLogger(__name__)
 
@@ -141,7 +141,7 @@ def _kanban_card_schema(columns: list[dict]) -> tasks_models.KanbanCardSchemaRes
 def _kanban_default_board() -> dict:
     """Return a default kanban board payload."""
     return {
-        "id": "progenitor-kanban",
+        "id": "progena-kanban",
         "title": "Delivery Kanban",
         "updated_at": utcnow().isoformat(),
         "columns": _kanban_default_columns(),
@@ -454,7 +454,7 @@ def _read_task_content(
     updated_at: str | None = None
     content: str | None = None
     document = store.get_document(
-        storage_documents.PROGENITOR_STATE_PREFIX,
+        storage_documents.PROGENA_STATE_PREFIX,
         _task_content_store_key(card_id),
         None,
     )
@@ -507,7 +507,7 @@ def _read_task_activity_entries(
     """Read persisted task activity entries."""
     store = storage_access._require_document_store(state_reader)
     document = store.get_document(
-        storage_documents.PROGENITOR_STATE_PREFIX,
+        storage_documents.PROGENA_STATE_PREFIX,
         _task_activity_store_key(card_id),
         [],
     )
@@ -524,7 +524,7 @@ def _write_task_activity_entries(
     store = storage_access._require_document_store(state_reader)
     normalized = _normalize_task_activity_entries(entries, card_id)
     store.save_document(
-        storage_documents.PROGENITOR_STATE_PREFIX,
+        storage_documents.PROGENA_STATE_PREFIX,
         _task_activity_store_key(card_id),
         normalized,
     )
@@ -579,12 +579,12 @@ def _write_task_content(
     store = storage_access._require_document_store(state_reader)
     normalized = content.rstrip()
     store.save_document(
-        storage_documents.PROGENITOR_STATE_PREFIX,
+        storage_documents.PROGENA_STATE_PREFIX,
         _task_content_store_key(card_id),
         {"content": normalized},
     )
     document = store.get_document(
-        storage_documents.PROGENITOR_STATE_PREFIX,
+        storage_documents.PROGENA_STATE_PREFIX,
         _task_content_store_key(card_id),
         None,
     )
@@ -638,7 +638,7 @@ def _kanban_board_response(
 def _read_kanban_card_doc(store: Any, card_id: str) -> dict | None:
     """Read one persisted card document (the ``kanban_card:<id>`` row)."""
     document = store.get_document(
-        storage_documents.PROGENITOR_STATE_PREFIX,
+        storage_documents.PROGENA_STATE_PREFIX,
         _kanban_card_store_key(card_id),
         None,
     )
@@ -662,7 +662,7 @@ def _migrate_inline_cards(store: Any, structure: dict, inline_cards: list) -> li
         if not card_id or card_id in card_order:
             continue
         store.save_document(
-            storage_documents.PROGENITOR_STATE_PREFIX,
+            storage_documents.PROGENA_STATE_PREFIX,
             _kanban_card_store_key(card_id),
             card,
         )
@@ -670,7 +670,7 @@ def _migrate_inline_cards(store: Any, structure: dict, inline_cards: list) -> li
     structure["card_order"] = card_order
     structure.pop("cards", None)
     store.save_document(
-        storage_documents.PROGENITOR_STATE_PREFIX, _kanban_board_store_key(), structure
+        storage_documents.PROGENA_STATE_PREFIX, _kanban_board_store_key(), structure
     )
     return card_order
 
@@ -679,14 +679,14 @@ def _read_kanban_board(state_reader: monitoring_state.StateReader) -> dict:
     """Assemble the kanban board from its structure + per-card documents.
 
     The board structure (columns + ``card_order``) is one document under the
-    shared ``("progenitor", "state")`` namespace; each card is its own
+    shared ``("progena", "state")`` namespace; each card is its own
     ``kanban_card:<id>`` document so the runtime agent edits one task per file
     and writes touch a single row. On first read we seed an empty board, and we
     transparently migrate any legacy inline-``cards`` board into per-card rows.
     """
     store = storage_access._require_document_store(state_reader)
     document = store.get_document(
-        storage_documents.PROGENITOR_STATE_PREFIX,
+        storage_documents.PROGENA_STATE_PREFIX,
         _kanban_board_store_key(),
         None,
     )
@@ -695,7 +695,7 @@ def _read_kanban_board(state_reader: monitoring_state.StateReader) -> dict:
         structure = {k: v for k, v in normalized.items() if k != "cards"}
         structure["card_order"] = []
         store.save_document(
-            storage_documents.PROGENITOR_STATE_PREFIX, _kanban_board_store_key(), structure
+            storage_documents.PROGENA_STATE_PREFIX, _kanban_board_store_key(), structure
         )
         return normalized
 
@@ -731,7 +731,7 @@ def _write_kanban_board(state_reader: monitoring_state.StateReader, board: dict)
     cards = normalized.get("cards", [])
 
     previous = store.get_document(
-        storage_documents.PROGENITOR_STATE_PREFIX, _kanban_board_store_key(), None
+        storage_documents.PROGENA_STATE_PREFIX, _kanban_board_store_key(), None
     )
     previous_order = []
     if previous is not None and isinstance(previous.payload, dict):
@@ -748,19 +748,19 @@ def _write_kanban_board(state_reader: monitoring_state.StateReader, board: dict)
         existing = _read_kanban_card_doc(store, card_id)
         if existing != card:
             store.save_document(
-                storage_documents.PROGENITOR_STATE_PREFIX, _kanban_card_store_key(card_id), card
+                storage_documents.PROGENA_STATE_PREFIX, _kanban_card_store_key(card_id), card
             )
 
     for stale_id in previous_order:
         if stale_id not in card_order:
             store.delete_document(
-                storage_documents.PROGENITOR_STATE_PREFIX, _kanban_card_store_key(stale_id)
+                storage_documents.PROGENA_STATE_PREFIX, _kanban_card_store_key(stale_id)
             )
 
     structure = {k: v for k, v in normalized.items() if k != "cards"}
     structure["card_order"] = card_order
     store.save_document(
-        storage_documents.PROGENITOR_STATE_PREFIX, _kanban_board_store_key(), structure
+        storage_documents.PROGENA_STATE_PREFIX, _kanban_board_store_key(), structure
     )
     return normalized
 
@@ -802,7 +802,7 @@ def _apply_kanban_card_order_event(event: storage_documents.DocumentEvent) -> No
     card_id = event.key[len(_KANBAN_CARD_KEY_PREFIX) :]
     store = storage_documents.get_default_document_store()
     board = store.get_document(
-        storage_documents.PROGENITOR_STATE_PREFIX, _kanban_board_store_key(), None
+        storage_documents.PROGENA_STATE_PREFIX, _kanban_board_store_key(), None
     )
     order = board.payload.get("card_order") if board and isinstance(board.payload, dict) else None
     listed = isinstance(order, list) and card_id in order
@@ -827,7 +827,7 @@ def _apply_kanban_card_order_event(event: storage_documents.DocumentEvent) -> No
     )
     with origin:
         store.mutate_document(
-            storage_documents.PROGENITOR_STATE_PREFIX, _kanban_board_store_key(), update
+            storage_documents.PROGENA_STATE_PREFIX, _kanban_board_store_key(), update
         )
 
 

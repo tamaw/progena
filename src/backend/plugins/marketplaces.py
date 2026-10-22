@@ -1,13 +1,13 @@
 """Backend access to the ``marketplaces`` state document.
 
 Registered marketplace sources live in the ``marketplaces`` document under the
-``progenitor.state`` namespace -- the same shared Postgres ``store`` table
-Progenitor's own runtime reads and writes, and the same document the agent can
+``progena.state`` namespace -- the same shared Postgres ``store`` table
+Progena's own runtime reads and writes, and the same document the agent can
 edit directly at ``/config/marketplaces.json`` (see
-``src/progenitor/agent/filesystem/``). The backend reads/writes it with
+``src/progena/agent/filesystem/``). The backend reads/writes it with
 straight SQL through ``PostgresDocumentStore``, no RPC to the runtime process
 needed; the existing LISTEN/NOTIFY trigger on the ``store`` table (scoped to
-``progenitor.state``/``backend.state`` prefixes) pushes the change back to the
+``progena.state``/``backend.state`` prefixes) pushes the change back to the
 UI stream the same way it already does for ``plugins``/``mcp``.
 """
 
@@ -16,8 +16,8 @@ from __future__ import annotations
 import time
 from typing import Any
 
-from src.backend.storage.documents import PROGENITOR_STATE_PREFIX, get_default_document_store
-from src.progenitor.config import default_marketplaces_config_payload
+from src.backend.storage.documents import PROGENA_STATE_PREFIX, get_default_document_store
+from src.progena.config import default_marketplaces_config_payload
 
 MARKETPLACES_DOC_KEY = "marketplaces"
 _CATALOG_CACHE: dict[str, tuple[float, Any]] = {}
@@ -28,7 +28,7 @@ def load_marketplaces() -> dict[str, Any]:
     """Return the marketplaces document from the document store."""
     default = default_marketplaces_config_payload()
     document = get_default_document_store().get_document(
-        PROGENITOR_STATE_PREFIX, MARKETPLACES_DOC_KEY, default
+        PROGENA_STATE_PREFIX, MARKETPLACES_DOC_KEY, default
     )
     payload = document.payload if document is not None else default
     return payload if isinstance(payload, dict) else default
@@ -37,9 +37,7 @@ def load_marketplaces() -> dict[str, Any]:
 def save_marketplaces(marketplaces: dict[str, Any]) -> dict[str, Any]:
     """Persist the marketplaces document and return it."""
     payload = {"marketplaces": marketplaces}
-    get_default_document_store().save_document(
-        PROGENITOR_STATE_PREFIX, MARKETPLACES_DOC_KEY, payload
-    )
+    get_default_document_store().save_document(PROGENA_STATE_PREFIX, MARKETPLACES_DOC_KEY, payload)
     return payload
 
 

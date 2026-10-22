@@ -14,7 +14,7 @@ function hostFromLocation() {
 
 function resetForNewWorkspace() {
   clearWorkspaceScopedCaches();
-  window.dispatchEvent(new CustomEvent('progenitor:workspace-switched'));
+  window.dispatchEvent(new CustomEvent('progena:workspace-switched'));
   store.dispatch(workspaceSwitched());
 }
 

@@ -85,7 +85,7 @@ export default function DesignLibraryPage() {
   const tokenCards = useMemo(() => THEME_TOKENS.map((name) => ({ name, value: tokens[name] || '—' })), [tokens]);
 
   return (
-    <section className="design-library" aria-label="Progenitor design library">
+    <section className="design-library" aria-label="Progena AI design library">
       <div className="dl-page">
         <nav className="dl-index" aria-label="Catalogue sections">
           <a href="#library-foundations">Foundations</a>
@@ -126,9 +126,9 @@ export default function DesignLibraryPage() {
                 <p className="dl-type-sample__mono">JetBrains Mono is used for paths, metadata, and code.</p>
                 <p className="dl-type-sample__hand">Shantell Sans appears in the chat writing block.</p>
               </div>
-              <div className="dl-brand-gallery" aria-label="Current Progenitor branding and navigation icons">
+              <div className="dl-brand-gallery" aria-label="Current Progena AI branding and navigation icons">
                 <span className="app-shell__brand-mark" aria-hidden="true">🧬</span>
-                <strong className="app-shell__brand-name">Progenitor</strong>
+                <strong className="app-shell__brand-name">Progena<span className="app-shell__brand-ai">AI</span></strong>
                 <span className="dl-icon-gallery" aria-label="Navigation icon samples">
                   <DashboardNavIcon /><InboxNavIcon /><RoutinesNavIcon />
                 </span>

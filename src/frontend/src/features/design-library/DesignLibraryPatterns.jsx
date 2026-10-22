@@ -1,4 +1,5 @@
 import { useCallback, useMemo, useState } from 'react';
+import { useSelector } from 'react-redux';
 import PopupModal from '../../components/PopupModal';
 import JsonCodeEditor from '../../components/JsonCodeEditor';
 import MarkdownContent from '../../components/MarkdownContent';
@@ -23,6 +24,7 @@ import DetailHeader, {
 } from '../../components/layout/DetailHeader';
 import StatusPill from '../chat/components/StatusPill';
 import { useNotifications } from '../../context/NotificationContext';
+import { selectAgentName } from '../settings/state/preferences';
 import { renderMarkdownToHtml } from '../../lib/markdown';
 import './DesignLibraryPatterns.css';
 
@@ -253,6 +255,7 @@ function FeedbackPatterns() {
 }
 
 function DataPatterns() {
+  const agentName = useSelector(selectAgentName);
   const [jsonDraft, setJsonDraft] = useState('{\n  "workflow": "Cloud review",\n  "approval": true,\n  "agents": ["researcher", "reviewer"]\n}');
   return (
     <section id="library-data" className="dlp-section" aria-labelledby="library-data-title">
@@ -295,7 +298,7 @@ function DataPatterns() {
           <article className="message-wrapper assistant msg msg--assistant entry entry--assistant">
             <div className="entry__gutter" aria-hidden="true"><span className="entry__badge entry__badge--assistant">P</span></div>
             <div className="entry__main msg__entry-main">
-              <div className="msg__head entry__head"><span className="entry__tag entry__tag--assistant">agent</span><span className="msg__role">Progenitor</span></div>
+              <div className="msg__head entry__head"><span className="entry__tag entry__tag--assistant">agent</span><span className="msg__role">{agentName}</span></div>
               <div className="message assistant"><div className="message-content" dangerouslySetInnerHTML={{ __html: CHAT_HTML }} /></div>
             </div>
           </article>

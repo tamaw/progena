@@ -1,8 +1,11 @@
+import { useSelector } from 'react-redux';
+import { selectAgentName } from '../settings/state/preferences';
+
 import StructuredDocumentBody from '../../components/StructuredDocumentBody';
 
 function openAgent(message, instruction, { draft = false, inline = false, clientId = null } = {}) {
   const prompt = `For the inbox file /inbox/${message.id}.md: ${instruction}`;
-  window.dispatchEvent(new CustomEvent('progenitor:open-quick-chat', {
+  window.dispatchEvent(new CustomEvent('progena:open-quick-chat', {
     detail: {
       mode: 'inbox-edit',
       subtitle: message.title || message.id,
@@ -14,10 +17,12 @@ function openAgent(message, instruction, { draft = false, inline = false, client
 }
 
 export default function StructuredInboxBody({ message }) {
+  const agentName = useSelector(selectAgentName);
   return (
     <StructuredDocumentBody
       content={message.body || ''}
       onAskAgent={(instruction, options) => openAgent(message, instruction, options)}
+      agentName={agentName}
       onAnswerQuestion={({ question, choice, content }) => {
         const block = content.slice(question.start, question.end);
         const id = question.attributes?.id;

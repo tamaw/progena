@@ -11,6 +11,7 @@ import { routineNodeSchemas } from '../models/nodePalette';
 import { buildQueryInputSchema } from '../models/querySchema';
 import { cloneValue } from '../models/values';
 import { formatTemplatePatch, promptTemplatePatch, instructionPatch } from '../models/templates';
+import { selectAgentName } from '../../settings/state/preferences';
 
 // Remounted per-node via `key={node.id}` on WorkflowNodeOptionsModal, so
 // lazy initial state is sufficient -- no effect-driven resync needed.
@@ -49,6 +50,7 @@ export function WorkflowNodeOptionsModal({ node, onChange, onClose }) {
   const instructionPath = node.data?.instruction || '';
   const loadedInstruction = useSelector((state) => selectInstruction(state, instructionPath));
   const instructionRequest = useSelector((state) => selectInstructionContentRequest(state, instructionPath));
+  const agentName = useSelector(selectAgentName);
 
   // Fetch the selected document once, then derive its input ports once per
   // loaded text: `onChange` is a fresh function every render and the graph
@@ -539,7 +541,7 @@ export function WorkflowNodeOptionsModal({ node, onChange, onClose }) {
                 <Select
                   value={node.data?.subagent || ''}
                   onChange={(val) => onChange(node.id, { subagent: val || null })}
-                  options={[{ value: '', label: 'Progenitor' }, ...subagentOptions]}
+                  options={[{ value: '', label: agentName }, ...subagentOptions]}
                   ariaLabel="Subagent"
                 />
               </label>
@@ -593,7 +595,7 @@ export function WorkflowNodeOptionsModal({ node, onChange, onClose }) {
                   <Select
                     value={node.data?.approver || 'any'}
                     onChange={(approver) => onChange(node.id, { approver })}
-                    options={[{ value: 'any', label: 'A person or Progenitor' }, { value: 'human', label: 'Only a person' }]}
+                    options={[{ value: 'any', label: `A person or ${agentName}` }, { value: 'human', label: 'Only a person' }]}
                     ariaLabel="Who can decide"
                   />
                 </label>

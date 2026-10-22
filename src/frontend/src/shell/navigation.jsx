@@ -2,7 +2,7 @@ import { localDesignLibraryEnabled } from '../lib/localDesignLibrary';
 import { AgentsNavIcon, InstructionsNavIcon, ChannelsNavIcon, ChatNavIcon, InboxNavIcon, DashboardNavIcon, InsightsIcon, KnowledgeNavIcon, CanvasesNavIcon, RepositoriesNavIcon, SchedulesNavIcon, RoutinesNavIcon, PluginsNavIcon, ProfilesNavIcon, TasksNavIcon, ToolsNavIcon, WorkspaceNavIcon } from '../components/navIcons';
 
 // Grouped by owner/level (see the entity-relationship model):
-//   Operate  — the surfaces you work in (Progenitor chat, overview, projects)
+//   Operate  — the surfaces you work in (Progena chat, overview, projects)
 //   Automate — runtime: triggers, schedules, I/O, work in flight
 //   Delegate — agents and the reusable building blocks they're composed of
 // Sessions and Logs are intentionally dropped from the rail (still routable).

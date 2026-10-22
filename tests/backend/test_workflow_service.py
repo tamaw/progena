@@ -11,7 +11,7 @@ from src.backend.workflows.service import (
     get_workflow_run,
     save_workflow_definition,
 )
-from src.progenitor.workflows.documents import default_workflow_definition
+from src.progena.workflows.documents import default_workflow_definition
 
 
 async def _wait_for(predicate, timeout=2.0):
@@ -600,12 +600,12 @@ async def test_format_node_renders_nested_and_non_string_values_without_a_runner
 
 def test_query_filter_tells_json_true_from_1():
     from src.backend.workflows.service import _execute_document_node
-    from src.progenitor.workflows.models import WorkflowNodeDocumentQuery
+    from src.progena.workflows.models import WorkflowNodeDocumentQuery
 
     store = InMemoryDocumentStore()
     seed_document_types(store)
-    store.save_document("progenitor.state", "kanban_card:yes", {"metadata": {"ready": True}})
-    store.save_document("progenitor.state", "kanban_card:one", {"metadata": {"ready": 1}})
+    store.save_document("progena.state", "kanban_card:yes", {"metadata": {"ready": True}})
+    store.save_document("progena.state", "kanban_card:one", {"metadata": {"ready": 1}})
     node = WorkflowNodeDocumentQuery.model_validate(
         {
             "kind": "document_query",

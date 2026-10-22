@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { writeFileSync } from 'node:fs';
 import { observeRoutineEvents, removeRoutine } from '../helpers/routineFixture.mjs';
 
-const databaseUrl = process.env.PROGENITOR_DATABASE_URL || 'postgresql://progenitor:progenitor@127.0.0.1:15433/progenitor';
+const databaseUrl = process.env.PROGENA_DATABASE_URL || 'postgresql://progena:progena@127.0.0.1:15433/progena';
 const projectRoot = fileURLToPath(new URL('../../../', import.meta.url));
 const evidenceScript = fileURLToPath(new URL('../helpers/routineToolEvidence.py', import.meta.url));
 
@@ -88,7 +88,7 @@ test('19 quick-chat routines survive rapid switching, SSE reconnect, and sequent
   // the edit is actually persisted and the assistant turn completes.
   await expect.poll(() => {
     const raw = execFileSync('psql', [databaseUrl, '-Atc',
-      `SELECT value->'payload'->'nodes' FROM store WHERE prefix='progenitor.state' AND key='routine:${second.id.replaceAll("'", "''")}'`], { encoding: 'utf8' });
+      `SELECT value->'payload'->'nodes' FROM store WHERE prefix='progena.state' AND key='routine:${second.id.replaceAll("'", "''")}'`], { encoding: 'utf8' });
     return JSON.parse(raw.trim())[0].config.expression;
   }, { timeout: 180_000, intervals: [1_000] }).toBe('39');
   await expect(page.getByRole('button', { name: 'New chat', exact: true })).toBeEnabled({ timeout: 180_000 });

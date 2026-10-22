@@ -14,7 +14,7 @@ import src.backend.integrations.subprocess as integrations_subprocess
 import src.backend.integrations.telegram as integrations_telegram
 import src.backend.lifecycle.state as lifecycle_state
 import src.backend.storage.documents as storage_documents
-from src.progenitor.documents.kinds import SESSION_KEY_PREFIX
+from src.progena.documents.kinds import SESSION_KEY_PREFIX
 
 logger = logging.getLogger(__name__)
 
@@ -33,19 +33,19 @@ def _telegram_conversation_id(chat_id: Any, message_thread_id: Any = None) -> st
 
 async def _send_telegram_connected_message(
     telegram: integrations_telegram.TelegramClient,
-    progenitor: integrations_subprocess.ProgenitorClient | integrations_runtime.SSEProgenitorClient,
+    progena: integrations_subprocess.ProgenaClient | integrations_runtime.SSEProgenaClient,
     document_store: storage_documents.BackendDocumentStore,
 ) -> None:
     """Trigger an agent-generated greeting the first time Telegram connects.
 
-    This routes through the same backend -> Progenitor SSE request/response
+    This routes through the same backend -> Progena SSE request/response
     path as a normal user message, but is auto-invoked on connection. A chat
     that already has a session document has been greeted, so restarts stay quiet.
     """
     conversation_id = _telegram_conversation_id(telegram.config.chat_id)
     session = await asyncio.to_thread(
         document_store.get_document,
-        storage_documents.PROGENITOR_STATE_PREFIX,
+        storage_documents.PROGENA_STATE_PREFIX,
         f"{SESSION_KEY_PREFIX}{conversation_id}",
     )
     if session is not None:
@@ -60,10 +60,10 @@ async def _send_telegram_connected_message(
 
     try:
         # Ensure the client is started/connected (we normally lazy-start).
-        if not progenitor.is_running:
-            await progenitor.start()
+        if not progena.is_running:
+            await progena.start()
         response_text = (
-            await progenitor.send_message(
+            await progena.send_message(
                 prompt,
                 request_id=request_id,
                 metadata={"thread_id": conversation_id, "source": lifecycle_state.SOURCE_TELEGRAM},
@@ -81,7 +81,7 @@ async def _send_telegram_connected_message(
         # Fallback should signal failure (if the agent path failed, we're not fully connected).
         try:
             sent = await telegram.send_message(
-                "⚠️ Progenitor failed to connect to the agent. "
+                "⚠️ Progena failed to connect to the agent. "
                 "I can't respond yet — please check the backend/agent logs and try again."
             )
             if not sent:
@@ -112,7 +112,7 @@ async def _send_telegram_message(
 
 async def _handle_telegram_agent_message(
     telegram: integrations_telegram.TelegramClient,
-    progenitor: integrations_subprocess.ProgenitorClient | integrations_runtime.SSEProgenitorClient,
+    progena: integrations_subprocess.ProgenaClient | integrations_runtime.SSEProgenaClient,
     chat_id: str,
     message: str,
     metadata: dict[str, Any],
@@ -128,16 +128,16 @@ async def _handle_telegram_agent_message(
                 message[:50] + "..." if len(message) > 50 else message,
             )
 
-            if not progenitor.is_running:
+            if not progena.is_running:
                 logger.info("SSE client not running, starting...")
-                await progenitor.start()
+                await progena.start()
 
             request_id = f"telegram-{chat_id}-{uuid.uuid4().hex[:8]}"
             conversation_id = _telegram_conversation_id(chat_id, metadata.get("message_thread_id"))
             streamed_chars = await telegram.stream_agent_response_to_chat(
                 chat_id,
                 chat_responses._stream_text_chunks(
-                    progenitor.send_message_stream_events(
+                    progena.send_message_stream_events(
                         message,
                         request_id=request_id,
                         metadata={
@@ -171,7 +171,7 @@ async def _handle_telegram_agent_message(
             logger.warning("Connection error on attempt %d: %s", attempt + 1, e)
             if attempt < max_retries:
                 with suppress(Exception):
-                    await progenitor.stop()
+                    await progena.stop()
                 await asyncio.sleep(1)
                 continue
             logger.error("Failed after %d attempts: %s", max_retries + 1, e)

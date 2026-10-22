@@ -32,6 +32,10 @@ vi.mock('react', async (importOriginal) => {
   };
 });
 
+vi.mock('react-redux', () => ({
+  useSelector: (selector) => selector({ uiData: { preferences: { agentName: 'Progena' } } }),
+}));
+
 vi.mock("@frontend/lib/safeMarkdown", () => ({
   formatMessage: content => content,
   renderSafeMarkdown: content => content,

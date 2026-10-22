@@ -10,20 +10,20 @@ const WORKSPACE_SCOPED_KEYS = [
   ARCHIVED_CHAT_SESSIONS_KEY,
   PINNED_CHAT_SESSIONS_KEY,
   SOLUTIONS_STORAGE_KEY,
-  'progenitor_chat_history',
-  'progenitor_quick_chat_handoff',
-  'progenitor_input_history',
-  'progenitor_stream_filters',
+  'progena_chat_history',
+  'progena_quick_chat_handoff',
+  'progena_input_history',
+  'progena_stream_filters',
 ];
 
 // Preferences that must survive a workspace switch -- they describe the
 // browser/UI, not data belonging to a particular backend.
 const PRESERVED_KEYS = [
-  'progenitor_theme',
-  'progenitor_notifications',
-  'progenitor_sounds',
-  'progenitor_sidebar_collapsed',
-  'progenitor_workspaces',
+  'progena_theme',
+  'progena_notifications',
+  'progena_sounds',
+  'progena_sidebar_collapsed',
+  'progena_workspaces',
 ];
 
 beforeEach(() => {

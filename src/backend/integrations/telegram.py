@@ -1,5 +1,5 @@
 """
-Telegram Bot API Client for Progenitor Backend.
+Telegram Bot API Client for Progena Backend.
 
 Sends agent messages to Telegram when no web UI client is connected.
 Also supports receiving messages via polling for two-way chat.
@@ -459,7 +459,7 @@ class TelegramClient:
         if command == "/start":
             await self.send_message_to_chat(
                 chat_id,
-                "👋 *Welcome to Progenitor!*\n\n"
+                "👋 *Welcome to Progena AI!*\n\n"
                 "I'm your AI assistant. Send me any message and I'll respond.\n\n"
                 "*Commands:*\n"
                 "/start - Show this welcome message\n"
@@ -472,9 +472,9 @@ class TelegramClient:
         elif command == "/help":
             await self.send_message_to_chat(
                 chat_id,
-                "🤖 *Progenitor Help*\n\n"
+                "🤖 *Progena AI Help*\n\n"
                 "Just send me any message and I'll process it through the "
-                "Progenitor AI agent.\n\n"
+                "Progena AI agent.\n\n"
                 "*Tips:*\n"
                 "• Be specific in your requests\n"
                 "• I can handle multi-turn conversations\n"
@@ -612,7 +612,7 @@ class TelegramClient:
 
     def _stream_message_header(self, segment_index: int) -> str:
         """Return the header for a streamed Telegram agent response."""
-        return "🤖 Progenitor Agent:\n\n" if segment_index == 0 else ""
+        return "🤖 Progena Agent:\n\n" if segment_index == 0 else ""
 
     def _stream_segment_limit(self, segment_index: int) -> int:
         """Return the max raw content length for a streamed segment."""
@@ -1052,7 +1052,7 @@ class TelegramClient:
 
         # Format the message with a header
         # Using plain text to avoid parse issues with special characters
-        message = f"🤖 Progenitor Agent:\n\n{content}"
+        message = f"🤖 Progena Agent:\n\n{content}"
 
         return await self.send_message(message)
 

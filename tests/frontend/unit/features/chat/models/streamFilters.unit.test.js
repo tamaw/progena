@@ -174,18 +174,18 @@ describe('isEventVisible', () => {
 
 describe('loadStreamFilters', () => {
   it('defaults every category to true when nothing stored', () => {
-    const filters = loadStreamFilters('progenitor:test-filters');
+    const filters = loadStreamFilters('progena:test-filters');
     expect(Object.values(filters).every((v) => v === true)).toBe(true);
   });
   it('respects stored boolean flags and defaults the rest to true', () => {
-    localStorage.setItem('progenitor:test-filters', JSON.stringify({ tools: false }));
-    const filters = loadStreamFilters('progenitor:test-filters');
+    localStorage.setItem('progena:test-filters', JSON.stringify({ tools: false }));
+    const filters = loadStreamFilters('progena:test-filters');
     expect(filters.tools).toBe(false);
     expect(filters.reasoning).toBe(true);
   });
   it('falls back to defaults on malformed JSON', () => {
-    localStorage.setItem('progenitor:test-filters', '{bad json');
-    const filters = loadStreamFilters('progenitor:test-filters');
+    localStorage.setItem('progena:test-filters', '{bad json');
+    const filters = loadStreamFilters('progena:test-filters');
     expect(filters.tools).toBe(true);
   });
 });

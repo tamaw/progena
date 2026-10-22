@@ -14,12 +14,12 @@ import uuid
 from typing import Any
 
 from src.backend.storage.documents import (
-    PROGENITOR_STATE_PREFIX,
+    PROGENA_STATE_PREFIX,
     BackendDocumentStore,
     store_database_url,
 )
-from src.progenitor.routines.events import RUN_EVENT_PREFIX
-from src.progenitor.utils import utcnow_isoformat
+from src.progena.routines.events import RUN_EVENT_PREFIX
+from src.progena.utils import utcnow_isoformat
 
 
 def append_background_task(doc_store: BackendDocumentStore, task: dict[str, Any]) -> None:
@@ -30,10 +30,10 @@ def append_background_task(doc_store: BackendDocumentStore, task: dict[str, Any]
     """
     url = store_database_url(doc_store)
     if not url:
-        existing = doc_store.get_document(PROGENITOR_STATE_PREFIX, "background_tasks", [])
+        existing = doc_store.get_document(PROGENA_STATE_PREFIX, "background_tasks", [])
         tasks = list(existing.payload) if existing is not None else []
         tasks.append(task)
-        doc_store.save_document(PROGENITOR_STATE_PREFIX, "background_tasks", tasks)
+        doc_store.save_document(PROGENA_STATE_PREFIX, "background_tasks", tasks)
         return
 
     import psycopg
@@ -41,10 +41,10 @@ def append_background_task(doc_store: BackendDocumentStore, task: dict[str, Any]
     with psycopg.connect(url, autocommit=True) as conn:
         conn.execute("SELECT pg_advisory_lock(hashtextextended('background_tasks', 0))")
         try:
-            existing = doc_store.get_document(PROGENITOR_STATE_PREFIX, "background_tasks", [])
+            existing = doc_store.get_document(PROGENA_STATE_PREFIX, "background_tasks", [])
             tasks = list(existing.payload) if existing is not None else []
             tasks.append(task)
-            doc_store.save_document(PROGENITOR_STATE_PREFIX, "background_tasks", tasks)
+            doc_store.save_document(PROGENA_STATE_PREFIX, "background_tasks", tasks)
         finally:
             conn.execute("SELECT pg_advisory_unlock(hashtextextended('background_tasks', 0))")
 
@@ -97,6 +97,6 @@ def enqueue_routine_run(
         "timestamp": queued_at,
     }
     doc_store.save_document(
-        PROGENITOR_STATE_PREFIX, f"{RUN_EVENT_PREFIX}{request_id}:enqueued", lifecycle
+        PROGENA_STATE_PREFIX, f"{RUN_EVENT_PREFIX}{request_id}:enqueued", lifecycle
     )
     return lifecycle

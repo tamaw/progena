@@ -11,10 +11,10 @@ This records the checkpoint-first design following the user's clarification that
 ## Evidence and remaining checks
 
 - Before the Insights implementation, the top-bar panel derived values from widget indexes/cycle counts. Browser inspection confirmed unchanged usage when switching 7d to 30d. The current panel lives in `src/frontend/src/features/insights/InsightsPanel.jsx`.
-- `src/progenitor/sessions/messages.py`: usage parsing already handles provider input/output/total and separate reasoning/cache metadata.
+- `src/progena/sessions/messages.py`: usage parsing already handles provider input/output/total and separate reasoning/cache metadata.
 - `src/backend/chat/service.py`: checkpoint message projection reads provider usage; its display token count is not a full accounting metric.
-- `src/progenitor/routines/factory.py`: routine `run_meta` contains token summaries. Workflow totals also exist; neither should be added to the same underlying messages again.
-- `src/progenitor/settings/model_profiles.py:58-79`: profile resolution currently returns a model without explicitly preserving the profile name. Inspect persisted messages/run context before deciding which attribution metadata must be added.
+- `src/progena/routines/factory.py`: routine `run_meta` contains token summaries. Workflow totals also exist; neither should be added to the same underlying messages again.
+- `src/progena/settings/model_profiles.py:58-79`: profile resolution currently returns a model without explicitly preserving the profile name. Inspect persisted messages/run context before deciding which attribution metadata must be added.
 - Profile names are mutable catalog keys. Deployment can change; multiple profiles can target the same deployment. Today's deployment mapping alone is not historical proof of a profile.
 - `src/backend/settings/model_profiles.py`: public fields and PATCH fields are explicitly whitelisted, so pricing must be added to validation, public projection, mutation and the Profiles UI—not merely stored as ignored JSON.
 - UI data follows acknowledged HTTP requests and correlated SSE snapshots. Database setup uses idempotent DDL and pooled Psycopg queries.

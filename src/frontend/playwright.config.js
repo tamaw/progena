@@ -1,9 +1,9 @@
 import { defineConfig, devices } from '@playwright/test';
 
 /**
- * Playwright discovery / smoke suite for the Progenitor frontend.
+ * Playwright discovery / smoke suite for the Progena frontend.
  *
- * It runs against an ALREADY-RUNNING stack (postgres + progenitor + backend +
+ * It runs against an ALREADY-RUNNING stack (postgres + progena + backend +
  * frontend). Start them per docs/LOCAL_STARTUP.md, then:
  *
  *   npm run test:e2e

@@ -16,14 +16,14 @@ from fastapi import APIRouter, HTTPException, Request
 
 import src.backend.http.contracts as http_contracts
 from src.backend.http.requests import BroadcastUiEvent, request_correlation_id
-from src.backend.storage.documents import PROGENITOR_STATE_PREFIX, BackendDocumentStore
-from src.progenitor.settings.model_profiles import (
+from src.backend.storage.documents import PROGENA_STATE_PREFIX, BackendDocumentStore
+from src.progena.settings.model_profiles import (
     MODEL_PROFILES_DOC_KEY,
     default_model_profiles_payload,
     migrate_legacy_model_profiles_payload,
     validate_model_profiles_payload,
 )
-from src.progenitor.settings.providers import GO_RESPONSES_MODELS, ProviderRepository
+from src.progena.settings.providers import GO_RESPONSES_MODELS, ProviderRepository
 
 
 def _safe_public_profile(name: str, profile: dict[str, Any]) -> dict[str, Any]:
@@ -64,7 +64,7 @@ def _public_profiles(raw: Any) -> dict[str, Any]:
 
 
 def _build_profiles_snapshot(store: BackendDocumentStore) -> dict[str, Any]:
-    document = store.get_document(PROGENITOR_STATE_PREFIX, MODEL_PROFILES_DOC_KEY)
+    document = store.get_document(PROGENA_STATE_PREFIX, MODEL_PROFILES_DOC_KEY)
     return _public_profiles(
         document.payload if document is not None else default_model_profiles_payload()
     )
@@ -114,7 +114,7 @@ def _mutate_profile(
         _public_profiles(updated)
         return updated
 
-    store.mutate_document(PROGENITOR_STATE_PREFIX, MODEL_PROFILES_DOC_KEY, mutator)
+    store.mutate_document(PROGENA_STATE_PREFIX, MODEL_PROFILES_DOC_KEY, mutator)
 
 
 def _migrate_legacy_profiles(
@@ -123,7 +123,7 @@ def _migrate_legacy_profiles(
     """Persist legacy Azure profile references once a default Foundry exists."""
     if repository is None:
         return
-    document = store.get_document(PROGENITOR_STATE_PREFIX, MODEL_PROFILES_DOC_KEY)
+    document = store.get_document(PROGENA_STATE_PREFIX, MODEL_PROFILES_DOC_KEY)
     payload = document.payload if document is not None else None
     if not isinstance(payload, dict) or not any(
         isinstance(profile, dict) and profile.get("provider") == "azure_openai"
@@ -144,7 +144,7 @@ def _migrate_legacy_profiles(
     def migrate(current: Any) -> Any:
         return migrate_legacy_model_profiles_payload(current, foundry_id)
 
-    store.mutate_document(PROGENITOR_STATE_PREFIX, MODEL_PROFILES_DOC_KEY, migrate)
+    store.mutate_document(PROGENA_STATE_PREFIX, MODEL_PROFILES_DOC_KEY, migrate)
 
 
 def create_model_profile_router(

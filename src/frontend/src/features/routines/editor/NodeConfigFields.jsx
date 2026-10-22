@@ -13,6 +13,7 @@ import {
   isCompleteSchemaFieldText,
 } from './graphFieldHelpers';
 import { useDispatch, useSelector } from 'react-redux';
+import { selectAgentName } from '../../settings/state/preferences';
 import { fetchModelProfiles, selectModelProfiles, selectModelProfilesState } from '../../settings/state/modelProfiles';
 import { selectAgentProfiles } from '../../agents/state/agents';
 import { selectRealtimeStreamReady } from '../../../realtime/realtimeSlice';
@@ -481,10 +482,11 @@ function NumberField({ id, config, field, label, placeholder, updateNodeConfig, 
   );
 }
 
-// Kind-specific config fields, mirroring src.progenitor.routines.graph's per-kind
+// Kind-specific config fields, mirroring src.progena.routines.graph's per-kind
 // config shape (prompt_template/system_prompt, expression, rubric_prompt/
 // response_schema, agent_name + prompt_template/inputs). `noop` has no config.
 export function NodeConfigBody({ id, kind, config, updateNodeConfig, replaceNodeConfig }) {
+  const agentName = useSelector(selectAgentName);
   if (kind === 'prompt') {
     return (
       <>
@@ -559,7 +561,7 @@ export function NodeConfigBody({ id, kind, config, updateNodeConfig, replaceNode
               value={config?.approver || 'any'}
               onChange={(next) => updateNodeConfig(id, { approver: next })}
               options={[
-                { value: 'any', label: 'A person or Progenitor' },
+                { value: 'any', label: `A person or ${agentName}` },
                 { value: 'human', label: 'Only a person' },
               ]}
               ariaLabel="Who can answer"

@@ -9,6 +9,11 @@
       "description": "How the user wants to be addressed. May be empty.",
       "default": ""
     },
+    "agent_name": {
+      "type": "string",
+      "description": "The agent's display name: shown in the UI and used by instructions with an {agent_name} placeholder. One line, at most 32 characters; empty means the default 'Progena'. Display only, never an identifier.",
+      "default": "Progena"
+    },
     "timezone": {
       "type": "string",
       "description": "IANA timezone name (e.g. 'America/New_York', 'UTC'). Used to schedule tasks and display timestamps."

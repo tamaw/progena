@@ -5,6 +5,10 @@ import { Message } from '@frontend/features/chat/components/Message';
 import { normalizeStreamEvent } from '@frontend/features/chat/models/streamEventsModel';
 import MessageImageStrip from '@frontend/features/chat/components/MessageImageStrip';
 
+vi.mock('react-redux', () => ({
+  useSelector: (selector) => selector({ uiData: { preferences: { agentName: 'Progena' } } }),
+}));
+
 // Ensure React is in global scope for the component's JSX compilation
 // when the automatic JSX runtime import is not injected by vitest.
 if (typeof globalThis.React === 'undefined') {
@@ -685,7 +689,7 @@ describe('Message with timelineItems', () => {
     expect(html).toContain('permission denied');
   });
 
-  it('defaults displayAgentName to Progenitor when empty', () => {
+  it('defaults displayAgentName to Progena when empty', () => {
     const message = baseMessage({
       timelineItems: [
         {
@@ -707,7 +711,7 @@ describe('Message with timelineItems', () => {
 
     const html = renderToStaticMarkup(React.createElement(Message, { message }));
 
-    expect(html).toContain('Progenitor');
+    expect(html).toContain('Progena');
   });
 });
 

@@ -3,10 +3,11 @@ import { useSelector } from 'react-redux';
 import { useLocation } from 'react-router-dom';
 import { selectUiAlerts } from '../features/alerts/state';
 import { useTheme } from '../features/settings/useTheme';
-import { AlertsIcon, ChevronRightIcon, InsightsIcon, MoonIcon, ProgenitorAiIcon, QuickChatIcon, SearchIcon, SunIcon } from '../components/navIcons';
+import { AlertsIcon, ChevronRightIcon, InsightsIcon, MoonIcon, ProgenaAiIcon, QuickChatIcon, SearchIcon, SunIcon } from '../components/navIcons';
 import { getPageLabel } from './navigation';
 import { ChromeIconButton } from '../components/panels/PanelFrame';
 import { WorkspaceSwitcher } from './WorkspaceSwitcher';
+import { selectAgentName } from '../features/settings/state/preferences';
 
 export function Header({ activePanel, setActivePanel, onSubmitQuickChat, onOpenPanel, onOpenQuickChat, onToggleNav, quickChatInputRef }) {
   const { currentTheme, toggleTheme } = useTheme();
@@ -14,6 +15,7 @@ export function Header({ activePanel, setActivePanel, onSubmitQuickChat, onOpenP
   const unreadCount = alerts?.filter((a) => !a.viewed)?.length || 0;
   const location = useLocation();
   const pageLabel = getPageLabel(location.pathname);
+  const agentName = useSelector(selectAgentName);
 
   const openPanel = useCallback((panel) => {
     setActivePanel((current) => (current === panel ? null : panel));
@@ -32,9 +34,9 @@ export function Header({ activePanel, setActivePanel, onSubmitQuickChat, onOpenP
         </span>
         <span className="app-shell__crumb">{pageLabel}</span>
       </div>
-      <form className="app-shell__quick-chat app-shell__quick-chat--ai" onSubmit={onSubmitQuickChat} aria-label="Ask Progenitor AI">
-        <span className="app-shell__quick-chat-ai-icon" aria-hidden="true"><ProgenitorAiIcon /></span>
-        <input ref={quickChatInputRef} name="prompt" type="text" placeholder="Ask Progenitor AI" aria-label="Ask Progenitor AI" autoComplete="off" />
+      <form className="app-shell__quick-chat app-shell__quick-chat--ai" onSubmit={onSubmitQuickChat} aria-label={`Ask ${agentName}`}>
+        <span className="app-shell__quick-chat-ai-icon" aria-hidden="true"><ProgenaAiIcon /></span>
+        <input ref={quickChatInputRef} name="prompt" type="text" placeholder={`Ask ${agentName}`} aria-label={`Ask ${agentName}`} autoComplete="off" />
         <span className="app-shell__quick-chat-shortcut" aria-label="Keyboard shortcut: Control Q">
           <kbd>Ctrl</kbd><kbd>Q</kbd>
         </span>

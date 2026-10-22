@@ -1,4 +1,4 @@
-const DB_NAME = 'progenitor-canvas';
+const DB_NAME = 'progena-canvas';
 const DB_VERSION = 1;
 const STORE_NAME = 'canvas';
 const CANVAS_KEY = 'canvas';

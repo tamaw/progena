@@ -38,8 +38,7 @@ HTTP/event/storage code must not import application assembly. Importing
 
 Process clients, session management and shutdown state live in `lifecycle/state.py`;
 startup orchestration lives in `lifecycle/startup.py`. Keep blocking database work
-off the event loop. Direct checkpoint readers use `CheckpointSerializer` from
-`src/progenitor/persistence/serialization.py` so historical type identities load.
+off the event loop.
 
 ## Browser request and event contract
 

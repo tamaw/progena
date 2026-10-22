@@ -3,7 +3,7 @@
 Read `AGENTS.md` for setup, validation, current architecture and repository safety.
 Also read the guide for each component you change:
 
-- `src/progenitor/AGENTS.md` — domains, DeepAgent, persistence and runtime
+- `src/progena/AGENTS.md` — domains, DeepAgent, persistence and runtime
 - `src/backend/AGENTS.md` — feature APIs, lifecycle and browser events
 - `src/frontend/AGENTS.md` — feature UI, Redux and streaming
 

@@ -25,6 +25,7 @@ import CanvasPage from './CanvasPage';
 import {
   CANVAS_FILTERS, CANVAS_STATE_LABEL, CANVAS_STATE_TONE, filterCanvases, canvasState,
 } from './canvasesPageModel';
+import { selectAgentName } from '../settings/state/preferences';
 
 function CanvasRow({ canvas, selected, onSelect }) {
   const state = canvasState(canvas);
@@ -49,7 +50,7 @@ function CanvasRow({ canvas, selected, onSelect }) {
 }
 
 const openCanvasChat = (draft) => window.dispatchEvent(
-  new CustomEvent('progenitor:open-quick-chat', { detail: { draft } }),
+  new CustomEvent('progena:open-quick-chat', { detail: { draft } }),
 );
 
 export default function CanvasesPage() {
@@ -61,6 +62,7 @@ export default function CanvasesPage() {
   const realtime = useSelector(selectRealtime);
   const canvases = useSelector(selectCanvases);
   const state = useSelector(selectCanvasesState);
+  const agentName = useSelector(selectAgentName);
   const { collapsed, setCollapsed, paneClassName } = usePaneCollapse('tasks-list');
   const [filter, setFilter] = useState('All');
   const [query, setQuery] = useState('');
@@ -125,11 +127,11 @@ export default function CanvasesPage() {
 
       <DetailPane flush className="task-detail canvases-detail">
         {selected ? (
-          <CanvasPage key={selected.name} name={selected.name} onAskProgenitor={openCanvasChat} />
+          <CanvasPage key={selected.name} name={selected.name} onAskProgena={openCanvasChat} />
         ) : (
           <PaneEmptyState detail>
             {state.loaded && !canvases.length
-              ? 'Ask Progenitor in chat for a dashboard, diagram or game; it appears here as soon as it is written.'
+              ? `Ask ${agentName} in chat for a dashboard, diagram or game; it appears here as soon as it is written.`
               : 'Select a canvas.'}
           </PaneEmptyState>
         )}

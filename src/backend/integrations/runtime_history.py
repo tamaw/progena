@@ -2,7 +2,7 @@
 
 The backend never rebuilds agent messages from checkpoint blobs itself; it asks
 the runtime (which owns the LangGraph graph) and rebuilds LangChain messages
-from the ``progenitor.langchain_message`` vendor include.
+from the ``progena.langchain_message`` vendor include.
 """
 
 from __future__ import annotations
@@ -89,7 +89,7 @@ class RuntimeConversationReader:
             params: dict[str, Any] = {
                 "order": "asc",
                 "limit": PAGE_LIMIT,
-                "include": "progenitor.langchain_message",
+                "include": "progena.langchain_message",
             }
             if checkpoint_id:
                 params["checkpoint_id"] = checkpoint_id

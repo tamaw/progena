@@ -2,18 +2,18 @@
 # Guardrail only: absolute paths can bypass this shim; the container is the boundary.
 #
 # Read-only git for every shell agent. Agents whose manifest sets
-# git_write: true (PROGENITOR_SHIM_GIT_WRITE=1) may also run repository setup:
+# git_write: true (PROGENA_SHIM_GIT_WRITE=1) may also run repository setup:
 # clone, fetch, pull --ff-only, switch, worktree add/remove, submodule, branch
 # create, remote add/set-url. Agents that also set git_publish: true
-# (PROGENITOR_SHIM_GIT_PUBLISH=1) may push a named non-default branch, never
+# (PROGENA_SHIM_GIT_PUBLISH=1) may push a named non-default branch, never
 # forced. Commit, and anything that rewrites history or discards work, stays
 # refused for everyone.
 set -euo pipefail
 
-REAL_PATH="${PROGENITOR_SHIM_SYSTEM_PATH:-/usr/bin:/bin}"
-WRITE="${PROGENITOR_SHIM_GIT_WRITE:-}"
-PUBLISH="${PROGENITOR_SHIM_GIT_PUBLISH:-}"
-deny() { printf 'progenitor-shim: refused: %s\n' "$*" >&2; exit 2; }
+REAL_PATH="${PROGENA_SHIM_SYSTEM_PATH:-/usr/bin:/bin}"
+WRITE="${PROGENA_SHIM_GIT_WRITE:-}"
+PUBLISH="${PROGENA_SHIM_GIT_PUBLISH:-}"
+deny() { printf 'progena-shim: refused: %s\n' "$*" >&2; exit 2; }
 need_write() { [[ "$WRITE" == "1" ]] || deny "$*"; }
 need_publish() { [[ "$WRITE" == "1" && "$PUBLISH" == "1" ]] || deny "$*"; }
 

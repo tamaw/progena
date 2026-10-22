@@ -10,7 +10,7 @@ import src.backend.agents.store as agents_store
 import src.backend.events.stream as events_stream
 import src.backend.monitoring.status as monitoring_status
 import src.backend.storage.documents as storage_documents
-from src.progenitor.routines.store import ROUTINE_GRAPH_KEY_PREFIX
+from src.progena.routines.store import ROUTINE_GRAPH_KEY_PREFIX
 
 logger = logging.getLogger(__name__)
 

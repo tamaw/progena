@@ -1,8 +1,10 @@
 {
-  "name": "frontend",
+  "name": "progena",
   "private": true,
   "version": "1.0.0",
-  "description": "Progenitor Chat UI - React Application",
+  "description": "Progena AI web app. Progena AI helps technical teams coordinate cloud and software work: connect specialist agents and tools, automate workflows, and stay in control.",
+  "homepage": "https://progena.ai/",
+  "repository": "github:tamaw/progena",
   "type": "module",
   "scripts": {
     "dev": "vite src/frontend --config src/frontend/vite.config.js",

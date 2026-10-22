@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Routine Graph",
-  "description": "A declarative graph compiled by src.progenitor.routines.factory. Version 2 makes every executable node configuration and edge shape explicit; unknown fields are rejected rather than silently ignored.",
+  "description": "A declarative graph compiled by src.progena.routines.factory. Version 2 makes every executable node configuration and edge shape explicit; unknown fields are rejected rather than silently ignored.",
   "type": "object",
   "additionalProperties": false,
   "required": ["id", "name", "description", "version", "entry", "nodes", "edges"],
@@ -273,7 +273,7 @@
       "properties": {
         "message": { "type": "string", "minLength": 1 },
         "allowed_responses": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "string", "minLength": 1 } },
-        "approver": { "enum": ["human", "any"], "default": "any", "description": "Who may answer: 'human' only through the Progenitor UI, 'any' also lets Progenitor answer (resume_routine)." },
+        "approver": { "enum": ["human", "any"], "default": "any", "description": "Who may answer: 'human' only through the Progena AI app, 'any' also lets the agent answer (resume_routine)." },
         "retry": { "$ref": "#/$defs/retryPolicy" },
         "timeout": { "type": "number", "minimum": 0, "description": "Seconds before this node is abandoned, overriding the execution policy attempt timeout. 0 disables the limit." }
       }

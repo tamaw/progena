@@ -9,12 +9,12 @@ import psycopg
 import pytest
 from psycopg import sql
 
-from src.backend.storage.documents import PROGENITOR_STATE_PREFIX, PostgresDocumentStore
-from src.progenitor.canvases.contracts import canvas_file_key
+from src.backend.storage.documents import PROGENA_STATE_PREFIX, PostgresDocumentStore
+from src.progena.canvases.contracts import canvas_file_key
 
-DATABASE_URL = (os.getenv("PROGENITOR_TEST_DATABASE_URL") or "").strip() or None
+DATABASE_URL = (os.getenv("PROGENA_TEST_DATABASE_URL") or "").strip() or None
 pytestmark = pytest.mark.skipif(
-    DATABASE_URL is None, reason="requires PROGENITOR_TEST_DATABASE_URL (a scratch database)"
+    DATABASE_URL is None, reason="requires PROGENA_TEST_DATABASE_URL (a scratch database)"
 )
 
 
@@ -38,10 +38,10 @@ def store():
 def test_canvas_revision_capture_skips_unchanged_writes_and_is_immutable(store):
     value, scoped_url = store
     key = canvas_file_key("demo", "index.mjs")
-    value.save_document(PROGENITOR_STATE_PREFIX, key, {"content": "one"})
-    value.save_document(PROGENITOR_STATE_PREFIX, key, {"content": "one"})
-    value.save_document(PROGENITOR_STATE_PREFIX, key, {"content": "two"})
-    value.delete_document(PROGENITOR_STATE_PREFIX, key)
+    value.save_document(PROGENA_STATE_PREFIX, key, {"content": "one"})
+    value.save_document(PROGENA_STATE_PREFIX, key, {"content": "one"})
+    value.save_document(PROGENA_STATE_PREFIX, key, {"content": "two"})
+    value.delete_document(PROGENA_STATE_PREFIX, key)
 
     revisions = value.list_canvas_revisions("demo")
     assert [(row.op, row.content) for row in revisions] == [
