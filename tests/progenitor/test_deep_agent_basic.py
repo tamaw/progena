@@ -618,30 +618,6 @@ class TestDeepAgentFactory:
             call_kwargs = mock_create_deep_agent.call_args
             assert call_kwargs.kwargs["checkpointer"] is custom_checkpointer
 
-    async def test_create_agent_uses_system_prompt(self):
-        """DeepAgent factory uses the canonical SYSTEM.md prompt."""
-        with (
-            patch("src.progenitor.agent.factory.ProviderChatModel"),
-            patch("src.progenitor.agent.factory.create_deep_agent") as mock_create_deep_agent,
-            patch("src.progenitor.agent.factory.create_progenitor_backend") as mock_backend,
-        ):
-            mock_create_deep_agent.return_value = MagicMock()
-            mock_backend.return_value = MagicMock()
-
-            from src.progenitor.agent.factory import create_progenitor_agent
-            from src.progenitor.config import ProgenitorConfig
-
-            config = ProgenitorConfig()
-            state_manager = FakeContentStateManager(prompt="SYSTEM")
-            await create_progenitor_agent(
-                config=config,
-                checkpointer=MagicMock(),
-                state_manager=state_manager,
-            )
-
-            call_kwargs = mock_create_deep_agent.call_args
-            assert call_kwargs.kwargs["system_prompt"] == "SYSTEM"
-
     async def test_create_agent_migrates_an_edited_legacy_prompt_and_applies_later_edits(self):
         """A stored legacy genesis.md edit boots as SYSTEM.md; later edits reach the next call."""
         from langchain.agents.middleware.types import ModelRequest

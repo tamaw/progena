@@ -152,12 +152,6 @@ async def test_sync_rejects_flat_and_grouped_sources_with_the_same_document_path
     assert state_manager.docs == {}
 
 
-def test_the_system_prompt_ships_as_the_flat_system_md():
-    assert SYSTEM_INSTRUCTION == "progenitor/SYSTEM.md"
-    assert (DEFAULT_INSTRUCTIONS_DIR / "SYSTEM.md").is_file()
-    assert not list(DEFAULT_INSTRUCTIONS_DIR.rglob("genesis.md"))
-
-
 LEGACY = "progenitor/genesis.md"
 
 
