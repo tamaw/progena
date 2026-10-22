@@ -533,10 +533,10 @@ class TestSchemaCompaction:
 class FakeContentStateManager:
     """Minimal async state_manager stub for get/save/list content documents."""
 
-    def __init__(self, *, prompt: str = "GENESIS") -> None:
+    def __init__(self, *, prompt: str = "SYSTEM") -> None:
         self._docs: dict[str, dict[str, str]] = {
             "instruction": {
-                "progenitor/genesis.md": f"---\ntitle: Genesis\ndescription: Test\n---\n{prompt}"
+                "progenitor/SYSTEM.md": f"---\ntitle: System\ndescription: Test\n---\n{prompt}"
             },
             "skill": {},
             "agent": {},
@@ -618,8 +618,8 @@ class TestDeepAgentFactory:
             call_kwargs = mock_create_deep_agent.call_args
             assert call_kwargs.kwargs["checkpointer"] is custom_checkpointer
 
-    async def test_create_agent_uses_genesis_prompt(self):
-        """DeepAgent factory uses the canonical genesis prompt."""
+    async def test_create_agent_uses_system_prompt(self):
+        """DeepAgent factory uses the canonical SYSTEM.md prompt."""
         with (
             patch("src.progenitor.agent.factory.ProviderChatModel"),
             patch("src.progenitor.agent.factory.create_deep_agent") as mock_create_deep_agent,
@@ -632,7 +632,7 @@ class TestDeepAgentFactory:
             from src.progenitor.config import ProgenitorConfig
 
             config = ProgenitorConfig()
-            state_manager = FakeContentStateManager(prompt="GENESIS")
+            state_manager = FakeContentStateManager(prompt="SYSTEM")
             await create_progenitor_agent(
                 config=config,
                 checkpointer=MagicMock(),
@@ -640,4 +640,75 @@ class TestDeepAgentFactory:
             )
 
             call_kwargs = mock_create_deep_agent.call_args
-            assert call_kwargs.kwargs["system_prompt"] == "GENESIS"
+            assert call_kwargs.kwargs["system_prompt"] == "SYSTEM"
+
+    async def test_create_agent_migrates_an_edited_legacy_prompt_and_applies_later_edits(self):
+        """A stored legacy genesis.md edit boots as SYSTEM.md; later edits reach the next call."""
+        from langchain.agents.middleware.types import ModelRequest
+        from langchain_core.messages import SystemMessage
+
+        from src.progenitor.agent.middleware import LiveInstructionMiddleware
+
+        with (
+            patch("src.progenitor.agent.factory.ProviderChatModel"),
+            patch("src.progenitor.agent.factory.create_deep_agent") as mock_create_deep_agent,
+            patch("src.progenitor.agent.factory.create_progenitor_backend") as mock_backend,
+        ):
+            mock_create_deep_agent.return_value = MagicMock()
+            mock_backend.return_value = MagicMock()
+
+            from src.progenitor.agent.factory import create_progenitor_agent
+            from src.progenitor.config import ProgenitorConfig
+
+            state_manager = FakeContentStateManager()
+            instructions = state_manager._docs["instruction"]
+            instructions.clear()
+            instructions["progenitor/genesis.md"] = "---\ntitle: S\ndescription: T\n---\nEDITED"
+            await create_progenitor_agent(
+                config=ProgenitorConfig(),
+                checkpointer=MagicMock(),
+                state_manager=state_manager,
+            )
+
+            kwargs = mock_create_deep_agent.call_args.kwargs
+            assert kwargs["system_prompt"] == "EDITED"
+            assert "progenitor/genesis.md" not in instructions
+            assert instructions["progenitor/SYSTEM.md"].endswith("EDITED")
+            (live,) = [m for m in kwargs["middleware"] if isinstance(m, LiveInstructionMiddleware)]
+
+        instructions["progenitor/SYSTEM.md"] = "---\ntitle: System\ndescription: Test\n---\nNEXT"
+        seen: list[ModelRequest] = []
+
+        async def handler(request: ModelRequest):
+            seen.append(request)
+            return MagicMock()
+
+        system = SystemMessage(content_blocks=[{"type": "text", "text": "EDITED\n\nBase prompt."}])
+        await live.awrap_model_call(
+            ModelRequest(model=MagicMock(), messages=[], tools=[], system_message=system), handler
+        )
+        sent = seen[0].system_message
+        assert sent is not None
+        text = "".join(block["text"] for block in sent.content_blocks if block["type"] == "text")
+        assert text == "NEXT\n\nBase prompt."
+
+    async def test_create_agent_fails_without_system_prompt(self, tmp_path):
+        """No stored or bundled SYSTEM.md fails boot, naming the path."""
+        with (
+            patch("src.progenitor.agent.factory.ProviderChatModel"),
+            patch("src.progenitor.agent.factory.create_deep_agent"),
+            patch("src.progenitor.agent.factory.create_progenitor_backend"),
+        ):
+            from src.progenitor.agent.factory import create_progenitor_agent
+            from src.progenitor.config import ProgenitorConfig
+
+            config = ProgenitorConfig()
+            config.storage.instructions_dir = tmp_path
+            state_manager = FakeContentStateManager()
+            state_manager._docs["instruction"].clear()
+            with pytest.raises(RuntimeError, match="progenitor/SYSTEM.md"):
+                await create_progenitor_agent(
+                    config=config,
+                    checkpointer=MagicMock(),
+                    state_manager=state_manager,
+                )

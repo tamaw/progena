@@ -23,6 +23,10 @@ mounts:
   runtime or user agent manifests under `/agents/`. Installed marketplace
   plugin skills and agents receive scoped read-only paths below `/skills/` and
   `/agents/`; native skills and native agent manifests remain bundled files.
+  Progenitor's system prompt is `instruction:progenitor/SYSTEM.md`; boot moves
+  a stored legacy `instruction:progenitor/genesis.md` (edits included) there
+  before seeding missing instructions, then deletes the legacy key. If both
+  exist with different text, `SYSTEM.md` is used and the legacy key is kept.
 - Postgres-backed virtual document directories: `/tasks/`, `/workflows/`,
   `/routines/`, `/policies/`, `/inbox/`, `/alerts/`, `/sessions/`, `/canvases/`,
   `/artifacts/`, and `/config/repos/`. These are collections of documents, not subdirectories on

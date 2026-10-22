@@ -43,7 +43,7 @@ def test_listener_routes_object_documents(key):
         "garbage",
         "[]",
         '{"key": 1}',
-        '{"key":"prompt:genesis.md"}',
+        '{"key":"prompt:SYSTEM.md"}',
         '{"key":"repos"}',
         '{"key":"repo_scan"}',
         '{"key":"background_tasks"}',

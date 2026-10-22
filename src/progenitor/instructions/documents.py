@@ -26,7 +26,7 @@ if TYPE_CHECKING:
     from src.progenitor.documents.types import DocumentType
 
 RUNTIME_INSTRUCTION_GROUP = "progenitor"
-GENESIS_INSTRUCTION = "progenitor/genesis.md"
+SYSTEM_INSTRUCTION = "progenitor/SYSTEM.md"
 
 
 def instruction_group(path: str) -> str:

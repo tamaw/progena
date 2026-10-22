@@ -232,7 +232,7 @@ class TestSearchRoute:
         client, store, events = harness
         store.save_document(
             PROGENITOR_STATE_PREFIX,
-            "instruction:progenitor/genesis.md",
+            "instruction:progenitor/SYSTEM.md",
             {
                 "content": "---\ntitle: Progenitor system prompt\n"
                 "description: Main prompt\n---\nYou are a helpful assistant.\n"
@@ -248,7 +248,7 @@ class TestSearchRoute:
         assert len(section["results"]) == 1
         assert section["results"][0]["title"] == "Progenitor system prompt"
         assert section["results"][0]["subtitle"] == "Main prompt"
-        assert section["results"][0]["to"] == "/instructions/progenitor/genesis.md"
+        assert section["results"][0]["to"] == "/instructions/progenitor/SYSTEM.md"
 
     def test_empty_sections_omitted(self, harness, monkeypatch):
         client, _, events = harness

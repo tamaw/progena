@@ -16,7 +16,7 @@ allowed-tools: ls read_file write_file edit_file grep glob
 
 | Group | Read by | Editable | Placeholders |
 |---|---|---|---|
-| `progenitor/` | this runtime (`genesis.md` is your own system prompt) | yes; applies on the next model call | fixed by code: keep exactly the same `{names}` |
+| `progenitor/` | this runtime (`SYSTEM.md` is your own system prompt) | yes; applies on the next model call | fixed by code: keep exactly the same `{names}` |
 | anything else, e.g. `workflows/` | workflow steps and routine `agent` nodes that reference the path | yes | free; each root becomes an input port or resolves from routine state |
 
 Standalone A2A agents maintain their own instructions in

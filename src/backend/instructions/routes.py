@@ -20,7 +20,7 @@ from src.backend.instructions import service as instruction_service
 router = APIRouter(prefix="/api/ui/instructions", tags=["instructions"])
 
 _REQUEST_ID_HEADER = Header(default=None, alias="X-Request-ID")
-_PATH_QUERY = Query(..., description="Instruction path, e.g. progenitor/genesis.md")
+_PATH_QUERY = Query(..., description="Instruction path, e.g. progenitor/SYSTEM.md")
 
 
 class InstructionUpdateRequest(BaseModel):

@@ -10,7 +10,9 @@ Instructions are seeded from the git-tracked ``data/instructions/`` directory
 Top-level files belong to the logical ``progenitor/`` instruction group;
 explicit subdirectories retain their group for custom instruction sources.
 Existing documents remain user-owned: boot never overwrites edited instructions
-or deletes documents removed from the source tree.
+or deletes documents removed from the source tree. The one exception is the
+legacy ``progenitor/genesis.md`` system prompt, which boot moves (edits
+included) to ``progenitor/SYSTEM.md`` before seeding.
 
 Native agent manifests remain read-only files in ``data/agents/objects/``.
 They are not imported into Postgres; user and plugin agents use documents.
@@ -37,10 +39,14 @@ from src.progenitor.documents.kinds import (
     MEMORY_DOCUMENT_KEY_PREFIX,
     SKILL_DOCUMENT_KEY_PREFIX,
 )
-from src.progenitor.instructions.documents import RUNTIME_INSTRUCTION_GROUP
+from src.progenitor.instructions.documents import RUNTIME_INSTRUCTION_GROUP, SYSTEM_INSTRUCTION
 from src.progenitor.instructions.templates import parse_instruction_template
 
 logger = logging.getLogger(__name__)
+
+# Stored path of the system prompt before it was renamed to SYSTEM_INSTRUCTION.
+# Only the boot migration reads it; nothing else resolves this path.
+_LEGACY_SYSTEM_INSTRUCTION = "progenitor/genesis.md"
 
 _KIND_PREFIXES: dict[str, str] = {
     "instruction": INSTRUCTION_DOCUMENT_KEY_PREFIX,
@@ -62,8 +68,40 @@ def content_document_prefix(kind: str) -> str:
 
 
 def content_document_key(kind: str, relative_path: str) -> str:
-    """Build the store key for one content document (e.g. ``instruction:progenitor/genesis.md``)."""
+    """Build the store key for one content document (e.g. ``instruction:progenitor/SYSTEM.md``)."""
     return f"{content_document_prefix(kind)}{relative_path}"
+
+
+async def _migrate_legacy_system_instruction(state_manager: Any, stored: dict[str, str]) -> None:
+    """Move a stored ``progenitor/genesis.md`` to ``SYSTEM_INSTRUCTION``, keeping edits.
+
+    Runs before seeding so an edited prompt becomes ``SYSTEM.md`` rather than
+    being shadowed by a fresh copy from disk. Writing the new key before deleting
+    the old one keeps an interrupted move recoverable; once the legacy key is
+    gone this is a no-op. If both keys hold different text, ``SYSTEM.md`` stays
+    authoritative and the legacy document is left for the user to remove.
+    ``stored`` is updated in place.
+    """
+    legacy = stored.get(_LEGACY_SYSTEM_INSTRUCTION)
+    if legacy is None:
+        return
+    current = stored.get(SYSTEM_INSTRUCTION)
+    if current is None:
+        await state_manager.save_content_document("instruction", SYSTEM_INSTRUCTION, legacy)
+        stored[SYSTEM_INSTRUCTION] = legacy
+    elif current != legacy:
+        logger.warning(
+            "Both %s and legacy %s are stored with different content; using %s and "
+            "keeping %s unread",
+            SYSTEM_INSTRUCTION,
+            _LEGACY_SYSTEM_INSTRUCTION,
+            SYSTEM_INSTRUCTION,
+            _LEGACY_SYSTEM_INSTRUCTION,
+        )
+        return
+    await state_manager.delete_content_document("instruction", _LEGACY_SYSTEM_INSTRUCTION)
+    del stored[_LEGACY_SYSTEM_INSTRUCTION]
+    logger.info("Moved stored instruction %s to %s", _LEGACY_SYSTEM_INSTRUCTION, SYSTEM_INSTRUCTION)
 
 
 async def sync_instruction_documents(state_manager: Any, source_dir: Path | str) -> None:
@@ -90,6 +128,7 @@ async def sync_instruction_documents(state_manager: Any, source_dir: Path | str)
             raise ValueError(f"{path}: {exc}") from exc
         files[document_path] = content
     stored = dict(await state_manager.list_content_documents("instruction"))
+    await _migrate_legacy_system_instruction(state_manager, stored)
     written = 0
     for relative_path, content in files.items():
         if relative_path in stored:
