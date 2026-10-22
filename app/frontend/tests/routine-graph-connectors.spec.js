@@ -17,7 +17,7 @@ import { removeRoutines, seedGraphFixtures } from './helpers/routineFixture.mjs'
  * only ever overflows rightward.
  *
  * Requires the running stack (see playwright.config.js). Each worker seeds its
- * own copies of the fixture graphs (e2e/fixtures/routine-graphs.json) and
+ * own copies of the fixture graphs (tests/fixtures/routine-graphs.json) and
  * removes them afterwards.
  */
 

@@ -28,6 +28,10 @@ frontend URL. The Vite dev/preview proxy forwards `/api/*` and `/v1/*` to the
 backend at `http://127.0.0.1:8000`, or `VITE_BACKEND_BASE_URL`. The browser never
 calls the runtime directly.
 
+Browser specs live in `tests/*.spec.js`, with shared helpers in `tests/helpers/`
+and data in `tests/fixtures/`. Unit tests stay beside their source under `src/`;
+Vitest's source-only include keeps the Playwright suite separate.
+
 ## Directory map
 
 ```text

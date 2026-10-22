@@ -14,7 +14,7 @@ import { removeRoutines, seedGraphFixtures } from './helpers/routineFixture.mjs'
  * body's first step comes and goes.
  *
  * These drive the real `+` menu on a seeded copy of the routine-private-context
- * fixture (e2e/fixtures/routine-graphs.json). The tests inspect edits in the
+ * fixture (tests/fixtures/routine-graphs.json). The tests inspect edits in the
  * JSON editor without applying or persisting them.
  *
  * Requires the running stack (see playwright.config.js).

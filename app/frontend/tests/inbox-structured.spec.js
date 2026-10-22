@@ -22,7 +22,7 @@ import {
  * Run with the isolated stack:
  *   INBOX_SMOKE_DATABASE_URL=postgresql://inbox_smoke@127.0.0.1:15843/inbox_smoke \
  *   FRONTEND_BASE_URL=http://127.0.0.1:5583 \
- *     npx playwright test e2e/inbox-structured.spec.js
+ *     npx playwright test tests/inbox-structured.spec.js
  */
 
 test.describe.configure({ mode: 'parallel' });

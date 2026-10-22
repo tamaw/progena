@@ -74,7 +74,7 @@ export default defineConfig([
   },
   {
     // Node-context tooling: Playwright config/specs run under Node, not the browser.
-    files: ['playwright.config.js', 'e2e/**/*.{js,jsx}'],
+    files: ['playwright.config.js', 'tests/**/*.{js,jsx}'],
     languageOptions: {
       globals: { ...globals.node },
     },
