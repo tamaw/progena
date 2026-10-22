@@ -9,16 +9,69 @@ isolation, the non-root user, and minimal mounts are the security boundary.
 
 from __future__ import annotations
 
+import logging
 import re
-from collections.abc import Mapping
+import shutil
+from collections import Counter
+from collections.abc import Iterable, Iterator, Mapping
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from pathlib import Path
+from threading import Lock
 from typing import TYPE_CHECKING
 
 from deepagents.backends import LocalShellBackend
+from deepagents.backends.protocol import ExecuteResponse
 
 if TYPE_CHECKING:
     from .object_agent_manifest import ObjectAgentShellConfig
+
+logger = logging.getLogger(__name__)
+
+
+class ShellHomeLifecycle:
+    """Keep generated homes for live agents and calls still using an old generation."""
+
+    def __init__(self, root: Path) -> None:
+        self.root = root
+        self._live: set[str] = set()
+        self._active: Counter[str] = Counter()
+        self._lock = Lock()
+
+    def reconcile(self, names: Iterable[str]) -> None:
+        with self._lock:
+            self._live = {agent_home_slug(name) for name in names}
+            try:
+                if self.root.exists():
+                    for path in self.root.iterdir():
+                        self._remove_orphan(path)
+            except OSError:
+                logger.warning("Could not scan shell homes %s", self.root, exc_info=True)
+
+    def _remove_orphan(self, path: Path) -> None:
+        if path.name in self._live or self._active[path.name]:
+            return
+        # Only immediate home directories are managed; never follow symlinks.
+        if path.is_symlink() or not path.is_dir():
+            return
+        try:
+            shutil.rmtree(path)
+        except OSError:
+            logger.warning("Could not remove orphaned shell home %s", path, exc_info=True)
+
+    @contextmanager
+    def use(self, name: str) -> Iterator[None]:
+        slug = agent_home_slug(name)
+        with self._lock:
+            self._active[slug] += 1
+        try:
+            yield
+        finally:
+            with self._lock:
+                self._active[slug] -= 1
+                if not self._active[slug]:
+                    del self._active[slug]
+                    self._remove_orphan(self.root / slug)
 
 
 @dataclass(frozen=True)
@@ -29,6 +82,7 @@ class ShellPaths:
     agent_home: Path
     timeout_seconds: int
     workspace_root: Path | None = None
+    home_lifecycle: ShellHomeLifecycle | None = None
 
 
 def agent_home_slug(name: str) -> str:
@@ -92,7 +146,10 @@ class ProgenitorShellBackend(LocalShellBackend):
         agent_home: Path,
         parent_env: Mapping[str, str] | None = None,
         repos_dir: Path | None = None,
+        home_lifecycle: ShellHomeLifecycle | None = None,
     ) -> None:
+        self._home_lifecycle = home_lifecycle
+        self._agent_home_name = agent_home.name
         workspace.mkdir(parents=True, exist_ok=True)
         agent_home.mkdir(parents=True, exist_ok=True)
         git_config = agent_home / ".gitconfig"
@@ -113,3 +170,10 @@ class ProgenitorShellBackend(LocalShellBackend):
             ),
             inherit_env=False,
         )
+
+    def execute(self, command: str, *, timeout: int | None = None) -> ExecuteResponse:
+        # aexecute runs this in a worker thread, which can outlive cancellation
+        # of its awaiting agent call. Keep the home until the command really exits.
+        homes = self._home_lifecycle
+        with homes.use(self._agent_home_name) if homes is not None else nullcontext():
+            return super().execute(command, timeout=timeout)

@@ -147,7 +147,7 @@ Would improve readability and testability.
 
 ## Tools
 - **Linting**: `ruff check app/`
-- **Type Checking**: `pyright app/`
+- **Type Checking**: `pyright --pythonpath .venv/bin/python app/`
 - **Testing**: `pytest` with coverage
 - **Security**: Manual review + automated scans
 

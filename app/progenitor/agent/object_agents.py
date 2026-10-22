@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import os
 from collections.abc import Iterable
+from contextlib import nullcontext
 from dataclasses import replace
 from pathlib import Path, PurePosixPath
 from typing import Any, cast
@@ -385,6 +386,7 @@ def _build_shell_backend(
                 agent_home=shell_paths.agent_home / agent_home_slug(manifest.name),
                 parent_env=os.environ,
                 repos_dir=worktree_dir,
+                home_lifecycle=shell_paths.home_lifecycle,
             ),
             routes={},
         ),
@@ -662,8 +664,9 @@ def create_object_agent_proxy(
             content, source=f"agent:{source.relative_path}", source_kind=source.source
         )
 
-    async def run(state: Any, config: RunnableConfig) -> dict[str, Any]:
-        manifest = await load_manifest()
+    async def run_manifest(
+        state: Any, config: RunnableConfig, manifest: ObjectAgentManifest
+    ) -> dict[str, Any]:
         warnings: list[str] = []
         if manifest.knowledge:
             catalog = await state_manager.get_knowledge_config()
@@ -752,6 +755,12 @@ def create_object_agent_proxy(
                     result["messages"] = messages
                     break
         return result
+
+    async def run(state: Any, config: RunnableConfig) -> dict[str, Any]:
+        manifest = await load_manifest()
+        homes = shell_paths.home_lifecycle if shell_paths is not None else None
+        with homes.use(manifest.name) if homes is not None else nullcontext():
+            return await run_manifest(state, config, manifest)
 
     return {
         "name": source.name,

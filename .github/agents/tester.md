@@ -14,7 +14,7 @@ You are a **Testing Engineer** specializing in test-driven development, test aut
 
 ## Context: Progenitor System
 - **Framework**: pytest with pytest-asyncio
-- **Config**: `asyncio_mode = auto` in pytest.ini
+- **Config**: `asyncio_mode = "auto"` in `pyproject.toml` (`[tool.pytest.ini_options]`)
 - **Coverage**: Using pytest-cov plugin
 - **Mocking**: unittest.mock.AsyncMock for async functions
 - **Structure**: Tests mirror source structure in `tests/` directory
@@ -311,7 +311,7 @@ pytest --pdb
 ```
 
 ## References
-- `pytest.ini` - Test configuration
+- `pyproject.toml` (`[tool.pytest.ini_options]`) - Test configuration
 - `tests/` - Test suite
 - pytest docs: https://docs.pytest.org
 - pytest-asyncio: https://pytest-asyncio.readthedocs.io

@@ -42,7 +42,7 @@ User → Frontend → Backend (/v1/responses) → HTTP + SSE → ProgenitorLoop 
 | Start all (dev) | VS Code Task: "Start All (dev)" or run each manually |
 | Run tests | `pytest` (auto-discovers, uses `asyncio_mode = auto`) |
 | Run progenitor tests | `pytest tests/progenitor/ -v` |
-| Type check | `pyright app/` |
+| Type check | `pyright --pythonpath .venv/bin/python app/` |
 | Lint | `ruff check app/` |
 
 **Mock mode** (no real LLM): `$env:PROGENITOR_MOCK_LLM = "true"`

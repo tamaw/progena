@@ -18,6 +18,14 @@ Locally this defaults to `data/shell-workspaces`. Docker Compose mounts the pers
 a fresh volume from the image directory owned by runtime UID/GID `10001:10001`.
 Scratch files survive container restarts. Repository paths continue to come from `/repos/`.
 
+Agent shell homes are generated separately under `PROGENITOR_SHELL_HOME` (locally
+`data/shell-home`, or `/app/agent-home` on tmpfs in Docker). Homes are created on
+first use. Startup and live agent-registry refreshes remove homes for agents that
+were deleted, renamed, or no longer enable shell access. An active call retains
+its home until it finishes; a shell command still running after cancellation
+retains its home until the command exits. This cleanup
+does not remove scratch workspaces or repository files.
+
 ## Running tests safely
 
 Install development dependencies in the activated virtual environment:

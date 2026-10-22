@@ -44,8 +44,7 @@ repos:
         language: system
         types: [python]
         pass_filenames: false
-        # --pythonpath is required: git runs hooks without the venv activated,
-        # and pyright will not read the interpreter from pyproject.toml.
+        # Match CI's interpreter even when git runs without the venv activated.
         args: [--pythonpath, .venv/bin/python, app/]
 
   # Security checks

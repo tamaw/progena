@@ -562,7 +562,7 @@ class FakeContentStateManager:
 class TestDeepAgentFactory:
     """Tests for the DeepAgent factory."""
 
-    async def test_create_agent_returns_compiled_graph(self):
+    async def test_create_agent_returns_compiled_graph(self, tmp_path):
         """Factory returns a compiled LangGraph state graph."""
         with (
             patch("app.progenitor.agent.agent.ProviderChatModel") as mock_provider_model,
@@ -579,6 +579,7 @@ class TestDeepAgentFactory:
             from app.progenitor.config import ProgenitorConfig
 
             config = ProgenitorConfig()
+            config.storage.shell_home_dir = tmp_path / "shell-home"
             result = await create_progenitor_agent(
                 config=config, state_manager=FakeContentStateManager()
             )
@@ -595,7 +596,7 @@ class TestDeepAgentFactory:
             assert "backend" in call_kwargs.kwargs
             assert "store" in call_kwargs.kwargs
 
-    async def test_create_agent_uses_custom_checkpointer(self):
+    async def test_create_agent_uses_custom_checkpointer(self, tmp_path):
         """Custom checkpointer is passed through."""
         with (
             patch("app.progenitor.agent.agent.ProviderChatModel"),
@@ -609,8 +610,10 @@ class TestDeepAgentFactory:
             from app.progenitor.config import ProgenitorConfig
 
             custom_checkpointer = MagicMock()
+            config = ProgenitorConfig()
+            config.storage.shell_home_dir = tmp_path / "shell-home"
             await create_progenitor_agent(
-                config=ProgenitorConfig(),
+                config=config,
                 checkpointer=custom_checkpointer,
                 state_manager=FakeContentStateManager(),
             )
@@ -618,7 +621,7 @@ class TestDeepAgentFactory:
             call_kwargs = mock_create_deep_agent.call_args
             assert call_kwargs.kwargs["checkpointer"] is custom_checkpointer
 
-    async def test_create_agent_uses_genesis_prompt(self):
+    async def test_create_agent_uses_genesis_prompt(self, tmp_path):
         """DeepAgent factory uses the canonical genesis prompt."""
         with (
             patch("app.progenitor.agent.agent.ProviderChatModel"),
@@ -632,6 +635,7 @@ class TestDeepAgentFactory:
             from app.progenitor.config import ProgenitorConfig
 
             config = ProgenitorConfig()
+            config.storage.shell_home_dir = tmp_path / "shell-home"
             state_manager = FakeContentStateManager(prompt="GENESIS")
             await create_progenitor_agent(
                 config=config,
