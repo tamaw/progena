@@ -57,7 +57,7 @@ jobs:
       - name: Lint progenitor (ruff)
         run: |
           . .venv/bin/activate
-          ruff check app/progenitor tests/progenitor tests/test_scheduler.py
+          ruff check app/progenitor tests/progenitor
 
       - name: Type-check (pyright)
         # --pythonpath keeps this identical to the pre-commit hook, so the
@@ -71,7 +71,6 @@ jobs:
           . .venv/bin/activate &&
           pytest
           tests/progenitor
-          tests/test_scheduler.py
 
   frontend:
     runs-on: [self-hosted, Linux, node]

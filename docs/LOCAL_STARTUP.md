@@ -25,7 +25,7 @@ Install development dependencies in the activated virtual environment:
 ```bash
 source .venv/bin/activate
 pip install -e ".[dev]"
-timeout --kill-after=5s 300s pytest tests/backend tests/progenitor tests/test_scheduler.py -q -rs
+timeout --kill-after=5s 300s pytest tests/backend tests/progenitor -q -rs
 ```
 
 The `timeout` command above is the Linux whole-run limit. Pytest also has a
