@@ -19,9 +19,9 @@ from app.backend.storage.documents import (
     InMemoryDocumentStore,
     set_default_document_store,
 )
-from app.progenitor.document_kinds import DOCUMENT_TYPE_KEY_PREFIX
-from app.progenitor.document_types import DocumentType
-from app.progenitor.modules import module_file_key
+from app.progenitor.documents.kinds import DOCUMENT_TYPE_KEY_PREFIX
+from app.progenitor.documents.types import DocumentType
+from app.progenitor.modules.contracts import module_file_key
 
 
 @pytest.fixture

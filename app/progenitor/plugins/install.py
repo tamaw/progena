@@ -107,7 +107,7 @@ def _filter_valid_agent_files(
     files: dict[str, str], plugin_name: str
 ) -> tuple[dict[str, str], list[str]]:
     """Keep complete, valid object-agent directories and skip bad ones."""
-    from ..agent.object_agent_manifest import parse_object_agent_manifest
+    from app.progenitor.agent.object_agents.manifest import parse_object_agent_manifest
 
     by_agent: dict[str, dict[str, str]] = {}
     for path, content in files.items():

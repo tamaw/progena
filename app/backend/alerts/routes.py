@@ -14,9 +14,7 @@ import app.backend.events.documents as events_documents
 import app.backend.events.stream as events_stream
 import app.backend.http.contracts as http_contracts
 import app.backend.http.requests as http_requests
-from app.progenitor.document_kinds import (
-    ALERT_KEY_PREFIX,
-)
+from app.progenitor.documents.kinds import ALERT_KEY_PREFIX
 
 logger = logging.getLogger(__name__)
 

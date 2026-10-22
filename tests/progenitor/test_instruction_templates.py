@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.progenitor.document_types import BUILTIN_DOCUMENT_TYPES
+from app.progenitor.documents.types import BUILTIN_DOCUMENT_TYPES
 from app.progenitor.instructions.templates import (
     InstructionTemplate,
     instruction_relative_path,
@@ -12,8 +12,9 @@ from app.progenitor.instructions.templates import (
     render_instruction_template,
     resolve_type_ref,
 )
-from app.progenitor.structured import validate_against_schema
-from app.progenitor.workflows import default_workflow_definition, derive_workflow_port_schemas
+from app.progenitor.llm.structured import validate_against_schema
+from app.progenitor.workflows.derivation import derive_workflow_port_schemas
+from app.progenitor.workflows.documents import default_workflow_definition
 
 
 class TestParsePromptTemplate:
@@ -346,7 +347,7 @@ class _Instructions:
 class TestInstructionDocumentDirectoryBackend:
     @staticmethod
     def _backend(docs=None):
-        from app.progenitor.agent.state_backend import InstructionDocumentDirectoryBackend
+        from app.progenitor.agent.filesystem.content import InstructionDocumentDirectoryBackend
 
         store = _Instructions(docs)
         return InstructionDocumentDirectoryBackend(store, "instruction"), store

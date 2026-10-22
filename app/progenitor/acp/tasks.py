@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..state.models import ACPAgentConfig, ACPFailureKind, ACPTaskRecord, ACPTaskStatus
+from app.progenitor.acp.models import ACPAgentConfig, ACPFailureKind, ACPTaskRecord, ACPTaskStatus
+
 from ..utils import utcnow
 from .agents import build_agent_args
 from .runner import ACPRunner

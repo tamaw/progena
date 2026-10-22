@@ -1,7 +1,7 @@
 """Validation for the ``plugins`` state document (``plugins.json``).
 
 Tracks *installed* plugins pulled from a marketplace's catalog. Distinct from
-``marketplaces.json`` (see :mod:`app.progenitor.marketplaces`), which registers
+``marketplaces.json`` (see :mod:`app.progenitor.plugins.marketplaces`), which registers
 the marketplace sources themselves.
 
 The payload-native :func:`validate_plugins_payload` is the single
@@ -17,7 +17,7 @@ import json
 import re
 from typing import Any
 
-from ..schemas import check_entry_schema
+from app.progenitor.documents.catalog import check_entry_schema
 
 _PLUGIN_KEY_RE = re.compile(r"^[a-z0-9][a-z0-9-]*/[a-z0-9][a-z0-9-]*$")
 

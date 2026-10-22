@@ -21,7 +21,7 @@ class Documents:
         return {}
 
     async def get_execution_policy(self, policy_id):
-        from app.progenitor.policies import ExecutionPolicy
+        from app.progenitor.settings.policies import ExecutionPolicy
 
         return ExecutionPolicy(id=policy_id, name="Default").model_dump(mode="json")
 
@@ -327,7 +327,7 @@ async def test_deleted_live_routine_does_not_fall_back_to_a_revision():
 
 @pytest.mark.asyncio
 async def test_actual_agent_factory_runner_preserves_nested_data(monkeypatch):
-    from app.progenitor.agent.agent import create_progenitor_agent
+    from app.progenitor.agent.factory import create_progenitor_agent
     from tests.progenitor.test_memory import FakeContentStateManager
 
     child = graph(
@@ -357,7 +357,7 @@ async def test_actual_agent_factory_runner_preserves_nested_data(monkeypatch):
 
     class Store(FakeContentStateManager):
         async def get_execution_policy(self, policy_id):
-            from app.progenitor.policies import ExecutionPolicy
+            from app.progenitor.settings.policies import ExecutionPolicy
 
             return ExecutionPolicy(id=policy_id, name="Default").model_dump(mode="json")
 
@@ -368,9 +368,9 @@ async def test_actual_agent_factory_runner_preserves_nested_data(monkeypatch):
             return [parent, child]
 
     agent = SimpleNamespace()
-    monkeypatch.setattr("app.progenitor.agent.agent.create_deep_agent", lambda **_kwargs: agent)
+    monkeypatch.setattr("app.progenitor.agent.factory.create_deep_agent", lambda **_kwargs: agent)
     monkeypatch.setattr(
-        "app.progenitor.agent.agent.create_progenitor_backend", lambda **_kwargs: object()
+        "app.progenitor.agent.factory.create_progenitor_backend", lambda **_kwargs: object()
     )
     compiled = await create_progenitor_agent(state_manager=Store(), checkpointer=MemorySaver())
     result = await compiled.routine_runner("parent", {"messages": [HumanMessage("calculate")]})

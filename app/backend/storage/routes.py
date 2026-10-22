@@ -12,8 +12,8 @@ import app.backend.events.stream as events_stream
 import app.backend.http.contracts as http_contracts
 import app.backend.http.requests as http_requests
 import app.backend.storage.documents as storage_documents
-from app.progenitor.document_types import DocumentType
-from app.progenitor.workflows import (
+from app.progenitor.documents.types import DocumentType
+from app.progenitor.workflows.ports import (
     document_create_input_schema,
     document_create_output_schema,
     document_delete_input_schema,

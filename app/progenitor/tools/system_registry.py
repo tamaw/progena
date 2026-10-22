@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Any, Optional
 from .protocol import BaseSystemTool, SystemTool, ToolContext
 
 if TYPE_CHECKING:
-    from ..state.models import ProgenitorState
+    from app.progenitor.orchestration.state import ProgenitorState
 
 logger = logging.getLogger(__name__)
 

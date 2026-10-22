@@ -122,7 +122,7 @@ Ephemeral storage:
 
 Notes:
 - Instructions and runtime memories are Postgres-backed content documents
-  (`app/progenitor/content_documents.py`, keyed `instruction:`/`memory:` in
+  (`app/progenitor/documents/content.py`, keyed `instruction:`/`memory:` in
   the same shared `store` table as `mcp.json`/`schedule.json`/etc — see
   `app/progenitor/state/manager.py`). Neither `progenitor` nor `backend` mounts
   a host directory for them. `data/instructions/` is checked into git and

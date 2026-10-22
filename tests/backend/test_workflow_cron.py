@@ -14,11 +14,9 @@ from app.backend.workflows.service import (
     list_workflow_runs,
     save_workflow_definition,
 )
-from app.progenitor.workflows import (
-    WorkflowNodeCron,
-    build_cron_trigger_output,
-    default_workflow_definition,
-)
+from app.progenitor.workflows.documents import default_workflow_definition
+from app.progenitor.workflows.events import build_cron_trigger_output
+from app.progenitor.workflows.models import WorkflowNodeCron
 
 START = datetime(2026, 10, 12, 8, 30, tzinfo=UTC)
 

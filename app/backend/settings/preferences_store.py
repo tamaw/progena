@@ -5,7 +5,7 @@ Preferences (display name, timezone) live in the ``preferences`` state document
 ``/config/preferences.json``) in the shared ``progenitor.state`` namespace —
 the same document ``app.progenitor.state.manager.StateManager`` reads/writes on
 the runtime side. This module loads/saves that document from the backend
-process; validation is shared via ``app.progenitor.state.preferences`` so the
+process; validation is shared via ``app.progenitor.settings.preferences`` so the
 two write paths can never disagree on shape.
 """
 
@@ -14,7 +14,7 @@ from __future__ import annotations
 from typing import Any
 
 from app.backend.storage.documents import PROGENITOR_STATE_PREFIX, get_default_document_store
-from app.progenitor.state.preferences import PREFERENCES_DOC_KEY, default_preferences_payload
+from app.progenitor.settings.preferences import PREFERENCES_DOC_KEY, default_preferences_payload
 
 
 def load_preferences() -> dict[str, Any]:

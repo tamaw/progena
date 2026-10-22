@@ -11,7 +11,7 @@ from app.backend.workflows.service import (
     get_workflow_run,
     save_workflow_definition,
 )
-from app.progenitor.workflows import default_workflow_definition
+from app.progenitor.workflows.documents import default_workflow_definition
 
 
 async def _wait_for(predicate, timeout=2.0):
@@ -600,7 +600,7 @@ async def test_format_node_renders_nested_and_non_string_values_without_a_runner
 
 def test_query_filter_tells_json_true_from_1():
     from app.backend.workflows.service import _execute_document_node
-    from app.progenitor.workflows import WorkflowNodeDocumentQuery
+    from app.progenitor.workflows.models import WorkflowNodeDocumentQuery
 
     store = InMemoryDocumentStore()
     seed_document_types(store)

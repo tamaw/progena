@@ -11,8 +11,9 @@ from langchain_core.tools import BaseTool
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from langchain_mcp_adapters.sessions import Connection, StreamableHttpConnection
 
+from app.progenitor.registry.store import normalize_tool_name
+
 from ..config import MCPConfig, MCPServerConfig
-from ..registry import normalize_tool_name
 from ..utils import utcnow_isoformat
 from .jsonrpc import parse_mcp_jsonrpc_response
 from .tool_schema import get_mcp_tool_description, get_mcp_tool_name
@@ -218,7 +219,7 @@ async def reload_mcp_runtime_context(
     *,
     reload_config: bool = False,
 ) -> None:
-    from ..nodes.mcp import sync_mcp_runtime_context
+    from app.progenitor.orchestration.nodes.mcp import sync_mcp_runtime_context
 
     mcp_runtime = llm_client.mcp_runtime
     if mcp_runtime is None:

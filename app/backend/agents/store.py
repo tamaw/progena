@@ -13,7 +13,7 @@ a document in the Progenitor runtime's own document store (the same Postgres
 (see ``app.progenitor.routines.store``). This gives the agent the same
 read/write/edit experience over routine graphs as it has over workflow
 definitions (mounted ``/routines/<agent_id>.json`` by
-``app.progenitor.agent.state_backend.RoutineDirectoryBackend``), and lets the
+``app.progenitor.agent.filesystem.routines.RoutineDirectoryBackend``), and lets the
 Agents page and the agent edit the exact same document. Only graph-editing
 bookkeeping that isn't part of the routine schema itself (``status``,
 ``summary``) stays in the backend's own ``agent_graph`` table.
@@ -35,12 +35,12 @@ from psycopg.types.json import Jsonb
 from psycopg_pool import ConnectionPool
 
 from app.backend.storage.documents import PROGENITOR_STATE_PREFIX, BackendDocumentStore
-from app.progenitor.agent.object_agent_manifest import (
+from app.progenitor.agent.object_agents.manifest import (
     discover_native_object_agents,
     parse_front_matter,
     parse_object_agent_manifest,
 )
-from app.progenitor.content_documents import AGENT_DOCUMENT_KEY_PREFIX, content_document_key
+from app.progenitor.documents.content import AGENT_DOCUMENT_KEY_PREFIX, content_document_key
 from app.progenitor.instructions.paths import PROJECT_ROOT
 from app.progenitor.routines.store import (
     ROUTINE_GRAPH_KEY_PREFIX,
@@ -80,7 +80,7 @@ DEFAULT_AGENT_GRAPH_STATUS: dict[str, Any] = {
 }
 
 # Progenitor's own skills live on disk at ``data/skills/<name>/SKILL.md``,
-# read-only and baked into the image (see ``app.progenitor.content_documents``).
+# read-only and baked into the image (see ``app.progenitor.documents.content``).
 _NATIVE_SKILLS_ROOT = PROJECT_ROOT / "data" / "skills"
 _NATIVE_OBJECT_AGENTS_ROOT = (
     Path(os.getenv("PROGENITOR_DATA_DIR", str(PROJECT_ROOT / "data"))) / "agents" / "objects"
@@ -388,7 +388,7 @@ class AgentStore:
 
         ``skill_path`` is the same absolute virtual-mount path stored in a
         manifest's ``skills`` list and read by the DeepAgent runtime (see
-        ``app.progenitor.agent.backends``): ``/skills/<name>`` for one of
+        ``app.progenitor.agent.filesystem.mounts``): ``/skills/<name>`` for one of
         Progenitor's own native skills (``data/skills/<name>/SKILL.md``,
         read-only, baked into the image), or
         ``/skills/<marketplace>__<plugin>/<name>`` for an installed

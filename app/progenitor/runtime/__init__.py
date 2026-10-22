@@ -3,7 +3,8 @@
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from .http import ProgenitorHTTPServer
+    from app.progenitor.runtime.http.server import ProgenitorHTTPServer
+
     from .progenitor import Progenitor
     from .queues import QueuedInput, RuntimeQueues
 
@@ -17,7 +18,7 @@ def __getattr__(name: str):
 
         return Progenitor
     if name == "ProgenitorHTTPServer":
-        from .http import ProgenitorHTTPServer
+        from app.progenitor.runtime.http.server import ProgenitorHTTPServer
 
         return ProgenitorHTTPServer
     if name == "QueuedInput":

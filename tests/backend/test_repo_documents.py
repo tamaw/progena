@@ -10,7 +10,7 @@ from app.backend.storage.documents import (
     InMemoryDocumentStore,
     set_default_document_store,
 )
-from app.progenitor.agent.state_backend import RepoDirectoryBackend
+from app.progenitor.agent.filesystem.repositories import RepoDirectoryBackend
 
 
 @pytest.fixture
@@ -99,8 +99,7 @@ async def test_agent_repo_files_validate_and_keep_created_at(store):
                 (k, d.payload) for k, d in store.list_documents(PROGENITOR_STATE_PREFIX, prefix)
             ]
 
-    manager = StateManager.__new__(StateManager)
-    manager._runtime_store = _Store()
+    manager = StateManager(_Store())
     backend = RepoDirectoryBackend(manager)
 
     written = await backend.awrite(

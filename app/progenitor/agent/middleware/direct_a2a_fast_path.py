@@ -2,17 +2,16 @@ from __future__ import annotations
 
 import contextlib
 import inspect
-import re
 from collections.abc import Awaitable, Callable
 from typing import Any, cast
 
 from langchain.agents.middleware.types import AgentMiddleware, ModelRequest, ModelResponse
 from langchain_core.messages import AIMessage
 
-from app.progenitor.a2a import A2AClient, extract_message_text, summarize_task_payload
+from app.progenitor.a2a.client import A2AClient
+from app.progenitor.a2a.mentions import _DIRECT_A2A_EMPTY_RE, _DIRECT_A2A_RE
+from app.progenitor.a2a.payloads import extract_message_text, summarize_task_payload
 
-_DIRECT_A2A_RE = re.compile(r"^@(?P<agent>[A-Za-z0-9_][A-Za-z0-9_.-]*)\s+(?P<request>.+?)\s*$")
-_DIRECT_A2A_EMPTY_RE = re.compile(r"^@(?P<agent>[A-Za-z0-9_][A-Za-z0-9_.-]*)\s*$")
 _DISPLAY_KEYS = ("display_agent_name", "display_model_name", "display_tool_calls")
 
 

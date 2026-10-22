@@ -6,7 +6,7 @@ readable directly with the file tools. This tool exists for the cases that
 extraction misses or does poorly -- PDFs, Word docs, spreadsheets,
 presentations -- by running Microsoft's markitdown converter against the
 attachment's *raw bytes* (fetched straight from the same Postgres blob
-table the backend writes to, via ``app.progenitor.attachments_db``).
+table the backend writes to, via ``app.progenitor.attachments.store``).
 
 The converted markdown is also written back onto the attachment's
 ``text_content`` column, so a later plain ``/attachments/<file>`` read (or
@@ -22,8 +22,9 @@ import os
 
 from pydantic import BaseModel, Field
 
-from .. import attachments_db
-from ..runtime.thread_context import get_current_thread_id
+import app.progenitor.attachments.store as attachments_db
+from app.progenitor.sessions.context import get_current_thread_id
+
 from .protocol import BaseSystemTool, ToolContext, ToolResult
 
 logger = logging.getLogger(__name__)

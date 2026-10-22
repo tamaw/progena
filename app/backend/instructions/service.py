@@ -21,7 +21,7 @@ from app.backend.storage.documents import (
     StoredDocument,
     get_default_document_store,
 )
-from app.progenitor.content_documents import content_document_key, content_document_prefix
+from app.progenitor.documents.content import content_document_key, content_document_prefix
 from app.progenitor.instructions import check_instruction_write, instruction_group
 from app.progenitor.instructions.templates import (
     InstructionTemplate,

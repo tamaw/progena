@@ -13,7 +13,7 @@ from app.backend.workflows.service import (
     get_workflow_run,
     save_workflow_definition,
 )
-from app.progenitor.workflows import default_workflow_definition
+from app.progenitor.workflows.documents import default_workflow_definition
 
 TYPED_ROUTINE = {
     "id": "summarize",

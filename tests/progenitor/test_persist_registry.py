@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.progenitor.nodes.registry import _persist_registry
+from app.progenitor.orchestration.nodes.registry import _persist_registry
 
 
 class _FakeRegistry:

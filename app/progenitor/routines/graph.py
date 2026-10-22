@@ -11,8 +11,8 @@ from typing import Annotated, Any, Literal, TypedDict
 
 from pydantic import BaseModel, ConfigDict, Field, SerializerFunctionWrapHandler, model_serializer
 
-from ..schemas import load_schema
-from ..structured import validate_against_schema
+from app.progenitor.documents.catalog import load_schema
+from app.progenitor.llm.structured import validate_against_schema
 
 ROUTINE_GRAPH_VERSION = "2.0.0"
 ROUTINE_SEED_NODE_ID = "__seed__"

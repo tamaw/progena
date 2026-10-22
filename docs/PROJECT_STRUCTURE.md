@@ -25,10 +25,20 @@ This overview is intentionally selective and centered on the runtime, backend, a
 app/
 ├── progenitor/   # Long-running runtime service
 │   ├── agent/    # DeepAgent setup and runtime integration
-│   ├── sse/      # Stream-envelope helpers for the HTTP+SSE chat/event path
-│   ├── llm/      # Model and prompt-loading helpers
-│   ├── runtime/  # Loop runner, scheduler, and runtime managers
-│   ├── state/    # State models and persistence helpers
+│   ├── orchestration/ # Graphs, nodes and composed loop state
+│   ├── llm/      # Provider context, model calls, schemas and response parsing
+│   ├── runtime/  # Lifecycle, heartbeat, HTTP server and streaming adapters
+│   ├── documents/ # Shared keys, kinds, schema catalog and document contracts
+│   ├── persistence/ # Database connections, checkpoints, cache, store and listener
+│   ├── workflows/ # Models, ports, derivation, validation and document store
+│   ├── routines/
+│   ├── schedules/
+│   ├── repositories/
+│   ├── sessions/
+│   ├── settings/
+│   ├── knowledge/ / instructions/ / plugins/
+│   ├── a2a/ / acp/ / async_subagents/ / mcp/
+│   ├── state/    # State lifecycle facade over domain stores
 │   ├── tools/    # Runtime tool registry and implementations
 │   └── main.py   # Runtime entry point
 ├── backend/      # FastAPI API and UI data backend

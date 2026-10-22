@@ -23,8 +23,8 @@ from app.backend.storage.documents import (
     document_write_origin,
     get_default_document_store,
 )
-from app.progenitor.document_types import DOCUMENT_OPERATIONS, DocumentType
-from app.progenitor.modules import (
+from app.progenitor.documents.types import DOCUMENT_OPERATIONS, DocumentType
+from app.progenitor.modules.contracts import (
     MAX_MODULE_DATA_BYTES,
     MODULE_MANIFEST_FILE,
     ModuleValidationError,

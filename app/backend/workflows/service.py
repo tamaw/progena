@@ -21,20 +21,34 @@ from app.backend.storage.documents import (
     document_write_origin,
 )
 from app.backend.workflows.routine_runs import enqueue_routine_run
-from app.progenitor.content_documents import content_document_key
-from app.progenitor.document_types import DocumentType
+from app.progenitor.documents.content import content_document_key
+from app.progenitor.documents.types import DocumentType
 from app.progenitor.instructions.templates import (
     instruction_relative_path,
     parse_format_template,
     parse_instruction_template,
     render_instruction_template,
 )
+from app.progenitor.llm.structured import validate_against_schema
 from app.progenitor.routines.store import routine_graph_key
-from app.progenitor.structured import validate_against_schema
 from app.progenitor.utils import utcnow, utcnow_isoformat
-from app.progenitor.workflows import (
+from app.progenitor.workflows.constants import (
     MAX_WORKFLOW_INVOKE_DEPTH,
     RoutineLoader,
+    WorkflowRunSource,
+)
+from app.progenitor.workflows.derivation import derive_workflow_port_schemas
+from app.progenitor.workflows.documents import (
+    build_workflow_list_item,
+    coerce_workflow_definition,
+    coerce_workflow_run,
+    workflow_definition_key,
+    workflow_id_from_path,
+    workflow_queue_key,
+    workflow_run_key,
+)
+from app.progenitor.workflows.events import build_cron_trigger_output, build_document_read_output
+from app.progenitor.workflows.models import (
     WorkflowDefinition,
     WorkflowListItem,
     WorkflowNodeAgent,
@@ -52,26 +66,17 @@ from app.progenitor.workflows import (
     WorkflowNodeRoutine,
     WorkflowNodeUnpack,
     WorkflowRun,
-    WorkflowRunSource,
     WorkflowTriggerNode,
-    build_cron_trigger_output,
-    build_document_read_output,
-    build_workflow_list_item,
-    coerce_workflow_definition,
-    coerce_workflow_run,
-    derive_workflow_port_schemas,
+)
+from app.progenitor.workflows.ports import (
     document_query_filter_port_names,
-    json_equal,
     routine_declared_schema,
-    validate_workflow_definition_payload,
-    workflow_definition_key,
-    workflow_id_from_path,
     workflow_node_input_ports,
     workflow_node_output_object,
     workflow_node_output_ports,
-    workflow_queue_key,
-    workflow_run_key,
 )
+from app.progenitor.workflows.validation import validate_workflow_definition_payload
+from app.progenitor.workflows.values import json_equal
 
 logger = logging.getLogger(__name__)
 

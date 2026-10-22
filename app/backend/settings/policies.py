@@ -11,7 +11,7 @@ from fastapi import APIRouter, HTTPException, Request
 import app.backend.http.contracts as http_contracts
 from app.backend.http.requests import BroadcastUiEvent, request_correlation_id
 from app.backend.storage.documents import PROGENITOR_STATE_PREFIX, BackendDocumentStore
-from app.progenitor.policies import POLICY_KEY_PREFIX, validate_policy
+from app.progenitor.settings.policies import POLICY_KEY_PREFIX, validate_policy
 
 
 def policy_catalog(store: BackendDocumentStore) -> list[dict[str, Any]]:

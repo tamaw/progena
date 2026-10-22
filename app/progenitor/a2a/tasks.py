@@ -6,7 +6,8 @@ import logging
 from collections.abc import Awaitable, Callable
 from typing import Any, cast
 
-from ..state.models import A2ATaskRecord, A2ATaskStatus
+from app.progenitor.a2a.models import A2ATaskRecord, A2ATaskStatus
+
 from ..utils import utcnow
 from .client import A2AClient
 from .payloads import (

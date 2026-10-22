@@ -19,8 +19,8 @@ import app.backend.monitoring.state as monitoring_state
 import app.backend.schedules.models as schedules_models
 import app.backend.storage.documents as storage_documents
 from app.progenitor.cron import default_timezone_name
-from app.progenitor.document_types import DOCUMENT_OPERATIONS
-from app.progenitor.schedule import Scheduler
+from app.progenitor.documents.types import DOCUMENT_OPERATIONS
+from app.progenitor.schedules.engine import Scheduler
 from app.progenitor.utils import utcnow
 
 logger = logging.getLogger(__name__)

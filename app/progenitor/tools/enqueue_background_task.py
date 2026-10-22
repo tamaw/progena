@@ -6,7 +6,9 @@ import uuid
 
 from pydantic import BaseModel, Field
 
-from ..state.models import BackgroundTaskEntry, generate_thread_id
+from app.progenitor.orchestration.state import BackgroundTaskEntry
+from app.progenitor.sessions.models import generate_thread_id
+
 from .protocol import BaseSystemTool, ToolContext, ToolResult
 
 

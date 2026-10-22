@@ -7,7 +7,7 @@ table -- the same one workflow definitions live in (see
 - The Progenitor runtime (async ``LangGraphRuntimeStore``, via
   ``StateManager``) mounts them as ``/routines/<agent_id>.json`` in the
   DeepAgent virtual filesystem (see
-  ``app.progenitor.agent.state_backend.RoutineDirectoryBackend``).
+  ``app.progenitor.agent.filesystem.routines.RoutineDirectoryBackend``).
 - The FastAPI backend (sync ``PostgresDocumentStore``) reads/writes the same
   keys directly so the Agents page's Graph tab and this module's document
   stay byte-for-byte the same thing the agent edits.
@@ -22,7 +22,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from ..document_kinds import ROUTINE_GRAPH_KEY_PREFIX
+from app.progenitor.documents.kinds import ROUTINE_GRAPH_KEY_PREFIX
+
 from .graph import ROUTINE_GRAPH_VERSION, RoutineGraph, validate_routine_graph_payload
 
 DEFAULT_ROUTINE_PROMPT_TEMPLATE = (

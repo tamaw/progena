@@ -15,13 +15,16 @@ from langchain_core.tools import tool
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph_sdk import get_client
 
-from app.progenitor import provider_runtime
-from app.progenitor.agent.live_async_subagents import LiveAsyncSubagentMiddleware
+import app.progenitor.llm.provider_context as provider_runtime
 from app.progenitor.agent.middleware.async_subagent_tracking import AsyncSubagentTrackingMiddleware
-from app.progenitor.agent.object_agent_registry import LiveSubagentMiddleware, ObjectAgentRegistry
-from app.progenitor.agent.object_agents import create_object_agent_proxy
+from app.progenitor.agent.object_agents.factory import create_object_agent_proxy
+from app.progenitor.agent.object_agents.registry import (
+    LiveSubagentMiddleware,
+    ObjectAgentRegistry,
+)
+from app.progenitor.agent.subagents.live import LiveAsyncSubagentMiddleware
 from app.progenitor.async_subagents.protocol import RUN_PREFIX, THREAD_PREFIX
-from app.progenitor.runtime.http import ProgenitorHTTPServer
+from app.progenitor.runtime.http.server import ProgenitorHTTPServer
 from app.progenitor.state.manager import StateManager
 from tests.progenitor.conftest import _FakeRuntimeStore
 

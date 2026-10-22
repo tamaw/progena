@@ -18,10 +18,7 @@ import app.backend.schedules.models as schedules_models
 import app.backend.storage.access as storage_access
 import app.backend.storage.documents as storage_documents
 import app.backend.tasks.models as tasks_models
-from app.progenitor.document_kinds import (
-    KANBAN_CARD_KEY_PREFIX,
-    KANBAN_TASK_CONTENT_KEY_PREFIX,
-)
+from app.progenitor.documents.kinds import KANBAN_CARD_KEY_PREFIX, KANBAN_TASK_CONTENT_KEY_PREFIX
 from app.progenitor.utils import utcnow
 
 logger = logging.getLogger(__name__)

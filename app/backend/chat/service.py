@@ -25,8 +25,9 @@ from app.progenitor.a2a.payloads import (
 from app.progenitor.a2a.payloads import (
     _MAX_PROGRESS_MESSAGE_TEXT_LENGTH as _REPLAYED_PROGRESS_MESSAGE_TEXT_LIMIT,
 )
-from app.progenitor.document_kinds import SESSION_KEY_PREFIX
-from app.progenitor.runtime.messages import (
+from app.progenitor.documents.kinds import SESSION_KEY_PREFIX
+from app.progenitor.security.redaction import redact_secrets
+from app.progenitor.sessions.messages import (
     extract_cache_read_token_count,
     extract_display_metadata,
     extract_message_text,
@@ -34,7 +35,6 @@ from app.progenitor.runtime.messages import (
     extract_reasoning_trace,
 )
 from app.progenitor.sessions.titles import ATTACHMENT_CONTEXT_MARKER, display_title
-from app.progenitor.state.models import redact_secrets
 
 # History must not replay arbitrary tool artifacts (which may contain raw files,
 # images, or credentials). Keep only the SSE-compatible user-facing projection.

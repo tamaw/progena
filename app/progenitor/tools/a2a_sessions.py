@@ -10,15 +10,18 @@ from typing import Any, cast
 
 from pydantic import BaseModel, Field
 
-from ..a2a import (
-    build_task_response,
+from app.progenitor.a2a.models import A2ATaskRecord
+from app.progenitor.a2a.payloads import build_task_response, extract_message_text
+from app.progenitor.a2a.tasks import (
     cancel_tracked_a2a_task,
     dispatch_tracked_a2a_task,
-    extract_message_text,
     refresh_tracked_a2a_task,
 )
-from ..sse.stream_events import build_a2a_call_progress_event, emit_stream_event
-from ..state.models import A2ATaskRecord
+from app.progenitor.runtime.streaming.stream_events import (
+    build_a2a_call_progress_event,
+    emit_stream_event,
+)
+
 from .protocol import BaseSystemTool, ToolContext, ToolResult
 
 _MAX_WAIT_SECONDS = 300.0

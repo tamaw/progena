@@ -8,7 +8,7 @@ from langchain_core.tools import StructuredTool
 
 from app.progenitor.agent.adapters import create_deepagent_tools, create_dynamic_mcp_tools
 from app.progenitor.config import MCPConfig
-from app.progenitor.mcp import MCPRuntime
+from app.progenitor.mcp.runtime import MCPRuntime
 from app.progenitor.tools.a2a_sessions import A2ASendArgs
 from app.progenitor.tools.protocol import RequestToolArgs
 

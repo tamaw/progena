@@ -28,7 +28,8 @@ from langgraph.graph.message import add_messages
 from langgraph.runtime import Runtime
 from langgraph.types import CachePolicy, RetryPolicy, TimeoutPolicy
 
-from ..policies import CACHE_NODE_KINDS, PolicyValues
+from app.progenitor.settings.policies import CACHE_NODE_KINDS, PolicyValues
+
 from ..utils import utcnow_isoformat
 
 # Re-export the existing helper imports for compiler callers.

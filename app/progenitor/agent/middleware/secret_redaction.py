@@ -8,7 +8,7 @@ from langchain.agents.middleware.types import AgentMiddleware, ToolCallRequest
 from langchain_core.messages import ToolMessage
 from langgraph.types import Command
 
-from app.progenitor.state.models import redact_secrets
+from app.progenitor.security.redaction import redact_secrets
 
 logger = logging.getLogger(__name__)
 

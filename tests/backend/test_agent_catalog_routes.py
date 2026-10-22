@@ -15,7 +15,7 @@ from fastapi.testclient import TestClient
 
 from app.backend.agents.routes import create_agent_profile_router, validate_agent_graph
 from app.backend.storage.documents import PROGENITOR_STATE_PREFIX, InMemoryDocumentStore
-from app.progenitor.policies import ExecutionPolicy
+from app.progenitor.settings.policies import ExecutionPolicy
 
 _DEFAULT_GRAPH = {
     "status": "Draft",

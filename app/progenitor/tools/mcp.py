@@ -2,7 +2,7 @@
 
 Tool *invocation* is handled by ``MCPRuntime`` (``app/progenitor/mcp/runtime.py``)
 via the LLM client; discovery/refresh is owned by ``sync_mcp_runtime_context``
-(``app/progenitor/nodes/mcp.py``). This module only reads that runtime state.
+(``app/progenitor/orchestration/nodes/mcp.py``). This module only reads that runtime state.
 """
 
 import logging

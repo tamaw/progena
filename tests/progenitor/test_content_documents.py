@@ -5,14 +5,14 @@ directories (`deepagents/middleware/skills.py:_alist_skills_with_errors`).
 `ContentDocumentDirectoryBackend.als` previously returned every content
 document row flat, all with `is_dir=False`, so skill discovery silently
 returned zero skills even though the documents existed and were readable by
-exact path. See `app/progenitor/agent/state_backend.py:ContentDocumentDirectoryBackend.als`.
+exact path. See `app/progenitor/agent/filesystem/:ContentDocumentDirectoryBackend.als`.
 """
 
 from unittest.mock import MagicMock
 
 from deepagents.middleware.skills import _alist_skills_with_errors
 
-from app.progenitor.agent.state_backend import ContentDocumentDirectoryBackend
+from app.progenitor.agent.filesystem.content import ContentDocumentDirectoryBackend
 
 
 class FakeContentStateManager(MagicMock):

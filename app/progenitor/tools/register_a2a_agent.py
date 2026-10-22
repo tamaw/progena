@@ -14,7 +14,8 @@ from urllib.parse import urlparse
 
 from pydantic import BaseModel, Field
 
-from ..state.models import AgentRegistryEntry
+from app.progenitor.registry.models import AgentRegistryEntry
+
 from .protocol import BaseSystemTool, ToolContext, ToolResult
 
 logger = logging.getLogger(__name__)

@@ -14,8 +14,10 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from app.progenitor.acp.models import ACPAgentConfig
+from app.progenitor.registry.models import AgentRegistryEntry
+
 from ..acp.agents import _profile_for_command, parse_acp_connection
-from ..state.models import ACPAgentConfig, AgentRegistryEntry
 from .protocol import BaseSystemTool, ToolContext, ToolResult
 
 logger = logging.getLogger(__name__)

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from ..state.models import redact_secrets
+from app.progenitor.security.redaction import redact_secrets
 
 DEFAULT_CHAT_TITLE = "New chat"
 DEFAULT_USER_NICK = "user"

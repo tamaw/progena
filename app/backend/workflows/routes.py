@@ -21,10 +21,7 @@ import app.backend.workflows.runtime as workflows_runtime
 import app.backend.workflows.service as workflows_service
 from app.progenitor.cron import cron_error, next_cron_time
 from app.progenitor.utils import utcnow
-from app.progenitor.workflows import (
-    default_workflow_definition,
-    workflow_id_from_path,
-)
+from app.progenitor.workflows.documents import default_workflow_definition, workflow_id_from_path
 
 logger = logging.getLogger(__name__)
 

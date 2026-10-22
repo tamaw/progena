@@ -66,14 +66,14 @@ class TestRuntimeMemoryWiring:
         state_manager = FakeContentStateManager()
 
         with (
-            patch("app.progenitor.agent.agent.create_deep_agent") as mock_create,
-            patch("app.progenitor.agent.agent.ProviderChatModel"),
-            patch("app.progenitor.agent.agent.create_progenitor_backend") as mock_backend,
+            patch("app.progenitor.agent.factory.create_deep_agent") as mock_create,
+            patch("app.progenitor.agent.factory.ProviderChatModel"),
+            patch("app.progenitor.agent.factory.create_progenitor_backend") as mock_backend,
         ):
             mock_create.return_value = MagicMock()
             mock_backend.return_value = MagicMock()
 
-            from app.progenitor.agent.agent import create_progenitor_agent
+            from app.progenitor.agent.factory import create_progenitor_agent
 
             await create_progenitor_agent(
                 config=config,
@@ -92,14 +92,14 @@ class TestRuntimeMemoryWiring:
         state_manager = FakeContentStateManager()
 
         with (
-            patch("app.progenitor.agent.agent.create_deep_agent") as mock_create,
-            patch("app.progenitor.agent.agent.ProviderChatModel"),
-            patch("app.progenitor.agent.agent.create_progenitor_backend") as mock_backend,
+            patch("app.progenitor.agent.factory.create_deep_agent") as mock_create,
+            patch("app.progenitor.agent.factory.ProviderChatModel"),
+            patch("app.progenitor.agent.factory.create_progenitor_backend") as mock_backend,
         ):
             mock_create.return_value = MagicMock()
             mock_backend.return_value = MagicMock()
 
-            from app.progenitor.agent.agent import (
+            from app.progenitor.agent.factory import (
                 DEFAULT_RUNTIME_MEMORY_CONTENT,
                 create_progenitor_agent,
             )
@@ -120,14 +120,14 @@ class TestRuntimeMemoryWiring:
         state_manager._docs["memory"]["preferences.md"] = "Prefer concise summaries.\n"
 
         with (
-            patch("app.progenitor.agent.agent.create_deep_agent") as mock_create,
-            patch("app.progenitor.agent.agent.ProviderChatModel"),
-            patch("app.progenitor.agent.agent.create_progenitor_backend") as mock_backend,
+            patch("app.progenitor.agent.factory.create_deep_agent") as mock_create,
+            patch("app.progenitor.agent.factory.ProviderChatModel"),
+            patch("app.progenitor.agent.factory.create_progenitor_backend") as mock_backend,
         ):
             mock_create.return_value = MagicMock()
             mock_backend.return_value = MagicMock()
 
-            from app.progenitor.agent.agent import create_progenitor_agent
+            from app.progenitor.agent.factory import create_progenitor_agent
 
             await create_progenitor_agent(
                 config=config,
@@ -145,7 +145,7 @@ class TestRuntimeMemoryWiring:
     async def test_factory_requires_state_manager(self, tmp_path: Path):
         config = _fake_config(tmp_path)
 
-        from app.progenitor.agent.agent import create_progenitor_agent
+        from app.progenitor.agent.factory import create_progenitor_agent
 
         try:
             await create_progenitor_agent(config=config, checkpointer=MagicMock())

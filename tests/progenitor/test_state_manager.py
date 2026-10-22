@@ -6,20 +6,17 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.progenitor.state.langgraph_store import (
+from app.progenitor.a2a.models import A2ATaskRecord
+from app.progenitor.async_subagents.models import AsyncSubagentTaskRecord
+from app.progenitor.orchestration.state import BackgroundTaskEntry
+from app.progenitor.persistence.store import (
     LOG_NAMESPACE_PREFIX,
     STATE_NAMESPACE,
     LangGraphRuntimeStore,
 )
+from app.progenitor.schedules.models import ScheduleEntry, ScheduleRunRecord
+from app.progenitor.sessions.models import ConversationMessage
 from app.progenitor.state.manager import StateManager
-from app.progenitor.state.models import (
-    A2ATaskRecord,
-    AsyncSubagentTaskRecord,
-    BackgroundTaskEntry,
-    ConversationMessage,
-    ScheduleEntry,
-    ScheduleRunRecord,
-)
 from tests.progenitor.conftest import _FakeRuntimeStore
 
 

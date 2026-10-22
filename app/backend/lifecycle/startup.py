@@ -24,7 +24,7 @@ import app.backend.lifecycle.state as lifecycle_state
 import app.backend.lifecycle.watchers as lifecycle_watchers
 import app.backend.schedules.service as schedules_service
 import app.backend.storage.documents as storage_documents
-from app.progenitor.providers import (
+from app.progenitor.settings.providers import (
     configure_provider_repository,
     provider_database_url,
     shutdown_provider_repository,

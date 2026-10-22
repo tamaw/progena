@@ -35,11 +35,8 @@ from app.backend.storage.documents import (
     store_database_url,
 )
 from app.progenitor.config import default_mcp_config_payload
-from app.progenitor.content_documents import (
-    AGENT_DOCUMENT_KEY_PREFIX,
-    SKILL_DOCUMENT_KEY_PREFIX,
-)
-from app.progenitor.document_kinds import (
+from app.progenitor.documents.content import AGENT_DOCUMENT_KEY_PREFIX, SKILL_DOCUMENT_KEY_PREFIX
+from app.progenitor.documents.kinds import (
     ACP_TASK_KEY_PREFIX,
     INBOX_MESSAGE_KEY_PREFIX,
     KNOWLEDGE_PAGE_KEY_PREFIX,
@@ -47,6 +44,10 @@ from app.progenitor.document_kinds import (
     MODULE_DOCUMENT_KEY_PREFIX,
     MODULE_STATUS_KEY_PREFIX,
     REPO_KEY_PREFIX,
+    WORKFLOW_DEFINITION_KEY_PREFIX,
+    WORKFLOW_INVOKE_REQUEST_KEY_PREFIX,
+    WORKFLOW_QUEUE_KEY_PREFIX,
+    WORKFLOW_RUN_KEY_PREFIX,
 )
 from app.progenitor.instructions.paths import PROJECT_ROOT
 from app.progenitor.knowledge.indexer_config import INDEX_STATUS_DOC_KEY
@@ -55,13 +56,7 @@ from app.progenitor.mcp.loader import (
     resolve_required_env_template,
 )
 from app.progenitor.routines.store import ROUTINE_GRAPH_KEY_PREFIX
-from app.progenitor.state.model_profiles import MODEL_PROFILES_DOC_KEY
-from app.progenitor.workflows import (
-    WORKFLOW_DEFINITION_KEY_PREFIX,
-    WORKFLOW_INVOKE_REQUEST_KEY_PREFIX,
-    WORKFLOW_QUEUE_KEY_PREFIX,
-    WORKFLOW_RUN_KEY_PREFIX,
-)
+from app.progenitor.settings.model_profiles import MODEL_PROFILES_DOC_KEY
 
 logger = logging.getLogger(__name__)
 DEFAULT_LOGS_DIR = PROJECT_ROOT / "logs"

@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Any, Optional, Protocol, cast
 from pydantic import BaseModel, Field
 
 if TYPE_CHECKING:
-    from ..state.models import ProgenitorState
+    from app.progenitor.orchestration.state import ProgenitorState
 
 
 @dataclass
@@ -48,7 +48,7 @@ class ToolResult:
     should_retry_slow_path: bool = False
     artifact: dict[str, Any] | None = None
     """Small, bounded projection surfaced on the SSE activity stream
-    (see ``app.progenitor.sse.stream_events._extract_artifact``). Allowed
+    (see ``app.progenitor.runtime.streaming.stream_events._extract_artifact``). Allowed
     keys: ``summary``, ``count``, ``kind``, ``status`` -- anything else is
     dropped before it reaches the frontend. Distinct from ``data``, which is
     the full result returned to the LLM."""

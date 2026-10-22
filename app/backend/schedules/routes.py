@@ -17,8 +17,8 @@ import app.backend.schedules.service as schedules_service
 import app.backend.settings.mcp as settings_mcp
 import app.backend.storage.documents as storage_documents
 import app.backend.workflows.runtime as workflows_runtime
-from app.progenitor.schedule import Scheduler
-from app.progenitor.schedule.service import generate_schedule_id
+from app.progenitor.schedules.engine import Scheduler
+from app.progenitor.schedules.service import generate_schedule_id
 from app.progenitor.utils import utcnow
 
 logger = logging.getLogger(__name__)

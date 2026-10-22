@@ -7,7 +7,7 @@ from typing import Any
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
-from app.progenitor.runtime.responses_api import (
+from app.progenitor.runtime.http.responses import (
     build_response_object,
     build_sse_event,
     conversation_items_with_sources,

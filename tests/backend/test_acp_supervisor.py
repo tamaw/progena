@@ -11,7 +11,7 @@ from app.backend.events.documents import DocumentEventDispatcher, seed_document_
 from app.backend.storage.documents import PROGENITOR_STATE_PREFIX, InMemoryDocumentStore
 from app.backend.workflows.acp_supervisor import ACPTaskSupervisor
 from app.progenitor.acp.runner import ACPRunResult
-from app.progenitor.document_kinds import ACP_TASK_KEY_PREFIX
+from app.progenitor.documents.kinds import ACP_TASK_KEY_PREFIX
 
 
 async def _wait_for(predicate: Callable[[], bool], timeout: float = 2.0) -> None:

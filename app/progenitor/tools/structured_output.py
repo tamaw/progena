@@ -15,8 +15,9 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from ..schemas import load_schema
-from ..structured import generate_structured
+from app.progenitor.documents.catalog import load_schema
+from app.progenitor.llm.structured import generate_structured
+
 from .protocol import BaseSystemTool, ToolContext, ToolResult
 
 logger = logging.getLogger(__name__)

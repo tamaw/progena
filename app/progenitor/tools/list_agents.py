@@ -5,7 +5,8 @@ List Agents - List all registered agents with their status.
 import logging
 from contextlib import suppress
 
-from ..nodes.registry import refresh_agent_metadata
+from app.progenitor.orchestration.nodes.registry import refresh_agent_metadata
+
 from .protocol import BaseSystemTool, ToolContext, ToolResult
 
 logger = logging.getLogger(__name__)

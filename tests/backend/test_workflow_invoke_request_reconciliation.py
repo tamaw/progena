@@ -18,7 +18,7 @@ from app.backend.storage.documents import (
     set_default_document_store,
 )
 from app.backend.workflows.service import list_workflow_runs, save_workflow_definition
-from app.progenitor.workflows import (
+from app.progenitor.workflows.documents import (
     default_workflow_definition,
     workflow_invoke_request_key,
 )

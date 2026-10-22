@@ -7,8 +7,9 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from ..runtime.thread_context import get_current_thread_id
-from ..workflows import MAX_WORKFLOW_INVOKE_DEPTH
+from app.progenitor.sessions.context import get_current_thread_id
+from app.progenitor.workflows.constants import MAX_WORKFLOW_INVOKE_DEPTH
+
 from .protocol import BaseSystemTool, ToolContext, ToolResult
 
 _ACTIVE_RUN_STATUSES = ("queued", "running", "paused")

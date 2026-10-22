@@ -5,8 +5,9 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from app.progenitor.acp.models import ACPAgentConfig
+from app.progenitor.registry.models import AgentRegistryEntry
 from app.progenitor.registry.store import ToolRegistry
-from app.progenitor.state.models import ACPAgentConfig, AgentRegistryEntry
 
 
 def _fake_store() -> tuple[Any, Any, dict[str, Any]]:

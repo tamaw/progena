@@ -59,8 +59,10 @@ Agent permissions and mounts constrain the virtual documents exposed to an objec
 
 ## Key Implementation Areas
 
-- `app/progenitor/graph/progenitor_graph.py` — conversation graph construction
-- `app/progenitor/graph/heartbeat_graph.py` — queue, cycle, and idle-heartbeat orchestration
+- `app/progenitor/orchestration/graphs/progenitor_graph.py` — conversation graph construction
+- `app/progenitor/orchestration/graphs/heartbeat_graph.py` — queue, cycle, and idle-heartbeat orchestration
 - `app/progenitor/agent/` — DeepAgent setup and virtual filesystem backends
-- `app/progenitor/state/` — state models and persistence
+- `app/progenitor/state/` — state lifecycle facade over domain stores
+- `app/progenitor/persistence/` — shared native store, checkpoints and notifications
+- `app/progenitor/orchestration/state.py` — composed graph state; domain models live beside their owners
 - `app/progenitor/a2a/`, `app/progenitor/acp/`, and `app/progenitor/async_subagents/` — tracked external work

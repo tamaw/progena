@@ -21,7 +21,7 @@ import app.backend.http.contracts as http_contracts
 import app.backend.settings.preferences_store as settings_preferences_store
 from app.backend.http.requests import request_correlation_id as _request_correlation_id
 from app.backend.settings.preferences_store import load_preferences, save_preferences
-from app.progenitor.state.preferences import validate_preferences_payload
+from app.progenitor.settings.preferences import validate_preferences_payload
 
 router = APIRouter(prefix="/api/ui/preferences", tags=["preferences"])
 

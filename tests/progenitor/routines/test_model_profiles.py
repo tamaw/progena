@@ -7,10 +7,10 @@ import pytest
 from langchain_core.messages import AIMessage
 from langchain_core.runnables import RunnableLambda
 
-from app.progenitor import provider_runtime
+import app.progenitor.llm.provider_context as provider_runtime
+from app.progenitor.agent.model_profiles import resolve_model_profile
 from app.progenitor.routines.factory import compile_routine_graph
 from app.progenitor.routines.graph import validate_routine_graph_payload
-from app.progenitor.state.model_profiles import resolve_model_profile
 from tests.progenitor.routines.test_factory import FakeModel, FakeStructuredModel
 
 

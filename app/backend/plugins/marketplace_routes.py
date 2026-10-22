@@ -19,7 +19,7 @@ from app.backend.plugins.marketplaces import (
     save_marketplaces,
     set_cached_catalog,
 )
-from app.progenitor.marketplaces import validate_marketplaces_payload
+from app.progenitor.plugins.marketplaces import validate_marketplaces_payload
 from app.progenitor.plugins.sources import PluginFetchError, fetch_marketplace
 
 logger = logging.getLogger(__name__)

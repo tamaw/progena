@@ -13,12 +13,12 @@ from langchain_core.runnables import RunnableLambda
 from langgraph.checkpoint.memory import MemorySaver
 from pydantic import Field
 
-from app.progenitor.agent.async_subagents import create_progenitor_async_subagents
-from app.progenitor.agent.object_agent_registry import (
+from app.progenitor.agent.object_agents.registry import (
     LiveSubagentMiddleware,
     ObjectAgentRegistry,
     RoutineSubagentRegistry,
 )
+from app.progenitor.agent.subagents.descriptors import create_progenitor_async_subagents
 from app.progenitor.routines.factory import compile_routine_graph
 from app.progenitor.routines.graph import validate_routine_graph_payload
 

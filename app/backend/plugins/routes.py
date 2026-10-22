@@ -20,7 +20,7 @@ from app.backend.plugins.marketplaces import (
 )
 from app.backend.storage.documents import PROGENITOR_STATE_PREFIX, get_default_document_store
 from app.progenitor.config import default_plugins_config_payload
-from app.progenitor.content_documents import content_document_key
+from app.progenitor.documents.content import content_document_key
 from app.progenitor.plugins.schema import validate_plugins_payload
 from app.progenitor.plugins.sources import (
     PluginFetchError,

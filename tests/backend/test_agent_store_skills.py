@@ -12,7 +12,7 @@ import pytest
 
 from app.backend.agents.store import AgentStore
 from app.backend.storage.documents import InMemoryDocumentStore
-from app.progenitor.content_documents import content_document_key
+from app.progenitor.documents.content import content_document_key
 
 
 def _make_store() -> AgentStore:

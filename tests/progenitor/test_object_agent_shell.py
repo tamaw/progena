@@ -4,12 +4,12 @@ import pytest
 from deepagents.backends import CompositeBackend
 from deepagents.middleware.filesystem import FilesystemMiddleware, supports_execution
 
-from app.progenitor.agent.object_agent_manifest import (
+from app.progenitor.agent.filesystem.shell import ShellPaths, build_shell_env
+from app.progenitor.agent.object_agents.factory import create_object_agent_proxy
+from app.progenitor.agent.object_agents.manifest import (
     ObjectAgentSource,
     parse_object_agent_manifest,
 )
-from app.progenitor.agent.object_agents import create_object_agent_proxy
-from app.progenitor.agent.shell_backend import ShellPaths, build_shell_env
 from app.progenitor.config import RuntimeConfig, StorageConfig
 
 SHELL_SYSTEM = """---
@@ -57,9 +57,9 @@ async def _compiled_backend(monkeypatch, source, tmp_path: Path, *, workspace_ro
         calls.append(kwargs)
         return _Compiled()
 
-    monkeypatch.setattr("app.progenitor.agent.object_agents.create_agent", create)
+    monkeypatch.setattr("app.progenitor.agent.object_agents.factory.create_agent", create)
     monkeypatch.setattr(
-        "app.progenitor.agent.object_agents.SummarizationMiddleware",
+        "app.progenitor.agent.object_agents.factory.SummarizationMiddleware",
         lambda **_kwargs: object(),
     )
     proxy = create_object_agent_proxy(
@@ -153,9 +153,9 @@ async def test_non_shell_proxy_does_not_expose_execute_capability(monkeypatch, t
         calls.append(kwargs)
         return _Compiled()
 
-    monkeypatch.setattr("app.progenitor.agent.object_agents.create_agent", create)
+    monkeypatch.setattr("app.progenitor.agent.object_agents.factory.create_agent", create)
     monkeypatch.setattr(
-        "app.progenitor.agent.object_agents.SummarizationMiddleware",
+        "app.progenitor.agent.object_agents.factory.SummarizationMiddleware",
         lambda **_kwargs: object(),
     )
     proxy = create_object_agent_proxy(

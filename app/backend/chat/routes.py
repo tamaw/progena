@@ -32,9 +32,7 @@ from app.backend.http.requests import BroadcastUiEvent
 from app.backend.http.requests import request_correlation_id as _strict_request_correlation_id
 from app.backend.integrations.runtime_history import RuntimeUnavailable
 from app.backend.storage.documents import BackendDocumentStore
-from app.progenitor.document_kinds import (
-    SESSION_KEY_PREFIX,
-)
+from app.progenitor.documents.kinds import SESSION_KEY_PREFIX
 
 logger = logging.getLogger(__name__)
 

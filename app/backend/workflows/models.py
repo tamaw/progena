@@ -7,12 +7,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-from app.progenitor.workflows import (
-    WORKFLOW_DEFAULT_DOCUMENT_TYPE,
-    WorkflowDefinition,
-    WorkflowListItem,
-    WorkflowRun,
-)
+from app.progenitor.workflows.constants import WORKFLOW_DEFAULT_DOCUMENT_TYPE
+from app.progenitor.workflows.models import WorkflowDefinition, WorkflowListItem, WorkflowRun
 
 logger = logging.getLogger(__name__)
 

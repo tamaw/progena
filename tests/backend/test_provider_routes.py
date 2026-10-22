@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 
 from app.backend.settings.providers import create_provider_router
 from app.backend.storage.documents import PROGENITOR_STATE_PREFIX, InMemoryDocumentStore
-from app.progenitor.providers import (
+from app.progenitor.settings.providers import (
     _normalize_foundry_base_url,
     _normalize_legacy_foundry_base_url,
 )

@@ -12,12 +12,13 @@ from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.runtime import Runtime
 from langgraph.types import interrupt
 
+from app.progenitor.llm.structured import validate_against_schema
+
 from ..instructions.templates import (
     instruction_relative_path,
     parse_instruction_template,
     render_instruction_template,
 )
-from ..structured import validate_against_schema
 from .approvals import approval_decision_id
 from .control_nodes import _foreach_items
 from .graph import RoutineNode
@@ -153,7 +154,8 @@ def _build_a2a_node(node: RoutineNode, *, tool_registry: Any, timeout: float | N
     """One-shot delegation to a registered Agent2Agent-protocol peer, resolved
     the same way the ``@agent_name request`` direct-call chat shortcut does
     (see ``DirectA2AFastPathMiddleware``)."""
-    from ..a2a import A2AClient, extract_message_text, summarize_task_payload
+    from app.progenitor.a2a.client import A2AClient
+    from app.progenitor.a2a.payloads import extract_message_text, summarize_task_payload
 
     config = _node_config(node)
     output_key = node.output_key or node.id

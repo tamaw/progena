@@ -6,7 +6,7 @@ in ``document_store.py`` -- because attachments are opaque binary blobs
 same Postgres database as the LangGraph ``store`` table
 (``PROGENITOR_DATABASE_URL``), so both the backend (writer, via
 ``attachment_routes.py``) and the Progenitor runtime (reader, via
-``app/progenitor/agent/attachment_backend.py``) share one source of truth
+``app/progenitor/agent/filesystem/attachments.py``) share one source of truth
 without any SSE round-trip to the runtime.
 """
 

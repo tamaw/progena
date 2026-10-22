@@ -28,20 +28,18 @@ import app.backend.settings.preferences as settings_preferences
 import app.backend.storage.documents as storage_documents
 import app.backend.tasks.service as tasks_service
 import app.backend.workflows.runtime as workflows_runtime
-from app.progenitor.content_documents import AGENT_DOCUMENT_KEY_PREFIX, SKILL_DOCUMENT_KEY_PREFIX
-from app.progenitor.document_kinds import (
+from app.progenitor.documents.content import AGENT_DOCUMENT_KEY_PREFIX, SKILL_DOCUMENT_KEY_PREFIX
+from app.progenitor.documents.kinds import (
     INSTRUCTION_DOCUMENT_KEY_PREFIX,
     KNOWLEDGE_PAGE_KEY_PREFIX,
     MODULE_DOCUMENT_KEY_PREFIX,
     MODULE_STATUS_KEY_PREFIX,
     REPO_KEY_PREFIX,
-)
-from app.progenitor.knowledge.indexer_config import INDEX_STATUS_DOC_KEY
-from app.progenitor.workflows import (
     WORKFLOW_DEFINITION_KEY_PREFIX,
     WORKFLOW_QUEUE_KEY_PREFIX,
     WORKFLOW_RUN_KEY_PREFIX,
 )
+from app.progenitor.knowledge.indexer_config import INDEX_STATUS_DOC_KEY
 
 logger = logging.getLogger(__name__)
 

@@ -22,16 +22,16 @@ from app.backend.storage.documents import (
     BackendDocumentStore,
     document_write_origin,
 )
-from app.progenitor.acp import (
-    ACPRunner,
+from app.progenitor.acp.models import ACPFailureKind, ACPTaskRecord, ACPTaskStatus
+from app.progenitor.acp.runner import ACPRunner
+from app.progenitor.acp.tasks import (
     acp_config_from_agent_config,
     acp_failure_kind,
     runner_for,
     task_command,
     task_cwd,
 )
-from app.progenitor.document_kinds import ACP_TASK_KEY_PREFIX
-from app.progenitor.state.models import ACPFailureKind, ACPTaskRecord, ACPTaskStatus
+from app.progenitor.documents.kinds import ACP_TASK_KEY_PREFIX
 from app.progenitor.utils import utcnow
 
 logger = logging.getLogger(__name__)

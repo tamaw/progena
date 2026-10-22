@@ -10,9 +10,9 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from app.progenitor.state.langgraph_store import LangGraphRuntimeStore
+from app.progenitor.acp.models import ACPTaskRecord, ACPTaskStatus
+from app.progenitor.persistence.store import LangGraphRuntimeStore
 from app.progenitor.state.manager import StateManager
-from app.progenitor.state.models import ACPTaskRecord, ACPTaskStatus
 from app.progenitor.tools.acp_sessions import (
     ACPAnswerTool,
     ACPCancelTool,

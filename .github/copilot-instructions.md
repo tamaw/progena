@@ -50,13 +50,12 @@ User → Frontend → Backend (/v1/responses) → HTTP + SSE → ProgenitorLoop 
 ## Project-Specific Patterns
 
 ### State Models (Pydantic v2)
-All state models live in `app/progenitor/state/models.py`. Key types:
-- `WorkItem`: Backlog items with `WorkItemType` (BUILD_AGENT, A2A_CALL, SYSTEM_TOOL, etc.)
-- `Decision`: Routing decisions with `DecisionAction` (ANSWER_DIRECTLY, DELEGATE_A2A, BUILD_AGENT, etc.)
-- `ProgenitorState`: TypedDict used by all LangGraph nodes
+Domain models live beside their owners, such as `schedules/models.py`,
+`a2a/models.py`, `acp/models.py` and `sessions/models.py` under app/progenitor.
+`ProgenitorState` in `orchestration/state.py` composes the graph's TypedDict state.
 
 ### Node Pattern
-Nodes in `app/progenitor/nodes/` follow a factory pattern:
+Nodes in `app/progenitor/orchestration/nodes/` follow a factory pattern:
 ```python
 def create_node(state_manager, llm_client=None) -> Callable[[ProgenitorState], Awaitable[dict]]:
     async def node(state: ProgenitorState) -> dict:
@@ -66,10 +65,9 @@ def create_node(state_manager, llm_client=None) -> Callable[[ProgenitorState], A
 ```
 
 ### Graph Routing
-Routing functions in `app/progenitor/graph.py` determine flow:
-- `should_continue()`: `pick_next` | `idle` | `end`
-- `route_after_decide()`: `planner` | `pick_next` | `respond`
-- `route_after_validate()`: `register` | `pick_next`
+`app/progenitor/orchestration/graphs/heartbeat_graph.py` assembles background
+work. The conversational graph delegates to `agent/factory.py`, which composes
+the native DeepAgent. Runtime lifecycle and transport remain under runtime/.
 
 ### Configuration Hierarchy
 Environment variables > JSON config files. Key configs:
@@ -86,13 +84,15 @@ See `app/progenitor/config.py` for full dataclass definitions.
 - Example: `tests/progenitor/test_nodes.py`
 
 ### Secret Redaction
-`redact_secrets()` in `app/progenitor/state/models.py` auto-redacts API keys in logs. Patterns cover OpenAI, Azure, GitHub, Anthropic, and AWS keys.
+`redact_secrets()` in `app/progenitor/security/redaction.py` auto-redacts API keys in logs. Patterns cover OpenAI, Azure, GitHub, Anthropic, and AWS keys.
 
 ## Key Files
 
-- `app/progenitor/graph.py` - LangGraph topology and routing
-- `app/progenitor/runtime/loop.py` - Perpetual loop execution
-- `app/progenitor/state/models.py` - All Pydantic models
+- `app/progenitor/orchestration/graphs/heartbeat_graph.py` - LangGraph topology and routing
+- `app/progenitor/runtime/heartbeat.py` - Perpetual loop execution
+- `app/progenitor/orchestration/state.py` - Composed graph state
+- `app/progenitor/persistence/` - Shared storage infrastructure
+- `app/progenitor/state/manager.py` - State lifecycle and domain-store assembly
 - `app/progenitor/config.py` - Configuration dataclasses
 - `app/backend/main.py` - FastAPI application assembly; endpoints live in backend feature packages
 - `docs/SPEC.md` - Checked-in main system specification

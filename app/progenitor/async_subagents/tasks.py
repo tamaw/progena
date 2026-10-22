@@ -9,8 +9,9 @@ from typing import Any, cast
 from deepagents.middleware.async_subagents import AsyncSubAgent
 from langgraph_sdk import get_client
 
+from app.progenitor.async_subagents.models import AsyncSubagentTaskRecord, AsyncSubagentTaskStatus
+
 from ..routines.messages import normalize_message_content
-from ..state.models import AsyncSubagentTaskRecord, AsyncSubagentTaskStatus
 from ..utils import utcnow
 
 HELLO_WORLD_ASYNC_ASSISTANT_ID = "hello-world-async"
@@ -34,7 +35,7 @@ def create_agent_background_runner(
         model_profile: str | None = None,
     ) -> dict[str, Any]:
         if model_profile:
-            from ..state.model_profiles import resolve_model_profile
+            from app.progenitor.agent.model_profiles import resolve_model_profile
 
             await resolve_model_profile(state_manager, model_profile)
         client = get_client(url=url)

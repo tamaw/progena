@@ -4,7 +4,7 @@ Installed by ``open_langgraph_persistence`` right after ``saver.setup()``,
 under the same advisory-lock pattern as ``CHECKPOINT_TRIGGER_SQL``.
 """
 
-from app.progenitor.document_kinds import SESSION_KEY_PREFIX
+from app.progenitor.documents.kinds import SESSION_KEY_PREFIX
 from app.progenitor.sessions.titles import ATTACHMENT_CONTEXT_MARKER
 
 # Only the SESSION_KEY_PREFIX and ATTACHMENT_CONTEXT_MARKER constants are

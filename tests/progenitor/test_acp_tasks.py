@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import pytest
 
+from app.progenitor.acp.models import ACPTaskRecord, ACPTaskStatus
 from app.progenitor.acp.tasks import (
     acp_config_from_agent_config,
     build_acp_completion_message,
     task_command,
     task_cwd,
 )
-from app.progenitor.state.models import ACPTaskRecord, ACPTaskStatus
 
 
 def test_acp_config_requires_explicit_acp_settings() -> None:

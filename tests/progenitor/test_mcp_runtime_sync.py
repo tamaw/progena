@@ -8,7 +8,7 @@ from __future__ import annotations
 import asyncio
 from types import SimpleNamespace
 
-from app.progenitor.nodes.mcp import reapply_mcp_disabled_tools
+from app.progenitor.orchestration.nodes.mcp import reapply_mcp_disabled_tools
 from app.progenitor.runtime.mcp_sync import MCPSyncScheduler
 from app.progenitor.tools.mcp import MCPTool
 from app.progenitor.tools.protocol import ToolContext

@@ -4,7 +4,7 @@ Registered marketplace sources live in the ``marketplaces`` document under the
 ``progenitor.state`` namespace -- the same shared Postgres ``store`` table
 Progenitor's own runtime reads and writes, and the same document the agent can
 edit directly at ``/config/marketplaces.json`` (see
-``app/progenitor/agent/state_backend.py``). The backend reads/writes it with
+``app/progenitor/agent/filesystem/``). The backend reads/writes it with
 straight SQL through ``PostgresDocumentStore``, no RPC to the runtime process
 needed; the existing LISTEN/NOTIFY trigger on the ``store`` table (scoped to
 ``progenitor.state``/``backend.state`` prefixes) pushes the change back to the

@@ -22,8 +22,8 @@ from app.backend.http.requests import request_correlation_id as _request_correla
 from app.backend.knowledge.pages import list_pages, orphaned_page_base_ids, read_page
 from app.backend.knowledge.service import load_bases, save_bases, snapshot_bases
 from app.backend.storage.documents import get_default_document_store
-from app.progenitor.front_matter import split_front_matter
-from app.progenitor.knowledge import find_base, validate_knowledge_payload
+from app.progenitor.documents.front_matter import split_front_matter
+from app.progenitor.knowledge.schema import find_base, validate_knowledge_payload
 
 logger = logging.getLogger(__name__)
 

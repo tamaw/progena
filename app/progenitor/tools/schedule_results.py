@@ -7,7 +7,8 @@ from typing import Any, cast
 
 from pydantic import BaseModel, Field, model_validator
 
-from ..runtime.messages import extract_message_text, get_last_ai_message
+from app.progenitor.sessions.messages import extract_message_text, get_last_ai_message
+
 from .protocol import BaseSystemTool, ToolContext, ToolResult
 
 

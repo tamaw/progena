@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..state.models import A2ATaskRecord, A2ATaskStatus
+from app.progenitor.a2a.models import A2ATaskRecord, A2ATaskStatus
 
 
 def normalize_a2a_task_status(raw_state: Any) -> A2ATaskStatus:

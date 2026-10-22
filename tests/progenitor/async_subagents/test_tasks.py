@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
+from app.progenitor.async_subagents.models import AsyncSubagentTaskRecord, AsyncSubagentTaskStatus
 from app.progenitor.async_subagents.tasks import refresh_tracked_async_subagent_task
-from app.progenitor.state.models import AsyncSubagentTaskRecord, AsyncSubagentTaskStatus
 
 
 class TestRefreshTrackedAsyncSubagentTask:
