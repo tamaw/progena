@@ -21,12 +21,12 @@ import psycopg
 import src.backend.events.stream as events_stream
 from src.backend.knowledge.service import load_bases
 from src.backend.storage.documents import (
-    PROGENITOR_STATE_PREFIX,
+    PROGENA_STATE_PREFIX,
     get_default_document_store,
     store_database_url,
 )
-from src.progenitor.knowledge.embedding import Embedder, embedder_for
-from src.progenitor.knowledge.index import (
+from src.progena.knowledge.embedding import Embedder, embedder_for
+from src.progena.knowledge.index import (
     PageChunk,
     chunk_count,
     chunk_page,
@@ -40,18 +40,18 @@ from src.progenitor.knowledge.index import (
     pending_paths,
     replace_page_chunks,
 )
-from src.progenitor.knowledge.indexer_config import (
+from src.progena.knowledge.indexer_config import (
     DEFAULT_DIMENSIONS,
     INDEX_STATUS_DOC_KEY,
     INDEXER_DOC_KEY,
     EmbeddingTarget,
     resolve_embedding_target,
 )
-from src.progenitor.utils import utcnow_isoformat
+from src.progena.utils import utcnow_isoformat
 
 logger = logging.getLogger(__name__)
 
-_ADVISORY_LOCK_KEY = "progenitor_knowledge_indexer"
+_ADVISORY_LOCK_KEY = "progena_knowledge_indexer"
 _DEBOUNCE_SECONDS = 2.0
 _LOCK_RETRY_SECONDS = 5.0
 _ALL = "*"
@@ -62,12 +62,12 @@ Publisher = Callable[[str, dict[str, Any]], None]
 
 
 def _payload(key: str) -> Any:
-    row = get_default_document_store().get_document(PROGENITOR_STATE_PREFIX, key)
+    row = get_default_document_store().get_document(PROGENA_STATE_PREFIX, key)
     return row.payload if row is not None else None
 
 
 def _save_status(doc: dict[str, Any]) -> None:
-    get_default_document_store().save_document(PROGENITOR_STATE_PREFIX, INDEX_STATUS_DOC_KEY, doc)
+    get_default_document_store().save_document(PROGENA_STATE_PREFIX, INDEX_STATUS_DOC_KEY, doc)
 
 
 def _status_doc() -> dict[str, Any]:
@@ -81,9 +81,7 @@ def _status_doc() -> dict[str, Any]:
 def _live_pages(base_id: str) -> dict[str, str]:
     prefix = f"knowledge:{base_id}/"
     live: dict[str, str] = {}
-    for key, document in get_default_document_store().list_documents(
-        PROGENITOR_STATE_PREFIX, prefix
-    ):
+    for key, document in get_default_document_store().list_documents(PROGENA_STATE_PREFIX, prefix):
         payload = document.payload if isinstance(document.payload, dict) else {}
         path = key[len(prefix) :]
         content = payload.get("content")

@@ -183,7 +183,7 @@ test('01 creates, saves, reloads, and runs a deterministic Eval routine twice', 
   expect(page.url()).toBe(routineUrl);
 });
 
-test('02 Progenitor-authored routine appears in the live roster and accepts a user edit', async ({ page }) => {
+test('02 Progena-authored routine appears in the live roster and accepts a user edit', async ({ page }) => {
   // Model-driven routine creation can take several minutes; keep the timeout
   // separate from assertions on save, reload, and persisted prompt text.
   test.setTimeout(600_000);
@@ -214,7 +214,7 @@ test('03 creates and edits the three-input classifier rubric', async ({ page }, 
   expect(classifier.config.response_schema).toBeTruthy();
   const responseSchema = { title: 'TextClassification', type: 'object', additionalProperties: false, required: ['text', 'category'], properties: { text: { type: 'string' }, category: { type: 'string', enum: ['question', 'request', 'statement'] } } };
   // Configure a repeatable user fixture around the native classifier authored
-  // by Progenitor. The model still performs each classification at runtime.
+  // by Progena. The model still performs each classification at runtime.
   const rubric = 'Classify this text: {text}\nReturn the text verbatim and category. A sentence ending in ? is question, one beginning Please is request, otherwise statement. Treat Could you sentences ending in ? as question.';
   const configured = {
     ...graph, version: '2.0.0', entry: 'fan',

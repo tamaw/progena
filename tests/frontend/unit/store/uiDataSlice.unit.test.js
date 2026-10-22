@@ -315,13 +315,13 @@ describe('applyUiEvent reducer', () => {
   it('status.updated merges into existing status (partial metric pushes)', () => {
     let s = reducer(undefined, applyUiEvent({
       type: 'status.updated',
-      payload: { progenitor_running: true, agents: [{ name: 'a' }], memory_mb: 100 },
+      payload: { progena_running: true, agents: [{ name: 'a' }], memory_mb: 100 },
     }));
     // A later partial push (e.g. the process-metrics tick) updates only its
     // fields and preserves the rest.
     s = reducer(s, applyUiEvent({ type: 'status.updated', payload: { memory_mb: 142 } }));
     expect(s.status.memory_mb).toBe(142);
-    expect(s.status.progenitor_running).toBe(true);
+    expect(s.status.progena_running).toBe(true);
     expect(s.status.agents).toEqual([{ name: 'a' }]);
   });
 
@@ -350,7 +350,7 @@ describe('applyUiEvent reducer', () => {
 
   it('kanban.snapshot replaces the live tasks board', () => {
     const board = {
-      id: 'progenitor-kanban',
+      id: 'progena-kanban',
       title: 'Tasks',
       updated_at: '2026-06-23T00:00:00Z',
       columns: [{ id: 'backlog', label: 'Backlog' }],
@@ -467,7 +467,7 @@ describe('applyUiEvent reducer', () => {
           graph: {
             nodes: {
               event_a: { kind: 'event', title: 'Event', document_type: 'kanban_card' },
-              prompt_a: { kind: 'prompt', title: 'Prompt', prompt: 'Handle it', agent_name: 'progenitor', role: null },
+              prompt_a: { kind: 'prompt', title: 'Prompt', prompt: 'Handle it', agent_name: 'progena', role: null },
             },
             edges: [{ from: { node: 'event_a', port: 'default' }, to: { node: 'prompt_a', port: 'default' } }],
           },
@@ -646,7 +646,7 @@ describe('agent reducers', () => {
             capabilities: { streaming: false, stateTransitionHistory: true },
             inputModes: ['text/plain'],
           },
-          skills: [{ id: 'progenitor_health_report', name: 'Health', tags: ['example'], examples: ['Run it'] }],
+          skills: [{ id: 'progena_health_report', name: 'Health', tags: ['example'], examples: ['Run it'] }],
         }],
       },
     }));
@@ -656,7 +656,7 @@ describe('agent reducers', () => {
     expect(agent.transport).toBe('JSONRPC');
     expect(agent.card.protocolVersion).toBe('0.3.0');
     expect(agent.card.capabilities.stateTransitionHistory).toBe(true);
-    expect(agent.skills.map((skill) => skill.id)).toEqual(['progenitor_health_report']);
+    expect(agent.skills.map((skill) => skill.id)).toEqual(['progena_health_report']);
     expect(agent.skills[0].examples).toEqual(['Run it']);
   });
 

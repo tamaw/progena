@@ -42,7 +42,7 @@ class SessionConfig(BaseModel):
     max_sessions: int = 1000
     cleanup_interval_seconds: int = 300  # 5 minutes
     persist_dir: Path | None = None
-    cookie_name: str = "progenitor_session"
+    cookie_name: str = "progena_session"
     cookie_max_age: int = 60 * 60 * 24 * 7  # 7 days
 
 
@@ -61,7 +61,7 @@ class UserPreferences(BaseModel):
     show_thinking: bool = False  # Show reasoning/thinking content
 
     # Model preferences
-    default_model: str = "progenitor-v1"
+    default_model: str = "progena-v1"
     temperature: float = 0.7
     max_tokens: int | None = None
 
@@ -456,7 +456,7 @@ class SettingsManager:
             stream_responses=settings.get("stream_responses", True),
             auto_scroll=settings.get("auto_scroll", True),
             show_thinking=settings.get("show_thinking", False),
-            default_model=settings.get("default_model", "progenitor-v1"),
+            default_model=settings.get("default_model", "progena-v1"),
             temperature=settings.get("temperature", 0.7),
             max_tokens=settings.get("max_tokens"),
             enabled_features=settings.get(
@@ -521,7 +521,7 @@ class SettingsManager:
 async def get_session_from_request(
     request,
     session_manager: SessionManager,
-    cookie_name: str = "progenitor_session",
+    cookie_name: str = "progena_session",
 ) -> SessionState:
     """Extract or create session from FastAPI request."""
     session_id = request.cookies.get(cookie_name)
@@ -536,7 +536,7 @@ async def get_session_from_request(
 def set_session_cookie(
     response,
     session: SessionState,
-    cookie_name: str = "progenitor_session",
+    cookie_name: str = "progena_session",
     max_age: int = 60 * 60 * 24 * 7,  # 7 days
 ) -> None:
     """Set session cookie on FastAPI response."""

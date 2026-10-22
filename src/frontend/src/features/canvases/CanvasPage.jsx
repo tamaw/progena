@@ -19,9 +19,10 @@ import { deleteCanvas, fetchCanvasFiles, selectCanvas, selectCanvasFiles } from 
 import CanvasHost from './CanvasHost';
 import { CANVAS_STATE_LABEL, CANVAS_STATE_TONE, canvasProblems, canvasState } from './canvasesPageModel';
 import styles from './CanvasPage.module.css';
+import { selectAgentName } from '../settings/state/preferences';
 
 /** Detail pane for one canvas: shared header and the live preview. */
-export default function CanvasPage({ name, onAskProgenitor }) {
+export default function CanvasPage({ name, onAskProgena }) {
   const dispatch = useDispatch();
   const navigate = useNavigate();
   const { getApiUrl } = useConfig();
@@ -29,6 +30,7 @@ export default function CanvasPage({ name, onAskProgenitor }) {
   const realtime = useSelector(selectRealtime);
   const summary = useSelector((state) => selectCanvas(state, name));
   const fileEntry = useSelector((state) => selectCanvasFiles(state, name));
+  const agentName = useSelector(selectAgentName);
   const deleteConfirmation = useConfirmAction(`canvas:${name}`);
 
   useEffect(() => {
@@ -48,9 +50,9 @@ export default function CanvasPage({ name, onAskProgenitor }) {
     <DetailHeaderActions menuLabel="Canvas actions">
       <DetailHeaderAction
         icon={<EditActionIcon />}
-        label="Ask Progenitor"
-        tooltip="Ask Progenitor to change this canvas"
-        onClick={() => onAskProgenitor(`Update the /canvases/${name}/ canvas: `)}
+        label={`Ask ${agentName}`}
+        tooltip={`Ask ${agentName} to change this canvas`}
+        onClick={() => onAskProgena(`Update the /canvases/${name}/ canvas: `)}
       />
       <DetailHeaderAction
         icon={<ReconnectActionIcon />}

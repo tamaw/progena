@@ -128,7 +128,7 @@ export default function RepositoriesPage() {
   }, [dispatch, reposUrl, selectedRepoId]);
 
   const openCreateChat = useCallback(() => {
-    window.dispatchEvent(new CustomEvent('progenitor:open-quick-chat', {
+    window.dispatchEvent(new CustomEvent('progena:open-quick-chat', {
       detail: { mode: 'repository-create' },
     }));
   }, []);

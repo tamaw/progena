@@ -17,7 +17,7 @@ const objectName = `pw342-a2a-object-${suffix.slice(0, 8)}`;
 let peer;
 const graphs = [];
 function persist(graph) {
-  queryNestedEvidence(`INSERT INTO store(prefix,key,value,created_at,updated_at) VALUES ('progenitor.state',${quote(`routine:${graph.id}`)},${quote(JSON.stringify({ payload: graph }))}::jsonb,now(),now());`);
+  queryNestedEvidence(`INSERT INTO store(prefix,key,value,created_at,updated_at) VALUES ('progena.state',${quote(`routine:${graph.id}`)},${quote(JSON.stringify({ payload: graph }))}::jsonb,now(),now());`);
   graphs.push(graph); return graph;
 }
 async function chat(page, text) {
@@ -50,7 +50,7 @@ async function edit(page, modify) {
   await expect(page.locator('.agents-graph-editor__saved')).toHaveText('Graph saved.', { timeout: 30_000 });
   await page.getByRole('button', { name: 'Collapse JSON editor' }).click();
 }
-const asyncTasks = () => JSON.parse(queryNestedEvidence("SELECT value->'payload' FROM store WHERE prefix='progenitor.state' AND key='async_subagent_tasks';") || '[]');
+const asyncTasks = () => JSON.parse(queryNestedEvidence("SELECT value->'payload' FROM store WHERE prefix='progena.state' AND key='async_subagent_tasks';") || '[]');
 test.beforeAll(async ({ browser }) => {
   test.setTimeout(240_000);
   peer = await startGreetingsFixture();
@@ -64,7 +64,7 @@ test.afterAll(async ({ browser }) => {
   test.setTimeout(240_000);
   try {
     for (const graph of graphs) removeRoutine(graph.id);
-    queryNestedEvidence(`DELETE FROM store WHERE prefix='progenitor.state' AND key=${quote(`agent:user/${objectName}/SYSTEM.md`)};`);
+    queryNestedEvidence(`DELETE FROM store WHERE prefix='progena.state' AND key=${quote(`agent:user/${objectName}/SYSTEM.md`)};`);
     if (peer) {
       const page = await browser.newPage({ baseURL: test.info().project.use.baseURL });
       try {
@@ -73,7 +73,7 @@ test.afterAll(async ({ browser }) => {
         // a later registration can resurrect the removed fixture. Use the
         // normal virtual-file save so the document/cache stay consistent.
         await chat(page, `Clean up only the disposable A2A fixture ${peerName}. Read /config/agents.json and save the same JSON with only the named ${peerName} entry removed from agents. Preserve every other agent, tool and field. Test-fixture deletion is approved; do not run anything.`);
-        expect(queryNestedEvidence(`SELECT count(*) FROM store CROSS JOIN LATERAL jsonb_array_elements(value->'payload'->'agents') a WHERE prefix='progenitor.state' AND key='registry' AND a->>'name'=${quote(peerName)};`)).toBe('0');
+        expect(queryNestedEvidence(`SELECT count(*) FROM store CROSS JOIN LATERAL jsonb_array_elements(value->'payload'->'agents') a WHERE prefix='progena.state' AND key='registry' AND a->>'name'=${quote(peerName)};`)).toBe('0');
       } finally { await page.close(); }
     }
   } finally { if (peer) await peer.stop(); }

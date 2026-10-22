@@ -14,14 +14,14 @@ import src.backend.canvases.routes as canvases_routes
 from src.backend.canvases.events import canvas_events
 from src.backend.events.documents import TypedDocumentEvent
 from src.backend.storage.documents import (
-    PROGENITOR_STATE_PREFIX,
+    PROGENA_STATE_PREFIX,
     DocumentEvent,
     InMemoryDocumentStore,
     set_default_document_store,
 )
-from src.progenitor.canvases.contracts import canvas_file_key
-from src.progenitor.documents.kinds import DOCUMENT_TYPE_KEY_PREFIX
-from src.progenitor.documents.types import DocumentType
+from src.progena.canvases.contracts import canvas_file_key
+from src.progena.documents.kinds import DOCUMENT_TYPE_KEY_PREFIX
+from src.progena.documents.types import DocumentType
 
 
 @pytest.fixture
@@ -49,9 +49,7 @@ def _seed_types(store: InMemoryDocumentStore) -> None:
         {"id": "kanban_card", "label": "Kanban", "key_prefix": "kanban_card:"},
         {"id": "artifact", "label": "Artifact", "key_prefix": "artifact:"},
     ):
-        store.save_document(
-            PROGENITOR_STATE_PREFIX, f"{DOCUMENT_TYPE_KEY_PREFIX}{item['id']}", item
-        )
+        store.save_document(PROGENA_STATE_PREFIX, f"{DOCUMENT_TYPE_KEY_PREFIX}{item['id']}", item)
 
 
 def _canvas(store: InMemoryDocumentStore, name: str = "demo") -> None:
@@ -65,12 +63,12 @@ def _canvas(store: InMemoryDocumentStore, name: str = "demo") -> None:
         }
     )
     store.save_document(
-        PROGENITOR_STATE_PREFIX,
+        PROGENA_STATE_PREFIX,
         canvas_file_key(name, "manifest.json"),
         {"content": manifest, "updated_at": "2026-01-01T00:00:00Z"},
     )
     store.save_document(
-        PROGENITOR_STATE_PREFIX,
+        PROGENA_STATE_PREFIX,
         canvas_file_key(name, "index.mjs"),
         {"content": "export default () => {}", "updated_at": "2026-01-01T00:00:01Z"},
     )
@@ -101,10 +99,10 @@ class _Capture:
 
 def test_in_memory_canvas_revisions_capture_changed_writes_and_delete(document_store):
     key = canvas_file_key("demo", "index.mjs")
-    document_store.save_document(PROGENITOR_STATE_PREFIX, key, {"content": "one"})
-    document_store.save_document(PROGENITOR_STATE_PREFIX, key, {"content": "one"})
-    document_store.save_document(PROGENITOR_STATE_PREFIX, key, {"content": "two"})
-    document_store.delete_document(PROGENITOR_STATE_PREFIX, key)
+    document_store.save_document(PROGENA_STATE_PREFIX, key, {"content": "one"})
+    document_store.save_document(PROGENA_STATE_PREFIX, key, {"content": "one"})
+    document_store.save_document(PROGENA_STATE_PREFIX, key, {"content": "two"})
+    document_store.delete_document(PROGENA_STATE_PREFIX, key)
 
     revisions = document_store.list_canvas_revisions("demo")
     assert [(item.op, item.content) for item in revisions] == [
@@ -146,9 +144,9 @@ def test_routes_reject_unknown_canvas_unknown_type_and_bad_data_key(client, docu
 def test_documents_page_prefix_and_exact_types(client, document_store):
     _seed_types(document_store)
     _canvas(document_store)
-    document_store.save_document(PROGENITOR_STATE_PREFIX, "kanban_card:b", {"id": "b"})
-    document_store.save_document(PROGENITOR_STATE_PREFIX, "kanban_card:a", {"id": "a"})
-    document_store.save_document(PROGENITOR_STATE_PREFIX, "preferences", {"theme": "dark"})
+    document_store.save_document(PROGENA_STATE_PREFIX, "kanban_card:b", {"id": "b"})
+    document_store.save_document(PROGENA_STATE_PREFIX, "kanban_card:a", {"id": "a"})
+    document_store.save_document(PROGENA_STATE_PREFIX, "preferences", {"theme": "dark"})
     with _Capture("tab") as capture:
         response = client.post(
             "/api/ui/canvases/demo/documents",
@@ -180,8 +178,8 @@ def test_documents_id_prefix_narrows_a_collection_to_that_type(client, document_
     _seed_types(document_store)
     _canvas(document_store)
     for key in ("artifact:sales/q3.csv", "artifact:sales/q4.csv", "artifact:ops/load.csv"):
-        document_store.save_document(PROGENITOR_STATE_PREFIX, key, {"content": "a,b\n1,2"})
-    document_store.save_document(PROGENITOR_STATE_PREFIX, "artifactx:sales/q1.csv", {})
+        document_store.save_document(PROGENA_STATE_PREFIX, key, {"content": "a,b\n1,2"})
+    document_store.save_document(PROGENA_STATE_PREFIX, "artifactx:sales/q1.csv", {})
     with _Capture("tab") as capture:
         response = client.post(
             "/api/ui/canvases/demo/documents",
@@ -213,12 +211,12 @@ def test_canvas_data_isolated_by_canvas(client, document_store):
 
 def test_snapshot_reports_manifest_errors_and_status(document_store):
     document_store.save_document(
-        PROGENITOR_STATE_PREFIX,
+        PROGENA_STATE_PREFIX,
         canvas_file_key("broken", "index.mjs"),
         {"content": "export default () => {}", "updated_at": "2026-01-01T00:00:00Z"},
     )
     document_store.save_document(
-        PROGENITOR_STATE_PREFIX,
+        PROGENA_STATE_PREFIX,
         "canvas_status:broken",
         {"state": "error", "revision": "abc", "errors": [{"message": "bad"}], "reported_at": "now"},
     )
@@ -242,7 +240,7 @@ async def test_canvas_interest_matching_and_disconnect_cleanup(monkeypatch):
         event=DocumentEvent(
             seq=1,
             txid=1,
-            prefix=PROGENITOR_STATE_PREFIX,
+            prefix=PROGENA_STATE_PREFIX,
             key="kanban_card:one",
             op="updated",
             before={"title": "old"},

@@ -1,4 +1,5 @@
 import { Fragment, memo, useMemo, useRef } from 'react';
+import { useSelector } from 'react-redux';
 import { useMermaidRender } from '../../../hooks/useMermaidRender';
 import { collectMessageImages } from '../models/conversationModel';
 import { formatDisplayToolCalls } from '../models/messageDisplayModel';
@@ -12,6 +13,7 @@ import MessageActions from './MessageActions';
 import { describeStreamEvent, badgeForEvent, toolDetailsForEvent, tokenMetaItemsForEvent, tagClassForEventType, appendStreamingCursor, formatTimestamp } from '../models/messageRenderUtils';
 import { renderSafeMarkdown, sanitizeHtmlFragment } from '../../../lib/safeMarkdown';
 import { A2A_PRIMARY_TOOL_NAME } from '../models/a2aTools';
+import { selectAgentName } from '../../settings/state/preferences';
 
 function isTimelineStreamEvent(event) {
   return isRenderableStreamEvent(event);
@@ -185,7 +187,8 @@ function MessageView({
     return `${count} ${tokenCount === 1 ? 'token' : 'tokens'}`;
   }, [isStreaming, role, tokenCount]);
   const tokenMetaItems = [formattedTokenCount].filter(Boolean);
-  const displayName = role === 'assistant' && displayAgentName ? displayAgentName : 'Progenitor';
+  const agentName = useSelector(selectAgentName);
+  const displayName = role === 'assistant' && displayAgentName ? displayAgentName : agentName;
   const displayModel = role === 'assistant' && displayModelName ? displayModelName : model;
   const displayTools = useMemo(
     () => (role === 'assistant' ? formatDisplayToolCalls(displayToolCalls) : ''),

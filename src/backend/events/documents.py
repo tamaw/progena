@@ -25,7 +25,7 @@ from typing import Any
 from src.backend.storage.documents import (
     DOCUMENT_EVENT_CHANNEL,
     EVENT_LOG_START,
-    PROGENITOR_STATE_PREFIX,
+    PROGENA_STATE_PREFIX,
     BackendDocumentStore,
     DocumentEvent,
     DocumentEventPosition,
@@ -33,14 +33,14 @@ from src.backend.storage.documents import (
     StoreChangeListener,
     store_database_url,
 )
-from src.progenitor.documents.kinds import DOCUMENT_TYPE_KEY_PREFIX
-from src.progenitor.documents.types import (
+from src.progena.documents.kinds import DOCUMENT_TYPE_KEY_PREFIX
+from src.progena.documents.types import (
     DocumentType,
     builtin_document_type_rows,
     parse_document_types,
     resolve_document_type,
 )
-from src.progenitor.workflows.events import build_document_event_output
+from src.progena.workflows.events import build_document_event_output
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +55,7 @@ _DEFERRED_RETRY_SECONDS = 1.0
 def list_document_types(store: BackendDocumentStore) -> dict[str, DocumentType]:
     """Return the document type registry stored in Postgres, keyed by id."""
 
-    rows = store.list_documents(PROGENITOR_STATE_PREFIX, DOCUMENT_TYPE_KEY_PREFIX)
+    rows = store.list_documents(PROGENA_STATE_PREFIX, DOCUMENT_TYPE_KEY_PREFIX)
     return parse_document_types(document.payload for _key, document in rows)
 
 
@@ -63,9 +63,9 @@ def seed_document_types(store: BackendDocumentStore) -> None:
     """Write the built-in document types, touching only rows that differ."""
 
     for key, payload in builtin_document_type_rows():
-        existing = store.get_document(PROGENITOR_STATE_PREFIX, key, None)
+        existing = store.get_document(PROGENA_STATE_PREFIX, key, None)
         if existing is None or existing.payload != payload:
-            store.save_document(PROGENITOR_STATE_PREFIX, key, payload)
+            store.save_document(PROGENA_STATE_PREFIX, key, payload)
 
 
 @dataclass(frozen=True)
@@ -232,9 +232,7 @@ class DocumentEventDispatcher:
             logger.info("Pruned %d processed document event(s)", removed)
 
     async def _dispatch(self, event: DocumentEvent) -> None:
-        if event.prefix == PROGENITOR_STATE_PREFIX and event.key.startswith(
-            DOCUMENT_TYPE_KEY_PREFIX
-        ):
+        if event.prefix == PROGENA_STATE_PREFIX and event.key.startswith(DOCUMENT_TYPE_KEY_PREFIX):
             self._types = None
         document_type = resolve_document_type(event.key, self.document_types())
         output = (

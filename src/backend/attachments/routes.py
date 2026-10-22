@@ -2,8 +2,8 @@
 
 Files are uploaded directly to the Postgres ``attachments`` blob table
 (``attachment_blob_store.py``) -- raw bytes plus best-effort extracted text,
-not a JSON document cache. The Progenitor runtime reads the same table
-directly (``src/progenitor/agent/filesystem/attachments.py``, mounted at
+not a JSON document cache. The Progena runtime reads the same table
+directly (``src/progena/agent/filesystem/attachments.py``, mounted at
 ``/attachments/``) so the DeepAgent can see and read uploaded files itself,
 independent of whatever text gets stuffed into a given prompt.
 

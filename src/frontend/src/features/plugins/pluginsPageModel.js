@@ -13,7 +13,7 @@ export const PLUGIN_FILTERS = [
 
 // The backend falls back to the literal string "unknown" when a plugin has no
 // declared version and no pinned ref/sha to fall back to (see
-// resolve_plugin_version in src/progenitor/plugins/sources.py) -- render that
+// resolve_plugin_version in src/progena/plugins/sources.py) -- render that
 // as "no version" rather than the confusing "vunknown".
 export function formatPluginVersion(version) {
   if (!version || version === 'unknown') {

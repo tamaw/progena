@@ -26,9 +26,7 @@ SOURCE_UI = "ui"
 config = ChatServerConfig.from_env()
 
 
-client: (
-    integrations_subprocess.ProgenitorClient | integrations_runtime.SSEProgenitorClient | None
-) = None
+client: integrations_subprocess.ProgenaClient | integrations_runtime.SSEProgenaClient | None = None
 
 
 session_manager: chat_session.SessionManager = chat_session.SessionManager(

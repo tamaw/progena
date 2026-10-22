@@ -29,19 +29,19 @@ from src.backend.agents.store import (
 from src.backend.http.requests import BroadcastUiEvent
 from src.backend.http.requests import request_correlation_id as _request_correlation_id
 from src.backend.storage.documents import (
-    PROGENITOR_STATE_PREFIX,
+    PROGENA_STATE_PREFIX,
     BackendDocumentStore,
     store_database_url,
 )
 from src.backend.workflows.routine_runs import append_background_task, enqueue_routine_run
-from src.progenitor.documents.catalog import load_schema
-from src.progenitor.llm.structured import validate_against_schema
-from src.progenitor.routines.graph import (
+from src.progena.documents.catalog import load_schema
+from src.progena.llm.structured import validate_against_schema
+from src.progena.routines.graph import (
     ROUTINE_GRAPH_VERSION,
     validate_routine_graph,
     validate_routine_graph_payload,
 )
-from src.progenitor.utils import utcnow_isoformat
+from src.progena.utils import utcnow_isoformat
 
 
 class AgentGraphModel(BaseModel):
@@ -304,7 +304,7 @@ def create_agent_profile_router(
         if is_runtime_live is not None and not is_runtime_live():
             raise HTTPException(
                 status_code=503,
-                detail="Progenitor runtime is not running; the routine cannot start",
+                detail="Progena runtime is not running; the routine cannot start",
             )
 
     def _require_store() -> AgentStore:
@@ -341,7 +341,7 @@ def create_agent_profile_router(
         """Acknowledge agent-list requests and publish the list on the UI stream.
 
         Subagents come from the backend DB; A2A agents are read through from
-        Progenitor's registry document so they always reflect the runtime's live
+        Progena's registry document so they always reflect the runtime's live
         view (status + agent card) without the backend fetching cards itself.
         """
         request_id = _request_correlation_id(request, x_request_id)
@@ -539,7 +539,7 @@ def create_agent_profile_router(
 
         policy_document = await asyncio.to_thread(
             get_document_store().get_document,
-            PROGENITOR_STATE_PREFIX,
+            PROGENA_STATE_PREFIX,
             f"policy:{body.policy_id}",
             None,
         )
@@ -633,9 +633,9 @@ def create_agent_profile_router(
 
         Writes a background-task entry (``metadata.kind = "routine_run"``)
         onto the same Postgres-backed queue the heartbeat runtime already
-        drains (``src.progenitor.orchestration.background`` -- both processes
+        drains (``src.progena.orchestration.background`` -- both processes
         share the LangGraph ``store`` table via the same
-        ``("progenitor", "state")`` namespace / ``"progenitor.state"``
+        ``("progena", "state")`` namespace / ``"progena.state"``
         prefix). The heartbeat graph recognizes that marker and routes
         straight to ``routine_run_node``, which calls the routine's already
         -compiled subagent runnable directly -- no LLM turn decides whether
@@ -683,8 +683,8 @@ def create_agent_profile_router(
         x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
     ):
         from src.backend.workflows.events import read_run_state, routine_events
-        from src.progenitor.routines.approvals import approval_lock, decision_key, validate_answer
-        from src.progenitor.routines.events import RUN_EVENT_PREFIX
+        from src.progena.routines.approvals import approval_lock, decision_key, validate_answer
+        from src.progena.routines.events import RUN_EVENT_PREFIX
 
         if (
             not body.thread_id.startswith(f"routine:{agent_id}:")
@@ -701,7 +701,7 @@ def create_agent_profile_router(
                     state["pending_approvals"], body.answer, body.interrupt_id
                 )
                 claim_key = decision_key(body.thread_id, body.interrupt_id)
-                if doc_store.get_document(PROGENITOR_STATE_PREFIX, claim_key) is not None:
+                if doc_store.get_document(PROGENA_STATE_PREFIX, claim_key) is not None:
                     raise ValueError("An answer for this approval has already been submitted")
                 metadata = {
                     "kind": "routine_run",
@@ -714,7 +714,7 @@ def create_agent_profile_router(
                     "request_id": request_id,
                 }
                 queued_at = utcnow_isoformat()
-                doc_store.save_document(PROGENITOR_STATE_PREFIX, claim_key, metadata)
+                doc_store.save_document(PROGENA_STATE_PREFIX, claim_key, metadata)
                 try:
                     append_background_task(
                         doc_store,
@@ -726,7 +726,7 @@ def create_agent_profile_router(
                         },
                     )
                 except Exception:
-                    doc_store.delete_document(PROGENITOR_STATE_PREFIX, claim_key)
+                    doc_store.delete_document(PROGENA_STATE_PREFIX, claim_key)
                     raise
                 lifecycle = {
                     "agent_id": agent_id,
@@ -737,7 +737,7 @@ def create_agent_profile_router(
                     "timestamp": queued_at,
                 }
                 doc_store.save_document(
-                    PROGENITOR_STATE_PREFIX, f"{RUN_EVENT_PREFIX}{request_id}:enqueued", lifecycle
+                    PROGENA_STATE_PREFIX, f"{RUN_EVENT_PREFIX}{request_id}:enqueued", lifecycle
                 )
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -801,7 +801,7 @@ def create_agent_profile_router(
 
         A run is a distinct checkpoint thread named
         ``routine:<agent_id>:<revision_id>:<run_id>`` (see
-        ``src.progenitor.routines.subagent.create_routine_subagent``); this
+        ``src.progena.routines.subagent.create_routine_subagent``); this
         reads the ``checkpoints`` table grouped by that thread_id rather than
         any bespoke run-history storage.
 

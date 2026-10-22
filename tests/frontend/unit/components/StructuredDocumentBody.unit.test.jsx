@@ -19,7 +19,7 @@ function documentFor(props) {
   const previous = globalThis.React;
   try {
     globalThis.React = React;
-    return new JSDOM(renderToStaticMarkup(createElement(StructuredDocumentBody, props))).window.document;
+    return new JSDOM(renderToStaticMarkup(createElement(StructuredDocumentBody, { agentName: 'Progena', ...props }))).window.document;
   } finally {
     if (previous === undefined) delete globalThis.React;
     else globalThis.React = previous;

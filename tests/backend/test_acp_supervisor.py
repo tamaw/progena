@@ -8,10 +8,10 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from src.backend.events.documents import DocumentEventDispatcher, seed_document_types
-from src.backend.storage.documents import PROGENITOR_STATE_PREFIX, InMemoryDocumentStore
+from src.backend.storage.documents import PROGENA_STATE_PREFIX, InMemoryDocumentStore
 from src.backend.workflows.acp_supervisor import ACPTaskSupervisor
-from src.progenitor.acp.runner import ACPRunResult
-from src.progenitor.documents.kinds import ACP_TASK_KEY_PREFIX
+from src.progena.acp.runner import ACPRunResult
+from src.progena.documents.kinds import ACP_TASK_KEY_PREFIX
 
 
 async def _wait_for(predicate: Callable[[], bool], timeout: float = 2.0) -> None:
@@ -128,9 +128,9 @@ class _FakeRunner:
 
 class _Harness:
     def __init__(self, monkeypatch, *, max_sessions: int = 2, max_turns: int = 20) -> None:
-        monkeypatch.setenv("PROGENITOR_ACP_MAX_SESSIONS", str(max_sessions))
-        monkeypatch.setenv("PROGENITOR_ACP_MAX_TURNS", str(max_turns))
-        monkeypatch.setenv("PROGENITOR_ACP_PROGRESS_INTERVAL_SECONDS", "3600")
+        monkeypatch.setenv("PROGENA_ACP_MAX_SESSIONS", str(max_sessions))
+        monkeypatch.setenv("PROGENA_ACP_MAX_TURNS", str(max_turns))
+        monkeypatch.setenv("PROGENA_ACP_PROGRESS_INTERVAL_SECONDS", "3600")
         self.store = InMemoryDocumentStore()
         seed_document_types(self.store)
         self.runs = _Runs()
@@ -151,7 +151,7 @@ class _Harness:
 
     def add_task(self, task_id: str, prompt: str, **extra: Any) -> None:
         self.store.save_document(
-            PROGENITOR_STATE_PREFIX,
+            PROGENA_STATE_PREFIX,
             f"{ACP_TASK_KEY_PREFIX}{task_id}",
             {
                 "task_id": task_id,
@@ -165,7 +165,7 @@ class _Harness:
 
     def task(self, task_id: str) -> dict[str, Any]:
         document = self.store.get_document(
-            PROGENITOR_STATE_PREFIX, f"{ACP_TASK_KEY_PREFIX}{task_id}", None
+            PROGENA_STATE_PREFIX, f"{ACP_TASK_KEY_PREFIX}{task_id}", None
         )
         assert document is not None
         return dict(document.payload)
@@ -176,14 +176,12 @@ class _Harness:
             mutator(payload)
             return payload
 
-        self.store.mutate_document(
-            PROGENITOR_STATE_PREFIX, f"{ACP_TASK_KEY_PREFIX}{task_id}", update
-        )
+        self.store.mutate_document(PROGENA_STATE_PREFIX, f"{ACP_TASK_KEY_PREFIX}{task_id}", update)
 
 
 def _registry(store: InMemoryDocumentStore) -> None:
     store.save_document(
-        PROGENITOR_STATE_PREFIX,
+        PROGENA_STATE_PREFIX,
         "registry",
         {
             "agents": [
@@ -338,7 +336,7 @@ async def test_turn_limit_rejects_queued_request_before_runner_starts(monkeypatc
     try:
         harness.add_task("one", "again", turn=2, session_id="old")
         await _wait_for(lambda: harness.task("one").get("status") == "failed")
-        assert "PROGENITOR_ACP_MAX_TURNS (2)" in harness.task("one")["last_error"]
+        assert "PROGENA_ACP_MAX_TURNS (2)" in harness.task("one")["last_error"]
         assert harness.runs.started == []
     finally:
         await harness.stop()
@@ -499,12 +497,12 @@ async def test_startup_recovers_working_tasks_and_migrates_legacy_records(monkey
     harness = _Harness(monkeypatch)
     _registry(harness.store)
     harness.store.save_document(
-        PROGENITOR_STATE_PREFIX,
+        PROGENA_STATE_PREFIX,
         f"{ACP_TASK_KEY_PREFIX}working",
         {"task_id": "working", "agent_name": "claude", "prompt": "old", "status": "working"},
     )
     harness.store.save_document(
-        PROGENITOR_STATE_PREFIX,
+        PROGENA_STATE_PREFIX,
         "acp_tasks",
         [
             {
@@ -520,6 +518,6 @@ async def test_startup_recovers_working_tasks_and_migrates_legacy_records(monkey
         await _wait_for(lambda: harness.task("legacy").get("status") == "completed")
         assert harness.task("working")["status"] == "interrupted"
         assert harness.task("legacy")["prompt"] == "migrated"
-        assert harness.store.get_document(PROGENITOR_STATE_PREFIX, "acp_tasks", None) is None
+        assert harness.store.get_document(PROGENA_STATE_PREFIX, "acp_tasks", None) is None
     finally:
         await harness.stop()

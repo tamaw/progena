@@ -62,7 +62,7 @@ def test_workflow_create_acknowledges_then_emits_canonical_state(workflow_env):
 
 def test_workflow_content_round_trip_keeps_typed_schemas(workflow_env):
     from src.backend.workflows.service import save_workflow_definition
-    from src.progenitor.workflows.documents import default_workflow_definition
+    from src.progena.workflows.documents import default_workflow_definition
 
     payload = default_workflow_definition(title="Typed schemas")
     agent_id = next(

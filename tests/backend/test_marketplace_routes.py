@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 
 from src.backend.main import app
 from src.backend.storage.documents import (
-    PROGENITOR_STATE_PREFIX,
+    PROGENA_STATE_PREFIX,
     InMemoryDocumentStore,
     set_default_document_store,
 )
@@ -65,7 +65,7 @@ class _StreamCapture:
 class TestMarketplaceRoutes:
     def test_get_returns_ack_and_broadcasts_snapshot(self, client, document_store):
         document_store.save_document(
-            PROGENITOR_STATE_PREFIX,
+            PROGENA_STATE_PREFIX,
             "marketplaces",
             {
                 "marketplaces": {
@@ -106,7 +106,7 @@ class TestMarketplaceRoutes:
             response = client.put("/api/ui/marketplaces", json=payload)
 
         assert_acknowledged(response, ["marketplaces.snapshot"])
-        stored = document_store.get_document(PROGENITOR_STATE_PREFIX, "marketplaces")
+        stored = document_store.get_document(PROGENA_STATE_PREFIX, "marketplaces")
         assert len(stored.payload["marketplaces"]) == 2
         assert stored.payload["marketplaces"]["acme"]["source"] == "https://github.com/acme/plugins"
 
@@ -127,7 +127,7 @@ class TestMarketplaceRoutes:
 
     def test_browse_returns_ack_and_broadcasts_catalog(self, client, document_store, monkeypatch):
         document_store.save_document(
-            PROGENITOR_STATE_PREFIX,
+            PROGENA_STATE_PREFIX,
             "marketplaces",
             {
                 "marketplaces": {
@@ -171,10 +171,10 @@ class TestMarketplaceRoutes:
         assert response.status_code == 404
 
     def test_browse_fetch_error_returns_400(self, client, document_store, monkeypatch):
-        from src.progenitor.plugins.sources import PluginFetchError
+        from src.progena.plugins.sources import PluginFetchError
 
         document_store.save_document(
-            PROGENITOR_STATE_PREFIX,
+            PROGENA_STATE_PREFIX,
             "marketplaces",
             {
                 "marketplaces": {

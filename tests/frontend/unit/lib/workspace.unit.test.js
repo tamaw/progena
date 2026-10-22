@@ -196,7 +196,7 @@ describe('workspace registry', () => {
   });
 
   it('survives a corrupted registry value', () => {
-    localStorage.setItem('progenitor_workspaces', 'not json');
+    localStorage.setItem('progena_workspaces', 'not json');
     expect(getWorkspaceRegistry()).toEqual([]);
   });
 });

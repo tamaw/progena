@@ -24,7 +24,7 @@ import src.backend.storage.documents as storage_documents
 import src.backend.storage.routes as storage_routes
 import src.backend.tasks.routes as tasks_routes
 import src.backend.workflows.routes as workflows_routes
-from src.progenitor.settings.providers import get_provider_repository
+from src.progena.settings.providers import get_provider_repository
 
 router = APIRouter(prefix="/api/ui", tags=["ui"])
 
@@ -48,8 +48,8 @@ router.include_router(
     chat_routes.create_chat_router(
         get_document_store=storage_documents.get_default_document_store,
         broadcast_ui_event=events_stream.broadcast_ui_event,
-        get_current_state=lambda thread_id: (
-            monitoring_state.get_state_reader().get_progenitor_state(thread_id)
+        get_current_state=lambda thread_id: monitoring_state.get_state_reader().get_progena_state(
+            thread_id
         ),
         get_thread_messages=lambda thread_id: (
             monitoring_state.get_state_reader().get_thread_messages(thread_id)
@@ -62,7 +62,7 @@ router.include_router(
         get_agent_store=agents_store.get_agent_store,
         get_document_store=storage_documents.get_default_document_store,
         broadcast_ui_event=events_stream.broadcast_ui_event,
-        is_runtime_live=integrations_runtime._progenitor_runtime_live,
+        is_runtime_live=integrations_runtime._progena_runtime_live,
     )
 )
 router.include_router(

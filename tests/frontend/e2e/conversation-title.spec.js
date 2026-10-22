@@ -4,7 +4,7 @@ import { test, expect } from '@playwright/test';
 /**
  * A user's first message in a new chat creates its `session` document (Postgres,
  * from the checkpoint write); the `created` event triggers a workflow that asks
- * Progenitor for a short title and writes it back onto the session, which the
+ * Progena for a short title and writes it back onto the session, which the
  * sidebar then shows.
  *
  * Runs against the live stack with a real LLM and reads run records from the
@@ -18,8 +18,8 @@ const FIRST_MESSAGE = `Help me plan a three day hiking trip in the Grampians nex
 test.setTimeout(300_000);
 
 function sql(query) {
-  return execFileSync('psql', ['-h', '127.0.0.1', '-p', '15433', '-U', 'progenitor', '-d', 'progenitor', '-qAtc', query], {
-    env: { ...process.env, PGPASSWORD: process.env.PGPASSWORD || 'progenitor' },
+  return execFileSync('psql', ['-h', '127.0.0.1', '-p', '15433', '-U', 'progena', '-d', 'progena', '-qAtc', query], {
+    env: { ...process.env, PGPASSWORD: process.env.PGPASSWORD || 'progena' },
     encoding: 'utf8',
   }).trim();
 }
@@ -30,12 +30,12 @@ function runsOf(workflowId) {
 }
 
 function sessionWithFirstMessage(text) {
-  const row = sql(`select value->'payload' from store where prefix = 'progenitor.state' and key like 'session:%' and value->'payload'->>'first_message' = '${text}'`);
+  const row = sql(`select value->'payload' from store where prefix = 'progena.state' and key like 'session:%' and value->'payload'->>'first_message' = '${text}'`);
   return row ? JSON.parse(row) : null;
 }
 
 function sessionEvents(threadId) {
-  return sql(`select string_agg(op, ',' order by seq) from document_events where prefix = 'progenitor.state' and key = 'session:${threadId}'`);
+  return sql(`select string_agg(op, ',' order by seq) from document_events where prefix = 'progena.state' and key = 'session:${threadId}'`);
 }
 
 function titleWorkflow() {

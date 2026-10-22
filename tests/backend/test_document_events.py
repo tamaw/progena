@@ -13,7 +13,7 @@ from src.backend.events.documents import (
 )
 from src.backend.storage.documents import (
     EVENT_LOG_START,
-    PROGENITOR_STATE_PREFIX,
+    PROGENA_STATE_PREFIX,
     DocumentEvent,
     InMemoryDocumentStore,
     document_write_origin,
@@ -27,18 +27,18 @@ from src.backend.workflows.service import (
     list_workflow_runs,
     save_workflow_definition,
 )
-from src.progenitor.documents.kinds import KNOWLEDGE_PAGE_KEY_PREFIX, SESSION_KEY_PREFIX
-from src.progenitor.documents.types import BUILTIN_DOCUMENT_TYPES, resolve_document_type
-from src.progenitor.workflows.derivation import derive_workflow_port_schemas
-from src.progenitor.workflows.documents import default_workflow_definition
-from src.progenitor.workflows.models import (
+from src.progena.documents.kinds import KNOWLEDGE_PAGE_KEY_PREFIX, SESSION_KEY_PREFIX
+from src.progena.documents.types import BUILTIN_DOCUMENT_TYPES, resolve_document_type
+from src.progena.workflows.derivation import derive_workflow_port_schemas
+from src.progena.workflows.documents import default_workflow_definition
+from src.progena.workflows.models import (
     WorkflowNodeDocumentCreate,
     WorkflowNodeDocumentDelete,
     WorkflowNodeDocumentQuery,
     WorkflowNodeDocumentWrite,
     WorkflowNodeEvent,
 )
-from src.progenitor.workflows.validation import validate_workflow_definition_payload
+from src.progena.workflows.validation import validate_workflow_definition_payload
 
 BUILTIN_TYPES = {item.id: item for item in BUILTIN_DOCUMENT_TYPES}
 
@@ -100,12 +100,12 @@ def _completed_runs(store, workflow_id):
 def test_store_event_log_records_each_operation_and_skips_identical_rewrites():
     store = InMemoryDocumentStore()
 
-    store.save_document(PROGENITOR_STATE_PREFIX, "kanban_card:a", {"title": "One"})
-    store.save_document(PROGENITOR_STATE_PREFIX, "kanban_card:a", {"title": "One"})
+    store.save_document(PROGENA_STATE_PREFIX, "kanban_card:a", {"title": "One"})
+    store.save_document(PROGENA_STATE_PREFIX, "kanban_card:a", {"title": "One"})
     with document_write_origin("workflow_run_x"):
-        store.save_document(PROGENITOR_STATE_PREFIX, "kanban_card:a", {"title": "Two"})
-    store.delete_document(PROGENITOR_STATE_PREFIX, "kanban_card:a")
-    store.save_document("progenitor.logs.tool_calls", "entry", {"ignored": True})
+        store.save_document(PROGENA_STATE_PREFIX, "kanban_card:a", {"title": "Two"})
+    store.delete_document(PROGENA_STATE_PREFIX, "kanban_card:a")
+    store.save_document("progena.logs.tool_calls", "entry", {"ignored": True})
 
     events = store.read_document_events(EVENT_LOG_START, 10)
     assert [(event.op, event.before, event.after, event.origin) for event in events] == [
@@ -130,14 +130,14 @@ async def test_dispatcher_starts_at_head_and_catches_up_on_events_written_while_
         dispatcher.add_handler(record)
         return dispatcher
 
-    store.save_document(PROGENITOR_STATE_PREFIX, "kanban_card:history", _card("history", "plan"))
+    store.save_document(PROGENA_STATE_PREFIX, "kanban_card:history", _card("history", "plan"))
     first = build()
     await first.start()
-    store.save_document(PROGENITOR_STATE_PREFIX, "kanban_card:live", _card("live", "plan"))
+    store.save_document(PROGENA_STATE_PREFIX, "kanban_card:live", _card("live", "plan"))
     await first.drain()
     await first.stop()
 
-    store.delete_document(PROGENITOR_STATE_PREFIX, "kanban_card:live")
+    store.delete_document(PROGENA_STATE_PREFIX, "kanban_card:live")
     second = build()
     await second.start()
     await second.drain()
@@ -162,7 +162,7 @@ async def test_new_alert_document_is_relayed_to_the_user(monkeypatch):
                 event=DocumentEvent(
                     seq=1,
                     txid=1,
-                    prefix=PROGENITOR_STATE_PREFIX,
+                    prefix=PROGENA_STATE_PREFIX,
                     key="alert:agent-alert",
                     op="created",
                     before=None,
@@ -205,8 +205,8 @@ async def test_handler_failure_stops_dispatch_without_acknowledging_the_event():
     dispatcher = DocumentEventDispatcher(store_getter=lambda: store)
     dispatcher.add_handler(record)
     await dispatcher.start()
-    store.save_document(PROGENITOR_STATE_PREFIX, "kanban_card:bad", _card("bad", "plan"))
-    store.save_document(PROGENITOR_STATE_PREFIX, "kanban_card:after", _card("after", "plan"))
+    store.save_document(PROGENA_STATE_PREFIX, "kanban_card:bad", _card("bad", "plan"))
+    store.save_document(PROGENA_STATE_PREFIX, "kanban_card:after", _card("after", "plan"))
     await _wait_for(lambda: dispatcher.stopped)
     await dispatcher.stop()
 
@@ -251,7 +251,7 @@ async def test_dispatcher_rechecks_while_events_are_deferred(monkeypatch):
     dispatcher = DocumentEventDispatcher(store_getter=lambda: store)
     dispatcher.add_handler(record)
     await dispatcher.start()
-    store.save_document(PROGENITOR_STATE_PREFIX, "kanban_card:held", _card("held", "plan"))
+    store.save_document(PROGENA_STATE_PREFIX, "kanban_card:held", _card("held", "plan"))
     await asyncio.sleep(0.1)
     assert seen == []
 
@@ -264,12 +264,12 @@ def test_in_memory_event_seq_is_not_reused_after_pruning_everything():
     from datetime import timedelta
 
     store = InMemoryDocumentStore()
-    store.save_document(PROGENITOR_STATE_PREFIX, "kanban_card:a", {"title": "One"})
-    store.save_document(PROGENITOR_STATE_PREFIX, "kanban_card:b", {"title": "Two"})
+    store.save_document(PROGENA_STATE_PREFIX, "kanban_card:a", {"title": "One"})
+    store.save_document(PROGENA_STATE_PREFIX, "kanban_card:b", {"title": "Two"})
     cursor = store.latest_document_event_position()
     assert store.prune_document_events(through=cursor, older_than=timedelta(0)) == 2
 
-    store.save_document(PROGENITOR_STATE_PREFIX, "kanban_card:c", {"title": "Three"})
+    store.save_document(PROGENA_STATE_PREFIX, "kanban_card:c", {"title": "Three"})
 
     assert [event.key for event in store.read_document_events(cursor, 10)] == ["kanban_card:c"]
 
@@ -291,16 +291,16 @@ async def test_card_move_to_done_starts_filtered_workflow_once_with_document_por
         "Kanban Card"
     )
     dispatcher = events_dispatch.get_document_event_dispatcher()
-    store.save_document(PROGENITOR_STATE_PREFIX, "kanban_task_content:c1", {"content": "# Brief"})
-    store.save_document(PROGENITOR_STATE_PREFIX, "kanban_card:c1", _card("c1", "build"))
+    store.save_document(PROGENA_STATE_PREFIX, "kanban_task_content:c1", {"content": "# Brief"})
+    store.save_document(PROGENA_STATE_PREFIX, "kanban_card:c1", _card("c1", "build"))
     store.save_document(
-        PROGENITOR_STATE_PREFIX, "kanban_card:c1", _card("c1", "build", title="Renamed")
+        PROGENA_STATE_PREFIX, "kanban_card:c1", _card("c1", "build", title="Renamed")
     )
     await dispatcher.drain()
     assert list_workflow_runs(store, workflow_id=definition.id) == []
 
     store.save_document(
-        PROGENITOR_STATE_PREFIX, "kanban_card:c1", _card("c1", "done", title="Renamed")
+        PROGENA_STATE_PREFIX, "kanban_card:c1", _card("c1", "done", title="Renamed")
     )
     await dispatcher.drain()
     [run] = await _wait_for(lambda: _completed_runs(store, definition.id))
@@ -340,21 +340,21 @@ async def test_knowledge_page_and_index_events_start_typed_workflows(store):
         ),
     )
     dispatcher = events_dispatch.get_document_event_dispatcher()
-    store.save_document(PROGENITOR_STATE_PREFIX, "knowledge_index", {"bases": {}})
-    store.save_document(PROGENITOR_STATE_PREFIX, "knowledge", {"bases": []})
+    store.save_document(PROGENA_STATE_PREFIX, "knowledge_index", {"bases": {}})
+    store.save_document(PROGENA_STATE_PREFIX, "knowledge", {"bases": []})
     await dispatcher.drain()
 
     store.save_document(
-        PROGENITOR_STATE_PREFIX,
+        PROGENA_STATE_PREFIX,
         f"{KNOWLEDGE_PAGE_KEY_PREFIX}engineering/overview.md",
         {"content": "---\ntype: Concept\ntitle: Overview\n---\n"},
     )
     store.save_document(
-        PROGENITOR_STATE_PREFIX,
+        PROGENA_STATE_PREFIX,
         "knowledge_index",
         {"bases": {"engineering": {"status": "indexed", "pages": 1}}},
     )
-    store.save_document(PROGENITOR_STATE_PREFIX, "knowledge", {"bases": [{"id": "engineering"}]})
+    store.save_document(PROGENA_STATE_PREFIX, "knowledge", {"bases": [{"id": "engineering"}]})
     await dispatcher.drain()
 
     page_run = await _wait_for(lambda: _completed_runs(store, page_workflow.id))
@@ -404,12 +404,12 @@ async def test_query_node_returns_collection_documents_matching_unpacked_field(s
     )
     definition = save_workflow_definition(store, workflow)
     dispatcher = events_dispatch.get_document_event_dispatcher()
-    store.save_document(PROGENITOR_STATE_PREFIX, "kanban_card:a", _card("a", "plan"))
-    store.save_document(PROGENITOR_STATE_PREFIX, "kanban_card:b", _card("b", "build"))
+    store.save_document(PROGENA_STATE_PREFIX, "kanban_card:a", _card("a", "plan"))
+    store.save_document(PROGENA_STATE_PREFIX, "kanban_card:b", _card("b", "build"))
     await dispatcher.drain()
     await _wait_for(lambda: len(_completed_runs(store, definition.id)) == 2)
     await dispatcher.drain()
-    store.save_document(PROGENITOR_STATE_PREFIX, "kanban_card:c", _card("c", "plan"))
+    store.save_document(PROGENA_STATE_PREFIX, "kanban_card:c", _card("c", "plan"))
     await dispatcher.drain()
 
     runs = await _wait_for(
@@ -573,7 +573,7 @@ async def test_document_write_node_executes_merge_and_sets_origin(store):
     )
     definition = save_workflow_definition(store, workflow)
     store.save_document(
-        PROGENITOR_STATE_PREFIX,
+        PROGENA_STATE_PREFIX,
         f"{SESSION_KEY_PREFIX}t1",
         {
             "id": "t1",
@@ -595,7 +595,7 @@ async def test_document_write_node_executes_merge_and_sets_origin(store):
     [completed] = await _wait_for(lambda: _completed_runs(store, definition.id))
     assert completed.node_outputs["write"]["found"] is True
     assert completed.node_outputs["write"]["title"] == "Renamed"
-    updated = store.get_document(PROGENITOR_STATE_PREFIX, f"{SESSION_KEY_PREFIX}t1")
+    updated = store.get_document(PROGENA_STATE_PREFIX, f"{SESSION_KEY_PREFIX}t1")
     assert updated.payload["title"] == "Renamed"
     # Verify origin was set to run id
     events = store.read_document_events(EVENT_LOG_START, 100)
@@ -644,7 +644,7 @@ async def test_document_write_node_with_nothing_to_write_completes(store):
     )
     definition = save_workflow_definition(store, workflow)
     store.save_document(
-        PROGENITOR_STATE_PREFIX,
+        PROGENA_STATE_PREFIX,
         f"{SESSION_KEY_PREFIX}t1",
         {
             "id": "t1",
@@ -672,15 +672,13 @@ def test_in_memory_session_turn_updates_log_no_event_like_postgres():
     store = InMemoryDocumentStore()
     key = f"{SESSION_KEY_PREFIX}t-noise"
     session = {"id": "t-noise", "title": "New chat", "content": "", "last_activity": "t0"}
-    store.save_document(PROGENITOR_STATE_PREFIX, key, session)
-    store.merge_document(
-        PROGENITOR_STATE_PREFIX, key, {"content": "<user> hi", "last_activity": "t1"}
-    )
+    store.save_document(PROGENA_STATE_PREFIX, key, session)
+    store.merge_document(PROGENA_STATE_PREFIX, key, {"content": "<user> hi", "last_activity": "t1"})
     store.save_document(
-        PROGENITOR_STATE_PREFIX, key, {**session, "content": "x", "last_activity": "t2"}
+        PROGENA_STATE_PREFIX, key, {**session, "content": "x", "last_activity": "t2"}
     )
-    store.mutate_document(PROGENITOR_STATE_PREFIX, key, lambda p: {**p, "last_activity": "t3"})
-    store.merge_document(PROGENITOR_STATE_PREFIX, key, {"title": "Hiking", "last_activity": "t4"})
+    store.mutate_document(PROGENA_STATE_PREFIX, key, lambda p: {**p, "last_activity": "t3"})
+    store.merge_document(PROGENA_STATE_PREFIX, key, {"title": "Hiking", "last_activity": "t4"})
 
     events = [e for e in store.read_document_events(EVENT_LOG_START, 100) if e.key == key]
     assert [e.op for e in events] == ["created", "updated"]
@@ -763,7 +761,7 @@ def test_document_create_stamps_creation_times_by_field_type(store, monkeypatch)
     for a number field (alerts), ISO text otherwise."""
     import time
 
-    from src.progenitor.documents.types import DocumentType
+    from src.progena.documents.types import DocumentType
 
     schema = {
         "type": "object",
@@ -804,7 +802,7 @@ def test_document_create_alert_with_title_and_message_applies_defaults_and_times
 
 
 def test_document_create_applies_and_copies_schema_defaults(store, monkeypatch):
-    from src.progenitor.documents.types import DocumentType
+    from src.progena.documents.types import DocumentType
 
     schema = {
         "type": "object",
@@ -840,7 +838,7 @@ def test_document_create_applies_and_copies_schema_defaults(store, monkeypatch):
 
 
 def test_document_write_never_applies_schema_defaults(store, monkeypatch):
-    from src.progenitor.documents.types import DocumentType
+    from src.progena.documents.types import DocumentType
 
     schema = {
         "type": "object",
@@ -850,7 +848,7 @@ def test_document_write_never_applies_schema_defaults(store, monkeypatch):
         },
     }
     monkeypatch.setattr(DocumentType, "load_schema", lambda self: schema)
-    store.save_document(PROGENITOR_STATE_PREFIX, "kanban_card:existing", {"id": "existing"})
+    store.save_document(PROGENA_STATE_PREFIX, "kanban_card:existing", {"id": "existing"})
 
     from src.backend.workflows.service import _execute_document_write_node
 
@@ -862,14 +860,14 @@ def test_document_write_never_applies_schema_defaults(store, monkeypatch):
     )
 
     assert result == {"found": True}
-    assert store.get_document(PROGENITOR_STATE_PREFIX, "kanban_card:existing").payload == {
+    assert store.get_document(PROGENA_STATE_PREFIX, "kanban_card:existing").payload == {
         "id": "existing"
     }
 
 
 def test_workflow_artifact_writes_follow_the_artifact_contract(store):
     from src.backend.workflows.service import _execute_document_write_node
-    from src.progenitor.artifacts.contracts import MAX_ARTIFACT_BYTES
+    from src.progena.artifacts.contracts import MAX_ARTIFACT_BYTES
 
     create = WorkflowNodeDocumentCreate(document_type="artifact")
     with pytest.raises(ValueError, match="invalid artifact"):
@@ -890,14 +888,14 @@ def test_workflow_artifact_writes_follow_the_artifact_contract(store):
     )
 
     assert result["found"] is True
-    stored = store.get_document(PROGENITOR_STATE_PREFIX, "artifact:sales/q3.csv").payload
+    stored = store.get_document(PROGENA_STATE_PREFIX, "artifact:sales/q3.csv").payload
     assert stored["content"] == "month,revenue\nAug,12"
     assert stored["updated_at"] == result["updated_at"]
     assert datetime.fromisoformat(stored["updated_at"]) >= datetime.fromisoformat(stamped)
 
 
 def test_document_delete_returns_before_and_tags_origin(store):
-    store.save_document(PROGENITOR_STATE_PREFIX, "kanban_card:gone", _card("gone", "todo"))
+    store.save_document(PROGENA_STATE_PREFIX, "kanban_card:gone", _card("gone", "todo"))
     node = WorkflowNodeDocumentDelete(document_type="kanban_card")
     deleted = _execute_document_delete_node(store, node, {"id": "gone"}, "run-delete")
     assert deleted == {"found": True, "before": _card("gone", "todo")}
@@ -930,13 +928,13 @@ def test_document_delete_returns_before_and_tags_origin(store):
 )
 def test_document_query_operators(store, op, value, expected):
     store.save_document(
-        PROGENITOR_STATE_PREFIX, "kanban_card:a", _card("a", "todo", title="alpha", position=1)
+        PROGENA_STATE_PREFIX, "kanban_card:a", _card("a", "todo", title="alpha", position=1)
     )
     store.save_document(
-        PROGENITOR_STATE_PREFIX, "kanban_card:b", _card("b", "todo", title="beta", position=2)
+        PROGENA_STATE_PREFIX, "kanban_card:b", _card("b", "todo", title="beta", position=2)
     )
     store.save_document(
-        PROGENITOR_STATE_PREFIX, "kanban_card:c", _card("c", "todo", title="gamma", position=3)
+        PROGENA_STATE_PREFIX, "kanban_card:c", _card("c", "todo", title="gamma", position=3)
     )
     field = "position" if op in {"lt", "lte", "gt", "gte"} else "title"
     node = WorkflowNodeDocumentQuery(
@@ -947,16 +945,16 @@ def test_document_query_operators(store, op, value, expected):
 
 def test_document_query_datetime_order_total_and_unwired_filter(store):
     store.save_document(
-        PROGENITOR_STATE_PREFIX,
+        PROGENA_STATE_PREFIX,
         "kanban_card:a",
         _card("a", "todo", started_at="2024-01-02T00:00:00Z"),
     )
     store.save_document(
-        PROGENITOR_STATE_PREFIX,
+        PROGENA_STATE_PREFIX,
         "kanban_card:b",
         _card("b", "todo", started_at="2024-01-01T00:00:00Z"),
     )
-    store.save_document(PROGENITOR_STATE_PREFIX, "kanban_card:c", _card("c", "todo"))
+    store.save_document(PROGENA_STATE_PREFIX, "kanban_card:c", _card("c", "todo"))
     node = WorkflowNodeDocumentQuery(
         document_type="kanban_card",
         filters=[{"field": "started_at", "op": "gte"}],
@@ -980,20 +978,20 @@ async def test_card_documents_written_by_any_writer_keep_the_board_order(store):
 
     dispatcher = events_dispatch.get_document_event_dispatcher()
     store.save_document(
-        PROGENITOR_STATE_PREFIX, "kanban_board", {"columns": [], "card_order": ["old"]}
+        PROGENA_STATE_PREFIX, "kanban_board", {"columns": [], "card_order": ["old"]}
     )
     with document_write_origin("workflow_run_x"):
-        store.save_document(PROGENITOR_STATE_PREFIX, "kanban_card:new", _card("new", "plan"))
+        store.save_document(PROGENA_STATE_PREFIX, "kanban_card:new", _card("new", "plan"))
     await dispatcher.drain()
 
-    board = store.get_document(PROGENITOR_STATE_PREFIX, "kanban_board")
+    board = store.get_document(PROGENA_STATE_PREFIX, "kanban_board")
     assert board.payload["card_order"] == ["old", "new"]
     board_events = [
         e for e in store.read_document_events(EVENT_LOG_START, 100) if e.key == "kanban_board"
     ]
     assert board_events[-1].origin == "workflow_run_x"
 
-    store.delete_document(PROGENITOR_STATE_PREFIX, "kanban_card:new")
+    store.delete_document(PROGENA_STATE_PREFIX, "kanban_card:new")
     await dispatcher.drain()
-    board = store.get_document(PROGENITOR_STATE_PREFIX, "kanban_board")
+    board = store.get_document(PROGENA_STATE_PREFIX, "kanban_board")
     assert board.payload["card_order"] == ["old"]

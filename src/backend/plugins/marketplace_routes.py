@@ -19,8 +19,8 @@ from src.backend.plugins.marketplaces import (
     save_marketplaces,
     set_cached_catalog,
 )
-from src.progenitor.plugins.marketplaces import validate_marketplaces_payload
-from src.progenitor.plugins.sources import PluginFetchError, fetch_marketplace
+from src.progena.plugins.marketplaces import validate_marketplaces_payload
+from src.progena.plugins.sources import PluginFetchError, fetch_marketplace
 
 logger = logging.getLogger(__name__)
 

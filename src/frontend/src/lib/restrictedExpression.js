@@ -1,5 +1,5 @@
 // Client-side syntax check mirroring the whitelisted grammar
-// `src/progenitor/routines/expression.py` accepts for `eval`/`condition`/`switch`
+// `src/progena/routines/expression.py` accepts for `eval`/`condition`/`switch`
 // config and `loop_guard` -- a small explicit subset of Python expression syntax,
 // walked via `ast.parse(mode="eval")` plus a recursive node-type whitelist rather
 // than a real interpreter. This is NOT a general Python parser: it exists only to
@@ -9,7 +9,7 @@
 // dict-key lookup (`ast.Attribute` in `_eval_node`), never real `getattr`, so
 // it only ever reaches into nested JSON-shaped state, not methods or dunders.
 // Keep the grammar here in lockstep with `_ALLOWED_BINOPS`/`_ALLOWED_COMPARES`/
-// `_eval_node` in expression.py -- see `tests/progenitor/routines/test_expression.py`
+// `_eval_node` in expression.py -- see `tests/progena/routines/test_expression.py`
 // for the backend's own accept/reject list this mirrors.
 
 const KEYWORD_ATOMS = new Set(['None', 'True', 'False']);

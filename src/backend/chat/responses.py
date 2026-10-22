@@ -24,7 +24,7 @@ import src.backend.events.stream as events_stream
 import src.backend.http.contracts as http_contracts
 import src.backend.http.requests as http_requests
 import src.backend.lifecycle.state as lifecycle_state
-from src.progenitor.sessions.titles import ATTACHMENT_CONTEXT_MARKER
+from src.progena.sessions.titles import ATTACHMENT_CONTEXT_MARKER
 
 router = APIRouter()
 
@@ -397,16 +397,14 @@ async def cancel_response(
     if cancel_event is not None:
         cancel_event.set()
 
-    progenitor_cancelled = False
+    progena_cancelled = False
     if lifecycle_state.client is not None:
         cancel_request = getattr(lifecycle_state.client, "cancel_request", None)
         if callable(cancel_request):
             result = cancel_request(target_request_id)
-            progenitor_cancelled = (
-                bool(await result) if inspect.isawaitable(result) else bool(result)
-            )
+            progena_cancelled = bool(await result) if inspect.isawaitable(result) else bool(result)
 
-    if cancel_event is None and not progenitor_cancelled:
+    if cancel_event is None and not progena_cancelled:
         raise HTTPException(
             status_code=404, detail="No active response stream for target_request_id"
         )
@@ -546,7 +544,7 @@ def _attach_session_cookie(
     response: Response,
 ) -> Response:
     """Set the session cookie when the request has no matching cookie yet."""
-    if request.cookies.get("progenitor_session") != session.session_id:
+    if request.cookies.get("progena_session") != session.session_id:
         chat_session.set_session_cookie(response, session)
     return response
 

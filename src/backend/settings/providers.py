@@ -13,9 +13,9 @@ from psycopg.errors import UniqueViolation
 
 import src.backend.http.contracts as http_contracts
 from src.backend.http.requests import BroadcastUiEvent, request_correlation_id
-from src.backend.storage.documents import PROGENITOR_STATE_PREFIX, BackendDocumentStore
-from src.progenitor.settings.model_profiles import MODEL_PROFILES_DOC_KEY
-from src.progenitor.settings.providers import GO_RESPONSES_MODELS, ProviderRepository
+from src.backend.storage.documents import PROGENA_STATE_PREFIX, BackendDocumentStore
+from src.progena.settings.model_profiles import MODEL_PROFILES_DOC_KEY
+from src.progena.settings.providers import GO_RESPONSES_MODELS, ProviderRepository
 
 
 def _repository_or_unavailable(
@@ -53,7 +53,7 @@ async def broadcast_provider_snapshot(
 
 def _profile_references_provider(store: BackendDocumentStore, provider_id: str) -> bool:
     """Return whether a stored profile explicitly points at this connection."""
-    document = store.get_document(PROGENITOR_STATE_PREFIX, MODEL_PROFILES_DOC_KEY)
+    document = store.get_document(PROGENA_STATE_PREFIX, MODEL_PROFILES_DOC_KEY)
     payload = document.payload if document is not None else None
     if not isinstance(payload, dict):
         return False
@@ -74,7 +74,7 @@ async def _test_connection(
         headers = {"Content-Type": "application/json"}
         if connection["provider_kind"] == "opencode_go":
             headers["Authorization"] = f"Bearer {connection['api_key']}"
-            headers["User-Agent"] = "progenitor/0.6.0"
+            headers["User-Agent"] = "progena/0.6.0"
             headers["x-opencode-session"] = f"provider-test-{uuid4()}"
         else:
             headers["api-key"] = connection["api_key"]

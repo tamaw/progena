@@ -10,7 +10,7 @@ from pydantic import BaseModel
 
 @dataclass(slots=True)
 class AgentResponse:
-    """Normalized non-stream response payload returned from Progenitor."""
+    """Normalized non-stream response payload returned from Progena."""
 
     response: str
     reasoning: str | None = None
@@ -38,7 +38,7 @@ class ResponseInputMessage(BaseModel):
 class ResponseRequest(BaseModel):
     """Unified Responses API request."""
 
-    model: str = "progenitor-v1"
+    model: str = "progena-v1"
     input: list[ResponseInputMessage] | str
     stream: bool = False
     include_reasoning: bool | None = None

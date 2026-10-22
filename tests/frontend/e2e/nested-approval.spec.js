@@ -46,7 +46,7 @@ for (const { answer, firstAnswer } of [{ answer: 'approve' }, { answer: 'decline
         branches: { approve: 'approved', decline: 'declined' } });
     }
     for (const graph of [child, parent]) {
-      queryNestedEvidence(`INSERT INTO store (prefix,key,value,created_at,updated_at) VALUES ('progenitor.state',${quote(`routine:${graph.id}`)},${quote(JSON.stringify({ payload: graph }))}::jsonb,now(),now());`);
+      queryNestedEvidence(`INSERT INTO store (prefix,key,value,created_at,updated_at) VALUES ('progena.state',${quote(`routine:${graph.id}`)},${quote(JSON.stringify({ payload: graph }))}::jsonb,now(),now());`);
     }
     async function terminal(requestId) {
       await expect.poll(() => page.evaluate((requestId) => window.__routineEvents.find((e) =>

@@ -19,9 +19,9 @@ import src.backend.storage.documents as storage_documents
 import src.backend.workflows.models as workflows_models
 import src.backend.workflows.runtime as workflows_runtime
 import src.backend.workflows.service as workflows_service
-from src.progenitor.cron import cron_error, next_cron_time
-from src.progenitor.utils import utcnow
-from src.progenitor.workflows.documents import default_workflow_definition, workflow_id_from_path
+from src.progena.cron import cron_error, next_cron_time
+from src.progena.utils import utcnow
+from src.progena.workflows.documents import default_workflow_definition, workflow_id_from_path
 
 logger = logging.getLogger(__name__)
 

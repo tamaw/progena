@@ -20,14 +20,14 @@ import src.backend.workflows.cron as workflows_cron
 import src.backend.workflows.events as workflows_events
 import src.backend.workflows.models as workflows_models
 import src.backend.workflows.service as workflows_service
-from src.progenitor.documents.kinds import (
+from src.progena.documents.kinds import (
     WORKFLOW_APPROVAL_REQUEST_KEY_PREFIX,
     WORKFLOW_DEFINITION_KEY_PREFIX,
     WORKFLOW_INVOKE_REQUEST_KEY_PREFIX,
 )
-from src.progenitor.routines.events import RUN_EVENT_PREFIX
-from src.progenitor.workflows.documents import parse_workflow_invoke_request_document
-from src.progenitor.workflows.models import WorkflowDefinition, WorkflowListItem, WorkflowRun
+from src.progena.routines.events import RUN_EVENT_PREFIX
+from src.progena.workflows.documents import parse_workflow_invoke_request_document
+from src.progena.workflows.models import WorkflowDefinition, WorkflowListItem, WorkflowRun
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +51,7 @@ def _build_action_metadata(
     action: str,
     workflow_run_id: str | None = None,
 ) -> dict[str, str]:
-    """Build metadata sent through the backend→Progenitor boundary."""
+    """Build metadata sent through the backend→Progena boundary."""
 
     metadata = {
         "thread_id": thread_id,
@@ -151,13 +151,13 @@ _workflow_invoke_lock = asyncio.Lock()
 
 
 async def _reconcile_workflow_invoke_requests(changed_key: str | None = None) -> None:
-    """Consume durable workflow invocation requests from Progenitor."""
+    """Consume durable workflow invocation requests from Progena."""
 
     if changed_key is not None and not changed_key.startswith(WORKFLOW_INVOKE_REQUEST_KEY_PREFIX):
         return
     store = storage_documents.get_default_document_store()
     rows = store.list_documents(
-        storage_documents.PROGENITOR_STATE_PREFIX, WORKFLOW_INVOKE_REQUEST_KEY_PREFIX
+        storage_documents.PROGENA_STATE_PREFIX, WORKFLOW_INVOKE_REQUEST_KEY_PREFIX
     )
     if not rows:
         return
@@ -169,7 +169,7 @@ async def _reconcile_workflow_invoke_requests(changed_key: str | None = None) ->
                 request = parse_workflow_invoke_request_document(payload)
             except Exception:
                 logger.warning("Dropping malformed workflow invoke request %r", key, exc_info=True)
-                store.delete_document(storage_documents.PROGENITOR_STATE_PREFIX, key)
+                store.delete_document(storage_documents.PROGENA_STATE_PREFIX, key)
                 continue
             try:
                 definition = workflows_service.get_workflow_definition(store, request.workflow_id)
@@ -182,7 +182,7 @@ async def _reconcile_workflow_invoke_requests(changed_key: str | None = None) ->
                         workflows_service.build_manual_trigger_event(
                             definition, payload=request.input
                         ),
-                        source="progenitor",
+                        source="progena",
                         ancestry=request.ancestry,
                     )
             except Exception:
@@ -191,13 +191,13 @@ async def _reconcile_workflow_invoke_requests(changed_key: str | None = None) ->
                     request.request_id,
                 )
                 continue
-            store.delete_document(storage_documents.PROGENITOR_STATE_PREFIX, key)
+            store.delete_document(storage_documents.PROGENA_STATE_PREFIX, key)
 
 
 async def _apply_workflow_approval_request(typed: events_documents.TypedDocumentEvent) -> None:
-    """Apply Progenitor's answer to a workflow approval, then drop the request.
+    """Apply Progena's answer to a workflow approval, then drop the request.
 
-    Progenitor answers as the agent, so a human-only approval is refused (and
+    Progena answers as the agent, so a human-only approval is refused (and
     logged) rather than applied. The request is single-use either way.
     """
 
@@ -214,13 +214,13 @@ async def _apply_workflow_approval_request(typed: events_documents.TypedDocument
                 workflow_id, run_id, approved=approved, answered_by="agent"
             )
         except PermissionError as exc:
-            logger.warning("Refused Progenitor approval for %s/%s: %s", workflow_id, run_id, exc)
+            logger.warning("Refused Progena approval for %s/%s: %s", workflow_id, run_id, exc)
         else:
             if resolved is None:
                 logger.info("Approval request for %s/%s no longer applies", workflow_id, run_id)
     else:
         logger.warning("Dropping malformed workflow approval request %r", event.key)
-    store.delete_document(storage_documents.PROGENITOR_STATE_PREFIX, event.key)
+    store.delete_document(storage_documents.PROGENA_STATE_PREFIX, event.key)
 
 
 def _workflow_content_response(
@@ -296,7 +296,7 @@ _active_workflow_invoke_tasks: set[asyncio.Task] = set()
 
 
 def _queue_workflow_invoke_reconciliation(_snapshot, changed_key: str | None = None) -> None:
-    """Queue reconciliation for durable Progenitor workflow requests."""
+    """Queue reconciliation for durable Progena workflow requests."""
 
     task = asyncio.create_task(_reconcile_workflow_invoke_requests(changed_key))
     _active_workflow_invoke_tasks.add(task)

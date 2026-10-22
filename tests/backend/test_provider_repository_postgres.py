@@ -1,6 +1,6 @@
 """Real-Postgres concurrency coverage for persisted provider settings.
 
-Opt-in on a scratch database (``PROGENITOR_TEST_DATABASE_URL``).
+Opt-in on a scratch database (``PROGENA_TEST_DATABASE_URL``).
 """
 
 from __future__ import annotations
@@ -12,21 +12,21 @@ import psycopg
 import pytest
 from cryptography.fernet import Fernet
 
-from src.progenitor.settings.providers import ProviderRepository
+from src.progena.settings.providers import ProviderRepository
 
-DATABASE_URL = (os.getenv("PROGENITOR_TEST_DATABASE_URL") or "").strip() or None
+DATABASE_URL = (os.getenv("PROGENA_TEST_DATABASE_URL") or "").strip() or None
 
 pytestmark = pytest.mark.skipif(
-    DATABASE_URL is None, reason="requires PROGENITOR_TEST_DATABASE_URL (a scratch database)"
+    DATABASE_URL is None, reason="requires PROGENA_TEST_DATABASE_URL (a scratch database)"
 )
 
 
 @pytest.fixture
 def repositories(monkeypatch):
     assert DATABASE_URL is not None
-    monkeypatch.delenv("PROGENITOR_DATABASE_URL", raising=False)
+    monkeypatch.delenv("PROGENA_DATABASE_URL", raising=False)
     monkeypatch.delenv("AZURE_OPENAI_BASE_URL", raising=False)
-    monkeypatch.setenv("PROGENITOR_PROVIDER_ENCRYPTION_KEY", Fernet.generate_key().decode("ascii"))
+    monkeypatch.setenv("PROGENA_PROVIDER_ENCRYPTION_KEY", Fernet.generate_key().decode("ascii"))
     with psycopg.connect(DATABASE_URL, autocommit=True) as conn:
         conn.execute("DROP TABLE IF EXISTS provider_connection")
         conn.execute("DROP TABLE IF EXISTS provider_repository_metadata")

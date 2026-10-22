@@ -2,18 +2,18 @@
 
 Agent catalog metadata (name, role, status, etc.) is the backend's own data, so
 it lives in a separate database on the *same* Postgres server as the
-Progenitor runtime (only the database name differs). The store is seeded from
+Progena runtime (only the database name differs). The store is seeded from
 routine definitions. Manifest-backed object agents and the shared Postgres
 ``registry`` document supply the other catalog resources; live runtime status
 is merged in at read time by the route layer.
 
 An agent's *editable routine graph* is not backend-owned data, though: it is
-a document in the Progenitor runtime's own document store (the same Postgres
+a document in the Progena runtime's own document store (the same Postgres
 ``store`` table workflow definitions live in), keyed ``routine:<agent_id>``
-(see ``src.progenitor.routines.store``). This gives the agent the same
+(see ``src.progena.routines.store``). This gives the agent the same
 read/write/edit experience over routine graphs as it has over workflow
 definitions (mounted ``/routines/<agent_id>.json`` by
-``src.progenitor.agent.filesystem.routines.RoutineDirectoryBackend``), and lets the
+``src.progena.agent.filesystem.routines.RoutineDirectoryBackend``), and lets the
 Agents page and the agent edit the exact same document. Only graph-editing
 bookkeeping that isn't part of the routine schema itself (``status``,
 ``summary``) stays in the backend's own ``agent_graph`` table.
@@ -34,20 +34,20 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 from psycopg_pool import ConnectionPool
 
-from src.backend.storage.documents import PROGENITOR_STATE_PREFIX, BackendDocumentStore
-from src.progenitor.agent.object_agents.manifest import (
+from src.backend.storage.documents import PROGENA_STATE_PREFIX, BackendDocumentStore
+from src.progena.agent.object_agents.manifest import (
     discover_native_object_agents,
     parse_front_matter,
     parse_object_agent_manifest,
 )
-from src.progenitor.documents.content import AGENT_DOCUMENT_KEY_PREFIX, content_document_key
-from src.progenitor.instructions.paths import PROJECT_ROOT
-from src.progenitor.routines.store import (
+from src.progena.documents.content import AGENT_DOCUMENT_KEY_PREFIX, content_document_key
+from src.progena.instructions.paths import PROJECT_ROOT
+from src.progena.routines.store import (
     ROUTINE_GRAPH_KEY_PREFIX,
     default_routine_graph,
     routine_graph_key,
 )
-from src.progenitor.utils import utcnow_isoformat
+from src.progena.utils import utcnow_isoformat
 
 logger = logging.getLogger(__name__)
 
@@ -72,18 +72,18 @@ _EMPTY_METRICS = {
 
 # Default graph-editing bookkeeping (``agent_graph.status``/``.summary``) for a
 # freshly seeded subagent. The routine graph document itself (nodes/entry/edges)
-# is seeded separately via ``src.progenitor.routines.store.default_routine_graph``
+# is seeded separately via ``src.progena.routines.store.default_routine_graph``
 # into the shared document store -- see ``AgentStore.ensure_graph``.
 DEFAULT_AGENT_GRAPH_STATUS: dict[str, Any] = {
     "status": "Draft",
     "summary": "A single step. Edit this graph to build out the routine.",
 }
 
-# Progenitor's own skills live on disk at ``data/skills/<name>/SKILL.md``,
-# read-only and baked into the image (see ``src.progenitor.documents.content``).
+# Progena's own skills live on disk at ``data/skills/<name>/SKILL.md``,
+# read-only and baked into the image (see ``src.progena.documents.content``).
 _NATIVE_SKILLS_ROOT = PROJECT_ROOT / "data" / "skills"
 _NATIVE_OBJECT_AGENTS_ROOT = (
-    Path(os.getenv("PROGENITOR_DATA_DIR", str(PROJECT_ROOT / "data"))) / "agents" / "objects"
+    Path(os.getenv("PROGENA_DATA_DIR", str(PROJECT_ROOT / "data"))) / "agents" / "objects"
 )
 
 
@@ -137,7 +137,7 @@ def ensure_database_exists(admin_url: str, db_name: str) -> None:
     """Create ``db_name`` on the shared Postgres server if it does not exist.
 
     ``admin_url`` must point at an existing, connectable database on the same
-    server (the Progenitor runtime database). ``CREATE DATABASE`` cannot run in a
+    server (the Progena runtime database). ``CREATE DATABASE`` cannot run in a
     transaction, so the admin connection uses autocommit.
     """
     if not admin_url or not db_name:
@@ -255,7 +255,7 @@ class AgentStore:
                 )
             )
         documents = self._document_store.list_documents(
-            PROGENITOR_STATE_PREFIX,
+            PROGENA_STATE_PREFIX,
             AGENT_DOCUMENT_KEY_PREFIX,
         )
         for key, document in sorted(
@@ -315,7 +315,7 @@ class AgentStore:
                 )
         relative_path = f"user/{_slug(manifest.name)}/SYSTEM.md"
         self._document_store.save_document(
-            PROGENITOR_STATE_PREFIX,
+            PROGENA_STATE_PREFIX,
             content_document_key("agent", relative_path),
             {"content": content, "updated_at": utcnow_isoformat()},
         )
@@ -342,10 +342,10 @@ class AgentStore:
         new_relative_path = f"{parts[0]}/{_slug(manifest.name)}/SYSTEM.md"
         if new_relative_path != location:
             self._document_store.delete_document(
-                PROGENITOR_STATE_PREFIX, content_document_key("agent", location)
+                PROGENA_STATE_PREFIX, content_document_key("agent", location)
             )
         self._document_store.save_document(
-            PROGENITOR_STATE_PREFIX,
+            PROGENA_STATE_PREFIX,
             content_document_key("agent", new_relative_path),
             {"content": content, "updated_at": utcnow_isoformat()},
         )
@@ -370,7 +370,7 @@ class AgentStore:
                 f"object agent {agent_id!r} is a {source} agent and cannot be deleted here"
             )
         self._document_store.delete_document(
-            PROGENITOR_STATE_PREFIX, content_document_key("agent", cast(str, location))
+            PROGENA_STATE_PREFIX, content_document_key("agent", cast(str, location))
         )
         return True
 
@@ -388,8 +388,8 @@ class AgentStore:
 
         ``skill_path`` is the same absolute virtual-mount path stored in a
         manifest's ``skills`` list and read by the DeepAgent runtime (see
-        ``src.progenitor.agent.filesystem.mounts``): ``/skills/<name>`` for one of
-        Progenitor's own native skills (``data/skills/<name>/SKILL.md``,
+        ``src.progena.agent.filesystem.mounts``): ``/skills/<name>`` for one of
+        Progena's own native skills (``data/skills/<name>/SKILL.md``,
         read-only, baked into the image), or
         ``/skills/<marketplace>__<plugin>/<name>`` for an installed
         marketplace-plugin skill (Postgres document store).
@@ -416,7 +416,7 @@ class AgentStore:
             plugin_segment, name = segments
             relative_path = f"{plugin_segment}/{name}/SKILL.md"
             document = self._document_store.get_document(
-                PROGENITOR_STATE_PREFIX, content_document_key("skill", relative_path)
+                PROGENA_STATE_PREFIX, content_document_key("skill", relative_path)
             )
             payload = document.payload if document is not None else None
             if not isinstance(payload, dict) or not isinstance(payload.get("content"), str):
@@ -463,7 +463,7 @@ class AgentStore:
             native_path.write_text(content, encoding="utf-8")
         else:
             self._document_store.save_document(
-                PROGENITOR_STATE_PREFIX,
+                PROGENA_STATE_PREFIX,
                 content_document_key("skill", cast(str, existing["location"])),
                 {"content": content, "updated_at": utcnow_isoformat()},
             )
@@ -563,7 +563,7 @@ class AgentStore:
         # itself if this agent doesn't already have one.
         if (
             self._document_store.get_document(
-                PROGENITOR_STATE_PREFIX, routine_graph_key(agent_id), None
+                PROGENA_STATE_PREFIX, routine_graph_key(agent_id), None
             )
             is not None
         ):
@@ -574,7 +574,7 @@ class AgentStore:
             document["nodes"] = graph.get("nodes", document["nodes"])
             document["edges"] = graph.get("edges", document["edges"])
         self._document_store.save_document(
-            PROGENITOR_STATE_PREFIX, routine_graph_key(agent_id), document
+            PROGENA_STATE_PREFIX, routine_graph_key(agent_id), document
         )
 
     def get_routine_document(self, agent_id: str) -> dict[str, Any] | None:
@@ -583,7 +583,7 @@ class AgentStore:
         through ``_graph_payload``, which needs the row first.
         """
         document = self._document_store.get_document(
-            PROGENITOR_STATE_PREFIX, routine_graph_key(agent_id), None
+            PROGENA_STATE_PREFIX, routine_graph_key(agent_id), None
         )
         payload = document.payload if document is not None else None
         return payload if isinstance(payload, dict) else None
@@ -593,7 +593,7 @@ class AgentStore:
         return [
             key.removeprefix(ROUTINE_GRAPH_KEY_PREFIX)
             for key, _ in self._document_store.list_documents(
-                PROGENITOR_STATE_PREFIX, ROUTINE_GRAPH_KEY_PREFIX
+                PROGENA_STATE_PREFIX, ROUTINE_GRAPH_KEY_PREFIX
             )
         ]
 
@@ -640,9 +640,7 @@ class AgentStore:
             cur.execute("DELETE FROM agent WHERE id = %s AND kind = 'routine'", (agent_id,))
             deleted = int(cur.rowcount) > 0
         if deleted:
-            self._document_store.delete_document(
-                PROGENITOR_STATE_PREFIX, routine_graph_key(agent_id)
-            )
+            self._document_store.delete_document(PROGENA_STATE_PREFIX, routine_graph_key(agent_id))
         return deleted
 
     def delete_routine_catalog_entry(self, agent_id: str) -> bool:
@@ -691,7 +689,7 @@ class AgentStore:
             if graph.get(key) is not None:
                 document[key] = graph[key]
         self._document_store.save_document(
-            PROGENITOR_STATE_PREFIX, routine_graph_key(agent_id), document
+            PROGENA_STATE_PREFIX, routine_graph_key(agent_id), document
         )
         return self._graph_payload(agent_id, graph_row)
 
@@ -699,7 +697,7 @@ class AgentStore:
         self, agent_id: str, graph_row: dict[str, Any] | None
     ) -> dict[str, Any] | None:
         document = self._document_store.get_document(
-            PROGENITOR_STATE_PREFIX, routine_graph_key(agent_id), None
+            PROGENA_STATE_PREFIX, routine_graph_key(agent_id), None
         )
         graph = document.payload if document is not None else None
         if not isinstance(graph, dict):
@@ -828,7 +826,7 @@ def _row_to_agent(row: dict[str, Any]) -> dict[str, Any]:
 
 
 def _acp_task_view(record: dict[str, Any]) -> dict[str, Any]:
-    """Shape a Progenitor ``ACPTaskRecord`` dict for the Agents-page detail pane."""
+    """Shape a Progena ``ACPTaskRecord`` dict for the Agents-page detail pane."""
     return {
         "id": str(record.get("task_id") or ""),
         "status": str(record.get("status") or "queued"),
@@ -842,7 +840,7 @@ def _acp_task_view(record: dict[str, Any]) -> dict[str, Any]:
 
 
 def _acp_tasks_by_agent() -> dict[str, list[dict[str, Any]]]:
-    """Read Progenitor's ACP run records and group recent ones by agent name."""
+    """Read Progena's ACP run records and group recent ones by agent name."""
     try:
         from src.backend.monitoring.state import get_state_reader
 
@@ -869,7 +867,7 @@ def _acp_tasks_by_agent() -> dict[str, list[dict[str, Any]]]:
 def acp_profile_from_info(
     info: Any, tasks_by_agent: dict[str, list[dict[str, Any]]] | None = None
 ) -> dict[str, Any]:
-    """Map a Progenitor registry ``AgentInfo`` (transport=="acp") to an AgentProfile.
+    """Map a Progena registry ``AgentInfo`` (transport=="acp") to an AgentProfile.
 
     Read-through: ACP agents are local stdio CLIs registered in the runtime
     registry. Connection facts come from the entry's ``acp`` config; ``status`` is
@@ -947,7 +945,7 @@ def acp_profile_from_info(
 
 
 def acp_profiles_from_registry() -> list[dict[str, Any]]:
-    """Read Progenitor's registry document and map its ACP agents read-through."""
+    """Read Progena's registry document and map its ACP agents read-through."""
     try:
         from src.backend.monitoring.state import get_state_reader
 
@@ -1063,7 +1061,7 @@ _A2A_TASK_LIMIT = 25
 
 
 def _task_view(record: dict[str, Any]) -> dict[str, Any]:
-    """Shape a Progenitor ``A2ATaskRecord`` dict for the Agents-page detail pane."""
+    """Shape a Progena ``A2ATaskRecord`` dict for the Agents-page detail pane."""
     return {
         "id": str(record.get("task_id") or ""),
         "status": str(record.get("status") or "unknown"),
@@ -1080,7 +1078,7 @@ def _task_view(record: dict[str, Any]) -> dict[str, Any]:
 
 
 def _a2a_tasks_by_agent() -> dict[str, list[dict[str, Any]]]:
-    """Read Progenitor's A2A task records and group recent ones by agent name."""
+    """Read Progena's A2A task records and group recent ones by agent name."""
     try:
         from src.backend.monitoring.state import get_state_reader
 
@@ -1107,11 +1105,11 @@ def _a2a_tasks_by_agent() -> dict[str, list[dict[str, Any]]]:
 def a2a_profile_from_info(
     info: Any, tasks_by_agent: dict[str, list[dict[str, Any]]] | None = None
 ) -> dict[str, Any]:
-    """Map a Progenitor registry ``AgentInfo`` to an ``AgentProfile``-shaped dict.
+    """Map a Progena registry ``AgentInfo`` to an ``AgentProfile``-shaped dict.
 
-    Read-through: everything comes from the live agent card Progenitor already
-    fetched (``info.agent_card``), Progenitor's health-derived ``status`` (shown
-    verbatim), and the A2A task records Progenitor tracks (``tasks_by_agent``).
+    Read-through: everything comes from the live agent card Progena already
+    fetched (``info.agent_card``), Progena's health-derived ``status`` (shown
+    verbatim), and the A2A task records Progena tracks (``tasks_by_agent``).
     A2A agents are read-only here, so no editable graph is attached.
     """
     card = getattr(info, "agent_card", None)
@@ -1158,7 +1156,7 @@ def a2a_profile_from_info(
 
 
 def a2a_profiles_from_registry() -> list[dict[str, Any]]:
-    """Read Progenitor's registry document and map its A2A agents read-through."""
+    """Read Progena's registry document and map its A2A agents read-through."""
     try:
         from src.backend.monitoring.state import get_state_reader
 

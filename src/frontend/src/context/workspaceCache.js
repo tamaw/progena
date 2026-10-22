@@ -17,10 +17,10 @@ const WORKSPACE_SCOPED_STORAGE_KEYS = [
   ARCHIVED_CHAT_SESSIONS_KEY,
   PINNED_CHAT_SESSIONS_KEY,
   SOLUTIONS_STORAGE_KEY,
-  'progenitor_chat_history',
-  'progenitor_quick_chat_handoff',
-  'progenitor_input_history',
-  'progenitor_stream_filters',
+  'progena_chat_history',
+  'progena_quick_chat_handoff',
+  'progena_input_history',
+  'progena_stream_filters',
 ];
 
 /** Clears every localStorage cache scoped to the previously-active workspace. */

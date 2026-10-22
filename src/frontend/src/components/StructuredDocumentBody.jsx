@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { useMermaidRender } from '../hooks/useMermaidRender';
 import { renderMarkdownToHtml } from '../lib/markdown';
 import { parseStructuredContent } from '../lib/structuredContent';
-import { OpenChatIcon, ProgenitorAiIcon, QuickChatIcon } from './navIcons';
+import { OpenChatIcon, ProgenaAiIcon, QuickChatIcon } from './navIcons';
 import { DeleteActionIcon } from './layout/DetailHeader';
 
 function Markdown({ content }) {
@@ -56,7 +56,7 @@ function withDefaultGroups(nodes) {
   });
 }
 
-export default function StructuredDocumentBody({ content = '', onAskAgent, onAnswerQuestion }) {
+export default function StructuredDocumentBody({ content = '', onAskAgent, onAnswerQuestion, agentName }) {
   const [selected, setSelected] = useState(null);
   const [mode, setMode] = useState(null);
   const nodes = useMemo(() => withDefaultGroups(parseStructuredContent(content)), [content]);
@@ -112,8 +112,8 @@ export default function StructuredDocumentBody({ content = '', onAskAgent, onAns
           : { ...current, phase: 'error', error: event.detail.error || 'The quick-chat response did not complete.' };
       });
     };
-    window.addEventListener('progenitor:quick-chat-inline-status', handleStatus);
-    return () => window.removeEventListener('progenitor:quick-chat-inline-status', handleStatus);
+    window.addEventListener('progena:quick-chat-inline-status', handleStatus);
+    return () => window.removeEventListener('progena:quick-chat-inline-status', handleStatus);
   }, []);
 
   function select(node) {
@@ -166,13 +166,13 @@ export default function StructuredDocumentBody({ content = '', onAskAgent, onAns
             setMode('ai');
           }}
         >
-          <ProgenitorAiIcon /><span className="msg-action-btn__label">Edit with AI</span>
+          <ProgenaAiIcon /><span className="msg-action-btn__label">Edit with AI</span>
         </button>
         <button type="button" className="msg-action-btn" aria-label="Explain" onClick={() => submitAgent(node, 'Explain this section to me in chat. Do not modify the file.')}>
           <QuickChatIcon /><span className="msg-action-btn__label">Explain</span>
         </button>
         <button type="button" className="msg-action-btn" aria-label="Remove" onClick={() => {
-          if (window.confirm(`Ask Progenitor to remove the entire ${describeNode(node)} section and its contents?`)) {
+          if (window.confirm(`Ask ${agentName} to remove the entire ${describeNode(node)} section and its contents?`)) {
             submitAgent(node, 'Remove this entire section and its contents from the document.');
           }
         }}>
@@ -293,7 +293,7 @@ export default function StructuredDocumentBody({ content = '', onAskAgent, onAns
             submitAgent(selected, instruction.trim(), { inline: true, clientId: id });
           }}
         >
-          <ProgenitorAiIcon />
+          <ProgenaAiIcon />
           <input
             aria-label={aiJob && aiJob.phase !== 'error' ? 'AI edit status' : 'AI edit instruction'}
             autoFocus

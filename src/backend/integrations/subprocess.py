@@ -1,7 +1,7 @@
 """
-Progenitor Client - Subprocess communication with the Progenitor agent.
+Progena Client - Subprocess communication with the Progena agent.
 
-Spawns Progenitor as a subprocess and communicates via stdin/stdout.
+Spawns Progena as a subprocess and communicates via stdin/stdout.
 
 CR-001 Improvements:
 - Message framing with length prefix for robust parsing
@@ -22,18 +22,18 @@ from typing import IO, Any
 
 from src.backend.chat.models import AgentResponse, normalize_token_usage
 from src.backend.config import ChatServerConfig
-from src.progenitor.instructions.paths import PROJECT_ROOT
+from src.progena.instructions.paths import PROJECT_ROOT
 
 logger = logging.getLogger(__name__)
 
 # Message framing constants
-MESSAGE_DELIMITER = b"\n---PROGENITOR_MSG_END---\n"
+MESSAGE_DELIMITER = b"\n---PROGENA_MSG_END---\n"
 HEARTBEAT_INTERVAL = 30  # seconds
 HEARTBEAT_TIMEOUT = 10  # seconds
 
 
-class ProgenitorClient:
-    """Client for communicating with Progenitor via subprocess.
+class ProgenaClient:
+    """Client for communicating with Progena via subprocess.
 
     CR-001: Enhanced with heartbeat monitoring and auto-restart.
     """
@@ -52,7 +52,7 @@ class ProgenitorClient:
         self._restart_delay: float = 1.0
 
     async def start(self) -> None:
-        """Start the Progenitor subprocess."""
+        """Start the Progena subprocess."""
         if self._started:
             return
 
@@ -60,16 +60,16 @@ class ProgenitorClient:
             if self._started:
                 return
 
-            script_path = self.config.progenitor_script
+            script_path = self.config.progena_script
             if not script_path.exists():
-                raise FileNotFoundError(f"Progenitor script not found: {script_path}")
+                raise FileNotFoundError(f"Progena script not found: {script_path}")
 
-            logger.info(f"Starting Progenitor subprocess: {script_path}")
+            logger.info(f"Starting Progena subprocess: {script_path}")
 
             # Capture subprocess stdout/stderr to files for diagnostics
             logs_dir = PROJECT_ROOT / "logs"
             logs_dir.mkdir(parents=True, exist_ok=True)
-            stderr_path = logs_dir / "progenitor.client.stderr.log"
+            stderr_path = logs_dir / "progena.client.stderr.log"
             self._log_stack = contextlib.ExitStack()
             self._stderr_log = self._log_stack.enter_context(
                 stderr_path.open("a", encoding="utf-8")
@@ -77,10 +77,10 @@ class ProgenitorClient:
 
             # Use module invocation to preserve package-relative imports
             self._process = await asyncio.create_subprocess_exec(
-                self.config.progenitor_python,
+                self.config.progena_python,
                 "-u",
                 "-m",
-                "src.progenitor.main",
+                "src.progena.main",
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
@@ -90,7 +90,7 @@ class ProgenitorClient:
             self._started = True
             self._last_heartbeat = time.time()
             self._restart_count = 0
-            logger.info(f"Progenitor started (PID: {self._process.pid})")
+            logger.info(f"Progena started (PID: {self._process.pid})")
 
             # Start stderr reader task
             asyncio.create_task(self._read_stderr())
@@ -105,7 +105,7 @@ class ProgenitorClient:
                 await asyncio.sleep(HEARTBEAT_INTERVAL)
 
                 if not self._check_process_alive():
-                    logger.warning("Progenitor process died, attempting restart...")
+                    logger.warning("Progena process died, attempting restart...")
                     await self._attempt_restart()
                     continue
 
@@ -113,7 +113,7 @@ class ProgenitorClient:
                 time_since_heartbeat = time.time() - self._last_heartbeat
                 if time_since_heartbeat > HEARTBEAT_INTERVAL * 3:
                     logger.warning(
-                        "No activity from Progenitor in %.1fs, checking health...",
+                        "No activity from Progena in %.1fs, checking health...",
                         time_since_heartbeat,
                     )
 
@@ -129,7 +129,7 @@ class ProgenitorClient:
         return self._process.returncode is None
 
     async def _attempt_restart(self) -> bool:
-        """Attempt to restart the Progenitor process (CR-001)."""
+        """Attempt to restart the Progena process (CR-001)."""
         if self._restart_count >= self._max_restarts:
             logger.error("Max restart attempts (%d) reached, giving up", self._max_restarts)
             return False
@@ -151,10 +151,10 @@ class ProgenitorClient:
 
         try:
             await self.start()
-            logger.info("Progenitor restarted successfully")
+            logger.info("Progena restarted successfully")
             return True
         except Exception as e:
-            logger.error("Failed to restart Progenitor: %s", e)
+            logger.error("Failed to restart Progena: %s", e)
             return False
 
     async def _read_stderr(self) -> None:
@@ -167,9 +167,9 @@ class ProgenitorClient:
                 line = await self._process.stderr.readline()
                 if not line:
                     break
-                # Surface progenitor stderr so crashes are visible in chatserver logs
+                # Surface progena stderr so crashes are visible in chatserver logs
                 decoded = line.decode().strip()
-                logger.error(f"[Progenitor stderr] {decoded}")
+                logger.error(f"[Progena stderr] {decoded}")
                 if self._stderr_log:
                     self._stderr_log.write(decoded + "\n")
                     self._stderr_log.flush()
@@ -178,7 +178,7 @@ class ProgenitorClient:
                 break
 
     async def stop(self) -> None:
-        """Stop the Progenitor subprocess."""
+        """Stop the Progena subprocess."""
         async with self._lock:
             # Cancel heartbeat task first (CR-001)
             if self._heartbeat_task:
@@ -188,15 +188,15 @@ class ProgenitorClient:
                 self._heartbeat_task = None
 
             if self._process:
-                logger.info("Stopping Progenitor subprocess...")
+                logger.info("Stopping Progena subprocess...")
                 self._process.terminate()
 
                 # Use configurable timeout (CR-001: CQ-011 fix)
-                stop_timeout = getattr(self.config, "progenitor_stop_timeout", 5)
+                stop_timeout = getattr(self.config, "progena_stop_timeout", 5)
                 try:
                     await asyncio.wait_for(self._process.wait(), timeout=stop_timeout)
                 except TimeoutError:
-                    logger.warning("Progenitor did not terminate in %ds, killing...", stop_timeout)
+                    logger.warning("Progena did not terminate in %ds, killing...", stop_timeout)
                     self._process.kill()
                 self._process = None
                 self._started = False
@@ -215,7 +215,7 @@ class ProgenitorClient:
         *,
         include_reasoning: bool | None = None,
     ) -> AgentResponse:
-        """Send a message to Progenitor and get the normalized response model.
+        """Send a message to Progena and get the normalized response model.
 
         Args:
             message: The user message to send
@@ -229,12 +229,12 @@ class ProgenitorClient:
 
         # CR-001: Check process health before sending
         if not self._check_process_alive():
-            logger.warning("Progenitor process not alive, restarting...")
+            logger.warning("Progena process not alive, restarting...")
             if not await self._attempt_restart():
-                raise RuntimeError("Progenitor process not running and restart failed")
+                raise RuntimeError("Progena process not running and restart failed")
 
         if not self._process or not self._process.stdin or not self._process.stdout:
-            raise RuntimeError("Progenitor process not running")
+            raise RuntimeError("Progena process not running")
 
         async with self._lock:
             effective_include_reasoning = (
@@ -258,11 +258,11 @@ class ProgenitorClient:
             try:
                 response_line = await asyncio.wait_for(
                     self._process.stdout.readline(),
-                    timeout=self.config.progenitor_timeout,
+                    timeout=self.config.progena_timeout,
                 )
 
                 if not response_line:
-                    raise RuntimeError("Progenitor process closed unexpectedly")
+                    raise RuntimeError("Progena process closed unexpectedly")
 
                 # CR-001: Update heartbeat timestamp on successful communication
                 self._last_heartbeat = time.time()
@@ -293,9 +293,7 @@ class ProgenitorClient:
                 )
 
             except TimeoutError:
-                raise TimeoutError(
-                    f"Progenitor did not respond within {self.config.progenitor_timeout}s"
-                )
+                raise TimeoutError(f"Progena did not respond within {self.config.progena_timeout}s")
             except json.JSONDecodeError:
                 # Return raw text if not JSON
                 self._last_heartbeat = time.time()  # CR-001
@@ -315,7 +313,7 @@ class ProgenitorClient:
             await self.start()
 
         if not self._process or not self._process.stdin or not self._process.stdout:
-            raise RuntimeError("Progenitor process not running")
+            raise RuntimeError("Progena process not running")
 
         async with self._lock:
             # Send message as JSON line with stream flag
@@ -337,11 +335,11 @@ class ProgenitorClient:
                 while True:
                     response_line = await asyncio.wait_for(
                         self._process.stdout.readline(),
-                        timeout=self.config.progenitor_timeout,
+                        timeout=self.config.progena_timeout,
                     )
 
                     if not response_line:
-                        raise RuntimeError("Progenitor process closed unexpectedly")
+                        raise RuntimeError("Progena process closed unexpectedly")
 
                     try:
                         response = json.loads(response_line.decode())
@@ -388,13 +386,11 @@ class ProgenitorClient:
                         logger.debug("Received unknown message type: %s", msg_type)
 
             except TimeoutError:
-                raise TimeoutError(
-                    f"Progenitor did not respond within {self.config.progenitor_timeout}s"
-                )
+                raise TimeoutError(f"Progena did not respond within {self.config.progena_timeout}s")
 
     @property
     def is_running(self) -> bool:
-        """Check if Progenitor is running."""
+        """Check if Progena is running."""
         return self._started and self._process is not None and self._process.returncode is None
 
     def get_status(self) -> dict:
@@ -412,14 +408,14 @@ class ProgenitorClient:
 
 
 # Global client instance
-_client: ProgenitorClient | None = None
+_client: ProgenaClient | None = None
 
 
-def get_client(config: ChatServerConfig | None = None) -> ProgenitorClient:
-    """Get or create the global Progenitor client."""
+def get_client(config: ChatServerConfig | None = None) -> ProgenaClient:
+    """Get or create the global Progena client."""
     global _client
     if _client is None:
         if config is None:
             config = ChatServerConfig.from_env()
-        _client = ProgenitorClient(config)
+        _client = ProgenaClient(config)
     return _client

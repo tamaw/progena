@@ -18,10 +18,10 @@ import src.backend.events.stream as events_stream
 import src.backend.monitoring.state as monitoring_state
 import src.backend.schedules.models as schedules_models
 import src.backend.storage.documents as storage_documents
-from src.progenitor.cron import default_timezone_name
-from src.progenitor.documents.types import DOCUMENT_OPERATIONS
-from src.progenitor.schedules.engine import Scheduler
-from src.progenitor.utils import utcnow
+from src.progena.cron import default_timezone_name
+from src.progena.documents.types import DOCUMENT_OPERATIONS
+from src.progena.schedules.engine import Scheduler
+from src.progena.utils import utcnow
 
 logger = logging.getLogger(__name__)
 
@@ -204,7 +204,7 @@ def _build_event_widget_entry(
 def _read_schedule_config(state_reader: monitoring_state.StateReader) -> dict[str, Any]:
     """Read the live schedule config, keyed by schedule id."""
     document = state_reader.document_store.get_document(
-        storage_documents.PROGENITOR_STATE_PREFIX, "schedule", {}
+        storage_documents.PROGENA_STATE_PREFIX, "schedule", {}
     )
     raw = document.payload if document is not None else {}
     return raw if isinstance(raw, dict) else {}
@@ -216,7 +216,7 @@ def _delete_schedule_entry(state_reader: monitoring_state.StateReader, schedule_
 
     def _save() -> None:
         state_reader.document_store.save_document(
-            storage_documents.PROGENITOR_STATE_PREFIX, "schedule", schedule_data
+            storage_documents.PROGENA_STATE_PREFIX, "schedule", schedule_data
         )
 
     return _delete_document_entry(entries=schedule_data, entry_id=schedule_id, save=_save)

@@ -1,13 +1,13 @@
 ---
 name: runtime-inspection
-description: Inspect Progenitor's heartbeat status, runtime logs, session records, and read-only virtual documents to diagnose failures, stalls, and behavioral regressions.
+description: Inspect Progena's heartbeat status, runtime logs, session records, and read-only virtual documents to diagnose failures, stalls, and behavioral regressions.
 allowed-tools: ls read_file grep glob
 ---
 
 # Runtime Inspection
 
 ## When to Use
-- The user asks why Progenitor failed, stalled, or repeated work
+- The user asks why Progena failed, stalled, or repeated work
 - The user asks for current runtime status or evidence from runtime activity
 - A regression needs correlation with a conversation, registered agent, or repository scan
 

@@ -22,7 +22,7 @@ const SCHEME_RE = /^[a-z][a-z0-9+.-]*:\/\//i;
 // whether it actually speaks plain http, so those always resolve to https
 // like any other switched-to host.
 const LOCALHOST_RE = /^(localhost|127(\.\d{1,3}){3}|\[?::1\]?)(:\d{1,5})?$/i;
-const REGISTRY_KEY = 'progenitor_workspaces';
+const REGISTRY_KEY = 'progena_workspaces';
 
 /** Parse a pathname into `{ host, rest }`, or `null` if it isn't workspace-scoped. */
 export function parseWorkspacePath(pathname) {
@@ -101,7 +101,7 @@ export function ensureWorkspaceRegistered(host) {
   }
 }
 
-const DEFAULT_WORKSPACE_KEY = 'progenitor_default_workspace';
+const DEFAULT_WORKSPACE_KEY = 'progena_default_workspace';
 
 /**
  * The host to land on for a bare `/` visit -- the last workspace the user

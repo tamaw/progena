@@ -1,4 +1,4 @@
-# Progenitor — Copilot instructions
+# Progena AI — Copilot instructions
 
 Read root `AGENTS.md` and the guide under each affected component before editing.
 They own setup, validation, architecture boundaries and repository safety.

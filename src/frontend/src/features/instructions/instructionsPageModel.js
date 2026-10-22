@@ -1,10 +1,10 @@
 // List shaping for the Instructions page. Instructions are grouped by their
-// first path segment: the agent that reads them (Progenitor first), or a
+// first path segment: the agent that reads them (the runtime first), or a
 // folder of workflow templates.
 
 export const INSTRUCTION_FILTERS = ['All', 'Editable', 'Read-only'];
 
-const RUNTIME_GROUP = 'progenitor';
+const RUNTIME_GROUP = 'progena';
 
 export function groupLabel(group) {
   const words = String(group || '').split('_').filter(Boolean);

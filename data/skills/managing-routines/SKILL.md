@@ -11,8 +11,8 @@ per routine: `/routines/<routine-id>.json`.
 
 The authoritative contract is `/schemas/graph.routine.schema.v1.json`. Read it
 before creating or reshaping a graph. The compiler and topology validator are
-implemented in `src/progenitor/routines/graph.py` and
-`src/progenitor/routines/factory.py`.
+implemented in `src/progena/routines/graph.py` and
+`src/progena/routines/factory.py`.
 
 ## Operating rules
 
@@ -94,7 +94,7 @@ The current schema supports: `prompt`, `eval`, `condition`, `switch`, `split`,
   managing-workflows skill).
   Repository work goes to the bundled `repo-manager` agent: it clones declared
   repos (`/config/repos/<id>.json`), creates and removes per-branch worktrees
-  under `$PROGENITOR_REPOS_DIR/<repo-id>.worktrees/`, and publishes branches
+  under `$PROGENA_REPOS_DIR/<repo-id>.worktrees/`, and publishes branches
   (push + pull request). Tell it the repo id and branch, and ask it to reply
   with the paths and URLs it produced.
 - `noop` passes state through unchanged.

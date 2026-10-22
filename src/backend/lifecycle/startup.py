@@ -24,7 +24,7 @@ import src.backend.lifecycle.state as lifecycle_state
 import src.backend.lifecycle.watchers as lifecycle_watchers
 import src.backend.schedules.service as schedules_service
 import src.backend.storage.documents as storage_documents
-from src.progenitor.settings.providers import (
+from src.progena.settings.providers import (
     configure_provider_repository,
     provider_database_url,
     shutdown_provider_repository,
@@ -48,7 +48,7 @@ async def lifespan(app: FastAPI):
     logger.info("Starting backend with enhanced features...")
     document_store = storage_documents.configure_default_document_store(
         lifecycle_state.config.database_url,
-        runtime_url=lifecycle_state.config.progenitor_runtime_url,
+        runtime_url=lifecycle_state.config.progena_runtime_url,
     )
     events_documents.seed_document_types(document_store)
     attachment_blob_store = attachments_store.configure_attachment_blob_store(
@@ -157,12 +157,12 @@ async def lifespan(app: FastAPI):
             timeout=5.0,
         )
 
-    # Initialize the Progenitor runtime HTTP client
+    # Initialize the Progena runtime HTTP client
     logger.info(
-        "Using Progenitor runtime client (base_url=%s)",
-        lifecycle_state.config.progenitor_runtime_url,
+        "Using Progena runtime client (base_url=%s)",
+        lifecycle_state.config.progena_runtime_url,
     )
-    # New alert documents are relayed to the user by Progenitor.
+    # New alert documents are relayed to the user by Progena.
     alerts_routes.set_alert_relay(
         lambda alert: alerts_relay._relay_alert(lifecycle_state.client, alert)
     )
@@ -241,15 +241,15 @@ async def lifespan(app: FastAPI):
             timeout=5.0,
         )
 
-        async def shutdown_progenitor_client() -> None:
+        async def shutdown_progena_client() -> None:
             """Wrapper to ensure callback returns None."""
             await lifecycle_shutdown.stop_client_safely(
-                lifecycle_state.client, timeout=10.0, name="Progenitor"
+                lifecycle_state.client, timeout=10.0, name="Progena"
             )
 
         lifecycle_state.graceful_shutdown.register_callback(
-            "stop_progenitor_client",
-            shutdown_progenitor_client,
+            "stop_progena_client",
+            shutdown_progena_client,
             priority=30,
             timeout=15.0,
         )
@@ -258,7 +258,7 @@ async def lifespan(app: FastAPI):
     if telegram_client and lifecycle_state.client:
 
         async def handle_telegram_message(chat_id: str, message: str, metadata: dict) -> str | None:
-            """Handle incoming Telegram messages by forwarding to Progenitor.
+            """Handle incoming Telegram messages by forwarding to Progena.
 
             Args:
                 chat_id: The Telegram chat ID.
@@ -288,8 +288,8 @@ async def lifespan(app: FastAPI):
             )
         )
 
-    # Don't auto-start Progenitor - let it start on first request
-    # This allows the server to start even if Progenitor has issues
+    # Don't auto-start Progena - let it start on first request
+    # This allows the server to start even if Progena has issues
     logger.info("Backend ready on %s:%d", lifecycle_state.config.host, lifecycle_state.config.port)
     logger.info(
         "Rate limiting: %d/min, %d/hour (enabled=%s)",

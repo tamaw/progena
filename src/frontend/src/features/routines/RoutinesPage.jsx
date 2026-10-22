@@ -88,7 +88,7 @@ export default function RoutinesPage() {
   const deleteAction = useConfirmAction(effectiveAgentId);
 
   const handleNewAgent = useCallback(() => {
-    window.dispatchEvent(new CustomEvent('progenitor:open-quick-chat', {
+    window.dispatchEvent(new CustomEvent('progena:open-quick-chat', {
       detail: { mode: 'routine-create' },
     }));
   }, []);

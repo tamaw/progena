@@ -1,7 +1,7 @@
 """Contract tests for the backend <-> runtime Responses/Conversations API.
 
-Runs a real ``ProgenitorHTTPServer`` (port=0) over a real checkpointed LangGraph
-graph and exercises the backend's ``SSEProgenitorClient`` and
+Runs a real ``ProgenaHTTPServer`` (port=0) over a real checkpointed LangGraph
+graph and exercises the backend's ``SSEProgenaClient`` and
 ``RuntimeConversationReader`` against it, so a drift between what the runtime
 sends and what the backend parses fails here.
 """
@@ -29,11 +29,11 @@ from langgraph.graph import START, StateGraph
 from langgraph.graph.message import add_messages
 
 from src.backend.config import ChatServerConfig
-from src.backend.integrations.runtime import SSEProgenitorClient
+from src.backend.integrations.runtime import SSEProgenaClient
 from src.backend.integrations.runtime_history import RuntimeConversationReader
-from src.progenitor.config import RuntimeConfig
-from src.progenitor.runtime.http.server import ProgenitorHTTPServer
-from src.progenitor.runtime.queues import RuntimeQueues
+from src.progena.config import RuntimeConfig
+from src.progena.runtime.http.server import ProgenaHTTPServer
+from src.progena.runtime.queues import RuntimeQueues
 
 pytestmark = pytest.mark.asyncio
 
@@ -101,21 +101,21 @@ class FakeLoopRunner:
 
     def __post_init__(self) -> None:
         self.config = SimpleNamespace(llm=SimpleNamespace(reasoning_enabled=False))
-        self.state: dict[str, Any] = {"thread_id": "progenitor_main", "cycle_count": 0}
+        self.state: dict[str, Any] = {"thread_id": "progena_main", "cycle_count": 0}
         self.heartbeat_context = None
         self.queues = RuntimeQueues(RuntimeConfig())
 
 
 @dataclass
 class _RuntimeServer:
-    server: ProgenitorHTTPServer
+    server: ProgenaHTTPServer
     loop_runner: FakeLoopRunner
     base_url: str
 
 
 async def _start_runtime_server(*, bridge_factory: Any = None) -> _RuntimeServer:
     loop_runner = FakeLoopRunner()
-    server = ProgenitorHTTPServer(state_manager=FakeStateManager(), loop_runner=loop_runner, port=0)
+    server = ProgenaHTTPServer(state_manager=FakeStateManager(), loop_runner=loop_runner, port=0)
     # Test seam: inject a scripted bridge instead of the real DeepAgentSSEStream.
     assert server._chat_service is not None
     if bridge_factory is not None:
@@ -125,7 +125,7 @@ async def _start_runtime_server(*, bridge_factory: Any = None) -> _RuntimeServer
 
 
 def _client_config(base_url: str) -> ChatServerConfig:
-    return ChatServerConfig(progenitor_runtime_url=base_url)
+    return ChatServerConfig(progena_runtime_url=base_url)
 
 
 async def _seed_thread(graph: Any, thread_id: str, messages: list[Any]) -> str:
@@ -161,7 +161,7 @@ async def test_send_message_folds_reasoning_and_collects_chunks() -> None:
         {"type": "stream_chunk", "content": "", "is_final": True},
     ]
     runtime = await _start_runtime_server(bridge_factory=make_bridge_factory(script))
-    client = SSEProgenitorClient(_client_config(runtime.base_url))
+    client = SSEProgenaClient(_client_config(runtime.base_url))
     try:
         response = await client.send_message("hi", request_id="req-1")
     finally:
@@ -185,7 +185,7 @@ async def test_stream_events_translate_back_to_internal_chunks_and_events() -> N
         {"type": "stream_chunk", "content": "ok", "is_final": True},
     ]
     runtime = await _start_runtime_server(bridge_factory=make_bridge_factory(script))
-    client = SSEProgenitorClient(_client_config(runtime.base_url))
+    client = SSEProgenaClient(_client_config(runtime.base_url))
     try:
         events = [
             event
@@ -214,7 +214,7 @@ async def test_stream_events_raise_on_failed_response() -> None:
         raise RuntimeError("kaboom")
 
     runtime = await _start_runtime_server(bridge_factory=make_bridge_factory(raising_script))
-    client = SSEProgenitorClient(_client_config(runtime.base_url))
+    client = SSEProgenaClient(_client_config(runtime.base_url))
     try:
         with pytest.raises(RuntimeError, match="kaboom"):
             async for _ in client.send_message_stream_events("hi", request_id="req-3"):
@@ -228,7 +228,7 @@ async def test_cancel_request_true_for_in_flight_false_for_unknown() -> None:
     gate = asyncio.Event()
     script = [_Wait(gate), {"type": "stream_chunk", "content": "x", "is_final": True}]
     runtime = await _start_runtime_server(bridge_factory=make_bridge_factory(script))
-    client = SSEProgenitorClient(_client_config(runtime.base_url))
+    client = SSEProgenaClient(_client_config(runtime.base_url))
     task = None
     try:
         assert (await client.cancel_request("unknown-request")) is False
@@ -248,7 +248,7 @@ async def test_cancel_request_true_for_in_flight_false_for_unknown() -> None:
 
 
 async def test_cancel_request_false_when_unreachable() -> None:
-    client = SSEProgenitorClient(ChatServerConfig(progenitor_runtime_url="http://127.0.0.1:1"))
+    client = SSEProgenaClient(ChatServerConfig(progena_runtime_url="http://127.0.0.1:1"))
     assert (await client.cancel_request("anything")) is False
 
 
@@ -258,7 +258,7 @@ async def test_delete_conversation_removes_thread_and_refuses_in_flight() -> Non
     runtime = await _start_runtime_server(bridge_factory=make_bridge_factory(script))
     graph = runtime.loop_runner.graph
     await _seed_thread(graph, "conv-delete", [HumanMessage(content="hello", id="h1")])
-    client = SSEProgenitorClient(_client_config(runtime.base_url))
+    client = SSEProgenaClient(_client_config(runtime.base_url))
     task = None
     try:
         task = asyncio.create_task(
@@ -318,7 +318,7 @@ async def test_reader_round_trips_checkpointed_messages_across_pages() -> None:
                         "output_token_details": {"reasoning": 3},
                     },
                     response_metadata={"id": f"resp_{index}"},
-                    additional_kwargs={"display_agent_name": "Progenitor"},
+                    additional_kwargs={"display_agent_name": "Progena"},
                 ),
                 ToolMessage(
                     content="result",
@@ -402,7 +402,7 @@ async def test_event_forwarding_from_runtime_broadcast() -> None:
     def callback(event_type: str, data: dict[str, Any]) -> None:
         received.append((event_type, data))
 
-    client = SSEProgenitorClient(_client_config(runtime.base_url), event_callback=callback)
+    client = SSEProgenaClient(_client_config(runtime.base_url), event_callback=callback)
     try:
         await client.start()
         await asyncio.sleep(0.2)
@@ -424,7 +424,7 @@ async def test_event_forwarding_from_runtime_broadcast() -> None:
 
 async def test_start_liveness_and_status() -> None:
     runtime = await _start_runtime_server()
-    client = SSEProgenitorClient(_client_config(runtime.base_url))
+    client = SSEProgenaClient(_client_config(runtime.base_url))
     try:
         assert client.is_running is False
         await client.start()
@@ -438,7 +438,7 @@ async def test_start_liveness_and_status() -> None:
 
 
 async def test_start_raises_when_runtime_unreachable() -> None:
-    client = SSEProgenitorClient(ChatServerConfig(progenitor_runtime_url="http://127.0.0.1:1"))
+    client = SSEProgenaClient(ChatServerConfig(progena_runtime_url="http://127.0.0.1:1"))
     with pytest.raises(RuntimeError):
         await asyncio.wait_for(client.start(), timeout=15.0)
 
@@ -447,8 +447,8 @@ async def test_stream_times_out_on_stuck_runtime() -> None:
     gate = asyncio.Event()  # never set
     runtime = await _start_runtime_server(bridge_factory=make_bridge_factory([_Wait(gate)]))
     config = _client_config(runtime.base_url)
-    config.progenitor_timeout = 0.3
-    client = SSEProgenitorClient(config)
+    config.progena_timeout = 0.3
+    client = SSEProgenaClient(config)
     try:
         with pytest.raises(httpx.ReadTimeout):
             async for _ in client.send_message_stream_events("hi", request_id="req-stuck"):

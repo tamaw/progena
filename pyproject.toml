@@ -1,11 +1,11 @@
 [project]
-name = "progenitor"
+name = "progena"
 version = "0.6.0"
-description = "Dual-loop AI agent system with LangGraph"
+description = "Progena AI helps technical teams coordinate cloud and software work: connect specialist agents and tools, automate workflows, and stay in control."
 requires-python = ">=3.11"
 readme = "README.md"
 license = {text = "MIT"}
-keywords = ["ai", "agent", "langgraph", "openai", "azure"]
+keywords = ["ai", "agent", "orchestration", "automation", "workflows", "langgraph", "microsoft-foundry", "azure"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
@@ -52,6 +52,10 @@ dependencies = [
     "agent-client-protocol==0.12.1",
     "markitdown[pdf,docx,pptx,xlsx,xls]>=0.1.0,<0.2.0",
 ]
+
+[project.urls]
+Homepage = "https://progena.ai/"
+Repository = "https://github.com/tamaw/progena"
 
 [project.optional-dependencies]
 dev = [

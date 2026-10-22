@@ -28,7 +28,7 @@ RUN apt-get update \
         socat \
     && rm -rf /var/lib/apt/lists/*
 
-# UID 10001 matches the Progenitor runtime, which shares the /app/repos workspace.
+# UID 10001 matches the Progena runtime, which shares the /app/repos workspace.
 RUN useradd -m -u 10001 -d /home/claude -s /bin/bash claude \
     && install -d -o claude -g claude \
         "${CLAUDE_CONFIG_DIR}" \

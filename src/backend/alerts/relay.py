@@ -35,7 +35,7 @@ def _build_alert_summary_prompt(alert: alerts_service.AlertInfo) -> str:
     approver = (alert.context or {}).get("approver")
     if alert.requires_response and approver == "human":
         lines.append(
-            "This needs a person's decision in the Progenitor UI; say where to answer it "
+            "This needs a person's decision in the Progena AI app; say where to answer it "
             "and that you cannot answer it for them."
         )
     elif alert.requires_response:
@@ -52,20 +52,18 @@ def _build_alert_summary_prompt(alert: alerts_service.AlertInfo) -> str:
 
 
 async def _relay_alert(
-    progenitor: integrations_subprocess.ProgenitorClient
-    | integrations_runtime.SSEProgenitorClient
-    | None,
+    progena: integrations_subprocess.ProgenaClient | integrations_runtime.SSEProgenaClient | None,
     alert: alerts_service.AlertInfo,
 ) -> None:
-    """Ask Progenitor to deliver a new alert through the normal user-message path."""
-    if progenitor is None:
+    """Ask Progena to deliver a new alert through the normal user-message path."""
+    if progena is None:
         logger.warning("Not relaying alert %s: backend client is unavailable", alert.id)
         return
     try:
-        if not progenitor.is_running:
-            await progenitor.start()
+        if not progena.is_running:
+            await progena.start()
         response_text = (
-            await progenitor.send_message(
+            await progena.send_message(
                 _build_alert_summary_prompt(alert),
                 request_id=f"alert-summary-{alert.id}",
             )

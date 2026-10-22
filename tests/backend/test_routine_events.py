@@ -8,12 +8,12 @@ import pytest
 import src.backend.events.stream as events_stream
 from src.backend.storage.documents import (
     EVENT_LOG_START,
-    PROGENITOR_STATE_PREFIX,
+    PROGENA_STATE_PREFIX,
     CheckpointThreadSnapshot,
     InMemoryDocumentStore,
 )
 from src.backend.workflows.events import RoutineEvents
-from src.progenitor.routines.events import RUN_EVENT_PREFIX
+from src.progena.routines.events import RUN_EVENT_PREFIX
 
 
 @pytest.fixture
@@ -51,8 +51,8 @@ async def test_global_lifecycle_survives_no_page_subscription(feed):
             "session_id": "session",
             "status": status,
         }
-        store.save_document(PROGENITOR_STATE_PREFIX, f"{RUN_EVENT_PREFIX}attempt:{status}", payload)
-    store.delete_document(PROGENITOR_STATE_PREFIX, f"{RUN_EVENT_PREFIX}attempt:started")
+        store.save_document(PROGENA_STATE_PREFIX, f"{RUN_EVENT_PREFIX}attempt:{status}", payload)
+    store.delete_document(PROGENA_STATE_PREFIX, f"{RUN_EVENT_PREFIX}attempt:started")
     logged = store.read_document_events(EVENT_LOG_START, 100)
     # Replaying the log (e.g. dispatcher catch-up) must not re-announce a transition.
     for event in [*logged, *logged]:
@@ -90,7 +90,7 @@ async def test_recovery_snapshot_keeps_latest_attempt_status_without_outputs(fee
     listener, store, events = feed
     for index, status in enumerate(["enqueued", "started", "completed"]):
         store.save_document(
-            PROGENITOR_STATE_PREFIX,
+            PROGENA_STATE_PREFIX,
             f"{RUN_EVENT_PREFIX}attempt:{status}",
             {
                 "agent_id": "demo",

@@ -2,10 +2,10 @@
 
 Preferences (display name, timezone) live in the ``preferences`` state document
 (the single source of truth, also editable by the agent as
-``/config/preferences.json``) in the shared ``progenitor.state`` namespace —
-the same document ``src.progenitor.state.manager.StateManager`` reads/writes on
+``/config/preferences.json``) in the shared ``progena.state`` namespace —
+the same document ``src.progena.state.manager.StateManager`` reads/writes on
 the runtime side. This module loads/saves that document from the backend
-process; validation is shared via ``src.progenitor.settings.preferences`` so the
+process; validation is shared via ``src.progena.settings.preferences`` so the
 two write paths can never disagree on shape.
 """
 
@@ -13,15 +13,15 @@ from __future__ import annotations
 
 from typing import Any
 
-from src.backend.storage.documents import PROGENITOR_STATE_PREFIX, get_default_document_store
-from src.progenitor.settings.preferences import PREFERENCES_DOC_KEY, default_preferences_payload
+from src.backend.storage.documents import PROGENA_STATE_PREFIX, get_default_document_store
+from src.progena.settings.preferences import PREFERENCES_DOC_KEY, default_preferences_payload
 
 
 def load_preferences() -> dict[str, Any]:
     """Return the user preferences document from the document store."""
     default = default_preferences_payload()
     document = get_default_document_store().get_document(
-        PROGENITOR_STATE_PREFIX, PREFERENCES_DOC_KEY, default
+        PROGENA_STATE_PREFIX, PREFERENCES_DOC_KEY, default
     )
     payload = document.payload if document is not None else default
     return payload if isinstance(payload, dict) else default
@@ -29,7 +29,5 @@ def load_preferences() -> dict[str, Any]:
 
 def save_preferences(payload: dict[str, Any]) -> dict[str, Any]:
     """Persist a validated preferences payload and return it."""
-    get_default_document_store().save_document(
-        PROGENITOR_STATE_PREFIX, PREFERENCES_DOC_KEY, payload
-    )
+    get_default_document_store().save_document(PROGENA_STATE_PREFIX, PREFERENCES_DOC_KEY, payload)
     return payload

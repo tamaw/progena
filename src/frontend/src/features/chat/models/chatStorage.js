@@ -2,8 +2,8 @@
 // flow through readJson/writeJsonOrRemove so the parse/validate/remove pattern
 // lives in exactly one place.
 
-export const ARCHIVED_CHAT_SESSIONS_KEY = 'progenitor:archived-chat-sessions';
-export const PINNED_CHAT_SESSIONS_KEY = 'progenitor:pinned-chat-sessions';
+export const ARCHIVED_CHAT_SESSIONS_KEY = 'progena:archived-chat-sessions';
+export const PINNED_CHAT_SESSIONS_KEY = 'progena:pinned-chat-sessions';
 
 export function readJson(key, fallback = null, warnLabel = null) {
   const saved = localStorage.getItem(key);

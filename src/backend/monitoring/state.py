@@ -3,7 +3,7 @@ State Reader Module.
 
 Reads state documents from the shared Postgres document store and operational
 logs from the configured log store. The backend uses this as a read/write
-adapter layer; Progenitor remains the owner of runtime state semantics.
+adapter layer; Progena remains the owner of runtime state semantics.
 
 The virtual `/config/*.json` names are database-backed views, not files under the
 repository's data directory.
@@ -28,15 +28,15 @@ from typing import Any, cast
 import src.backend.lifecycle.state as lifecycle_state
 from src.backend.storage.documents import (
     BACKEND_STATE_PREFIX,
-    PROGENITOR_STATE_PREFIX,
+    PROGENA_STATE_PREFIX,
     BackendDocumentStore,
     StoreChangeListener,
     get_default_document_store,
     store_database_url,
 )
-from src.progenitor.config import default_mcp_config_payload
-from src.progenitor.documents.content import AGENT_DOCUMENT_KEY_PREFIX, SKILL_DOCUMENT_KEY_PREFIX
-from src.progenitor.documents.kinds import (
+from src.progena.config import default_mcp_config_payload
+from src.progena.documents.content import AGENT_DOCUMENT_KEY_PREFIX, SKILL_DOCUMENT_KEY_PREFIX
+from src.progena.documents.kinds import (
     ACP_TASK_KEY_PREFIX,
     CANVAS_DATA_KEY_PREFIX,
     CANVAS_DOCUMENT_KEY_PREFIX,
@@ -49,14 +49,14 @@ from src.progenitor.documents.kinds import (
     WORKFLOW_QUEUE_KEY_PREFIX,
     WORKFLOW_RUN_KEY_PREFIX,
 )
-from src.progenitor.instructions.paths import PROJECT_ROOT
-from src.progenitor.knowledge.indexer_config import INDEX_STATUS_DOC_KEY
-from src.progenitor.mcp.loader import (
+from src.progena.instructions.paths import PROJECT_ROOT
+from src.progena.knowledge.indexer_config import INDEX_STATUS_DOC_KEY
+from src.progena.mcp.loader import (
     normalize_mcp_config_payload,
     resolve_required_env_template,
 )
-from src.progenitor.routines.store import ROUTINE_GRAPH_KEY_PREFIX
-from src.progenitor.settings.model_profiles import MODEL_PROFILES_DOC_KEY
+from src.progena.routines.store import ROUTINE_GRAPH_KEY_PREFIX
+from src.progena.settings.model_profiles import MODEL_PROFILES_DOC_KEY
 
 logger = logging.getLogger(__name__)
 DEFAULT_LOGS_DIR = PROJECT_ROOT / "logs"
@@ -122,7 +122,7 @@ def _coerce_int(value: Any, default: int = 0) -> int:
         return default
 
 
-def _live_progenitor_reachable() -> bool | None:
+def _live_progena_reachable() -> bool | None:
     """Live liveness check via the backend's SSE heartbeat, or None if unavailable.
 
     Reads the shared lifecycle state. Returns None whenever there's no SSE
@@ -302,7 +302,7 @@ class HealthInfo:
         )
 
     def is_running(self) -> bool:
-        """Check if progenitor appears to be running."""
+        """Check if progena appears to be running."""
         if self.live_reachable is not None:
             return self.live_reachable
         if self.status != "running" or not self.last_active:
@@ -522,7 +522,7 @@ class StateReader:
         document_store: BackendDocumentStore,
         logs_dir: Path | None = None,
     ):
-        self.logs_dir = logs_dir or Path(os.getenv("PROGENITOR_LOG_DIR", str(DEFAULT_LOGS_DIR)))
+        self.logs_dir = logs_dir or Path(os.getenv("PROGENA_LOG_DIR", str(DEFAULT_LOGS_DIR)))
         self.document_store = document_store
         self._last_snapshot: StateSnapshot | None = None
         self._watchers: list[Callable[[StateSnapshot, str | None], None]] = []
@@ -547,12 +547,12 @@ class StateReader:
 
     def get_health(self) -> HealthInfo:
         health = self._get_health_document()
-        health.live_reachable = _live_progenitor_reachable()
+        health.live_reachable = _live_progena_reachable()
         return health
 
     def _get_health_document(self) -> HealthInfo:
         if self.document_store is not None:
-            health_doc = self.document_store.get_document(PROGENITOR_STATE_PREFIX, "health", {})
+            health_doc = self.document_store.get_document(PROGENA_STATE_PREFIX, "health", {})
             data = health_doc.payload if health_doc is not None else {}
             if isinstance(data, dict) and data:
                 return HealthInfo.from_dict(data)
@@ -560,7 +560,7 @@ class StateReader:
             # "health" document - fall back to current_state for a rough
             # signal so the UI doesn't flash "unknown" on first boot.
             current_doc = self.document_store.get_document(
-                PROGENITOR_STATE_PREFIX, "current_state", {}
+                PROGENA_STATE_PREFIX, "current_state", {}
             )
             current = current_doc.payload if current_doc is not None else {}
             if isinstance(current, dict):
@@ -585,7 +585,7 @@ class StateReader:
         )
 
     def get_registry(self) -> tuple[list[AgentInfo], list[ToolInfo]]:
-        document = self.document_store.get_document(PROGENITOR_STATE_PREFIX, "registry", {})
+        document = self.document_store.get_document(PROGENA_STATE_PREFIX, "registry", {})
         agents_data = document.payload if document is not None else {}
 
         agent_entries: list[dict[str, Any]] = []
@@ -614,19 +614,19 @@ class StateReader:
         return self._registry_tools(agents)
 
     def get_a2a_tasks(self) -> list[dict[str, Any]]:
-        """Read Progenitor's tracked A2A task records (read-through).
+        """Read Progena's tracked A2A task records (read-through).
 
-        Progenitor owns the A2A task lifecycle and persists the records to its
-        ``("progenitor","state","a2a_tasks")`` document; the backend just reads
+        Progena owns the A2A task lifecycle and persists the records to its
+        ``("progena","state","a2a_tasks")`` document; the backend just reads
         them so the Agents page can show per-agent task history.
         """
-        document = self.document_store.get_document(PROGENITOR_STATE_PREFIX, "a2a_tasks", [])
+        document = self.document_store.get_document(PROGENA_STATE_PREFIX, "a2a_tasks", [])
         doc = document.payload if document is not None else []
         return [task for task in doc if isinstance(task, dict)] if isinstance(doc, list) else []
 
     def get_acp_tasks(self) -> list[dict[str, Any]]:
         """Read the per-record ACP task documents for the Agents page."""
-        rows = self.document_store.list_documents(PROGENITOR_STATE_PREFIX, ACP_TASK_KEY_PREFIX)
+        rows = self.document_store.list_documents(PROGENA_STATE_PREFIX, ACP_TASK_KEY_PREFIX)
         tasks: list[dict[str, Any]] = []
         for key, document in rows:
             if not isinstance(document.payload, dict):
@@ -721,7 +721,7 @@ class StateReader:
 
     def get_mcp_config(self) -> dict[str, Any]:
         document = self.document_store.get_document(
-            PROGENITOR_STATE_PREFIX,
+            PROGENA_STATE_PREFIX,
             "mcp",
             default_mcp_config_payload(),
         )
@@ -730,20 +730,20 @@ class StateReader:
 
     def save_mcp_config(self, payload: dict[str, Any]) -> None:
         normalized = normalize_mcp_config_payload(payload)
-        self.document_store.save_document(PROGENITOR_STATE_PREFIX, "mcp", normalized)
+        self.document_store.save_document(PROGENA_STATE_PREFIX, "mcp", normalized)
 
     def get_mcp_tools(self) -> dict[str, Any]:
         """Read the runtime-owned discovered MCP tools document."""
         default: dict[str, Any] = {"tools": []}
-        document = self.document_store.get_document(PROGENITOR_STATE_PREFIX, "mcp_tools", default)
+        document = self.document_store.get_document(PROGENA_STATE_PREFIX, "mcp_tools", default)
         payload = document.payload if document is not None else default
         return payload if isinstance(payload, dict) else dict(default)
 
     def save_mcp_tools(self, payload: dict[str, Any]) -> None:
-        self.document_store.save_document(PROGENITOR_STATE_PREFIX, "mcp_tools", payload)
+        self.document_store.save_document(PROGENA_STATE_PREFIX, "mcp_tools", payload)
 
     def get_backlog(self) -> list[BacklogItem]:
-        document = self.document_store.get_document(PROGENITOR_STATE_PREFIX, "build_state", {})
+        document = self.document_store.get_document(PROGENA_STATE_PREFIX, "build_state", {})
         data = document.payload if document is not None else {}
         backlog = data.get("backlog", []) if isinstance(data, dict) else []
         if not isinstance(backlog, list):
@@ -751,7 +751,7 @@ class StateReader:
         return [BacklogItem.from_dict(item) for item in backlog if isinstance(item, dict)]
 
     def get_schedule(self) -> list[ScheduleItem]:
-        document = self.document_store.get_document(PROGENITOR_STATE_PREFIX, "schedule", {})
+        document = self.document_store.get_document(PROGENA_STATE_PREFIX, "schedule", {})
         data = document.payload if document is not None else {}
         if not isinstance(data, dict):
             return []
@@ -773,13 +773,13 @@ class StateReader:
         ]
 
     def get_build_state(self) -> dict[str, Any]:
-        document = self.document_store.get_document(PROGENITOR_STATE_PREFIX, "build_state", {})
+        document = self.document_store.get_document(PROGENA_STATE_PREFIX, "build_state", {})
         data = document.payload if document is not None else {}
         return data if isinstance(data, dict) else {}
 
-    def get_progenitor_state(self, thread_id: str | None = None) -> dict[str, Any]:
+    def get_progena_state(self, thread_id: str | None = None) -> dict[str, Any]:
         key = f"current_state:{thread_id}" if thread_id is not None else "current_state"
-        document = self.document_store.get_document(PROGENITOR_STATE_PREFIX, key, {})
+        document = self.document_store.get_document(PROGENA_STATE_PREFIX, key, {})
         data = document.payload if document is not None else {}
         return data if isinstance(data, dict) else {}
 
@@ -857,7 +857,7 @@ class StateReader:
         if not health.is_running():
             return []
 
-        current = self.get_progenitor_state()
+        current = self.get_progena_state()
         build = self.get_build_state()
         actions = current.get("actions_this_cycle", 0)
         build_actions = build.get("actions_this_cycle", 0) if isinstance(build, dict) else 0
@@ -885,7 +885,7 @@ class StateReader:
     def _registry_fingerprint(self) -> str:
         """Stable hash of the registry state document."""
         try:
-            registry_doc = self.document_store.get_document(PROGENITOR_STATE_PREFIX, "registry", {})
+            registry_doc = self.document_store.get_document(PROGENA_STATE_PREFIX, "registry", {})
             payload = registry_doc.payload if registry_doc is not None else {}
         except Exception:
             return ""
@@ -922,7 +922,7 @@ class StateReader:
             return ""
         try:
             document = self.document_store.get_document(
-                PROGENITOR_STATE_PREFIX, "knowledge", {"bases": []}
+                PROGENA_STATE_PREFIX, "knowledge", {"bases": []}
             )
         except Exception:
             return ""
@@ -940,7 +940,7 @@ class StateReader:
         if self.document_store is None:
             return ""
         try:
-            document = self.document_store.get_document(PROGENITOR_STATE_PREFIX, "schedule", {})
+            document = self.document_store.get_document(PROGENA_STATE_PREFIX, "schedule", {})
         except Exception:
             return ""
         payload = document.payload if document is not None else {}
@@ -959,7 +959,7 @@ class StateReader:
             return ""
         try:
             structure_doc = self.document_store.get_document(
-                PROGENITOR_STATE_PREFIX, "kanban_board", None
+                PROGENA_STATE_PREFIX, "kanban_board", None
             )
             structure = structure_doc.payload if structure_doc is not None else {}
             order = structure.get("card_order") if isinstance(structure, dict) else None
@@ -971,7 +971,7 @@ class StateReader:
             cards = []
             for card_id in card_order:
                 card_doc = self.document_store.get_document(
-                    PROGENITOR_STATE_PREFIX, f"kanban_card:{card_id}", None
+                    PROGENA_STATE_PREFIX, f"kanban_card:{card_id}", None
                 )
                 if card_doc is not None and isinstance(card_doc.payload, dict):
                     cards.append(card_doc.payload)
@@ -990,7 +990,7 @@ class StateReader:
         if self.document_store is None:
             return ""
         try:
-            rows = self.document_store.list_documents(PROGENITOR_STATE_PREFIX, "inbox_message:")
+            rows = self.document_store.list_documents(PROGENA_STATE_PREFIX, "inbox_message:")
             material = [
                 document.payload for _key, document in rows if isinstance(document.payload, dict)
             ]
@@ -1003,7 +1003,7 @@ class StateReader:
 
         A request document is included because the always-on workflow invoke
         reconciler is registered as a StateReader watcher and must run when
-        Progenitor writes a durable invoke request.
+        Progena writes a durable invoke request.
         """
         if self.document_store is None:
             return ""
@@ -1015,7 +1015,7 @@ class StateReader:
                 WORKFLOW_QUEUE_KEY_PREFIX,
                 WORKFLOW_INVOKE_REQUEST_KEY_PREFIX,
             ):
-                rows = self.document_store.list_documents(PROGENITOR_STATE_PREFIX, key_prefix)
+                rows = self.document_store.list_documents(PROGENA_STATE_PREFIX, key_prefix)
                 material.extend(
                     document.payload
                     for _key, document in rows
@@ -1037,7 +1037,7 @@ class StateReader:
         if self.document_store is None:
             return ""
         try:
-            health_doc = self.document_store.get_document(PROGENITOR_STATE_PREFIX, "health", {})
+            health_doc = self.document_store.get_document(PROGENA_STATE_PREFIX, "health", {})
             payload = health_doc.payload if health_doc is not None else {}
         except Exception:
             return ""
@@ -1049,7 +1049,7 @@ class StateReader:
         backlog = self.get_backlog()
         schedule = self.get_schedule()
         loops = self.get_loops(health)
-        progenitor = self.get_progenitor_state()
+        progena = self.get_progena_state()
         build = self.get_build_state()
         return StateSnapshot(
             timestamp=time.time(),
@@ -1059,9 +1059,9 @@ class StateReader:
             backlog=backlog,
             schedule=schedule,
             loops=loops,
-            cycle_count=progenitor.get("cycle_count", 0),
-            thread_id=progenitor.get("thread_id"),
-            messages_count=len(progenitor.get("messages", [])),
+            cycle_count=progena.get("cycle_count", 0),
+            thread_id=progena.get("thread_id"),
+            messages_count=len(progena.get("messages", [])),
             build=BuildInfo.from_dict(build),
             sessions=self.get_sessions_summary(),
             mcp_fingerprint=self._mcp_fingerprint(),
@@ -1280,7 +1280,7 @@ class StateReader:
             else resolved_path.parts
         )
         for part in reversed(relative_parts[:-1]):
-            if part not in {"logs", "progenitor"}:
+            if part not in {"logs", "progena"}:
                 return part
         return path.stem
 

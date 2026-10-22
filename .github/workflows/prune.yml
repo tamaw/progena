@@ -31,7 +31,7 @@ jobs:
         run: |
           # No label filter: sweeps every unused image regardless of source,
           # including GitHub Actions runner and ephemeral job images, not just
-          # ones tagged com.progenitor.managed=true.
+          # ones tagged ai.progena.managed=true.
           docker image prune -af \
             --filter "until=168h" || true
 

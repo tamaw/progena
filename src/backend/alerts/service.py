@@ -1,6 +1,6 @@
 """Backend access to ``alert:<id>`` documents (the alert center).
 
-Alerts are durable documents (see :mod:`src.progenitor.alerts.contracts`); this module
+Alerts are durable documents (see :mod:`src.progena.alerts.contracts`); this module
 reads them for the alert center, marks them viewed, creates backend-side ones
 (workflow notifications) and keeps only the newest :data:`MAX_ALERTS`.
 """
@@ -12,9 +12,9 @@ from typing import Any, TypedDict
 
 from pydantic import BaseModel
 
-from src.backend.storage.documents import PROGENITOR_STATE_PREFIX, get_default_document_store
-from src.progenitor.alerts.contracts import alert_key, build_alert
-from src.progenitor.documents.kinds import ALERT_KEY_PREFIX
+from src.backend.storage.documents import PROGENA_STATE_PREFIX, get_default_document_store
+from src.progena.alerts.contracts import alert_key, build_alert
+from src.progena.documents.kinds import ALERT_KEY_PREFIX
 
 MAX_ALERTS = 100
 
@@ -78,7 +78,7 @@ def create_alert(
         context=context,
     )
     store = get_default_document_store()
-    store.save_document(PROGENITOR_STATE_PREFIX, alert_key(payload["id"]), payload)
+    store.save_document(PROGENA_STATE_PREFIX, alert_key(payload["id"]), payload)
     _prune(store)
     return AlertInfo.model_validate(payload)
 
@@ -87,7 +87,7 @@ def _all_alerts() -> list[AlertInfo]:
     alerts = [
         AlertInfo.model_validate(document.payload)
         for _key, document in get_default_document_store().list_documents(
-            PROGENITOR_STATE_PREFIX, ALERT_KEY_PREFIX
+            PROGENA_STATE_PREFIX, ALERT_KEY_PREFIX
         )
         if isinstance(document.payload, dict)
     ]
@@ -96,7 +96,7 @@ def _all_alerts() -> list[AlertInfo]:
 
 def _prune(store: Any) -> None:
     for stale in _all_alerts()[MAX_ALERTS:]:
-        store.delete_document(PROGENITOR_STATE_PREFIX, alert_key(stale.id))
+        store.delete_document(PROGENA_STATE_PREFIX, alert_key(stale.id))
 
 
 def list_alerts() -> list[AlertInfo]:
@@ -107,7 +107,7 @@ def list_alerts() -> list[AlertInfo]:
 def get_alert(alert_id: str) -> AlertInfo | None:
     """Return a single alert by ID."""
     document = get_default_document_store().get_document(
-        PROGENITOR_STATE_PREFIX, alert_key(alert_id), None
+        PROGENA_STATE_PREFIX, alert_key(alert_id), None
     )
     if document is None or not isinstance(document.payload, dict):
         return None
@@ -152,7 +152,7 @@ def mark_alerts_viewed(alert_ids: list[str] | None = None) -> int:
         if alert.viewed or (targets and alert.id not in targets):
             continue
         try:
-            store.mutate_document(PROGENITOR_STATE_PREFIX, alert_key(alert.id), mark)
+            store.mutate_document(PROGENA_STATE_PREFIX, alert_key(alert.id), mark)
         except _AlertGone:
             continue
         updated += 1
@@ -163,4 +163,4 @@ def clear_alerts() -> None:
     """Delete every alert document (tests)."""
     store = get_default_document_store()
     for alert in list_alerts():
-        store.delete_document(PROGENITOR_STATE_PREFIX, alert_key(alert.id))
+        store.delete_document(PROGENA_STATE_PREFIX, alert_key(alert.id))

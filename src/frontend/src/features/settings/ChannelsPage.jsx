@@ -1,3 +1,7 @@
+import { useMemo } from 'react';
+import { useSelector } from 'react-redux';
+import { selectAgentName } from './state/preferences';
+
 import {
   PaneEmptyState,
   PaneList,
@@ -28,7 +32,7 @@ const CHANNELS = [
     name: 'Slack',
     category: 'Team chat',
     status: 'connected',
-    handle: '#progenitor',
+    handle: '#progena',
     description:
       'Talk to agents from a Slack workspace. Mention the bot in a channel or DM it directly; threads keep each conversation separate.',
     agents: ['Code Reviewer', 'Researcher'],
@@ -36,14 +40,14 @@ const CHANNELS = [
     outbound: 2104,
     lastActivity: '2m',
     capabilities: { inbound: true, outbound: true, attachments: true, threads: true },
-    config: { Workspace: 'progenitor.slack.com', 'Default channel': '#progenitor', Bot: '@progenitor' },
+    config: { Workspace: 'progena.slack.com', 'Default channel': '#progena', Bot: '@progena' },
   },
   {
     id: 'teams',
     name: 'Microsoft Teams',
     category: 'Team chat',
     status: 'connected',
-    handle: 'Progenitor bot',
+    handle: 'Agent bot',
     description:
       'Reach agents from Microsoft Teams chats and channels via an Azure Bot registration. Honors your tenant’s compliance policies.',
     agents: ['Researcher'],
@@ -51,14 +55,14 @@ const CHANNELS = [
     outbound: 740,
     lastActivity: '21m',
     capabilities: { inbound: true, outbound: true, attachments: true, threads: false },
-    config: { Tenant: 'progenitor.onmicrosoft.com', 'App ID': 'a1b2…e9f0', Bot: 'Progenitor' },
+    config: { Tenant: 'progena.onmicrosoft.com', 'App ID': 'a1b2…e9f0', Bot: null },
   },
   {
     id: 'discord',
     name: 'Discord',
     category: 'Team chat',
     status: 'disconnected',
-    handle: 'progenitor#0001',
+    handle: 'progena#0001',
     description:
       'Run agents inside a Discord server. Add the bot, grant message permissions, and it responds to slash commands and mentions.',
     agents: [],
@@ -73,7 +77,7 @@ const CHANNELS = [
     name: 'Telegram',
     category: 'Messaging',
     status: 'connected',
-    handle: '@progenitor_bot',
+    handle: '@progena_bot',
     description:
       'A Telegram bot that forwards direct messages and group mentions to agents. The fastest channel to wire up for personal use.',
     agents: ['Hello World'],
@@ -81,7 +85,7 @@ const CHANNELS = [
     outbound: 3098,
     lastActivity: 'now',
     capabilities: { inbound: true, outbound: true, attachments: true, threads: false },
-    config: { Bot: '@progenitor_bot', 'Chat ID': '-100…4821' },
+    config: { Bot: '@progena_bot', 'Chat ID': '-100…4821' },
   },
   {
     id: 'whatsapp',
@@ -103,7 +107,7 @@ const CHANNELS = [
     name: 'Email',
     category: 'Email & SMS',
     status: 'connected',
-    handle: 'agent@progenitor.dev',
+    handle: 'agent@progena.ai',
     description:
       'Inbound email is parsed into conversations and replies are sent from the agent address. Good for async, longer-form requests.',
     agents: ['Code Reviewer'],
@@ -111,7 +115,7 @@ const CHANNELS = [
     outbound: 455,
     lastActivity: '1h',
     capabilities: { inbound: true, outbound: true, attachments: true, threads: true },
-    config: { Address: 'agent@progenitor.dev', Transport: 'SMTP + IMAP' },
+    config: { Address: 'agent@progena.ai', Transport: 'SMTP + IMAP' },
   },
   {
     id: 'sms',
@@ -141,7 +145,7 @@ const CHANNELS = [
     outbound: 8997,
     lastActivity: 'now',
     capabilities: { inbound: true, outbound: true, attachments: false, threads: false },
-    config: { Endpoint: 'https://api.progenitor.dev/hooks/agent', Auth: 'Bearer token' },
+    config: { Endpoint: 'https://api.progena.ai/hooks/agent', Auth: 'Bearer token' },
   },
 ];
 
@@ -187,6 +191,13 @@ function ChannelRow({ channel, selected, onSelect }) {
 }
 
 export default function ChannelsPage() {
+  const agentName = useSelector(selectAgentName);
+  const channels = useMemo(
+    () => CHANNELS.map((channel) => channel.id === 'teams'
+      ? { ...channel, handle: `${agentName} bot`, config: { ...channel.config, Bot: agentName } }
+      : channel),
+    [agentName],
+  );
   const {
     filter: activeFilter,
     setFilter: setActiveFilter,
@@ -196,7 +207,7 @@ export default function ChannelsPage() {
     visible: visibleChannels,
     groups,
     selected,
-  } = useListSelection(CHANNELS, {
+  } = useListSelection(channels, {
     match: matchesChannel,
     groupBy: channelCategory,
   });

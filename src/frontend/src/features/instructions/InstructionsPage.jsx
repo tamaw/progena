@@ -230,7 +230,7 @@ export default function InstructionsPage() {
               onFilterChange={setFilter}
               actionLabel="+ New"
               onAction={() => window.dispatchEvent(
-                new CustomEvent('progenitor:open-quick-chat', { detail: { mode: 'instruction-create' } }),
+                new CustomEvent('progena:open-quick-chat', { detail: { mode: 'instruction-create' } }),
               )}
             />
             <PaneListToolbar>

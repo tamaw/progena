@@ -40,6 +40,7 @@ import { fetchSchedules, selectSchedulesState } from './state';
 import { selectUiWidgets } from './widgetsState';
 import { entityDraftKey } from '../../store/editorDraftsSlice';
 import { selectRealtimeConnected } from '../../realtime/realtimeSlice';
+import { selectAgentName } from '../settings/state/preferences';
 
 const SCHEDULE_FILTERS = ['All', 'Active', 'Paused', 'Completed'];
 const SCHEDULE_SORTS = ['Type', 'Next', 'Status'];
@@ -290,6 +291,7 @@ function SchedulesPage() {
     requestId: scheduleRequestId,
   } = schedulesState;
   const widgets = useSelector(selectUiWidgets);
+  const agentName = useSelector(selectAgentName);
   const realtimeConnected = useSelector(selectRealtimeConnected);
   const [logsFailure, setLogsFailure] = useState(null);
   const [activeFilter, setActiveFilter] = useState('All');
@@ -610,7 +612,7 @@ function SchedulesPage() {
           onFilterChange={setActiveFilter}
           actionLabel="+ New"
           onAction={() => {
-            window.dispatchEvent(new CustomEvent('progenitor:open-quick-chat', {
+            window.dispatchEvent(new CustomEvent('progena:open-quick-chat', {
               detail: { mode: 'schedule-create' },
             }));
           }}
@@ -681,7 +683,7 @@ function SchedulesPage() {
           </div>
         ) : !selectedSchedule ? (
           <div className="detail-pane__body">
-            <PaneEmptyState>Select a schedule, or use New to ask Progenitor to create one.</PaneEmptyState>
+            <PaneEmptyState>Select a schedule, or use New to ask {agentName} to create one.</PaneEmptyState>
           </div>
         ) : (
           <>
@@ -890,7 +892,7 @@ function SchedulesPage() {
                     <p className="schedules-trigger-edit__hint">
                       {triggerSaving
                         ? 'Processing…'
-                        : 'Describe the timing in plain language — Progenitor converts it for you.'}
+                        : `Describe the timing in plain language — ${agentName} converts it for you.`}
                     </p>
                   </div>
                 ) : (

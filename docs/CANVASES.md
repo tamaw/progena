@@ -1,7 +1,7 @@
 # Canvases
 
 Agent-built ES modules (`.mjs`) — dashboards, interactive diagrams, small games —
-authored by Progenitor through a skill, stored as Postgres JSONB documents, pushed
+authored by Progena through a skill, stored as Postgres JSONB documents, pushed
 live to the UI, and rendered in a sandbox under **Canvases**.
 
 ## Design decisions
@@ -114,7 +114,7 @@ the existing `documents` bridge request (`type: 'artifact'`); no artifact-specif
 
 ## Storage
 
-All keys live in the `progenitor.state` store namespace, so the existing `store_changed`
+All keys live in the `progena.state` store namespace, so the existing `store_changed`
 NOTIFY and `document_events` triggers fire with no trigger change.
 
 | Key | Payload | Writer |
@@ -123,7 +123,7 @@ NOTIFY and `document_events` triggers fire with no trigger change.
 | `canvas_data:<name>/<key>` | `{value: <any JSON>, updated_at: iso}` | Backend on canvas request |
 | `canvas_status:<name>` | `{state: "loaded"\|"error", revision: str, errors: [{message, stack?}], reported_at: iso}` | Backend on host report |
 
-Shared code in `src/progenitor/canvases/contracts.py` (pure, used by runtime and backend):
+Shared code in `src/progena/canvases/contracts.py` (pure, used by runtime and backend):
 key prefixes re-exported from `document_kinds.py` (`CANVAS_DOCUMENT_KEY_PREFIX`,
 `CANVAS_DATA_KEY_PREFIX`, `CANVAS_STATUS_KEY_PREFIX`), name/path/extension validation,
 caps, manifest validation, `load_canvas_libraries()`, and
@@ -145,7 +145,7 @@ immutability trigger. History is stored only: there is no revision route, browse
 
 ## Agent side (runtime)
 
-- `CanvasDirectoryBackend` (`src/progenitor/agent/filesystem/canvases.py`) at `routes["/canvases/"]` in `src/progenitor/agent/filesystem/mounts.py`,
+- `CanvasDirectoryBackend` (`src/progena/agent/filesystem/canvases.py`) at `routes["/canvases/"]` in `src/progena/agent/filesystem/mounts.py`,
   on top of `ContentDocumentDirectoryBackend` with content kind `canvas`, enforcing
   validation and caps on `awrite`/`aedit`.
 - Read-only virtual files: `/canvases/_catalogue.json` (libraries from
@@ -217,7 +217,7 @@ limit is 1 MB to fit the 742 KB three.js bundle); rerun the script after changin
   Quick Chat draft), `PaneListSearch` and `sess-row` rows (status dot, title, description,
   files, libraries, age). It opens the first canvas when none is selected.
 - `CanvasPage`, the detail pane: `DetailHeader` with `DetailStatus`, file count, libraries,
-  data sources, revision and updated meta; icon actions (Ask Progenitor, Reload, Delete via
+  data sources, revision and updated meta; icon actions (Ask Progena, Reload, Delete via
   `useConfirmAction` + `PopupModal`); the live preview (`CanvasHost`, remounted when the
   summary `revision` changes) fills the rest of the pane, with no tabs. Filters and state
   labels live in `canvasesPageModel.js`.

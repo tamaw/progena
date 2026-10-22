@@ -10,14 +10,14 @@ from fastapi import APIRouter, HTTPException, Request
 
 import src.backend.http.contracts as http_contracts
 from src.backend.http.requests import BroadcastUiEvent, request_correlation_id
-from src.backend.storage.documents import PROGENITOR_STATE_PREFIX, BackendDocumentStore
-from src.progenitor.settings.policies import POLICY_KEY_PREFIX, validate_policy
+from src.backend.storage.documents import PROGENA_STATE_PREFIX, BackendDocumentStore
+from src.progena.settings.policies import POLICY_KEY_PREFIX, validate_policy
 
 
 def policy_catalog(store: BackendDocumentStore) -> list[dict[str, Any]]:
     return [
         document.payload
-        for _, document in store.list_documents(PROGENITOR_STATE_PREFIX, POLICY_KEY_PREFIX)
+        for _, document in store.list_documents(PROGENA_STATE_PREFIX, POLICY_KEY_PREFIX)
     ]
 
 
@@ -44,7 +44,7 @@ def create_policy_router(
         store = get_store()
         await asyncio.to_thread(
             store.save_document,
-            PROGENITOR_STATE_PREFIX,
+            PROGENA_STATE_PREFIX,
             f"{POLICY_KEY_PREFIX}{policy_id}",
             policy.model_dump(mode="json"),
         )

@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to the Progenitor project will be documented in this file.
+All notable changes to the Progena AI project (formerly Progenitor) will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
@@ -8,7 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- **Shared exchange volume**: setting `PROGENITOR_SHARED_DIR` mounts that directory as a writable `/shared/` route for the agent. Compose mounts the external `progenitor-shared` volume there, and deployment creates it, so A2A agent containers that mount the same volume can exchange files with Progenitor. Startup fails when the configured directory is missing.
+- **Configurable agent name** (Settings → General → Agent name, `agent_name` in `/config/preferences.json`, default `Progena`): the UI labels the agent's messages, prompts and actions with it, and runtime instructions may use an optional `{agent_name}` placeholder (the bundled `genesis.md` does). Display only; identifiers are unchanged.
+- **Shared exchange volume**: setting `PROGENA_SHARED_DIR` mounts that directory as a writable `/shared/` route for the agent. Compose mounts the external `progena-shared` volume there, and deployment creates it, so A2A agent containers that mount the same volume can exchange files with Progena. Startup fails when the configured directory is missing.
 
 ### Fixed
 - **Module catalogue included in deployment images**: allow bundled `data/modules/` through the Docker build context and include catalogue changes in both Python-image rebuild decisions. This fixes the missing-directory `COPY` failure and keeps manifest validation aligned with deployed libraries.
@@ -20,6 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Stale documentation retired**: removed obsolete code maps, vendored-library guides, completed plans, one-off review/test reports, and the host-specific nginx template. The frontend container's nginx configuration remains supported.
 
 ### Changed
+- **Renamed to Progena AI** ([progena.ai](https://progena.ai); short name Progena). Clean cutover with no compatibility layer: Python package `src/progena`, `PROGENA_*` environment variables, Postgres user/database `progena`, store prefixes `progena.state`/`progena.logs`, the `progena/` instruction group, SQL functions/triggers, checkpoint metadata, browser storage keys and the `progena_session` cookie, `docker/docker-compose.progena.yml`, images `ghcr.io/tamaw/progena*`, containers `progena*`, network `progena_network`, volumes `progena-postgres-data`/`progena-shared`, `/var/lib/progena` and labels `ai.progena.*`. Existing `progenitor` data, volumes and containers are not read or migrated; the checkpoint type-path translation (`CheckpointSerializer`) and historical model aliases are removed. Deploy onto a fresh database after stopping the old `progenitor*` containers. The browser icon is the Progena AI helix logo (`src/frontend/public/favicon.svg`), package metadata in `pyproject.toml` and `package.json` follows progena.ai, and agent-repository links point at `tamaw/progena.agents`.
 - **Modules renamed to Canvases** (`docs/CANVASES.md`, `/canvases` page with an easel nav icon, `building-canvases` skill): the agent writes to `/canvases/<name>/`; documents use `canvas:`, `canvas_data:` and `canvas_status:` keys with the `canvas`, `canvas_data` and `canvas_status` document types; history lives in `canvas_revisions`; routes move to `/api/ui/canvases/*` with `canvases.snapshot` / `canvas.*` events; the library catalogue moves to `data/canvases/` and is rebuilt with `npm run build:canvas-vendor`. Clean cutover: existing `module:*` documents and the `module_revisions` table are left in place but no longer read.
 - **Canvas page is preview-only**: the Files and Revisions tabs and Restore action are gone, along with the `/canvases/{name}/revisions` and `/restore` routes; the canvas fills the pane under its header. `canvas_revisions` history is still captured, stored only.
 - **Bundled guidance matches the current runtime**: made the default system prompt user-neutral, corrected conversation/heartbeat architecture and virtual-document permissions, refreshed runtime inspection and session ingestion paths, fixed the plugin configuration target, and documented the bundled schemas. Existing saved instruction edits remain untouched.

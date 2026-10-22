@@ -8,10 +8,12 @@ import { createSelector } from '@reduxjs/toolkit';
 import { createAcknowledgedThunk, requestAcknowledged, addRequestLifecycle } from '../../../store/async';
 
 const VALID_PINNED_PANELS = new Set(['quickChat', 'alerts', 'insights']);
+export const DEFAULT_AGENT_NAME = 'Progena';
 
 export const initialState = {
   preferences: {
     displayName: '',
+    agentName: DEFAULT_AGENT_NAME,
     timezone: '',
     theme: 'system',
     navCollapsed: false,
@@ -27,6 +29,9 @@ export const initialState = {
 };
 
 function applyPreferences(state, payload) {
+  state.preferences.agentName = typeof payload.agent_name === 'string' && payload.agent_name.trim()
+    ? payload.agent_name.trim()
+    : DEFAULT_AGENT_NAME;
   state.preferences.displayName = typeof payload.display_name === 'string' ? payload.display_name : '';
   state.preferences.timezone = typeof payload.timezone === 'string' ? payload.timezone : '';
   state.preferences.theme = ['system', 'dark', 'light'].includes(payload.theme) ? payload.theme : 'system';
@@ -65,6 +70,7 @@ export const savePreferences = createAcknowledgedThunk(
     {
       preferencesUrl,
       displayName,
+      agentName,
       timezone,
       theme,
       navCollapsed,
@@ -79,6 +85,7 @@ export const savePreferences = createAcknowledgedThunk(
       method: 'PUT',
       body: {
         display_name: displayName,
+        agent_name: agentName,
         timezone,
         theme,
         nav_collapsed: navCollapsed,
@@ -106,6 +113,8 @@ export function buildExtraReducers(builder) {
 
 export const selectPreferences = (state) => state.uiData.preferences;
 
+export const selectAgentName = (state) => selectPreferences(state).agentName;
+
 // Build a `savePreferences` argument (minus `preferencesUrl`) that carries
 // every current field, so a caller can override just the one it's changing:
 // `dispatch(savePreferences({ preferencesUrl, ...selectPreferencesSaveRequest(state), theme: next }))`.
@@ -117,6 +126,7 @@ export const selectPreferences = (state) => state.uiData.preferences;
 // (any alert, any status tick, ...), firing those effects constantly.
 export const selectPreferencesSaveRequest = createSelector([selectPreferences], (preferences) => ({
   displayName: preferences.displayName,
+  agentName: preferences.agentName,
   timezone: preferences.timezone,
   theme: preferences.theme,
   navCollapsed: preferences.navCollapsed,

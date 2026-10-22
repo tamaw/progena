@@ -23,23 +23,23 @@ from psycopg.types.json import Jsonb
 from psycopg_pool import ConnectionPool, PoolClosed
 
 from src.backend.integrations.runtime_history import RuntimeConversationReader, RuntimeUnavailable
-from src.progenitor.documents.kinds import (
+from src.progena.documents.kinds import (
     CANVAS_DOCUMENT_KEY_PREFIX,
     INBOX_MESSAGE_KEY_PREFIX,
     INSTRUCTION_DOCUMENT_KEY_PREFIX,
     SESSION_KEY_PREFIX,
 )
-from src.progenitor.routines.store import ROUTINE_GRAPH_KEY_PREFIX
+from src.progena.routines.store import ROUTINE_GRAPH_KEY_PREFIX
 
-PROGENITOR_STATE_PREFIX = "progenitor.state"
-PROGENITOR_LOG_PREFIX = "progenitor.logs"
+PROGENA_STATE_PREFIX = "progena.state"
+PROGENA_LOG_PREFIX = "progena.logs"
 BACKEND_STATE_PREFIX = "backend.state"
 
 # Postgres LISTEN/NOTIFY channel used to push ``store`` table changes to the
 # backend without polling. Only state-namespace writes notify on it (the
-# high-frequency ``progenitor.logs.*`` rows are deliberately excluded).
+# high-frequency ``progena.logs.*`` rows are deliberately excluded).
 STORE_CHANGE_CHANNEL = "store_changed"
-_STORE_CHANGE_PREFIXES = (PROGENITOR_STATE_PREFIX, BACKEND_STATE_PREFIX)
+_STORE_CHANGE_PREFIXES = (PROGENA_STATE_PREFIX, BACKEND_STATE_PREFIX)
 # Parallel runtime reads when the chat list needs messages for many threads.
 CONVERSATION_FETCH_CONCURRENCY = 8
 
@@ -54,7 +54,7 @@ DocumentEventOp = Literal["created", "updated", "deleted"]
 # run sets it to its run id so events caused by its own writes carry their
 # ancestry and cannot re-trigger the workflow that produced them.
 _document_write_origin: ContextVar[str | None] = ContextVar(
-    "progenitor_document_write_origin", default=None
+    "progena_document_write_origin", default=None
 )
 
 
@@ -157,7 +157,7 @@ class RoutineRunSummary:
     """One routine execution, reconstructed from its checkpoint thread.
 
     ``thread_id`` follows ``routine:<routine_id>:<revision_id>:<run_id>``
-    (see ``src.progenitor.routines.subagent.create_routine_subagent``);
+    (see ``src.progena.routines.subagent.create_routine_subagent``);
     ``revision_id``/``run_id`` are parsed out of it, not stored separately.
     """
 
@@ -328,7 +328,7 @@ def _is_session_noise(prefix: str, key: str, before: Any, after: Any) -> bool:
 
     Mirrors the Postgres capture trigger's noise filter: such updates log no event.
     """
-    if prefix != PROGENITOR_STATE_PREFIX or not key.startswith(SESSION_KEY_PREFIX):
+    if prefix != PROGENA_STATE_PREFIX or not key.startswith(SESSION_KEY_PREFIX):
         return False
     if not isinstance(before, dict) or not isinstance(after, dict):
         return False
@@ -453,7 +453,7 @@ class InMemoryDocumentStore:
                 self._record_event(prefix, key, "updated", previous.payload, stored)
             if changed:
                 self._capture_canvas_revision(prefix, key, "write", stored)
-            if prefix == PROGENITOR_STATE_PREFIX and key.startswith("knowledge:"):
+            if prefix == PROGENA_STATE_PREFIX and key.startswith("knowledge:"):
                 remainder = key[len("knowledge:") :]
                 base_id, separator, path = remainder.partition("/")
                 if (
@@ -473,7 +473,7 @@ class InMemoryDocumentStore:
                         (base_id, path, revision_id), (summary, content)
                     )
             if (
-                prefix == PROGENITOR_STATE_PREFIX
+                prefix == PROGENA_STATE_PREFIX
                 and key.startswith(INSTRUCTION_DOCUMENT_KEY_PREFIX)
                 and isinstance(stored, dict)
                 and isinstance(stored.get("content"), str)
@@ -496,7 +496,7 @@ class InMemoryDocumentStore:
     def _capture_canvas_revision(
         self, prefix: str, key: str, op: Literal["write", "delete"], payload: Any
     ) -> None:
-        if prefix != PROGENITOR_STATE_PREFIX or not key.startswith(CANVAS_DOCUMENT_KEY_PREFIX):
+        if prefix != PROGENA_STATE_PREFIX or not key.startswith(CANVAS_DOCUMENT_KEY_PREFIX):
             return
         remainder = key.removeprefix(CANVAS_DOCUMENT_KEY_PREFIX)
         name, separator, path = remainder.partition("/")
@@ -679,7 +679,7 @@ class InMemoryDocumentStore:
         limit: int = 500,
     ) -> list[dict[str, Any]]:
         rows: list[dict[str, Any]] = []
-        source_prefix = f"{PROGENITOR_LOG_PREFIX}."
+        source_prefix = f"{PROGENA_LOG_PREFIX}."
         for (prefix, key), document in self._documents.items():
             if not prefix.startswith(source_prefix):
                 continue
@@ -697,9 +697,9 @@ class InMemoryDocumentStore:
     def get_log_sources(self) -> list[dict[str, Any]]:
         sources = sorted(
             {
-                prefix.removeprefix(f"{PROGENITOR_LOG_PREFIX}.")
+                prefix.removeprefix(f"{PROGENA_LOG_PREFIX}.")
                 for prefix, _key in self._documents
-                if prefix.startswith(f"{PROGENITOR_LOG_PREFIX}.")
+                if prefix.startswith(f"{PROGENA_LOG_PREFIX}.")
             }
         )
         return [{"source": source, "count": 0} for source in sources]
@@ -839,7 +839,7 @@ class PostgresDocumentStore:
         # lock on one pooled connection serializes setup; the steps below use
         # other pooled connections.
         with self._pool.connection() as conn:
-            conn.execute("SELECT pg_advisory_lock(hashtext('progenitor_document_store_setup'))")
+            conn.execute("SELECT pg_advisory_lock(hashtext('progena_document_store_setup'))")
             try:
                 self._ensure_store_table()
                 self._ensure_change_trigger()
@@ -851,9 +851,7 @@ class PostgresDocumentStore:
                 self._ensure_instruction_revision_history()
                 self._ensure_canvas_revision_history()
             finally:
-                conn.execute(
-                    "SELECT pg_advisory_unlock(hashtext('progenitor_document_store_setup'))"
-                )
+                conn.execute("SELECT pg_advisory_unlock(hashtext('progena_document_store_setup'))")
 
     def close(self) -> None:
         self._pool.close()
@@ -914,14 +912,14 @@ class PostgresDocumentStore:
         task from ``/config/schedule.json`` in the separate runtime process,
         which has no other way to tell the backend a row disappeared). Scoped
         to state-namespace prefixes so the noisy append-only
-        ``progenitor.logs.*`` rows do not flood the channel. ``CREATE OR
+        ``progena.logs.*`` rows do not flood the channel. ``CREATE OR
         REPLACE`` + ``DROP ... IF EXISTS`` keep this idempotent.
         """
         prefixes = ", ".join(f"'{prefix}'" for prefix in _STORE_CHANGE_PREFIXES)
         with self._cursor() as cur:
             cur.execute(
                 f"""
-                CREATE OR REPLACE FUNCTION progenitor_notify_store_change()
+                CREATE OR REPLACE FUNCTION progena_notify_store_change()
                 RETURNS trigger AS $$
                 DECLARE
                     row_prefix TEXT := COALESCE(NEW.prefix, OLD.prefix);
@@ -941,9 +939,9 @@ class PostgresDocumentStore:
             )
             cur.execute(
                 """
-                CREATE OR REPLACE TRIGGER progenitor_store_change
+                CREATE OR REPLACE TRIGGER progena_store_change
                 AFTER INSERT OR UPDATE OR DELETE ON store
-                FOR EACH ROW EXECUTE FUNCTION progenitor_notify_store_change()
+                FOR EACH ROW EXECUTE FUNCTION progena_notify_store_change()
                 """
             )
 
@@ -952,7 +950,7 @@ class PostgresDocumentStore:
 
         Every INSERT/UPDATE/DELETE of a state-namespace ``store`` row appends one
         ``document_events`` row carrying ``created``/``updated``/``deleted``, the
-        before/after payloads, and the writer origin (``progenitor.origin``,
+        before/after payloads, and the writer origin (``progena.origin``,
         set transaction-locally by ``document_write_origin``). Rewrites of an
         identical value are skipped. The row's sequence number is NOTIFYed on
         ``document_events`` so consumers wake up, then catch up from their
@@ -1011,7 +1009,7 @@ class PostgresDocumentStore:
             # Placeholders are filled from module constants only, never input.
             cur.execute(
                 """
-                CREATE OR REPLACE FUNCTION progenitor_record_document_event()
+                CREATE OR REPLACE FUNCTION progena_record_document_event()
                 RETURNS trigger AS $$
                 DECLARE
                     row_prefix TEXT := COALESCE(NEW.prefix, OLD.prefix);
@@ -1026,7 +1024,7 @@ class PostgresDocumentStore:
                     -- Noise filter: content/last_activity-only updates on session docs
                     -- do not log an event, because they happen on every turn.
                     IF TG_OP = 'UPDATE'
-                        AND row_prefix = 'progenitor.state'
+                        AND row_prefix = 'progena.state'
                         AND COALESCE(NEW.key, OLD.key) LIKE '__SESSION_PREFIX__%'
                         AND (OLD.value -> 'payload') - 'content' - 'last_activity'
                             IS NOT DISTINCT FROM
@@ -1043,7 +1041,7 @@ class PostgresDocumentStore:
                                    ELSE 'deleted' END,
                         CASE WHEN TG_OP = 'INSERT' THEN NULL ELSE OLD.value -> 'payload' END,
                         CASE WHEN TG_OP = 'DELETE' THEN NULL ELSE NEW.value -> 'payload' END,
-                        NULLIF(current_setting('progenitor.origin', true), '')
+                        NULLIF(current_setting('progena.origin', true), '')
                     )
                     RETURNING seq INTO event_seq;
                     PERFORM pg_notify('__CHANNEL__', event_seq::text);
@@ -1056,9 +1054,9 @@ class PostgresDocumentStore:
             )
             cur.execute(
                 """
-                CREATE OR REPLACE TRIGGER progenitor_document_event
+                CREATE OR REPLACE TRIGGER progena_document_event
                 AFTER INSERT OR UPDATE OR DELETE ON store
-                FOR EACH ROW EXECUTE FUNCTION progenitor_record_document_event()
+                FOR EACH ROW EXECUTE FUNCTION progena_record_document_event()
                 """
             )
 
@@ -1073,7 +1071,7 @@ class PostgresDocumentStore:
         DELETE captures OLD in the same transaction, preserving the final live
         snapshot even when it predates installation of the capture trigger.
         """
-        state_prefix = PROGENITOR_STATE_PREFIX
+        state_prefix = PROGENA_STATE_PREFIX
         key_prefix = ROUTINE_GRAPH_KEY_PREFIX
         with self._cursor() as cur:
             cur.execute(
@@ -1094,7 +1092,7 @@ class PostgresDocumentStore:
                 """
             )
             capture_sql = """
-                CREATE OR REPLACE FUNCTION progenitor_capture_routine_revision()
+                CREATE OR REPLACE FUNCTION progena_capture_routine_revision()
                 RETURNS trigger AS $$
                 DECLARE
                     graph_doc JSONB;
@@ -1122,21 +1120,21 @@ class PostgresDocumentStore:
             cur.execute(capture_sql)
             cur.execute(
                 """
-                CREATE OR REPLACE TRIGGER progenitor_capture_routine_revision
+                CREATE OR REPLACE TRIGGER progena_capture_routine_revision
                 AFTER INSERT OR UPDATE ON store
-                FOR EACH ROW EXECUTE FUNCTION progenitor_capture_routine_revision()
+                FOR EACH ROW EXECUTE FUNCTION progena_capture_routine_revision()
                 """
             )
             cur.execute(
                 """
-                CREATE OR REPLACE TRIGGER progenitor_capture_deleted_routine_revision
+                CREATE OR REPLACE TRIGGER progena_capture_deleted_routine_revision
                 BEFORE DELETE ON store
-                FOR EACH ROW EXECUTE FUNCTION progenitor_capture_routine_revision()
+                FOR EACH ROW EXECUTE FUNCTION progena_capture_routine_revision()
                 """
             )
             cur.execute(
                 """
-                CREATE OR REPLACE FUNCTION progenitor_routine_revisions_immutable()
+                CREATE OR REPLACE FUNCTION progena_routine_revisions_immutable()
                 RETURNS trigger AS $$
                 BEGIN
                     RAISE EXCEPTION 'routine_graph_revisions rows are immutable (attempted % on %/%)',
@@ -1147,9 +1145,9 @@ class PostgresDocumentStore:
             )
             cur.execute(
                 """
-                CREATE OR REPLACE TRIGGER progenitor_routine_revisions_immutable
+                CREATE OR REPLACE TRIGGER progena_routine_revisions_immutable
                 BEFORE UPDATE ON routine_graph_revisions
-                FOR EACH ROW EXECUTE FUNCTION progenitor_routine_revisions_immutable()
+                FOR EACH ROW EXECUTE FUNCTION progena_routine_revisions_immutable()
                 """
             )
             backfill_sql = """
@@ -1165,7 +1163,7 @@ class PostgresDocumentStore:
             cur.execute(backfill_sql)
 
     def _ensure_instruction_revision_history(self) -> None:
-        state_prefix = PROGENITOR_STATE_PREFIX
+        state_prefix = PROGENA_STATE_PREFIX
         key_prefix = INSTRUCTION_DOCUMENT_KEY_PREFIX
         with self._cursor() as cur:
             cur.execute(
@@ -1177,7 +1175,7 @@ class PostgresDocumentStore:
                 );
                 CREATE INDEX IF NOT EXISTS instruction_revisions_latest
                     ON instruction_revisions (path, captured_at DESC, revision_id DESC);
-                CREATE OR REPLACE FUNCTION progenitor_capture_instruction_revision()
+                CREATE OR REPLACE FUNCTION progena_capture_instruction_revision()
                 RETURNS trigger AS $$
                 DECLARE source_row store%ROWTYPE; body TEXT;
                 BEGIN
@@ -1195,21 +1193,21 @@ class PostgresDocumentStore:
                     RETURN source_row;
                 END;
                 $$ LANGUAGE plpgsql;
-                CREATE OR REPLACE TRIGGER progenitor_capture_instruction_revision
+                CREATE OR REPLACE TRIGGER progena_capture_instruction_revision
                     AFTER INSERT OR UPDATE ON store FOR EACH ROW
-                    EXECUTE FUNCTION progenitor_capture_instruction_revision();
-                CREATE OR REPLACE TRIGGER progenitor_capture_deleted_instruction_revision
+                    EXECUTE FUNCTION progena_capture_instruction_revision();
+                CREATE OR REPLACE TRIGGER progena_capture_deleted_instruction_revision
                     BEFORE DELETE ON store FOR EACH ROW
-                    EXECUTE FUNCTION progenitor_capture_instruction_revision();
-                CREATE OR REPLACE FUNCTION progenitor_instruction_revisions_immutable()
+                    EXECUTE FUNCTION progena_capture_instruction_revision();
+                CREATE OR REPLACE FUNCTION progena_instruction_revisions_immutable()
                 RETURNS trigger AS $$
                 BEGIN
                     RAISE EXCEPTION 'instruction_revisions rows are immutable';
                 END;
                 $$ LANGUAGE plpgsql;
-                CREATE OR REPLACE TRIGGER progenitor_instruction_revisions_immutable
+                CREATE OR REPLACE TRIGGER progena_instruction_revisions_immutable
                     BEFORE UPDATE OR DELETE ON instruction_revisions FOR EACH ROW
-                    EXECUTE FUNCTION progenitor_instruction_revisions_immutable();
+                    EXECUTE FUNCTION progena_instruction_revisions_immutable();
                 INSERT INTO instruction_revisions(path, content, revision_id)
                 SELECT substring(key from length('__KEY_PREFIX__') + 1),
                        value -> 'payload' ->> 'content',
@@ -1224,7 +1222,7 @@ class PostgresDocumentStore:
     def _ensure_canvas_revision_history(self) -> None:
         """Capture an immutable timeline for every canvas file."""
 
-        state_prefix = PROGENITOR_STATE_PREFIX
+        state_prefix = PROGENA_STATE_PREFIX
         key_prefix = CANVAS_DOCUMENT_KEY_PREFIX
         with self._cursor() as cur:
             cur.execute(
@@ -1244,7 +1242,7 @@ class PostgresDocumentStore:
                 );
                 CREATE INDEX IF NOT EXISTS canvas_revisions_name_latest
                     ON canvas_revisions (name, captured_at DESC, id DESC);
-                CREATE OR REPLACE FUNCTION progenitor_capture_canvas_revision()
+                CREATE OR REPLACE FUNCTION progena_capture_canvas_revision()
                 RETURNS trigger AS $$
                 DECLARE
                     source_row store%ROWTYPE;
@@ -1282,21 +1280,21 @@ class PostgresDocumentStore:
                     RETURN source_row;
                 END;
                 $$ LANGUAGE plpgsql;
-                CREATE OR REPLACE TRIGGER progenitor_capture_canvas_revision
+                CREATE OR REPLACE TRIGGER progena_capture_canvas_revision
                     AFTER INSERT OR UPDATE ON store FOR EACH ROW
-                    EXECUTE FUNCTION progenitor_capture_canvas_revision();
-                CREATE OR REPLACE TRIGGER progenitor_capture_deleted_canvas_revision
+                    EXECUTE FUNCTION progena_capture_canvas_revision();
+                CREATE OR REPLACE TRIGGER progena_capture_deleted_canvas_revision
                     BEFORE DELETE ON store FOR EACH ROW
-                    EXECUTE FUNCTION progenitor_capture_canvas_revision();
-                CREATE OR REPLACE FUNCTION progenitor_canvas_revisions_immutable()
+                    EXECUTE FUNCTION progena_capture_canvas_revision();
+                CREATE OR REPLACE FUNCTION progena_canvas_revisions_immutable()
                 RETURNS trigger AS $$
                 BEGIN
                     RAISE EXCEPTION 'canvas_revisions rows are immutable';
                 END;
                 $$ LANGUAGE plpgsql;
-                CREATE OR REPLACE TRIGGER progenitor_canvas_revisions_immutable
+                CREATE OR REPLACE TRIGGER progena_canvas_revisions_immutable
                     BEFORE UPDATE OR DELETE ON canvas_revisions FOR EACH ROW
-                    EXECUTE FUNCTION progenitor_canvas_revisions_immutable();
+                    EXECUTE FUNCTION progena_canvas_revisions_immutable();
                 INSERT INTO canvas_revisions(name, path, op, content, content_hash)
                 SELECT
                     split_part(substring(key from length('__KEY_PREFIX__') + 1), '/', 1),
@@ -1317,7 +1315,7 @@ class PostgresDocumentStore:
             )
 
     def _ensure_knowledge_page_revision_history(self) -> None:
-        state_prefix = PROGENITOR_STATE_PREFIX
+        state_prefix = PROGENA_STATE_PREFIX
         with self._cursor() as cur:
             cur.execute(
                 """
@@ -1329,7 +1327,7 @@ class PostgresDocumentStore:
                 );
                 CREATE INDEX IF NOT EXISTS knowledge_page_revisions_latest
                     ON knowledge_page_revisions (base_id, path, captured_at DESC, revision_id DESC);
-                CREATE OR REPLACE FUNCTION progenitor_capture_knowledge_page_revision()
+                CREATE OR REPLACE FUNCTION progena_capture_knowledge_page_revision()
                 RETURNS trigger AS $$
                 DECLARE source_row store%ROWTYPE; rest TEXT; slash INTEGER; page_content TEXT;
                 BEGIN
@@ -1350,21 +1348,21 @@ class PostgresDocumentStore:
                     RETURN source_row;
                 END;
                 $$ LANGUAGE plpgsql;
-                CREATE OR REPLACE TRIGGER progenitor_capture_knowledge_page_revision
+                CREATE OR REPLACE TRIGGER progena_capture_knowledge_page_revision
                     AFTER INSERT OR UPDATE ON store FOR EACH ROW
-                    EXECUTE FUNCTION progenitor_capture_knowledge_page_revision();
-                CREATE OR REPLACE TRIGGER progenitor_capture_deleted_knowledge_page_revision
+                    EXECUTE FUNCTION progena_capture_knowledge_page_revision();
+                CREATE OR REPLACE TRIGGER progena_capture_deleted_knowledge_page_revision
                     BEFORE DELETE ON store FOR EACH ROW
-                    EXECUTE FUNCTION progenitor_capture_knowledge_page_revision();
-                CREATE OR REPLACE FUNCTION progenitor_knowledge_page_revisions_immutable()
+                    EXECUTE FUNCTION progena_capture_knowledge_page_revision();
+                CREATE OR REPLACE FUNCTION progena_knowledge_page_revisions_immutable()
                 RETURNS trigger AS $$
                 BEGIN
                     RAISE EXCEPTION 'knowledge_page_revisions rows are immutable';
                 END;
                 $$ LANGUAGE plpgsql;
-                CREATE OR REPLACE TRIGGER progenitor_knowledge_page_revisions_immutable
+                CREATE OR REPLACE TRIGGER progena_knowledge_page_revisions_immutable
                     BEFORE UPDATE OR DELETE ON knowledge_page_revisions FOR EACH ROW
-                    EXECUTE FUNCTION progenitor_knowledge_page_revisions_immutable();
+                    EXECUTE FUNCTION progena_knowledge_page_revisions_immutable();
                 INSERT INTO knowledge_page_revisions(base_id, path, content, revision_id)
                 SELECT split_part(substring(key from 11), '/', 1),
                        substring(substring(key from 11) from position('/' in substring(key from 11)) + 1),
@@ -1405,7 +1403,7 @@ class PostgresDocumentStore:
             )
             cur.execute(
                 sql.SQL("""
-                CREATE OR REPLACE FUNCTION progenitor_capture_inbox_revision()
+                CREATE OR REPLACE FUNCTION progena_capture_inbox_revision()
                 RETURNS trigger AS $$
                 DECLARE source_row store%ROWTYPE;
                 BEGIN
@@ -1422,27 +1420,27 @@ class PostgresDocumentStore:
                 END;
                 $$ LANGUAGE plpgsql;
                 """).format(
-                    state_prefix=sql.Literal(PROGENITOR_STATE_PREFIX),
+                    state_prefix=sql.Literal(PROGENA_STATE_PREFIX),
                     key_prefix=sql.Literal(INBOX_MESSAGE_KEY_PREFIX),
                 )
             )
             cur.execute(
                 """
-                CREATE OR REPLACE TRIGGER progenitor_capture_inbox_revision
+                CREATE OR REPLACE TRIGGER progena_capture_inbox_revision
                 AFTER INSERT OR UPDATE ON store
-                FOR EACH ROW EXECUTE FUNCTION progenitor_capture_inbox_revision()
+                FOR EACH ROW EXECUTE FUNCTION progena_capture_inbox_revision()
                 """
             )
             cur.execute(
                 """
-                CREATE OR REPLACE TRIGGER progenitor_capture_deleted_inbox_revision
+                CREATE OR REPLACE TRIGGER progena_capture_deleted_inbox_revision
                 BEFORE DELETE ON store
-                FOR EACH ROW EXECUTE FUNCTION progenitor_capture_inbox_revision()
+                FOR EACH ROW EXECUTE FUNCTION progena_capture_inbox_revision()
                 """
             )
             cur.execute(
                 """
-                CREATE OR REPLACE FUNCTION progenitor_inbox_revisions_immutable()
+                CREATE OR REPLACE FUNCTION progena_inbox_revisions_immutable()
                 RETURNS trigger AS $$
                 BEGIN RAISE EXCEPTION 'inbox_message_revisions rows are immutable'; END;
                 $$ LANGUAGE plpgsql;
@@ -1450,9 +1448,9 @@ class PostgresDocumentStore:
             )
             cur.execute(
                 """
-                CREATE OR REPLACE TRIGGER progenitor_inbox_revisions_immutable
+                CREATE OR REPLACE TRIGGER progena_inbox_revisions_immutable
                 BEFORE UPDATE OR DELETE ON inbox_message_revisions
-                FOR EACH ROW EXECUTE FUNCTION progenitor_inbox_revisions_immutable()
+                FOR EACH ROW EXECUTE FUNCTION progena_inbox_revisions_immutable()
                 """
             )
             cur.execute(
@@ -1466,7 +1464,7 @@ class PostgresDocumentStore:
                 """,
                 (
                     INBOX_MESSAGE_KEY_PREFIX,
-                    PROGENITOR_STATE_PREFIX,
+                    PROGENA_STATE_PREFIX,
                     INBOX_MESSAGE_KEY_PREFIX,
                     INBOX_MESSAGE_KEY_PREFIX,
                     INBOX_MESSAGE_KEY_PREFIX,
@@ -1474,7 +1472,7 @@ class PostgresDocumentStore:
             )
 
     def _ensure_policy_revision_history(self) -> None:
-        from src.progenitor.settings.policies import ExecutionPolicy
+        from src.progena.settings.policies import ExecutionPolicy
 
         with self._cursor() as cur:
             cur.execute("""
@@ -1484,11 +1482,11 @@ class PostgresDocumentStore:
                     captured_at TIMESTAMPTZ NOT NULL DEFAULT now(),
                     PRIMARY KEY (policy_id, revision_id)
                 );
-                CREATE OR REPLACE FUNCTION progenitor_capture_policy_revision() RETURNS trigger AS $$
+                CREATE OR REPLACE FUNCTION progena_capture_policy_revision() RETURNS trigger AS $$
                 DECLARE source_row store%ROWTYPE;
                 BEGIN
                     IF TG_OP = 'DELETE' THEN source_row := OLD; ELSE source_row := NEW; END IF;
-                    IF source_row.prefix = 'progenitor.state' AND source_row.key LIKE 'policy:%'
+                    IF source_row.prefix = 'progena.state' AND source_row.key LIKE 'policy:%'
                         AND jsonb_typeof(source_row.value->'payload') = 'object' THEN
                         INSERT INTO policy_revisions(policy_id, document)
                         VALUES (substring(source_row.key from 8), source_row.value->'payload')
@@ -1497,19 +1495,19 @@ class PostgresDocumentStore:
                     RETURN source_row;
                 END;
                 $$ LANGUAGE plpgsql;
-                CREATE OR REPLACE TRIGGER progenitor_capture_policy_revision AFTER INSERT OR UPDATE OR DELETE ON store
-                FOR EACH ROW EXECUTE FUNCTION progenitor_capture_policy_revision();
-                CREATE OR REPLACE FUNCTION progenitor_policy_revisions_immutable() RETURNS trigger AS $$
+                CREATE OR REPLACE TRIGGER progena_capture_policy_revision AFTER INSERT OR UPDATE OR DELETE ON store
+                FOR EACH ROW EXECUTE FUNCTION progena_capture_policy_revision();
+                CREATE OR REPLACE FUNCTION progena_policy_revisions_immutable() RETURNS trigger AS $$
                 BEGIN RAISE EXCEPTION 'policy revisions are immutable'; END;
                 $$ LANGUAGE plpgsql;
-                CREATE OR REPLACE TRIGGER progenitor_policy_revisions_immutable BEFORE UPDATE OR DELETE ON policy_revisions
-                FOR EACH ROW EXECUTE FUNCTION progenitor_policy_revisions_immutable();
+                CREATE OR REPLACE TRIGGER progena_policy_revisions_immutable BEFORE UPDATE OR DELETE ON policy_revisions
+                FOR EACH ROW EXECUTE FUNCTION progena_policy_revisions_immutable();
             """)
             cur.execute(
                 """INSERT INTO store(prefix,key,value,created_at,updated_at)
                 VALUES (%s,%s,%s,now(),now()) ON CONFLICT(prefix,key) DO NOTHING""",
                 (
-                    PROGENITOR_STATE_PREFIX,
+                    PROGENA_STATE_PREFIX,
                     "policy:default",
                     Jsonb(
                         {
@@ -1669,7 +1667,7 @@ class PostgresDocumentStore:
                 )
             else:
                 with cur.connection.transaction():
-                    cur.execute("SELECT set_config('progenitor.origin', %s, true)", (origin,))
+                    cur.execute("SELECT set_config('progena.origin', %s, true)", (origin,))
                     cur.execute(
                         "DELETE FROM store WHERE prefix = %s AND key = %s RETURNING value",
                         (prefix, key),
@@ -1710,7 +1708,7 @@ class PostgresDocumentStore:
                 new_payload = mutator(payload)
                 value = {"payload": new_payload}
                 if origin is not None:
-                    cur.execute("SELECT set_config('progenitor.origin', %s, true)", (origin,))
+                    cur.execute("SELECT set_config('progena.origin', %s, true)", (origin,))
                 cur.execute(
                     """
                         INSERT INTO store (prefix, key, value, created_at, updated_at)
@@ -1735,7 +1733,7 @@ class PostgresDocumentStore:
                 cur.execute(query, params)
                 return cur.rowcount
             with cur.connection.transaction():
-                cur.execute("SELECT set_config('progenitor.origin', %s, true)", (origin,))
+                cur.execute("SELECT set_config('progena.origin', %s, true)", (origin,))
                 cur.execute(query, params)
             return cur.rowcount
 
@@ -1849,10 +1847,10 @@ class PostgresDocumentStore:
         limit: int = 500,
     ) -> list[dict[str, Any]]:
         clauses = [sql.SQL("prefix LIKE %s")]
-        params: list[Any] = [f"{PROGENITOR_LOG_PREFIX}.%"]
+        params: list[Any] = [f"{PROGENA_LOG_PREFIX}.%"]
         if source:
             clauses.append(sql.SQL("prefix = %s"))
-            params.append(f"{PROGENITOR_LOG_PREFIX}.{source}")
+            params.append(f"{PROGENA_LOG_PREFIX}.{source}")
         if level:
             clauses.append(sql.SQL("lower(value->>'level') = %s"))
             params.append(level.lower())
@@ -1889,7 +1887,7 @@ class PostgresDocumentStore:
                 GROUP BY prefix
                 ORDER BY source
                 """,
-                (f"{PROGENITOR_LOG_PREFIX}.", f"{PROGENITOR_LOG_PREFIX}.%"),
+                (f"{PROGENA_LOG_PREFIX}.", f"{PROGENA_LOG_PREFIX}.%"),
             )
             rows = cast(list[dict[str, Any]], cur.fetchall())
         return [dict(row) for row in rows]
@@ -2167,7 +2165,7 @@ class PostgresDocumentStore:
         """Every distinct routine-run checkpoint thread for one routine.
 
         A run's thread_id is ``routine:<routine_id>:<revision_id>:<run_id>``
-        (see ``src.progenitor.routines.subagent.create_routine_subagent``).
+        (see ``src.progena.routines.subagent.create_routine_subagent``).
         Groups raw checkpoint rows by thread_id -- one row per run, newest
         last-checkpoint first -- rather than reconstructing full message
         history, which the Runs panel doesn't need.
@@ -2254,7 +2252,7 @@ class PostgresDocumentStore:
     ) -> list[RoutineRevisionSummary]:
         """Every captured revision of one routine's graph document, newest first.
 
-        Mirrors ``src.progenitor.routines.revisions.PostgresRoutineRevisionReader``,
+        Mirrors ``src.progena.routines.revisions.PostgresRoutineRevisionReader``,
         reading the same ``routine_graph_revisions`` table this store's own
         ``_ensure_routine_revision_history`` DDL/trigger populates.
         """
@@ -2460,7 +2458,7 @@ def _escape_like(text: str) -> str:
 def _log_row_to_entry(row: dict[str, Any]) -> dict[str, Any]:
     value = row.get("value")
     entry = dict(value) if isinstance(value, dict) else {}
-    source = str(row.get("prefix") or "").removeprefix(f"{PROGENITOR_LOG_PREFIX}.")
+    source = str(row.get("prefix") or "").removeprefix(f"{PROGENA_LOG_PREFIX}.")
     entry.setdefault("id", row.get("key"))
     entry.setdefault("source", source)
     entry.setdefault("timestamp", _timestamp_text(entry.get("timestamp") or row.get("updated_at")))
@@ -2496,7 +2494,7 @@ def configure_default_document_store(
         logger.info("Backend document store connected to Postgres")
     else:
         store = InMemoryDocumentStore()
-        logger.warning("PROGENITOR_DATABASE_URL is not set; backend document store is in-memory")
+        logger.warning("PROGENA_DATABASE_URL is not set; backend document store is in-memory")
     _default_store = store
     return _default_store
 

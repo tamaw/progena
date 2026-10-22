@@ -63,9 +63,9 @@ export function PrimaryNav({ isCollapsed, isOpen, onClose, onToggleCollapse, onO
   return (
     <aside className={`app-shell__sidebar ${isOpen ? 'is-open' : ''} ${isCollapsed ? 'is-collapsed' : ''}`}>
       <div className="app-shell__rail-logo">
-        <Link to="/chat" className="app-shell__brand-link" aria-label="Progenitor home">
+        <Link to="/chat" className="app-shell__brand-link" aria-label="Progena AI home">
           <span className="app-shell__brand-mark" aria-hidden="true">🧬</span>
-          <span className="app-shell__brand-name">Progenitor</span>
+          <span className="app-shell__brand-name">Progena<span className="app-shell__brand-ai">AI</span></span>
         </Link>
         <button
           type="button"

@@ -18,12 +18,12 @@ from src.backend.chat.service import (
     patch_session_document,
 )
 from src.backend.storage.documents import (
-    PROGENITOR_STATE_PREFIX,
+    PROGENA_STATE_PREFIX,
     CheckpointThreadSnapshot,
     InMemoryDocumentStore,
 )
-from src.progenitor.documents.kinds import SESSION_KEY_PREFIX
-from src.progenitor.sessions.titles import ATTACHMENT_CONTEXT_MARKER
+from src.progena.documents.kinds import SESSION_KEY_PREFIX
+from src.progena.sessions.titles import ATTACHMENT_CONTEXT_MARKER
 
 
 class _CountingDocumentStore(InMemoryDocumentStore):
@@ -54,7 +54,7 @@ def _store_session(store: InMemoryDocumentStore, thread_id: str, **fields) -> No
         "content": "",
         **fields,
     }
-    store.save_document(PROGENITOR_STATE_PREFIX, f"{SESSION_KEY_PREFIX}{thread_id}", payload)
+    store.save_document(PROGENA_STATE_PREFIX, f"{SESSION_KEY_PREFIX}{thread_id}", payload)
 
 
 class TestListChatSessions:
@@ -177,7 +177,7 @@ class TestPatchSessionDocument:
 
         patch_session_document(store, "thread_p", ChatPatchRequest(title="New"))
 
-        doc = store.get_document(PROGENITOR_STATE_PREFIX, f"{SESSION_KEY_PREFIX}thread_p")
+        doc = store.get_document(PROGENA_STATE_PREFIX, f"{SESSION_KEY_PREFIX}thread_p")
         assert doc.payload["title"] == "New"
 
     def test_patches_pinned(self):
@@ -186,7 +186,7 @@ class TestPatchSessionDocument:
 
         patch_session_document(store, "thread_p", ChatPatchRequest(pinned=True))
 
-        doc = store.get_document(PROGENITOR_STATE_PREFIX, f"{SESSION_KEY_PREFIX}thread_p")
+        doc = store.get_document(PROGENA_STATE_PREFIX, f"{SESSION_KEY_PREFIX}thread_p")
         assert doc.payload["pinned"] is True
 
     def test_patches_archived(self):
@@ -195,7 +195,7 @@ class TestPatchSessionDocument:
 
         patch_session_document(store, "thread_p", ChatPatchRequest(archived=True))
 
-        doc = store.get_document(PROGENITOR_STATE_PREFIX, f"{SESSION_KEY_PREFIX}thread_p")
+        doc = store.get_document(PROGENA_STATE_PREFIX, f"{SESSION_KEY_PREFIX}thread_p")
         assert doc.payload["archived"] is True
 
     def test_noop_when_no_fields_set(self):
@@ -218,7 +218,7 @@ class TestDeleteSessionDocument:
         _store_session(store, "thread_d")
 
         assert delete_session_document(store, "thread_d") is True
-        assert store.get_document(PROGENITOR_STATE_PREFIX, f"{SESSION_KEY_PREFIX}thread_d") is None
+        assert store.get_document(PROGENA_STATE_PREFIX, f"{SESSION_KEY_PREFIX}thread_d") is None
 
     def test_returns_false_when_missing(self):
         store = InMemoryDocumentStore()

@@ -16,30 +16,30 @@ from typing import Any, Literal, Protocol
 from src.backend.alerts.service import create_alert
 from src.backend.events.documents import list_document_types
 from src.backend.storage.documents import (
-    PROGENITOR_STATE_PREFIX,
+    PROGENA_STATE_PREFIX,
     BackendDocumentStore,
     document_write_origin,
 )
 from src.backend.workflows.routine_runs import enqueue_routine_run
-from src.progenitor.artifacts.contracts import ArtifactValidationError, validate_artifact
-from src.progenitor.documents.content import content_document_key
-from src.progenitor.documents.types import DocumentType
-from src.progenitor.instructions.templates import (
+from src.progena.artifacts.contracts import ArtifactValidationError, validate_artifact
+from src.progena.documents.content import content_document_key
+from src.progena.documents.types import DocumentType
+from src.progena.instructions.templates import (
     instruction_relative_path,
     parse_format_template,
     parse_instruction_template,
     render_instruction_template,
 )
-from src.progenitor.llm.structured import validate_against_schema
-from src.progenitor.routines.store import routine_graph_key
-from src.progenitor.utils import utcnow, utcnow_isoformat
-from src.progenitor.workflows.constants import (
+from src.progena.llm.structured import validate_against_schema
+from src.progena.routines.store import routine_graph_key
+from src.progena.utils import utcnow, utcnow_isoformat
+from src.progena.workflows.constants import (
     MAX_WORKFLOW_INVOKE_DEPTH,
     RoutineLoader,
     WorkflowRunSource,
 )
-from src.progenitor.workflows.derivation import derive_workflow_port_schemas
-from src.progenitor.workflows.documents import (
+from src.progena.workflows.derivation import derive_workflow_port_schemas
+from src.progena.workflows.documents import (
     build_workflow_list_item,
     coerce_workflow_definition,
     coerce_workflow_run,
@@ -48,8 +48,8 @@ from src.progenitor.workflows.documents import (
     workflow_queue_key,
     workflow_run_key,
 )
-from src.progenitor.workflows.events import build_cron_trigger_output, build_document_read_output
-from src.progenitor.workflows.models import (
+from src.progena.workflows.events import build_cron_trigger_output, build_document_read_output
+from src.progena.workflows.models import (
     WorkflowDefinition,
     WorkflowListItem,
     WorkflowNodeAgent,
@@ -69,15 +69,15 @@ from src.progenitor.workflows.models import (
     WorkflowRun,
     WorkflowTriggerNode,
 )
-from src.progenitor.workflows.ports import (
+from src.progena.workflows.ports import (
     document_query_filter_port_names,
     routine_declared_schema,
     workflow_node_input_ports,
     workflow_node_output_object,
     workflow_node_output_ports,
 )
-from src.progenitor.workflows.validation import validate_workflow_definition_payload
-from src.progenitor.workflows.values import json_equal
+from src.progena.workflows.validation import validate_workflow_definition_payload
+from src.progena.workflows.values import json_equal
 
 logger = logging.getLogger(__name__)
 
@@ -137,7 +137,7 @@ class PromptExecutionResult:
 
 
 class WorkflowPromptRunner(Protocol):
-    """Agent/extract-node runner adapter: backed by Progenitor."""
+    """Agent/extract-node runner adapter: backed by Progena."""
 
     async def __call__(
         self,
@@ -162,7 +162,7 @@ def _coerce_stored_workflow_definition(
 def list_workflow_definitions(store: BackendDocumentStore) -> list[WorkflowDefinition]:
     """Return every valid stored workflow definition, newest first."""
 
-    rows = store.list_documents(PROGENITOR_STATE_PREFIX, "workflow:")
+    rows = store.list_documents(PROGENA_STATE_PREFIX, "workflow:")
     definitions: list[WorkflowDefinition] = []
     for key, document in rows:
         try:
@@ -189,9 +189,7 @@ def get_workflow_definition(
     """Return one stored workflow definition."""
 
     workflow_id = workflow_id_from_path(workflow_id_or_path)
-    document = store.get_document(
-        PROGENITOR_STATE_PREFIX, workflow_definition_key(workflow_id), None
-    )
+    document = store.get_document(PROGENA_STATE_PREFIX, workflow_definition_key(workflow_id), None)
     if document is None:
         return None
     return _coerce_stored_workflow_definition(store, workflow_definition_key(workflow_id), document)
@@ -202,7 +200,7 @@ def _instruction_loader_from_store(store: BackendDocumentStore) -> Callable[[str
 
     def load(path: str) -> str:
         document = store.get_document(
-            PROGENITOR_STATE_PREFIX,
+            PROGENA_STATE_PREFIX,
             content_document_key("instruction", instruction_relative_path(path)),
             None,
         )
@@ -230,7 +228,7 @@ def _routine_loader_from_store(store: BackendDocumentStore) -> RoutineLoader:
     """Return a loader for the routine graphs routine nodes reference."""
 
     def load(routine_id: str) -> Mapping[str, Any] | None:
-        document = store.get_document(PROGENITOR_STATE_PREFIX, routine_graph_key(routine_id), None)
+        document = store.get_document(PROGENA_STATE_PREFIX, routine_graph_key(routine_id), None)
         return (
             document.payload
             if document is not None and isinstance(document.payload, dict)
@@ -258,7 +256,7 @@ def save_workflow_definition(
     normalized = validate_workflow_definition_payload(typed)
     definition = WorkflowDefinition.model_validate(normalized)
     store.save_document(
-        PROGENITOR_STATE_PREFIX,
+        PROGENA_STATE_PREFIX,
         workflow_definition_key(definition.id),
         definition.model_dump(mode="json", by_alias=True),
     )
@@ -269,7 +267,7 @@ def delete_workflow_definition(store: BackendDocumentStore, workflow_id_or_path:
     """Delete one workflow definition."""
 
     workflow_id = workflow_id_from_path(workflow_id_or_path)
-    store.delete_document(PROGENITOR_STATE_PREFIX, workflow_definition_key(workflow_id))
+    store.delete_document(PROGENA_STATE_PREFIX, workflow_definition_key(workflow_id))
 
 
 def list_workflow_runs(
@@ -279,7 +277,7 @@ def list_workflow_runs(
 ) -> list[WorkflowRun]:
     """Return persisted workflow runs, newest first."""
 
-    rows = store.list_documents(PROGENITOR_STATE_PREFIX, "workflow_run:")
+    rows = store.list_documents(PROGENA_STATE_PREFIX, "workflow_run:")
     runs: list[WorkflowRun] = []
     for _key, document in rows:
         try:
@@ -300,7 +298,7 @@ def list_workflow_runs(
 def get_workflow_run(store: BackendDocumentStore, run_id: str) -> WorkflowRun | None:
     """Return one stored workflow run."""
 
-    document = store.get_document(PROGENITOR_STATE_PREFIX, workflow_run_key(run_id), None)
+    document = store.get_document(PROGENA_STATE_PREFIX, workflow_run_key(run_id), None)
     if document is None:
         return None
     return coerce_workflow_run(_document_payload(document, {}))
@@ -316,7 +314,7 @@ def save_workflow_run(store: BackendDocumentStore, run: WorkflowRun) -> Workflow
 
     with document_write_origin(run.run_id):
         store.save_document(
-            PROGENITOR_STATE_PREFIX,
+            PROGENA_STATE_PREFIX,
             workflow_run_key(run.run_id),
             run.model_dump(mode="json"),
         )
@@ -326,13 +324,13 @@ def save_workflow_run(store: BackendDocumentStore, run: WorkflowRun) -> Workflow
 def delete_workflow_run(store: BackendDocumentStore, run_id: str) -> None:
     """Delete one workflow run."""
 
-    store.delete_document(PROGENITOR_STATE_PREFIX, workflow_run_key(run_id))
+    store.delete_document(PROGENA_STATE_PREFIX, workflow_run_key(run_id))
 
 
 def get_workflow_queue(store: BackendDocumentStore, workflow_id: str) -> list[dict[str, Any]]:
     """Return queued trigger payloads for one workflow."""
 
-    document = store.get_document(PROGENITOR_STATE_PREFIX, workflow_queue_key(workflow_id), None)
+    document = store.get_document(PROGENA_STATE_PREFIX, workflow_queue_key(workflow_id), None)
     if document is None:
         return []
     payload = _document_payload(document, {})
@@ -354,12 +352,12 @@ def save_workflow_queue(
 
     if items:
         store.save_document(
-            PROGENITOR_STATE_PREFIX,
+            PROGENA_STATE_PREFIX,
             workflow_queue_key(workflow_id),
             {"items": [item for item in items if isinstance(item, dict)]},
         )
         return
-    store.delete_document(PROGENITOR_STATE_PREFIX, workflow_queue_key(workflow_id))
+    store.delete_document(PROGENA_STATE_PREFIX, workflow_queue_key(workflow_id))
 
 
 def find_active_workflow_run(
@@ -535,7 +533,7 @@ def _parse_json_reply(node_title: str, reply: str) -> Any:
         return json.loads(text)
     except json.JSONDecodeError as exc:
         raise ValueError(
-            f"extract node '{node_title}': Progenitor's reply was not the JSON result"
+            f"extract node '{node_title}': Progena's reply was not the JSON result"
         ) from exc
 
 
@@ -585,7 +583,7 @@ def _build_queued_run(
     invocation = invocation if isinstance(invocation, Mapping) else {}
     raw_source = invocation.get("source")
     source: WorkflowRunSource = (
-        raw_source if raw_source in ("document", "manual", "progenitor", "cron") else "manual"
+        raw_source if raw_source in ("document", "manual", "progena", "cron") else "manual"
     )
     ancestry_raw = invocation.get("ancestry")
     ancestry = [str(item) for item in ancestry_raw] if isinstance(ancestry_raw, list) else []
@@ -695,7 +693,7 @@ def _execute_document_node(
     document_type = _resolve_node_document_type(store, node)
     if isinstance(node, WorkflowNodeDocumentRead):
         key = document_type.document_key(str(resolved_input.get("id") or ""))
-        document = store.get_document(PROGENITOR_STATE_PREFIX, key, None)
+        document = store.get_document(PROGENA_STATE_PREFIX, key, None)
         return build_document_read_output(
             document_type, key, document.payload if document is not None else None
         )
@@ -703,7 +701,7 @@ def _execute_document_node(
         raise ValueError(f"node '{node.title}' needs a collection document type")
     filter_ports = document_query_filter_port_names(node.filters)
     candidates: list[tuple[str, Mapping[str, Any]]] = []
-    for key, document in store.list_documents(PROGENITOR_STATE_PREFIX, document_type.key_prefix):
+    for key, document in store.list_documents(PROGENA_STATE_PREFIX, document_type.key_prefix):
         payload = document.payload
         if not isinstance(payload, Mapping):
             continue
@@ -768,7 +766,7 @@ def _execute_document_write_node(
         if field in resolved_input and resolved_input[field] is not None
     }
     if not merge_payload:
-        return {"found": store.get_document(PROGENITOR_STATE_PREFIX, key, None) is not None}
+        return {"found": store.get_document(PROGENA_STATE_PREFIX, key, None) is not None}
     error = document_type.validate_write(merge_payload)
     if error:
         raise ValueError(
@@ -778,7 +776,7 @@ def _execute_document_write_node(
         _check_artifact_write(document_type, document_id, merge_payload, node.title)
         merge_payload["updated_at"] = utcnow_isoformat()
     with document_write_origin(run_id):
-        found = store.merge_document(PROGENITOR_STATE_PREFIX, key, merge_payload)
+        found = store.merge_document(PROGENA_STATE_PREFIX, key, merge_payload)
     return {"found": found, **merge_payload}
 
 
@@ -828,7 +826,7 @@ def _execute_document_create_node(
         return payload
 
     with document_write_origin(run_id):
-        document = store.mutate_document(PROGENITOR_STATE_PREFIX, key, insert)
+        document = store.mutate_document(PROGENA_STATE_PREFIX, key, insert)
     return {"id": document_id, "key": key, "document": document}
 
 
@@ -843,7 +841,7 @@ def _execute_document_delete_node(
         raise ValueError(f"node '{node.title}' needs a collection document type")
     key = document_type.document_key(str(resolved_input["id"]))
     with document_write_origin(run_id):
-        before = store.pop_document(PROGENITOR_STATE_PREFIX, key)
+        before = store.pop_document(PROGENA_STATE_PREFIX, key)
     return {"found": before is not None, "before": before}
 
 
@@ -1139,7 +1137,7 @@ class WorkflowExecutor:
         """Resolve a paused approval node and continue its run.
 
         Returns ``None`` when the run isn't waiting on an approval. Raises
-        ``PermissionError`` when Progenitor answers a human-only approval.
+        ``PermissionError`` when Progena answers a human-only approval.
         """
 
         async with self._lock_for(workflow_id):
@@ -1155,7 +1153,7 @@ class WorkflowExecutor:
                 return None
             if answered_by == "agent" and (run.pending_approval or {}).get("approver") == "human":
                 raise PermissionError(
-                    "This approval needs a person's decision in the Progenitor UI."
+                    "This approval needs a person's decision in the Progena AI app."
                 )
             selected_port = "approved" if approved else "rejected"
             updated = run.model_copy(
@@ -1585,7 +1583,7 @@ class WorkflowExecutor:
                     ) | definitions
                     # The turn's final reply is the only full result the backend
                     # receives (tool results reach it as previews only), so
-                    # Progenitor returns the structured_output value verbatim.
+                    # Progena returns the structured_output value verbatim.
                     instruction = (
                         f"{input_text}\n\n"
                         "Produce the answer by calling the structured_output tool exactly once "

@@ -2,8 +2,8 @@ import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { readFileSync, writeFileSync } from 'node:fs';
 
-const databaseUrl = process.env.PROGENITOR_DATABASE_URL
-  || 'postgresql://progenitor:progenitor@127.0.0.1:15433/progenitor';
+const databaseUrl = process.env.PROGENA_DATABASE_URL
+  || 'postgresql://progena:progena@127.0.0.1:15433/progena';
 const quote = (value) => `'${value.replaceAll("'", "''")}'`;
 // Preserve successful evidence even when Playwright uses only the list reporter.
 export async function attachJsonEvidence(testInfo, name, evidence) {
@@ -33,12 +33,12 @@ export function seedRoutine({ failing = false, retry } = {}) {
     output_schema: { type: 'object', properties: { second: { type: 'number' } } },
   };
   sql(`INSERT INTO store (prefix, key, value, created_at, updated_at)
-       VALUES ('progenitor.state', ${quote(`routine:${id}`)}, ${quote(JSON.stringify({ payload: graph }))}::jsonb, now(), now());`);
+       VALUES ('progena.state', ${quote(`routine:${id}`)}, ${quote(JSON.stringify({ payload: graph }))}::jsonb, now(), now());`);
   return graph;
 }
 
 export function removeRoutine(id) {
-  sql(`DELETE FROM store WHERE prefix = 'progenitor.state' AND key = ${quote(`routine:${id}`)};`);
+  sql(`DELETE FROM store WHERE prefix = 'progena.state' AND key = ${quote(`routine:${id}`)};`);
 }
 
 // Persisted routine graphs the connector/editing specs render (forks, joins,
@@ -59,7 +59,7 @@ export function seedGraphFixtures(fixtureIds) {
     const id = `${fixtureId}-${suffix}`;
     const graph = { ...structuredClone(fixture), id, name: `${fixture.name} ${suffix}` };
     sql(`INSERT INTO store (prefix, key, value, created_at, updated_at)
-         VALUES ('progenitor.state', ${quote(`routine:${id}`)}, ${quote(JSON.stringify({ payload: graph }))}::jsonb, now(), now());`);
+         VALUES ('progena.state', ${quote(`routine:${id}`)}, ${quote(JSON.stringify({ payload: graph }))}::jsonb, now(), now());`);
     ids[fixtureId] = id;
   }
   return ids;

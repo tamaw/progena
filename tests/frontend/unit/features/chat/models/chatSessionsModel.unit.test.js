@@ -309,7 +309,7 @@ describe('normalizeBackendChatMessage', () => {
 
   // The fix for the above: build_task_response persists a compact
   // {state, message_text} log per intermediate status update (see
-  // extract_progress_log in src/progenitor/a2a/payloads.py); the backend
+  // extract_progress_log in src/progena/a2a/payloads.py); the backend
   // extracts it onto tool_calls[].progress_log ahead of the 400-char result
   // truncation (chat_sessions.py). Reload should now replay it as
   // a2a_call_progress events, the same shape a live viewer saw, and end up

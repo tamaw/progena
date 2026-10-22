@@ -18,15 +18,15 @@ from src.backend.http.requests import request_correlation_id as _request_correla
 from src.backend.knowledge.service import load_bases
 from src.backend.monitoring.state import get_state_reader
 from src.backend.storage.documents import (
-    PROGENITOR_STATE_PREFIX,
+    PROGENA_STATE_PREFIX,
     get_default_document_store,
     store_database_url,
 )
-from src.progenitor.documents.front_matter import split_front_matter
-from src.progenitor.documents.kinds import AGENT_DOCUMENT_KEY_PREFIX, DOCUMENT_KINDS, SearchSpec
-from src.progenitor.knowledge.embedding import embedder_for
-from src.progenitor.knowledge.index import search as index_search
-from src.progenitor.knowledge.indexer_config import (
+from src.progena.documents.front_matter import split_front_matter
+from src.progena.documents.kinds import AGENT_DOCUMENT_KEY_PREFIX, DOCUMENT_KINDS, SearchSpec
+from src.progena.knowledge.embedding import embedder_for
+from src.progena.knowledge.index import search as index_search
+from src.progena.knowledge.indexer_config import (
     INDEXER_DOC_KEY,
     min_similarity,
     resolve_embedding_target,
@@ -99,7 +99,7 @@ def _text_provider(kind, q: str, limit: int = 5) -> dict[str, Any]:
     store = get_default_document_store()
     try:
         rows = store.search_documents(
-            prefix=PROGENITOR_STATE_PREFIX,
+            prefix=PROGENA_STATE_PREFIX,
             key_prefix=kind.key_prefix,
             fields=spec.fields,
             source=spec.source,
@@ -156,7 +156,7 @@ async def _knowledge_provider(q: str, limit: int = 5) -> dict[str, Any]:
     store = get_default_document_store()
     try:
         settings, profiles = (
-            getattr(store.get_document(PROGENITOR_STATE_PREFIX, key), "payload", None)
+            getattr(store.get_document(PROGENA_STATE_PREFIX, key), "payload", None)
             for key in (INDEXER_DOC_KEY, "profile")
         )
         target = resolve_embedding_target(settings, profiles)

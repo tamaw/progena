@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "Alert",
-  "description": "One user alert: the payload of an alert:<id> document. Producers create it directly; the backend shows it in the alert center and asks Progenitor to relay it to the user.",
+  "description": "One user alert: the payload of an alert:<id> document. Producers create it directly; the backend shows it in the alert center and asks Progena to relay it to the user.",
   "type": "object",
   "required": ["id", "type", "title", "message", "timestamp", "urgent", "requires_response", "viewed"],
   "properties": {

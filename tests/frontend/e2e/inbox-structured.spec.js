@@ -409,7 +409,7 @@ test.describe('structured inbox', () => {
       const dialog = page.getByRole('dialog', { name: 'Edit section with AI' });
       await dialog.getByRole('textbox', { name: 'AI edit instruction' }).fill('Rewrite the plan');
       await page.evaluate(() => {
-        window.addEventListener('progenitor:open-quick-chat', (event) => {
+        window.addEventListener('progena:open-quick-chat', (event) => {
           if (event.detail?.inline) window.__inlineClientId = event.detail.clientId;
         }, { once: true });
       });
@@ -421,7 +421,7 @@ test.describe('structured inbox', () => {
       await expect(dialog.getByRole('textbox', { name: 'AI edit status' })).toHaveValue('Working…');
       await expect(page.getByText('This message changed while you were editing. Select the latest section to review it.')).toHaveCount(0);
       await page.evaluate(() => {
-        window.dispatchEvent(new CustomEvent('progenitor:quick-chat-inline-status', {
+        window.dispatchEvent(new CustomEvent('progena:quick-chat-inline-status', {
           detail: { clientId: window.__inlineClientId, status: 'completed' },
         }));
       });
@@ -782,7 +782,7 @@ test.describe('structured inbox', () => {
     seedInboxMessage({ id, title, body });
     await page.addInitScript(() => {
       window.__inlineStatuses = [];
-      window.addEventListener('progenitor:quick-chat-inline-status', (event) => {
+      window.addEventListener('progena:quick-chat-inline-status', (event) => {
         window.__inlineStatuses.push(event.detail);
       });
     });
@@ -816,10 +816,10 @@ test.describe('structured inbox', () => {
       // The modal pane covers the inbox, so dispatch the same event as AI Edit.
       // Another regular instruction must not overwrite or silence its failure.
       await page.evaluate(() => {
-        window.dispatchEvent(new CustomEvent('progenitor:open-quick-chat', {
+        window.dispatchEvent(new CustomEvent('progena:open-quick-chat', {
           detail: { prompt: 'Inline instruction', inline: true, clientId: 'race-inline' },
         }));
-        window.dispatchEvent(new CustomEvent('progenitor:open-quick-chat', {
+        window.dispatchEvent(new CustomEvent('progena:open-quick-chat', {
           detail: { prompt: 'Other regular instruction' },
         }));
       });

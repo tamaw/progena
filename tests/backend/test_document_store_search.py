@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from src.backend.storage.documents import PROGENITOR_STATE_PREFIX, PostgresDocumentStore
+from src.backend.storage.documents import PROGENA_STATE_PREFIX, PostgresDocumentStore
 
 
 @pytest.fixture
@@ -22,19 +22,19 @@ def _keys(rows):
 def test_json_fields_match_case_insensitively_with_title_prefix_first_and_limit(store):
     for i in range(7):
         store.save_document(
-            PROGENITOR_STATE_PREFIX,
+            PROGENA_STATE_PREFIX,
             f"kanban_card:c{i}",
             {"title": f"Task {i}", "description": "fix the HEALTH check"},
         )
     store.save_document(
-        PROGENITOR_STATE_PREFIX,
+        PROGENA_STATE_PREFIX,
         "kanban_card:lead",
         {"title": "Health dashboard", "description": ""},
     )
-    store.save_document(PROGENITOR_STATE_PREFIX, "kanban_card:other", {"title": "Unrelated"})
+    store.save_document(PROGENA_STATE_PREFIX, "kanban_card:other", {"title": "Unrelated"})
 
     rows = store.search_documents(
-        PROGENITOR_STATE_PREFIX, "kanban_card:", ("title", "description"), "json", "health"
+        PROGENA_STATE_PREFIX, "kanban_card:", ("title", "description"), "json", "health"
     )
 
     assert len(rows) == 5
@@ -45,14 +45,14 @@ def test_json_fields_match_case_insensitively_with_title_prefix_first_and_limit(
 def test_front_matter_search_honours_key_suffix(store):
     manifest = "---\nname: researcher\ndescription: Researches Raft papers\n---\nBody\n"
     store.save_document(
-        PROGENITOR_STATE_PREFIX, "agent:user/researcher/SYSTEM.md", {"content": manifest}
+        PROGENA_STATE_PREFIX, "agent:user/researcher/SYSTEM.md", {"content": manifest}
     )
     store.save_document(
-        PROGENITOR_STATE_PREFIX, "agent:user/researcher/notes.md", {"content": "Raft notes"}
+        PROGENA_STATE_PREFIX, "agent:user/researcher/notes.md", {"content": "Raft notes"}
     )
 
     rows = store.search_documents(
-        PROGENITOR_STATE_PREFIX,
+        PROGENA_STATE_PREFIX,
         "agent:",
         ("name", "description"),
         "front_matter",
@@ -64,11 +64,9 @@ def test_front_matter_search_honours_key_suffix(store):
 
 
 def test_like_wildcards_in_the_query_are_literal(store):
-    store.save_document(PROGENITOR_STATE_PREFIX, "kanban_card:a", {"title": "100% done"})
-    store.save_document(PROGENITOR_STATE_PREFIX, "kanban_card:b", {"title": "1000 items"})
+    store.save_document(PROGENA_STATE_PREFIX, "kanban_card:a", {"title": "100% done"})
+    store.save_document(PROGENA_STATE_PREFIX, "kanban_card:b", {"title": "1000 items"})
 
-    rows = store.search_documents(
-        PROGENITOR_STATE_PREFIX, "kanban_card:", ("title",), "json", "100%"
-    )
+    rows = store.search_documents(PROGENA_STATE_PREFIX, "kanban_card:", ("title",), "json", "100%")
 
     assert _keys(rows) == ["kanban_card:a"]

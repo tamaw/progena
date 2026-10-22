@@ -1,4 +1,7 @@
-function getPageStatusContext(pathname, runtime, counts) {
+import { useSelector } from 'react-redux';
+import { selectAgentName } from '../features/settings/state/preferences';
+
+function getPageStatusContext(pathname, runtime, counts, agentName) {
   const route = pathname.replace(/^\//, '').split('/')[0] || 'chat';
   const runningCount = counts.runningSessions;
   if (route === 'solutions' || route === 'projects' || route === 'kanban') {
@@ -7,7 +10,7 @@ function getPageStatusContext(pathname, runtime, counts) {
 
   const contextByRoute = {
     agents: ['Agents workspace', `${counts.onlineAgents} online`, 'Tools, memories, tasks linked'],
-    chat: ['Chat session', 'Progenitor active', 'Messages stream here'],
+    chat: ['Chat session', `${agentName} active`, 'Messages stream here'],
     dashboard: ['Dashboard board', `${runtime.widgets.length} widgets`, `${runningCount} running`],
     knowledge: ['Knowledge graph', '8 bases', '214 links mapped'],
     logs: ['Runtime logs', 'Live tail ready', 'Errors grouped'],
@@ -20,15 +23,16 @@ function getPageStatusContext(pathname, runtime, counts) {
     workspace: ['Workspace canvas', 'Nodes editable', 'Dock ready'],
   };
 
-  return contextByRoute[route] || ['Progenitor', 'Ready', 'Runtime workspace'];
+  return contextByRoute[route] || ['Progena AI', 'Ready', 'Runtime workspace'];
 }
 
 export default function AppStatusBar({ runtime, pathname }) {
   const { health, widgets } = runtime;
   const agentWidgets = widgets.filter((widget) => widget.type === 'agent');
+  const agentName = useSelector(selectAgentName);
   const runningSessions = widgets.filter((widget) => ['running', 'busy', 'executing'].includes(widget.status || widget.data?.agentStatus)).length;
   const onlineAgents = agentWidgets.filter((widget) => !['offline', 'stopped', 'error'].includes(widget.status || widget.data?.agentStatus)).length;
-  const pageContext = getPageStatusContext(pathname, runtime, { onlineAgents, runningSessions });
+  const pageContext = getPageStatusContext(pathname, runtime, { onlineAgents, runningSessions }, agentName);
 
   return (
     <footer className="app-shell__statusbar">

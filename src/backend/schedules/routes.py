@@ -17,9 +17,9 @@ import src.backend.schedules.service as schedules_service
 import src.backend.settings.mcp as settings_mcp
 import src.backend.storage.documents as storage_documents
 import src.backend.workflows.runtime as workflows_runtime
-from src.progenitor.schedules.engine import Scheduler
-from src.progenitor.schedules.service import generate_schedule_id
-from src.progenitor.utils import utcnow
+from src.progena.schedules.engine import Scheduler
+from src.progena.schedules.service import generate_schedule_id
+from src.progena.utils import utcnow
 
 logger = logging.getLogger(__name__)
 
@@ -59,7 +59,7 @@ async def refresh_widget(
     """Refresh agent widget metadata from its live protocol surface.
 
     MCP servers are not refreshed here: their tools/capabilities are discovered
-    by the Progenitor runtime when it initialises its MCP context (and on
+    by the Progena runtime when it initialises its MCP context (and on
     ``mcp_refresh``), which is the single source of truth the UI reads from.
     """
     request_id = http_requests.request_correlation_id(request, x_request_id)
@@ -138,7 +138,7 @@ async def patch_widget(
 
         def _save_schedule() -> None:
             state_reader.document_store.save_document(
-                storage_documents.PROGENITOR_STATE_PREFIX, "schedule", schedule_data
+                storage_documents.PROGENA_STATE_PREFIX, "schedule", schedule_data
             )
 
         updated = schedules_service._patch_document_entry(
@@ -416,7 +416,7 @@ async def create_schedule(
     schedule_data[schedule_id] = entry
 
     state_reader.document_store.save_document(
-        storage_documents.PROGENITOR_STATE_PREFIX, "schedule", schedule_data
+        storage_documents.PROGENA_STATE_PREFIX, "schedule", schedule_data
     )
 
     refreshed = next(
@@ -459,7 +459,7 @@ async def retrigger_schedule(
     """Reschedule a task from a natural-language description.
 
     Rather than editing cron fields by hand, the user describes the timing in
-    plain language ("friday at 15:00"). We hand that to the Progenitor agent on a
+    plain language ("friday at 15:00"). We hand that to the Progena agent on a
     dedicated (non-chat) thread carrying just the schedule id and the free text -
     the loaded ``managing-schedules`` skill owns how a natural-language reschedule request
     gets interpreted and applied to ``/config/schedule.json``, not a hardcoded
@@ -471,7 +471,7 @@ async def retrigger_schedule(
     if not text:
         raise HTTPException(status_code=400, detail="Trigger description is required")
     if not lifecycle_state.client:
-        raise HTTPException(status_code=503, detail="Progenitor client not initialized")
+        raise HTTPException(status_code=503, detail="Progena client not initialized")
     request_id = http_requests.request_correlation_id(request, x_request_id)
 
     state_reader = monitoring_state.get_state_reader()
@@ -526,7 +526,7 @@ async def retrigger_schedule(
         updated["next_run"] = next_run.isoformat() if next_run else None
         updated["next_run_at"] = next_run.isoformat() if next_run else None
         state_reader.document_store.save_document(
-            storage_documents.PROGENITOR_STATE_PREFIX, "schedule", schedule_data
+            storage_documents.PROGENA_STATE_PREFIX, "schedule", schedule_data
         )
 
     schedules_service._broadcast_widget_refresh(state_reader, request_id=request_id)
