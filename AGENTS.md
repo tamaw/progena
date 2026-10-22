@@ -15,17 +15,12 @@ tests/
 ├── backend/        # Backend tests
 ├── progenitor/     # Runtime/domain tests, including scheduler tests
 └── conftest.py     # Shared environment setup and disposable Postgres fixtures
-data/
-├── instructions/   # Bundled instruction templates synced to Postgres
-├── skills/         # Bundled native skills
-├── schemas/        # Checked-in document contracts
-├── agents/         # Built-in object-agent instructions
-├── modules/        # Vendored module library catalogue
-└── shims/          # Agent shell command shims
 ```
 
 Python imports use `src.backend.*` and `src.progenitor.*`. After changing layouts,
 refresh editable metadata with `pip install -e ".[dev]"` in the activated venv.
+Bundled instructions, skills, schemas, object agents, module libraries and shell
+shims live under `data/`.
 Standalone A2A agents and their tests/deployment assets live in
 [progentior.agents](https://github.com/tamaw/progentior.agents). Configure external
 checkout discovery with `PROGENITOR_AGENT_REPOSITORIES`; do not copy those agents
@@ -49,8 +44,8 @@ venv Python executable for Pyright's `--pythonpath` argument.
 
 Pyright is the Python type checker; use the pinned project version and explicit
 venv interpreter, matching `.github/workflows/ci.yml` and `.pre-commit-config.yaml`.
-Review existing tool-specific overrides alongside `pyproject.toml` when changing
-configuration. Do not introduce a parallel type-checking setup.
+Python dependencies and tool configuration live in `pyproject.toml`. Do not add
+parallel Pyright or pytest configuration files.
 
 From `src/frontend`, use Node 24 (compatible with the current Vite/Vitest engines):
 
@@ -70,8 +65,7 @@ verify their execution.
 Python tests use `pytest-asyncio` with automatic async mode. Root `conftest.py`
 pins checkout-local paths and provides disposable Postgres databases; component
 conftests provide mocks and cleanup. Use `PROGENITOR_TEST_DATABASE_URL` only for a
-test server; otherwise persistence tests provision Postgres with Docker. Keep
-regressions focused on observable behavior and report skipped/unrun checks.
+test server; otherwise persistence tests provision Postgres with Docker. Report skipped/unrun checks.
 
 ## Running locally
 
@@ -87,8 +81,7 @@ npm run dev -- --port 5173
 
 Runtime health is `http://127.0.0.1:9501/health`; backend liveness is
 `http://127.0.0.1:8000/healthz`. Vite proxies `/api/*` and `/v1/*` to the backend.
-It does not proxy `/health`. Docker keeps `/app` as its working directory and copies
-source into `/app/src`; these container paths differ from the Python namespace.
+Docker keeps `/app` as its working directory and source under `/app/src`.
 
 ## Contracts to preserve
 
