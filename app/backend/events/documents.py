@@ -33,14 +33,14 @@ from app.backend.storage.documents import (
     StoreChangeListener,
     store_database_url,
 )
-from app.progenitor.document_kinds import DOCUMENT_TYPE_KEY_PREFIX
-from app.progenitor.document_types import (
+from app.progenitor.documents.kinds import DOCUMENT_TYPE_KEY_PREFIX
+from app.progenitor.documents.types import (
     DocumentType,
     builtin_document_type_rows,
     parse_document_types,
     resolve_document_type,
 )
-from app.progenitor.workflows import build_document_event_output
+from app.progenitor.workflows.events import build_document_event_output
 
 logger = logging.getLogger(__name__)
 

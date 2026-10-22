@@ -74,7 +74,7 @@ def patch_checkpointer(monkeypatch):
     from langgraph.checkpoint.memory import MemorySaver
 
     monkeypatch.setattr(
-        "app.progenitor.agent.agent._build_checkpointer",
+        "app.progenitor.agent.factory._build_checkpointer",
         lambda db_path: MemorySaver(),
     )
 
@@ -84,7 +84,7 @@ def model_provider(monkeypatch):
     """Provide an isolated connection for graph tests with fake model graphs."""
     from types import SimpleNamespace
 
-    from app.progenitor import provider_runtime
+    import app.progenitor.llm.provider_context as provider_runtime
 
     repository = SimpleNamespace(
         resolve=lambda provider_id=None, model_override=None: {

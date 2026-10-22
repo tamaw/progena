@@ -102,7 +102,7 @@ NOTIFY and `document_events` triggers fire with no trigger change.
 | `module_data:<name>/<key>` | `{value: <any JSON>, updated_at: iso}` | Backend on module request |
 | `module_status:<name>` | `{state: "loaded"\|"error", revision: str, errors: [{message, stack?}], reported_at: iso}` | Backend on host report |
 
-Shared code in `app/progenitor/modules.py` (pure, used by runtime and backend):
+Shared code in `app/progenitor/modules/contracts.py` (pure, used by runtime and backend):
 key prefixes re-exported from `document_kinds.py` (`MODULE_DOCUMENT_KEY_PREFIX`,
 `MODULE_DATA_KEY_PREFIX`, `MODULE_STATUS_KEY_PREFIX`), name/path/extension validation,
 caps, manifest validation, `load_module_libraries()`, and
@@ -126,7 +126,7 @@ writes, so they are themselves revisions and fire NOTIFY.
 
 ## Agent side (runtime)
 
-- `ModuleDirectoryBackend` (`app/progenitor/agent/module_backend.py`) at `routes["/modules/"]` in `app/progenitor/agent/backends.py`,
+- `ModuleDirectoryBackend` (`app/progenitor/agent/filesystem/modules.py`) at `routes["/modules/"]` in `app/progenitor/agent/filesystem/mounts.py`,
   on top of `ContentDocumentDirectoryBackend` with content kind `module`, enforcing
   validation and caps on `awrite`/`aedit`.
 - Read-only virtual files: `/modules/_catalogue.json` (libraries from

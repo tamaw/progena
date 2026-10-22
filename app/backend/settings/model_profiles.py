@@ -17,13 +17,13 @@ from fastapi import APIRouter, HTTPException, Request
 import app.backend.http.contracts as http_contracts
 from app.backend.http.requests import BroadcastUiEvent, request_correlation_id
 from app.backend.storage.documents import PROGENITOR_STATE_PREFIX, BackendDocumentStore
-from app.progenitor.providers import GO_RESPONSES_MODELS, ProviderRepository
-from app.progenitor.state.model_profiles import (
+from app.progenitor.settings.model_profiles import (
     MODEL_PROFILES_DOC_KEY,
     default_model_profiles_payload,
     migrate_legacy_model_profiles_payload,
     validate_model_profiles_payload,
 )
+from app.progenitor.settings.providers import GO_RESPONSES_MODELS, ProviderRepository
 
 
 def _safe_public_profile(name: str, profile: dict[str, Any]) -> dict[str, Any]:

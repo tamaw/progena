@@ -7,11 +7,9 @@ from typing import Any
 
 import pytest
 
-from app.progenitor.agent.state_backend import (
-    StateDocumentBackend,
-    create_plugins_state_file,
-    validate_plugins_document,
-)
+from app.progenitor.agent.filesystem.base import StateDocumentBackend
+from app.progenitor.agent.filesystem.config import create_plugins_state_file
+from app.progenitor.plugins.schema import validate_plugins_document
 from app.progenitor.state.manager import StateManager
 from tests.progenitor.conftest import _FakeRuntimeStore
 

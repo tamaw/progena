@@ -34,13 +34,13 @@ from app.backend.storage.documents import (
     store_database_url,
 )
 from app.backend.workflows.routine_runs import append_background_task, enqueue_routine_run
+from app.progenitor.documents.catalog import load_schema
+from app.progenitor.llm.structured import validate_against_schema
 from app.progenitor.routines.graph import (
     ROUTINE_GRAPH_VERSION,
     validate_routine_graph,
     validate_routine_graph_payload,
 )
-from app.progenitor.schemas import load_schema
-from app.progenitor.structured import validate_against_schema
 from app.progenitor.utils import utcnow_isoformat
 
 
@@ -633,7 +633,7 @@ def create_agent_profile_router(
 
         Writes a background-task entry (``metadata.kind = "routine_run"``)
         onto the same Postgres-backed queue the heartbeat runtime already
-        drains (``app.progenitor.state.background_store`` -- both processes
+        drains (``app.progenitor.orchestration.background`` -- both processes
         share the LangGraph ``store`` table via the same
         ``("progenitor", "state")`` namespace / ``"progenitor.state"``
         prefix). The heartbeat graph recognizes that marker and routes

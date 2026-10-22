@@ -23,7 +23,7 @@ from psycopg.types.json import Jsonb
 from psycopg_pool import ConnectionPool, PoolClosed
 
 from app.backend.integrations.runtime_history import RuntimeConversationReader, RuntimeUnavailable
-from app.progenitor.document_kinds import (
+from app.progenitor.documents.kinds import (
     INBOX_MESSAGE_KEY_PREFIX,
     INSTRUCTION_DOCUMENT_KEY_PREFIX,
     MODULE_DOCUMENT_KEY_PREFIX,
@@ -1498,7 +1498,7 @@ class PostgresDocumentStore:
             )
 
     def _ensure_policy_revision_history(self) -> None:
-        from app.progenitor.policies import ExecutionPolicy
+        from app.progenitor.settings.policies import ExecutionPolicy
 
         with self._cursor() as cur:
             cur.execute("""

@@ -22,7 +22,7 @@ from app.backend.storage.documents import (
     CheckpointThreadSnapshot,
     InMemoryDocumentStore,
 )
-from app.progenitor.document_kinds import SESSION_KEY_PREFIX
+from app.progenitor.documents.kinds import SESSION_KEY_PREFIX
 from app.progenitor.sessions.titles import ATTACHMENT_CONTEXT_MARKER
 
 

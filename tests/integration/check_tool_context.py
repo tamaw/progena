@@ -7,7 +7,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from app.progenitor.registry import ToolRegistry
+from app.progenitor.registry.store import ToolRegistry
 
 
 async def check_tool_context():

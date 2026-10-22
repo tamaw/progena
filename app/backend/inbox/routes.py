@@ -22,7 +22,7 @@ import app.backend.storage.documents as storage_documents
 from app.backend.http.requests import BroadcastUiEvent
 from app.backend.http.requests import request_correlation_id as _request_correlation_id
 from app.backend.storage.documents import PROGENITOR_STATE_PREFIX, BackendDocumentStore
-from app.progenitor.document_kinds import INBOX_MESSAGE_KEY_PREFIX
+from app.progenitor.documents.kinds import INBOX_MESSAGE_KEY_PREFIX
 
 
 class InboxMessage(BaseModel):

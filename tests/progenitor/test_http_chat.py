@@ -19,12 +19,12 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 from langgraph.store.memory import InMemoryStore
 
-from app.progenitor import provider_runtime
+import app.progenitor.llm.provider_context as provider_runtime
 from app.progenitor.config import LLMConfig, ProgenitorConfig, RuntimeConfig
-from app.progenitor.runtime.http_chat import RuntimeChatService
+from app.progenitor.persistence.store import LangGraphRuntimeStore
+from app.progenitor.runtime.http.chat import RuntimeChatService
 from app.progenitor.runtime.queues import RuntimeQueues
-from app.progenitor.sse.deepagent_stream import DeepAgentSSEStream
-from app.progenitor.state.langgraph_store import LangGraphRuntimeStore
+from app.progenitor.runtime.streaming.deepagent_stream import DeepAgentSSEStream
 from app.progenitor.state.manager import StateManager
 
 pytestmark = pytest.mark.asyncio
@@ -429,7 +429,7 @@ async def test_responses_bridge_cancellation_does_not_synthesize_completed() -> 
 async def test_responses_writes_keepalive_comments_during_a_silent_bridge_gap(
     monkeypatch,
 ) -> None:
-    monkeypatch.setattr("app.progenitor.runtime.http_chat.EVENTS_KEEPALIVE_SECONDS", 0.05)
+    monkeypatch.setattr("app.progenitor.runtime.http.chat.EVENTS_KEEPALIVE_SECONDS", 0.05)
 
     loop_runner = FakeLoopRunner()
     gate = asyncio.Event()
@@ -470,7 +470,7 @@ async def test_responses_writes_keepalive_comments_during_a_silent_bridge_gap(
 
 async def test_direct_stream_queue_applies_backpressure(monkeypatch) -> None:
     """A slow response writer must bound how far the bridge producer gets ahead."""
-    monkeypatch.setattr("app.progenitor.runtime.http_chat.DIRECT_STREAM_QUEUE_SIZE", 2)
+    monkeypatch.setattr("app.progenitor.runtime.http.chat.DIRECT_STREAM_QUEUE_SIZE", 2)
 
     loop_runner = FakeLoopRunner()
     first_write_started = asyncio.Event()
@@ -974,7 +974,7 @@ async def test_cancelled_turn_keeps_partial_reply_and_next_turn_continues(
 async def test_session_renders_of_one_thread_run_in_order(monkeypatch) -> None:
     """A turn finishing mid-render queues one more render instead of racing it,
     so the last merge always reflects the last turn."""
-    from app.progenitor.runtime import http_chat
+    import app.progenitor.runtime.http.chat as http_chat
 
     service = RuntimeChatService(FakeLoopRunner())
     release = asyncio.Event()

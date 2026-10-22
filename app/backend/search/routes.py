@@ -22,12 +22,8 @@ from app.backend.storage.documents import (
     get_default_document_store,
     store_database_url,
 )
-from app.progenitor.document_kinds import (
-    AGENT_DOCUMENT_KEY_PREFIX,
-    DOCUMENT_KINDS,
-    SearchSpec,
-)
-from app.progenitor.front_matter import split_front_matter
+from app.progenitor.documents.front_matter import split_front_matter
+from app.progenitor.documents.kinds import AGENT_DOCUMENT_KEY_PREFIX, DOCUMENT_KINDS, SearchSpec
 from app.progenitor.knowledge.embedding import embedder_for
 from app.progenitor.knowledge.index import search as index_search
 from app.progenitor.knowledge.indexer_config import (

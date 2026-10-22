@@ -4,8 +4,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from app.progenitor.registry import discover_external_agents
 from app.progenitor.registry.discovery import AgentDiscovery, DiscoveredAgentSpec
+from app.progenitor.registry.refresh import discover_external_agents
 
 
 class TestAgentDiscovery:

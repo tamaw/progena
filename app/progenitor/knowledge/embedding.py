@@ -6,8 +6,9 @@ from typing import Protocol
 
 from openai import AsyncOpenAI
 
+from app.progenitor.llm.provider_context import provider_config_for_call
+
 from ..config import LLMConfig
-from ..provider_runtime import provider_config_for_call
 from .indexer_config import EmbeddingTarget
 
 EMBED_BATCH_SIZE = 64

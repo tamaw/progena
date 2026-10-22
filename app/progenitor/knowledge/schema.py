@@ -20,7 +20,8 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
-from ..schemas import check_entry_schema
+from app.progenitor.documents.catalog import check_entry_schema
+
 from .pages import BASE_ID_RE
 
 

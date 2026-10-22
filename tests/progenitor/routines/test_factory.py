@@ -10,7 +10,6 @@ import pytest
 from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.errors import GraphRecursionError
 
-from app.progenitor.policies import PolicyValues
 from app.progenitor.routines.factory import (
     compile_routine_graph,
     extract_json_object,
@@ -18,6 +17,7 @@ from app.progenitor.routines.factory import (
     resolve_data_path,
 )
 from app.progenitor.routines.graph import validate_routine_graph_payload
+from app.progenitor.settings.policies import PolicyValues
 
 _EXAMPLE_PATH = Path(__file__).parent / "fixtures" / "reference_routine.json"
 

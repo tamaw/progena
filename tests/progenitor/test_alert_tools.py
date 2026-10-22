@@ -4,9 +4,9 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from app.progenitor.agent.state_backend import AlertDirectoryBackend
-from app.progenitor.schemas import load_schema
-from app.progenitor.structured import validate_against_schema
+from app.progenitor.agent.filesystem.alerts import AlertDirectoryBackend
+from app.progenitor.documents.catalog import load_schema
+from app.progenitor.llm.structured import validate_against_schema
 from app.progenitor.tools.protocol import ToolContext
 from app.progenitor.tools.resolve_workflow_approval import ResolveWorkflowApprovalTool
 

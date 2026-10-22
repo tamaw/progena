@@ -14,7 +14,7 @@ import app.backend.integrations.subprocess as integrations_subprocess
 import app.backend.integrations.telegram as integrations_telegram
 import app.backend.lifecycle.state as lifecycle_state
 import app.backend.storage.documents as storage_documents
-from app.progenitor.document_kinds import SESSION_KEY_PREFIX
+from app.progenitor.documents.kinds import SESSION_KEY_PREFIX
 
 logger = logging.getLogger(__name__)
 

@@ -10,23 +10,24 @@ import os
 from pathlib import Path
 from typing import Any
 
-from ..config import ProgenitorConfig, get_config
-from ..document_kinds import AGENT_DOCUMENT_KEY_PREFIX, ROUTINE_GRAPH_KEY_PREFIX
-from ..llm.client import LLMClient
-from ..mcp import MCPRuntime
-from ..providers import (
+from app.progenitor.documents.kinds import AGENT_DOCUMENT_KEY_PREFIX, ROUTINE_GRAPH_KEY_PREFIX
+from app.progenitor.llm.client import LLMClient
+from app.progenitor.mcp.runtime import MCPRuntime
+from app.progenitor.persistence.listener import RuntimeStoreListener
+from app.progenitor.persistence.store import LangGraphRuntimeStore
+from app.progenitor.registry.runtime import AgentRegistryRuntime
+from app.progenitor.runtime.http.server import ProgenitorHTTPServer
+from app.progenitor.settings.providers import (
     configure_provider_repository,
     get_provider_repository,
     provider_database_url,
     shutdown_provider_repository,
 )
-from ..registry import AgentRegistryRuntime
-from ..state.langgraph_store import LangGraphRuntimeStore
+
+from ..config import ProgenitorConfig, get_config
 from ..state.manager import StateManager
-from ..state.store_listener import RuntimeStoreListener
 from .agent_sync import AgentSyncScheduler
 from .heartbeat import ProgenitorLoop
-from .http import ProgenitorHTTPServer
 from .mcp_sync import MCPSyncScheduler
 from .plugin_sync import PluginSyncScheduler
 
@@ -119,7 +120,7 @@ class Progenitor:
                 await registry.refresh()
 
     async def _do_mcp_full_resync(self) -> None:
-        from ..nodes.mcp import sync_mcp_runtime_context
+        from app.progenitor.orchestration.nodes.mcp import sync_mcp_runtime_context
 
         if self.state_manager is None:
             return
@@ -133,7 +134,7 @@ class Progenitor:
         logger.info("Re-synced MCP runtime from config change: %s", summary)
 
     async def _do_mcp_reapply(self) -> None:
-        from ..nodes.mcp import reapply_mcp_disabled_tools
+        from app.progenitor.orchestration.nodes.mcp import reapply_mcp_disabled_tools
 
         count, _changed = await reapply_mcp_disabled_tools(self.llm_client, self.state_manager)
         logger.info("Re-applied MCP tool flags from store change (%d disabled)", count)
@@ -174,7 +175,7 @@ class Progenitor:
         if foundry is None:
             logger.warning("Legacy Azure model profiles are awaiting a Foundry provider migration")
             return
-        from ..state.model_profiles import migrate_legacy_model_profiles_payload
+        from app.progenitor.settings.model_profiles import migrate_legacy_model_profiles_payload
 
         migrated = migrate_legacy_model_profiles_payload(payload, str(foundry["id"]))
         if migrated != payload:
@@ -190,7 +191,7 @@ class Progenitor:
 
         self.logs_dir.mkdir(parents=True, exist_ok=True)
 
-        from ..database import open_langgraph_persistence
+        from app.progenitor.persistence.langgraph import open_langgraph_persistence
 
         persistence = await self._persistence_stack.enter_async_context(
             open_langgraph_persistence(

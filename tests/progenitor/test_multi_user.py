@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from app.progenitor.runtime.thread_context import (
+from app.progenitor.sessions.context import (
     get_current_thread_id,
     reset_current_thread_id,
     set_current_thread_id,
@@ -84,12 +84,12 @@ async def test_contextvar_isolation_across_tasks() -> None:
 async def test_state_manager_bare_key_fallback() -> None:
     """get_current_state with thread_id=None falls back to the bare
     'current_state' document for backward compatibility."""
-    manager = StateManager(runtime_store=MagicMock())
-    manager._runtime_store = MagicMock()
-    manager._runtime_store.get_document = AsyncMock(return_value={"cycle_count": 7})
+    store = MagicMock()
+    store.get_document = AsyncMock(return_value={"cycle_count": 7})
+    manager = StateManager(runtime_store=store)
 
     state = await manager.get_current_state()
     assert state["cycle_count"] == 7
 
     # Verify the bare key was used, not a composite key.
-    manager._runtime_store.get_document.assert_awaited_once_with("current_state", {})
+    store.get_document.assert_awaited_once_with("current_state", {})

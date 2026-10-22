@@ -8,7 +8,7 @@ from typing import Any, Literal
 
 import yaml
 
-from ..front_matter import split_front_matter
+from app.progenitor.documents.front_matter import split_front_matter
 
 INDEX_FILE = "index.md"
 LOG_FILE = "log.md"

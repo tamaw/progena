@@ -7,12 +7,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from app.progenitor.config import LLMConfig, MCPConfig
-from app.progenitor.llm.client import (
-    LLMClient,
-    _build_json_schema_format_from_dict,
-    _build_responses_endpoint,
-)
-from app.progenitor.mcp import MCPRuntime
+from app.progenitor.llm.client import LLMClient
+from app.progenitor.llm.schema import _build_json_schema_format_from_dict
+from app.progenitor.llm.transport import _build_responses_endpoint
+from app.progenitor.mcp.runtime import MCPRuntime
 
 
 def _extract(data: dict):

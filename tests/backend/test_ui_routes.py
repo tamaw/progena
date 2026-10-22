@@ -37,7 +37,7 @@ from app.backend.storage.documents import (
     InMemoryDocumentStore,
     set_default_document_store,
 )
-from app.progenitor.document_kinds import SESSION_KEY_PREFIX
+from app.progenitor.documents.kinds import SESSION_KEY_PREFIX
 
 
 def _create_session_document(store, thread_id, title="New chat", **extra):

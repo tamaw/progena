@@ -8,9 +8,10 @@ import time
 from collections.abc import Iterable
 from typing import Any, NamedTuple, cast
 
+from app.progenitor.a2a.models import A2ATaskRecord
+from app.progenitor.documents.values import make_json_safe
+
 from ..config import RuntimeConfig
-from ..sse.stream_payloads import make_json_safe
-from ..state.models import A2ATaskRecord
 from ..utils import utcnow_isoformat
 
 logger = logging.getLogger(__name__)

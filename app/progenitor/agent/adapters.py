@@ -16,16 +16,17 @@ from langchain_core.tools import BaseTool, InjectedToolCallId, StructuredTool
 from langchain_openai import ChatOpenAI
 from pydantic import ConfigDict, Field, SecretStr
 
-from .. import __version__
-from ..config import LLMConfig
-from ..provider_runtime import (
+from app.progenitor.llm.provider_context import (
     ProviderNotConfiguredError,
     ProviderTurn,
     activate_provider_turn,
     current_provider_turn,
     provider_config_for_call,
 )
-from ..runtime.thread_context import get_current_thread_id
+from app.progenitor.sessions.context import get_current_thread_id
+
+from .. import __version__
+from ..config import LLMConfig
 from ..tools.protocol import ToolContext
 from ..tools.system_registry import get_all_system_tools
 from .checkpoint_usage import CheckpointChatOpenAI
@@ -535,8 +536,9 @@ async def create_deep_agent_for_runtime(
     live_state_provider: Callable[[], Any] | None = None,
 ) -> Any:
     """Create the runtime conversation graph backed by Progenitor's agent setup."""
+    from app.progenitor.orchestration.graphs.progenitor_graph import create_conversation_graph
+
     from ..config import get_config
-    from ..graph.progenitor_graph import create_conversation_graph
 
     if config is None:
         config = get_config(validate=False)

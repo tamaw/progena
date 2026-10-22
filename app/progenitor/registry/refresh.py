@@ -126,7 +126,7 @@ async def refresh_agent_health(
     """Best-effort refresh of /health status for configured agents."""
     import aiohttp
 
-    from ..state.models import AgentStatus
+    from app.progenitor.registry.models import AgentStatus
 
     agents = registry.get("agents", []) if isinstance(registry, dict) else registry.get_agents()
     if not agents:
@@ -228,7 +228,7 @@ async def refresh_agent_health(
 async def refresh_agent_metadata(registry: Any) -> dict[str, Any]:
     """Refresh agent cards and health with best-effort logging."""
     try:
-        from ..a2a import A2AClient
+        from app.progenitor.a2a.client import A2AClient
 
         a2a_client = A2AClient()
         card_summary = await refresh_agent_cards(registry, a2a_client)

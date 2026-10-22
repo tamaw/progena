@@ -4,7 +4,7 @@ from unittest.mock import patch
 import pytest
 from langchain_core.tools import StructuredTool
 
-from app.progenitor.mcp import build_mcp_langchain_tool_wrappers
+from app.progenitor.mcp.context import build_mcp_langchain_tool_wrappers
 
 
 def _adapter_tool(name: str) -> StructuredTool:

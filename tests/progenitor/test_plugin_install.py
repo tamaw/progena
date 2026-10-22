@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from app.progenitor.agent.object_agent_manifest import discover_object_agents
+from app.progenitor.agent.object_agents.manifest import discover_object_agents
 from app.progenitor.plugins.install import (
     _fetch_and_digest,
     check_plugin_updates,

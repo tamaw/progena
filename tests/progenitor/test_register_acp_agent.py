@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from app.progenitor.acp.agents import parse_acp_connection
-from app.progenitor.state.models import AgentRegistryEntry
+from app.progenitor.registry.models import AgentRegistryEntry
 from app.progenitor.tools.protocol import ToolContext
 from app.progenitor.tools.register_a2a_agent import RegisterA2AAgentTool
 from app.progenitor.tools.register_acp_agent import RegisterACPAgentTool

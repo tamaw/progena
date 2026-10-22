@@ -27,18 +27,18 @@ from app.backend.workflows.service import (
     list_workflow_runs,
     save_workflow_definition,
 )
-from app.progenitor.document_kinds import KNOWLEDGE_PAGE_KEY_PREFIX, SESSION_KEY_PREFIX
-from app.progenitor.document_types import BUILTIN_DOCUMENT_TYPES, resolve_document_type
-from app.progenitor.workflows import (
+from app.progenitor.documents.kinds import KNOWLEDGE_PAGE_KEY_PREFIX, SESSION_KEY_PREFIX
+from app.progenitor.documents.types import BUILTIN_DOCUMENT_TYPES, resolve_document_type
+from app.progenitor.workflows.derivation import derive_workflow_port_schemas
+from app.progenitor.workflows.documents import default_workflow_definition
+from app.progenitor.workflows.models import (
     WorkflowNodeDocumentCreate,
     WorkflowNodeDocumentDelete,
     WorkflowNodeDocumentQuery,
     WorkflowNodeDocumentWrite,
     WorkflowNodeEvent,
-    default_workflow_definition,
-    derive_workflow_port_schemas,
-    validate_workflow_definition_payload,
 )
+from app.progenitor.workflows.validation import validate_workflow_definition_payload
 
 BUILTIN_TYPES = {item.id: item for item in BUILTIN_DOCUMENT_TYPES}
 
@@ -763,7 +763,7 @@ def test_document_create_stamps_creation_times_by_field_type(store, monkeypatch)
     for a number field (alerts), ISO text otherwise."""
     import time
 
-    from app.progenitor.document_types import DocumentType
+    from app.progenitor.documents.types import DocumentType
 
     schema = {
         "type": "object",
@@ -804,7 +804,7 @@ def test_document_create_alert_with_title_and_message_applies_defaults_and_times
 
 
 def test_document_create_applies_and_copies_schema_defaults(store, monkeypatch):
-    from app.progenitor.document_types import DocumentType
+    from app.progenitor.documents.types import DocumentType
 
     schema = {
         "type": "object",
@@ -840,7 +840,7 @@ def test_document_create_applies_and_copies_schema_defaults(store, monkeypatch):
 
 
 def test_document_write_never_applies_schema_defaults(store, monkeypatch):
-    from app.progenitor.document_types import DocumentType
+    from app.progenitor.documents.types import DocumentType
 
     schema = {
         "type": "object",

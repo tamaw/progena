@@ -10,23 +10,23 @@ from deepagents.middleware.memory import MemoryMiddleware
 from deepagents.middleware.skills import SkillsMiddleware, _alist_skills
 from langchain.agents.middleware import HumanInTheLoopMiddleware
 
-from app.progenitor.agent.agent import _resolve_runtime_memory_paths
-from app.progenitor.agent.backends import ReadOnlyBackend
-from app.progenitor.agent.object_agent_manifest import (
-    OBJECT_AGENT_SYSTEM_FILE,
-    discover_native_object_agents,
-    discover_object_agents,
-    parse_front_matter,
-    parse_object_agent_manifest,
-)
-from app.progenitor.agent.object_agents import (
+from app.progenitor.agent.factory import _resolve_runtime_memory_paths
+from app.progenitor.agent.filesystem.content import ContentDocumentDirectoryBackend
+from app.progenitor.agent.filesystem.mounts import ReadOnlyBackend
+from app.progenitor.agent.object_agents.factory import (
     ScopedMountBackend,
     SelfManifestBackend,
     build_object_agent,
     create_object_agent_proxy,
     object_agent_memory_sources,
 )
-from app.progenitor.agent.state_backend import ContentDocumentDirectoryBackend
+from app.progenitor.agent.object_agents.manifest import (
+    OBJECT_AGENT_SYSTEM_FILE,
+    discover_native_object_agents,
+    discover_object_agents,
+    parse_front_matter,
+    parse_object_agent_manifest,
+)
 
 VALID_SYSTEM = """---
 name: reviewer
@@ -114,12 +114,12 @@ async def test_plugin_installed_after_startup_reads_skills_and_companions(
         compiled_backends.append(filesystem.backend)
         return SimpleNamespace(ainvoke=AsyncMock(return_value={"messages": []}))
 
-    monkeypatch.setattr("app.progenitor.agent.object_agents.create_agent", create)
+    monkeypatch.setattr("app.progenitor.agent.object_agents.factory.create_agent", create)
     monkeypatch.setattr(
-        "app.progenitor.agent.object_agents.SummarizationMiddleware", lambda **_kw: object()
+        "app.progenitor.agent.object_agents.factory.SummarizationMiddleware", lambda **_kw: object()
     )
     monkeypatch.setattr(
-        "app.progenitor.agent.object_agents.StateBackend",
+        "app.progenitor.agent.object_agents.factory.StateBackend",
         lambda: SimpleNamespace(aread=AsyncMock(return_value=ReadResult(error="File not found"))),
     )
     content = PLUGIN_SYSTEM
@@ -174,10 +174,10 @@ def test_listed_plugin_skill_is_mounted_without_declaring_it(monkeypatch):
     )
     calls = []
     monkeypatch.setattr(
-        "app.progenitor.agent.object_agents.create_agent", lambda **kw: calls.append(kw)
+        "app.progenitor.agent.object_agents.factory.create_agent", lambda **kw: calls.append(kw)
     )
     monkeypatch.setattr(
-        "app.progenitor.agent.object_agents.SummarizationMiddleware", lambda **_kw: object()
+        "app.progenitor.agent.object_agents.factory.SummarizationMiddleware", lambda **_kw: object()
     )
     build_object_agent(
         manifest,
@@ -205,10 +205,10 @@ def test_listed_search_without_knowledge_grants_is_not_given_the_unscoped_tool(m
     )
     calls = []
     monkeypatch.setattr(
-        "app.progenitor.agent.object_agents.create_agent", lambda **kw: calls.append(kw)
+        "app.progenitor.agent.object_agents.factory.create_agent", lambda **kw: calls.append(kw)
     )
     monkeypatch.setattr(
-        "app.progenitor.agent.object_agents.SummarizationMiddleware", lambda **_kw: object()
+        "app.progenitor.agent.object_agents.factory.SummarizationMiddleware", lambda **_kw: object()
     )
     build_object_agent(
         manifest,
@@ -231,7 +231,7 @@ def test_manifest_rejects_all_skills_wildcard():
 
 async def test_only_listed_skills_load_into_the_prompt(monkeypatch, tmp_path: Path, caplog):
     monkeypatch.setattr(
-        "app.progenitor.agent.object_agents.StateBackend",
+        "app.progenitor.agent.object_agents.factory.StateBackend",
         lambda: SimpleNamespace(aread=AsyncMock(return_value=ReadResult(error="File not found"))),
     )
     for name in ("managing-repos", "sibling"):
@@ -253,10 +253,10 @@ async def test_only_listed_skills_load_into_the_prompt(monkeypatch, tmp_path: Pa
     )
     calls = []
     monkeypatch.setattr(
-        "app.progenitor.agent.object_agents.create_agent", lambda **kw: calls.append(kw)
+        "app.progenitor.agent.object_agents.factory.create_agent", lambda **kw: calls.append(kw)
     )
     monkeypatch.setattr(
-        "app.progenitor.agent.object_agents.SummarizationMiddleware", lambda **_kw: object()
+        "app.progenitor.agent.object_agents.factory.SummarizationMiddleware", lambda **_kw: object()
     )
     build_object_agent(
         manifest,
@@ -267,7 +267,7 @@ async def test_only_listed_skills_load_into_the_prompt(monkeypatch, tmp_path: Pa
     )
 
     skills = next(m for m in calls[0]["middleware"] if isinstance(m, SkillsMiddleware))
-    with caplog.at_level("WARNING", logger="app.progenitor.agent.object_agents"):
+    with caplog.at_level("WARNING", logger="app.progenitor.agent.object_agents.factory"):
         update = await skills.abefore_agent({}, None, {})
     assert [skill["name"] for skill in update["skills_metadata"]] == ["managing-repos"]
     # A listed skill without SKILL.md is reported instead of silently skipped.
@@ -367,9 +367,10 @@ async def test_builder_preserves_scoped_mounts_and_middleware(monkeypatch):
         calls.append(kwargs)
         return compiled
 
-    monkeypatch.setattr("app.progenitor.agent.object_agents.create_agent", create)
+    monkeypatch.setattr("app.progenitor.agent.object_agents.factory.create_agent", create)
     monkeypatch.setattr(
-        "app.progenitor.agent.object_agents.SummarizationMiddleware", lambda **_kwargs: object()
+        "app.progenitor.agent.object_agents.factory.SummarizationMiddleware",
+        lambda **_kwargs: object(),
     )
     tool, model, checkpointer = SimpleNamespace(name="current_time"), object(), object()
     assert (
@@ -478,10 +479,11 @@ async def test_memory_agent_sees_only_its_own_memory_at_memories(monkeypatch):
     )
     calls = []
     monkeypatch.setattr(
-        "app.progenitor.agent.object_agents.create_agent", lambda **kw: calls.append(kw)
+        "app.progenitor.agent.object_agents.factory.create_agent", lambda **kw: calls.append(kw)
     )
     monkeypatch.setattr(
-        "app.progenitor.agent.object_agents.SummarizationMiddleware", lambda **_kwargs: object()
+        "app.progenitor.agent.object_agents.factory.SummarizationMiddleware",
+        lambda **_kwargs: object(),
     )
 
     sources = await object_agent_memory_sources(store, manifest.name)
@@ -657,9 +659,9 @@ async def test_lazy_proxy_resolves_only_declared_parent_tools(monkeypatch, tmp_p
         calls.append(kwargs)
         return _Compiled()
 
-    monkeypatch.setattr("app.progenitor.agent.object_agents.create_agent", _create)
+    monkeypatch.setattr("app.progenitor.agent.object_agents.factory.create_agent", _create)
     monkeypatch.setattr(
-        "app.progenitor.agent.object_agents.SummarizationMiddleware",
+        "app.progenitor.agent.object_agents.factory.SummarizationMiddleware",
         lambda **_kwargs: object(),
     )
     proxy = create_object_agent_proxy(
@@ -779,9 +781,9 @@ async def test_lazy_proxy_uses_only_declared_mounts_and_prompt(monkeypatch, tmp_
         calls.append(kwargs)
         return _Compiled()
 
-    monkeypatch.setattr("app.progenitor.agent.object_agents.create_agent", _create)
+    monkeypatch.setattr("app.progenitor.agent.object_agents.factory.create_agent", _create)
     monkeypatch.setattr(
-        "app.progenitor.agent.object_agents.SummarizationMiddleware",
+        "app.progenitor.agent.object_agents.factory.SummarizationMiddleware",
         lambda **_kwargs: object(),
     )
     proxy = create_object_agent_proxy(
@@ -858,10 +860,10 @@ def test_manifest_rejects_knowledge_as_mount():
 async def _knowledge_child_backend(monkeypatch, access: str):
     from deepagents.backends.protocol import LsResult, WriteResult
 
-    from app.progenitor.agent.knowledge_backend import KnowledgePageBackend
+    from app.progenitor.agent.filesystem.knowledge import KnowledgePageBackend
 
     monkeypatch.setattr(
-        "app.progenitor.agent.object_agents.StateBackend",
+        "app.progenitor.agent.object_agents.factory.StateBackend",
         lambda: SimpleNamespace(
             aread=AsyncMock(return_value=ReadResult(error="File not found")),
             awrite=AsyncMock(return_value=WriteResult(error="no state route")),
@@ -884,10 +886,11 @@ async def _knowledge_child_backend(monkeypatch, access: str):
     )
     calls = []
     monkeypatch.setattr(
-        "app.progenitor.agent.object_agents.create_agent", lambda **kw: calls.append(kw)
+        "app.progenitor.agent.object_agents.factory.create_agent", lambda **kw: calls.append(kw)
     )
     monkeypatch.setattr(
-        "app.progenitor.agent.object_agents.SummarizationMiddleware", lambda **_kwargs: object()
+        "app.progenitor.agent.object_agents.factory.SummarizationMiddleware",
+        lambda **_kwargs: object(),
     )
     build_object_agent(
         manifest,
@@ -920,7 +923,7 @@ async def test_write_knowledge_grant_lands_in_its_base(monkeypatch):
 
 
 def test_knowledge_grant_attaches_curating_skill(monkeypatch):
-    from app.progenitor.agent import object_agents
+    import app.progenitor.agent.object_agents.factory as object_agents
 
     manifest = parse_object_agent_manifest(
         _knowledge_system("  - base: eng\n    access: read\n"), source="test"
@@ -953,7 +956,7 @@ def test_knowledge_grant_attaches_curating_skill(monkeypatch):
 async def test_proxy_skips_unknown_base_and_reports_warning(monkeypatch):
     from langchain_core.messages import AIMessage
 
-    from app.progenitor.agent.knowledge_backend import KnowledgePageBackend
+    from app.progenitor.agent.filesystem.knowledge import KnowledgePageBackend
 
     system = _knowledge_system("  - base: nope\n    access: read\n", perm_path="/knowledge/nope/")
     sm = _KnowledgeStateManager({"user/reviewer/SYSTEM.md": system})
@@ -966,9 +969,10 @@ async def test_proxy_skips_unknown_base_and_reports_warning(monkeypatch):
             ainvoke=AsyncMock(return_value={"messages": [AIMessage(content="done")]})
         )
 
-    monkeypatch.setattr("app.progenitor.agent.object_agents.create_agent", create)
+    monkeypatch.setattr("app.progenitor.agent.object_agents.factory.create_agent", create)
     monkeypatch.setattr(
-        "app.progenitor.agent.object_agents.SummarizationMiddleware", lambda **_kwargs: object()
+        "app.progenitor.agent.object_agents.factory.SummarizationMiddleware",
+        lambda **_kwargs: object(),
     )
     proxy = create_object_agent_proxy(
         source,
@@ -990,7 +994,7 @@ async def test_proxy_skips_unknown_base_and_reports_warning(monkeypatch):
 async def test_proxy_runs_with_remaining_grants_when_a_granted_base_is_missing(monkeypatch):
     from langchain_core.messages import AIMessage
 
-    from app.progenitor.agent.knowledge_backend import KnowledgePageBackend
+    from app.progenitor.agent.filesystem.knowledge import KnowledgePageBackend
 
     # Permissions name both bases; the missing base's must not break the build.
     system = _knowledge_system(
@@ -1007,9 +1011,10 @@ async def test_proxy_runs_with_remaining_grants_when_a_granted_base_is_missing(m
             ainvoke=AsyncMock(return_value={"messages": [AIMessage(content="done")]})
         )
 
-    monkeypatch.setattr("app.progenitor.agent.object_agents.create_agent", create)
+    monkeypatch.setattr("app.progenitor.agent.object_agents.factory.create_agent", create)
     monkeypatch.setattr(
-        "app.progenitor.agent.object_agents.SummarizationMiddleware", lambda **_kwargs: object()
+        "app.progenitor.agent.object_agents.factory.SummarizationMiddleware",
+        lambda **_kwargs: object(),
     )
     proxy = create_object_agent_proxy(
         source,

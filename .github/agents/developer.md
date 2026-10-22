@@ -71,9 +71,9 @@ class MyModel(BaseModel):
 ### Common Tasks
 
 #### Adding a New Node
-1. Create node in `app/progenitor/nodes/my_node.py`
+1. Create node in `app/progenitor/orchestration/nodes/my_node.py`
 2. Follow factory pattern
-3. Add to graph in `app/progenitor/graph.py`
+3. Add to graph in `app/progenitor/orchestration/graphs/heartbeat_graph.py`
 4. Add routing logic if needed
 5. Write tests in `tests/progenitor/test_nodes.py`
 

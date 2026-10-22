@@ -19,7 +19,7 @@ from pydantic import Field
 from app.progenitor.agent import adapters
 from app.progenitor.agent.adapters import ProviderChatModel, create_langchain_model
 from app.progenitor.config import LLMConfig
-from app.progenitor.provider_runtime import ProviderNotConfiguredError, ProviderTurn
+from app.progenitor.llm.provider_context import ProviderNotConfiguredError, ProviderTurn
 
 
 @pytest.mark.parametrize("asynchronous", [False, True])
@@ -565,9 +565,9 @@ class TestDeepAgentFactory:
     async def test_create_agent_returns_compiled_graph(self):
         """Factory returns a compiled LangGraph state graph."""
         with (
-            patch("app.progenitor.agent.agent.ProviderChatModel") as mock_provider_model,
-            patch("app.progenitor.agent.agent.create_deep_agent") as mock_create_deep_agent,
-            patch("app.progenitor.agent.agent.create_progenitor_backend") as mock_backend,
+            patch("app.progenitor.agent.factory.ProviderChatModel") as mock_provider_model,
+            patch("app.progenitor.agent.factory.create_deep_agent") as mock_create_deep_agent,
+            patch("app.progenitor.agent.factory.create_progenitor_backend") as mock_backend,
         ):
             mock_model = MagicMock()
             mock_provider_model.return_value = mock_model
@@ -575,7 +575,7 @@ class TestDeepAgentFactory:
             mock_create_deep_agent.return_value = mock_graph
             mock_backend.return_value = MagicMock()
 
-            from app.progenitor.agent.agent import create_progenitor_agent
+            from app.progenitor.agent.factory import create_progenitor_agent
             from app.progenitor.config import ProgenitorConfig
 
             config = ProgenitorConfig()
@@ -598,14 +598,14 @@ class TestDeepAgentFactory:
     async def test_create_agent_uses_custom_checkpointer(self):
         """Custom checkpointer is passed through."""
         with (
-            patch("app.progenitor.agent.agent.ProviderChatModel"),
-            patch("app.progenitor.agent.agent.create_deep_agent") as mock_create_deep_agent,
-            patch("app.progenitor.agent.agent.create_progenitor_backend") as mock_backend,
+            patch("app.progenitor.agent.factory.ProviderChatModel"),
+            patch("app.progenitor.agent.factory.create_deep_agent") as mock_create_deep_agent,
+            patch("app.progenitor.agent.factory.create_progenitor_backend") as mock_backend,
         ):
             mock_create_deep_agent.return_value = MagicMock()
             mock_backend.return_value = MagicMock()
 
-            from app.progenitor.agent.agent import create_progenitor_agent
+            from app.progenitor.agent.factory import create_progenitor_agent
             from app.progenitor.config import ProgenitorConfig
 
             custom_checkpointer = MagicMock()
@@ -621,14 +621,14 @@ class TestDeepAgentFactory:
     async def test_create_agent_uses_genesis_prompt(self):
         """DeepAgent factory uses the canonical genesis prompt."""
         with (
-            patch("app.progenitor.agent.agent.ProviderChatModel"),
-            patch("app.progenitor.agent.agent.create_deep_agent") as mock_create_deep_agent,
-            patch("app.progenitor.agent.agent.create_progenitor_backend") as mock_backend,
+            patch("app.progenitor.agent.factory.ProviderChatModel"),
+            patch("app.progenitor.agent.factory.create_deep_agent") as mock_create_deep_agent,
+            patch("app.progenitor.agent.factory.create_progenitor_backend") as mock_backend,
         ):
             mock_create_deep_agent.return_value = MagicMock()
             mock_backend.return_value = MagicMock()
 
-            from app.progenitor.agent.agent import create_progenitor_agent
+            from app.progenitor.agent.factory import create_progenitor_agent
             from app.progenitor.config import ProgenitorConfig
 
             config = ProgenitorConfig()

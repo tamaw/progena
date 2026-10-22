@@ -23,7 +23,7 @@ from .templates import (
 )
 
 if TYPE_CHECKING:
-    from app.progenitor.document_types import DocumentType
+    from app.progenitor.documents.types import DocumentType
 
 RUNTIME_INSTRUCTION_GROUP = "progenitor"
 GENESIS_INSTRUCTION = "progenitor/genesis.md"

@@ -1,6 +1,6 @@
 """Backend access to ``alert:<id>`` documents (the alert center).
 
-Alerts are durable documents (see :mod:`app.progenitor.alerts`); this module
+Alerts are durable documents (see :mod:`app.progenitor.alerts.contracts`); this module
 reads them for the alert center, marks them viewed, creates backend-side ones
 (workflow notifications) and keeps only the newest :data:`MAX_ALERTS`.
 """
@@ -13,8 +13,8 @@ from typing import Any, TypedDict
 from pydantic import BaseModel
 
 from app.backend.storage.documents import PROGENITOR_STATE_PREFIX, get_default_document_store
-from app.progenitor.alerts import alert_key, build_alert
-from app.progenitor.document_kinds import ALERT_KEY_PREFIX
+from app.progenitor.alerts.contracts import alert_key, build_alert
+from app.progenitor.documents.kinds import ALERT_KEY_PREFIX
 
 MAX_ALERTS = 100
 

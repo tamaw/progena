@@ -4,7 +4,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from app.progenitor.schedule import Scheduler
+from app.progenitor.schedules.engine import Scheduler
 
 
 class TestScheduler:

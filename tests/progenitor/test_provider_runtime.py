@@ -1,7 +1,7 @@
 import asyncio
 import threading
 
-from app.progenitor import provider_runtime
+import app.progenitor.llm.provider_context as provider_runtime
 from app.progenitor.config import LLMConfig
 
 

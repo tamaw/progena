@@ -20,18 +20,14 @@ import app.backend.workflows.cron as workflows_cron
 import app.backend.workflows.events as workflows_events
 import app.backend.workflows.models as workflows_models
 import app.backend.workflows.service as workflows_service
-from app.progenitor.document_kinds import (
+from app.progenitor.documents.kinds import (
     WORKFLOW_APPROVAL_REQUEST_KEY_PREFIX,
-)
-from app.progenitor.routines.events import RUN_EVENT_PREFIX
-from app.progenitor.workflows import (
     WORKFLOW_DEFINITION_KEY_PREFIX,
     WORKFLOW_INVOKE_REQUEST_KEY_PREFIX,
-    WorkflowDefinition,
-    WorkflowListItem,
-    WorkflowRun,
-    parse_workflow_invoke_request_document,
 )
+from app.progenitor.routines.events import RUN_EVENT_PREFIX
+from app.progenitor.workflows.documents import parse_workflow_invoke_request_document
+from app.progenitor.workflows.models import WorkflowDefinition, WorkflowListItem, WorkflowRun
 
 logger = logging.getLogger(__name__)
 

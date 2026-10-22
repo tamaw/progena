@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from app.progenitor.state.models import A2ATaskRecord
+from app.progenitor.a2a.models import A2ATaskRecord
 from app.progenitor.tools.a2a_sessions import (
     A2ACancelTool,
     A2AListTool,

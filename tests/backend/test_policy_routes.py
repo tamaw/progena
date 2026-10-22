@@ -3,7 +3,7 @@ from fastapi.testclient import TestClient
 
 from app.backend.settings.policies import create_policy_router
 from app.backend.storage.documents import PROGENITOR_STATE_PREFIX, InMemoryDocumentStore
-from app.progenitor.policies import ExecutionPolicy
+from app.progenitor.settings.policies import ExecutionPolicy
 
 
 def test_policy_requests_acknowledge_and_stream_validated_persisted_documents():

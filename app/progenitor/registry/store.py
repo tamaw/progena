@@ -7,7 +7,8 @@ import re
 from collections.abc import Awaitable, Callable
 from typing import Any, TypedDict
 
-from ..state.models import AgentRegistryEntry, AgentStatus
+from app.progenitor.registry.models import AgentRegistryEntry, AgentStatus
+
 from ..tools.protocol import BaseSystemTool, ToolContext, ToolResult
 from ..utils import utcnow
 

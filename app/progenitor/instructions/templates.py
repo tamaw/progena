@@ -23,10 +23,10 @@ from dataclasses import dataclass
 from pathlib import PurePosixPath
 from typing import TYPE_CHECKING, Any
 
-from app.progenitor.front_matter import split_front_matter
+from app.progenitor.documents.front_matter import split_front_matter
 
 if TYPE_CHECKING:
-    from app.progenitor.document_types import DocumentType
+    from app.progenitor.documents.types import DocumentType
 
 _PLACEHOLDER_RE = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*)\}")
 
@@ -284,11 +284,11 @@ def resolve_type_ref(
 
     if ref in document_types:
         doc_type = document_types[ref]
-        from app.progenitor.workflows import _typed_document_schema
+        from app.progenitor.documents.schema import typed_document_schema
 
-        return _typed_document_schema(doc_type, doc_type.load_schema())
+        return typed_document_schema(doc_type, doc_type.load_schema())
 
-    from app.progenitor.schemas import load_schema
+    from app.progenitor.documents.catalog import load_schema
 
     try:
         return _split_definitions(load_schema(ref))

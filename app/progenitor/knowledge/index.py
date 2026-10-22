@@ -19,7 +19,8 @@ import psycopg
 from psycopg import sql
 from psycopg.rows import dict_row
 
-from ..front_matter import split_front_matter
+from app.progenitor.documents.front_matter import split_front_matter
+
 from .pages import classify_page_path, is_deprecated
 
 MAX_CHUNK_CHARS = 1500

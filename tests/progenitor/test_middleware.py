@@ -17,7 +17,7 @@ from app.progenitor.agent.middleware import (
     DirectA2AFastPathMiddleware,
     DynamicMCPToolMiddleware,
 )
-from app.progenitor.state.models import AsyncSubagentTaskRecord
+from app.progenitor.async_subagents.models import AsyncSubagentTaskRecord
 
 
 class TestDynamicMCPToolMiddleware:

@@ -7,7 +7,7 @@ from typing import Any
 
 from app.backend.knowledge.service import load_bases
 from app.backend.storage.documents import PROGENITOR_STATE_PREFIX, get_default_document_store
-from app.progenitor.front_matter import split_front_matter
+from app.progenitor.documents.front_matter import split_front_matter
 from app.progenitor.knowledge.indexer_config import (
     INDEX_STATUS_DOC_KEY,
     index_front_matter,

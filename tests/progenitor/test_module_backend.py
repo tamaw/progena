@@ -5,9 +5,9 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from app.progenitor.agent.module_backend import ModuleDirectoryBackend
-from app.progenitor.document_types import BUILTIN_DOCUMENT_TYPES
-from app.progenitor.modules import MAX_MODULE_FILE_BYTES, module_revision
+from app.progenitor.agent.filesystem.modules import ModuleDirectoryBackend
+from app.progenitor.documents.types import BUILTIN_DOCUMENT_TYPES
+from app.progenitor.modules.contracts import MAX_MODULE_FILE_BYTES, module_revision
 
 
 class FakeModuleStateManager:

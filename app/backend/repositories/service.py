@@ -3,14 +3,14 @@
 Each declared repository is one ``repo:<id>`` document under the
 ``progenitor.state`` namespace -- the same shared Postgres ``store`` table
 Progenitor's own runtime reads and writes, and the same documents the agent
-edits as ``/config/repos/<id>.json`` (see ``app/progenitor/agent/state_backend.py``).
+edits as ``/config/repos/<id>.json`` (see ``app/progenitor/agent/filesystem/``).
 Every write touches one repo's row under that key's lock, so concurrent edits
 of different repos never overwrite each other, and each create/update/delete
 is its own typed ``repo`` document event.
 
 Live git state (branches, commits, worktrees) lives in the separate
 ``repo_scan`` document. The heartbeat's ``refresh_repo_scan_node`` (see
-``app/progenitor/nodes/repo_scan.py``) is the periodic, local-only writer --
+``app/progenitor/orchestration/nodes/repo_scan.py``) is the periodic, local-only writer --
 it never does network I/O, so it can't tell a stale clone from a fresh one.
 ``fetch_and_rescan_repo`` below is the on-demand counterpart: it runs
 ``git fetch`` against one repo (real network I/O, deliberately never part of
@@ -28,14 +28,14 @@ from typing import Any
 
 from app.backend.storage.documents import PROGENITOR_STATE_PREFIX, get_default_document_store
 from app.progenitor.config import get_config
-from app.progenitor.document_kinds import REPO_KEY_PREFIX
-from app.progenitor.repos.scan import (
+from app.progenitor.documents.kinds import REPO_KEY_PREFIX
+from app.progenitor.repositories.scan import (
     RepoScanResult,
     aggregate_workspace_signal,
     fetch_repo,
     scan_repo,
 )
-from app.progenitor.repos.schema import validate_repo_entry
+from app.progenitor.repositories.schema import validate_repo_entry
 from app.progenitor.utils import utcnow_isoformat
 
 REPO_SCAN_DOC_KEY = "repo_scan"

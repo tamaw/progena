@@ -11,8 +11,9 @@ from typing import Any, Literal, cast
 
 from pydantic import BaseModel, Field
 
-from ..acp import acp_config_from_agent_config, task_command, task_cwd
-from ..state.models import ACPTaskRecord, ACPTaskStatus
+from app.progenitor.acp.models import ACPTaskRecord, ACPTaskStatus
+from app.progenitor.acp.tasks import acp_config_from_agent_config, task_command, task_cwd
+
 from ..utils import utcnow
 from .protocol import BaseSystemTool, ToolContext, ToolResult
 

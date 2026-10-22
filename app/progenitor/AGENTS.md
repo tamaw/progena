@@ -1,199 +1,120 @@
-# Progenitor - GitHub Copilot Agent
+# Progenitor runtime — agent guide
 
-## DeepAgent Orchestrator Loop
+Progenitor hosts the conversational DeepAgent, maintains durable state, runs
+scheduled/background work, and delegates to A2A, ACP and async subagents.
 
-The core perpetual agent is a conversational orchestrator. It hosts the
-DeepAgent chat surface, maintains durable state, runs schedules, and delegates
-specialized work to external A2A agents.
+## Ownership
 
-### Agent Capabilities
-- LangGraph state machine design and implementation
-- Async Python patterns and coroutines
-- State management and persistence
-- LLM integration (Azure OpenAI, OpenAI)
-- Agent routing and orchestration
-- A2A (Agent-to-Agent) communication
-- Scheduled task execution
+Organize by domain, adapter, or application assembly. Small domains stay flat;
+introduce subdirectories only for distinct responsibilities.
 
-### Architecture
-
-#### Dual-Loop Pattern
-**User Loop:**
-```
-Intake → DeepAgent Chat → Respond → Idle → repeat
-```
-
-**Background Loop:**
-```
-PickDueSchedule → Intake → DeepAgent Chat → Respond → AdvanceSchedule
-A2ACallback → RecordTaskUpdate → Notify
-```
-
-#### Directory Structure
-```
+```text
 progenitor/
-├── config.py            # Configuration dataclasses
-├── graph/               # Graph builders
-│   ├── progenitor_graph.py  # Conversational DeepAgent graph
-│   └── heartbeat_graph.py   # Background heartbeat/schedule/A2A graph
-├── main.py              # Entry point
-├── nodes/               # LangGraph node implementations
-│   ├── chat.py          # Main LLM tool-calling node
-│   ├── intake.py        # Message intake node
-│   ├── a2a.py           # A2A task/callback updates
-│   ├── schedule.py      # Scheduled work dispatch
-│   ├── respond.py       # Response generation node
-│   └── ...
+├── main.py / config.py      # Entry point and environment configuration
+├── agent/
+│   ├── factory.py          # DeepAgent composition
+│   ├── adapters.py         # Model, tool and graph adapters
+│   ├── filesystem/         # Shared file protocol, mounts and domain adapters
+│   ├── middleware/
+│   ├── object_agents/      # SDK-aware manifests, construction and live registry
+│   └── subagents/          # DeepAgent descriptors and live middleware
+├── orchestration/
+│   ├── graphs/             # Conversation and heartbeat graph assembly
+│   ├── nodes/              # Graph execution adapters
+│   ├── state.py            # Composed graph state and background-work contract
+│   └── store.py            # Background queue operations and advisory lock
 ├── runtime/
-│   ├── progenitor.py    # Main Progenitor runtime lifecycle
-│   └── heartbeat.py     # Perpetual heartbeat/background loop execution
-├── state/
-│   ├── models.py        # Pydantic state models
-│   └── manager.py       # State persistence manager
-└── llm/
-    └── client.py        # LLM client abstraction
+│   ├── progenitor.py       # Process lifecycle and live refresh wiring
+│   ├── heartbeat.py        # Loop execution
+│   ├── http/               # Server, chat execution and response contracts
+│   └── streaming/          # DeepAgent stream translation and SSE envelopes
+├── workflows/              # Contracts, ports, derivation, validation and store
+├── routines/               # Graph compilation, execution and documents
+├── schedules/              # Contracts, dispatch, validation and store
+├── repositories/           # Contracts, scanning and store
+├── sessions/               # Context, messages, history, transcript and store
+├── attachments/            # Uploaded attachment persistence
+├── tasks/ / inbox/         # Document rules, Markdown representations and stores
+├── alerts/ / modules/      # Domain contracts and document operations
+├── settings/               # Providers, profiles, preferences and policies
+├── instructions/ / knowledge/ / plugins/
+├── registry/ / a2a/ / acp/ / async_subagents/ / mcp/
+├── llm/                    # Provider context, model calls, schemas and parsing
+├── documents/              # Shared keys, kinds, types, schemas and content access
+├── persistence/            # Connections, checkpoints, native store, cache and listener
+├── security/               # Secret redaction
+├── state/manager.py        # Existing facade and state lifecycle assembly
+└── tools/                  # Agent-callable entry points and dynamic discovery
 ```
 
-### Key Components
+Feature names follow the backend/frontend where ownership matches. Sessions
+represent persisted conversation history; agent/ represents DeepAgent integration.
+Protocol-specific A2A and ACP behavior keeps explicit ownership.
 
-#### State Models (`state/models.py`)
-- `ProgenitorState`: TypedDict for LangGraph nodes
-- `ConversationMessage`: persisted user/assistant/tool messages
-- `ScheduleEntry`: durable scheduled tasks
-- `A2ATaskRecord`: tracked external A2A task state
+## Dependencies
 
-#### Node Pattern
-All nodes follow this factory pattern:
-```python
-def create_node(state_manager, llm_client=None) -> Callable[[ProgenitorState], Awaitable[dict]]:
-    async def node(state: ProgenitorState) -> dict:
-        # Node logic - return partial state update
-        return {"key": "value"}
-    return node
-```
+- Domain contracts and validation must import without constructing the agent,
+  server, graph or database connection. Import directly from the owning module;
+  package initializers must not eagerly assemble unrelated capabilities.
+- Domain stores own document interpretation and mutations. They receive the
+  shared persistence.documents.StateDocuments access object, not StateManager.
+  This preserves one cache and the original read-through behavior across stores.
+- StateManager assembles those stores and retains existing call signatures.
+  Put new domain behavior in its store, not in the facade. Keep lifecycle,
+  per-thread mutation locks and cache flushing coordinated centrally.
+- Agent filesystem code adapts native read/write/edit operations to domain
+  rules. Schedule validation belongs in schedules/validation.py; task Markdown
+  belongs in tasks/documents.py. Shared file protocol mechanics belong in
+  agent/filesystem/base.py.
+- Graph nodes and tools adapt domain capabilities. Runtime code owns lifecycle,
+  queue coordination and HTTP/stream transport.
+- Provider/profile validation belongs in settings; model resolution and calls
+  belong in the LLM/agent integration. SDK-specific object-agent manifest parsing
+  remains under agent/object_agents/; plugin installation consumes it.
 
-Builder, worktree, Copilot CLI, and PR workflows belong to external builder
-agents. Progenitor can send work to remote A2A agents through `a2a_send`, but it
-does not own their implementation loop.
+## Workflows
 
-### Development
+workflows/models.py owns Pydantic contracts. ports.py constructs node port
+schemas; derivation.py recomputes authoritative schemas from document types,
+instruction templates and routines. validation.py checks payloads and graph
+compatibility; graph.py owns ordering/cycles. Document IDs, defaults and list
+projections live in documents.py; trigger payloads live in events.py.
 
-#### Running the Agent
+The shared documents/schema.py helper embeds nominally typed document schemas,
+hoisting definitions so local references resolve. Instruction templates use this
+helper and do not import workflow implementation code.
+
+## Persistence and lifecycle
+
+Production injects the Postgres LangGraph checkpointer and store. Runtime state,
+mutable configuration, memories, instructions, sessions and virtual files are
+Postgres documents. Bundled schemas, native skills and native agent manifests
+remain repository-managed assets. Preserve document keys, namespaces, seed
+behavior, virtual mount paths and LISTEN/NOTIFY contracts when moving code.
+Repository scans and background work retain read-through access.
+
+Keep the lazy model aliases in state/models.py and workflows/__init__.py for
+historical LangGraph checkpoints that contain old Python class paths. They are
+deserialization compatibility only; application imports use current domain paths.
+
+Workspace and shell directories are allocated dynamically. The tools registry
+discovers implementations directly under tools/; moving a tool into a nested
+directory requires updating discovery rather than silently dropping the tool.
+
+## Validation
+
+Activate the project virtual environment before Python commands:
+
 ```bash
-# Activate venv
-& .\.venv\Scripts\Activate.ps1
-
-# Run directly
-python -m app.progenitor.main
-
-# With mock LLM (for testing)
-$env:PROGENITOR_MOCK_LLM = "true"
-python -m app.progenitor.main
+source .venv/bin/activate
+ruff check app/backend app/progenitor tests/backend tests/progenitor tests/test_scheduler.py
+pyright --pythonpath .venv/bin/python app/
+pytest tests/backend tests/progenitor tests/test_scheduler.py --timeout=45
 ```
 
-#### Testing
-```bash
-# Run all progenitor tests
-pytest tests/progenitor/ -v
+Use fake model graphs for unit tests. Persistence tests create disposable
+Postgres databases; never point them at production. Cover request correlation,
+resumed runs, per-thread isolation, virtual file validation, read-through
+coherence and queue locking when changing their owners.
 
-# Run specific test file
-pytest tests/progenitor/test_nodes.py -v
-
-# Run with coverage
-pytest tests/progenitor/ --cov=app.progenitor
-```
-
-### Configuration
-
-#### Environment Variables
-- `PROGENITOR_LLM_PROVIDER`: `azure` | `openai`
-- `AZURE_OPENAI_*`: Azure deployment settings
-- `OPENAI_API_KEY`: OpenAI API key
-- `PROGENITOR_MOCK_LLM`: Enable mock mode
-- `PROGENITOR_DATABASE_URL`: PostgreSQL URL for the LangGraph checkpointer/store
-- `PROGENITOR_DATA_DIR`: Read-only runtime data root for the JSON Schema contracts under `schemas/` (instructions and memories are Postgres-backed content documents, see `content_documents.py`)
-
-#### Runtime Persistence and Virtual Files
-The normal Progenitor runtime stores state and structured logs in the LangGraph
-Postgres store. Runtime state uses the `("progenitor", "state")` namespace;
-structured logs use `("progenitor", "logs", <source>)`. Progenitor does not
-write its runtime state as JSON files under `data/state`.
-
-The DeepAgent receives a virtual filesystem view backed by those documents:
-- `/config/mcp.json`: MCP server configuration
-- `/config/knowledge.json`: Knowledge-base settings
-- `/config/indexer.json`: Search-indexer settings (`profile` names a `/config/profile.json` embeddings deployment; `dimensions`; `min_similarity` search cut-off)
-- `/knowledge/<base-id>/`: knowledge-base pages (OKF markdown; see the curating-knowledge skill); each base's generated root `index.md` has its search-index state in `search_index` front matter
-- `/knowledge/indexer.json`: Read-only search-indexer status per base, written by the backend indexer (`search` tool queries the index)
-- `/config/schedule.json`: Scheduled tasks
-- `/config/agents.json`: A2A agent registry and runtime tools
-- `/config/repos/<id>.json`: Declared repositories, one file per repo (name, remote, local worktree path, read/write access; kebab-case id) — agent-editable
-- `/config/repo_scan.json`: Read-only heartbeat-derived git state per declared repo (branch, dirty count, commits, contributor count); never agent-editable
-- `/config/preferences.json`: User profile and UI settings (display name, timezone, theme, nav/panel layout)
-- `/config/health.json`: Read-only heartbeat status
-- `/tasks/board.json` and `/tasks/<id>.md`: Kanban structure and cards
-- `/workflows/<id>.json`: Workflow definitions
-- `/instructions/<group>/<file>.md`: Read-only agent instructions (front matter `title`/`description`/`variables` + body); only `progenitor/` ones are read by this runtime and editable on the Instructions page
-- `/routines/<id>.json`: Routine graph definitions
-- `/policies/<id>.json`: Validated routine execution policies
-
-Native `read`/`write`/`edit` operations on these paths validate and persist the
-corresponding Postgres document. Conversation messages are kept in the
-LangGraph checkpoint; the per-thread `current_state` document stores scalar
-bookkeeping such as cycle and response status. Names such as
-`current_state.json` and `a2a_tasks.json` are legacy/document labels, not local
-filesystem paths.
-
-### Key Patterns
-
-#### State Persistence
-```python
-# Read a runtime document
-state = await state_manager.get_current_state(thread_id=thread_id)
-
-# Merge scalar bookkeeping into the Postgres-backed document
-await state_manager.update_current_state({"pending_response": response}, thread_id=thread_id)
-
-# Read or update a virtual-file document through the same store
-schedule = await state_manager.get_schedule()
-await state_manager.save_schedule(schedule)
-```
-
-The standalone agent factory can use a local checkpointer fallback when no
-checkpointer is injected, but the production `Progenitor` runtime injects the
-Postgres checkpointer and store.
-
-#### LLM Calls
-```python
-# Conversation graph (async: syncs data/instructions/ into Postgres on boot)
-graph = await create_conversation_graph(config=config, state_manager=state_manager)
-
-# Heartbeat/background graph
-background = create_heartbeat_graph(state_manager=state_manager)
-
-# Direct instruction loading (Postgres-backed; render_instruction drops the front matter)
-prompt = render_instruction(await state_manager.get_content_document("instruction", "progenitor/genesis.md"))
-```
-
-#### Secret Redaction
-`redact_secrets()` auto-redacts API keys in logs. Patterns cover OpenAI, Azure, GitHub, Anthropic, and AWS keys.
-
-### Testing Conventions
-- Use `pytest-asyncio` with `asyncio_mode = auto`
-- Mock LLM client: `mock_llm = AsyncMock(); mock_llm.decide.return_value = {...}`
-- Mock state manager: `mock_state_manager = AsyncMock()`
-- Example: `tests/progenitor/test_nodes.py`
-
-### Important Notes
-- Always activate venv before Python commands
-- State persists automatically in the configured Postgres store
-- Exponential backoff when idle
-- Interrupt-safe (graceful shutdown on Ctrl+C)
-- Secret redaction in logs
-
-### References
-- Runtime Spec: `docs/SPEC.md`
-- State Documents: `docs/STATE_DOCUMENTS.md`
-- Architecture: `docs/ARCHITECTURE_DIAGRAM.md`
-- State Models: `app/progenitor/state/models.py`
-- Graph Definitions: `app/progenitor/graph/progenitor_graph.py`, `app/progenitor/graph/heartbeat_graph.py`
+Create PRs for review. Do not merge or deploy unless the human explicitly asks.

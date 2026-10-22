@@ -15,7 +15,8 @@ from ..instructions import render_instruction
 from .refresh import refresh_agent_metadata
 
 if TYPE_CHECKING:
-    from ..llm.client import LLMClient
+    from app.progenitor.llm.client import LLMClient
+
     from .store import ToolRegistry
 
 logger = logging.getLogger(__name__)
@@ -347,7 +348,7 @@ class AgentDiscovery:
             spec.port = port
 
     async def _register_agent(self, spec: DiscoveredAgentSpec) -> None:
-        from ..state.models import AgentRegistryEntry, AgentStatus
+        from app.progenitor.registry.models import AgentRegistryEntry, AgentStatus
 
         entrypoint = spec.entrypoint
         port = spec.port

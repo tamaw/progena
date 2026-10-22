@@ -32,7 +32,7 @@ from app.backend.config import ChatServerConfig
 from app.backend.integrations.runtime import SSEProgenitorClient
 from app.backend.integrations.runtime_history import RuntimeConversationReader
 from app.progenitor.config import RuntimeConfig
-from app.progenitor.runtime.http import ProgenitorHTTPServer
+from app.progenitor.runtime.http.server import ProgenitorHTTPServer
 from app.progenitor.runtime.queues import RuntimeQueues
 
 pytestmark = pytest.mark.asyncio

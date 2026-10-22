@@ -4,8 +4,8 @@ from pathlib import Path
 
 import pytest
 
-from app.progenitor.content_documents import sync_instruction_documents
-from app.progenitor.document_types import BUILTIN_DOCUMENT_TYPES
+from app.progenitor.documents.content import sync_instruction_documents
+from app.progenitor.documents.types import BUILTIN_DOCUMENT_TYPES
 from app.progenitor.instructions import (
     DEFAULT_INSTRUCTIONS_DIR,
     check_instruction_write,

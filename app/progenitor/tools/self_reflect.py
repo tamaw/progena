@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Any, Literal, Optional
 from pydantic import BaseModel, Field
 
 if TYPE_CHECKING:
-    from ..llm.client import LLMClient
+    from app.progenitor.llm.client import LLMClient
 
 from ..instructions import render_instruction
 from .protocol import BaseSystemTool, ToolContext, ToolResult, build_tool_spec

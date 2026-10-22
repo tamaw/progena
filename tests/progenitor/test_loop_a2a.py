@@ -5,9 +5,9 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from langgraph.runtime import Runtime
 
-from app.progenitor.nodes.a2a import apply_completed_tasks_node
-from app.progenitor.nodes.context import HeartbeatContext
-from app.progenitor.state.models import A2ATaskRecord
+from app.progenitor.a2a.models import A2ATaskRecord
+from app.progenitor.orchestration.nodes.a2a import apply_completed_tasks_node
+from app.progenitor.orchestration.nodes.context import HeartbeatContext
 
 
 @pytest.mark.asyncio

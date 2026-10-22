@@ -145,7 +145,7 @@ class NullRoutineRevisionReader:
     """No-op reader used when no ``database_url`` is configured (dev/SQLite runs)."""
 
     async def fetch_policy_revision_id(self, policy_id: str, document: dict[str, Any]) -> str:
-        from ..policies import policy_revision_id
+        from app.progenitor.settings.policies import policy_revision_id
 
         return policy_revision_id(document)
 

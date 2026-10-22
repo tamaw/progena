@@ -9,7 +9,7 @@ from langchain_core.messages import ToolMessage
 from langgraph.types import Command
 
 from app.progenitor.agent.middleware import AuditLoggingMiddleware
-from app.progenitor.sse.stream_events import (
+from app.progenitor.runtime.streaming.stream_events import (
     ALLOWED_CUSTOM_EVENT_TYPES,
     CUSTOM_EVENT_FALLBACK_TYPE,
     build_a2a_call_progress_event,
@@ -20,7 +20,7 @@ from app.progenitor.sse.stream_events import (
     build_tool_start_event,
     normalize_custom_event,
 )
-from app.progenitor.sse.stream_payloads import (
+from app.progenitor.runtime.streaming.stream_payloads import (
     DEFAULT_STREAM_ARGS_BYTES,
     DEFAULT_STREAM_PREVIEW_BYTES,
 )
@@ -428,7 +428,7 @@ async def test_audit_middleware_swallows_writer_failure():
     # get_stream_writer returns a writer that raises when invoked; emit_stream_event
     # must swallow the failure so tool execution is unaffected.
     with patch(
-        "app.progenitor.sse.stream_events.get_stream_writer",
+        "app.progenitor.runtime.streaming.stream_events.get_stream_writer",
         return_value=boom,
     ):
         result = await middleware.awrap_tool_call(request, handler)

@@ -8,7 +8,7 @@ PROJECT_ROOT = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from app.progenitor.config import MCPConfig
-from app.progenitor.mcp import build_mcp_runtime_context
+from app.progenitor.mcp.context import build_mcp_runtime_context
 
 
 async def check_mcp():

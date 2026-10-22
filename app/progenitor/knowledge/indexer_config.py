@@ -13,7 +13,7 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from ..schemas import check_entry_schema
+from app.progenitor.documents.catalog import check_entry_schema
 
 INDEXER_DOC_KEY = "indexer"
 INDEX_STATUS_DOC_KEY = "knowledge_index"

@@ -4,8 +4,9 @@ MCP Refresh - Refresh live MCP tool discovery from the shared MCP state document
 
 import logging
 
+from app.progenitor.mcp.context import reload_mcp_runtime_context
+
 from ..config import MCPConfig
-from ..mcp import reload_mcp_runtime_context
 from .protocol import BaseSystemTool, ToolContext, ToolResult
 
 logger = logging.getLogger(__name__)

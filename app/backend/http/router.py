@@ -24,7 +24,7 @@ import app.backend.storage.documents as storage_documents
 import app.backend.storage.routes as storage_routes
 import app.backend.tasks.routes as tasks_routes
 import app.backend.workflows.routes as workflows_routes
-from app.progenitor.providers import get_provider_repository
+from app.progenitor.settings.providers import get_provider_repository
 
 router = APIRouter(prefix="/api/ui", tags=["ui"])
 

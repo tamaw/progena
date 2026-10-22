@@ -2,142 +2,43 @@
 
 import json
 import logging
-import re
-from copy import deepcopy
 from typing import TYPE_CHECKING, Any, TypeVar, cast
-from urllib.parse import urlsplit, urlunsplit
 from uuid import uuid4
 
 import httpx
 from pydantic import BaseModel
 
-from .. import __version__
-from ..config import LLMConfig, MCPConfig
-from ..provider_runtime import (
+from app.progenitor.llm.provider_context import (
     ProviderTurn,
     activate_provider_turn,
     current_provider_turn,
     provider_config_for_call,
 )
-from ..runtime.thread_context import get_current_thread_id
+from app.progenitor.llm.responses import extract_text_and_reasoning, sanitize_user_visible_text
+from app.progenitor.llm.schema import (
+    _build_json_schema_format,
+    _build_json_schema_format_from_dict,
+    to_azure_text_format,
+)
+from app.progenitor.llm.transport import (
+    _build_responses_endpoint,
+    is_temperature_unsupported,
+    supports_temperature,
+)
+from app.progenitor.sessions.context import get_current_thread_id
+
+from .. import __version__
+from ..config import LLMConfig, MCPConfig
 from ..tools.user_communication import EventPusher
 
 if TYPE_CHECKING:
-    from ..mcp import MCPRuntime
+    from app.progenitor.mcp.runtime import MCPRuntime
 
 logger = logging.getLogger(__name__)
 
 TModel = TypeVar("TModel", bound=BaseModel)
 
 # Context window sizes for common models (in tokens)
-INLINE_TOOL_MARKUP_PATTERN = re.compile(r".*?", re.DOTALL)
-
-
-def _build_responses_endpoint(base_url: str) -> str:
-    """Build a valid /responses endpoint from either base URL or full endpoint URL."""
-    raw = (base_url or "").strip()
-    if not raw:
-        return "/responses"
-
-    parsed = urlsplit(raw)
-    path = (parsed.path or "").rstrip("/")
-    endpoint_path = path if path.endswith("/responses") else f"{path}/responses"
-
-    return urlunsplit((parsed.scheme, parsed.netloc, endpoint_path, parsed.query, parsed.fragment))
-
-
-def _close_object_schemas(node: Any) -> None:
-    """Recursively enforce strict object schemas Azure Responses accepts."""
-    if isinstance(node, dict):
-        if "$ref" in node:
-            ref = node["$ref"]
-            node.clear()
-            node["$ref"] = ref
-            return
-        if node.get("type") == "object":
-            # A dict-valued additionalProperties is itself a schema (an
-            # arbitrary-key map's value shape) and must be preserved and
-            # recursed into, not clobbered with False - overwriting it here
-            # would leave the map unable to hold any properties at all.
-            if not isinstance(node.get("additionalProperties"), dict):
-                node["additionalProperties"] = False
-            properties = node.get("properties")
-            if isinstance(properties, dict):
-                node["required"] = list(properties.keys())
-        for value in node.values():
-            _close_object_schemas(value)
-        return
-    if isinstance(node, list):
-        for item in node:
-            _close_object_schemas(item)
-
-
-def _build_json_schema_format(response_model: Any, schema_name: str) -> dict[str, Any]:
-    """Build response_format dict for structured output using Pydantic model.
-
-    Args:
-        response_model: Pydantic BaseModel class to generate schema from
-        schema_name: Name for the JSON schema
-
-    Returns:
-        Dictionary in format: {"type": "json_schema", "json_schema": {...}}
-    """
-    schema = response_model.model_json_schema()
-    _close_object_schemas(schema)
-
-    return {
-        "type": "json_schema",
-        "json_schema": {
-            "name": schema_name,
-            "schema": schema,
-            "strict": True,
-        },
-    }
-
-
-def _build_json_schema_format_from_dict(
-    json_schema: dict[str, Any], schema_name: str, *, strict: bool = True
-) -> dict[str, Any]:
-    """Build a response_format dict from a raw JSON Schema document.
-
-    Companion to :func:`_build_json_schema_format` for callers that load a
-    schema from a file at runtime instead of a Pydantic model. The schema is
-    deep-copied so the caller's dict is left untouched.
-
-    When ``strict`` is True the schema is rewritten into the closed-object form
-    the provider's strict mode requires. When False the schema is passed through
-    as-is.
-
-    ``strict=False`` is still required for schemas with arbitrary-key maps
-    (dict-valued ``additionalProperties``): the provider's real strict mode
-    rejects anything but a literal ``additionalProperties: false`` on every
-    object, so such a schema is never strict-mode-compatible regardless of
-    this function. ``_close_object_schemas`` recursing into a dict-valued
-    ``additionalProperties`` instead of clobbering it with ``False`` only
-    keeps the *closed* schema self-consistent (no longer claiming
-    ``minProperties: 1`` while simultaneously forbidding every property) for
-    callers that pass ``strict=True`` anyway; it does not make the provider
-    accept the map.
-
-    The provider requires an explicit top-level ``"type": "object"`` even
-    outside strict mode. Plain JSON Schema treats a root schema with no
-    ``type`` key (just ``properties``/``required``) as implicitly
-    object-shaped, so default it in rather than rejecting otherwise-valid
-    schemas the provider is stricter than the spec about.
-    """
-    schema = deepcopy(json_schema)
-    schema.setdefault("type", "object")
-    if strict:
-        _close_object_schemas(schema)
-
-    return {
-        "type": "json_schema",
-        "json_schema": {
-            "name": schema_name,
-            "schema": schema,
-            "strict": strict,
-        },
-    }
 
 
 class LLMClient:
@@ -486,190 +387,20 @@ class LLMClient:
 
     @staticmethod
     def _to_azure_text_format(response_format: dict[str, Any]) -> dict[str, Any]:
-        if response_format.get("type") != "json_schema":
-            return response_format
-
-        json_schema = response_format.get("json_schema")
-        if not isinstance(json_schema, dict):
-            return response_format
-
-        return {
-            "type": "json_schema",
-            "name": json_schema.get("name") or "structured_output",
-            "schema": json_schema.get("schema") or {},
-            "strict": bool(json_schema.get("strict", True)),
-        }
+        return to_azure_text_format(response_format)
 
     def _extract_text_and_reasoning(self, data: dict[str, Any]) -> tuple[str, str]:
-        """Extract response text and optional reasoning trace from /responses output."""
-        text_parts: list[str] = []
-        reasoning_parts: list[str] = []
-
-        def _append_text_candidate(candidate: Any) -> None:
-            if candidate is None:
-                return
-            if isinstance(candidate, str):
-                if candidate.strip():
-                    text_parts.append(candidate)
-                return
-            if isinstance(candidate, list):
-                for item in candidate:
-                    _append_text_candidate(item)
-                return
-            if isinstance(candidate, dict):
-                for key in (
-                    "text",
-                    "value",
-                    "content",
-                    "output_text",
-                    "refusal",
-                    "message",
-                    "parts",
-                ):
-                    if key in candidate:
-                        _append_text_candidate(candidate.get(key))
-
-        # Primary text response
-        if output_text := data.get("output_text"):
-            _append_text_candidate(output_text)
-
-        # Some providers return final text in top-level `text`
-        _append_text_candidate(data.get("text"))
-
-        # Structured output items
-        for item in data.get("output", []):
-            item_type = item.get("type")
-
-            if item_type == "message":
-                content = item.get("content", "")
-                if isinstance(content, (str, dict)):
-                    _append_text_candidate(content)
-                elif isinstance(content, list):
-                    for part in content:
-                        if not isinstance(part, dict):
-                            continue
-                        part_type = part.get("type")
-                        if part_type in ("output_text", "text"):
-                            _append_text_candidate(part.get("text"))
-                            _append_text_candidate(part.get("value"))
-                            _append_text_candidate(part.get("content"))
-                        elif part_type == "refusal":
-                            _append_text_candidate(part.get("refusal") or part.get("text"))
-                        elif part_type in ("reasoning", "reasoning_text", "reasoning_summary"):
-                            reasoning_parts.append(part.get("text", ""))
-
-            elif item_type in ("output_text", "text"):
-                _append_text_candidate(item.get("text"))
-                _append_text_candidate(item.get("value"))
-                _append_text_candidate(item.get("content"))
-
-            elif item_type in ("reasoning", "reasoning_text", "reasoning_summary"):
-                reasoning_parts.append(str(item.get("content") or item.get("text", "")))
-
-            elif item_type == "refusal":
-                _append_text_candidate(item.get("refusal") or item.get("text"))
-
-        # Top-level reasoning
-        if reasoning := data.get("reasoning"):
-            reasoning_parts.append(str(reasoning))
-
-        text = self._sanitize_user_visible_text("".join(text_parts).strip())
-        reasoning = "".join(reasoning_parts).strip()
-
-        if not text:
-            error_payload = data.get("error")
-            status = data.get("status")
-            incomplete_details = data.get("incomplete_details")
-            truncation = data.get("truncation")
-            top_text = data.get("text")
-            output_value = data.get("output")
-            output_items: list[Any] = output_value if isinstance(output_value, list) else []
-
-            output_summaries: list[dict[str, Any]] = []
-            for item in output_items[:5]:
-                if not isinstance(item, dict):
-                    output_summaries.append({"type": type(item).__name__})
-                    continue
-                content = item.get("content")
-                content_shape: Any
-                if isinstance(content, list):
-                    content_shape = [
-                        {
-                            "type": c.get("type") if isinstance(c, dict) else type(c).__name__,
-                            "keys": list(c.keys())[:8] if isinstance(c, dict) else None,
-                        }
-                        for c in content[:5]
-                    ]
-                elif isinstance(content, dict):
-                    content_shape = {"keys": list(content.keys())[:12]}
-                else:
-                    content_shape = type(content).__name__
-
-                output_summaries.append(
-                    {
-                        "type": item.get("type"),
-                        "role": item.get("role"),
-                        "status": item.get("status"),
-                        "keys": list(item.keys())[:12],
-                        "content_shape": content_shape,
-                    }
-                )
-
-            if error_payload:
-                logger.warning(
-                    "Empty LLM response with provider error - status=%s error=%s incomplete_details=%s truncation=%s keys=%s top_text=%r output_summaries=%s",
-                    status,
-                    error_payload,
-                    incomplete_details,
-                    truncation,
-                    list(data.keys()),
-                    top_text,
-                    output_summaries,
-                )
-            else:
-                logger.info(
-                    "Empty LLM response without provider error - status=%s incomplete_details=%s truncation=%s keys=%s top_text=%r output_summaries=%s",
-                    status,
-                    incomplete_details,
-                    truncation,
-                    list(data.keys()),
-                    top_text,
-                    output_summaries,
-                )
-
-        return text, reasoning
+        return extract_text_and_reasoning(data, self._sanitize_user_visible_text)
 
     @staticmethod
     def _sanitize_user_visible_text(text: str) -> str:
-        """Remove provider/tool markup artifacts from user-visible text."""
-        if not text:
-            return text
-
-        # Some providers emit inline tool-call traces (e.g.
-        # "tool_name{...json...}") as plain text. Strip these blocks so
-        # user-facing responses remain clean.
-        cleaned = INLINE_TOOL_MARKUP_PATTERN.sub("", text)
-
-        # Normalize accidental leading blank lines introduced by stripping.
-        return cleaned.lstrip()
+        return sanitize_user_visible_text(text)
 
     def _supports_temperature(self, model: str) -> bool:
-        """Return True if temperature parameter is supported for ``model``."""
-        unsupported_keywords = {"gpt-5.2-chat"}
-        model_lower = model.lower()
-        return not any(keyword in model_lower for keyword in unsupported_keywords)
+        return supports_temperature(model)
 
     def _is_temperature_unsupported(self, response: httpx.Response | None) -> bool:
-        """Detect unsupported temperature errors from provider responses."""
-        if response is None:
-            return False
-        try:
-            data = response.json()
-            message = str(data.get("error", {}).get("message", ""))
-        except Exception:
-            message = response.text
-        message_lower = message.lower()
-        return "temperature" in message_lower and "unsupported" in message_lower
+        return is_temperature_unsupported(response)
 
     async def _post_response(
         self,

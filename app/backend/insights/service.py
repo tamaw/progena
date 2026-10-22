@@ -20,7 +20,7 @@ from app.backend.storage.documents import (
     BackendDocumentStore,
     CheckpointMessageBlob,
 )
-from app.progenitor.state.model_profiles import (
+from app.progenitor.settings.model_profiles import (
     MODEL_PROFILES_DOC_KEY,
     default_model_profiles_payload,
     validate_model_profiles_payload,

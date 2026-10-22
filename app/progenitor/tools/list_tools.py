@@ -6,7 +6,8 @@ import logging
 from contextlib import suppress
 from typing import Any
 
-from ..nodes.registry import refresh_agent_metadata
+from app.progenitor.orchestration.nodes.registry import refresh_agent_metadata
+
 from .protocol import BaseSystemTool, ToolContext, ToolResult
 
 logger = logging.getLogger(__name__)
