@@ -50,7 +50,14 @@ def test_every_checked_in_instruction_is_valid():
     """The runtime refuses to boot on an invalid file, so catch it here first."""
     paths = sorted(DEFAULT_INSTRUCTIONS_DIR.rglob("*.md"))
     for path in paths:
-        parse_instruction_template(path.read_text(encoding="utf-8"))
+        content = path.read_text(encoding="utf-8")
+        template = parse_instruction_template(content)
+        assert set(template.inputs) == set(template.roots), (
+            f"{path}: declare a typed input for every placeholder root"
+        )
+        check_instruction_write(
+            path.relative_to(DEFAULT_INSTRUCTIONS_DIR).as_posix(), None, content, TYPES
+        )
 
 
 def test_render_drops_front_matter_and_fills_variables():
