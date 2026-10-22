@@ -162,9 +162,7 @@ def broadcast_instructions_snapshot(
     restores, and whenever an ``instruction:`` document changes (runtime boot
     sync surfaced via the Postgres NOTIFY watcher).
     """
-    from app.backend.instructions.service import list_instructions
-
-    payload = list_instructions() if instructions is None else instructions
+    payload = instruction_service.list_instructions() if instructions is None else instructions
     return events_stream.broadcast_ui_event(
         "instructions.snapshot", {"instructions": payload}, request_id=request_id
     )
