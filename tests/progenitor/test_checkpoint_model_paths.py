@@ -52,4 +52,4 @@ def test_historical_model_aliases_resolve_only_to_current_contracts():
     for name in workflow._CHECKPOINT_MODELS:
         assert getattr(workflow, name) is getattr(contracts, name)
     with pytest.raises(AttributeError):
-        getattr(workflow, "default_workflow_definition")
+        _ = workflow.default_workflow_definition
