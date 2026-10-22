@@ -232,6 +232,8 @@ async def create_progenitor_agent(
         .expanduser()
         .resolve()
     )
+    configured_shared_dir = getattr(config.storage, "shared_dir", None)
+    shared_dir = Path(configured_shared_dir).expanduser() if configured_shared_dir else None
 
     # Provider resolution is deliberately lazy so the runtime can boot before
     # Settings has a connection. Each invocation uses its turn snapshot.
@@ -273,6 +275,7 @@ async def create_progenitor_agent(
         skills_dir=skills_dir,
         agents_dir=data_dir / "agents" / "objects",
         worktree_dir=worktree_dir,
+        shared_dir=shared_dir,
         state_manager=state_manager,
         database_url=database_url,
         checkpointer=checkpointer,

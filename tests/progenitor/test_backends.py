@@ -145,6 +145,36 @@ class TestBackendFactory:
         backend = create_progenitor_backend()
         assert backend is not None
 
+    async def test_shared_route_exchanges_files_with_other_containers(self, monkeypatch, tmp_path):
+        """/shared/ writes land in the shared directory and external files are readable."""
+        self._patch_runtime_free_state_backend(monkeypatch)
+        shared = tmp_path / "shared"
+        (shared / "agent-one").mkdir(parents=True)
+        (shared / "agent-one" / "orders.jsonl").write_text('{"side":"buy"}\n', encoding="utf-8")
+
+        backend = create_progenitor_backend(project_root=tmp_path, shared_dir=shared)
+        written = await backend.awrite("/shared/market/btc.csv", "ts,price\n1,100\n")
+        external = await backend.aread("/shared/agent-one/orders.jsonl")
+        listing = await backend.als("/shared/")
+
+        assert written.error is None
+        assert (shared / "market" / "btc.csv").read_text(encoding="utf-8") == "ts,price\n1,100\n"
+        assert external.error is None
+        assert external.file_data["content"] == '{"side":"buy"}\n'
+        assert {entry["path"] for entry in listing.entries} >= {
+            "/shared/agent-one/",
+            "/shared/market/",
+        }
+
+    def test_shared_route_requires_configured_directory(self, monkeypatch, tmp_path):
+        """Unset means no /shared/ route; a configured but missing directory fails startup."""
+        import pytest
+
+        self._patch_runtime_free_state_backend(monkeypatch)
+        assert "/shared/" not in create_progenitor_backend(project_root=tmp_path).routes
+        with pytest.raises(FileNotFoundError, match="PROGENITOR_SHARED_DIR"):
+            create_progenitor_backend(project_root=tmp_path, shared_dir=tmp_path / "missing")
+
     async def test_memories_write_and_schemas_read_round_trip(self, monkeypatch):
         """/memories/ (Postgres, read-write) and /schemas/ (disk, read-only) both work end to end."""
         import json

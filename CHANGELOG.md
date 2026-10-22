@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Shared exchange volume**: setting `PROGENITOR_SHARED_DIR` mounts that directory as a writable `/shared/` route for the agent. Compose mounts the external `progenitor-shared` volume there, and deployment creates it, so A2A agent containers that mount the same volume can exchange files with Progenitor. Startup fails when the configured directory is missing.
+
 ### Fixed
 - **Module catalogue included in deployment images**: allow bundled `data/modules/` through the Docker build context and include catalogue changes in both Python-image rebuild decisions. This fixes the missing-directory `COPY` failure and keeps manifest validation aligned with deployed libraries.
 

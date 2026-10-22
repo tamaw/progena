@@ -10,6 +10,8 @@ Profile:
   - /self/ -> <project_root>/src (read-only)
   - /repos/ -> configured repo/worktree directory (read-only)
   - /logs/ -> configured log dir (read-only)
+  - /shared/ -> configured shared exchange dir (read-write), only when
+    ``PROGENITOR_SHARED_DIR`` is set; a Docker volume other containers also mount
   - /instructions/ -> Postgres content documents, kind="instruction" (validated writes;
     bundled agent instructions read-only)
   - /skills/ -> <project_root>/data/skills (read-only, disk-mounted): progenitor's
@@ -163,6 +165,7 @@ def create_progenitor_backend(
     skills_dir: str | Path | None = None,
     agents_dir: str | Path | None = None,
     worktree_dir: str | Path | None = None,
+    shared_dir: str | Path | None = None,
     state_manager: Any | None = None,
     database_url: str | None = None,
     checkpointer: Any | None = None,
@@ -180,6 +183,8 @@ def create_progenitor_backend(
         agents_dir: Bundled agent directory, read-only at /agents/objects/
             and /agents/native/. Defaults to <project_root>/data/agents/objects.
         worktree_dir: Repository/worktree directory. Defaults to ``<project_root>/data/repos``.
+        shared_dir: Cross-container exchange directory, writable at ``/shared/``.
+            Omitted when unset; startup fails when set but missing.
         state_manager: Required for instructions/memories/config mounts and for
             installed marketplace-plugin skill mounts (all Postgres-backed);
             without it those routes are omitted entirely.
@@ -234,6 +239,12 @@ def create_progenitor_backend(
         backend = _route_backend(mount_path, read_only=ro)
         if backend is not None:
             routes[route] = backend
+
+    if shared_dir is not None:
+        shared_path = Path(shared_dir)
+        if not shared_path.is_dir():
+            raise FileNotFoundError(f"PROGENITOR_SHARED_DIR is not a directory: {shared_path}")
+        routes["/shared/"] = FilesystemBackend(root_dir=str(shared_path), virtual_mode=True)
 
     if state_manager is not None:
         routes["/agents/"] = ReadOnlyBackend(

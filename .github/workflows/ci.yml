@@ -258,12 +258,16 @@ jobs:
           # Removing containers keeps bind-mounted state (logs/repos, plus Postgres) intact.
           docker rm -f progenitor progenitor-backend progenitor-frontend progenitor-agent-claude 2>/dev/null || true
           docker volume inspect progenitor-postgres-data >/dev/null 2>&1 || docker volume create progenitor-postgres-data >/dev/null
+          docker volume inspect progenitor-shared >/dev/null 2>&1 || docker volume create progenitor-shared >/dev/null
           # The runtime runs as UID 10001; log files left by the old root container
           # are not appendable, so hand its log and repos folders over before starting it.
+          # Agent containers may have created the shared volume root as root; only its
+          # top level is handed over, leaving their files as they wrote them.
           docker run --rm --user 0 --entrypoint sh \
             -v "$PROGENITOR_HOST_LOGS_DIR:/logs" -v "$PROGENITOR_HOST_REPOS_DIR:/repos" \
+            -v progenitor-shared:/shared \
             ghcr.io/tamaw/progenitor:${PROGENITOR_IMAGE_TAG} \
-            -c 'mkdir -p /logs/progenitor && chown -R 10001:10001 /logs/progenitor /repos'
+            -c 'mkdir -p /logs/progenitor && chown -R 10001:10001 /logs/progenitor /repos && chown 10001:10001 /shared && chmod 0777 /shared'
           docker compose -f docker/docker-compose.progenitor.yml up -d --no-build --pull never
           docker compose -f docker/docker-compose.progenitor.yml ps
 
