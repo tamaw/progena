@@ -55,6 +55,34 @@ to the backend and receives browser application data through two SSE roles:
     non-strings.
 - `GET /v1/events` broadcasts runtime agent events to the backend.
 
+### JavaScript computation
+
+The main conversational agent exposes `javascript(code)` through Deep Agents'
+official `CodeInterpreterMiddleware` (`langchain-quickjs`). QuickJS-NG runs as a
+Wasm guest in the local Wasmtime runtime. No hosted sandbox, service account or
+sandbox API key is required.
+
+- Calls share scratch variables within one conversation turn. A new turn starts
+  with a fresh context, separate from other conversations; no JS session
+  snapshot is stored in checkpoints.
+- The JS heap is capped at 64 MiB and execution at five seconds per call.
+  Results and captured console output are each truncated to 4,000 characters.
+  These are interpreter limits, not a whole-process memory or wall-time bound.
+- No filesystem, network, shell, Node.js packages, browser APIs, agent-tool
+  bridge or JavaScript subagent dispatch is exposed. Normal tool permissions and
+  delegation paths remain unchanged.
+- To transform stored data, read it through the permitted document tools, pass
+  the data into `javascript`, and persist its output through the normal validated
+  document tools. The interpreter does not replace or mount over virtual paths.
+- This adds no routine node type or interpreter capability to object agents.
+
+The upstream interpreter integration is beta and `quickjs-rs` is experimental.
+Wasm is an in-process isolation boundary, not a separate OS sandbox: Wasmtime/JIT
+vulnerabilities remain a host-escape risk. Keep Wasmtime updated and add isolated
+workers/containers for hostile multi-tenant execution. See the
+[upstream security guidance](https://github.com/langchain-ai/quickjs-rs#security)
+and [Deep Agents interpreter documentation](https://docs.langchain.com/oss/python/deepagents/interpreters).
+
 ### Backend (`src/backend/`)
 
 - Exposes the browser's finite command/query routes and bridges work to the

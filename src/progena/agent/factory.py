@@ -20,6 +20,7 @@ from deepagents.middleware.async_subagents import AsyncSubAgent
 from deepagents.middleware.filesystem import FilesystemMiddleware, FsToolName
 from deepagents.middleware.subagents import CompiledSubAgent
 from langchain.agents.middleware import TodoListMiddleware
+from langchain_quickjs import CodeInterpreterMiddleware
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph.state import CompiledStateGraph
 
@@ -104,6 +105,19 @@ This file stores durable runtime memory for Progena.
 - Keep entries concise and durable
 - Remove stale or superseded guidance when it no longer applies
 """
+
+
+def _create_javascript_middleware() -> CodeInterpreterMiddleware:
+    """Create a computation-only interpreter with turn-local scratch state."""
+    return CodeInterpreterMiddleware(
+        tool_name="javascript",
+        mode="turn",
+        memory_limit=64 * 1024 * 1024,
+        timeout=5.0,
+        max_result_chars=4000,
+        ptc=None,
+        subagents=False,
+    )
 
 
 def _build_checkpointer(db_path: Path) -> Any:
@@ -319,6 +333,7 @@ async def create_progena_agent(
         SchemaCompactionMiddleware(),
         SecretRedactionMiddleware(),
         AuditLoggingMiddleware(log_sink=log_sink),
+        _create_javascript_middleware(),
     ]
 
     # Bring the stored instructions in line with the image's data/instructions/.
