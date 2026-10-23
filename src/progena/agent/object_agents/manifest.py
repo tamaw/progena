@@ -23,7 +23,7 @@ NATIVE_OBJECT_AGENT_SOURCE = "native"
 
 
 DEFAULT_SHELL_MAX_OUTPUT_BYTES: Final = 100_000
-DEFAULT_SHELL_SYSTEM_PATH: Final = "/usr/bin:/bin"
+DEFAULT_SHELL_SYSTEM_PATH: Final = "/usr/local/bin:/usr/bin:/bin"
 
 
 @dataclass(frozen=True)

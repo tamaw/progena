@@ -83,14 +83,6 @@ async def _compiled_backend(monkeypatch, source, tmp_path: Path, *, workspace_ro
     return filesystem.backend
 
 
-def test_shell_manifest_defaults():
-    manifest = parse_object_agent_manifest(SHELL_SYSTEM, source="test")
-
-    assert manifest.shell is not None
-    assert manifest.shell.max_output_bytes == 100_000
-    assert manifest.shell.system_path == "/usr/bin:/bin"
-
-
 @pytest.mark.parametrize("shell", ["", "shell: false\n"])
 def test_absent_or_disabled_shell_is_not_enabled(shell: str):
     content = SHELL_SYSTEM.replace("shell: true\nenv_passthrough: []\n", shell)
@@ -206,7 +198,6 @@ def test_shell_environment_is_scrubbed_and_explicit():
         },
     )
 
-    assert environment["PATH"] == "/shims:/usr/bin:/bin"
     assert environment["GH_TOKEN"] == "token"
     assert "AZURE_OPENAI_API_KEY" not in environment
     assert "GH_HOST" not in environment

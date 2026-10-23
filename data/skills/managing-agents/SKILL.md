@@ -33,6 +33,28 @@ Remote HTTP A2A delegation is distinct from object-agent delegation: use
 `a2a_send`/`a2a_send_async` for an explicitly named registered remote agent,
 then `a2a_status` or `a2a_cancel` for its tracked task.
 
+## Delegate helper programs
+
+Use the bundled native `workspace-worker` for helper programs and command
+execution in its own shell workspace. Use `repo-manager` for repository
+operations and registered implementation agents for repository code changes.
+Neither the worker nor a delegated task inherits the parent's conversation.
+
+For a long or exact handoff, write the complete task material to a uniquely
+named `.txt`, `.md`, or `.json` file under `/artifacts/delegation-context/`.
+Pass that path in the task description and require the worker to read it before
+acting. This directory is read-only for the worker; its durable result directory
+is `/artifacts/worker-results/`. Both are virtual file-tool paths, not shell paths.
+Do not replace required source or requirements with a summary or an
+omitted-content placeholder. No history access or implicit conversation sharing
+is needed.
+
+The worker has native shell access but no Git-write/publish flags or credential
+passthrough. Its scrubbed command path keeps the Git/GitHub shims first and
+includes `/usr/local/bin` for the container's Python. The shell is not a sandbox;
+the runtime container, non-root user and physical mounts remain the security
+boundary. User-created agents still cannot enable native-only capabilities.
+
 ## Create an agent
 
 1. Inspect `/agents/` and `/agents/user/` for existing names. When creating a

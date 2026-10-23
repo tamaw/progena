@@ -8,10 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Native workspace worker**: added `workspace-worker` for helper programs and command execution without repository-management privileges or credential passthrough. Exact task material is shared through a read-only `/artifacts/delegation-context/` mount; durable results use `/artifacts/worker-results/`. Parent and agent guidance make isolated task context and virtual-versus-shell paths explicit.
 - **Configurable agent name** (Settings → General → Agent name, `agent_name` in `/config/preferences.json`, default `Progena`): the UI labels the agent's messages, prompts and actions with it, and runtime instructions may use an optional `{agent_name}` placeholder (the bundled `genesis.md` does). Display only; identifiers are unchanged.
 - **Shared exchange volume**: setting `PROGENA_SHARED_DIR` mounts that directory as a writable `/shared/` route for the agent. Compose mounts the external `progena-shared` volume there, and deployment creates it, so A2A agent containers that mount the same volume can exchange files with Progena. Startup fails when the configured directory is missing.
 
 ### Fixed
+- **Python available to shell agents**: include `/usr/local/bin` in the scrubbed native-agent command path, after the Git/GitHub shims, so the Python installed in runtime images is discoverable without an absolute executable path.
 - **Module catalogue included in deployment images**: allow bundled `data/modules/` through the Docker build context and include catalogue changes in both Python-image rebuild decisions. This fixes the missing-directory `COPY` failure and keeps manifest validation aligned with deployed libraries.
 
 ### Removed
