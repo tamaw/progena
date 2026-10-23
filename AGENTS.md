@@ -110,7 +110,7 @@ Docker keeps `/app` as its working directory and source under `/app/src`.
 
 ## Repository safety
 
-- **Do not merge PRs.** Create PRs and wait for human approval/merge.
+- **Merge PRs only when explicitly requested by the human.** Otherwise create PRs and wait for human approval/merge.
 - **Do not trigger deployments** unless explicitly instructed by the human
   (`workflow_dispatch` is allowed only on request).
 - If a workflow is accidentally started that could deploy, cancel it immediately
