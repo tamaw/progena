@@ -311,6 +311,23 @@ The following are intentionally absent rather than compatibility endpoints:
 
 A deleted path returns `404`; it is not a fallback for a stream failure.
 
+## ChatGPT plan provider settings
+
+Provider settings retain the finite acknowledgement/canonical-event contract.
+`GET`/`POST /api/ui/providers` and `PATCH`/`DELETE /api/ui/providers/{id}`
+publish `providers.snapshot`. Its public payload includes `providers`, `go_models`,
+`chatgpt_models` (catalogues keyed by provider ID), and `chatgpt_model_errors`
+(safe per-registration errors). A catalogue failure does not hide other providers.
+
+`POST /api/ui/providers/{id}/test` publishes `providers.tested`; ChatGPT tests
+consume a supported Responses stream through `response.completed`.
+`POST /api/ui/providers/{id}/disconnect` revokes/clears the selected ChatGPT
+session and publishes a new `providers.snapshot` after success. Tokens never
+appear in these events. Account labels/status are public metadata, not credentials.
+ChatGPT model selections are checked against that registration's current catalogue.
+Registration and reauthorization use the local CLI and secure server import
+described in `docs/DOCKER.md`, not an OAuth callback on a browser API route.
+
 ## Insights and estimated model cost
 
 `GET /api/ui/insights/token-usage?range=24h|7d|30d&profile=<optional-name>`
@@ -349,6 +366,8 @@ removes pricing. Cached-input tokens use the cache rate instead of the input
 rate. Unknown cache detail is labelled as an estimate charged at the input
 rate; unknown pricing is unpriced, not zero cost. Editing rates recalculates
 history and does not claim invoice-grade historical tariffs.
+ChatGPT-plan calls retain token counts but do not use profile API prices to
+estimate charges; they are reported as unpriced with an explanatory warning.
 
 The Profiles editor provides an explicit Azure GPT-5 mini Global Standard
 USD preset, verified against the [Azure pricing page](https://azure.microsoft.com/en-us/pricing/details/azure-openai/)

@@ -19,7 +19,12 @@ import useEntityDraft from '../../hooks/useEntityDraft';
 import useMissingEntityRoute from '../../hooks/useMissingEntityRoute';
 import { useConfig } from '../../context/ConfigContext';
 import { deleteModelProfile, fetchModelProfiles, patchModelProfile, selectModelProfiles, selectModelProfilesState } from './state/modelProfiles';
-import { fetchProviders, selectGoResponsesModels, selectProviders } from './state/providers';
+import {
+  fetchProviders,
+  selectChatgptModels,
+  selectGoResponsesModels,
+  selectProviders,
+} from './state/providers';
 import { selectRealtimeStreamReady } from '../../realtime/realtimeSlice';
 import { draftDiscarded, entityDraftKey } from '../../store/editorDraftsSlice';
 import { useSnapshotSave } from '../../hooks/useSnapshotSave';
@@ -124,9 +129,15 @@ function ProfileDetails({ profile, catalogue, providers, goModels, url, connecte
   const selectedProviderId = draft?.provider_id ?? profile.provider_id;
   const selectedProvider = providers.find((provider) => provider.id === selectedProviderId);
   const isGoProvider = selectedProvider?.kind === 'opencode_go';
+  const isChatgptProvider = selectedProvider?.kind === 'chatgpt';
   const goModelOptions = useMemo(
     () => goModels.map((model) => ({ value: model, label: model })),
     [goModels],
+  );
+  const chatgptModels = useSelector((state) => selectChatgptModels(state, selectedProviderId));
+  const chatgptModelOptions = useMemo(
+    () => chatgptModels.map((model) => ({ value: model.slug, label: model.display_name })),
+    [chatgptModels],
   );
   const deleteAction = useConfirmAction(`profile-delete:${url}:${profile.name}`);
   const conflict = Boolean(draft && baseline
@@ -154,11 +165,15 @@ function ProfileDetails({ profile, catalogue, providers, goModels, url, connecte
   const handleSave = () => {
     if (!draft || conflict || saving) return;
     if (!draft.deployment.trim()) {
-      setEditState((current) => ({ ...current, validationError: isGoProvider ? 'A Responses model is required.' : 'Deployment is required.' }));
+      setEditState((current) => ({ ...current, validationError: isGoProvider || isChatgptProvider ? 'A Responses model is required.' : 'Deployment is required.' }));
       return;
     }
     if (isGoProvider && !goModels.includes(draft.deployment)) {
       setEditState((current) => ({ ...current, validationError: 'Choose a supported OpenCode Go Responses model.' }));
+      return;
+    }
+    if (isChatgptProvider && !chatgptModels.some((model) => model.slug === draft.deployment)) {
+      setEditState((current) => ({ ...current, validationError: 'Choose a model available to this ChatGPT account.' }));
       return;
     }
     const pricingError = validatePricing(draft);
@@ -254,7 +269,7 @@ function ProfileDetails({ profile, catalogue, providers, goModels, url, connecte
                 />
               </label>
               <label className="agents-draft-field profiles-field">
-                <span className="agents-draft-field__label">{isGoProvider ? 'Responses model' : 'Deployment'} <span aria-hidden="true" className="profiles-field__required">*</span></span>
+                <span className="agents-draft-field__label">{isGoProvider || isChatgptProvider ? 'Responses model' : 'Deployment'} <span aria-hidden="true" className="profiles-field__required">*</span></span>
                 {isGoProvider ? (
                   <Select
                     value={draft.deployment}
@@ -263,6 +278,15 @@ function ProfileDetails({ profile, catalogue, providers, goModels, url, connecte
                     ariaLabel="OpenCode Go Responses model"
                     placeholder="Choose a supported model"
                     disabled={saving || !goModels.length}
+                  />
+                ) : isChatgptProvider ? (
+                  <Select
+                    value={draft.deployment}
+                    onChange={(value) => updateDraft('deployment', value)}
+                    options={chatgptModelOptions}
+                    ariaLabel="ChatGPT plan model"
+                    placeholder="Choose an available model"
+                    disabled={saving || !chatgptModels.length}
                   />
                 ) : (
                   <input className="set-text-input" type="text" value={draft.deployment} onChange={(event) => updateDraft('deployment', event.target.value)} disabled={saving} required />
@@ -306,13 +330,13 @@ function ProfileDetails({ profile, catalogue, providers, goModels, url, connecte
                 ))}
               </fieldset>
               {error ? <InlineFailure failure={error} operation="Save profile" /> : null}
-              <p className="profiles-form__hint">{saving ? 'Saving…' : isGoProvider ? 'Foundry reasoning overrides do not apply to OpenCode Go.' : 'Clear effort or summary to remove its override.'}</p>
+              <p className="profiles-form__hint">{saving ? 'Saving…' : isGoProvider ? 'Foundry reasoning overrides do not apply to OpenCode Go.' : isChatgptProvider && !chatgptModels.length ? 'The selected ChatGPT account has no available model catalog. Reconnect it in Providers.' : 'Clear effort or summary to remove its override.'}</p>
             </form>
           ) : (
             <dl className="agents-card-facts profiles-config-grid">
               <div className="agents-card-fact"><dt className="agents-card-fact__label">Name</dt><dd className="agents-card-fact__value">{profile.name}</dd></div>
               <div className="agents-card-fact"><dt className="agents-card-fact__label">Provider</dt><dd className="agents-card-fact__value">{providerLabel(profile, providers)}</dd></div>
-              <div className="agents-card-fact"><dt className="agents-card-fact__label">{selectedProvider?.kind === 'opencode_go' ? 'Responses model' : 'Deployment'}</dt><dd className="agents-card-fact__value">{profile.deployment}</dd></div>
+              <div className="agents-card-fact"><dt className="agents-card-fact__label">{selectedProvider?.kind === 'opencode_go' || selectedProvider?.kind === 'chatgpt' ? 'Responses model' : 'Deployment'}</dt><dd className="agents-card-fact__value">{profile.deployment}</dd></div>
               <div className="agents-card-fact"><dt className="agents-card-fact__label">Reasoning enabled</dt><dd className="agents-card-fact__value">{profile.reasoning_enabled == null ? 'Inherit' : profile.reasoning_enabled ? 'Enabled' : 'Disabled'}</dd></div>
               <div className="agents-card-fact"><dt className="agents-card-fact__label">Reasoning effort</dt><dd className="agents-card-fact__value">{profile.reasoning_effort || 'Inherit'}</dd></div>
               <div className="agents-card-fact"><dt className="agents-card-fact__label">Reasoning summary</dt><dd className="agents-card-fact__value">{profile.reasoning_summary || 'Inherit'}</dd></div>
