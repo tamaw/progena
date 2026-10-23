@@ -7,9 +7,9 @@ import time
 
 import pytest
 
-from app.backend.settings.model_profiles import _mutate_profile
-from app.backend.storage.documents import PROGENITOR_STATE_PREFIX, PostgresDocumentStore
-from app.progenitor.state.model_profiles import MODEL_PROFILES_DOC_KEY
+from src.backend.settings.model_profiles import _mutate_profile
+from src.backend.storage.documents import PROGENA_STATE_PREFIX, PostgresDocumentStore
+from src.progena.settings.model_profiles import MODEL_PROFILES_DOC_KEY
 
 
 def _profile(deployment: str) -> dict:
@@ -21,7 +21,7 @@ def store(postgres_url: str):
     store = PostgresDocumentStore(postgres_url)
     store.open()
     store.save_document(
-        PROGENITOR_STATE_PREFIX,
+        PROGENA_STATE_PREFIX,
         MODEL_PROFILES_DOC_KEY,
         {"general": _profile("g1"), "fast": _profile("f1")},
     )
@@ -65,7 +65,7 @@ def _interleave(store, first, second):
 
 
 def _stored(store) -> dict:
-    document = store.get_document(PROGENITOR_STATE_PREFIX, MODEL_PROFILES_DOC_KEY)
+    document = store.get_document(PROGENA_STATE_PREFIX, MODEL_PROFILES_DOC_KEY)
     assert document is not None
     return document.payload
 

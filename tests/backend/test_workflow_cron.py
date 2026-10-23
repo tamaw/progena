@@ -3,10 +3,10 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from app.backend.events.documents import seed_document_types
-from app.backend.storage.documents import BACKEND_STATE_PREFIX, InMemoryDocumentStore
-from app.backend.workflows.cron import WorkflowCronClock, workflow_cron_state_key
-from app.backend.workflows.service import (
+from src.backend.events.documents import seed_document_types
+from src.backend.storage.documents import BACKEND_STATE_PREFIX, InMemoryDocumentStore
+from src.backend.workflows.cron import WorkflowCronClock, workflow_cron_state_key
+from src.backend.workflows.service import (
     PromptExecutionResult,
     WorkflowExecutor,
     get_workflow_run,
@@ -14,11 +14,9 @@ from app.backend.workflows.service import (
     list_workflow_runs,
     save_workflow_definition,
 )
-from app.progenitor.workflows import (
-    WorkflowNodeCron,
-    build_cron_trigger_output,
-    default_workflow_definition,
-)
+from src.progena.workflows.documents import default_workflow_definition
+from src.progena.workflows.events import build_cron_trigger_output
+from src.progena.workflows.models import WorkflowNodeCron
 
 START = datetime(2026, 10, 12, 8, 30, tzinfo=UTC)
 
@@ -205,7 +203,7 @@ async def test_state_of_deleted_cron_nodes_is_removed():
     key = workflow_cron_state_key(definition.id, "cron")
     assert store.get_document(BACKEND_STATE_PREFIX, key, None) is not None
 
-    store.delete_document("progenitor.state", f"workflow:{definition.id}")
+    store.delete_document("progena.state", f"workflow:{definition.id}")
     await clock.at(START + timedelta(minutes=1))
 
     assert store.get_document(BACKEND_STATE_PREFIX, key, None) is None

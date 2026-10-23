@@ -91,7 +91,7 @@
           }},
           {"type": "object", "additionalProperties": false, "required": ["kind", "title", "message"], "properties": {
             "kind": {"const": "approval"}, "title": {"type": "string", "minLength": 1}, "message": {"type": "string", "minLength": 1},
-            "approver": {"description": "Who may decide: 'human' only in the Progenitor UI, 'any' also lets Progenitor decide (resolve_workflow_approval).", "enum": ["human", "any"]},
+            "approver": {"description": "Who may decide: 'human' only in the Progena AI app, 'any' also lets the agent decide (resolve_workflow_approval).", "enum": ["human", "any"]},
             "input_schema": {"type": "object"}, "output_schema": {"type": "object"}
           }}
         ]}},

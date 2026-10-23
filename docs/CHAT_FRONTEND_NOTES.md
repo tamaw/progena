@@ -150,8 +150,7 @@ these boundaries when changing chat state or presentation:
 When modifying these paths, run:
 
 ```bash
-cd app/frontend
-npm test -- src/features/chat/hooks/useChatStream.test.js src/realtime/realtimeListener.unit.test.js src/features/chat/components/Message.copy.unit.test.jsx src/features/chat/models/conversationModel.unit.test.js src/features/chat/models/messageRenderUtils.unit.test.js src/features/chat/components/TimelineItem.unit.test.jsx src/features/chat/components/SubagentCard.unit.test.jsx src/lib/markdown.unit.test.js src/store/uiDataSlice.unit.test.js
+npm test -- tests/frontend/unit/features/chat/hooks/useChatStream.test.js tests/frontend/unit/realtime/realtimeListener.unit.test.js tests/frontend/unit/features/chat/components/Message.copy.unit.test.jsx tests/frontend/unit/features/chat/models/conversationModel.unit.test.js tests/frontend/unit/features/chat/models/messageRenderUtils.unit.test.js tests/frontend/unit/features/chat/components/TimelineItem.unit.test.jsx tests/frontend/unit/features/chat/components/SubagentCard.unit.test.jsx tests/frontend/unit/lib/markdown.unit.test.js tests/frontend/unit/store/uiDataSlice.unit.test.js
 npm run build
 ```
 

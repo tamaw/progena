@@ -1,4 +1,4 @@
-# Pre-commit configuration for Progenitor
+# Pre-commit configuration for Progena
 # Install: pip install pre-commit && pre-commit install
 # Run manually: pre-commit run --all-files
 
@@ -8,9 +8,9 @@ repos:
     rev: v6.0.0
     hooks:
       - id: trailing-whitespace
-        exclude: ^(app/frontend/|\.md$)
+        exclude: ^(src/frontend/|\.md$)
       - id: end-of-file-fixer
-        exclude: ^app/frontend/
+        exclude: ^src/frontend/
       - id: check-yaml
       - id: check-json
       - id: check-toml
@@ -30,7 +30,7 @@ repos:
         exclude: ^tests/
       # Formatting (replaces black)
       - id: ruff-format
-        exclude: ^app/frontend/
+        exclude: ^src/frontend/
 
   # Type checking with pyright. Deliberately a `local` hook running the project
   # venv's pyright rather than an isolated pre-commit env: the previous
@@ -46,7 +46,7 @@ repos:
         pass_filenames: false
         # --pythonpath is required: git runs hooks without the venv activated,
         # and pyright will not read the interpreter from pyproject.toml.
-        args: [--pythonpath, .venv/bin/python, app/]
+        args: [--pythonpath, .venv/bin/python, src/]
 
   # Security checks
   - repo: https://github.com/PyCQA/bandit
@@ -78,6 +78,6 @@ ci:
   autoupdate_commit_msg: '[pre-commit.ci] pre-commit autoupdate'
   autoupdate_schedule: weekly
   # pyright is a local hook needing the project venv, which pre-commit.ci has
-  # no way to build; the ci workflow's `pyright app/` step covers it there.
+  # no way to build; the ci workflow's `pyright src/` step covers it there.
   skip: [pyright]
   submodules: false

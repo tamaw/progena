@@ -1,4 +1,4 @@
-# Progenitor Runtime Architecture
+# Progena AI Runtime Architecture
 
 This document describes the running stack. For the checked-in repository layout,
 see [PROJECT_STRUCTURE.md](PROJECT_STRUCTURE.md). The normative browser-client
@@ -12,7 +12,7 @@ Browser frontend
       | finite commands/queries
       | X-Request-ID: <operation UUID>
       v
-Backend HTTP API ---- internal HTTP/SSE ----> Progenitor runtime
+Backend HTTP API ---- internal HTTP/SSE ----> Progena runtime
       |                                           |
       | HTTP 202 Accepted acknowledgement         +--> runtime tools and integrations
       | { request_id, event_types }              |
@@ -158,9 +158,9 @@ no response-body token SSE.
 
 ## State and logging
 
-Runtime and backend state, including the Progenitor state documents and
+Runtime and backend state, including the Progena state documents and
 operational logs, are persisted in the configured Postgres stores. The
-Progenitor agent receives selected documents through a validated virtual
+Progena agent receives selected documents through a validated virtual
 filesystem (`/config/*.json`, task Markdown files under `/tasks/`, and
 workflow JSON files under `/workflows/`); these are database-backed views, not
 local files. State changes relevant to the browser are represented as typed
@@ -232,6 +232,6 @@ snapshots/detail loads.
 ## Deployment shape
 
 The default checked-in container stack runs Postgres, frontend, backend, the
-Progenitor runtime, and an internal Claude ACP sidecar. The backend-to-runtime
+Progena runtime, and an internal Claude ACP sidecar. The backend-to-runtime
 transport is internal; it must not be confused with the browser's canonical lifecycle
 stream or its request-scoped chat response stream.

@@ -14,7 +14,7 @@ from fastapi.testclient import TestClient
 @pytest.fixture
 def app():
     """Get the FastAPI app instance."""
-    from app.backend.main import app
+    from src.backend.main import app
 
     return app
 
@@ -59,16 +59,16 @@ class TestRequestIdMiddleware:
 
 
 class TestClientRequestIdPropagation:
-    """Test that request ID is passed to the Progenitor client."""
+    """Test that request ID is passed to the Progena client."""
 
     @pytest.mark.asyncio
     async def test_send_message_accepts_request_id(self):
         """Test that send_message accepts request_id parameter."""
-        from app.backend.config import ChatServerConfig
-        from app.backend.integrations.subprocess import ProgenitorClient
+        from src.backend.config import ChatServerConfig
+        from src.backend.integrations.subprocess import ProgenaClient
 
         config = MagicMock(spec=ChatServerConfig)
-        client = ProgenitorClient(config)
+        client = ProgenaClient(config)
 
         # Mock the process
         mock_process = MagicMock()
@@ -82,7 +82,7 @@ class TestClientRequestIdPropagation:
         client._process = mock_process
         client._started = True
         client._last_heartbeat = 0  # Initialize heartbeat
-        config.progenitor_timeout = 30
+        config.progena_timeout = 30
 
         # Call with request_id
         await client.send_message("test message", request_id="req-abc123")
@@ -97,11 +97,11 @@ class TestClientRequestIdPropagation:
     @pytest.mark.asyncio
     async def test_send_message_without_request_id(self):
         """Test that send_message works without request_id."""
-        from app.backend.config import ChatServerConfig
-        from app.backend.integrations.subprocess import ProgenitorClient
+        from src.backend.config import ChatServerConfig
+        from src.backend.integrations.subprocess import ProgenaClient
 
         config = MagicMock(spec=ChatServerConfig)
-        client = ProgenitorClient(config)
+        client = ProgenaClient(config)
 
         # Mock the process
         mock_process = MagicMock()
@@ -115,7 +115,7 @@ class TestClientRequestIdPropagation:
         client._process = mock_process
         client._started = True
         client._last_heartbeat = 0  # Initialize heartbeat
-        config.progenitor_timeout = 30
+        config.progena_timeout = 30
 
         # Call without request_id
         await client.send_message("test message")
@@ -129,11 +129,11 @@ class TestClientRequestIdPropagation:
     @pytest.mark.asyncio
     async def test_send_message_stream_events_accepts_request_id(self):
         """Test that send_message_stream_events accepts request_id parameter."""
-        from app.backend.config import ChatServerConfig
-        from app.backend.integrations.subprocess import ProgenitorClient
+        from src.backend.config import ChatServerConfig
+        from src.backend.integrations.subprocess import ProgenaClient
 
         config = MagicMock(spec=ChatServerConfig)
-        client = ProgenitorClient(config)
+        client = ProgenaClient(config)
 
         # Mock the process
         mock_process = MagicMock()
@@ -150,7 +150,7 @@ class TestClientRequestIdPropagation:
 
         client._process = mock_process
         client._started = True
-        config.progenitor_timeout = 30
+        config.progena_timeout = 30
 
         # Call with request_id and consume the stream
         events = []
@@ -182,7 +182,7 @@ class TestRequestIdInLogs:
         """Test that request ID is logged for incoming requests."""
         import logging
 
-        from app.backend.main import app
+        from src.backend.main import app
 
         with caplog.at_level(logging.INFO), TestClient(app) as client:
             response = client.get("/api/ui/widgets")

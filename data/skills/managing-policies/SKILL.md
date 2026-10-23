@@ -24,9 +24,13 @@ max_items and eligible-node cache settings override the respective defaults.
 Graph concurrency and step limits constrain execution. The fan-out limit is a
 default for the node's max_items and uses its existing truncation behaviour.
 Retry categories are transient, model_response (also ValueError), and all.
-Only Prompt, Classify and Eval nodes may cache results. Native LangGraph
+Prompt, Classify, Eval, and pure Code nodes may cache results. Native LangGraph
 caching uses matching node inputs and a shared cache backend; it may reuse
 results across runs. TTL is seconds; null never expires, zero expires immediately.
+Filesystem-enabled Code nodes are an explicit exception: they reject positive
+node cache/retry settings and use one automatic attempt without caching,
+regardless of these inherited policy defaults. That does not provide exactly-once
+semantics across manual reruns or replays.
 
 Editing a shared policy affects new runs of all routines selecting it. Existing
 paused runs retain their recorded policy values. Read relevant routines before

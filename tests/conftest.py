@@ -1,9 +1,9 @@
 """Root pytest configuration.
 
-A developer's local ``.env`` may point the ``PROGENITOR_*_DIR`` variables at
+A developer's local ``.env`` may point the ``PROGENA_*_DIR`` variables at
 another checkout (a long-running ``main`` worktree). ``load_dotenv`` never
 overrides variables that are already set, so pinning them here, before any
-``app`` module is imported, makes the shipped schemas and path defaults under
+``src`` module is imported, makes the shipped schemas and path defaults under
 test the ones in this checkout -- the same ones CI sees.
 """
 
@@ -25,11 +25,11 @@ from psycopg import sql
 _ROOT = Path(__file__).resolve().parents[1]
 
 os.environ.update(
-    PROGENITOR_DATA_DIR=str(_ROOT / "data"),
-    PROGENITOR_STATE_DIR=str(_ROOT / "data" / "state"),
-    PROGENITOR_LOG_DIR=str(_ROOT / "logs"),
-    PROGENITOR_WORKTREE_DIR=str(_ROOT / "worktrees"),
-    PROGENITOR_PROMPTS_DIR=str(_ROOT / "data" / "prompts"),
+    PROGENA_DATA_DIR=str(_ROOT / "data"),
+    PROGENA_STATE_DIR=str(_ROOT / "data" / "state"),
+    PROGENA_LOG_DIR=str(_ROOT / "logs"),
+    PROGENA_WORKTREE_DIR=str(_ROOT / "worktrees"),
+    PROGENA_PROMPTS_DIR=str(_ROOT / "data" / "prompts"),
 )
 
 
@@ -43,19 +43,19 @@ def _docker(*args: str, timeout: float = 10) -> str:
 @pytest.fixture(scope="session")
 def postgres_admin_url():
     """A test-only server, never the application's configured database."""
-    configured = os.getenv("PROGENITOR_TEST_DATABASE_URL", "").strip()
+    configured = os.getenv("PROGENA_TEST_DATABASE_URL", "").strip()
     if configured:
         if not configured.startswith(("postgresql://", "postgres://")):
-            pytest.fail("PROGENITOR_TEST_DATABASE_URL must be a PostgreSQL URI")
+            pytest.fail("PROGENA_TEST_DATABASE_URL must be a PostgreSQL URI")
         yield configured
         return
 
     if shutil.which("docker") is None:
-        pytest.skip("Postgres tests need Docker or PROGENITOR_TEST_DATABASE_URL")
+        pytest.skip("Postgres tests need Docker or PROGENA_TEST_DATABASE_URL")
     try:
         _docker("info", "--format", "{{.ServerVersion}}", timeout=5)
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
-        pytest.skip("Postgres tests need a reachable Docker daemon or PROGENITOR_TEST_DATABASE_URL")
+        pytest.skip("Postgres tests need a reachable Docker daemon or PROGENA_TEST_DATABASE_URL")
 
     image = "pgvector/pgvector:pg16"
     try:
@@ -83,7 +83,7 @@ def postgres_admin_url():
         ["--network", runner_network] if runner_network else ["--publish", "127.0.0.1::5432"]
     )
 
-    container = f"progenitor-pytest-{uuid4().hex}"
+    container = f"progena-pytest-{uuid4().hex}"
     try:
         # The server expires even if pytest's hard watchdog bypasses teardown.
         _docker(
@@ -142,7 +142,7 @@ def postgres_admin_url():
 @pytest.fixture
 def postgres_url(postgres_admin_url):
     """Give each test its own database with bounded connection and SQL waits."""
-    database = f"progenitor_test_{uuid4().hex}"
+    database = f"progena_test_{uuid4().hex}"
     with psycopg.connect(
         postgres_admin_url,
         autocommit=True,

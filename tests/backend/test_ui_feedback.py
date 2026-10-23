@@ -1,7 +1,7 @@
 """
 Tests for UI Feedback Mechanisms.
 
-Critical tests ensuring the aliens see proper feedback from the Progenitor agent
+Critical tests ensuring the aliens see proper feedback from the Progena agent
 and all sub-agents. These tests verify:
 - SSE (Server-Sent Events) for real-time UI updates
 - Agent status propagation
@@ -15,9 +15,9 @@ from datetime import UTC, datetime
 import pytest
 from fastapi.testclient import TestClient
 
-from app.backend.main import app
-from app.backend.monitoring.state import AgentInfo, BacklogItem, BuildInfo, HealthInfo, StateReader
-from app.backend.storage.documents import PROGENITOR_STATE_PREFIX, InMemoryDocumentStore
+from src.backend.main import app
+from src.backend.monitoring.state import AgentInfo, BacklogItem, BuildInfo, HealthInfo, StateReader
+from src.backend.storage.documents import PROGENA_STATE_PREFIX, InMemoryDocumentStore
 
 
 @pytest.fixture
@@ -105,7 +105,7 @@ class TestStateReader:
         assert health.llm_reasoning_effort == "medium"
 
     def test_health_info_stale_detection(self):
-        """Test that stale progenitor is detected."""
+        """Test that stale progena is detected."""
         from datetime import timedelta
 
         # Stale - last_active too old (> 60 seconds)
@@ -211,7 +211,7 @@ class TestStateReaderFileOperations:
             "pid": 9999,
         }
         store = InMemoryDocumentStore()
-        store.save_document(PROGENITOR_STATE_PREFIX, "health", health_data)
+        store.save_document(PROGENA_STATE_PREFIX, "health", health_data)
         reader = StateReader(document_store=store)
         health = reader.get_health()
         assert health.status == "running"
@@ -220,7 +220,7 @@ class TestStateReaderFileOperations:
         assert health.pid == 9999
 
     def test_read_registry_file(self):
-        """Test reading agents.json and the Progenitor MCP source config."""
+        """Test reading agents.json and the Progena MCP source config."""
         agents_data = {
             "agents": [
                 {
@@ -249,8 +249,8 @@ class TestStateReaderFileOperations:
             }
         }
         store = InMemoryDocumentStore()
-        store.save_document(PROGENITOR_STATE_PREFIX, "registry", agents_data)
-        store.save_document(PROGENITOR_STATE_PREFIX, "mcp", mcp_data)
+        store.save_document(PROGENA_STATE_PREFIX, "registry", agents_data)
+        store.save_document(PROGENA_STATE_PREFIX, "mcp", mcp_data)
         reader = StateReader(document_store=store)
         agents, tools = reader.get_registry()
 
@@ -263,7 +263,7 @@ class TestStateReaderFileOperations:
         """Map entries should be visible even if legacy list is present."""
         store = InMemoryDocumentStore()
         store.save_document(
-            PROGENITOR_STATE_PREFIX,
+            PROGENA_STATE_PREFIX,
             "registry",
             {
                 "agents": [{"name": "legacy-agent", "url": "http://legacy:8100"}],
@@ -287,7 +287,7 @@ class TestStateReaderFileOperations:
         # all resolved through the document store now, not disk files).
         store = InMemoryDocumentStore()
         store.save_document(
-            PROGENITOR_STATE_PREFIX,
+            PROGENA_STATE_PREFIX,
             "health",
             {
                 "status": "running",
@@ -298,7 +298,7 @@ class TestStateReaderFileOperations:
             },
         )
         store.save_document(
-            PROGENITOR_STATE_PREFIX,
+            PROGENA_STATE_PREFIX,
             "build_state",
             {
                 "build_in_progress": True,
@@ -317,7 +317,7 @@ class TestStateReaderFileOperations:
             },
         )
         store.save_document(
-            PROGENITOR_STATE_PREFIX,
+            PROGENA_STATE_PREFIX,
             "schedule",
             {
                 "sched-1": {
@@ -346,7 +346,7 @@ class TestStateReaderFileOperations:
 
         store = InMemoryDocumentStore()
         store.save_document(
-            PROGENITOR_STATE_PREFIX,
+            PROGENA_STATE_PREFIX,
             "registry",
             {
                 "agents": [

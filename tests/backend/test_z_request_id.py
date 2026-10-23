@@ -10,8 +10,8 @@ from contextlib import contextmanager
 import httpx
 import uvicorn
 
-import app.backend.events.stream as events_stream
-from app.backend.main import app
+import src.backend.events.stream as events_stream
+from src.backend.main import app
 
 
 @contextmanager

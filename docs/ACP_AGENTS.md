@@ -1,9 +1,9 @@
 # ACP Agents
 
-Progenitor can invoke **ACP agents** — local CLIs that speak the **Agent Client
+Progena can invoke **ACP agents** — local CLIs that speak the **Agent Client
 Protocol** (Zed's stdio JSON-RPC standard), the most prominent being the GitHub
 Copilot CLI (`copilot --acp`). ACP is a peer protocol to A2A: where A2A agents are
-remote HTTP servers, ACP agents are local subprocesses Progenitor spawns and drives.
+remote HTTP servers, ACP agents are local subprocesses Progena spawns and drives.
 
 > Terminology: this is the **Agent Client Protocol** (the `agent-client-protocol`
 > Python SDK, imported as `acp`), *not* IBM's "Agent Communication Protocol" (which
@@ -16,7 +16,7 @@ remote HTTP servers, ACP agents are local subprocesses Progenitor spawns and dri
 acp_* tools / workflows ─→ acp_task:<id> document (queued or updated)
                                    │ document event
 backend ACPTaskSupervisor ─────────┘
-   └─ ACPRunner (app/progenitor/acp/) ─→ ACP agent (TCP server or stdio CLI)
+   └─ ACPRunner (src/progena/acp/) ─→ ACP agent (TCP server or stdio CLI)
 ```
 
 The runtime registry is database-backed: `ToolRegistry` reads and writes the
@@ -58,7 +58,7 @@ permissions are auto-approved; plan mode's ExitPlanMode is exposed as a
 Workflow event nodes can react to `acp_task` `status`, `stalled`, and
 `pending_input` changes. The supervisor owns status, progress, output,
 `pending_input`, and session fields; requesters own messages, mode, answers,
-and cancellation requests. A task cannot start beyond `PROGENITOR_ACP_MAX_TURNS`.
+and cancellation requests. A task cannot start beyond `PROGENA_ACP_MAX_TURNS`.
 
 ACP agents are reached only through `acp_*`; `a2a_*` tools handle remote A2A agents.
 
@@ -99,7 +99,7 @@ Remove an agent with the `unregister_agent` tool (by name) — it deletes any ag
 
 Each task runs in its `cwd` (a path on the agent's host), else the registry
 entry's `acp.cwd`, else `/tmp`. For build work pass a worktree the `repo-manager`
-agent created under `/app/repos` (`PROGENITOR_WORKTREE_DIR`): it is mounted at
+agent created under `/app/repos` (`PROGENA_WORKTREE_DIR`): it is mounted at
 the same path in the runtime, backend, and Claude containers, all running as
 UID 10001, so the path the agent reports is the one Claude edits.
 

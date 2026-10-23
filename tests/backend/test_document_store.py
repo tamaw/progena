@@ -8,7 +8,7 @@ import pytest
 from psycopg.types.json import Jsonb
 from psycopg_pool import PoolClosed
 
-from app.backend.storage.documents import (
+from src.backend.storage.documents import (
     STORE_CHANGE_CHANNEL,
     InMemoryDocumentStore,
     PostgresDocumentStore,
@@ -95,12 +95,12 @@ def test_postgres_document_store_reopens_closed_pool():
 
 def test_in_memory_list_documents_filters_by_prefix_and_key_prefix():
     store = InMemoryDocumentStore()
-    store.save_document("progenitor.state", "inbox_message:b", {"id": "b"})
-    store.save_document("progenitor.state", "inbox_message:a", {"id": "a"})
-    store.save_document("progenitor.state", "kanban_card:c", {"id": "c"})
+    store.save_document("progena.state", "inbox_message:b", {"id": "b"})
+    store.save_document("progena.state", "inbox_message:a", {"id": "a"})
+    store.save_document("progena.state", "kanban_card:c", {"id": "c"})
     store.save_document("backend.state", "inbox_message:d", {"id": "d"})
 
-    rows = store.list_documents("progenitor.state", "inbox_message:")
+    rows = store.list_documents("progena.state", "inbox_message:")
 
     assert [key for key, _doc in rows] == ["inbox_message:a", "inbox_message:b"]
     assert [doc.payload["id"] for _key, doc in rows] == ["a", "b"]
@@ -127,16 +127,16 @@ def test_ensure_change_trigger_notifies_state_only():
     store._ensure_change_trigger()
 
     emitted = " ".join(str(query) for query, _ in pool._cursor.executed)
-    assert "progenitor_notify_store_change" in emitted
+    assert "progena_notify_store_change" in emitted
     assert "pg_notify" in emitted
-    assert "CREATE OR REPLACE TRIGGER progenitor_store_change" in emitted
+    assert "CREATE OR REPLACE TRIGGER progena_store_change" in emitted
     # Deletes must notify too - the runtime process has no other way to tell the
     # backend a row disappeared.
     assert "AFTER INSERT OR UPDATE OR DELETE" in emitted
     # State prefixes notify; the high-frequency logs prefix is excluded.
-    assert "progenitor.state" in emitted
+    assert "progena.state" in emitted
     assert "backend.state" in emitted
-    assert "progenitor.logs" not in emitted
+    assert "progena.logs" not in emitted
 
 
 def test_inbox_revisions_capture_backfill_ui_agent_and_deletion(postgres_url: str):
@@ -152,7 +152,7 @@ def test_inbox_revisions_capture_backfill_ui_agent_and_deletion(postgres_url: st
             conn.execute(
                 "INSERT INTO store (prefix, key, value) VALUES (%s, %s, %s)",
                 (
-                    "progenitor.state",
+                    "progena.state",
                     "inbox_message:backfill",
                     Jsonb({"payload": {"id": "backfill", "body": "original"}}),
                 ),
@@ -168,12 +168,12 @@ def test_inbox_revisions_capture_backfill_ui_agent_and_deletion(postgres_url: st
 
         assert [row[0] for row in revisions("backfill")] == [{"id": "backfill", "body": "original"}]
         store.save_document(
-            "progenitor.state", "inbox_message:backfill", {"id": "backfill", "body": "original"}
+            "progena.state", "inbox_message:backfill", {"id": "backfill", "body": "original"}
         )
         assert len(revisions("backfill")) == 1
 
         store.save_document(
-            "progenitor.state",
+            "progena.state",
             "inbox_message:backfill",
             {"id": "backfill", "body": "original", "read": True},
         )
@@ -184,7 +184,7 @@ def test_inbox_revisions_capture_backfill_ui_agent_and_deletion(postgres_url: st
                 "UPDATE store SET value = %s WHERE prefix = %s AND key = %s",
                 (
                     Jsonb({"payload": {"id": "backfill", "body": "edited", "read": True}}),
-                    "progenitor.state",
+                    "progena.state",
                     "inbox_message:backfill",
                 ),
             )
@@ -195,7 +195,7 @@ def test_inbox_revisions_capture_backfill_ui_agent_and_deletion(postgres_url: st
             conn.execute(
                 "INSERT INTO store (prefix, key, value) VALUES (%s, %s, %s)",
                 (
-                    "progenitor.state",
+                    "progena.state",
                     "inboxXmessage:ignored",
                     Jsonb({"payload": {"body": "ignored"}}),
                 ),
@@ -204,7 +204,7 @@ def test_inbox_revisions_capture_backfill_ui_agent_and_deletion(postgres_url: st
         assert len(revisions("backfill")) == 3
         assert revisions("ignored") == []
 
-        store.delete_document("progenitor.state", "inbox_message:backfill")
+        store.delete_document("progena.state", "inbox_message:backfill")
         assert len(revisions("backfill")) == 3
         with (
             psycopg.connect(postgres_url, autocommit=True) as conn,

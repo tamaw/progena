@@ -10,11 +10,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-import app.backend.events.stream as events_stream
-import app.backend.integrations.telegram_bridge as integrations_telegram_bridge
-from app.backend.chat.models import AgentResponse
-from app.backend.config import ChatServerConfig
-from app.backend.integrations.telegram import (
+import src.backend.events.stream as events_stream
+import src.backend.integrations.telegram_bridge as integrations_telegram_bridge
+from src.backend.chat.models import AgentResponse
+from src.backend.config import ChatServerConfig
+from src.backend.integrations.telegram import (
     TelegramClient,
     TelegramConfig,
     TelegramDraftSession,
@@ -24,7 +24,7 @@ from app.backend.integrations.telegram import (
     init_telegram_client,
     stop_telegram_client,
 )
-from app.backend.storage.documents import PROGENITOR_STATE_PREFIX, InMemoryDocumentStore
+from src.backend.storage.documents import PROGENA_STATE_PREFIX, InMemoryDocumentStore
 
 
 async def _async_iter(*chunks: str):
@@ -270,7 +270,7 @@ class TestTelegramClient:
 
         assert streamed_chars == len("Hello world")
         assert [method for method, _ in calls] == ["sendMessageDraft", "sendMessage"]
-        assert calls[-1][1]["text"] == "🤖 Progenitor Agent:\n\nHello world"
+        assert calls[-1][1]["text"] == "🤖 Progena Agent:\n\nHello world"
 
     @pytest.mark.asyncio
     async def test_stream_agent_response_to_chat_splits_long_output(self, client):
@@ -351,7 +351,7 @@ class TestTelegramClient:
         assert (
             client._should_flush_draft(
                 session,
-                "🤖 Progenitor Agent:\n\nnext segment",
+                "🤖 Progena Agent:\n\nnext segment",
                 now=10.5,
             )
             is False
@@ -360,7 +360,7 @@ class TestTelegramClient:
         assert (
             client._should_flush_draft(
                 session,
-                "🤖 Progenitor Agent:\n\nnext segment",
+                "🤖 Progena Agent:\n\nnext segment",
                 now=11.0,
             )
             is True
@@ -373,7 +373,7 @@ class TestTelegramClient:
         assert (
             client._should_flush_draft(
                 session,
-                "🤖 Progenitor Agent:\n\nhello",
+                "🤖 Progena Agent:\n\nhello",
                 now=0.5,
             )
             is True
@@ -478,7 +478,7 @@ class TestTelegramRoutes:
         """Create test FastAPI client."""
         from fastapi.testclient import TestClient
 
-        from app.backend.main import app
+        from src.backend.main import app
 
         return TestClient(app)
 
@@ -810,23 +810,23 @@ class TestTelegramConnectedMessage:
         telegram.send_message.return_value = True
         telegram.config.chat_id = "555"
 
-        progenitor = AsyncMock()
-        progenitor.is_running = True
-        progenitor.send_message.return_value = AgentResponse(
-            response="👋 Progenitor connected to Telegram.",
+        progena = AsyncMock()
+        progena.is_running = True
+        progena.send_message.return_value = AgentResponse(
+            response="👋 Progena connected to Telegram.",
             reasoning=None,
             reasoning_tokens=None,
         )
 
         await integrations_telegram_bridge._send_telegram_connected_message(
-            telegram, progenitor, InMemoryDocumentStore()
+            telegram, progena, InMemoryDocumentStore()
         )
 
         telegram.send_message.assert_awaited_once()
         sent_text = telegram.send_message.call_args.args[0]
         assert "👋" in sent_text
-        assert "progenitor" in sent_text.lower()
-        assert progenitor.send_message.await_args.kwargs["metadata"] == {
+        assert "progena" in sent_text.lower()
+        assert progena.send_message.await_args.kwargs["metadata"] == {
             "thread_id": "tele_555",
             "source": "telegram",
         }
@@ -837,16 +837,16 @@ class TestTelegramConnectedMessage:
 
         telegram = AsyncMock()
         telegram.config.chat_id = "555"
-        progenitor = AsyncMock()
-        progenitor.is_running = True
+        progena = AsyncMock()
+        progena.is_running = True
         store = InMemoryDocumentStore()
-        store.save_document(PROGENITOR_STATE_PREFIX, "session:tele_555", {"title": "Telegram"})
+        store.save_document(PROGENA_STATE_PREFIX, "session:tele_555", {"title": "Telegram"})
 
         await integrations_telegram_bridge._send_telegram_connected_message(
-            telegram, progenitor, store
+            telegram, progena, store
         )
 
-        progenitor.send_message.assert_not_awaited()
+        progena.send_message.assert_not_awaited()
         telegram.send_message.assert_not_awaited()
 
     @pytest.mark.asyncio
@@ -855,16 +855,16 @@ class TestTelegramConnectedMessage:
         telegram = AsyncMock()
         telegram.send_message.return_value = False
 
-        progenitor = AsyncMock()
-        progenitor.is_running = True
-        progenitor.send_message.return_value = AgentResponse(
-            response="👋 Progenitor connected to Telegram.",
+        progena = AsyncMock()
+        progena.is_running = True
+        progena.send_message.return_value = AgentResponse(
+            response="👋 Progena connected to Telegram.",
             reasoning=None,
             reasoning_tokens=None,
         )
 
         await integrations_telegram_bridge._send_telegram_connected_message(
-            telegram, progenitor, InMemoryDocumentStore()
+            telegram, progena, InMemoryDocumentStore()
         )
 
     @pytest.mark.asyncio
@@ -873,12 +873,12 @@ class TestTelegramConnectedMessage:
         telegram = AsyncMock()
         telegram.send_message.return_value = True
 
-        progenitor = AsyncMock()
-        progenitor.is_running = True
-        progenitor.send_message.side_effect = RuntimeError("SSE down")
+        progena = AsyncMock()
+        progena.is_running = True
+        progena.send_message.side_effect = RuntimeError("SSE down")
 
         await integrations_telegram_bridge._send_telegram_connected_message(
-            telegram, progenitor, InMemoryDocumentStore()
+            telegram, progena, InMemoryDocumentStore()
         )
 
         telegram.send_message.assert_awaited_once()
@@ -895,9 +895,9 @@ class TestTelegramBackendStreaming:
         telegram = AsyncMock()
         telegram.stream_agent_response_to_chat.return_value = len("Hello world")
 
-        progenitor = AsyncMock()
-        progenitor.is_running = True
-        progenitor.send_message_stream_events = MagicMock(
+        progena = AsyncMock()
+        progena.is_running = True
+        progena.send_message_stream_events = MagicMock(
             return_value=_async_event_iter(
                 {"type": "stream_chunk", "content": "Hello"},
                 {"type": "stream_event", "event_type": "node_update", "content": ""},
@@ -907,7 +907,7 @@ class TestTelegramBackendStreaming:
 
         result = await integrations_telegram_bridge._handle_telegram_agent_message(
             telegram,
-            progenitor,
+            progena,
             "987654321",
             "Hi",
             {"username": "owner", "message_thread_id": 123},
@@ -916,7 +916,7 @@ class TestTelegramBackendStreaming:
         assert result is None
         telegram.stream_agent_response_to_chat.assert_awaited_once()
         assert telegram.stream_agent_response_to_chat.await_args.kwargs["message_thread_id"] == 123
-        assert progenitor.send_message_stream_events.call_args.kwargs["metadata"] == {
+        assert progena.send_message_stream_events.call_args.kwargs["metadata"] == {
             "thread_id": "tele_987654321_123",
             "source": "telegram",
         }
@@ -929,15 +929,15 @@ class TestTelegramBackendStreaming:
             "draft unavailable"
         )
 
-        progenitor = AsyncMock()
-        progenitor.is_running = True
-        progenitor.send_message_stream_events = MagicMock(
+        progena = AsyncMock()
+        progena.is_running = True
+        progena.send_message_stream_events = MagicMock(
             return_value=_async_event_iter({"type": "stream_chunk", "content": "Hello"})
         )
 
         result = await integrations_telegram_bridge._handle_telegram_agent_message(
             telegram,
-            progenitor,
+            progena,
             "987654321",
             "Hi",
             {"username": "owner"},

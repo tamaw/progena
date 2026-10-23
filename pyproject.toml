@@ -1,11 +1,11 @@
 [project]
-name = "progenitor"
+name = "progena"
 version = "0.6.0"
-description = "Dual-loop AI agent system with LangGraph"
+description = "Progena AI helps technical teams coordinate cloud and software work: connect specialist agents and tools, automate workflows, and stay in control."
 requires-python = ">=3.11"
 readme = "README.md"
 license = {text = "MIT"}
-keywords = ["ai", "agent", "langgraph", "openai", "azure"]
+keywords = ["ai", "agent", "orchestration", "automation", "workflows", "langgraph", "microsoft-foundry", "azure"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
@@ -18,14 +18,19 @@ classifiers = [
 
 dependencies = [
     "a2a-sdk[http-server]>=0.3.24,<1.0.0",
-    "openai>=1.0.0",
-    "langgraph>=0.4.0",
-    "langgraph-checkpoint-sqlite>=3.1.1",
-    "langgraph-checkpoint-postgres>=3.1.3,<4.0.0",
+    "openai>=3.37.0,<4.0.0",
+    "langgraph>=1.2.16,<2.0.0",
+    "langgraph-checkpoint-sqlite>=3.1.2,<4.0.0",
+    "langgraph-checkpoint-postgres>=3.2.0,<4.0.0",
     "psycopg[binary,pool]>=3.2.0",
-    "deepagents>=0.6.12,<0.7.0",
-    "langchain-openai>=0.3.0",
-    "langchain-mcp-adapters>=0.2.2",
+    "deepagents>=0.7.30,<0.8.0",
+    "langchain>=1.4.7,<2.0.0",
+    "langchain-core>=1.7.0,<2.0.0",
+    "langchain-openai>=1.7.2,<2.0.0",
+    "langchain-mcp-adapters>=0.3.2,<0.4.0",
+    "langchain-quickjs>=0.3.9,<0.4.0",
+    # 0.2.6 ships the QuickJS-NG Wasm guest, executed by Wasmtime.
+    "quickjs-rs>=0.2.6,<0.3.0",
     # mcp 2.0 split internals into a separate `mcp-types` package and moved
     # `RequestContext`; langchain-mcp-adapters (as of 0.3.1) still imports it
     # from the old location, so a fresh unpinned resolve breaks at import
@@ -33,11 +38,11 @@ dependencies = [
     "mcp>=1.30.0,<2.0.0",
     "pydantic>=2.0.0",
     "croniter>=2.0.5",
-    "wcmatch>=10.1",  # glob over virtual /config, /tasks, ... (same matcher deepagents uses)
+    "wcmatch>=11.2",  # glob over virtual /config, /tasks, ... (same matcher deepagents uses)
     "aiohttp>=3.14.4",
     "anyio>=4.14.2",
     "cryptography>=50.0.0",
-    "langgraph-sdk>=0.4.4",
+    "langgraph-sdk>=0.4.8,<0.5.0",
     "multidict>=6.9.1",
     "pyasn1>=0.6.4",
     "PyJWT>=2.15.0",
@@ -52,6 +57,10 @@ dependencies = [
     "agent-client-protocol==0.12.1",
     "markitdown[pdf,docx,pptx,xlsx,xls]>=0.1.0,<0.2.0",
 ]
+
+[project.urls]
+Homepage = "https://progena.ai/"
+Repository = "https://github.com/tamaw/progena"
 
 [project.optional-dependencies]
 dev = [
@@ -85,9 +94,14 @@ ml = [
 requires = ["setuptools>=68.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
+[tool.setuptools]
+# Frontend assets are built by Vite, not shipped as Python package data.
+include-package-data = false
+
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["app*", "src*"]
+include = ["src", "src.*"]
+namespaces = false
 
 # Ruff configuration (linting + formatting)
 [tool.ruff]
@@ -104,7 +118,7 @@ exclude = [
     ".venv",
     "__pycache__",
     "node_modules",
-    "app/chat-ui",
+    "src/chat-ui",
     "worktrees",
     "*.json",
 ]
@@ -136,12 +150,9 @@ unfixable = []
     "ARG",    # Unused arguments OK in tests
     "S101",   # assert OK in tests
 ]
-"tests/integration/**/*.py" = [
-    "E402",   # Allow sys.path bootstrap before local imports
-]
 
 [tool.ruff.lint.isort]
-known-first-party = ["app"]
+known-first-party = ["src"]
 
 [tool.ruff.format]
 quote-style = "double"
@@ -149,31 +160,34 @@ indent-style = "space"
 skip-magic-trailing-comma = false
 line-ending = "auto"
 
-# Pyright configuration. Note the interpreter is NOT set here: pyright ignores
-# `venvPath`/`venv` and `pythonPath` from pyproject.toml (verified -- every
-# third-party import still failed to resolve), so both call sites pass
-# `--pythonpath .venv/bin/python` explicitly. Getting this wrong is silent:
-# an unresolved dependency degrades to Any and the run reports success.
+# Shared Pyright configuration. CI and pre-commit pass --pythonpath explicitly
+# so dependency resolution uses the project venv even without activation.
 [tool.pyright]
 # Oldest interpreter we support, per requires-python.
 pythonVersion = "3.11"
 # Pinned so a pyright upgrade cannot silently change strictness under CI.
 typeCheckingMode = "standard"
-include = ["app"]
+include = ["src"]
 exclude = [
+    ".venv",
+    "worktrees",
+    "tests",
     "**/__pycache__",
-    "app/chat-ui",
-    "app/frontend",
+    "src/chat-ui",
+    "src/frontend",
 ]
 
 # Pytest configuration
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+norecursedirs = ["frontend"]
 asyncio_mode = "auto"
-filterwarnings = [
-    "ignore::DeprecationWarning",
-    "ignore::PendingDeprecationWarning",
-]
+asyncio_default_fixture_loop_scope = "function"
+timeout = 60
+timeout_method = "thread"
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
     "integration: marks integration tests",
@@ -190,10 +204,10 @@ skips = [
 
 # Coverage configuration
 [tool.coverage.run]
-source = ["app"]
+source = ["src"]
 branch = true
 omit = [
-    "app/chat-ui/*",
+    "src/chat-ui/*",
     "tests/*",
 ]
 

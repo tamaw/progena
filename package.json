@@ -1,0 +1,53 @@
+{
+  "name": "progena",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Progena AI web app. Progena AI helps technical teams coordinate cloud and software work: connect specialist agents and tools, automate workflows, and stay in control.",
+  "homepage": "https://progena.ai/",
+  "repository": "github:tamaw/progena",
+  "type": "module",
+  "scripts": {
+    "dev": "vite src/frontend --config src/frontend/vite.config.js",
+    "build": "vite build src/frontend --config src/frontend/vite.config.js",
+    "prod": "npm run build && npm run preview",
+    "preview": "vite preview src/frontend --config src/frontend/vite.config.js",
+    "lint": "eslint src/frontend tests/frontend eslint.config.js",
+    "test": "vitest run --config src/frontend/vitest.config.js",
+    "test:unit": "vitest run --config src/frontend/vitest.config.js",
+    "test:watch": "vitest --config src/frontend/vitest.config.js",
+    "test:e2e": "playwright test --config src/frontend/playwright.config.js",
+    "smoke:routes": "node src/frontend/scripts/smoke-routes.mjs",
+    "build:canvas-vendor": "node src/frontend/scripts/build-canvas-vendor.mjs",
+    "clean": "node --input-type=module -e \"import { rmSync } from 'node:fs'; rmSync('src/frontend/dist', { recursive: true, force: true });\""
+  },
+  "dependencies": {
+    "@reduxjs/toolkit": "^2.13.0",
+    "@xyflow/react": "^12.12.0",
+    "acorn": "^8.19.0",
+    "chart.js": "^4.5.1",
+    "es-module-lexer": "^3.0.4",
+    "highlight.js": "^11.12.0",
+    "mermaid": "^12.2.0",
+    "react": "^19.3.1",
+    "react-chartjs-2": "^5.3.1",
+    "react-dom": "^19.3.1",
+    "react-redux": "^9.3.0",
+    "react-router-dom": "^7.18.4"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.5",
+    "@playwright/test": "^1.64.1",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^5.1.1",
+    "d3": "7.9.0",
+    "eslint": "^9.39.5",
+    "eslint-plugin-react-hooks": "~7.0.1",
+    "eslint-plugin-react-refresh": "^0.4.24",
+    "globals": "^16.5.0",
+    "jsdom": "^26.1.0",
+    "three": "0.186.1",
+    "vite": "^7.3.7",
+    "vitest": "^5.0.5"
+  }
+}

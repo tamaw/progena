@@ -1,0 +1,366 @@
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&family=Shantell+Sans:wght@400;500;600&display=swap");
+
+/* ============================================================================
+   Progena AI - Main Styles
+   ============================================================================ */
+
+:root {
+    /* Colors - Dark Theme (default) */
+    --color-bg-primary: #0e1014;
+    --color-bg-secondary: #181b22;
+    --color-bg-tertiary: #14171d;
+    --color-bg-hover: #1e222a;
+    --color-border: #262a33;
+    --color-border-light: #333845;
+
+    --color-text-primary: #e6e8ed;
+    --color-text-secondary: #b6bbc6;
+    --color-text-muted: #6a6f7b;
+
+    --color-accent: #6f96ff;
+    --color-accent-hover: #86a8ff;
+    --color-success: #4cc790;
+    --color-warning: #f7b146;
+    --color-error: #ff7770;
+    --color-info: #6f96ff;
+    --color-accent-soft: rgba(111, 150, 255, 0.16);
+    /* Second accent hue, distinct from --color-success, used to tell apart
+       families of like-shaped UI (e.g. delegation cards in chat-panel.css)
+       that would otherwise share the same green. */
+    --color-accent-secondary: #14b8a6;
+
+    /* User message colors */
+    --color-user-bg: #2f6ff6;
+    --color-user-text: #ffffff;
+
+    /* Assistant message colors */
+    --color-assistant-bg: #181b22;
+    --color-assistant-text: #e6e8ed;
+
+    /* Spacing */
+    --spacing-xs: 4px;
+    --spacing-sm: 8px;
+    --spacing-md: 12px;
+    --spacing-lg: 18px;
+    --spacing-xl: 28px;
+
+    /* Sizing */
+    --header-height: 56px;
+    --sidebar-width: 280px;
+    --input-max-height: 200px;
+    /* Tooltips float above page chrome/panels (which reach ~1000) and modals
+       (~1001), so a hovered hint is never clipped. */
+    --z-tooltip: 1100;
+    /* Shared height of a left list pane's header strip (filter-tabs row +
+       search/sort row). The detail header pins its bottom border to this so the
+       two panes share one continuous divider. Keep in sync if either row's
+       padding changes. */
+    --pane-header-height: 80px;
+
+    /* Typography */
+    --font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+    --font-family-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+    --font-size-xs: 11px;
+    --font-size-sm: 12px;
+    --font-size-md: 13px;
+    --font-size-lg: 14px;
+    --font-size-xl: 20px;
+    --font-size-doc: 14px; /* long-form reading: inbox documents */
+
+    /* Borders */
+    --border-radius-sm: 6px;
+    --border-radius-md: 8px;
+    --border-radius-lg: 10px;
+    --border-radius-xl: 12px;
+
+    /* Shadows */
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+    --shadow-md: 0 1px 3px rgba(0, 0, 0, 0.4), 0 8px 24px rgba(0, 0, 0, 0.25);
+    --shadow-lg: 0 16px 40px rgba(0, 0, 0, 0.28);
+
+    /* Transitions */
+    --transition-fast: 0.1s ease;
+    --transition-normal: 0.2s ease;
+    --transition-slow: 0.3s ease;
+}
+
+/* Light Theme */
+/* Interface density (Settings → Appearance). Comfortable is the :root default.
+   The root font-size follows --font-size-md, so rem-based sizes scale too. */
+[data-density="compact"] {
+    --font-size-xs: 10px;
+    --font-size-sm: 11px;
+    --font-size-md: 12px;
+    --font-size-lg: 13px;
+    --font-size-xl: 18px;
+    --font-size-doc: 13px;
+}
+
+[data-density="presentation"] {
+    --font-size-xs: 13px;
+    --font-size-sm: 14px;
+    --font-size-md: 16px;
+    --font-size-lg: 17px;
+    --font-size-xl: 24px;
+    --font-size-doc: 18px;
+}
+
+[data-theme="light"] {
+    --color-bg-primary: #f4f5f7;
+    --color-bg-secondary: #ffffff;
+    --color-bg-tertiary: #f8f9fb;
+    --color-bg-hover: #f1f3f7;
+    --color-border: #e7e9ee;
+    --color-border-light: #d8dbe2;
+
+    --color-text-primary: #1d2128;
+    --color-text-secondary: #4a5161;
+    --color-text-muted: #9aa1ad;
+
+    --color-user-bg: #2f6ff6;
+    --color-user-text: #ffffff;
+
+    --color-assistant-bg: #ffffff;
+    --color-assistant-text: #1d2128;
+
+    --color-accent: #2f6ff6;
+    --color-accent-hover: #235de0;
+    --color-success: #22a06b;
+    --color-warning: #f59e0b;
+    --color-error: #e0524a;
+    --color-info: #2f6ff6;
+    --color-accent-soft: rgba(47, 111, 246, 0.12);
+
+    --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.04);
+    --shadow-md: 0 1px 3px rgba(15, 23, 42, 0.06), 0 8px 24px rgba(15, 23, 42, 0.04);
+    --shadow-lg: 0 16px 40px rgba(15, 23, 42, 0.12);
+}
+
+/* Reset & Base */
+*, *::before, *::after {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+html, body {
+    height: 100%;
+    font-family: var(--font-family);
+    font-size: var(--font-size-md);
+    line-height: 1.5;
+    color: var(--color-text-primary);
+    background-color: var(--color-bg-primary);
+    overflow: hidden;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+}
+
+body {
+    letter-spacing: -0.01em;
+}
+
+button,
+input,
+select,
+textarea {
+    font: inherit;
+}
+
+button {
+    color: inherit;
+}
+
+button:not(:disabled) {
+    cursor: pointer;
+}
+
+:where(
+    input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="color"]):not([type="file"]),
+    select,
+    textarea
+) {
+    color: var(--color-text-primary);
+    background: var(--color-bg-secondary);
+    border: 1px solid var(--color-border);
+    border-radius: var(--border-radius-md);
+    transition: border-color var(--transition-normal), box-shadow var(--transition-normal), background-color var(--transition-normal);
+}
+
+:where(
+    input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="color"]):not([type="file"]),
+    textarea
+)::placeholder {
+    color: var(--color-text-muted);
+}
+
+:where(input[type="checkbox"], input[type="radio"]) {
+    accent-color: var(--color-accent);
+}
+
+/* ---- Field shells -------------------------------------------------------
+   A "field shell" wraps a borderless <input>/<textarea> (plus optional
+   adornments like an avatar or a trailing action button) and owns the focus
+   treatment itself — a 1px border plus a soft :focus-within ring, exactly like
+   the top-chrome search bar. Reuse it anywhere by adding class="field-shell".
+
+   Crucially, the inner control must NOT render its own :focus-visible ring or it
+   doubles up with the shell's ring (the "inner highlight" look). The reset rule
+   below folds in the app's existing shells so this stays consistent everywhere. */
+
+select {
+    appearance: none;
+    background-image:
+        linear-gradient(45deg, transparent 50%, currentColor 50%),
+        linear-gradient(135deg, currentColor 50%, transparent 50%);
+    background-position:
+        calc(100% - 14px) calc(50% - 2px),
+        calc(100% - 9px) calc(50% - 2px);
+    background-size: 5px 5px, 5px 5px;
+    background-repeat: no-repeat;
+    padding-right: 28px;
+}
+
+/* App Container */
+
+.status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background-color: var(--color-text-muted);
+    transition: background-color var(--transition-normal);
+}
+
+/* Main Content */
+
+/* Sidebar */
+.sidebar {
+    width: var(--sidebar-width);
+    background-color: var(--color-bg-secondary);
+    border-right: 1px solid var(--color-border);
+    overflow-y: auto;
+    flex-shrink: 0;
+}
+
+.sidebar-section {
+    padding: var(--spacing-md);
+    border-bottom: 1px solid var(--color-border-light);
+}
+
+.sidebar-section:last-child {
+    border-bottom: none;
+}
+
+.sidebar-title {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: var(--font-size-sm);
+    font-weight: 600;
+    color: var(--color-text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: var(--spacing-sm);
+}
+
+.empty-state {
+    text-align: center;
+    padding: var(--spacing-lg) var(--spacing-md);
+    color: var(--color-text-muted);
+    font-size: var(--font-size-sm);
+}
+
+/* Chat Container */
+
+/* Buttons */
+.btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: var(--spacing-sm) var(--spacing-md);
+    border: 1px solid var(--color-border);
+    border-radius: var(--border-radius-md);
+    font-size: var(--font-size-md);
+    font-weight: 500;
+    cursor: pointer;
+    transition: all var(--transition-fast);
+}
+
+.btn-primary {
+    background-color: var(--color-accent);
+    border-color: var(--color-accent);
+    color: white;
+}
+
+.btn-primary:hover {
+    background-color: var(--color-accent-hover);
+    border-color: var(--color-accent-hover);
+}
+
+/* Utility Classes */
+.hidden {
+    display: none !important;
+}
+
+/* Scrollbar Styles */
+::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+
+::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+    background-color: var(--color-border);
+    border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background-color: var(--color-text-muted);
+}
+
+/* Animations */
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes slideIn {
+    from { opacity: 0; transform: translateX(20px); }
+    to { opacity: 1; transform: translateX(0); }
+}
+
+/* Keyboard shortcuts */
+kbd {
+    display: inline-block;
+    padding: 2px 6px;
+    font-family: var(--font-family-mono);
+    font-size: var(--font-size-xs);
+    color: var(--color-text-secondary);
+    background-color: var(--color-bg-tertiary);
+    border: 1px solid var(--color-border);
+    border-radius: var(--border-radius-sm);
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+    .sidebar {
+        position: fixed;
+        left: 0;
+        top: var(--header-height);
+        bottom: 0;
+        transform: translateX(-100%);
+        z-index: 100;
+        transition: transform var(--transition-normal);
+    }
+
+    .sidebar.open {
+        transform: translateX(0);
+    }
+}

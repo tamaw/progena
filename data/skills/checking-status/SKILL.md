@@ -1,12 +1,12 @@
 ---
 name: checking-status
-description: Report Progenitor's own current runtime status (running/idle, uptime, cycle count, git commit/version, LLM model and reasoning config) by reading the /config/health.json file. Use when a user asks "are you running", "what's your status", "what version are you on", or "what model are you using".
+description: Report Progena's own current runtime status (running/idle, uptime, cycle count, git commit/version, LLM model and reasoning config) by reading the /config/health.json file. Use when a user asks "are you running", "what's your status", "what version are you on", or "what model are you using".
 allowed-tools: read_file
 ---
 
 # Checking Status
 
-Progenitor's own system status lives in a single read-only virtual file:
+Progena's own system status lives in a single read-only virtual file:
 `/config/health.json`. It is backed by the runtime `health` state document (the
 heartbeat loop writes it every cycle; Postgres is the source of truth) - there is
 no separate "get status" tool, and the file cannot be edited (writes are rejected).

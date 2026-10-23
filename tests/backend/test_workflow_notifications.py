@@ -4,22 +4,22 @@ import asyncio
 
 import pytest
 
-from app.backend.alerts import service as alert_store
-from app.backend.events.documents import seed_document_types
-from app.backend.storage.documents import (
+from src.backend.alerts import service as alert_store
+from src.backend.events.documents import seed_document_types
+from src.backend.storage.documents import (
     EVENT_LOG_START,
-    PROGENITOR_STATE_PREFIX,
+    PROGENA_STATE_PREFIX,
     InMemoryDocumentStore,
     set_default_document_store,
 )
-from app.backend.workflows.service import (
+from src.backend.workflows.service import (
     PromptExecutionResult,
     WorkflowExecutor,
     build_manual_trigger_event,
     get_workflow_run,
     save_workflow_definition,
 )
-from app.progenitor.workflows import default_workflow_definition
+from src.progena.workflows.documents import default_workflow_definition
 
 
 @pytest.fixture
@@ -70,7 +70,7 @@ def test_alerts_are_durable_documents_and_prune_oldest(store, monkeypatch):
 
     assert [a.title for a in alert_store.list_alerts()] == ["Three", "Two"]
     assert alert_store.get_alert(first.id) is None
-    assert store.get_document(PROGENITOR_STATE_PREFIX, f"alert:{third.id}").payload["urgent"]
+    assert store.get_document(PROGENA_STATE_PREFIX, f"alert:{third.id}").payload["urgent"]
 
     assert alert_store.mark_alerts_viewed([third.id]) == 1
     assert alert_store.get_alert(third.id).viewed
@@ -131,7 +131,7 @@ async def test_pause_alert_only_when_the_workflow_asks_for_it(store):
 
 
 @pytest.mark.asyncio
-async def test_progenitor_cannot_decide_a_human_only_approval(store):
+async def test_progena_cannot_decide_a_human_only_approval(store):
     executor = _executor(store)
     paused = await _paused(
         store, executor, _approval_workflow(store, notify_on_pause=False, approver="human")
@@ -148,7 +148,7 @@ async def test_progenitor_cannot_decide_a_human_only_approval(store):
 
 
 @pytest.mark.asyncio
-async def test_progenitor_may_decide_an_any_approver_approval(store):
+async def test_progena_may_decide_an_any_approver_approval(store):
     executor = _executor(store)
     paused = await _paused(store, executor, _approval_workflow(store, notify_on_pause=False))
 
@@ -162,7 +162,7 @@ async def test_progenitor_may_decide_an_any_approver_approval(store):
 @pytest.mark.asyncio
 async def test_routine_human_pause_raises_an_alert_with_its_question(store):
     store.save_document(
-        PROGENITOR_STATE_PREFIX,
+        PROGENA_STATE_PREFIX,
         "routine:greet",
         {"id": "greet", "name": "Greet", "version": 1, "entry": "n1", "nodes": [], "edges": []},
     )

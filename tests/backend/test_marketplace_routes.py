@@ -9,9 +9,9 @@ import pytest
 from ack_helpers import assert_acknowledged
 from fastapi.testclient import TestClient
 
-from app.backend.main import app
-from app.backend.storage.documents import (
-    PROGENITOR_STATE_PREFIX,
+from src.backend.main import app
+from src.backend.storage.documents import (
+    PROGENA_STATE_PREFIX,
     InMemoryDocumentStore,
     set_default_document_store,
 )
@@ -24,7 +24,7 @@ def client():
 
 @pytest.fixture(autouse=True)
 def _clear_catalog_cache():
-    from app.backend.plugins.marketplaces import _CATALOG_CACHE
+    from src.backend.plugins.marketplaces import _CATALOG_CACHE
 
     _CATALOG_CACHE.clear()
 
@@ -41,7 +41,7 @@ class _StreamCapture:
     """Subscribe to the UI event stream for the duration of a request."""
 
     def __init__(self):
-        from app.backend.events import stream as events_stream
+        from src.backend.events import stream as events_stream
 
         self.events_stream = events_stream
         self.queue = asyncio.Queue()
@@ -65,7 +65,7 @@ class _StreamCapture:
 class TestMarketplaceRoutes:
     def test_get_returns_ack_and_broadcasts_snapshot(self, client, document_store):
         document_store.save_document(
-            PROGENITOR_STATE_PREFIX,
+            PROGENA_STATE_PREFIX,
             "marketplaces",
             {
                 "marketplaces": {
@@ -106,7 +106,7 @@ class TestMarketplaceRoutes:
             response = client.put("/api/ui/marketplaces", json=payload)
 
         assert_acknowledged(response, ["marketplaces.snapshot"])
-        stored = document_store.get_document(PROGENITOR_STATE_PREFIX, "marketplaces")
+        stored = document_store.get_document(PROGENA_STATE_PREFIX, "marketplaces")
         assert len(stored.payload["marketplaces"]) == 2
         assert stored.payload["marketplaces"]["acme"]["source"] == "https://github.com/acme/plugins"
 
@@ -127,7 +127,7 @@ class TestMarketplaceRoutes:
 
     def test_browse_returns_ack_and_broadcasts_catalog(self, client, document_store, monkeypatch):
         document_store.save_document(
-            PROGENITOR_STATE_PREFIX,
+            PROGENA_STATE_PREFIX,
             "marketplaces",
             {
                 "marketplaces": {
@@ -153,7 +153,7 @@ class TestMarketplaceRoutes:
         )()
 
         monkeypatch.setattr(
-            "app.backend.plugins.marketplace_routes.fetch_marketplace",
+            "src.backend.plugins.marketplace_routes.fetch_marketplace",
             AsyncMock(return_value=fake_catalog),
         )
 
@@ -171,10 +171,10 @@ class TestMarketplaceRoutes:
         assert response.status_code == 404
 
     def test_browse_fetch_error_returns_400(self, client, document_store, monkeypatch):
-        from app.progenitor.plugins.sources import PluginFetchError
+        from src.progena.plugins.sources import PluginFetchError
 
         document_store.save_document(
-            PROGENITOR_STATE_PREFIX,
+            PROGENA_STATE_PREFIX,
             "marketplaces",
             {
                 "marketplaces": {
@@ -186,7 +186,7 @@ class TestMarketplaceRoutes:
             },
         )
         monkeypatch.setattr(
-            "app.backend.plugins.marketplace_routes.fetch_marketplace",
+            "src.backend.plugins.marketplace_routes.fetch_marketplace",
             AsyncMock(side_effect=PluginFetchError("network error")),
         )
 

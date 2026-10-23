@@ -5,7 +5,7 @@
   "type": "object",
   "properties": {
     "source": {
-      "description": "Source specification for fetching the plugin. Required. May be a relative path string or a structured object; see app/progenitor/plugins/sources.py:_fetch_plugin_archive for exactly what each source_type consumes.",
+      "description": "Source specification for fetching the plugin. Required. May be a relative path string or a structured object; see src/progena/plugins/sources.py:_fetch_plugin_archive for exactly what each source_type consumes.",
       "oneOf": [
         {
           "type": "string",

@@ -12,7 +12,7 @@ is the supported way to register a marketplace — there is no separate "add mar
 Every successful write is validated and persists immediately; the Settings → Marketplaces
 page in the UI updates live.
 
-Registering a marketplace tells Progenitor where to fetch its catalog. Progenitor accepts
+Registering a marketplace tells Progena where to fetch its catalog. Progena accepts
 Claude-style ``.claude-plugin/marketplace.json`` and GitHub Copilot-style
 ``.github/plugin/marketplace.json`` manifests. It does not install anything by itself —
 use the ``managing-plugins`` skill afterward to install a specific plugin from it.

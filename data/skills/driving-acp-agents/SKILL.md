@@ -26,7 +26,7 @@ with the `acp_*` tools; the `a2a_*` tools are for remote A2A agents only.
    values, or `{"action": "decline"}`. Plan answers are
    `{"approve": true|false, "feedback": "..."}`.
 5. Wait with `acp_status(task_id, wait_seconds=...)`, never fast-poll. The wait
-   may be at most 300 seconds. A task cannot exceed `PROGENITOR_ACP_MAX_TURNS`.
+   may be at most 300 seconds. A task cannot exceed `PROGENA_ACP_MAX_TURNS`.
 6. Claude commits its own work (repo-manager never commits): say so in the
    prompt, e.g. "commit your changes on this branch with a clear message". Claude
    has no GitHub credentials, so have `repo-manager` publish the branch and pull

@@ -9,9 +9,9 @@ import pytest
 from ack_helpers import assert_acknowledged
 from fastapi.testclient import TestClient
 
-from app.backend.main import app
-from app.backend.storage.documents import (
-    PROGENITOR_STATE_PREFIX,
+from src.backend.main import app
+from src.backend.storage.documents import (
+    PROGENA_STATE_PREFIX,
     InMemoryDocumentStore,
     set_default_document_store,
 )
@@ -24,7 +24,7 @@ def client():
 
 @pytest.fixture(autouse=True)
 def _clear_catalog_cache():
-    from app.backend.plugins.marketplaces import _CATALOG_CACHE
+    from src.backend.plugins.marketplaces import _CATALOG_CACHE
 
     _CATALOG_CACHE.clear()
 
@@ -41,7 +41,7 @@ class _StreamCapture:
     """Subscribe to the UI event stream for the duration of a request."""
 
     def __init__(self):
-        from app.backend.events import stream as events_stream
+        from src.backend.events import stream as events_stream
 
         self.events_stream = events_stream
         self.queue = asyncio.Queue()
@@ -65,7 +65,7 @@ class _StreamCapture:
 class TestPluginRoutes:
     def test_get_returns_ack_and_broadcasts_snapshot(self, client, document_store):
         document_store.save_document(
-            PROGENITOR_STATE_PREFIX,
+            PROGENA_STATE_PREFIX,
             "plugins",
             {
                 "plugins": {
@@ -96,7 +96,7 @@ class TestPluginRoutes:
     def test_post_installs_and_broadcasts(self, client, document_store, monkeypatch):
         # Seed marketplace source so the backend can resolve the catalog.
         document_store.save_document(
-            PROGENITOR_STATE_PREFIX,
+            PROGENA_STATE_PREFIX,
             "marketplaces",
             {
                 "marketplaces": {
@@ -128,7 +128,7 @@ class TestPluginRoutes:
         )()
 
         monkeypatch.setattr(
-            "app.backend.plugins.routes.fetch_marketplace",
+            "src.backend.plugins.routes.fetch_marketplace",
             AsyncMock(return_value=fake_catalog),
         )
 
@@ -139,7 +139,7 @@ class TestPluginRoutes:
             )
 
         assert_acknowledged(response, ["plugins.snapshot"])
-        stored = document_store.get_document(PROGENITOR_STATE_PREFIX, "plugins")
+        stored = document_store.get_document(PROGENA_STATE_PREFIX, "plugins")
         assert "acme/formatter" in stored.payload["plugins"]
         assert stored.payload["plugins"]["acme/formatter"]["status"] == "pending"
         assert stored.payload["plugins"]["acme/formatter"]["source"]["repo"] == "acme/formatter"
@@ -156,7 +156,7 @@ class TestPluginRoutes:
         the marketplace archive to resolve it against, and would fail
         every single install (found live against a real marketplace)."""
         document_store.save_document(
-            PROGENITOR_STATE_PREFIX,
+            PROGENA_STATE_PREFIX,
             "marketplaces",
             {
                 "marketplaces": {
@@ -184,7 +184,7 @@ class TestPluginRoutes:
         )()
 
         monkeypatch.setattr(
-            "app.backend.plugins.routes.fetch_marketplace",
+            "src.backend.plugins.routes.fetch_marketplace",
             AsyncMock(return_value=fake_catalog),
         )
 
@@ -194,14 +194,14 @@ class TestPluginRoutes:
         )
 
         assert_acknowledged(response, ["plugins.snapshot"])
-        stored = document_store.get_document(PROGENITOR_STATE_PREFIX, "plugins")
+        stored = document_store.get_document(PROGENA_STATE_PREFIX, "plugins")
         source = stored.payload["plugins"]["acme/everything"]["source"]
         assert source == {"source": "git-subdir", "url": "acme/plugins", "path": "", "ref": "main"}
 
     def test_post_rejects_invalid_plugin_document(self, client, document_store, monkeypatch):
         # Seed a marketplace.
         document_store.save_document(
-            PROGENITOR_STATE_PREFIX,
+            PROGENA_STATE_PREFIX,
             "marketplaces",
             {
                 "marketplaces": {
@@ -231,7 +231,7 @@ class TestPluginRoutes:
         )()
 
         monkeypatch.setattr(
-            "app.backend.plugins.routes.fetch_marketplace",
+            "src.backend.plugins.routes.fetch_marketplace",
             AsyncMock(return_value=fake_catalog),
         )
 
@@ -246,7 +246,7 @@ class TestPluginRoutes:
         # So the new_entry won't have "source", and _save_plugins_document will fail validation.
         assert response.status_code == 400
         # The document must remain unchanged.
-        stored = document_store.get_document(PROGENITOR_STATE_PREFIX, "plugins")
+        stored = document_store.get_document(PROGENA_STATE_PREFIX, "plugins")
         assert stored is None or stored.payload.get("plugins") == {}
 
     def test_post_rejects_missing_marketplace_or_plugin(self, client, document_store):
@@ -258,7 +258,7 @@ class TestPluginRoutes:
 
     def test_post_rejects_unknown_plugin(self, client, document_store, monkeypatch):
         document_store.save_document(
-            PROGENITOR_STATE_PREFIX,
+            PROGENA_STATE_PREFIX,
             "marketplaces",
             {
                 "marketplaces": {
@@ -284,7 +284,7 @@ class TestPluginRoutes:
         )()
 
         monkeypatch.setattr(
-            "app.backend.plugins.routes.fetch_marketplace",
+            "src.backend.plugins.routes.fetch_marketplace",
             AsyncMock(return_value=fake_catalog),
         )
 
@@ -296,7 +296,7 @@ class TestPluginRoutes:
 
     def test_delete_removes_plugin_and_broadcasts(self, client, document_store):
         document_store.save_document(
-            PROGENITOR_STATE_PREFIX,
+            PROGENA_STATE_PREFIX,
             "plugins",
             {
                 "plugins": {
@@ -318,7 +318,7 @@ class TestPluginRoutes:
             response = client.delete("/api/ui/plugins/acme/formatter")
 
         assert_acknowledged(response, ["plugins.snapshot"])
-        stored = document_store.get_document(PROGENITOR_STATE_PREFIX, "plugins")
+        stored = document_store.get_document(PROGENA_STATE_PREFIX, "plugins")
         assert "acme/formatter" not in stored.payload["plugins"]
         assert "beta/linter" in stored.payload["plugins"]
 

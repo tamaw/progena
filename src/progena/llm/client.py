@@ -1,0 +1,976 @@
+"""Responses API client for auxiliary model calls."""
+
+import json
+import logging
+from typing import TYPE_CHECKING, Any, TypeVar, cast
+from uuid import uuid4
+
+import httpx
+from pydantic import BaseModel
+
+from src.progena.llm.provider_context import (
+    ProviderTurn,
+    activate_provider_turn,
+    current_provider_turn,
+    provider_config_for_call,
+)
+from src.progena.llm.responses import extract_text_and_reasoning, sanitize_user_visible_text
+from src.progena.llm.schema import (
+    _build_json_schema_format,
+    _build_json_schema_format_from_dict,
+    to_azure_text_format,
+)
+from src.progena.llm.transport import (
+    _build_responses_endpoint,
+    is_temperature_unsupported,
+    supports_temperature,
+)
+from src.progena.sessions.context import get_current_thread_id
+from src.progena.settings.providers import refresh_chatgpt_access_token_after_rejection
+
+from .. import __version__
+from ..config import LLMConfig, MCPConfig
+from ..tools.user_communication import EventPusher
+
+_CHATGPT_TOOL_NAMESPACE = "progena"
+_CHATGPT_UNSUPPORTED_TOOL_TYPES = frozenset(
+    {
+        "code_interpreter",
+        "computer",
+        "computer_use_preview",
+        "file_search",
+        "image_generation",
+        "mcp",
+        "programmatic_tool_calling",
+        "tool_search",
+    }
+)
+
+
+class ChatGPTResponseStreamError(RuntimeError):
+    """A ChatGPT direct-route stream that did not reach response.completed."""
+
+    def __init__(
+        self,
+        event_type: str,
+        *,
+        code: str | None = None,
+        param: str | None = None,
+        detail: str | None = None,
+    ) -> None:
+        self.event_type = event_type
+        self.code = code
+        self.param = param
+        self.detail = detail
+        message = f"ChatGPT response stream ended with {event_type}"
+        if code:
+            message = f"{message}: {code}"
+        if detail:
+            message = f"{message} ({detail})"
+        super().__init__(message)
+
+
+if TYPE_CHECKING:
+    from src.progena.mcp.runtime import MCPRuntime
+
+logger = logging.getLogger(__name__)
+
+TModel = TypeVar("TModel", bound=BaseModel)
+
+# Context window sizes for common models (in tokens)
+
+
+class LLMClient:
+    """Responses API helper that resolves its provider at call time."""
+
+    def __init__(
+        self,
+        config: LLMConfig | None = None,
+        mcp_config: MCPConfig | None = None,
+    ):
+        """Initialize reusable transport and model-behaviour defaults."""
+        # ``config`` contains only non-connection behavior at runtime. The
+        # concrete endpoint, model and credential are resolved from Postgres at
+        # the beginning of each provider turn.
+        self.config = config or LLMConfig()
+        self.mcp_config = mcp_config or MCPConfig()
+        self.client = httpx.AsyncClient(
+            timeout=httpx.Timeout(120.0),
+            headers={"Content-Type": "application/json"},
+            transport=httpx.AsyncHTTPTransport(retries=2),
+        )
+
+        # MCP runtime is initialized externally (startup)
+        self._mcp_runtime: MCPRuntime | None = None
+
+        # Optional event pusher for realtime progress updates via SSE
+        self._event_pusher: EventPusher | None = None
+
+        logger.info("LLM client initialized with persisted provider resolution")
+
+    def set_event_pusher(self, event_pusher: EventPusher | None) -> None:
+        """Attach an event pusher used to stream progress updates to clients."""
+        self._event_pusher = event_pusher
+
+    async def _push_event(
+        self,
+        event_type: str,
+        content: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        if not self._event_pusher:
+            return
+        try:
+            await self._event_pusher(event_type, content, metadata)
+        except Exception:
+            # Never let event delivery break the main LLM/tool flow
+            logger.debug("Failed to push event %s", event_type, exc_info=True)
+
+    async def close(self):
+        """Close the HTTP client."""
+        await self.client.aclose()
+        await self.close_mcp_context()
+
+    async def _responses_connection(self) -> tuple[LLMConfig, str, dict[str, str]]:
+        """Resolve request-local endpoint and immutable protocol headers."""
+        config = await provider_config_for_call(self.config)
+        if config.provider_kind == "chatgpt":
+            return (
+                config,
+                "https://api.openai.com/v1/responses",
+                {"Authorization": f"Bearer {config.api_key}"},
+            )
+
+        endpoint = _build_responses_endpoint(config.base_url)
+        if config.provider_kind == "opencode_go":
+            turn = current_provider_turn()
+            session_id = turn.session_id if turn is not None else ""
+            if not session_id:
+                raise RuntimeError("OpenCode Go requests require an active conversation session")
+            return (
+                config,
+                endpoint,
+                {
+                    "Authorization": f"Bearer {config.api_key}",
+                    "User-Agent": f"progena/{__version__}",
+                    "x-opencode-session": session_id,
+                },
+            )
+        return config, endpoint, {"api-key": config.api_key or ""}
+
+    @property
+    def mcp_runtime(self) -> "MCPRuntime | None":
+        """Return the attached MCP runtime, if any."""
+        return self._mcp_runtime
+
+    def set_mcp_runtime(self, mcp_runtime: "MCPRuntime | None") -> None:
+        """Attach the runtime-owned MCP state holder."""
+        self._mcp_runtime = mcp_runtime
+
+    async def close_mcp_context(self) -> None:
+        """Close all initialized MCP clients and clear the active MCP context."""
+        if self._mcp_runtime is None:
+            return
+        await self._mcp_runtime.close()
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        await self.close()
+
+    def _build_input_messages(
+        self,
+        messages: list[dict[str, Any]],
+        system_prompt: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Build Responses API input messages from chat history."""
+        input_messages: list[dict[str, Any]] = []
+
+        allowed_roles = {"system", "user", "assistant", "tool"}
+
+        if system_prompt:
+            input_messages.append(
+                {
+                    "role": "system",
+                    "content": system_prompt,
+                }
+            )
+
+        for msg in messages:
+            role = str(msg.get("role", "user") or "user")
+            if role not in allowed_roles:
+                # Scheduled/background messages may use custom roles like
+                # "scheduler". The OpenAI-compatible Responses API only
+                # accepts standard roles, so coerce unknown roles to "user".
+                role = "user"
+            content = msg.get("content", "")
+
+            if isinstance(content, list):
+                if (
+                    content
+                    and isinstance(content[0], dict)
+                    and content[0].get("type")
+                    in {
+                        "input_text",
+                        "output_text",
+                        "input_image",
+                        "input_file",
+                        "refusal",
+                        "summary_text",
+                        "tether_browsing_display",
+                        "computer_screenshot",
+                        "tool_call",
+                        "tool_result",
+                    }
+                ):
+                    wrapped_content: Any = content
+                else:
+                    text_parts = []
+                    for part in content:
+                        if isinstance(part, dict):
+                            text_parts.append(str(part.get("text", "")))
+                        elif isinstance(part, str):
+                            text_parts.append(part)
+                    wrapped_content = "".join(text_parts)
+            else:
+                wrapped_content = str(content)
+
+            input_messages.append(
+                {
+                    "role": role,
+                    "content": wrapped_content,
+                }
+            )
+
+        return input_messages
+
+    def _merge_tools(self, tools: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+        """Merge caller-supplied tools with MCP tools, de-duplicated by name."""
+        if tools is not None and len(tools) == 0:
+            return []
+
+        merged: list[dict[str, Any]] = []
+        seen_names: set[str] = set()
+
+        for tool in tools or []:
+            name = (
+                tool.get("function", {}).get("name")
+                if tool.get("type") == "function"
+                else tool.get("name")
+            )
+            if name:
+                seen_names.add(name)
+            merged.append(tool)
+
+        mcp_runtime = self._mcp_runtime
+        for normalized in mcp_runtime.iter_openai_tools() if mcp_runtime is not None else []:
+            # iter_openai_tools() returns the Responses API's flat shape
+            # ({"type": "function", "name": ...}), not the nested
+            # Chat-Completions shape the loop above tolerates.
+            name = normalized.get("name")
+            if not name or name in seen_names:
+                continue
+            seen_names.add(name)
+            merged.append(normalized)
+
+        return merged
+
+    def _resolve_request_tools(
+        self,
+        tools: list[dict[str, Any]] | None,
+        response_format: dict[str, Any] | None,
+    ) -> list[dict[str, Any]]:
+        """Resolve effective tools for a request.
+
+        For structured-output requests, we still include the tool list in the
+        upstream payload (so the provider can see
+        the full tool registry), but the call site should typically force
+        tool_choice='none' to avoid tool calls breaking strict JSON outputs.
+        """
+        if response_format is not None and tools is None:
+            # Default tools for structured outputs: include for context/contract,
+            # but rely on tool_choice='none' during the call.
+            return self._merge_tools(None)
+        return self._merge_tools(tools)
+
+    def _extract_tool_calls(self, data: dict[str, Any]) -> list[dict[str, Any]]:
+        """Extract tool calls from a Responses API payload.
+
+        Tool calls can appear in:
+        - data["output"] as {"type": "tool_call", ...}
+        - data["output"] as {"type": "function_call" | "custom_tool_call", ...}
+        - data["output"] > message > content as tool_call items
+        - data["tool_calls"] as direct list
+        """
+        tool_calls: list[dict[str, Any]] = []
+        tool_call_types = {"tool_call", "function_call", "custom_tool_call"}
+
+        # Check output array
+        for item in data.get("output", []):
+            if item.get("type") in tool_call_types:
+                tool_calls.append(item)
+                continue
+
+            # Check message content for tool calls
+            if item.get("type") == "message":
+                content = item.get("content")
+                if isinstance(content, list):
+                    for part in content:
+                        if isinstance(part, dict) and part.get("type") in tool_call_types:
+                            tool_calls.append(part)
+
+        # Check top-level tool_calls
+        if isinstance(data.get("tool_calls"), list):
+            tool_calls.extend(data["tool_calls"])
+
+        return tool_calls
+
+    async def _call_mcp_tool(self, tool_call: dict[str, Any]) -> dict[str, Any]:
+        """Execute a tool call against the correct MCP server for that tool."""
+        if self._mcp_runtime is None:
+            return {"error": "MCP runtime unavailable"}
+        return await self._mcp_runtime.call_tool(tool_call)
+
+    async def _execute_tool_call(
+        self,
+        tool_call: dict[str, Any],
+        tool_name: str,
+        tool_args: dict[str, Any],
+        system_tool_context: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Execute either a system tool or an MCP tool call."""
+        if system_tool_context:
+            from ..tools.system_registry import execute_system_tool, get_system_tool
+
+            tool_registry = system_tool_context.get("tool_registry")
+            state_manager = system_tool_context.get("state_manager")
+            state = system_tool_context.get("state")
+            default_user_input = system_tool_context.get("default_user_input", "")
+            tool_user_input = str(tool_args.get("request") or default_user_input or "")
+
+            if (
+                callable(get_system_tool)
+                and callable(execute_system_tool)
+                and get_system_tool(tool_name)
+            ):
+                data_out, err, state_updates, _retry = await execute_system_tool(
+                    tool_name=tool_name,
+                    tool_registry=tool_registry,
+                    llm_client=self,
+                    state=state,
+                    state_manager=state_manager,
+                    user_input=tool_user_input,
+                    tool_args=tool_args,
+                )
+
+                if state_updates and isinstance(system_tool_context.get("state_updates"), dict):
+                    system_tool_context["state_updates"].update(state_updates)
+                if state_updates and isinstance(state, dict):
+                    state.update(state_updates)
+
+                if err:
+                    return {"error": err}
+                return {"result": data_out}
+
+            # If it isn't a system tool, allow direct A2A agent invocation by name.
+            if tool_registry is not None and hasattr(tool_registry, "find_by_name"):
+                try:
+                    agent_cfg = tool_registry.find_by_name(tool_name)
+                except Exception:
+                    agent_cfg = None
+
+                agent_url = (
+                    str(agent_cfg.get("url") or "").strip() if isinstance(agent_cfg, dict) else ""
+                )
+                agent_type = (
+                    str(agent_cfg.get("type") or "").strip() if isinstance(agent_cfg, dict) else ""
+                )
+                agent_kind = (
+                    str(agent_cfg.get("kind") or "").strip() if isinstance(agent_cfg, dict) else ""
+                )
+                agent_transport = (
+                    str(agent_cfg.get("transport") or "http").strip()
+                    if isinstance(agent_cfg, dict)
+                    else ""
+                )
+                if (
+                    isinstance(agent_cfg, dict)
+                    and agent_url
+                    and agent_transport == "http"
+                    and agent_type != "mcp_tool"
+                    and agent_kind != "mcp_tool"
+                ):
+                    forwarded_args = dict(tool_args)
+                    forwarded_args.setdefault("agent", str(agent_cfg.get("name") or tool_name))
+                    forwarded_args.setdefault(
+                        "message", str(forwarded_args.pop("request", "") or tool_user_input)
+                    )
+
+                    data_out, err, state_updates, _retry = await execute_system_tool(
+                        tool_name="a2a_send",
+                        tool_registry=tool_registry,
+                        llm_client=self,
+                        state=state,
+                        state_manager=state_manager,
+                        user_input=tool_user_input,
+                        tool_args=forwarded_args,
+                    )
+                    if state_updates and isinstance(system_tool_context.get("state_updates"), dict):
+                        system_tool_context["state_updates"].update(state_updates)
+                    if state_updates and isinstance(state, dict):
+                        state.update(state_updates)
+                    if err:
+                        return {"error": err}
+                    return {"result": data_out}
+
+        # Default: call MCP tool
+        return await self._call_mcp_tool({**tool_call, "arguments": tool_args})
+
+    def _get_json_response_format(self, response_model: type, schema_name: str) -> dict[str, Any]:
+        """Return a response_format payload for structured output."""
+        return _build_json_schema_format(response_model, schema_name)
+
+    @staticmethod
+    def _to_azure_text_format(response_format: dict[str, Any]) -> dict[str, Any]:
+        return to_azure_text_format(response_format)
+
+    def _extract_text_and_reasoning(self, data: dict[str, Any]) -> tuple[str, str]:
+        return extract_text_and_reasoning(data, self._sanitize_user_visible_text)
+
+    @staticmethod
+    def _sanitize_user_visible_text(text: str) -> str:
+        return sanitize_user_visible_text(text)
+
+    def _supports_temperature(self, model: str) -> bool:
+        return supports_temperature(model)
+
+    def _is_temperature_unsupported(self, response: httpx.Response | None) -> bool:
+        return is_temperature_unsupported(response)
+
+    @staticmethod
+    def _chatgpt_input_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Replace rejected system input items with Responses developer messages."""
+        return [
+            {**message, "role": "developer"} if message.get("role") == "system" else dict(message)
+            for message in messages
+        ]
+
+    @staticmethod
+    def _namespace_chatgpt_tools(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Group local function/custom tools as required by the direct route."""
+        local_tools: list[dict[str, Any]] = []
+        namespaced_tools: list[dict[str, Any]] = []
+        for raw_tool in tools:
+            tool = dict(raw_tool)
+            tool_type = tool.get("type")
+            if tool_type in {"function", "custom"}:
+                if tool_type == "function" and isinstance(tool.get("function"), dict):
+                    tool = {"type": "function", **tool["function"]}
+                local_tools.append(tool)
+            elif tool_type in {"web_search", "web_search_preview"}:
+                namespaced_tools.append(tool)
+            elif tool_type in _CHATGPT_UNSUPPORTED_TOOL_TYPES:
+                raise ValueError(f"ChatGPT plan usage does not support tool type {tool_type!r}")
+            else:
+                raise ValueError(
+                    "ChatGPT plan usage accepts only function/custom tools and web search"
+                )
+
+        if local_tools:
+            namespaced_tools.append(
+                {
+                    "type": "namespace",
+                    "name": _CHATGPT_TOOL_NAMESPACE,
+                    "description": "Progena local system and MCP tools.",
+                    "tools": local_tools,
+                }
+            )
+        return namespaced_tools
+
+    @staticmethod
+    def _chatgpt_response_output_items(data: dict[str, Any]) -> list[dict[str, Any]]:
+        """Retain all stateless output items before sending tool outputs."""
+        output = data.get("output")
+        if not isinstance(output, list):
+            return []
+        return [dict(item) for item in output if isinstance(item, dict)]
+
+    async def _post_chatgpt_stream_once(
+        self,
+        endpoint_url: str,
+        payload: dict[str, Any],
+        headers: dict[str, str],
+    ) -> dict[str, Any]:
+        """Consume one direct-route SSE response through its terminal event."""
+        completed_response: dict[str, Any] | None = None
+        event_name = ""
+        data_lines: list[str] = []
+
+        def consume_event() -> dict[str, Any] | None:
+            nonlocal event_name
+            if not data_lines:
+                event_name = ""
+                return None
+            raw_data = "\n".join(data_lines)
+            data_lines.clear()
+            if raw_data == "[DONE]":
+                event_name = ""
+                return None
+            event = json.loads(raw_data)
+            if not isinstance(event, dict):
+                raise ChatGPTResponseStreamError(
+                    event_name or "stream.invalid_event",
+                    detail="event payload was not an object",
+                )
+            event_type = str(event.get("type") or event_name)
+            event_name = ""
+            if event_type in {"error", "response.failed", "response.incomplete"}:
+                response = event.get("response")
+                response_data = response if isinstance(response, dict) else {}
+                error = response_data.get("error")
+                error_data = error if isinstance(error, dict) else event.get("error")
+                error_data = error_data if isinstance(error_data, dict) else {}
+                incomplete = response_data.get("incomplete_details")
+                incomplete_data = incomplete if isinstance(incomplete, dict) else {}
+                raise ChatGPTResponseStreamError(
+                    event_type,
+                    code=str(error_data["code"]) if error_data.get("code") else None,
+                    param=str(error_data["param"]) if error_data.get("param") else None,
+                    detail=(
+                        str(error_data["message"])
+                        if error_data.get("message")
+                        else str(event["message"])
+                        if event.get("message")
+                        else str(incomplete_data["reason"])
+                        if incomplete_data.get("reason")
+                        else None
+                    ),
+                )
+            if event_type != "response.completed":
+                return None
+            response = event.get("response")
+            if not isinstance(response, dict):
+                raise ChatGPTResponseStreamError(
+                    "response.completed",
+                    detail="completed event did not include a response object",
+                )
+            return response
+
+        async with self.client.stream(
+            "POST", endpoint_url, json=payload, headers=headers
+        ) as response:
+            if response.is_error:
+                await response.aread()
+                response.raise_for_status()
+            async for line in response.aiter_lines():
+                if not line:
+                    completed = consume_event()
+                    if completed is not None:
+                        completed_response = completed
+                elif line.startswith("event:"):
+                    event_name = line.removeprefix("event:").strip()
+                elif line.startswith("data:"):
+                    data_lines.append(line.removeprefix("data:").lstrip())
+            completed = consume_event()
+            if completed is not None:
+                completed_response = completed
+
+        if completed_response is None:
+            raise ChatGPTResponseStreamError("stream.interrupted")
+        return completed_response
+
+    async def _post_chatgpt_stream(
+        self,
+        endpoint_url: str,
+        payload: dict[str, Any],
+        headers: dict[str, str],
+        *,
+        provider_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Retry one unauthorized direct-route request with a rotated bearer token."""
+        try:
+            return await self._post_chatgpt_stream_once(endpoint_url, payload, headers)
+        except httpx.HTTPStatusError as exc:
+            authorization = headers.get("Authorization", "")
+            rejected_token = authorization.removeprefix("Bearer ").strip()
+            if (
+                exc.response.status_code != 401
+                or not provider_id
+                or not rejected_token
+                or authorization == rejected_token
+            ):
+                raise
+            access_token = await refresh_chatgpt_access_token_after_rejection(
+                provider_id,
+                rejected_token,
+            )
+            retry_headers = {**headers, "Authorization": f"Bearer {access_token}"}
+            return await self._post_chatgpt_stream_once(endpoint_url, payload, retry_headers)
+
+    async def _post_response(
+        self,
+        input_messages: list[dict[str, Any]],
+        response_format: dict[str, Any] | None = None,
+        include_reasoning: bool = False,
+        temperature: float = 0.7,
+        max_tokens: int = 4096,
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: str | dict[str, Any] | None = None,
+        max_tool_rounds: int = 4,
+        system_tool_context: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Call /responses endpoint with optional tool calling loop."""
+        config, endpoint_url, headers = await self._responses_connection()
+        is_chatgpt = config.provider_kind == "chatgpt"
+        if is_chatgpt:
+            input_messages = self._chatgpt_input_messages(input_messages)
+
+        merged_tools = self._resolve_request_tools(tools, response_format)
+        if is_chatgpt:
+            merged_tools = self._namespace_chatgpt_tools(merged_tools)
+
+        payload: dict[str, Any] = {
+            "model": config.model_default,
+            "input": input_messages,
+        }
+        if is_chatgpt:
+            payload.update(
+                {
+                    "store": False,
+                    "stream": True,
+                    "include": ["reasoning.encrypted_content"],
+                }
+            )
+        else:
+            payload["max_output_tokens"] = max_tokens
+
+        if response_format:
+            payload["text"] = {"format": self._to_azure_text_format(response_format)}
+        if merged_tools:
+            payload["tools"] = merged_tools
+            # When requesting strict structured output, prevent tool calling while
+            # still sending tool definitions upstream.
+            if tool_choice is not None:
+                payload["tool_choice"] = tool_choice
+            elif response_format is not None:
+                payload["tool_choice"] = "none"
+            else:
+                # Be explicit: some providers default tool calling off unless
+                # tool_choice is set.
+                payload["tool_choice"] = "auto"
+        if is_chatgpt and config.reasoning_enabled:
+            payload["reasoning"] = {
+                "effort": config.reasoning_effort,
+                "summary": config.reasoning_summary,
+            }
+        elif include_reasoning and config.provider_kind == "foundry":
+            payload["reasoning"] = {"summary": config.reasoning_summary}
+        if not is_chatgpt and self._supports_temperature(config.model_default):
+            payload["temperature"] = temperature
+
+        if is_chatgpt:
+            data = await self._post_chatgpt_stream(
+                endpoint_url,
+                payload,
+                headers,
+                provider_id=getattr(config, "provider_id", None),
+            )
+        else:
+            try:
+                response = await self.client.post(endpoint_url, json=payload, headers=headers)
+                response.raise_for_status()
+                data = response.json()
+            except httpx.HTTPStatusError as exc:
+                # Retry without temperature if unsupported.
+                if self._is_temperature_unsupported(exc.response):
+                    logger.debug("Temperature unsupported, retrying without it")
+                    payload.pop("temperature", None)
+                    response = await self.client.post(endpoint_url, json=payload, headers=headers)
+                    response.raise_for_status()
+                    data = response.json()
+                else:
+                    # httpx's own message omits the response body, which is where
+                    # the provider explains why a request was rejected.
+                    body_preview = (exc.response.text or "").strip()
+                    if len(body_preview) > 2000:
+                        body_preview = body_preview[:2000] + "..."
+                    logger.error(
+                        "LLM request failed: %s %s",
+                        exc.response.status_code,
+                        body_preview,
+                    )
+                    raise
+
+        # Tool calling loop (MCP + system tools).
+        tool_round = 0
+        tool_calls = self._extract_tool_calls(data)
+        if is_chatgpt:
+            input_messages.extend(self._chatgpt_response_output_items(data))
+        seen_calls: set[str] = set()
+
+        while tool_calls and tool_round < max_tool_rounds:
+            logger.info("Executing %d tool call(s) - round %d", len(tool_calls), tool_round + 1)
+            await self._push_event(
+                event_type="mcp_tool_round_started",
+                content=f"Executing {len(tool_calls)} tool call(s) (round {tool_round + 1})",
+                metadata={"round": tool_round + 1, "count": len(tool_calls)},
+            )
+
+            tool_result_messages: list[dict[str, Any]] = []
+            for tool_call in tool_calls:
+                tool_call_id = (
+                    tool_call.get("call_id") or tool_call.get("id") or tool_call.get("tool_call_id")
+                )
+                tool_name = str(
+                    tool_call.get("name")
+                    or tool_call.get("tool_name")
+                    or tool_call.get("function", {}).get("name")
+                    or "(unknown)"
+                )
+                execution_tool_call = tool_call
+
+                raw_args = (
+                    tool_call.get("arguments")
+                    or tool_call.get("input")
+                    or tool_call.get("params")
+                    or tool_call.get("function", {}).get("arguments")
+                    or {}
+                )
+                if isinstance(raw_args, str):
+                    try:
+                        tool_args = json.loads(raw_args)
+                    except json.JSONDecodeError:
+                        tool_args = {"raw": raw_args}
+                elif isinstance(raw_args, dict):
+                    tool_args = raw_args
+                else:
+                    tool_args = {"raw": raw_args}
+
+                try:
+                    sig = f"{tool_name}:{json.dumps(tool_args, sort_keys=True, default=str)}"
+                except Exception:
+                    sig = f"{tool_name}:{str(tool_args)}"
+
+                await self._push_event(
+                    event_type="mcp_tool_call_started",
+                    content=f"Calling tool: {tool_name}",
+                    metadata={
+                        "tool": tool_name,
+                        "tool_call_id": tool_call_id,
+                        "type": tool_call.get("type"),
+                    },
+                )
+
+                if sig in seen_calls:
+                    result: dict[str, Any] = {"error": f"Repeated tool call detected: {tool_name}"}
+                else:
+                    seen_calls.add(sig)
+                    result = await self._execute_tool_call(
+                        tool_call=execution_tool_call,
+                        tool_name=tool_name,
+                        tool_args=tool_args,
+                        system_tool_context=system_tool_context,
+                    )
+
+                success = not (isinstance(result, dict) and result.get("error"))
+                await self._push_event(
+                    event_type="mcp_tool_call_finished",
+                    content=f"Tool {tool_name} {'succeeded' if success else 'failed'}",
+                    metadata={
+                        "tool": tool_name,
+                        "tool_call_id": tool_call_id,
+                        "success": success,
+                        "error": (result.get("error") if isinstance(result, dict) else None),
+                    },
+                )
+
+                result_text = json.dumps(result, default=str)
+                if is_chatgpt:
+                    if not isinstance(tool_call_id, str) or not tool_call_id:
+                        raise ChatGPTResponseStreamError(
+                            "response.invalid_tool_call",
+                            detail="function call did not include call_id",
+                        )
+                    tool_result_message: dict[str, Any] = {
+                        "type": (
+                            "custom_tool_call_output"
+                            if tool_call.get("type") == "custom_tool_call"
+                            else "function_call_output"
+                        ),
+                        "call_id": tool_call_id,
+                        "output": result_text,
+                    }
+                    namespace = tool_call.get("namespace")
+                    if isinstance(namespace, str):
+                        tool_result_message["namespace"] = namespace
+                    tool_result_messages.append(tool_result_message)
+                else:
+                    tool_result_messages.append(
+                        {
+                            "role": "user",
+                            "content": f"[TOOL_RESULT tool={tool_name} id={tool_call_id}] {result_text}",
+                        }
+                    )
+
+            input_messages.extend(tool_result_messages)
+            payload["input"] = input_messages
+
+            if is_chatgpt:
+                # A long-running tool can outlive the access token acquired for
+                # this request; retain the provider snapshot and renew only it.
+                (
+                    followup_config,
+                    followup_endpoint,
+                    followup_headers,
+                ) = await self._responses_connection()
+                data = await self._post_chatgpt_stream(
+                    followup_endpoint,
+                    payload,
+                    followup_headers,
+                    provider_id=getattr(followup_config, "provider_id", None),
+                )
+            else:
+                response = await self.client.post(endpoint_url, json=payload, headers=headers)
+                try:
+                    response.raise_for_status()
+                except httpx.HTTPStatusError as exc:
+                    body_preview = (exc.response.text or "").strip()
+                    if len(body_preview) > 2000:
+                        body_preview = body_preview[:2000] + "..."
+                    logger.error(
+                        "Tool-loop follow-up /responses request failed (status=%s): %s",
+                        exc.response.status_code,
+                        body_preview,
+                    )
+                    await self._push_event(
+                        event_type="mcp_tool_followup_failed",
+                        content=f"Tool-loop follow-up request failed ({exc.response.status_code})",
+                        metadata={
+                            "status_code": exc.response.status_code,
+                            "body": body_preview,
+                        },
+                    )
+                    raise
+                data = response.json()
+
+            tool_calls = self._extract_tool_calls(data)
+            if is_chatgpt:
+                input_messages.extend(self._chatgpt_response_output_items(data))
+            tool_round += 1
+
+            await self._push_event(
+                event_type="mcp_tool_round_finished",
+                content=f"Finished tool round {tool_round}",
+                metadata={"round": tool_round, "remaining_calls": len(tool_calls)},
+            )
+
+        if tool_calls:
+            logger.warning("Tool call loop reached max rounds (%d)", max_tool_rounds)
+            await self._push_event(
+                event_type="mcp_tool_round_limit_reached",
+                content=f"Tool call loop reached max rounds ({max_tool_rounds})",
+                metadata={"max_tool_rounds": max_tool_rounds, "remaining_calls": len(tool_calls)},
+            )
+
+        return cast(dict[str, Any], data)
+
+    async def chat(
+        self,
+        prompt: str | list[dict[str, str]],
+        system_prompt: str | None = None,
+        temperature: float = 0.7,
+        max_tokens: int = 4096,
+        response_format: dict[str, Any] | None = None,
+        tools: list[dict[str, Any]] | None = None,
+        max_tool_rounds: int = 4,
+        system_tool_context: dict[str, Any] | None = None,
+    ) -> str:
+        """Send a prompt or message history to /responses and return text.
+
+        ``prompt`` may be a single user prompt string or a full conversation
+        history as a list of ``{"role", "content"}`` messages.
+        """
+        if isinstance(prompt, str):
+            messages: list[dict[str, str]] = [{"role": "user", "content": prompt}]
+        else:
+            messages = prompt
+
+        if response_format:
+            instruction = "Return only valid JSON that matches the provided schema. Do not include any extra text."
+            system_prompt = f"{system_prompt}\n\n{instruction}" if system_prompt else instruction
+        input_messages = self._build_input_messages(messages, system_prompt)
+
+        async def post() -> dict[str, Any]:
+            return await self._post_response(
+                input_messages=input_messages,
+                response_format=response_format,
+                include_reasoning=False,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                tools=tools,
+                max_tool_rounds=max_tool_rounds,
+                system_tool_context=system_tool_context,
+            )
+
+        if current_provider_turn() is None:
+            session_id = get_current_thread_id() or f"auxiliary:{uuid4().hex}"
+            turn = await ProviderTurn.create(self.config, session_id=session_id)
+            with activate_provider_turn(turn):
+                data = await post()
+        else:
+            data = await post()
+        text, _reasoning = self._extract_text_and_reasoning(data)
+        return text
+
+    async def chat_structured(
+        self,
+        prompt: str,
+        response_model: type[TModel],
+        schema_name: str,
+        system_prompt: str | None = None,
+        temperature: float = 0.7,
+        max_tokens: int = 4096,
+    ) -> TModel:
+        """Send a single-prompt request and return a validated structured model."""
+        response_format = self._get_json_response_format(response_model, schema_name)
+        response = await self.chat(
+            prompt=prompt,
+            system_prompt=system_prompt,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            response_format=response_format,
+        )
+
+        raw_data = json.loads(response)
+        return response_model.model_validate(raw_data)
+
+    async def chat_structured_json(
+        self,
+        prompt: str | list[dict[str, str]],
+        json_schema: dict[str, Any],
+        schema_name: str,
+        system_prompt: str | None = None,
+        temperature: float = 0.7,
+        max_tokens: int = 4096,
+        strict: bool = True,
+    ) -> Any:
+        """Run a structured-output call against a raw JSON Schema.
+
+        Unlike :meth:`chat_structured`, the schema is supplied as a plain dict
+        (typically loaded from a file) rather than a Pydantic model, so the
+        result is returned as parsed JSON rather than a validated model. Set
+        ``strict=False`` for schemas that use features the provider's strict
+        mode forbids (arbitrary-key maps, etc.).
+        """
+        response_format = _build_json_schema_format_from_dict(
+            json_schema, schema_name, strict=strict
+        )
+        response = await self.chat(
+            prompt=prompt,
+            system_prompt=system_prompt,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            response_format=response_format,
+        )
+        return json.loads(response)

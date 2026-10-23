@@ -1,7 +1,7 @@
 """Unit tests for read-through A2A mapping in the backend agent store.
 
 A2A agents are no longer stored in the backend DB; they are mapped on the fly from
-Progenitor's registry document (each ``AgentInfo`` already carries the live
+Progena's registry document (each ``AgentInfo`` already carries the live
 ``agent_card`` and health-derived ``status``). These tests avoid Postgres and the
 network by constructing ``AgentInfo``-like objects and monkeypatching the registry
 read.
@@ -12,7 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from app.backend.agents import store as agent_store
+from src.backend.agents import store as agent_store
 
 
 @dataclass
@@ -62,7 +62,7 @@ def test_a2a_card_details_extracts_metadata():
         "defaultInputModes": ["text/plain"],
         "defaultOutputModes": ["text/plain", "application/json"],
         "capabilities": {"streaming": False, "stateTransitionHistory": True},
-        "provider": {"organization": "Progenitor", "url": "https://example.test"},
+        "provider": {"organization": "Progena", "url": "https://example.test"},
         "documentationUrl": "https://docs.example.test",
     }
     details = agent_store._a2a_card_details(card)
@@ -75,7 +75,7 @@ def test_a2a_card_details_extracts_metadata():
         "pushNotifications": False,
         "stateTransitionHistory": True,
     }
-    assert details["provider"] == {"organization": "Progenitor", "url": "https://example.test"}
+    assert details["provider"] == {"organization": "Progena", "url": "https://example.test"}
     assert details["documentationUrl"] == "https://docs.example.test"
 
 
@@ -131,7 +131,7 @@ def test_acp_profiles_from_registry_filters_by_transport(monkeypatch):
             "get_acp_tasks": lambda self: [],
         },
     )()
-    import app.backend.monitoring.state as state_reader
+    import src.backend.monitoring.state as state_reader
 
     monkeypatch.setattr(state_reader, "get_state_reader", lambda: fake_reader)
 
@@ -161,7 +161,7 @@ def test_acp_profiles_from_registry_detects_acp_kind_without_transport(monkeypat
             "get_a2a_tasks": lambda self: [],
         },
     )()
-    import app.backend.monitoring.state as state_reader
+    import src.backend.monitoring.state as state_reader
 
     monkeypatch.setattr(state_reader, "get_state_reader", lambda: fake_reader)
 
@@ -182,7 +182,7 @@ def test_a2a_profile_from_info_maps_card():
             "preferredTransport": "JSONRPC",
             "protocolVersion": "0.3.0",
             "capabilities": {"streaming": True},
-            "skills": [{"id": "progenitor_health_report", "name": "Health"}],
+            "skills": [{"id": "progena_health_report", "name": "Health"}],
         }
     )
     profile = agent_store.a2a_profile_from_info(info)
@@ -197,7 +197,7 @@ def test_a2a_profile_from_info_maps_card():
     assert profile["transport"] == "JSONRPC"
     assert profile["card"]["protocolVersion"] == "0.3.0"
     assert profile["card"]["capabilities"]["streaming"] is True
-    assert [s["id"] for s in profile["skills"]] == ["progenitor_health_report"]
+    assert [s["id"] for s in profile["skills"]] == ["progena_health_report"]
     # A2A agents are read-only: no editable graph attached.
     assert profile["graph"] is None
 
@@ -223,7 +223,7 @@ def test_a2a_profiles_from_registry(monkeypatch):
         (),
         {"get_registry": lambda self: ([_Info(status="running"), _Info(name="Other")], [])},
     )()
-    import app.backend.monitoring.state as state_reader
+    import src.backend.monitoring.state as state_reader
 
     monkeypatch.setattr(state_reader, "get_state_reader", lambda: fake_reader)
 
@@ -233,7 +233,7 @@ def test_a2a_profiles_from_registry(monkeypatch):
 
 
 def test_a2a_profiles_from_registry_handles_failure(monkeypatch):
-    import app.backend.monitoring.state as state_reader
+    import src.backend.monitoring.state as state_reader
 
     def _boom():
         raise RuntimeError("no reader")
@@ -280,7 +280,7 @@ def test_a2a_tasks_by_agent_groups_sorts_and_shapes(monkeypatch):
         {"task_id": "d", "status": "working"},  # no agent_name -> skipped
     ]
     fake_reader = type("R", (), {"get_a2a_tasks": lambda self: records})()
-    import app.backend.monitoring.state as state_reader
+    import src.backend.monitoring.state as state_reader
 
     monkeypatch.setattr(state_reader, "get_state_reader", lambda: fake_reader)
 

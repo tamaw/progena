@@ -39,7 +39,7 @@
     },
     "mounts": {
       "type": "array",
-      "description": "Explicit virtual filesystem paths available to the agent. Paths must be beneath an existing Progenitor route.",
+      "description": "Explicit virtual filesystem paths available to the agent. Paths must be beneath an existing Progena route.",
       "items": {
         "type": "object",
         "required": ["path", "access"],
@@ -74,7 +74,7 @@
     },
     "git_write": {
       "type": "boolean",
-      "description": "Bundled agents with shell: true only. Lets the wrapped git/gh run repository setup commands (clone, fetch, pull --ff-only, switch, worktree add/remove, submodule, branch create, remote add/set-url, gh repo clone); push, commit and history-rewriting or work-discarding commands stay refused. The shell also gets PROGENITOR_REPOS_DIR, the managed repos directory."
+      "description": "Bundled agents with shell: true only. Lets the wrapped git/gh run repository setup commands (clone, fetch, pull --ff-only, switch, worktree add/remove, submodule, branch create, remote add/set-url, gh repo clone); push, commit and history-rewriting or work-discarding commands stay refused. The shell also gets PROGENA_REPOS_DIR, the managed repos directory."
     },
     "git_publish": {
       "type": "boolean",

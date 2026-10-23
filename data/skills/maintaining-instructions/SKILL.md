@@ -1,6 +1,6 @@
 ---
 name: maintaining-instructions
-description: Read, create and edit instructions under /instructions/ — the markdown templates Progenitor, the A2A agents and workflow steps send to models — keeping front matter valid and placeholders intact
+description: Read, create and edit instructions under /instructions/ — the markdown templates Progena, the A2A agents and workflow steps send to models — keeping front matter valid and placeholders intact
 allowed-tools: ls read_file write_file edit_file grep glob
 ---
 
@@ -8,7 +8,7 @@ allowed-tools: ls read_file write_file edit_file grep glob
 
 ## When to Use
 - A workflow `extract`/`agent` step or routine `agent` node needs a reusable template
-- The user asks why Progenitor or an agent behaves a certain way, or to change that behaviour
+- The user asks why Progena or an agent behaves a certain way, or to change that behaviour
 - The user asks what an instruction is for or what fills its placeholders
 - An agent needs instructions for driving Claude through `acp_*` tools
 ## Layout
@@ -16,11 +16,11 @@ allowed-tools: ls read_file write_file edit_file grep glob
 
 | Group | Read by | Editable | Placeholders |
 |---|---|---|---|
-| `progenitor/` | this runtime (`genesis.md` is your own system prompt) | yes; applies on the next model call | fixed by code: keep exactly the same `{names}` |
+| `progena/` | this runtime (`genesis.md` is your own system prompt) | yes; applies on the next model call | fixed by code: keep exactly the same `{names}`; `{agent_name}` (the configured agent name) may be added or removed |
 | anything else, e.g. `workflows/` | workflow steps and routine `agent` nodes that reference the path | yes | free; each root becomes an input port or resolves from routine state |
 
 Standalone A2A agents maintain their own instructions in
-[progentior.agents](https://github.com/tamaw/progentior.agents); they are not bundled
+[progena.agents](https://github.com/tamaw/progena.agents); they are not bundled
 instruction groups in this runtime.
 
 ## Format

@@ -129,7 +129,7 @@ Representative payloads:
 ```json
 {
   "id": "response-123",
-  "model": "progenitor-v1",
+  "model": "progena-v1",
   "thread_id": "thread_abc",
   "delta": "Hello",
   "request_id": "4e58d2dc-88bf-4c10-9bf0-1f2ccce2c100",
@@ -141,7 +141,7 @@ Representative payloads:
 ```json
 {
   "id": "response-123",
-  "model": "progenitor-v1",
+  "model": "progena-v1",
   "thread_id": "thread_abc",
   "event_type": "tool_start",
   "content": "python",
@@ -264,14 +264,14 @@ responses never are.
 | Agent profiles | `GET /api/ui/agent-profiles`; `GET /api/ui/agent-profiles/{agent_id}`; `PATCH /api/ui/agent-profiles/{agent_id}/graph` | Canonical `ui.event` envelopes: `agents.snapshot`, `agent.upserted`, request-correlated `agent.selected`, `agent.graph.updated` |
 | Inbox | `GET /api/ui/inbox`; `POST /api/ui/inbox/{message_id}/read`; `POST /api/ui/inbox/{message_id}/decision`; `DELETE /api/ui/inbox/{message_id}` | Canonical `ui.event` envelopes: `inbox.snapshot`, `inbox.message.upserted`, `inbox.message.deleted` |
 | Knowledge | `GET/PUT /api/ui/knowledge`; `POST /api/ui/knowledge/{base_id}/sources/{source_id}/index`; `GET /api/ui/knowledge/{base_id}/search` | Canonical `ui.event` envelopes: `knowledge.snapshot`, request-scoped `knowledge.search.results` |
-| Workflows | `GET/POST /api/ui/workflows`; `GET/PUT /api/ui/workflows/content`; `DELETE /api/ui/workflows/{workflow_id}`; `POST /api/ui/workflows/{workflow_id}/pause`; `POST /api/ui/workflows/{workflow_id}/resume`; `POST /api/ui/workflows/{workflow_id}/trigger`; `GET /api/ui/workflow-runs`; `GET /api/ui/document-types`; `GET /api/ui/workflows/cron-preview?expression=&timezone=&count=` (synchronous: `{"next_runs": [...]}`, `400` with the validation message) | Canonical `ui.event` envelopes: `workflows.snapshot`, `workflow.updated`, `workflow.deleted`, `workflow.runs.snapshot`, `workflow.run.started`, `workflow.run.updated`, `workflow.run.completed`, `workflow.run.failed`, `document_types.snapshot` (registry with each type's document schema and derived event/read/query port schemas). Runs start from the durable `document_events` log (see `app/backend/events/documents.py`) or from `cron` trigger nodes fired by the backend clock (`app/backend/workflows/cron.py`, last handled due time per node in `backend.state` `workflow_cron:<workflow>:<node>`), never inline from routes. |
+| Workflows | `GET/POST /api/ui/workflows`; `GET/PUT /api/ui/workflows/content`; `DELETE /api/ui/workflows/{workflow_id}`; `POST /api/ui/workflows/{workflow_id}/pause`; `POST /api/ui/workflows/{workflow_id}/resume`; `POST /api/ui/workflows/{workflow_id}/trigger`; `GET /api/ui/workflow-runs`; `GET /api/ui/document-types`; `GET /api/ui/workflows/cron-preview?expression=&timezone=&count=` (synchronous: `{"next_runs": [...]}`, `400` with the validation message) | Canonical `ui.event` envelopes: `workflows.snapshot`, `workflow.updated`, `workflow.deleted`, `workflow.runs.snapshot`, `workflow.run.started`, `workflow.run.updated`, `workflow.run.completed`, `workflow.run.failed`, `document_types.snapshot` (registry with each type's document schema and derived event/read/query port schemas). Runs start from the durable `document_events` log (see `src/backend/events/documents.py`) or from `cron` trigger nodes fired by the backend clock (`src/backend/workflows/cron.py`, last handled due time per node in `backend.state` `workflow_cron:<workflow>:<node>`), never inline from routes. |
 | Search | `GET /api/ui/search` | Request-scoped `search.results` (sections: Inbox, Tasks, Agents, Routines, Workflows, Prompts, Knowledge, Tools, Schedules) |
 | Knowledge | `GET/PUT /api/ui/knowledge`; `GET /api/ui/knowledge/{base_id}/pages`; `GET /api/ui/knowledge/{base_id}/page`; `GET /api/ui/knowledge/{base_id}/page/revisions`; `GET /api/ui/knowledge/{base_id}/page/revisions/{revision_id}` | Canonical `ui.event` envelopes: `knowledge.snapshot`, `knowledge.pages.snapshot`, `knowledge.page.loaded`, `knowledge.page.revisions.loaded`, `knowledge.page.revision.loaded`; indexer-originated `knowledge.index.started`, `knowledge.index.progress`, `knowledge.index.completed`, `knowledge.index.failed` |
 | Workflows | `GET/POST /api/ui/workflows`; `GET/PUT /api/ui/workflows/content`; `DELETE /api/ui/workflows/{workflow_id}`; `POST /api/ui/workflows/{workflow_id}/pause`; `POST /api/ui/workflows/{workflow_id}/resume`; `POST /api/ui/workflows/{workflow_id}/trigger`; `GET /api/ui/workflow-runs` | Canonical `ui.event` envelopes: `workflows.snapshot`, `workflow.updated`, `workflow.deleted`, `workflow.runs.snapshot`, `workflow.run.started`, `workflow.run.updated`, `workflow.run.completed`, `workflow.run.failed` |
 | Kanban and tasks | `GET /api/ui/kanban`; `POST /api/ui/kanban/cards`; `PATCH/DELETE /api/ui/kanban/cards/{card_id}`; `GET/PUT /api/ui/tasks/{card_id}/content`; `POST /api/ui/tasks/{card_id}/activity` | Canonical `ui.event` envelopes: `kanban.snapshot`, `task.content.updated`, `task.activity.updated` |
 | Widgets and MCP | `GET /api/ui/widgets`; `GET /api/ui/mcp`; `GET /api/ui/mcp/content`; `PATCH/DELETE /api/ui/widgets/{widget_id}`; `POST /api/ui/widgets/{widget_id}/refresh` | Canonical `ui.event` envelopes: `widgets.updated`, `mcp.snapshot` (lean list, no per-tool/log detail), `mcp.server.detail.updated` (full tools/logs for one server) |
 | Schedules and event widgets | `GET/POST /api/ui/schedules`; `POST /api/ui/schedules/{schedule_id}/trigger`; `POST /api/ui/events` | Canonical `ui.event` envelopes: `schedule.snapshot`, `widgets.updated` |
-| Instructions | `GET /api/ui/instructions`; `GET/PUT /api/ui/instructions/content`; `GET /api/ui/instructions/revisions`; `GET /api/ui/instructions/revisions/{id}`; `POST /api/ui/instructions/revisions/{id}/restore` | `instructions.snapshot` (front matter summaries), `instruction.loaded`, `instruction.revisions.loaded`, `instruction.revision.loaded`. Only `progenitor/` instructions are editable (403 otherwise); invalid front matter or changed `variables` is a 400. |
+| Instructions | `GET /api/ui/instructions`; `GET/PUT /api/ui/instructions/content`; `GET /api/ui/instructions/revisions`; `GET /api/ui/instructions/revisions/{id}`; `POST /api/ui/instructions/revisions/{id}/restore` | `instructions.snapshot` (front matter summaries), `instruction.loaded`, `instruction.revisions.loaded`, `instruction.revision.loaded`. Only `progena/` instructions are editable (403 otherwise); invalid front matter or changed `variables` is a 400. |
 | Marketplaces and plugins | `GET/PUT /api/ui/marketplaces`; `GET /api/ui/marketplaces/{name}/plugins`; `GET/POST /api/ui/plugins`; `DELETE /api/ui/plugins/{marketplace}/{plugin}` | Canonical `ui.event` envelopes: `marketplaces.snapshot`, `plugins.snapshot`, request-scoped `plugin.catalog.snapshot`. Skills are no longer authored directly — they ship inside installed marketplace plugins. |
 | Alerts | `GET /api/ui/alerts`; `POST /api/ui/alerts/viewed`; `POST /api/ui/alerts/{alert_id}/dismiss`; `POST /api/ui/alerts/{alert_id}/respond` | Canonical `ui.event` envelopes: `alerts.updated` and `alert` for independently generated alerts |
 | Logs | `GET /api/ui/logs`; `GET /api/ui/logs/sources`; `GET /api/ui/logs/export` | Canonical `ui.event` envelopes: `logs.page.loaded`, `logs.sources.loaded`, `logs.export.started`, `logs.export.chunk`, `logs.export.completed` |
@@ -311,6 +311,23 @@ The following are intentionally absent rather than compatibility endpoints:
 
 A deleted path returns `404`; it is not a fallback for a stream failure.
 
+## ChatGPT plan provider settings
+
+Provider settings retain the finite acknowledgement/canonical-event contract.
+`GET`/`POST /api/ui/providers` and `PATCH`/`DELETE /api/ui/providers/{id}`
+publish `providers.snapshot`. Its public payload includes `providers`, `go_models`,
+`chatgpt_models` (catalogues keyed by provider ID), and `chatgpt_model_errors`
+(safe per-registration errors). A catalogue failure does not hide other providers.
+
+`POST /api/ui/providers/{id}/test` publishes `providers.tested`; ChatGPT tests
+consume a supported Responses stream through `response.completed`.
+`POST /api/ui/providers/{id}/disconnect` revokes/clears the selected ChatGPT
+session and publishes a new `providers.snapshot` after success. Tokens never
+appear in these events. Account labels/status are public metadata, not credentials.
+ChatGPT model selections are checked against that registration's current catalogue.
+Registration and reauthorization use the local CLI and secure server import
+described in `docs/DOCKER.md`, not an OAuth callback on a browser API route.
+
 ## Insights and estimated model cost
 
 `GET /api/ui/insights/token-usage?range=24h|7d|30d&profile=<optional-name>`
@@ -349,6 +366,8 @@ removes pricing. Cached-input tokens use the cache rate instead of the input
 rate. Unknown cache detail is labelled as an estimate charged at the input
 rate; unknown pricing is unpriced, not zero cost. Editing rates recalculates
 history and does not claim invoice-grade historical tariffs.
+ChatGPT-plan calls retain token counts but do not use profile API prices to
+estimate charges; they are reported as unpriced with an explanatory warning.
 
 The Profiles editor provides an explicit Azure GPT-5 mini Global Standard
 USD preset, verified against the [Azure pricing page](https://azure.microsoft.com/en-us/pricing/details/azure-openai/)
@@ -356,8 +375,8 @@ on 2026-10-20: input `0.25`, cached input `0.025`, output `2.00` per million
 tokens. Displayed rounded prices are not used for calculation. This preset
 does not establish prices for other models, regions or deployment tiers.
 An absent catalog is seeded with this pricing only when
-`PROGENITOR_MODEL_DEFAULT_MODEL=gpt-5-mini` and
-`PROGENITOR_MODEL_DEFAULT_PRICING_TIER=global_standard` are both explicit.
+`PROGENA_MODEL_DEFAULT_MODEL=gpt-5-mini` and
+`PROGENA_MODEL_DEFAULT_PRICING_TIER=global_standard` are both explicit.
 Existing catalogs are never silently repriced; arbitrary deployment names
 remain unpriced until configured.
 
@@ -368,13 +387,13 @@ Start the runtime and backend separately:
 
 ```bash
 source .venv/bin/activate
-export AGENT_NAME=progenitor
-python -m app.progenitor.main
+export AGENT_NAME=progena
+python -m src.progena.main
 ```
 
 ```bash
 source .venv/bin/activate
-python -m uvicorn app.backend.main:app --host 0.0.0.0 --port 8000
+python -m uvicorn src.backend.main:app --host 0.0.0.0 --port 8000
 ```
 
 The frontend development server proxies `/api`, `/v1`, and operational health

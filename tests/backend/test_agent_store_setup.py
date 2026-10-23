@@ -5,10 +5,10 @@ from unittest.mock import Mock
 
 import pytest
 
-from app.backend.agents import store as agent_store
-from app.backend.storage.documents import PROGENITOR_STATE_PREFIX, InMemoryDocumentStore
-from app.progenitor.routines.graph import validate_routine_graph_payload
-from app.progenitor.routines.store import default_routine_graph, routine_graph_key
+from src.backend.agents import store as agent_store
+from src.backend.storage.documents import PROGENA_STATE_PREFIX, InMemoryDocumentStore
+from src.progena.routines.graph import validate_routine_graph_payload
+from src.progena.routines.store import default_routine_graph, routine_graph_key
 
 
 @pytest.mark.parametrize("existing_graph", [False, True])
@@ -17,8 +17,8 @@ def test_catalog_setup_and_graph_seeding_preserve_existing_data(monkeypatch, exi
     graph = default_routine_graph("alpha", name="Existing routine")
     graph["nodes"][0]["config"]["prompt_template"] = "Keep my edited prompt: {request}"
     if existing_graph:
-        documents.save_document(PROGENITOR_STATE_PREFIX, routine_graph_key("alpha"), graph)
-    documents.save_document(PROGENITOR_STATE_PREFIX, "unrelated", {"keep": True})
+        documents.save_document(PROGENA_STATE_PREFIX, routine_graph_key("alpha"), graph)
+    documents.save_document(PROGENA_STATE_PREFIX, "unrelated", {"keep": True})
     save = Mock(wraps=documents.save_document)
     delete = Mock(wraps=documents.delete_document)
     monkeypatch.setattr(documents, "save_document", save)
@@ -54,4 +54,4 @@ def test_catalog_setup_and_graph_seeding_preserve_existing_data(monkeypatch, exi
     else:
         save.assert_called_once()
     delete.assert_not_called()
-    assert documents.get_document(PROGENITOR_STATE_PREFIX, "unrelated").payload == {"keep": True}
+    assert documents.get_document(PROGENA_STATE_PREFIX, "unrelated").payload == {"keep": True}

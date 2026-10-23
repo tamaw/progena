@@ -1,9 +1,9 @@
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app.backend.settings.policies import create_policy_router
-from app.backend.storage.documents import PROGENITOR_STATE_PREFIX, InMemoryDocumentStore
-from app.progenitor.policies import ExecutionPolicy
+from src.backend.settings.policies import create_policy_router
+from src.backend.storage.documents import PROGENA_STATE_PREFIX, InMemoryDocumentStore
+from src.progena.settings.policies import ExecutionPolicy
 
 
 def test_policy_requests_acknowledge_and_stream_validated_persisted_documents():
@@ -20,7 +20,7 @@ def test_policy_requests_acknowledge_and_stream_validated_persisted_documents():
         assert response.status_code == 202
         assert events[-1][0] == "policies.snapshot"
         assert events[-1][1]["items"] == [policy]
-        assert store.get_document(PROGENITOR_STATE_PREFIX, "policy:test").payload == policy
+        assert store.get_document(PROGENA_STATE_PREFIX, "policy:test").payload == policy
         assert client.get("/policies").status_code == 202
         assert client.put("/policies/wrong", json=policy).status_code == 422
         policy["values"]["cache_ttl"] = -1

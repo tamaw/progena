@@ -8,13 +8,13 @@ still trigger a live UI push.
 
 from __future__ import annotations
 
-from app.backend.monitoring.state import StateReader
-from app.backend.storage.documents import PROGENITOR_STATE_PREFIX, InMemoryDocumentStore
+from src.backend.monitoring.state import StateReader
+from src.backend.storage.documents import PROGENA_STATE_PREFIX, InMemoryDocumentStore
 
 
 def _reader(servers: dict) -> tuple[StateReader, InMemoryDocumentStore]:
     store = InMemoryDocumentStore()
-    store.save_document(PROGENITOR_STATE_PREFIX, "mcp", {"mcpServers": servers})
+    store.save_document(PROGENA_STATE_PREFIX, "mcp", {"mcpServers": servers})
     reader = StateReader(
         document_store=store,
     )
@@ -31,7 +31,7 @@ def test_store_change_threads_key_to_watchers():
     reader.add_watcher(lambda snapshot, key: seen.append((snapshot, key)))
 
     # NOTIFY payload carries the changed store key; it must reach the watcher.
-    reader._on_store_change('{"prefix": "progenitor.state", "key": "mcp"}')
+    reader._on_store_change('{"prefix": "progena.state", "key": "mcp"}')
 
     assert len(seen) == 1
     assert seen[0][1] == "mcp"
@@ -50,7 +50,7 @@ def test_toggling_enabled_is_detected():
     reader._last_snapshot = snap1
 
     store.save_document(
-        PROGENITOR_STATE_PREFIX,
+        PROGENA_STATE_PREFIX,
         "mcp",
         {"mcpServers": {"jina": {"url": "https://x/mcp", "transport": "http", "enabled": False}}},
     )
@@ -70,7 +70,7 @@ def test_editing_url_is_detected():
     reader._last_snapshot = snap1
 
     store.save_document(
-        PROGENITOR_STATE_PREFIX,
+        PROGENA_STATE_PREFIX,
         "mcp",
         {"mcpServers": {"jina": {"url": "https://new/mcp", "transport": "http"}}},
     )

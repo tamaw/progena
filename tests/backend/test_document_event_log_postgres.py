@@ -8,7 +8,7 @@ import psycopg
 import pytest
 from psycopg.types.json import Jsonb
 
-from app.backend.storage.documents import PROGENITOR_STATE_PREFIX, PostgresDocumentStore
+from src.backend.storage.documents import PROGENA_STATE_PREFIX, PostgresDocumentStore
 
 
 @pytest.fixture
@@ -23,7 +23,7 @@ def _insert(conn: psycopg.Connection, key: str) -> None:
     conn.execute(
         "INSERT INTO store (prefix, key, value, created_at, updated_at) "
         "VALUES (%s, %s, %s, now(), now())",
-        (PROGENITOR_STATE_PREFIX, key, Jsonb({"payload": {"key": key}})),
+        (PROGENA_STATE_PREFIX, key, Jsonb({"payload": {"key": key}})),
     )
 
 
@@ -99,14 +99,14 @@ def test_mutate_document_is_not_overwritten_by_a_concurrent_merge(store):
     import time
 
     key = f"kanban_card:{uuid.uuid4().hex}:locked"
-    store.save_document(PROGENITOR_STATE_PREFIX, key, {"a": 0, "b": 0})
+    store.save_document(PROGENA_STATE_PREFIX, key, {"a": 0, "b": 0})
     merged = threading.Event()
     merge_errors: list[Exception] = []
     merger: threading.Thread | None = None
 
     def concurrent_merge() -> None:
         try:
-            store.merge_document(PROGENITOR_STATE_PREFIX, key, {"b": 1})
+            store.merge_document(PROGENA_STATE_PREFIX, key, {"b": 1})
         except Exception as exc:
             merge_errors.append(exc)
         finally:
@@ -121,16 +121,16 @@ def test_mutate_document_is_not_overwritten_by_a_concurrent_merge(store):
         return {**payload, "a": 1}
 
     try:
-        store.mutate_document(PROGENITOR_STATE_PREFIX, key, mutator)
+        store.mutate_document(PROGENA_STATE_PREFIX, key, mutator)
         assert merger is not None
         merger.join(timeout=5)
         assert not merger.is_alive()
         if merge_errors:
             raise merge_errors[0]
         assert merged.is_set()
-        assert store.get_document(PROGENITOR_STATE_PREFIX, key).payload == {"a": 1, "b": 1}
+        assert store.get_document(PROGENA_STATE_PREFIX, key).payload == {"a": 1, "b": 1}
     finally:
         if merger is not None:
             merger.join(timeout=5)
             assert not merger.is_alive()
-        store.delete_document(PROGENITOR_STATE_PREFIX, key)
+        store.delete_document(PROGENA_STATE_PREFIX, key)

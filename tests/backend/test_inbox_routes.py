@@ -6,9 +6,9 @@ import pytest
 from ack_helpers import assert_acknowledged
 from fastapi.testclient import TestClient
 
-from app.backend.main import app
-from app.backend.storage.documents import (
-    PROGENITOR_STATE_PREFIX,
+from src.backend.main import app
+from src.backend.storage.documents import (
+    PROGENA_STATE_PREFIX,
     InMemoryDocumentStore,
     set_default_document_store,
 )
@@ -45,12 +45,12 @@ def seeded_store(document_store):
         ("msg_new", "New digest", "2026-07-05T00:00:00+00:00", False),
     ):
         document_store.save_document(
-            PROGENITOR_STATE_PREFIX,
+            PROGENA_STATE_PREFIX,
             f"inbox_message:{message_id}",
             _message_payload(message_id, title=title, created_at=created_at, read=read),
         )
     # A junk non-dict payload row must be tolerated, not crash the snapshot.
-    document_store.save_document(PROGENITOR_STATE_PREFIX, "inbox_message:junk", None)
+    document_store.save_document(PROGENA_STATE_PREFIX, "inbox_message:junk", None)
     return document_store
 
 
@@ -58,7 +58,7 @@ class _StreamCapture:
     """Subscribe to the UI event stream for the duration of a request."""
 
     def __init__(self):
-        from app.backend.events import stream as events_stream
+        from src.backend.events import stream as events_stream
 
         self.events_stream = events_stream
         self.queue = asyncio.Queue()
@@ -116,7 +116,7 @@ class TestInboxRoutes:
 
         assert_acknowledged(response, ["inbox.snapshot"])
 
-        stored = seeded_store.get_document(PROGENITOR_STATE_PREFIX, "inbox_message:msg_new")
+        stored = seeded_store.get_document(PROGENA_STATE_PREFIX, "inbox_message:msg_new")
         assert stored.payload["read"] is True
         assert stored.payload["read_at"]
 
@@ -127,7 +127,7 @@ class TestInboxRoutes:
         response = client.post("/api/ui/inbox/msg_old/read", json={"read": False})
         assert_acknowledged(response, ["inbox.snapshot"])
 
-        stored = seeded_store.get_document(PROGENITOR_STATE_PREFIX, "inbox_message:msg_old")
+        stored = seeded_store.get_document(PROGENA_STATE_PREFIX, "inbox_message:msg_old")
         assert stored.payload["read"] is False
         assert stored.payload["read_at"] is None
 
@@ -141,7 +141,7 @@ class TestInboxRoutes:
 
         assert_acknowledged(response, ["inbox.snapshot"])
 
-        stored = seeded_store.get_document(PROGENITOR_STATE_PREFIX, "inbox_message:msg_new")
+        stored = seeded_store.get_document(PROGENA_STATE_PREFIX, "inbox_message:msg_new")
         assert stored.payload["decision"] == "approved"
         assert stored.payload["read"] is True
         assert stored.payload["read_at"]
@@ -153,7 +153,7 @@ class TestInboxRoutes:
         response = client.post("/api/ui/inbox/msg_old/decision", json={"decision": "rejected"})
         assert_acknowledged(response, ["inbox.snapshot"])
 
-        stored = seeded_store.get_document(PROGENITOR_STATE_PREFIX, "inbox_message:msg_old")
+        stored = seeded_store.get_document(PROGENA_STATE_PREFIX, "inbox_message:msg_old")
         assert stored.payload["decision"] == "rejected"
 
     def test_decide_rejects_invalid_value(self, client, seeded_store):
@@ -166,7 +166,7 @@ class TestInboxRoutes:
 
     def test_snapshot_reflects_requires_approval_and_task_id(self, client, document_store):
         document_store.save_document(
-            PROGENITOR_STATE_PREFIX,
+            PROGENA_STATE_PREFIX,
             "inbox_message:msg_plan",
             {
                 **_message_payload(
@@ -192,7 +192,7 @@ class TestInboxRoutes:
 
         assert_acknowledged(response, ["inbox.snapshot"])
 
-        stored = seeded_store.get_document(PROGENITOR_STATE_PREFIX, "inbox_message:msg_new")
+        stored = seeded_store.get_document(PROGENA_STATE_PREFIX, "inbox_message:msg_new")
         assert stored.payload["archived"] is True
 
         types = [envelope.type for envelope in capture.event_types()]
@@ -203,7 +203,7 @@ class TestInboxRoutes:
         response = client.post("/api/ui/inbox/msg_new/archive", json={"archived": False})
         assert_acknowledged(response, ["inbox.snapshot"])
 
-        stored = seeded_store.get_document(PROGENITOR_STATE_PREFIX, "inbox_message:msg_new")
+        stored = seeded_store.get_document(PROGENA_STATE_PREFIX, "inbox_message:msg_new")
         assert stored.payload["archived"] is False
 
     def test_archive_unknown_message_404s(self, client, document_store):
@@ -215,7 +215,7 @@ class TestInboxRoutes:
             response = client.delete("/api/ui/inbox/msg_old")
 
         assert_acknowledged(response, ["inbox.snapshot"])
-        assert seeded_store.get_document(PROGENITOR_STATE_PREFIX, "inbox_message:msg_old") is None
+        assert seeded_store.get_document(PROGENA_STATE_PREFIX, "inbox_message:msg_old") is None
 
         envelopes = capture.event_types()
         types = [envelope.type for envelope in envelopes]

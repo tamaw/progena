@@ -1,12 +1,15 @@
-# Progenitor Project Structure
+# Progena AI Project Structure
 
 This document focuses on the checked-in main stack only. For runtime relationships and request flow, see [`ARCHITECTURE_DIAGRAM.md`](ARCHITECTURE_DIAGRAM.md).
 
 ## Top level
 
 ```text
-progenitor/
-├── app/          # Main application code
+progena/
+├── src/          # Main application code
+├── tests/        # backend/, progena/, frontend/{unit,e2e,helpers,fixtures}
+├── package.json  # Shared frontend dependencies and npm scripts
+├── package-lock.json
 ├── data/         # Bundled assets and managed-repository workspace
 ├── docker/       # Container definitions
 ├── docs/         # Project documentation
@@ -19,16 +22,32 @@ progenitor/
 
 This overview is intentionally selective and centered on the runtime, backend, and frontend.
 
-## Application code (`app/`)
+The Python package namespace is `src`: start the runtime with
+`python -m src.progena.main` and the gateway with
+`python -m uvicorn src.backend.main:app`. Install the repository with
+`pip install -e ".[dev]"` after changing source layouts so editable package
+metadata points at the current tree.
+
+## Application code (`src/`)
 
 ```text
-app/
-├── progenitor/   # Long-running runtime service
+src/
+├── progena/   # Long-running runtime service
 │   ├── agent/    # DeepAgent setup and runtime integration
-│   ├── sse/      # Stream-envelope helpers for the HTTP+SSE chat/event path
-│   ├── llm/      # Model and prompt-loading helpers
-│   ├── runtime/  # Loop runner, scheduler, and runtime managers
-│   ├── state/    # State models and persistence helpers
+│   ├── orchestration/ # Graphs, nodes and composed loop state
+│   ├── llm/      # Provider context, model calls, schemas and response parsing
+│   ├── runtime/  # Lifecycle, heartbeat, HTTP server and streaming adapters
+│   ├── documents/ # Shared keys, kinds, schema catalog and document contracts
+│   ├── persistence/ # Database connections, checkpoints, cache, store and listener
+│   ├── workflows/ # Models, ports, derivation, validation and document store
+│   ├── routines/
+│   ├── schedules/
+│   ├── repositories/
+│   ├── sessions/
+│   ├── settings/
+│   ├── knowledge/ / instructions/ / plugins/
+│   ├── a2a/ / acp/ / async_subagents/ / mcp/
+│   ├── state/    # State lifecycle facade over domain stores
 │   ├── tools/    # Runtime tool registry and implementations
 │   └── main.py   # Runtime entry point
 ├── backend/      # FastAPI API and UI data backend
@@ -44,7 +63,7 @@ app/
 │   ├── knowledge/
 │   ├── plugins/      # Plugins and marketplaces
 │   ├── repositories/
-│   ├── modules/
+│   ├── canvases/
 │   ├── workflows/    # Execution, cron, approvals and ACP supervision
 │   ├── tasks/        # Kanban cards, content and activity
 │   ├── schedules/    # Schedules and event widgets
@@ -95,8 +114,8 @@ stored in the Postgres attachment table. See
 
 ```text
 docker/
-├── docker-compose.progenitor.yml
-├── progenitor/Dockerfile
+├── docker-compose.progena.yml
+├── progena/Dockerfile
 ├── backend/Dockerfile
 ├── frontend/Dockerfile
 ├── claude/Dockerfile       # deployed ACP sidecar

@@ -7,10 +7,10 @@ from typing import Literal
 from fastapi.testclient import TestClient
 from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 
-import app.backend.events.stream as events_stream
-from app.backend.insights.service import build_token_usage_snapshot
-from app.backend.main import app
-from app.backend.storage.documents import CheckpointMessageBlob, StoredDocument
+import src.backend.events.stream as events_stream
+from src.backend.insights.service import build_token_usage_snapshot
+from src.backend.main import app
+from src.backend.storage.documents import CheckpointMessageBlob, StoredDocument
 
 
 class _InsightsStore:
@@ -87,6 +87,27 @@ def _profiles() -> dict:
             },
         },
     }
+
+
+def test_chatgpt_plan_usage_is_not_charged_at_profile_api_rates():
+    end = datetime(2026, 10, 20, 12, tzinfo=UTC)
+    occurred = end - timedelta(hours=1)
+    message = _message(
+        "plan-call", occurred.isoformat(), {"input_tokens": 100, "output_tokens": 20}
+    )
+    message["response_metadata"]["insights"]["provider"] = "chatgpt"
+    snapshot = build_token_usage_snapshot(
+        _InsightsStore([_record("plan", occurred, [message])], _profiles()),
+        range_name="24h",
+        profile=None,
+        generated_at=end,
+    )
+
+    assert snapshot["totals"]["total_tokens"] == 120
+    assert snapshot["totals"]["costs"] == []
+    assert snapshot["totals"]["unpriced_call_count"] == 1
+    assert snapshot["by_profile"][0]["costs"] == []
+    assert all(bucket["costs"] == [] for bucket in snapshot["series"])
 
 
 def test_usage_deduplicates_checkpoint_snapshots_and_honors_half_open_boundaries():
@@ -304,7 +325,7 @@ def test_usage_marks_missing_usage_and_missing_cache_detail_without_calling_them
 
 
 def test_token_usage_route_acknowledges_and_correlates_snapshot(monkeypatch):
-    from app.backend.insights import routes as insights_routes
+    from src.backend.insights import routes as insights_routes
 
     payload = {
         "range": "24h",

@@ -9,15 +9,15 @@ Covers two behaviours added for the live Tools page:
 
 from __future__ import annotations
 
-from app.backend.monitoring.state import StateReader
-from app.backend.storage.documents import PROGENITOR_STATE_PREFIX, InMemoryDocumentStore
+from src.backend.monitoring.state import StateReader
+from src.backend.storage.documents import PROGENA_STATE_PREFIX, InMemoryDocumentStore
 
 
 def _reader(servers: dict, mcp_tools: dict | None = None):
     store = InMemoryDocumentStore()
-    store.save_document(PROGENITOR_STATE_PREFIX, "mcp", {"mcpServers": servers})
+    store.save_document(PROGENA_STATE_PREFIX, "mcp", {"mcpServers": servers})
     if mcp_tools is not None:
-        store.save_document(PROGENITOR_STATE_PREFIX, "mcp_tools", mcp_tools)
+        store.save_document(PROGENA_STATE_PREFIX, "mcp_tools", mcp_tools)
     return StateReader(
         document_store=store,
     ), store
@@ -76,7 +76,7 @@ def test_fingerprint_changes_when_discovered_tools_change():
     # Discovery completes after the config write: tools land in the mcp_tools doc
     # with no change to the server config. The fingerprint must still move.
     store.save_document(
-        PROGENITOR_STATE_PREFIX,
+        PROGENA_STATE_PREFIX,
         "mcp_tools",
         {"tools": [{"name": "jina_search", "server": "jina", "enabled": True}]},
     )

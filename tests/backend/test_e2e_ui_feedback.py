@@ -2,7 +2,7 @@
 End-to-End UI Feedback Integration Tests.
 
 CRITICAL: These tests verify that the aliens will see proper feedback
-from the Progenitor agent and all sub-agents through the client UI.
+from the Progena agent and all sub-agents through the client UI.
 
 Tests the complete feedback path:
 1. User sends message via UI
@@ -19,9 +19,9 @@ from types import SimpleNamespace
 import pytest
 from fastapi.testclient import TestClient
 
-from app.backend.main import app
-from app.backend.monitoring.state import AgentInfo, BuildInfo, HealthInfo, StateReader
-from app.backend.storage.documents import PROGENITOR_STATE_PREFIX, InMemoryDocumentStore
+from src.backend.main import app
+from src.backend.monitoring.state import AgentInfo, BuildInfo, HealthInfo, StateReader
+from src.backend.storage.documents import PROGENA_STATE_PREFIX, InMemoryDocumentStore
 
 
 @pytest.fixture
@@ -32,7 +32,7 @@ def client():
 
 @pytest.fixture
 def mock_state_files():
-    """Create mock state in an InMemoryDocumentStore simulating a running progenitor."""
+    """Create mock state in an InMemoryDocumentStore simulating a running progena."""
     store = InMemoryDocumentStore()
 
     # Health - agent is running (Postgres document, no file)
@@ -43,7 +43,7 @@ def mock_state_files():
         "cycle_count": 42,
         "pid": 12345,
     }
-    store.save_document(PROGENITOR_STATE_PREFIX, "health", health_data)
+    store.save_document(PROGENA_STATE_PREFIX, "health", health_data)
 
     # Registry with agents
     agents_data = {
@@ -86,8 +86,8 @@ def mock_state_files():
             }
         }
     }
-    store.save_document(PROGENITOR_STATE_PREFIX, "registry", agents_data)
-    store.save_document(PROGENITOR_STATE_PREFIX, "mcp", mcp_data)
+    store.save_document(PROGENA_STATE_PREFIX, "registry", agents_data)
+    store.save_document(PROGENA_STATE_PREFIX, "mcp", mcp_data)
 
     # Build state - in progress
     build_state = {
@@ -118,7 +118,7 @@ def mock_state_files():
             },
         ],
     }
-    store.save_document(PROGENITOR_STATE_PREFIX, "build_state", build_state)
+    store.save_document(PROGENA_STATE_PREFIX, "build_state", build_state)
 
     # Schedule
     schedule = {
@@ -129,7 +129,7 @@ def mock_state_files():
             "enabled": True,
         },
     }
-    store.save_document(PROGENITOR_STATE_PREFIX, "schedule", schedule)
+    store.save_document(PROGENA_STATE_PREFIX, "schedule", schedule)
 
     return SimpleNamespace(document_store=store)
 
@@ -290,13 +290,13 @@ class TestAgentFeedbackVisibility:
 
         # Update registry to simulate agent status change
         registry_doc = mock_state_files.document_store.get_document(
-            PROGENITOR_STATE_PREFIX, "registry", {}
+            PROGENA_STATE_PREFIX, "registry", {}
         )
         registry = registry_doc.payload if registry_doc is not None else {}
         if isinstance(registry, dict) and "agents" in registry:
             registry["agents"][1]["status"] = "ready"  # tech-analyzer becomes ready
             mock_state_files.document_store.save_document(
-                PROGENITOR_STATE_PREFIX, "registry", registry
+                PROGENA_STATE_PREFIX, "registry", registry
             )
 
         # Re-read
@@ -316,13 +316,13 @@ class TestAgentFeedbackVisibility:
         for phase in phases:
             # Update build phase
             build_doc = mock_state_files.document_store.get_document(
-                PROGENITOR_STATE_PREFIX, "build_state", {}
+                PROGENA_STATE_PREFIX, "build_state", {}
             )
             build_state = build_doc.payload if build_doc is not None else {}
             if isinstance(build_state, dict):
                 build_state["build_phase"] = phase
                 mock_state_files.document_store.save_document(
-                    PROGENITOR_STATE_PREFIX, "build_state", build_state
+                    PROGENA_STATE_PREFIX, "build_state", build_state
                 )
 
             # Verify phase is reported correctly
@@ -338,13 +338,13 @@ class TestAgentFeedbackVisibility:
 
         # Complete a task
         build_doc = mock_state_files.document_store.get_document(
-            PROGENITOR_STATE_PREFIX, "build_state", {}
+            PROGENA_STATE_PREFIX, "build_state", {}
         )
         build_state = build_doc.payload if build_doc is not None else {}
         if isinstance(build_state, dict) and "backlog" in build_state:
             build_state["backlog"][0]["status"] = "completed"
             mock_state_files.document_store.save_document(
-                PROGENITOR_STATE_PREFIX, "build_state", build_state
+                PROGENA_STATE_PREFIX, "build_state", build_state
             )
 
         # Verify
@@ -378,12 +378,12 @@ class TestLoopStatusFeedback:
         )
         # Update health to stopped
         health_doc = mock_state_files.document_store.get_document(
-            PROGENITOR_STATE_PREFIX, "health", {}
+            PROGENA_STATE_PREFIX, "health", {}
         )
         health_payload = dict(health_doc.payload) if health_doc is not None else {}
         health_payload["status"] = "stopped"
         mock_state_files.document_store.save_document(
-            PROGENITOR_STATE_PREFIX, "health", health_payload
+            PROGENA_STATE_PREFIX, "health", health_payload
         )
 
         health = reader.get_health()

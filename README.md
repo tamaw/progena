@@ -1,89 +1,29 @@
-# Progenitor
+# Progena AI
 
-Progenitor is a perpetual, conversational AI agent system built with LangGraph. It includes a web frontend, backend API, and PostgreSQL-backed runtime.
+[Progena AI](https://progena.ai) is a self-hosted conversational AI agent system. Chat with an agent, connect tools, automate work with workflows and schedules, and create interactive canvases—all through a web interface.
 
-## Prerequisites
+## Features
 
-- Docker Engine with Docker Compose
-- An Azure OpenAI Responses API deployment and its base URL and API key
+- Persistent conversations and PostgreSQL-backed agent state.
+- Tools and integrations through MCP, A2A and ACP.
+- Workflows and scheduled tasks.
+- Agent-built interactive canvases.
+- Configurable model providers and profiles: Microsoft Foundry, OpenCode Go, and ChatGPT plan OAuth via the Responses API.
 
-For local development, also install Python 3.11+ and Node.js 22.12+ with npm.
+Built with Python, FastAPI, LangGraph and React.
 
-## Docker quick start
+## Getting started
 
-From a fresh clone, create the Docker resources required by the Compose stack:
+You'll need Docker with Compose, or Python, Node.js and PostgreSQL with pgvector for local development. Configure a supported model provider to run agent tasks.
 
-```bash
-docker network create progenitor_network
-docker volume create progenitor-postgres-data
-```
+- [Docker setup](docs/DOCKER.md)
+- [Local development](docs/LOCAL_STARTUP.md)
+- [Architecture](docs/ARCHITECTURE_DIAGRAM.md)
+- [API documentation](docs/BACKEND.md)
 
-Copy the environment template, then set your Azure endpoint, API key and deployment name in `.env`:
+Progena is under active development. Keep deployments private or behind an authenticated reverse proxy; agents with shell and tool access should run only in environments you trust.
 
-```bash
-cp .env.example .env
-```
-
-Configure model connections in **Settings → Providers**. Foundry and OpenCode Go use the **Responses API only**. Profiles can select an explicit connection or inherit the default. Saved changes apply to new turns; active turns retain their connection.
-
-Connections live in ordinary `provider_connection` / `provider_settings` tables in the backend PostgreSQL database (`BACKEND_DATABASE_NAME`, default `backend`), not agent state. Both services need access to this database.
-
-Keys are write-only and either reference `AZURE_OPENAI_API_KEY`, `OPENCODE_GO_API_KEY`, or `PROGENITOR_PROVIDER_*_API_KEY`, or are encrypted in the database. Database credentials require the same stable `PROGENITOR_PROVIDER_ENCRYPTION_KEY` Fernet key in backend and runtime; losing it makes stored keys unreadable. Custom environment sources must be supplied to both services.
-
-A legacy Azure endpoint is imported once on initial provider-database setup. `/openai/responses?api-version=...` becomes `/openai/v1`. An invalid initial endpoint leaves setup retryable; after setup completes, legacy endpoint environment changes are ignored. An empty installation starts without making model calls so providers can be configured.
-
-Go uses conversation-scoped `x-opencode-session` headers and does not receive Foundry reasoning overrides. Knowledge embeddings require an explicitly selected Foundry connection. Independent A2A credentials and Claude ACP authentication are unchanged.
-
-Optional environment credentials and legacy first-run import settings:
-
-```dotenv
-AZURE_OPENAI_BASE_URL=https://<resource>.openai.azure.com/openai/v1
-AZURE_OPENAI_API_KEY=<your-api-key>
-OPENCODE_GO_API_KEY=<your-go-api-key>
-PROGENITOR_MODEL_DEFAULT=<your-deployment-name>
-# Required only for database-stored keys:
-PROGENITOR_PROVIDER_ENCRYPTION_KEY=<shared-fernet-key>
-```
-
-Start the stack from the repository root:
-
-```bash
-docker compose --env-file .env -f docker/docker-compose.progenitor.yml up --build -d
-```
-
-Open [http://127.0.0.1:8081](http://127.0.0.1:8081) for loopback-only access. In a public deployment, use the host nginx public HTTPS URL: the host owns TLS certificates and OAuth2 authentication, while the Compose frontend and backend communicate over HTTP.
-
-When rolling out this stack, change the host nginx upstream for `127.0.0.1:8081` from `https://` to `http://` at the same time as the Compose frontend port mapping changes to container port 80. This does not change public HTTPS; TLS remains terminated at host nginx.
-
-Useful commands:
-
-```bash
-docker compose --env-file .env -f docker/docker-compose.progenitor.yml logs -f
-docker compose --env-file .env -f docker/docker-compose.progenitor.yml down
-```
-
-## Local development
-
-Create and activate a virtual environment, then install the development dependencies:
-
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -e ".[dev]"
-```
-
-A local run also needs PostgreSQL with pgvector, the Azure OpenAI environment variables above, the runtime, backend, and frontend processes. Follow the complete [local startup guide](docs/LOCAL_STARTUP.md).
-
-Standalone A2A agents and their image/deployment ownership live in [progentior.agents](https://github.com/tamaw/progentior.agents). This repository contains Progenitor and its built-in object agents.
-
-## Documentation
-
-- [System specification](docs/SPEC.md)
-- [Architecture diagram](docs/ARCHITECTURE_DIAGRAM.md)
-- [Docker stack reference](docs/DOCKER.md)
-- [Local startup guide](docs/LOCAL_STARTUP.md)
-- [Backend API](docs/BACKEND.md)
-- [Project structure](docs/PROJECT_STRUCTURE.md)
+Standalone A2A agents are maintained separately in [progena.agents](https://github.com/tamaw/progena.agents), currently a private repository.
 
 ## License
 

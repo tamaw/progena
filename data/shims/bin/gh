@@ -2,8 +2,8 @@
 # Guardrail only: absolute paths can bypass this shim; the container is the boundary.
 set -euo pipefail
 
-REAL_PATH="${PROGENITOR_SHIM_SYSTEM_PATH:-/usr/bin:/bin}"
-deny() { printf 'progenitor-shim: refused: %s\n' "$*" >&2; exit 2; }
+REAL_PATH="${PROGENA_SHIM_SYSTEM_PATH:-/usr/bin:/bin}"
+deny() { printf 'progena-shim: refused: %s\n' "$*" >&2; exit 2; }
 
 args=("$@")
 for arg in "${args[@]}"; do
@@ -21,11 +21,11 @@ case "$group:$verb" in
     ;;
   repo:clone)
     # Same opt-in as git clone (manifest git_write: true).
-    [[ "${PROGENITOR_SHIM_GIT_WRITE:-}" == "1" ]] || deny "gh $group $verb"
+    [[ "${PROGENA_SHIM_GIT_WRITE:-}" == "1" ]] || deny "gh $group $verb"
     ;;
   pr:create)
     # Same opt-in as git push (manifest git_publish: true).
-    [[ "${PROGENITOR_SHIM_GIT_WRITE:-}" == "1" && "${PROGENITOR_SHIM_GIT_PUBLISH:-}" == "1" ]] \
+    [[ "${PROGENA_SHIM_GIT_WRITE:-}" == "1" && "${PROGENA_SHIM_GIT_PUBLISH:-}" == "1" ]] \
       || deny "gh $group $verb"
     ;;
   *)

@@ -1,12 +1,12 @@
 # State documents and virtual filesystem mounts
 
-Progenitor persists runtime documents in the LangGraph store's Postgres-backed
-`("progenitor", "state")` namespace. JSON-looking paths are agent-facing
+Progena persists runtime documents in the LangGraph store's Postgres-backed
+`("progena", "state")` namespace. JSON-looking paths are agent-facing
 virtual files; they are not files written under `data/state/` or another
 repository state directory. The backend and runtime use the same persisted
 documents, while static assets remain checked in under `data/`.
 
-`app/progenitor/agent/backends.py:create_progenitor_backend` is the source of
+`src/progena/agent/filesystem/mounts.py:create_progena_backend` is the source of
 truth for mounts. A route is present only when its dependencies are configured:
 the Postgres document routes require a `StateManager`, and `/attachments/`
 requires a database URL.
@@ -16,7 +16,7 @@ requires a database URL.
 The agent sees both ordinary read-only filesystem mounts and virtual document
 mounts:
 
-- Disk-backed, read-only: `/self/` (`app/`), `/repos/` (managed worktrees),
+- Disk-backed, read-only: `/self/` (`src/`), `/repos/` (managed worktrees),
   `/logs/`, `/schemas/`, `/skills/`, and bundled native-agent paths under
   `/agents/objects/` and `/agents/native/`.
 - Postgres-backed content: `/memories/`, `/instructions/`, `/knowledge/`, and
@@ -24,15 +24,15 @@ mounts:
   plugin skills and agents receive scoped read-only paths below `/skills/` and
   `/agents/`; native skills and native agent manifests remain bundled files.
 - Postgres-backed virtual document directories: `/tasks/`, `/workflows/`,
-  `/routines/`, `/policies/`, `/inbox/`, `/alerts/`, `/sessions/`, `/modules/`, and
-  `/config/repos/`. These are collections of documents, not subdirectories on
+  `/routines/`, `/policies/`, `/inbox/`, `/alerts/`, `/sessions/`, `/canvases/`,
+  `/artifacts/`, and `/config/repos/`. These are collections of documents, not subdirectories on
   disk. `/config/repos/` shadows the broader `/config/` route for repository
   declarations.
 - Postgres attachment blobs: `/attachments/` is read-only and exposes uploaded
   files for the active conversation. It is not a state-document mount.
 
 `/tasks/` exposes `board.json` plus one Markdown file per card; `/workflows/`,
-`/routines/`, `/policies/`, `/inbox/`, `/alerts/`, `/sessions/`, `/modules/`, and
+`/routines/`, `/policies/`, `/inbox/`, `/alerts/`, `/sessions/`, `/canvases/`, `/artifacts/`, and
 `/config/repos/` likewise map document collections to files. Session files
 render the chat body with YAML front matter; only supported front-matter fields
 are editable.
@@ -72,7 +72,7 @@ rather than by sharing an in-memory filesystem.
 
 ## Inbox message revisions
 
-Each `/inbox/<id>.md` message is a separate `progenitor.state` /
+Each `/inbox/<id>.md` message is a separate `progena.state` /
 `inbox_message:<id>` store row. Backend startup installs a trigger that captures
 its complete JSON payload into `inbox_message_revisions` on insert, update, and
 delete, and backfills currently stored messages. Like `routine_graph_revisions`,
@@ -82,28 +82,40 @@ and decision changes can also produce revisions; writing identical content
 again does not. History is stored only; the inbox has no revision browser or
 restore action.
 
-## Modules
+## Canvases
 
-Agent-built UI modules (dashboards, diagrams, games) are directories the agent
-writes at `/modules/<name>/` (`ModuleDirectoryBackend`,
-`app/progenitor/agent/module_backend.py`). Each file is one `module:<name>/<path>`
+Agent-built UI canvases (dashboards, diagrams, games) are directories the agent
+writes at `/canvases/<name>/` (`CanvasDirectoryBackend`,
+`src/progena/agent/filesystem/canvases.py`). Each file is one `canvas:<name>/<path>`
 content document (`{content, updated_at}`); `manifest.json`
-(`module_manifest.schema.v1.json`) must be written first. Names, paths, file
+(`canvas_manifest.schema.v1.json`) must be written first. Names, paths, file
 types and size caps are shared by the runtime mount and the backend in
-`app/progenitor/modules.py`. The mount also projects read-only
-`/modules/_catalogue.json` (vendored libraries from `data/modules/libraries.json`,
-document types, host API) and `/modules/<name>/status.json` (last load result
-reported by the browser, `module_status:<name>`).
+`src/progena/canvases/contracts.py`. The mount also projects read-only
+`/canvases/_catalogue.json` (vendored libraries from `data/canvases/libraries.json`,
+document types, host API) and `/canvases/<name>/status.json` (last load result
+reported by the browser, `canvas_status:<name>`).
 
-A module's own runtime state lives in `module_data:<name>/<key>` documents
-(`{value, updated_at}`), written only by the backend on the module's behalf; a
-module cannot write any other document. Backend startup installs
-`module_revisions`, an immutable per-file history captured by trigger on
-`module:` rows (writes with changed content and deletes); the Modules page can
-view any revision and restore the module to a point in time, which is itself a
-normal write. `module`, `module_data` and `module_status` are built-in document
-types, so workflows and other modules can react to them. Routes, events and the
-sandbox loading design are in [MODULES.md](MODULES.md).
+A canvas's own runtime state lives in `canvas_data:<name>/<key>` documents
+(`{value, updated_at}`), written only by the backend on the canvas's behalf; a
+canvas cannot write any other document. Backend startup installs
+`canvas_revisions`, an immutable per-file history captured by trigger on
+`canvas:` rows (writes with changed content and deletes); like inbox history it
+is stored only, with no browser or restore. `canvas`, `canvas_data` and `canvas_status` are built-in document
+types, so workflows and other canvases can react to them. Routes, events and the
+sandbox loading design are in [CANVASES.md](CANVASES.md).
+
+## Artifacts
+
+Data files that canvases visualise live at `/artifacts/<path>`
+(`ArtifactDirectoryBackend`, `src/progena/agent/filesystem/artifacts.py`), one
+`artifact:<path>` content document (`{content, updated_at}`) per file. Paths,
+types (`.csv`, `.tsv`, `.json`, `.jsonl`, `.md`, `.txt`) and the 1 MiB cap are in
+`src/progena/artifacts/contracts.py`; workflow `document_write` and
+`document_create` nodes on the `artifact` type are held to the same rules. Only
+the latest content is kept. Progena has the whole mount; an object agent
+writes only below a declared `mounts` path such as `/artifacts/research/`.
+Canvases read artifacts with `host.artifacts` and stay live through `artifact.*`
+document events (see [CANVASES.md](CANVASES.md)).
 
 ## Model profiles
 
@@ -126,11 +138,11 @@ Unsupported fields and malformed configuration produce `422`; unknown profiles
 produce `404`. The full public snapshot is validated before persistence, and
 unchanged raw siblings/private properties are retained.
 
-`profiles.json` is also an agent-writable `/config/` virtual file. Progenitor can
+`profiles.json` is also an agent-writable `/config/` virtual file. Progena can
 write the complete validated map to add, edit, or remove profiles; its
 `StateManager` write lands in the same Postgres row as the UI route.
 
-Postgres changes to the `progenitor.state` / `profile` document trigger an
+Postgres changes to the `progena.state` / `profile` document trigger an
 unsolicited `profiles.snapshot`. This key bypasses coarse `StateSnapshot` diff
 filtering because profiles are not runtime-health fields. The existing canonical
 stream is reused: no profile-specific stream or polling. On `connection.ready`

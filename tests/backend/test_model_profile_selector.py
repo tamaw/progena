@@ -12,8 +12,9 @@ from ack_helpers import assert_acknowledged
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app.backend.settings.model_profiles import create_model_profile_router
-from app.backend.storage.documents import PROGENITOR_STATE_PREFIX, InMemoryDocumentStore
+import src.backend.settings.model_profiles as model_profile_routes
+from src.backend.settings.model_profiles import create_model_profile_router
+from src.backend.storage.documents import PROGENA_STATE_PREFIX, InMemoryDocumentStore
 
 
 class FakeProviderRepository:
@@ -55,7 +56,7 @@ class TestPublicLeakageGuard:
     def test_canonical_fields_are_exposed(self):
         store = InMemoryDocumentStore()
         store.save_document(
-            PROGENITOR_STATE_PREFIX,
+            PROGENA_STATE_PREFIX,
             "profile",
             {
                 "general": {
@@ -114,7 +115,7 @@ class TestGetAcknowledgement:
     )
     def test_get_reports_malformed_store_document(self, payload):
         store = InMemoryDocumentStore()
-        store.save_document(PROGENITOR_STATE_PREFIX, "profile", payload)
+        store.save_document(PROGENA_STATE_PREFIX, "profile", payload)
         app, events = _make_app(store)
         with TestClient(app) as client:
             response = client.get("/model-profiles")
@@ -132,7 +133,7 @@ class TestGetAcknowledgement:
     def test_get_migrates_legacy_azure_profile_to_default_foundry(self):
         store = InMemoryDocumentStore()
         store.save_document(
-            PROGENITOR_STATE_PREFIX,
+            PROGENA_STATE_PREFIX,
             "profile",
             {"general": {"provider": "azure_openai", "deployment": "legacy"}},
         )
@@ -143,7 +144,7 @@ class TestGetAcknowledgement:
         with TestClient(app) as client:
             response = client.get("/model-profiles")
         assert response.status_code == 202
-        assert store.get_document(PROGENITOR_STATE_PREFIX, "profile").payload == {
+        assert store.get_document(PROGENA_STATE_PREFIX, "profile").payload == {
             "general": {"provider_id": "foundry-1", "deployment": "legacy"}
         }
         assert events[-1][1]["profiles"][0]["provider_id"] == "foundry-1"
@@ -151,7 +152,7 @@ class TestGetAcknowledgement:
     def test_get_migration_removes_legacy_connection_fields(self):
         store = InMemoryDocumentStore()
         store.save_document(
-            PROGENITOR_STATE_PREFIX,
+            PROGENA_STATE_PREFIX,
             "profile",
             {
                 "general": {
@@ -172,7 +173,7 @@ class TestGetAcknowledgement:
             response = client.get("/model-profiles")
 
         assert response.status_code == 202
-        assert store.get_document(PROGENITOR_STATE_PREFIX, "profile").payload == {
+        assert store.get_document(PROGENA_STATE_PREFIX, "profile").payload == {
             "general": {
                 "provider_id": "foundry-1",
                 "deployment": "legacy",
@@ -186,7 +187,7 @@ class TestPatchEdits:
     def test_patch_updates_deployment(self):
         store = InMemoryDocumentStore()
         store.save_document(
-            PROGENITOR_STATE_PREFIX,
+            PROGENA_STATE_PREFIX,
             "profile",
             {
                 "general": {
@@ -204,13 +205,13 @@ class TestPatchEdits:
         assert events[-1][0] == "profiles.snapshot"
         profiles = events[-1][1]["profiles"]
         assert profiles[0]["deployment"] == "new"
-        saved = store.get_document(PROGENITOR_STATE_PREFIX, "profile").payload
+        saved = store.get_document(PROGENA_STATE_PREFIX, "profile").payload
         assert saved["general"]["deployment"] == "new"
 
     def test_patch_preserves_sibling_profiles(self):
         store = InMemoryDocumentStore()
         store.save_document(
-            PROGENITOR_STATE_PREFIX,
+            PROGENA_STATE_PREFIX,
             "profile",
             {
                 "general": {"provider_id": "foundry-1", "deployment": "general-deployment"},
@@ -221,14 +222,14 @@ class TestPatchEdits:
         with TestClient(app) as client:
             response = client.patch("/model-profiles/general", json={"deployment": "updated"})
         assert response.status_code == 202
-        saved = store.get_document(PROGENITOR_STATE_PREFIX, "profile").payload
+        saved = store.get_document(PROGENA_STATE_PREFIX, "profile").payload
         assert saved["general"]["deployment"] == "updated"
         assert saved["review"]["deployment"] == "review-deployment"
 
     def test_patch_adds_and_removes_reasoning_fields(self):
         store = InMemoryDocumentStore()
         store.save_document(
-            PROGENITOR_STATE_PREFIX,
+            PROGENA_STATE_PREFIX,
             "profile",
             {
                 "general": {
@@ -250,7 +251,7 @@ class TestPatchEdits:
                 },
             )
         assert r1.status_code == 202
-        saved = store.get_document(PROGENITOR_STATE_PREFIX, "profile").payload
+        saved = store.get_document(PROGENA_STATE_PREFIX, "profile").payload
         assert saved["general"]["reasoning_enabled"] is True
         assert saved["general"]["reasoning_effort"] == "high"
         assert saved["general"]["reasoning_summary"] == "concise"
@@ -266,7 +267,7 @@ class TestPatchEdits:
                 },
             )
         assert r2.status_code == 202
-        saved = store.get_document(PROGENITOR_STATE_PREFIX, "profile").payload
+        saved = store.get_document(PROGENA_STATE_PREFIX, "profile").payload
         assert "reasoning_enabled" not in saved["general"]
         assert "reasoning_effort" not in saved["general"]
         assert "reasoning_summary" not in saved["general"]
@@ -274,7 +275,7 @@ class TestPatchEdits:
     def test_patch_persists_pricing_and_null_removes_it(self):
         store = InMemoryDocumentStore()
         store.save_document(
-            PROGENITOR_STATE_PREFIX,
+            PROGENA_STATE_PREFIX,
             "profile",
             {"general": {"provider_id": "foundry-1", "deployment": "greeting"}},
         )
@@ -293,15 +294,14 @@ class TestPatchEdits:
         assert events[-2][1]["profiles"][0]["pricing"] == pricing
         assert removed.status_code == 202
         assert (
-            "pricing"
-            not in store.get_document(PROGENITOR_STATE_PREFIX, "profile").payload["general"]
+            "pricing" not in store.get_document(PROGENA_STATE_PREFIX, "profile").payload["general"]
         )
 
     @pytest.mark.parametrize("rate", ["NaN", "Infinity", "-0.01"])
     def test_patch_rejects_nonfinite_or_negative_pricing(self, rate):
         store = InMemoryDocumentStore()
         store.save_document(
-            PROGENITOR_STATE_PREFIX,
+            PROGENA_STATE_PREFIX,
             "profile",
             {"general": {"provider_id": "foundry-1", "deployment": "greeting"}},
         )
@@ -322,14 +322,13 @@ class TestPatchEdits:
         assert response.status_code == 422
         assert events == []
         assert (
-            "pricing"
-            not in store.get_document(PROGENITOR_STATE_PREFIX, "profile").payload["general"]
+            "pricing" not in store.get_document(PROGENA_STATE_PREFIX, "profile").payload["general"]
         )
 
     def test_patch_missing_profile_returns_404(self):
         store = InMemoryDocumentStore()
         store.save_document(
-            PROGENITOR_STATE_PREFIX,
+            PROGENA_STATE_PREFIX,
             "profile",
             {"general": {"provider_id": "foundry-1", "deployment": "greeting"}},
         )
@@ -341,7 +340,7 @@ class TestPatchEdits:
     def test_patch_empty_deployment_returns_422(self):
         store = InMemoryDocumentStore()
         store.save_document(
-            PROGENITOR_STATE_PREFIX,
+            PROGENA_STATE_PREFIX,
             "profile",
             {"general": {"provider_id": "foundry-1", "deployment": "greeting"}},
         )
@@ -353,7 +352,7 @@ class TestPatchEdits:
     def test_patch_null_deployment_returns_422(self):
         store = InMemoryDocumentStore()
         store.save_document(
-            PROGENITOR_STATE_PREFIX,
+            PROGENA_STATE_PREFIX,
             "profile",
             {"general": {"provider_id": "foundry-1", "deployment": "greeting"}},
         )
@@ -365,7 +364,7 @@ class TestPatchEdits:
     def test_patch_rejects_non_boolean_reasoning_enabled(self):
         store = InMemoryDocumentStore()
         store.save_document(
-            PROGENITOR_STATE_PREFIX,
+            PROGENA_STATE_PREFIX,
             "profile",
             {"general": {"provider_id": "foundry-1", "deployment": "greeting"}},
         )
@@ -377,7 +376,7 @@ class TestPatchEdits:
     def test_patch_rejects_empty_reasoning_effort(self):
         store = InMemoryDocumentStore()
         store.save_document(
-            PROGENITOR_STATE_PREFIX,
+            PROGENA_STATE_PREFIX,
             "profile",
             {"general": {"provider_id": "foundry-1", "deployment": "greeting"}},
         )
@@ -389,7 +388,7 @@ class TestPatchEdits:
     def test_patch_rejects_arbitrary_extra_fields(self):
         store = InMemoryDocumentStore()
         store.save_document(
-            PROGENITOR_STATE_PREFIX,
+            PROGENA_STATE_PREFIX,
             "profile",
             {"general": {"provider_id": "foundry-1", "deployment": "greeting"}},
         )
@@ -404,7 +403,7 @@ class TestPatchEdits:
     def test_patch_profile_with_special_characters_in_name(self):
         store = InMemoryDocumentStore()
         store.save_document(
-            PROGENITOR_STATE_PREFIX,
+            PROGENA_STATE_PREFIX,
             "profile",
             {
                 "smoke profile/review": {
@@ -420,13 +419,13 @@ class TestPatchEdits:
                 f"/model-profiles/{encoded_name}", json={"deployment": "updated"}
             )
         assert response.status_code == 202
-        saved = store.get_document(PROGENITOR_STATE_PREFIX, "profile").payload
+        saved = store.get_document(PROGENA_STATE_PREFIX, "profile").payload
         assert saved["smoke profile/review"]["deployment"] == "updated"
 
     def test_patch_rejects_unsupported_go_deployment(self):
         store = InMemoryDocumentStore()
         store.save_document(
-            PROGENITOR_STATE_PREFIX,
+            PROGENA_STATE_PREFIX,
             "profile",
             {"general": {"provider_id": "foundry-1", "deployment": "greeting"}},
         )
@@ -442,7 +441,7 @@ class TestPatchEdits:
     def test_patch_rejects_unknown_provider_id(self):
         store = InMemoryDocumentStore()
         store.save_document(
-            PROGENITOR_STATE_PREFIX,
+            PROGENA_STATE_PREFIX,
             "profile",
             {"general": {"provider_id": "foundry-1", "deployment": "greeting"}},
         )
@@ -456,7 +455,7 @@ class TestDeleteProfiles:
     def test_delete_preserves_remaining_raw_profiles_and_broadcasts_snapshot(self):
         store = InMemoryDocumentStore()
         store.save_document(
-            PROGENITOR_STATE_PREFIX,
+            PROGENA_STATE_PREFIX,
             "profile",
             {
                 "general": {
@@ -475,7 +474,7 @@ class TestDeleteProfiles:
 
         assert response.status_code == 202
         assert_acknowledged(response, ["profiles.snapshot"], request_id="delete-test")
-        assert store.get_document(PROGENITOR_STATE_PREFIX, "profile").payload == {
+        assert store.get_document(PROGENA_STATE_PREFIX, "profile").payload == {
             "general": {
                 "provider_id": "foundry-1",
                 "deployment": "general-deployment",
@@ -500,7 +499,7 @@ class TestDeleteProfiles:
     def test_delete_migrates_legacy_catalog_before_removing_profile(self):
         store = InMemoryDocumentStore()
         store.save_document(
-            PROGENITOR_STATE_PREFIX,
+            PROGENA_STATE_PREFIX,
             "profile",
             {
                 "general": {
@@ -525,7 +524,7 @@ class TestDeleteProfiles:
 
         assert response.status_code == 202
         assert_acknowledged(response, ["profiles.snapshot"], request_id="delete-migration-test")
-        assert store.get_document(PROGENITOR_STATE_PREFIX, "profile").payload == {
+        assert store.get_document(PROGENA_STATE_PREFIX, "profile").payload == {
             "review": {
                 "provider_id": "foundry-1",
                 "deployment": "review-deployment",
@@ -550,14 +549,14 @@ class TestDeleteProfiles:
     def test_delete_unknown_profile_does_not_persist_or_broadcast(self):
         store = InMemoryDocumentStore()
         original = {"general": {"provider_id": "foundry-1", "deployment": "general"}}
-        store.save_document(PROGENITOR_STATE_PREFIX, "profile", original)
+        store.save_document(PROGENA_STATE_PREFIX, "profile", original)
         app, events = _make_app(store)
 
         with TestClient(app) as client:
             response = client.delete("/model-profiles/missing")
 
         assert response.status_code == 404
-        assert store.get_document(PROGENITOR_STATE_PREFIX, "profile").payload == original
+        assert store.get_document(PROGENA_STATE_PREFIX, "profile").payload == original
         assert events == []
 
     def test_whitespace_aliases_of_one_name_are_rejected_not_half_deleted(self):
@@ -566,7 +565,7 @@ class TestDeleteProfiles:
             " general ": {"provider_id": "foundry-1", "deployment": "a"},
             "general": {"provider_id": "foundry-1", "deployment": "b"},
         }
-        store.save_document(PROGENITOR_STATE_PREFIX, "profile", original)
+        store.save_document(PROGENA_STATE_PREFIX, "profile", original)
         app, events = _make_app(store)
 
         with TestClient(app) as client:
@@ -574,7 +573,7 @@ class TestDeleteProfiles:
 
         assert response.status_code == 422
         assert "ambiguous" in response.text
-        assert store.get_document(PROGENITOR_STATE_PREFIX, "profile").payload == original
+        assert store.get_document(PROGENA_STATE_PREFIX, "profile").payload == original
         assert events == []
 
 
@@ -586,11 +585,11 @@ class TestNotificationSameTransactionDiffConsumption:
     """
 
     def test_profile_notify_survives_snapshot_consumed_by_sibling_document(self):
-        from app.backend.monitoring.state import StateReader
+        from src.backend.monitoring.state import StateReader
 
         store = InMemoryDocumentStore()
         store.save_document(
-            PROGENITOR_STATE_PREFIX,
+            PROGENA_STATE_PREFIX,
             "profile",
             {"general": {"provider_id": "foundry-1", "deployment": "greeting"}},
         )
@@ -605,7 +604,7 @@ class TestNotificationSameTransactionDiffConsumption:
         state_reader.add_watcher(watcher)
 
         state_reader._on_store_change(
-            '{"prefix":"progenitor.state","key":"profile","action":"UPDATE"}'
+            '{"prefix":"progena.state","key":"profile","action":"UPDATE"}'
         )
         assert [key for _, key in received] == ["profile"]
 
@@ -616,19 +615,19 @@ def test_invalid_sibling_rejects_patch_without_persisting():
         "general": {"provider_id": "foundry-1", "deployment": "original"},
         "broken": {"provider_id": "foundry-1", "deployment": "other", "reasoning_enabled": "wrong"},
     }
-    store.save_document(PROGENITOR_STATE_PREFIX, "profile", original)
+    store.save_document(PROGENA_STATE_PREFIX, "profile", original)
     app, events = _make_app(store)
     with TestClient(app) as client:
         response = client.patch("/model-profiles/general", json={"deployment": "changed"})
     assert response.status_code == 422
-    assert store.get_document(PROGENITOR_STATE_PREFIX, "profile").payload == original
+    assert store.get_document(PROGENA_STATE_PREFIX, "profile").payload == original
     assert events == []
 
 
 def test_patch_preserves_normalized_profile_identity_without_duplicating_store_key():
     store = InMemoryDocumentStore()
     store.save_document(
-        PROGENITOR_STATE_PREFIX,
+        PROGENA_STATE_PREFIX,
         "profile",
         {
             " general ": {"provider_id": "foundry-1", "deployment": "original"},
@@ -638,6 +637,105 @@ def test_patch_preserves_normalized_profile_identity_without_duplicating_store_k
     with TestClient(app) as client:
         response = client.patch("/model-profiles/general", json={"deployment": "changed"})
     assert response.status_code == 202
-    assert store.get_document(PROGENITOR_STATE_PREFIX, "profile").payload == {
+    assert store.get_document(PROGENA_STATE_PREFIX, "profile").payload == {
         " general ": {"provider_id": "foundry-1", "deployment": "changed"},
     }
+
+
+def test_chatgpt_profile_deployment_must_come_from_selected_account_catalog(monkeypatch):
+    store = InMemoryDocumentStore()
+    store.save_document(
+        PROGENA_STATE_PREFIX,
+        "profile",
+        {"general": {"provider_id": "chatgpt-1", "deployment": "gpt-6.1-sol"}},
+    )
+    repository = FakeProviderRepository(
+        [{"id": "chatgpt-1", "name": "Personal", "kind": "chatgpt", "is_default": True}]
+    )
+
+    async def models(provider_id: str) -> list[dict[str, str]]:
+        assert provider_id == "chatgpt-1"
+        return [{"slug": "gpt-6.1-sol", "display_name": "GPT-6.1 Sol"}]
+
+    monkeypatch.setattr(model_profile_routes, "get_chatgpt_models", models)
+    app, events = _make_app(store, repository)
+    with TestClient(app) as client:
+        accepted = client.patch("/model-profiles/general", json={"deployment": "gpt-6.1-sol"})
+        rejected = client.patch("/model-profiles/general", json={"deployment": "other-model"})
+
+    assert accepted.status_code == 202
+    assert_acknowledged(accepted, ["profiles.snapshot"])
+    assert rejected.status_code == 422
+    assert (
+        rejected.json()["detail"] == "deployment is not available for the selected ChatGPT account"
+    )
+    assert events[-1][1]["profiles"][0]["deployment"] == "gpt-6.1-sol"
+
+
+def test_chatgpt_catalog_validates_whitespace_normalized_provider_id(monkeypatch):
+    store = InMemoryDocumentStore()
+    original = {"general": {"provider_id": "foundry-1", "deployment": "foundry-model"}}
+    store.save_document(PROGENA_STATE_PREFIX, "profile", original)
+    repository = FakeProviderRepository(
+        [
+            {"id": "foundry-1", "kind": "foundry", "is_default": True},
+            {"id": "chatgpt-1", "kind": "chatgpt", "is_default": False},
+        ]
+    )
+
+    async def models(provider_id: str) -> list[dict[str, str]]:
+        assert provider_id == "chatgpt-1"
+        return [{"slug": "gpt-6.1-sol", "display_name": "GPT-6.1 Sol"}]
+
+    monkeypatch.setattr(model_profile_routes, "get_chatgpt_models", models)
+    app, events = _make_app(store, repository)
+    with TestClient(app) as client:
+        response = client.patch(
+            "/model-profiles/general",
+            json={"provider_id": " chatgpt-1 ", "deployment": "not-in-catalogue"},
+        )
+
+    assert response.status_code == 422
+    assert (
+        response.json()["detail"] == "deployment is not available for the selected ChatGPT account"
+    )
+    assert store.get_document(PROGENA_STATE_PREFIX, "profile").payload == original
+    assert events == []
+
+
+def test_chatgpt_catalog_rejects_when_provider_changes_before_locked_mutation(monkeypatch):
+    store = InMemoryDocumentStore()
+    original = {"general": {"provider_id": "chatgpt-1", "deployment": "gpt-6.1-sol"}}
+    store.save_document(PROGENA_STATE_PREFIX, "profile", original)
+    repository = FakeProviderRepository(
+        [
+            {"id": "chatgpt-1", "kind": "chatgpt", "is_default": True},
+            {"id": "chatgpt-2", "kind": "chatgpt", "is_default": False},
+        ]
+    )
+
+    async def models(provider_id: str) -> list[dict[str, str]]:
+        assert provider_id == "chatgpt-1"
+        store.mutate_document(
+            PROGENA_STATE_PREFIX,
+            "profile",
+            lambda payload: {
+                **payload,
+                "general": {"provider_id": "chatgpt-2", "deployment": "other-model"},
+            },
+        )
+        return [{"slug": "gpt-6.1-sol", "display_name": "GPT-6.1 Sol"}]
+
+    monkeypatch.setattr(model_profile_routes, "get_chatgpt_models", models)
+    app, events = _make_app(store, repository)
+    with TestClient(app) as client:
+        response = client.patch("/model-profiles/general", json={"deployment": "gpt-6.1-sol"})
+
+    assert response.status_code == 409
+    assert (
+        response.json()["detail"] == "Profile provider changed during validation; retry the request"
+    )
+    assert store.get_document(PROGENA_STATE_PREFIX, "profile").payload == {
+        "general": {"provider_id": "chatgpt-2", "deployment": "other-model"}
+    }
+    assert events == []

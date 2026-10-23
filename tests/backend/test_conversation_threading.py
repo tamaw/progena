@@ -1,12 +1,12 @@
 from fastapi.testclient import TestClient
 
-import app.backend.lifecycle.state as lifecycle_state
-from app.backend.chat.session import SessionConfig, SessionManager
-from app.backend.main import app
-from app.backend.monitoring.state import StateReader
-from app.backend.storage.documents import (
+import src.backend.lifecycle.state as lifecycle_state
+from src.backend.chat.session import SessionConfig, SessionManager
+from src.backend.main import app
+from src.backend.monitoring.state import StateReader
+from src.backend.storage.documents import (
     BACKEND_STATE_PREFIX,
-    PROGENITOR_STATE_PREFIX,
+    PROGENA_STATE_PREFIX,
     InMemoryDocumentStore,
 )
 
@@ -29,7 +29,7 @@ def test_deleted_session_route_does_not_restore_stale_conversation_state(monkeyp
     monkeypatch.setattr(lifecycle_state, "session_manager", session_manager)
 
     with TestClient(app) as client:
-        client.cookies.set("progenitor_session", "stale-session")
+        client.cookies.set("progena_session", "stale-session")
         response = client.get("/v1/session")
 
     assert response.status_code == 404
@@ -41,7 +41,7 @@ def test_state_reader_uses_current_state_for_thread_and_messages():
 
     # Health
     store.save_document(
-        PROGENITOR_STATE_PREFIX,
+        PROGENA_STATE_PREFIX,
         "health",
         {
             "status": "running",
@@ -54,7 +54,7 @@ def test_state_reader_uses_current_state_for_thread_and_messages():
 
     # Current state with messages
     store.save_document(
-        PROGENITOR_STATE_PREFIX,
+        PROGENA_STATE_PREFIX,
         "current_state",
         {
             "thread_id": "thread_live",
@@ -68,10 +68,10 @@ def test_state_reader_uses_current_state_for_thread_and_messages():
     )
 
     # Build state (empty)
-    store.save_document(PROGENITOR_STATE_PREFIX, "build_state", {})
+    store.save_document(PROGENA_STATE_PREFIX, "build_state", {})
 
     # Schedule (empty)
-    store.save_document(PROGENITOR_STATE_PREFIX, "schedule", {})
+    store.save_document(PROGENA_STATE_PREFIX, "schedule", {})
 
     # Sessions as a list
     store.save_document(

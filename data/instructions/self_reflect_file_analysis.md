@@ -1,6 +1,6 @@
 ---
 title: Source file analysis
-description: Summarises one Progenitor source file for self-reflection.
+description: Summarises one Progena AI source file for self-reflection.
 inputs:
   relative_path:
     type: string
@@ -9,7 +9,7 @@ inputs:
   content:
     type: string
 ---
-Analyze this Python source file from an AI agent system called "Progenitor".
+Analyze this Python source file from an AI agent system called "Progena AI".
 Provide a concise summary of:
 1. The main purpose of this file
 2. Key components (classes, functions, important variables)

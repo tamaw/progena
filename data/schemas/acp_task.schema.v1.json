@@ -37,7 +37,7 @@
     "answers": {"type": "object", "default": {}, "additionalProperties": true, "description": "Answers keyed by a supervisor-created pending_input id."},
     "source": {"type": "string", "default": "workflow", "description": "Who requested the task (e.g. 'workflow', or an agent name)."},
     "request_metadata": {"type": "object", "default": {}, "description": "Free-form caller context."},
-    "notify_on_completion": {"type": "boolean", "default": false, "description": "Tell Progenitor's chat when a turn ends."},
+    "notify_on_completion": {"type": "boolean", "default": false, "description": "Tell Progena's chat when a turn ends."},
     "command": {"type": "string", "readOnly": true, "description": "Agent endpoint used (host:port or command)."},
     "session_id": {"type": ["string", "null"], "readOnly": true, "description": "ACP session id; later turns resume it."},
     "turn": {"type": "integer", "minimum": 0, "readOnly": true, "description": "Number of turns started."},
@@ -59,7 +59,7 @@
         "last_activity_at": {"type": ["string", "null"]}
       }
     },
-    "stalled": {"type": "boolean", "readOnly": true, "description": "True while a working turn has shown no agent activity for PROGENITOR_ACP_STALL_SECONDS."},
+    "stalled": {"type": "boolean", "readOnly": true, "description": "True while a working turn has shown no agent activity for PROGENA_ACP_STALL_SECONDS."},
     "history": {"type": "array", "items": {"type": "object"}, "readOnly": true, "description": "Finished turns: turn, status, prompt, output, summary, stop_reason, last_error, completed_at."},
     "pending_input": {
       "type": ["object", "null"],

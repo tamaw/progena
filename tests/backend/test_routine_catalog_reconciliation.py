@@ -12,15 +12,15 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-import app.backend.agents.reconciliation as agents_reconciliation
-import app.backend.agents.store as agents_store
-import app.backend.events.stream as events_stream
-import app.backend.monitoring.status as monitoring_status
-import app.backend.storage.documents as storage_documents
-from app.backend.agents.routes import create_agent_profile_router
-from app.backend.monitoring.state import StateReader
-from app.backend.storage.documents import (
-    PROGENITOR_STATE_PREFIX,
+import src.backend.agents.reconciliation as agents_reconciliation
+import src.backend.agents.store as agents_store
+import src.backend.events.stream as events_stream
+import src.backend.monitoring.status as monitoring_status
+import src.backend.storage.documents as storage_documents
+from src.backend.agents.routes import create_agent_profile_router
+from src.backend.monitoring.state import StateReader
+from src.backend.storage.documents import (
+    PROGENA_STATE_PREFIX,
     CheckpointThreadSnapshot,
     InMemoryDocumentStore,
     StoreChangeListener,
@@ -55,11 +55,11 @@ class Catalog:
     def list_routine_document_ids(self):
         return [
             key.removeprefix("routine:")
-            for key, _ in self.documents.list_documents(PROGENITOR_STATE_PREFIX, "routine:")
+            for key, _ in self.documents.list_documents(PROGENA_STATE_PREFIX, "routine:")
         ]
 
     def get_routine_document(self, agent_id):
-        document = self.documents.get_document(PROGENITOR_STATE_PREFIX, f"routine:{agent_id}")
+        document = self.documents.get_document(PROGENA_STATE_PREFIX, f"routine:{agent_id}")
         return document.payload if document else None
 
     def delete_routine_catalog_entry(self, agent_id):
@@ -98,8 +98,8 @@ def test_deleted_event_is_accepted_by_canonical_transport(monkeypatch):
 def harness(monkeypatch):
     documents = InMemoryDocumentStore()
     graph = {"id": "gone", "entry": None, "nodes": [], "edges": []}
-    documents.save_document(PROGENITOR_STATE_PREFIX, "routine:gone", graph)
-    documents.save_document(PROGENITOR_STATE_PREFIX, "routine:other", {**graph, "id": "other"})
+    documents.save_document(PROGENA_STATE_PREFIX, "routine:gone", graph)
+    documents.save_document(PROGENA_STATE_PREFIX, "routine:other", {**graph, "id": "other"})
     documents.upsert_routine_revision("gone", "last", graph, captured_at="2026-10-03")
     documents.upsert_checkpoint_thread_snapshot(
         CheckpointThreadSnapshot(
@@ -137,9 +137,9 @@ async def drain_reconciliation():
 
 async def test_delete_notification_removes_only_catalog_and_keeps_history(harness, monkeypatch):
     documents, catalog, events, roster, reader = harness
-    documents.delete_document(PROGENITOR_STATE_PREFIX, "routine:gone")
+    documents.delete_document(PROGENA_STATE_PREFIX, "routine:gone")
     payload = json.dumps(
-        {"prefix": PROGENITOR_STATE_PREFIX, "key": "routine:gone", "action": "deleted"}
+        {"prefix": PROGENA_STATE_PREFIX, "key": "routine:gone", "action": "deleted"}
     )
 
     class Connection:
@@ -163,7 +163,7 @@ async def test_delete_notification_removes_only_catalog_and_keeps_history(harnes
     assert events[1][0] == "agents.snapshot"
     assert {agent["id"] for agent in events[1][1]["agents"]} == {"other", "object"}
     roster.assert_awaited_once()
-    assert documents.get_document(PROGENITOR_STATE_PREFIX, "routine:gone") is None
+    assert documents.get_document(PROGENA_STATE_PREFIX, "routine:gone") is None
     assert documents.get_routine_revision("gone", "last")["id"] == "gone"
     assert [r.revision_id for r in documents.list_routine_revisions("gone")] == ["last"]
     runs, _ = documents.list_routine_runs("gone")
@@ -178,7 +178,7 @@ async def test_delete_notification_removes_only_catalog_and_keeps_history(harnes
 
 async def test_reconnect_removes_missing_document_with_unchanged_snapshot(harness):
     documents, catalog, events, roster, reader = harness
-    documents.delete_document(PROGENITOR_STATE_PREFIX, "routine:gone")
+    documents.delete_document(PROGENA_STATE_PREFIX, "routine:gone")
     assert "gone" not in {row["id"] for row in catalog.list_agents()}
     assert "gone" in catalog.list_routine_catalog_ids()
     reader._emit_if_changed()  # listener reconnect callback
@@ -191,9 +191,9 @@ async def test_reconnect_removes_missing_document_with_unchanged_snapshot(harnes
 
 async def test_delayed_delete_notification_uses_current_live_document(harness):
     documents, catalog, events, roster, reader = harness
-    documents.delete_document(PROGENITOR_STATE_PREFIX, "routine:gone")
+    documents.delete_document(PROGENA_STATE_PREFIX, "routine:gone")
     documents.save_document(
-        PROGENITOR_STATE_PREFIX, "routine:gone", {"entry": None, "nodes": [], "edges": []}
+        PROGENA_STATE_PREFIX, "routine:gone", {"entry": None, "nodes": [], "edges": []}
     )
     reader._on_store_change(json.dumps({"key": "routine:gone", "action": "deleted"}))
     await drain_reconciliation()
@@ -204,7 +204,7 @@ async def test_delayed_delete_notification_uses_current_live_document(harness):
 
 async def test_unrelated_notification_does_not_remove_missing_routine(harness):
     documents, catalog, events, roster, reader = harness
-    documents.delete_document(PROGENITOR_STATE_PREFIX, "routine:gone")
+    documents.delete_document(PROGENA_STATE_PREFIX, "routine:gone")
     reader._on_store_change(json.dumps({"key": "workflow:other", "action": "deleted"}))
     await drain_reconciliation()
     assert catalog.deleted == []
@@ -214,7 +214,7 @@ async def test_unrelated_notification_does_not_remove_missing_routine(harness):
 
 def test_deleted_routine_history_routes_remain_available(harness, monkeypatch):
     documents, catalog, events, _roster, _reader = harness
-    documents.delete_document(PROGENITOR_STATE_PREFIX, "routine:gone")
+    documents.delete_document(PROGENA_STATE_PREFIX, "routine:gone")
     catalog.delete_routine_catalog_entry("gone")
     app = FastAPI()
     app.include_router(
@@ -253,7 +253,11 @@ def test_deleted_routine_history_routes_remain_available(harness, monkeypatch):
     )
     connection = AsyncMock()
     connection.__aenter__.return_value = saver
-    monkeypatch.setattr(AsyncPostgresSaver, "from_conn_string", lambda _url: connection)
+
+    def open_saver(_url):
+        return connection
+
+    monkeypatch.setattr(AsyncPostgresSaver, "from_conn_string", open_saver)
     response = client.get(
         "/api/ui/agent-profiles/gone/run-state",
         params={"thread_id": "routine:gone:last:run"},
@@ -269,7 +273,7 @@ def test_deleted_routine_history_routes_remain_available(harness, monkeypatch):
 
 def test_catalog_hides_deleted_document_before_notification_reconciles(harness, monkeypatch):
     documents, catalog, events, _roster, _reader = harness
-    documents.delete_document(PROGENITOR_STATE_PREFIX, "routine:gone")
+    documents.delete_document(PROGENA_STATE_PREFIX, "routine:gone")
     # Older store adapters can return surviving metadata with graph=None.
     original_get_agent = catalog.get_agent
     monkeypatch.setattr(
@@ -304,4 +308,4 @@ def test_catalog_hides_deleted_document_before_notification_reconciles(harness, 
     assert {agent["id"] for agent in events[-1][1]["agents"]} == {"other", "object"}
     assert "gone" in catalog.rows  # reads never mutate the catalog
     assert catalog.deleted == []
-    assert documents.get_document(PROGENITOR_STATE_PREFIX, "routine:gone") is None
+    assert documents.get_document(PROGENA_STATE_PREFIX, "routine:gone") is None

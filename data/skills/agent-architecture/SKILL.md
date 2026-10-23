@@ -1,18 +1,18 @@
 ---
 name: agent-architecture
-description: Understand Progenitor's conversation graph, heartbeat runtime, durable virtual documents, and registered-agent model. Use when explaining or extending the runtime, or diagnosing agent behavior and state.
+description: Understand Progena's conversation graph, heartbeat runtime, durable virtual documents, and registered-agent model. Use when explaining or extending the runtime, or diagnosing agent behavior and state.
 ---
 
 # Agent Architecture
 
 ## When to Use
-- Questions about how Progenitor processes a conversation or background work
+- Questions about how Progena processes a conversation or background work
 - Debugging runtime behavior, persistent state, or agent registration
 - Extending the conversational agent, heartbeat graph, or virtual-document model
 
 ## Runtime Model
 
-Progenitor has two cooperating graphs, not a build loop:
+Progena has two cooperating graphs, not a build loop:
 
 - **Conversation graph** — the user-facing DeepAgent graph. It handles a chat turn, tool calls, memory, and delegation to configured agents.
 - **Heartbeat graph** — repeatedly dequeues input and, when idle, runs due maintenance. Its startup and idle work includes MCP and registry refresh, schedules, tracked A2A/ACP/async-subagent completion handling, health updates, and other periodic maintenance. A queued input runs one conversation cycle, then the runtime records a checkpoint and health state before cleanup.
@@ -33,6 +33,7 @@ The agent uses virtual paths, validated on write where applicable:
 - `/tasks/board.json` and `/tasks/<id>.md`, `/workflows/<id>.json`, `/routines/<id>.json`, and `/policies/<id>.json` — persisted work-management and execution definitions.
 - `/sessions/<date>_<title-slug>_<id8>.md` — chat records; only `title`, `pinned`, and `archived` front-matter fields are editable.
 - `/memories/` and `/knowledge/<base-id>/` — persistent memories and catalogued knowledge pages.
+- `/canvases/<name>/` and `/artifacts/<path>` — sandboxed UI canvases and the CSV/JSON/text data artifacts they visualise (see `building-canvases`).
 - `/instructions/` — validated stored instruction documents. Checked-in instruction files seed missing documents only; existing stored instructions remain user-owned.
 
 Use `read_file`, `write_file`, and `edit_file` against these virtual paths. The backend validates supported writes and publishes the resulting state change; paths are not local filesystem locations.
@@ -41,8 +42,8 @@ Use `read_file`, `write_file`, and `edit_file` against these virtual paths. The 
 Model connections are ordinary database-backed application settings, managed in **Settings → Providers**:
 - Foundry and OpenCode Go use the Responses API; Go accepts only the supported Responses model IDs.
 - `/config/profile.json` selects a `provider_id` and `deployment`, or inherits the default connection when `provider_id` is absent. Never put endpoints or API keys in agent state.
-- Credentials use encrypted database storage (`PROGENITOR_PROVIDER_ENCRYPTION_KEY` shared by backend/runtime) or an explicit provider API-key environment reference.
-- `AZURE_OPENAI_BASE_URL` and `PROGENITOR_MODEL_DEFAULT` are imported once for existing installations, not ongoing runtime overrides.
+- Credentials use encrypted database storage (`PROGENA_PROVIDER_ENCRYPTION_KEY` shared by backend/runtime) or an explicit provider API-key environment reference.
+- `AZURE_OPENAI_BASE_URL` and `PROGENA_MODEL_DEFAULT` are imported once for existing installations, not ongoing runtime overrides.
 - Saved provider changes apply on the next turn; active turns retain their connection snapshot.
 
 ## Registered Agents
@@ -59,8 +60,10 @@ Agent permissions and mounts constrain the virtual documents exposed to an objec
 
 ## Key Implementation Areas
 
-- `app/progenitor/graph/progenitor_graph.py` — conversation graph construction
-- `app/progenitor/graph/heartbeat_graph.py` — queue, cycle, and idle-heartbeat orchestration
-- `app/progenitor/agent/` — DeepAgent setup and virtual filesystem backends
-- `app/progenitor/state/` — state models and persistence
-- `app/progenitor/a2a/`, `app/progenitor/acp/`, and `app/progenitor/async_subagents/` — tracked external work
+- `src/progena/orchestration/graphs/progena_graph.py` — conversation graph construction
+- `src/progena/orchestration/graphs/heartbeat_graph.py` — queue, cycle, and idle-heartbeat orchestration
+- `src/progena/agent/` — DeepAgent setup and virtual filesystem backends
+- `src/progena/state/` — state lifecycle facade over domain stores
+- `src/progena/persistence/` — shared native store, checkpoints and notifications
+- `src/progena/orchestration/state.py` — composed graph state; domain models live beside their owners
+- `src/progena/a2a/`, `src/progena/acp/`, and `src/progena/async_subagents/` — tracked external work

@@ -1,12 +1,12 @@
-# Progenitor System Specification
+# Progena AI System Specification
 
-This document describes the checked-in main system: the Progenitor runtime, the
+This document describes the checked-in main system: the Progena runtime, the
 backend API, and the React frontend. The browser API contract is defined
 normatively in [BACKEND.md](BACKEND.md).
 
 ## Purpose
 
-Progenitor is a long-running conversational system. The runtime maintains
+Progena is a long-running conversational system. The runtime maintains
 conversation state and executes the main agent graph. The frontend submits work
 to the backend and receives browser application data through two SSE roles:
 
@@ -16,7 +16,7 @@ to the backend and receives browser application data through two SSE roles:
 
 ## Core components
 
-### Runtime (`app/progenitor/`)
+### Runtime (`src/progena/`)
 
 - Runs the perpetual conversation service.
 - Restores and checkpoints runtime state.
@@ -46,16 +46,75 @@ to the backend and receives browser application data through two SSE roles:
     `after` / `limit` (1–100) / `order` paging.
   - `DELETE /v1/conversations/{id}` deletes the thread's checkpoints and its
     runtime `current_state` document (409 while a turn is in flight).
-  - Vendor extensions outside the OpenAI spec: `progenitor.stream_event` SSE
+  - Vendor extensions outside the OpenAI spec: `progena.stream_event` SSE
     events carry the runtime's tool/reasoning/subagent activity; the
-    `include=progenitor.langchain_message` items option adds
+    `include=progena.langchain_message` items option adds
     `source_message_id` to every item and the serialized LangChain message to
     the first item of each message in the page; the `checkpoint_id` query
     parameter reads a specific checkpoint; `metadata` values may be
     non-strings.
 - `GET /v1/events` broadcasts runtime agent events to the backend.
 
-### Backend (`app/backend/`)
+### JavaScript execution
+
+The main conversational agent exposes `javascript(code)` through Deep Agents'
+official `CodeInterpreterMiddleware` (`langchain-quickjs`). QuickJS-NG runs as a
+Wasm guest in the local Wasmtime runtime. No hosted sandbox, service account or
+sandbox API key is required.
+
+- Calls share scratch variables within one conversation turn. A new turn starts
+  with a fresh context, separate from other conversations; no JS session
+  snapshot is stored in checkpoints.
+- The JS heap is capped at 64 MiB and execution at five seconds per call.
+  Results and captured console output are each truncated to 4,000 characters.
+  These are interpreter limits, not a whole-process memory or wall-time bound.
+- The `tools` bridge allowlists `ls`, `read_file`, `glob`, `grep`, `list_agents`,
+  `a2a_send`, `a2a_send_async`, `a2a_status` and `a2a_list`. JavaScript uses their
+  camelCase names, such as `await tools.readFile(...)` and
+  `await tools.a2aSend(...)`. Reads retain the existing backend permissions;
+  communication uses the existing registered-agent and tracked-task contracts.
+- Top-level `await task(...)` dispatches configured object agents and routines
+  through Progena's live task resolution, including targets added after graph
+  compilation. The SDK's built-in `general-purpose` delegate remains available.
+- No direct filesystem, network, shell, Node.js packages or browser APIs are
+  exposed. Write/edit/execute, arbitrary MCP tools, agent registration and A2A
+  cancellation are not in the JavaScript tool allowlist. Delegated agents retain
+  their own permissions and may perform writes or shell work they already own.
+- Bridge calls bypass the parent ToolNode's per-operation approval/interceptor
+  path. Backend validation and approvals inside delegated agents/routines still
+  apply. Use normal parent tool calls when individual parent approval is needed.
+  The five-second JS budget does not bound host-tool or delegated-agent waits.
+  Upstream limits each evaluation to 256 PTC tool calls and 32 simultaneous
+  subagent dispatches; the latter is a concurrency cap, not a total task budget.
+- Results can be persisted through normal validated document tools outside
+  JavaScript. The interpreter does not replace or mount over virtual paths.
+- A routine `code` node is separate from this conversational interpreter. It
+  accepts only inline `{"language":"javascript","code":"..."}` source, receives
+  JSON-compatible routine state as `input`, and returns one JSON-compatible
+  value to its `output_key`. Each execution creates and disposes a fresh
+  QuickJS runtime with a 16 MiB heap, 512 KiB stack, one-second JS deadline,
+  and 1 MiB serialized-result cap. It exposes no tools, host functions,
+  modules, network, filesystem, or shell;
+  sandbox and JSON-boundary failures fail the node.
+  The SDK lifecycle runs in a worker thread to keep the event loop and graph
+  timeout watchdog responsive. Cancelling the awaiting node does not kill
+  the worker; its independent one-second guest deadline still bounds execution.
+  The host also checks serialized UTF-8 bytes before accepting the result.
+  The JavaScript editor reuses graph-state autocomplete with `input`-rooted
+  dot/bracket references, rather than Python expression or prompt-template
+  syntax. It suggests declared routine inputs and predecessor output keys/
+  response fields; script results have no inferred field schema. Source is
+  never message-template interpolated, so object braces and JavaScript
+  `${...}` template literals retain their normal meaning.
+
+The upstream interpreter integration is beta and `quickjs-rs` is experimental.
+Wasm is an in-process isolation boundary, not a separate OS sandbox: Wasmtime/JIT
+vulnerabilities remain a host-escape risk. Keep Wasmtime updated and add isolated
+workers/containers for hostile multi-tenant execution. See the
+[upstream security guidance](https://github.com/langchain-ai/quickjs-rs#security)
+and [Deep Agents interpreter documentation](https://docs.langchain.com/oss/python/deepagents/interpreters).
+
+### Backend (`src/backend/`)
 
 - Exposes the browser's finite command/query routes and bridges work to the
   runtime.
@@ -76,7 +135,7 @@ to the backend and receives browser application data through two SSE roles:
 - Keeps successful finite HTTP responses data-free; browser-visible results come
   from canonical events or the dedicated response-content stream.
 
-### Frontend (`app/frontend/`)
+### Frontend (`src/frontend/`)
 
 - Provides the React/Vite web client.
 - Opens one app-lifetime canonical `EventSource` to `/api/ui/stream`.
@@ -87,10 +146,10 @@ to the backend and receives browser application data through two SSE roles:
   events hydrate Redux; pages read Redux selectors.
 - Generates an `X-Request-ID` UUID for every finite application request and
   waits for matching causal canonical stream events after acknowledgement.
-- Renders agent-built modules (`/modules`) in sandboxed, network-less iframes
-  (`sandbox="allow-scripts"`, `srcdoc`); module files, vendored libraries,
+- Renders agent-built canvases (`/canvases`) in sandboxed, network-less iframes
+  (`sandbox="allow-scripts"`, `srcdoc`); canvas files, vendored libraries,
   documents and events reach the frame only through the parent's postMessage
-  bridge over the canonical stream (`docs/MODULES.md`).
+  bridge over the canonical stream (`docs/CANVASES.md`).
 
 There are no browser `/api/ui/events` or `/api/ui/status` streams, no
 response-body fallback, and no inline response-body token SSE.
@@ -196,7 +255,7 @@ The dedicated stream owns response content transport only. It never carries
 - Runtime state is updated after scheduled work is processed.
 
 The system persists runtime conversation/checkpoint state, state documents,
-backend-owned metadata, and operational logs in Postgres. Progenitor exposes
+backend-owned metadata, and operational logs in Postgres. Progena exposes
 selected state documents through a validated virtual filesystem (`/config/*.json`
 and related task/workflow paths); those JSON names are views over database
 documents, not files in `data/state` or `data/config`. State-document changes are
@@ -205,11 +264,28 @@ broadcast to the canonical UI stream after the write succeeds; details are in
 
 Chat history is exposed through `/sessions/`: one
 `<date>_<title-slug>_<id8>.md` per non-archived chat, backed by `session:`
-documents in Postgres (`app/progenitor/sessions/`). Each file is YAML front
+documents in Postgres (`src/progena/sessions/`). Each file is YAML front
 matter (all payload fields except `content`, plus `display_title`) followed by
 a blank line and the IRC-style `content`. Only the `title`, `pinned`, and
 `archived` front-matter fields are editable; the body is read-only. Listing,
 grep, and read operate directly on the store documents (no cache).
+
+## Routine Code filesystem access
+
+Routine Code nodes run in a fresh QuickJS sandbox and are pure unless their
+`config.filesystem` explicitly grants a virtual filesystem scope. A grant
+declares `"access": "read"` or `"read_write"` and one or more canonical
+directory roots below `/artifacts/` or `/shared/`; no other mount family,
+relative path, dot traversal, backslash, NUL, or empty root is valid. Read
+access provides `ls`, `readFile`, `glob`, and `grep`; write access adds
+`writeFile`, `editFile`, `copyFile`, `moveFile`, and `deleteFile`. It never
+provides shell, network, agent, browser, or generic host access. Writes and
+copies do not overwrite; moves operate on files only within one mount, but are
+not atomic and may be copy-then-delete. File operations are nontransactional:
+completed writes are not rolled back on cancellation or a later error, and
+manual reruns/replays can repeat them. Disabling automatic caching and retries
+does not provide exactly-once execution. The QuickJS CPU deadline excludes
+async filesystem waits, which remain bounded by the enclosing node timeout.
 
 ## Insights
 

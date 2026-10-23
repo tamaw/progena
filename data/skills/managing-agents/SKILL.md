@@ -96,7 +96,7 @@ Set `memory: true` to give an agent private memory: its `/memories/` is its own
 writable folder, and every file in it is loaded into its prompt on every run
 (`/memories/AGENTS.md` first). No mount needs declaring; such an agent cannot
 also mount the shared `/memories/`. These notes are not loaded into
-Progenitor's own memory; Progenitor can inspect them at
+Progena's own memory; Progena can inspect them at
 `/memories/agents/<name>/`.
 
 Set `knowledge` to a list of `{base, access}` grants. `access: read` is

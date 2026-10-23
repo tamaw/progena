@@ -7,8 +7,8 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from app.backend.alerts.service import clear_alerts
-from app.backend.chat.models import AgentResponse
+from src.backend.alerts.service import clear_alerts
+from src.backend.chat.models import AgentResponse
 
 
 @pytest.fixture(autouse=True)
@@ -33,7 +33,7 @@ def cleanup_event_loop():
 
 
 @pytest.fixture(autouse=True)
-def mock_progenitor_client():
+def mock_progena_client():
     """Mock the get_client and get_sse_client to avoid connection issues in tests."""
     mock_client = AsyncMock()
     mock_client.send_message.return_value = AgentResponse(
@@ -45,8 +45,8 @@ def mock_progenitor_client():
     mock_client.stop = AsyncMock()
 
     with (
-        patch("app.backend.integrations.runtime.get_sse_client", return_value=mock_client),
-        patch("app.backend.lifecycle.state.config.telegram_enabled", False),
+        patch("src.backend.integrations.runtime.get_sse_client", return_value=mock_client),
+        patch("src.backend.lifecycle.state.config.telegram_enabled", False),
     ):
         yield
 
@@ -64,7 +64,7 @@ def client():
     """Provide a TestClient for the FastAPI app."""
     from fastapi.testclient import TestClient
 
-    from app.backend.main import app
+    from src.backend.main import app
 
     with TestClient(app) as client:
         yield client
@@ -73,6 +73,6 @@ def client():
 @pytest.fixture
 def app():
     """Get the FastAPI app instance."""
-    from app.backend.main import app
+    from src.backend.main import app
 
     return app
