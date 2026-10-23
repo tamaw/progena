@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Shared exchange volume**: setting `PROGENA_SHARED_DIR` mounts that directory as a writable `/shared/` route for the agent. Compose mounts the external `progena-shared` volume there, and deployment creates it, so A2A agent containers that mount the same volume can exchange files with Progena. Startup fails when the configured directory is missing.
 
 ### Fixed
+- **Cross-provider reasoning replay**: Responses API checkpoints now attribute opaque reasoning and response IDs to their provider connection. A later turn preserves them only for the same connection (falling back to matching provider kind and base URL); provider switches and legacy checkpoints with unknown origin drop opaque items while retaining visible assistant text and tool calls.
 - **JavaScript bridge compatibility**: retain standard nullable `anyOf` schemas during metadata compaction so the interpreter can render read/A2A tool signatures without crashing. JavaScript subagent calls now use the same live object-agent/routine resolution as normal task calls, including targets added after graph compilation.
 - **Module catalogue included in deployment images**: allow bundled `data/modules/` through the Docker build context and include catalogue changes in both Python-image rebuild decisions. This fixes the missing-directory `COPY` failure and keeps manifest validation aligned with deployed libraries.
 
