@@ -12,7 +12,8 @@ import jwt
 import pytest
 from cryptography.hazmat.primitives.asymmetric import rsa
 
-from src.progena.settings import chatgpt_cli, chatgpt_oauth as oauth
+from src.progena.settings import chatgpt_cli
+from src.progena.settings import chatgpt_oauth as oauth
 
 
 @pytest.fixture
