@@ -524,6 +524,34 @@ async def test_code_node_filesystem_errors_are_catchable_and_preserve_no_overwri
         )
 
 
+@pytest.mark.asyncio
+async def test_code_node_filesystem_writes_and_copies_into_missing_directories(tmp_path):
+    backend = _filesystem_backend(tmp_path)
+    graph = validate_routine_graph_payload(
+        _payload(
+            _filesystem_code_node(
+                """
+                await tools.writeFile({ file_path: "/shared/run/round-0/bars.csv", content: "t" });
+                await tools.writeFile({ file_path: "/artifacts/run/state.json", content: "{}" });
+                await tools.copyFile({
+                  source_path: "/shared/run/round-0/bars.csv",
+                  destination_path: "/shared/run/round-1/bars.csv"
+                });
+                return "ok";
+                """
+            )
+        )
+    )
+    result = await compile_routine_graph(graph, model=object(), filesystem_backend=backend).ainvoke(
+        {}
+    )
+
+    assert result["data"]["result"] == "ok"
+    assert (tmp_path / "shared" / "run" / "round-0" / "bars.csv").read_text(encoding="utf-8") == "t"
+    assert (tmp_path / "shared" / "run" / "round-1" / "bars.csv").read_text(encoding="utf-8") == "t"
+    assert (tmp_path / "artifacts" / "run" / "state.json").read_text(encoding="utf-8") == "{}"
+
+
 class _UnexpectedFilesystemFailureBackend:
     def __init__(self, backend):
         self._backend = backend
