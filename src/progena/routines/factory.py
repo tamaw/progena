@@ -28,6 +28,7 @@ from langgraph.graph.message import add_messages
 from langgraph.runtime import Runtime
 from langgraph.types import CachePolicy, RetryPolicy, TimeoutPolicy
 
+from src.progena.sandboxes.execution import SandboxPythonRunner
 from src.progena.settings.policies import CACHE_NODE_KINDS, PolicyValues
 
 from ..utils import utcnow_isoformat
@@ -72,6 +73,7 @@ from .messages import (
     normalize_message_content as normalize_message_content,
 )
 from .model_nodes import _build_classify_node, _build_prompt_node
+from .python_nodes import _build_python_node
 from .state import (
     RoutineState as RoutineState,
 )
@@ -264,6 +266,7 @@ def _build_node_callable(
     routine_registry: dict[str, Any],
     routine_runner: Callable[..., Awaitable[dict[str, Any]]] | None = None,
     agent_background_runner: Callable[..., Awaitable[dict[str, Any]]] | None = None,
+    sandbox_python_runner: SandboxPythonRunner | None = None,
     model_profile_resolver: Callable[[str], Awaitable[Any]] | None = None,
     tool_registry: Any = None,
     defs: dict[str, dict[str, Any]] | None = None,
@@ -292,6 +295,8 @@ def _build_node_callable(
         )
     if node.kind == "eval":
         return _build_eval_node(node)
+    if node.kind == "python":
+        return _build_python_node(node, sandbox_python_runner=sandbox_python_runner, defs=defs)
     if node.kind == "reduce":
         return _build_reduce_node(node)
     if node.kind == "condition":
@@ -480,6 +485,7 @@ def compile_routine_graph(
     routine_registry: dict[str, Any] | None = None,
     routine_runner: Callable[..., Awaitable[dict[str, Any]]] | None = None,
     agent_background_runner: Callable[..., Awaitable[dict[str, Any]]] | None = None,
+    sandbox_python_runner: SandboxPythonRunner | None = None,
     model_profile_resolver: Callable[[str], Awaitable[Any]] | None = None,
     tool_registry: Any = None,
     base_system_prompt: str | None = None,
@@ -669,6 +675,7 @@ def compile_routine_graph(
                     tool_registry=tool_registry,
                     defs=graph.defs,
                     instruction_loader=instruction_loader,
+                    sandbox_python_runner=sandbox_python_runner,
                     policy_defaults=policy_defaults,
                 ),
                 route_fn=route_fns.get(node.id),

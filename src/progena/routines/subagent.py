@@ -33,6 +33,7 @@ from langgraph.errors import NodeTimeoutError
 from langgraph.types import Command
 
 from src.progena.llm.structured import validate_against_schema
+from src.progena.sandboxes.execution import SandboxPythonRunner
 from src.progena.settings.policies import PolicyValues, resolve_execution_policy
 
 from ..instructions.templates import instruction_relative_path
@@ -176,6 +177,7 @@ def create_routine_executor(
     routine_registry: dict[str, Any],
     routine_runner: Callable[..., Awaitable[dict[str, Any]]] | None = None,
     agent_background_runner: Callable[..., Awaitable[dict[str, Any]]] | None = None,
+    sandbox_python_runner: SandboxPythonRunner | None = None,
     model_profile_resolver: Callable[[str], Awaitable[Any]] | None = None,
     tool_registry: Any = None,
     checkpointer: Any | None = None,
@@ -262,6 +264,7 @@ def create_routine_executor(
                     agent_registry=agent_registry,
                     routine_registry=routine_registry,
                     routine_runner=routine_runner,
+                    sandbox_python_runner=sandbox_python_runner,
                     agent_background_runner=agent_background_runner,
                     model_profile_resolver=model_profile_resolver,
                     tool_registry=tool_registry,
@@ -498,6 +501,7 @@ def create_routine_subagent(
     routine_registry: dict[str, Any],
     routine_runner: Callable[..., Awaitable[dict[str, Any]]] | None = None,
     agent_background_runner: Callable[..., Awaitable[dict[str, Any]]] | None = None,
+    sandbox_python_runner: SandboxPythonRunner | None = None,
     model_profile_resolver: Callable[[str], Awaitable[Any]] | None = None,
     tool_registry: Any = None,
     checkpointer: Any | None = None,
@@ -511,6 +515,7 @@ def create_routine_subagent(
         agent_registry=agent_registry,
         routine_registry=routine_registry,
         routine_runner=routine_runner,
+        sandbox_python_runner=sandbox_python_runner,
         agent_background_runner=agent_background_runner,
         model_profile_resolver=model_profile_resolver,
         tool_registry=tool_registry,
@@ -626,11 +631,23 @@ def _pause_details(interrupts: Any) -> dict[str, Any]:
 
 
 async def resume_routine_thread(
-    *, thread_id: str, answer: Any, database_url: str | None = None, **kwargs: Any
+    *,
+    thread_id: str,
+    answer: Any,
+    database_url: str | None = None,
+    sandbox_python_runner: SandboxPythonRunner | None = None,
+    agent_background_runner: Callable[..., Awaitable[dict[str, Any]]] | None = None,
+    **kwargs: Any,
 ) -> dict[str, Any]:
     """Answer one still-pending interrupt, shared by UI and Progena chat."""
     async with approval_lock(thread_id, database_url, wait=True):
-        return await _resume_routine_thread(thread_id=thread_id, answer=answer, **kwargs)
+        return await _resume_routine_thread(
+            thread_id=thread_id,
+            answer=answer,
+            sandbox_python_runner=sandbox_python_runner,
+            agent_background_runner=agent_background_runner,
+            **kwargs,
+        )
 
 
 async def _resume_routine_thread(
@@ -644,6 +661,7 @@ async def _resume_routine_thread(
     routine_registry: dict[str, Any] | None = None,
     routine_runner: Callable[..., Awaitable[dict[str, Any]]] | None = None,
     agent_background_runner: Callable[..., Awaitable[dict[str, Any]]] | None = None,
+    sandbox_python_runner: SandboxPythonRunner | None = None,
     model_profile_resolver: Callable[[str], Awaitable[Any]] | None = None,
     tool_registry: Any = None,
     checkpointer: Any | None = None,
@@ -678,6 +696,7 @@ async def _resume_routine_thread(
         agent_registry=agent_registry,
         routine_registry=routine_registry,
         routine_runner=routine_runner,
+        sandbox_python_runner=sandbox_python_runner,
         agent_background_runner=agent_background_runner,
         model_profile_resolver=model_profile_resolver,
         tool_registry=tool_registry,
@@ -697,6 +716,7 @@ async def _resume_routine_thread(
         routine_registry=routine_registry,
         routine_runner=routine_runner,
         agent_background_runner=agent_background_runner,
+        sandbox_python_runner=sandbox_python_runner,
         model_profile_resolver=model_profile_resolver,
         tool_registry=tool_registry,
         instruction_loader=instruction_loader,

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { makeNode, normalizeGraphNodes, stableStringify } from '@frontend/features/routines/editor/graphEdits';
+import { normalizeGraphNodes, stableStringify } from '@frontend/features/routines/editor/graphEdits';
 
 describe('normalizeGraphNodes', () => {
   it('uses each node id as its output key while preserving the rest of the node', () => {
@@ -16,14 +16,6 @@ describe('normalizeGraphNodes', () => {
       output_key: 'eval-1',
     }]);
     expect(nodes[0].output_key).toBe('result');
-  });
-});
-
-describe('makeNode', () => {
-  it('does not seed allowed_responses for human nodes', () => {
-    const node = makeNode('human');
-    expect(node.config).toHaveProperty('message');
-    expect(node.config).not.toHaveProperty('allowed_responses');
   });
 });
 

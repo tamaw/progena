@@ -58,13 +58,26 @@ schema, validate it, then write exactly one routine file.
 
 ## Node kinds
 
-The current schema supports: `prompt`, `eval`, `condition`, `switch`, `split`,
-`classify`, `agent`, `a2a`, `noop`, `human`, `foreach`, `reduce`, and `routine`.
+The current schema supports: `prompt`, `eval`, `python`, `condition`, `switch`,
+`split`, `classify`, `agent`, `a2a`, `noop`, `human`, `foreach`, `reduce`, and `routine`.
 
 - `prompt` invokes the model using exactly one of `prompt_template` or
   `prompt_file`.
 - `eval` uses a restricted Python expression or expression file; `defaults`
   provides fallbacks for missing top-level state values.
+- `python` runs real Python in a fresh disposable Daytona sandbox, not in the
+  runtime process. Set exactly one of `code` or `code_file` (an explicit virtual
+  source path). `input_map` maps Python `inputs` keys to dotted routine-data
+  paths, for example `{"prices": "round.market.prices"}`. Python must assign a
+  JSON-serializable `result`, stored under the node's `output_key`; optional
+  `response_schema` validates that raw result. `input_files` maps sandbox-relative
+  destinations to virtual sources; `output_files` maps sandbox-relative sources
+  to `/artifacts/` or configured `/shared/` destinations. `timeout_seconds`
+  limits remote execution to 1–300 seconds; the separate node `timeout` also
+  includes provisioning, transfer, and cleanup, so allow overhead. No sandbox,
+  variables, or packages persist between calls. Python nodes are never cached;
+  retries may repeat external side effects. Missing Daytona configuration fails
+  explicitly with no host fallback. Use `eval` for simple restricted expressions.
 - `condition` is a boolean gate whose router must have exactly `true` and
   `false` branches and no default.
 - `switch` routes an expression through author-defined branches.

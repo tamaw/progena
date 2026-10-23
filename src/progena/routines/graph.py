@@ -9,7 +9,14 @@ from __future__ import annotations
 
 from typing import Annotated, Any, Literal, TypedDict
 
-from pydantic import BaseModel, ConfigDict, Field, SerializerFunctionWrapHandler, model_serializer
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SerializerFunctionWrapHandler,
+    model_serializer,
+    model_validator,
+)
 
 from src.progena.documents.catalog import load_schema
 from src.progena.llm.structured import validate_against_schema
@@ -26,6 +33,7 @@ VALID_ROUTINE_NODE_KINDS = {
     "prompt",
     "eval",
     "condition",
+    "python",
     "switch",
     "split",
     "classify",
@@ -139,6 +147,28 @@ class EvalNodeConfig(BaseModel):
     retry: RetryPolicyConfig | None = None
     timeout: float | None = Field(default=None, ge=0)
     cache: bool | CachePolicyConfig | None = None
+
+
+class PythonNodeConfig(BaseModel):
+    """Python source executed only by the injected remote sandbox runner."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    code: str | None = Field(default=None, min_length=1)
+    code_file: str | None = Field(default=None, min_length=1)
+    input_map: dict[str, str] = Field(default_factory=dict)
+    input_files: dict[str, str] = Field(default_factory=dict)
+    output_files: dict[str, str] = Field(default_factory=dict)
+    timeout_seconds: int | None = Field(default=None, ge=1, le=300)
+    response_schema: dict[str, Any] | None = None
+    retry: RetryPolicyConfig | None = None
+    timeout: float | None = Field(default=None, ge=0)
+
+    @model_validator(mode="after")
+    def require_one_code_source(self) -> PythonNodeConfig:
+        if (self.code is None) == (self.code_file is None):
+            raise ValueError("python node config needs exactly one of 'code' or 'code_file'")
+        return self
 
 
 class ConditionNodeConfig(BaseModel):
@@ -326,6 +356,21 @@ class RoutineNodeEval(BaseModel):
     y: float | None = None
 
 
+class RoutineNodePython(BaseModel):
+    """Execute author-provided Python remotely through the sandbox boundary."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    kind: Literal["python"] = "python"
+    description: str = ""
+    output_key: str | None = None
+    config: PythonNodeConfig
+    label: str | None = None
+    x: float | None = None
+    y: float | None = None
+
+
 class RoutineNodeCondition(BaseModel):
     """Evaluate a restricted expression, coerced to a boolean gate."""
 
@@ -497,6 +542,7 @@ RoutineNode = Annotated[
     | RoutineNodeAgent
     | RoutineNodeA2A
     | RoutineNodeNoop
+    | RoutineNodePython
     | RoutineNodeHuman
     | RoutineNodeForeach
     | RoutineNodeRoutine

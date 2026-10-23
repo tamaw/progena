@@ -70,6 +70,18 @@ class AttachmentDirectoryBackend(_AsyncOnlyFileBackendMixin):
     def _name(file_path: str) -> str:
         return file_path.lstrip("/")
 
+    async def adownload_file_bounded(self, path: str, max_bytes: int) -> bytes:
+        """Stage original upload bytes, not extracted text or base64 read-file rendering."""
+        thread_id = get_current_thread_id()
+        if thread_id is None:
+            raise ValueError("No active conversation thread; cannot resolve attachments")
+        content = await attachments_db.fetch_bytes_by_name(
+            self._database_url, self._name(path), thread_id=thread_id, max_bytes=max_bytes
+        )
+        if content is None:
+            raise FileNotFoundError(path)
+        return content
+
     async def aread(self, file_path: str, offset: int = 0, limit: int = 2000) -> ReadResult:
         name = self._name(file_path)
         thread_id = get_current_thread_id()

@@ -32,6 +32,7 @@
       "oneOf": [
         { "$ref": "#/$defs/nodePrompt" },
         { "$ref": "#/$defs/nodeEval" },
+        { "$ref": "#/$defs/nodePython" },
         { "$ref": "#/$defs/nodeCondition" },
         { "$ref": "#/$defs/nodeSwitch" },
         { "$ref": "#/$defs/nodeSplit" },
@@ -67,6 +68,13 @@
       "allOf": [
         { "$ref": "#/$defs/nodeBase" },
         { "required": ["id", "kind", "output_key", "config"], "properties": { "kind": { "const": "eval" }, "config": { "$ref": "#/$defs/evalConfig" } } }
+      ],
+      "unevaluatedProperties": false
+    },
+    "nodePython": {
+      "allOf": [
+        { "$ref": "#/$defs/nodeBase" },
+        { "required": ["id", "kind", "output_key", "config"], "properties": { "kind": { "const": "python" }, "config": { "$ref": "#/$defs/pythonConfig" } } }
       ],
       "unevaluatedProperties": false
     },
@@ -166,6 +174,7 @@
       ]
     },
     "evalConfig": {
+      "description": "A restricted deterministic Python expression evaluated by the routine runtime, not a general Python program.",
       "type": "object",
       "additionalProperties": false,
       "properties": {
@@ -180,6 +189,26 @@
       "oneOf": [
         { "required": ["expression"], "not": { "required": ["expression_file"] } },
         { "required": ["expression_file"], "not": { "required": ["expression"] } }
+      ]
+    },
+    "pythonConfig": {
+      "description": "Full Python program executed only through the configured remote sandbox. Unlike eval expressions, this is not evaluated by the restricted expression evaluator.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "code": { "type": "string", "minLength": 1, "description": "Inline Python source. It receives the mapped inputs global and must assign a JSON-serializable result global." },
+        "code_file": { "type": "string", "minLength": 1, "description": "Virtual source-file path resolved by the sandbox runner." },
+        "input_map": { "$ref": "#/$defs/inputMap", "description": "Python input name to routine data dotted path." },
+        "input_files": { "$ref": "#/$defs/inputMap", "description": "Sandbox-relative destination path to virtual source path." },
+        "output_files": { "$ref": "#/$defs/inputMap", "description": "Sandbox-relative source path to persistent virtual destination path." },
+        "timeout_seconds": { "type": "integer", "minimum": 1, "maximum": 300, "description": "Remote Python execution timeout, independent of this node's generic timeout." },
+        "response_schema": { "$ref": "#/$defs/responseSchema" },
+        "retry": { "$ref": "#/$defs/retryPolicy" },
+        "timeout": { "type": "number", "minimum": 0, "description": "Seconds before this graph node is abandoned, overriding the execution policy attempt timeout. 0 disables the graph-level limit." }
+      },
+      "oneOf": [
+        { "required": ["code"], "not": { "required": ["code_file"] } },
+        { "required": ["code_file"], "not": { "required": ["code"] } }
       ]
     },
     "conditionConfig": {

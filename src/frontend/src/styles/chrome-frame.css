@@ -6318,6 +6318,10 @@ body,
   --node-color: #6366f1;
 }
 
+.agents-graph-node--python {
+  --node-color: #2563eb;
+}
+
 .agents-graph-node--condition {
   --node-color: #f59e0b;
 }

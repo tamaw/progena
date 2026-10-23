@@ -464,13 +464,14 @@ function StringListField({ id, config, field, label, placeholder, updateNodeConf
   );
 }
 
-function NumberField({ id, config, field, label, placeholder, updateNodeConfig, min = 1 }) {
+function NumberField({ id, config, field, label, placeholder, updateNodeConfig, min = 1, max }) {
   return (
     <label className="agents-graph-node__field">
       <span className="agents-graph-node__field-label">{label}</span>
       <input
         type="number"
         min={min}
+        max={max}
         className="agents-graph-node__toolinput"
         value={config?.[field] ?? ''}
         placeholder={placeholder}
@@ -483,8 +484,8 @@ function NumberField({ id, config, field, label, placeholder, updateNodeConfig, 
 }
 
 // Kind-specific config fields, mirroring src.progena.routines.graph's per-kind
-// config shape (prompt_template/system_prompt, expression, rubric_prompt/
-// response_schema, agent_name + prompt_template/inputs). `noop` has no config.
+// config shape. Eval/condition/switch use restricted expressions; Python is
+// ordinary source executed remotely by the sandbox runner. `noop` has no config.
 export function NodeConfigBody({ id, kind, config, updateNodeConfig, replaceNodeConfig }) {
   const agentName = useSelector(selectAgentName);
   if (kind === 'prompt') {
@@ -499,6 +500,25 @@ export function NodeConfigBody({ id, kind, config, updateNodeConfig, replaceNode
   if (kind === 'eval' || kind === 'condition' || kind === 'switch') {
     return (
       <ExpressionField id={id} config={config} field="expression" label="Expression" placeholder="Restricted Python expression…" updateNodeConfig={updateNodeConfig} autocomplete />
+    );
+  }
+  if (kind === 'python') {
+    const updateSource = (_id, patch) => {
+      const next = { ...config };
+      delete next.code;
+      delete next.code_file;
+      replaceNodeConfig({ ...next, ...patch });
+    };
+    return (
+      <>
+        <ConfigField id={id} config={config} field="code" label="Remote Python code" placeholder={'# Or supply a code file below.\nresult = {"answer": inputs["value"]}'} multiline updateNodeConfig={updateSource} />
+        <ConfigField id={id} config={config} field="code_file" label="Remote Python code file (instead of inline code)" placeholder="/artifacts/calculation.txt" updateNodeConfig={updateSource} />
+        <KeyValueMapField id={id} config={config} field="input_map" label="Input map (Python input: routine data path)" placeholder="value: request.value" updateNodeConfig={updateNodeConfig} />
+        <KeyValueMapField id={id} config={config} field="input_files" label="Input files (sandbox path: virtual source)" placeholder="data/input.csv: /artifacts/input.csv" updateNodeConfig={updateNodeConfig} />
+        <KeyValueMapField id={id} config={config} field="output_files" label="Output files (sandbox path: virtual destination)" placeholder="data/report.json: /artifacts/report.json" updateNodeConfig={updateNodeConfig} />
+        <NumberField id={id} config={config} field="timeout_seconds" label="Sandbox timeout (seconds, optional)" placeholder="120" updateNodeConfig={updateNodeConfig} max={300} />
+        <ResponseSchemaField id={id} config={config} field="response_schema" label="Result fields (optional)" updateNodeConfig={updateNodeConfig} />
+      </>
     );
   }
   if (kind === 'classify') {

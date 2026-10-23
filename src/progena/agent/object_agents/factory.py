@@ -7,7 +7,7 @@ import os
 from collections.abc import Iterable
 from dataclasses import replace
 from pathlib import Path, PurePosixPath
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from deepagents.backends import CompositeBackend, StateBackend
 from deepagents.backends.protocol import (
@@ -27,7 +27,11 @@ from deepagents.backends.utils import (
     perform_string_replacement,
     slice_read_response,
 )
-from deepagents.middleware.filesystem import FilesystemMiddleware, FilesystemPermission
+from deepagents.middleware.filesystem import (
+    FilesystemMiddleware,
+    FilesystemPermission,
+    _check_fs_permission,
+)
 from deepagents.middleware.memory import MemoryMiddleware
 from deepagents.middleware.skills import SkillsMiddleware
 from deepagents.middleware.subagents import CompiledSubAgent
@@ -66,6 +70,9 @@ from src.progena.llm.provider_context import (
     activate_provider_turn,
     current_provider_turn,
 )
+
+if TYPE_CHECKING:
+    from src.progena.sandboxes.daytona import DaytonaPythonExecutor
 
 logger = logging.getLogger(__name__)
 
@@ -127,6 +134,9 @@ class ScopedMountBackend:
     async def adownload_files(self, paths: list[str]) -> Any:
         responses = await self._backend.adownload_files([self._path(path) for path in paths])
         return [replace(r, path=self._unpath(r.path)) for r in responses]
+
+    async def adownload_file_bounded(self, path: str, max_bytes: int) -> bytes:
+        return await self._backend.adownload_file_bounded(self._path(path), max_bytes)
 
     async def aupload_files(self, files: list[tuple[str, bytes]]) -> Any:
         responses = await self._backend.aupload_files(
@@ -515,6 +525,7 @@ def build_object_agent(
     worktree_dir: Path | None = None,
     shell_paths: ShellPaths | None = None,
     memory_sources: list[str] | None = None,
+    sandbox_executor: DaytonaPythonExecutor | None = None,
 ) -> Any:
     """Build one agent from the current manifest and its parent's runtime resources.
 
@@ -591,6 +602,32 @@ def build_object_agent(
             shell_paths=shell_paths,
         )
         self_backend = CompositeBackend(default=self_backend.default, routes=routes)
+    if any(getattr(tool, "name", "") == "sandbox_python" for tool in selected_tools):
+        # A parent-bound runner would resolve code_file and input_files through
+        # the conversation's broader mounts. Bind this declared agent's freshly
+        # scoped backend instead.
+        from src.progena.agent.adapters import wrap_system_tool
+        from src.progena.sandboxes.execution import create_sandbox_python_runner
+        from src.progena.tools.sandbox_python import SandboxPythonTool
+
+        def sandbox_path_policy(operation: Any, path: str) -> bool:
+            return _check_fs_permission(list(manifest.permissions), operation, path) == "allow"
+
+        sandbox_runner = (
+            create_sandbox_python_runner(
+                sandbox_executor,
+                self_backend,
+                path_policy=sandbox_path_policy,
+            )
+            if sandbox_executor is not None
+            else None
+        )
+        selected_tools = [
+            wrap_system_tool(SandboxPythonTool(), sandbox_python=sandbox_runner)
+            if getattr(tool, "name", "") == "sandbox_python"
+            else tool
+            for tool in selected_tools
+        ]
 
     middleware: list[Any] = [
         ToolErrorMiddleware(),
@@ -656,6 +693,7 @@ def create_object_agent_proxy(
     log_sink: Any | None = None,
     worktree_dir: Path | None = None,
     shell_paths: ShellPaths | None = None,
+    sandbox_executor: DaytonaPythonExecutor | None = None,
 ) -> CompiledSubAgent:
     """Return a lazy proxy that compiles the manifest only when invoked."""
 
@@ -728,6 +766,7 @@ def create_object_agent_proxy(
             worktree_dir=worktree_dir,
             shell_paths=shell_paths,
             memory_sources=memory_sources,
+            sandbox_executor=sandbox_executor,
         )
         thread_id = config.get("configurable", {}).get("object_agent_thread_id")
 

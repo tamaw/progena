@@ -65,6 +65,55 @@ agent as the writable `/shared/` route (`PROGENA_SHARED_DIR`). Mount the same
 volume into A2A agent containers to exchange files with them; nothing in it is
 access-controlled, so any container that mounts it can change anything there.
 
+## Optional Daytona Python execution
+
+Set `DAYTONA_API_KEY` in the runtime's private environment to enable
+`sandbox_python` and routine `python` nodes. Compose passes it only to `progena`;
+the CI production environment uses the same named secret. Optional
+`DAYTONA_API_URL`, `DAYTONA_TARGET`, and `PROGENA_DAYTONA_SNAPSHOT` select the
+service, region and a Python-capable snapshot. Without a snapshot the provider's
+default snapshot must contain `python3`. The runtime uses the pinned Daytona
+SDK directly for bounded execution and transfers; it does not need Docker socket access.
+
+Each call provisions a new sandbox, uploads Python and declared inputs, runs
+once, collects selected outputs, then deletes the sandbox. The returned snapshot
+profile is checked before code upload/execution: at most 2 CPU, 4 GiB memory,
+8 GiB disk and no GPU. Snapshot creation itself can incur cost before that
+check; choose an appropriately sized snapshot in Daytona.
+`PROGENA_DAYTONA_TIMEOUT_SECONDS` defaults to 120 (1–300 seconds);
+per-call `timeout_seconds` overrides it. Provisioning and cleanup have their own
+bounded provider operations, so total wall time can exceed execution timeout.
+TTL expiry backs up explicit deletion. Cleanup failures report the sandbox ID:
+inspect and delete that sandbox in Daytona rather than assuming it disappeared.
+Provisioning, execution, transfer and deletion can incur provider charges.
+
+`PROGENA_DAYTONA_NETWORK_BLOCK_ALL=true` requests blocked network access and
+rejects a sandbox that does not report that setting. Verify actual enforcement
+for your Daytona organisation/tier before using untrusted code: the reported flag
+is not proof of packet-level enforcement. Only deliberately set it to `false`
+when remote code should have network access. The sandbox receives no host
+environment credentials; code and explicitly selected files still leave the
+deployment and are handled by Daytona. Do not import secrets.
+
+Virtual directories stay where they are: Postgres documents/checkpoints and the
+local `/shared/` volume are not mirrored or mounted remotely. `code_file` and
+`input_files` read only declared document/attachment/shared routes; exports
+target writable `/artifacts/` or configured `/shared/`. Object agents require the
+tool in their manifest and retain their own filesystem mounts and permissions.
+Code is limited to 64 KiB, JSON inputs to 1 MiB, and imported files to 1 MiB each,
+4 MiB combined (at most 16 files each direction). JSON results are limited to
+1 MiB and captured Python stdout/stderr to 256 KiB each. Output downloads are
+bounded to 16 MiB each and 32 MiB combined; artifact format/UTF-8 and 1 MiB
+document limits still apply. Direct OS/subprocess console output is discarded.
+Packages must already exist in the snapshot or be installed by code when its
+network policy allows; neither packages nor process state persist between calls.
+
+On existing installations, review the saved `progena/genesis.md` instruction
+in the Instructions page to permit `sandbox_python` for remote calculations
+while retaining the ban on host execution; preserve your saved customisations
+rather than blindly replacing that document. The bundled managing-routines
+skill documents the distinct `python` node contract.
+
 ## Start and stop
 
 From the repository root:

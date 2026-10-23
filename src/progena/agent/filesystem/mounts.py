@@ -56,7 +56,11 @@ from deepagents.backends.protocol import EditResult, FileUploadResponse, WriteRe
 from src.progena.agent.filesystem.alerts import AlertDirectoryBackend
 from src.progena.agent.filesystem.artifacts import ArtifactDirectoryBackend
 from src.progena.agent.filesystem.attachments import AttachmentDirectoryBackend
-from src.progena.agent.filesystem.base import StateDocumentBackend, StateFile
+from src.progena.agent.filesystem.base import (
+    BoundedFilesystemBackend,
+    StateDocumentBackend,
+    StateFile,
+)
 from src.progena.agent.filesystem.canvases import CanvasDirectoryBackend
 from src.progena.agent.filesystem.config import (
     create_health_state_file,
@@ -244,7 +248,7 @@ def create_progena_backend(
         shared_path = Path(shared_dir)
         if not shared_path.is_dir():
             raise FileNotFoundError(f"PROGENA_SHARED_DIR is not a directory: {shared_path}")
-        routes["/shared/"] = FilesystemBackend(root_dir=str(shared_path), virtual_mode=True)
+        routes["/shared/"] = BoundedFilesystemBackend(root_dir=str(shared_path), virtual_mode=True)
 
     if state_manager is not None:
         routes["/agents/"] = ReadOnlyBackend(

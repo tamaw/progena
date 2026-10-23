@@ -69,6 +69,8 @@ from src.progena.routines.subagent import (
     resolve_routine_document,
     resume_routine_thread,
 )
+from src.progena.sandboxes.daytona import DaytonaPythonExecutor, DaytonaSettings
+from src.progena.sandboxes.execution import create_sandbox_python_runner
 
 logger = logging.getLogger(__name__)
 
@@ -282,13 +284,27 @@ async def create_progena_agent(
         plugin_skill_segments=plugin_segments,
         plugin_agent_segments=plugin_agent_segments,
     )
+    sandbox_executor = None
+    sandbox_python_runner = None
+    if config.daytona.api_key:
+        sandbox_executor = DaytonaPythonExecutor(
+            DaytonaSettings(
+                api_key=config.daytona.api_key,
+                api_url=config.daytona.api_url,
+                target=config.daytona.target,
+                snapshot=config.daytona.snapshot,
+                timeout_seconds=config.daytona.timeout_seconds,
+                network_block_all=config.daytona.network_block_all,
+            )
+        )
+        sandbox_python_runner = create_sandbox_python_runner(sandbox_executor, backend)
 
     # Wrap Progena's system tools as DeepAgent-compatible tools. The
     # resume_routine tool needs model/registries/checkpointer, and
     # schedule_results needs the compiled agent itself; neither exists yet at
     # this point in construction (built below) -- this box is populated once
     # they do; create_deepagent_tools reads it at call time, not at wrap time.
-    late_bindings: dict[str, Any] = {}
+    late_bindings: dict[str, Any] = {"sandbox_python": sandbox_python_runner}
     tools = create_deepagent_tools(
         tool_registry=tool_registry,
         llm_client=llm_client,
@@ -387,6 +403,7 @@ async def create_progena_agent(
             checkpointer=checkpointer,
             log_sink=log_sink,
             worktree_dir=worktree_dir,
+            sandbox_executor=sandbox_executor,
             shell_paths=ShellPaths(
                 shim_bin=Path(config.storage.shim_bin_dir),
                 agent_home=Path(config.storage.shell_home_dir),
@@ -440,6 +457,7 @@ async def create_progena_agent(
             routine_registry={},
             routine_runner=_run_routine,
             agent_background_runner=background_runner,
+            sandbox_python_runner=sandbox_python_runner,
             model_profile_resolver=profile_resolver,
             tool_registry=tool_registry,
             checkpointer=checkpointer,
@@ -495,6 +513,7 @@ async def create_progena_agent(
             routine_registry={},
             routine_runner=_run_routine,
             agent_background_runner=background_runner,
+            sandbox_python_runner=sandbox_python_runner,
             model_profile_resolver=profile_resolver,
             tool_registry=tool_registry,
             checkpointer=checkpointer,
@@ -517,6 +536,7 @@ async def create_progena_agent(
             routine_registry={},
             routine_runner=_run_routine,
             agent_background_runner=background_runner,
+            sandbox_python_runner=sandbox_python_runner,
             model_profile_resolver=profile_resolver,
             tool_registry=tool_registry,
             checkpointer=checkpointer,

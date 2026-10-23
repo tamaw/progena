@@ -349,6 +349,29 @@ class MCPConfig:
 
 
 @dataclass
+class DaytonaConfig:
+    """Host-only credentials and bounded disposable-sandbox execution policy."""
+
+    api_key: str = field(default="", repr=False)
+    api_url: str | None = None
+    target: str | None = None
+    snapshot: str | None = None
+    timeout_seconds: int = 120
+    network_block_all: bool = True
+
+    @classmethod
+    def from_env(cls) -> "DaytonaConfig":
+        return cls(
+            api_key=os.getenv("DAYTONA_API_KEY", "").strip(),
+            api_url=os.getenv("DAYTONA_API_URL", "").strip() or None,
+            target=os.getenv("DAYTONA_TARGET", "").strip() or None,
+            snapshot=os.getenv("PROGENA_DAYTONA_SNAPSHOT", "").strip() or None,
+            timeout_seconds=env_int("PROGENA_DAYTONA_TIMEOUT_SECONDS", 120),
+            network_block_all=env_bool("PROGENA_DAYTONA_NETWORK_BLOCK_ALL", True),
+        )
+
+
+@dataclass
 class ProgenaConfig:
     """Complete Progena configuration."""
 
@@ -358,6 +381,7 @@ class ProgenaConfig:
     database: DatabaseConfig = field(default_factory=DatabaseConfig)
     scheduler: SchedulerConfig = field(default_factory=SchedulerConfig)
     mcp: MCPConfig = field(default_factory=MCPConfig)
+    daytona: DaytonaConfig = field(default_factory=DaytonaConfig)
 
     @classmethod
     def load(
@@ -379,6 +403,7 @@ class ProgenaConfig:
             database=DatabaseConfig.from_env(),
             scheduler=SchedulerConfig.from_env(),
             mcp=MCPConfig(),
+            daytona=DaytonaConfig.from_env(),
         )
 
         if validate:
@@ -404,6 +429,12 @@ class ProgenaConfig:
                 errors.append(f"Storage {name} cannot be empty")
         if not 1 <= self.runtime.shell_timeout_seconds <= 3600:
             errors.append("PROGENA_SHELL_TIMEOUT_SECONDS must be between 1 and 3600")
+        if not 1 <= self.daytona.timeout_seconds <= 300:
+            errors.append("PROGENA_DAYTONA_TIMEOUT_SECONDS must be between 1 and 300")
+        if self.daytona.api_url:
+            endpoint = urlsplit(self.daytona.api_url)
+            if endpoint.scheme not in {"http", "https"} or not endpoint.netloc or endpoint.username:
+                errors.append("DAYTONA_API_URL must be an HTTP(S) URL without embedded credentials")
 
         if errors:
             raise ValueError("Configuration validation failed:\n  - " + "\n  - ".join(errors))
@@ -414,6 +445,7 @@ class ProgenaConfig:
 
         if redact_secrets:
             result["llm"]["api_key"] = "***REDACTED***" if self.llm.api_key else None
+            result["daytona"]["api_key"] = "***REDACTED***" if self.daytona.api_key else None
             database_url = result.get("database", {}).get("url")
             if database_url:
                 result["database"]["url"] = _redact_url_password(str(database_url))

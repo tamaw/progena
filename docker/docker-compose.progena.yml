@@ -71,6 +71,12 @@ services:
       # Bind the runtime HTTP server on all interfaces so other containers (backend) can connect.
       PROGENA_HTTP_HOST: 0.0.0.0
       GH_TOKEN: ${GH_TOKEN:-}
+      DAYTONA_API_KEY: ${DAYTONA_API_KEY:-}
+      DAYTONA_API_URL: ${DAYTONA_API_URL:-}
+      DAYTONA_TARGET: ${DAYTONA_TARGET:-}
+      PROGENA_DAYTONA_SNAPSHOT: ${PROGENA_DAYTONA_SNAPSHOT:-}
+      PROGENA_DAYTONA_TIMEOUT_SECONDS: ${PROGENA_DAYTONA_TIMEOUT_SECONDS:-120}
+      PROGENA_DAYTONA_NETWORK_BLOCK_ALL: ${PROGENA_DAYTONA_NETWORK_BLOCK_ALL:-true}
       PROGENA_SHELL_HOME: /app/agent-home
       PROGENA_SHELL_WORKSPACE_DIR: /app/shell-workspaces
       PROGENA_SHELL_SHIM_BIN: /app/data/shims/bin

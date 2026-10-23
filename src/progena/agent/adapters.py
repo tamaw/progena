@@ -27,6 +27,7 @@ from src.progena.sessions.context import get_current_thread_id
 
 from .. import __version__
 from ..config import LLMConfig
+from ..sandboxes.execution import SandboxPythonRunner
 from ..tools.protocol import ToolContext
 from ..tools.system_registry import get_all_system_tools
 from .checkpoint_usage import CheckpointChatOpenAI
@@ -416,6 +417,7 @@ def wrap_system_tool(
     state_manager: Any = None,
     live_state_provider: Callable[[], Any] | None = None,
     late_bindings: dict[str, Any] | None = None,
+    sandbox_python: SandboxPythonRunner | None = None,
 ) -> StructuredTool:
     """Wrap one system tool as a DeepAgent-compatible StructuredTool.
 
@@ -445,6 +447,7 @@ def wrap_system_tool(
             tool_call_id=tool_call_id,
             resume_routine=(late_bindings or {}).get("resume_routine"),
             thread_state=(late_bindings or {}).get("thread_state"),
+            sandbox_python=(late_bindings or {}).get("sandbox_python", sandbox_python),
         )
         result = await system_tool.execute(ctx)
         if not result.success:

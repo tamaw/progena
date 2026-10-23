@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Disposable Daytona Python execution**: `sandbox_python` and routine `python` nodes run real Python remotely with explicit virtual-file imports/exports, bounded results/logs, timeouts, deletion and TTL backstops. Existing Postgres/checkpoint mounts remain unchanged; object agents retain their own mount and permission scopes. Runtime-only Daytona credentials are optional; unconfigured execution fails without a host fallback.
 - **Configurable agent name** (Settings → General → Agent name, `agent_name` in `/config/preferences.json`, default `Progena`): the UI labels the agent's messages, prompts and actions with it, and runtime instructions may use an optional `{agent_name}` placeholder (the bundled `genesis.md` does). Display only; identifiers are unchanged.
 - **Shared exchange volume**: setting `PROGENA_SHARED_DIR` mounts that directory as a writable `/shared/` route for the agent. Compose mounts the external `progena-shared` volume there, and deployment creates it, so A2A agent containers that mount the same volume can exchange files with Progena. Startup fails when the configured directory is missing.
 

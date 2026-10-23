@@ -92,6 +92,28 @@ async def fetch_by_name(
     return dict(row) if row is not None else None
 
 
+async def fetch_bytes_by_name(
+    database_url: str, filename: str, *, thread_id: str, max_bytes: int
+) -> bytes | None:
+    """Fetch a bounded prefix of the latest upload, without loading the entire blob."""
+    if max_bytes < 0:
+        raise ValueError("max_bytes must be nonnegative")
+    pool = await get_pool(database_url)
+    async with pool.connection() as conn, conn.cursor() as cur:
+        await cur.execute(
+            "SELECT substring(data from 1 for %s) FROM attachments "
+            "WHERE filename = %s AND thread_id = %s ORDER BY created_at DESC LIMIT 1",
+            (max_bytes + 1, filename, thread_id),
+        )
+        row = await cur.fetchone()
+    if row is None:
+        return None
+    content = bytes(row[0])
+    if len(content) > max_bytes:
+        raise ValueError(f"Sandbox attachment input exceeds {max_bytes} bytes")
+    return content
+
+
 async def fetch_attachment(
     database_url: str, identifier: str, *, thread_id: str
 ) -> dict[str, Any] | None:

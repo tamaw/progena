@@ -27,6 +27,8 @@ from src.progena.agent.object_agents.manifest import (
     parse_front_matter,
     parse_object_agent_manifest,
 )
+from src.progena.sandboxes.daytona import PythonExecutionResult
+from src.progena.sandboxes.execution import SandboxPythonRequest
 
 VALID_SYSTEM = """---
 name: reviewer
@@ -1032,3 +1034,81 @@ async def test_proxy_runs_with_remaining_grants_when_a_granted_base_is_missing(m
     assert {route for route in filesystem.backend.routes if route.startswith("/knowledge/")} == {
         "/knowledge/eng/"
     }
+
+
+@pytest.mark.asyncio
+async def test_declared_object_sandbox_tool_uses_only_its_scoped_artifact_mount(
+    monkeypatch, tmp_path
+):
+    system = """---
+name: scoped-python
+description: Runs Python against its explicitly mounted artifact folder.
+version: 1.0.0
+kind: object
+tools: [sandbox_python]
+mounts:
+  - path: /artifacts/public/
+    access: read
+permissions:
+  - operations: [read, write]
+    paths: [/artifacts/public/]
+---
+Use the sandbox only for declared artifact inputs and outputs.
+"""
+    manifest = parse_object_agent_manifest(system, source="test")
+    (tmp_path / "controller.py").write_text("result = 'controller'", encoding="utf-8")
+    (tmp_path / "public").mkdir()
+    parent = CompositeBackend(
+        default=object(),
+        routes={"/artifacts/": FilesystemBackend(root_dir=tmp_path, virtual_mode=True)},
+    )
+    captured: dict[str, object] = {}
+
+    class Executor:
+        async def execute(self, **_kwargs):
+            return PythonExecutionResult(
+                sandbox_id="sandbox-123",
+                result=None,
+                stdout="",
+                stderr="",
+                output_files={"report.md": b"# Remote report\n"},
+            )
+
+    def wrap(tool, *, sandbox_python=None):
+        captured["runner"] = sandbox_python
+        return SimpleNamespace(name=tool.name)
+
+    def create(**_kwargs):
+        return object()
+
+    monkeypatch.setattr("src.progena.agent.adapters.wrap_system_tool", wrap)
+    monkeypatch.setattr("src.progena.agent.object_agents.factory.create_agent", create)
+    monkeypatch.setattr(
+        "src.progena.agent.object_agents.factory.SummarizationMiddleware",
+        lambda **_kwargs: object(),
+    )
+    build_object_agent(
+        manifest,
+        model=object(),
+        tools=[SimpleNamespace(name="sandbox_python")],
+        backend=parent,
+        checkpointer=None,
+        sandbox_executor=Executor(),
+    )
+
+    runner = captured["runner"]
+    assert callable(runner)
+    with pytest.raises(ValueError):
+        await runner(SandboxPythonRequest(code_file="/artifacts/controller.py"))
+    with pytest.raises(ValueError):
+        await runner(
+            SandboxPythonRequest(
+                code="result = None",
+                output_files={"report.md": "/artifacts/public/report.md"},
+            )
+        )
+
+    written = await parent.awrite("/artifacts/public/controller.md", "# Controller report\n")
+    assert written.error is None
+    read = await parent.aread("/artifacts/public/controller.md")
+    assert read.file_data["content"] == "# Controller report\n"

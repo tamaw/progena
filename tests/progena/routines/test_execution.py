@@ -270,6 +270,51 @@ async def test_resume_preserves_run_correlation_and_context():
 
 
 @pytest.mark.asyncio
+async def test_resumed_python_node_uses_approval_answer():
+    doc = graph(
+        "sandbox-resume",
+        [
+            {
+                "id": "approve",
+                "kind": "human",
+                "config": {"message": "Proceed?", "allowed_responses": ["yes"]},
+            },
+            {
+                "id": "calculate",
+                "kind": "python",
+                "config": {
+                    "code": "result = {'approved': inputs['answer']}",
+                    "input_map": {"answer": "approve"},
+                },
+            },
+        ],
+        [{"from": "approve", "to": "calculate", "level": "normal"}],
+    )
+    manager, saver = Documents(doc), MemorySaver()
+
+    async def runner(request):
+        return {"result": {"approved": request.inputs["answer"]}}
+
+    paused = await executor(doc, manager, checkpointer=saver, sandbox_python_runner=runner).ainvoke(
+        {"messages": [HumanMessage("go")]}
+    )
+    resumed = await resume_routine_thread(
+        thread_id=paused["_routine_thread_id"],
+        answer="yes",
+        model=object(),
+        state_manager=manager,
+        revision_reader=NullRoutineRevisionReader(),
+        agent_registry={},
+        sandbox_python_runner=runner,
+        checkpointer=saver,
+    )
+
+    assert resumed["status"] == "completed"
+    saved = await saver.aget_tuple({"configurable": {"thread_id": paused["_routine_thread_id"]}})
+    assert saved.checkpoint["channel_values"]["data"]["calculate"] == {"approved": "yes"}
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("declared_schemas", [False, True])
 async def test_nested_input_and_output_maps_survive_execution_adapter(declared_schemas):
     child = graph(

@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+import os
+import stat
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
 
+from deepagents.backends import FilesystemBackend
 from deepagents.backends.protocol import (
     FILE_NOT_FOUND,
     EditResult,
@@ -32,6 +36,26 @@ from wcmatch import glob as wcglob
 from src.progena.documents.values import JsonDoc
 
 logger = logging.getLogger(__name__)
+
+
+class BoundedFilesystemBackend(FilesystemBackend):
+    """Filesystem mount with bounded raw-byte reads for explicit sandbox imports."""
+
+    async def adownload_file_bounded(self, path: str, max_bytes: int) -> bytes:
+        return await asyncio.to_thread(self._download_file_bounded, path, max_bytes)
+
+    def _download_file_bounded(self, path: str, max_bytes: int) -> bytes:
+        if max_bytes < 0:
+            raise ValueError("max_bytes must be nonnegative")
+        resolved = self._resolve_path(path)
+        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+        with os.fdopen(os.open(resolved, flags), "rb") as handle:
+            if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
+                raise ValueError("Sandbox imports require a regular file")
+            content = handle.read(max_bytes + 1)
+        if len(content) > max_bytes:
+            raise ValueError(f"Sandbox input exceeds {max_bytes} bytes")
+        return content
 
 
 @dataclass

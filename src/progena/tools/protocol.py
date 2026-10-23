@@ -5,15 +5,18 @@ Defined under src.progena.tools so tool contracts stay independent from
 runtime and agent wiring.
 """
 
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
 from copy import deepcopy
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Optional, Protocol, cast
+from typing import TYPE_CHECKING, Any, Protocol, cast
 
 from pydantic import BaseModel, Field
 
 if TYPE_CHECKING:
     from src.progena.orchestration.state import ProgenaState
+    from src.progena.sandboxes.execution import SandboxPythonRunner
 
 
 @dataclass
@@ -22,7 +25,7 @@ class ToolContext:
 
     tool_registry: Any
     llm_client: Any
-    state: Optional["ProgenaState"] = None
+    state: ProgenaState | None = None
     state_manager: Any = None
     user_input: str = ""
     tool_args: dict[str, Any] | None = None
@@ -35,6 +38,7 @@ class ToolContext:
     # agent graph (``graph.aget_state``), resolved once the compiled agent
     # exists (see agent.py). Used by schedule_results.py to read run threads.
     thread_state: Any = None
+    sandbox_python: SandboxPythonRunner | None = None
 
 
 @dataclass
@@ -59,12 +63,12 @@ class ToolResult:
         data: dict[str, Any],
         state_updates: dict[str, Any] | None = None,
         artifact: dict[str, Any] | None = None,
-    ) -> "ToolResult":
+    ) -> ToolResult:
         """Create a successful result."""
         return cls(success=True, data=data, state_updates=state_updates, artifact=artifact)
 
     @classmethod
-    def fail(cls, error: str, should_retry_slow_path: bool = False) -> "ToolResult":
+    def fail(cls, error: str, should_retry_slow_path: bool = False) -> ToolResult:
         """Create a failed result."""
         return cls(success=False, error=error, should_retry_slow_path=should_retry_slow_path)
 

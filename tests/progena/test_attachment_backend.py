@@ -141,3 +141,38 @@ class TestListingIsThreadScoped:
             reset_current_thread_id(token)
 
         assert [entry["path"] for entry in result.entries] == ["/mine.txt"]
+
+
+async def test_bounded_sandbox_import_preserves_original_bytes_and_thread_scope(postgres_url):
+    pool = await attachments_db.get_pool(postgres_url)
+    raw = b"%PDF-\x00\xff original upload"
+    try:
+        async with pool.connection() as conn, conn.cursor() as cur:
+            for identifier, thread, content, time_offset in [
+                ("older", "owner", b"outdated", -1),
+                ("mine", "owner", raw, 0),
+                ("theirs", "other", b"private other conversation", 1),
+            ]:
+                await cur.execute(
+                    "INSERT INTO attachments "
+                    "(id, thread_id, filename, mime_type, size_bytes, checksum, data, "
+                    "text_content, created_at) VALUES (%s,%s,'report.pdf','application/pdf',"
+                    "%s,'fixture',%s,'extracted text is not the upload', now() + %s * interval '1 second')",
+                    (identifier, thread, len(content), content, time_offset),
+                )
+        mount = AttachmentDirectoryBackend(postgres_url)
+        token = set_current_thread_id("owner")
+        try:
+            assert await mount.adownload_file_bounded("/report.pdf", len(raw)) == raw
+            with pytest.raises(ValueError):
+                await mount.adownload_file_bounded("/report.pdf", len(raw) - 1)
+        finally:
+            reset_current_thread_id(token)
+        token = set_current_thread_id("unrelated")
+        try:
+            with pytest.raises(FileNotFoundError):
+                await mount.adownload_file_bounded("/report.pdf", 1024)
+        finally:
+            reset_current_thread_id(token)
+    finally:
+        await attachments_db.close_all_pools()

@@ -17,6 +17,7 @@
 export const GRAPH_NODE_KINDS = [
   { kind: 'prompt', label: 'Prompt' },
   { kind: 'eval', label: 'Eval', icon: '<>' },
+  { kind: 'python', label: 'Python', icon: 'Py' },
   { kind: 'condition', label: 'Branch' },
   { kind: 'switch', label: 'Switch' },
   { kind: 'split', label: 'Fork' },
@@ -34,6 +35,7 @@ export const GRAPH_NODE_KINDS = [
 export const GRAPH_KIND_COLORS = {
   prompt: '#3b82f6',
   eval: '#6366f1',
+  python: '#2563eb',
   condition: '#f59e0b',
   switch: '#eab308',
   split: '#84cc16',
