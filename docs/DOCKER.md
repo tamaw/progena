@@ -201,12 +201,15 @@ and host mounts before allowing queued deployment jobs onto a new runner.
 
 ### Workflow trust boundary
 
-The checked-in CI workflow runs only for pushes to `main` and manual runs that
-select `main` in `tamaw/progena`. The Docker-prune workflow accepts only scheduled
-or manual runs on that same repository and branch. Feature-branch pushes and
-pull requests do not run on these persistent, Docker-capable hosts; run the
-checks in the root repository guide locally before merging. Fork installations
-must deliberately configure their own repository identity and runners.
+The checked-in CI workflow runs its test jobs for pushes to `main`, manual runs
+that select `main`, and pull requests into `main` whose head branch is in
+`tamaw/progena` itself. Fork pull requests are skipped by the job conditions.
+Only pushes to `main` and manual `main` runs build images and deploy. The
+Docker-prune workflow accepts only scheduled or manual runs on that same
+repository and branch. Pull-request test jobs run on the same persistent
+runners as deployment, so they execute branch code there; treat write access to
+the repository as trusted. Fork installations must deliberately configure their
+own repository identity and runners.
 
 External actions are pinned to full commit SHAs. Checkouts do not persist the
 GitHub token in Git configuration, and workflow tokens have read-only contents
@@ -249,8 +252,9 @@ these self-hosted runners, even when GitHub requires approval.
    contributor-approval setting while the repository is private.
 4. Re-enable Actions only after those protections are verified. Contribution
    secret scanning runs on isolated GitHub-hosted runners without production
-   credentials. Keep any future PR checks off the persistent deployment hosts.
-   Do not use `pull_request_target` to execute PR code.
+   credentials. Same-repository PR test jobs run on the self-hosted runners, so
+   never approve a fork PR to run there, and do not use `pull_request_target`
+   to execute PR code.
 
 Scan all fetched Git refs before publication; deleting a secret from the current
 tree does not remove it from history. The history contains retired frontend and
