@@ -130,10 +130,12 @@ Install the declared OpenAI SDK range (`>=3.37.0,<4.0.0`); older SDKs do
 not understand namespace tools and can misparse response tool metadata.
 
 ChatGPT requests stream with `store:false`, include application-managed context,
-and omit unsupported controls such as temperature and output-token limits.
-Tools and MCP execute through Progena. OpenAI-hosted file search, Code Interpreter,
-image generation, hosted MCP, audio/video, and transcription are not supported
-by this route. Local file handling and checkpoints remain Progena-owned.
+and omit unsupported controls such as temperature and output-token limits. Its
+terminal Responses event can omit items emitted earlier in the stream, so Progena
+retains completed streamed items for auxiliary calls. Tools and MCP execute through
+Progena. OpenAI-hosted file search, Code Interpreter, image generation, hosted MCP,
+audio/video, and transcription are not supported by this route. Local file handling
+and checkpoints remain Progena-owned.
 `store:false` disables Responses storage; it is not a general zero-retention
 guarantee. Plan limits are not API token prices, and errors never silently switch
 to another billing connection. Review

@@ -436,6 +436,67 @@ async def test_call_mcp_tool_routes_to_server_by_alias():
 
 
 @pytest.mark.asyncio
+async def test_chatgpt_structured_request_reuses_streamed_items_when_completion_empty():
+    requests: list[dict] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(json.loads(request.content))
+        output_item = {
+            "type": "message",
+            "role": "assistant",
+            "status": "completed",
+            "content": [{"type": "output_text", "text": '{"ok": true}'}],
+        }
+        terminal_response = {"status": "completed", "output": []}
+        events = [
+            {"type": "response.output_item.done", "item": output_item},
+            {"type": "response.completed", "response": terminal_response},
+        ]
+        return httpx.Response(
+            200,
+            text="".join(
+                f"event: {event['type']}\ndata: {json.dumps(event)}\n\n" for event in events
+            ),
+            headers={"content-type": "text/event-stream"},
+        )
+
+    client = LLMClient.__new__(LLMClient)
+    client._mcp_runtime = None
+    client._event_pusher = None
+    client._responses_connection = AsyncMock(
+        return_value=(
+            SimpleNamespace(
+                provider_kind="chatgpt",
+                model_default="gpt-test",
+                reasoning_enabled=False,
+            ),
+            "https://api.openai.com/v1/responses",
+            {"Authorization": "Bearer oauth-token"},
+        )
+    )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as transport:
+        client.client = transport
+        result = await client._post_response(
+            [
+                {"role": "system", "content": "Return only JSON."},
+                {"role": "user", "content": "Set ok to true."},
+            ],
+            response_format={
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "structured_output",
+                    "schema": {"type": "object"},
+                    "strict": False,
+                },
+            },
+        )
+
+    assert result["output"][0]["content"][0]["text"] == '{"ok": true}'
+    assert requests[0]["text"]["format"]["name"] == "structured_output"
+
+
+@pytest.mark.asyncio
 async def test_chatgpt_auxiliary_tool_round_uses_stateless_sse_history():
     requests: list[dict] = []
 
