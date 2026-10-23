@@ -201,6 +201,20 @@ class TestLangChainAdapter:
         assert model.use_responses_api is True
         assert model.output_version == "responses/v1"
 
+    def test_chatgpt_model_retains_registration_for_unauthorized_recovery(self):
+        config = LLMConfig(
+            base_url="https://api.openai.com/v1",
+            api_key="oauth-token",
+            model_default="gpt-test",
+            provider_kind="chatgpt",
+            provider_id="provider-1",
+        )
+        with patch("src.progena.agent.adapters.CheckpointChatOpenAI") as mock_chat_openai:
+            model = mock_chat_openai.return_value
+            create_langchain_model(config)
+
+        model.set_chatgpt_provider.assert_called_once_with("provider-1", "oauth-token")
+
     def test_create_model_requires_a_resolved_provider_snapshot(self):
         """No process environment fallback may manufacture a model."""
         with pytest.raises(ProviderNotConfiguredError):

@@ -23,7 +23,11 @@ from src.progena.settings.model_profiles import (
     migrate_legacy_model_profiles_payload,
     validate_model_profiles_payload,
 )
-from src.progena.settings.providers import GO_RESPONSES_MODELS, ProviderRepository
+from src.progena.settings.providers import (
+    GO_RESPONSES_MODELS,
+    ProviderRepository,
+    get_chatgpt_models,
+)
 
 
 def _safe_public_profile(name: str, profile: dict[str, Any]) -> dict[str, Any]:
@@ -193,6 +197,16 @@ def create_model_profile_router(
             raise HTTPException(
                 status_code=422, detail=f"Unsupported fields in patch body: {sorted(extra_keys)}"
             )
+        patch_body = dict(body)
+        for field in ("provider_id", "deployment"):
+            if field not in patch_body:
+                continue
+            value = patch_body[field]
+            if not isinstance(value, str) or not value.strip():
+                raise HTTPException(status_code=422, detail=f"{field} must be a non-empty string")
+            patch_body[field] = value.strip()
+        validated_stored_provider_id: str | None = None
+
         repository: ProviderRepository | None = None
         if get_provider_repository is not None:
             try:
@@ -203,29 +217,27 @@ def create_model_profile_router(
                 ) from exc
 
         def patch(profile: dict[str, Any]) -> dict[str, Any] | None:
-            if "provider_id" in body:
-                provider_id = body["provider_id"]
-                if not isinstance(provider_id, str) or not provider_id.strip():
-                    raise HTTPException(
-                        status_code=422, detail="provider_id must be a non-empty string"
-                    )
-                profile["provider_id"] = provider_id.strip()
-            if "deployment" in body:
-                deployment = body["deployment"]
-                if not isinstance(deployment, str) or not deployment.strip():
-                    raise HTTPException(
-                        status_code=422, detail="deployment must be a non-empty string"
-                    )
-                profile["deployment"] = deployment.strip()
-            if "pricing" in body:
-                if body["pricing"] is None:
+            if (
+                validated_stored_provider_id is not None
+                and profile["provider_id"] != validated_stored_provider_id
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail="Profile provider changed during validation; retry the request",
+                )
+            if "provider_id" in patch_body:
+                profile["provider_id"] = patch_body["provider_id"]
+            if "deployment" in patch_body:
+                profile["deployment"] = patch_body["deployment"]
+            if "pricing" in patch_body:
+                if patch_body["pricing"] is None:
                     profile.pop("pricing", None)
                 else:
-                    profile["pricing"] = body["pricing"]
+                    profile["pricing"] = patch_body["pricing"]
             for field in ("reasoning_enabled", "reasoning_effort", "reasoning_summary"):
-                if field not in body:
+                if field not in patch_body:
                     continue
-                value = body[field]
+                value = patch_body[field]
                 if value is None:
                     profile.pop(field, None)
                 elif field == "reasoning_enabled":
@@ -260,6 +272,39 @@ def create_model_profile_router(
 
         store = get_store()
         await asyncio.to_thread(_migrate_legacy_profiles, store, repository)
+        if repository is not None and ("provider_id" in patch_body or "deployment" in patch_body):
+            current_profiles = list(
+                (await asyncio.to_thread(_build_profiles_snapshot, store))["profiles"]
+            )
+            stored_profile = next(
+                (item for item in current_profiles if item["name"] == name),
+                None,
+            )
+            if stored_profile is not None:
+                validated_stored_provider_id = stored_profile["provider_id"]
+                provider_id = patch_body.get("provider_id", validated_stored_provider_id)
+                deployment = patch_body.get("deployment", stored_profile["deployment"])
+                provider = next(
+                    (
+                        item
+                        for item in await asyncio.to_thread(repository.list_public)
+                        if item["id"] == provider_id
+                    ),
+                    None,
+                )
+                if provider is not None and provider["kind"] == "chatgpt":
+                    try:
+                        chatgpt_models = await get_chatgpt_models(str(provider["id"]))
+                    except (LookupError, ValueError, ConnectionError, TimeoutError) as exc:
+                        raise HTTPException(
+                            status_code=503, detail="ChatGPT model catalog is unavailable"
+                        ) from exc
+                    model_slugs = {model["slug"] for model in chatgpt_models}
+                    if deployment not in model_slugs:
+                        raise HTTPException(
+                            status_code=422,
+                            detail="deployment is not available for the selected ChatGPT account",
+                        )
         await asyncio.to_thread(_mutate_profile, store, name, patch)
         await broadcast_model_profiles_snapshot(store, broadcast, request_id=request_id)
         return http_contracts.acknowledgement_response(request_id, ["profiles.snapshot"])

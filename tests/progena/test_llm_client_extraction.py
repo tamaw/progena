@@ -4,10 +4,13 @@ import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 
+import src.progena.llm.client as llm_client_module
+
 from src.progena.config import LLMConfig, MCPConfig
-from src.progena.llm.client import LLMClient
+from src.progena.llm.client import ChatGPTResponseStreamError, LLMClient
 from src.progena.llm.schema import _build_json_schema_format_from_dict
 from src.progena.llm.transport import _build_responses_endpoint
 from src.progena.mcp.runtime import MCPRuntime
@@ -431,3 +434,314 @@ async def test_call_mcp_tool_routes_to_server_by_alias():
     payload = mcp_client.post.await_args.kwargs["json"]
     assert payload["params"]["name"] == "search_web"
     assert payload["params"]["arguments"] == {"query": "latest ai"}
+
+
+@pytest.mark.asyncio
+async def test_chatgpt_auxiliary_tool_round_uses_stateless_sse_history():
+    requests: list[dict] = []
+
+    responses = [
+        {
+            "output": [
+                {
+                    "type": "reasoning",
+                    "id": "rsn_1",
+                    "summary": [],
+                    "encrypted_content": "opaque-reasoning",
+                },
+                {
+                    "type": "function_call",
+                    "id": "fc_1",
+                    "call_id": "call_1",
+                    "name": "sample",
+                    "namespace": "progena",
+                    "arguments": '{"value": 1}',
+                },
+            ]
+        },
+        {
+            "output": [
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "done"}],
+                }
+            ]
+        },
+    ]
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(json.loads(request.content))
+        body = {
+            "type": "response.completed",
+            "response": responses[len(requests) - 1],
+        }
+        return httpx.Response(
+            200,
+            text=f"event: response.completed\ndata: {json.dumps(body)}\n\n",
+            headers={"content-type": "text/event-stream"},
+        )
+
+    client = LLMClient.__new__(LLMClient)
+    client._mcp_runtime = None
+    client._event_pusher = None
+    client._responses_connection = AsyncMock(
+        return_value=(
+            SimpleNamespace(
+                provider_kind="chatgpt",
+                model_default="gpt-test",
+                reasoning_enabled=False,
+            ),
+            "https://api.openai.com/v1/responses",
+            {"Authorization": "Bearer oauth-token"},
+        )
+    )
+    client._execute_tool_call = AsyncMock(return_value={"result": "ok"})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as transport:
+        client.client = transport
+        result = await client._post_response(
+            [
+                {"role": "system", "content": "Follow the tool contract."},
+                {"role": "user", "content": "Run sample."},
+            ],
+            temperature=0.1,
+            max_tokens=9,
+            tools=[
+                {
+                    "type": "function",
+                    "name": "sample",
+                    "description": "Sample tool",
+                    "parameters": {"type": "object", "properties": {}},
+                }
+            ],
+        )
+
+    assert result == responses[1]
+    assert len(requests) == 2
+    assert requests[0]["store"] is False
+    assert requests[0]["stream"] is True
+    assert requests[0]["include"] == ["reasoning.encrypted_content"]
+    assert requests[0]["input"][0]["role"] == "developer"
+    assert {"max_output_tokens", "temperature", "previous_response_id"}.isdisjoint(requests[0])
+    assert requests[0]["tools"] == [
+        {
+            "type": "namespace",
+            "name": "progena",
+            "description": "Progena local system and MCP tools.",
+            "tools": [
+                {
+                    "type": "function",
+                    "name": "sample",
+                    "description": "Sample tool",
+                    "parameters": {"type": "object", "properties": {}},
+                }
+            ],
+        }
+    ]
+    assert requests[1]["input"][2:5] == [
+        responses[0]["output"][0],
+        responses[0]["output"][1],
+        {
+            "type": "function_call_output",
+            "call_id": "call_1",
+            "output": '{"result": "ok"}',
+            "namespace": "progena",
+        },
+    ]
+    assert client._execute_tool_call.await_args.kwargs["tool_name"] == "sample"
+
+
+@pytest.mark.asyncio
+async def test_chatgpt_auxiliary_request_retries_unauthorized_before_processing_output(monkeypatch):
+    requests: list[httpx.Request] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if len(requests) == 1:
+            return httpx.Response(401, json={"error": {"message": "expired"}})
+        body = {
+            "type": "response.completed",
+            "response": {
+                "output": [
+                    {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "retried"}],
+                    }
+                ]
+            },
+        }
+        return httpx.Response(
+            200,
+            text=f"event: response.completed\ndata: {json.dumps(body)}\n\n",
+            headers={"content-type": "text/event-stream"},
+        )
+
+    client = LLMClient.__new__(LLMClient)
+    client._mcp_runtime = None
+    client._event_pusher = None
+    client._responses_connection = AsyncMock(
+        return_value=(
+            SimpleNamespace(
+                provider_kind="chatgpt",
+                provider_id="provider-1",
+                model_default="gpt-test",
+                reasoning_enabled=False,
+            ),
+            "https://api.openai.com/v1/responses",
+            {"Authorization": "Bearer rejected-token"},
+        )
+    )
+    refresh = AsyncMock(return_value="rotated-token")
+    monkeypatch.setattr(llm_client_module, "refresh_chatgpt_access_token_after_rejection", refresh)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as transport:
+        client.client = transport
+        result = await client._post_response([{"role": "user", "content": "Retry."}])
+
+    assert result["output"][0]["content"][0]["text"] == "retried"
+    assert [request.headers["authorization"] for request in requests] == [
+        "Bearer rejected-token",
+        "Bearer rotated-token",
+    ]
+    refresh.assert_awaited_once_with("provider-1", "rejected-token")
+
+
+@pytest.mark.asyncio
+async def test_chatgpt_tool_followup_retries_without_reexecuting_tool(monkeypatch):
+    requests: list[httpx.Request] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if len(requests) == 1:
+            response = {
+                "output": [
+                    {
+                        "type": "function_call",
+                        "id": "fc_1",
+                        "call_id": "call_1",
+                        "name": "sample",
+                        "namespace": "progena",
+                        "arguments": "{}",
+                    }
+                ]
+            }
+            return httpx.Response(
+                200,
+                text=(
+                    "event: response.completed\n"
+                    f"data: {json.dumps({'type': 'response.completed', 'response': response})}\n\n"
+                ),
+                headers={"content-type": "text/event-stream"},
+            )
+        if len(requests) == 2:
+            return httpx.Response(401, json={"error": {"message": "expired"}})
+        response = {
+            "output": [
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "done"}],
+                }
+            ]
+        }
+        return httpx.Response(
+            200,
+            text=(
+                "event: response.completed\n"
+                f"data: {json.dumps({'type': 'response.completed', 'response': response})}\n\n"
+            ),
+            headers={"content-type": "text/event-stream"},
+        )
+
+    client = LLMClient.__new__(LLMClient)
+    client._mcp_runtime = None
+    client._event_pusher = None
+    client._responses_connection = AsyncMock(
+        return_value=(
+            SimpleNamespace(
+                provider_kind="chatgpt",
+                provider_id="provider-1",
+                model_default="gpt-test",
+                reasoning_enabled=False,
+            ),
+            "https://api.openai.com/v1/responses",
+            {"Authorization": "Bearer rejected-token"},
+        )
+    )
+    client._execute_tool_call = AsyncMock(return_value={"result": "ok"})
+    refresh = AsyncMock(return_value="rotated-token")
+    monkeypatch.setattr(llm_client_module, "refresh_chatgpt_access_token_after_rejection", refresh)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as transport:
+        client.client = transport
+        result = await client._post_response(
+            [{"role": "user", "content": "Run sample."}],
+            tools=[
+                {
+                    "type": "function",
+                    "name": "sample",
+                    "parameters": {"type": "object", "properties": {}},
+                }
+            ],
+        )
+
+    assert result["output"][0]["content"][0]["text"] == "done"
+    assert client._execute_tool_call.await_count == 1
+    assert [request.headers["authorization"] for request in requests] == [
+        "Bearer rejected-token",
+        "Bearer rejected-token",
+        "Bearer rotated-token",
+    ]
+    refresh.assert_awaited_once_with("provider-1", "rejected-token")
+
+
+@pytest.mark.asyncio
+async def test_chatgpt_auxiliary_stream_rejects_incomplete_completion():
+    def respond(_request: httpx.Request) -> httpx.Response:
+        body = {
+            "type": "response.incomplete",
+            "response": {"incomplete_details": {"reason": "max_output_tokens"}},
+        }
+        return httpx.Response(
+            200,
+            text=f"event: response.incomplete\ndata: {json.dumps(body)}\n\n",
+            headers={"content-type": "text/event-stream"},
+        )
+
+    client = LLMClient.__new__(LLMClient)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as transport:
+        client.client = transport
+        with pytest.raises(ChatGPTResponseStreamError) as exc_info:
+            await client._post_chatgpt_stream(
+                "https://api.openai.com/v1/responses",
+                {"model": "gpt-test", "input": [], "store": False, "stream": True},
+                {"Authorization": "Bearer oauth-token"},
+            )
+
+    assert exc_info.value.event_type == "response.incomplete"
+    assert exc_info.value.detail == "max_output_tokens"
+
+
+def test_chatgpt_custom_tool_calls_are_extracted_for_execution():
+    client = LLMClient.__new__(LLMClient)
+    assert client._extract_tool_calls(
+        {
+            "output": [
+                {
+                    "type": "custom_tool_call",
+                    "call_id": "call_custom",
+                    "name": "progena_command",
+                    "input": "status",
+                }
+            ]
+        }
+    ) == [
+        {
+            "type": "custom_tool_call",
+            "call_id": "call_custom",
+            "name": "progena_command",
+            "input": "status",
+        }
+    ]

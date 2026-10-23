@@ -12,6 +12,7 @@ from ack_helpers import assert_acknowledged
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+import src.backend.settings.model_profiles as model_profile_routes
 from src.backend.settings.model_profiles import create_model_profile_router
 from src.backend.storage.documents import PROGENA_STATE_PREFIX, InMemoryDocumentStore
 
@@ -639,3 +640,102 @@ def test_patch_preserves_normalized_profile_identity_without_duplicating_store_k
     assert store.get_document(PROGENA_STATE_PREFIX, "profile").payload == {
         " general ": {"provider_id": "foundry-1", "deployment": "changed"},
     }
+
+
+def test_chatgpt_profile_deployment_must_come_from_selected_account_catalog(monkeypatch):
+    store = InMemoryDocumentStore()
+    store.save_document(
+        PROGENA_STATE_PREFIX,
+        "profile",
+        {"general": {"provider_id": "chatgpt-1", "deployment": "gpt-6.1-sol"}},
+    )
+    repository = FakeProviderRepository(
+        [{"id": "chatgpt-1", "name": "Personal", "kind": "chatgpt", "is_default": True}]
+    )
+
+    async def models(provider_id: str) -> list[dict[str, str]]:
+        assert provider_id == "chatgpt-1"
+        return [{"slug": "gpt-6.1-sol", "display_name": "GPT-6.1 Sol"}]
+
+    monkeypatch.setattr(model_profile_routes, "get_chatgpt_models", models)
+    app, events = _make_app(store, repository)
+    with TestClient(app) as client:
+        accepted = client.patch("/model-profiles/general", json={"deployment": "gpt-6.1-sol"})
+        rejected = client.patch("/model-profiles/general", json={"deployment": "other-model"})
+
+    assert accepted.status_code == 202
+    assert_acknowledged(accepted, ["profiles.snapshot"])
+    assert rejected.status_code == 422
+    assert (
+        rejected.json()["detail"] == "deployment is not available for the selected ChatGPT account"
+    )
+    assert events[-1][1]["profiles"][0]["deployment"] == "gpt-6.1-sol"
+
+
+def test_chatgpt_catalog_validates_whitespace_normalized_provider_id(monkeypatch):
+    store = InMemoryDocumentStore()
+    original = {"general": {"provider_id": "foundry-1", "deployment": "foundry-model"}}
+    store.save_document(PROGENA_STATE_PREFIX, "profile", original)
+    repository = FakeProviderRepository(
+        [
+            {"id": "foundry-1", "kind": "foundry", "is_default": True},
+            {"id": "chatgpt-1", "kind": "chatgpt", "is_default": False},
+        ]
+    )
+
+    async def models(provider_id: str) -> list[dict[str, str]]:
+        assert provider_id == "chatgpt-1"
+        return [{"slug": "gpt-6.1-sol", "display_name": "GPT-6.1 Sol"}]
+
+    monkeypatch.setattr(model_profile_routes, "get_chatgpt_models", models)
+    app, events = _make_app(store, repository)
+    with TestClient(app) as client:
+        response = client.patch(
+            "/model-profiles/general",
+            json={"provider_id": " chatgpt-1 ", "deployment": "not-in-catalogue"},
+        )
+
+    assert response.status_code == 422
+    assert (
+        response.json()["detail"] == "deployment is not available for the selected ChatGPT account"
+    )
+    assert store.get_document(PROGENA_STATE_PREFIX, "profile").payload == original
+    assert events == []
+
+
+def test_chatgpt_catalog_rejects_when_provider_changes_before_locked_mutation(monkeypatch):
+    store = InMemoryDocumentStore()
+    original = {"general": {"provider_id": "chatgpt-1", "deployment": "gpt-6.1-sol"}}
+    store.save_document(PROGENA_STATE_PREFIX, "profile", original)
+    repository = FakeProviderRepository(
+        [
+            {"id": "chatgpt-1", "kind": "chatgpt", "is_default": True},
+            {"id": "chatgpt-2", "kind": "chatgpt", "is_default": False},
+        ]
+    )
+
+    async def models(provider_id: str) -> list[dict[str, str]]:
+        assert provider_id == "chatgpt-1"
+        store.mutate_document(
+            PROGENA_STATE_PREFIX,
+            "profile",
+            lambda payload: {
+                **payload,
+                "general": {"provider_id": "chatgpt-2", "deployment": "other-model"},
+            },
+        )
+        return [{"slug": "gpt-6.1-sol", "display_name": "GPT-6.1 Sol"}]
+
+    monkeypatch.setattr(model_profile_routes, "get_chatgpt_models", models)
+    app, events = _make_app(store, repository)
+    with TestClient(app) as client:
+        response = client.patch("/model-profiles/general", json={"deployment": "gpt-6.1-sol"})
+
+    assert response.status_code == 409
+    assert (
+        response.json()["detail"] == "Profile provider changed during validation; retry the request"
+    )
+    assert store.get_document(PROGENA_STATE_PREFIX, "profile").payload == {
+        "general": {"provider_id": "chatgpt-2", "deployment": "other-model"}
+    }
+    assert events == []
