@@ -23,7 +23,7 @@ export function pickEntryForIteration(entries, iterationIndex, guardEntries) {
 
 // Node kinds with a real external side effect: a live agent/routine
 // delegation, an A2A call, or a human approval gate. Everything else
-// (eval/condition/switch/split/noop) is pure/deterministic -- re-running
+// (eval/code/condition/switch/split/noop) is pure/deterministic -- re-running
 // it has no observable consequence outside this graph's own state.
 const SIDE_EFFECTING_KINDS = new Set(['agent', 'routine', 'a2a', 'human']);
 

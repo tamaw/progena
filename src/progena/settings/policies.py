@@ -13,7 +13,7 @@ from src.progena.documents.kinds import POLICY_KEY_PREFIX as POLICY_KEY_PREFIX
 from src.progena.llm.structured import validate_against_schema
 
 DEFAULT_POLICY_ID = "default"
-CACHE_NODE_KINDS = frozenset({"prompt", "classify", "eval"})
+CACHE_NODE_KINDS = frozenset({"prompt", "classify", "eval", "code"})
 
 
 class PolicyRetry(BaseModel):

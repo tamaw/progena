@@ -88,7 +88,24 @@ sandbox API key is required.
   subagent dispatches; the latter is a concurrency cap, not a total task budget.
 - Results can be persisted through normal validated document tools outside
   JavaScript. The interpreter does not replace or mount over virtual paths.
-- This adds no routine node type or interpreter capability to object agents.
+- A routine `code` node is separate from this conversational interpreter. It
+  accepts only inline `{"language":"javascript","code":"..."}` source, receives
+  JSON-compatible routine state as `input`, and returns one JSON-compatible
+  value to its `output_key`. Each execution creates and disposes a fresh
+  QuickJS runtime with a 16 MiB heap, 512 KiB stack, one-second JS deadline,
+  and 1 MiB serialized-result cap. It exposes no tools, host functions,
+  modules, network, filesystem, or shell;
+  sandbox and JSON-boundary failures fail the node.
+  The SDK lifecycle runs in a worker thread to keep the event loop and graph
+  timeout watchdog responsive. Cancelling the awaiting node does not kill
+  the worker; its independent one-second guest deadline still bounds execution.
+  The host also checks serialized UTF-8 bytes before accepting the result.
+  The JavaScript editor reuses graph-state autocomplete with `input`-rooted
+  dot/bracket references, rather than Python expression or prompt-template
+  syntax. It suggests declared routine inputs and predecessor output keys/
+  response fields; script results have no inferred field schema. Source is
+  never message-template interpolated, so object braces and JavaScript
+  `${...}` template literals retain their normal meaning.
 
 The upstream interpreter integration is beta and `quickjs-rs` is experimental.
 Wasm is an in-process isolation boundary, not a separate OS sandbox: Wasmtime/JIT

@@ -20,6 +20,7 @@ export function makeNode(kind) {
   const config = {
     prompt: { prompt_template: '' },
     eval: { expression: '' },
+    code: { language: 'javascript', code: 'return input;' },
     condition: { expression: '' },
     switch: { expression: '' },
     split: {},

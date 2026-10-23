@@ -58,13 +58,39 @@ schema, validate it, then write exactly one routine file.
 
 ## Node kinds
 
-The current schema supports: `prompt`, `eval`, `condition`, `switch`, `split`,
+The current schema supports: `prompt`, `eval`, `code`, `condition`, `switch`, `split`,
 `classify`, `agent`, `a2a`, `noop`, `human`, `foreach`, `reduce`, and `routine`.
 
 - `prompt` invokes the model using exactly one of `prompt_template` or
   `prompt_file`.
 - `eval` uses a restricted Python expression or expression file; `defaults`
   provides fallbacks for missing top-level state values.
+- `code` runs an inline JavaScript body in a fresh bounded QuickJS sandbox.
+  Its config is exactly `language: "javascript"` and nonblank `code`, plus the
+  standard `retry`, `timeout`, and `cache` options. The body receives all
+  current routine data as JSON-compatible `input` and must `return` one
+  JSON-compatible value; the whole value is stored at its `output_key`.
+  `return { total: input.items.reduce((sum, item) => sum + item.price, 0) };`
+  is valid. There is no filesystem, network, tool, module, or host-function
+  access. Do not use file references or attempt to
+  request permissions. QuickJS execution, memory, stack, and result size are
+  independently bounded; a sandbox exception, timeout, or non-JSON result
+  fails the node.
+  Reference routine parameters and earlier outputs with `input.<key>`, where
+  `<key>` is the producer's `output_key` (or node ID when omitted), not its
+  display label. For example, `return input.quote.price * input.quantity;`.
+  Use brackets for literal keys containing punctuation or spaces:
+  `input["market-data"]["close.price"]`. Only values already produced on the
+  executed graph path exist; code-node outputs have no inferred field schema.
+  JavaScript source is **not** a message template: do not inject `{key}` or
+  double/escape JavaScript object braces. `${...}` inside backticks is normal
+  JavaScript interpolation. In contrast, Eval/Branch/Switch expressions use
+  `quote.price`, and prompt templates use `{quote[price]}`.
+  The editor reuses state-path autocomplete: type `input.` (or a partial
+  `input` reference), then select with arrows/Enter or the mouse; Escape
+  dismisses it. Suggestions include routine input keys, seeded `request` and
+  `context`, and predecessor outputs/declared response fields. It inserts
+  JavaScript-safe dot/bracket access; it does not infer arbitrary script results.
 - `condition` is a boolean gate whose router must have exactly `true` and
   `false` branches and no default.
 - `switch` routes an expression through author-defined branches.
@@ -142,8 +168,8 @@ Use only the fields allowed by the selected node kind. For example:
 ```text
 prompt  -> config.prompt_template
 eval    -> config.expression
+code    -> config.code
 human   -> config.message
-routine -> config.routine_name
 ```
 
 Do not copy fields between kinds. The schema's `oneOf` branches are strict.

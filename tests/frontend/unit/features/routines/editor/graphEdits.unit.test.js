@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { makeNode, normalizeGraphNodes, stableStringify } from '@frontend/features/routines/editor/graphEdits';
+import { makeNode, normalizeGraphNodes, serializeGraph, stableStringify } from '@frontend/features/routines/editor/graphEdits';
 
 describe('normalizeGraphNodes', () => {
   it('uses each node id as its output key while preserving the rest of the node', () => {
@@ -24,6 +24,24 @@ describe('makeNode', () => {
     const node = makeNode('human');
     expect(node.config).toHaveProperty('message');
     expect(node.config).not.toHaveProperty('allowed_responses');
+  });
+
+});
+
+describe('serializeGraph', () => {
+  it('preserves edited Code source', () => {
+    const node = {
+      id: 'transform',
+      kind: 'code',
+      label: 'Transform',
+      description: '',
+      config: { language: 'javascript', code: 'return input.items;' },
+    };
+
+    expect(serializeGraph([node], [], { entry: node.id }).nodes[0]).toMatchObject({
+      kind: 'code',
+      config: node.config,
+    });
   });
 });
 

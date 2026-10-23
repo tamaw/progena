@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
 from collections.abc import Callable
 from math import prod
 from typing import Any
@@ -9,6 +11,7 @@ from typing import Any
 from langgraph.errors import NodeError
 from langgraph.runtime import Runtime
 from langgraph.types import Command, Send, interrupt
+from quickjs_rs import Runtime as QuickJSRuntime
 
 from .expression import evaluate_expression
 from .graph import RoutineEdge, RoutineNode
@@ -63,6 +66,110 @@ def _build_eval_node(node: RoutineNode) -> Any:
         namespace = {**defaults, **data}
         result = evaluate_expression(expression, namespace)
         return {"data": {output_key: result}}
+
+    return run
+
+
+# Code nodes deliberately use a substantially tighter sandbox bound than the
+# graph-level node timeout: JavaScript has no host calls here, so a healthy
+# computation should complete quickly. The SDK enforces all three limits in
+# the guest runtime, including interrupting a busy loop.
+_CODE_MEMORY_LIMIT_BYTES = 16 * 1024 * 1024
+_CODE_STACK_LIMIT_BYTES = 512 * 1024
+_CODE_TIMEOUT_SECONDS = 1.0
+_CODE_MAX_RESULT_BYTES = 1024 * 1024
+
+_CODE_WRAPPER_PREFIX = """\
+"use strict";
+const __routineInput = JSON.parse("""
+
+_CODE_WRAPPER_MIDDLE = """);
+const __routineStringify = JSON.stringify;
+const __routineIsFinite = Number.isFinite;
+const __routineTypeError = TypeError;
+const __routineRangeError = RangeError;
+const __routineCharCodeAt = Function.prototype.call.bind(String.prototype.charCodeAt);
+const __routineResult = await (async function(input) {
+"""
+
+_CODE_WRAPPER_SUFFIX = (
+    """
+})(__routineInput);
+const __routineSerialized = __routineStringify(__routineResult, (key, value) => {
+  const type = typeof value;
+  if (type === "undefined" || type === "bigint" || type === "function" || type === "symbol" ||
+      (type === "number" && !__routineIsFinite(value))) {
+    throw new __routineTypeError("code result must be JSON-compatible");
+  }
+  return value;
+});
+const __routineMaxBytes = """
+    + str(_CODE_MAX_RESULT_BYTES)
+    + """;
+let __routineResultBytes = 0;
+for (let index = 0; index < __routineSerialized.length; index += 1) {
+  const unit = __routineCharCodeAt(__routineSerialized, index);
+  if (unit < 0x80) __routineResultBytes += 1;
+  else if (unit < 0x800) __routineResultBytes += 2;
+  else if (unit >= 0xD800 && unit <= 0xDBFF) {
+    __routineResultBytes += 4;
+    index += 1;
+  } else __routineResultBytes += 3;
+  if (__routineResultBytes > __routineMaxBytes) {
+    throw new __routineRangeError("code result exceeds the maximum size");
+  }
+}
+__routineSerialized;
+"""
+)
+
+
+def _build_code_node(node: RoutineNode) -> Any:
+    """Run a JavaScript body in a one-shot QuickJS sandbox."""
+
+    config = _node_config(node)
+    output_key = node.output_key or node.id
+    code = config["code"]
+
+    def evaluate(source: str) -> Any:
+        # eval_async performs pure guest computation synchronously. Keep the
+        # complete SDK lifecycle in one worker so graph watchdogs can run.
+        with (
+            QuickJSRuntime(
+                memory_limit=_CODE_MEMORY_LIMIT_BYTES,
+                stack_limit=_CODE_STACK_LIMIT_BYTES,
+            ) as runtime,
+            runtime.new_context(timeout=_CODE_TIMEOUT_SECONDS) as context,
+        ):
+            return asyncio.run(
+                context.eval_async(source, strict=True, filename=f"<routine code {node.id}>")
+            )
+
+    async def run(state: RoutineState) -> dict[str, Any]:
+        try:
+            input_json = json.dumps(
+                state.get("data", {}),
+                allow_nan=False,
+                separators=(",", ":"),
+            )
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"code node {node.id}: input must be JSON-compatible") from exc
+
+        source = "".join(
+            (
+                _CODE_WRAPPER_PREFIX,
+                json.dumps(input_json),
+                _CODE_WRAPPER_MIDDLE,
+                code,
+                _CODE_WRAPPER_SUFFIX,
+            )
+        )
+        serialized = await asyncio.to_thread(evaluate, source)
+        if not isinstance(serialized, str):
+            raise ValueError(f"code node {node.id}: result must be JSON-compatible")
+        if len(serialized.encode("utf-8")) > _CODE_MAX_RESULT_BYTES:
+            raise ValueError(f"code node {node.id}: result exceeds the maximum size")
+        return {"data": {output_key: json.loads(serialized)}}
 
     return run
 

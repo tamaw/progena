@@ -130,10 +130,11 @@ async def test_agent_node_propagates_profile_without_changing_agent_definition(e
     )
 
 
-@pytest.mark.parametrize("kind", ["eval", "a2a", "foreach"])
+@pytest.mark.parametrize("kind", ["eval", "code", "a2a", "foreach"])
 def test_other_node_kinds_reject_model_profiles(kind):
     configs = {
         "eval": {"expression": "1"},
+        "code": {"language": "javascript", "code": "return 1;"},
         "a2a": {"agent_name": "remote", "prompt_template": "hello"},
         "foreach": {"mode": "send", "items_from": "items", "item_key": "item"},
     }
