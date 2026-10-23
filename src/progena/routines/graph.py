@@ -96,6 +96,34 @@ class CachePolicyConfig(BaseModel):
     ttl: int | None = Field(default=None, ge=0)
 
 
+class FilesystemConfig(BaseModel):
+    """Explicit, directory-scoped virtual filesystem access for a Code node."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    access: Literal["read", "read_write"]
+    paths: list[str] = Field(min_length=1)
+
+    @field_validator("paths")
+    @classmethod
+    def normalize_paths(cls, paths: list[str]) -> list[str]:
+        normalized: list[str] = []
+        for path in paths:
+            if not path or not path.startswith("/") or "\x00" in path or "\\" in path:
+                raise ValueError("filesystem paths must be non-empty absolute slash paths")
+            segments = path.split("/")
+            if any(segment in {".", ".."} for segment in segments):
+                raise ValueError("filesystem paths cannot contain dot segments")
+            parts = [segment for segment in segments if segment]
+            if not parts or parts[0] not in {"artifacts", "shared"}:
+                raise ValueError("filesystem paths must be under /artifacts/ or /shared/")
+            canonical = f"/{'/'.join(parts)}/"
+            if canonical in normalized:
+                raise ValueError(f"duplicate filesystem path: {canonical}")
+            normalized.append(canonical)
+        return normalized
+
+
 class LoopGuardConfig(BaseModel):
     """A deterministic guard for a normal edge. `expression` resolves names
     directly against the routine's own `data` state -- see EvalNodeConfig's
@@ -156,6 +184,7 @@ class CodeNodeConfig(BaseModel):
 
     language: Literal["javascript"]
     code: str = Field(min_length=1)
+    filesystem: FilesystemConfig | None = None
     retry: RetryPolicyConfig | None = None
     timeout: float | None = Field(default=None, ge=0)
     cache: bool | CachePolicyConfig | None = None

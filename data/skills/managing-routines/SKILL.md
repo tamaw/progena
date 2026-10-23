@@ -66,16 +66,16 @@ The current schema supports: `prompt`, `eval`, `code`, `condition`, `switch`, `s
 - `eval` uses a restricted Python expression or expression file; `defaults`
   provides fallbacks for missing top-level state values.
 - `code` runs an inline JavaScript body in a fresh bounded QuickJS sandbox.
-  Its config is exactly `language: "javascript"` and nonblank `code`, plus the
-  standard `retry`, `timeout`, and `cache` options. The body receives all
-  current routine data as JSON-compatible `input` and must `return` one
+  Its config requires `language: "javascript"` and nonblank `code`, with optional
+  `filesystem` and the standard `retry`, `timeout`, and `cache` options.
+  The body receives all current routine data as JSON-compatible `input` and must `return` one
   JSON-compatible value; the whole value is stored at its `output_key`.
   `return { total: input.items.reduce((sum, item) => sum + item.price, 0) };`
-  is valid. There is no filesystem, network, tool, module, or host-function
-  access. Do not use file references or attempt to
-  request permissions. QuickJS execution, memory, stack, and result size are
-  independently bounded; a sandbox exception, timeout, or non-JSON result
-  fails the node.
+  is valid. Host capabilities are absent by default; only the explicit
+  filesystem capability below can add scoped file tools. There are no direct
+  filesystem, network or module APIs. QuickJS execution, memory, stack and
+  result size are independently bounded; a sandbox exception, timeout or
+  non-JSON result fails the node.
   Reference routine parameters and earlier outputs with `input.<key>`, where
   `<key>` is the producer's `output_key` (or node ID when omitted), not its
   display label. For example, `return input.quote.price * input.quantity;`.
@@ -91,6 +91,55 @@ The current schema supports: `prompt`, `eval`, `code`, `condition`, `switch`, `s
   dismisses it. Suggestions include routine input keys, seeded `request` and
   `context`, and predecessor outputs/declared response fields. It inserts
   JavaScript-safe dot/bracket access; it does not infer arbitrary script results.
+
+  A Code node is pure when `config.filesystem` is omitted or null. To grant a
+  narrowly scoped virtual filesystem, set `config.filesystem` to:
+
+  ```json
+  {
+    "access": "read",
+    "paths": ["/artifacts/", "/shared/reports/"]
+  }
+  ```
+
+  `access` is `"read"` or `"read_write"`. Each `paths` entry is a directory
+  root under `/artifacts/` or `/shared/`; use absolute slash paths only. Paths
+  are normalized with a trailing slash. Dot segments, backslashes, NULs, empty
+  paths, and every other mount family are rejected. Read access exposes only
+  `ls`, `readFile`, `glob`, and `grep`; write access additionally exposes
+  `writeFile`, `editFile`, `copyFile`, `moveFile`, and `deleteFile`. Text only:
+  binary data is rejected rather than lossy-converted. There is no shell,
+  network, agent, or generic host-tool escape hatch. Writes and copies never
+  overwrite; moves are file-only and must stay on one mount, but are not atomic
+  (they may be implemented as copy then delete). File operations are
+  nontransactional: cancellation or a later failure does not roll back completed
+  writes, and a manual rerun/replay can repeat them. Filesystem-enabled Code
+  nodes never cache and never retry automatically, which is not exactly-once
+  execution. The QuickJS CPU deadline excludes async filesystem waits; the
+  enclosing node timeout still bounds those waits.
+
+  With `access: "read_write"` and `/artifacts/` allowed, for example:
+
+  ```javascript
+  await tools.writeFile({
+    file_path: "/artifacts/report.json",
+    content: JSON.stringify(input.result)
+  });
+  await tools.moveFile({
+    source_path: "/artifacts/report.json",
+    destination_path: "/artifacts/finished.json"
+  });
+  return JSON.parse(await tools.readFile({file_path: "/artifacts/finished.json"}));
+  ```
+
+  Calls are asynchronous and must be awaited. `ls` takes `{path}`; `readFile`
+  takes `{file_path, offset?, limit?}`; `glob` takes `{pattern, path?}` and
+  returns `{matches, truncated, truncation_reason}`; `grep` takes
+  `{pattern, path?, glob?, max_count?}` and returns `{matches, truncated}`.
+  `editFile` takes `{file_path, old_string, new_string, replace_all?}`;
+  `copyFile`/`moveFile` take `{source_path, destination_path}`; `deleteFile`
+  takes `{file_path}`. Filesystem methods throw on failure. Scope checks also
+  reject symlinks whose resolved target escapes the configured directory roots.
 - `condition` is a boolean gate whose router must have exactly `true` and
   `false` branches and no default.
 - `switch` routes an expression through author-defined branches.
@@ -168,7 +217,7 @@ Use only the fields allowed by the selected node kind. For example:
 ```text
 prompt  -> config.prompt_template
 eval    -> config.expression
-code    -> config.code
+code    -> config.code (+ optional config.filesystem)
 human   -> config.message
 ```
 

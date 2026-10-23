@@ -59,14 +59,13 @@ describe('extracted routine components', () => {
     expect(doc.querySelector('[aria-required="true"]')).toBeNull();
   });
 
-  it('renders editable Code source with the sandbox contract', () => {
+  it('renders editable Code source with filesystem permissions', () => {
     const node = { id: 'transform', kind: 'code', label: 'Transform', config: { language: 'javascript', code: 'return input.items;' } };
     const doc = parseMarkup(renderWithGraph(<NodeInspector node={node} />, [node], []));
 
     expect(doc.textContent).toContain('JavaScript');
     expect(doc.querySelector('textarea')?.textContent).toBe('return input.items;');
-    expect(doc.textContent).toContain('JSON-compatible result');
-    expect(doc.textContent).toContain('without Node, browser, network, filesystem, or host tools');
+    expect(doc.textContent).toContain('Filesystem access');
   });
 
   it('renders nested forks and their shared join once with connector controls', () => {

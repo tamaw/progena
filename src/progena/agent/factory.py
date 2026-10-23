@@ -483,6 +483,7 @@ async def create_progena_agent(
             agent_background_runner=background_runner,
             model_profile_resolver=profile_resolver,
             tool_registry=tool_registry,
+            filesystem_backend=backend,
             checkpointer=checkpointer,
             context=dict(getattr(runtime, "context", None) or {}),
         )
@@ -538,6 +539,7 @@ async def create_progena_agent(
             agent_background_runner=background_runner,
             model_profile_resolver=profile_resolver,
             tool_registry=tool_registry,
+            filesystem_backend=backend,
             checkpointer=checkpointer,
         )
 
@@ -560,6 +562,7 @@ async def create_progena_agent(
             agent_background_runner=background_runner,
             model_profile_resolver=profile_resolver,
             tool_registry=tool_registry,
+            filesystem_backend=backend,
             checkpointer=checkpointer,
             **kwargs,
         )

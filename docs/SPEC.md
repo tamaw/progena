@@ -270,6 +270,23 @@ a blank line and the IRC-style `content`. Only the `title`, `pinned`, and
 `archived` front-matter fields are editable; the body is read-only. Listing,
 grep, and read operate directly on the store documents (no cache).
 
+## Routine Code filesystem access
+
+Routine Code nodes run in a fresh QuickJS sandbox and are pure unless their
+`config.filesystem` explicitly grants a virtual filesystem scope. A grant
+declares `"access": "read"` or `"read_write"` and one or more canonical
+directory roots below `/artifacts/` or `/shared/`; no other mount family,
+relative path, dot traversal, backslash, NUL, or empty root is valid. Read
+access provides `ls`, `readFile`, `glob`, and `grep`; write access adds
+`writeFile`, `editFile`, `copyFile`, `moveFile`, and `deleteFile`. It never
+provides shell, network, agent, browser, or generic host access. Writes and
+copies do not overwrite; moves operate on files only within one mount, but are
+not atomic and may be copy-then-delete. File operations are nontransactional:
+completed writes are not rolled back on cancellation or a later error, and
+manual reruns/replays can repeat them. Disabling automatic caching and retries
+does not provide exactly-once execution. The QuickJS CPU deadline excludes
+async filesystem waits, which remain bounded by the enclosing node timeout.
+
 ## Insights
 
 **Spectate → Insights** (`/insights`) displays checkpoint-backed token totals,

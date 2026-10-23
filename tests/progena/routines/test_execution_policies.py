@@ -40,6 +40,20 @@ def prompt(config=None):
     }
 
 
+def filesystem_code(config=None):
+    return {
+        "id": "code",
+        "kind": "code",
+        "output_key": "code",
+        "config": {
+            "language": "javascript",
+            "code": "return input;",
+            "filesystem": {"access": "read", "paths": ["/artifacts/"]},
+            **(config or {}),
+        },
+    }
+
+
 class Model:
     def __init__(self, fail=0, delay=0):
         self.calls = 0
@@ -79,6 +93,41 @@ async def test_node_can_disable_policy_cache():
     await compiled.ainvoke({"data": {}})
     await compiled.ainvoke({"data": {}})
     assert model.calls == 2
+
+
+def test_filesystem_code_ignores_inherited_cache_and_retries():
+    compiled = compile_routine_graph(
+        validate_routine_graph_payload(graph([filesystem_code()])),
+        model=object(),
+        filesystem_backend=object(),
+        execution_policy=PolicyValues(
+            cache_enabled=True,
+            retry={"max_retries": 3, "initial_interval": 0, "retry_on": "all"},
+        ),
+    )
+
+    code_node = compiled.nodes["code"]
+    assert code_node.cache_policy is None
+    assert code_node.retry_policy[0].max_attempts == 1
+
+
+@pytest.mark.parametrize(
+    "config,error",
+    [
+        ({"cache": True}, "filesystem-enabled code cannot enable caching"),
+        (
+            {"retry": {"max_retries": 1, "initial_interval": 0}},
+            "filesystem-enabled code cannot enable retries",
+        ),
+    ],
+)
+def test_filesystem_code_rejects_explicit_cache_or_retries(config, error):
+    with pytest.raises(ValueError, match=error):
+        compile_routine_graph(
+            validate_routine_graph_payload(graph([filesystem_code(config)])),
+            model=object(),
+            filesystem_backend=object(),
+        )
 
 
 async def test_policy_retry_category_and_node_override():

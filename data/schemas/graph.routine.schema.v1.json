@@ -204,6 +204,13 @@
           "pattern": "\\S",
           "description": "Inline JavaScript body. It receives JSON-compatible routine data as `input` and must `return` one JSON-compatible value."
         },
+        "filesystem": {
+          "anyOf": [
+            { "type": "null" },
+            { "$ref": "#/$defs/filesystemConfig" }
+          ],
+          "description": "Optional, explicitly scoped virtual filesystem access. Its paths are canonicalized as directory roots."
+        },
         "retry": { "$ref": "#/$defs/retryPolicy" },
         "timeout": { "type": "number", "minimum": 0, "description": "Seconds before this node is abandoned, overriding the execution policy attempt timeout. The QuickJS sandbox still has a fixed short execution limit." },
         "cache": { "$ref": "#/$defs/cachePolicy" }
@@ -357,6 +364,23 @@
         "output_map": { "$ref": "#/$defs/inputMap" },
         "retry": { "$ref": "#/$defs/retryPolicy" },
         "timeout": { "type": "number", "minimum": 0, "description": "Seconds before this node is abandoned, overriding the execution policy attempt timeout. 0 disables the limit." }
+      }
+    },
+    "filesystemConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["access", "paths"],
+      "properties": {
+        "access": { "enum": ["read", "read_write"] },
+        "paths": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^/(artifacts|shared)(/.*)?$"
+          }
+        }
       }
     },
     "inputMap": { "type": "object", "additionalProperties": { "type": "string", "minLength": 1 } },
