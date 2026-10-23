@@ -207,6 +207,24 @@ Configure the `production` Environment with a custom deployment branch policy
 allowing only the branch `main` (not tags); the job condition alone is not an
 independent secrets boundary.
 
+Deployment health failures report container health status only. Application logs
+and unrelated container listings are deliberately omitted from Actions output;
+inspect application logs privately on the deployment host.
+
+Repository Actions policy allows only the exact action commits used by the
+checked-in workflows, with GitHub-owned/verified-publisher blanket allowances
+disabled. Updating an action pin also requires updating that allowlist.
+Log and artifact retention is 14 days. Retention changes apply to new data; they
+do not retroactively purge existing logs, artifacts or copies downloaded by others.
+
+The `Secret scan` workflow checks new PR and `main` push commits using a
+checksum-verified Gitleaks binary and pinned upstream rules. It runs on
+GitHub-hosted runners without application dependencies or production credentials,
+redacts findings, and uploads no reports. Repository suppression files and inline
+allow comments cannot bypass the scan. Manual dispatch scans the selected tip;
+an optional `base_sha` scans the range after that commit. This contribution scan
+does not replace a full-history audit before publication.
+
 ### Before making a repository public
 
 Workflow conditions are defense in depth, not a sandbox: a pull request can
@@ -221,10 +239,10 @@ these self-hosted runners, even when GitHub requires approval.
    protect `main` with reviewed pull requests, and verify that `production` still
    allows deployments only from `main`. GitHub does not expose the public-fork
    contributor-approval setting while the repository is private.
-4. Re-enable Actions only after those protections are verified. If fork PR checks
-   are added later, run them on isolated GitHub-hosted runners without production
-   credentials, not these persistent hosts. Do not use `pull_request_target` to
-   execute PR code.
+4. Re-enable Actions only after those protections are verified. Contribution
+   secret scanning runs on isolated GitHub-hosted runners without production
+   credentials. Keep any future PR checks off the persistent deployment hosts.
+   Do not use `pull_request_target` to execute PR code.
 
 Scan all fetched Git refs before publication; deleting a secret from the current
 tree does not remove it from history. The history contains retired frontend and
