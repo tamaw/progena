@@ -30,6 +30,29 @@ describe('provider request lifecycle', () => {
     expect(state.providers.goModels).toEqual(['grok-4.7']);
   });
 
+  it('drops stale account catalogs and errors when the authoritative registrations change', () => {
+    let state = reducer(undefined, applyUiEvent({
+      type: 'providers.snapshot',
+      payload: {
+        providers: [{ id: 'old', kind: 'chatgpt' }],
+        chatgpt_models: { old: [{ slug: 'old-model', display_name: 'Old model' }] },
+        chatgpt_model_errors: { old: 'Reconnect required' },
+      },
+    }));
+    state = reducer(state, applyUiEvent({
+      type: 'providers.snapshot',
+      payload: {
+        providers: [{ id: 'new', kind: 'chatgpt' }],
+        chatgpt_models: { new: [{ slug: 'new-model', display_name: 'New model' }] },
+        chatgpt_model_errors: {},
+      },
+    }));
+
+    expect(state.providers.chatgptModelsByProviderId.old).toBeUndefined();
+    expect(state.providers.chatgptModelErrorsByProviderId.old).toBeUndefined();
+    expect(state.providers.chatgptModelsByProviderId.new[0].slug).toBe('new-model');
+  });
+
   it('settles a CRUD request only from its correlated authoritative snapshot', () => {
     const args = { providersUrl: '/api/ui/providers', provider: { name: 'Go' } };
     let state = reducer(undefined, createProvider.pending('create-a', args));

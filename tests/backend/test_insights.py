@@ -89,6 +89,27 @@ def _profiles() -> dict:
     }
 
 
+def test_chatgpt_plan_usage_is_not_charged_at_profile_api_rates():
+    end = datetime(2026, 10, 20, 12, tzinfo=UTC)
+    occurred = end - timedelta(hours=1)
+    message = _message(
+        "plan-call", occurred.isoformat(), {"input_tokens": 100, "output_tokens": 20}
+    )
+    message["response_metadata"]["insights"]["provider"] = "chatgpt"
+    snapshot = build_token_usage_snapshot(
+        _InsightsStore([_record("plan", occurred, [message])], _profiles()),
+        range_name="24h",
+        profile=None,
+        generated_at=end,
+    )
+
+    assert snapshot["totals"]["total_tokens"] == 120
+    assert snapshot["totals"]["costs"] == []
+    assert snapshot["totals"]["unpriced_call_count"] == 1
+    assert snapshot["by_profile"][0]["costs"] == []
+    assert all(bucket["costs"] == [] for bucket in snapshot["series"])
+
+
 def test_usage_deduplicates_checkpoint_snapshots_and_honors_half_open_boundaries():
     end = datetime(2026, 10, 20, 12, tzinfo=UTC)
     start = end - timedelta(hours=24)

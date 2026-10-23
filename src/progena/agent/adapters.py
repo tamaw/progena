@@ -74,19 +74,12 @@ def create_langchain_model(
         turn = current_provider_turn()
         session_id = turn.session_id if turn is not None else None
     model_name = config.model_default
-    base_url = _normalize_langchain_base_url(config.base_url)
-    if config.provider_kind == "opencode_go":
-        headers = {
-            "Authorization": f"Bearer {config.api_key}",
-            "User-Agent": f"progena/{__version__}",
-        }
-        if session_id:
-            headers["x-opencode-session"] = session_id
-        reasoning_effort: str | None = None
-        extra_body: dict[str, Any] | None = None
-    else:
-        headers = {"api-key": config.api_key}
-        reasoning_effort = config.reasoning_effort if config.reasoning_enabled else None
+    if config.provider_kind == "chatgpt":
+        # ChatGPT-plan OAuth tokens are accepted only by the public direct
+        # route, never an Azure-compatible endpoint.
+        base_url = "https://api.openai.com/v1"
+        headers = {"Authorization": f"Bearer {config.api_key}"}
+        reasoning_effort = None
         extra_body = (
             {
                 "reasoning": {
@@ -97,6 +90,30 @@ def create_langchain_model(
             if config.reasoning_enabled
             else None
         )
+    else:
+        base_url = _normalize_langchain_base_url(config.base_url)
+        if config.provider_kind == "opencode_go":
+            headers = {
+                "Authorization": f"Bearer {config.api_key}",
+                "User-Agent": f"progena/{__version__}",
+            }
+            if session_id:
+                headers["x-opencode-session"] = session_id
+            reasoning_effort = None
+            extra_body = None
+        else:
+            headers = {"api-key": config.api_key}
+            reasoning_effort = config.reasoning_effort if config.reasoning_enabled else None
+            extra_body = (
+                {
+                    "reasoning": {
+                        "effort": config.reasoning_effort,
+                        "summary": config.reasoning_summary,
+                    }
+                }
+                if config.reasoning_enabled
+                else None
+            )
 
     model = CheckpointChatOpenAI(
         model=model_name,
@@ -104,6 +121,7 @@ def create_langchain_model(
         api_key=SecretStr(config.api_key),
         default_headers=headers,
         use_responses_api=True,
+        use_previous_response_id=False,
         output_version="responses/v1",
         streaming=True,
         reasoning_effort=reasoning_effort,
@@ -111,6 +129,14 @@ def create_langchain_model(
         timeout=config.timeout_seconds,
         max_retries=config.max_retries,
     )
+    model.set_provider_connection(
+        provider_id=config.provider_id,
+        provider_kind=config.provider_kind,
+        base_url=config.base_url,
+    )
+    model.set_provider_kind(config.provider_kind)
+    if config.provider_kind == "chatgpt" and config.provider_id:
+        model.set_chatgpt_provider(config.provider_id, config.api_key)
     model.set_usage_profile(profile_name)
     logger.info(
         "Created LangChain model adapter: provider=%s model=%s responses_api=%s reasoning=%s",

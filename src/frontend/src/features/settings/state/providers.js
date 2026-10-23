@@ -5,6 +5,8 @@ export const initialState = {
   providers: {
     items: [],
     goModels: [],
+    chatgptModelsByProviderId: {},
+    chatgptModelErrorsByProviderId: {},
     loaded: false,
     loading: false,
     error: null,
@@ -51,7 +53,20 @@ export const testProviderConnection = createAcknowledgedThunk(
   ),
 );
 
-const snapshotOperations = [createProvider, patchProvider, deleteProvider];
+export const disconnectChatgptProvider = createAcknowledgedThunk(
+  'uiData/disconnectChatgptProvider',
+  ({ providersUrl, providerId }, { requestId }) => requestAcknowledged(
+    `${providersUrl}/${encodeURIComponent(providerId)}/disconnect`,
+    { method: 'POST', requestId },
+  ),
+);
+
+const snapshotOperations = [
+  createProvider,
+  patchProvider,
+  deleteProvider,
+  disconnectChatgptProvider,
+];
 
 function requestStarted(state, action, type) {
   state.providers.requests[action.meta.requestId] = {
@@ -80,6 +95,15 @@ export const eventHandlers = {
   'providers.snapshot': (state, payload) => {
     state.providers.items = Array.isArray(payload.providers) ? payload.providers : [];
     state.providers.goModels = Array.isArray(payload.go_models) ? payload.go_models : [];
+    state.providers.chatgptModelsByProviderId = payload.chatgpt_models
+      && typeof payload.chatgpt_models === 'object' && !Array.isArray(payload.chatgpt_models)
+      ? payload.chatgpt_models
+      : {};
+    state.providers.chatgptModelErrorsByProviderId = payload.chatgpt_model_errors
+      && typeof payload.chatgpt_model_errors === 'object'
+      && !Array.isArray(payload.chatgpt_model_errors)
+      ? payload.chatgpt_model_errors
+      : {};
     state.providers.loaded = true;
     state.providers.snapshotRequestId = payload.request_id || null;
     if (!state.providers.loading || payload.request_id === state.providers.requestId) {
@@ -133,6 +157,12 @@ export function buildExtraReducers(builder) {
 
 export const selectProviders = (state) => state.uiData.providers.items;
 export const selectGoResponsesModels = (state) => state.uiData.providers.goModels;
+export const selectChatgptModels = (state, providerId) => (providerId
+  ? state.uiData.providers.chatgptModelsByProviderId[providerId] || []
+  : []);
+export const selectChatgptModelError = (state, providerId) => (providerId
+  ? state.uiData.providers.chatgptModelErrorsByProviderId[providerId] || null
+  : null);
 export const selectProvidersState = (state) => state.uiData.providers;
 export const selectProviderRequest = (state, requestId) => (requestId
   ? state.uiData.providers.requests[requestId] || null : null);

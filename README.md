@@ -8,7 +8,7 @@
 - Tools and integrations through MCP, A2A and ACP.
 - Workflows and scheduled tasks.
 - Agent-built interactive canvases.
-- Configurable model providers and profiles, including Microsoft Foundry and OpenCode Go via the Responses API.
+- Configurable model providers and profiles: Microsoft Foundry, OpenCode Go, and ChatGPT plan OAuth via the Responses API.
 
 Built with Python, FastAPI, LangGraph and React.
 
