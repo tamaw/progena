@@ -133,6 +133,39 @@ class ReadOnlyBackend:
         return getattr(self._backend, item)
 
 
+class FileOnlyDeleteBackend:
+    """Prevent the chat filesystem delete tool from recursively removing directories."""
+
+    def __init__(self, backend: Any) -> None:
+        self._backend = backend
+
+    @staticmethod
+    def _directory_error(file_path: str) -> DeleteResult:
+        return DeleteResult(error=f"Cannot delete directory '{file_path}'; delete files only")
+
+    async def adelete(self, file_path: str) -> DeleteResult:
+        if file_path.endswith("/") or (
+            isinstance(self._backend, CompositeBackend)
+            and f"{file_path.rstrip('/')}/" in self._backend.routes
+        ):
+            return self._directory_error(file_path)
+        read = await self._backend.aread(file_path, 0, 1)
+        if read.error is not None:
+            listing = await self._backend.als(file_path)
+            if listing.error is None and listing.entries:
+                return self._directory_error(file_path)
+        return await self._backend.adelete(file_path)
+
+    def delete(self, file_path: str) -> DeleteResult:
+        """Preserve the SDK's synchronous tool surface for synchronous callers."""
+        import asyncio
+
+        return asyncio.run(self.adelete(file_path))
+
+    def __getattr__(self, item: str) -> Any:
+        return getattr(self._backend, item)
+
+
 def create_object_agent_plugin_skill_routes(
     state_manager: Any, mount_paths: Iterable[str], skill_paths: Iterable[str] = ()
 ) -> dict[str, Any]:
