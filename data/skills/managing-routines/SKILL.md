@@ -109,11 +109,12 @@ The current schema supports: `prompt`, `eval`, `code`, `condition`, `switch`, `s
   `ls`, `readFile`, `glob`, and `grep`; write access additionally exposes
   `writeFile`, `editFile`, `copyFile`, `moveFile`, and `deleteFile`. Text only:
   binary data is rejected rather than lossy-converted. There is no shell,
-  network, agent, or generic host-tool escape hatch. Writes and copies never
-  overwrite; moves are file-only and must stay on one mount, but are not atomic
-  (they may be implemented as copy then delete). File operations are
-  nontransactional: cancellation or a later failure does not roll back completed
-  writes, and a manual rerun/replay can repeat them. Filesystem-enabled Code
+  network, agent, or generic host-tool escape hatch. `writeFile` and `copyFile`
+  never overwrite; replace a file with `deleteFile` then `writeFile`. Moves are
+  file-only and must stay on one mount, but are not atomic (they may be
+  implemented as copy then delete). File operations are nontransactional:
+  cancellation or a later failure does not roll back completed writes, and a
+  manual rerun/replay can repeat them. Filesystem-enabled Code
   nodes never cache and never retry automatically, which is not exactly-once
   execution. The QuickJS CPU deadline excludes async filesystem waits; the
   enclosing node timeout still bounds those waits.
@@ -138,8 +139,10 @@ The current schema supports: `prompt`, `eval`, `code`, `condition`, `switch`, `s
   `{pattern, path?, glob?, max_count?}` and returns `{matches, truncated}`.
   `editFile` takes `{file_path, old_string, new_string, replace_all?}`;
   `copyFile`/`moveFile` take `{source_path, destination_path}`; `deleteFile`
-  takes `{file_path}`. Filesystem methods throw on failure. Scope checks also
-  reject symlinks whose resolved target escapes the configured directory roots.
+  takes `{file_path}`. Filesystem failures throw catchable errors whose message
+  is available as `error.message`; use `ls` or `glob` for existence checks.
+  Scope checks also reject symlinks whose resolved target escapes the configured
+  directory roots.
 - `condition` is a boolean gate whose router must have exactly `true` and
   `false` branches and no default.
 - `switch` routes an expression through author-defined branches.

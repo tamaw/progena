@@ -15,7 +15,7 @@ from langgraph.runtime import Runtime
 from langgraph.types import Command, Send, interrupt
 from quickjs_rs import Runtime as QuickJSRuntime
 
-from .code_filesystem import CallerLoopBridge, ScopedFilesystemTools
+from .code_filesystem import CallerLoopBridge, FilesystemToolError, ScopedFilesystemTools
 from .expression import evaluate_expression
 from .graph import RoutineEdge, RoutineNode
 from .messages import normalize_message_content
@@ -128,25 +128,41 @@ __routineSerialized;
 
 
 _CODE_FILESYSTEM_READ_PRELUDE = """\
+const __routineFilesystemError = Error;
+const __routineFilesystemCall = async (host, args) => {
+  const result = await host(args);
+  if (!result.ok) {
+    throw new __routineFilesystemError(result.error);
+  }
+  return result.value;
+};
 const tools = Object.freeze({
-  ls: async (args) => await __routineFilesystemLs(args),
-  readFile: async (args) => await __routineFilesystemReadFile(args),
-  glob: async (args) => await __routineFilesystemGlob(args),
-  grep: async (args) => await __routineFilesystemGrep(args),
+  ls: async (args) => await __routineFilesystemCall(__routineFilesystemLs, args),
+  readFile: async (args) => await __routineFilesystemCall(__routineFilesystemReadFile, args),
+  glob: async (args) => await __routineFilesystemCall(__routineFilesystemGlob, args),
+  grep: async (args) => await __routineFilesystemCall(__routineFilesystemGrep, args),
 });
 """
 
 _CODE_FILESYSTEM_WRITE_PRELUDE = """\
+const __routineFilesystemError = Error;
+const __routineFilesystemCall = async (host, args) => {
+  const result = await host(args);
+  if (!result.ok) {
+    throw new __routineFilesystemError(result.error);
+  }
+  return result.value;
+};
 const tools = Object.freeze({
-  ls: async (args) => await __routineFilesystemLs(args),
-  readFile: async (args) => await __routineFilesystemReadFile(args),
-  glob: async (args) => await __routineFilesystemGlob(args),
-  grep: async (args) => await __routineFilesystemGrep(args),
-  writeFile: async (args) => await __routineFilesystemWriteFile(args),
-  editFile: async (args) => await __routineFilesystemEditFile(args),
-  copyFile: async (args) => await __routineFilesystemCopyFile(args),
-  moveFile: async (args) => await __routineFilesystemMoveFile(args),
-  deleteFile: async (args) => await __routineFilesystemDeleteFile(args),
+  ls: async (args) => await __routineFilesystemCall(__routineFilesystemLs, args),
+  readFile: async (args) => await __routineFilesystemCall(__routineFilesystemReadFile, args),
+  glob: async (args) => await __routineFilesystemCall(__routineFilesystemGlob, args),
+  grep: async (args) => await __routineFilesystemCall(__routineFilesystemGrep, args),
+  writeFile: async (args) => await __routineFilesystemCall(__routineFilesystemWriteFile, args),
+  editFile: async (args) => await __routineFilesystemCall(__routineFilesystemEditFile, args),
+  copyFile: async (args) => await __routineFilesystemCall(__routineFilesystemCopyFile, args),
+  moveFile: async (args) => await __routineFilesystemCall(__routineFilesystemMoveFile, args),
+  deleteFile: async (args) => await __routineFilesystemCall(__routineFilesystemDeleteFile, args),
 });
 """
 
@@ -214,17 +230,23 @@ class _CodeExecution:
         if filesystem is None:
             return
 
+        async def call_filesystem(operation: Callable[[], Any]) -> dict[str, Any]:
+            try:
+                return {"ok": True, "value": await self._bridge.call(operation)}
+            except FilesystemToolError as exc:
+                return {"ok": False, "error": str(exc)}
+
         async def ls(args: Any) -> Any:
-            return await self._bridge.call(lambda: filesystem.ls(args))
+            return await call_filesystem(lambda: filesystem.ls(args))
 
         async def read_file(args: Any) -> Any:
-            return await self._bridge.call(lambda: filesystem.read_file(args))
+            return await call_filesystem(lambda: filesystem.read_file(args))
 
         async def glob(args: Any) -> Any:
-            return await self._bridge.call(lambda: filesystem.glob(args))
+            return await call_filesystem(lambda: filesystem.glob(args))
 
         async def grep(args: Any) -> Any:
-            return await self._bridge.call(lambda: filesystem.grep(args))
+            return await call_filesystem(lambda: filesystem.grep(args))
 
         context.register("__routineFilesystemLs", ls)
         context.register("__routineFilesystemReadFile", read_file)
@@ -235,19 +257,19 @@ class _CodeExecution:
             return
 
         async def write_file(args: Any) -> Any:
-            return await self._bridge.call(lambda: filesystem.write_file(args))
+            return await call_filesystem(lambda: filesystem.write_file(args))
 
         async def edit_file(args: Any) -> Any:
-            return await self._bridge.call(lambda: filesystem.edit_file(args))
+            return await call_filesystem(lambda: filesystem.edit_file(args))
 
         async def copy_file(args: Any) -> Any:
-            return await self._bridge.call(lambda: filesystem.copy_file(args))
+            return await call_filesystem(lambda: filesystem.copy_file(args))
 
         async def move_file(args: Any) -> Any:
-            return await self._bridge.call(lambda: filesystem.move_file(args))
+            return await call_filesystem(lambda: filesystem.move_file(args))
 
         async def delete_file(args: Any) -> Any:
-            return await self._bridge.call(lambda: filesystem.delete_file(args))
+            return await call_filesystem(lambda: filesystem.delete_file(args))
 
         context.register("__routineFilesystemWriteFile", write_file)
         context.register("__routineFilesystemEditFile", edit_file)
