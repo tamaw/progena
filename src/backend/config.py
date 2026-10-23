@@ -27,27 +27,27 @@ class ChatServerConfig:
     port: int = 8000
     debug: bool = False
 
-    # Progenitor settings (legacy subprocess mode)
-    progenitor_script: Path = field(
-        default_factory=lambda: Path(__file__).parent.parent / "progenitor" / "main.py"
+    # Progena settings (legacy subprocess mode)
+    progena_script: Path = field(
+        default_factory=lambda: Path(__file__).parent.parent / "progena" / "main.py"
     )
-    progenitor_timeout: int = 300  # seconds for request timeout
-    progenitor_stop_timeout: int = 5  # seconds to wait for graceful shutdown (CR-001)
-    progenitor_python: str = field(
+    progena_timeout: int = 300  # seconds for request timeout
+    progena_stop_timeout: int = 5  # seconds to wait for graceful shutdown (CR-001)
+    progena_python: str = field(
         default_factory=lambda: sys.executable
     )  # Use same Python as backend
 
-    # Progenitor runtime HTTP settings (chat + events over HTTP/SSE)
-    progenitor_runtime_url: str = "http://127.0.0.1:9501"  # Runtime HTTP base URL
-    database_url: str = ""  # Postgres URL for the Progenitor runtime database (read)
+    # Progena runtime HTTP settings (chat + events over HTTP/SSE)
+    progena_runtime_url: str = "http://127.0.0.1:9501"  # Runtime HTTP base URL
+    database_url: str = ""  # Postgres URL for the Progena runtime database (read)
     # Backend-owned data lives in a separate database on the *same* Postgres
     # server. Only the database name differs from ``database_url``.
     backend_database_name: str = "backend"
 
     # API settings
-    api_title: str = "Progenitor Chat API"
+    api_title: str = "Progena AI Chat API"
     api_version: str = "0.1.0"
-    model_name: str = "progenitor-v1"
+    model_name: str = "progena-v1"
 
     # CORS
     cors_origins: list[str] = field(default_factory=lambda: ["*"])
@@ -87,7 +87,7 @@ class ChatServerConfig:
     def backend_database_url(self) -> str:
         """Backend database URL: ``database_url`` with the db name swapped.
 
-        Same DBMS/host/credentials as the Progenitor runtime database; only the
+        Same DBMS/host/credentials as the Progena runtime database; only the
         database-name path component differs. Returns "" when no base URL is set.
         """
         if not self.database_url or not self.backend_database_name:
@@ -102,15 +102,15 @@ class ChatServerConfig:
             host=os.getenv("CHAT_SERVER_HOST", "0.0.0.0"),  # nosec B104 - same runtime default as above
             port=env_int("CHAT_SERVER_PORT", 8000),
             debug=env_bool("CHAT_SERVER_DEBUG", False),
-            progenitor_timeout=env_int("CHAT_SERVER_PROGENITOR_TIMEOUT", 300),
-            progenitor_stop_timeout=env_int("CHAT_SERVER_PROGENITOR_STOP_TIMEOUT", 5),
-            progenitor_python=os.getenv("CHAT_SERVER_PYTHON", sys.executable),
-            progenitor_runtime_url=os.getenv("PROGENITOR_RUNTIME_URL", "http://127.0.0.1:9501"),
-            database_url=os.getenv("PROGENITOR_DATABASE_URL", ""),
+            progena_timeout=env_int("CHAT_SERVER_PROGENA_TIMEOUT", 300),
+            progena_stop_timeout=env_int("CHAT_SERVER_PROGENA_STOP_TIMEOUT", 5),
+            progena_python=os.getenv("CHAT_SERVER_PYTHON", sys.executable),
+            progena_runtime_url=os.getenv("PROGENA_RUNTIME_URL", "http://127.0.0.1:9501"),
+            database_url=os.getenv("PROGENA_DATABASE_URL", ""),
             backend_database_name=os.getenv("BACKEND_DATABASE_NAME", "backend"),
             # API settings
-            api_title=os.getenv("CHAT_SERVER_API_TITLE", "Progenitor Chat API"),
-            model_name=os.getenv("CHAT_SERVER_MODEL_NAME", "progenitor-v1"),
+            api_title=os.getenv("CHAT_SERVER_API_TITLE", "Progena AI Chat API"),
+            model_name=os.getenv("CHAT_SERVER_MODEL_NAME", "progena-v1"),
             rate_limit_enabled=env_bool("CHAT_SERVER_RATE_LIMIT_ENABLED", True),
             rate_limit_per_minute=env_int("CHAT_SERVER_RATE_LIMIT_PER_MINUTE", 10000),
             rate_limit_per_hour=env_int("CHAT_SERVER_RATE_LIMIT_PER_HOUR", 100000),
@@ -122,7 +122,7 @@ class ChatServerConfig:
             ),
             stream_enabled=env_bool("CHAT_SERVER_STREAM_ENABLED", True),
             stream_chunk_delay_ms=env_int("CHAT_SERVER_STREAM_CHUNK_DELAY_MS", 0),
-            reasoning_enabled=env_bool("PROGENITOR_REASONING_ENABLED", True),
+            reasoning_enabled=env_bool("PROGENA_REASONING_ENABLED", True),
             # Telegram settings
             telegram_enabled=env_bool("TELEGRAM_ENABLED", False),
             telegram_bot_token=os.getenv("TELEGRAM_BOT_TOKEN", ""),

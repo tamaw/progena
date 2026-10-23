@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Routine Graph",
-  "description": "A declarative graph compiled by src.progenitor.routines.factory. Version 2 makes every executable node configuration and edge shape explicit; unknown fields are rejected rather than silently ignored.",
+  "description": "A declarative graph compiled by src.progena.routines.factory. Version 2 makes every executable node configuration and edge shape explicit; unknown fields are rejected rather than silently ignored.",
   "type": "object",
   "additionalProperties": false,
   "required": ["id", "name", "description", "version", "entry", "nodes", "edges"],
@@ -32,6 +32,7 @@
       "oneOf": [
         { "$ref": "#/$defs/nodePrompt" },
         { "$ref": "#/$defs/nodeEval" },
+        { "$ref": "#/$defs/nodeCode" },
         { "$ref": "#/$defs/nodeCondition" },
         { "$ref": "#/$defs/nodeSwitch" },
         { "$ref": "#/$defs/nodeSplit" },
@@ -67,6 +68,14 @@
       "allOf": [
         { "$ref": "#/$defs/nodeBase" },
         { "required": ["id", "kind", "output_key", "config"], "properties": { "kind": { "const": "eval" }, "config": { "$ref": "#/$defs/evalConfig" } } }
+      ],
+      "unevaluatedProperties": false
+    },
+
+    "nodeCode": {
+      "allOf": [
+        { "$ref": "#/$defs/nodeBase" },
+        { "required": ["id", "kind", "output_key", "config"], "properties": { "kind": { "const": "code" }, "config": { "$ref": "#/$defs/codeConfig" } } }
       ],
       "unevaluatedProperties": false
     },
@@ -182,6 +191,31 @@
         { "required": ["expression_file"], "not": { "required": ["expression"] } }
       ]
     },
+
+    "codeConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["language", "code"],
+      "properties": {
+        "language": { "const": "javascript" },
+        "code": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S",
+          "description": "Inline JavaScript body. It receives JSON-compatible routine data as `input` and must `return` one JSON-compatible value."
+        },
+        "filesystem": {
+          "anyOf": [
+            { "type": "null" },
+            { "$ref": "#/$defs/filesystemConfig" }
+          ],
+          "description": "Optional, explicitly scoped virtual filesystem access. Its paths are canonicalized as directory roots."
+        },
+        "retry": { "$ref": "#/$defs/retryPolicy" },
+        "timeout": { "type": "number", "minimum": 0, "description": "Seconds before this node is abandoned, overriding the execution policy attempt timeout. The QuickJS sandbox still has a fixed short execution limit." },
+        "cache": { "$ref": "#/$defs/cachePolicy" }
+      }
+    },
     "conditionConfig": {
       "type": "object",
       "additionalProperties": false,
@@ -273,7 +307,7 @@
       "properties": {
         "message": { "type": "string", "minLength": 1 },
         "allowed_responses": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "string", "minLength": 1 } },
-        "approver": { "enum": ["human", "any"], "default": "any", "description": "Who may answer: 'human' only through the Progenitor UI, 'any' also lets Progenitor answer (resume_routine)." },
+        "approver": { "enum": ["human", "any"], "default": "any", "description": "Who may answer: 'human' only through the Progena AI app, 'any' also lets the agent answer (resume_routine)." },
         "retry": { "$ref": "#/$defs/retryPolicy" },
         "timeout": { "type": "number", "minimum": 0, "description": "Seconds before this node is abandoned, overriding the execution policy attempt timeout. 0 disables the limit." }
       }
@@ -330,6 +364,23 @@
         "output_map": { "$ref": "#/$defs/inputMap" },
         "retry": { "$ref": "#/$defs/retryPolicy" },
         "timeout": { "type": "number", "minimum": 0, "description": "Seconds before this node is abandoned, overriding the execution policy attempt timeout. 0 disables the limit." }
+      }
+    },
+    "filesystemConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["access", "paths"],
+      "properties": {
+        "access": { "enum": ["read", "read_write"] },
+        "paths": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^/(artifacts|shared)(/.*)?$"
+          }
+        }
       }
     },
     "inputMap": { "type": "object", "additionalProperties": { "type": "string", "minLength": 1 } },

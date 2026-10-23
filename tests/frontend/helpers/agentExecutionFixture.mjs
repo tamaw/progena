@@ -4,13 +4,13 @@ import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 const root = resolve(import.meta.dirname, '../../..');
-const databaseUrl = process.env.PROGENITOR_DATABASE_URL || 'postgresql://progenitor:progenitor@127.0.0.1:15433/progenitor';
+const databaseUrl = process.env.PROGENA_DATABASE_URL || 'postgresql://progena:progena@127.0.0.1:15433/progena';
 const quote = (value) => `'${value.replaceAll("'", "''")}'`;
 function sql(command) {
   return execFileSync('psql', [databaseUrl, '-v', 'ON_ERROR_STOP=1', '-tAq'], { input: command, encoding: 'utf8' }).trim();
 }
 export function readAgentRun(task) {
-  const value = sql(`SELECT value FROM store WHERE prefix='progenitor.state' AND key=${quote(`agent_protocol_run:${task.thread_id}:${task.run_id}`)};`);
+  const value = sql(`SELECT value FROM store WHERE prefix='progena.state' AND key=${quote(`agent_protocol_run:${task.thread_id}:${task.run_id}`)};`);
   return value ? JSON.parse(value).payload : null;
 }
 export function seedAgentExecution() {
@@ -18,8 +18,8 @@ export function seedAgentExecution() {
   const name = `e2e-gated-${suffix}`;
   const id = `routine_modes_${suffix}`;
   // Read the configured workspace root without exposing the runtime environment.
-  const script = "from dotenv import load_dotenv; load_dotenv(); from src.progenitor.config import StorageConfig; print(StorageConfig.from_env().shell_workspace_dir)";
-  const workspaceRoot = process.env.PROGENITOR_SHELL_WORKSPACE_DIR || execFileSync('bash', ['-c', 'source .venv/bin/activate && python -c "$1"', 'workspace', script], { cwd: root, encoding: 'utf8' }).trim();
+  const script = "from dotenv import load_dotenv; load_dotenv(); from src.progena.config import StorageConfig; print(StorageConfig.from_env().shell_workspace_dir)";
+  const workspaceRoot = process.env.PROGENA_SHELL_WORKSPACE_DIR || execFileSync('bash', ['-c', 'source .venv/bin/activate && python -c "$1"', 'workspace', script], { cwd: root, encoding: 'utf8' }).trim();
   const workspace = resolve(workspaceRoot, name);
   mkdirSync(workspace, { recursive: true });
   const command = 'printf waiting > entered; while [ ! -f release ]; do sleep 0.2; done; printf E2E_AGENT_DONE';
@@ -39,7 +39,7 @@ export function seedAgentExecution() {
   mkdirSync(nativeDir, { recursive: true });
   writeFileSync(resolve(nativeDir, 'SYSTEM.md'), content);
   sql(`INSERT INTO store(prefix,key,value,created_at,updated_at) VALUES
-    ('progenitor.state',${quote(`routine:${id}`)},${quote(JSON.stringify({ payload: graph }))}::jsonb,now(),now());`);
+    ('progena.state',${quote(`routine:${id}`)},${quote(JSON.stringify({ payload: graph }))}::jsonb,now(),now());`);
   // Trigger a runtime object-agent refresh so the newly-written native agent is
   // discovered without requiring a runtime restart.
   sql(`NOTIFY store_changed, '{"key":"agent:native/${name}/SYSTEM.md"}';`);
@@ -52,7 +52,7 @@ export function seedAgentExecution() {
     reset: () => { for (const file of ['entered', 'release']) rmSync(resolve(workspace, file), { force: true }); },
     cleanup: () => {
       writeFileSync(resolve(workspace, 'release'), 'release');
-      sql(`DELETE FROM store WHERE prefix='progenitor.state' AND key=${quote(`routine:${id}`)};`);
+      sql(`DELETE FROM store WHERE prefix='progena.state' AND key=${quote(`routine:${id}`)};`);
       rmSync(nativeDir, { recursive: true, force: true });
     },
   };

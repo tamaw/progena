@@ -1,7 +1,6 @@
 import { extractMarkdownImages } from '../../../lib/markdown';
 import { PERSISTED_CATEGORIES, categoryForEventType } from './streamFilters';
 
-export const CHAT_AGENT_NAME = 'Progenitor';
 export const DEFAULT_CHAT_TITLE = 'New chat';
 
 export function shouldShowChatContentLoading({

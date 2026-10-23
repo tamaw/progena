@@ -10,8 +10,8 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from src.backend.settings.providers import create_provider_router
-from src.backend.storage.documents import PROGENITOR_STATE_PREFIX, InMemoryDocumentStore
-from src.progenitor.settings.providers import (
+from src.backend.storage.documents import PROGENA_STATE_PREFIX, InMemoryDocumentStore
+from src.progena.settings.providers import (
     _normalize_foundry_base_url,
     _normalize_legacy_foundry_base_url,
 )
@@ -102,7 +102,7 @@ def test_duplicate_provider_name_is_a_conflict_without_database_details():
 def test_delete_rejects_profile_connection_reference():
     store = InMemoryDocumentStore()
     store.save_document(
-        PROGENITOR_STATE_PREFIX,
+        PROGENA_STATE_PREFIX,
         "profile",
         {"general": {"provider_id": "foundry-1", "deployment": "model"}},
     )

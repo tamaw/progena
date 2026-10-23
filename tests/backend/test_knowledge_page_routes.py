@@ -12,7 +12,7 @@ from fastapi.testclient import TestClient
 import src.backend.events.stream as events_stream
 import src.backend.knowledge.routes as routes
 from src.backend.storage.documents import (
-    PROGENITOR_STATE_PREFIX,
+    PROGENA_STATE_PREFIX,
     InMemoryDocumentStore,
     set_default_document_store,
 )
@@ -25,12 +25,12 @@ def harness(monkeypatch):
     store = InMemoryDocumentStore()
     set_default_document_store(store)
     store.save_document(
-        PROGENITOR_STATE_PREFIX, "knowledge", {"bases": [{"id": "eng", "name": "Engineering"}]}
+        PROGENA_STATE_PREFIX, "knowledge", {"bases": [{"id": "eng", "name": "Engineering"}]}
     )
     store.save_document(
-        PROGENITOR_STATE_PREFIX, "knowledge:eng/concepts/retry.md", {"content": PAGE_A}
+        PROGENA_STATE_PREFIX, "knowledge:eng/concepts/retry.md", {"content": PAGE_A}
     )
-    store.save_document(PROGENITOR_STATE_PREFIX, "knowledge:eng/log.md", {"content": "## log\n"})
+    store.save_document(PROGENA_STATE_PREFIX, "knowledge:eng/log.md", {"content": "## log\n"})
     events: list[tuple[str, dict[str, Any]]] = []
     monkeypatch.setattr(
         events_stream,
@@ -86,7 +86,7 @@ def test_deprecated_page_is_unlisted_but_readable(harness):
     client, store, events = harness
     deprecated = PAGE_A.replace("type: Concept\n", "type: Concept\nstatus: deprecated\n")
     store.save_document(
-        PROGENITOR_STATE_PREFIX, "knowledge:eng/concepts/retry.md", {"content": deprecated}
+        PROGENA_STATE_PREFIX, "knowledge:eng/concepts/retry.md", {"content": deprecated}
     )
     client.get("/api/ui/knowledge/eng/pages")
     assert [p["path"] for p in _last(events, "knowledge.pages.snapshot")["pages"]] == ["log.md"]
@@ -99,7 +99,7 @@ def test_deprecated_page_is_unlisted_but_readable(harness):
 def test_revisions_list_and_read(harness):
     client, store, events = harness
     store.save_document(
-        PROGENITOR_STATE_PREFIX, "knowledge:eng/concepts/retry.md", {"content": PAGE_A + "More.\n"}
+        PROGENA_STATE_PREFIX, "knowledge:eng/concepts/retry.md", {"content": PAGE_A + "More.\n"}
     )
     params = {"path": "concepts/retry.md"}
     assert_acknowledged(
@@ -124,7 +124,7 @@ def test_revisions_list_and_read(harness):
 
 def test_new_base_id_avoids_orphaned_pages(harness, monkeypatch):
     client, store, _ = harness
-    store.save_document(PROGENITOR_STATE_PREFIX, "knowledge:research/a.md", {"content": PAGE_A})
+    store.save_document(PROGENA_STATE_PREFIX, "knowledge:research/a.md", {"content": PAGE_A})
     response = client.put(
         "/api/ui/knowledge",
         json={"bases": [{"id": "eng", "name": "Engineering"}, {"name": "Research"}]},

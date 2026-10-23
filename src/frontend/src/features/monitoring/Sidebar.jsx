@@ -7,7 +7,7 @@ function formatUptime(seconds) {
 
 function SidebarContent({ status, mode = 'sidebar' }) {
   const agentStatus = {
-    running: status?.progenitor_running ? 'Running' : 'Stopped',
+    running: status?.progena_running ? 'Running' : 'Stopped',
     cycles: status?.cycle_count ?? '--',
     pid: status?.pid ?? '--',
     memory: status?.memory_mb ? `${status.memory_mb.toFixed(1)} MB` : '--',
@@ -25,7 +25,7 @@ function SidebarContent({ status, mode = 'sidebar' }) {
     <>
       <div className={`${sectionClassName} ${mode === 'dashboard' ? 'detail-panel' : ''}`.trim()}>
         <div className={titleClassName}>
-          <h3>Progenitor Status</h3>
+          <h3>Progena AI Status</h3>
         </div>
         <div className={mode === 'dashboard' ? 'panel-body status-detail-grid' : 'agent-status-panel'}>
           <div className="status-item">

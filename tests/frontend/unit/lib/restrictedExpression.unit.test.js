@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { checkExpressionSyntax } from '@frontend/lib/restrictedExpression';
 
-// Mirrors tests/progenitor/routines/test_expression.py's own accept/reject
+// Mirrors tests/progena/routines/test_expression.py's own accept/reject
 // list -- this module exists purely to flag, client-side, what that backend
 // evaluator would reject, so the two must agree on every case there.
 describe('checkExpressionSyntax', () => {

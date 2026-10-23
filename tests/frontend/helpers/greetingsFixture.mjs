@@ -11,16 +11,16 @@ async function listen(server) {
 // the user's live :8109 instance. The transparent proxy counts actual retries;
 // it never fabricates A2A responses or delays the runtime itself.
 export async function startGreetingsFixture() {
-  const agentsRoot = process.env.PROGENITOR_TEST_AGENTS_ROOT;
+  const agentsRoot = process.env.PROGENA_TEST_AGENTS_ROOT;
   if (!agentsRoot) {
-    throw new Error('Set PROGENITOR_TEST_AGENTS_ROOT to an installed progentior.agents checkout');
+    throw new Error('Set PROGENA_TEST_AGENTS_ROOT to an installed progena.agents checkout');
   }
   const reservation = createServer();
   const port = await listen(reservation);
   await new Promise((resolve) => reservation.close(resolve));
   let logs = '';
   const child = spawn('bash', ['-c', 'source .venv/bin/activate && exec python -m uvicorn app.agents.greetings_agent.agent:app --host 127.0.0.1 --port "$PORT"'], {
-    cwd: resolve(agentsRoot), env: { ...process.env, PORT: String(port), A2A_PUBLIC_HOST: '127.0.0.1', PROGENITOR_MOCK_LLM: 'true' }, stdio: ['ignore', 'pipe', 'pipe'],
+    cwd: resolve(agentsRoot), env: { ...process.env, PORT: String(port), A2A_PUBLIC_HOST: '127.0.0.1', PROGENA_MOCK_LLM: 'true' }, stdio: ['ignore', 'pipe', 'pipe'],
   });
   child.stdout.on('data', (data) => { logs += data; });
   child.stderr.on('data', (data) => { logs += data; });

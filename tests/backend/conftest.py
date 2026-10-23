@@ -33,7 +33,7 @@ def cleanup_event_loop():
 
 
 @pytest.fixture(autouse=True)
-def mock_progenitor_client():
+def mock_progena_client():
     """Mock the get_client and get_sse_client to avoid connection issues in tests."""
     mock_client = AsyncMock()
     mock_client.send_message.return_value = AgentResponse(

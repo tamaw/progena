@@ -25,8 +25,8 @@ export function RoutinePolicyPanel({ policyId, onSelect, onClose, recordedPolicy
   const workspaceGenerationRef = useRef(0);
   useEffect(() => {
     const invalidateSaveContinuation = () => { workspaceGenerationRef.current += 1; };
-    window.addEventListener('progenitor:workspace-switched', invalidateSaveContinuation);
-    return () => window.removeEventListener('progenitor:workspace-switched', invalidateSaveContinuation);
+    window.addEventListener('progena:workspace-switched', invalidateSaveContinuation);
+    return () => window.removeEventListener('progena:workspace-switched', invalidateSaveContinuation);
   }, []);
   const values = historical ? recordedPolicy?.values : draft?.values;
   function update(key, value, retry = false) {

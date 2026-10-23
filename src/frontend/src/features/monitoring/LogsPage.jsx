@@ -648,7 +648,7 @@ function LogsPage() {
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement('a');
     anchor.href = url;
-    anchor.download = 'progenitor-logs.csv';
+    anchor.download = 'progena-logs.csv';
     anchor.click();
     URL.revokeObjectURL(url);
     setPendingExportRequestId(null);

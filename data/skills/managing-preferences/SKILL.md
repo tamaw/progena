@@ -1,6 +1,6 @@
 ---
 name: managing-preferences
-description: View or update the user's profile (display name, timezone), UI settings (theme, nav-rail collapse, pinned panel), and notification sound settings by editing the /config/preferences.json file. Use when a user asks to set/change their name, timezone, theme/dark mode, nav/panel layout, or notification sounds, or asks what their current preferences are.
+description: View or update the user's profile (display name, timezone), the agent's display name, UI settings (theme, nav-rail collapse, pinned panel), and notification sound settings by editing the /config/preferences.json file. Use when a user asks to set/change their name, rename the agent, timezone, theme/dark mode, nav/panel layout, or notification sounds, or asks what their current preferences are.
 allowed-tools: read_file write_file edit_file structured_output
 ---
 
@@ -22,6 +22,7 @@ notification sounds").
 
 ## When to Use
 - User asks to set or change their display name
+- User asks to rename you (the agent's display name)
 - User asks to set or change their timezone
 - User asks to change their theme (light/dark/system) or nav-rail/panel layout
 - User asks to enable/disable notification sounds
@@ -33,6 +34,7 @@ Authoritative shape: `/schemas/preferences.schema.v1.json`.
 ```json
 {
   "display_name": "Ada Lovelace",
+  "agent_name": "Progena",
   "timezone": "America/New_York",
   "theme": "system",
   "nav_collapsed": false,
@@ -42,12 +44,16 @@ Authoritative shape: `/schemas/preferences.schema.v1.json`.
 ```
 
 Rules enforced on every write (a violating edit is rejected and nothing changes):
-- Top level must be a JSON object with these six fields and no others —
-  `timezone` is the only one that must actually be present; the other five
+- Top level must be a JSON object with these seven fields and no others —
+  `timezone` is the only one that must actually be present; the other six
   are optional and normalize to their schema default (see the example
   below) when omitted, so every saved document is still complete and
   self-describing.
 - `display_name` is a string (may be empty).
+- `agent_name` is your display name: one line, at most 32 characters; empty
+  means the default `Progena`. It changes how the UI labels you and fills
+  `{agent_name}` in your instructions on the next model call. It is never an
+  identifier, so renaming does not affect stored data.
 - `timezone` is required and must be a non-empty IANA timezone name (e.g.
   `America/New_York`, `Europe/London`, `UTC`) — anything `zoneinfo` doesn't
   recognize is rejected.

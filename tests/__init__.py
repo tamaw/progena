@@ -1,1 +1,1 @@
-"""Tests for Progenitor agent."""
+"""Tests for Progena agent."""

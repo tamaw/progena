@@ -167,7 +167,7 @@ function defaultWriteNode() {
   };
 }
 
-// Mirrors routine_node_port_schemas() in src/progenitor/workflows.py (the
+// Mirrors routine_node_port_schemas() in src/progena/workflows.py (the
 // backend recomputes these on save): a routine's declared input_schema /
 // output_schema fields, else one `message` string, plus the run's thread_id.
 function declaredRoutineSchema(schema) {

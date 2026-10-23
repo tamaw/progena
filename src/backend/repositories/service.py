@@ -1,16 +1,16 @@
 """Backend access to ``repo:<id>`` documents and the ``repo_scan`` document.
 
 Each declared repository is one ``repo:<id>`` document under the
-``progenitor.state`` namespace -- the same shared Postgres ``store`` table
-Progenitor's own runtime reads and writes, and the same documents the agent
-edits as ``/config/repos/<id>.json`` (see ``src/progenitor/agent/filesystem/``).
+``progena.state`` namespace -- the same shared Postgres ``store`` table
+Progena's own runtime reads and writes, and the same documents the agent
+edits as ``/config/repos/<id>.json`` (see ``src/progena/agent/filesystem/``).
 Every write touches one repo's row under that key's lock, so concurrent edits
 of different repos never overwrite each other, and each create/update/delete
 is its own typed ``repo`` document event.
 
 Live git state (branches, commits, worktrees) lives in the separate
 ``repo_scan`` document. The heartbeat's ``refresh_repo_scan_node`` (see
-``src/progenitor/orchestration/nodes/repo_scan.py``) is the periodic, local-only writer --
+``src/progena/orchestration/nodes/repo_scan.py``) is the periodic, local-only writer --
 it never does network I/O, so it can't tell a stale clone from a fresh one.
 ``fetch_and_rescan_repo`` below is the on-demand counterpart: it runs
 ``git fetch`` against one repo (real network I/O, deliberately never part of
@@ -18,7 +18,7 @@ the heartbeat batch) and merges a fresh single-repo scan into the same
 document, so a manual "Fetch" click doesn't wait out the heartbeat interval.
 Both writers persist through the same ``save_document`` call the heartbeat
 uses, so the runtime's cached copy is invalidated (see ``_on_store_change`` in
-``src/progenitor/runtime/progenitor.py``).
+``src/progena/runtime/progena.py``).
 """
 
 from __future__ import annotations
@@ -26,17 +26,17 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from src.backend.storage.documents import PROGENITOR_STATE_PREFIX, get_default_document_store
-from src.progenitor.config import get_config
-from src.progenitor.documents.kinds import REPO_KEY_PREFIX
-from src.progenitor.repositories.scan import (
+from src.backend.storage.documents import PROGENA_STATE_PREFIX, get_default_document_store
+from src.progena.config import get_config
+from src.progena.documents.kinds import REPO_KEY_PREFIX
+from src.progena.repositories.scan import (
     RepoScanResult,
     aggregate_workspace_signal,
     fetch_repo,
     scan_repo,
 )
-from src.progenitor.repositories.schema import validate_repo_entry
-from src.progenitor.utils import utcnow_isoformat
+from src.progena.repositories.schema import validate_repo_entry
+from src.progena.utils import utcnow_isoformat
 
 REPO_SCAN_DOC_KEY = "repo_scan"
 
@@ -63,7 +63,7 @@ def repo_key(repo_id: str) -> str:
 def load_repo(repo_id: str) -> dict[str, Any] | None:
     """Return one declared repo entry, or ``None`` if it isn't declared."""
     document = get_default_document_store().get_document(
-        PROGENITOR_STATE_PREFIX, repo_key(repo_id), None
+        PROGENA_STATE_PREFIX, repo_key(repo_id), None
     )
     payload = document.payload if document is not None else None
     return payload if isinstance(payload, dict) else None
@@ -74,7 +74,7 @@ def load_repos() -> dict[str, dict[str, Any]]:
     return {
         key.removeprefix(REPO_KEY_PREFIX): document.payload
         for key, document in get_default_document_store().list_documents(
-            PROGENITOR_STATE_PREFIX, REPO_KEY_PREFIX
+            PROGENA_STATE_PREFIX, REPO_KEY_PREFIX
         )
         if isinstance(document.payload, dict)
     }
@@ -84,7 +84,7 @@ def load_repo_scan() -> dict[str, Any]:
     """Return the heartbeat's last derived git-state scan, or an empty shell."""
     default: dict[str, Any] = {"scanned_at": None, "repos": {}, "workspace_signal": {}}
     document = get_default_document_store().get_document(
-        PROGENITOR_STATE_PREFIX, REPO_SCAN_DOC_KEY, default
+        PROGENA_STATE_PREFIX, REPO_SCAN_DOC_KEY, default
     )
     payload = document.payload if document is not None else default
     return payload if isinstance(payload, dict) else default
@@ -137,7 +137,7 @@ async def fetch_and_rescan_repo(repo_id: str) -> dict[str, Any]:
         "repos": {rid: result.to_dict() for rid, result in scans.items()},
         "workspace_signal": signal.to_dict(),
     }
-    get_default_document_store().save_document(PROGENITOR_STATE_PREFIX, REPO_SCAN_DOC_KEY, payload)
+    get_default_document_store().save_document(PROGENA_STATE_PREFIX, REPO_SCAN_DOC_KEY, payload)
     return scan_result.to_dict()
 
 
@@ -186,7 +186,7 @@ def create_repo(
             return validate_repo_entry(repo_id, entry)
 
         try:
-            saved = store.mutate_document(PROGENITOR_STATE_PREFIX, repo_key(repo_id), claim)
+            saved = store.mutate_document(PROGENA_STATE_PREFIX, repo_key(repo_id), claim)
         except _RepoIdTaken:
             continue
         return repo_id, saved
@@ -206,7 +206,7 @@ def update_repo(repo_id: str, updates: dict[str, Any]) -> dict[str, Any]:
         return validate_repo_entry(repo_id, merged, created_at=existing.get("created_at"))
 
     saved: dict[str, Any] = get_default_document_store().mutate_document(
-        PROGENITOR_STATE_PREFIX, repo_key(repo_id), patch
+        PROGENA_STATE_PREFIX, repo_key(repo_id), patch
     )
     return saved
 
@@ -215,7 +215,7 @@ def delete_repo(repo_id: str) -> bool:
     """Remove one declared repo entry. Returns ``False`` if it wasn't present."""
     if load_repo(repo_id) is None:
         return False
-    get_default_document_store().delete_document(PROGENITOR_STATE_PREFIX, repo_key(repo_id))
+    get_default_document_store().delete_document(PROGENA_STATE_PREFIX, repo_key(repo_id))
     return True
 
 

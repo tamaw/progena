@@ -5,6 +5,8 @@ import { checkExpressionSyntax } from '../../../lib/restrictedExpression';
 import {
   buildStatePathSuggestions,
   getExpressionAutocompleteContext,
+  getJavascriptAutocompleteContext,
+  javascriptStatePathSuggestions,
   filterStatePathSuggestions,
   inputsToText,
   textToInputs,
@@ -13,6 +15,7 @@ import {
   isCompleteSchemaFieldText,
 } from './graphFieldHelpers';
 import { useDispatch, useSelector } from 'react-redux';
+import { selectAgentName } from '../../settings/state/preferences';
 import { fetchModelProfiles, selectModelProfiles, selectModelProfilesState } from '../../settings/state/modelProfiles';
 import { selectAgentProfiles } from '../../agents/state/agents';
 import { selectRealtimeStreamReady } from '../../../realtime/realtimeSlice';
@@ -113,7 +116,7 @@ function ConfigField({ id, config, field, label, placeholder, multiline, updateN
 // state now (see expression.py's `ast.Attribute` handling), so there's no
 // separate `inputs` binding step left to author; the same predecessor/
 // response_schema suggestions just get typed straight into the expression.
-export function ExpressionField({ id, config, field, label, placeholder, updateNodeConfig, autocomplete = false }) {
+export function ExpressionField({ id, config, field, label, placeholder, updateNodeConfig, autocomplete = false, language = 'python' }) {
   const missing = useContext(MissingFieldsContext);
   const graph = useContext(GraphEditContext);
   const value = config?.[field] || '';
@@ -128,12 +131,12 @@ export function ExpressionField({ id, config, field, label, placeholder, updateN
   const [panelPos, setPanelPos] = useState(null);
   const highlighted = useMemo(() => {
     try {
-      return hljs.highlight(value, { language: 'python' }).value;
+      return hljs.highlight(value, { language }).value;
     } catch {
       return value;
     }
-  }, [value]);
-  const issue = useMemo(() => checkExpressionSyntax(value), [value]);
+  }, [value, language]);
+  const issue = useMemo(() => language === 'python' ? checkExpressionSyntax(value) : { ok: true }, [value, language]);
   const errorHtml = useMemo(() => {
     if (issue.ok) return null;
     const before = escapeHtmlText(value.slice(0, issue.start));
@@ -143,12 +146,21 @@ export function ExpressionField({ id, config, field, label, placeholder, updateN
   }, [issue, value]);
 
   const suggestions = useMemo(
-    () => (autocomplete ? buildStatePathSuggestions(id, graph?.nodes, graph?.edges, graph?.inputSchema) : EMPTY_SUGGESTIONS),
-    [autocomplete, id, graph?.nodes, graph?.edges, graph?.inputSchema],
+    () => {
+      if (!autocomplete) return EMPTY_SUGGESTIONS;
+      const paths = buildStatePathSuggestions(id, graph?.nodes, graph?.edges, graph?.inputSchema);
+      return language === 'javascript' ? javascriptStatePathSuggestions(paths) : paths;
+    },
+    [autocomplete, language, id, graph?.nodes, graph?.edges, graph?.inputSchema],
   );
   const context = useMemo(
-    () => (autocomplete && focused ? getExpressionAutocompleteContext(value, caret) : null),
-    [autocomplete, focused, value, caret],
+    () => {
+      if (!autocomplete || !focused) return null;
+      return language === 'javascript'
+        ? getJavascriptAutocompleteContext(value, caret)
+        : getExpressionAutocompleteContext(value, caret);
+    },
+    [autocomplete, language, focused, value, caret],
   );
   const filtered = useMemo(
     () => (context ? filterStatePathSuggestions(suggestions, context.query) : EMPTY_SUGGESTIONS),
@@ -236,7 +248,7 @@ export function ExpressionField({ id, config, field, label, placeholder, updateN
         title={issue.ok ? undefined : issue.message}
       >
         <pre ref={highlightRef} className="agents-graph-node__expr-highlight" aria-hidden="true">
-          <code className="hljs language-python" dangerouslySetInnerHTML={{ __html: `${highlighted}\n` }} />
+          <code className={`hljs language-${language}`} dangerouslySetInnerHTML={{ __html: `${highlighted}\n` }} />
         </pre>
         {errorHtml ? (
           <pre ref={errorLayerRef} className="agents-graph-node__expr-error" aria-hidden="true" dangerouslySetInnerHTML={{ __html: errorHtml }} />
@@ -354,9 +366,16 @@ function getCaretCoordinates(textarea, position) {
 // preventDefault on every option -- a real mousedown would blur the
 // textarea before the click landed, closing the menu out from under it).
 function StatePathSuggestionsMenu({ items, activeIndex, position, onHover, onSelect }) {
+  const panelRef = useRef(null);
+  useLayoutEffect(() => {
+    if (!position || !panelRef.current) return;
+    const panel = panelRef.current;
+    const rect = panel.getBoundingClientRect();
+    panel.style.left = `${Math.max(8, Math.min(position.left, window.innerWidth - rect.width - 8))}px`;
+  }, [position, items]);
   if (!position) return null;
   return createPortal(
-    <div className="app-listbox__panel agents-graph-node__suggest-menu" style={{ position: 'fixed', top: position.top, left: position.left }}>
+    <div ref={panelRef} className="app-listbox__panel agents-graph-node__suggest-menu" style={{ position: 'fixed', top: position.top, left: position.left }}>
       <ul className="app-listbox__list" role="listbox" aria-label="State path suggestions">
         {items.map((item, index) => (
           <li key={item.path} role="option" aria-selected={index === activeIndex} data-index={index}>
@@ -463,6 +482,65 @@ function StringListField({ id, config, field, label, placeholder, updateNodeConf
   );
 }
 
+function FilesystemAccessField({ id, config, updateNodeConfig }) {
+  const filesystem = config?.filesystem;
+  const enabled = filesystem != null;
+  const paths = (filesystem?.paths || []).join('\n');
+  const [pathDraft, setPathDraft] = useState(null);
+  return (
+    <>
+      <label className="agents-graph-node__field">
+        <span className="agents-graph-node__field-label">Filesystem access</span>
+        <div className="agents-graph-node__select">
+          <Select
+            value={filesystem?.access || ''}
+            onChange={(access) => updateNodeConfig(id, {
+              filesystem: access
+                ? {
+                  access,
+                  paths: filesystem?.paths?.length ? filesystem.paths : ['/artifacts/'],
+                }
+                : null,
+            })}
+            options={[
+              { value: '', label: 'None' },
+              { value: 'read', label: 'Read' },
+              { value: 'read_write', label: 'Read & write' },
+            ]}
+            ariaLabel="Filesystem access"
+            portal
+            className="nodrag nowheel"
+          />
+        </div>
+      </label>
+      {enabled ? (
+        <>
+          <label className="agents-graph-node__field">
+            <span className="agents-graph-node__field-label">Allowed paths (one directory per line)</span>
+            <textarea
+              className="agents-graph-node__prompt"
+              value={pathDraft?.id === id ? pathDraft.text : paths}
+              placeholder={'/artifacts/\n/shared/'}
+              onChange={(event) => {
+                const text = event.target.value;
+                setPathDraft({ id, text });
+                updateNodeConfig(id, {
+                  filesystem: {
+                    ...filesystem,
+                    paths: text.split('\n').map((path) => path.trim()).filter(Boolean),
+                  },
+                });
+              }}
+              onBlur={() => setPathDraft(null)}
+            />
+          </label>
+          <p className="routine-node-inspector__hint">Only <code>/artifacts/</code> and <code>/shared/</code> subtrees are allowed. Writes never overwrite; moves require a file on the same mount (copy can cross mounts). Filesystem code never uses automatic retries or caching.</p>
+        </>
+      ) : null}
+    </>
+  );
+}
+
 function NumberField({ id, config, field, label, placeholder, updateNodeConfig, min = 1 }) {
   return (
     <label className="agents-graph-node__field">
@@ -481,10 +559,11 @@ function NumberField({ id, config, field, label, placeholder, updateNodeConfig, 
   );
 }
 
-// Kind-specific config fields, mirroring src.progenitor.routines.graph's per-kind
+// Kind-specific config fields, mirroring src.progena.routines.graph's per-kind
 // config shape (prompt_template/system_prompt, expression, rubric_prompt/
 // response_schema, agent_name + prompt_template/inputs). `noop` has no config.
 export function NodeConfigBody({ id, kind, config, updateNodeConfig, replaceNodeConfig }) {
+  const agentName = useSelector(selectAgentName);
   if (kind === 'prompt') {
     return (
       <>
@@ -497,6 +576,15 @@ export function NodeConfigBody({ id, kind, config, updateNodeConfig, replaceNode
   if (kind === 'eval' || kind === 'condition' || kind === 'switch') {
     return (
       <ExpressionField id={id} config={config} field="expression" label="Expression" placeholder="Restricted Python expression…" updateNodeConfig={updateNodeConfig} autocomplete />
+    );
+  }
+  if (kind === 'code') {
+    return (
+      <>
+        <ExpressionField id={id} config={config} field="code" label="JavaScript" placeholder="return input;" language="javascript" autocomplete updateNodeConfig={updateNodeConfig} />
+        <p className="routine-node-inspector__hint">Type <code>input.</code> to suggest routine inputs and earlier outputs. Use arrows and Enter to insert, or Escape to dismiss. Return a JSON-compatible result. No Node or browser APIs, network, shell or agent tools; filesystem tools must be explicitly enabled below.</p>
+        <FilesystemAccessField id={id} config={config} updateNodeConfig={updateNodeConfig} />
+      </>
     );
   }
   if (kind === 'classify') {
@@ -559,7 +647,7 @@ export function NodeConfigBody({ id, kind, config, updateNodeConfig, replaceNode
               value={config?.approver || 'any'}
               onChange={(next) => updateNodeConfig(id, { approver: next })}
               options={[
-                { value: 'any', label: 'A person or Progenitor' },
+                { value: 'any', label: `A person or ${agentName}` },
                 { value: 'human', label: 'Only a person' },
               ]}
               ariaLabel="Who can answer"

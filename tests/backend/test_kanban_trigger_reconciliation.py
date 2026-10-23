@@ -22,12 +22,12 @@ from src.backend.events.documents import seed_document_types
 from src.backend.main import app
 from src.backend.monitoring.state import StateReader
 from src.backend.storage.documents import (
-    PROGENITOR_STATE_PREFIX,
+    PROGENA_STATE_PREFIX,
     InMemoryDocumentStore,
     set_default_document_store,
 )
 from src.backend.workflows.service import list_workflow_runs, save_workflow_definition
-from src.progenitor.workflows.documents import default_workflow_definition
+from src.progena.workflows.documents import default_workflow_definition
 
 
 @pytest.fixture
@@ -105,7 +105,7 @@ async def test_agent_card_move_fires_matching_workflow(workflow_env, backend_cli
 
     # Direct store write simulating the runtime agent's filesystem tool.
     store.save_document(
-        PROGENITOR_STATE_PREFIX,
+        PROGENA_STATE_PREFIX,
         "kanban_card:card_agent_1",
         {
             "id": "card_agent_1",
@@ -122,7 +122,7 @@ async def test_agent_card_move_fires_matching_workflow(workflow_env, backend_cli
 
     # Move the card to done — this must match the workflow event node.
     store.save_document(
-        PROGENITOR_STATE_PREFIX,
+        PROGENA_STATE_PREFIX,
         "kanban_card:card_agent_1",
         {
             "id": "card_agent_1",
@@ -159,7 +159,7 @@ async def test_rest_driven_move_is_not_double_dispatched(workflow_env, backend_c
 
             card_id = "card_rest_1"
             store.save_document(
-                PROGENITOR_STATE_PREFIX,
+                PROGENA_STATE_PREFIX,
                 f"kanban_card:{card_id}",
                 {
                     "id": card_id,
@@ -170,7 +170,7 @@ async def test_rest_driven_move_is_not_double_dispatched(workflow_env, backend_c
                     "owner": "user",
                 },
             )
-            board = store.get_document(PROGENITOR_STATE_PREFIX, "kanban_board", None)
+            board = store.get_document(PROGENA_STATE_PREFIX, "kanban_board", None)
             structure = (
                 dict(board.payload) if board is not None and isinstance(board.payload, dict) else {}
             )
@@ -178,7 +178,7 @@ async def test_rest_driven_move_is_not_double_dispatched(workflow_env, backend_c
             if card_id not in order:
                 order.append(card_id)
             structure["card_order"] = order
-            store.save_document(PROGENITOR_STATE_PREFIX, "kanban_board", structure)
+            store.save_document(PROGENA_STATE_PREFIX, "kanban_board", structure)
             # The app's own dispatcher drains on the TestClient loop; draining
             # from this loop too would share its lock across event loops.
             await asyncio.sleep(0.3)
@@ -225,7 +225,7 @@ async def test_non_matching_move_does_not_fire_workflow(workflow_env, backend_cl
     save_workflow_definition(store, _matching_workflow_definition(workflow_id, "No match workflow"))
 
     store.save_document(
-        PROGENITOR_STATE_PREFIX,
+        PROGENA_STATE_PREFIX,
         "kanban_card:card_no_match",
         {
             "id": "card_no_match",
@@ -240,7 +240,7 @@ async def test_non_matching_move_does_not_fire_workflow(workflow_env, backend_cl
 
     # Update a field other than column_id — match requires after.column_id == done.
     store.save_document(
-        PROGENITOR_STATE_PREFIX,
+        PROGENA_STATE_PREFIX,
         "kanban_card:card_no_match",
         {
             "id": "card_no_match",

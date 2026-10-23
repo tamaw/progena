@@ -11,7 +11,6 @@ import {
   toCommittedAssistantMessage,
   normalizeTaskSummary,
 } from '@frontend/features/chat/models/liveAssistantTurnModel';
-import { CHAT_AGENT_NAME } from '@frontend/features/chat/models/conversationModel';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────
 
@@ -1187,10 +1186,10 @@ describe('applyAssistantChunk', () => {
     expect(next.timelineItems[0].error).toBe(false);
   });
 
-  it('on first chunk: assistant_message uses CHAT_AGENT_NAME when no displayAgentName set', () => {
+  it('on first chunk: leaves displayAgentName empty when no metadata is set', () => {
     const turn = baseTurn();
     const next = applyAssistantChunk(turn, 'text', NOW);
-    expect(next.timelineItems[0].displayAgentName).toBe(CHAT_AGENT_NAME);
+    expect(next.timelineItems[0].displayAgentName).toBe('');
   });
 
   it('on first chunk: assistant_message uses displayAgentName when metadata was provided earlier', () => {
@@ -1388,9 +1387,9 @@ describe('buildDefaultAssistantTimeline', () => {
     expect(items.some((item) => item.event?.eventType === 'todos_update')).toBe(false);
   });
 
-  it('uses CHAT_AGENT_NAME when displayAgentName is missing', () => {
+  it('leaves displayAgentName empty when it is missing', () => {
     const items = buildDefaultAssistantTimeline({ role: 'assistant', content: 'hi' });
-    expect(items[0].displayAgentName).toBe(CHAT_AGENT_NAME);
+    expect(items[0].displayAgentName).toBe('');
   });
 
   it('falls back to empty string for displayModelName when missing', () => {

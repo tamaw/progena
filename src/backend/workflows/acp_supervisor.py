@@ -18,21 +18,21 @@ from typing import Any
 
 from src.backend.events.documents import TypedDocumentEvent
 from src.backend.storage.documents import (
-    PROGENITOR_STATE_PREFIX,
+    PROGENA_STATE_PREFIX,
     BackendDocumentStore,
     document_write_origin,
 )
-from src.progenitor.acp.models import ACPFailureKind, ACPTaskRecord, ACPTaskStatus
-from src.progenitor.acp.runner import ACPRunner
-from src.progenitor.acp.tasks import (
+from src.progena.acp.models import ACPFailureKind, ACPTaskRecord, ACPTaskStatus
+from src.progena.acp.runner import ACPRunner
+from src.progena.acp.tasks import (
     acp_config_from_agent_config,
     acp_failure_kind,
     runner_for,
     task_command,
     task_cwd,
 )
-from src.progenitor.documents.kinds import ACP_TASK_KEY_PREFIX
-from src.progenitor.utils import utcnow
+from src.progena.documents.kinds import ACP_TASK_KEY_PREFIX
+from src.progena.utils import utcnow
 
 logger = logging.getLogger(__name__)
 
@@ -104,7 +104,7 @@ def _registry_agents(payload: Any) -> list[dict[str, Any]]:
 
 def resolve_acp_agent_config(store: BackendDocumentStore, agent_name: str) -> dict[str, Any]:
     """Resolve an enabled ACP registry entry by name."""
-    document = store.get_document(PROGENITOR_STATE_PREFIX, "registry", {})
+    document = store.get_document(PROGENA_STATE_PREFIX, "registry", {})
     for agent in _registry_agents(document.payload if document is not None else {}):
         if str(agent.get("name") or "") != agent_name:
             continue
@@ -146,10 +146,10 @@ class ACPTaskSupervisor:
     ) -> None:
         self._store_getter = store_getter
         self._runner_factory = runner_factory
-        self._max_sessions = _positive_int("PROGENITOR_ACP_MAX_SESSIONS", 2)
-        self._max_turns = _positive_int("PROGENITOR_ACP_MAX_TURNS", 20)
-        self._progress_interval = _positive_float("PROGENITOR_ACP_PROGRESS_INTERVAL_SECONDS", 15.0)
-        self._stall_seconds = _positive_float("PROGENITOR_ACP_STALL_SECONDS", 600.0)
+        self._max_sessions = _positive_int("PROGENA_ACP_MAX_SESSIONS", 2)
+        self._max_turns = _positive_int("PROGENA_ACP_MAX_TURNS", 20)
+        self._progress_interval = _positive_float("PROGENA_ACP_PROGRESS_INTERVAL_SECONDS", 15.0)
+        self._stall_seconds = _positive_float("PROGENA_ACP_STALL_SECONDS", 600.0)
         self._semaphore = asyncio.Semaphore(self._max_sessions)
         self._scheduled: dict[str, asyncio.Task[None]] = {}
         self._active: dict[str, _ActiveTurn] = {}
@@ -163,12 +163,12 @@ class ACPTaskSupervisor:
     def _mutate(self, task_id: str, mutator: Callable[[Any], Any]) -> Any:
         with document_write_origin(_SUPERVISOR_ORIGIN):
             return self._store().mutate_document(
-                PROGENITOR_STATE_PREFIX, f"{ACP_TASK_KEY_PREFIX}{task_id}", mutator
+                PROGENA_STATE_PREFIX, f"{ACP_TASK_KEY_PREFIX}{task_id}", mutator
             )
 
     def _get(self, task_id: str) -> ACPTaskRecord | None:
         document = self._store().get_document(
-            PROGENITOR_STATE_PREFIX, f"{ACP_TASK_KEY_PREFIX}{task_id}", None
+            PROGENA_STATE_PREFIX, f"{ACP_TASK_KEY_PREFIX}{task_id}", None
         )
         return _record(task_id, document.payload if document is not None else None)
 
@@ -179,7 +179,7 @@ class ACPTaskSupervisor:
         self._started = True
         self._stopping = False
         self._migrate_legacy_records()
-        rows = self._store().list_documents(PROGENITOR_STATE_PREFIX, ACP_TASK_KEY_PREFIX)
+        rows = self._store().list_documents(PROGENA_STATE_PREFIX, ACP_TASK_KEY_PREFIX)
         for key, document in rows:
             task_id = _task_id_from_key(key)
             if task_id is None:
@@ -295,7 +295,7 @@ class ACPTaskSupervisor:
             if record.turn >= self._max_turns:
                 self._fail_queued(
                     task_id,
-                    f"ACP task exceeded PROGENITOR_ACP_MAX_TURNS ({self._max_turns})",
+                    f"ACP task exceeded PROGENA_ACP_MAX_TURNS ({self._max_turns})",
                 )
                 return
             async with self._semaphore:
@@ -310,7 +310,7 @@ class ACPTaskSupervisor:
                 if record.turn >= self._max_turns:
                     self._fail_queued(
                         task_id,
-                        f"ACP task exceeded PROGENITOR_ACP_MAX_TURNS ({self._max_turns})",
+                        f"ACP task exceeded PROGENA_ACP_MAX_TURNS ({self._max_turns})",
                     )
                     return
                 try:
@@ -980,7 +980,7 @@ class ACPTaskSupervisor:
     def _migrate_legacy_records(self) -> None:
         """Move the old list document without overwriting any newer task row."""
         store = self._store()
-        legacy_document = store.get_document(PROGENITOR_STATE_PREFIX, "acp_tasks", None)
+        legacy_document = store.get_document(PROGENA_STATE_PREFIX, "acp_tasks", None)
         legacy = legacy_document.payload if legacy_document is not None else None
         if not isinstance(legacy, list):
             return
@@ -1004,6 +1004,6 @@ class ACPTaskSupervisor:
                 return current if current is not None else initial
 
             with document_write_origin(_SUPERVISOR_ORIGIN):
-                store.mutate_document(PROGENITOR_STATE_PREFIX, key, create_if_absent)
+                store.mutate_document(PROGENA_STATE_PREFIX, key, create_if_absent)
         with document_write_origin(_SUPERVISOR_ORIGIN):
-            store.delete_document(PROGENITOR_STATE_PREFIX, "acp_tasks")
+            store.delete_document(PROGENA_STATE_PREFIX, "acp_tasks")

@@ -15,6 +15,7 @@
  */
 
 import { Fragment, memo } from 'react';
+import { useSelector } from 'react-redux';
 import { formatDisplayToolCalls } from '../models/messageDisplayModel';
 import { renderSafeMarkdown, sanitizeHtmlFragment } from '../../../lib/safeMarkdown';
 import { describeStreamEvent, badgeForEvent, toolDetailsForEvent, todosDetailsForEvent, tokenMetaItemsForEvent, tagClassForEventType, formatTimestamp } from '../models/messageRenderUtils';
@@ -23,8 +24,10 @@ import SubagentCard from './SubagentCard';
 import A2ACallCard from './A2ACallCard';
 import NormalToolContent from './NormalToolContent';
 import MessageActions from './MessageActions';
+import { selectAgentName } from '../../settings/state/preferences';
 
 const TimelineItem = memo(function TimelineItem({ item, itemIndex, onRegenerate }) {
+  const agentName = useSelector(selectAgentName);
   if (item.kind === 'subagent') {
     return <SubagentCard item={item} />;
   }
@@ -57,7 +60,7 @@ const TimelineItem = memo(function TimelineItem({ item, itemIndex, onRegenerate 
           <div className="entry__main msg__entry-main">
             <div className="msg__head entry__head">
               <span className="entry__tag entry__tag--assistant">agent</span>
-              <span className="msg__role">{item.displayAgentName || 'Progenitor'}</span>
+              <span className="msg__role">{item.displayAgentName || agentName}</span>
               <span className="msg__head-trailing">
                 {tokenMeta.map((meta, mi) => (
                   <Fragment key={`${meta}-${mi}`}>

@@ -7,7 +7,7 @@ import InlineFailure from '../../components/InlineFailure';
 import { fetchAgentSkillContent, selectAgentSkillContent, updateAgentSkillContent } from './state/agents';
 import { formatAge } from './agentFormat';
 
-// Chip tone per A2A task status (matches Progenitor's A2ATaskStatus enum).
+// Chip tone per A2A task status (matches Progena's A2ATaskStatus enum).
 const TASK_TONE = {
   completed: 'ok',
   working: 'info',

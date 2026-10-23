@@ -62,7 +62,7 @@ class TestUserMessageEvents:
         try:
             response = client.post(
                 "/api/ui/responses",
-                json={"model": "progenitor-v1", "input": "Hello!", "stream": False},
+                json={"model": "progena-v1", "input": "Hello!", "stream": False},
                 headers={"X-Request-ID": request_id},
             )
             events = [queue.get_nowait()["envelope"] for _ in range(queue.qsize())]
@@ -113,7 +113,7 @@ class TestUserMessageEvents:
             response = client.post(
                 "/api/ui/responses",
                 json={
-                    "model": "progenitor-v1",
+                    "model": "progena-v1",
                     "input": [],
                     "stream": True,
                     "metadata": {
@@ -141,7 +141,7 @@ class TestUserMessageEvents:
             '{"key": "value", "array": [1, 2, 3]}',
         ]
         for content in contents:
-            request = ResponseRequest(model="progenitor-v1", input=content, stream=False)
+            request = ResponseRequest(model="progena-v1", input=content, stream=False)
             assert request.input == content
 
 
@@ -233,9 +233,9 @@ class TestResponsesAPIEvents:
     """Responses input normalization remains valid before event dispatch."""
 
     def test_responses_api_accepts_string_and_message_list_inputs(self):
-        string_input = ResponseRequest(model="progenitor-v1", input="Hello, world!")
+        string_input = ResponseRequest(model="progena-v1", input="Hello, world!")
         list_input = ResponseRequest(
-            model="progenitor-v1",
+            model="progena-v1",
             input=[ResponseInputMessage(role="user", content="Hello!")],
         )
 
@@ -392,11 +392,11 @@ class TestTypingIndicatorEvents:
 
         try:
             # Simulate typing indicator sequence
-            events_stream.broadcast_ui_event("typing_start", {"agent": "progenitor"}, scope="chat")
+            events_stream.broadcast_ui_event("typing_start", {"agent": "progena"}, scope="chat")
             events_stream.broadcast_ui_event(
-                "typing_update", {"agent": "progenitor", "text": "..."}, scope="chat"
+                "typing_update", {"agent": "progena", "text": "..."}, scope="chat"
             )
-            events_stream.broadcast_ui_event("typing_stop", {"agent": "progenitor"}, scope="chat")
+            events_stream.broadcast_ui_event("typing_stop", {"agent": "progena"}, scope="chat")
 
             events = []
             while not queue.empty():
@@ -421,4 +421,4 @@ class TestMessageContentTypes:
             "| Col1 | Col2 |\n|------|------|\n| A | B |",
         ]
         for content in contents:
-            assert ResponseRequest(model="progenitor-v1", input=content).input == content
+            assert ResponseRequest(model="progena-v1", input=content).input == content

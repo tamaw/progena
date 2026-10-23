@@ -31,18 +31,18 @@ from src.backend.main import app
 from src.backend.monitoring.state import StateReader
 from src.backend.storage.documents import (
     BACKEND_STATE_PREFIX,
-    PROGENITOR_LOG_PREFIX,
-    PROGENITOR_STATE_PREFIX,
+    PROGENA_LOG_PREFIX,
+    PROGENA_STATE_PREFIX,
     CheckpointThreadSnapshot,
     InMemoryDocumentStore,
     set_default_document_store,
 )
-from src.progenitor.documents.kinds import SESSION_KEY_PREFIX
+from src.progena.documents.kinds import SESSION_KEY_PREFIX
 
 
 def _create_session_document(store, thread_id, title="New chat", **extra):
     store.save_document(
-        PROGENITOR_STATE_PREFIX,
+        PROGENA_STATE_PREFIX,
         f"{SESSION_KEY_PREFIX}{thread_id}",
         {
             "id": thread_id,
@@ -98,7 +98,7 @@ def tasks_state_reader(tmp_path, monkeypatch, document_store):
 
     Tasks have no file fallback, so these tests need a real document store. The
     board, task bodies, and activity all persist under the shared
-    ``("progenitor", "state")`` namespace — the same documents the runtime
+    ``("progena", "state")`` namespace — the same documents the runtime
     agent reads/edits through ``/state/tasks/`` as ``board.json`` plus per-task
     ``<id>.md`` files.
     """
@@ -139,14 +139,14 @@ class TestUIRoutes:
     def test_process_metrics_excludes_db_fields(self):
         """The periodic tick carries only process metrics, never DB-derived state.
 
-        progenitor_running belongs here too: it's a live SSE heartbeat check,
-        not a Postgres read (see integrations.runtime.get_progenitor_liveness()).
+        progena_running belongs here too: it's a live SSE heartbeat check,
+        not a Postgres read (see integrations.runtime.get_progena_liveness()).
         """
 
         metrics = monitoring_status._process_metrics()
-        assert set(metrics) == {"status", "uptime_seconds", "memory_mb", "progenitor_running"}
+        assert set(metrics) == {"status", "uptime_seconds", "memory_mb", "progena_running"}
         assert metrics["status"] in {"healthy", "draining"}
-        assert isinstance(metrics["progenitor_running"], bool)
+        assert isinstance(metrics["progena_running"], bool)
         # None of the DB-derived fields leak into the metrics tick.
         assert "widgets" not in metrics
         assert "agents" not in metrics
@@ -205,7 +205,7 @@ class TestUIRoutes:
             check_request_id_header=True,
         )
         stored = document_store.get_document(
-            PROGENITOR_STATE_PREFIX, f"{SESSION_KEY_PREFIX}{thread_id}"
+            PROGENA_STATE_PREFIX, f"{SESSION_KEY_PREFIX}{thread_id}"
         )
         assert stored is not None
         assert stored.payload["title"] == "Backend chat"
@@ -389,7 +389,7 @@ class TestUIRoutes:
         class _LiveStateReader:
             """The runtime still holds a current_state document for the thread."""
 
-            def get_progenitor_state(self, thread_id: str | None = None) -> dict[str, Any]:
+            def get_progena_state(self, thread_id: str | None = None) -> dict[str, Any]:
                 return {"thread_id": thread_id, "cycle_count": 1}
 
             def get_thread_messages(self, thread_id: str) -> list[Any]:
@@ -441,7 +441,7 @@ class TestUIRoutes:
 
         assert response.status_code == 202
         stored = document_store.get_document(
-            PROGENITOR_STATE_PREFIX, f"{SESSION_KEY_PREFIX}thread-rename"
+            PROGENA_STATE_PREFIX, f"{SESSION_KEY_PREFIX}thread-rename"
         )
         assert stored.payload["title"] == "New"
         assert client.patch("/api/ui/chats/missing", json={"title": "x"}).status_code == 404
@@ -462,11 +462,11 @@ class TestUIRoutes:
 
         monkeypatch.setattr(document_store, "get_checkpoint_thread_snapshot", _unavailable)
         key = f"{SESSION_KEY_PREFIX}thread-down"
-        payload = document_store.get_document(PROGENITOR_STATE_PREFIX, key).payload
+        payload = document_store.get_document(PROGENA_STATE_PREFIX, key).payload
         event = DocumentEvent(
             seq=1,
             txid=1,
-            prefix=PROGENITOR_STATE_PREFIX,
+            prefix=PROGENA_STATE_PREFIX,
             key=key,
             op="updated",
             before=payload,
@@ -543,7 +543,7 @@ class TestUIRoutes:
 
         assert delete_response.status_code == 202
         assert (
-            document_store.get_document(PROGENITOR_STATE_PREFIX, f"{SESSION_KEY_PREFIX}{thread_id}")
+            document_store.get_document(PROGENA_STATE_PREFIX, f"{SESSION_KEY_PREFIX}{thread_id}")
             is None
         )
         list_response = client.get("/api/ui/chats?include_archived=true")
@@ -581,7 +581,7 @@ class TestUIRoutes:
 
         assert patch_response.status_code == 202
         stored = document_store.get_document(
-            PROGENITOR_STATE_PREFIX, f"{SESSION_KEY_PREFIX}thread_current-session-1"
+            PROGENA_STATE_PREFIX, f"{SESSION_KEY_PREFIX}thread_current-session-1"
         )
         assert stored is not None
         assert stored.payload["pinned"] is True
@@ -592,7 +592,7 @@ class TestUIRoutes:
         assert delete_response.status_code == 202
         assert (
             document_store.get_document(
-                PROGENITOR_STATE_PREFIX, f"{SESSION_KEY_PREFIX}thread_current-session-1"
+                PROGENA_STATE_PREFIX, f"{SESSION_KEY_PREFIX}thread_current-session-1"
             )
             is None
         )
@@ -631,7 +631,7 @@ class TestUIRoutes:
         created = client.post("/api/ui/kanban/cards", json={"title": "Activity task"})
         assert created.status_code == 202
         board = tasks_state_reader.document_store.get_document(
-            PROGENITOR_STATE_PREFIX, "kanban_board", None
+            PROGENA_STATE_PREFIX, "kanban_board", None
         )
         assert board is not None
         card_id = board.payload["card_order"][-1]
@@ -647,7 +647,7 @@ class TestUIRoutes:
             }
         ]
         tasks_state_reader.document_store.save_document(
-            PROGENITOR_STATE_PREFIX,
+            PROGENA_STATE_PREFIX,
             f"kanban_task_activity:{card_id}",
             persisted_activity,
         )
@@ -687,7 +687,7 @@ class TestUIRoutes:
         )
         assert created.status_code == 202
         board = tasks_state_reader.document_store.get_document(
-            PROGENITOR_STATE_PREFIX, "kanban_board", None
+            PROGENA_STATE_PREFIX, "kanban_board", None
         )
         assert board is not None
         card_id = board.payload["card_order"][-1]
@@ -719,7 +719,7 @@ class TestUIRoutes:
         assert content_event.payload["request_id"] == request_id
 
         stored = tasks_state_reader.document_store.get_document(
-            PROGENITOR_STATE_PREFIX, f"kanban_task_content:{card_id}", None
+            PROGENA_STATE_PREFIX, f"kanban_task_content:{card_id}", None
         )
         assert stored is not None
         assert stored.payload == {"content": "## Acceptance\n\nKeep this body"}
@@ -734,15 +734,15 @@ class TestUIRoutes:
         assert_acknowledgement_body(data)
         assert "kanban.snapshot" in data["event_types"]
         store = tasks_state_reader.document_store
-        board = store.get_document(PROGENITOR_STATE_PREFIX, "kanban_board", None)
+        board = store.get_document(PROGENA_STATE_PREFIX, "kanban_board", None)
         card_id = board.payload["card_order"][-1]
         # Cards persist as their own ``kanban_card:<id>`` document; the board
         # structure only records column layout + ``card_order``.
         store = tasks_state_reader.document_store
-        stored_board = store.get_document(PROGENITOR_STATE_PREFIX, "kanban_board", None)
+        stored_board = store.get_document(PROGENA_STATE_PREFIX, "kanban_board", None)
         assert stored_board is not None
         assert "cards" not in stored_board.payload
-        stored_card = store.get_document(PROGENITOR_STATE_PREFIX, f"kanban_card:{card_id}", None)
+        stored_card = store.get_document(PROGENA_STATE_PREFIX, f"kanban_card:{card_id}", None)
         assert stored_card is not None
         assert stored_card.payload["id"] == card_id
 
@@ -762,7 +762,7 @@ class TestUIRoutes:
         assert_acknowledgement_body(data)
         assert "kanban.snapshot" in data["event_types"]
 
-        stored_card = store.get_document(PROGENITOR_STATE_PREFIX, f"kanban_card:{card_id}", None)
+        stored_card = store.get_document(PROGENA_STATE_PREFIX, f"kanban_card:{card_id}", None)
         assert stored_card is not None
         assert stored_card.payload["column_id"] == "build"
         assert stored_card.payload["status"] == "running"
@@ -787,11 +787,11 @@ class TestUIRoutes:
         assert_acknowledgement_body(data)
         assert "kanban.snapshot" in data["event_types"]
         store = tasks_state_reader.document_store
-        board = store.get_document(PROGENITOR_STATE_PREFIX, "kanban_board", None)
+        board = store.get_document(PROGENA_STATE_PREFIX, "kanban_board", None)
         card_id = board.payload["card_order"][-1]
 
         stored_card = tasks_state_reader.document_store.get_document(
-            PROGENITOR_STATE_PREFIX, f"kanban_card:{card_id}", None
+            PROGENA_STATE_PREFIX, f"kanban_card:{card_id}", None
         )
         assert stored_card.payload["project_id"] == "acme"
 
@@ -803,7 +803,7 @@ class TestUIRoutes:
         data = patch_response.json()
         assert_acknowledgement_body(data)
         stored_card = tasks_state_reader.document_store.get_document(
-            PROGENITOR_STATE_PREFIX, f"kanban_card:{card_id}", None
+            PROGENA_STATE_PREFIX, f"kanban_card:{card_id}", None
         )
         assert stored_card.payload["project_id"] == "beta"
 
@@ -814,7 +814,7 @@ class TestUIRoutes:
         assert cleared.status_code == 202
         assert_acknowledgement_body(cleared.json())
         stored_card = tasks_state_reader.document_store.get_document(
-            PROGENITOR_STATE_PREFIX, f"kanban_card:{card_id}", None
+            PROGENA_STATE_PREFIX, f"kanban_card:{card_id}", None
         )
         assert stored_card.payload["project_id"] is None
 
@@ -826,7 +826,7 @@ class TestUIRoutes:
             json={"title": "Metadata task"},
         )
         store = tasks_state_reader.document_store
-        board = store.get_document(PROGENITOR_STATE_PREFIX, "kanban_board", None)
+        board = store.get_document(PROGENA_STATE_PREFIX, "kanban_board", None)
         card_id = board.payload["card_order"][-1]
 
         patch_response = client.patch(
@@ -845,7 +845,7 @@ class TestUIRoutes:
         assert patch_response.status_code == 202
         data = patch_response.json()
         assert_acknowledgement_body(data)
-        stored_card = store.get_document(PROGENITOR_STATE_PREFIX, f"kanban_card:{card_id}", None)
+        stored_card = store.get_document(PROGENA_STATE_PREFIX, f"kanban_card:{card_id}", None)
         assert stored_card.payload["metadata"]["subtasks"][0]["title"] == "First subtask"
         assert stored_card.payload["metadata"]["subtasks"][1]["done"] is True
         assert stored_card.payload["metadata"]["dependencies"] == ["task-123", "docs/spec.md"]
@@ -879,7 +879,7 @@ class TestUIRoutes:
         data = patch_response.json()
         assert_acknowledgement_body(data)
         stored_card_updated = store.get_document(
-            PROGENITOR_STATE_PREFIX, f"kanban_card:{card_id}", None
+            PROGENA_STATE_PREFIX, f"kanban_card:{card_id}", None
         )
         assert stored_card_updated.payload["metadata"]["collaborators"] == [
             "review_agent",
@@ -890,11 +890,11 @@ class TestUIRoutes:
     def test_kanban_card_reorder_persists_positions(self, client, tasks_state_reader):
         client.post("/api/ui/kanban/cards", json={"title": "First card"})
         store = tasks_state_reader.document_store
-        board = store.get_document(PROGENITOR_STATE_PREFIX, "kanban_board", None)
+        board = store.get_document(PROGENA_STATE_PREFIX, "kanban_board", None)
         first_id = board.payload["card_order"][0]
         client.post("/api/ui/kanban/cards", json={"title": "Second card"})
         client.post("/api/ui/kanban/cards", json={"title": "Third card"})
-        board = store.get_document(PROGENITOR_STATE_PREFIX, "kanban_board", None)
+        board = store.get_document(PROGENA_STATE_PREFIX, "kanban_board", None)
         third_id = board.payload["card_order"][2]
 
         reorder_response = client.patch(
@@ -905,7 +905,7 @@ class TestUIRoutes:
         assert reorder_response.status_code == 202
         data = reorder_response.json()
         assert_acknowledgement_body(data)
-        board = store.get_document(PROGENITOR_STATE_PREFIX, "kanban_board", None)
+        board = store.get_document(PROGENA_STATE_PREFIX, "kanban_board", None)
         assert board.payload["card_order"][0] == first_id
         assert board.payload["card_order"][1] == third_id
 
@@ -931,7 +931,7 @@ class TestUIRoutes:
 
     def test_kanban_normalizes_legacy_columns(self, client, tasks_state_reader):
         legacy_board = {
-            "id": "progenitor-kanban",
+            "id": "progena-kanban",
             "title": "Delivery Kanban",
             "updated_at": "2026-03-22T00:00:00+00:00",
             "columns": [],
@@ -942,7 +942,7 @@ class TestUIRoutes:
             ],
         }
         tasks_state_reader.document_store.save_document(
-            PROGENITOR_STATE_PREFIX, "kanban_board", legacy_board
+            PROGENA_STATE_PREFIX, "kanban_board", legacy_board
         )
 
         board_response = client.get("/api/ui/kanban")
@@ -965,23 +965,21 @@ class TestUIRoutes:
         # The legacy inline-cards board is migrated to per-card documents + an
         # ordered ``card_order`` on the structure document.
         store = tasks_state_reader.document_store
-        structure = store.get_document(PROGENITOR_STATE_PREFIX, "kanban_board", None)
+        structure = store.get_document(PROGENA_STATE_PREFIX, "kanban_board", None)
         assert "cards" not in structure.payload
         assert set(structure.payload["card_order"]) == {
             "legacy-research",
             "legacy-test",
             "legacy-review",
         }
-        assert (
-            store.get_document(PROGENITOR_STATE_PREFIX, "kanban_card:legacy-test", None) is not None
-        )
+        assert store.get_document(PROGENA_STATE_PREFIX, "kanban_card:legacy-test", None) is not None
 
     def test_kanban_card_delete_persists(self, client, tasks_state_reader):
         create_response = client.post("/api/ui/kanban/cards", json={"title": "Disposable card"})
         data = create_response.json()
         assert_acknowledgement_body(data)
         store = tasks_state_reader.document_store
-        board = store.get_document(PROGENITOR_STATE_PREFIX, "kanban_board", None)
+        board = store.get_document(PROGENA_STATE_PREFIX, "kanban_board", None)
         card_id = board.payload["card_order"][-1]
 
         delete_response = client.delete(f"/api/ui/kanban/cards/{card_id}")
@@ -996,8 +994,8 @@ class TestUIRoutes:
         # Deleting the card also removes its backing document and drops it from
         # the board's ``card_order``.
         store = tasks_state_reader.document_store
-        assert store.get_document(PROGENITOR_STATE_PREFIX, f"kanban_card:{card_id}", None) is None
-        structure = store.get_document(PROGENITOR_STATE_PREFIX, "kanban_board", None)
+        assert store.get_document(PROGENA_STATE_PREFIX, f"kanban_card:{card_id}", None) is None
+        structure = store.get_document(PROGENA_STATE_PREFIX, "kanban_board", None)
         assert card_id not in structure.payload["card_order"]
 
     def test_schedule_widget_delete_persists_removal(self, client, kanban_state_reader):
@@ -1015,7 +1013,7 @@ class TestUIRoutes:
         data = create_response.json()
         assert_acknowledgement_body(data)
         store = kanban_state_reader.document_store
-        schedule_doc = store.get_document(PROGENITOR_STATE_PREFIX, "schedule", {})
+        schedule_doc = store.get_document(PROGENA_STATE_PREFIX, "schedule", {})
         before_delete = schedule_doc.payload if schedule_doc else {}
         schedule_id = list(before_delete.keys())[0]
         assert list(before_delete.keys()) == [schedule_id]
@@ -1025,7 +1023,7 @@ class TestUIRoutes:
         assert delete_response.status_code == 202
         data = delete_response.json()
         assert_acknowledgement_body(data)
-        schedule_doc = store.get_document(PROGENITOR_STATE_PREFIX, "schedule", {})
+        schedule_doc = store.get_document(PROGENA_STATE_PREFIX, "schedule", {})
         after_delete = schedule_doc.payload if schedule_doc else {}
         assert after_delete == {}
 
@@ -1125,8 +1123,8 @@ class TestLogsEndpoint:
         builder_dir = kanban_state_reader.logs_dir / "builder"
         builder_dir.mkdir(parents=True, exist_ok=True)
 
-        (kanban_state_reader.logs_dir / "progenitor.log").write_text(
-            "2026-03-11 21:59:52 - __main__ - INFO - Progenitor starting...\n",
+        (kanban_state_reader.logs_dir / "progena.log").write_text(
+            "2026-03-11 21:59:52 - __main__ - INFO - Progena starting...\n",
             encoding="utf-8",
         )
         (builder_dir / "builder.log").write_text(
@@ -1235,7 +1233,7 @@ class TestLogsEndpoint:
         store = kanban_state_reader.document_store
         for i, entry in enumerate(source_entries):
             store.save_document(
-                f"{PROGENITOR_LOG_PREFIX}.decisions",
+                f"{PROGENA_LOG_PREFIX}.decisions",
                 f"entry-{i}",
                 {
                     "timestamp": entry["timestamp"],
@@ -1375,7 +1373,7 @@ class TestLogsEndpoint:
     def test_logs_export_supports_csv(self, client, kanban_state_reader):
         """Test CSV export output."""
         timestamp = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S")
-        (kanban_state_reader.logs_dir / "progenitor.log").write_text(
+        (kanban_state_reader.logs_dir / "progena.log").write_text(
             f"{timestamp} - __main__ - INFO - Started\n",
             encoding="utf-8",
         )
@@ -1395,7 +1393,7 @@ class TestScheduleEndpoint:
     def test_create_and_patch_keep_paused_in_sync(self, client, monkeypatch):
         """enabled drives the runtime-honoured paused flag on create and patch."""
         store = InMemoryDocumentStore()
-        store.save_document(PROGENITOR_STATE_PREFIX, "schedule", {})
+        store.save_document(PROGENA_STATE_PREFIX, "schedule", {})
         state_reader = StateReader(document_store=store)
         monkeypatch.setattr("src.backend.monitoring.state.get_state_reader", lambda: state_reader)
 
@@ -1412,7 +1410,7 @@ class TestScheduleEndpoint:
         assert created.status_code == 202
         data = created.json()
         assert_acknowledgement_body(data)
-        doc = store.get_document(PROGENITOR_STATE_PREFIX, "schedule", {})
+        doc = store.get_document(PROGENA_STATE_PREFIX, "schedule", {})
         assert doc is not None
         schedule_ids = list(doc.payload.keys())
         assert len(schedule_ids) == 1
@@ -1427,7 +1425,7 @@ class TestScheduleEndpoint:
         assert patched.status_code == 202
         patched_data = patched.json()
         assert_acknowledgement_body(patched_data)
-        entry = store.get_document(PROGENITOR_STATE_PREFIX, "schedule", {}).payload[schedule_id]
+        entry = store.get_document(PROGENA_STATE_PREFIX, "schedule", {}).payload[schedule_id]
         assert entry["paused"] is True
         assert entry["enabled"] is False
 
@@ -1437,7 +1435,7 @@ class TestScheduleEndpoint:
         store = InMemoryDocumentStore()
         created_at = datetime.now(UTC).isoformat()
         store.save_document(
-            PROGENITOR_STATE_PREFIX,
+            PROGENA_STATE_PREFIX,
             "schedule",
             {
                 "sched-live": {
@@ -1478,14 +1476,14 @@ class TestLogsPage:
     ):
         """The acknowledgement resolves only through the correlated page payload."""
 
-        (kanban_state_reader.logs_dir / "progenitor.log").write_text(
+        (kanban_state_reader.logs_dir / "progena.log").write_text(
             "2026-03-11 21:59:52 - __main__ - INFO - Causal log record\n",
             encoding="utf-8",
         )
         request_id = "59251b89-8ddb-4e18-913b-566e2419c139"
         event_start = len(events_stream._ui_event_replay)
         response = client.get(
-            "/api/ui/logs?format=json&folder=root&file=progenitor.log"
+            "/api/ui/logs?format=json&folder=root&file=progena.log"
             "&start=2026-03-01&end=2026-03-12&limit=10",
             headers={"X-Request-ID": request_id},
         )
@@ -1522,7 +1520,7 @@ class TestLogsPage:
             "search": None,
             "source": None,
             "folder": "root",
-            "file": "progenitor.log",
+            "file": "progena.log",
             "start": "2026-03-01",
             "end": "2026-03-12",
             "after": None,
@@ -1533,7 +1531,7 @@ class TestLogsPage:
         assert payload["active_selection"] == {
             "source": "",
             "group": "root",
-            "file": "progenitor.log",
+            "file": "progena.log",
         }
         assert payload["date_range"] == {"start": "2026-03-01", "end": "2026-03-12"}
         assert payload["cursor"] == {
@@ -1598,7 +1596,7 @@ class TestWorkspaceBridgeActions:
     def test_patch_schedule_widget_updates_schedule_document(self, client, monkeypatch):
         store = InMemoryDocumentStore()
         store.save_document(
-            PROGENITOR_STATE_PREFIX,
+            PROGENA_STATE_PREFIX,
             "schedule",
             {
                 "sched-1": {
@@ -1627,7 +1625,7 @@ class TestWorkspaceBridgeActions:
         )
 
         assert response.status_code == 202
-        document = store.get_document(PROGENITOR_STATE_PREFIX, "schedule", {})
+        document = store.get_document(PROGENA_STATE_PREFIX, "schedule", {})
         assert document is not None
         updated = document.payload["sched-1"]
         assert updated["name"] == "Nightly check"
@@ -1638,7 +1636,7 @@ class TestWorkspaceBridgeActions:
     def test_patch_mcp_widget_updates_mcp_config_document(self, client, monkeypatch):
         store = InMemoryDocumentStore()
         store.save_document(
-            PROGENITOR_STATE_PREFIX,
+            PROGENA_STATE_PREFIX,
             "mcp",
             {
                 "mcpServers": {
@@ -1667,7 +1665,7 @@ class TestWorkspaceBridgeActions:
         data = response.json()
         assert_acknowledgement_body(data)
 
-        document = store.get_document(PROGENITOR_STATE_PREFIX, "mcp", {})
+        document = store.get_document(PROGENA_STATE_PREFIX, "mcp", {})
         assert document is not None
         updated = document.payload
         assert updated["mcpServers"]["jina"]["enabled"] is True
@@ -1680,7 +1678,7 @@ class TestWorkspaceBridgeActions:
     def test_mcp_snapshot_omits_tool_detail_content_route_returns_it(self, client, monkeypatch):
         store = InMemoryDocumentStore()
         store.save_document(
-            PROGENITOR_STATE_PREFIX,
+            PROGENA_STATE_PREFIX,
             "mcp",
             {
                 "mcpServers": {
@@ -1694,7 +1692,7 @@ class TestWorkspaceBridgeActions:
             },
         )
         store.save_document(
-            PROGENITOR_STATE_PREFIX,
+            PROGENA_STATE_PREFIX,
             "mcp_tools",
             {
                 "tools": [
@@ -1767,7 +1765,7 @@ class TestWorkspaceBridgeActions:
     def test_patch_mcp_tool_broadcasts_server_detail_update(self, client, monkeypatch):
         store = InMemoryDocumentStore()
         store.save_document(
-            PROGENITOR_STATE_PREFIX,
+            PROGENA_STATE_PREFIX,
             "mcp",
             {
                 "mcpServers": {
@@ -1781,7 +1779,7 @@ class TestWorkspaceBridgeActions:
             },
         )
         store.save_document(
-            PROGENITOR_STATE_PREFIX,
+            PROGENA_STATE_PREFIX,
             "mcp_tools",
             {"tools": [{"name": "search", "server": "jina", "description": "", "enabled": True}]},
         )
@@ -1807,7 +1805,7 @@ class TestWorkspaceBridgeActions:
     def test_refresh_agent_widget_returns_live_card_details(self, client, tmp_path, monkeypatch):
         store = InMemoryDocumentStore()
         store.save_document(
-            PROGENITOR_STATE_PREFIX,
+            PROGENA_STATE_PREFIX,
             "registry",
             {
                 "agents": [
@@ -1827,7 +1825,7 @@ class TestWorkspaceBridgeActions:
                 ]
             },
         )
-        store.save_document(PROGENITOR_STATE_PREFIX, "mcp", {"mcpServers": {}})
+        store.save_document(PROGENA_STATE_PREFIX, "mcp", {"mcpServers": {}})
 
         state_reader = StateReader(
             document_store=store,
@@ -1868,16 +1866,16 @@ class TestWorkspaceBridgeActions:
         assert widget_event.type == "widgets.updated"
 
     def test_refresh_mcp_widget_is_rejected(self, client, monkeypatch):
-        # MCP tool discovery is owned by the Progenitor runtime's MCP init (and
+        # MCP tool discovery is owned by the Progena runtime's MCP init (and
         # ``mcp_refresh``); the backend no longer probes servers itself.
         store = InMemoryDocumentStore()
         store.save_document(
-            PROGENITOR_STATE_PREFIX,
+            PROGENA_STATE_PREFIX,
             "registry",
             {"agents": []},
         )
         store.save_document(
-            PROGENITOR_STATE_PREFIX,
+            PROGENA_STATE_PREFIX,
             "mcp",
             {
                 "mcpServers": {
@@ -1900,7 +1898,7 @@ class TestWorkspaceBridgeActions:
 
     def test_create_schedule_writes_schedule_document(self, client, monkeypatch):
         store = InMemoryDocumentStore()
-        store.save_document(PROGENITOR_STATE_PREFIX, "schedule", {})
+        store.save_document(PROGENA_STATE_PREFIX, "schedule", {})
         state_reader = StateReader(document_store=store)
         monkeypatch.setattr("src.backend.monitoring.state.get_state_reader", lambda: state_reader)
 
@@ -1919,7 +1917,7 @@ class TestWorkspaceBridgeActions:
         assert response.status_code == 202
         data = response.json()
         assert_acknowledgement_body(data)
-        document = store.get_document(PROGENITOR_STATE_PREFIX, "schedule", {})
+        document = store.get_document(PROGENA_STATE_PREFIX, "schedule", {})
         assert document is not None
         schedule_ids = list(document.payload.keys())
         assert len(schedule_ids) == 1
@@ -1934,7 +1932,7 @@ class TestWorkspaceBridgeActions:
         self, client, monkeypatch
     ):
         store = InMemoryDocumentStore()
-        store.save_document(PROGENITOR_STATE_PREFIX, "schedule", {})
+        store.save_document(PROGENA_STATE_PREFIX, "schedule", {})
         state_reader = StateReader(document_store=store)
         monkeypatch.setattr("src.backend.monitoring.state.get_state_reader", lambda: state_reader)
 
@@ -1953,7 +1951,7 @@ class TestWorkspaceBridgeActions:
         assert response.status_code == 202
         data = response.json()
         assert_acknowledgement_body(data)
-        document = store.get_document(PROGENITOR_STATE_PREFIX, "schedule", {})
+        document = store.get_document(PROGENA_STATE_PREFIX, "schedule", {})
         assert document is not None
         schedule_ids = list(document.payload.keys())
         assert len(schedule_ids) == 1
@@ -2059,7 +2057,7 @@ class TestWorkspaceBridgeActions:
             json={"title": "Evented card", "summary": "Initial summary"},
         )
         await events_dispatch.get_document_event_dispatcher().drain()
-        board = store.get_document(PROGENITOR_STATE_PREFIX, "kanban_board", None)
+        board = store.get_document(PROGENA_STATE_PREFIX, "kanban_board", None)
         card_id = board.payload["card_order"][-1]
 
         widgets_resp = client.get("/api/ui/widgets")
@@ -2113,11 +2111,11 @@ class TestWorkspaceBridgeActions:
 
         client.post("/api/ui/kanban/cards", json={"title": "First card"})
         await events_dispatch.get_document_event_dispatcher().drain()
-        board = store.get_document(PROGENITOR_STATE_PREFIX, "kanban_board", None)
+        board = store.get_document(PROGENA_STATE_PREFIX, "kanban_board", None)
         first_id = board.payload["card_order"][0]
         client.post("/api/ui/kanban/cards", json={"title": "Second card"})
         await events_dispatch.get_document_event_dispatcher().drain()
-        board = store.get_document(PROGENITOR_STATE_PREFIX, "kanban_board", None)
+        board = store.get_document(PROGENA_STATE_PREFIX, "kanban_board", None)
         second_id = board.payload["card_order"][-1]
 
         move_response = client.patch(

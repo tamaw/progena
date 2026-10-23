@@ -1,6 +1,6 @@
-import { useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
-import { savePreferences, selectPreferences, selectPreferencesSaveRequest } from './state/preferences';
+import { DEFAULT_AGENT_NAME, savePreferences, selectPreferences, selectPreferencesSaveRequest } from './state/preferences';
 import { useConfig } from '../../context/ConfigContext';
 import { SettingsAboutIcon, SettingsAgentsIcon, SettingsAppearanceIcon, SettingsGeneralIcon, SettingsIntegrationsIcon, SettingsKeyboardIcon, SettingsMarketplacesIcon, SettingsTeamIcon } from '../../components/navIcons';
 import PopupModal from '../../components/PopupModal';
@@ -29,8 +29,24 @@ export function SettingsPanel({ onClose, isPinned, onTogglePin, isOpen, onResetL
   const preferencesUrl = getApiUrl('preferences');
   const [section, setSection] = useState('general');
   const [resetConfirmationOpen, setResetConfirmationOpen] = useState(false);
+  const [agentNameDraft, setAgentNameDraft] = useState('');
 
   const preferencesSaveRequest = useSelector(selectPreferencesSaveRequest);
+  useEffect(() => {
+    if (preferences.loaded) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- syncing the persisted draft after its authoritative snapshot arrives.
+      setAgentNameDraft(preferences.agentName);
+    }
+  }, [preferences.agentName, preferences.loaded]);
+
+  const handleAgentNameBlur = useCallback(() => {
+    const agentName = agentNameDraft.trim() || DEFAULT_AGENT_NAME;
+    if (!preferences.loaded || agentName === preferences.agentName) {
+      return;
+    }
+    dispatch(savePreferences({ preferencesUrl, ...preferencesSaveRequest, agentName }));
+  }, [agentNameDraft, dispatch, preferences.agentName, preferences.loaded, preferencesSaveRequest, preferencesUrl]);
+
   return (
     <>
       <TopNavPane title="Settings" className="topnav-pane--settings" bodyClassName="settings-pane__body" onClose={onClose} isPinned={isPinned} onTogglePin={onTogglePin} isOpen={isOpen}>
@@ -57,6 +73,28 @@ export function SettingsPanel({ onClose, isPinned, onTogglePin, isOpen, onResetL
                 </header>
 
                 <WorkspacesSettingsRow />
+
+                <div className="set-row">
+                  <div className="set-row__label">
+                    <div className="set-row__title">Agent name</div>
+                    <div className="set-row__sub">What the assistant is called in chat and its system prompt.</div>
+                  </div>
+                  <span className="set-inline-control">
+                    <input
+                      className="set-text-input"
+                      type="text"
+                      maxLength={32}
+                      value={agentNameDraft}
+                      placeholder={DEFAULT_AGENT_NAME}
+                      aria-label="Agent name"
+                      onChange={(event) => setAgentNameDraft(event.target.value)}
+                      onBlur={handleAgentNameBlur}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter') event.currentTarget.blur();
+                      }}
+                    />
+                  </span>
+                </div>
 
                 <div className="set-row">
                   <div className="set-row__label">
@@ -102,7 +140,7 @@ export function SettingsPanel({ onClose, isPinned, onTogglePin, isOpen, onResetL
                 <div className="set-row set-row--danger">
                   <div className="set-row__label">
                     <div className="set-row__title">Reset all settings</div>
-                    <div className="set-row__sub">Restore Progenitor to factory defaults.</div>
+                    <div className="set-row__sub">Restore Progena AI to factory defaults.</div>
                   </div>
                   <button type="button" className="set-btn set-btn--danger" onClick={() => setResetConfirmationOpen(true)}>Reset</button>
                 </div>
@@ -162,7 +200,7 @@ export function SettingsPanel({ onClose, isPinned, onTogglePin, isOpen, onResetL
         <PopupModal
           eyebrow="Reset settings"
           title="Reset all settings?"
-          message="This restores the default Progenitor settings and clears saved local preferences, including chat-related preferences."
+          message="This restores the default Progena AI settings and clears saved local preferences, including chat-related preferences."
           confirmLabel="Reset settings"
           onClose={() => setResetConfirmationOpen(false)}
           onConfirm={() => {

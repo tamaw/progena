@@ -72,7 +72,6 @@ venv.bak/
 *.swp
 *.swo
 .codex
-.progenitor_worktree
 
 # Project specific
 data/state/*.json

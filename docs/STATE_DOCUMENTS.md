@@ -1,12 +1,12 @@
 # State documents and virtual filesystem mounts
 
-Progenitor persists runtime documents in the LangGraph store's Postgres-backed
-`("progenitor", "state")` namespace. JSON-looking paths are agent-facing
+Progena persists runtime documents in the LangGraph store's Postgres-backed
+`("progena", "state")` namespace. JSON-looking paths are agent-facing
 virtual files; they are not files written under `data/state/` or another
 repository state directory. The backend and runtime use the same persisted
 documents, while static assets remain checked in under `data/`.
 
-`src/progenitor/agent/filesystem/mounts.py:create_progenitor_backend` is the source of
+`src/progena/agent/filesystem/mounts.py:create_progena_backend` is the source of
 truth for mounts. A route is present only when its dependencies are configured:
 the Postgres document routes require a `StateManager`, and `/attachments/`
 requires a database URL.
@@ -72,7 +72,7 @@ rather than by sharing an in-memory filesystem.
 
 ## Inbox message revisions
 
-Each `/inbox/<id>.md` message is a separate `progenitor.state` /
+Each `/inbox/<id>.md` message is a separate `progena.state` /
 `inbox_message:<id>` store row. Backend startup installs a trigger that captures
 its complete JSON payload into `inbox_message_revisions` on insert, update, and
 delete, and backfills currently stored messages. Like `routine_graph_revisions`,
@@ -86,11 +86,11 @@ restore action.
 
 Agent-built UI canvases (dashboards, diagrams, games) are directories the agent
 writes at `/canvases/<name>/` (`CanvasDirectoryBackend`,
-`src/progenitor/agent/filesystem/canvases.py`). Each file is one `canvas:<name>/<path>`
+`src/progena/agent/filesystem/canvases.py`). Each file is one `canvas:<name>/<path>`
 content document (`{content, updated_at}`); `manifest.json`
 (`canvas_manifest.schema.v1.json`) must be written first. Names, paths, file
 types and size caps are shared by the runtime mount and the backend in
-`src/progenitor/canvases/contracts.py`. The mount also projects read-only
+`src/progena/canvases/contracts.py`. The mount also projects read-only
 `/canvases/_catalogue.json` (vendored libraries from `data/canvases/libraries.json`,
 document types, host API) and `/canvases/<name>/status.json` (last load result
 reported by the browser, `canvas_status:<name>`).
@@ -107,12 +107,12 @@ sandbox loading design are in [CANVASES.md](CANVASES.md).
 ## Artifacts
 
 Data files that canvases visualise live at `/artifacts/<path>`
-(`ArtifactDirectoryBackend`, `src/progenitor/agent/filesystem/artifacts.py`), one
+(`ArtifactDirectoryBackend`, `src/progena/agent/filesystem/artifacts.py`), one
 `artifact:<path>` content document (`{content, updated_at}`) per file. Paths,
 types (`.csv`, `.tsv`, `.json`, `.jsonl`, `.md`, `.txt`) and the 1 MiB cap are in
-`src/progenitor/artifacts/contracts.py`; workflow `document_write` and
+`src/progena/artifacts/contracts.py`; workflow `document_write` and
 `document_create` nodes on the `artifact` type are held to the same rules. Only
-the latest content is kept. Progenitor has the whole mount; an object agent
+the latest content is kept. Progena has the whole mount; an object agent
 writes only below a declared `mounts` path such as `/artifacts/research/`.
 Canvases read artifacts with `host.artifacts` and stay live through `artifact.*`
 document events (see [CANVASES.md](CANVASES.md)).
@@ -138,11 +138,11 @@ Unsupported fields and malformed configuration produce `422`; unknown profiles
 produce `404`. The full public snapshot is validated before persistence, and
 unchanged raw siblings/private properties are retained.
 
-`profiles.json` is also an agent-writable `/config/` virtual file. Progenitor can
+`profiles.json` is also an agent-writable `/config/` virtual file. Progena can
 write the complete validated map to add, edit, or remove profiles; its
 `StateManager` write lands in the same Postgres row as the UI route.
 
-Postgres changes to the `progenitor.state` / `profile` document trigger an
+Postgres changes to the `progena.state` / `profile` document trigger an
 unsolicited `profiles.snapshot`. This key bypasses coarse `StateSnapshot` diff
 filtering because profiles are not runtime-health fields. The existing canonical
 stream is reused: no profile-specific stream or polling. On `connection.ready`

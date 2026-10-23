@@ -8,7 +8,7 @@ import { subscribeUiEvent } from '../../realtime/realtimeEvents';
 import { buildCanvasSrcdoc, normalizeCanvasTheme } from './canvasHostModel';
 import styles from './CanvasHost.module.css';
 
-const CHANNEL = 'progenitor-canvas';
+const CHANNEL = 'progena-canvas';
 
 function hostTheme() {
   const computed = getComputedStyle(document.documentElement);

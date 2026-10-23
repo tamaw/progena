@@ -1,10 +1,10 @@
 """Instruction documents for the Instructions page.
 
 Instructions are ``instruction:<group>/<file>.md`` store documents in the
-template format of ``src.progenitor.instructions.templates``. ``progenitor/``
+template format of ``src.progena.instructions.templates``. ``progena/``
 is seeded from ``data/instructions/`` by the runtime; other groups are created
 by users and agents. Ownership rules live in
-``src.progenitor.instructions.documents``. Every write is captured in
+``src.progena.instructions.documents``. Every write is captured in
 ``instruction_revisions``.
 """
 
@@ -16,14 +16,14 @@ from typing import Any
 
 from src.backend.events.documents import list_document_types
 from src.backend.storage.documents import (
-    PROGENITOR_STATE_PREFIX,
+    PROGENA_STATE_PREFIX,
     BackendDocumentStore,
     StoredDocument,
     get_default_document_store,
 )
-from src.progenitor.documents.content import content_document_key, content_document_prefix
-from src.progenitor.instructions import check_instruction_write, instruction_group
-from src.progenitor.instructions.templates import (
+from src.progena.documents.content import content_document_key, content_document_prefix
+from src.progena.instructions import check_instruction_write, instruction_group
+from src.progena.instructions.templates import (
     InstructionTemplate,
     instruction_relative_path,
     parse_instruction_template,
@@ -84,7 +84,7 @@ def list_instructions(store: BackendDocumentStore | None = None) -> list[dict[st
     store = store or get_default_document_store()
     prefix = content_document_prefix(_KIND)
     summaries = []
-    for key, document in store.list_documents(PROGENITOR_STATE_PREFIX, prefix):
+    for key, document in store.list_documents(PROGENA_STATE_PREFIX, prefix):
         content = _content(document)
         if content is not None:
             summaries.append(_summary(key[len(prefix) :], content, document.updated_at))
@@ -95,7 +95,7 @@ def get_instruction(path: str, store: BackendDocumentStore | None = None) -> dic
     """The full instruction; raises ``FileNotFoundError`` when it does not exist."""
     store = store or get_default_document_store()
     path = instruction_relative_path(path)
-    document = store.get_document(PROGENITOR_STATE_PREFIX, content_document_key(_KIND, path), None)
+    document = store.get_document(PROGENA_STATE_PREFIX, content_document_key(_KIND, path), None)
     content = _content(document)
     if document is None or content is None:
         raise FileNotFoundError(path)
@@ -110,7 +110,7 @@ def save_instruction(
     current = get_instruction(path, store)
     check_instruction_write(path, current["content"], content, list_document_types(store))
     store.save_document(
-        PROGENITOR_STATE_PREFIX,
+        PROGENA_STATE_PREFIX,
         content_document_key(_KIND, path),
         {"content": content, "updated_at": datetime.now(UTC).isoformat()},
     )

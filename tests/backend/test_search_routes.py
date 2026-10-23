@@ -12,7 +12,7 @@ from fastapi.testclient import TestClient
 import src.backend.events.stream as events_stream
 import src.backend.search.routes as routes
 from src.backend.storage.documents import (
-    PROGENITOR_STATE_PREFIX,
+    PROGENA_STATE_PREFIX,
     InMemoryDocumentStore,
     set_default_document_store,
 )
@@ -45,11 +45,11 @@ class _FakeStateReader:
         self._store = store
 
     def get_mcp_config(self):
-        doc = self._store.get_document(PROGENITOR_STATE_PREFIX, "mcp", {})
+        doc = self._store.get_document(PROGENA_STATE_PREFIX, "mcp", {})
         return doc.payload if doc is not None else {}
 
     def get_schedule(self):
-        doc = self._store.get_document(PROGENITOR_STATE_PREFIX, "schedule", {})
+        doc = self._store.get_document(PROGENA_STATE_PREFIX, "schedule", {})
         data = doc.payload if doc is not None else {}
         if not isinstance(data, dict):
             return []
@@ -85,7 +85,7 @@ class TestSearchRoute:
     def test_search_includes_text_kind_results(self, harness):
         client, store, events = harness
         store.save_document(
-            PROGENITOR_STATE_PREFIX,
+            PROGENA_STATE_PREFIX,
             "inbox_message:msg-1",
             {"title": "Hello world", "body": "body text"},
         )
@@ -103,13 +103,13 @@ class TestSearchRoute:
     def test_sections_in_fixed_order(self, harness):
         client, store, events = harness
         store.save_document(
-            PROGENITOR_STATE_PREFIX, "inbox_message:m1", {"title": "Alpha", "body": "b"}
+            PROGENA_STATE_PREFIX, "inbox_message:m1", {"title": "Alpha", "body": "b"}
         )
         store.save_document(
-            PROGENITOR_STATE_PREFIX, "kanban_card:c1", {"title": "Alpha", "summary": "s"}
+            PROGENA_STATE_PREFIX, "kanban_card:c1", {"title": "Alpha", "summary": "s"}
         )
         store.save_document(
-            PROGENITOR_STATE_PREFIX, "workflow:w1", {"title": "Alpha", "description": "d"}
+            PROGENA_STATE_PREFIX, "workflow:w1", {"title": "Alpha", "description": "d"}
         )
         assert_acknowledged(
             client.get("/api/ui/search?q=alpha"),
@@ -124,7 +124,7 @@ class TestSearchRoute:
         client, store, events = harness
         for i in range(10):
             store.save_document(
-                PROGENITOR_STATE_PREFIX,
+                PROGENA_STATE_PREFIX,
                 f"inbox_message:m{i}",
                 {"title": f"Message {i}", "body": "body"},
             )
@@ -139,10 +139,10 @@ class TestSearchRoute:
     def test_failing_provider_isolated(self, harness, monkeypatch):
         client, store, events = harness
         store.save_document(
-            PROGENITOR_STATE_PREFIX, "inbox_message:m1", {"title": "Test title", "body": "b"}
+            PROGENA_STATE_PREFIX, "inbox_message:m1", {"title": "Test title", "body": "b"}
         )
         store.save_document(
-            PROGENITOR_STATE_PREFIX,
+            PROGENA_STATE_PREFIX,
             "mcp",
             {"mcpServers": {"jina": {"description": "web search", "url": "http://jina"}}},
         )
@@ -168,7 +168,7 @@ class TestSearchRoute:
     def test_tools_provider(self, harness):
         client, store, events = harness
         store.save_document(
-            PROGENITOR_STATE_PREFIX,
+            PROGENA_STATE_PREFIX,
             "mcp",
             {"mcpServers": {"jina": {"description": "Web search", "url": "http://jina"}}},
         )
@@ -186,7 +186,7 @@ class TestSearchRoute:
     def test_schedules_provider(self, harness):
         client, store, events = harness
         store.save_document(
-            PROGENITOR_STATE_PREFIX,
+            PROGENA_STATE_PREFIX,
             "schedule",
             {
                 "sched_1": {
@@ -213,7 +213,7 @@ class TestSearchRoute:
         # Agents page knows it by the id built from the name.
         client, store, events = harness
         store.save_document(
-            PROGENITOR_STATE_PREFIX,
+            PROGENA_STATE_PREFIX,
             "agent:market__plugin/reviewer/SYSTEM.md",
             {"content": "---\nname: Code Reviewer\ndescription: A test agent\n---\n"},
         )
@@ -231,10 +231,10 @@ class TestSearchRoute:
     def test_instruction_results_use_front_matter_and_path_links(self, harness):
         client, store, events = harness
         store.save_document(
-            PROGENITOR_STATE_PREFIX,
-            "instruction:progenitor/genesis.md",
+            PROGENA_STATE_PREFIX,
+            "instruction:progena/genesis.md",
             {
-                "content": "---\ntitle: Progenitor system prompt\n"
+                "content": "---\ntitle: Progena system prompt\n"
                 "description: Main prompt\n---\nYou are a helpful assistant.\n"
             },
         )
@@ -246,9 +246,9 @@ class TestSearchRoute:
         section = next((s for s in payload["sections"] if s["label"] == "Instructions"), None)
         assert section is not None
         assert len(section["results"]) == 1
-        assert section["results"][0]["title"] == "Progenitor system prompt"
+        assert section["results"][0]["title"] == "Progena system prompt"
         assert section["results"][0]["subtitle"] == "Main prompt"
-        assert section["results"][0]["to"] == "/instructions/progenitor/genesis.md"
+        assert section["results"][0]["to"] == "/instructions/progena/genesis.md"
 
     def test_empty_sections_omitted(self, harness, monkeypatch):
         client, _, events = harness

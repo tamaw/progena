@@ -1,10 +1,10 @@
-export const SOLUTIONS_STORAGE_KEY = 'progenitor:solutions';
+export const SOLUTIONS_STORAGE_KEY = 'progena:solutions';
 
 export const DEFAULT_SOLUTIONS = [
   {
     id: 'main',
     name: 'main',
-    summary: 'Primary Progenitor solution for the local app workspace.',
+    summary: 'Primary Progena AI solution for the local app workspace.',
     projects: [
       {
         id: 'backend-runtime',

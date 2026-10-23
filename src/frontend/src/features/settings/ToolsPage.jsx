@@ -38,6 +38,7 @@ import { reportFailure } from '../../lib/failures';
 import { selectRealtime } from '../../realtime/realtimeSlice';
 import { entityDraftKey } from '../../store/editorDraftsSlice';
 import { createUuid } from '../../lib/uuid';
+import { selectAgentName } from './state/preferences';
 const SERVER_FILTERS = ['All', 'Connected', 'Disabled', 'Errors'];
 const SERVER_SORTS = ['Status', 'Name', 'Transport'];
 
@@ -153,6 +154,7 @@ export default function ToolsPage() {
   const realtime = useSelector(selectRealtime);
   const mcpServers = useSelector(selectMcpServers);
   const mcpState = useSelector(selectMcpState);
+  const agentName = useSelector(selectAgentName);
   const { updateWidget, deleteWidget } = useWidgetsApi();
 
   const [activeFilter, setActiveFilter] = useState('All');
@@ -351,9 +353,9 @@ export default function ToolsPage() {
   }, [deleteAction, deleteWidget, navigate, refreshMcp, selectedServer]);
 
   const addServer = useCallback(() => {
-    // Creation is a Progenitor change request: open quick-chat primed to add an
+    // Creation is a Progena change request: open quick-chat primed to add an
     // MCP server (there is no REST create — the agent owns config mutation).
-    window.dispatchEvent(new CustomEvent('progenitor:open-quick-chat', {
+    window.dispatchEvent(new CustomEvent('progena:open-quick-chat', {
       detail: { mode: 'mcp-create' },
     }));
   }, []);
@@ -559,7 +561,7 @@ export default function ToolsPage() {
                       ? 'Loading tools…'
                       : (selectedServer.enabled === false
                         ? 'Enable the server to discover its tools.'
-                        : 'No tools discovered yet. Progenitor lists them on its next MCP refresh.')}</PaneEmptyState>
+                        : `No tools discovered yet. ${agentName} lists them on its next MCP refresh.`)}</PaneEmptyState>
                   )}
                 </div>
               </section>

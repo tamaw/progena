@@ -13,8 +13,8 @@ from pathlib import Path
 import pytest
 
 from src.backend.agents.store import AgentStore
-from src.backend.storage.documents import PROGENITOR_STATE_PREFIX, InMemoryDocumentStore
-from src.progenitor.documents.content import content_document_key
+from src.backend.storage.documents import PROGENA_STATE_PREFIX, InMemoryDocumentStore
+from src.progena.documents.content import content_document_key
 
 
 def _make_store(monkeypatch: pytest.MonkeyPatch) -> AgentStore:
@@ -109,7 +109,7 @@ def test_native_manifest_cannot_be_updated_or_deleted(
     )
     monkeypatch.setattr("src.backend.agents.store._NATIVE_OBJECT_AGENTS_ROOT", tmp_path)
     store._document_store.save_document(
-        PROGENITOR_STATE_PREFIX,
+        PROGENA_STATE_PREFIX,
         content_document_key("agent", "native/native-agent/SYSTEM.md"),
         {"content": system_path.read_text(encoding="utf-8")},
     )
@@ -139,7 +139,7 @@ def test_update_object_agent_rejects_renaming_native_manifest(
         encoding="utf-8",
     )
     store._document_store.save_document(
-        PROGENITOR_STATE_PREFIX,
+        PROGENA_STATE_PREFIX,
         content_document_key("agent", "native/native-agent/SYSTEM.md"),
         {"content": system_path.read_text(encoding="utf-8")},
     )
@@ -173,7 +173,7 @@ def test_native_disk_precedence_over_documents(monkeypatch, tmp_path):
     system_path.write_text(_manifest_markdown("Reviewer", "Reviews.", "native prompt."))
     for owner in ("user", "acme__plugin", "native"):
         store._document_store.save_document(
-            PROGENITOR_STATE_PREFIX,
+            PROGENA_STATE_PREFIX,
             content_document_key("agent", f"{owner}/reviewer/SYSTEM.md"),
             {"content": _manifest_markdown("Reviewer", "Reviews.", f"{owner} prompt.")},
         )
@@ -192,7 +192,7 @@ def test_native_rename_with_same_slug_is_rejected(monkeypatch, tmp_path):
     system_path.parent.mkdir()
     system_path.write_text(_manifest_markdown("Native Agent", "Ships.", "Prompt."))
     store._document_store.save_document(
-        PROGENITOR_STATE_PREFIX,
+        PROGENA_STATE_PREFIX,
         "agent:native/native-agent/SYSTEM.md",
         {"content": _manifest_markdown("Native Agent", "Ships.", "Prompt.")},
     )

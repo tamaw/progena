@@ -13,7 +13,7 @@ import { reportFailure } from '../../../lib/failures';
 import { createUuid } from '../../../lib/uuid';
 import { clearChatErrored, clearChatGenerating, clearChatUnread, clearActiveChatSession } from '../state/actions';
 import { deleteChatSession, fetchChatMessages, requestChatSessionDetail, requestChatSessionReconciliation, selectActiveChatSession, selectActiveChatSessionState, selectChatReconciliationState, selectChatSessions, selectChatSessionsState, updateChatSessionMetadata } from '../state/chats';
-import { savePreferences, selectPreferences, selectPreferencesSaveRequest } from '../../settings/state/preferences';
+import { savePreferences, selectAgentName, selectPreferences, selectPreferencesSaveRequest } from '../../settings/state/preferences';
 import { subscribeUiEvent } from '../../../realtime/realtimeEvents';
 import ChatInput from '../components/ChatInput';
 import { RegenerateDisabledContext } from '../components/RegenerateDisabledContext';
@@ -48,6 +48,7 @@ function ConversationPage() {
   const activeBackendChatState = useSelector(selectActiveChatSessionState);
   const chatReconciliationState = useSelector(selectChatReconciliationState);
   const preferences = useSelector(selectPreferences);
+  const agentName = useSelector(selectAgentName);
   const preferencesSaveRequest = useSelector(selectPreferencesSaveRequest);
   const initialQuickChatHandoffRef = useRef(undefined);
   if (initialQuickChatHandoffRef.current === undefined) {
@@ -86,7 +87,7 @@ function ConversationPage() {
   ));
   const derivedChatTitle = useMemo(() => deriveChatTitle(messages), [messages]);
   // The open thread's session document, once Postgres has created it. Its title
-  // is authoritative: anyone (the header, a workflow, Progenitor) may rename it.
+  // is authoritative: anyone (the header, a workflow, Progena) may rename it.
   const threadSession = useMemo(
     () => backendChatSessions.find((session) => session.thread_id === threadId) ?? null,
     [backendChatSessions, threadId],
@@ -516,9 +517,9 @@ function ConversationPage() {
       localStorage.removeItem(config.storage.quickChatHandoff);
     };
 
-    window.addEventListener('progenitor:load-chat-history', handlePromotedQuickChat);
+    window.addEventListener('progena:load-chat-history', handlePromotedQuickChat);
     return () => {
-      window.removeEventListener('progenitor:load-chat-history', handlePromotedQuickChat);
+      window.removeEventListener('progena:load-chat-history', handlePromotedQuickChat);
     };
   }, [activeStreamIdRef, config.storage.quickChatHandoff, setIsGenerating, setLiveAssistantTurn]);
 
@@ -815,7 +816,7 @@ function ConversationPage() {
         // Show a notification
         show(
           isQuestion ? 'warning' : 'info',
-          metadata?.title || (isQuestion ? 'Question from Progenitor' : 'Scheduled Message'),
+          metadata?.title || (isQuestion ? `Question from ${agentName}` : 'Scheduled Message'),
           metadata?.schedule_id
             ? `Reminder: ${cleanContent.slice(0, 50)}...`
             : cleanContent.slice(0, 100)
@@ -830,7 +831,7 @@ function ConversationPage() {
         event.data?.content || 'A previous message is still running; your message will be handled next.'
       );
     }
-  }, [show]);
+  }, [agentName, show]);
 
   useEffect(() => subscribeUiEvent((event) => {
     handleChatEvent({ type: event?.type, data: event?.payload });

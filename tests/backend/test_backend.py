@@ -14,7 +14,7 @@ from src.backend.alerts.service import AlertInfo
 from src.backend.chat.models import AgentResponse
 from src.backend.config import ChatServerConfig
 from src.backend.integrations.runtime import start_sse_client_with_retry
-from src.backend.integrations.subprocess import ProgenitorClient
+from src.backend.integrations.subprocess import ProgenaClient
 
 
 class TestChatServerConfig:
@@ -32,14 +32,14 @@ class TestChatServerConfig:
         assert config.model_name == "test-model"
 
 
-class TestProgenitorClient:
-    """Tests for ProgenitorClient."""
+class TestProgenaClient:
+    """Tests for ProgenaClient."""
 
     @pytest.fixture
     def config(self, tmp_path):
         """Create a test config."""
         # Create a dummy script
-        script = tmp_path / "dummy_progenitor.py"
+        script = tmp_path / "dummy_progena.py"
         script.write_text("""
 import sys
 import json
@@ -51,17 +51,17 @@ for line in sys.stdin:
     print(json.dumps(response), flush=True)
 """)
         return ChatServerConfig(
-            progenitor_script=script,
-            progenitor_timeout=5,
+            progena_script=script,
+            progena_timeout=5,
         )
 
     @pytest.mark.asyncio
     async def test_client_start_missing_script(self):
         """Test client fails with missing script."""
         config = ChatServerConfig(
-            progenitor_script=Path("/nonexistent/script.py"),
+            progena_script=Path("/nonexistent/script.py"),
         )
-        client = ProgenitorClient(config)
+        client = ProgenaClient(config)
 
         with pytest.raises(FileNotFoundError):
             await client.start()
@@ -69,7 +69,7 @@ for line in sys.stdin:
     @pytest.mark.asyncio
     async def test_send_message_not_started(self, config):
         """Test send_message auto-starts the client."""
-        client = ProgenitorClient(config)
+        client = ProgenaClient(config)
 
         # Mock the subprocess
         mock_process = MagicMock()
@@ -114,7 +114,7 @@ class TestSSEEventForwardingStartup:
 
 
 class TestAlertRelay:
-    """New alert documents are relayed to the user through Progenitor."""
+    """New alert documents are relayed to the user through Progena."""
 
     def _alert(self, **overrides):
         return AlertInfo(
@@ -132,29 +132,29 @@ class TestAlertRelay:
 
     @pytest.mark.asyncio
     async def test_relay_sends_one_summary_turn(self):
-        progenitor = AsyncMock()
-        progenitor.is_running = True
-        progenitor.send_message = AsyncMock(
+        progena = AsyncMock()
+        progena.is_running = True
+        progena.send_message = AsyncMock(
             return_value=AgentResponse(response="sent", reasoning=None, reasoning_tokens=None)
         )
 
-        await alerts_relay._relay_alert(progenitor, self._alert(id="alert-42"))
+        await alerts_relay._relay_alert(progena, self._alert(id="alert-42"))
 
-        progenitor.start.assert_not_awaited()
-        progenitor.send_message.assert_awaited_once()
-        assert progenitor.send_message.await_args.kwargs["request_id"] == "alert-summary-alert-42"
+        progena.start.assert_not_awaited()
+        progena.send_message.assert_awaited_once()
+        assert progena.send_message.await_args.kwargs["request_id"] == "alert-summary-alert-42"
 
     @pytest.mark.asyncio
     async def test_relay_starts_client_when_needed(self):
-        progenitor = AsyncMock()
-        progenitor.is_running = False
-        progenitor.send_message = AsyncMock(
+        progena = AsyncMock()
+        progena.is_running = False
+        progena.send_message = AsyncMock(
             return_value=AgentResponse(response="sent", reasoning=None, reasoning_tokens=None)
         )
 
-        await alerts_relay._relay_alert(progenitor, self._alert())
+        await alerts_relay._relay_alert(progena, self._alert())
 
-        progenitor.start.assert_awaited_once()
+        progena.start.assert_awaited_once()
 
 
 class TestChatServerAPI:

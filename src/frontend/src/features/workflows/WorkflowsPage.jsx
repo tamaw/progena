@@ -618,7 +618,7 @@ function WorkflowsInner() {
   }, [navigate, workflows]);
 
   const openCreateWorkflowChat = () => {
-    window.dispatchEvent(new CustomEvent('progenitor:open-quick-chat', {
+    window.dispatchEvent(new CustomEvent('progena:open-quick-chat', {
       detail: { mode: 'workflow-create' },
     }));
   };

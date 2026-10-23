@@ -59,6 +59,15 @@ describe('extracted routine components', () => {
     expect(doc.querySelector('[aria-required="true"]')).toBeNull();
   });
 
+  it('renders editable Code source with filesystem permissions', () => {
+    const node = { id: 'transform', kind: 'code', label: 'Transform', config: { language: 'javascript', code: 'return input.items;' } };
+    const doc = parseMarkup(renderWithGraph(<NodeInspector node={node} />, [node], []));
+
+    expect(doc.textContent).toContain('JavaScript');
+    expect(doc.querySelector('textarea')?.textContent).toBe('return input.items;');
+    expect(doc.textContent).toContain('Filesystem access');
+  });
+
   it('renders nested forks and their shared join once with connector controls', () => {
     const nodes = [
       { id: 'outer', kind: 'condition', config: { expression: 'True' } },

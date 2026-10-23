@@ -9,6 +9,7 @@ import { routerTargets, edgeSourceIds, isFlowEdge, reachableFrom } from './graph
 export const REQUIRED_CONFIG = {
   prompt: [['prompt_template', 'prompt_file']],
   eval: [['expression', 'expression_file']],
+  code: ['code'],
   condition: [['expression', 'expression_file']],
   switch: [['expression', 'expression_file']],
   split: [],

@@ -26,6 +26,9 @@ vi.mock("@frontend/features/chat/models/messageRenderUtils", () => ({
   tagClassForEventType: () => '',
   formatTimestamp: () => ''
 }));
+vi.mock('react-redux', () => ({
+  useSelector: (selector) => selector({ uiData: { preferences: { agentName: 'Progena' } } }),
+}));
 
 import TimelineItem from '@frontend/features/chat/components/TimelineItem';
 

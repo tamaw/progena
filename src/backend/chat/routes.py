@@ -32,11 +32,11 @@ from src.backend.http.requests import BroadcastUiEvent
 from src.backend.http.requests import request_correlation_id as _strict_request_correlation_id
 from src.backend.integrations.runtime_history import RuntimeUnavailable
 from src.backend.storage.documents import BackendDocumentStore
-from src.progenitor.documents.kinds import SESSION_KEY_PREFIX
+from src.progena.documents.kinds import SESSION_KEY_PREFIX
 
 logger = logging.getLogger(__name__)
 
-RUNTIME_UNAVAILABLE_DETAIL = "Progenitor runtime is unavailable; chat history cannot be loaded"
+RUNTIME_UNAVAILABLE_DETAIL = "Progena runtime is unavailable; chat history cannot be loaded"
 
 
 def request_correlation_id(request: Request, header_request_id: str | None) -> str:

@@ -11,8 +11,8 @@ per routine: `/routines/<routine-id>.json`.
 
 The authoritative contract is `/schemas/graph.routine.schema.v1.json`. Read it
 before creating or reshaping a graph. The compiler and topology validator are
-implemented in `src/progenitor/routines/graph.py` and
-`src/progenitor/routines/factory.py`.
+implemented in `src/progena/routines/graph.py` and
+`src/progena/routines/factory.py`.
 
 ## Operating rules
 
@@ -58,7 +58,7 @@ schema, validate it, then write exactly one routine file.
 
 ## Node kinds
 
-The current schema supports: `prompt`, `eval`, `condition`, `switch`, `split`,
+The current schema supports: `prompt`, `eval`, `code`, `condition`, `switch`, `split`,
 `classify`, `agent`, `a2a`, `noop`, `human`, `foreach`, `reduce`, and `routine`.
 
 - `prompt` invokes the model using exactly one of `prompt_template` or
@@ -75,6 +75,81 @@ The current schema supports: `prompt`, `eval`, `condition`, `switch`, `split`,
   list/object at 100,000 entries. Calls, subscripts (`x[0]`), comprehensions,
   imports, `*` list unpacking, sets/tuples, `eval`/`exec`, and attribute access
   on anything other than an object remain rejected.
+- `code` runs an inline JavaScript body in a fresh bounded QuickJS sandbox.
+  Its config requires `language: "javascript"` and nonblank `code`, with optional
+  `filesystem` and the standard `retry`, `timeout`, and `cache` options.
+  The body receives all current routine data as JSON-compatible `input` and must `return` one
+  JSON-compatible value; the whole value is stored at its `output_key`.
+  `return { total: input.items.reduce((sum, item) => sum + item.price, 0) };`
+  is valid. Host capabilities are absent by default; only the explicit
+  filesystem capability below can add scoped file tools. There are no direct
+  filesystem, network or module APIs. QuickJS execution, memory, stack and
+  result size are independently bounded; a sandbox exception, timeout or
+  non-JSON result fails the node.
+  Reference routine parameters and earlier outputs with `input.<key>`, where
+  `<key>` is the producer's `output_key` (or node ID when omitted), not its
+  display label. For example, `return input.quote.price * input.quantity;`.
+  Use brackets for literal keys containing punctuation or spaces:
+  `input["market-data"]["close.price"]`. Only values already produced on the
+  executed graph path exist; code-node outputs have no inferred field schema.
+  JavaScript source is **not** a message template: do not inject `{key}` or
+  double/escape JavaScript object braces. `${...}` inside backticks is normal
+  JavaScript interpolation. In contrast, Eval/Branch/Switch expressions use
+  `quote.price`, and prompt templates use `{quote[price]}`.
+  The editor reuses state-path autocomplete: type `input.` (or a partial
+  `input` reference), then select with arrows/Enter or the mouse; Escape
+  dismisses it. Suggestions include routine input keys, seeded `request` and
+  `context`, and predecessor outputs/declared response fields. It inserts
+  JavaScript-safe dot/bracket access; it does not infer arbitrary script results.
+
+  A Code node is pure when `config.filesystem` is omitted or null. To grant a
+  narrowly scoped virtual filesystem, set `config.filesystem` to:
+
+  ```json
+  {
+    "access": "read",
+    "paths": ["/artifacts/", "/shared/reports/"]
+  }
+  ```
+
+  `access` is `"read"` or `"read_write"`. Each `paths` entry is a directory
+  root under `/artifacts/` or `/shared/`; use absolute slash paths only. Paths
+  are normalized with a trailing slash. Dot segments, backslashes, NULs, empty
+  paths, and every other mount family are rejected. Read access exposes only
+  `ls`, `readFile`, `glob`, and `grep`; write access additionally exposes
+  `writeFile`, `editFile`, `copyFile`, `moveFile`, and `deleteFile`. Text only:
+  binary data is rejected rather than lossy-converted. There is no shell,
+  network, agent, or generic host-tool escape hatch. Writes and copies never
+  overwrite; moves are file-only and must stay on one mount, but are not atomic
+  (they may be implemented as copy then delete). File operations are
+  nontransactional: cancellation or a later failure does not roll back completed
+  writes, and a manual rerun/replay can repeat them. Filesystem-enabled Code
+  nodes never cache and never retry automatically, which is not exactly-once
+  execution. The QuickJS CPU deadline excludes async filesystem waits; the
+  enclosing node timeout still bounds those waits.
+
+  With `access: "read_write"` and `/artifacts/` allowed, for example:
+
+  ```javascript
+  await tools.writeFile({
+    file_path: "/artifacts/report.json",
+    content: JSON.stringify(input.result)
+  });
+  await tools.moveFile({
+    source_path: "/artifacts/report.json",
+    destination_path: "/artifacts/finished.json"
+  });
+  return JSON.parse(await tools.readFile({file_path: "/artifacts/finished.json"}));
+  ```
+
+  Calls are asynchronous and must be awaited. `ls` takes `{path}`; `readFile`
+  takes `{file_path, offset?, limit?}`; `glob` takes `{pattern, path?}` and
+  returns `{matches, truncated, truncation_reason}`; `grep` takes
+  `{pattern, path?, glob?, max_count?}` and returns `{matches, truncated}`.
+  `editFile` takes `{file_path, old_string, new_string, replace_all?}`;
+  `copyFile`/`moveFile` take `{source_path, destination_path}`; `deleteFile`
+  takes `{file_path}`. Filesystem methods throw on failure. Scope checks also
+  reject symlinks whose resolved target escapes the configured directory roots.
 - `condition` is a boolean gate whose router must have exactly `true` and
   `false` branches and no default.
 - `switch` routes an expression through author-defined branches.
@@ -104,7 +179,7 @@ The current schema supports: `prompt`, `eval`, `condition`, `switch`, `split`,
   managing-workflows skill).
   Repository work goes to the bundled `repo-manager` agent: it clones declared
   repos (`/config/repos/<id>.json`), creates and removes per-branch worktrees
-  under `$PROGENITOR_REPOS_DIR/<repo-id>.worktrees/`, and publishes branches
+  under `$PROGENA_REPOS_DIR/<repo-id>.worktrees/`, and publishes branches
   (push + pull request). Tell it the repo id and branch, and ask it to reply
   with the paths and URLs it produced.
 - `noop` passes state through unchanged.
@@ -152,8 +227,8 @@ Use only the fields allowed by the selected node kind. For example:
 ```text
 prompt  -> config.prompt_template
 eval    -> config.expression
+code    -> config.code (+ optional config.filesystem)
 human   -> config.message
-routine -> config.routine_name
 ```
 
 Do not copy fields between kinds. The schema's `oneOf` branches are strict.

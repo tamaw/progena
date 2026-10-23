@@ -28,8 +28,8 @@ import src.backend.settings.preferences as settings_preferences
 import src.backend.storage.documents as storage_documents
 import src.backend.tasks.service as tasks_service
 import src.backend.workflows.runtime as workflows_runtime
-from src.progenitor.documents.content import AGENT_DOCUMENT_KEY_PREFIX, SKILL_DOCUMENT_KEY_PREFIX
-from src.progenitor.documents.kinds import (
+from src.progena.documents.content import AGENT_DOCUMENT_KEY_PREFIX, SKILL_DOCUMENT_KEY_PREFIX
+from src.progena.documents.kinds import (
     CANVAS_DOCUMENT_KEY_PREFIX,
     CANVAS_STATUS_KEY_PREFIX,
     INSTRUCTION_DOCUMENT_KEY_PREFIX,
@@ -39,7 +39,7 @@ from src.progenitor.documents.kinds import (
     WORKFLOW_QUEUE_KEY_PREFIX,
     WORKFLOW_RUN_KEY_PREFIX,
 )
-from src.progenitor.knowledge.indexer_config import INDEX_STATUS_DOC_KEY
+from src.progena.knowledge.indexer_config import INDEX_STATUS_DOC_KEY
 
 logger = logging.getLogger(__name__)
 
@@ -68,8 +68,8 @@ async def _get_current_status() -> dict:
     status = {
         "status": "healthy",
         "uptime_seconds": round(now - start_time, 1),
-        "progenitor_running": snapshot.health.is_running(),
-        "progenitor_status": snapshot.health.status,  # Raw status from the health document
+        "progena_running": snapshot.health.is_running(),
+        "progena_status": snapshot.health.status,  # Raw status from the health document
         "version": getattr(lifecycle_state.config, "api_version", "0.1.0"),
         # State data
         "cycle_count": snapshot.health.cycle_count,  # Use health.cycle_count for accuracy
@@ -80,8 +80,8 @@ async def _get_current_status() -> dict:
         # Distinct from "version" above (the backend's own api_version) - this
         # is the runtime process's code commit, for spotting a stale-process
         # running old code without cross-referencing Postgres by hand.
-        "progenitor_commit": snapshot.health.version,
-        "progenitor_started_at": snapshot.health.started_at,
+        "progena_commit": snapshot.health.version,
+        "progena_started_at": snapshot.health.started_at,
         "llm_model": snapshot.health.llm_model,
         "llm_reasoning_enabled": snapshot.health.llm_reasoning_enabled,
         "llm_reasoning_effort": snapshot.health.llm_reasoning_effort,
@@ -166,7 +166,7 @@ def _process_metrics() -> dict:
     merged into it by the periodic tick so we never re-read the DB just to
     refresh metrics.
 
-    Also includes ``progenitor_running``: a live SSE-heartbeat liveness check,
+    Also includes ``progena_running``: a live SSE-heartbeat liveness check,
     deliberately NOT stored in Postgres (see HealthInfo.live_reachable), so a
     pure liveness flip - the runtime dying with no other document changing -
     still reaches the frontend within this tick's cadence instead of only
@@ -181,7 +181,7 @@ def _process_metrics() -> dict:
     metrics: dict = {
         "status": "draining" if draining else "healthy",
         "uptime_seconds": round(now - start_time, 1),
-        "progenitor_running": bool(integrations_runtime.get_progenitor_liveness()),
+        "progena_running": bool(integrations_runtime.get_progena_liveness()),
     }
     try:
         import psutil
@@ -352,7 +352,7 @@ def _status_changed(current: dict, previous: dict) -> bool:
         return True
 
     # Check key fields for changes
-    for key in ("status", "progenitor_running"):
+    for key in ("status", "progena_running"):
         if current.get(key) != previous.get(key):
             return True
 

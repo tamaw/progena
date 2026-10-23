@@ -6,14 +6,14 @@ import json
 from typing import Any
 
 from src.backend.knowledge.service import load_bases
-from src.backend.storage.documents import PROGENITOR_STATE_PREFIX, get_default_document_store
-from src.progenitor.documents.front_matter import split_front_matter
-from src.progenitor.knowledge.indexer_config import (
+from src.backend.storage.documents import PROGENA_STATE_PREFIX, get_default_document_store
+from src.progena.documents.front_matter import split_front_matter
+from src.progena.knowledge.indexer_config import (
     INDEX_STATUS_DOC_KEY,
     index_front_matter,
     index_record,
 )
-from src.progenitor.knowledge.pages import (
+from src.progena.knowledge.pages import (
     INDEX_FILE,
     classify_page_path,
     is_deprecated,
@@ -42,9 +42,7 @@ def _rows(base_id: str) -> list[tuple[str, dict[str, Any]]]:
     """``(path, payload)`` of every stored page in a base that has content."""
     return [
         (key[len(f"knowledge:{base_id}/") :], document.payload)
-        for key, document in _store().list_documents(
-            PROGENITOR_STATE_PREFIX, f"knowledge:{base_id}/"
-        )
+        for key, document in _store().list_documents(PROGENA_STATE_PREFIX, f"knowledge:{base_id}/")
         if _content(document.payload) is not None
     ]
 
@@ -86,7 +84,7 @@ def read_page(base_id: str, path: str) -> dict[str, Any] | None:
         directory = path[: -len(INDEX_FILE)].rstrip("/")
         live = [(p, payload["content"]) for p, payload in _rows(base_id)]
         title = str(base.get("name") or base_id) if not directory else directory.rsplit("/", 1)[-1]
-        row = _store().get_document(PROGENITOR_STATE_PREFIX, INDEX_STATUS_DOC_KEY)
+        row = _store().get_document(PROGENA_STATE_PREFIX, INDEX_STATUS_DOC_KEY)
         content = render_directory_index(
             title=title,
             directory=directory,
@@ -100,7 +98,7 @@ def read_page(base_id: str, path: str) -> dict[str, Any] | None:
         classify_page_path(path)
     except ValueError:
         return None
-    row = _store().get_document(PROGENITOR_STATE_PREFIX, _key(base_id, path))
+    row = _store().get_document(PROGENA_STATE_PREFIX, _key(base_id, path))
     payload = row.payload if row is not None else None
     content = _content(payload)
     if content is None or not isinstance(payload, dict):
@@ -138,6 +136,6 @@ def orphaned_page_base_ids() -> frozenset[str]:
     catalog = {str(base.get("id")) for base in load_bases()}
     stored = {
         key[len("knowledge:") :].split("/", 1)[0]
-        for key, _ in _store().list_documents(PROGENITOR_STATE_PREFIX, "knowledge:")
+        for key, _ in _store().list_documents(PROGENA_STATE_PREFIX, "knowledge:")
     }
     return frozenset(stored - catalog - {""})

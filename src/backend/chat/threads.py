@@ -7,7 +7,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-from src.progenitor.utils import utcnow_isoformat
+from src.progena.utils import utcnow_isoformat
 
 InvocationType = Literal["user", "automation", "system", "workflow_step"]
 ThreadStatus = Literal["running", "completed", "error"]

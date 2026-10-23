@@ -1,7 +1,7 @@
 """
-HTTP-based Progenitor Client for Backend.
+HTTP-based Progena Client for Backend.
 
-Talks to the Progenitor runtime's persistent HTTP + SSE endpoints
+Talks to the Progena runtime's persistent HTTP + SSE endpoints
 (``POST /v1/responses``, ``POST /v1/responses/{response_id}/cancel``,
 ``DELETE /v1/conversations/{id}``, ``GET /v1/events``).
 
@@ -59,8 +59,8 @@ async def _iter_sse_frames(response: httpx.Response) -> AsyncIterator[tuple[str,
             event_name = None
 
 
-class SSEProgenitorClient:
-    """Client that communicates with the Progenitor runtime via HTTP + SSE.
+class SSEProgenaClient:
+    """Client that communicates with the Progena runtime via HTTP + SSE.
 
     Talks to the runtime's persistent HTTP server for chat requests,
     cancellation, and background event forwarding to the frontend via SSE.
@@ -85,7 +85,7 @@ class SSEProgenitorClient:
 
     @property
     def _base_url(self) -> str:
-        return self.config.progenitor_runtime_url
+        return self.config.progena_runtime_url
 
     async def start(self) -> None:
         """Start the client, waiting for the runtime HTTP server to be reachable."""
@@ -115,7 +115,7 @@ class SSEProgenitorClient:
             if not connected:
                 await client.aclose()
                 raise RuntimeError(
-                    f"Failed to reach Progenitor runtime HTTP server at {self._base_url}"
+                    f"Failed to reach Progena runtime HTTP server at {self._base_url}"
                 )
 
             self._client = client
@@ -124,7 +124,7 @@ class SSEProgenitorClient:
             self._events_task = asyncio.create_task(self._events_loop())
 
             self._started = True
-            logger.info("HTTP Progenitor client started (%s)", self._base_url)
+            logger.info("HTTP Progena client started (%s)", self._base_url)
 
     async def stop(self) -> None:
         """Stop the client and its background tasks."""
@@ -297,13 +297,13 @@ class SSEProgenitorClient:
         if thread_id:
             body["conversation"] = thread_id
 
-        request_timeout = httpx.Timeout(5.0, read=self.config.progenitor_timeout)
+        request_timeout = httpx.Timeout(5.0, read=self.config.progena_timeout)
         async with self._client.stream(
             "POST", "/v1/responses", json=body, timeout=request_timeout
         ) as response:
             if response.status_code != 200:
                 error_body = await response.aread()
-                raise RuntimeError(f"Progenitor error: {_decode_error_body(error_body)}")
+                raise RuntimeError(f"Progena error: {_decode_error_body(error_body)}")
 
             async for _event_name, data in _iter_sse_frames(response):
                 event_type = data.get("type", "")
@@ -317,7 +317,7 @@ class SSEProgenitorClient:
                         "runtime_emitted_at_ms": data.get("runtime_emitted_at_ms"),
                         "runtime_stream_seq": data.get("runtime_stream_seq"),
                     }
-                elif event_type == "progenitor.stream_event":
+                elif event_type == "progena.stream_event":
                     yielded: dict[str, Any] = {
                         "type": "stream_event",
                         "event_type": data.get("event_type", ""),
@@ -343,7 +343,7 @@ class SSEProgenitorClient:
                     return
                 elif event_type == "response.failed":
                     error = data.get("response", {}).get("error", {})
-                    raise RuntimeError(f"Progenitor error: {error.get('message', 'unknown error')}")
+                    raise RuntimeError(f"Progena error: {error.get('message', 'unknown error')}")
                 # All other events (response.created, response.in_progress, …) are ignored.
 
     async def cancel_request(self, request_id: str) -> bool:
@@ -424,53 +424,53 @@ def _decode_error_body(body: bytes) -> str:
 
 def get_sse_client(
     config: ChatServerConfig, event_callback: EventCallback | None = None
-) -> SSEProgenitorClient:
-    """Create an HTTP-based Progenitor client.
+) -> SSEProgenaClient:
+    """Create an HTTP-based Progena client.
 
     Args:
         config: Backend configuration.
         event_callback: Optional callback for forwarding events to SSE.
 
     Returns:
-        An SSEProgenitorClient instance.
+        An SSEProgenaClient instance.
     """
-    return SSEProgenitorClient(config, event_callback=event_callback)
+    return SSEProgenaClient(config, event_callback=event_callback)
 
 
 async def start_sse_client_with_retry(
-    client: SSEProgenitorClient,
+    client: SSEProgenaClient,
     *,
     retry_delay: float = 5.0,
 ) -> None:
-    """Start a Progenitor client in the background and keep retrying until it connects."""
+    """Start a Progena client in the background and keep retrying until it connects."""
     attempts = 0
 
     while True:
         try:
             await client.start()
             if attempts:
-                logger.info("Progenitor client connected after %d retries", attempts)
+                logger.info("Progena client connected after %d retries", attempts)
             else:
-                logger.info("Progenitor client connected")
+                logger.info("Progena client connected")
             return
         except asyncio.CancelledError:
             raise
         except Exception as e:
             attempts += 1
             log = logger.warning if attempts == 1 or attempts % 12 == 0 else logger.debug
-            log("Progenitor client unavailable, retrying in %.1fs: %s", retry_delay, e)
+            log("Progena client unavailable, retrying in %.1fs: %s", retry_delay, e)
             await asyncio.sleep(retry_delay)
 
 
-def _progenitor_runtime_live() -> bool:
+def _progena_runtime_live() -> bool:
 
-    return bool(get_progenitor_liveness())
+    return bool(get_progena_liveness())
 
 
-def get_progenitor_liveness() -> bool:
+def get_progena_liveness() -> bool:
     """Report whether the runtime is reachable right now, independent of Postgres.
 
-    Backed by the SSE heartbeat/ack (see SSEProgenitorClient.is_running), not a
+    Backed by the SSE heartbeat/ack (see SSEProgenaClient.is_running), not a
     stored timestamp - this is a live check, not a staleness heuristic.
     """
     return bool(lifecycle_state.client and lifecycle_state.client.is_running)

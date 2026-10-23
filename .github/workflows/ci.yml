@@ -2,9 +2,9 @@ name: ci
 
 on:
   workflow_dispatch:
-    # Manual runs are used as an explicit deploy signal; build-and-deploy
-    # still runs after validation even when no push-based diff is available.
+    # Manual deploys must select main; other refs are rejected before scheduling.
   push:
+    branches: [main]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -16,11 +16,13 @@ permissions:
 
 jobs:
   backend:
+    if: ${{ github.repository == 'tamaw/progena' && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
     runs-on: [self-hosted, Linux, python]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           clean: false
+          persist-credentials: false
 
       - name: Install Python deps
         run: |
@@ -39,13 +41,15 @@ jobs:
           . .venv/bin/activate
           pytest tests/backend
 
-  progenitor:
+  progena:
+    if: ${{ github.repository == 'tamaw/progena' && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
     # Pyright uses a system Node runtime on the self-hosted runner.
     runs-on: [self-hosted, Linux, node, python]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           clean: false
+          persist-credentials: false
 
       - name: Install Python deps
         run: |
@@ -54,10 +58,10 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[dev]"
 
-      - name: Lint progenitor (ruff)
+      - name: Lint progena (ruff)
         run: |
           . .venv/bin/activate
-          ruff check src/progenitor tests/progenitor
+          ruff check src/progena tests/progena
 
       - name: Type-check (pyright)
         # --pythonpath keeps this identical to the pre-commit hook, so the
@@ -66,18 +70,20 @@ jobs:
           . .venv/bin/activate
           pyright --pythonpath .venv/bin/python src/
 
-      - name: Tests progenitor (pytest)
+      - name: Tests progena (pytest)
         run: >
           . .venv/bin/activate &&
           pytest
-          tests/progenitor
+          tests/progena
 
   frontend:
+    if: ${{ github.repository == 'tamaw/progena' && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
     runs-on: [self-hosted, Linux, node]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           clean: false
+          persist-credentials: false
 
       - name: Install deps
         run: npm ci --prefer-offline
@@ -94,13 +100,14 @@ jobs:
   build-and-deploy:
     runs-on: [self-hosted, Linux, docker]
     environment: production
-    needs: [backend, progenitor, frontend]
+    needs: [backend, progena, frontend]
     # Build deployment images and deploy them on the same self-hosted Docker runner.
-    if: ${{ github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch' }}
+    if: ${{ github.repository == 'tamaw/progena' && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           clean: false
+          persist-credentials: false
           fetch-depth: 0
 
       # Compare against the commit last deployed, not just this push: a push whose
@@ -112,103 +119,103 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          DEPLOYED="$(docker run --rm -v progenitor-deploy-state:/state --entrypoint sh \
-            ghcr.io/tamaw/progenitor:latest -c 'cat /state/deployed_commit 2>/dev/null' || true)"
+          DEPLOYED="$(docker run --rm -v progena-deploy-state:/state --entrypoint sh \
+            ghcr.io/tamaw/progena:latest -c 'cat /state/deployed_commit 2>/dev/null' || true)"
           DEPLOYED="$(tr -d '[:space:]' <<< "$DEPLOYED")"
           if [ -z "$DEPLOYED" ] || ! git merge-base --is-ancestor "$DEPLOYED" HEAD 2>/dev/null; then
             echo "No usable deployed commit (${DEPLOYED:-none}); rebuilding and redeploying everything."
-            for output in progenitor_image backend_image frontend_image claude_image redeploy; do
+            for output in progena_image backend_image frontend_image claude_image redeploy; do
               echo "${output}=true" >> "$GITHUB_OUTPUT"
             done
             exit 0
           fi
           echo "Deployed commit: $DEPLOYED"
           changed() { [ -n "$(git diff --name-only "$DEPLOYED" HEAD -- "$@")" ] && echo true || echo false; }
-          # Both Python images copy all of src/ (the backend imports src.progenitor).
+          # Both Python images copy all of src/ (the backend imports src.progena).
           PYTHON_COMMON=(src ':!src/frontend' pyproject.toml README.md data/schemas data/canvases .dockerignore)
-          PROGENITOR="$(changed "${PYTHON_COMMON[@]}" docker/progenitor data/instructions data/skills data/agents data/shims)"
+          PROGENA="$(changed "${PYTHON_COMMON[@]}" docker/progena data/instructions data/skills data/agents data/shims)"
           BACKEND="$(changed "${PYTHON_COMMON[@]}" docker/backend data/agents/objects)"
           FRONTEND="$(changed src/frontend docker/frontend package.json package-lock.json)"
           CLAUDE="$(changed docker/claude)"
           # The stack also restarts for compose/deploy-step changes.
-          STACK="$(changed docker/docker-compose.progenitor.yml .github/workflows/ci.yml)"
+          STACK="$(changed docker/docker-compose.progena.yml .github/workflows/ci.yml)"
           REDEPLOY=false
-          for flag in "$PROGENITOR" "$BACKEND" "$FRONTEND" "$CLAUDE" "$STACK"; do
+          for flag in "$PROGENA" "$BACKEND" "$FRONTEND" "$CLAUDE" "$STACK"; do
             if [ "$flag" = true ]; then REDEPLOY=true; fi
           done
           {
-            echo "progenitor_image=$PROGENITOR"
+            echo "progena_image=$PROGENA"
             echo "backend_image=$BACKEND"
             echo "frontend_image=$FRONTEND"
             echo "claude_image=$CLAUDE"
             echo "redeploy=$REDEPLOY"
           } | tee -a "$GITHUB_OUTPUT"
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
-      - name: Build and load progenitor image
-        if: ${{ github.event_name == 'workflow_dispatch' || steps.changes.outputs.progenitor_image == 'true' }}
-        uses: docker/build-push-action@v6
+      - name: Build and load progena image
+        if: ${{ github.event_name == 'workflow_dispatch' || steps.changes.outputs.progena_image == 'true' }}
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
-          file: docker/progenitor/Dockerfile
+          file: docker/progena/Dockerfile
           build-args: |
             GIT_COMMIT=${{ github.sha }}
           load: true
           labels: |
-            com.progenitor.managed=true
-            com.progenitor.component=progenitor
+            ai.progena.managed=true
+            ai.progena.component=progena
           tags: |
-            ghcr.io/tamaw/progenitor:latest
-            ghcr.io/tamaw/progenitor:${{ github.sha }}
-          cache-from: type=gha,scope=progenitor-image
-          cache-to: type=gha,mode=max,scope=progenitor-image
+            ghcr.io/tamaw/progena:latest
+            ghcr.io/tamaw/progena:${{ github.sha }}
+          cache-from: type=gha,scope=progena-image
+          cache-to: type=gha,mode=max,scope=progena-image
 
       - name: Build and load backend image
         if: ${{ github.event_name == 'workflow_dispatch' || steps.changes.outputs.backend_image == 'true' }}
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
           file: docker/backend/Dockerfile
           load: true
           labels: |
-            com.progenitor.managed=true
-            com.progenitor.component=backend
+            ai.progena.managed=true
+            ai.progena.component=backend
           tags: |
-            ghcr.io/tamaw/progenitor-backend:latest
-            ghcr.io/tamaw/progenitor-backend:${{ github.sha }}
+            ghcr.io/tamaw/progena-backend:latest
+            ghcr.io/tamaw/progena-backend:${{ github.sha }}
           cache-from: type=gha,scope=backend-image
           cache-to: type=gha,mode=max,scope=backend-image
 
       - name: Build and load frontend image
         if: ${{ github.event_name == 'workflow_dispatch' || steps.changes.outputs.frontend_image == 'true' }}
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
           file: docker/frontend/Dockerfile
           load: true
           labels: |
-            com.progenitor.managed=true
-            com.progenitor.component=frontend
+            ai.progena.managed=true
+            ai.progena.component=frontend
           tags: |
-            ghcr.io/tamaw/progenitor-frontend:latest
-            ghcr.io/tamaw/progenitor-frontend:${{ github.sha }}
+            ghcr.io/tamaw/progena-frontend:latest
+            ghcr.io/tamaw/progena-frontend:${{ github.sha }}
           cache-from: type=gha,scope=frontend-image
           cache-to: type=gha,mode=max,scope=frontend-image
 
       - name: Build and load claude image
         if: ${{ github.event_name == 'workflow_dispatch' || steps.changes.outputs.claude_image == 'true' }}
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
           file: docker/claude/Dockerfile
           load: true
           labels: |
-            com.progenitor.managed=true
-            com.progenitor.component=claude
+            ai.progena.managed=true
+            ai.progena.component=claude
           tags: |
-            ghcr.io/tamaw/progenitor-claude:latest
-            ghcr.io/tamaw/progenitor-claude:${{ github.sha }}
+            ghcr.io/tamaw/progena-claude:latest
+            ghcr.io/tamaw/progena-claude:${{ github.sha }}
           cache-from: type=gha,scope=claude-image
           cache-to: type=gha,mode=max,scope=claude-image
 
@@ -218,22 +225,22 @@ jobs:
 
       - name: Ensure external network
         if: ${{ github.event_name == 'workflow_dispatch' || steps.changes.outputs.redeploy == 'true' }}
-        run: docker network inspect progenitor_network >/dev/null 2>&1 || docker network create progenitor_network
+        run: docker network inspect progena_network >/dev/null 2>&1 || docker network create progena_network
 
-      - name: Deploy progenitor stack
+      - name: Deploy progena stack
         if: ${{ github.event_name == 'workflow_dispatch' || steps.changes.outputs.redeploy == 'true' }}
         env:
-          PROGENITOR_IMAGE_TAG: latest
+          PROGENA_IMAGE_TAG: latest
           AZURE_OPENAI_API_KEY: ${{ secrets.AZURE_OPENAI_API_KEY }}
           AZURE_OPENAI_BASE_URL: ${{ secrets.AZURE_OPENAI_BASE_URL }}
           OPENCODE_GO_API_KEY: ${{ secrets.OPENCODE_GO_API_KEY }}
           JINA_API_KEY: ${{ secrets.JINA_API_KEY }}
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
-          PROGENITOR_MODEL_DEFAULT: ${{ vars.PROGENITOR_MODEL_DEFAULT }}
-          PROGENITOR_TIMEZONE: ${{ vars.PROGENITOR_TIMEZONE }}
-          PROGENITOR_REASONING_ENABLED: ${{ vars.PROGENITOR_REASONING_ENABLED }}
-          PROGENITOR_REASONING_EFFORT: ${{ vars.PROGENITOR_REASONING_EFFORT }}
-          PROGENITOR_REASONING_SUMMARY: ${{ vars.PROGENITOR_REASONING_SUMMARY }}
+          PROGENA_MODEL_DEFAULT: ${{ vars.PROGENA_MODEL_DEFAULT }}
+          PROGENA_TIMEZONE: ${{ vars.PROGENA_TIMEZONE }}
+          PROGENA_REASONING_ENABLED: ${{ vars.PROGENA_REASONING_ENABLED }}
+          PROGENA_REASONING_EFFORT: ${{ vars.PROGENA_REASONING_EFFORT }}
+          PROGENA_REASONING_SUMMARY: ${{ vars.PROGENA_REASONING_SUMMARY }}
           TELEGRAM_ENABLED: ${{ vars.TELEGRAM_ENABLED }}
           TELEGRAM_POLLING_ENABLED: ${{ vars.TELEGRAM_POLLING_ENABLED }}
           TELEGRAM_ALLOWED_USERS: ${{ vars.TELEGRAM_ALLOWED_USERS }}
@@ -241,35 +248,35 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           # Outside the runner checkout; preserve the existing installation layout.
-          PROGENITOR_INSTALL_ROOT: /var/lib/progenitor
+          PROGENA_INSTALL_ROOT: /var/lib/progena
         run: |
-          export PROGENITOR_HOST_LOGS_DIR="$PROGENITOR_INSTALL_ROOT/logs"
-          export PROGENITOR_HOST_REPOS_DIR="$PROGENITOR_INSTALL_ROOT/repos"
-          export PROGENITOR_HOST_CLAUDE_DIR="$PROGENITOR_INSTALL_ROOT/claude"
+          export PROGENA_HOST_LOGS_DIR="$PROGENA_INSTALL_ROOT/logs"
+          export PROGENA_HOST_REPOS_DIR="$PROGENA_INSTALL_ROOT/repos"
+          export PROGENA_HOST_CLAUDE_DIR="$PROGENA_INSTALL_ROOT/claude"
           # Check every image before touching the running stack, so a missing image
           # fails the deploy without taking production down. Postgres comes from a
           # registry (compose runs with --pull never), so pull it first.
-          docker compose -f docker/docker-compose.progenitor.yml pull postgres
-          docker image inspect ghcr.io/tamaw/progenitor:${PROGENITOR_IMAGE_TAG} >/dev/null
-          docker image inspect ghcr.io/tamaw/progenitor-backend:${PROGENITOR_IMAGE_TAG} >/dev/null
-          docker image inspect ghcr.io/tamaw/progenitor-frontend:${PROGENITOR_IMAGE_TAG} >/dev/null
-          docker image inspect ghcr.io/tamaw/progenitor-claude:${PROGENITOR_IMAGE_TAG} >/dev/null
+          docker compose -f docker/docker-compose.progena.yml pull postgres
+          docker image inspect ghcr.io/tamaw/progena:${PROGENA_IMAGE_TAG} >/dev/null
+          docker image inspect ghcr.io/tamaw/progena-backend:${PROGENA_IMAGE_TAG} >/dev/null
+          docker image inspect ghcr.io/tamaw/progena-frontend:${PROGENA_IMAGE_TAG} >/dev/null
+          docker image inspect ghcr.io/tamaw/progena-claude:${PROGENA_IMAGE_TAG} >/dev/null
           # If a manual/dev container exists with the same name, docker compose will fail.
           # Removing containers keeps bind-mounted state (logs/repos, plus Postgres) intact.
-          docker rm -f progenitor progenitor-backend progenitor-frontend progenitor-agent-claude 2>/dev/null || true
-          docker volume inspect progenitor-postgres-data >/dev/null 2>&1 || docker volume create progenitor-postgres-data >/dev/null
-          docker volume inspect progenitor-shared >/dev/null 2>&1 || docker volume create progenitor-shared >/dev/null
+          docker rm -f progena progena-backend progena-frontend progena-agent-claude 2>/dev/null || true
+          docker volume inspect progena-postgres-data >/dev/null 2>&1 || docker volume create progena-postgres-data >/dev/null
+          docker volume inspect progena-shared >/dev/null 2>&1 || docker volume create progena-shared >/dev/null
           # The runtime runs as UID 10001; log files left by the old root container
           # are not appendable, so hand its log and repos folders over before starting it.
           # Agent containers may have created the shared volume root as root; only its
           # top level is handed over, leaving their files as they wrote them.
           docker run --rm --user 0 --entrypoint sh \
-            -v "$PROGENITOR_HOST_LOGS_DIR:/logs" -v "$PROGENITOR_HOST_REPOS_DIR:/repos" \
-            -v progenitor-shared:/shared \
-            ghcr.io/tamaw/progenitor:${PROGENITOR_IMAGE_TAG} \
-            -c 'mkdir -p /logs/progenitor && chown -R 10001:10001 /logs/progenitor /repos && chown 10001:10001 /shared && chmod 0777 /shared'
-          docker compose -f docker/docker-compose.progenitor.yml up -d --no-build --pull never
-          docker compose -f docker/docker-compose.progenitor.yml ps
+            -v "$PROGENA_HOST_LOGS_DIR:/logs" -v "$PROGENA_HOST_REPOS_DIR:/repos" \
+            -v progena-shared:/shared \
+            ghcr.io/tamaw/progena:${PROGENA_IMAGE_TAG} \
+            -c 'mkdir -p /logs/progena && chown -R 10001:10001 /logs/progena /repos && chown 10001:10001 /shared && chmod 0777 /shared'
+          docker compose -f docker/docker-compose.progena.yml up -d --no-build --pull never
+          docker compose -f docker/docker-compose.progena.yml ps
 
       - name: Liveness checks
         if: ${{ github.event_name == 'workflow_dispatch' || steps.changes.outputs.redeploy == 'true' }}
@@ -287,19 +294,18 @@ jobs:
               sleep 2
             done
             echo "Timed out waiting for $name to become healthy (status=$status)"
-            docker ps -a || true
-            docker logs "$name" --tail 200 || true
+            echo "Application logs are omitted from public CI; inspect them on the deployment host."
             return 1
           }
 
-          wait_healthy progenitor-postgres 60
-          wait_healthy progenitor-backend 90
-          wait_healthy progenitor 120
-          wait_healthy progenitor-frontend 60
-          wait_healthy progenitor-agent-claude 60
+          wait_healthy progena-postgres 60
+          wait_healthy progena-backend 90
+          wait_healthy progena 120
+          wait_healthy progena-frontend 60
+          wait_healthy progena-agent-claude 60
 
       - name: Record deployed commit
         if: ${{ github.event_name == 'workflow_dispatch' || steps.changes.outputs.redeploy == 'true' }}
         run: |
-          docker run --rm --user 0 -v progenitor-deploy-state:/state --entrypoint sh \
-            ghcr.io/tamaw/progenitor:latest -c 'echo "$1" > /state/deployed_commit' sh "${{ github.sha }}"
+          docker run --rm --user 0 -v progena-deploy-state:/state --entrypoint sh \
+            ghcr.io/tamaw/progena:latest -c 'echo "$1" > /state/deployed_commit' sh "${{ github.sha }}"

@@ -29,14 +29,14 @@ afterEach(() => act(() => root.unmount()));
 
 describe('ConfigProvider density', () => {
   it('restores a valid stored density onto the document element', () => {
-    localStorage.setItem('progenitor_density', 'presentation');
+    localStorage.setItem('progena_density', 'presentation');
     mount();
     expect(seen.current.config.density.default).toBe('presentation');
     expect(document.documentElement.dataset.density).toBe('presentation');
   });
 
   it('falls back to comfortable for an unknown stored value', () => {
-    localStorage.setItem('progenitor_density', 'huge');
+    localStorage.setItem('progena_density', 'huge');
     mount();
     expect(document.documentElement.dataset.density).toBe('comfortable');
   });
@@ -44,15 +44,15 @@ describe('ConfigProvider density', () => {
   it('persists a selection and removes it again on reset', () => {
     mount();
     act(() => seen.current.setDensity('compact'));
-    expect(localStorage.getItem('progenitor_density')).toBe('compact');
+    expect(localStorage.getItem('progena_density')).toBe('compact');
     expect(document.documentElement.dataset.density).toBe('compact');
     act(() => seen.current.resetSettings());
-    expect(localStorage.getItem('progenitor_density')).toBeNull();
+    expect(localStorage.getItem('progena_density')).toBeNull();
     expect(document.documentElement.dataset.density).toBe('comfortable');
   });
 
   it('ignores a stored session timeout outside the slider range', () => {
-    localStorage.setItem('progenitor_idle_timeout_minutes', '999');
+    localStorage.setItem('progena_idle_timeout_minutes', '999');
     mount();
     expect(seen.current.config.session.idleTimeoutMinutes).toBe(30);
   });

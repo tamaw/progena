@@ -453,6 +453,11 @@ describe('missingRequirements', () => {
     expect(missingRequirements({ kind: 'switch', config: { expression: 'category' } })).toEqual([]);
   });
 
+  it('requires nonblank inline JavaScript source for Code', () => {
+    expect(missingRequirements({ kind: 'code', config: { language: 'javascript', code: '  ' } })).toEqual([['code']]);
+    expect(missingRequirements({ kind: 'code', config: { language: 'javascript', code: 'return input;' } })).toEqual([]);
+  });
+
   it('requires nothing for split -- a structural parallel gateway, not an expression node', () => {
     expect(missingRequirements({ kind: 'split', config: {} })).toEqual([]);
   });

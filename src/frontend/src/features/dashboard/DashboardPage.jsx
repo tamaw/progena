@@ -192,7 +192,7 @@ export default function DashboardPage() {
       ? 'Connecting'
       : 'Live';
 
-  const runtimeLabel = status?.progenitor_running
+  const runtimeLabel = status?.progena_running
     ? 'Running'
     : status === null
       ? 'Awaiting status'
@@ -221,7 +221,7 @@ export default function DashboardPage() {
               {streamStateLabel === 'Live' ? 'Live updates' : streamStateLabel}
             </span>
             <span className="dashboard-header__signal">
-              <span className={`dashboard-status-dot${status?.progenitor_running ? ' dashboard-status-dot--running' : status === null ? ' dashboard-status-dot--pending' : ' dashboard-status-dot--stopped'}`} aria-hidden="true" />
+              <span className={`dashboard-status-dot${status?.progena_running ? ' dashboard-status-dot--running' : status === null ? ' dashboard-status-dot--pending' : ' dashboard-status-dot--stopped'}`} aria-hidden="true" />
               Runtime {runtimeLabel.toLowerCase()}
             </span>
           </div>
@@ -585,8 +585,8 @@ export default function DashboardPage() {
                 <span>Cycles</span><strong>{status?.cycle_count ?? 0}</strong>
                 <span>Uptime</span><strong>{formatUptime(status?.uptime_seconds)}</strong>
                 <span>Memory</span><strong>{typeof status?.memory_mb === 'number' ? `${status.memory_mb.toFixed(1)} MB` : '--'}</strong>
-                <span>Commit</span><strong>{status?.progenitor_commit || '--'}</strong>
-                <span>Started</span><strong>{status?.progenitor_started_at ? formatRelativeTime(status.progenitor_started_at) : '--'}</strong>
+                <span>Commit</span><strong>{status?.progena_commit || '--'}</strong>
+                <span>Started</span><strong>{status?.progena_started_at ? formatRelativeTime(status.progena_started_at) : '--'}</strong>
                 <span>Model</span><strong>{status?.llm_model || '--'}</strong>
                 <span>Reasoning</span>
                 <strong>

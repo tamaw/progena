@@ -143,7 +143,7 @@ function ProviderEditor({ provider, goModels, providersUrl, onClose }) {
         {draft.secret_source === 'environment' ? (
           <label className="set-row set-connection-field">
             <span className="set-row__title">Environment variable</span>
-            <input className="set-text-input" list="provider-environment-variables" value={draft.env_var} placeholder="PROGENITOR_PROVIDER_*_API_KEY" disabled={busy} onChange={(event) => update('env_var', event.target.value)} />
+            <input className="set-text-input" list="provider-environment-variables" value={draft.env_var} placeholder="PROGENA_PROVIDER_*_API_KEY" disabled={busy} onChange={(event) => update('env_var', event.target.value)} />
             <datalist id="provider-environment-variables">{ENVIRONMENT_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</datalist>
           </label>
         ) : (

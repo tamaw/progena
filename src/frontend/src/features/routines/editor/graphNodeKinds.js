@@ -13,10 +13,11 @@
 // force branching logic onto a single line.
 
 // Routine step kinds offered at each insertion point. Mirrors
-// src.progenitor.routines.graph.VALID_ROUTINE_NODE_KINDS.
+// src.progena.routines.graph.VALID_ROUTINE_NODE_KINDS.
 export const GRAPH_NODE_KINDS = [
   { kind: 'prompt', label: 'Prompt' },
   { kind: 'eval', label: 'Eval', icon: '<>' },
+  { kind: 'code', label: 'Code', icon: '</>' },
   { kind: 'condition', label: 'Branch' },
   { kind: 'switch', label: 'Switch' },
   { kind: 'split', label: 'Fork' },
@@ -34,6 +35,7 @@ export const GRAPH_NODE_KINDS = [
 export const GRAPH_KIND_COLORS = {
   prompt: '#3b82f6',
   eval: '#6366f1',
+  code: '#14b8a6',
   condition: '#f59e0b',
   switch: '#eab308',
   split: '#84cc16',
@@ -49,7 +51,7 @@ export const GRAPH_KIND_COLORS = {
 };
 
 // A `condition` node is a two-way gate, so its router's branch set is fixed
-// rather than author-defined. Mirrors src.progenitor.routines.graph's
+// rather than author-defined. Mirrors src.progena.routines.graph's
 // CONDITION_BRANCH_VALUES; order here is the left-to-right lane order.
 export const CONDITION_BRANCHES = ['true', 'false'];
 

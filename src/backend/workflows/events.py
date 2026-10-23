@@ -10,15 +10,14 @@ from typing import Any
 
 import src.backend.events.stream as events_stream
 from src.backend.storage.documents import (
-    PROGENITOR_STATE_PREFIX,
+    PROGENA_STATE_PREFIX,
     DocumentEvent,
     StoreChangeListener,
     store_database_url,
 )
 from src.backend.storage.documents import get_default_document_store as get_document_store
-from src.progenitor.persistence.serialization import CheckpointSerializer
-from src.progenitor.routines.approvals import decision_key, pending_approvals
-from src.progenitor.routines.events import CHECKPOINT_CHANNEL, RUN_EVENT_PREFIX
+from src.progena.routines.approvals import decision_key, pending_approvals
+from src.progena.routines.events import CHECKPOINT_CHANNEL, RUN_EVENT_PREFIX
 
 logger = logging.getLogger(__name__)
 
@@ -38,9 +37,7 @@ async def read_run_state(agent_id: str, thread_id: str, doc_store=None) -> dict[
     if database_url:
         from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 
-        async with AsyncPostgresSaver.from_conn_string(
-            database_url, serde=CheckpointSerializer()
-        ) as saver:
+        async with AsyncPostgresSaver.from_conn_string(database_url) as saver:
             checkpoint = await saver.aget_tuple({"configurable": {"thread_id": thread_id}})
             if checkpoint is not None:
                 values = checkpoint.checkpoint.get("channel_values", {})
@@ -57,7 +54,7 @@ async def read_run_state(agent_id: str, thread_id: str, doc_store=None) -> dict[
                 for approval in approvals:
                     claim = await asyncio.to_thread(
                         doc_store.get_document,
-                        PROGENITOR_STATE_PREFIX,
+                        PROGENA_STATE_PREFIX,
                         decision_key(thread_id, approval["interrupt_id"]),
                     )
                     approval["answer_pending"] = claim is not None
@@ -206,7 +203,7 @@ class RoutineEvents:
     async def lifecycle_snapshot(self, client_id: str | None = None) -> None:
 
         documents = await asyncio.to_thread(
-            get_document_store().list_documents, PROGENITOR_STATE_PREFIX, RUN_EVENT_PREFIX
+            get_document_store().list_documents, PROGENA_STATE_PREFIX, RUN_EVENT_PREFIX
         )
         latest: dict[str, dict[str, Any]] = {}
         for _, document in documents:

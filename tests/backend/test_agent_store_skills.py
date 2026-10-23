@@ -12,7 +12,7 @@ import pytest
 
 from src.backend.agents.store import AgentStore
 from src.backend.storage.documents import InMemoryDocumentStore
-from src.progenitor.documents.content import content_document_key
+from src.progena.documents.content import content_document_key
 
 
 def _make_store() -> AgentStore:
@@ -46,7 +46,7 @@ def test_resolve_skill_reads_marketplace_skill_from_document_store() -> None:
         "---\nname: pr-summarizer-skill\ndescription: Summarizes PRs.\n---\nSummarize the diff.\n"
     )
     store._document_store.save_document(  # noqa: SLF001
-        "progenitor.state",
+        "progena.state",
         content_document_key("skill", "acme__toolkit/pr-summarizer-skill/SKILL.md"),
         {"content": content, "updated_at": "2026-08-01T00:00:00Z"},
     )
@@ -70,7 +70,7 @@ def test_update_skill_persists_marketplace_skill_content() -> None:
     store = _make_store()
     original = "---\nname: pr-summarizer-skill\ndescription: Old.\n---\nOld body.\n"
     store._document_store.save_document(  # noqa: SLF001
-        "progenitor.state",
+        "progena.state",
         content_document_key("skill", "acme__toolkit/pr-summarizer-skill/SKILL.md"),
         {"content": original, "updated_at": "2026-08-01T00:00:00Z"},
     )

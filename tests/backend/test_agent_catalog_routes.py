@@ -14,8 +14,8 @@ from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 
 from src.backend.agents.routes import create_agent_profile_router, validate_agent_graph
-from src.backend.storage.documents import PROGENITOR_STATE_PREFIX, InMemoryDocumentStore
-from src.progenitor.settings.policies import ExecutionPolicy
+from src.backend.storage.documents import PROGENA_STATE_PREFIX, InMemoryDocumentStore
+from src.progena.settings.policies import ExecutionPolicy
 
 _DEFAULT_GRAPH = {
     "status": "Draft",
@@ -138,7 +138,7 @@ def harness(monkeypatch):
         events.append((event_type, payload, kwargs))
         return None
 
-    # The list/detail routes read A2A/ACP agents through from Progenitor's
+    # The list/detail routes read A2A/ACP agents through from Progena's
     # registry; keep tests hermetic by returning no remote agent profiles by
     # default.
     import src.backend.agents.routes as routes
@@ -148,7 +148,7 @@ def harness(monkeypatch):
 
     doc_store = InMemoryDocumentStore()
     doc_store.save_document(
-        PROGENITOR_STATE_PREFIX,
+        PROGENA_STATE_PREFIX,
         "policy:default",
         ExecutionPolicy(id="default", name="Default").model_dump(mode="json"),
     )
@@ -360,7 +360,7 @@ def test_runs_route_publishes_run_summaries():
 
     doc_store = InMemoryDocumentStore()
     doc_store.save_document(
-        PROGENITOR_STATE_PREFIX,
+        PROGENA_STATE_PREFIX,
         "policy:default",
         ExecutionPolicy(id="default", name="Default").model_dump(mode="json"),
     )
@@ -427,7 +427,7 @@ def test_runs_route_pages_backward_with_before_cursor():
 
     doc_store = InMemoryDocumentStore()
     doc_store.save_document(
-        PROGENITOR_STATE_PREFIX,
+        PROGENA_STATE_PREFIX,
         "policy:default",
         ExecutionPolicy(id="default", name="Default").model_dump(mode="json"),
     )
@@ -479,7 +479,7 @@ def test_revisions_route_publishes_revision_summaries():
     """Two revisions of one routine surface newest first, scoped to that routine."""
     doc_store = InMemoryDocumentStore()
     doc_store.save_document(
-        PROGENITOR_STATE_PREFIX,
+        PROGENA_STATE_PREFIX,
         "policy:default",
         ExecutionPolicy(id="default", name="Default").model_dump(mode="json"),
     )
@@ -526,7 +526,7 @@ def test_revisions_route_publishes_revision_summaries():
 def test_get_routine_revision_publishes_full_graph():
     doc_store = InMemoryDocumentStore()
     doc_store.save_document(
-        PROGENITOR_STATE_PREFIX,
+        PROGENA_STATE_PREFIX,
         "policy:default",
         ExecutionPolicy(id="default", name="Default").model_dump(mode="json"),
     )
@@ -802,8 +802,8 @@ def test_approval_queues_native_answer_and_rejects_duplicate(harness, monkeypatc
     from unittest.mock import AsyncMock
 
     import src.backend.workflows.events as events_module
-    from src.backend.storage.documents import PROGENITOR_STATE_PREFIX
-    from src.progenitor.routines.approvals import decision_key
+    from src.backend.storage.documents import PROGENA_STATE_PREFIX
+    from src.progena.routines.approvals import decision_key
 
     client, events = harness
     store = client.app.state.doc_store
@@ -830,16 +830,14 @@ def test_approval_queues_native_answer_and_rejects_duplicate(harness, monkeypatc
     }
     response = client.post("/api/ui/agent-profiles/alpha/approval", json=body)
     assert response.status_code == 202
-    queued = store.get_document(PROGENITOR_STATE_PREFIX, "background_tasks").payload
+    queued = store.get_document(PROGENA_STATE_PREFIX, "background_tasks").payload
     assert len(queued) == 1
     assert queued[0]["metadata"]["operation"] == "resume"
     assert queued[0]["metadata"]["thread_id"] == body["thread_id"]
     assert queued[0]["metadata"]["answer"] == answer
-    assert store.get_document(
-        PROGENITOR_STATE_PREFIX, decision_key(body["thread_id"], "approval-id")
-    )
+    assert store.get_document(PROGENA_STATE_PREFIX, decision_key(body["thread_id"], "approval-id"))
     assert client.post("/api/ui/agent-profiles/alpha/approval", json=body).status_code == 409
-    assert len(store.get_document(PROGENITOR_STATE_PREFIX, "background_tasks").payload) == 1
+    assert len(store.get_document(PROGENA_STATE_PREFIX, "background_tasks").payload) == 1
 
 
 @pytest.mark.parametrize(
@@ -854,7 +852,7 @@ def test_invalid_approval_does_not_enqueue(harness, monkeypatch, thread, interru
     from unittest.mock import AsyncMock
 
     import src.backend.workflows.events as events_module
-    from src.backend.storage.documents import PROGENITOR_STATE_PREFIX
+    from src.backend.storage.documents import PROGENA_STATE_PREFIX
 
     client, _ = harness
     monkeypatch.setattr(
@@ -877,9 +875,7 @@ def test_invalid_approval_does_not_enqueue(harness, monkeypatch, thread, interru
         json={"thread_id": thread, "interrupt_id": interrupt, "answer": answer},
     )
     assert response.status_code == status
-    assert (
-        client.app.state.doc_store.get_document(PROGENITOR_STATE_PREFIX, "background_tasks") is None
-    )
+    assert client.app.state.doc_store.get_document(PROGENA_STATE_PREFIX, "background_tasks") is None
 
 
 def _runtime_gated_client(live: dict[str, bool]) -> tuple[TestClient, InMemoryDocumentStore]:
@@ -913,8 +909,8 @@ def test_run_and_approval_are_refused_while_the_runtime_is_down():
 
     assert (run.status_code, resume.status_code) == (503, 503)
     assert "runtime is not running" in run.json()["detail"]
-    assert doc_store.get_document(PROGENITOR_STATE_PREFIX, "background_tasks") is None
+    assert doc_store.get_document(PROGENA_STATE_PREFIX, "background_tasks") is None
 
     live["value"] = True
     assert client.post("/api/ui/agent-profiles/alpha/run", json={}).status_code == 202
-    assert len(doc_store.get_document(PROGENITOR_STATE_PREFIX, "background_tasks").payload) == 1
+    assert len(doc_store.get_document(PROGENA_STATE_PREFIX, "background_tasks").payload) == 1

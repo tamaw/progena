@@ -1,6 +1,6 @@
 """Backend chat session read model backed by ``session:`` documents.
 
-The sidebar/list/detail read ``progenitor.state`` / ``session:<thread_id>``
+The sidebar/list/detail read ``progena.state`` / ``session:<thread_id>``
 documents created by Postgres.  Messages still come from checkpoints through
 the runtime reader.
 """
@@ -15,26 +15,26 @@ from pydantic import BaseModel, Field
 
 from src.backend.integrations.runtime_history import RuntimeUnavailable
 from src.backend.storage.documents import (
-    PROGENITOR_STATE_PREFIX,
+    PROGENA_STATE_PREFIX,
     BackendDocumentStore,
     CheckpointThreadSnapshot,
 )
-from src.progenitor.a2a.payloads import (
+from src.progena.a2a.payloads import (
     _MAX_PROGRESS_LOG_ENTRIES as _REPLAYED_PROGRESS_LOG_ENTRY_LIMIT,
 )
-from src.progenitor.a2a.payloads import (
+from src.progena.a2a.payloads import (
     _MAX_PROGRESS_MESSAGE_TEXT_LENGTH as _REPLAYED_PROGRESS_MESSAGE_TEXT_LIMIT,
 )
-from src.progenitor.documents.kinds import SESSION_KEY_PREFIX
-from src.progenitor.security.redaction import redact_secrets
-from src.progenitor.sessions.messages import (
+from src.progena.documents.kinds import SESSION_KEY_PREFIX
+from src.progena.security.redaction import redact_secrets
+from src.progena.sessions.messages import (
     extract_cache_read_token_count,
     extract_display_metadata,
     extract_message_text,
     extract_reasoning_token_count,
     extract_reasoning_trace,
 )
-from src.progenitor.sessions.titles import ATTACHMENT_CONTEXT_MARKER, display_title
+from src.progena.sessions.titles import ATTACHMENT_CONTEXT_MARKER, display_title
 
 # History must not replay arbitrary tool artifacts (which may contain raw files,
 # images, or credentials). Keep only the SSE-compatible user-facing projection.
@@ -668,7 +668,7 @@ def _summary_from_session(
 
 
 def _session_payload(store: BackendDocumentStore, thread_id: str) -> dict[str, Any] | None:
-    document = store.get_document(PROGENITOR_STATE_PREFIX, f"{SESSION_KEY_PREFIX}{thread_id}")
+    document = store.get_document(PROGENA_STATE_PREFIX, f"{SESSION_KEY_PREFIX}{thread_id}")
     return None if document is None else dict(document.payload)
 
 
@@ -682,7 +682,7 @@ def list_chat_sessions(
     checkpoint_snapshots = store.list_checkpoint_thread_snapshots(limit=100)
     snapshots_by_thread_id = {snapshot.thread_id: snapshot for snapshot in checkpoint_snapshots}
 
-    for _key, document in store.list_documents(PROGENITOR_STATE_PREFIX, SESSION_KEY_PREFIX):
+    for _key, document in store.list_documents(PROGENA_STATE_PREFIX, SESSION_KEY_PREFIX):
         payload = document.payload
         thread_id = payload["thread_id"]
         if payload["archived"] and not include_archived:
@@ -762,17 +762,15 @@ def patch_session_document(
         updates["archived"] = request.archived
     if not updates:
         return payload
-    if not store.merge_document(
-        PROGENITOR_STATE_PREFIX, f"{SESSION_KEY_PREFIX}{thread_id}", updates
-    ):
+    if not store.merge_document(PROGENA_STATE_PREFIX, f"{SESSION_KEY_PREFIX}{thread_id}", updates):
         return None
     return {**payload, **updates}
 
 
 def delete_session_document(store: BackendDocumentStore, thread_id: str) -> bool:
     key = f"{SESSION_KEY_PREFIX}{thread_id}"
-    existing = store.get_document(PROGENITOR_STATE_PREFIX, key)
+    existing = store.get_document(PROGENA_STATE_PREFIX, key)
     if existing is None:
         return False
-    store.delete_document(PROGENITOR_STATE_PREFIX, key)
+    store.delete_document(PROGENA_STATE_PREFIX, key)
     return True

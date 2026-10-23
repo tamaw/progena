@@ -1,6 +1,6 @@
 # Frontend — Agent Guide
 
-React + Vite SPA for Progenitor. Organize code by its owner: application wiring,
+React + Vite SPA for Progena. Organize code by its owner: application wiring,
 shared infrastructure, or a product feature. Feature names follow the backend
 where responsibilities match; frontend-only composition such as the dashboard
 and routine editor has its own feature.

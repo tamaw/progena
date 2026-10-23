@@ -14,6 +14,7 @@ permissions:
 
 jobs:
   prune-docker:
+    if: ${{ github.repository == 'tamaw/progena' && github.ref == 'refs/heads/main' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
     runs-on: [self-hosted, Linux, docker]
     steps:
       - name: Capture Docker disk usage (before)
@@ -31,7 +32,7 @@ jobs:
         run: |
           # No label filter: sweeps every unused image regardless of source,
           # including GitHub Actions runner and ephemeral job images, not just
-          # ones tagged com.progenitor.managed=true.
+          # ones tagged ai.progena.managed=true.
           docker image prune -af \
             --filter "until=168h" || true
 

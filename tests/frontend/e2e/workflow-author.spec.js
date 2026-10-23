@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { test, expect } from '@playwright/test';
 
 /**
- * Progenitor authors workflows from quick chat, then they run end to end:
+ * Progena authors workflows from quick chat, then they run end to end:
  * a cron workflow on demand (▶) and on a real backend clock fire, and an
  * event → extract → agent workflow on a real kanban card creation.
  *
@@ -22,8 +22,8 @@ test.describe.configure({ mode: 'serial' });
 test.setTimeout(600_000);
 
 function sql(query) {
-  return execFileSync('psql', ['-h', '127.0.0.1', '-p', '15433', '-U', 'progenitor', '-d', 'progenitor', '-qAtc', query], {
-    env: { ...process.env, PGPASSWORD: process.env.PGPASSWORD || 'progenitor' },
+  return execFileSync('psql', ['-h', '127.0.0.1', '-p', '15433', '-U', 'progena', '-d', 'progena', '-qAtc', query], {
+    env: { ...process.env, PGPASSWORD: process.env.PGPASSWORD || 'progena' },
     encoding: 'utf8',
   }).trim();
 }
@@ -54,7 +54,7 @@ function quickChatThreadForMessage(text) {
   return row || null;
 }
 
-async function askProgenitor(page, text) {
+async function askProgena(page, text) {
   await page.goto('/workflows');
   await page.getByRole('button', { name: '+ New' }).click();
   const input = page.locator('.qchat-input textarea, .qchat-input input').first();
@@ -85,7 +85,7 @@ function sqlRows(query) {
   return out ? out.split('\n') : [];
 }
 
-// Remove everything the tests created: the quick chats that asked Progenitor,
+// Remove everything the tests created: the quick chats that asked Progena,
 // each workflow with its runs and run threads, and the kanban card (through the
 // card route, so board bookkeeping such as card_order is updated too).
 test.afterAll(async ({ request }) => {
@@ -116,9 +116,9 @@ test.afterAll(async ({ request }) => {
   }
 });
 
-test('Progenitor builds a cron workflow that runs on demand and on schedule', async ({ page, request }) => {
+test('Progena builds a cron workflow that runs on demand and on schedule', async ({ page, request }) => {
   const errors = trackPageErrors(page);
-  await askProgenitor(page,
+  await askProgena(page,
     `Create a NEW workflow titled exactly "${CRON_TITLE}". Trigger: a cron node firing every minute ("* * * * *") in timezone Europe/London. ` +
     'Then one agent node whose inline template is: "Automated workflow test. Reply with exactly one line: CRON_OK {scheduled_for}. Do not call any tools." ' +
     "Wire the cron node's scheduled_for output into the agent's scheduled_for input. Do not edit any other workflow.");
@@ -156,9 +156,9 @@ test('Progenitor builds a cron workflow that runs on demand and on schedule', as
   expect(errors).toEqual([]);
 });
 
-test('Progenitor builds an event workflow that extracts and reports on a new card', async ({ page, request }) => {
+test('Progena builds an event workflow that extracts and reports on a new card', async ({ page, request }) => {
   const errors = trackPageErrors(page);
-  await askProgenitor(page,
+  await askProgena(page,
     `Create a NEW workflow titled exactly "${EVENT_TITLE}". Trigger: an event node on document_type kanban_card, operations ["created"], ` +
     `with match {"after.title": "${CARD_TITLE}"} so it only fires for that card. ` +
     'Unpack the event "after" document, then an extract node with an inline template that asks to rate the urgency of the card titled {title}, ' +

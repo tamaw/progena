@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 from src.backend.monitoring.state import StateReader
-from src.backend.storage.documents import PROGENITOR_STATE_PREFIX, InMemoryDocumentStore
+from src.backend.storage.documents import PROGENA_STATE_PREFIX, InMemoryDocumentStore
 
 
 def _reader(enabled: bool) -> tuple[StateReader, InMemoryDocumentStore]:
     store = InMemoryDocumentStore()
     store.save_document(
-        PROGENITOR_STATE_PREFIX,
+        PROGENA_STATE_PREFIX,
         "registry",
         {
             "agents": [
@@ -33,7 +33,7 @@ def test_in_place_enabled_change_is_detected():
     reader._last_snapshot = before
 
     store.save_document(
-        PROGENITOR_STATE_PREFIX,
+        PROGENA_STATE_PREFIX,
         "registry",
         {
             "agents": [

@@ -1,6 +1,6 @@
-# Progenitor — repository guide
+# Progena AI — repository guide
 
-Progenitor is a conversational LangGraph/DeepAgent runtime with a FastAPI gateway
+Progena is a conversational LangGraph/DeepAgent runtime with a FastAPI gateway
 and a React/Vite frontend. Read this guide first, then the `AGENTS.md` in each
 component you change. Paths and commands below are relative to the repository root.
 
@@ -8,23 +8,23 @@ component you change. Paths and commands below are relative to the repository ro
 
 ```text
 src/
-├── progenitor/     # Agent composition, domain contracts/stores, orchestration and runtime
+├── progena/     # Agent composition, domain contracts/stores, orchestration and runtime
 ├── backend/        # Feature routes/services, shared HTTP/events/storage and lifecycle
 └── frontend/       # Vite project; application code under src/frontend/src/features/
 tests/
 ├── backend/        # Backend tests
-├── progenitor/     # Runtime/domain tests, including scheduler tests
+├── progena/     # Runtime/domain tests, including scheduler tests
 ├── frontend/       # Unit tests, browser specs, helpers and fixtures
 └── conftest.py     # Shared environment setup and disposable Postgres fixtures
 ```
 
-Python imports use `src.backend.*` and `src.progenitor.*`. After changing layouts,
+Python imports use `src.backend.*` and `src.progena.*`. After changing layouts,
 refresh editable metadata with `pip install -e ".[dev]"` in the activated venv.
 Bundled instructions, skills, schemas, object agents, canvas libraries and shell
 shims live under `data/`.
 Standalone A2A agents and their tests/deployment assets live in
-[progentior.agents](https://github.com/tamaw/progentior.agents). Configure external
-checkout discovery with `PROGENITOR_AGENT_REPOSITORIES`; do not copy those agents
+[progena.agents](https://github.com/tamaw/progena.agents). Configure external
+checkout discovery with `PROGENA_AGENT_REPOSITORIES`; do not copy those agents
 back here.
 
 ## Setup and checks
@@ -34,9 +34,9 @@ Always activate the project venv before Python commands. On Linux/macOS:
 ```bash
 source .venv/bin/activate
 pip install -e ".[dev]"
-ruff check src/backend src/progenitor tests/backend tests/progenitor
+ruff check src/backend src/progena tests/backend tests/progena
 pyright --pythonpath .venv/bin/python src/
-pytest tests/backend tests/progenitor
+pytest tests/backend tests/progena
 pre-commit run --all-files
 ```
 
@@ -67,7 +67,7 @@ verify their execution.
 
 Python tests use `pytest-asyncio` with automatic async mode. Root `conftest.py`
 pins checkout-local paths and provides disposable Postgres databases; component
-conftests provide mocks and cleanup. Use `PROGENITOR_TEST_DATABASE_URL` only for a
+conftests provide mocks and cleanup. Use `PROGENA_TEST_DATABASE_URL` only for a
 test server; otherwise persistence tests provision Postgres with Docker. Report skipped/unrun checks.
 
 ## Running locally
@@ -76,7 +76,7 @@ Install frontend dependencies and configure `.env` using `.env.example` and
 `docs/LOCAL_STARTUP.md`. Postgres is required. Run these in separate terminals:
 
 ```bash
-python -m src.progenitor.main
+python -m src.progena.main
 python -m uvicorn src.backend.main:app --host 0.0.0.0 --port 8000
 # From the repository root:
 npm run dev -- --port 5173
@@ -98,9 +98,9 @@ Docker keeps `/app` as its working directory and source under `/app/src`.
   optional credential sources.
 - Conversation state is scoped by LangGraph `thread_id`. Keep different threads
   isolated and serialize overlapping runs for the same conversation.
-- Use `CheckpointSerializer` from `src/progenitor/persistence/serialization.py`
+- Use `CheckpointSerializer` from `src/progena/persistence/serialization.py`
   when opening checkpoint savers or decoding blobs. Preserve historical model
-  aliases; existing `app.progenitor.*` checkpoint identities remain readable.
+  aliases; existing `app.progena.*` checkpoint identities remain readable.
 - Browser application data arrives through the canonical `/api/ui/stream` and
   request-scoped chat content streams. Finite application routes return `202`
   acknowledgements with request correlation. Follow the exact contract and
@@ -110,7 +110,7 @@ Docker keeps `/app` as its working directory and source under `/app/src`.
 
 ## Repository safety
 
-- **Do not merge PRs.** Create PRs and wait for human approval/merge.
+- **Merge PRs only when explicitly requested by the human.** Otherwise create PRs and wait for human approval/merge.
 - **Do not trigger deployments** unless explicitly instructed by the human
   (`workflow_dispatch` is allowed only on request).
 - If a workflow is accidentally started that could deploy, cancel it immediately

@@ -13,7 +13,7 @@ import {
 const bases = [
   {
     id: 'arch',
-    name: 'Progenitor architecture',
+    name: 'Progena architecture',
     status: 'indexed',
     owner: 'Builder',
     lastSynced: '2026-06-27T06:00:00Z',

@@ -1,4 +1,5 @@
 import { tokenize } from '../../../lib/restrictedExpression';
+import { tokenizer } from 'acorn';
 import { predecessorsOf } from './graphTopology';
 
 // What identifier/dotted-attribute chain, if any, ends right at the caret --
@@ -47,6 +48,81 @@ export function getExpressionAutocompleteContext(text, caret) {
     i -= 1;
   }
   return { query: source.slice(start, position), tokenStart: start, tokenEnd: position };
+}
+
+// Tokenize JavaScript rather than reusing the restricted Python expression
+// parser: strings, comments, regexes and template text are not references.
+export function getJavascriptAutocompleteContext(text, caret) {
+  const position = Math.max(0, Math.min(caret, text.length));
+  const tokens = [];
+  const comments = [];
+  try {
+    const lexer = tokenizer(text.slice(0, position), {
+      ecmaVersion: 'latest',
+      onComment: (_block, _text, start, end) => comments.push({ start, end }),
+    });
+    for (let token = lexer.getToken(); token.type.label !== 'eof'; token = lexer.getToken()) {
+      tokens.push(token);
+    }
+  } catch {
+    return null;
+  }
+  if (comments.some(({ start, end }) => position > start && position <= end)) return null;
+  // Find an input-rooted member expression ending at the caret. An unfinished
+  // bracket is allowed so choosing a candidate can insert the complete access.
+  for (let index = tokens.length - 1; index >= 0; index -= 1) {
+    const token = tokens[index];
+    if (token.type.label !== 'name' || token.value !== 'input') continue;
+    if (tokens[index - 1]?.type.label === '.' || tokens[index - 1]?.type.label === '?.') continue;
+    const suffix = tokens.slice(index + 1);
+    // Require explicit member access: bare prefixes can be declaration or
+    // parameter bindings, where inserting a member expression corrupts code.
+    if (!suffix.length) continue;
+    let valid = true;
+    let pendingBracket = false;
+    let query = token.value;
+    for (let i = 0; i < suffix.length;) {
+      const label = suffix[i].type.label;
+      if (label === '.') {
+        i += 1;
+        query += '.';
+        if (i < suffix.length) {
+          if (suffix[i].type.label !== 'name' && !suffix[i].type.keyword) valid = false;
+          query += suffix[i++].value;
+        }
+      } else if (label === '[') {
+        i += 1;
+        pendingBracket = true;
+        if (i < suffix.length) {
+          if (suffix[i].type.label !== 'string') valid = false;
+          query += `[${JSON.stringify(suffix[i++].value)}]`;
+          if (i < suffix.length) {
+            if (suffix[i++].type.label !== ']') valid = false;
+            pendingBracket = false;
+          }
+        }
+      } else {
+        valid = false;
+        break;
+      }
+    }
+    if (!valid || tokens.at(-1)?.end !== position) return null;
+    const tail = text.slice(position).match(/^[\w$]*/)?.[0] || '';
+    const remaining = text.slice(position);
+    const closingBracket = pendingBracket ? remaining.match(/^\s*\]/)?.[0].length || 0 : 0;
+    if (pendingBracket && !closingBracket && remaining.trim()) return null;
+    return { query: query.replace(/\.$/, ''), tokenStart: token.start, tokenEnd: position + tail.length + closingBracket };
+  }
+  return null;
+}
+
+export function javascriptStatePathSuggestions(suggestions) {
+  return suggestions.map((item) => ({
+    ...item,
+    path: `input${item.segments.map((segment) => (
+      /^[A-Za-z_$][\w$]*$/.test(segment) ? `.${segment}` : `[${JSON.stringify(segment)}]`
+    )).join('')}`,
+  }));
 }
 
 // `eval`/`condition` nodes resolve named inputs from dotted `data` paths before
@@ -175,7 +251,7 @@ export function isCompleteSchemaFieldText(text) {
 // predecessor carrying a `response_schema` (Select/classify always; prompt/
 // agent when authored with one), a `<output_key>.<property>` entry per
 // schema field, since both consumers already walk nested dicts
-// (`src/progenitor/routines/state.py`'s `resolve_data_path`/`_resolve_inputs`, and
+// (`src/progena/routines/state.py`'s `resolve_data_path`/`_resolve_inputs`, and
 // `expression.py`'s `ast.Attribute` handling) with no synthetic flattening
 // needed. `eval`/`switch`/`condition` predecessors offer only their bare key
 // -- their result has no declared shape to drill into.
@@ -183,10 +259,10 @@ export function buildStatePathSuggestions(nodeId, nodes, edges, inputSchema) {
   const nodesById = new Map((nodes || []).map((node) => [node.id, node]));
   const seen = new Set();
   const suggestions = [];
-  const add = (path, entry) => {
+  const add = (path, entry, segments = [path]) => {
     if (seen.has(path)) return;
     seen.add(path);
-    suggestions.push({ path, name: path.includes('.') ? path.slice(path.lastIndexOf('.') + 1) : path, ...entry });
+    suggestions.push({ path, segments, name: path.includes('.') ? path.slice(path.lastIndexOf('.') + 1) : path, ...entry });
   };
   add('request', { source: 'Seeded', hint: 'the routine invocation request' });
   add('context', { source: 'Seeded', hint: 'accumulated context' });
@@ -199,13 +275,13 @@ export function buildStatePathSuggestions(nodeId, nodes, edges, inputSchema) {
     add(outputKey, { source, kind: node.kind });
     if (node.kind === 'agent' && node.config?.execution === 'background') {
       ['task_id', 'thread_id', 'run_id', 'agent_name', 'status'].forEach((property) => {
-        add(`${outputKey}.${property}`, { source, kind: node.kind, hint: 'string' });
+        add(`${outputKey}.${property}`, { source, kind: node.kind, hint: 'string' }, [outputKey, property]);
       });
       return;
     }
     const properties = node.config?.response_schema?.properties;
     if (properties && typeof properties === 'object') {
-      Object.keys(properties).forEach((prop) => add(`${outputKey}.${prop}`, { source, kind: node.kind, hint: properties[prop]?.type }));
+      Object.keys(properties).forEach((prop) => add(`${outputKey}.${prop}`, { source, kind: node.kind, hint: properties[prop]?.type }, [outputKey, prop]));
     }
   });
   return suggestions;

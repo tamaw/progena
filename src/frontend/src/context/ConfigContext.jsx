@@ -43,7 +43,7 @@ const defaultConfig = {
     maxMessageLength: 100000,
     maxHistoryLength: 100,
     streamingEnabled: true,
-    defaultModel: 'progenitor-v1'
+    defaultModel: 'progena-v1'
   },
   sse: {
     reconnectDelay: 2000,
@@ -62,16 +62,16 @@ const defaultConfig = {
     options: ['system', 'dark', 'light']
   },
   storage: {
-    theme: 'progenitor_theme',
-    chatHistory: 'progenitor_chat_history',
-    settings: 'progenitor_settings',
-    inputHistory: 'progenitor_input_history',
-    sidebarCollapsed: 'progenitor_sidebar_collapsed',
-    pinnedPanel: 'progenitor_pinned_panel',
-    streamFilters: 'progenitor_stream_filters',
-    quickChatHandoff: 'progenitor_quick_chat_handoff',
-    idleTimeoutMinutes: 'progenitor_idle_timeout_minutes',
-    density: 'progenitor_density'
+    theme: 'progena_theme',
+    chatHistory: 'progena_chat_history',
+    settings: 'progena_settings',
+    inputHistory: 'progena_input_history',
+    sidebarCollapsed: 'progena_sidebar_collapsed',
+    pinnedPanel: 'progena_pinned_panel',
+    streamFilters: 'progena_stream_filters',
+    quickChatHandoff: 'progena_quick_chat_handoff',
+    idleTimeoutMinutes: 'progena_idle_timeout_minutes',
+    density: 'progena_density'
   }
 };
 
@@ -83,7 +83,7 @@ const defaultConfig = {
 // means navigating to a different workspace URL.
 export function ConfigProvider({ children, workspaceHost }) {
   const [config, setConfig] = useState(() => {
-    const savedTheme = localStorage.getItem('progenitor_theme');
+    const savedTheme = localStorage.getItem('progena_theme');
     const savedDensity = localStorage.getItem(defaultConfig.storage.density);
     const savedTimeout = Number(localStorage.getItem(defaultConfig.storage.idleTimeoutMinutes));
 
@@ -124,7 +124,7 @@ export function ConfigProvider({ children, workspaceHost }) {
       ...prev,
       theme: { ...prev.theme, default: theme }
     }));
-    localStorage.setItem('progenitor_theme', theme);
+    localStorage.setItem('progena_theme', theme);
   };
 
   const setDensity = (density) => {

@@ -50,7 +50,7 @@ Full message body in **markdown** — headings, lists, links, code blocks, and
   comes back to you. Never set it yourself; absent/null means still pending.
   Check it on a message you sent with `requires_approval: true` to see whether
   (and how) the user decided.
-- `context` (optional object, default `{}`) is generic structured provenance.
+- `refs` (optional object, default `{}`) is generic structured provenance.
   Workflow and routine authors may put immutable candidate bindings here (for
   example the exact commit or document a decision request is about) so a later
   step can check that what was approved is what it acts on. Write it once when

@@ -1,13 +1,13 @@
-# Progenitor Project Structure
+# Progena AI Project Structure
 
 This document focuses on the checked-in main stack only. For runtime relationships and request flow, see [`ARCHITECTURE_DIAGRAM.md`](ARCHITECTURE_DIAGRAM.md).
 
 ## Top level
 
 ```text
-progenitor/
+progena/
 ├── src/          # Main application code
-├── tests/        # backend/, progenitor/, frontend/{unit,e2e,helpers,fixtures}
+├── tests/        # backend/, progena/, frontend/{unit,e2e,helpers,fixtures}
 ├── package.json  # Shared frontend dependencies and npm scripts
 ├── package-lock.json
 ├── data/         # Bundled assets and managed-repository workspace
@@ -23,17 +23,16 @@ progenitor/
 This overview is intentionally selective and centered on the runtime, backend, and frontend.
 
 The Python package namespace is `src`: start the runtime with
-`python -m src.progenitor.main` and the gateway with
+`python -m src.progena.main` and the gateway with
 `python -m uvicorn src.backend.main:app`. Install the repository with
 `pip install -e ".[dev]"` after changing source layouts so editable package
-metadata points at the current tree. Checkpoint readers translate historical
-`app.progenitor.*` constructor identities; saved message contents are unchanged.
+metadata points at the current tree.
 
 ## Application code (`src/`)
 
 ```text
 src/
-├── progenitor/   # Long-running runtime service
+├── progena/   # Long-running runtime service
 │   ├── agent/    # DeepAgent setup and runtime integration
 │   ├── orchestration/ # Graphs, nodes and composed loop state
 │   ├── llm/      # Provider context, model calls, schemas and response parsing
@@ -115,8 +114,8 @@ stored in the Postgres attachment table. See
 
 ```text
 docker/
-├── docker-compose.progenitor.yml
-├── progenitor/Dockerfile
+├── docker-compose.progena.yml
+├── progena/Dockerfile
 ├── backend/Dockerfile
 ├── frontend/Dockerfile
 ├── claude/Dockerfile       # deployed ACP sidecar

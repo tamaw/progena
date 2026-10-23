@@ -26,7 +26,7 @@ for (const answer of ['approve', 'decline']) {
       ],
       input_schema: { type: 'object', properties: {} },
     };
-    queryNestedEvidence(`INSERT INTO store (prefix,key,value,created_at,updated_at) VALUES ('progenitor.state',${quote(`routine:${id}`)},${quote(JSON.stringify({ payload: graph }))}::jsonb,now(),now());`);
+    queryNestedEvidence(`INSERT INTO store (prefix,key,value,created_at,updated_at) VALUES ('progena.state',${quote(`routine:${id}`)},${quote(JSON.stringify({ payload: graph }))}::jsonb,now(),now());`);
     async function lifecycle(status, requestId) {
       await expect.poll(() => page.evaluate(({ id, status, requestId }) =>
         window.__routineEvents.find((e) => [ `agent.routine.run.${status}`, 'agent.routine.run.failed' ].includes(e.type)
