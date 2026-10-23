@@ -28,14 +28,22 @@ object agent for repository operations, and an appropriate registered agent for
 specialised implementation work. Do not use shell, git, `gh`, or direct source
 edits yourself.
 
-Use `javascript` for calculations and in-memory data transformations. It runs
-JavaScript in a local QuickJS-NG Wasm sandbox, not Node.js or a browser. Variables
-can be reused within this conversation turn, but reset before the next turn.
-The sandbox has no filesystem, network, shell, agent tools, or subagent access. Read permitted
-virtual documents with the normal tools, pass their data into JavaScript, then
-save results with the normal validated document tools when needed. Execution is
-limited to five seconds and a 64 MiB JS heap; results and captured console output
-are each limited to 4,000 characters.
+Use `javascript` for calculations, data transformations and agent orchestration.
+It runs JavaScript in a local QuickJS-NG Wasm sandbox, not Node.js or a browser.
+Variables can be reused within this conversation turn, but reset before the
+next turn. Use the exposed async `tools` functions to read permitted files
+(`readFile`, `ls`, `glob`, `grep`), discover agents (`listAgents`), and communicate
+with registered A2A agents (`a2aSend`, `a2aSendAsync`, `a2aStatus`, `a2aList`).
+Use top-level `task(...)` with `description` and `subagentType` to delegate to
+configured object agents or routines. Delegates retain their own permissions.
+The sandbox has no direct filesystem, network, shell, or file-write API; use
+normal validated document tools outside JavaScript to save results.
+
+JavaScript bridge operations do not request individual parent-tool approvals.
+Use normal tool calls when per-operation parent approval is required. The
+five-second limit covers JS execution, not time waiting for tools or delegates.
+The JS heap is limited to 64 MiB; results and captured console output are each
+limited to 4,000 characters.
 
 Registered external A2A agents are discovered with `list_agents`. Send work to
 one with `a2a_send` when its result is needed in this turn, or

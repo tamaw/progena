@@ -55,7 +55,7 @@ to the backend and receives browser application data through two SSE roles:
     non-strings.
 - `GET /v1/events` broadcasts runtime agent events to the backend.
 
-### JavaScript computation
+### JavaScript execution
 
 The main conversational agent exposes `javascript(code)` through Deep Agents'
 official `CodeInterpreterMiddleware` (`langchain-quickjs`). QuickJS-NG runs as a
@@ -68,12 +68,26 @@ sandbox API key is required.
 - The JS heap is capped at 64 MiB and execution at five seconds per call.
   Results and captured console output are each truncated to 4,000 characters.
   These are interpreter limits, not a whole-process memory or wall-time bound.
-- No filesystem, network, shell, Node.js packages, browser APIs, agent-tool
-  bridge or JavaScript subagent dispatch is exposed. Normal tool permissions and
-  delegation paths remain unchanged.
-- To transform stored data, read it through the permitted document tools, pass
-  the data into `javascript`, and persist its output through the normal validated
-  document tools. The interpreter does not replace or mount over virtual paths.
+- The `tools` bridge allowlists `ls`, `read_file`, `glob`, `grep`, `list_agents`,
+  `a2a_send`, `a2a_send_async`, `a2a_status` and `a2a_list`. JavaScript uses their
+  camelCase names, such as `await tools.readFile(...)` and
+  `await tools.a2aSend(...)`. Reads retain the existing backend permissions;
+  communication uses the existing registered-agent and tracked-task contracts.
+- Top-level `await task(...)` dispatches configured object agents and routines
+  through Progena's live task resolution, including targets added after graph
+  compilation. The SDK's built-in `general-purpose` delegate remains available.
+- No direct filesystem, network, shell, Node.js packages or browser APIs are
+  exposed. Write/edit/execute, arbitrary MCP tools, agent registration and A2A
+  cancellation are not in the JavaScript tool allowlist. Delegated agents retain
+  their own permissions and may perform writes or shell work they already own.
+- Bridge calls bypass the parent ToolNode's per-operation approval/interceptor
+  path. Backend validation and approvals inside delegated agents/routines still
+  apply. Use normal parent tool calls when individual parent approval is needed.
+  The five-second JS budget does not bound host-tool or delegated-agent waits.
+  Upstream limits each evaluation to 256 PTC tool calls and 32 simultaneous
+  subagent dispatches; the latter is a concurrency cap, not a total task budget.
+- Results can be persisted through normal validated document tools outside
+  JavaScript. The interpreter does not replace or mount over virtual paths.
 - This adds no routine node type or interpreter capability to object agents.
 
 The upstream interpreter integration is beta and `quickjs-rs` is experimental.

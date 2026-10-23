@@ -17,39 +17,21 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Tool-schema compaction (per-turn LLM prefill reduction)
 #
-# LangChain's bind_tools() serializes each tool's ``args_schema.model_json_schema()``
-# into every model request. The raw Pydantic v2 schema carries provider-irrelevant
-# metadata -- per-property ``title`` keys, top-level title/description, ``$schema``
-# and ``definitions`` blocks, and ``anyOf([{type:T}, {type:null}])`` unions for
-# Optional[X] fields. The model does not use any of this; it bills token prefill
-# time against it. ``_compact_json_schema`` strips the noise and flattens null
-# unions to ``"type": [T, "null"]`` without changing what the model can call.
-# surfacing as ``ConfigDict(json_schema_extra=...)`` on a per-args-schema subclass
-# keeps the compaction on the Pydantic code path (validation is untouched).
+# LangChain serializes args_schema.model_json_schema() into model requests.
+# Strip metadata but preserve Pydantic's standard anyOf nullable unions: the
+# QuickJS tool-reference renderer consumes these schemas before provider binding
+# and does not support the alternative JSON Schema "type": [T, "null"] form.
+# A per-model json_schema_extra hook leaves input validation untouched.
 _SCHEMA_NOISE_KEYS = frozenset({"title", "$schema", "definitions"})
 
 
 def _compact_json_schema(schema: Any) -> None:
     """Strip provider-irrelevant JSON-schema metadata in place."""
     if isinstance(schema, dict):
-        # Drop noise keys at every level first so flattening sees a clean map.
+        # Drop provider-irrelevant metadata, retaining validation keywords.
         for k in tuple(schema.keys()):
             if k in _SCHEMA_NOISE_KEYS:
                 del schema[k]
-        # Flatten anyOf([{T}, {null}]) -> "type": [T_type, "null"]. Pydantic
-        # emits Optional[X] as a 2-branch union; providers accept the flat form.
-        anyof = schema.get("anyOf")
-        if isinstance(anyof, list) and len(anyof) == 2 and all(isinstance(b, dict) for b in anyof):
-            branches_with_type = [b for b in anyof if "type" in b]
-            if any(b.get("type") == "null" for b in branches_with_type):
-                non_null = next((b for b in anyof if b.get("type") != "null"), None)
-                primary_type = non_null.get("type") if non_null is not None else None
-                if primary_type is not None and non_null is not None:
-                    for kk, vv in non_null.items():
-                        if kk not in ("type", "anyOf"):
-                            schema[kk] = vv
-                    schema["type"] = [primary_type, "null"]
-                    del schema["anyOf"]
         # Recurse into all nested dicts/lists (properties, $defs, items, ...).
         for v in list(schema.values()):
             if isinstance(v, dict):

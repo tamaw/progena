@@ -108,15 +108,25 @@ This file stores durable runtime memory for Progena.
 
 
 def _create_javascript_middleware() -> CodeInterpreterMiddleware:
-    """Create a computation-only interpreter with turn-local scratch state."""
+    """Expose read tools, A2A communication and turn-local subagent dispatch."""
     return CodeInterpreterMiddleware(
         tool_name="javascript",
         mode="turn",
         memory_limit=64 * 1024 * 1024,
         timeout=5.0,
         max_result_chars=4000,
-        ptc=None,
-        subagents=False,
+        ptc=[
+            "ls",
+            "read_file",
+            "glob",
+            "grep",
+            "list_agents",
+            "a2a_send",
+            "a2a_send_async",
+            "a2a_status",
+            "a2a_list",
+        ],
+        subagents=True,
     )
 
 

@@ -5,13 +5,15 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable, Iterable
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 from deepagents.middleware.subagents import CompiledSubAgent, SubAgentMiddleware
 from langchain.agents.middleware.types import AgentMiddleware, ModelRequest, ToolCallRequest
+from langchain.tools import ToolRuntime
 from langchain_core.messages import ToolMessage
-from langchain_core.tools import BaseTool
+from langchain_core.tools import BaseTool, StructuredTool
 
 from src.progena.agent.object_agents.manifest import (
     ObjectAgentSource,
@@ -167,6 +169,49 @@ class LiveSubagentMiddleware(AgentMiddleware):
             return await handler(request)
         return await snapshot.awrap_model_call(self._model_request(request, snapshot), handler)
 
+    def _with_live_task_runtime(self, request: ToolCallRequest) -> ToolCallRequest:
+        """Give the interpreter the same live task resolution as direct calls."""
+        if request.tool_call["name"] != "javascript":
+            return request
+        original = next((tool for tool in request.runtime.tools if tool.name == "task"), None)
+
+        async def dispatch(description: str, subagent_type: str, runtime: ToolRuntime) -> Any:
+            nested = ToolCallRequest(
+                tool_call={
+                    "name": "task",
+                    "args": {"description": description, "subagent_type": subagent_type},
+                    "id": runtime.tool_call_id,
+                    "type": "tool_call",
+                },
+                tool=original,
+                state=runtime.state,
+                runtime=runtime,
+            )
+
+            async def invoke(bound: ToolCallRequest) -> Any:
+                if bound.tool is None:
+                    raise RuntimeError("No task tool is available")
+                return await bound.tool.arun(
+                    {**bound.tool_call["args"], "runtime": bound.runtime},
+                    config=bound.runtime.config,
+                    tool_call_id=bound.runtime.tool_call_id,
+                )
+
+            return await self.awrap_tool_call(nested, invoke)
+
+        task = StructuredTool.from_function(
+            coroutine=dispatch,
+            name="task",
+            description=original.description
+            if original
+            else "Delegate to a live agent or routine.",
+        )
+        runtime = replace(
+            request.runtime,
+            tools=[*(tool for tool in request.runtime.tools if tool.name != "task"), task],
+        )
+        return replace(request, runtime=runtime)
+
     def _bind_task(self, request: ToolCallRequest) -> ToolCallRequest | ToolMessage:
         if request.tool_call["name"] != "task":
             return request
@@ -183,12 +228,14 @@ class LiveSubagentMiddleware(AgentMiddleware):
         return request.override(tool=snapshot.tools[0])
 
     def wrap_tool_call(self, request: ToolCallRequest, handler: Callable[..., Any]) -> Any:
+        request = self._with_live_task_runtime(request)
         bound = self._bind_task(request)
         return bound if isinstance(bound, ToolMessage) else handler(bound)
 
     async def awrap_tool_call(
         self, request: ToolCallRequest, handler: Callable[..., Awaitable[Any]]
     ) -> Any:
+        request = self._with_live_task_runtime(request)
         if request.tool_call["name"] == "task":
             wanted = request.tool_call["args"].get("subagent_type")
             if wanted != "general-purpose" and wanted not in {s["name"] for s in self._specs()}:
