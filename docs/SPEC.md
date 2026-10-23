@@ -55,6 +55,65 @@ to the backend and receives browser application data through two SSE roles:
     non-strings.
 - `GET /v1/events` broadcasts runtime agent events to the backend.
 
+### JavaScript execution
+
+The main conversational agent exposes `javascript(code)` through Deep Agents'
+official `CodeInterpreterMiddleware` (`langchain-quickjs`). QuickJS-NG runs as a
+Wasm guest in the local Wasmtime runtime. No hosted sandbox, service account or
+sandbox API key is required.
+
+- Calls share scratch variables within one conversation turn. A new turn starts
+  with a fresh context, separate from other conversations; no JS session
+  snapshot is stored in checkpoints.
+- The JS heap is capped at 64 MiB and execution at five seconds per call.
+  Results and captured console output are each truncated to 4,000 characters.
+  These are interpreter limits, not a whole-process memory or wall-time bound.
+- The `tools` bridge allowlists `ls`, `read_file`, `glob`, `grep`, `list_agents`,
+  `a2a_send`, `a2a_send_async`, `a2a_status` and `a2a_list`. JavaScript uses their
+  camelCase names, such as `await tools.readFile(...)` and
+  `await tools.a2aSend(...)`. Reads retain the existing backend permissions;
+  communication uses the existing registered-agent and tracked-task contracts.
+- Top-level `await task(...)` dispatches configured object agents and routines
+  through Progena's live task resolution, including targets added after graph
+  compilation. The SDK's built-in `general-purpose` delegate remains available.
+- No direct filesystem, network, shell, Node.js packages or browser APIs are
+  exposed. Write/edit/execute, arbitrary MCP tools, agent registration and A2A
+  cancellation are not in the JavaScript tool allowlist. Delegated agents retain
+  their own permissions and may perform writes or shell work they already own.
+- Bridge calls bypass the parent ToolNode's per-operation approval/interceptor
+  path. Backend validation and approvals inside delegated agents/routines still
+  apply. Use normal parent tool calls when individual parent approval is needed.
+  The five-second JS budget does not bound host-tool or delegated-agent waits.
+  Upstream limits each evaluation to 256 PTC tool calls and 32 simultaneous
+  subagent dispatches; the latter is a concurrency cap, not a total task budget.
+- Results can be persisted through normal validated document tools outside
+  JavaScript. The interpreter does not replace or mount over virtual paths.
+- A routine `code` node is separate from this conversational interpreter. It
+  accepts only inline `{"language":"javascript","code":"..."}` source, receives
+  JSON-compatible routine state as `input`, and returns one JSON-compatible
+  value to its `output_key`. Each execution creates and disposes a fresh
+  QuickJS runtime with a 16 MiB heap, 512 KiB stack, one-second JS deadline,
+  and 1 MiB serialized-result cap. It exposes no tools, host functions,
+  modules, network, filesystem, or shell;
+  sandbox and JSON-boundary failures fail the node.
+  The SDK lifecycle runs in a worker thread to keep the event loop and graph
+  timeout watchdog responsive. Cancelling the awaiting node does not kill
+  the worker; its independent one-second guest deadline still bounds execution.
+  The host also checks serialized UTF-8 bytes before accepting the result.
+  The JavaScript editor reuses graph-state autocomplete with `input`-rooted
+  dot/bracket references, rather than Python expression or prompt-template
+  syntax. It suggests declared routine inputs and predecessor output keys/
+  response fields; script results have no inferred field schema. Source is
+  never message-template interpolated, so object braces and JavaScript
+  `${...}` template literals retain their normal meaning.
+
+The upstream interpreter integration is beta and `quickjs-rs` is experimental.
+Wasm is an in-process isolation boundary, not a separate OS sandbox: Wasmtime/JIT
+vulnerabilities remain a host-escape risk. Keep Wasmtime updated and add isolated
+workers/containers for hostile multi-tenant execution. See the
+[upstream security guidance](https://github.com/langchain-ai/quickjs-rs#security)
+and [Deep Agents interpreter documentation](https://docs.langchain.com/oss/python/deepagents/interpreters).
+
 ### Backend (`src/backend/`)
 
 - Exposes the browser's finite command/query routes and bridges work to the

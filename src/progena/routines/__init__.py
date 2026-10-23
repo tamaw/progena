@@ -1,8 +1,9 @@
 """Declarative graph-agent DSL backing the Routines page.
 
 A routine is authored as a JSON graph (see ``data/schemas/graph.routine.schema.v1.json``)
-of ``prompt``/``eval``/``condition``/``classify``/``agent``/``a2a``/``routine``/``noop``
-nodes connected by plain or ``state_equals``-routed edges, and compiled by
+of ``prompt``/``eval``/``code``/``condition``/``switch``/``split``/``classify``/
+``agent``/``a2a``/``human``/``foreach``/``reduce``/``routine``/``noop`` nodes
+connected by plain or ``state_equals``-routed edges, and compiled by
 :mod:`src.progena.routines.factory` into a runnable ``langgraph.graph.StateGraph``.
 
 Modules:

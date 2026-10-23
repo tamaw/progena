@@ -34,6 +34,7 @@ from ..utils import utcnow_isoformat
 
 # Re-export the existing helper imports for compiler callers.
 from .control_nodes import (
+    _build_code_node,
     _build_condition_node,
     _build_eval_node,
     _build_human_node,
@@ -292,6 +293,8 @@ def _build_node_callable(
         )
     if node.kind == "eval":
         return _build_eval_node(node)
+    if node.kind == "code":
+        return _build_code_node(node)
     if node.kind == "reduce":
         return _build_reduce_node(node)
     if node.kind == "condition":
@@ -336,7 +339,7 @@ def _extract_token_usage(result: dict[str, Any] | None) -> dict[str, int] | None
     ``messages`` -- the same uniform choke point as duration, so no node
     kind has to opt in individually. Every model-calling node builder
     already threads its raw response through ``messages`` (prompt/classify/
-    agent/a2a/routine); kinds with no LLM call (eval/condition/switch/split/
+    agent/a2a/routine); kinds with no LLM call (eval/code/condition/switch/split/
     reduce/noop/human/foreach-send) correctly report no tokens by having no
     messages at all. Returns ``None`` -- not a zeroed dict -- when nothing
     carried usage data, so a display layer can tell "no LLM call" apart

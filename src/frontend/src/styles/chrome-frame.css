@@ -6369,9 +6369,11 @@ body,
    shadow/hover state), but position/top/left are set inline per keystroke
    from real caret coordinates, so the CSS here only adds what the base
    listbox doesn't need for a button-triggered panel. */
-.agents-graph-node__suggest-menu {
+.app-listbox__panel.agents-graph-node__suggest-menu {
   z-index: var(--z-tooltip, 1100);
-  max-width: 280px;
+  min-width: 0;
+  width: 280px;
+  max-width: calc(100vw - 16px);
 }
 
 .agents-graph-node__suggest-menu .app-listbox__option-label {

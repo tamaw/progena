@@ -5,6 +5,8 @@ import { checkExpressionSyntax } from '../../../lib/restrictedExpression';
 import {
   buildStatePathSuggestions,
   getExpressionAutocompleteContext,
+  getJavascriptAutocompleteContext,
+  javascriptStatePathSuggestions,
   filterStatePathSuggestions,
   inputsToText,
   textToInputs,
@@ -114,7 +116,7 @@ function ConfigField({ id, config, field, label, placeholder, multiline, updateN
 // state now (see expression.py's `ast.Attribute` handling), so there's no
 // separate `inputs` binding step left to author; the same predecessor/
 // response_schema suggestions just get typed straight into the expression.
-export function ExpressionField({ id, config, field, label, placeholder, updateNodeConfig, autocomplete = false }) {
+export function ExpressionField({ id, config, field, label, placeholder, updateNodeConfig, autocomplete = false, language = 'python' }) {
   const missing = useContext(MissingFieldsContext);
   const graph = useContext(GraphEditContext);
   const value = config?.[field] || '';
@@ -129,12 +131,12 @@ export function ExpressionField({ id, config, field, label, placeholder, updateN
   const [panelPos, setPanelPos] = useState(null);
   const highlighted = useMemo(() => {
     try {
-      return hljs.highlight(value, { language: 'python' }).value;
+      return hljs.highlight(value, { language }).value;
     } catch {
       return value;
     }
-  }, [value]);
-  const issue = useMemo(() => checkExpressionSyntax(value), [value]);
+  }, [value, language]);
+  const issue = useMemo(() => language === 'python' ? checkExpressionSyntax(value) : { ok: true }, [value, language]);
   const errorHtml = useMemo(() => {
     if (issue.ok) return null;
     const before = escapeHtmlText(value.slice(0, issue.start));
@@ -144,12 +146,21 @@ export function ExpressionField({ id, config, field, label, placeholder, updateN
   }, [issue, value]);
 
   const suggestions = useMemo(
-    () => (autocomplete ? buildStatePathSuggestions(id, graph?.nodes, graph?.edges, graph?.inputSchema) : EMPTY_SUGGESTIONS),
-    [autocomplete, id, graph?.nodes, graph?.edges, graph?.inputSchema],
+    () => {
+      if (!autocomplete) return EMPTY_SUGGESTIONS;
+      const paths = buildStatePathSuggestions(id, graph?.nodes, graph?.edges, graph?.inputSchema);
+      return language === 'javascript' ? javascriptStatePathSuggestions(paths) : paths;
+    },
+    [autocomplete, language, id, graph?.nodes, graph?.edges, graph?.inputSchema],
   );
   const context = useMemo(
-    () => (autocomplete && focused ? getExpressionAutocompleteContext(value, caret) : null),
-    [autocomplete, focused, value, caret],
+    () => {
+      if (!autocomplete || !focused) return null;
+      return language === 'javascript'
+        ? getJavascriptAutocompleteContext(value, caret)
+        : getExpressionAutocompleteContext(value, caret);
+    },
+    [autocomplete, language, focused, value, caret],
   );
   const filtered = useMemo(
     () => (context ? filterStatePathSuggestions(suggestions, context.query) : EMPTY_SUGGESTIONS),
@@ -237,7 +248,7 @@ export function ExpressionField({ id, config, field, label, placeholder, updateN
         title={issue.ok ? undefined : issue.message}
       >
         <pre ref={highlightRef} className="agents-graph-node__expr-highlight" aria-hidden="true">
-          <code className="hljs language-python" dangerouslySetInnerHTML={{ __html: `${highlighted}\n` }} />
+          <code className={`hljs language-${language}`} dangerouslySetInnerHTML={{ __html: `${highlighted}\n` }} />
         </pre>
         {errorHtml ? (
           <pre ref={errorLayerRef} className="agents-graph-node__expr-error" aria-hidden="true" dangerouslySetInnerHTML={{ __html: errorHtml }} />
@@ -355,9 +366,16 @@ function getCaretCoordinates(textarea, position) {
 // preventDefault on every option -- a real mousedown would blur the
 // textarea before the click landed, closing the menu out from under it).
 function StatePathSuggestionsMenu({ items, activeIndex, position, onHover, onSelect }) {
+  const panelRef = useRef(null);
+  useLayoutEffect(() => {
+    if (!position || !panelRef.current) return;
+    const panel = panelRef.current;
+    const rect = panel.getBoundingClientRect();
+    panel.style.left = `${Math.max(8, Math.min(position.left, window.innerWidth - rect.width - 8))}px`;
+  }, [position, items]);
   if (!position) return null;
   return createPortal(
-    <div className="app-listbox__panel agents-graph-node__suggest-menu" style={{ position: 'fixed', top: position.top, left: position.left }}>
+    <div ref={panelRef} className="app-listbox__panel agents-graph-node__suggest-menu" style={{ position: 'fixed', top: position.top, left: position.left }}>
       <ul className="app-listbox__list" role="listbox" aria-label="State path suggestions">
         {items.map((item, index) => (
           <li key={item.path} role="option" aria-selected={index === activeIndex} data-index={index}>
@@ -499,6 +517,14 @@ export function NodeConfigBody({ id, kind, config, updateNodeConfig, replaceNode
   if (kind === 'eval' || kind === 'condition' || kind === 'switch') {
     return (
       <ExpressionField id={id} config={config} field="expression" label="Expression" placeholder="Restricted Python expression…" updateNodeConfig={updateNodeConfig} autocomplete />
+    );
+  }
+  if (kind === 'code') {
+    return (
+      <>
+        <ExpressionField id={id} config={config} field="code" label="JavaScript" placeholder="return input;" language="javascript" autocomplete updateNodeConfig={updateNodeConfig} />
+        <p className="routine-node-inspector__hint">Type <code>input.</code> to suggest routine inputs and earlier outputs. Use arrows and Enter to insert, or Escape to dismiss. Return a JSON-compatible result. Runs in a pure sandbox without Node, browser, network, filesystem, or host tools.</p>
+      </>
     );
   }
   if (kind === 'classify') {

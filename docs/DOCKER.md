@@ -142,6 +142,14 @@ Notes:
   separate [agents repository](https://github.com/tamaw/progena.agents); they are
   not copied into this image. `data/skills/` is a read-only disk mount (`/skills/`),
   not stored in Postgres.
+  After upgrading to JavaScript support, review the saved
+  `progena/genesis.md` on the Instructions page: older copies say Progena cannot
+  execute code. Replace that blanket restriction with permission to use the
+  `javascript` tool for computation, allowlisted reads/A2A communication and
+  configured subagent dispatch, following `data/instructions/genesis.md`.
+  Retain the direct host-code/shell/source-edit restrictions and review the
+  bridge approval caveat in `docs/SPEC.md`. An image upgrade deliberately does
+  not overwrite saved instructions.
 - `current_state`, `schedule`, `registry/agents`, `mcp`, `knowledge`, `health`,
   `kanban`, `attachments`, `sessions`, `prompts`, `skills`, and `memories` all
   persist through the shared LangGraph/Postgres document store with no

@@ -23,6 +23,7 @@
   "dependencies": {
     "@reduxjs/toolkit": "^2.12.0",
     "@xyflow/react": "^12.10.1",
+    "acorn": "^8.19.0",
     "chart.js": "^4.5.1",
     "es-module-lexer": "^3.0.4",
     "highlight.js": "^11.11.1",

@@ -1,6 +1,7 @@
 """Postgres-backed live delegation exercised through the installed SDK."""
 
 import asyncio
+import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -13,6 +14,7 @@ from langchain_core.runnables import RunnableLambda
 from langgraph.checkpoint.memory import MemorySaver
 from pydantic import Field
 
+from src.progena.agent.factory import _create_javascript_middleware
 from src.progena.agent.object_agents.registry import (
     LiveSubagentMiddleware,
     ObjectAgentRegistry,
@@ -373,3 +375,58 @@ async def test_compiled_routine_retains_initially_empty_live_map():
     await registry.refresh()
     with pytest.raises(KeyError, match="unknown agent 'helper'"):
         await graph.ainvoke({"messages": [HumanMessage(content="run again")]})
+
+
+@pytest.mark.parametrize("create_graph", [create_agent, create_deep_agent])
+async def test_javascript_dispatches_agents_added_and_replaced_after_compile(create_graph):
+    """Interpreter dispatch resolves live targets, with or without a static task."""
+    documents = {}
+
+    def proxy(source):
+        power = 2 if source.name == "square" else 3
+
+        def calculate(state):
+            values = json.loads(state["messages"][-1].content)
+            return {"messages": [AIMessage(content=str(sum(value**power for value in values)))]}
+
+        return {
+            "name": source.name,
+            "description": source.manifest.description,
+            "runnable": RunnableLambda(calculate),
+        }
+
+    registry = registry_for(documents, proxy)
+    model = Model(responses=[AIMessage(content="initial")])
+    graph = create_graph(
+        model=model,
+        middleware=[
+            _create_javascript_middleware(),
+            LiveSubagentMiddleware(registry, backend=None),
+        ],
+    )
+
+    async def delegate(name):
+        model.i = 0
+        model.responses = [
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "javascript",
+                        "args": {
+                            "code": f'Number(await task({{description: "[2,3]", subagentType: "{name}"}}))'
+                        },
+                        "id": f"javascript-{name}",
+                    }
+                ],
+            ),
+            AIMessage(content="complete"),
+        ]
+        result = await graph.ainvoke({"messages": [HumanMessage(content="calculate")]})
+        return [m.content for m in result["messages"] if isinstance(m, ToolMessage)]
+
+    documents["user/square/SYSTEM.md"] = manifest("square")
+    assert await delegate("square") == ["<result>13</result>"]
+    documents.clear()
+    documents["user/cube/SYSTEM.md"] = manifest("cube")
+    assert await delegate("cube") == ["<result>35</result>"]

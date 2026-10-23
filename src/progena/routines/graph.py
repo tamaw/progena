@@ -9,7 +9,14 @@ from __future__ import annotations
 
 from typing import Annotated, Any, Literal, TypedDict
 
-from pydantic import BaseModel, ConfigDict, Field, SerializerFunctionWrapHandler, model_serializer
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SerializerFunctionWrapHandler,
+    field_validator,
+    model_serializer,
+)
 
 from src.progena.documents.catalog import load_schema
 from src.progena.llm.structured import validate_against_schema
@@ -25,6 +32,7 @@ RESERVED_ROUTINE_NODE_IDS = frozenset(
 VALID_ROUTINE_NODE_KINDS = {
     "prompt",
     "eval",
+    "code",
     "condition",
     "switch",
     "split",
@@ -139,6 +147,25 @@ class EvalNodeConfig(BaseModel):
     retry: RetryPolicyConfig | None = None
     timeout: float | None = Field(default=None, ge=0)
     cache: bool | CachePolicyConfig | None = None
+
+
+class CodeNodeConfig(BaseModel):
+    """Run an inline JavaScript body in a fresh bounded QuickJS sandbox."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    language: Literal["javascript"]
+    code: str = Field(min_length=1)
+    retry: RetryPolicyConfig | None = None
+    timeout: float | None = Field(default=None, ge=0)
+    cache: bool | CachePolicyConfig | None = None
+
+    @field_validator("code")
+    @classmethod
+    def code_must_not_be_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("code must not be blank")
+        return value
 
 
 class ConditionNodeConfig(BaseModel):
@@ -326,6 +353,21 @@ class RoutineNodeEval(BaseModel):
     y: float | None = None
 
 
+class RoutineNodeCode(BaseModel):
+    """Run an inline JavaScript body in an isolated QuickJS sandbox."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    kind: Literal["code"] = "code"
+    description: str = ""
+    output_key: str | None = None
+    config: CodeNodeConfig
+    label: str | None = None
+    x: float | None = None
+    y: float | None = None
+
+
 class RoutineNodeCondition(BaseModel):
     """Evaluate a restricted expression, coerced to a boolean gate."""
 
@@ -490,6 +532,7 @@ class RoutineNodeNoop(BaseModel):
 RoutineNode = Annotated[
     RoutineNodePrompt
     | RoutineNodeEval
+    | RoutineNodeCode
     | RoutineNodeCondition
     | RoutineNodeSwitch
     | RoutineNodeSplit

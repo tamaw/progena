@@ -32,6 +32,7 @@
       "oneOf": [
         { "$ref": "#/$defs/nodePrompt" },
         { "$ref": "#/$defs/nodeEval" },
+        { "$ref": "#/$defs/nodeCode" },
         { "$ref": "#/$defs/nodeCondition" },
         { "$ref": "#/$defs/nodeSwitch" },
         { "$ref": "#/$defs/nodeSplit" },
@@ -67,6 +68,14 @@
       "allOf": [
         { "$ref": "#/$defs/nodeBase" },
         { "required": ["id", "kind", "output_key", "config"], "properties": { "kind": { "const": "eval" }, "config": { "$ref": "#/$defs/evalConfig" } } }
+      ],
+      "unevaluatedProperties": false
+    },
+
+    "nodeCode": {
+      "allOf": [
+        { "$ref": "#/$defs/nodeBase" },
+        { "required": ["id", "kind", "output_key", "config"], "properties": { "kind": { "const": "code" }, "config": { "$ref": "#/$defs/codeConfig" } } }
       ],
       "unevaluatedProperties": false
     },
@@ -181,6 +190,24 @@
         { "required": ["expression"], "not": { "required": ["expression_file"] } },
         { "required": ["expression_file"], "not": { "required": ["expression"] } }
       ]
+    },
+
+    "codeConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["language", "code"],
+      "properties": {
+        "language": { "const": "javascript" },
+        "code": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S",
+          "description": "Inline JavaScript body. It receives JSON-compatible routine data as `input` and must `return` one JSON-compatible value."
+        },
+        "retry": { "$ref": "#/$defs/retryPolicy" },
+        "timeout": { "type": "number", "minimum": 0, "description": "Seconds before this node is abandoned, overriding the execution policy attempt timeout. The QuickJS sandbox still has a fixed short execution limit." },
+        "cache": { "$ref": "#/$defs/cachePolicy" }
+      }
     },
     "conditionConfig": {
       "type": "object",
