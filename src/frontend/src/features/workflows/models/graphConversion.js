@@ -74,6 +74,17 @@ function buildNodeData(kind, node, callbacks, latestRun) {
       canDelete: false,
     };
   }
+  if (kind === 'manual') {
+    return {
+      ...shared,
+      kind,
+      title: node.title || 'Manual trigger',
+      outputSchema: cloneValue(node.output_schema) || { type: 'object', properties: {} },
+      onChange: callbacks.onNodeChange,
+      onDelete: callbacks.onDeleteNode,
+      canDelete: true,
+    };
+  }
   if (kind === 'agent') {
     return {
       ...shared,
@@ -270,7 +281,12 @@ export function workflowToFlow(definition, callbacks, latestRun) {
             overlap: node.overlap,
             outputSchema: cloneValue(node.output_schema) || null,
           }
-        : kind === 'agent'
+        : kind === 'manual'
+          ? {
+              ...node,
+              outputSchema: cloneValue(node.output_schema) || { type: 'object', properties: {} },
+            }
+          : kind === 'agent'
         ? {
           ...node,
           instruction: node.instruction ?? null,
@@ -334,7 +350,7 @@ export function workflowToFlow(definition, callbacks, latestRun) {
 }
 
 function isTriggerKind(kind) {
-  return kind === 'event' || kind === 'cron';
+  return kind === 'event' || kind === 'cron' || kind === 'manual';
 }
 
 export function applyRunStateToNodes(nodes, latestRun) {
@@ -379,6 +395,12 @@ export function flowToWorkflow(baseWorkflow, nodes, edges, viewport) {
         timezone: node.data?.timezone || 'UTC',
         overlap: node.data?.overlap || 'skip',
         output_schema: cloneValue(node.data?.outputSchema) || null,
+      };
+    } else if (node.type === 'manual') {
+      graphNodes[node.id] = {
+        kind: 'manual',
+        title: String(node.data?.title || 'Manual trigger'),
+        output_schema: cloneValue(node.data?.outputSchema) || { type: 'object', properties: {} },
       };
     } else if (node.type === 'document_read') {
       graphNodes[node.id] = {

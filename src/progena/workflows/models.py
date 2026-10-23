@@ -88,7 +88,17 @@ class WorkflowNodeCron(BaseModel):
     output_schema: dict[str, Any] = Field(default_factory=lambda: copy.deepcopy(CRON_OUTPUT_SCHEMA))
 
 
-WorkflowTriggerNode = WorkflowNodeEvent | WorkflowNodeCron
+class WorkflowNodeManual(BaseModel):
+    """Entrypoint started only by an explicit manual workflow invocation."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["manual"] = "manual"
+    title: str = "Manual trigger"
+    output_schema: dict[str, Any] = Field(default_factory=lambda: dict(_JSON_OBJECT_SCHEMA))
+
+
+WorkflowTriggerNode = WorkflowNodeEvent | WorkflowNodeCron | WorkflowNodeManual
 
 
 class WorkflowNodeData(BaseModel):
@@ -286,6 +296,7 @@ class WorkflowNodeApproval(BaseModel):
 WorkflowNode = Annotated[
     WorkflowNodeEvent
     | WorkflowNodeCron
+    | WorkflowNodeManual
     | WorkflowNodeData
     | WorkflowNodeDocumentRead
     | WorkflowNodeDocumentQuery

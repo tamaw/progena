@@ -48,6 +48,7 @@ function upsertWorkflowListItem(state, workflow) {
   const triggers = nodes.flatMap((node) => {
     if (node?.kind === 'event') return [node.document_type || ''];
     if (node?.kind === 'cron') return [`cron ${node.expression || ''}`];
+    if (node?.kind === 'manual') return ['manual'];
     return [];
   });
   const listItem = {

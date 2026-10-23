@@ -42,7 +42,7 @@ export function nodeOutputPorts(kind, outputSchema) {
 }
 
 export function nodeInputPorts(kind, inputSchema) {
-  if (kind === 'data' || kind === 'event' || kind === 'cron') {
+  if (kind === 'data' || kind === 'event' || kind === 'cron' || kind === 'manual') {
     return [];
   }
   return schemaProperties(inputSchema);

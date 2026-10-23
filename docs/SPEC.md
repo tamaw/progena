@@ -248,6 +248,15 @@ The dedicated stream owns response content transport only. It never carries
 `chat.response.cancelled`; those remain canonical lifecycle envelopes on
 `/api/ui/stream`.
 
+## Workflow triggers
+
+Workflow graphs start from `event`, `cron`, or `manual` trigger nodes. A manual
+trigger is never dispatched by document events or scheduling; its object
+`output_schema` is the typed explicit-run payload and property defaults are
+applied before it reaches connected ports. For browser and `run_workflow`
+invocations, the backend chooses the first manual trigger when present, then
+falls back to the first event or cron trigger for existing workflows.
+
 ## Scheduled work
 
 - Scheduled entries are persisted with runtime state.
