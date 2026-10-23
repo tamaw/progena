@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
 from collections.abc import Callable
+from contextlib import suppress
 from math import prod
 from typing import Any
 
@@ -13,6 +15,7 @@ from langgraph.runtime import Runtime
 from langgraph.types import Command, Send, interrupt
 from quickjs_rs import Runtime as QuickJSRuntime
 
+from .code_filesystem import CallerLoopBridge, ScopedFilesystemTools
 from .expression import evaluate_expression
 from .graph import RoutineEdge, RoutineNode
 from .messages import normalize_message_content
@@ -70,10 +73,10 @@ def _build_eval_node(node: RoutineNode) -> Any:
     return run
 
 
-# Code nodes deliberately use a substantially tighter sandbox bound than the
-# graph-level node timeout: JavaScript has no host calls here, so a healthy
-# computation should complete quickly. The SDK enforces all three limits in
-# the guest runtime, including interrupting a busy loop.
+# Code nodes deliberately use a substantially tighter guest-CPU bound than the
+# graph-level wall-clock timeout. The SDK enforces all three limits in the
+# guest runtime, including interrupting a busy loop; async host waits are
+# excluded from this deadline and remain bounded by the node timeout.
 _CODE_MEMORY_LIMIT_BYTES = 16 * 1024 * 1024
 _CODE_STACK_LIMIT_BYTES = 512 * 1024
 _CODE_TIMEOUT_SECONDS = 1.0
@@ -124,26 +127,183 @@ __routineSerialized;
 )
 
 
-def _build_code_node(node: RoutineNode) -> Any:
-    """Run a JavaScript body in a one-shot QuickJS sandbox."""
+_CODE_FILESYSTEM_READ_PRELUDE = """\
+const tools = Object.freeze({
+  ls: async (args) => await __routineFilesystemLs(args),
+  readFile: async (args) => await __routineFilesystemReadFile(args),
+  glob: async (args) => await __routineFilesystemGlob(args),
+  grep: async (args) => await __routineFilesystemGrep(args),
+});
+"""
+
+_CODE_FILESYSTEM_WRITE_PRELUDE = """\
+const tools = Object.freeze({
+  ls: async (args) => await __routineFilesystemLs(args),
+  readFile: async (args) => await __routineFilesystemReadFile(args),
+  glob: async (args) => await __routineFilesystemGlob(args),
+  grep: async (args) => await __routineFilesystemGrep(args),
+  writeFile: async (args) => await __routineFilesystemWriteFile(args),
+  editFile: async (args) => await __routineFilesystemEditFile(args),
+  copyFile: async (args) => await __routineFilesystemCopyFile(args),
+  moveFile: async (args) => await __routineFilesystemMoveFile(args),
+  deleteFile: async (args) => await __routineFilesystemDeleteFile(args),
+});
+"""
+
+
+def _evaluate_pure_code(node_id: str, source: str) -> Any:
+    """Keep the original host-free QuickJS lifecycle untouched."""
+    with (
+        QuickJSRuntime(
+            memory_limit=_CODE_MEMORY_LIMIT_BYTES,
+            stack_limit=_CODE_STACK_LIMIT_BYTES,
+        ) as runtime,
+        runtime.new_context(timeout=_CODE_TIMEOUT_SECONDS) as context,
+    ):
+        return asyncio.run(
+            context.eval_async(source, strict=True, filename=f"<routine code {node_id}>")
+        )
+
+
+class _CodeExecution:
+    """Own one QuickJS worker and cancel its host work as one unit."""
+
+    def __init__(
+        self,
+        *,
+        bridge: CallerLoopBridge,
+        filesystem: ScopedFilesystemTools | None,
+        node_id: str,
+    ) -> None:
+        self._bridge = bridge
+        self._filesystem = filesystem
+        self._node_id = node_id
+        self._lock = threading.Lock()
+        self._cancelled = False
+        self._worker_loop: asyncio.AbstractEventLoop | None = None
+        self._worker_task: asyncio.Task[Any] | None = None
+
+    def _set_worker_task(self, loop: asyncio.AbstractEventLoop, task: asyncio.Task[Any]) -> None:
+        with self._lock:
+            self._worker_loop = loop
+            self._worker_task = task
+            cancelled = self._cancelled
+        if cancelled:
+            task.cancel()
+
+    def _clear_worker_task(self, task: asyncio.Task[Any]) -> None:
+        with self._lock:
+            if self._worker_task is task:
+                self._worker_task = None
+                self._worker_loop = None
+
+    def cancel(self) -> None:
+        """Cancel backend calls before interrupting the guest await."""
+        self._bridge.cancel()
+        with self._lock:
+            self._cancelled = True
+            loop = self._worker_loop
+            task = self._worker_task
+        if loop is not None and task is not None:
+            # The worker may already have closed its loop after completing.
+            with suppress(RuntimeError):
+                loop.call_soon_threadsafe(task.cancel)
+
+    def _register_filesystem_hosts(self, context: Any) -> None:
+        filesystem = self._filesystem
+        if filesystem is None:
+            return
+
+        async def ls(args: Any) -> Any:
+            return await self._bridge.call(lambda: filesystem.ls(args))
+
+        async def read_file(args: Any) -> Any:
+            return await self._bridge.call(lambda: filesystem.read_file(args))
+
+        async def glob(args: Any) -> Any:
+            return await self._bridge.call(lambda: filesystem.glob(args))
+
+        async def grep(args: Any) -> Any:
+            return await self._bridge.call(lambda: filesystem.grep(args))
+
+        context.register("__routineFilesystemLs", ls)
+        context.register("__routineFilesystemReadFile", read_file)
+        context.register("__routineFilesystemGlob", glob)
+        context.register("__routineFilesystemGrep", grep)
+
+        if not filesystem.writable:
+            return
+
+        async def write_file(args: Any) -> Any:
+            return await self._bridge.call(lambda: filesystem.write_file(args))
+
+        async def edit_file(args: Any) -> Any:
+            return await self._bridge.call(lambda: filesystem.edit_file(args))
+
+        async def copy_file(args: Any) -> Any:
+            return await self._bridge.call(lambda: filesystem.copy_file(args))
+
+        async def move_file(args: Any) -> Any:
+            return await self._bridge.call(lambda: filesystem.move_file(args))
+
+        async def delete_file(args: Any) -> Any:
+            return await self._bridge.call(lambda: filesystem.delete_file(args))
+
+        context.register("__routineFilesystemWriteFile", write_file)
+        context.register("__routineFilesystemEditFile", edit_file)
+        context.register("__routineFilesystemCopyFile", copy_file)
+        context.register("__routineFilesystemMoveFile", move_file)
+        context.register("__routineFilesystemDeleteFile", delete_file)
+
+    def evaluate(self, source: str) -> Any:
+        """Evaluate guest JavaScript while its host callbacks run on the caller loop."""
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        task: asyncio.Task[Any] | None = None
+        try:
+            with (
+                QuickJSRuntime(
+                    memory_limit=_CODE_MEMORY_LIMIT_BYTES,
+                    stack_limit=_CODE_STACK_LIMIT_BYTES,
+                ) as runtime,
+                runtime.new_context(timeout=_CODE_TIMEOUT_SECONDS) as context,
+            ):
+                self._register_filesystem_hosts(context)
+                task = loop.create_task(
+                    context.eval_async(
+                        source,
+                        strict=True,
+                        filename=f"<routine code {self._node_id}>",
+                    )
+                )
+                self._set_worker_task(loop, task)
+                return loop.run_until_complete(task)
+        finally:
+            if task is not None:
+                self._clear_worker_task(task)
+                if not task.done():
+                    task.cancel()
+                    loop.run_until_complete(asyncio.gather(task, return_exceptions=True))
+            asyncio.set_event_loop(None)
+            loop.close()
+
+
+def _build_code_node(node: RoutineNode, *, filesystem_backend: Any | None = None) -> Any:
+    """Run a JavaScript body in a one-shot, optionally filesystem-scoped sandbox."""
 
     config = _node_config(node)
     output_key = node.output_key or node.id
     code = config["code"]
-
-    def evaluate(source: str) -> Any:
-        # eval_async performs pure guest computation synchronously. Keep the
-        # complete SDK lifecycle in one worker so graph watchdogs can run.
-        with (
-            QuickJSRuntime(
-                memory_limit=_CODE_MEMORY_LIMIT_BYTES,
-                stack_limit=_CODE_STACK_LIMIT_BYTES,
-            ) as runtime,
-            runtime.new_context(timeout=_CODE_TIMEOUT_SECONDS) as context,
-        ):
-            return asyncio.run(
-                context.eval_async(source, strict=True, filename=f"<routine code {node.id}>")
-            )
+    filesystem_config = config.get("filesystem")
+    if filesystem_config is not None and filesystem_backend is None:
+        raise ValueError(
+            f"code node {node.id}: filesystem is enabled but no filesystem backend was supplied"
+        )
+    if filesystem_config is not None:
+        # Fail compilation before a graph can invoke an enabled capability
+        # against a CompositeBackend route that would otherwise fall through
+        # to its unrelated default mount. A fresh adapter is still made per run.
+        ScopedFilesystemTools(filesystem_backend, filesystem_config)
 
     async def run(state: RoutineState) -> dict[str, Any]:
         try:
@@ -155,16 +315,45 @@ def _build_code_node(node: RoutineNode) -> Any:
         except (TypeError, ValueError) as exc:
             raise ValueError(f"code node {node.id}: input must be JSON-compatible") from exc
 
+        filesystem = (
+            ScopedFilesystemTools(filesystem_backend, filesystem_config)
+            if filesystem_config is not None
+            else None
+        )
+        prelude = (
+            _CODE_FILESYSTEM_WRITE_PRELUDE
+            if filesystem is not None and filesystem.writable
+            else _CODE_FILESYSTEM_READ_PRELUDE
+            if filesystem is not None
+            else ""
+        )
         source = "".join(
             (
                 _CODE_WRAPPER_PREFIX,
                 json.dumps(input_json),
                 _CODE_WRAPPER_MIDDLE,
+                prelude,
                 code,
                 _CODE_WRAPPER_SUFFIX,
             )
         )
-        serialized = await asyncio.to_thread(evaluate, source)
+        if filesystem is None:
+            serialized = await asyncio.to_thread(_evaluate_pure_code, node.id, source)
+        else:
+            execution = _CodeExecution(
+                bridge=CallerLoopBridge(asyncio.get_running_loop()),
+                filesystem=filesystem,
+                node_id=node.id,
+            )
+            worker = asyncio.create_task(asyncio.to_thread(execution.evaluate, source))
+            try:
+                serialized = await asyncio.shield(worker)
+            except BaseException:
+                execution.cancel()
+                # Preserve the original error; wait only for host cleanup.
+                with suppress(BaseException):
+                    await asyncio.shield(worker)
+                raise
         if not isinstance(serialized, str):
             raise ValueError(f"code node {node.id}: result must be JSON-compatible")
         if len(serialized.encode("utf-8")) > _CODE_MAX_RESULT_BYTES:

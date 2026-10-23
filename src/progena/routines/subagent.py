@@ -178,6 +178,7 @@ def create_routine_executor(
     agent_background_runner: Callable[..., Awaitable[dict[str, Any]]] | None = None,
     model_profile_resolver: Callable[[str], Awaitable[Any]] | None = None,
     tool_registry: Any = None,
+    filesystem_backend: Any | None = None,
     checkpointer: Any | None = None,
     context: dict[str, Any] | None = None,
 ) -> RunnableLambda:
@@ -265,6 +266,7 @@ def create_routine_executor(
                     agent_background_runner=agent_background_runner,
                     model_profile_resolver=model_profile_resolver,
                     tool_registry=tool_registry,
+                    filesystem_backend=filesystem_backend,
                     base_system_prompt=None,
                     instruction_loader=instruction_loader,
                     checkpointer=checkpointer,
@@ -500,6 +502,7 @@ def create_routine_subagent(
     agent_background_runner: Callable[..., Awaitable[dict[str, Any]]] | None = None,
     model_profile_resolver: Callable[[str], Awaitable[Any]] | None = None,
     tool_registry: Any = None,
+    filesystem_backend: Any | None = None,
     checkpointer: Any | None = None,
 ) -> CompiledSubAgent:
     """Expose execution as a conversational task without leaking child state."""
@@ -514,6 +517,7 @@ def create_routine_subagent(
         agent_background_runner=agent_background_runner,
         model_profile_resolver=model_profile_resolver,
         tool_registry=tool_registry,
+        filesystem_backend=filesystem_backend,
         checkpointer=checkpointer,
     )
 
@@ -646,6 +650,7 @@ async def _resume_routine_thread(
     agent_background_runner: Callable[..., Awaitable[dict[str, Any]]] | None = None,
     model_profile_resolver: Callable[[str], Awaitable[Any]] | None = None,
     tool_registry: Any = None,
+    filesystem_backend: Any | None = None,
     checkpointer: Any | None = None,
     interrupt_id: str | None = None,
     request_id: str | None = None,
@@ -681,6 +686,7 @@ async def _resume_routine_thread(
         agent_background_runner=agent_background_runner,
         model_profile_resolver=model_profile_resolver,
         tool_registry=tool_registry,
+        filesystem_backend=filesystem_backend,
         base_system_prompt=None,
         instruction_loader=instruction_loader,
         checkpointer=checkpointer,
@@ -699,6 +705,7 @@ async def _resume_routine_thread(
         agent_background_runner=agent_background_runner,
         model_profile_resolver=model_profile_resolver,
         tool_registry=tool_registry,
+        filesystem_backend=filesystem_backend,
         instruction_loader=instruction_loader,
         checkpointer=checkpointer,
         execution_policy=PolicyValues.model_validate(execution_policy["values"]),

@@ -267,6 +267,7 @@ def _build_node_callable(
     agent_background_runner: Callable[..., Awaitable[dict[str, Any]]] | None = None,
     model_profile_resolver: Callable[[str], Awaitable[Any]] | None = None,
     tool_registry: Any = None,
+    filesystem_backend: Any | None = None,
     defs: dict[str, dict[str, Any]] | None = None,
     instruction_loader: Callable[[str], str] | None = None,
     policy_defaults: dict[str, Any] | None = None,
@@ -294,7 +295,7 @@ def _build_node_callable(
     if node.kind == "eval":
         return _build_eval_node(node)
     if node.kind == "code":
-        return _build_code_node(node)
+        return _build_code_node(node, filesystem_backend=filesystem_backend)
     if node.kind == "reduce":
         return _build_reduce_node(node)
     if node.kind == "condition":
@@ -485,6 +486,7 @@ def compile_routine_graph(
     agent_background_runner: Callable[..., Awaitable[dict[str, Any]]] | None = None,
     model_profile_resolver: Callable[[str], Awaitable[Any]] | None = None,
     tool_registry: Any = None,
+    filesystem_backend: Any | None = None,
     base_system_prompt: str | None = None,
     instruction_loader: Callable[[str], str] | None = None,
     checkpointer: Any | None = None,
@@ -562,6 +564,17 @@ def compile_routine_graph(
                     config.get("max_concurrency") or policy.concurrency_limit,
                     policy.concurrency_limit,
                 )
+        filesystem_enabled = node.kind == "code" and config.get("filesystem") is not None
+        if filesystem_enabled:
+            if config.get("cache") not in (None, False):
+                raise ValueError(f"node {node.id}: filesystem-enabled code cannot enable caching")
+            retry = config.get("retry") or {}
+            if (retry.get("max_retries") or 0) > 0:
+                raise ValueError(f"node {node.id}: filesystem-enabled code cannot enable retries")
+            # A filesystem operation is observable even if it happens to return
+            # the same value: never inherit cache/retry defaults for it.
+            config["cache"] = False
+            config["retry"] = {**retry, "max_retries": 0}
         if node.kind in CACHE_NODE_KINDS:
             node_cache = config.get("cache")
             if (
@@ -670,6 +683,7 @@ def compile_routine_graph(
                     agent_background_runner=agent_background_runner,
                     model_profile_resolver=model_profile_resolver,
                     tool_registry=tool_registry,
+                    filesystem_backend=filesystem_backend,
                     defs=graph.defs,
                     instruction_loader=instruction_loader,
                     policy_defaults=policy_defaults,

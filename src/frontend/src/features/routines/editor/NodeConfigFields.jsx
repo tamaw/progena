@@ -482,6 +482,65 @@ function StringListField({ id, config, field, label, placeholder, updateNodeConf
   );
 }
 
+function FilesystemAccessField({ id, config, updateNodeConfig }) {
+  const filesystem = config?.filesystem;
+  const enabled = filesystem != null;
+  const paths = (filesystem?.paths || []).join('\n');
+  const [pathDraft, setPathDraft] = useState(null);
+  return (
+    <>
+      <label className="agents-graph-node__field">
+        <span className="agents-graph-node__field-label">Filesystem access</span>
+        <div className="agents-graph-node__select">
+          <Select
+            value={filesystem?.access || ''}
+            onChange={(access) => updateNodeConfig(id, {
+              filesystem: access
+                ? {
+                  access,
+                  paths: filesystem?.paths?.length ? filesystem.paths : ['/artifacts/'],
+                }
+                : null,
+            })}
+            options={[
+              { value: '', label: 'None' },
+              { value: 'read', label: 'Read' },
+              { value: 'read_write', label: 'Read & write' },
+            ]}
+            ariaLabel="Filesystem access"
+            portal
+            className="nodrag nowheel"
+          />
+        </div>
+      </label>
+      {enabled ? (
+        <>
+          <label className="agents-graph-node__field">
+            <span className="agents-graph-node__field-label">Allowed paths (one directory per line)</span>
+            <textarea
+              className="agents-graph-node__prompt"
+              value={pathDraft?.id === id ? pathDraft.text : paths}
+              placeholder={'/artifacts/\n/shared/'}
+              onChange={(event) => {
+                const text = event.target.value;
+                setPathDraft({ id, text });
+                updateNodeConfig(id, {
+                  filesystem: {
+                    ...filesystem,
+                    paths: text.split('\n').map((path) => path.trim()).filter(Boolean),
+                  },
+                });
+              }}
+              onBlur={() => setPathDraft(null)}
+            />
+          </label>
+          <p className="routine-node-inspector__hint">Only <code>/artifacts/</code> and <code>/shared/</code> subtrees are allowed. Writes never overwrite; moves require a file on the same mount (copy can cross mounts). Filesystem code never uses automatic retries or caching.</p>
+        </>
+      ) : null}
+    </>
+  );
+}
+
 function NumberField({ id, config, field, label, placeholder, updateNodeConfig, min = 1 }) {
   return (
     <label className="agents-graph-node__field">
@@ -523,7 +582,8 @@ export function NodeConfigBody({ id, kind, config, updateNodeConfig, replaceNode
     return (
       <>
         <ExpressionField id={id} config={config} field="code" label="JavaScript" placeholder="return input;" language="javascript" autocomplete updateNodeConfig={updateNodeConfig} />
-        <p className="routine-node-inspector__hint">Type <code>input.</code> to suggest routine inputs and earlier outputs. Use arrows and Enter to insert, or Escape to dismiss. Return a JSON-compatible result. Runs in a pure sandbox without Node, browser, network, filesystem, or host tools.</p>
+        <p className="routine-node-inspector__hint">Type <code>input.</code> to suggest routine inputs and earlier outputs. Use arrows and Enter to insert, or Escape to dismiss. Return a JSON-compatible result. No Node or browser APIs, network, shell or agent tools; filesystem tools must be explicitly enabled below.</p>
+        <FilesystemAccessField id={id} config={config} updateNodeConfig={updateNodeConfig} />
       </>
     );
   }
