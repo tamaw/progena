@@ -27,7 +27,7 @@ from deepagents.backends.utils import (
     perform_string_replacement,
     slice_read_response,
 )
-from deepagents.middleware.filesystem import FilesystemMiddleware, FilesystemPermission
+from deepagents.middleware.filesystem import FilesystemMiddleware, FilesystemPermission, FsToolName
 from deepagents.middleware.memory import MemoryMiddleware
 from deepagents.middleware.skills import SkillsMiddleware
 from deepagents.middleware.subagents import CompiledSubAgent
@@ -68,6 +68,16 @@ from src.progena.llm.provider_context import (
 )
 
 logger = logging.getLogger(__name__)
+
+_FILESYSTEM_TOOLS: list[FsToolName] = [
+    "ls",
+    "read_file",
+    "write_file",
+    "edit_file",
+    "glob",
+    "grep",
+    "execute",
+]
 
 
 class ScopedMountBackend:
@@ -119,11 +129,21 @@ class ScopedMountBackend:
     async def aglob(self, pattern: str, path: str | None = None) -> Any:
         return self._rebase(await self._backend.aglob(pattern, self._path(path)), "matches")
 
-    async def agrep(self, pattern: str, path: str | None = None, glob: str | None = None) -> Any:
-        return self._rebase(await self._backend.agrep(pattern, self._path(path), glob), "matches")
+    async def agrep(
+        self,
+        pattern: str,
+        path: str | None = None,
+        glob: str | None = None,
+        *,
+        max_count: int | None = None,
+    ) -> Any:
+        return self._rebase(
+            await self._backend.agrep(pattern, self._path(path), glob, max_count=max_count),
+            "matches",
+        )
 
-    # Middleware (memory, skills) batch-loads through these; without them the
-    # call fell through __getattr__ to the unscoped parent route.
+    # Middleware (memory, skills) batch-loads through these explicit,
+    # path-rebased operations.
     async def adownload_files(self, paths: list[str]) -> Any:
         responses = await self._backend.adownload_files([self._path(path) for path in paths])
         return [replace(r, path=self._unpath(r.path)) for r in responses]
@@ -134,8 +154,7 @@ class ScopedMountBackend:
         )
         return [replace(r, path=self._unpath(r.path)) for r in responses]
 
-    # Sync and legacy forms of the same calls. Anything path-taking that fell
-    # through __getattr__ would reach the whole parent route, unscoped.
+    # Synchronous consumers need the same path rebasing as the async API.
     def read(self, path: str, offset: int = 0, limit: int = 2000) -> Any:
         return self._backend.read(self._path(path), offset, limit)
 
@@ -145,14 +164,27 @@ class ScopedMountBackend:
     def edit(self, path: str, old: str, new: str, replace_all: bool = False) -> Any:
         return self._backend.edit(self._path(path), old, new, replace_all)
 
+    def delete(self, path: str) -> Any:
+        return self._backend.delete(self._path(path))
+
     def ls(self, path: str) -> Any:
         return self._rebase(self._backend.ls(self._path(path)), "entries")
 
     def glob(self, pattern: str, path: str | None = None) -> Any:
         return self._rebase(self._backend.glob(pattern, self._path(path)), "matches")
 
-    def grep(self, pattern: str, path: str | None = None, glob: str | None = None) -> Any:
-        return self._rebase(self._backend.grep(pattern, self._path(path), glob), "matches")
+    def grep(
+        self,
+        pattern: str,
+        path: str | None = None,
+        glob: str | None = None,
+        *,
+        max_count: int | None = None,
+    ) -> Any:
+        return self._rebase(
+            self._backend.grep(pattern, self._path(path), glob, max_count=max_count),
+            "matches",
+        )
 
     def download_files(self, paths: list[str]) -> Any:
         responses = self._backend.download_files([self._path(path) for path in paths])
@@ -163,30 +195,6 @@ class ScopedMountBackend:
             [(self._path(path), content) for path, content in files]
         )
         return [replace(r, path=self._unpath(r.path)) for r in responses]
-
-    def ls_info(self, path: str) -> Any:
-        return self._rebase(self._backend.ls_info(self._path(path)), "entries")
-
-    async def als_info(self, path: str) -> Any:
-        return self._rebase(await self._backend.als_info(self._path(path)), "entries")
-
-    def glob_info(self, pattern: str, path: str = "/") -> Any:
-        return self._rebase(self._backend.glob_info(pattern, self._path(path)), "matches")
-
-    async def aglob_info(self, pattern: str, path: str = "/") -> Any:
-        return self._rebase(await self._backend.aglob_info(pattern, self._path(path)), "matches")
-
-    def grep_raw(self, pattern: str, path: str | None = None, glob: str | None = None) -> Any:
-        return self._rebase(self._backend.grep_raw(pattern, self._path(path), glob), "matches")
-
-    async def agrep_raw(
-        self, pattern: str, path: str | None = None, glob: str | None = None
-    ) -> Any:
-        raw = await self._backend.agrep_raw(pattern, self._path(path), glob)
-        return self._rebase(raw, "matches")
-
-    def __getattr__(self, name: str) -> Any:
-        return getattr(self._backend, name)
 
 
 def _without_base_permissions(
@@ -325,7 +333,12 @@ class SelfManifestBackend(_AsyncOnlyFileBackendMixin):  # pragma: no cover
         return GlobResult(matches=[])
 
     async def agrep(
-        self, pattern: str, path: str | None = None, glob: str | None = None
+        self,
+        pattern: str,
+        path: str | None = None,
+        glob: str | None = None,
+        *,
+        max_count: int | None = None,
     ) -> GrepResult:
         return GrepResult(matches=[])
 
@@ -621,6 +634,7 @@ def build_object_agent(
         middleware.append(
             FilesystemMiddleware(
                 backend=self_backend,
+                tools=_FILESYSTEM_TOOLS,
                 _permissions=list(manifest.permissions) or None,
             )
         )
