@@ -238,6 +238,7 @@ jobs:
           AZURE_OPENAI_API_KEY: ${{ secrets.AZURE_OPENAI_API_KEY }}
           AZURE_OPENAI_BASE_URL: ${{ secrets.AZURE_OPENAI_BASE_URL }}
           OPENCODE_GO_API_KEY: ${{ secrets.OPENCODE_GO_API_KEY }}
+          PROGENA_PROVIDER_ENCRYPTION_KEY: ${{ secrets.PROGENA_PROVIDER_ENCRYPTION_KEY }}
           JINA_API_KEY: ${{ secrets.JINA_API_KEY }}
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
           PROGENA_MODEL_DEFAULT: ${{ vars.PROGENA_MODEL_DEFAULT }}
