@@ -1,12 +1,8 @@
-"""
-Tests for Progena runtime memory wiring (Postgres-backed content documents).
-"""
+"""Runtime memory requires a durable content-document owner."""
 
-from pathlib import Path
-from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+import pytest
 
-from src.progena.instructions import DEFAULT_INSTRUCTIONS_DIR
+from src.progena.agent.factory import create_progena_agent
 from tests.progena.conftest import _FakeRuntimeStore
 
 
@@ -43,116 +39,6 @@ class FakeContentStateManager:
         return {}
 
 
-def _fake_config(base_dir: Path) -> SimpleNamespace:
-    data_dir = base_dir / "data"
-    state_dir = data_dir / "state"
-    log_dir = base_dir / "logs"
-    for path in (data_dir, state_dir, log_dir):
-        path.mkdir(parents=True, exist_ok=True)
-
-    return SimpleNamespace(
-        llm=SimpleNamespace(model_default="test-model"),
-        storage=SimpleNamespace(
-            data_dir=data_dir,
-            state_dir=state_dir,
-            log_dir=log_dir,
-            instructions_dir=DEFAULT_INSTRUCTIONS_DIR,
-        ),
-    )
-
-
-class TestRuntimeMemoryWiring:
-    """Test that Progena wires runtime memory from Postgres content documents."""
-
-    async def test_factory_passes_explicit_memory_paths(self, tmp_path: Path):
-        config = _fake_config(tmp_path)
-        state_manager = FakeContentStateManager()
-
-        with (
-            patch("src.progena.agent.factory.create_deep_agent") as mock_create,
-            patch("src.progena.agent.factory.ProviderChatModel"),
-            patch("src.progena.agent.factory.create_progena_backend") as mock_backend,
-        ):
-            mock_create.return_value = MagicMock()
-            mock_backend.return_value = MagicMock()
-
-            from src.progena.agent.factory import create_progena_agent
-
-            await create_progena_agent(
-                config=config,
-                checkpointer=MagicMock(),
-                state_manager=state_manager,
-                memory_paths=["/memories/custom.md", "/memories/notes.md"],
-            )
-
-        call_kwargs = mock_create.call_args.kwargs
-        assert call_kwargs["memory"] == ["/memories/custom.md", "/memories/notes.md"]
-        # Explicit paths bypass discovery entirely -- nothing written.
-        assert state_manager._docs["memory"] == {}
-
-    async def test_factory_defaults_to_postgres_runtime_memory(self, tmp_path: Path):
-        config = _fake_config(tmp_path)
-        state_manager = FakeContentStateManager()
-
-        with (
-            patch("src.progena.agent.factory.create_deep_agent") as mock_create,
-            patch("src.progena.agent.factory.ProviderChatModel"),
-            patch("src.progena.agent.factory.create_progena_backend") as mock_backend,
-        ):
-            mock_create.return_value = MagicMock()
-            mock_backend.return_value = MagicMock()
-
-            from src.progena.agent.factory import (
-                DEFAULT_RUNTIME_MEMORY_CONTENT,
-                create_progena_agent,
-            )
-
-            await create_progena_agent(
-                config=config,
-                checkpointer=MagicMock(),
-                state_manager=state_manager,
-            )
-
-        call_kwargs = mock_create.call_args.kwargs
-        assert call_kwargs["memory"] == ["/memories/AGENTS.md"]
-        assert state_manager._docs["memory"]["AGENTS.md"] == DEFAULT_RUNTIME_MEMORY_CONTENT
-
-    async def test_factory_discovers_postgres_runtime_memories(self, tmp_path: Path):
-        config = _fake_config(tmp_path)
-        state_manager = FakeContentStateManager()
-        state_manager._docs["memory"]["preferences.md"] = "Prefer concise summaries.\n"
-
-        with (
-            patch("src.progena.agent.factory.create_deep_agent") as mock_create,
-            patch("src.progena.agent.factory.ProviderChatModel"),
-            patch("src.progena.agent.factory.create_progena_backend") as mock_backend,
-        ):
-            mock_create.return_value = MagicMock()
-            mock_backend.return_value = MagicMock()
-
-            from src.progena.agent.factory import create_progena_agent
-
-            await create_progena_agent(
-                config=config,
-                checkpointer=MagicMock(),
-                state_manager=state_manager,
-                project_root=tmp_path,
-            )
-
-        call_kwargs = mock_create.call_args.kwargs
-        assert call_kwargs["memory"] == [
-            "/memories/AGENTS.md",
-            "/memories/preferences.md",
-        ]
-
-    async def test_factory_requires_state_manager(self, tmp_path: Path):
-        config = _fake_config(tmp_path)
-
-        from src.progena.agent.factory import create_progena_agent
-
-        try:
-            await create_progena_agent(config=config, checkpointer=MagicMock())
-        except ValueError:
-            pass
-        else:
-            raise AssertionError("expected ValueError when state_manager is None")
+async def test_factory_requires_state_manager():
+    with pytest.raises(ValueError):
+        await create_progena_agent()

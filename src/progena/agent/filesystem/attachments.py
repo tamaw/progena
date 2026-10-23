@@ -125,6 +125,11 @@ class AttachmentDirectoryBackend(_AsyncOnlyFileBackendMixin):
         return GlobResult(matches=[])
 
     async def agrep(
-        self, pattern: str, path: str | None = None, glob: str | None = None
+        self,
+        pattern: str,
+        path: str | None = None,
+        glob: str | None = None,
+        *,
+        max_count: int | None = None,
     ) -> GrepResult:
         return GrepResult(matches=[])

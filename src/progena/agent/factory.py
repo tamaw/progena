@@ -17,7 +17,9 @@ from typing import Any
 
 from deepagents import create_deep_agent
 from deepagents.middleware.async_subagents import AsyncSubAgent
+from deepagents.middleware.filesystem import FilesystemMiddleware, FsToolName
 from deepagents.middleware.subagents import CompiledSubAgent
+from langchain.agents.middleware import TodoListMiddleware
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph.state import CompiledStateGraph
 
@@ -71,6 +73,16 @@ from src.progena.routines.subagent import (
 )
 
 logger = logging.getLogger(__name__)
+
+_FILESYSTEM_TOOLS: list[FsToolName] = [
+    "ls",
+    "read_file",
+    "write_file",
+    "edit_file",
+    "glob",
+    "grep",
+    "execute",
+]
 
 DEFAULT_RUNTIME_MEMORY_PATH = "/memories/AGENTS.md"
 DEFAULT_RUNTIME_MEMORY_CONTENT = """# Progena Runtime Memory
@@ -298,6 +310,10 @@ async def create_progena_agent(
     )
 
     custom_middleware = [
+        # Deep Agents 0.7 made recursive deletion available through the
+        # filesystem middleware. Progena's existing authority excludes it.
+        FilesystemMiddleware(backend=backend, tools=_FILESYSTEM_TOOLS),
+        TodoListMiddleware(),
         DirectA2AFastPathMiddleware(tool_registry=tool_registry),
         DynamicMCPToolMiddleware(mcp_tools_provider=lambda: create_dynamic_mcp_tools(llm_client)),
         SchemaCompactionMiddleware(),

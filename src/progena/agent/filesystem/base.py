@@ -145,7 +145,12 @@ class _AsyncOnlyFileBackendMixin:
         return GlobResult(matches=matches)
 
     async def agrep(
-        self, pattern: str, path: str | None = None, glob: str | None = None
+        self,
+        pattern: str,
+        path: str | None = None,
+        glob: str | None = None,
+        *,
+        max_count: int | None = None,
     ) -> GrepResult:
         """Literal search over the rendered documents, as ``read_file`` shows them."""
         base = (path or "/").rstrip("/")
@@ -160,7 +165,7 @@ class _AsyncOnlyFileBackendMixin:
                 continue
             if result.error is None and result.file_data is not None:
                 files[file_path] = result.file_data
-        return grep_matches_from_files(files, pattern, path or "/", glob)
+        return grep_matches_from_files(files, pattern, path or "/", glob, max_count=max_count)
 
 
 class StateDocumentBackend(_AsyncOnlyFileBackendMixin):

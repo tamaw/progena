@@ -152,7 +152,8 @@ immutability trigger. History is stored only: there is no revision route, browse
   `data/canvases/libraries.json`, document type ids/labels/key/key_prefix/schema, host API
   summary) and `/canvases/<name>/status.json` (projection of `canvas_status:<name>` plus
   `current_revision` and `stale` when the status revision differs).
-- No agent delete (DeepAgents <0.7 never routes `delete_file`); deletion is a UI action.
+- No agent delete: the runtime explicitly omits Deep Agents' recursive `delete`
+  tool from main/object-agent filesystem tools; canvas deletion remains a UI action.
 - Skill `data/skills/building-canvases/SKILL.md`.
 
 ## Backend

@@ -206,6 +206,29 @@ class TestBackendFactory:
             assert schema_read.error is None
             assert json.loads(schema_read.file_data["content"]) == schema
 
+    async def test_grep_honors_include_glob_and_reports_truncation(self, monkeypatch):
+        self._patch_runtime_free_state_backend(monkeypatch)
+        state_manager = FakeContentStateManager()
+        state_manager._docs["memory"].update(
+            {
+                "first.md": "needle in the first document\n",
+                "second.md": "needle in the second document\n",
+                "ignored.txt": "needle outside the include glob\n",
+            }
+        )
+        backend = create_progena_backend(project_root=".", state_manager=state_manager)
+
+        result = await backend.agrep("needle", path="/memories/", glob="*.md", max_count=1)
+
+        assert result.truncated is True
+        assert result.matches == [
+            {
+                "path": "/memories/first.md",
+                "line": 1,
+                "text": "needle in the first document",
+            }
+        ]
+
     async def test_instructions_mount_reads_and_validates_writes(self, monkeypatch):
         """/instructions/ reads Postgres content and validates writes."""
         from src.progena.agent.filesystem.content import InstructionDocumentDirectoryBackend
@@ -270,9 +293,6 @@ class TestBackendFactory:
             assert read.file_data["content"] == "Bundled disk manifest"
             assert (await backend.awrite(path, "overwrite")).error is not None
             assert (await backend.aedit(path, "Bundled", "Modified")).error is not None
-            # CompositeBackend exposes no delete operation; native routes have
-            # no writable file tools and cannot be uninstalled through plugins.
-            assert not hasattr(backend, "adelete")
             uploads = await backend.aupload_files([(path, b"overwrite")])
             assert uploads[0].error == "permission_denied"
             assert disk_path.read_text() == "Bundled disk manifest"
@@ -397,3 +417,15 @@ def test_dynamic_plugin_skill_inference_stays_inside_declared_mounts():
         ["/skills/other__plugin/review/", "/skills/acme__new/reviewer/"],
     )
     assert set(narrower) == {"/skills/acme__new/review/"}
+
+
+async def test_read_only_disk_mount_rejects_recursive_and_single_file_deletion(tmp_path):
+    from deepagents.backends import FilesystemBackend
+
+    nested = tmp_path / "folder" / "nested.txt"
+    nested.parent.mkdir()
+    nested.write_text("Retained document")
+    readonly = ReadOnlyBackend(FilesystemBackend(root_dir=tmp_path, virtual_mode=True))
+    assert (await readonly.adelete("/folder")).error is not None
+    assert readonly.delete("/folder/nested.txt").error is not None
+    assert nested.read_text() == "Retained document"

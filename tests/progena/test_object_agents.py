@@ -538,6 +538,21 @@ async def test_scoped_mount_lists_paths_the_child_can_read(tmp_path: Path):
     assert "name: lint" in composite.read("/skills/pack/lint/SKILL.md").file_data["content"]
 
 
+async def test_scoped_mount_grep_forwards_cap_and_preserves_truncation(tmp_path: Path):
+    pack = tmp_path / "pack"
+    pack.mkdir()
+    (pack / "first.txt").write_text("needle\n")
+    (pack / "second.txt").write_text("needle\n")
+
+    scoped = ScopedMountBackend(FilesystemBackend(root_dir=tmp_path, virtual_mode=True), "/pack")
+    result = await scoped.agrep("needle", max_count=1)
+
+    matches = result.matches or []
+    assert result.truncated
+    assert len(matches) == 1
+    assert matches[0]["path"] in {"/first.txt", "/second.txt"}
+
+
 async def test_main_agent_memory_excludes_object_agent_memories():
     store = SimpleNamespace(
         list_content_documents=AsyncMock(

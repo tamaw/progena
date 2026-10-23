@@ -51,7 +51,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from deepagents.backends import CompositeBackend, FilesystemBackend, StateBackend
-from deepagents.backends.protocol import EditResult, FileUploadResponse, WriteResult
+from deepagents.backends.protocol import DeleteResult, EditResult, FileUploadResponse, WriteResult
 
 from src.progena.agent.filesystem.alerts import AlertDirectoryBackend
 from src.progena.agent.filesystem.artifacts import ArtifactDirectoryBackend
@@ -116,6 +116,12 @@ class ReadOnlyBackend:
         self, file_path: str, old_string: str, new_string: str, replace_all: bool = False
     ) -> EditResult:
         return self.edit(file_path, old_string, new_string, replace_all)
+
+    def delete(self, file_path: str) -> DeleteResult:
+        return DeleteResult(error="This mount is read-only")
+
+    async def adelete(self, file_path: str) -> DeleteResult:
+        return self.delete(file_path)
 
     def upload_files(self, files: list[tuple[str, bytes]]) -> list[FileUploadResponse]:
         return [FileUploadResponse(path=path, error="permission_denied") for path, _ in files]
