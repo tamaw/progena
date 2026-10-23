@@ -36,6 +36,7 @@ VALID_ROUTINE_NODE_KINDS = {
     "foreach",
     "routine",
     "reduce",
+    "review_provenance",
 }
 
 # A `condition` node is a two-way gate: its expression is coerced to a bool, so
@@ -296,6 +297,16 @@ class ReduceNodeConfig(BaseModel):
     operation: Literal["collect", "sum", "count", "min", "max", "product"] = "collect"
 
 
+class ReviewProvenanceNodeConfig(BaseModel):
+    """State path of a review candidate. Its card, reviewer task and PR evidence are
+    read from the compiler's trusted evidence source, never from routine state."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    candidate: str = Field(min_length=1)
+    max_evidence_age_seconds: int = Field(default=900, ge=1, le=86_400)
+
+
 class RoutineNodePrompt(BaseModel):
     """Render a template and invoke the supplied chat model."""
 
@@ -487,6 +498,21 @@ class RoutineNodeNoop(BaseModel):
     y: float | None = None
 
 
+class RoutineNodeReviewProvenance(BaseModel):
+    """Fail-closed deterministic check of a review approval candidate."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    kind: Literal["review_provenance"] = "review_provenance"
+    description: str = ""
+    output_key: str | None = None
+    config: ReviewProvenanceNodeConfig
+    label: str | None = None
+    x: float | None = None
+    y: float | None = None
+
+
 RoutineNode = Annotated[
     RoutineNodePrompt
     | RoutineNodeEval
@@ -500,7 +526,8 @@ RoutineNode = Annotated[
     | RoutineNodeHuman
     | RoutineNodeForeach
     | RoutineNodeRoutine
-    | RoutineNodeReduce,
+    | RoutineNodeReduce
+    | RoutineNodeReviewProvenance,
     Field(discriminator="kind"),
 ]
 
