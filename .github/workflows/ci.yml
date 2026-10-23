@@ -294,8 +294,7 @@ jobs:
               sleep 2
             done
             echo "Timed out waiting for $name to become healthy (status=$status)"
-            docker ps -a || true
-            docker logs "$name" --tail 200 || true
+            echo "Application logs are omitted from public CI; inspect them on the deployment host."
             return 1
           }
 
