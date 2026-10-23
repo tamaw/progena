@@ -111,6 +111,11 @@ def create_langchain_model(
         timeout=config.timeout_seconds,
         max_retries=config.max_retries,
     )
+    model.set_provider_connection(
+        provider_id=config.provider_id,
+        provider_kind=config.provider_kind,
+        base_url=config.base_url,
+    )
     model.set_usage_profile(profile_name)
     logger.info(
         "Created LangChain model adapter: provider=%s model=%s responses_api=%s reasoning=%s",
