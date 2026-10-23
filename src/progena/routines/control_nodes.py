@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from datetime import UTC, datetime, timedelta
 from math import prod
 from typing import Any
 
@@ -13,6 +14,7 @@ from langgraph.types import Command, Send, interrupt
 from .expression import evaluate_expression
 from .graph import RoutineEdge, RoutineNode
 from .messages import normalize_message_content
+from .provenance import ReviewEvidenceSource, load_and_validate_review_candidate
 from .state import (
     RoutineState,
     _context_data,
@@ -63,6 +65,34 @@ def _build_eval_node(node: RoutineNode) -> Any:
         namespace = {**defaults, **data}
         result = evaluate_expression(expression, namespace)
         return {"data": {output_key: result}}
+
+    return run
+
+
+def _build_review_provenance_node(
+    node: RoutineNode, evidence_source: ReviewEvidenceSource | None
+) -> Any:
+    """Fail-closed review candidate check; writes {valid, reasons, receipt}, never raises
+    on bad evidence so a downstream condition can route on `valid`.
+
+    Only the candidate comes from routine state. Its card, reviewer task and PR
+    evidence are read from `evidence_source` by the candidate's own ids, so an
+    earlier step cannot supply them (or a `verified` flag) itself.
+    """
+    config = _node_config(node)
+    output_key = node.output_key or node.id
+    max_age = timedelta(seconds=config["max_evidence_age_seconds"])
+    candidate_path = config["candidate"]
+
+    async def run(state: RoutineState) -> dict[str, Any]:
+        try:
+            candidate = resolve_data_path(state.get("data", {}), candidate_path)
+        except KeyError:
+            candidate = None  # absent state is a missing candidate
+        verdict = await load_and_validate_review_candidate(
+            candidate, source=evidence_source, now=datetime.now(UTC), max_evidence_age=max_age
+        )
+        return {"data": {output_key: verdict.as_dict()}}
 
     return run
 

@@ -619,6 +619,14 @@ export function NodeConfigBody({ id, kind, config, updateNodeConfig, replaceNode
       </>
     );
   }
+  if (kind === 'review_provenance') {
+    return (
+      <>
+        <ConfigField id={id} config={config} field="candidate" label="Candidate path" placeholder="e.g. review_candidate" updateNodeConfig={updateNodeConfig} />
+        <p className="routine-node-inspector__hint">Reads the card, reviewer task and live PR from the runtime, never from earlier steps. Writes {"{valid, reasons, receipt}"}; missing, pending, stale or mismatched evidence is invalid. Route on valid with a Branch step.</p>
+      </>
+    );
+  }
   if (kind === 'reduce') {
     return (
       <>

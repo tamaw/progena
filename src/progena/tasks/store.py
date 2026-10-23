@@ -50,6 +50,16 @@ class TaskStore:
         payload = await self._access.store.get_document(key, None)
         return payload if isinstance(payload, dict) else None
 
+    async def peek_kanban_card(self, card_id: str) -> dict[str, Any] | None:
+        """Return one card document, or ``None``, without ever writing.
+
+        ``get_kanban_card`` materializes a default row for a missing key; use this
+        wherever the id comes from outside (e.g. a routine's review candidate) so a
+        forged or stale id cannot create a document.
+        """
+        payload = await self._access.store.peek_document(self._kanban_card_key(card_id))
+        return payload if isinstance(payload, dict) else None
+
     async def save_kanban_card(self, card_id: str, card: dict[str, Any]) -> None:
         """Persist one card document and ensure it is tracked in ``card_order``."""
         key = self._kanban_card_key(card_id)

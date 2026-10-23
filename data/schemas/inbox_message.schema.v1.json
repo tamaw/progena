@@ -56,6 +56,11 @@
     "task_id": {
       "type": "string",
       "description": "The kanban_card:<id> this message concerns, if any -- lets an approval request link back to the task it's about. A task may accumulate several approval messages over its lifecycle."
+    },
+    "context": {
+      "type": "object",
+      "description": "Generic structured provenance written by the message's author (for example a workflow document_create node). Workflow authors may put immutable candidate bindings here so a later step can verify exactly what was presented for decision. Opaque to the Inbox UI.",
+      "default": {}
     }
   },
   "required": ["id", "title", "body"],

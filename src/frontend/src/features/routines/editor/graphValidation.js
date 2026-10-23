@@ -18,6 +18,7 @@ export const REQUIRED_CONFIG = {
   human: ['message'],
   routine: ['routine_name'],
   reduce: ['source_node'],
+  review_provenance: ['candidate'],
   noop: [],
 };
 

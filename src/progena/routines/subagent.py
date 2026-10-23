@@ -49,6 +49,7 @@ from .approvals import (
 from .events import persist_run_event, routine_run_output
 from .factory import compile_routine_graph
 from .graph import RoutineContext, validate_routine_graph_payload
+from .review_evidence import review_evidence_source_for
 from .revisions import RoutineRevisionReader
 
 logger = logging.getLogger(__name__)
@@ -272,6 +273,7 @@ def create_routine_executor(
                     execution_policy=policy_values,
                     cache=_RUNTIME_NODE_CACHE,
                     model_profiles=model_profiles,
+                    review_evidence_source=review_evidence_source_for(state_manager, graph),
                 )
                 cache[compile_key] = compiled
             # One thread_id per top-level run, not per node/call -- lets
@@ -669,6 +671,7 @@ async def _resume_routine_thread(
         raise ValueError(f"routine {routine_id!r} has no stored graph to resume against")
 
     graph = validate_routine_graph_payload(graph_doc)
+    evidence_source = review_evidence_source_for(state_manager, graph)
     instruction_loader = None
     if any(node.kind == "agent" and node.config.instruction is not None for node in graph.nodes):
         instruction_loader, _ = await _routine_instruction_loader(state_manager)
@@ -684,6 +687,7 @@ async def _resume_routine_thread(
         base_system_prompt=None,
         instruction_loader=instruction_loader,
         checkpointer=checkpointer,
+        review_evidence_source=evidence_source,
     )
     run_config: RunnableConfig = {"configurable": {"thread_id": thread_id}}
     checkpoint = await compiled.aget_state(run_config)
@@ -704,6 +708,7 @@ async def _resume_routine_thread(
         execution_policy=PolicyValues.model_validate(execution_policy["values"]),
         cache=_RUNTIME_NODE_CACHE,
         model_profiles=await state_manager.get_model_profiles_config(),
+        review_evidence_source=evidence_source,
     )
     approval = validate_answer(pending_approvals(checkpoint.interrupts), answer, interrupt_id)
     if answered_by == "agent" and approval["approver"] == "human":

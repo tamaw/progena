@@ -42,7 +42,8 @@
         { "$ref": "#/$defs/nodeHuman" },
         { "$ref": "#/$defs/nodeForeach" },
         { "$ref": "#/$defs/nodeRoutine" },
-        { "$ref": "#/$defs/nodeReduce" }
+        { "$ref": "#/$defs/nodeReduce" },
+        { "$ref": "#/$defs/nodeReviewProvenance" }
       ]
     },
     "nodeBase": {
@@ -144,6 +145,13 @@
       "allOf": [
         { "$ref": "#/$defs/nodeBase" },
         { "required": ["id", "kind", "output_key", "config"], "properties": { "kind": { "const": "reduce" }, "config": { "$ref": "#/$defs/reduceConfig" } } }
+      ],
+      "unevaluatedProperties": false
+    },
+    "nodeReviewProvenance": {
+      "allOf": [
+        { "$ref": "#/$defs/nodeBase" },
+        { "required": ["id", "kind", "output_key", "config"], "properties": { "kind": { "const": "review_provenance" }, "config": { "$ref": "#/$defs/reviewProvenanceConfig" } } }
       ],
       "unevaluatedProperties": false
     },
@@ -291,6 +299,16 @@
       "properties": {
         "source_node": { "$ref": "#/$defs/nodeId", "description": "Node whose output is collected from each execution, commonly the last node in a Send foreach body." },
         "operation": { "type": "string", "enum": ["collect", "sum", "count", "min", "max", "product"], "default": "collect" }
+      }
+    },
+    "reviewProvenanceConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["candidate"],
+      "description": "Deterministically validate a review candidate {card_id, reviewer_task_id, pr_url, head_sha} against its kanban card, completed reviewer ACP task and a live PR lookup {url, head_sha, verified, observed_at}. Those records are read by the candidate's own ids from the runtime's trusted evidence source, never from routine state; without that source the verdict is invalid (source.unavailable). Writes {valid, reasons, receipt}; anything missing, pending, stale, malformed or mismatched is invalid. A missing candidate path counts as a missing candidate.",
+      "properties": {
+        "candidate": { "type": "string", "minLength": 1, "description": "State path of the review candidate." },
+        "max_evidence_age_seconds": { "type": "integer", "minimum": 1, "maximum": 86400, "default": 900, "description": "Evidence observed longer ago than this is stale." }
       }
     },
     "foreachSendConfig": {

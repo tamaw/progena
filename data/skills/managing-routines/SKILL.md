@@ -59,12 +59,29 @@ schema, validate it, then write exactly one routine file.
 ## Node kinds
 
 The current schema supports: `prompt`, `eval`, `condition`, `switch`, `split`,
-`classify`, `agent`, `a2a`, `noop`, `human`, `foreach`, `reduce`, and `routine`.
+`classify`, `agent`, `a2a`, `noop`, `human`, `foreach`, `reduce`, `routine`, and
+`review_provenance`.
 
 - `prompt` invokes the model using exactly one of `prompt_template` or
   `prompt_file`.
 - `eval` uses a restricted Python expression or expression file; `defaults`
-  provides fallbacks for missing top-level state values.
+  provides fallbacks for missing top-level state values. Expressions support
+  constants, names, dotted dict-field walks (`a.b.c`), arithmetic, comparisons,
+  `and`/`or`/`not`, `x if c else y`, and JSON-style object/list literals:
+  `{**card.metadata, "review_approval": {"inbox_id": inbox.id, "sha": sha}}`
+  or `["a", n, [1, 2]]`. Object keys must be strings; `**` unpacks only
+  objects; unpacked entries and explicit keys merge left to right, so a later
+  key overwrites an earlier one. The result is a new object -- state is never
+  mutated. Sizes are counted logically -- every nested entry, counting a
+  repeated reference each time, so `[[0] * 1000] * 1000` is 1,000,000 entries.
+  Expressions are capped at 2000 characters and 500 levels of nesting; any
+  constructed list/object/string at 100,000 entries; and everything one
+  evaluation builds or compares (`==`, `<`, `in`, ...) at 1,000,000 entries
+  in total, checked before the work runs. Values nested over 64 levels or
+  containing reference cycles cannot be built from or compared. Calls,
+  subscripts (`x[0]`), comprehensions, imports, `*` list unpacking,
+  sets/tuples, `eval`/`exec`, and attribute access on anything other than an
+  object remain rejected.
 - `condition` is a boolean gate whose router must have exactly `true` and
   `false` branches and no default.
 - `switch` routes an expression through author-defined branches.
@@ -107,6 +124,28 @@ The current schema supports: `prompt`, `eval`, `condition`, `switch`, `split`,
   the body node whose output should be aggregated. Empty input returns `[]` for
   collect, `0` for sum/count, `1` for product, and `null` for min/max.
 - `routine` invokes another routine by name with optional input/output maps.
+- `review_provenance` checks a review candidate before anything acts on it.
+  `config.candidate` is the state path of `{card_id, reviewer_task_id, pr_url,
+  head_sha}`; optional `max_evidence_age_seconds` defaults to 900. The node
+  reads the stored kanban card, the stored reviewer ACP task and the pull
+  request (a live, read-only GitHub API lookup) itself, by the candidate's ids
+  -- never from routine state, repo-manager replies or `repo_scan`, so an
+  earlier step cannot supply a record or a `verified` flag. The lookup's
+  `verified` only means the fetch succeeded and returned this exact pull
+  request with a full head SHA; it does not mean CI or checks passed. The
+  lookup is unauthenticated, so only public github.com pull requests can pass;
+  private repositories, other hosts and API errors are invalid. It writes
+  `{valid, reasons, receipt}` and never calls a model or changes anything. It
+  fails closed: `valid` is true only when the card id and PR URL, the reviewer
+  task id and card, and the PR URL and full head SHA all match; the task is
+  `completed` with no pending input or cancellation; `verified` is exactly
+  `true`; and the PR was observed no longer ago than the window, not before
+  the task completed, and not in the future. A missing candidate path counts as a
+  missing candidate, and a failed read as missing evidence. PR URLs compare as
+  `https://host/owner/repo/pull/N`, case-insensitively for host/owner/repo;
+  abbreviated SHAs are rejected. Route on `<output_key>.valid` with a
+  `condition` node; `receipt` holds the validated identities for a later
+  `eval`, e.g. `{**card.metadata, "review_approval": provenance.receipt}`.
 
 ### Prompt template placeholders
 

@@ -42,6 +42,7 @@ from .control_nodes import (
     _build_output_projector,
     _build_reduce_node,
     _build_retry_exhausted_handler,
+    _build_review_provenance_node,
     _build_router,
     _build_send_router,
     _build_split_node,
@@ -72,6 +73,7 @@ from .messages import (
     normalize_message_content as normalize_message_content,
 )
 from .model_nodes import _build_classify_node, _build_prompt_node
+from .provenance import ReviewEvidenceSource
 from .state import (
     RoutineState as RoutineState,
 )
@@ -269,6 +271,7 @@ def _build_node_callable(
     defs: dict[str, dict[str, Any]] | None = None,
     instruction_loader: Callable[[str], str] | None = None,
     policy_defaults: dict[str, Any] | None = None,
+    review_evidence_source: ReviewEvidenceSource | None = None,
 ) -> Any:
     profile = _node_config(node).get("model_profile")
     if profile and node.kind in {"prompt", "classify"}:
@@ -294,6 +297,8 @@ def _build_node_callable(
         return _build_eval_node(node)
     if node.kind == "reduce":
         return _build_reduce_node(node)
+    if node.kind == "review_provenance":
+        return _build_review_provenance_node(node, review_evidence_source)
     if node.kind == "condition":
         return _build_condition_node(node)
     if node.kind == "switch":
@@ -489,6 +494,7 @@ def compile_routine_graph(
     preserve_data: bool = False,
     execution_policy: PolicyValues | None = None,
     model_profiles: dict[str, Any] | None = None,
+    review_evidence_source: ReviewEvidenceSource | None = None,
 ):
     """Compile a routine with LangGraph persistence, retries, context and fan-out.
 
@@ -499,7 +505,9 @@ def compile_routine_graph(
     retained for direct compiler callers and backwards compatibility.
     ``preserve_data`` keeps structured child state alongside a declared output
     projection for the execution adapter; direct callers retain the default
-    projected output contract.
+    projected output contract. ``review_evidence_source`` supplies the trusted
+    card, reviewer-task and live PR reads for ``review_provenance`` nodes; without
+    it those nodes always report ``source.unavailable``.
     """
     # Keep live registry identity even when it is initially empty.
     agent_registry = {} if agent_registry is None else agent_registry
@@ -670,6 +678,7 @@ def compile_routine_graph(
                     defs=graph.defs,
                     instruction_loader=instruction_loader,
                     policy_defaults=policy_defaults,
+                    review_evidence_source=review_evidence_source,
                 ),
                 route_fn=route_fns.get(node.id),
                 capture_output_key=capture_output_keys.get(node.id),

@@ -7,6 +7,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.types import Command
 
+from src.progena.routines.expression import UnsafeExpressionError
 from src.progena.routines.factory import compile_routine_graph
 from src.progena.routines.graph import validate_routine_graph_payload
 from src.progena.settings.policies import PolicyValues
@@ -505,6 +506,58 @@ async def test_eval_node_default_only_applies_when_the_input_path_is_missing() -
     )
 
     assert result["data"]["hits"] == 6
+
+
+@pytest.mark.asyncio
+async def test_eval_node_builds_an_approval_receipt_without_mutating_state() -> None:
+    metadata = {"priority": "high", "labels": ["infra"]}
+    routine = graph(
+        {
+            "id": "receipt",
+            "kind": "eval",
+            "output_key": "metadata",
+            "config": {
+                "expression": (
+                    '{**card.metadata, "review_approval": '
+                    '{"inbox_id": inbox.id, "sha": evidence.commit_sha}}'
+                )
+            },
+        },
+    )
+    result = await compile_routine_graph(routine, model=FakeModel()).ainvoke(
+        {
+            "messages": [HumanMessage("go")],
+            "data": {
+                "card": {"metadata": metadata},
+                "inbox": {"id": "msg-1"},
+                "evidence": {"commit_sha": "abc123"},
+            },
+        }
+    )
+
+    assert result["data"]["metadata"] == {
+        "priority": "high",
+        "labels": ["infra"],
+        "review_approval": {"inbox_id": "msg-1", "sha": "abc123"},
+    }
+    assert metadata == {"priority": "high", "labels": ["infra"]}
+
+
+@pytest.mark.asyncio
+async def test_eval_node_rejects_shared_reference_blowup_before_comparing() -> None:
+    attack = "[[[0]*100000]*100000]*100000 == [[[0]*100000]*100000]*100000"
+    routine = graph(
+        {
+            "id": "blowup",
+            "kind": "eval",
+            "output_key": "blowup",
+            "config": {"expression": attack},
+        },
+    )
+    with pytest.raises(UnsafeExpressionError, match="sequence repetition result too long"):
+        await compile_routine_graph(routine, model=FakeModel()).ainvoke(
+            {"messages": [HumanMessage("go")], "data": {}}
+        )
 
 
 def test_eval_condition_switch_and_loop_guard_reject_a_legacy_inputs_field() -> None:
