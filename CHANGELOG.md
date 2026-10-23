@@ -22,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **JavaScript bridge compatibility**: retain standard nullable `anyOf` schemas during metadata compaction so the interpreter can render read/A2A tool signatures without crashing. JavaScript subagent calls now use the same live object-agent/routine resolution as normal task calls, including targets added after graph compilation.
 - **Module catalogue included in deployment images**: allow bundled `data/modules/` through the Docker build context and include catalogue changes in both Python-image rebuild decisions. This fixes the missing-directory `COPY` failure and keeps manifest validation aligned with deployed libraries.
 - **ChatGPT token recovery**: preserve a rotated refresh credential before deferred ID-token verification, retry that validation without replaying its consumed grant, and retry one pre-output HTTP 401 with a coordinated token refresh. Reasoning replay now retains the completed status, streamed summary and encrypted content without duplicate chunk fields.
+- **ChatGPT structured and auxiliary calls**: recover completed Responses output items from the stream when the ChatGPT plan terminal event reports an empty `output`, restoring schema-constrained output and tool follow-ups.
 
 ### Removed
 - **Obsolete root scripts retired**: removed the obsolete diagnostics, live evaluators, helper, and one-off migration utilities with their live-evaluation reports. Retired scripts remain available in Git history.
