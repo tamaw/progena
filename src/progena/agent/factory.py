@@ -13,9 +13,10 @@ import json
 import logging
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from deepagents import create_deep_agent
+from deepagents.backends.protocol import BackendProtocol
 from deepagents.middleware.async_subagents import AsyncSubAgent
 from deepagents.middleware.filesystem import FilesystemMiddleware, FsToolName
 from deepagents.middleware.subagents import CompiledSubAgent
@@ -29,7 +30,7 @@ from src.progena.agent.adapters import (
     create_deepagent_tools,
     create_dynamic_mcp_tools,
 )
-from src.progena.agent.filesystem.mounts import create_progena_backend
+from src.progena.agent.filesystem.mounts import FileOnlyDeleteBackend, create_progena_backend
 from src.progena.agent.filesystem.shell import ShellPaths
 from src.progena.agent.middleware import (
     AsyncSubagentTrackingMiddleware,
@@ -80,6 +81,7 @@ _FILESYSTEM_TOOLS: list[FsToolName] = [
     "read_file",
     "write_file",
     "edit_file",
+    "delete",
     "glob",
     "grep",
     "execute",
@@ -334,9 +336,12 @@ async def create_progena_agent(
     )
 
     custom_middleware = [
-        # Deep Agents 0.7 made recursive deletion available through the
-        # filesystem middleware. Progena's existing authority excludes it.
-        FilesystemMiddleware(backend=backend, tools=_FILESYSTEM_TOOLS),
+        # Keep Deep Agents' native delete tool, but deny its recursive directory
+        # deletion behavior for the chat-facing filesystem.
+        FilesystemMiddleware(
+            backend=cast("BackendProtocol", FileOnlyDeleteBackend(backend)),
+            tools=_FILESYSTEM_TOOLS,
+        ),
         TodoListMiddleware(),
         DirectA2AFastPathMiddleware(tool_registry=tool_registry),
         DynamicMCPToolMiddleware(mcp_tools_provider=lambda: create_dynamic_mcp_tools(llm_client)),
