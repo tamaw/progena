@@ -49,6 +49,7 @@ class _UsageCall:
     total_tokens: int | None
     cache_read_tokens: int | None
     reasoning_tokens: int | None
+    provider: str | None = None
 
 
 class _Metrics:
@@ -261,6 +262,7 @@ def _merge_usage_calls(previous: _UsageCall, current: _UsageCall) -> _UsageCall:
         has_explicit_timestamp=has_explicit_timestamp,
         profile_name=current.profile_name or previous.profile_name,
         deployment=current.deployment or previous.deployment,
+        provider=current.provider or previous.provider,
         input_tokens=input_tokens,
         output_tokens=output_tokens,
         total_tokens=total_tokens,
@@ -322,6 +324,7 @@ def _usage_call_from_message(message: Any, blob: CheckpointMessageBlob) -> _Usag
         has_explicit_timestamp=explicit_timestamp is not None,
         profile_name=profile_name,
         deployment=deployment,
+        provider=_nonempty_string(insights.get("provider")),
         input_tokens=input_tokens,
         output_tokens=output_tokens,
         total_tokens=total_tokens,
@@ -417,6 +420,9 @@ def _message_timestamp(
 def _estimate_cost(
     call: _UsageCall, pricing: Mapping[str, Any] | None, warnings: set[str]
 ) -> tuple[str, Decimal] | None:
+    if call.provider == "chatgpt":
+        warnings.add("ChatGPT plan usage is not priced using API token rates.")
+        return None
     if call.input_tokens is None or call.output_tokens is None:
         return None
     if pricing is None:

@@ -15,7 +15,11 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 
 from src.progena.config import LLMConfig
-from src.progena.settings.providers import GO_RESPONSES_MODELS, get_provider_repository
+from src.progena.settings.providers import (
+    GO_RESPONSES_MODELS,
+    get_provider_repository,
+    refresh_chatgpt_access_token,
+)
 
 
 class ProviderNotConfiguredError(RuntimeError):
@@ -164,16 +168,30 @@ async def provider_config_for_call(
     provider_id: str | None = None,
     model_override: str | None = None,
 ) -> LLMConfig:
-    """Resolve a connection, reusing the active turn snapshot when present."""
+    """Resolve a connection and renew a ChatGPT access token at call time.
+
+    A provider turn intentionally pins the selected registration and model, but
+    its access token can expire while tools or subagents are running. Refreshing
+    here changes only that credential and lets storage serialize rotating-token
+    refreshes for the selected registration.
+    """
     turn = current_provider_turn()
     if turn is not None:
-        return await turn.resolve(
+        config = await turn.resolve(
             provider_id=provider_id,
             model_override=model_override,
             template=template,
         )
-    return await resolve_provider_config(
-        template,
-        provider_id=provider_id,
-        model_override=model_override,
-    )
+    else:
+        config = await resolve_provider_config(
+            template,
+            provider_id=provider_id,
+            model_override=model_override,
+        )
+
+    if config.provider_kind != "chatgpt":
+        return config
+    if not config.provider_id:
+        raise ProviderResolutionError("ChatGPT provider is missing its registration identifier")
+    access_token = await refresh_chatgpt_access_token(config.provider_id)
+    return replace(config, api_key=access_token)

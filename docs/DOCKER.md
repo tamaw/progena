@@ -27,7 +27,7 @@ object agents.
 
 ## Before starting
 
-Model connections are configured in **Settings → Providers**, not required endpoint environment variables. Foundry and OpenCode Go currently use the Responses API only.
+Model connections are configured in **Settings → Providers**, not required endpoint environment variables. Foundry, OpenCode Go, and ChatGPT plan connections use the Responses API.
 
 For database-stored API keys, generate one Fernet key and set `PROGENA_PROVIDER_ENCRYPTION_KEY` in the deployment `.env`; Compose passes it to backend and runtime:
 
@@ -64,6 +64,82 @@ docker volume create progena-shared
 agent as the writable `/shared/` route (`PROGENA_SHARED_DIR`). Mount the same
 volume into A2A agent containers to exchange files with them; nothing in it is
 access-controlled, so any container that mounts it can change anything there.
+
+### ChatGPT plan OAuth on a self-hosted server
+
+ChatGPT plan authentication is a model-provider connection, not Progena's
+application login. It uses OpenAI's supported open-source flow; see the official
+[sign-in](https://developers.openai.com/siwc/token-sharing-open-source/sign-in)
+and [self-hosted server](https://developers.openai.com/siwc/token-sharing-open-source/self-hosted-vms)
+guides.
+
+Set the same persistent `PROGENA_PROVIDER_ENCRYPTION_KEY` on backend and runtime
+before importing credentials. Access, refresh, and retained ID tokens are encrypted
+in the backend provider database. Back up that database and encryption key
+securely together; neither belongs in source control or application transcripts.
+
+On the computer running your browser, activate the project venv and sign in:
+
+```bash
+python -m src.progena.settings.chatgpt_cli sign-in \
+  --credential-file "$HOME/.config/progena/chatgpt-credentials.json"
+```
+
+The helper opens the system browser and listens only on `127.0.0.1` at an
+available port. Do not replace its callback with the public server URL or
+`localhost`. It validates state, PKCE, the signed ID token, and the account
+identity. Credential files are written atomically with Unix mode `0600`.
+Use a different credential file for each registration; use `--reauthorize`
+with its existing file to reconnect that registration. Routine reauthorization
+does not request consent. If a provider reports that ChatGPT plan usage is
+disabled, explicitly request it again with:
+
+```bash
+python -m src.progena.settings.chatgpt_cli sign-in \
+  --reauthorize --enable-plan-usage \
+  --credential-file "$HOME/.config/progena/chatgpt-credentials.json"
+```
+
+Transfer the selected protected file over SSH to a private directory on the
+server. For a Compose installation, copy it into the runtime's writable tmpfs,
+make the file owned by its unprivileged runtime user, and import it:
+
+```bash
+# On the server after the SSH transfer; substitute your protected file path.
+docker cp /private/path/chatgpt-credentials.json progena:/app/tmp/chatgpt-credentials.json
+docker exec -u 0 progena chown 10001:10001 /app/tmp/chatgpt-credentials.json
+docker exec -u 0 progena chmod 600 /app/tmp/chatgpt-credentials.json
+docker exec progena python -m src.progena.settings.chatgpt_cli import \
+  --credential-file /app/tmp/chatgpt-credentials.json --name "My ChatGPT plan"
+docker exec progena rm /app/tmp/chatgpt-credentials.json
+```
+
+Remove the server-side transfer copy after a successful import. Do not put token
+contents in shell arguments, Settings fields, tickets, or chat. The server retains
+its own stable host ID and owns subsequent token refreshes; do not run competing
+refresh clients against the transferred session. For reconnecting, import the
+new credential file with `--provider-id` set to the existing provider ID.
+
+Reload **Settings → Providers**, select a model from that account's catalogue,
+then select the connection as the default or assign it to a model profile.
+Separate provider records keep saved registrations distinct, including those
+with the same email address. Disconnect stops further use and attempts renewable
+session revocation. Check ChatGPT Settings if remote revocation cannot be confirmed.
+
+Install the declared OpenAI SDK range (`>=3.37.0,<4.0.0`); older SDKs do
+not understand namespace tools and can misparse response tool metadata.
+
+ChatGPT requests stream with `store:false`, include application-managed context,
+and omit unsupported controls such as temperature and output-token limits.
+Tools and MCP execute through Progena. OpenAI-hosted file search, Code Interpreter,
+image generation, hosted MCP, audio/video, and transcription are not supported
+by this route. Local file handling and checkpoints remain Progena-owned.
+`store:false` disables Responses storage; it is not a general zero-retention
+guarantee. Plan limits are not API token prices, and errors never silently switch
+to another billing connection. Review
+[OpenAI's current limitations](https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations)
+and [usage settings](https://chatgpt.com/settings/usage).
+
 
 ## Start and stop
 

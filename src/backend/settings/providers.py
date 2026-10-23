@@ -14,8 +14,15 @@ from psycopg.errors import UniqueViolation
 import src.backend.http.contracts as http_contracts
 from src.backend.http.requests import BroadcastUiEvent, request_correlation_id
 from src.backend.storage.documents import PROGENA_STATE_PREFIX, BackendDocumentStore
+from src.progena.settings.chatgpt_oauth import ChatGPTOAuthError
 from src.progena.settings.model_profiles import MODEL_PROFILES_DOC_KEY
-from src.progena.settings.providers import GO_RESPONSES_MODELS, ProviderRepository
+from src.progena.settings.providers import (
+    GO_RESPONSES_MODELS,
+    ProviderRepository,
+    get_chatgpt_models,
+    test_chatgpt_connection,
+    update_chatgpt_provider,
+)
 
 
 def _repository_or_unavailable(
@@ -37,8 +44,27 @@ def _repository_error(exc: Exception) -> HTTPException:
     return HTTPException(status_code=503, detail="Provider settings are unavailable")
 
 
-def _snapshot(repository: ProviderRepository) -> dict[str, Any]:
-    return {"providers": repository.list_public(), "go_models": list(GO_RESPONSES_MODELS)}
+async def _snapshot(repository: ProviderRepository) -> dict[str, Any]:
+    providers = await asyncio.to_thread(repository.list_public)
+    chatgpt_models: dict[str, list[dict[str, str]]] = {}
+    chatgpt_model_errors: dict[str, str] = {}
+    for provider in providers:
+        if provider["kind"] != "chatgpt":
+            continue
+        provider_id = str(provider["id"])
+        try:
+            chatgpt_models[provider_id] = await get_chatgpt_models(provider_id)
+        except (ChatGPTOAuthError, LookupError, ValueError, ConnectionError, TimeoutError):
+            chatgpt_models[provider_id] = []
+            chatgpt_model_errors[provider_id] = (
+                "Model catalog is unavailable. Reconnect the account and try again."
+            )
+    return {
+        "providers": providers,
+        "go_models": list(GO_RESPONSES_MODELS),
+        "chatgpt_models": chatgpt_models,
+        "chatgpt_model_errors": chatgpt_model_errors,
+    }
 
 
 async def broadcast_provider_snapshot(
@@ -47,7 +73,7 @@ async def broadcast_provider_snapshot(
     *,
     request_id: str | None = None,
 ) -> None:
-    payload = await asyncio.to_thread(_snapshot, repository)
+    payload = await _snapshot(repository)
     broadcast("providers.snapshot", payload, request_id=request_id)
 
 
@@ -64,8 +90,19 @@ def _profile_references_provider(store: BackendDocumentStore, provider_id: str) 
 
 
 async def _test_connection(
-    repository: ProviderRepository, provider_id: str
+    repository: ProviderRepository,
+    provider_id: str,
+    provider_kind: str,
+    model_default: object = None,
 ) -> tuple[bool, str | None]:
+    if provider_kind == "chatgpt":
+        if not isinstance(model_default, str) or not model_default.strip():
+            return (False, "Choose a ChatGPT model before testing this connection.")
+        try:
+            await test_chatgpt_connection(provider_id)
+        except (ChatGPTOAuthError, LookupError, ValueError, ConnectionError, TimeoutError):
+            return (False, "Connection test failed. Reconnect the ChatGPT account and try again.")
+        return (True, None)
     try:
         connection = await asyncio.to_thread(repository.resolve, provider_id)
     except (LookupError, ValueError):
@@ -142,7 +179,25 @@ def create_provider_router(
         request_id = request_correlation_id(request, request.headers.get("x-request-id"))
         repository = _repository_or_unavailable(get_repository)
         try:
-            await asyncio.to_thread(repository.update, provider_id, body)
+            provider = next(
+                item
+                for item in await asyncio.to_thread(repository.list_public)
+                if item["id"] == provider_id
+            )
+        except StopIteration as exc:
+            raise HTTPException(status_code=404, detail="Provider not found") from exc
+        try:
+            if provider["kind"] == "chatgpt":
+                patch = dict(body)
+                default_model = patch.pop("default_model", None)
+                if "default_model" in body and (
+                    not isinstance(default_model, str) or not default_model.strip()
+                ):
+                    raise ValueError("model must be a non-empty string")
+                if patch or default_model is not None:
+                    await update_chatgpt_provider(provider_id, patch, default_model)
+            else:
+                await asyncio.to_thread(repository.update, provider_id, body)
             await broadcast_provider_snapshot(repository, broadcast, request_id=request_id)
         except Exception as exc:
             raise _repository_error(exc) from exc
@@ -184,23 +239,47 @@ def create_provider_router(
         request_id = request_correlation_id(request, request.headers.get("x-request-id"))
         repository = _repository_or_unavailable(get_repository)
         try:
-            exists = await asyncio.to_thread(repository.resolve, provider_id)
-        except LookupError as exc:
-            raise HTTPException(status_code=404, detail="Provider not found") from exc
-        except ValueError:
-            exists = None
-        if exists is None:
-            broadcast(
-                "providers.tested",
-                {"provider_id": provider_id, "ok": False, "error": "Provider is not configured"},
-                request_id=request_id,
+            provider = next(
+                item
+                for item in await asyncio.to_thread(repository.list_public)
+                if item["id"] == provider_id
             )
-        else:
-            ok, error = await _test_connection(repository, provider_id)
-            payload: dict[str, Any] = {"provider_id": provider_id, "ok": ok}
-            if error is not None:
-                payload["error"] = error
-            broadcast("providers.tested", payload, request_id=request_id)
+        except StopIteration as exc:
+            raise HTTPException(status_code=404, detail="Provider not found") from exc
+        ok, error = await _test_connection(
+            repository, provider_id, str(provider["kind"]), provider.get("default_model")
+        )
+        payload: dict[str, Any] = {"provider_id": provider_id, "ok": ok}
+        if error is not None:
+            payload["error"] = error
+        broadcast("providers.tested", payload, request_id=request_id)
         return http_contracts.acknowledgement_response(request_id, ["providers.tested"])
+
+    @router.post(
+        "/providers/{provider_id}/disconnect",
+        status_code=202,
+        response_model=http_contracts.UiRequestAcknowledgement,
+    )
+    async def disconnect_chatgpt_provider(
+        provider_id: str, request: Request
+    ) -> http_contracts.UiRequestAcknowledgement:
+        request_id = request_correlation_id(request, request.headers.get("x-request-id"))
+        repository = _repository_or_unavailable(get_repository)
+        try:
+            provider = next(
+                item
+                for item in await asyncio.to_thread(repository.list_public)
+                if item["id"] == provider_id
+            )
+        except StopIteration as exc:
+            raise HTTPException(status_code=404, detail="Provider not found") from exc
+        if provider["kind"] != "chatgpt":
+            raise HTTPException(status_code=422, detail="Provider is not a ChatGPT plan connection")
+        try:
+            await asyncio.to_thread(repository.disconnect_chatgpt, provider_id)
+            await broadcast_provider_snapshot(repository, broadcast, request_id=request_id)
+        except Exception as exc:
+            raise _repository_error(exc) from exc
+        return http_contracts.acknowledgement_response(request_id, ["providers.snapshot"])
 
     return router
