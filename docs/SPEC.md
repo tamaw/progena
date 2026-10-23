@@ -279,12 +279,15 @@ directory roots below `/artifacts/` or `/shared/`; no other mount family,
 relative path, dot traversal, backslash, NUL, or empty root is valid. Read
 access provides `ls`, `readFile`, `glob`, and `grep`; write access adds
 `writeFile`, `editFile`, `copyFile`, `moveFile`, and `deleteFile`. It never
-provides shell, network, agent, browser, or generic host access. Writes and
-copies do not overwrite; moves operate on files only within one mount, but are
-not atomic and may be copy-then-delete. File operations are nontransactional:
-completed writes are not rolled back on cancellation or a later error, and
-manual reruns/replays can repeat them. Disabling automatic caching and retries
-does not provide exactly-once execution. The QuickJS CPU deadline excludes
+provides shell, network, agent, browser, or generic host access. `writeFile`
+and `copyFile` do not overwrite; replace a file with `deleteFile` then
+`writeFile`. Moves operate on files only within one mount, but are not atomic
+and may be copy-then-delete. Filesystem failures throw catchable errors whose
+message is available as `error.message`; use `ls` or `glob` for existence
+checks. File operations are nontransactional: completed writes are not rolled
+back on cancellation or a later error, and manual reruns/replays can repeat
+them. Disabling automatic caching and retries does not provide exactly-once
+execution. The QuickJS CPU deadline excludes
 async filesystem waits, which remain bounded by the enclosing node timeout.
 
 ## Insights

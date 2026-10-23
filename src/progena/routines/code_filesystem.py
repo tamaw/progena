@@ -414,6 +414,7 @@ class ScopedFilesystemTools:
             _required_string(args, "file_path", "writeFile"), label="writeFile file_path"
         )
         content = _required_string(args, "content", "writeFile")
+        await self._require_missing_destination(path, operation="writeFile")
         result = await self._backend.awrite(path, content)
         _result_error("writeFile", result)
         return {"path": getattr(result, "path", None) or path}
