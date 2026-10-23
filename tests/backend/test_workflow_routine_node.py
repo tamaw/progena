@@ -102,6 +102,54 @@ async def _start(store, definition, executor):
     return waiting
 
 
+def test_manual_payload_feeds_format_then_routine_with_defaulted_ports():
+    store = InMemoryDocumentStore()
+    seed_document_types(store)
+    store.save_document(PROGENA_STATE_PREFIX, f"routine:{TYPED_ROUTINE['id']}", TYPED_ROUTINE)
+    workflow = default_workflow_definition()
+    workflow["graph"] = {
+        "nodes": {
+            "manual": {
+                "kind": "manual",
+                "title": "Run round",
+                "output_schema": {
+                    "type": "object",
+                    "required": ["run_id"],
+                    "properties": {
+                        "run_id": {"type": "string"},
+                        "round_count": {"type": "integer", "default": 3},
+                    },
+                },
+            },
+            "format": {
+                "kind": "format",
+                "title": "Format round",
+                "template": "{run_id}:{round_count}",
+            },
+            "run": {"kind": "routine", "title": "Run routine", "routine": TYPED_ROUTINE["id"]},
+        },
+        "edges": [
+            {
+                "from": {"node": "manual", "port": "run_id"},
+                "to": {"node": "format", "port": "run_id"},
+            },
+            {
+                "from": {"node": "manual", "port": "round_count"},
+                "to": {"node": "format", "port": "round_count"},
+            },
+            {"from": {"node": "format", "port": "text"}, "to": {"node": "run", "port": "card"}},
+        ],
+    }
+
+    definition = save_workflow_definition(store, workflow)
+
+    assert build_manual_trigger_event(definition, payload={"run_id": "round-a"}) == {
+        "run_id": "round-a",
+        "round_count": 3,
+    }
+    assert definition.graph.nodes["run"].input_schema["properties"]["card"] == {"type": "string"}
+
+
 def test_routine_ports_come_from_its_schemas_else_message():
     _store, typed, _e, _r = _setup(TYPED_ROUTINE, port="card")
     node = typed.graph.nodes["run"]

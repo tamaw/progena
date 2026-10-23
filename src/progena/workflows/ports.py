@@ -20,6 +20,7 @@ from src.progena.workflows.models import (
     WorkflowNodeCron,
     WorkflowNodeData,
     WorkflowNodeEvent,
+    WorkflowNodeManual,
 )
 from src.progena.workflows.schema_values import unpackable_properties
 
@@ -327,7 +328,9 @@ def workflow_node_output_ports(node: WorkflowNode) -> dict[str, dict[str, Any]]:
 def workflow_node_input_ports(node: WorkflowNode) -> dict[str, dict[str, Any]]:
     """Return the named, typed input ports for one node."""
 
-    if isinstance(node, WorkflowNodeData | WorkflowNodeEvent | WorkflowNodeCron):
+    if isinstance(
+        node, WorkflowNodeData | WorkflowNodeEvent | WorkflowNodeCron | WorkflowNodeManual
+    ):
         return {}
     schema = node.input_schema or {}
     if schema.get("type") != "object":

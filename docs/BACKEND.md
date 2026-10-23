@@ -251,6 +251,16 @@ For browser chat generation, the acknowledgement and streams divide ownership:
 - canonical terminal cancellation still arrives only as
   `chat.response.cancelled` correlated to the **target** response request ID
 
+## Workflow triggers
+
+Workflow graphs require at least one `event`, `cron`, or `manual` trigger.
+`manual` triggers never subscribe to document events or the cron clock. Their
+object `output_schema` declares the typed payload ports accepted by
+`POST /api/ui/workflows/{workflow_id}/trigger` and `run_workflow`; defaults on
+payload properties are applied before validation and run creation. An explicit
+run chooses the first manual trigger in graph order when one exists, otherwise
+the first event or cron trigger remains the compatibility fallback.
+
 ## Browser-retained route disposition
 
 The browser-facing retained route families in this table use the acknowledgement

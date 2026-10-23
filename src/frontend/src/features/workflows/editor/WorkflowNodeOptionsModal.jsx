@@ -380,6 +380,13 @@ export function WorkflowNodeOptionsModal({ node, onChange, onClose }) {
                 </div>
               </>
             ) : null}
+            {kind === 'manual' ? (
+              <JsonFieldEditor
+                label="Payload schema"
+                value={node.data?.outputSchema}
+                onCommit={(outputSchema) => onChange(node.id, { outputSchema })}
+              />
+            ) : null}
             {kind === 'document_read' ? (
               <>
                 <label className="workflow-node-options__field">

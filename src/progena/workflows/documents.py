@@ -23,6 +23,7 @@ from src.progena.workflows.models import (
     WorkflowInvokeRequest,
     WorkflowListItem,
     WorkflowNodeEvent,
+    WorkflowNodeManual,
     WorkflowRun,
     WorkflowTriggerNode,
 )
@@ -81,7 +82,13 @@ def build_workflow_list_item(definition: WorkflowDefinition) -> WorkflowListItem
         None,
     )
     triggers = [
-        node.document_type if isinstance(node, WorkflowNodeEvent) else f"cron {node.expression}"
+        (
+            node.document_type
+            if isinstance(node, WorkflowNodeEvent)
+            else "manual"
+            if isinstance(node, WorkflowNodeManual)
+            else f"cron {node.expression}"
+        )
         for node in definition.graph.nodes.values()
         if isinstance(node, WorkflowTriggerNode)
     ]
