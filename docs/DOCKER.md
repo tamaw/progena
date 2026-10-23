@@ -101,14 +101,14 @@ python -m src.progena.settings.chatgpt_cli sign-in \
 ```
 
 Transfer the selected protected file over SSH to a private directory on the
-server. For a Compose installation, copy it into the runtime's writable tmpfs,
-make the file owned by its unprivileged runtime user, and import it:
+server. For a Compose installation, stream it into the runtime's writable tmpfs
+as its unprivileged runtime user (`docker cp` cannot write to the read-only
+root filesystem or its tmpfs, and would create a root-owned file), then import it:
 
 ```bash
 # On the server after the SSH transfer; substitute your protected file path.
-docker cp /private/path/chatgpt-credentials.json progena:/app/tmp/chatgpt-credentials.json
-docker exec -u 0 progena chown 10001:10001 /app/tmp/chatgpt-credentials.json
-docker exec -u 0 progena chmod 600 /app/tmp/chatgpt-credentials.json
+docker exec -i -u 10001 progena sh -c 'umask 077; cat > /app/tmp/chatgpt-credentials.json' \
+  < /private/path/chatgpt-credentials.json
 docker exec progena python -m src.progena.settings.chatgpt_cli import \
   --credential-file /app/tmp/chatgpt-credentials.json --name "My ChatGPT plan"
 docker exec progena rm /app/tmp/chatgpt-credentials.json
