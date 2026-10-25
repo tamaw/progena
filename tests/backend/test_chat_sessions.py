@@ -231,6 +231,53 @@ class TestGetChatDetail:
             "provider_id": "provider-1",
         }
 
+    def test_tool_failure_is_classified_before_history_truncation(self):
+        long_failure = "x" * 1000 + "\n[Command failed with exit code 3]"
+        store = InMemoryDocumentStore()
+        store.upsert_checkpoint_thread_snapshot(
+            CheckpointThreadSnapshot(
+                thread_id="thread_failed_tool",
+                checkpoint_id="cp-1",
+                checkpoint_ts="2026-01-01T00:00:00Z",
+                messages=[
+                    {"id": "u1", "type": "human", "content": "run it"},
+                    {
+                        "id": "a1",
+                        "type": "ai",
+                        "content": "",
+                        "tool_calls": [
+                            {"id": "c1", "name": "execute", "args": {}},
+                            {"id": "c2", "name": "execute", "args": {}},
+                        ],
+                    },
+                    {
+                        "id": "t1",
+                        "type": "tool",
+                        "name": "execute",
+                        "tool_call_id": "c1",
+                        "content": long_failure,
+                    },
+                    {
+                        "id": "t2",
+                        "type": "tool",
+                        "name": "execute",
+                        "tool_call_id": "c2",
+                        "content": "ok\n[Command succeeded with exit code 0]",
+                    },
+                    {"id": "a2", "type": "ai", "content": "Done."},
+                ],
+            )
+        )
+        _store_session(store, "thread_failed_tool")
+
+        detail = get_chat_detail(store, "thread_failed_tool")
+
+        assert detail is not None
+        failed, succeeded = detail.messages[-1].tool_calls
+        assert "exit code" not in failed["result"]
+        assert failed["failed"] is True
+        assert "failed" not in succeeded
+
     def test_keeps_each_model_calls_reasoning_as_its_own_segment(self):
         def ai(message_id, created_at, reasoning, **extra):
             return {

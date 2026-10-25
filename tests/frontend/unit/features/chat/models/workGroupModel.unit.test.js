@@ -52,7 +52,7 @@ describe('buildWorkSteps', () => {
       eventItem('result', 'tool_result', {
         tool_name: 'javascript',
         tool_call_id: 'script',
-        result_preview: '<stdout>before failure</stdout><error type="TypeError">boom</error>',
+        result_preview: '<stdout>\nbefore failure\n</stdout>\n<error type="TypeError">boom</error>',
       }),
     ];
     const steps = buildWorkSteps(items);

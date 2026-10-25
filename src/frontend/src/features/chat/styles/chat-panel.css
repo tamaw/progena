@@ -2476,14 +2476,15 @@ pre.mermaid svg {
     cursor: pointer;
 }
 
-/* Clicking leaves no focus ring; keyboard focus brightens the header text
-   instead (same approach as .knowledge-breadcrumbs buttons). */
+/* Clicking leaves no focus ring. Work-group titles start muted and brighten on
+   keyboard focus; card titles are already primary, so cards get a ring. */
 .entry-toggle:focus {
     outline: none;
 }
 
-.entry-toggle:focus-visible .entry__role {
-    color: var(--color-text-primary);
+.entry-toggle:not(.work-group__toggle):focus-visible {
+    outline: 1px solid color-mix(in oklab, var(--color-accent) 55%, transparent);
+    outline-offset: 1px;
 }
 
 /* Toggle headers use the tool rows' right-hand chevron, after the meta. */

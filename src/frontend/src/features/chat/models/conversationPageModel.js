@@ -71,7 +71,11 @@ function filterSupportedPersistedStreamEvents(streamEvents) {
   });
 }
 
-export function normalizeStoredMessage(message, index) {
+/**
+ * `preserveTimeline` is only for trusted in-memory handoffs (Quick Chat
+ * promotion), whose timelines can hold partial answers absent from `content`.
+ */
+export function normalizeStoredMessage(message, index, { preserveTimeline = false } = {}) {
   if (!message || typeof message !== 'object') {
     return null;
   }
@@ -124,10 +128,12 @@ export function normalizeStoredMessage(message, index) {
     contextUsage: normalizeContextUsage(message.contextUsage ?? message.context_usage),
   };
 
-  // Stored timelineItems are legacy denormalized data. Always rebuild the
-  // assistant timeline from the normalized streamEvents instead.
+  // Stored timelineItems are legacy denormalized data. Rebuild the assistant
+  // timeline from the normalized streamEvents unless the caller trusts it.
   if (role === 'assistant') {
-    base.timelineItems = buildDefaultAssistantTimeline(base);
+    base.timelineItems = preserveTimeline && Array.isArray(message.timelineItems) && message.timelineItems.length > 0
+      ? message.timelineItems
+      : buildDefaultAssistantTimeline(base);
   }
 
   return base;

@@ -57,15 +57,18 @@ function ConversationPage() {
   const preferencesSaveRequest = useSelector(selectPreferencesSaveRequest);
   const initialQuickChatHandoffRef = useRef(undefined);
   if (initialQuickChatHandoffRef.current === undefined) {
-    initialQuickChatHandoffRef.current = quickChatMemory.handoff
-      ?? loadQuickChatHandoff(config.storage.quickChatHandoff);
+    const memoryHandoff = quickChatMemory.handoff;
+    initialQuickChatHandoffRef.current = memoryHandoff
+      ? { ...memoryHandoff, inMemory: true }
+      : loadQuickChatHandoff(config.storage.quickChatHandoff);
   }
   const initialQuickChatHandoff = initialQuickChatHandoffRef.current;
 
   const [messages, setMessages] = useState(() => {
     if (Array.isArray(initialQuickChatHandoff?.messages) && initialQuickChatHandoff.messages.length > 0) {
+      const preserveTimeline = initialQuickChatHandoff.inMemory === true;
       return initialQuickChatHandoff.messages
-        .map((message, index) => normalizeStoredMessage(message, index))
+        .map((message, index) => normalizeStoredMessage(message, index, { preserveTimeline }))
         .filter(Boolean);
     }
 
@@ -531,7 +534,7 @@ function ConversationPage() {
       }
 
       const normalizedMessages = promotedMessages
-        .map((message, index) => normalizeStoredMessage(message, index))
+        .map((message, index) => normalizeStoredMessage(message, index, { preserveTimeline: true }))
         .filter(Boolean);
       if (normalizedMessages.length === 0) {
         return;

@@ -3,7 +3,14 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
+
+# deepagents' execute footer; a truncation note may follow it, and offloaded
+# output puts it first, so match a whole line rather than the end of text.
+_EXECUTE_FAILURE = re.compile(r"^\[Command failed with exit code -?\d+\]$", re.MULTILINE)
+# langchain_quickjs renders a thrown error as a top-level element.
+_JAVASCRIPT_ERROR = re.compile(r'^<error type="', re.MULTILINE)
 
 
 def coerce_messages_list(messages: Any) -> list:
@@ -78,6 +85,26 @@ def get_last_ai_message(messages: Any) -> Any | None:
             if role == "assistant" or mtype == "ai":
                 return msg
     return None
+
+
+def tool_result_failed(tool_name: Any, message: Any, text: str) -> bool:
+    """Whether a returned tool result reports failure.
+
+    Callers pass the full result text, before any preview truncation, so a long
+    failing command keeps its classification after its footer is cut off.
+    """
+    getter = message.get if isinstance(message, dict) else lambda key: getattr(message, key, None)
+    if getter("status") == "error":
+        return True
+    artifact = getter("artifact")
+    exit_code = artifact.get("exit_code") if isinstance(artifact, dict) else None
+    if isinstance(exit_code, int) and not isinstance(exit_code, bool) and exit_code != 0:
+        return True
+    if tool_name == "execute":
+        return bool(_EXECUTE_FAILURE.search(text))
+    if tool_name == "javascript":
+        return bool(_JAVASCRIPT_ERROR.search(text))
+    return False
 
 
 def _coerce_to_dict(obj: Any) -> dict[str, Any] | None:

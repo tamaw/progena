@@ -239,6 +239,8 @@ function buildToolStreamEvents(toolCalls, messageId) {
             : result,
           tool_call_id: toolCallId,
           source: 'checkpoint',
+          // Classified server-side from the full result; the preview is truncated.
+          ...(tc.failed === true ? { success: false } : {}),
         },
       };
       if (isNormalToolCall && Number.isFinite(durationMs)) {

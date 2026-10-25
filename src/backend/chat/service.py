@@ -34,6 +34,7 @@ from src.progena.sessions.messages import (
     extract_message_text,
     extract_reasoning_token_count,
     extract_reasoning_trace,
+    tool_result_failed,
 )
 from src.progena.sessions.titles import ATTACHMENT_CONTEXT_MARKER, display_title
 
@@ -588,6 +589,10 @@ def _messages_from_checkpoint(
         result_entry: dict[str, Any] = {
             "result": result_text[:400] + "…" if len(result_text) > 400 else result_text,
         }
+        tool_name = raw.get("name") if isinstance(raw, dict) else getattr(raw, "name", None)
+        if tool_result_failed(tool_name, raw, result_text):
+            # Classified before truncation; the stored preview may lose the footer.
+            result_entry["failed"] = True
         artifact = raw.get("artifact") if isinstance(raw, dict) else getattr(raw, "artifact", None)
         curated_artifact = _curated_tool_artifact(artifact)
         if curated_artifact is not None:
@@ -664,6 +669,8 @@ def _messages_from_checkpoint(
                     tc_with_result["images"] = entry["images"]
                 if "progress_log" in entry:
                     tc_with_result["progress_log"] = entry["progress_log"]
+                if entry.get("failed"):
+                    tc_with_result["failed"] = True
                 audit_entry = audit_index.get(tc["id"])
                 if audit_entry is not None and "duration_ms" in audit_entry:
                     tc_with_result["duration_ms"] = audit_entry.get("duration_ms")

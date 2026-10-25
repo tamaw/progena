@@ -15,6 +15,13 @@ describe('isToolEventFailure', () => {
     },
     {
       eventType: 'tool_result',
+      metadata: {
+        tool_name: 'execute',
+        result_preview: 'boom\n[Command failed with exit code 1]\n[Output was truncated due to size limits]',
+      },
+    },
+    {
+      eventType: 'tool_result',
       metadata: { tool_name: 'javascript', result_preview: '<error type="TypeError">boom</error>' },
     },
   ])('recognizes failure event %#', (event) => {
@@ -28,6 +35,10 @@ describe('isToolEventFailure', () => {
     {
       eventType: 'tool_result',
       metadata: { tool_name: 'execute', result_preview: 'done\n[Command succeeded with exit code 0]' },
+    },
+    {
+      eventType: 'tool_result',
+      metadata: { tool_name: 'execute', result_preview: 'echo "[Command failed with exit code 1]" printed it' },
     },
     {
       eventType: 'tool_result',

@@ -956,6 +956,22 @@ describe('applySubagentEvent', () => {
     expect(items[0].entries[0]).toMatchObject({ status: 'error', error: 'boom', durationMs: 2 });
   });
 
+  it('subagent_tool_result marks a returned execute failure as errored', () => {
+    let items = applySubagentEvent([], subagentEvent('subagent_tool_start', {
+      metadata: { tool_call_id: 'call_1', nested_tool_call_id: 'nested_1', nested_tool_name: 'execute' },
+    }));
+    items = applySubagentEvent(items, subagentEvent('subagent_tool_result', {
+      metadata: {
+        tool_call_id: 'call_1',
+        nested_tool_call_id: 'nested_1',
+        nested_tool_name: 'execute',
+        success: false,
+        result_preview: 'long output cut before the footer…',
+      },
+    }));
+    expect(items[0].entries[0]).toMatchObject({ status: 'error' });
+  });
+
   it('subagent_result finalizes status/finishedAt/durationMs/resultPreview on success', () => {
     let items = applySubagentEvent([], subagentEvent('subagent_start', {
       metadata: { subagent_name: 'researcher', tool_call_id: 'call_1' },
@@ -1827,6 +1843,16 @@ describe('finalizeLiveAssistantTurn', () => {
       expect(result.isStreaming).toBe(false);
       // There are stream events but no text content.
       expect(result.timelineItems[0].kind).toBe('stream_event');
+    });
+
+    it('records a cache response timestamp only when the reply has answer text', () => {
+      const toolOnly = applyAssistantStreamEvent(baseTurn(), rawStreamEvent('tool_start', { content: 'x' }), NOW);
+      const answered = applyAssistantChunk(baseTurn(), 'Hello', NOW);
+
+      expect(finalizeLiveAssistantTurn(toolOnly, { status: 'completed', now: NOW + 100 }).responseTimestamp)
+        .toBeNull();
+      expect(finalizeLiveAssistantTurn(answered, { status: 'completed', now: NOW + 100 }).responseTimestamp)
+        .toBe(NOW + 100);
     });
 
     // Acceptance: completion with NO output AND no events returns '(No response text)'.

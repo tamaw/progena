@@ -13,6 +13,7 @@ import { groupSessionItems } from '@frontend/features/chat/models/conversationMo
 import { formatDisplayToolCalls } from '@frontend/features/chat/models/messageDisplayModel';
 import { CHAT_STATUS } from '@frontend/features/chat/models/chatStatus';
 import { mergeToolCallItems } from '@frontend/features/chat/models/workGroupModel';
+import { isToolEventFailure } from '@frontend/features/chat/models/toolFailureModel';
 
 
 describe('compareSessionItems', () => {
@@ -118,6 +119,16 @@ describe('normalizeBackendChatMessage', () => {
     const types = m.streamEvents.map((e) => e.eventType);
     expect(types).toEqual(['tool_start', 'tool_result']);
     expect(m.streamEvents[0].metadata.tool_name).toBe('search');
+  });
+
+  it('keeps a server-classified failure whose truncated preview lost its footer', () => {
+    const m = normalizeBackendChatMessage({
+      id: 'm-failed-tool',
+      role: 'assistant',
+      content: 'done',
+      tool_calls: [{ id: 't1', name: 'execute', args: {}, result: 'long output…', failed: true }],
+    }, 1);
+    expect(isToolEventFailure(m.streamEvents.find((e) => e.eventType === 'tool_result'))).toBe(true);
   });
 
   it('preserves persisted normal tool duration and curated artifact metadata', () => {

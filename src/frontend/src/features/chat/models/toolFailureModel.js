@@ -3,8 +3,10 @@
  * independent of rendering so filters, summaries, and tool output agree.
  */
 const FAILURE_STATES = new Set(['error', 'failed', 'failure', 'rejected']);
-const EXECUTE_FAILURE = /\[Command failed with exit code -?\d+\]\s*$/;
-const JAVASCRIPT_ERROR = /<error(?:\s[^>]*)?>/;
+// Fallback for events without server classification; mirrors
+// `tool_result_failed` in src/progena/sessions/messages.py.
+const EXECUTE_FAILURE = /^\[Command failed with exit code -?\d+\]$/m;
+const JAVASCRIPT_ERROR = /^<error type="/m;
 
 function isFailureState(value) {
   return typeof value === 'string' && FAILURE_STATES.has(value.toLowerCase());

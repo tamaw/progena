@@ -22,6 +22,7 @@
 import { createStreamEvent, appendStreamEvent, appendReasoningText, extractReasoningTokenCount, extractCacheReadTokenCount, mergeReasoningEvents, isReasoningEvent, isRenderableStreamEvent, MAX_STREAM_EVENTS_PER_MESSAGE } from './streamEventsModel';
 import { isA2AToolName } from './a2aTools';
 import { normalizeContextUsage } from './contextWindowModel';
+import { isToolEventFailure } from './toolFailureModel';
 
 /** Create a fresh live assistant turn with no visible output yet. */
 export function createLiveAssistantTurn({ streamId, startedAt }) {
@@ -245,7 +246,11 @@ function applySubagentEventToItem(item, nextEvent) {
         ...item,
         entries: upsertSubagentToolEntry(item.entries, metadata.nested_tool_call_id, {
           toolName: metadata.nested_tool_name || '',
-          status: 'success',
+          // Returned failures (non-zero exit, thrown JS) arrive as results.
+          status: isToolEventFailure({
+            eventType: 'tool_result',
+            metadata: { ...metadata, tool_name: metadata.nested_tool_name },
+          }) ? 'error' : 'success',
           resultPreview: typeof metadata.result_preview === 'string' ? metadata.result_preview : '',
           durationMs,
         }),
@@ -870,9 +875,12 @@ export function finalizeLiveAssistantTurn(turn, { status, now, errorMessage }) {
     return null;
   }
 
+  // Matches history normalization: only a completed reply with answer text
+  // starts the cache countdown; tool-only or empty turns never do.
+  const hasAnswerText = typeof turn.content === 'string' && turn.content.trim().length > 0;
   const finalTurn = {
     ...turn, isStreaming: false, assistantTimestamp: now || turn.startedAt,
-    responseTimestamp: status === 'completed' ? now || turn.startedAt : null,
+    responseTimestamp: status === 'completed' && hasAnswerText ? now || turn.startedAt : null,
   };
 
   if (status === 'error') {
