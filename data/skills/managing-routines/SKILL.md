@@ -64,7 +64,17 @@ The current schema supports: `prompt`, `eval`, `code`, `condition`, `switch`, `s
 - `prompt` invokes the model using exactly one of `prompt_template` or
   `prompt_file`.
 - `eval` uses a restricted Python expression or expression file; `defaults`
-  provides fallbacks for missing top-level state values.
+  provides fallbacks for missing top-level state values. Expressions support
+  constants, names, dotted dict-field walks (`a.b.c`), arithmetic, comparisons,
+  `and`/`or`/`not`, `x if c else y`, and JSON-style object/list literals:
+  `{**card.metadata, "review_approval": {"inbox_id": inbox.id, "sha": sha}}`
+  or `["a", n, [1, 2]]`. Object keys must be strings; `**` unpacks only
+  objects; unpacked entries and explicit keys merge left to right, so a later
+  key overwrites an earlier one. The result is a new object -- state is never
+  mutated. Expressions are capped at 2000 characters and any constructed
+  list/object at 100,000 entries. Calls, subscripts (`x[0]`), comprehensions,
+  imports, `*` list unpacking, sets/tuples, `eval`/`exec`, and attribute access
+  on anything other than an object remain rejected.
 - `code` runs an inline JavaScript body in a fresh bounded QuickJS sandbox.
   Its config requires `language: "javascript"` and nonblank `code`, with optional
   `filesystem` and the standard `retry`, `timeout`, and `cache` options.
