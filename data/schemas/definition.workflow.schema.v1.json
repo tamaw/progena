@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Workflow Definition",
-  "description": "A graph-native workflow contains document-event and literal-value sources plus typed value connections. Every connection supplies data and establishes execution dependency. Event and direct document-node port schemas are derived from the node's document type (document_type:<id> rows) on save.",
+  "description": "A graph-native workflow contains document-event, manual, and literal-value sources plus typed value connections. Every connection supplies data and establishes execution dependency. Event and direct document-node port schemas are derived from the node's document type (document_type:<id> rows) on save.",
   "type": "object",
   "additionalProperties": false,
   "required": ["id", "title", "description", "enabled", "paused", "version", "graph", "ui", "updated_at", "created_at"],
@@ -33,6 +33,10 @@
             "timezone": {"description": "IANA timezone the expression is evaluated in, e.g. \"Europe/London\".", "type": "string", "minLength": 1},
             "overlap": {"description": "What a fire does while the workflow still has an active run: skip (default) drops it, queue runs it afterwards.", "enum": ["skip", "queue"]},
             "output_schema": {"type": "object"}
+          }},
+          {"type": "object", "additionalProperties": false, "required": ["kind", "title", "output_schema"], "properties": {
+            "kind": {"const": "manual"}, "title": {"type": "string", "minLength": 1},
+            "output_schema": {"description": "JSON Schema object declaring the typed payload accepted by an explicit manual run. Its properties are the node's output ports; property defaults are applied when omitted.", "type": "object"}
           }},
           {"type": "object", "additionalProperties": false, "required": ["kind", "title", "value", "output_schema"], "properties": {
             "kind": {"const": "data"}, "title": {"type": "string", "minLength": 1}, "value": {}, "output_schema": {"type": "object"}

@@ -5,68 +5,23 @@
  * (same entry/gutter/main layout, same fixed-height auto-scrolling body).
  *
  * Each status update renders as its own small `.entry` node in a nested
- * chain (A2ASubEntry below) -- a second, smaller-scale application of the
- * same .entry/.chat-entry-chain grammar the outer timeline already uses,
- * rather than a bespoke boxed .tool block. The outer card's own connecting
- * line to whatever comes next in the *outer* chain is unaffected by this --
- * it's driven by the outer .entry__gutter (sized to .entry__main's full
- * height via CSS grid stretch), which knows nothing about what's nested
- * inside, so it keeps flowing straight through regardless of how tall the
- * nested sub-chain grows.
+ * chain (A2ASubEntry below), trimmed to the latest CARD_SUMMARY_LINES with
+ * an "N earlier" toggle -- a second, smaller-scale application of the same
+ * .entry/.chat-entry-chain grammar the outer timeline already uses.
  */
 
-import { memo } from 'react';
+import { memo, useState } from 'react';
 import {
   formatDuration,
   formatTimestamp,
   extractA2ASummary,
 } from '../models/messageRenderUtils';
-import useStickyScroll from '../hooks/useStickyScroll';
-import { SubmittedGlyph, WorkingGlyph, CompletedGlyph, FailedGlyph } from './eventGlyphs';
+import { selectRecentLines } from '../models/workGroupModel';
+import useRunningDisclosure from '../hooks/useRunningDisclosure';
+import EarlierLinesToggle from './EarlierLinesToggle';
 
-// Distinguishes the A2A card's badge from SubagentCard's at a glance -- a
-// link between two endpoints, standing in for "agent-to-agent connection".
-// Also the fallback glyph for any sub-entry state with no dedicated icon
-// below (input-required, auth-required, unknown, ...).
-function A2AGlyph() {
-  return (
-    <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <path d="M15 7h3a5 5 0 0 1 5 5 5 5 0 0 1-5 5h-3" />
-      <path d="M9 17H6a5 5 0 0 1-5-5 5 5 0 0 1 5-5h3" />
-      <line x1="8" y1="12" x2="16" y2="12" />
-    </svg>
-  );
-}
-
-const A2A_STATE_GLYPHS = {
-  submitted: SubmittedGlyph,
-  working: WorkingGlyph,
-  completed: CompletedGlyph,
-  failed: FailedGlyph,
-  rejected: FailedGlyph,
-  canceled: FailedGlyph,
-};
-
-// Called directly as a plain function (not rendered as `<X />`) since these
-// glyphs are pure markup with no hooks of their own -- picking one out of a
-// stable, module-level map is safe, but JSX-element-style invocation of a
-// dynamically-selected component trips react-hooks/static-components, which
-// can't verify that stability statically.
-//
-// `state` comes straight off the wire (a remote A2A agent's own self-reported
-// TaskStatusUpdateEvent.status.state, see applyA2ACallEvent in
-// liveAssistantTurnModel.js) -- Object.hasOwn guards the lookup so a state
-// name that collides with an inherited Object.prototype member (e.g.
-// "constructor", "toString") can't resolve to that inherited value instead
-// of falling through to the A2AGlyph default, which isn't callable as one of
-// these components and would otherwise crash the render.
-function glyphForA2AState(state) {
-  const Glyph = Object.hasOwn(A2A_STATE_GLYPHS, state) ? A2A_STATE_GLYPHS[state] : A2AGlyph;
-  return Glyph();
-}
-
-// One status update = one mini entry in the nested chain. Its glyph is the
-// visual status indicator; the timestamp remains right-aligned metadata.
+// One status update = one mini entry in the nested chain. Its dot colour is
+// the visual status indicator; the timestamp remains right-aligned metadata.
 const A2ASubEntry = memo(function A2ASubEntry({ message, isLast }) {
   const state = message.state || 'update';
   // A per-entry clock time, not just chain position -- shows exactly when
@@ -75,9 +30,7 @@ const A2ASubEntry = memo(function A2ASubEntry({ message, isLast }) {
   return (
     <div className={`entry a2a-sub-entry ${isLast ? 'entry--chain-end' : 'entry--chain-item'}`}>
       <div className="entry__gutter" aria-hidden="true">
-        <span className={`entry__badge a2a-call-card__badge a2a-sub-entry__badge--${state}`}>
-          {glyphForA2AState(state)}
-        </span>
+        <span className={`entry__badge a2a-call-card__badge a2a-sub-entry__badge--${state}`} />
       </div>
       <div className="entry__main">
         <div className="entry__head">
@@ -93,25 +46,29 @@ const A2ASubEntry = memo(function A2ASubEntry({ message, isLast }) {
 
 const A2ACallCard = memo(function A2ACallCard({ item }) {
   const messageCount = item.messages.length;
+  const hasFailedUpdate = item.messages.some((message) => message.state === 'failed' || message.state === 'rejected');
   const durationLabel = Number.isFinite(item.durationMs) ? formatDuration(item.durationMs) : '';
   const formattedTime = formatTimestamp(item.finishedAt || item.startedAt);
   // resultPreview is the whole A2A tool result dict, stringified -- only
   // shown when there's no message log to tell the story instead, and even
   // then prefer just the human-readable summary over raw JSON when extractable.
   const displayedResult = extractA2ASummary(item.resultPreview) || item.resultPreview;
-  const { ref: scrollRef, onScroll } = useStickyScroll(`${messageCount}:${item.status}`);
+  const [showAll, setShowAll] = useState(false);
+  const { open, toggle } = useRunningDisclosure(item.status === 'running');
+  const { visibleLines, hiddenCount } = selectRecentLines(item.messages, showAll);
+  const error = item.status === 'error' && item.error
+    ? <div className="a2a-call-card__error">{item.error}</div>
+    : null;
 
   return (
     <div className={`entry entry--chain-item a2a-call-card a2a-call-card--${item.status}`}>
       <div className="entry__gutter" aria-hidden="true">
-        <span className={`entry__badge a2a-call-card__badge a2a-call-card__badge--${item.status}`}>
-          <A2AGlyph />
-        </span>
+        <span className={`entry__badge a2a-call-card__badge a2a-call-card__badge--${item.status}`} />
       </div>
       <div className="entry__main">
-        <div className="entry__head">
-          <span className="entry__tag a2a-call-card__tag">A2A</span>
+        <button type="button" className="entry__head entry-toggle" aria-expanded={open} onClick={toggle}>
           <span className="entry__role">{item.agentName || 'agent'}</span>
+          {hasFailedUpdate && <span className="work-group__failed">Failed</span>}
           <span className="msg__head-trailing">
             {messageCount > 0 && (
               <span className="muted">{messageCount} update{messageCount === 1 ? '' : 's'}</span>
@@ -119,28 +76,31 @@ const A2ACallCard = memo(function A2ACallCard({ item }) {
             {durationLabel && <span className="muted">{durationLabel}</span>}
             {formattedTime && <span className="msg__time entry__time">{formattedTime}</span>}
           </span>
-        </div>
-        <div className="a2a-call-card__body entry__content" ref={scrollRef} onScroll={onScroll}>
-          {messageCount > 0 && (
-            <div className="a2a-call-card__subchain">
-              {item.messages.map((message, index) => (
-                <A2ASubEntry key={message.id} message={message} isLast={index === messageCount - 1} />
-              ))}
-            </div>
-          )}
-          {item.status === 'error' && item.error && (
-            <div className="a2a-call-card__error">{item.error}</div>
-          )}
-          {/* resultPreview is a generic, unstructured stringified dump of
-              the whole A2A tool result (task id, context id, raw history,
-              ...) -- shown only as a fallback when there are no per-step
-              messages to tell the story instead, matching SubagentCard's
-              content-or-resultPreview fallback. With messages present,
-              showing both would repeat the same narrative as raw JSON. */}
-          {item.status === 'success' && messageCount === 0 && displayedResult && (
-            <div className="a2a-call-card__result">{displayedResult}</div>
-          )}
-        </div>
+          <span className="tool-event-disclosure__chevron" aria-hidden="true" />
+        </button>
+        {!open && error}
+        {open && (
+          <div className="a2a-call-card__body entry__content">
+            <EarlierLinesToggle hiddenCount={hiddenCount} showAll={showAll} onToggle={() => setShowAll((value) => !value)} />
+            {visibleLines.length > 0 && (
+              <div className="a2a-call-card__subchain">
+                {visibleLines.map((message, index) => (
+                  <A2ASubEntry key={message.id} message={message} isLast={index === visibleLines.length - 1} />
+                ))}
+              </div>
+            )}
+            {error}
+            {/* resultPreview is a generic, unstructured stringified dump of
+                the whole A2A tool result (task id, context id, raw history,
+                ...) -- shown only as a fallback when there are no per-step
+                messages to tell the story instead, matching SubagentCard's
+                content-or-resultPreview fallback. With messages present,
+                showing both would repeat the same narrative as raw JSON. */}
+            {item.status === 'success' && messageCount === 0 && displayedResult && (
+              <div className="a2a-call-card__result">{displayedResult}</div>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );

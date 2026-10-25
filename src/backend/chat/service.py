@@ -29,10 +29,12 @@ from src.progena.documents.kinds import SESSION_KEY_PREFIX
 from src.progena.security.redaction import redact_secrets
 from src.progena.sessions.messages import (
     extract_cache_read_token_count,
+    extract_context_usage,
     extract_display_metadata,
     extract_message_text,
     extract_reasoning_token_count,
     extract_reasoning_trace,
+    tool_result_failed,
 )
 from src.progena.sessions.titles import ATTACHMENT_CONTEXT_MARKER, display_title
 
@@ -124,6 +126,24 @@ def _now_iso() -> str:
     return datetime.now(UTC).isoformat().replace("+00:00", "Z")
 
 
+class ReasoningSegment(BaseModel):
+    """One model call's reasoning, kept separate so history can show where it fell."""
+
+    text: str
+    created_at: str | None = None
+
+
+class ContextUsage(BaseModel):
+    """Latest main-agent model call token footprint and optional attribution."""
+
+    input_tokens: int
+    output_tokens: int
+    total_tokens: int
+    profile_name: str | None = None
+    deployment: str | None = None
+    provider_id: str | None = None
+
+
 class ChatMessage(BaseModel):
     id: str
     role: str
@@ -134,11 +154,14 @@ class ChatMessage(BaseModel):
     reasoning_token_count: int = 0
     cache_read_token_count: int = 0
     reasoning_text: str = ""
+    # Per-model-call reasoning in order; reasoning_text is their "\n\n" join.
+    reasoning_segments: list[ReasoningSegment] = Field(default_factory=list)
     display_agent_name: str | None = None
     display_model_name: str | None = None
     display_tool_calls: list[Any] = Field(default_factory=list)
     tool_calls: list[dict[str, Any]] = Field(default_factory=list)
     attachments: list[dict[str, Any]] = Field(default_factory=list)
+    context_usage: ContextUsage | None = None
     raw: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -457,14 +480,7 @@ def _chat_message_from_raw(
     role = _raw_message_role(raw)
     if role == "tool":
         return None
-    if isinstance(raw, dict):
-        content = _strip_attachment_context(
-            _message_text(raw.get("content") or raw.get("message") or raw.get("text"))
-        )
-    else:
-        content = _strip_attachment_context(
-            extract_message_text(raw) or _message_text(getattr(raw, "content", ""))
-        )
+    content = _raw_message_content(raw)
     if role == "assistant" and _is_cancelled_reply(raw):
         content = f"{content}{CANCELLED_SUFFIX}" if content else CANCELLED_SUFFIX.strip()
     if not content and role == "assistant":
@@ -476,16 +492,36 @@ def _chat_message_from_raw(
         content=content,
         created_at=_raw_message_created_at(raw),
         reasoning_timestamp=_raw_message_created_at(raw) if reasoning_text else None,
+        reasoning_segments=(
+            [ReasoningSegment(text=reasoning_text, created_at=_raw_message_created_at(raw))]
+            if reasoning_text
+            else []
+        ),
         token_count=_raw_message_token_count(raw),
         reasoning_token_count=extract_reasoning_token_count(raw) or 0,
         cache_read_token_count=extract_cache_read_token_count(raw) or 0,
         reasoning_text=reasoning_text,
         display_agent_name=_display_metadata_from_raw(raw).get("display_agent_name"),
         display_model_name=_display_metadata_from_raw(raw).get("display_model_name"),
+        context_usage=(
+            ContextUsage.model_validate(context_usage)
+            if (context_usage := extract_context_usage(raw))
+            else None
+        ),
         display_tool_calls=_display_metadata_from_raw(raw).get("display_tool_calls", []),
         tool_calls=tool_calls or [],
         attachments=_attachments_from_raw(raw),
         raw=_raw_message_payload(raw),
+    )
+
+
+def _raw_message_content(raw: Any) -> str:
+    if isinstance(raw, dict):
+        return _strip_attachment_context(
+            _message_text(raw.get("content") or raw.get("message") or raw.get("text"))
+        )
+    return _strip_attachment_context(
+        extract_message_text(raw) or _message_text(getattr(raw, "content", ""))
     )
 
 
@@ -553,6 +589,10 @@ def _messages_from_checkpoint(
         result_entry: dict[str, Any] = {
             "result": result_text[:400] + "…" if len(result_text) > 400 else result_text,
         }
+        tool_name = raw.get("name") if isinstance(raw, dict) else getattr(raw, "name", None)
+        if tool_result_failed(tool_name, raw, result_text):
+            # Classified before truncation; the stored preview may lose the footer.
+            result_entry["failed"] = True
         artifact = raw.get("artifact") if isinstance(raw, dict) else getattr(raw, "artifact", None)
         curated_artifact = _curated_tool_artifact(artifact)
         if curated_artifact is not None:
@@ -568,8 +608,9 @@ def _messages_from_checkpoint(
     pending_token_count = 0
     pending_reasoning_token_count = 0
     pending_cache_read_token_count = 0
-    pending_reasoning_parts: list[str] = []
+    pending_reasoning_parts: list[ReasoningSegment] = []
     pending_reasoning_timestamp: str | None = None
+    pending_context_usage: ContextUsage | None = None
 
     for index, raw in enumerate(snapshot.messages):
         role = _raw_message_role(raw)
@@ -579,11 +620,13 @@ def _messages_from_checkpoint(
         if role == "user":
             if pending_tool_calls or pending_reasoning_parts:
                 synthetic = _synthetic_pending_tool_call_message(pending_tool_calls, index)
-                synthetic.reasoning_text = "\n\n".join(pending_reasoning_parts)
+                synthetic.reasoning_text = _join_reasoning(pending_reasoning_parts)
+                synthetic.reasoning_segments = pending_reasoning_parts
                 synthetic.reasoning_timestamp = pending_reasoning_timestamp
                 synthetic.token_count = pending_token_count
                 synthetic.reasoning_token_count = pending_reasoning_token_count
                 synthetic.cache_read_token_count = pending_cache_read_token_count
+                synthetic.context_usage = pending_context_usage
                 messages.append(synthetic)
                 pending_tool_calls = []
             pending_reasoning_parts = []
@@ -591,8 +634,14 @@ def _messages_from_checkpoint(
             pending_reasoning_token_count = 0
             pending_cache_read_token_count = 0
             pending_reasoning_timestamp = None
+            pending_context_usage = None
 
         if role == "assistant":
+            pending_context_usage = (
+                ContextUsage.model_validate(context_usage)
+                if (context_usage := extract_context_usage(raw))
+                else None
+            )
             pending_token_count += _raw_message_token_count(raw)
             pending_reasoning_token_count += extract_reasoning_token_count(raw) or 0
             pending_cache_read_token_count = (
@@ -600,37 +649,53 @@ def _messages_from_checkpoint(
             )
             reasoning_text = extract_reasoning_trace(raw)
             if reasoning_text:
-                pending_reasoning_parts.append(reasoning_text)
+                pending_reasoning_parts.append(
+                    ReasoningSegment(text=reasoning_text, created_at=_raw_message_created_at(raw))
+                )
                 if pending_reasoning_timestamp is None:
                     pending_reasoning_timestamp = _raw_message_created_at(raw)
-            for tc in _extract_raw_tool_calls(raw):
+            raw_tool_calls = _extract_raw_tool_calls(raw)
+            # Text the model wrote alongside its tool calls narrates them rather
+            # than answering, so it travels with the first call as commentary.
+            commentary = _raw_message_content(raw).strip() if raw_tool_calls else ""
+            for call_index, tc in enumerate(raw_tool_calls):
                 entry = tool_results.get(tc["id"], {})
                 tc_with_result = {**tc, "result": entry.get("result", "")}
+                if commentary and call_index == 0:
+                    tc_with_result["commentary"] = commentary
                 if "artifact" in entry:
                     tc_with_result["artifact"] = entry["artifact"]
                 if "images" in entry:
                     tc_with_result["images"] = entry["images"]
                 if "progress_log" in entry:
                     tc_with_result["progress_log"] = entry["progress_log"]
+                if entry.get("failed"):
+                    tc_with_result["failed"] = True
                 audit_entry = audit_index.get(tc["id"])
                 if audit_entry is not None and "duration_ms" in audit_entry:
                     tc_with_result["duration_ms"] = audit_entry.get("duration_ms")
                 pending_tool_calls.append(tc_with_result)
+            if commentary:
+                # The narration now lives on its tool call; the message adds nothing.
+                continue
 
         tool_calls_to_attach = list(pending_tool_calls) if role == "assistant" else None
         message = _chat_message_from_raw(raw, index, tool_calls=tool_calls_to_attach)
         if message is not None:
             if role == "assistant":
-                message.reasoning_text = "\n\n".join(pending_reasoning_parts)
+                message.reasoning_text = _join_reasoning(pending_reasoning_parts)
+                message.reasoning_segments = pending_reasoning_parts
                 message.token_count = pending_token_count
                 message.reasoning_token_count = pending_reasoning_token_count
                 message.cache_read_token_count = pending_cache_read_token_count
                 message.reasoning_timestamp = pending_reasoning_timestamp
+                message.context_usage = pending_context_usage
                 pending_reasoning_parts = []
                 pending_token_count = 0
                 pending_reasoning_token_count = 0
                 pending_cache_read_token_count = 0
                 pending_reasoning_timestamp = None
+                pending_context_usage = None
             if role in ("assistant", "user"):
                 pending_tool_calls = []
             messages.append(message)
@@ -640,11 +705,17 @@ def _messages_from_checkpoint(
         synthetic.token_count = pending_token_count
         synthetic.reasoning_token_count = pending_reasoning_token_count
         synthetic.cache_read_token_count = pending_cache_read_token_count
-        synthetic.reasoning_text = "\n\n".join(pending_reasoning_parts)
+        synthetic.reasoning_text = _join_reasoning(pending_reasoning_parts)
+        synthetic.reasoning_segments = pending_reasoning_parts
         synthetic.reasoning_timestamp = pending_reasoning_timestamp
+        synthetic.context_usage = pending_context_usage
         messages.append(synthetic)
 
     return messages
+
+
+def _join_reasoning(segments: list[ReasoningSegment]) -> str:
+    return "\n\n".join(segment.text for segment in segments)
 
 
 def _summary_from_session(

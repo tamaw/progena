@@ -68,7 +68,17 @@ The current schema supports: `prompt`, `eval`, `code`, `condition`, `switch`, `s
 - `prompt` invokes the model using exactly one of `prompt_template` or
   `prompt_file`.
 - `eval` uses a restricted Python expression or expression file; `defaults`
-  provides fallbacks for missing top-level state values.
+  provides fallbacks for missing top-level state values. Expressions support
+  constants, names, dotted dict-field walks (`a.b.c`), arithmetic, comparisons,
+  `and`/`or`/`not`, `x if c else y`, and JSON-style object/list literals:
+  `{**card.metadata, "review_approval": {"inbox_id": inbox.id, "sha": sha}}`
+  or `["a", n, [1, 2]]`. Object keys must be strings; `**` unpacks only
+  objects; unpacked entries and explicit keys merge left to right, so a later
+  key overwrites an earlier one. The result is a new object -- state is never
+  mutated. Expressions are capped at 2000 characters and any constructed
+  list/object at 100,000 entries. Calls, subscripts (`x[0]`), comprehensions,
+  imports, `*` list unpacking, sets/tuples, `eval`/`exec`, and attribute access
+  on anything other than an object remain rejected.
 - `code` runs an inline JavaScript body in a fresh bounded QuickJS sandbox.
   Its config requires `language: "javascript"` and nonblank `code`, with optional
   `filesystem` and the standard `retry`, `timeout`, and `cache` options.
@@ -113,11 +123,12 @@ The current schema supports: `prompt`, `eval`, `code`, `condition`, `switch`, `s
   `ls`, `readFile`, `glob`, and `grep`; write access additionally exposes
   `writeFile`, `editFile`, `copyFile`, `moveFile`, and `deleteFile`. Text only:
   binary data is rejected rather than lossy-converted. There is no shell,
-  network, agent, or generic host-tool escape hatch. Writes and copies never
-  overwrite; moves are file-only and must stay on one mount, but are not atomic
-  (they may be implemented as copy then delete). File operations are
-  nontransactional: cancellation or a later failure does not roll back completed
-  writes, and a manual rerun/replay can repeat them. Filesystem-enabled Code
+  network, agent, or generic host-tool escape hatch. `writeFile` and `copyFile`
+  never overwrite; replace a file with `deleteFile` then `writeFile`. Moves are
+  file-only and must stay on one mount, but are not atomic (they may be
+  implemented as copy then delete). File operations are nontransactional:
+  cancellation or a later failure does not roll back completed writes, and a
+  manual rerun/replay can repeat them. Filesystem-enabled Code
   nodes never cache and never retry automatically, which is not exactly-once
   execution. The QuickJS CPU deadline excludes async filesystem waits; the
   enclosing node timeout still bounds those waits.
@@ -142,8 +153,10 @@ The current schema supports: `prompt`, `eval`, `code`, `condition`, `switch`, `s
   `{pattern, path?, glob?, max_count?}` and returns `{matches, truncated}`.
   `editFile` takes `{file_path, old_string, new_string, replace_all?}`;
   `copyFile`/`moveFile` take `{source_path, destination_path}`; `deleteFile`
-  takes `{file_path}`. Filesystem methods throw on failure. Scope checks also
-  reject symlinks whose resolved target escapes the configured directory roots.
+  takes `{file_path}`. Filesystem failures throw catchable errors whose message
+  is available as `error.message`; use `ls` or `glob` for existence checks.
+  Scope checks also reject symlinks whose resolved target escapes the configured
+  directory roots.
 - `condition` is a boolean gate whose router must have exactly `true` and
   `false` branches and no default.
 - `switch` routes an expression through author-defined branches.

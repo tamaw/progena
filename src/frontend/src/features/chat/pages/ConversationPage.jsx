@@ -1,5 +1,5 @@
 import { usePaneCollapse } from '../../../hooks/usePaneCollapse';
-import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo } from 'react';
+import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo, useSyncExternalStore } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useChatApi } from '../hooks/useChatApi';
@@ -14,6 +14,7 @@ import { createUuid } from '../../../lib/uuid';
 import { clearChatErrored, clearChatGenerating, clearChatUnread, clearActiveChatSession } from '../state/actions';
 import { deleteChatSession, fetchChatMessages, requestChatSessionDetail, requestChatSessionReconciliation, selectActiveChatSession, selectActiveChatSessionState, selectChatReconciliationState, selectChatSessions, selectChatSessionsState, updateChatSessionMetadata } from '../state/chats';
 import { savePreferences, selectAgentName, selectPreferences, selectPreferencesSaveRequest } from '../../settings/state/preferences';
+import { selectModelProfiles } from '../../settings/state/modelProfiles';
 import { subscribeUiEvent } from '../../../realtime/realtimeEvents';
 import ChatInput from '../components/ChatInput';
 import { RegenerateDisabledContext } from '../components/RegenerateDisabledContext';
@@ -24,13 +25,16 @@ import DetailPane from '../../../components/layout/DetailPane';
 import { areChatTranscriptsEquivalent, mergeCanonicalMessages, excludeLiveOwnedMessage, shouldRetireLiveOwnerAfterCanonicalReconciliation, countTokens, countToolInvocations, deriveChatTitle, groupSessionItems, shouldShowChatContentLoading, getActiveRouteThreadId, shouldShowNewChatEmptyState, shouldDeferInitialRosterSelection, shouldDeferRouteSelection, shouldDismissEmptySelection, shouldSkipRoutedMountOpen, isReopeningCurrentLocalDraft, shouldAdoptMaterializedDraft } from '../models/conversationModel';
 import { buildChatSessionItems, compareSessionItems, findAdjacentSessionItem, normalizeBackendChatMessage, shouldLoadSelectedBackendChat, sidebarEmptyMessage, visibleGroupsForFilter } from '../models/chatSessionsModel';
 import { isEventVisible, loadStreamFilters } from '../models/streamFilters';
-import LiveAssistantTurn from '../components/LiveAssistantTurn';
+import ChatMessages from '../components/ChatMessages';
+import { LiveConversationHeader } from '../components/ConversationHeader';
 import { ARCHIVED_CHAT_SESSIONS_KEY, loadQuickChatHandoff, persistPinnedSessionIds } from '../models/chatStorage';
 import { useEntityUrlSync } from '../../../lib/routes';
 import { getDailyWelcomeMessage, normalizeStoredMessage, stripEphemeralStreamEvents } from '../models/conversationPageModel';
-import { HistoricalMessage, LiveConversationHeader } from '../components/ConversationHeader';
+import { followTranscript, noteTranscriptScroll, noteTranscriptUserInput, pinTranscriptToTail } from '../models/transcriptScroll';
 import { ConversationSessionsPane } from '../components/ConversationSessionsPane';
 import { useConversationAttachments } from '../hooks/useConversationAttachments';
+import { latestContextUsage, resolveComposerCacheExpiry, resolveComposerContextUsage } from '../models/contextWindowModel';
+import { quickChatMemory } from '../models/quickChatMemory';
 
 function ConversationPage() {
   const dispatch = useDispatch();
@@ -49,26 +53,30 @@ function ConversationPage() {
   const chatReconciliationState = useSelector(selectChatReconciliationState);
   const preferences = useSelector(selectPreferences);
   const agentName = useSelector(selectAgentName);
+  const modelProfiles = useSelector(selectModelProfiles);
   const preferencesSaveRequest = useSelector(selectPreferencesSaveRequest);
   const initialQuickChatHandoffRef = useRef(undefined);
   if (initialQuickChatHandoffRef.current === undefined) {
-    initialQuickChatHandoffRef.current = loadQuickChatHandoff(config.storage.quickChatHandoff);
+    const memoryHandoff = quickChatMemory.handoff;
+    initialQuickChatHandoffRef.current = memoryHandoff
+      ? { ...memoryHandoff, inMemory: true }
+      : loadQuickChatHandoff(config.storage.quickChatHandoff);
   }
   const initialQuickChatHandoff = initialQuickChatHandoffRef.current;
 
   const [messages, setMessages] = useState(() => {
     if (Array.isArray(initialQuickChatHandoff?.messages) && initialQuickChatHandoff.messages.length > 0) {
+      const preserveTimeline = initialQuickChatHandoff.inMemory === true;
       return initialQuickChatHandoff.messages
-        .map((message, index) => normalizeStoredMessage(message, index))
+        .map((message, index) => normalizeStoredMessage(message, index, { preserveTimeline }))
         .filter(Boolean);
     }
 
-    const saved = localStorage.getItem(config.storage.chatHistory);
-    if (!saved) {
-      return [];
-    }
-
     try {
+      const saved = localStorage.getItem(config.storage.chatHistory);
+      if (!saved) {
+        return [];
+      }
       const parsed = JSON.parse(saved);
       if (!Array.isArray(parsed)) {
         return [];
@@ -167,9 +175,12 @@ function ConversationPage() {
   // composer itself never reaches these (its own inline zone handles that).
   const { isDraggingOverChat, handleChatDragEnter, handleChatDragOver, handleChatDragLeave, handleChatDrop } = useConversationAttachments({ connectionState, isClearingSession, chatInputRef });
   const handleMessagesScroll = useCallback(() => {
-    const container = messagesContainerRef.current;
-    if (!container) return;
-    isPinnedToBottomRef.current = container.scrollHeight - container.scrollTop - container.clientHeight < 24;
+    noteTranscriptScroll(messagesContainerRef.current, isPinnedToBottomRef);
+  }, []);
+  // Real scroll input (as opposed to the browser re-anchoring content) is what
+  // lets a scroll release a long answer the transcript is holding in place.
+  const handleMessagesUserInput = useCallback(() => {
+    noteTranscriptUserInput(messagesContainerRef.current);
   }, []);
   const [oldestMessageCursor, setOldestMessageCursor] = useState(null);
   const [loadingOlderMessages, setLoadingOlderMessages] = useState(false);
@@ -281,6 +292,24 @@ function ConversationPage() {
     onForegroundStreamStarted: beginForegroundStream,
     requestForegroundReconciliation,
   });
+
+  const liveContextUsage = useSyncExternalStore(
+    liveTurnStore.subscribeContextUsage,
+    liveTurnStore.getContextUsageSnapshot,
+    liveTurnStore.getContextUsageSnapshot,
+  );
+  const composerContextUsage = useMemo(() => resolveComposerContextUsage({
+    contextUsage: liveContextUsage ?? latestContextUsage(messages),
+    profiles: modelProfiles,
+    isFreshConversation: Boolean(threadId)
+      && !selectedBackendChatId
+      && messages.length === 0
+      && !liveContextUsage,
+  }), [liveContextUsage, messages, modelProfiles, selectedBackendChatId, threadId]);
+  const composerCacheExpiry = useMemo(
+    () => resolveComposerCacheExpiry({ messages, profiles: modelProfiles }),
+    [messages, modelProfiles],
+  );
 
   const openBackendChat = useCallback(async (requestedThreadId) => {
     if (!requestedThreadId) {
@@ -396,7 +425,6 @@ function ConversationPage() {
     },
     [config.storage.streamFilters],
   );
-
   useEffect(() => {
     // A routed detail owns initialization. Do not create an unrelated draft
     // while the requested chat is loading (or after its detail fails).
@@ -423,8 +451,13 @@ function ConversationPage() {
       }
       const quickChatHandoff = initialQuickChatHandoffRef.current;
       if (quickChatHandoff) {
-        localStorage.removeItem(config.storage.quickChatHandoff);
+        try {
+          localStorage.removeItem(config.storage.quickChatHandoff);
+        } catch {
+          // The in-memory handoff remains available even when storage is blocked.
+        }
         initialQuickChatHandoffRef.current = null;
+        quickChatMemory.handoff = null;
       }
 
       // A quick-chat handoff is an explicit, in-the-moment intent ("promote
@@ -501,7 +534,7 @@ function ConversationPage() {
       }
 
       const normalizedMessages = promotedMessages
-        .map((message, index) => normalizeStoredMessage(message, index))
+        .map((message, index) => normalizeStoredMessage(message, index, { preserveTimeline: true }))
         .filter(Boolean);
       if (normalizedMessages.length === 0) {
         return;
@@ -514,7 +547,12 @@ function ConversationPage() {
       if (typeof event.detail?.threadId === 'string') {
         setThreadId(event.detail.threadId);
       }
-      localStorage.removeItem(config.storage.quickChatHandoff);
+      try {
+        localStorage.removeItem(config.storage.quickChatHandoff);
+      } catch {
+        // The in-memory handoff has already been applied.
+      }
+      quickChatMemory.handoff = null;
     };
 
     window.addEventListener('progena:load-chat-history', handlePromotedQuickChat);
@@ -527,11 +565,15 @@ function ConversationPage() {
   // Backend chat messages must not leak into localStorage — they are the server's
   // source of truth and would create a ghost "Current" card on the next page visit.
   useEffect(() => {
-    if (selectedBackendChatId) {
-      localStorage.removeItem(config.storage.chatHistory);
-    } else if (messages.length > 0) {
-      const persistable = messages.slice(-100).map(stripEphemeralStreamEvents);
-      localStorage.setItem(config.storage.chatHistory, JSON.stringify(persistable));
+    try {
+      if (selectedBackendChatId) {
+        localStorage.removeItem(config.storage.chatHistory);
+      } else if (messages.length > 0) {
+        const persistable = messages.slice(-100).map(stripEphemeralStreamEvents);
+        localStorage.setItem(config.storage.chatHistory, JSON.stringify(persistable));
+      }
+    } catch {
+      // Local persistence is a reload enhancement, never a chat interaction dependency.
     }
   }, [messages, selectedBackendChatId, config.storage.chatHistory]);
 
@@ -639,7 +681,7 @@ function ConversationPage() {
 
     activeStreamIdRef.current = null;
     recentScheduledContent.current.clear();
-    isPinnedToBottomRef.current = true;
+    pinTranscriptToTail(messagesContainerRef.current, isPinnedToBottomRef);
     setMessages(backendMessages);
     setOldestMessageCursor(backendMessages.length ? backendMessages[0].id : null);
     appliedOlderPageRequestIdRef.current = null;
@@ -739,22 +781,17 @@ function ConversationPage() {
     }
   }, [activeBackendChatState?.hasMoreMessages, dispatch, getApiUrl, loadingOlderMessages, oldestMessageCursor, show, threadId]);
 
-  // Committed message changes and generation transitions keep the page at the
-  // tail only while the user remains near the bottom. Per-frame live-turn
+  // Committed message changes and generation transitions re-follow the
+  // transcript (followTranscript: hold an answer being read, else stay at the
+  // tail only while the user remains near the bottom). Per-frame live-turn
   // scrolling is owned by LiveAssistantTurn so streaming does not redraw this
   // page-wide component tree.
   useEffect(() => {
-    if (!isPinnedToBottomRef.current || messagesScrollFrameRef.current !== null) return;
-
-    const container = messagesContainerRef.current;
-    if (!container) return;
+    if (messagesScrollFrameRef.current !== null) return;
 
     messagesScrollFrameRef.current = requestAnimationFrame(() => {
       messagesScrollFrameRef.current = null;
-      const currentContainer = messagesContainerRef.current;
-      if (currentContainer && isPinnedToBottomRef.current) {
-        currentContainer.scrollTop = currentContainer.scrollHeight;
-      }
+      followTranscript(messagesContainerRef.current, isPinnedToBottomRef);
     });
   }, [messages, isGenerating]);
 
@@ -837,17 +874,23 @@ function ConversationPage() {
     handleChatEvent({ type: event?.type, data: event?.payload });
   }), [handleChatEvent]);
 
+  // Sending is an explicit "take me to the conversation" -- the user's own
+  // message and the reply must be in view even if they had scrolled back.
+  const sendAndFollow = useCallback((...args) => {
+    pinTranscriptToTail(messagesContainerRef.current, isPinnedToBottomRef);
+    return handleSend(...args);
+  }, [handleSend]);
   // Regenerate actions sit on every historical assistant card. Keep their
   // dispatcher identity stable so a new streamed reply cannot invalidate the
   // entire committed transcript; read the current transcript at click time.
-  const regenerateStateRef = useRef({ messages, isGenerating, handleSend, show });
+  const regenerateStateRef = useRef({ messages, isGenerating, handleSend: sendAndFollow, show });
   regenerateStateRef.current.messages = messages;
   regenerateStateRef.current.isGenerating = isGenerating;
-  regenerateStateRef.current.handleSend = handleSend;
+  regenerateStateRef.current.handleSend = sendAndFollow;
   regenerateStateRef.current.show = show;
   const handleQuickAction = useCallback((message) => {
-    handleSend(message);
-  }, [handleSend]);
+    sendAndFollow(message);
+  }, [sendAndFollow]);
 
   const handleRegenerate = useCallback((assistantMessageId) => {
     const current = regenerateStateRef.current;
@@ -1458,6 +1501,12 @@ function ConversationPage() {
   const liveOwnedMessageId = liveTurnStore.getSnapshot()?.assistantMessageId ?? null;
   const visibleMessages = excludeLiveOwnedMessage(messages, liveOwnedMessageId);
 
+  const shouldRenderTranscript = !isRouteDetailError
+    && !isContentLoading
+    && !isEmptyConversationPane
+    && !isNewChatEmpty;
+  const transcriptMessages = shouldRenderTranscript ? visibleMessages : [];
+
   return (
     <PageShell className="chat-page">
       <ConversationSessionsPane
@@ -1493,7 +1542,6 @@ function ConversationPage() {
           isRouteDetailError={isRouteDetailError}
           showEventFilters={showEventFilters}
           streamFilters={streamFilters}
-          streamFiltersStorageKey={config.storage.streamFilters}
           updateStreamFilters={updateStreamFilters}
           chatStatus={currentSessionItem?.status || 'idle'}
           threadId={threadId}
@@ -1522,11 +1570,22 @@ function ConversationPage() {
         )}
         <RegenerateDisabledContext.Provider value={isGenerating}>
           <div
-            className="chat-messages sess-detail__body chat-detail-body"
+            className="chat-messages sess-detail__body chat-detail-body chat-transcript"
             ref={messagesContainerRef}
             onScroll={handleMessagesScroll}
+            onWheel={handleMessagesUserInput}
+            onTouchStart={handleMessagesUserInput}
+            onPointerDown={handleMessagesUserInput}
+            onKeyDown={handleMessagesUserInput}
           >
-            <div className="chat-messages__inner">
+            <ChatMessages
+              messages={transcriptMessages}
+              streamEventFilter={streamEventFilter}
+              onRegenerate={handleRegenerate}
+              liveTurnStore={shouldRenderTranscript ? liveTurnStore : undefined}
+              messagesContainerRef={messagesContainerRef}
+              isPinnedToBottomRef={isPinnedToBottomRef}
+            >
               {isRouteDetailError ? (
                 <InlineFailure
                   failure={chatDetailError}
@@ -1549,50 +1608,25 @@ function ConversationPage() {
                   <h2>{welcomeMessage}</h2>
                   <QuickActions onAction={handleQuickAction} />
                 </div>
-              ) : (
-                <>
-                  {activeBackendChatState?.hasMoreMessages ? (
-                    <div className="chat-messages__load-older">
-                      <button
-                        type="button"
-                        className="chat-messages__load-older-button"
-                        onClick={handleLoadOlderMessages}
-                        disabled={loadingOlderMessages}
-                      >
-                        {loadingOlderMessages ? 'Loading…' : 'Load earlier messages'}
-                      </button>
-                    </div>
-                  ) : null}
-                  {visibleMessages.map((msg) => {
-                    if (msg.role === 'user' && streamFilters.user === false) return null;
-                    return (
-                      <HistoricalMessage
-                        key={msg.id}
-                        message={msg}
-                        streamEventFilter={streamEventFilter}
-                        hideContent={msg.role === 'assistant' && streamFilters.agent === false}
-                        showImages={streamFilters.images !== false}
-                        onRegenerate={msg.role === 'assistant' ? handleRegenerate : undefined}
-                      />
-                    );
-                  })}
-                  <LiveAssistantTurn
-                    store={liveTurnStore}
-                    messagesContainerRef={messagesContainerRef}
-                    isPinnedToBottomRef={isPinnedToBottomRef}
-                    streamEventFilter={streamEventFilter}
-                    hideContent={streamFilters.agent === false}
-                    showImages={streamFilters.images !== false}
-                  />
-                </>
-              )}
-            </div>
+              ) : activeBackendChatState?.hasMoreMessages ? (
+                <div className="chat-messages__load-older">
+                  <button
+                    type="button"
+                    className="chat-messages__load-older-button"
+                    onClick={handleLoadOlderMessages}
+                    disabled={loadingOlderMessages}
+                  >
+                    {loadingOlderMessages ? 'Loading…' : 'Load earlier messages'}
+                  </button>
+                </div>
+              ) : null}
+            </ChatMessages>
           </div>
         </RegenerateDisabledContext.Provider>
 
         <ChatInput
           ref={chatInputRef}
-          onSend={handleSend}
+          onSend={sendAndFollow}
           onStop={handleStop}
           onCommand={handleCommand}
           isGenerating={isGenerating}
@@ -1600,6 +1634,8 @@ function ConversationPage() {
           autoFocus
           focusToken={`${threadId ?? 'no-session'}:${composerFocusTick}`}
           keepFocusAfterSend
+          contextUsage={composerContextUsage}
+          cacheExpiry={composerCacheExpiry}
         />
         </div>
       </DetailPane>

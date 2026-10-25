@@ -6,13 +6,11 @@
  * dispatching tool_call_id in liveAssistantTurnModel.js) and needs no
  * special handling here beyond rendering whatever `item` it's given.
  *
- * The body is a fixed-height pane (`.subagent-card__body`, chat-panel.css)
- * that scrolls and auto-tails its latest content (useStickyScroll) instead
- * of a manual collapse/expand toggle -- always visible, no click required,
- * and every concurrent card keeps the same small footprint on screen. The
- * header stays bare chrome, styled like any other top-level entry (see
- * A2ACallCard.jsx's matching comment history) -- the tinted "card" look
- * lives on the body.
+ * The body shows only the latest CARD_SUMMARY_LINES chain lines (task
+ * summary, streamed text, nested tool calls) with an "N earlier" toggle for
+ * the rest, so every concurrent card keeps the same small footprint. The
+ * header stays bare chrome, styled like any other top-level entry -- the
+ * tinted "card" look lives on the body.
  *
  * `item.entries` is a single ordered chain mixing the subagent's own
  * streamed text (`{ kind: 'message', ... }`) and its nested tool calls
@@ -26,58 +24,18 @@
  * rather than inventing a parallel set.
  */
 
-import { memo } from 'react';
+import { memo, useState } from 'react';
 import { renderSafeMarkdown } from '../../../lib/safeMarkdown';
-import { formatArgsPreview, formatToolInputSummary, formatDuration, formatTimestamp, statusPillProps } from '../models/messageRenderUtils';
-import useStickyScroll from '../hooks/useStickyScroll';
-import StatusPill from './StatusPill';
-import { SubmittedGlyph, WorkingGlyph, CompletedGlyph, FailedGlyph } from './eventGlyphs';
-
-// Distinguishes the subagent card's badge from A2ACallCard's at a glance --
-// a branch spinning off the main line, standing in for "delegated sub-work".
-function SubagentGlyph() {
-  return (
-    <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <line x1="6" y1="3" x2="6" y2="15" />
-      <circle cx="18" cy="6" r="3" />
-      <circle cx="6" cy="18" r="3" />
-      <path d="M18 9a9 9 0 0 1-9 9" />
-    </svg>
-  );
-}
-
-// Distinguishes a streamed-text entry from a nested-tool-call entry in the
-// same chain -- a speech bubble, standing in for "the subagent said this".
-function MessageGlyph() {
-  return (
-    <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z" />
-    </svg>
-  );
-}
-
-const CHILD_STATUS_GLYPHS = {
-  running: WorkingGlyph,
-  success: CompletedGlyph,
-  error: FailedGlyph,
-};
-
-// Called directly as a plain function, not rendered as `<X />` -- see the
-// matching comment on A2ACallCard.jsx's glyphForA2AState for why (these are
-// pure markup with no hooks, but react-hooks/static-components can't verify
-// a dynamically-selected component's stability statically).
-function glyphForChildStatus(status) {
-  const Glyph = CHILD_STATUS_GLYPHS[status] || WorkingGlyph;
-  return Glyph();
-}
+import { formatArgsPreview, formatToolInputSummary, formatDuration, formatTimestamp } from '../models/messageRenderUtils';
+import { selectRecentLines } from '../models/workGroupModel';
+import useRunningDisclosure from '../hooks/useRunningDisclosure';
+import EarlierLinesToggle from './EarlierLinesToggle';
 
 const SubagentTaskSummaryEntry = memo(function SubagentTaskSummaryEntry({ taskSummary, isLast }) {
   return (
     <div className={`entry subagent-child subagent-card__task-summary-entry ${isLast ? 'entry--chain-end' : 'entry--chain-item'}`}>
       <div className="entry__gutter" aria-hidden="true">
-        <span className="entry__badge subagent-card__badge subagent-card__badge--submitted">
-          {SubmittedGlyph()}
-        </span>
+        <span className="entry__badge subagent-card__badge subagent-card__badge--submitted" />
       </div>
       <div className="entry__main">
         <div className="entry__head">
@@ -119,7 +77,7 @@ function childToolSummary(child) {
 
 // Every nested tool call is a closed-by-default disclosure, matching the
 // top-level tool-event-disclosure control. The status/summary stays visible;
-// args, duration, and result/error remain available behind Expand.
+// args, duration, and result/error remain available behind the chevron.
 const SubagentChild = memo(function SubagentChild({ child, isLast }) {
   const args = formatArgsPreview(child.argsPreview);
   const body = [
@@ -131,16 +89,12 @@ const SubagentChild = memo(function SubagentChild({ child, isLast }) {
   return (
     <div className={`entry subagent-child ${isLast ? 'entry--chain-end' : 'entry--chain-item'}`}>
       <div className="entry__gutter" aria-hidden="true">
-        <span className={`entry__badge subagent-card__badge subagent-card__badge--${child.status}`}>
-          {glyphForChildStatus(child.status)}
-        </span>
+        <span className={`entry__badge subagent-card__badge subagent-card__badge--${child.status}`} />
       </div>
       <div className="entry__main">
         <details className="tool-event-disclosure">
           <summary>
             <span className="tool__summary tool-event-disclosure__summary">{summary}</span>
-            <span className="tool-event-disclosure__state tool-event-disclosure__state--expand tool-event-disclosure__label">Expand</span>
-            <span className="tool-event-disclosure__state tool-event-disclosure__state--collapse tool-event-disclosure__label">Collapse</span>
             <span className="tool-event-disclosure__chevron" aria-hidden="true" />
           </summary>
           <div className="tool chat-event-tool">
@@ -172,9 +126,7 @@ const SubagentMessageEntry = memo(function SubagentMessageEntry({ entry, isLast,
   return (
     <div className={`entry subagent-child ${isLast ? 'entry--chain-end' : 'entry--chain-item'}`}>
       <div className="entry__gutter" aria-hidden="true">
-        <span className={`entry__badge subagent-card__badge${isStreaming ? ' subagent-card__badge--running' : ''}`}>
-          <MessageGlyph />
-        </span>
+        <span className={`entry__badge subagent-card__badge${isStreaming ? ' subagent-card__badge--running' : ''}`} />
       </div>
       <div className="entry__main">
         {isStreaming ? (
@@ -207,27 +159,31 @@ const SubagentCard = memo(function SubagentCard({ item }) {
   const entries = item.entries.length > 0
     ? item.entries
     : (item.resultPreview ? [{ kind: 'message', id: 'result', text: item.resultPreview }] : []);
-  const entryCount = entries.length;
-  const lastEntry = entryCount > 0 ? entries[entryCount - 1] : null;
+  const lastEntry = entries.length > 0 ? entries[entries.length - 1] : null;
   const isStreamingLastEntry = item.status === 'running' && item.entries.length > 0 && lastEntry.kind === 'message';
   const toolCount = entries.filter((entry) => entry.kind === 'tool').length;
+  const failedToolCount = entries.filter((entry) => entry.kind === 'tool' && entry.status === 'error').length;
   const durationLabel = Number.isFinite(item.durationMs) ? formatDuration(item.durationMs) : '';
   const formattedTime = formatTimestamp(item.finishedAt || item.startedAt);
-  const stickyKey = `${entryCount}:${lastEntry && lastEntry.kind === 'message' ? lastEntry.text.length : lastEntry?.status}:${item.status}`;
-  const { ref: scrollRef, onScroll } = useStickyScroll(stickyKey);
+  const [showAll, setShowAll] = useState(false);
+  const { open, toggle } = useRunningDisclosure(item.status === 'running');
+  const lines = item.taskSummary
+    ? [{ kind: 'task_summary', id: 'task-summary' }, ...entries]
+    : entries;
+  const { visibleLines, hiddenCount } = selectRecentLines(lines, showAll);
+  const error = item.status === 'error' && item.error
+    ? <div className="subagent-card__error">{item.error}</div>
+    : null;
 
   return (
     <div className={`entry entry--chain-item subagent-card subagent-card--${item.status}`}>
       <div className="entry__gutter" aria-hidden="true">
-        <span className={`entry__badge subagent-card__badge subagent-card__badge--${item.status}`}>
-          <SubagentGlyph />
-        </span>
+        <span className={`entry__badge subagent-card__badge subagent-card__badge--${item.status}`} />
       </div>
       <div className="entry__main">
-        <div className="entry__head">
-          <span className="entry__tag subagent-card__tag">Subagent</span>
+        <button type="button" className="entry__head entry-toggle" aria-expanded={open} onClick={toggle}>
           <span className="entry__role">{item.subagentName || 'subagent'}</span>
-          <StatusPill {...statusPillProps(item.status)} />
+          {failedToolCount > 0 && <span className="work-group__failed">{failedToolCount} failed</span>}
           <span className="msg__head-trailing">
             {toolCount > 0 && (
               <span className="muted">{toolCount} tool call{toolCount === 1 ? '' : 's'}</span>
@@ -235,31 +191,36 @@ const SubagentCard = memo(function SubagentCard({ item }) {
             {durationLabel && <span className="muted">{durationLabel}</span>}
             {formattedTime && <span className="msg__time entry__time">{formattedTime}</span>}
           </span>
-        </div>
-        <div className="subagent-card__body entry__content" ref={scrollRef} onScroll={onScroll}>
-          {(item.taskSummary || entryCount > 0) && (
-            <div className="subagent-card__children">
-              {item.taskSummary && (
-                <SubagentTaskSummaryEntry taskSummary={item.taskSummary} isLast={entryCount === 0} />
-              )}
-              {entries.map((entry, index) => (
-                entry.kind === 'tool' ? (
-                  <SubagentChild key={entry.id} child={entry} isLast={index === entryCount - 1} />
-                ) : (
-                  <SubagentMessageEntry
-                    key={entry.id}
-                    entry={entry}
-                    isLast={index === entryCount - 1}
-                    isStreaming={isStreamingLastEntry && index === entryCount - 1}
-                  />
-                )
-              ))}
-            </div>
-          )}
-          {item.status === 'error' && item.error && (
-            <div className="subagent-card__error">{item.error}</div>
-          )}
-        </div>
+          <span className="tool-event-disclosure__chevron" aria-hidden="true" />
+        </button>
+        {!open && error}
+        {open && (
+          <div className="subagent-card__body entry__content">
+            <EarlierLinesToggle hiddenCount={hiddenCount} showAll={showAll} onToggle={() => setShowAll((value) => !value)} />
+            {visibleLines.length > 0 && (
+              <div className="subagent-card__children">
+                {visibleLines.map((line, index) => {
+                  const isLast = index === visibleLines.length - 1;
+                  if (line.kind === 'task_summary') {
+                    return <SubagentTaskSummaryEntry key={line.id} taskSummary={item.taskSummary} isLast={isLast} />;
+                  }
+                  if (line.kind === 'tool') {
+                    return <SubagentChild key={line.id} child={line} isLast={isLast} />;
+                  }
+                  return (
+                    <SubagentMessageEntry
+                      key={line.id}
+                      entry={line}
+                      isLast={isLast}
+                      isStreaming={isStreamingLastEntry && line === lastEntry}
+                    />
+                  );
+                })}
+              </div>
+            )}
+            {error}
+          </div>
+        )}
       </div>
     </div>
   );

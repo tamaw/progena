@@ -1,15 +1,23 @@
+import json
+
 import pytest
 
 from src.progena.documents.catalog import load_schema
 from src.progena.documents.types import BUILTIN_DOCUMENT_TYPES, DocumentType
 from src.progena.llm.structured import validate_against_schema
 from src.progena.workflows.derivation import derive_workflow_port_schemas
-from src.progena.workflows.documents import coerce_workflow_run, default_workflow_definition
+from src.progena.workflows.documents import (
+    coerce_workflow_run,
+    default_workflow_definition,
+)
 from src.progena.workflows.events import document_changed_fields
 from src.progena.workflows.graph import ordered_workflow_node_ids
 from src.progena.workflows.models import WorkflowDefinition, WorkflowNodeEvent
 from src.progena.workflows.ports import document_create_input_schema, document_write_input_schema
-from src.progena.workflows.validation import validate_workflow_definition_payload
+from src.progena.workflows.validation import (
+    validate_workflow_definition_document,
+    validate_workflow_definition_payload,
+)
 
 
 def _node_id(payload, kind):
@@ -32,6 +40,48 @@ def _default_with_schemas():
     return derive_workflow_port_schemas(
         default_workflow_definition(), {t.id: t for t in BUILTIN_DOCUMENT_TYPES}
     )
+
+
+def test_manual_only_workflow_saves_with_typed_ports_and_defaults():
+    payload = default_workflow_definition()
+    payload["graph"] = {
+        "nodes": {
+            "manual": {
+                "kind": "manual",
+                "title": "Run round",
+                "output_schema": {
+                    "type": "object",
+                    "required": ["run_id"],
+                    "properties": {
+                        "run_id": {"type": "string"},
+                        "round_count": {"type": "integer", "default": 3},
+                    },
+                },
+            },
+            "format": {
+                "kind": "format",
+                "title": "Format round",
+                "template": "Run {run_id} for {round_count} rounds",
+            },
+        },
+        "edges": [
+            {
+                "from": {"node": "manual", "port": "run_id"},
+                "to": {"node": "format", "port": "run_id"},
+            },
+            {
+                "from": {"node": "manual", "port": "round_count"},
+                "to": {"node": "format", "port": "round_count"},
+            },
+        ],
+    }
+
+    normalized = validate_workflow_definition_document(json.dumps(payload), _TYPES)
+
+    assert normalized["graph"]["nodes"]["manual"]["output_schema"]["properties"] == {
+        "run_id": {"type": "string"},
+        "round_count": {"type": "integer", "default": 3},
+    }
 
 
 def test_document_create_defaulted_required_fields_are_optional_ports(monkeypatch):

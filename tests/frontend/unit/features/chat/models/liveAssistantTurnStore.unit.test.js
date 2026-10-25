@@ -108,4 +108,29 @@ describe('createLiveAssistantTurnStore', () => {
     expect(headerSnapshots).toHaveLength(4);
     expect(headerSnapshots.at(-1).reasoningEventCount).toBe(1);
   });
+
+  it('notifies context-usage subscribers only when the latest-call footprint changes', () => {
+    const store = createLiveAssistantTurnStore();
+    const snapshots = [];
+    const turn = {
+      streamId: 'stream-001',
+      content: 'First visible text',
+      contextUsage: {
+        inputTokens: 100,
+        outputTokens: 20,
+        totalTokens: 120,
+        profileName: 'general',
+      },
+    };
+
+    store.subscribeContextUsage(() => snapshots.push(store.getContextUsageSnapshot()));
+    store.set(turn);
+    store.set({ ...turn, content: 'Extended text' });
+    store.set({ ...turn, contextUsage: { ...turn.contextUsage, totalTokens: 140 } });
+
+    expect(snapshots).toEqual([
+      turn.contextUsage,
+      { ...turn.contextUsage, totalTokens: 140 },
+    ]);
+  });
 });

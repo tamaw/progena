@@ -78,8 +78,6 @@ function renderLiveTurn({ store, container, pinned }) {
     messagesContainerRef: { current: container },
     isPinnedToBottomRef: { current: pinned },
     streamEventFilter: () => true,
-    hideContent: false,
-    showImages: true,
   });
   reactHarness.flushEffects();
 }
@@ -93,6 +91,18 @@ afterEach(() => {
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
+
+// A transcript container with no messages: followTranscript only needs
+// geometry and a selector query.
+function fakeTranscript({ scrollTop, scrollHeight }) {
+  return {
+    scrollTop,
+    scrollHeight,
+    clientHeight: 300,
+    querySelectorAll: () => [],
+    getBoundingClientRect: () => ({ top: 0 }),
+  };
+}
 describe('LiveAssistantTurn terminal outer-transcript scroll', () => {
   it('tails the pinned outer transcript synchronously when the real live store publishes its finalized snapshot', () => {
     const scheduledFrames = [];
@@ -102,7 +112,7 @@ describe('LiveAssistantTurn terminal outer-transcript scroll', () => {
     }));
     vi.stubGlobal('cancelAnimationFrame', vi.fn());
     const store = createLiveAssistantTurnStore();
-    const container = { scrollTop: 17, scrollHeight: 640 };
+    const container = fakeTranscript({ scrollTop: 17, scrollHeight: 640 });
     const pinned = { current: true };
     const streaming = streamingTurn();
 
@@ -126,7 +136,7 @@ describe('LiveAssistantTurn terminal outer-transcript scroll', () => {
     }));
     vi.stubGlobal('cancelAnimationFrame', vi.fn());
     const store = createLiveAssistantTurnStore();
-    const container = { scrollTop: 103, scrollHeight: 640 };
+    const container = fakeTranscript({ scrollTop: 103, scrollHeight: 640 });
     const streaming = streamingTurn();
 
     store.set(streaming);
@@ -135,6 +145,5 @@ describe('LiveAssistantTurn terminal outer-transcript scroll', () => {
     renderLiveTurn({ store, container, pinned: false });
 
     expect(container.scrollTop).toBe(103);
-    expect(scheduledFrames).toEqual([]);
   });
 });

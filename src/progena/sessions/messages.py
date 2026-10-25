@@ -3,7 +3,14 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
+
+# deepagents' execute footer; a truncation note may follow it, and offloaded
+# output puts it first, so match a whole line rather than the end of text.
+_EXECUTE_FAILURE = re.compile(r"^\[Command failed with exit code -?\d+\]$", re.MULTILINE)
+# langchain_quickjs renders a thrown error as a top-level element.
+_JAVASCRIPT_ERROR = re.compile(r'^<error type="', re.MULTILINE)
 
 
 def coerce_messages_list(messages: Any) -> list:
@@ -78,6 +85,26 @@ def get_last_ai_message(messages: Any) -> Any | None:
             if role == "assistant" or mtype == "ai":
                 return msg
     return None
+
+
+def tool_result_failed(tool_name: Any, message: Any, text: str) -> bool:
+    """Whether a returned tool result reports failure.
+
+    Callers pass the full result text, before any preview truncation, so a long
+    failing command keeps its classification after its footer is cut off.
+    """
+    getter = message.get if isinstance(message, dict) else lambda key: getattr(message, key, None)
+    if getter("status") == "error":
+        return True
+    artifact = getter("artifact")
+    exit_code = artifact.get("exit_code") if isinstance(artifact, dict) else None
+    if isinstance(exit_code, int) and not isinstance(exit_code, bool) and exit_code != 0:
+        return True
+    if tool_name == "execute":
+        return bool(_EXECUTE_FAILURE.search(text))
+    if tool_name == "javascript":
+        return bool(_JAVASCRIPT_ERROR.search(text))
+    return False
 
 
 def _coerce_to_dict(obj: Any) -> dict[str, Any] | None:
@@ -312,6 +339,59 @@ def extract_token_usage(msg: Any) -> dict[str, int] | None:
     return None
 
 
+def extract_context_usage(msg: Any) -> dict[str, int | str] | None:
+    """Return one complete model call's usage and persisted profile attribution.
+
+    Context capacity is meaningful only for an actual provider call. Unlike
+    aggregate accounting, this deliberately rejects partial usage records
+    rather than inventing zero input or output tokens.
+    """
+    if msg is None:
+        return None
+
+    containers: list[dict[str, Any]] = []
+    if isinstance(msg, dict):
+        for key in ("usage_metadata", "response_metadata"):
+            value = msg.get(key)
+            if isinstance(value, dict):
+                containers.append(value)
+        response_metadata = msg.get("response_metadata")
+    else:
+        for attr in ("usage_metadata", "response_metadata"):
+            value = getattr(msg, attr, None)
+            if isinstance(value, dict):
+                containers.append(value)
+        response_metadata = getattr(msg, "response_metadata", None)
+
+    usage = next(
+        (
+            extracted
+            for container in containers
+            if (extracted := _extract_complete_token_usage_from_container(container)) is not None
+        ),
+        None,
+    )
+    if usage is None:
+        return None
+
+    result: dict[str, int | str] = dict(usage)
+    if not isinstance(response_metadata, dict):
+        return result
+    insights = response_metadata.get("insights")
+    if isinstance(insights, dict):
+        for key in ("profile_name", "deployment", "provider_id"):
+            value = insights.get(key)
+            if isinstance(value, str) and value:
+                result[key] = value
+    if "provider_id" not in result:
+        provider = response_metadata.get("progena_provider")
+        if isinstance(provider, dict):
+            provider_id = provider.get("id")
+            if isinstance(provider_id, str) and provider_id:
+                result["provider_id"] = provider_id
+    return result
+
+
 def extract_cache_read_token_count(msg: Any) -> int | None:
     """Extract Azure's reported prompt-cache-read token count from a completed message.
 
@@ -425,6 +505,39 @@ def _extract_reasoning_token_count_from_container(container: dict[str, Any]) -> 
     return None
 
 
+def _extract_complete_token_usage_from_container(
+    container: dict[str, Any],
+) -> dict[str, int] | None:
+    """Extract a provider footprint only when both input and output are known."""
+    aliases = {
+        "input_tokens": ("input_tokens", "prompt_tokens"),
+        "output_tokens": ("output_tokens", "completion_tokens"),
+        "total_tokens": ("total_tokens",),
+    }
+    usage: dict[str, int] = {}
+    for normalized, keys in aliases.items():
+        for key in keys:
+            value = container.get(key)
+            if type(value) is int and value >= 0:
+                usage[normalized] = value
+                break
+    if "input_tokens" in usage and "output_tokens" in usage:
+        return {
+            "input_tokens": usage["input_tokens"],
+            "output_tokens": usage["output_tokens"],
+            "total_tokens": usage.get(
+                "total_tokens", usage["input_tokens"] + usage["output_tokens"]
+            ),
+        }
+    for key in ("token_usage", "usage"):
+        nested = container.get(key)
+        if isinstance(nested, dict):
+            nested_usage = _extract_complete_token_usage_from_container(nested)
+            if nested_usage is not None:
+                return nested_usage
+    return None
+
+
 def _extract_token_usage_from_container(container: dict[str, Any]) -> dict[str, int] | None:
     aliases = {
         "input_tokens": ("input_tokens", "prompt_tokens"),
@@ -488,6 +601,7 @@ __all__ = [
     "attach_reasoning_trace",
     "coerce_messages_list",
     "extract_cache_read_token_count",
+    "extract_context_usage",
     "extract_display_metadata",
     "extract_message_text",
     "extract_reasoning_token_count",

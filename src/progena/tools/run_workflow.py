@@ -7,6 +7,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from src.progena.llm.structured import validate_against_schema
 from src.progena.sessions.context import get_current_thread_id
 from src.progena.workflows.constants import MAX_WORKFLOW_INVOKE_DEPTH
 
@@ -21,7 +22,10 @@ class RunWorkflowArgs(BaseModel):
     )
     input: dict[str, Any] = Field(
         default_factory=dict,
-        description="JSON object passed as the triggering event payload.",
+        description=(
+            "JSON payload for the workflow's manual trigger. It must satisfy that "
+            "trigger's declared payload schema; property defaults are applied."
+        ),
     )
 
 
@@ -39,14 +43,40 @@ class RunWorkflowTool(BaseSystemTool):
             "ls /workflows/ for available ids). The backend WorkflowExecutor "
             "runs the nodes on its own execution thread and this call returns "
             "immediately after enqueueing. Provide workflow_id and an optional "
-            "JSON input object. Refuses disabled or paused workflows, recursive "
-            f"chains deeper than {MAX_WORKFLOW_INVOKE_DEPTH} workflows, and "
-            "workflows already in the current invocation chain."
+            "JSON input object for its preferred manual trigger. Refuses disabled "
+            "or paused workflows, recursive chains deeper than "
+            f"{MAX_WORKFLOW_INVOKE_DEPTH} workflows, and workflows already in the "
+            "current invocation chain."
         )
 
     @property
     def args_model(self) -> type[BaseModel]:
         return RunWorkflowArgs
+
+    @staticmethod
+    def _manual_payload_error(definition: Any, payload: dict[str, Any]) -> str | None:
+        """Validate input immediately when the persisted graph has a manual trigger."""
+
+        graph = definition.get("graph") if isinstance(definition, dict) else None
+        nodes = graph.get("nodes") if isinstance(graph, dict) else None
+        if not isinstance(nodes, dict):
+            return None
+        manual = next(
+            (
+                node
+                for node in nodes.values()
+                if isinstance(node, dict) and node.get("kind") == "manual"
+            ),
+            None,
+        )
+        if not isinstance(manual, dict):
+            return None
+        schema = manual.get("output_schema")
+        if not isinstance(schema, dict):
+            return "manual trigger is missing its payload schema"
+        if error := validate_against_schema(payload, schema):
+            return f"manual trigger payload failed schema validation: {error}"
+        return None
 
     async def execute(self, context: ToolContext) -> ToolResult:
         if context.state_manager is None:
@@ -66,6 +96,8 @@ class RunWorkflowTool(BaseSystemTool):
             )
         if not definition.get("enabled", True) or definition.get("paused", False):
             return ToolResult.fail(f"Workflow '{workflow_id}' is disabled or paused.")
+        if error := self._manual_payload_error(definition, input_payload):
+            return ToolResult.fail(f"Workflow '{workflow_id}' {error}.")
 
         ancestry = await self._resolve_ancestry(context)
         if workflow_id in ancestry:

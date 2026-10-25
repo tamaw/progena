@@ -89,6 +89,37 @@ def _workflow(event, nodes, edges):
     return workflow
 
 
+async def test_manual_trigger_does_not_match_document_events(store):
+    workflow = default_workflow_definition()
+    workflow["graph"] = {
+        "nodes": {
+            "manual": {
+                "kind": "manual",
+                "title": "Manual",
+                "output_schema": {
+                    "type": "object",
+                    "required": ["run_id"],
+                    "properties": {"run_id": {"type": "string"}},
+                },
+            },
+            "agent": {"kind": "agent", "title": "Run", "template": "Run {run_id}"},
+        },
+        "edges": [
+            {
+                "from": {"node": "manual", "port": "run_id"},
+                "to": {"node": "agent", "port": "run_id"},
+            }
+        ],
+    }
+    save_workflow_definition(store, workflow)
+
+    runs = await workflows_runtime.get_workflow_executor().dispatch_document_event(
+        {"document_type": "kanban_card", "op": "updated"}
+    )
+
+    assert runs == []
+
+
 def _completed_runs(store, workflow_id):
     return [
         run

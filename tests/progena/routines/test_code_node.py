@@ -11,7 +11,6 @@ from langgraph.errors import NodeTimeoutError
 from quickjs_rs import JSError
 from quickjs_rs import TimeoutError as QuickJSTimeoutError
 
-from src.progena.routines.code_filesystem import FilesystemToolError
 from src.progena.routines.factory import compile_routine_graph
 from src.progena.routines.graph import validate_routine_graph_payload
 
@@ -418,7 +417,7 @@ async def test_code_node_filesystem_rejects_scope_escapes_and_read_only_writes(t
             )
         )
     )
-    with pytest.raises(FilesystemToolError, match="path traversal"):
+    with pytest.raises(JSError, match="path traversal"):
         await compile_routine_graph(escaped, model=object(), filesystem_backend=backend).ainvoke({})
 
     (tmp_path / "artifacts" / "binary.png").write_bytes(b"\x89PNG\r\n\x1a\n")
@@ -431,7 +430,7 @@ async def test_code_node_filesystem_rejects_scope_escapes_and_read_only_writes(t
             )
         )
     )
-    with pytest.raises(FilesystemToolError, match="binary files are not supported"):
+    with pytest.raises(JSError, match="binary files are not supported"):
         await compile_routine_graph(binary, model=object(), filesystem_backend=backend).ainvoke({})
 
 
@@ -459,59 +458,133 @@ def test_code_node_filesystem_rejects_missing_backend_and_composite_default_fall
 
 
 @pytest.mark.asyncio
-async def test_code_node_filesystem_copy_and_move_preserve_no_overwrite_and_mount_rules(tmp_path):
+async def test_code_node_filesystem_errors_are_catchable_and_preserve_no_overwrite(tmp_path):
     backend = _filesystem_backend(tmp_path)
     (tmp_path / "artifacts" / "source.txt").write_text("source", encoding="utf-8")
-    (tmp_path / "artifacts" / "destination.txt").write_text("existing", encoding="utf-8")
+    destination = tmp_path / "artifacts" / "destination.txt"
+    shared_destination = tmp_path / "shared" / "destination.txt"
+    destination.write_text("existing", encoding="utf-8")
+    shared_destination.write_text("shared existing", encoding="utf-8")
 
-    no_overwrite = validate_routine_graph_payload(
+    caught = validate_routine_graph_payload(
         _payload(
             _filesystem_code_node(
                 """
-                return await tools.copyFile({
-                  source_path: "/artifacts/source.txt",
-                  destination_path: "/artifacts/destination.txt"
+                async function errorMessage(operation) {
+                  try {
+                    await operation();
+                  } catch (error) {
+                    return error.message;
+                  }
+                }
+                return {
+                  missing: await errorMessage(() =>
+                    tools.readFile({ file_path: "/artifacts/missing.txt" })
+                  ),
+                  copy: await errorMessage(() => tools.copyFile({
+                    source_path: "/artifacts/source.txt",
+                    destination_path: "/artifacts/destination.txt"
+                  })),
+                  write: await errorMessage(() => tools.writeFile({
+                    file_path: "/artifacts/destination.txt",
+                    content: "replacement"
+                  })),
+                  writeShared: await errorMessage(() => tools.writeFile({
+                    file_path: "/shared/destination.txt",
+                    content: "replacement"
+                  }))
+                };
+                """
+            )
+        )
+    )
+    result = await compile_routine_graph(
+        caught, model=object(), filesystem_backend=backend
+    ).ainvoke({})
+
+    assert result["data"]["result"] == {
+        "missing": "readFile: File '/missing.txt' not found",
+        "copy": "copyFile: destination already exists: /artifacts/destination.txt",
+        "write": "writeFile: destination already exists: /artifacts/destination.txt",
+        "writeShared": "writeFile: destination already exists: /shared/destination.txt",
+    }
+    assert destination.read_text(encoding="utf-8") == "existing"
+    assert shared_destination.read_text(encoding="utf-8") == "shared existing"
+
+    uncaught = validate_routine_graph_payload(
+        _payload(
+            _filesystem_code_node(
+                'return await tools.readFile({ file_path: "/artifacts/missing.txt" });'
+            )
+        )
+    )
+    with pytest.raises(JSError, match=r"readFile: File '/missing\.txt' not found"):
+        await compile_routine_graph(uncaught, model=object(), filesystem_backend=backend).ainvoke(
+            {}
+        )
+
+
+@pytest.mark.asyncio
+async def test_code_node_filesystem_writes_and_copies_into_missing_directories(tmp_path):
+    backend = _filesystem_backend(tmp_path)
+    graph = validate_routine_graph_payload(
+        _payload(
+            _filesystem_code_node(
+                """
+                await tools.writeFile({ file_path: "/shared/run/round-0/bars.csv", content: "t" });
+                await tools.writeFile({ file_path: "/artifacts/run/state.json", content: "{}" });
+                await tools.copyFile({
+                  source_path: "/shared/run/round-0/bars.csv",
+                  destination_path: "/shared/run/round-1/bars.csv"
                 });
+                return "ok";
                 """
             )
         )
     )
-    with pytest.raises(FilesystemToolError, match="destination already exists"):
-        await compile_routine_graph(
-            no_overwrite, model=object(), filesystem_backend=backend
-        ).ainvoke({})
-    assert (tmp_path / "artifacts" / "destination.txt").read_text(encoding="utf-8") == "existing"
+    result = await compile_routine_graph(graph, model=object(), filesystem_backend=backend).ainvoke(
+        {}
+    )
 
-    cross_mount = validate_routine_graph_payload(
+    assert result["data"]["result"] == "ok"
+    assert (tmp_path / "shared" / "run" / "round-0" / "bars.csv").read_text(encoding="utf-8") == "t"
+    assert (tmp_path / "shared" / "run" / "round-1" / "bars.csv").read_text(encoding="utf-8") == "t"
+    assert (tmp_path / "artifacts" / "run" / "state.json").read_text(encoding="utf-8") == "{}"
+
+
+class _UnexpectedFilesystemFailureBackend:
+    def __init__(self, backend):
+        self._backend = backend
+
+    async def aread(self, *_args, **_kwargs):
+        raise RuntimeError("internal filesystem failure")
+
+    def __getattr__(self, name: str):
+        return getattr(self._backend, name)
+
+
+@pytest.mark.asyncio
+async def test_code_node_sanitizes_unexpected_filesystem_host_failures(tmp_path):
+    backend = _UnexpectedFilesystemFailureBackend(_filesystem_backend(tmp_path))
+    graph = validate_routine_graph_payload(
         _payload(
             _filesystem_code_node(
                 """
-                return await tools.moveFile({
-                  source_path: "/artifacts/source.txt",
-                  destination_path: "/shared/source.txt"
-                });
+                try {
+                  await tools.readFile({ file_path: "/artifacts/anything.txt" });
+                } catch (error) {
+                  return String(error);
+                }
                 """
             )
         )
     )
-    with pytest.raises(FilesystemToolError, match="cross-mount"):
-        await compile_routine_graph(
-            cross_mount, model=object(), filesystem_backend=backend
-        ).ainvoke({})
-    assert (tmp_path / "artifacts" / "source.txt").read_text(encoding="utf-8") == "source"
-    assert not (tmp_path / "shared" / "source.txt").exists()
 
-    missing_source = validate_routine_graph_payload(
-        _payload(
-            _filesystem_code_node(
-                'return await tools.deleteFile({ file_path: "/artifacts/missing.txt" });'
-            )
-        )
+    result = await compile_routine_graph(graph, model=object(), filesystem_backend=backend).ainvoke(
+        {}
     )
-    with pytest.raises(FilesystemToolError, match="not found"):
-        await compile_routine_graph(
-            missing_source, model=object(), filesystem_backend=backend
-        ).ainvoke({})
+
+    assert result["data"]["result"] == "HostError: Host function failed"
 
 
 class _FailingSourceDeleteBackend:
@@ -547,7 +620,7 @@ async def test_code_node_filesystem_move_rolls_back_destination_when_source_dele
         )
     )
 
-    with pytest.raises(FilesystemToolError, match="destination rolled back"):
+    with pytest.raises(JSError, match="destination rolled back"):
         await compile_routine_graph(
             graph, model=object(), filesystem_backend=failing_backend
         ).ainvoke({})
@@ -627,6 +700,6 @@ async def test_filesystem_subtree_scope_rejects_symlink_escape(tmp_path, code):
     graph = validate_routine_graph_payload(
         _payload(_filesystem_code_node(code, paths=["/shared/allowed/"]))
     )
-    with pytest.raises(FilesystemToolError):
+    with pytest.raises(JSError):
         await compile_routine_graph(graph, model=object(), filesystem_backend=backend).ainvoke({})
     assert not (private / "new.txt").exists()

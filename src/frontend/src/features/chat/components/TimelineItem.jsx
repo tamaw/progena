@@ -18,15 +18,25 @@ import { Fragment, memo } from 'react';
 import { useSelector } from 'react-redux';
 import { formatDisplayToolCalls } from '../models/messageDisplayModel';
 import { renderSafeMarkdown, sanitizeHtmlFragment } from '../../../lib/safeMarkdown';
-import { describeStreamEvent, badgeForEvent, toolDetailsForEvent, todosDetailsForEvent, tokenMetaItemsForEvent, tagClassForEventType, formatTimestamp } from '../models/messageRenderUtils';
+import { describeStreamEvent, badgeClassForEvent, toolDetailsForEvent, todosDetailsForEvent, tokenMetaItemsForEvent, formatTimestamp } from '../models/messageRenderUtils';
 import TodoListPanel from './TodoListPanel';
 import SubagentCard from './SubagentCard';
 import A2ACallCard from './A2ACallCard';
 import NormalToolContent from './NormalToolContent';
 import MessageActions from './MessageActions';
 import { selectAgentName } from '../../settings/state/preferences';
+import ToolCallEntry from './ToolCallEntry';
 
 const TimelineItem = memo(function TimelineItem({ item, itemIndex, onRegenerate }) {
+  if (item.kind === 'tool_call') {
+    return <ToolCallEntry item={item} />;
+  }
+  return <TimelineRow item={item} itemIndex={itemIndex} onRegenerate={onRegenerate} />;
+});
+
+// Separate component so the tool_call branch above stays hook-free; this
+// one reads the agent name from the store.
+function TimelineRow({ item, itemIndex, onRegenerate }) {
   const agentName = useSelector(selectAgentName);
   if (item.kind === 'subagent') {
     return <SubagentCard item={item} />;
@@ -55,11 +65,10 @@ const TimelineItem = memo(function TimelineItem({ item, itemIndex, onRegenerate 
       <div key={item.id || `tl-${itemIndex}`} className="chat-entry-chain--item">
         <article className={`message-wrapper assistant msg msg--assistant entry entry--assistant ${item.error ? 'entry--standalone' : 'entry--chain-end'}`}>
           <div className="entry__gutter" aria-hidden="true">
-            <span className="entry__badge entry__badge--assistant">P</span>
+            <span className="entry__badge entry__badge--assistant" />
           </div>
           <div className="entry__main msg__entry-main">
             <div className="msg__head entry__head">
-              <span className="entry__tag entry__tag--assistant">agent</span>
               <span className="msg__role">{item.displayAgentName || agentName}</span>
               <span className="msg__head-trailing">
                 {tokenMeta.map((meta, mi) => (
@@ -98,7 +107,7 @@ const TimelineItem = memo(function TimelineItem({ item, itemIndex, onRegenerate 
   if (item.kind === 'stream_event') {
     const event = item.event;
     const description = describeStreamEvent(event);
-    const badge = badgeForEvent(event.eventType || 'stream_event');
+    const badgeClassName = badgeClassForEvent(event.eventType || 'stream_event');
     const tool = toolDetailsForEvent(event, description);
     const todos = todosDetailsForEvent(event);
     const eventTokenMetaItems = tokenMetaItemsForEvent(event);
@@ -111,11 +120,10 @@ const TimelineItem = memo(function TimelineItem({ item, itemIndex, onRegenerate 
           role="listitem"
         >
           <div className="entry__gutter" aria-hidden="true">
-            <span className={badge.className}>{badge.label}</span>
+            <span className={badgeClassName} />
           </div>
           <div className="entry__main">
             <div className="message-stream-event-header entry__head">
-              <span className={tagClassForEventType(event.eventType || 'stream_event')}>{description.badge}</span>
               <span className="entry__role">{description.title}</span>
               <span className="msg__head-trailing">
                 {tool?.isNormal
@@ -137,8 +145,6 @@ const TimelineItem = memo(function TimelineItem({ item, itemIndex, onRegenerate 
                     className="message-content reasoning-event-disclosure__summary"
                     dangerouslySetInnerHTML={{ __html: sanitizeHtmlFragment(description.bodyHtml) }}
                   />
-                  <span className="tool-event-disclosure__state tool-event-disclosure__state--expand tool-event-disclosure__label">Expand</span>
-                  <span className="tool-event-disclosure__state tool-event-disclosure__state--collapse tool-event-disclosure__label">Collapse</span>
                   <span className="tool-event-disclosure__chevron" aria-hidden="true" />
                 </summary>
                 <div className="reasoning-event-disclosure__detail">
@@ -179,6 +185,6 @@ const TimelineItem = memo(function TimelineItem({ item, itemIndex, onRegenerate 
   }
 
   return null;
-});
+}
 
 export default TimelineItem;

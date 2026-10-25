@@ -90,6 +90,74 @@ async def _wait_for_completed_run(store: InMemoryDocumentStore, workflow_id: str
     raise AssertionError(f"Timed out waiting for workflow run completion for {workflow_id}")
 
 
+def _manual_workflow(workflow_id: str) -> dict:
+    workflow = default_workflow_definition(workflow_id=workflow_id)
+    workflow["graph"] = {
+        "nodes": {
+            "manual": {
+                "kind": "manual",
+                "title": "Run round",
+                "output_schema": {
+                    "type": "object",
+                    "required": ["run_id"],
+                    "properties": {
+                        "run_id": {"type": "string"},
+                        "round_count": {"type": "integer", "default": 3},
+                    },
+                },
+            },
+            "agent": {
+                "kind": "agent",
+                "title": "Run round",
+                "template": "Run {run_id} for {round_count} rounds",
+            },
+        },
+        "edges": [
+            {
+                "from": {"node": "manual", "port": "run_id"},
+                "to": {"node": "agent", "port": "run_id"},
+            },
+            {
+                "from": {"node": "manual", "port": "round_count"},
+                "to": {"node": "agent", "port": "round_count"},
+            },
+        ],
+    }
+    return workflow
+
+
+async def test_run_workflow_request_prefers_manual_trigger_and_applies_defaults(
+    workflow_env, backend_client
+):
+    store = workflow_env
+    workflow_id = "workflow_manual_invoke"
+    save_workflow_definition(store, _manual_workflow(workflow_id))
+    key = _write_invoke_request(store, "request-manual", workflow_id, input={"run_id": "round-a"})
+
+    await workflows_runtime._reconcile_workflow_invoke_requests(key)
+    run = await _wait_for_completed_run(store, workflow_id)
+
+    assert run["status"] == "completed", run["last_error"]
+    assert run["trigger_node_id"] == "manual"
+    assert run["trigger_event"]["run_id"] == "round-a"
+    assert run["trigger_event"]["round_count"] == 3
+    sent_message = backend_client.send_message.await_args.args[0]
+    assert "Run round-a for 3 rounds" in sent_message
+    assert store.get_document(PROGENA_STATE_PREFIX, key, None) is None
+
+
+async def test_run_workflow_request_rejects_invalid_manual_payload(workflow_env, backend_client):
+    store = workflow_env
+    workflow_id = "workflow_manual_invalid"
+    save_workflow_definition(store, _manual_workflow(workflow_id))
+    key = _write_invoke_request(store, "request-manual-invalid", workflow_id, input={"run_id": 7})
+
+    await workflows_runtime._reconcile_workflow_invoke_requests(key)
+
+    assert list_workflow_runs(store, workflow_id=workflow_id) == []
+    assert store.get_document(PROGENA_STATE_PREFIX, key, None) is None
+
+
 async def test_invoke_request_runs_the_connected_agent_with_typed_trigger_ports(
     workflow_env, backend_client
 ):

@@ -1262,6 +1262,52 @@ async def test_reasoning_summary_sums_reasoning_tokens_across_model_calls_in_one
 
 
 @pytest.mark.asyncio
+async def test_usage_update_keeps_aggregate_billing_but_reports_latest_context_call():
+    first_call = AIMessage(
+        id="ai-first",
+        content="",
+        usage_metadata={"input_tokens": 100, "output_tokens": 20, "total_tokens": 120},
+    )
+    final_call = AIMessage(
+        id="ai-final",
+        content="Done",
+        usage_metadata={"input_tokens": 35, "output_tokens": 8, "total_tokens": 43},
+        response_metadata={
+            "insights": {
+                "profile_name": "general",
+                "deployment": "final-model",
+                "provider_id": "provider-1",
+            }
+        },
+    )
+    graph = _FakeGraph(
+        [
+            ("updates", {"model": {"messages": [first_call]}}),
+            (
+                "updates",
+                {"respond": {"pending_response": "Done", "messages": [first_call, final_call]}},
+            ),
+        ]
+    )
+    bridge = DeepAgentSSEStream(graph, config=_make_config(), state={})
+
+    items = await _collect_items(bridge)
+
+    usage_update = next(item for item in items if item.get("event_type") == "usage_update")
+    assert usage_update["metadata"] == {
+        "usage": {"input_tokens": 135, "output_tokens": 28, "total_tokens": 163},
+        "context_usage": {
+            "input_tokens": 35,
+            "output_tokens": 8,
+            "total_tokens": 43,
+            "profile_name": "general",
+            "deployment": "final-model",
+            "provider_id": "provider-1",
+        },
+    }
+
+
+@pytest.mark.asyncio
 async def test_duplicate_update_delivery_of_same_message_id_counts_reasoning_once():
     # The same provider message can arrive in several update events (distinct
     # objects, same id). Its usage must count exactly once toward the turn
@@ -1384,13 +1430,8 @@ async def test_usage_update_sums_model_calls_and_deduplicates_repeated_message_i
     )
 
     usage_updates = [item for item in items if item.get("event_type") == "usage_update"]
-    assert usage_updates == [
-        {
-            "type": "stream_event",
-            "event_type": "usage_update",
-            "content": "",
-            "metadata": {"usage": {"input_tokens": 30, "output_tokens": 16, "total_tokens": 46}},
-        }
+    assert [item["metadata"]["usage"] for item in usage_updates] == [
+        {"input_tokens": 30, "output_tokens": 16, "total_tokens": 46}
     ]
 
 

@@ -24,6 +24,7 @@ from src.progena.workflows.models import (
     WorkflowNodeEvent,
     WorkflowNodeExtract,
     WorkflowNodeFormat,
+    WorkflowNodeManual,
     WorkflowTriggerNode,
 )
 from src.progena.workflows.ports import workflow_node_input_ports, workflow_node_output_ports
@@ -69,8 +70,18 @@ def validate_workflow_definition_payload(payload: Any) -> dict[str, Any]:
         if isinstance(node, WorkflowNodeEvent)
     }
     if not any(isinstance(node, WorkflowTriggerNode) for node in definition.graph.nodes.values()):
-        raise ValueError("workflow graph must contain at least one event or cron trigger node")
+        raise ValueError(
+            "workflow graph must contain at least one event or cron trigger node, or a manual trigger node"
+        )
     for node_id, node in definition.graph.nodes.items():
+        if isinstance(node, WorkflowNodeManual):
+            if node.output_schema.get("type") != "object":
+                raise ValueError(f"manual node '{node_id}' payload schema must have type 'object'")
+            schema_error = validate_against_schema({}, node.output_schema)
+            if schema_error and schema_error.startswith("invalid schema:"):
+                raise ValueError(
+                    f"manual node '{node_id}' has an invalid payload schema: {schema_error}"
+                )
         if isinstance(node, WorkflowNodeCron) and (
             error := cron_error(node.expression, node.timezone)
         ):
@@ -182,10 +193,7 @@ def _validate_data_edges(definition: WorkflowDefinition) -> None:
     for node_id, node in nodes.items():
         if isinstance(node, WorkflowTriggerNode) and inbound[node_id]:
             raise ValueError(f"trigger node '{node_id}' cannot have inbound edges")
-        if (
-            not isinstance(node, WorkflowNodeData | WorkflowNodeEvent | WorkflowNodeCron)
-            and not inbound[node_id]
-        ):
+        if not isinstance(node, WorkflowNodeData | WorkflowTriggerNode) and not inbound[node_id]:
             raise ValueError(
                 f"executable node '{node_id}' has no inbound connection; wire an edge into one "
                 f"of its inputs: {_describe_ports(workflow_node_input_ports(node))}"

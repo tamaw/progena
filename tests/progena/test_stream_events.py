@@ -294,6 +294,34 @@ def test_build_tool_result_event_unwraps_command_result():
     assert event["metadata"]["result_preview"] == "HELLO_FROM_SUBAGENT"
 
 
+def test_build_tool_result_event_classifies_failure_before_truncating_preview():
+    output = "x" * (DEFAULT_STREAM_PREVIEW_BYTES * 2)
+    content = (
+        f"{output}\n[Command failed with exit code 2]\n[Output was truncated due to size limits]"
+    )
+    event = build_tool_result_event("execute", "call_1", 1.0, content)
+
+    assert "exit code" not in event["metadata"]["result_preview"]
+    assert event["metadata"]["success"] is False
+
+
+def test_build_tool_result_event_classifies_failure_from_execute_artifact():
+    message = ToolMessage(
+        content="[Command failed with exit code 1]\npreview",
+        name="execute",
+        tool_call_id="call_1",
+        artifact={"exit_code": 1, "truncated": False},
+    )
+    assert (
+        build_tool_result_event("execute", "call_1", 1.0, message)["metadata"]["success"] is False
+    )
+
+
+def test_build_tool_result_event_keeps_quoted_failure_text_successful():
+    content = 'echo "[Command failed with exit code 1]"\n[Command succeeded with exit code 0]'
+    assert build_tool_result_event("execute", "call_1", 1.0, content)["metadata"]["success"] is True
+
+
 def test_build_tool_error_event_redacts_and_truncates():
     api_key = "sk-" + "b" * 48
     event = build_tool_error_event(

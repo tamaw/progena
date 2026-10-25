@@ -73,26 +73,46 @@ export const DEFAULT_NODE_SIZES = {
     data: { width: 320, height: 220 },
     settings: { width: 380, height: 320 },
   },
+  manual: {
+    data: { width: 320, height: 160 },
+    settings: { width: 380, height: 280 },
+  },
 };
 
 // Workflow nodes are grouped by what they do, including direct document
 // operations. No capability-specific kinds.
 export const NODE_MENU_CATEGORIES = [
-  { id: 'triggers', label: 'Triggers', items: [{ id: 'event', kind: 'event', label: 'Event', icon: 'E' }, { id: 'cron', kind: 'cron', label: 'Cron', icon: 'C' }] },
-  { id: 'agents', label: 'Agents', items: [
-    { id: 'agent', kind: 'agent', label: 'Agent', icon: 'A' },
-    { id: 'routine', kind: 'routine', label: 'Routine', icon: 'R' },
-  ] },
-  { id: 'data', label: 'Data', items: [
-    { id: 'data', kind: 'data', label: 'Data', icon: 'D' },
-    { id: 'document_read', kind: 'document_read', label: 'Read document', icon: 'R' },
-    { id: 'document_query', kind: 'document_query', label: 'Query documents', icon: 'Q' },
-    { id: 'document_write', kind: 'document_write', label: 'Write document', icon: 'W' },
-    { id: 'document_create', kind: 'document_create', label: 'Create document', icon: '+' },
-    { id: 'document_delete', kind: 'document_delete', label: 'Delete document', icon: '×' },
-    { id: 'unpack', kind: 'unpack', label: 'Unpack', icon: 'U' },
-    { id: 'extract', kind: 'extract', label: 'Extract', icon: 'X' },
-  ]} ,
+  {
+    id: 'triggers',
+    label: 'Triggers',
+    items: [
+      { id: 'event', kind: 'event', label: 'Event', icon: 'E' },
+      { id: 'cron', kind: 'cron', label: 'Cron', icon: 'C' },
+      { id: 'manual', kind: 'manual', label: 'Manual', icon: 'M' },
+    ],
+  },
+  {
+    id: 'agents',
+    label: 'Agents',
+    items: [
+      { id: 'agent', kind: 'agent', label: 'Agent', icon: 'A' },
+      { id: 'routine', kind: 'routine', label: 'Routine', icon: 'R' },
+    ],
+  },
+  {
+    id: 'data',
+    label: 'Data',
+    items: [
+      { id: 'data', kind: 'data', label: 'Data', icon: 'D' },
+      { id: 'document_read', kind: 'document_read', label: 'Read document', icon: 'R' },
+      { id: 'document_query', kind: 'document_query', label: 'Query documents', icon: 'Q' },
+      { id: 'document_write', kind: 'document_write', label: 'Write document', icon: 'W' },
+      { id: 'document_create', kind: 'document_create', label: 'Create document', icon: '+' },
+      { id: 'document_delete', kind: 'document_delete', label: 'Delete document', icon: '×' },
+      { id: 'unpack', kind: 'unpack', label: 'Unpack', icon: 'U' },
+      { id: 'extract', kind: 'extract', label: 'Extract', icon: 'X' },
+    ],
+  },
   {
     id: 'logic',
     label: 'Logic',
@@ -133,6 +153,13 @@ function defaultCronNode() {
         timezone: { type: 'string' },
       },
     },
+  };
+}
+
+function defaultManualNode() {
+  return {
+    title: 'Manual trigger',
+    outputSchema: { type: 'object', properties: {} },
   };
 }
 
@@ -215,8 +242,8 @@ function defaultDeleteNode() {
 
 export const DOCK_NODE_DEFAULTS = {
   event: defaultEventNode,
+  manual: defaultManualNode,
   agent: () => ({
-    title: 'Agent',
     instruction: null,
     template: '',
     subagent: null,

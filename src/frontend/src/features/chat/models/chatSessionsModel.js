@@ -10,6 +10,7 @@ import { buildDefaultAssistantTimeline, normalizeTaskSummary } from './liveAssis
 import { isA2AToolName } from './a2aTools';
 import { extractA2ASummary } from './messageRenderUtils';
 import { deriveChatStatus } from './chatStatus';
+import { normalizeContextUsage } from './contextWindowModel';
 export function compareSessionItems(left, right) {
   const pinnedDelta = Number(Boolean(right.pinned)) - Number(Boolean(left.pinned));
   if (pinnedDelta !== 0) {
@@ -144,6 +145,7 @@ function buildToolStreamEvents(toolCalls, messageId) {
           args_preview: { ...args, subagent_type: subagentName },
           tool_call_id: toolCallId,
           source: 'checkpoint',
+          ...(typeof tc.commentary === 'string' && tc.commentary.trim() ? { commentary: tc.commentary } : {}),
         },
       });
       events.push(...buildSubagentDispatchStreamEvents(
@@ -187,6 +189,7 @@ function buildToolStreamEvents(toolCalls, messageId) {
         args_preview: args,
         tool_call_id: toolCallId,
         source: 'checkpoint',
+        ...(typeof tc.commentary === 'string' && tc.commentary.trim() ? { commentary: tc.commentary } : {}),
       },
     });
     // Replays the same submitted/working/completed/... sequence a live
@@ -236,6 +239,8 @@ function buildToolStreamEvents(toolCalls, messageId) {
             : result,
           tool_call_id: toolCallId,
           source: 'checkpoint',
+          // Classified server-side from the full result; the preview is truncated.
+          ...(tc.failed === true ? { success: false } : {}),
         },
       };
       if (isNormalToolCall && Number.isFinite(durationMs)) {
@@ -277,6 +282,10 @@ export function normalizeBackendChatMessage(message, index) {
     role,
     content,
     timestamp,
+    // Never reuse the display timestamp's Date.now() fallback for cache age.
+    responseTimestamp: role === 'assistant' && content.trim()
+      && !['cancelled', 'failed', 'incomplete'].includes(raw.response_metadata?.status)
+      ? toValidTimestamp(createdAt) : null,
     tokenCount: Number.isFinite(message.token_count) ? message.token_count : 0,
     reasoningTokenCount: Number.isFinite(message.reasoning_token_count)
       ? message.reasoning_token_count
@@ -288,6 +297,14 @@ export function normalizeBackendChatMessage(message, index) {
     reasoningTimestamp: typeof message.reasoning_timestamp === 'string'
       ? message.reasoning_timestamp
       : null,
+    reasoningSegments: Array.isArray(message.reasoning_segments)
+      ? message.reasoning_segments
+        .filter((segment) => typeof segment?.text === 'string' && segment.text.trim())
+        .map((segment) => ({
+          text: segment.text,
+          timestamp: typeof segment.created_at === 'string' ? segment.created_at : null,
+        }))
+      : [],
     displayAgentName: typeof message.display_agent_name === 'string' ? message.display_agent_name : '',
     displayModelName: typeof message.display_model_name === 'string' ? message.display_model_name : '',
     displayToolCalls: Array.isArray(message.display_tool_calls) ? message.display_tool_calls : [],
@@ -301,6 +318,7 @@ export function normalizeBackendChatMessage(message, index) {
     streamEvents,
     attachments: Array.isArray(message.attachments) ? message.attachments : [],
     raw,
+    contextUsage: normalizeContextUsage(message.context_usage),
   };
 
   // Attach a synthetic fallback timeline for backend-loaded messages.

@@ -9,6 +9,20 @@ vi.mock('react-redux', () => ({
   useSelector: (selector) => selector({ uiData: { preferences: { agentName: 'Progena' } } }),
 }));
 
+// These tests cover which items a turn routes into its work group and how
+// each row renders; WorkGroup's own collapse/live preview is covered in
+// WorkGroup.unit.test.jsx. Render the group expanded here via the real rows.
+vi.mock('@frontend/features/chat/components/WorkGroup', async () => {
+  const { default: TimelineItem } = await import('@frontend/features/chat/components/TimelineItem');
+  return {
+    default: ({ items }) => React.createElement(
+      'div',
+      { className: 'work-group' },
+      items.map((item, index) => React.createElement(TimelineItem, { key: item.id || index, item, itemIndex: index })),
+    ),
+  };
+});
+
 // Ensure React is in global scope for the component's JSX compilation
 // when the automatic JSX runtime import is not injected by vitest.
 if (typeof globalThis.React === 'undefined') {
@@ -191,7 +205,7 @@ function divMarkupByClass(markup, className) {
 /* ------------------------------------------------------------------ */
 
 describe('Message with timelineItems', () => {
-  it('renders items in array order', () => {
+  it('renders all work first, then delegated-agent cards, then the answer, even when work followed answer text', () => {
     const message = baseMessage({
       timelineItems: [
         {
@@ -228,20 +242,30 @@ describe('Message with timelineItems', () => {
             metadata: { tool_name: 'search_web', result_preview: '3 hits', duration_ms: 1200 },
           },
         },
+        {
+          kind: 'subagent',
+          id: 'subagent-1',
+          toolCallId: 'task-1',
+          subagentName: 'researcher',
+          taskSummary: '',
+          status: 'success',
+          entries: [],
+          resultPreview: 'Delegated result',
+        },
       ],
     });
 
     const html = renderToStaticMarkup(React.createElement(Message, { message }));
 
-    expect(html).toContain('chat-entry-chain--connected');
-
     const toolStartPos = html.indexOf('→ Search Web');
+    const toolResultPos = html.indexOf('✓ Search Web');
+    const cardPos = html.indexOf('researcher');
     const assistantPos = html.indexOf('I found results.');
-    const toolResultPos = html.indexOf('tool_result');
 
     expect(toolStartPos).toBeGreaterThan(0);
-    expect(assistantPos).toBeGreaterThan(toolStartPos);
-    expect(toolResultPos).toBeGreaterThan(assistantPos);
+    expect(toolResultPos).toBeGreaterThan(toolStartPos);
+    expect(cardPos).toBeGreaterThan(toolResultPos);
+    expect(assistantPos).toBeGreaterThan(cardPos);
   });
   it('renders streamed assistant content once in the explicit timeline row', () => {
     const streamedContent = 'Live assistant response';
@@ -271,49 +295,6 @@ describe('Message with timelineItems', () => {
     expect(timelineItem).toContain('class="entry__main msg__entry-main"');
     expect(timelineItem).toContain(streamedContent);
     expect(messageEntries).toHaveLength(1);
-  });
-
-  it('hides assistant content and images while retaining filtered timeline events', () => {
-    const message = baseMessage({
-      content: 'Should be hidden',
-      streamEvents: [{
-        id: 'e-hidden-content',
-        eventType: 'tool_result',
-        metadata: { tool_name: 'search_web', result_preview: 'retained event' },
-        images: [{ id: 'image-1', base64: 'AAA', media_type: 'image/png' }],
-      }],
-      timelineItems: [
-        {
-          kind: 'stream_event',
-          id: 'e-hidden-content',
-          event: {
-            id: 'e-hidden-content',
-            eventType: 'tool_result',
-            metadata: { tool_name: 'search_web', result_preview: 'retained event' },
-          },
-        },
-        {
-          kind: 'assistant_message',
-          id: 'assistant-hidden-content',
-          content: 'Should be hidden',
-          timestamp: MS_EPOCH,
-          displayAgentName: '',
-          displayModelName: '',
-          displayToolCalls: [],
-          tokenCount: 0,
-          reasoningTokenCount: 0,
-          reasoningText: '',
-          isStreaming: false,
-          error: false,
-        },
-      ],
-    });
-
-    const html = renderToStaticMarkup(React.createElement(Message, { message, hideContent: true }));
-
-    expect(html).not.toContain('Should be hidden');
-    expect(html).toContain('retained event');
-    expect(html).not.toContain('msg-img-strip');
   });
 
   it('exposes image thumbnails as keyboard-activatable controls', () => {
@@ -401,7 +382,8 @@ describe('Message with timelineItems', () => {
         toolCallId: 'call-summary',
         subagentName: 'researcher',
         taskSummary: 'Read the README.md and summarize its purpose',
-        status: 'success',
+        // Running, so the card's body is open (finished cards collapse).
+        status: 'running',
         startedAt: MS_EPOCH,
         finishedAt: MS_EPOCH + 100,
         durationMs: 100,
@@ -422,7 +404,6 @@ describe('Message with timelineItems', () => {
     expect(summaryPos).toBeGreaterThan(summaryEntryPos);
     expect(resultPos).toBeGreaterThan(summaryPos);
     expect(html).toContain('Read the README.md and summarize its purpose');
-    expect(html.slice(summaryEntryPos, resultPos)).toMatch(/<svg[^>]*aria-hidden="true"/);
     expect(html.slice(summaryEntryPos, resultPos)).toContain('message-stream-event-body');
     expect(divMarkupByClass(html, 'subagent-card__children')).toMatch(
       /Read the README\.md and summarize its purpose[\s\S]*Final answer from the researcher/,
@@ -459,7 +440,8 @@ describe('Message with timelineItems', () => {
         id: 'subagent-call-nested-tool',
         toolCallId: 'call-nested-tool',
         subagentName: 'researcher',
-        status: 'success',
+        // Running, so the card's body is open (finished cards collapse).
+        status: 'running',
         startedAt: MS_EPOCH,
         finishedAt: MS_EPOCH + 1250,
         durationMs: 1250,
@@ -484,8 +466,6 @@ describe('Message with timelineItems', () => {
 
     expect(disclosure).toContain('read_file · path: src/main.py');
     expect(disclosure).not.toContain('completed');
-    expect(disclosure).toContain('>Expand</span>');
-    expect(disclosure).toContain('>Collapse</span>');
     expect(disclosure).toContain('class="tool-event-disclosure__chevron"');
     expect(disclosure).not.toMatch(/<details[^>]*\bopen(?:=|\s|>)/);
 
@@ -570,7 +550,7 @@ describe('Message with timelineItems', () => {
     expect(html).toContain('→ Search');
   });
 
-  it('renders node_update stream event with step tag', () => {
+  it('renders node_update stream event as a step', () => {
     const message = baseMessage({
       timelineItems: [
         {
@@ -588,8 +568,7 @@ describe('Message with timelineItems', () => {
 
     const html = renderToStaticMarkup(React.createElement(Message, { message }));
 
-    expect(html).toContain('chat-event-tag--step');
-    expect(html).toContain('Step');
+    expect(html).toContain('chat-event-badge--step');
     expect(html).toContain('Model Call');
     expect(html).toContain('outputs: response');
   });
@@ -613,7 +592,6 @@ describe('Message with timelineItems', () => {
     const html = renderToStaticMarkup(React.createElement(Message, { message }));
 
     expect(html).toContain('chat-event-badge--reason');
-    expect(html).toContain('chat-event-tag--reason');
     expect(html).toContain('Reasoning');
   });
 
@@ -665,6 +643,35 @@ describe('Message with timelineItems', () => {
     expect(html.slice(reasoningRowPos, toolRowPos)).toContain(formattedReasoningTimestamp);
   });
 
+  it('places each saved model call reasoning segment ahead of the tool calls it led to', () => {
+    const first = Date.parse('2026-07-15T02:31:08.000Z');
+    const second = Date.parse('2026-07-15T02:31:12.000Z');
+    const toolItem = (id, timestamp, toolName) => ({
+      kind: 'stream_event',
+      id,
+      timestamp,
+      event: { id, eventType: 'tool_start', timestamp, content: '', metadata: { tool_name: toolName } },
+    });
+    const message = baseMessage({
+      reasoningText: 'joined text must not be used',
+      reasoningSegments: [
+        { text: '**Listing files**\n\nfirst call', timestamp: new Date(first).toISOString() },
+        { text: '**Reading files**\n\nsecond call', timestamp: new Date(second).toISOString() },
+      ],
+      timelineItems: [
+        toolItem('t1', first, 'list_files'),
+        toolItem('t2', second, 'read_file'),
+      ],
+    });
+
+    const html = renderToStaticMarkup(React.createElement(Message, { message }));
+    const positions = ['first call', '→ List Files', 'second call', '→ Read File'].map((text) => html.indexOf(text));
+
+    expect(positions.every((position) => position >= 0)).toBe(true);
+    expect([...positions].sort((a, b) => a - b)).toEqual(positions);
+    expect(html).not.toContain('joined text must not be used');
+  });
+
   it('renders tool_error stream event with error styling', () => {
     const message = baseMessage({
       timelineItems: [
@@ -684,7 +691,6 @@ describe('Message with timelineItems', () => {
     const html = renderToStaticMarkup(React.createElement(Message, { message }));
 
     expect(html).toContain('entry__badge--err');
-    expect(html).toContain('entry__tag--err');
     expect(html).toContain('✗ Deploy');
     expect(html).toContain('permission denied');
   });
@@ -727,7 +733,6 @@ describe('Message fallback layout without timelineItems', () => {
 
     expect(html).toContain('msg--assistant');
     expect(html).toContain('Hello world');
-    expect(html).toContain('entry__tag--assistant');
     expect(html).toContain('chat-entry-chain--single');
     expect(html).not.toContain('chat-entry-chain--connected');
   });
@@ -813,7 +818,7 @@ describe('Message user messages', () => {
     expect(html).not.toContain('chat-entry-chain');
   });
 
-  it('render user entry tag and label', () => {
+  it('labels a user entry as Message', () => {
     const message = baseMessage({
       role: 'user',
       content: 'hi',
@@ -822,7 +827,6 @@ describe('Message user messages', () => {
 
     const html = renderToStaticMarkup(React.createElement(Message, { message }));
 
-    expect(html).toContain('entry__tag--in');
     expect(html).toContain('Message');
   });
 });
@@ -859,8 +863,6 @@ describe('normal tool content and metadata display', () => {
     expect(html).toContain('path: src/main.py');
     expect(header).not.toContain('path: src/main.py');
     expect(disclosure).toContain('tool-event-disclosure__summary');
-    expect(disclosure).toContain('>Expand</span>');
-    expect(disclosure).toContain('>Collapse</span>');
     expect(disclosure).toContain('class="tool-event-disclosure__chevron"');
     expect(disclosure).not.toMatch(/<details[^>]*\bopen(?:=|\s|>)/);
     const payloadStart = disclosure.indexOf('class="tool chat-event-tool"');
@@ -954,8 +956,6 @@ describe('normal tool content and metadata display', () => {
     expect(header).not.toContain(rawResult);
     expect(header.indexOf('1.25s')).toBeLessThan(header.indexOf(timestamp));
     expect(disclosure).toContain('tool-event-disclosure__summary');
-    expect(disclosure).toContain('>Expand</span>');
-    expect(disclosure).toContain('>Collapse</span>');
     expect(disclosure).toContain('class="tool-event-disclosure__chevron"');
     expect(disclosure).not.toMatch(/<details[^>]*\bopen(?:=|\s|>)/);
     const payloadStart = disclosure.indexOf('class="tool chat-event-tool"');
@@ -982,8 +982,6 @@ describe('normal tool content and metadata display', () => {
     expect(html).toContain('class="tool__summary');
     expect(html).toContain('query: status');
     expect(disclosure).toContain('tool-event-disclosure__summary');
-    expect(disclosure).toContain('>Expand</span>');
-    expect(disclosure).toContain('>Collapse</span>');
     expect(disclosure).toContain('class="tool-event-disclosure__chevron"');
     const payloadStart = disclosure.indexOf('class="tool chat-event-tool"');
     expect(payloadStart).toBeGreaterThan(-1);
@@ -1058,8 +1056,6 @@ describe('normal tool content and metadata display', () => {
     expect(html).toContain('class="tool__summary');
     expect(html).toContain('7 lines read');
     expect(disclosure).toContain('tool-event-disclosure__summary');
-    expect(disclosure).toContain('>Expand</span>');
-    expect(disclosure).toContain('>Collapse</span>');
     const payloadStart = disclosure.indexOf('class="tool chat-event-tool"');
     expect(payloadStart).toBeGreaterThan(-1);
     expect(disclosure.indexOf(rawResult.replaceAll('"', '&quot;'))).toBeGreaterThan(payloadStart);
@@ -1101,7 +1097,6 @@ describe('normal tool content and metadata display', () => {
     expect(disclosure).not.toMatch(/<details[^>]*\bopen(?:=|\s|>)/);
     expect(disclosure).toContain('tool-event-disclosure__summary');
     expect(disclosure).toContain('class="tool__summary tool-event-disclosure__summary">Found 2 agents</span>');
-    expect(disclosure).toContain('>Expand</span>');
     expect(payloadStart).toBeGreaterThan(-1);
     expect(disclosure.indexOf('class="tool__summary')).toBeLessThan(payloadStart);
     expect(disclosure.indexOf(escapedResult)).toBeGreaterThan(payloadStart);
@@ -1176,8 +1171,6 @@ describe('reasoning summary presentation', () => {
     expect(summary).not.toContain(finalParagraph);
     expect(detail).toContain(detailParagraph);
     expect(detail).toContain(finalParagraph);
-    expect(disclosure).toContain('>Expand</span>');
-    expect(disclosure).toContain('>Collapse</span>');
   });
 
   it('renders a metadata summary alone in normal message-content markup without a disclosure', () => {

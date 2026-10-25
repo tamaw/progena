@@ -1,9 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import {
-  PERSISTED_CATEGORIES,
   STREAM_EVENT_CATEGORIES,
   categoryForEventType,
   countCategorizedEvents,
+  filterStreamEvents,
+  filterTimelineItems,
   isEventVisible,
   loadStreamFilters,
 } from '@frontend/features/chat/models/streamFilters';
@@ -57,7 +58,7 @@ describe('countCategorizedEvents', () => {
     expect(counts.tools).toBe(1);
   });
 
-  it('counts an A2A start/result pair once under "a2a", not "tools"', () => {
+  it('counts an A2A start/result pair once under delegations, not tools', () => {
     const counts = countCategorizedEvents(
       [
         { eventType: 'tool_start', metadata: { tool_name: 'a2a_send' } },
@@ -65,7 +66,7 @@ describe('countCategorizedEvents', () => {
       ],
       emptyCounts(),
     );
-    expect(counts.a2a).toBe(1);
+    expect(counts.delegations).toBe(1);
     expect(counts.tools).toBe(0);
   });
 
@@ -77,11 +78,11 @@ describe('countCategorizedEvents', () => {
       ],
       emptyCounts(),
     );
-    expect(counts.a2a).toBe(1);
-    expect(counts.errors).toBe(0);
+    expect(counts.delegations).toBe(1);
+    expect(counts.tools).toBe(0);
   });
 
-  it('still counts a plain tool error under "errors"', () => {
+  it('does not double-count a failed tool invocation', () => {
     const counts = countCategorizedEvents(
       [
         { eventType: 'tool_start', metadata: { tool_name: 'shell' } },
@@ -90,7 +91,6 @@ describe('countCategorizedEvents', () => {
       emptyCounts(),
     );
     expect(counts.tools).toBe(1);
-    expect(counts.errors).toBe(1);
   });
 
   it('counts intermediate a2a_call_progress updates as part of the same invocation', () => {
@@ -103,7 +103,7 @@ describe('countCategorizedEvents', () => {
       ],
       emptyCounts(),
     );
-    expect(counts.a2a).toBe(1);
+    expect(counts.delegations).toBe(1);
   });
 
   it('counts a subagent dispatch once, ignoring its nested tool calls and message deltas', () => {
@@ -118,10 +118,10 @@ describe('countCategorizedEvents', () => {
       ],
       emptyCounts(),
     );
-    expect(counts.subagents).toBe(1);
+    expect(counts.delegations).toBe(1);
   });
 
-  it('reproduces the reported header/filter mismatch: 4 tools + 6 a2a sums to the header\'s 10, not the raw event total', () => {
+  it('keeps tool and delegation invocation counts independent of lifecycle updates', () => {
     const events = [
       { eventType: 'tool_start', metadata: { tool_name: 'list_agents' } },
       { eventType: 'tool_result', metadata: { tool_name: 'list_agents' } },
@@ -138,8 +138,8 @@ describe('countCategorizedEvents', () => {
     }
     const counts = countCategorizedEvents(events, emptyCounts());
     expect(counts.tools).toBe(4);
-    expect(counts.a2a).toBe(6);
-    expect(counts.tools + counts.a2a).toBe(10);
+    expect(counts.delegations).toBe(6);
+    expect(counts.tools + counts.delegations).toBe(10);
   });
 
   it('ignores reasoning and null-category events', () => {
@@ -170,13 +170,65 @@ describe('isEventVisible', () => {
   it('defaults to visible when the category flag is absent', () => {
     expect(isEventVisible({ eventType: 'reasoning_delta' }, {})).toBe(true);
   });
+  it('combines subagents and A2A without hiding ordinary tool activity', () => {
+    const filters = { delegations: false };
+    expect(isEventVisible({ eventType: 'subagent_start' }, filters)).toBe(false);
+    expect(isEventVisible({ eventType: 'tool_start', metadata: { tool_name: 'a2a_send' } }, filters)).toBe(false);
+    expect(isEventVisible({ eventType: 'tool_start', metadata: { tool_name: 'read_file' } }, filters)).toBe(true);
+  });
+  it.each([
+    { eventType: 'tool_error', metadata: { tool_name: 'read_file' } },
+    { eventType: 'tool_error', metadata: { tool_name: 'a2a_send' } },
+    { eventType: 'subagent_result', metadata: { success: false } },
+    { eventType: 'subagent_tool_error' },
+    { eventType: 'a2a_call_progress', metadata: { state: 'failed' } },
+  ])('keeps failures visible when their category is hidden: $eventType', (event) => {
+    const filters = { tools: false, delegations: false };
+    expect(isEventVisible(event, filters)).toBe(true);
+    expect(isEventVisible(event, { ...filters, errors: false })).toBe(false);
+  });
+  it('lets Errors hide failures even when their activity category is enabled', () => {
+    expect(isEventVisible({ eventType: 'tool_error' }, { tools: true, errors: false })).toBe(false);
+  });
+  it('keeps an execute call together under Errors, including its opening commentary and arguments', () => {
+    const events = [
+      {
+        eventType: 'tool_start',
+        metadata: {
+          tool_name: 'execute',
+          tool_call_id: 'failed-command',
+          args_preview: { command: 'false' },
+          commentary: 'Checking the command',
+        },
+      },
+      {
+        eventType: 'tool_result',
+        metadata: {
+          tool_name: 'execute',
+          tool_call_id: 'failed-command',
+          result_preview: 'boom\n[Command failed with exit code 2]',
+        },
+      },
+    ];
+    const errorsOnly = (event) => isEventVisible(event, { tools: false, errors: true });
+    expect(filterStreamEvents(events, errorsOnly)).toEqual(events);
+    expect(filterTimelineItems(events.map((event, index) => ({ kind: 'stream_event', id: `${index}`, event })), errorsOnly))
+      .toHaveLength(2);
+
+    const toolsOnly = (event) => isEventVisible(event, { tools: true, errors: false });
+    expect(filterStreamEvents(events, toolsOnly)).toEqual([]);
+    expect(filterTimelineItems(events.map((event, index) => ({ kind: 'stream_event', id: `${index}`, event })), toolsOnly))
+      .toEqual([]);
+  });
+  it('requires opting in to diagnostic events without hiding failures', () => {
+    const event = { eventType: 'node_update' };
+    expect(isEventVisible(event, {})).toBe(false);
+    expect(isEventVisible(event, { debug: true })).toBe(true);
+    expect(isEventVisible({ ...event, metadata: { error: 'Execution failed' } }, {})).toBe(true);
+  });
 });
 
 describe('loadStreamFilters', () => {
-  it('defaults every category to true when nothing stored', () => {
-    const filters = loadStreamFilters('progena:test-filters');
-    expect(Object.values(filters).every((v) => v === true)).toBe(true);
-  });
   it('respects stored boolean flags and defaults the rest to true', () => {
     localStorage.setItem('progena:test-filters', JSON.stringify({ tools: false }));
     const filters = loadStreamFilters('progena:test-filters');
@@ -188,13 +240,26 @@ describe('loadStreamFilters', () => {
     const filters = loadStreamFilters('progena:test-filters');
     expect(filters.tools).toBe(true);
   });
-});
-
-describe('PERSISTED_CATEGORIES', () => {
-  it('persists tools, plan, reasoning, subagents and a2a', () => {
-    expect(PERSISTED_CATEGORIES.has('tools')).toBe(true);
-    expect(PERSISTED_CATEGORIES.has('reasoning')).toBe(true);
-    expect(PERSISTED_CATEGORIES.has('a2a')).toBe(true);
-    expect(PERSISTED_CATEGORIES.has('debug')).toBe(false);
+  it('drops obsolete conversation flags and merges old delegation preferences', () => {
+    const key = 'progena:test-filters';
+    localStorage.setItem(key, JSON.stringify({
+      user: false, agent: false, images: false, errors: false, debug: true,
+      subagents: false, a2a: false, tools: false,
+    }));
+    expect(loadStreamFilters(key)).toEqual({
+      tools: false, plan: true, reasoning: true, delegations: false,
+      errors: false, debug: true,
+    });
+    localStorage.setItem(key, JSON.stringify({ subagents: false, a2a: true }));
+    expect(loadStreamFilters(key).delegations).toBe(true);
+  });
+  it('retains explicit new preferences across reloads', () => {
+    const key = 'progena:test-filters';
+    const saved = {
+      tools: false, plan: true, reasoning: false, delegations: false,
+      errors: false, debug: true,
+    };
+    localStorage.setItem(key, JSON.stringify(saved));
+    expect(loadStreamFilters(key)).toEqual(saved);
   });
 });

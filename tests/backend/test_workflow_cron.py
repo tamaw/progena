@@ -53,6 +53,31 @@ def cron_workflow(*, expression="0 9 * * 1-5", timezone="UTC", overlap="skip"):
     return payload
 
 
+def manual_workflow():
+    payload = default_workflow_definition()
+    payload["graph"] = {
+        "nodes": {
+            "manual": {
+                "kind": "manual",
+                "title": "Manual",
+                "output_schema": {
+                    "type": "object",
+                    "required": ["run_id"],
+                    "properties": {"run_id": {"type": "string"}},
+                },
+            },
+            "agent": {"kind": "agent", "title": "Run", "template": "Run {run_id}"},
+        },
+        "edges": [
+            {
+                "from": {"node": "manual", "port": "run_id"},
+                "to": {"node": "agent", "port": "run_id"},
+            }
+        ],
+    }
+    return payload
+
+
 class RecordingExecutor:
     def __init__(self):
         self.calls = []
@@ -92,6 +117,18 @@ def _setup(**cron):
     definition = save_workflow_definition(store, cron_workflow(timezone="UTC", **cron))
     executor = RecordingExecutor()
     return store, definition, executor, Clock(store, executor)
+
+
+@pytest.mark.asyncio
+async def test_manual_trigger_is_not_scheduled_by_the_cron_clock():
+    store = InMemoryDocumentStore()
+    seed_document_types(store)
+    save_workflow_definition(store, manual_workflow())
+    executor = RecordingExecutor()
+
+    await Clock(store, executor).at(START)
+
+    assert executor.calls == []
 
 
 @pytest.mark.asyncio
