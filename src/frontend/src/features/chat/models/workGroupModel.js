@@ -18,6 +18,7 @@
  */
 
 import { isA2AToolName } from './a2aTools';
+import { isToolEventFailure } from './toolFailureModel';
 import { isReasoningEvent } from './streamEventsModel';
 import { formatToolInputSummary, prettifyLabel } from './messageRenderUtils';
 
@@ -84,7 +85,7 @@ function writeTodosCallsWithPlans(items) {
       callIndexByKey.set(key, callIndex);
       calls.push({ key, hasPlan: false, failed: false });
     }
-    if (eventType === 'tool_error') calls[callIndex].failed = true;
+    if (isToolEventFailure(item.event)) calls[callIndex].failed = true;
   }
 
   return new Set(calls.filter((call) => call.hasPlan && !call.failed).map((call) => call.key));
@@ -137,7 +138,7 @@ export function buildWorkSteps(workItems) {
       if (eventType === 'tool_start') {
         step.detail = toolCallSummary(toolName, metadata);
       } else {
-        step.status = eventType === 'tool_error' ? 'error' : 'success';
+        step.status = isToolEventFailure(event) ? 'error' : 'success';
         if (Number.isFinite(metadata.duration_ms)) step.durationMs = metadata.duration_ms;
       }
 

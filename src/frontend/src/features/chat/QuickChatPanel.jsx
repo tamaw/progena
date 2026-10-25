@@ -19,6 +19,7 @@ import { quickChatMemory } from './models/quickChatMemory';
 import { createLiveAssistantTurnStore } from './models/liveAssistantTurnStore';
 import { applyAssistantChunk, applyAssistantMetadata, applyAssistantStreamEvent, createLiveAssistantTurn, finalizeLiveAssistantTurn } from './models/liveAssistantTurnModel';
 import { loadQuickChatHistory, toQuickChatInputHistory } from './models/quickChatStreamModel';
+import { createQuickChatPromotion, persistQuickChatHandoff } from './models/quickChatPromotionModel';
 import { latestContextUsage, resolveComposerCacheExpiry, resolveComposerContextUsage } from './models/contextWindowModel';
 import { followTranscript, noteTranscriptScroll, noteTranscriptUserInput, pinTranscriptToTail } from './models/transcriptScroll';
 
@@ -526,30 +527,23 @@ export function QuickChatPanel({
 
   const openInChat = useCallback(() => {
     const hasQuickChatHandoff = history.length > 0;
+    let handoff = null;
     if (hasQuickChatHandoff) {
-      // The main conversation owns storage normalization. Do not synthesize
-      // token counts or discard trace data gathered by the rich renderer.
-      const promotedMessages = history.map((turn) => ({ ...turn }));
-      localStorage.setItem(config.storage.chatHistory, JSON.stringify(promotedMessages));
-      localStorage.setItem(
-        config.storage.quickChatHandoff,
-        JSON.stringify({
-          messages: promotedMessages,
-          threadId: scratchThreadId,
-        }),
-      );
+      const promotion = createQuickChatPromotion(history, scratchThreadId);
+      handoff = promotion.handoff;
+      quickChatMemory.handoff = handoff;
+      // The live destination receives the complete renderer payload. Storage is
+      // only the reload fallback, so it uses the bounded persisted form.
+      persistQuickChatHandoff(config.storage.quickChatHandoff, promotion.persistedHandoff);
       window.dispatchEvent(new CustomEvent('progena:load-chat-history', {
-        detail: {
-          messages: promotedMessages,
-          threadId: scratchThreadId,
-        },
+        detail: handoff,
       }));
     }
     onClose();
     if (!isOnChatPage) {
       navigate('/chat', hasQuickChatHandoff ? { state: { quickChatHandoff: true } } : undefined);
     }
-  }, [config.storage.chatHistory, config.storage.quickChatHandoff, history, isOnChatPage, navigate, onClose, scratchThreadId]);
+  }, [config.storage.quickChatHandoff, history, isOnChatPage, navigate, onClose, scratchThreadId]);
 
   const resetQuickChat = useCallback(() => {
     quickChatEpochRef.current += 1;
@@ -564,6 +558,7 @@ export function QuickChatPanel({
     setLiveAssistantTurn(null);
     quickChatMemory.history = [];
     quickChatMemory.threadId = null;
+    quickChatMemory.handoff = null;
     setHistory([]);
     sessionPromiseRef.current = null;
     setIsSending(false);

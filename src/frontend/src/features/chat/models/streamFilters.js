@@ -1,3 +1,4 @@
+import { isToolEventFailure } from './toolFailureModel';
 import { A2A_PRIMARY_TOOL_NAME, isA2AToolName } from './a2aTools';
 
 export const STREAM_EVENT_CATEGORIES = [
@@ -47,32 +48,30 @@ function activityCategory(category) {
   return category === 'errors' ? 'tools' : category;
 }
 
-function hasFailure(metadata) {
-  return metadata?.success === false
-    || Boolean(metadata?.error)
-    || ['error', 'failed', 'rejected'].includes(metadata?.status)
-    || ['error', 'failed', 'rejected'].includes(metadata?.state);
-}
-
 export function isEventVisible(event, filters) {
   if (!event) return false;
   const category = activityCategory(categoryForEventType(event.eventType, event.metadata));
   if (!category) return false;
-  if ((typeof event.eventType === 'string' && event.eventType.endsWith('_error')) || hasFailure(event.metadata)) {
-    return filters?.errors !== false;
-  }
+  if (isToolEventFailure(event)) return filters?.errors !== false;
   return filters?.[category] ?? DEFAULT_FILTERS[category];
+}
+
+function toolCallId(event) {
+  const callId = event?.metadata?.tool_call_id;
+  return typeof callId === 'string' && callId ? callId : null;
 }
 
 function turnEventFilter(events, filter) {
   if (typeof filter !== 'function') return () => true;
-  const hiddenCalls = new Set();
+  const failuresByCall = new Map();
   for (const event of events) {
-    if (event?.eventType === 'tool_error' && event.metadata?.tool_call_id && !filter(event)) {
-      hiddenCalls.add(event.metadata.tool_call_id);
-    }
+    const callId = toolCallId(event);
+    if (callId && isToolEventFailure(event)) failuresByCall.set(callId, event);
   }
-  return (event) => !hiddenCalls.has(event?.metadata?.tool_call_id) && filter(event);
+  return (event) => {
+    const failure = failuresByCall.get(toolCallId(event));
+    return filter(failure || event);
+  };
 }
 
 export function filterStreamEvents(events, filter) {

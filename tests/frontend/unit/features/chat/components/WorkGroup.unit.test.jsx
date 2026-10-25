@@ -145,4 +145,63 @@ describe('WorkGroup', () => {
     expect(host.textContent).toContain('Second generated observation.');
     expect(host.textContent.match(/Reading files/g)).toHaveLength(1);
   });
+
+  it('renders a failed write_todos call with its merged plan, commentary, input, and terminal error', async () => {
+    const todos = [{ content: 'Keep this plan visible', status: 'pending' }];
+    const writeTodosItems = [
+      {
+        kind: 'stream_event',
+        id: 'todos-start',
+        event: {
+          id: 'todos-start',
+          eventType: 'tool_start',
+          content: '',
+          metadata: {
+            tool_name: 'write_todos',
+            tool_call_id: 'todos-call',
+            commentary: 'Saving the plan before continuing.',
+            args_preview: { todos },
+          },
+        },
+      },
+      {
+        kind: 'stream_event',
+        id: 'todos-plan',
+        event: {
+          id: 'todos-plan',
+          eventType: 'todos_update',
+          content: '',
+          metadata: { todos },
+        },
+      },
+      {
+        kind: 'stream_event',
+        id: 'todos-result',
+        event: {
+          id: 'todos-result',
+          eventType: 'tool_result',
+          content: '',
+          metadata: {
+            tool_name: 'write_todos',
+            tool_call_id: 'todos-call',
+            success: false,
+            error: 'Todo service rejected the update.',
+          },
+        },
+      },
+    ];
+    await act(async () => root.render(
+      <WorkGroup items={writeTodosItems} active={false} endedAt={1_000} />,
+    ));
+
+    await act(async () => host.querySelector('.work-group__toggle').click());
+
+    expect(host.querySelector('.tool-call-entry--error')).not.toBeNull();
+    expect(host.querySelector('.entry__badge--err')).not.toBeNull();
+    expect(host.textContent).toContain('Keep this plan visible');
+    expect(host.textContent).toContain('Saving the plan before continuing.');
+    expect(host.textContent).toContain('Input');
+    expect(host.textContent).toContain('Error');
+    expect(host.textContent).toContain('Todo service rejected the update.');
+  });
 });

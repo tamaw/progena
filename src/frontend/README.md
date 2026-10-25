@@ -29,6 +29,12 @@ messages instead of rebuilding text-only copies. Profile context usage and
 scroll anchoring also reuse the main chat models. Keep future transcript
 presentation changes in these shared components, not panel-specific bubbles.
 
+Promotion carries the complete transcript through module memory and the
+in-page handoff event. Only one reload fallback is persisted, capped at the
+latest 100 messages with transient images and denormalized timelines removed.
+Its canonical thread ID lets the main page reload durable history. Storage
+quota or access failures must never prevent promotion or navigation.
+
 Quick Chat refreshes every history page before replacing its transcript.
 A new submission increments the transcript epoch so a delayed refresh cannot
 overwrite that turn, even after its stream returns to idle. The panel subscribes
@@ -54,6 +60,13 @@ of their activity categories. Nested tool failures and failed A2A updates remain
 indicated on collapsed delegation cards when Errors is enabled.
 **Debug** remains an inline filter chip, with its saved preference preserved.
 Browser-local preferences combine the old delegation flags.
+
+Failure classification is shared by filters, work summaries, and tool rows in
+`models/toolFailureModel.js`. Returned command/interpreter errors count as
+failures even when tool transport succeeds. Filtering keeps or hides the whole
+correlated invocation, including its input/commentary. A failed plan retains its
+checklist plus terminal error, and output metadata preserves the runtime's
+authoritative artifact summary alongside the raw preview.
 
 ## Quick Start
 

@@ -34,6 +34,7 @@ import { followTranscript, noteTranscriptScroll, noteTranscriptUserInput, pinTra
 import { ConversationSessionsPane } from '../components/ConversationSessionsPane';
 import { useConversationAttachments } from '../hooks/useConversationAttachments';
 import { latestContextUsage, resolveComposerCacheExpiry, resolveComposerContextUsage } from '../models/contextWindowModel';
+import { quickChatMemory } from '../models/quickChatMemory';
 
 function ConversationPage() {
   const dispatch = useDispatch();
@@ -56,7 +57,8 @@ function ConversationPage() {
   const preferencesSaveRequest = useSelector(selectPreferencesSaveRequest);
   const initialQuickChatHandoffRef = useRef(undefined);
   if (initialQuickChatHandoffRef.current === undefined) {
-    initialQuickChatHandoffRef.current = loadQuickChatHandoff(config.storage.quickChatHandoff);
+    initialQuickChatHandoffRef.current = quickChatMemory.handoff
+      ?? loadQuickChatHandoff(config.storage.quickChatHandoff);
   }
   const initialQuickChatHandoff = initialQuickChatHandoffRef.current;
 
@@ -67,12 +69,11 @@ function ConversationPage() {
         .filter(Boolean);
     }
 
-    const saved = localStorage.getItem(config.storage.chatHistory);
-    if (!saved) {
-      return [];
-    }
-
     try {
+      const saved = localStorage.getItem(config.storage.chatHistory);
+      if (!saved) {
+        return [];
+      }
       const parsed = JSON.parse(saved);
       if (!Array.isArray(parsed)) {
         return [];
@@ -447,8 +448,13 @@ function ConversationPage() {
       }
       const quickChatHandoff = initialQuickChatHandoffRef.current;
       if (quickChatHandoff) {
-        localStorage.removeItem(config.storage.quickChatHandoff);
+        try {
+          localStorage.removeItem(config.storage.quickChatHandoff);
+        } catch {
+          // The in-memory handoff remains available even when storage is blocked.
+        }
         initialQuickChatHandoffRef.current = null;
+        quickChatMemory.handoff = null;
       }
 
       // A quick-chat handoff is an explicit, in-the-moment intent ("promote
@@ -538,7 +544,12 @@ function ConversationPage() {
       if (typeof event.detail?.threadId === 'string') {
         setThreadId(event.detail.threadId);
       }
-      localStorage.removeItem(config.storage.quickChatHandoff);
+      try {
+        localStorage.removeItem(config.storage.quickChatHandoff);
+      } catch {
+        // The in-memory handoff has already been applied.
+      }
+      quickChatMemory.handoff = null;
     };
 
     window.addEventListener('progena:load-chat-history', handlePromotedQuickChat);
@@ -551,11 +562,15 @@ function ConversationPage() {
   // Backend chat messages must not leak into localStorage — they are the server's
   // source of truth and would create a ghost "Current" card on the next page visit.
   useEffect(() => {
-    if (selectedBackendChatId) {
-      localStorage.removeItem(config.storage.chatHistory);
-    } else if (messages.length > 0) {
-      const persistable = messages.slice(-100).map(stripEphemeralStreamEvents);
-      localStorage.setItem(config.storage.chatHistory, JSON.stringify(persistable));
+    try {
+      if (selectedBackendChatId) {
+        localStorage.removeItem(config.storage.chatHistory);
+      } else if (messages.length > 0) {
+        const persistable = messages.slice(-100).map(stripEphemeralStreamEvents);
+        localStorage.setItem(config.storage.chatHistory, JSON.stringify(persistable));
+      }
+    } catch {
+      // Local persistence is a reload enhancement, never a chat interaction dependency.
     }
   }, [messages, selectedBackendChatId, config.storage.chatHistory]);
 

@@ -46,6 +46,20 @@ describe('buildWorkSteps', () => {
     expect(steps[0]).toMatchObject({ title: 'Read File', detail: 'path: /a', status: 'success', durationMs: 30 });
     expect(steps[1]).toMatchObject({ detail: 'path: /b', status: 'error', durationMs: 12 });
   });
+  it('counts a JavaScript returned error as one failed merged tool call', () => {
+    const items = [
+      eventItem('start', 'tool_start', { tool_name: 'javascript', tool_call_id: 'script' }),
+      eventItem('result', 'tool_result', {
+        tool_name: 'javascript',
+        tool_call_id: 'script',
+        result_preview: '<stdout>before failure</stdout><error type="TypeError">boom</error>',
+      }),
+    ];
+    const steps = buildWorkSteps(items);
+    expect(steps).toMatchObject([{ title: 'Javascript', status: 'error' }]);
+    expect(summarizeWork(items, steps)).toMatchObject({ toolCount: 1, failedCount: 1 });
+  });
+
 
   it('leaves graph steps and card-owned task/A2A calls out of the step list', () => {
     const steps = buildWorkSteps([

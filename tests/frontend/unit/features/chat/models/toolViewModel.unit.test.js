@@ -47,6 +47,22 @@ describe('edit_file / write_file', () => {
   });
 });
 
+describe('artifact output summaries', () => {
+  it('keeps the authoritative omitted-line summary alongside the useful preview', () => {
+    const view = buildToolCallView({
+      toolName: 'read_file',
+      argsPreview: { path: '/src/main.py' },
+      resultText: 'line 1\nline 2\nline 3',
+      artifact: { summary: 'src/main.py: 5 lines · 2 more lines not shown' },
+      status: 'success',
+    });
+
+    expect(view.output.meta).toContain('src/main.py: 5 lines · 2 more lines not shown');
+    expect(view.output.body).toEqual({ kind: 'text', text: 'line 1\nline 2\nline 3' });
+  });
+
+});
+
 describe('execute output', () => {
   it('turns the exit status line into the meta and a failed command into an Error box', () => {
     const view = success('execute', { command: 'false' }, 'boom\n[Command failed with exit code 2]');

@@ -255,8 +255,29 @@ function genericInput(args) {
 /**
  * The input and output boxes for one tool call. `output` is null while the
  * call is still running; an errored call's output is labelled Error.
+ *
+ * `artifact.summary` is the runtime's authoritative, user-facing account of
+ * the result (including omitted-line notices). Keep it beside—not instead
+ * of—the preview so a useful raw result remains inspectable.
  */
-export function buildToolCallView({ toolName, argsPreview, resultText, errorText, status }) {
+function artifactSummary(artifact) {
+  return artifact && typeof artifact === 'object' && !Array.isArray(artifact)
+    && typeof artifact.summary === 'string' && artifact.summary.trim()
+    ? artifact.summary.trim()
+    : '';
+}
+
+function withArtifactSummary(output, artifact) {
+  const summary = artifactSummary(artifact);
+  if (!summary) return output;
+  if (!output) return box('Output', null, { meta: summary });
+  if (output.meta.includes(summary)) return output;
+  return { ...output, meta: [summary, output.meta].filter(Boolean).join(' · ') };
+}
+
+export function buildToolCallView({
+  toolName, argsPreview, resultText, errorText, artifact, status,
+}) {
   const view = BUILT_IN_VIEWS[toolName];
   const args = parseToolArgs(argsPreview);
   let input = null;
@@ -283,5 +304,5 @@ export function buildToolCallView({ toolName, argsPreview, resultText, errorText
       output = box('Output', { kind: 'text', text: raw }, { meta: truncated ? 'preview' : '' });
     }
   }
-  return { input, output };
+  return { input, output: withArtifactSummary(output, artifact) };
 }

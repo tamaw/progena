@@ -3,6 +3,8 @@ import {
   STREAM_EVENT_CATEGORIES,
   categoryForEventType,
   countCategorizedEvents,
+  filterStreamEvents,
+  filterTimelineItems,
   isEventVisible,
   loadStreamFilters,
 } from '@frontend/features/chat/models/streamFilters';
@@ -187,6 +189,36 @@ describe('isEventVisible', () => {
   });
   it('lets Errors hide failures even when their activity category is enabled', () => {
     expect(isEventVisible({ eventType: 'tool_error' }, { tools: true, errors: false })).toBe(false);
+  });
+  it('keeps an execute call together under Errors, including its opening commentary and arguments', () => {
+    const events = [
+      {
+        eventType: 'tool_start',
+        metadata: {
+          tool_name: 'execute',
+          tool_call_id: 'failed-command',
+          args_preview: { command: 'false' },
+          commentary: 'Checking the command',
+        },
+      },
+      {
+        eventType: 'tool_result',
+        metadata: {
+          tool_name: 'execute',
+          tool_call_id: 'failed-command',
+          result_preview: 'boom\n[Command failed with exit code 2]',
+        },
+      },
+    ];
+    const errorsOnly = (event) => isEventVisible(event, { tools: false, errors: true });
+    expect(filterStreamEvents(events, errorsOnly)).toEqual(events);
+    expect(filterTimelineItems(events.map((event, index) => ({ kind: 'stream_event', id: `${index}`, event })), errorsOnly))
+      .toHaveLength(2);
+
+    const toolsOnly = (event) => isEventVisible(event, { tools: true, errors: false });
+    expect(filterStreamEvents(events, toolsOnly)).toEqual([]);
+    expect(filterTimelineItems(events.map((event, index) => ({ kind: 'stream_event', id: `${index}`, event })), toolsOnly))
+      .toEqual([]);
   });
   it('requires opting in to diagnostic events without hiding failures', () => {
     const event = { eventType: 'node_update' };
