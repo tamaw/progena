@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import time
+
 import pytest
 
 from src.progena.routines.expression import UnsafeExpressionError, evaluate_expression
@@ -184,6 +186,114 @@ class TestObjectAndListLiterals:
             evaluate_expression('{**m, "extra": 1}', {"m": at_limit})
         with pytest.raises(UnsafeExpressionError, match="object literal too large"):
             evaluate_expression("{**m, **m}", {"m": at_limit})
+
+
+ATTACK = "[[[0]*100000]*100000]*100000 == [[[0]*100000]*100000]*100000"
+
+
+def _shared(levels: int, width: int) -> list[object]:
+    # `width ** levels` logical entries held in only `levels` short lists.
+    value: list[object] = [0] * width
+    for _ in range(levels - 1):
+        value = [value] * width
+    return value
+
+
+def _all(clause: str, count: int) -> str:
+    return " and ".join([clause] * count)
+
+
+class TestLogicalSizeBudget:
+    """Constructions and comparisons are bounded by nested (logical) size, not identities."""
+
+    def test_exact_attack_payload_is_rejected_promptly(self):
+        start = time.monotonic()
+        with pytest.raises(UnsafeExpressionError, match="sequence repetition result too long"):
+            evaluate_expression(ATTACK, {})
+        assert time.monotonic() - start < 5
+
+    def test_repetition_counts_nested_entries(self):
+        assert len(evaluate_expression("[[0] * 1000] * 100", {})) == 100
+        with pytest.raises(UnsafeExpressionError, match="sequence repetition result too long"):
+            evaluate_expression("[[0] * 1000] * 101", {})
+
+    def test_list_literal_counts_every_reference(self):
+        namespace = {"m": {str(i): i for i in range(60_000)}}
+        with pytest.raises(UnsafeExpressionError, match="list literal too long"):
+            evaluate_expression("[m, m]", namespace)
+
+    def test_object_literal_counts_nested_values(self):
+        with pytest.raises(UnsafeExpressionError, match="object literal too large"):
+            evaluate_expression('{"k": v}', {"v": [[0] * 1000] * 101})
+
+    def test_deep_comparison_of_shared_state_is_bounded(self):
+        # Built separately so the built-in `==` cannot short-circuit on identity.
+        namespace = {"x": _shared(3, 100_000), "y": _shared(3, 100_000)}
+        start = time.monotonic()
+        with pytest.raises(UnsafeExpressionError, match="too much data"):
+            evaluate_expression("x == y", namespace)
+        with pytest.raises(UnsafeExpressionError, match="too much data"):
+            evaluate_expression("x < y", namespace)
+        assert time.monotonic() - start < 10
+
+    def test_list_membership_is_bounded(self):
+        namespace = {"needle": [0] * 1000, "haystack": [[0] * 999 + [1]] * 900}
+        with pytest.raises(UnsafeExpressionError, match="too much data"):
+            evaluate_expression("needle in haystack", namespace)
+        with pytest.raises(UnsafeExpressionError, match="too much data"):
+            evaluate_expression("needle not in haystack", namespace)
+
+    def test_constructions_and_comparisons_share_one_budget(self):
+        namespace = {"m": {str(i): i for i in range(100_000)}, "s": "x" * 50_000}
+        assert evaluate_expression(_all("{**m} == {**m}", 2), namespace) is True
+        with pytest.raises(UnsafeExpressionError, match="too much data"):
+            evaluate_expression(_all("{**m} == {**m}", 3), namespace)
+        assert evaluate_expression(_all("s + s == s + s", 2), namespace) is True
+        with pytest.raises(UnsafeExpressionError, match="too much data"):
+            evaluate_expression(_all("s + s == s + s", 3), namespace)
+
+    def test_budget_resets_for_each_evaluation(self):
+        namespace = {"m": {str(i): i for i in range(100_000)}}
+        for _ in range(3):
+            assert evaluate_expression(_all("{**m} == {**m}", 2), namespace) is True
+
+    def test_untaken_branches_are_not_charged(self):
+        namespace = {"x": _shared(3, 100_000), "flag": False}
+        assert evaluate_expression("x == x if flag else 'skipped'", namespace) == "skipped"
+
+    def test_rejects_reference_cycles(self):
+        cycle: list[object] = []
+        cycle.append(cycle)
+        with pytest.raises(UnsafeExpressionError, match="reference cycle"):
+            evaluate_expression("c == c", {"c": cycle})
+        with pytest.raises(UnsafeExpressionError, match="reference cycle"):
+            evaluate_expression("[c]", {"c": cycle})
+
+    def test_rejects_deeply_nested_values(self):
+        deep: list[object] = []
+        for _ in range(100):
+            deep = [deep]
+        with pytest.raises(UnsafeExpressionError, match="nested too deeply"):
+            evaluate_expression("d == d", {"d": deep})
+
+    def test_rejects_deeply_nested_expressions(self):
+        with pytest.raises(UnsafeExpressionError):
+            evaluate_expression("-" * 1000 + "1", {})
+
+    def test_ordinary_receipt_and_comparisons_still_work(self):
+        namespace = {
+            "card": {"metadata": {"priority": "high", "labels": ["infra"]}},
+            "inbox": {"id": "msg-1"},
+            "evidence": {"commit_sha": "abc123"},
+        }
+        receipt = evaluate_expression(RECEIPT, namespace)
+        assert receipt["review_approval"] == {"inbox_id": "msg-1", "sha": "abc123"}
+        assert receipt["labels"] == ["infra"]
+        assert evaluate_expression('inbox.id in ["msg-1", "msg-2"]', namespace) is True
+        assert evaluate_expression('"infra" in card.metadata.labels', namespace) is True
+        expected = '{"priority": "high", "labels": ["infra"]}'
+        assert evaluate_expression(f"card.metadata == {expected}", namespace) is True
+        assert evaluate_expression('"priority" in card.metadata', namespace) is True
 
 
 class TestRejectedConstructs:
