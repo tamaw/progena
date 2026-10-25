@@ -174,14 +174,21 @@ async def _reconcile_workflow_invoke_requests(changed_key: str | None = None) ->
             try:
                 definition = workflows_service.get_workflow_definition(store, request.workflow_id)
                 if definition is not None:
-                    # The request input fills the trigger node's declared output
-                    # ports (e.g. an event node's ``key``/``after``), exactly
-                    # like an on-demand run, and is validated against them.
+                    try:
+                        trigger = workflows_service.build_manual_trigger_event(
+                            definition, payload=request.input
+                        )
+                    except ValueError as exc:
+                        logger.warning(
+                            "Dropping workflow invoke request %r: %s",
+                            request.request_id,
+                            exc,
+                        )
+                        store.delete_document(storage_documents.PROGENA_STATE_PREFIX, key)
+                        continue
                     await executor.trigger_workflow(
                         request.workflow_id,
-                        workflows_service.build_manual_trigger_event(
-                            definition, payload=request.input
-                        ),
+                        trigger,
                         source="progena",
                         ancestry=request.ancestry,
                     )

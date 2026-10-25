@@ -19,6 +19,27 @@ def _definition(**overrides):
     return {"enabled": True, "paused": False, **overrides}
 
 
+def _manual_definition(**overrides):
+    return _definition(
+        graph={
+            "nodes": {
+                "manual": {
+                    "kind": "manual",
+                    "output_schema": {
+                        "type": "object",
+                        "required": ["run_id"],
+                        "properties": {
+                            "run_id": {"type": "string"},
+                            "round_count": {"type": "integer", "default": 3},
+                        },
+                    },
+                }
+            }
+        },
+        **overrides,
+    )
+
+
 async def test_execute_missing_workflow_id_fails():
     state_manager = AsyncMock()
     result = await RunWorkflowTool().execute(_context(state_manager, {}))
@@ -42,16 +63,30 @@ async def test_execute_disabled_workflow_fails():
     assert "disabled" in (result.error or "")
 
 
-async def test_execute_queues_request_without_active_ancestry():
+async def test_execute_rejects_invalid_manual_payload_before_enqueueing():
     state_manager = AsyncMock()
-    state_manager.get_workflow_definition.return_value = _definition()
+    state_manager.get_workflow_definition.return_value = _manual_definition()
+
+    result = await RunWorkflowTool().execute(
+        _context(state_manager, {"workflow_id": "manual", "input": {"run_id": 7}})
+    )
+
+    assert not result.success
+    assert "manual trigger payload failed schema validation" in (result.error or "")
+    state_manager.request_workflow_run.assert_not_awaited()
+
+
+async def test_execute_queues_manual_trigger_payload_without_active_ancestry():
+    state_manager = AsyncMock()
+    state_manager.get_workflow_definition.return_value = _manual_definition()
     with patch("src.progena.tools.run_workflow.get_current_thread_id", return_value=None):
         result = await RunWorkflowTool().execute(
-            _context(state_manager, {"workflow_id": "wf_a", "input": {"x": 1}})
+            _context(state_manager, {"workflow_id": "wf_a", "input": {"run_id": "round-a"}})
         )
     assert result.success
     assert (result.data or {})["queued"] is True
     state_manager.request_workflow_run.assert_awaited_once()
+    assert state_manager.request_workflow_run.await_args.kwargs["input"] == {"run_id": "round-a"}
     assert state_manager.request_workflow_run.await_args.kwargs["ancestry"] == []
 
 

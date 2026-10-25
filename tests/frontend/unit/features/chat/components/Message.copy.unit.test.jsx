@@ -44,20 +44,15 @@ vi.mock("@frontend/lib/safeMarkdown", () => ({
 vi.mock("@frontend/features/chat/models/messageRenderUtils", () => ({
   appendStreamingCursor: content => content,
   describeStreamEvent: () => ({
-    badge: '',
     title: '',
     metaDetail: '',
     bodyHtml: '',
     bodyDetail: ''
   }),
-  badgeForEvent: () => ({
-    className: '',
-    label: ''
-  }),
+  badgeClassForEvent: () => '',
   toolDetailsForEvent: () => null,
   todosDetailsForEvent: () => null,
   tokenMetaItemsForEvent: () => [],
-  tagClassForEventType: () => '',
   formatTimestamp: () => ''
 }));
 

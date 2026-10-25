@@ -161,6 +161,29 @@ export function CronNode({ id, data, selected, height }) {
   );
 }
 
+export function ManualNode({ id, data, selected, height }) {
+  const edges = useEdges();
+  const connectedOutputPorts = useMemo(() => edges.filter((e) => e.source === id).map((e) => portFromHandle(e.sourceHandle)), [edges, id]);
+
+  return (
+    <>
+      <NodeResizer minWidth={280} minHeight={110} isVisible={selected} onResizeEnd={(_event, params) => data.onResize(id, { width: params.width, height: params.height })} />
+      <div className={`canvas-node workflow-graph-node workflow-graph-node--trigger ${selected ? 'selected' : ''}`}>
+        <div className="node-title-bar drag-handle">
+          <span className="node-type-icon manual">M</span>
+          <WorkflowNodeTitle expanded={false} title={data.title} placeholder="Manual trigger title" onChange={(event) => data.onChange(id, { title: event.target.value })} />
+          <button type="button" className="node-options-btn nodrag" onClick={() => data.onOpenOptions(id)} aria-label="Configure node" data-tooltip="Configure node"><ConfigureActionIcon /></button>
+          {data.canDelete ? <button type="button" className="node-remove-btn" onClick={() => data.onDelete(id)} aria-label="Delete manual trigger">×</button> : null}
+        </div>
+        <div className="node-body">
+          <WorkflowNodePorts kind="manual" inputSchema={null} outputSchema={data.outputSchema} nodeHeight={height} connectedOutputPorts={connectedOutputPorts} onUnpack={data.onUnpack ? (port) => data.onUnpack(id, port) : undefined} />
+        </div>
+      </div>
+      <WorkflowNodeHandles kind="manual" inputSchema={null} outputSchema={data.outputSchema} nodeHeight={height} connectedOutputPorts={connectedOutputPorts} />
+    </>
+  );
+}
+
 export function WorkflowDataNode({ id, data, selected, height }) {
   const edges = useEdges();
   const connectedOutputPorts = useMemo(() => edges.filter((e) => e.source === id).map((e) => portFromHandle(e.sourceHandle)), [edges, id]);

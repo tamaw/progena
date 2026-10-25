@@ -165,6 +165,12 @@ def _canonical_pattern(value: str, *, label: str) -> str:
     return value
 
 
+def _is_missing_path_error(error: Any) -> bool:
+    """Backends report absence as prose ("not found") or a code ("path_not_found")."""
+    text = str(error).lower()
+    return "not found" in text or "not_found" in text
+
+
 def _result_error(operation: str, result: Any) -> None:
     error = getattr(result, "error", None)
     if error:
@@ -414,6 +420,7 @@ class ScopedFilesystemTools:
             _required_string(args, "file_path", "writeFile"), label="writeFile file_path"
         )
         content = _required_string(args, "content", "writeFile")
+        await self._require_missing_destination(path, operation="writeFile")
         result = await self._backend.awrite(path, content)
         _result_error("writeFile", result)
         return {"path": getattr(result, "path", None) or path}
@@ -469,7 +476,7 @@ class ScopedFilesystemTools:
         parent = posixpath.dirname(path) or "/"
         listing = await self._backend.als(parent)
         listing_error = getattr(listing, "error", None)
-        if listing_error and "not found" not in str(listing_error).lower():
+        if listing_error and not _is_missing_path_error(listing_error):
             raise FilesystemToolError(
                 f"{operation}: unable to inspect destination: {listing_error}"
             )
@@ -483,7 +490,7 @@ class ScopedFilesystemTools:
                     raise FilesystemToolError(f"{operation}: destination already exists: {path}")
 
         error = getattr(read_result, "error", None)
-        if not isinstance(error, str) or "not found" not in error.lower():
+        if not isinstance(error, str) or not _is_missing_path_error(error):
             raise FilesystemToolError(
                 f"{operation}: unable to establish destination absence: "
                 f"{error or 'unknown read error'}"

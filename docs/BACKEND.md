@@ -154,7 +154,12 @@ Representative payloads:
 ```
 
 Structured `chat.response.event` frames preserve the runtime's `metadata` and,
-when present, the runtime `images` list.
+when present, the runtime `images` list. A terminal `usage_update` event keeps
+aggregate billing usage in `metadata.usage`; when the latest main-agent model
+call reported complete input/output usage, `metadata.context_usage` is its
+non-aggregate `{input_tokens, output_tokens, total_tokens, profile_name?,
+deployment?, provider_id?}` footprint. Persisted chat messages expose the same
+optional `context_usage`; missing provider usage is omitted rather than inferred.
 
 ### Dedicated replay and resync semantics
 
@@ -250,6 +255,16 @@ For browser chat generation, the acknowledgement and streams divide ownership:
   `event_types: ["chat.response.cancel_requested"]`
 - canonical terminal cancellation still arrives only as
   `chat.response.cancelled` correlated to the **target** response request ID
+
+## Workflow triggers
+
+Workflow graphs require at least one `event`, `cron`, or `manual` trigger.
+`manual` triggers never subscribe to document events or the cron clock. Their
+object `output_schema` declares the typed payload ports accepted by
+`POST /api/ui/workflows/{workflow_id}/trigger` and `run_workflow`; defaults on
+payload properties are applied before validation and run creation. An explicit
+run chooses the first manual trigger in graph order when one exists, otherwise
+the first event or cron trigger remains the compatibility fallback.
 
 ## Browser-retained route disposition
 
@@ -362,12 +377,22 @@ retained message history, not just the selected range.
 Profiles expose optional public/PATCH `pricing` with `currency` and
 `input_per_million`, `cached_input_per_million`, `output_per_million` decimal
 strings. All rates must be finite/nonnegative; zero is valid; PATCH `null`
-removes pricing. Cached-input tokens use the cache rate instead of the input
-rate. Unknown cache detail is labelled as an estimate charged at the input
-rate; unknown pricing is unpriced, not zero cost. Editing rates recalculates
-history and does not claim invoice-grade historical tariffs.
+removes pricing. Profiles may also carry an optional positive-integer
+`context_window`; absent capacity is never inferred from a model name. Cached-input
+tokens use the cache rate instead of the input rate. Unknown cache detail is
+labelled as an estimate charged at the input rate; unknown pricing is unpriced,
+not zero cost. Editing rates recalculates history and does not claim
+invoice-grade historical tariffs.
 ChatGPT-plan calls retain token counts but do not use profile API prices to
 estimate charges; they are reported as unpriced with an explanatory warning.
+
+Profiles also expose optional positive-integer `cache_ttl_seconds` in public
+snapshots and PATCH bodies; `null` removes it. The value is a composer countdown
+estimate only, never a provider request/retention setting. It is stored beside
+`context_window` in the shared `profile` JSONB document and follows the same
+validation and canonical `profiles.snapshot` acknowledgement contract. See
+[model profile cache estimates](STATE_DOCUMENTS.md#model-profiles) for timing
+limitations and provider retention references.
 
 The Profiles editor provides an explicit Azure GPT-5 mini Global Standard
 USD preset, verified against the [Azure pricing page](https://azure.microsoft.com/en-us/pricing/details/azure-openai/)

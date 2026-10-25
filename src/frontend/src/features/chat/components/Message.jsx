@@ -5,14 +5,16 @@ import { collectMessageImages } from '../models/conversationModel';
 import { formatDisplayToolCalls } from '../models/messageDisplayModel';
 import { hasReasoningContent, isReasoningEvent, isRenderableStreamEvent } from '../models/streamEventsModel';
 import TimelineItem from './TimelineItem';
+import WorkGroup from './WorkGroup';
+import { buildWorkGroups, partitionTurnTimeline, timelineItemKey } from '../models/workGroupModel';
 import MessageImageStrip from './MessageImageStrip';
 import AttachmentFileIcon from './AttachmentFileIcon';
 import { describeAttachmentFileType, formatAttachmentSize } from '../models/attachmentFileTypes';
 import NormalToolContent from './NormalToolContent';
 import MessageActions from './MessageActions';
-import { describeStreamEvent, badgeForEvent, toolDetailsForEvent, tokenMetaItemsForEvent, tagClassForEventType, appendStreamingCursor, formatTimestamp } from '../models/messageRenderUtils';
+import { describeStreamEvent, badgeClassForEvent, toolDetailsForEvent, tokenMetaItemsForEvent, appendStreamingCursor, formatTimestamp } from '../models/messageRenderUtils';
 import { renderSafeMarkdown, sanitizeHtmlFragment } from '../../../lib/safeMarkdown';
-import { A2A_PRIMARY_TOOL_NAME } from '../models/a2aTools';
+import { filterStreamEvents, filterTimelineItems } from '../models/streamFilters';
 import { selectAgentName } from '../../settings/state/preferences';
 
 function isTimelineStreamEvent(event) {
@@ -24,10 +26,11 @@ function buildSyntheticReasoningEvent(
   reasoningTokenCount,
   reasoningTimestamp,
   messageId,
+  idSuffix = '',
 ) {
   const trimmed = reasoningText.trim();
   return {
-    id: `${messageId}-reasoning`,
+    id: `${messageId}-reasoning${idSuffix}`,
     eventType: 'reasoning_summary',
     timestamp: reasoningTimestamp || undefined,
     content: reasoningText,
@@ -62,65 +65,63 @@ function buildTimelineStreamEvents(
   return [buildSyntheticReasoningEvent(reasoningText, reasoningTokenCount, reasoningTimestamp, messageId), ...timelineEvents];
 }
 
-// Backend-loaded (non-live) assistant messages carry reasoningText as a plain
-// field rather than a reasoning stream_event in their timelineItems -- see
-// chatSessionsModel.js's buildDefaultAssistantTimeline, which never synthesizes
-// one. Inject a synthetic reasoning row here, ahead of the assistant_message
-// row, so history reloads don't silently lose the reasoning trace that live
-// streaming shows via liveAssistantTurnModel.js.
+// Backend-loaded (non-live) assistant messages carry reasoning as plain
+// fields rather than reasoning stream_events in their timelineItems -- see
+// chatSessionsModel.js's buildDefaultAssistantTimeline, which never
+// synthesizes one. Inject one synthetic reasoning row per model call
+// (reasoningSegments; older payloads only have the joined reasoningText) at
+// its chronological position, so each lands ahead of the tool calls it led
+// to, matching the rows live streaming builds in liveAssistantTurnModel.js.
 function withReasoningFallback(
   timelineItems,
-  reasoningText,
-  reasoningTokenCount,
-  reasoningTimestamp,
-  messageId,
-  isStreaming = false,
+  { reasoningText, reasoningSegments, reasoningTokenCount, reasoningTimestamp, messageId, isStreaming },
 ) {
   const hasReasoningEntry = timelineItems.some((item) =>
     item.kind === 'stream_event' && isReasoningEvent(item.event) && hasReasoningContent(item.event)
   );
-  const fallbackReasoningText = typeof reasoningText === 'string' ? reasoningText.trim() : '';
-  if (isStreaming || hasReasoningEntry || !fallbackReasoningText) {
-    return timelineItems;
-  }
-  const event = buildSyntheticReasoningEvent(
-    reasoningText,
-    reasoningTokenCount,
-    reasoningTimestamp,
-    messageId,
-  );
-  const reasoningItem = { kind: 'stream_event', id: event.id, event, timestamp: reasoningTimestamp };
-  const assistantIndex = timelineItems.findIndex((item) => item.kind === 'assistant_message');
-  if (assistantIndex < 0) return [reasoningItem, ...timelineItems];
+  if (isStreaming || hasReasoningEntry) return timelineItems;
 
-  const reasoningTime = Date.parse(reasoningTimestamp || '');
-  if (Number.isFinite(reasoningTime)) {
-    const chronologicalIndex = timelineItems.findIndex((item) => {
-      const timestamp = item.timestamp ?? item.event?.timestamp;
-      const itemTime = typeof timestamp === 'number' ? timestamp : Date.parse(timestamp || '');
-      return Number.isFinite(itemTime) && itemTime >= reasoningTime;
-    });
-    if (chronologicalIndex >= 0) {
-      return [
-        ...timelineItems.slice(0, chronologicalIndex),
-        reasoningItem,
-        ...timelineItems.slice(chronologicalIndex),
-      ];
+  const segments = Array.isArray(reasoningSegments) && reasoningSegments.length > 0
+    ? reasoningSegments
+    : [{ text: typeof reasoningText === 'string' ? reasoningText : '', timestamp: reasoningTimestamp }];
+  const usableSegments = segments.filter((segment) => segment.text.trim());
+  if (usableSegments.length === 0) return timelineItems;
+
+  const items = timelineItems.slice();
+  let searchFrom = 0;
+  usableSegments.forEach((segment, segmentIndex) => {
+    const event = buildSyntheticReasoningEvent(
+      segment.text,
+      // The turn's token total belongs to a single row; split rows estimate.
+      usableSegments.length === 1 ? reasoningTokenCount : 0,
+      segment.timestamp,
+      messageId,
+      usableSegments.length === 1 ? '' : `-${segmentIndex}`,
+    );
+    const reasoningItem = { kind: 'stream_event', id: event.id, event, timestamp: segment.timestamp };
+    const reasoningTime = Date.parse(segment.timestamp || '');
+    let insertAt = -1;
+    if (Number.isFinite(reasoningTime)) {
+      insertAt = items.findIndex((item, index) => {
+        if (index < searchFrom) return false;
+        const timestamp = item.timestamp ?? item.event?.timestamp;
+        const itemTime = typeof timestamp === 'number' ? timestamp : Date.parse(timestamp || '');
+        return Number.isFinite(itemTime) && itemTime >= reasoningTime;
+      });
     }
-  }
-
-  return [
-    ...timelineItems.slice(0, assistantIndex),
-    reasoningItem,
-    ...timelineItems.slice(assistantIndex),
-  ];
+    if (insertAt < 0) {
+      const assistantIndex = items.findIndex((item) => item.kind === 'assistant_message');
+      insertAt = assistantIndex >= 0 ? Math.max(assistantIndex, searchFrom) : items.length;
+    }
+    items.splice(insertAt, 0, reasoningItem);
+    searchFrom = insertAt + 1;
+  });
+  return items;
 }
 
 function MessageView({
   message,
   streamEventFilter,
-  hideContent = false,
-  showImages = true,
   onRegenerate,
 }) {
   const {
@@ -136,19 +137,15 @@ function MessageView({
     reasoningTokenCount = 0,
     reasoningText = '',
     reasoningTimestamp = null,
+    reasoningSegments = [],
     model = '',
     displayAgentName = '',
     displayModelName = '',
     displayToolCalls = [],
     timelineItems,
+    workActive = false,
     attachments = [],
   } = message;
-  // Quick chat prepends a fenced page-context block ahead of the user's own
-  // text (see AppRuntimeShell's submit()); the main Chat page intentionally
-  // shows messages raw (it doubles as a debugging view), so that block is
-  // deliberately NOT stripped here -- only in quick chat's own rendering,
-  // which is a separate component (QuickChatMarkdown in AppRuntimeShell.jsx)
-  // and never routes through this one.
 
   const hasTimelineItems = role === 'assistant' && Array.isArray(timelineItems) && timelineItems.length > 0;
   const visibleStreamEvents = useMemo(() => {
@@ -162,8 +159,7 @@ function MessageView({
       messageId,
       isStreaming,
     );
-    if (typeof streamEventFilter !== 'function') return timelineEvents;
-    return timelineEvents.filter(streamEventFilter);
+    return filterStreamEvents(timelineEvents, streamEventFilter);
   }, [hasTimelineItems, isStreaming, messageId, reasoningText, reasoningTimestamp, reasoningTokenCount, streamEvents, streamEventFilter]);
 
   const formattedContent = useMemo(() => {
@@ -197,35 +193,20 @@ function MessageView({
   const hasConnectedEvents = role === 'assistant' && visibleStreamEvents.length > 0;
   const entryStateClass = hasConnectedEvents ? 'entry--chain-end' : 'entry--standalone';
 
-  // Tool-result (base64) images and markdown images from the message text are both
-  // image responses in the same sense, so they're collected together via the shared
-  // collectMessageImages() -- see its doc comment for why this must stay one function
-  // rather than duplicated logic here and in the Images filter count.
+  // Images belong to the message, even when their producing activity is hidden.
   const messageImages = useMemo(
-    () => (showImages && !hideContent ? collectMessageImages({ role, content, streamEvents }) : []),
-    [content, hideContent, role, showImages, streamEvents],
+    () => collectMessageImages({ role, content, streamEvents }),
+    [content, role, streamEvents],
   );
 
   const messageEntry = (
     <article className={`message-wrapper ${role} msg msg--${role} entry entry--${role === 'assistant' ? 'assistant' : 'user'} ${entryStateClass}`}>
       <div className="entry__gutter" aria-hidden="true">
-        <span className={`entry__badge entry__badge--${role === 'assistant' ? 'assistant' : 'user'}`}>
-          {role === 'assistant' ? 'P' : 'U'}
-        </span>
+        <span className={`entry__badge entry__badge--${role === 'assistant' ? 'assistant' : 'user'}`} />
       </div>
       <div className="entry__main msg__entry-main">
         <div className="msg__head entry__head">
-          {role === 'assistant' ? (
-            <>
-              <span className="entry__tag entry__tag--assistant">agent</span>
-              <span className="msg__role">{displayName}</span>
-            </>
-          ) : (
-            <>
-              <span className="entry__tag entry__tag--in">user</span>
-              <span className="msg__role">Message</span>
-            </>
-          )}
+          <span className="msg__role">{role === 'assistant' ? displayName : 'Message'}</span>
           {isScheduled && (
             <span className="scheduled-badge muted">
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -259,7 +240,7 @@ function MessageView({
               dangerouslySetInnerHTML={{ __html: formattedContent }}
             />
           )}
-          {!hideContent && attachments.length > 0 && (
+          {attachments.length > 0 && (
             <div className="message-attachments">
               {attachments.map((attachment, index) => {
                 const sizeLabel = formatAttachmentSize(attachment.size_bytes);
@@ -285,7 +266,7 @@ function MessageView({
               })}
             </div>
           )}
-          {showImages && !hideContent && messageImages.length > 0 && (
+          {messageImages.length > 0 && (
             <MessageImageStrip images={messageImages} />
           )}
         </div>
@@ -293,54 +274,52 @@ function MessageView({
     </article>
   );
 
-  // If the message has explicit timelineItems, render them in array order.
+  // Timeline turns render as: one collapsible work group (tools, reasoning,
+  // plan, steps), then delegated-agent cards, then the answer.
   if (hasTimelineItems) {
-    const fullTimelineItems = withReasoningFallback(
-      timelineItems,
+    const fullTimelineItems = withReasoningFallback(timelineItems, {
       reasoningText,
+      reasoningSegments,
       reasoningTokenCount,
       reasoningTimestamp,
       messageId,
       isStreaming,
-    );
-    const visibleTimelineItems = fullTimelineItems.filter((item) => {
-      if (item.kind === 'stream_event') {
-        return typeof streamEventFilter !== 'function' || streamEventFilter(item.event);
-      }
-      if (item.kind === 'assistant_message') {
-        return !hideContent;
-      }
-      if (item.kind === 'subagent') {
-        // Subagent cards aren't a single event, so gate on the same
-        // "subagents" category the underlying subagent_* events belong to
-        // (see categoryForEventType in streamFilters.js) rather than a
-        // per-event check.
-        return typeof streamEventFilter !== 'function' || streamEventFilter({ eventType: 'subagent_start' });
-      }
-      if (item.kind === 'a2a_call') {
-        // A2A cards are not a single event, so gate on the same category as
-        // the generic lifecycle event that seeded the card.
-        return typeof streamEventFilter !== 'function'
-          || streamEventFilter({
-            eventType: 'tool_start',
-            metadata: { tool_name: A2A_PRIMARY_TOOL_NAME },
-          });
-      }
-      return true;
     });
+    // Visibility is a presentation choice, not a different end to the work.
+    // Skip rows emptied by tool commentary, as the visible answer path does.
+    const answerStartedAt = fullTimelineItems.find((item) =>
+      item.kind === 'assistant_message' && (item.error || (item.content || '').trim())
+    )?.timestamp ?? null;
+    const visibleTimelineItems = filterTimelineItems(fullTimelineItems, streamEventFilter);
+    const { workItems, cardItems, answerItems: allAnswerItems } = partitionTurnTimeline(visibleTimelineItems);
+    // An answer row whose text all turned out to be tool commentary (see
+    // claimToolCommentary in liveAssistantTurnModel.js) has nothing to show.
+    const answerItems = allAnswerItems.filter((item) => item.error || (item.content || '').trim());
+    const workGroups = buildWorkGroups(workItems);
     return (
       <div className="chat-entry-chain chat-entry-chain--connected">
-        {visibleTimelineItems.map((item, idx) => (
+        {workGroups.map((group, index) => {
+          const isLatest = index === workGroups.length - 1;
+          return (
+            <WorkGroup
+              key={group.id}
+              heading={group.heading}
+              items={group.items}
+              active={workActive && isLatest}
+              endedAt={isLatest ? answerStartedAt : workGroups[index + 1].startedAt}
+              onRegenerate={onRegenerate}
+            />
+          );
+        })}
+        {[...cardItems, ...answerItems].map((item, idx) => (
           <TimelineItem
-            key={item.kind === 'stream_event' && isReasoningEvent(item.event)
-              ? `${item.id}-${item.event.eventType}`
-              : (item.id || `tl-${idx}`)}
+            key={timelineItemKey(item, idx)}
             item={item}
             itemIndex={idx}
             onRegenerate={onRegenerate}
           />
         ))}
-        {showImages && !hideContent && messageImages.length > 0 && (
+        {messageImages.length > 0 && (
           <div className="chat-entry-chain__images">
             <MessageImageStrip images={messageImages} />
           </div>
@@ -355,7 +334,7 @@ function MessageView({
     return (
       <div className={`chat-entry-chain ${hasConnectedEvents ? 'chat-entry-chain--connected' : 'chat-entry-chain--single'}`}>
         {hasConnectedEvents && <StreamEvents events={visibleStreamEvents} />}
-        {!hideContent && messageEntry}
+        {messageEntry}
       </div>
     );
   }
@@ -373,7 +352,7 @@ function StreamEvents({ events }) {
       {events.map((event) => {
         const description = describeStreamEvent(event);
         const isReasoning = isReasoningEvent(event);
-        const badge = badgeForEvent(event.eventType || 'stream_event');
+        const badgeClassName = badgeClassForEvent(event.eventType || 'stream_event');
         const tool = toolDetailsForEvent(event, description);
         const tokenMetaItems = tokenMetaItemsForEvent(event);
         const eventFormattedTime = formatTimestamp(event.timestamp);
@@ -384,11 +363,10 @@ function StreamEvents({ events }) {
             role="listitem"
           >
             <div className="entry__gutter" aria-hidden="true">
-              <span className={badge.className}>{badge.label}</span>
+              <span className={badgeClassName} />
             </div>
             <div className="entry__main">
               <div className="message-stream-event-header entry__head">
-                <span className={tagClassForEventType(event.eventType || 'stream_event')}>{description.badge}</span>
                 <span className="entry__role">{description.title}</span>
                 <span className="msg__head-trailing">
                   {tool?.isNormal
@@ -410,8 +388,6 @@ function StreamEvents({ events }) {
                       className="message-content reasoning-event-disclosure__summary"
                       dangerouslySetInnerHTML={{ __html: sanitizeHtmlFragment(description.bodyHtml || '') }}
                     />
-                    <span className="tool-event-disclosure__state tool-event-disclosure__state--expand tool-event-disclosure__label">Expand</span>
-                    <span className="tool-event-disclosure__state tool-event-disclosure__state--collapse tool-event-disclosure__label">Collapse</span>
                     <span className="tool-event-disclosure__chevron" aria-hidden="true" />
                   </summary>
                   <div className="reasoning-event-disclosure__detail">
@@ -449,8 +425,8 @@ function StreamEvents({ events }) {
 }
 
 // Memoized so a streamed token only re-renders the streaming message, not the
-// whole transcript. streamEventFilter is a stable useCallback in the parent and
-// hideContent/showImages are booleans, so the default shallow compare is safe.
+// whole transcript. streamEventFilter is a stable useCallback in the parent,
+// so the default shallow compare is safe.
 const Message = memo(MessageView);
 
 export { Message };

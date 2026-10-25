@@ -14,6 +14,10 @@ This folder intentionally contains a small, maintained set of docs centered on t
 - **[CHAT_FRONTEND_NOTES.md](CHAT_FRONTEND_NOTES.md)** - Chat rendering, streaming, and frontend implementation notes
 - **[ACP_AGENTS.md](ACP_AGENTS.md)** - ACP sidecars and runtime integration
 
+## Review follow-ups
+
+- **[REVIEW_FOLLOWUPS.md](REVIEW_FOLLOWUPS.md)** — Open non-chat findings from the `feat/chat-ui-ux-changes` review, with reproduction evidence and required outcomes.
+
 ## Project links
 
 - [Main README](../README.md)

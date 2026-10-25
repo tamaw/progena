@@ -506,6 +506,7 @@ class LLMClient:
         completed_response: dict[str, Any] | None = None
         event_name = ""
         data_lines: list[str] = []
+        streamed_output_items: list[dict[str, Any]] = []
 
         def consume_event() -> dict[str, Any] | None:
             nonlocal event_name
@@ -547,6 +548,10 @@ class LLMClient:
                         else None
                     ),
                 )
+            if event_type == "response.output_item.done":
+                item = event.get("item")
+                if isinstance(item, dict):
+                    streamed_output_items.append(item)
             if event_type != "response.completed":
                 return None
             response = event.get("response")
@@ -555,6 +560,8 @@ class LLMClient:
                     "response.completed",
                     detail="completed event did not include a response object",
                 )
+            if not response.get("output") and streamed_output_items:
+                return {**response, "output": streamed_output_items}
             return response
 
         async with self.client.stream(

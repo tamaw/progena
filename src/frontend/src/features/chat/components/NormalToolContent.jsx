@@ -13,8 +13,6 @@ export default function NormalToolContent({ tool }) {
     <details className="tool-event-disclosure">
       <summary>
         {summary}
-        <span className="tool-event-disclosure__state tool-event-disclosure__state--expand tool-event-disclosure__label">Expand</span>
-        <span className="tool-event-disclosure__state tool-event-disclosure__state--collapse tool-event-disclosure__label">Collapse</span>
         <span className="tool-event-disclosure__chevron" aria-hidden="true" />
       </summary>
       {payload}

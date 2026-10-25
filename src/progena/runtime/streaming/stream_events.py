@@ -22,6 +22,7 @@ from src.progena.runtime.streaming.stream_payloads import (
     truncate_text,
 )
 from src.progena.security.redaction import redact_secrets
+from src.progena.sessions.messages import tool_result_failed
 
 logger = logging.getLogger(__name__)
 
@@ -130,6 +131,7 @@ def build_tool_result_event(
     """
     result = _unwrap_command_result(result)
     images = _extract_images(result)
+    text = _result_text(result)
     payload: dict[str, Any] = {
         "event_type": "tool_result",
         "content": tool_name,
@@ -137,11 +139,12 @@ def build_tool_result_event(
             "tool_name": tool_name,
             "tool_call_id": tool_call_id,
             "duration_ms": round(float(duration_ms), 2),
-            "success": True,
+            # Classified before truncation; the preview may lose the failure footer.
+            "success": not tool_result_failed(tool_name, result, text),
             "result_preview": (
                 f"{len(images)} image{'s' if len(images) != 1 else ''}"
                 if images
-                else _redact_preview(result)
+                else _redact_preview(text)
             ),
         },
     }
@@ -398,18 +401,19 @@ def _unwrap_command_result(value: Any) -> Any:
     return value
 
 
-def _redact_preview(value: Any) -> str:
-    """Coerce ``value`` to a redacted, truncated string preview."""
+def _result_text(value: Any) -> str:
+    """Coerce a tool result (or its message wrapper) to its full text."""
     if value is None:
         return ""
     if hasattr(value, "content"):
         text = value.content
-        if not isinstance(text, str):
-            text = str(text)
-    elif isinstance(value, str):
-        text = value
-    else:
-        text = str(value)
+        return text if isinstance(text, str) else str(text)
+    return value if isinstance(value, str) else str(value)
+
+
+def _redact_preview(value: Any) -> str:
+    """Coerce ``value`` to a redacted, truncated string preview."""
+    text = _result_text(value)
     redacted = redact_secrets(text) if text else ""
     return truncate_text(redacted, DEFAULT_STREAM_PREVIEW_BYTES)
 

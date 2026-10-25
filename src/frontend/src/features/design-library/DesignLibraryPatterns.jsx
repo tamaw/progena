@@ -296,9 +296,9 @@ function DataPatterns() {
         <article className="dlp-card">
           <div className="dlp-card__head"><h3>Chat response</h3><span className="dlp-pattern-tag">existing markup pattern</span></div>
           <article className="message-wrapper assistant msg msg--assistant entry entry--assistant">
-            <div className="entry__gutter" aria-hidden="true"><span className="entry__badge entry__badge--assistant">P</span></div>
+            <div className="entry__gutter" aria-hidden="true"><span className="entry__badge entry__badge--assistant" /></div>
             <div className="entry__main msg__entry-main">
-              <div className="msg__head entry__head"><span className="entry__tag entry__tag--assistant">agent</span><span className="msg__role">{agentName}</span></div>
+              <div className="msg__head entry__head"><span className="msg__role">{agentName}</span></div>
               <div className="message assistant"><div className="message-content" dangerouslySetInnerHTML={{ __html: CHAT_HTML }} /></div>
             </div>
           </article>

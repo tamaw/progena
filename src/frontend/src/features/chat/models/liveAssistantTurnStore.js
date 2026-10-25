@@ -16,6 +16,19 @@ function createHeaderSnapshot(turn) {
   };
 }
 
+function createContextUsageSnapshot(turn) {
+  return turn?.contextUsage ?? null;
+}
+
+function sameContextUsage(left, right) {
+  return left?.inputTokens === right?.inputTokens
+    && left?.outputTokens === right?.outputTokens
+    && left?.totalTokens === right?.totalTokens
+    && left?.profileName === right?.profileName
+    && left?.deployment === right?.deployment
+    && left?.providerId === right?.providerId;
+}
+
 function sameHeaderSnapshot(left, right) {
   return left?.assistantMessageId === right?.assistantMessageId
     && left?.reasoningTokenCount === right?.reasoningTokenCount
@@ -27,12 +40,14 @@ function sameHeaderSnapshot(left, right) {
 export function createLiveAssistantTurnStore(initialValue = null) {
   let liveTurn = initialValue;
   let headerSnapshot = createHeaderSnapshot(initialValue);
+  let contextUsageSnapshot = createContextUsageSnapshot(initialValue);
   const listeners = new Set();
   const headerListeners = new Set();
-
+  const contextUsageListeners = new Set();
   return {
     getSnapshot: () => liveTurn,
     getHeaderSnapshot: () => headerSnapshot,
+    getContextUsageSnapshot: () => contextUsageSnapshot,
     subscribe(listener) {
       listeners.add(listener);
       return () => {
@@ -45,15 +60,28 @@ export function createLiveAssistantTurnStore(initialValue = null) {
         headerListeners.delete(listener);
       };
     },
+    subscribeContextUsage(listener) {
+      contextUsageListeners.add(listener);
+      return () => {
+        contextUsageListeners.delete(listener);
+      };
+    },
     set(nextTurn) {
       if (Object.is(liveTurn, nextTurn)) {
         return;
       }
       liveTurn = nextTurn;
       const nextHeaderSnapshot = createHeaderSnapshot(nextTurn);
+      const nextContextUsageSnapshot = createContextUsageSnapshot(nextTurn);
       if (!sameHeaderSnapshot(headerSnapshot, nextHeaderSnapshot)) {
         headerSnapshot = nextHeaderSnapshot;
         for (const listener of [...headerListeners]) {
+          listener();
+        }
+      }
+      if (!sameContextUsage(contextUsageSnapshot, nextContextUsageSnapshot)) {
+        contextUsageSnapshot = nextContextUsageSnapshot;
+        for (const listener of [...contextUsageListeners]) {
           listener();
         }
       }

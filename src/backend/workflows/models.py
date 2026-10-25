@@ -67,7 +67,7 @@ class WorkflowContentPutRequest(BaseModel):
 
 
 class WorkflowManualTriggerRequest(BaseModel):
-    """Manual trigger payload for operator testing, merged over neutral event defaults."""
+    """Explicit run payload, validated against a preferred manual trigger when present."""
 
     payload: dict[str, Any] = Field(default_factory=dict)
 

@@ -64,6 +64,7 @@ from src.progena.workflows.models import (
     WorkflowNodeEvent,
     WorkflowNodeExtract,
     WorkflowNodeFormat,
+    WorkflowNodeManual,
     WorkflowNodeRoutine,
     WorkflowNodeUnpack,
     WorkflowRun,
@@ -373,16 +374,40 @@ def find_active_workflow_run(
 
 
 def first_trigger_node_id(definition: WorkflowDefinition) -> str | None:
-    """The trigger node a run starts from when no specific trigger fired it."""
+    """The trigger node an on-demand run starts from, preferring ``manual``."""
 
     return next(
         (
             node_id
             for node_id, node in definition.graph.nodes.items()
-            if isinstance(node, WorkflowTriggerNode)
+            if isinstance(node, WorkflowNodeManual)
         ),
-        None,
+        next(
+            (
+                node_id
+                for node_id, node in definition.graph.nodes.items()
+                if isinstance(node, WorkflowTriggerNode)
+            ),
+            None,
+        ),
     )
+
+
+def _apply_schema_defaults(value: Mapping[str, Any], schema: Mapping[str, Any]) -> dict[str, Any]:
+    """Copy a JSON object payload and fill declared property defaults recursively."""
+
+    result = copy.deepcopy(dict(value))
+    properties = schema.get("properties")
+    if not isinstance(properties, Mapping):
+        return result
+    for name, property_schema in properties.items():
+        if not isinstance(property_schema, Mapping):
+            continue
+        if name not in result and "default" in property_schema:
+            result[name] = copy.deepcopy(property_schema["default"])
+        elif isinstance(result.get(name), Mapping):
+            result[name] = _apply_schema_defaults(result[name], property_schema)
+    return result
 
 
 def build_manual_trigger_event(
@@ -390,14 +415,16 @@ def build_manual_trigger_event(
     *,
     payload: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Build the trigger output object for an on-demand run of the first trigger node.
-
-    A cron node fires as if due now. For an event node, ``payload`` is merged
-    over neutral defaults for its document type.
-    """
+    """Build and validate output for an explicit run, preferring a manual trigger."""
 
     node_id = first_trigger_node_id(definition)
     node = definition.graph.nodes.get(node_id) if node_id else None
+    if isinstance(node, WorkflowNodeManual):
+        resolved_payload = _apply_schema_defaults(payload or {}, node.output_schema)
+        error = validate_against_schema(resolved_payload, node.output_schema)
+        if error:
+            raise ValueError(f"manual trigger payload failed schema validation: {error}")
+        return resolved_payload
     if isinstance(node, WorkflowNodeCron):
         now = utcnow()
         return build_cron_trigger_output(node, scheduled_for=now, fired_at=now)
@@ -1007,7 +1034,7 @@ class WorkflowExecutor:
                 return None
             trigger_with_meta["_invocation"]["trigger_node_id"] = trigger_node_id
             trigger_error = validate_against_schema(
-                trigger_with_meta,
+                dict(trigger),
                 trigger_node.output_schema or {},
             )
             if trigger_error:

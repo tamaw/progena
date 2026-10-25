@@ -448,7 +448,7 @@ describe('workflow node menu', () => {
     const addableKinds = NODE_MENU_CATEGORIES.flatMap((category) => category.items).map((item) => item.kind);
 
     expect(addableKinds.sort()).toEqual(
-      ['agent', 'approval', 'condition', 'cron', 'data', 'document_create', 'document_delete', 'document_query', 'document_read', 'document_write', 'event', 'extract', 'format', 'routine', 'unpack'].sort(),
+      ['agent', 'approval', 'condition', 'cron', 'data', 'document_create', 'document_delete', 'document_query', 'document_read', 'document_write', 'event', 'extract', 'format', 'manual', 'routine', 'unpack'].sort(),
     );
   });
 });

@@ -222,7 +222,7 @@ class CheckpointChatOpenAI(ChatOpenAI):
         return self._provider_kind == "chatgpt"
 
     def _usage_context(self) -> dict[str, Any]:
-        return {
+        context: dict[str, Any] = {
             "profile_name": self._insights_profile_name,
             "provider": (
                 self._provider_connection.get("kind")
@@ -232,6 +232,11 @@ class CheckpointChatOpenAI(ChatOpenAI):
             "deployment": self.model_name,
             "occurred_at": datetime.now(UTC).isoformat(),
         }
+        if self._provider_connection is not None:
+            provider_id = self._provider_connection.get("id")
+            if provider_id:
+                context["provider_id"] = provider_id
+        return context
 
     def _message_can_replay_opaque_items(self, message: BaseMessage) -> bool:
         source = _message_connection(message)

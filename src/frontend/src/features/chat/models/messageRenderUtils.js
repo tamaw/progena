@@ -76,7 +76,7 @@ export function appendStreamingCursor(html) {
 
 // ─── Label / display helpers ─────────────────────────────────────────────
 
-function prettifyLabel(value) {
+export function prettifyLabel(value) {
   return value
     .split(/[_-]/g)
     .filter(Boolean)
@@ -111,26 +111,6 @@ export function extractA2ASummary(resultText) {
   } catch {
     return '';
   }
-}
-
-/**
- * `{ label, tone }` for StatusPill (StatusPill.jsx), shared by every place
- * that renders the running/success/error vocabulary: SubagentCard's own
- * card-level status and SubagentChild's per-nested-call status (both use
- * these exact three values -- see liveAssistantTurnModel.js's item shapes)
- * -- one mapping instead of two copies of the same ternary chain.
- *
- * A2ACallCard's own card-level header deliberately doesn't use this: unlike
- * a subagent (whose only status signal is this running/success/error
- * summary), an A2A card's status progression is already fully visible one
- * level down, as its own chain of submitted/working/completed/... sub-
- * entries (A2ASubEntry) -- a StatusPill up top would just repeat the last
- * sub-entry's own label.
- */
-export function statusPillProps(status) {
-  if (status === 'error') return { label: 'error', tone: 'err' };
-  if (status === 'success') return { label: 'done', tone: 'ok' };
-  return { label: 'running', tone: 'pending' };
 }
 
 function firstStringArg(args, keys) {
@@ -341,14 +321,6 @@ function detailsMatch(left, right) {
   return normalizeDetailText(left) === normalizeDetailText(right);
 }
 
-function badgeForEventType(eventType) {
-  if (eventType.includes('tool')) return 'Tool';
-  if (eventType.includes('agent')) return 'Agent';
-  if (eventType.includes('node')) return 'Step';
-  if (eventType.includes('reasoning')) return 'Reasoning';
-  return 'Event';
-}
-
 function splitReasoningContent(content) {
   const paragraphs = typeof content === 'string'
     ? content.trim().split(/\n\s*\n/).filter(Boolean)
@@ -397,11 +369,8 @@ export function describeStreamEvent(event) {
       detailParts.push('draft updated');
     }
     return {
-      // The "Step" tag already labels this as a graph node execution, and
-      // the title already carries the node's own name, so there's nothing
-      // meaningful left to put in metaDetail (it used to leak a stray
-      // "Model"/"Step" kind label here, which just repeated the tag).
-      badge: 'Step',
+      // The title already carries the node's own name, so there's nothing
+      // meaningful left to put in metaDetail.
       title: prettifyLabel(nodeName),
       metaDetail: '',
       bodyDetail: detailParts.join(' • '),
@@ -411,7 +380,6 @@ export function describeStreamEvent(event) {
   if (eventType === 'tool_start') {
     const toolName = typeof metadata.tool_name === 'string' ? metadata.tool_name : 'tool';
     return {
-      badge: 'Tool',
       title: `→ ${prettifyLabel(toolName)}`,
       metaDetail: isNormalTool(toolName)
         ? ''
@@ -428,7 +396,6 @@ export function describeStreamEvent(event) {
       ? ''
       : (typeof metadata.result_preview === 'string' ? metadata.result_preview.trim() : '');
     return {
-      badge: 'Tool',
       title: `✓ ${prettifyLabel(toolName)}`,
       metaDetail: normalTool ? duration : [duration, output].filter(Boolean).join(' • ') || 'completed',
       bodyDetail: '',
@@ -443,7 +410,6 @@ export function describeStreamEvent(event) {
       ? ''
       : (typeof metadata.error === 'string' ? metadata.error.trim() : '');
     return {
-      badge: 'Tool',
       title: `✗ ${prettifyLabel(toolName)}`,
       metaDetail: normalTool ? duration : [duration, output].filter(Boolean).join(' • ') || 'error',
       bodyDetail: '',
@@ -454,7 +420,6 @@ export function describeStreamEvent(event) {
     const presentation = reasoningPresentation(event);
     const reasoningHtml = renderReasoningHtml(event, presentation);
     return {
-      badge: 'Reasoning',
       title: 'Reasoning',
       bodyHtml: reasoningHtml.summaryHtml,
       reasoningDetailHtml: reasoningHtml.detailHtml,
@@ -474,7 +439,6 @@ export function describeStreamEvent(event) {
       || todos.find((todo) => todo?.status === 'pending')
       || todos[todos.length - 1];
     return {
-      badge: 'Plan',
       title: activeTodo?.content || 'Plan',
       metaDetail: todos.length > 0 ? `${completed}/${todos.length} done` : '',
       bodyDetail: '',
@@ -484,17 +448,14 @@ export function describeStreamEvent(event) {
   // Flat subagent_* events only reach this generic renderer via the reload
   // fallback (buildDefaultAssistantTimeline groups them into a single card
   // when it can -- see liveAssistantTurnModel.js) or chats persisted before
-  // grouping shipped. Handled explicitly, setting badge: 'Subagent' directly,
-  // rather than falling into badgeForEventType()'s generic fallback below --
-  // "subagent_start" etc. accidentally contain the substring "agent" and
-  // would otherwise be mislabeled "Agent".
+  // grouping shipped.
   if (eventType.startsWith('subagent_')) {
     const subagentName = typeof metadata.subagent_name === 'string' && metadata.subagent_name
       ? metadata.subagent_name
       : 'subagent';
 
     if (eventType === 'subagent_start') {
-      return { badge: 'Subagent', title: `→ ${subagentName}`, metaDetail: 'started', bodyDetail: '' };
+      return { title: `→ ${subagentName}`, metaDetail: 'started', bodyDetail: '' };
     }
 
     if (eventType === 'subagent_result') {
@@ -507,7 +468,6 @@ export function describeStreamEvent(event) {
         parts.push(metadata.result_preview);
       }
       return {
-        badge: 'Subagent',
         title: `${isError ? '✗' : '✓'} ${subagentName}`,
         metaDetail: parts.join(' • ') || (isError ? 'error' : 'completed'),
         bodyDetail: '',
@@ -516,7 +476,6 @@ export function describeStreamEvent(event) {
 
     if (eventType === 'subagent_message_delta') {
       return {
-        badge: 'Subagent',
         title: subagentName,
         bodyHtml: typeof event?.content === 'string' && event.content ? formatMessage(event.content) : '',
         metaDetail: '',
@@ -530,7 +489,6 @@ export function describeStreamEvent(event) {
 
     if (eventType === 'subagent_tool_start') {
       return {
-        badge: 'Subagent',
         title: `${subagentName} → ${prettifyLabel(nestedToolName)}`,
         metaDetail: formatArgsPreview(metadata.args_preview) || 'invoking…',
         bodyDetail: '',
@@ -542,7 +500,6 @@ export function describeStreamEvent(event) {
       if (typeof metadata.duration_ms === 'number') parts.push(formatDuration(metadata.duration_ms));
       if (typeof metadata.result_preview === 'string' && metadata.result_preview) parts.push(metadata.result_preview);
       return {
-        badge: 'Subagent',
         title: `${subagentName} ✓ ${prettifyLabel(nestedToolName)}`,
         metaDetail: parts.join(' • ') || 'completed',
         bodyDetail: '',
@@ -554,7 +511,6 @@ export function describeStreamEvent(event) {
     if (typeof metadata.duration_ms === 'number') errorParts.push(formatDuration(metadata.duration_ms));
     if (typeof metadata.error === 'string' && metadata.error) errorParts.push(metadata.error);
     return {
-      badge: 'Subagent',
       title: `${subagentName} ✗ ${prettifyLabel(nestedToolName)}`,
       metaDetail: errorParts.join(' • ') || 'error',
       bodyDetail: '',
@@ -572,7 +528,6 @@ export function describeStreamEvent(event) {
       ? metadata.agent_name
       : 'agent';
     return {
-      badge: 'A2A',
       title: agentName,
       metaDetail: typeof metadata.state === 'string' ? metadata.state : '',
       bodyDetail: typeof metadata.message_text === 'string' ? metadata.message_text : '',
@@ -590,7 +545,6 @@ export function describeStreamEvent(event) {
   const metadataSummary = summarizeMetadata(metadata);
 
   return {
-    badge: badgeForEventType(eventType),
     title: explicitName ? prettifyLabel(explicitName) : prettifyLabel(eventType),
     metaDetail: metadataSummary,
     bodyDetail: contentDetail && !detailsMatch(contentDetail, metadataSummary) ? contentDetail : '',
@@ -620,32 +574,13 @@ export function tokenMetaItemsForEvent(event) {
   return items;
 }
 
-export function badgeForEvent(eventType) {
-  if (eventType === 'tool_error') {
-    return { className: 'entry__badge entry__badge--err', label: '!' };
-  }
-  if (eventType === 'todos_update') {
-    return { className: 'entry__badge entry__badge--plan', label: '☰' };
-  }
-  if (eventType.includes('tool')) {
-    return { className: 'entry__badge entry__badge--tool', label: '⌘' };
-  }
-  if (eventType.includes('reasoning')) {
-    return { className: 'entry__badge chat-event-badge--reason', label: '?' };
-  }
-  if (eventType.includes('node') || eventType.includes('agent')) {
-    return { className: 'entry__badge chat-event-badge--step', label: '◇' };
-  }
-  return { className: 'entry__badge entry__badge--tool', label: '•' };
-}
-
-export function tagClassForEventType(eventType) {
-  if (eventType === 'tool_error') return 'entry__tag entry__tag--err';
-  if (eventType === 'todos_update') return 'entry__tag chat-event-tag--plan';
-  if (eventType.includes('tool')) return 'entry__tag chat-event-tag--tool';
-  if (eventType.includes('reasoning')) return 'entry__tag chat-event-tag--reason';
-  if (eventType.includes('node') || eventType.includes('agent')) return 'entry__tag chat-event-tag--step';
-  return 'entry__tag chat-event-tag--step';
+export function badgeClassForEvent(eventType) {
+  if (eventType === 'tool_error') return 'entry__badge entry__badge--err';
+  if (eventType === 'todos_update') return 'entry__badge entry__badge--plan';
+  if (eventType.includes('tool')) return 'entry__badge entry__badge--tool';
+  if (eventType.includes('reasoning')) return 'entry__badge chat-event-badge--reason';
+  if (eventType.includes('node') || eventType.includes('agent')) return 'entry__badge chat-event-badge--step';
+  return 'entry__badge entry__badge--tool';
 }
 
 export function todosDetailsForEvent(event) {

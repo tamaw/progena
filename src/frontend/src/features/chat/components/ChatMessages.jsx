@@ -1,26 +1,84 @@
-import { useSelector } from 'react-redux';
-import { selectAgentName } from '../../settings/state/preferences';
+import { memo, useCallback, useRef } from 'react';
 
-import Message from './Message';
+import LiveAssistantTurn from './LiveAssistantTurn';
+import { Message } from './Message';
+import { followTranscript } from '../models/transcriptScroll';
 
-function ChatMessages({ messages }) {
-  const agentName = useSelector(selectAgentName);
-  if (messages.length === 0) {
-    return (
-      <div className="chat-messages">
-        <div className="welcome-message">
-          <h2>Welcome to Progena AI</h2>
-          <p>Start a conversation with {agentName}.</p>
-        </div>
-      </div>
-    );
-  }
+const HistoricalMessage = memo(function HistoricalMessage({
+  message,
+  streamEventFilter,
+  onRegenerate,
+}) {
+  const handleMessageRegenerate = useCallback(
+    () => onRegenerate?.(message.id),
+    [message.id, onRegenerate],
+  );
 
   return (
-    <div className="chat-messages">
-      {messages.map((msg, index) => (
-        <Message key={msg.id || index} message={msg} />
-      ))}
+    <Message
+      message={message}
+      streamEventFilter={streamEventFilter}
+      onRegenerate={message.role === 'assistant' && onRegenerate ? handleMessageRegenerate : undefined}
+    />
+  );
+});
+
+function ChatMessages({
+  messages,
+  streamEventFilter,
+  onRegenerate,
+  liveTurnStore,
+  messagesContainerRef,
+  isPinnedToBottomRef,
+  className = '',
+  children,
+}) {
+  // Row heights can change without a parent render (streaming, image load,
+  // work disclosure). Observe rows, not the potentially height-capped wrapper.
+  const observersRef = useRef(null);
+  const observeTranscript = useCallback((node) => {
+    observersRef.current?.forEach((observer) => observer.disconnect());
+    observersRef.current = null;
+    if (!node || !messagesContainerRef || !isPinnedToBottomRef
+      || typeof ResizeObserver === 'undefined' || typeof MutationObserver === 'undefined') return;
+    const follow = () => followTranscript(messagesContainerRef.current, isPinnedToBottomRef);
+    const resizeObserver = new ResizeObserver(follow);
+    [...node.children].forEach((child) => resizeObserver.observe(child));
+    const mutationObserver = new MutationObserver((records) => {
+      records.forEach((record) => {
+        record.removedNodes.forEach((removed) => {
+          if (removed.nodeType === 1) resizeObserver.unobserve(removed);
+        });
+        record.addedNodes.forEach((added) => {
+          if (added.nodeType === 1) resizeObserver.observe(added);
+        });
+      });
+    });
+    mutationObserver.observe(node, { childList: true });
+    observersRef.current = [resizeObserver, mutationObserver];
+  }, [messagesContainerRef, isPinnedToBottomRef]);
+
+  return (
+    <div className={`chat-messages__inner ${className}`.trim()} ref={observeTranscript}>
+      {children}
+      {messages.map((message, index) => {
+        return (
+          <HistoricalMessage
+            key={message.id ?? `${message.role}-${index}`}
+            message={message}
+            streamEventFilter={streamEventFilter}
+            onRegenerate={onRegenerate}
+          />
+        );
+      })}
+      {liveTurnStore ? (
+        <LiveAssistantTurn
+          store={liveTurnStore}
+          messagesContainerRef={messagesContainerRef}
+          isPinnedToBottomRef={isPinnedToBottomRef}
+          streamEventFilter={streamEventFilter}
+        />
+      ) : null}
     </div>
   );
 }
