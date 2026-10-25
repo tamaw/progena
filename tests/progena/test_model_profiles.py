@@ -25,6 +25,36 @@ def test_profile_document_requires_persisted_provider_and_deployment():
         validate_model_profiles_document('{"general": {"deployment": "x"}}')
 
 
+def test_profile_context_window_is_optional_positive_integer_and_preserved():
+    profiles = validate_model_profiles_payload(
+        {
+            "general": {
+                "provider_id": "foundry-1",
+                "deployment": "deployment-general",
+                "context_window": 128_000,
+            },
+            "review": {"provider_id": "foundry-1", "deployment": "deployment-review"},
+        }
+    )
+
+    assert profiles["general"]["context_window"] == 128_000
+    assert "context_window" not in profiles["review"]
+
+
+@pytest.mark.parametrize("context_window", [0, -1, True, "128000"])
+def test_profile_context_window_rejects_non_positive_or_non_integer_values(context_window):
+    with pytest.raises(ValueError, match="context_window must be a positive integer"):
+        validate_model_profiles_payload(
+            {
+                "general": {
+                    "provider_id": "foundry-1",
+                    "deployment": "deployment-general",
+                    "context_window": context_window,
+                }
+            }
+        )
+
+
 def test_legacy_azure_profile_is_converted_once_to_foundry_provider_id():
     migrated = migrate_legacy_model_profiles_payload(
         {"general": {"provider": "azure_openai", "deployment": "deployment-general"}},

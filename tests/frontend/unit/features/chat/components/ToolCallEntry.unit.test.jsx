@@ -25,8 +25,8 @@ describe('ToolCallEntry', () => {
     expect(html.match(/entry__role/g)).toHaveLength(1);
     expect(html).toContain('Read File');
     const summaryPos = html.indexOf('Reading the config');
-    const inputPos = html.indexOf('tool-call-entry__input');
-    const outputPos = html.indexOf('tool-call-entry__output');
+    const inputPos = html.indexOf('tool-io__label">Input');
+    const outputPos = html.indexOf('tool-io__label">Output');
     expect(summaryPos).toBeGreaterThan(-1);
     expect(inputPos).toBeGreaterThan(summaryPos);
     expect(outputPos).toBeGreaterThan(inputPos);

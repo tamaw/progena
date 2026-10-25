@@ -182,7 +182,6 @@ const SubagentCard = memo(function SubagentCard({ item }) {
       <div className="entry__main">
         <button type="button" className="entry__head entry-toggle" aria-expanded={open} onClick={toggle}>
           <span className="entry__role">{item.subagentName || 'subagent'}</span>
-          <span className="entry-toggle__chevron" aria-hidden="true" />
           <span className="msg__head-trailing">
             {toolCount > 0 && (
               <span className="muted">{toolCount} tool call{toolCount === 1 ? '' : 's'}</span>
@@ -190,6 +189,7 @@ const SubagentCard = memo(function SubagentCard({ item }) {
             {durationLabel && <span className="muted">{durationLabel}</span>}
             {formattedTime && <span className="msg__time entry__time">{formattedTime}</span>}
           </span>
+          <span className="tool-event-disclosure__chevron" aria-hidden="true" />
         </button>
         {!open && error}
         {open && (

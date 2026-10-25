@@ -1,5 +1,7 @@
-import React from 'react';
-import { describe, expect, it, vi } from 'vitest';
+// @vitest-environment jsdom
+import React, { act } from 'react';
+import { createRoot } from 'react-dom/client';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import WorkGroup from '@frontend/features/chat/components/WorkGroup';
 
@@ -7,9 +9,26 @@ vi.mock('react-redux', () => ({
   useSelector: (selector) => selector({ uiData: { preferences: { agentName: 'Progena' } } }),
 }));
 
-if (typeof globalThis.React === 'undefined') {
-  globalThis.React = React;
-}
+let host;
+let root;
+
+beforeEach(() => {
+  vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
+  vi.stubGlobal('React', React);
+  vi.stubGlobal('ResizeObserver', class {
+    observe() {}
+    disconnect() {}
+  });
+  host = document.createElement('div');
+  document.body.append(host);
+  root = createRoot(host);
+});
+
+afterEach(async () => {
+  if (root) await act(async () => root.unmount());
+  host.remove();
+  vi.unstubAllGlobals();
+});
 
 function tool(id, eventType, callId, extra = {}) {
   return {
@@ -50,7 +69,7 @@ describe('WorkGroup', () => {
 
   it('previews the latest steps while working, keeping an older running parallel call visible', () => {
     const html = renderToStaticMarkup(React.createElement(WorkGroup, { items, active: true }));
-    expect(html).toContain('Generating…');
+    expect(html).toContain('typing-word');
     // `a` started first and never finished: still shown although outside the latest three.
     expect(html).toContain('path: /a');
     expect(html).not.toContain('path: /b');
@@ -73,5 +92,57 @@ describe('WorkGroup', () => {
     expect(html).toContain('Reading files');
     expect(html).toContain('path: /a');
     expect(html).not.toContain('work-step__badge--reasoning');
+  });
+
+  it('shows provider reasoning detail after expanding its headed group', async () => {
+    const reasoning = {
+      kind: 'stream_event',
+      id: 'provider-reasoning',
+      timestamp: 900,
+      event: {
+        id: 'provider-reasoning',
+        eventType: 'reasoning_summary',
+        content: '**Inspect files**\n\nThis generated text must not replace provider metadata.',
+        metadata: {
+          summary: 'Provider summary',
+          detail: 'Provider **reasoning detail**',
+        },
+        timestamp: 900,
+      },
+    };
+    await act(async () => root.render(
+      <WorkGroup heading="Inspect files" items={[reasoning]} active={false} endedAt={1_000} />,
+    ));
+
+    const toggle = host.querySelector('.work-group__toggle');
+    await act(async () => toggle.click());
+
+    expect(host.textContent).toContain('Provider summary');
+    expect(host.textContent).toContain('Provider reasoning detail');
+    expect(host.textContent).not.toContain('This generated text must not replace provider metadata.');
+  });
+
+  it('keeps generated reasoning body without repeating its heading', async () => {
+    const reasoning = {
+      kind: 'stream_event',
+      id: 'generated-reasoning',
+      timestamp: 900,
+      event: {
+        id: 'generated-reasoning',
+        eventType: 'reasoning_delta',
+        content: '**Reading files**\n\nFirst generated observation.\n\nSecond generated observation.',
+        metadata: { source: 'stream_reasoning' },
+        timestamp: 900,
+      },
+    };
+    await act(async () => root.render(
+      <WorkGroup heading="Reading files" items={[reasoning]} active={false} endedAt={1_000} />,
+    ));
+
+    await act(async () => host.querySelector('.work-group__toggle').click());
+
+    expect(host.textContent).toContain('First generated observation.');
+    expect(host.textContent).toContain('Second generated observation.');
+    expect(host.textContent.match(/Reading files/g)).toHaveLength(1);
   });
 });

@@ -1,6 +1,7 @@
 /**
  * One collapsible work line of an assistant turn (see workGroupModel.js):
- * headed by its reasoning summary when it has one, else "Generating…" while
+ * headed by its reasoning summary when it has one, else the typed "-ing"
+ * word (TypingWord, as the pending cursor uses) while
  * live / "Worked for 17s" once done. Seconds tick and the tool count grows
  * while it is live.
  *
@@ -11,8 +12,9 @@
 
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import TimelineItem from './TimelineItem';
-import { renderSafeMarkdown } from '../../../lib/safeMarkdown';
-import { formatDuration, formatTimestamp, tokenMetaItemsForEvent } from '../models/messageRenderUtils';
+import TypingWord from './TypingWord';
+import { renderSafeMarkdown, sanitizeHtmlFragment } from '../../../lib/safeMarkdown';
+import { describeStreamEvent, formatDuration, formatTimestamp, tokenMetaItemsForEvent } from '../models/messageRenderUtils';
 import {
   buildWorkSteps,
   mergeToolCallItems,
@@ -47,11 +49,20 @@ const WorkStep = memo(function WorkStep({ step }) {
 // The reasoning behind a headed group, under its header: clamped to a few
 // lines, with a right-hand chevron (like a tool row's) only when the text is
 // actually cut off at the current width.
-const ReasoningBody = memo(function ReasoningBody({ text }) {
+const ReasoningBody = memo(function ReasoningBody({ event }) {
   const [open, setOpen] = useState(false);
   const [overflows, setOverflows] = useState(false);
   const textRef = useRef(null);
-  const html = useMemo(() => renderSafeMarkdown(text), [text]);
+  const { bodyHtml, reasoningDetailHtml } = useMemo(() => describeStreamEvent({
+    ...event,
+    content: reasoningSectionBody(event.content),
+  }), [event]);
+  const html = useMemo(() => {
+    const presentationHtml = `${bodyHtml || ''}${reasoningDetailHtml || ''}`;
+    return presentationHtml
+      ? sanitizeHtmlFragment(presentationHtml)
+      : renderSafeMarkdown(reasoningSectionBody(event.content));
+  }, [bodyHtml, event.content, reasoningDetailHtml]);
 
   useLayoutEffect(() => {
     const element = textRef.current;
@@ -124,18 +135,20 @@ const WorkGroup = memo(function WorkGroup({ heading, items, active, endedAt, onR
             aria-expanded={expanded}
             onClick={() => setExpanded((value) => !value)}
           >
-            <span className="entry__role work-group__title">{header.title}</span>
+            <span className="entry__role work-group__title">
+              {header.title ?? <TypingWord reserveWidth />}
+            </span>
             {header.meta && <span className="work-group__meta">{header.meta}</span>}
             {summary.failedCount > 0 && (
               <span className="work-group__failed">{summary.failedCount} failed</span>
             )}
-            <span className="entry-toggle__chevron" aria-hidden="true" />
             <span className="msg__head-trailing">
               {tokenMeta.map((meta) => <span key={meta} className="msg__stat message-token-count">{meta}</span>)}
               {time && <span className="msg__time entry__time">{time}</span>}
             </span>
+            <span className="tool-event-disclosure__chevron" aria-hidden="true" />
           </button>
-          {expanded && reasoningItem && <ReasoningBody text={reasoningSectionBody(reasoningItem.event.content)} />}
+          {expanded && reasoningItem && <ReasoningBody event={reasoningItem.event} />}
         </div>
       </div>
       {liveSteps.map((step) => <WorkStep key={step.id} step={step} />)}

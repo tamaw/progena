@@ -417,6 +417,23 @@
     order: 4;
 }
 
+/* One right-hand column for the whole transcript: rows end in a chevron
+   (8px gap + 6px chevron, flush with the transcript's right padding), so
+   every header without one -- messages, agent answers, work groups,
+   subagent/A2A cards, preview steps -- reserves the same space after its
+   meta, and all times line up. */
+.chat-detail-body {
+    --entry-chevron-slot: 14px;
+}
+
+.chat-detail-body .tool-event-disclosure__chevron {
+    margin-right: 0;
+}
+
+.chat-detail-body .entry__head:not(:has(> .tool-event-disclosure__chevron)) > .msg__head-trailing {
+    margin-right: var(--entry-chevron-slot);
+}
+
 .tool-call-entry__commentary {
     margin-top: 6px;
     color: var(--color-text-secondary, var(--color-text-muted));
@@ -447,14 +464,148 @@
     margin-left: auto;
 }
 
-.tool-call-entry__label {
-    padding: 6px 14px 0;
-    color: var(--color-text-muted);
+/* Tool call detail boxes (ToolIOBox.jsx): Input and Output share one frame
+   -- label + meta header, then a body shaped per tool. Long bodies scroll
+   inside the box rather than stretching the transcript. */
+.tool-call-entry__detail {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-top: 6px;
+}
+
+.tool-io {
+    overflow: hidden;
+    background: var(--color-bg-secondary);
+    border: 1px solid var(--color-border);
+    border-radius: 8px;
+}
+
+.tool-io__header {
+    display: flex;
+    gap: 8px;
+    align-items: baseline;
+    justify-content: space-between;
+    padding: 6px 12px;
     font-size: 11.5px;
 }
 
-.tool-call-entry__output--error .tool__body {
+.tool-io__label {
+    color: var(--color-text-secondary, var(--color-text-muted));
+    font-weight: 600;
+}
+
+.tool-io__meta {
+    color: var(--color-text-muted);
+    font-variant-numeric: tabular-nums;
+}
+
+.tool-io--error .tool-io__label,
+.tool-io--error .tool-io__meta {
     color: var(--color-error);
+}
+
+.tool-io__body {
+    max-height: 320px;
+    overflow: auto;
+    background: var(--color-bg-primary);
+    border-top: 1px solid var(--color-border);
+    font-size: 11.5px;
+    line-height: 1.6;
+}
+
+.tool-io__code {
+    margin: 0;
+    padding: 8px 12px;
+    color: var(--color-text-secondary, var(--color-text-primary));
+    font-family: var(--font-family-mono);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
+.tool-io--error .tool-io__code {
+    color: var(--color-error);
+}
+
+.tool-io__code .prompt {
+    color: var(--color-accent);
+    user-select: none;
+}
+
+.tool-io__code--numbered {
+    padding-left: 0;
+}
+
+/* Numbered lines: number column + text column, so wrapped text keeps its
+   indent instead of running under the numbers. Block lines copy as lines. */
+.tool-io__line {
+    display: grid;
+    grid-template-columns: 3ch minmax(0, 1fr);
+    column-gap: 12px;
+    padding-left: 12px;
+}
+
+.tool-io__line-number {
+    color: var(--color-text-muted);
+    text-align: right;
+    user-select: none;
+}
+
+.tool-io__line--removed {
+    background: color-mix(in srgb, var(--color-error) 12%, transparent);
+}
+
+.tool-io__line--added {
+    background: color-mix(in srgb, var(--color-success) 12%, transparent);
+}
+
+.tool-io__fields {
+    display: grid;
+    grid-template-columns: max-content minmax(0, 1fr);
+    gap: 2px 12px;
+    margin: 0;
+    padding: 8px 12px;
+    font-family: var(--font-family-mono);
+}
+
+.tool-io__field {
+    display: contents;
+}
+
+.tool-io__field dt {
+    color: var(--color-text-muted);
+}
+
+.tool-io__field dd {
+    margin: 0;
+    overflow-wrap: anywhere;
+    color: var(--color-text-primary);
+}
+
+.tool-io__fields + .tool-io__code,
+.tool-io__fields + .tool-io__block-name {
+    border-top: 1px solid var(--color-border);
+}
+
+.tool-io__block-name {
+    padding: 6px 12px 0;
+    color: var(--color-text-muted);
+    font-family: var(--font-family-mono);
+}
+
+.tool-io__block-name + .tool-io__code {
+    padding-top: 2px;
+}
+
+.tool-io__list {
+    margin: 0;
+    padding: 8px 12px;
+    font-family: var(--font-family-mono);
+    list-style: none;
+}
+
+.tool-io__list li {
+    overflow-wrap: anywhere;
 }
 
 /* Code in messages */
@@ -525,6 +676,21 @@
 }
 .pending-cursor__word {
     color: var(--color-text-primary);
+}
+
+/* TypingWord with reserveWidth: the invisible longest word and the typed
+   text share one grid cell, so the cell keeps the longest word's width. */
+.typing-word--reserved {
+    display: inline-grid;
+}
+
+.typing-word--reserved > * {
+    grid-area: 1 / 1;
+    white-space: nowrap;
+}
+
+.typing-word__sizer {
+    visibility: hidden;
 }
 
 /* Todo panel -- live plan checklist rendered as the body of a `todos_update`
@@ -2267,6 +2433,7 @@ pre.mermaid svg {
    included). Compounded so it beats chrome-frame.css's later
    `.sess-detail__body` padding. */
 .chat-messages.chat-detail-body {
+    padding-right: 16px;
     padding-left: 16px;
 }
 
@@ -2310,17 +2477,13 @@ pre.mermaid svg {
     color: var(--color-text-primary);
 }
 
-.entry-toggle__chevron {
+/* Toggle headers use the tool rows' right-hand chevron, after the meta. */
+.entry-toggle > .tool-event-disclosure__chevron {
     flex: 0 0 auto;
-    width: 6px;
-    height: 6px;
-    border-right: 1.5px solid var(--color-text-muted);
-    border-bottom: 1.5px solid var(--color-text-muted);
-    transform: rotate(-45deg);
-    transition: transform 0.15s ease;
+    order: 4;
 }
 
-.entry-toggle[aria-expanded="true"] .entry-toggle__chevron {
+.entry-toggle[aria-expanded="true"] > .tool-event-disclosure__chevron {
     transform: rotate(45deg);
 }
 

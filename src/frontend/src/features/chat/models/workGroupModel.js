@@ -10,7 +10,7 @@
  *     the turn's "work", split into groups. Every reasoning summary (a
  *     `**Heading**` section) opens a new group headed by that summary, and
  *     the work that follows lands in it. Work before any summary forms a
- *     headless group ("Generating…" / "Worked for …").
+ *     headless group (a typed "-ing" word while live / "Worked for …").
  *
  * While the agent is working, the latest group previews only its latest
  * steps (plus every still-running step, so parallel tool calls stay
@@ -60,6 +60,40 @@ function isCardOwnedTool(toolName) {
   return toolName === 'task' || isA2AToolName(toolName);
 }
 
+// `todos_update` has no call id. Match it to the latest correlated
+// write_todos lifecycle exactly as mergeToolCallItems does, so the compact
+// preview hides only the lifecycle which the visible plan actually replaces.
+function writeTodosCallsWithPlans(items) {
+  const calls = [];
+  const callIndexByKey = new Map();
+
+  for (const item of Array.isArray(items) ? items : []) {
+    const eventType = item?.kind === 'stream_event' ? item.event?.eventType : '';
+    if (eventType === 'todos_update') {
+      const owner = calls.findLastIndex((call) => !call.hasPlan);
+      if (owner >= 0) calls[owner].hasPlan = true;
+      continue;
+    }
+    if (!TOOL_EVENT_TYPES.has(eventType) || toolCallNameFromItem(item) !== 'write_todos') continue;
+
+    const key = toolCallKey(item);
+    if (!key) continue;
+    let callIndex = callIndexByKey.get(key);
+    if (callIndex === undefined) {
+      callIndex = calls.length;
+      callIndexByKey.set(key, callIndex);
+      calls.push({ key, hasPlan: false, failed: false });
+    }
+    if (eventType === 'tool_error') calls[callIndex].failed = true;
+  }
+
+  return new Set(calls.filter((call) => call.hasPlan && !call.failed).map((call) => call.key));
+}
+
+function toolCallNameFromItem(item) {
+  return item?.event?.metadata?.tool_name;
+}
+
 function itemTimestamp(item) {
   const value = item?.timestamp ?? item?.event?.timestamp;
   const parsed = Number.isFinite(value) ? value : Date.parse(value || '');
@@ -74,6 +108,7 @@ function itemTimestamp(item) {
 export function buildWorkSteps(workItems) {
   const steps = [];
   const toolStepIndex = new Map();
+  const writeTodosWithPlans = writeTodosCallsWithPlans(workItems);
 
   for (const item of Array.isArray(workItems) ? workItems : []) {
     const event = item?.event;
@@ -83,9 +118,9 @@ export function buildWorkSteps(workItems) {
 
     if (TOOL_EVENT_TYPES.has(eventType)) {
       const toolName = typeof metadata.tool_name === 'string' && metadata.tool_name ? metadata.tool_name : 'tool';
-      // write_todos is shown by the plan update it produces (one entry, not two).
-      if (isCardOwnedTool(toolName) || toolName === 'write_todos') continue;
-      const key = typeof metadata.tool_call_id === 'string' && metadata.tool_call_id ? metadata.tool_call_id : item.id;
+      const toolCallId = typeof metadata.tool_call_id === 'string' && metadata.tool_call_id ? metadata.tool_call_id : null;
+      if (isCardOwnedTool(toolName) || (toolName === 'write_todos' && toolCallId && writeTodosWithPlans.has(toolCallId))) continue;
+      const key = toolCallId || item.id;
       const existingIndex = toolStepIndex.get(key);
       const step = existingIndex === undefined
         ? {
@@ -279,9 +314,10 @@ export function summarizeWork(workItems, steps, endedAt = null) {
 }
 
 /**
- * Header text for a group: its reasoning summary, else "Generating…" while
- * live, else "Worked for 17s". `meta` carries the counters that are not
- * already in the title (seconds tick live; tool count increments).
+ * Header text for a group: its reasoning summary; null while live without
+ * one (the header types a "-ing" word instead); else "Worked for 17s".
+ * `meta` carries the counters that are not already in the title (seconds
+ * tick live; tool count increments).
  */
 export function workGroupHeader({ heading, active, summary }) {
   const elapsed = formatElapsed(summary.elapsedMs);
@@ -289,7 +325,7 @@ export function workGroupHeader({ heading, active, summary }) {
   if (heading || active) {
     const showElapsed = active || summary.elapsedMs >= 1000;
     return {
-      title: heading || 'Generating…',
+      title: heading || null,
       meta: [showElapsed ? elapsed : '', tools].filter(Boolean).join(' · '),
     };
   }

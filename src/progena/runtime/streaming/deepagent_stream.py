@@ -32,6 +32,7 @@ from src.progena.sessions.messages import (
     attach_reasoning_trace,
     coerce_messages_list,
     extract_cache_read_token_count,
+    extract_context_usage,
     extract_display_metadata,
     extract_message_text,
     extract_reasoning_token_count,
@@ -548,6 +549,9 @@ class DeepAgentSSEStream:
         usage_metadata: dict[str, Any] = {}
         if turn_usage is not None:
             usage_metadata["usage"] = turn_usage
+        context_usage = extract_context_usage(last_ai_msg)
+        if context_usage is not None:
+            usage_metadata["context_usage"] = context_usage
         if cache_read_tokens is not None:
             usage_metadata["cache_read_tokens"] = cache_read_tokens
         if usage_metadata:

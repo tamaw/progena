@@ -1,6 +1,7 @@
 import { PERSISTED_CATEGORIES, categoryForEventType } from './streamFilters';
 import { appendStreamEvent, normalizeStreamEvent } from './streamEventsModel';
 import { buildDefaultAssistantTimeline } from './liveAssistantTurnModel';
+import { normalizeContextUsage } from './contextWindowModel';
 
 const WEEKDAY_WELCOME_MESSAGES = [
   'Sunday reset 🌿',
@@ -120,6 +121,7 @@ export function normalizeStoredMessage(message, index) {
         : [],
     ),
     timestamp,
+    contextUsage: normalizeContextUsage(message.contextUsage ?? message.context_usage),
   };
 
   // Stored timelineItems are legacy denormalized data. Always rebuild the

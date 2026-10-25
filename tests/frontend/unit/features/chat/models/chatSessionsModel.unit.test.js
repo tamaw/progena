@@ -12,6 +12,8 @@ import { getAgentMentionContext } from '@frontend/features/chat/models/chatInput
 import { groupSessionItems } from '@frontend/features/chat/models/conversationModel';
 import { formatDisplayToolCalls } from '@frontend/features/chat/models/messageDisplayModel';
 import { CHAT_STATUS } from '@frontend/features/chat/models/chatStatus';
+import { mergeToolCallItems } from '@frontend/features/chat/models/workGroupModel';
+
 
 describe('compareSessionItems', () => {
   it('orders pinned before unpinned', () => {
@@ -63,6 +65,31 @@ describe('normalizeBackendChatMessage', () => {
     expect(m.content).toBe('hello');
     expect(m.tokenCount).toBe(5);
     expect(m.model).toBe('gpt-x');
+  });
+
+  it('normalizes persisted latest parent-call context usage', () => {
+    const m = normalizeBackendChatMessage({
+      id: 'm-context',
+      role: 'assistant',
+      content: 'hello',
+      context_usage: {
+        input_tokens: 80,
+        output_tokens: 20,
+        total_tokens: 100,
+        profile_name: 'general',
+        provider_id: 'foundry-1',
+        deployment: 'gpt-5',
+      },
+    }, 0);
+
+    expect(m.contextUsage).toEqual({
+      inputTokens: 80,
+      outputTokens: 20,
+      totalTokens: 100,
+      profileName: 'general',
+      providerId: 'foundry-1',
+      deployment: 'gpt-5',
+    });
   });
 
   it('preserves optional assistant display metadata', () => {
@@ -150,6 +177,7 @@ describe('normalizeBackendChatMessage', () => {
         id: 'call_1',
         name: 'task',
         args: { subagent_type: 'researcher', description: 'look into it' },
+        commentary: 'I’ll ask a researcher to investigate.',
         result: 'Here is what I found.',
       }],
     }, 1);
@@ -166,6 +194,7 @@ describe('normalizeBackendChatMessage', () => {
       tool_call_id: 'call_1',
       args_preview: { subagent_type: 'researcher', description: 'look into it' },
     });
+    expect(outerStart.metadata.commentary).toBe('I’ll ask a researcher to investigate.');
     expect(outerResult.metadata).toMatchObject({
       tool_name: 'task',
       tool_call_id: 'call_1',
@@ -180,6 +209,9 @@ describe('normalizeBackendChatMessage', () => {
       success: true,
       result_preview: 'Here is what I found.',
     });
+    const mergedTask = mergeToolCallItems(m.timelineItems)
+      .find((item) => item.kind === 'tool_call' && item.id === 'call-call_1');
+    expect(mergedTask.start.event.metadata.commentary).toBe('I’ll ask a researcher to investigate.');
   });
 
   it('still emits a terminal subagent_result for an image-only task result', () => {

@@ -6,6 +6,7 @@ import { selectAgentProfiles, selectAgentProfilesState } from '../../agents/stat
 import { selectRealtimeStreamReady } from '../../../realtime/realtimeSlice';
 import { getAgentMentionContext } from '../models/chatInputModel';
 import AttachmentFileIcon from './AttachmentFileIcon';
+import ContextWindowIndicator from './ContextWindowIndicator';
 import { describeAttachmentFileType, formatAttachmentSize } from '../models/attachmentFileTypes';
 
 const SLASH_COMMANDS = [
@@ -54,6 +55,7 @@ const ChatInput = forwardRef(function ChatInput({
   initialMessage = '',
   className = '',
   enableAttachments = true,
+  contextUsage = null,
 }, ref) {
   const [message, setMessage] = useState(initialMessage);
   const [activeSlashIndex, setActiveSlashIndex] = useState(0);
@@ -543,6 +545,7 @@ const ChatInput = forwardRef(function ChatInput({
               </div>
             </div>
             <div className="input-toolbar__right">
+              <ContextWindowIndicator usage={contextUsage} />
               <button type="button" className="btn-icon" title="Voice input (coming soon)" aria-label="Voice input" disabled>
                 <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                   <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />

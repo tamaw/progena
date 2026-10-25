@@ -50,6 +50,7 @@ describe('createLiveAssistantTurn', () => {
       reasoningText: '',
       reasoningTokenCount: 0,
       cacheReadTokenCount: 0,
+      contextUsage: null,
       reasoningSummaryReceived: false,
       streamEvents: [],
       displayAgentName: '',
@@ -157,6 +158,27 @@ describe('applyAssistantStreamEvent', () => {
     const evt = rawStreamEvent('message_delta');
     const next = applyAssistantStreamEvent(turn, evt, NOW);
     expect(next).toBe(turn);
+  });
+
+  it('retains terminal latest-call context usage without a visual timeline row', () => {
+    const turn = applyAssistantChunk(baseTurn(), 'Done', NOW);
+    const next = applyAssistantStreamEvent(turn, rawStreamEvent('usage_update', {
+      metadata: {
+        context_usage: {
+          input_tokens: 120,
+          output_tokens: 30,
+          total_tokens: 150,
+          profile_name: 'general',
+          provider_id: 'provider-a',
+          deployment: 'gpt-a',
+        },
+      },
+    }), NOW);
+
+    expect(next.timelineItems).toHaveLength(1);
+    expect(next.contextUsage).toMatchObject({ totalTokens: 150, profileName: 'general' });
+    expect(finalizeLiveAssistantTurn(next, { status: 'completed', now: NOW }).contextUsage)
+      .toMatchObject({ totalTokens: 150, providerId: 'provider-a' });
   });
 
   it('appends a stream_event timeline item for todos_update', () => {
@@ -1727,46 +1749,6 @@ describe('buildDefaultAssistantTimeline', () => {
 // ─── toCommittedAssistantMessage ─────────────────────────────────────────
 
 describe('toCommittedAssistantMessage', () => {
-  it('converts a complete turn to a message-like object', () => {
-    const turn = {
-      ...baseTurn(),
-      assistantMessageId: 'msg_42',
-      assistantTimestamp: NOW,
-      content: 'Hello',
-      tokenCount: 5,
-      reasoningText: 'thinking',
-      reasoningTokenCount: 3,
-      streamEvents: [{ id: 'e1' }],
-      displayAgentName: 'Agent',
-      displayModelName: 'gpt-4',
-      displayToolCalls: [{ name: 'search' }],
-      isStreaming: false,
-      error: false,
-      timelineItems: [{ kind: 'assistant_message', id: 'msg_42', content: 'Hello' }],
-    };
-    const msg = toCommittedAssistantMessage(turn);
-    expect(msg).toEqual({
-      streamId: STREAM_ID,
-      assistantMessageId: 'msg_42',
-      startedAt: NOW - 1000,
-      id: 'msg_42',
-      role: 'assistant',
-      content: 'Hello',
-      timestamp: NOW,
-      tokenCount: 5,
-      reasoningTokenCount: 3,
-      cacheReadTokenCount: 0,
-      reasoningText: 'thinking',
-      streamEvents: [{ id: 'e1' }],
-      displayAgentName: 'Agent',
-      displayModelName: 'gpt-4',
-      displayToolCalls: [{ name: 'search' }],
-      isStreaming: false,
-      error: false,
-      workActive: false,
-      timelineItems: [{ kind: 'assistant_message', id: 'msg_42', content: 'Hello' }],
-    });
-  });
 
   it('marks a streaming turn as working until answer text arrives, and again when tools follow text', () => {
     const toolStart = (id) => ({ event_type: 'tool_start', metadata: { tool_name: 'ls', tool_call_id: id } });

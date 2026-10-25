@@ -2,27 +2,20 @@
  * One tool call (see mergeToolCallItems in workGroupModel.js) on one line:
  * tool name, then the agent's commentary for the call, else a summary of its
  * input, then duration, time and a chevron. Opening it shows the full
- * commentary, an input box and an output box.
+ * commentary, then matching Input and Output boxes (ToolIOBox) shaped per
+ * tool by toolViewModel.js.
  *
  * A write_todos call that produced a plan update renders as that plan
  * instead: the current item, an inline progress bar and "n/total", opening
  * to the checklist.
  */
 
-import { memo } from 'react';
-import {
-  describeStreamEvent,
-  formatDuration,
-  formatTimestamp,
-  prettifyLabel,
-  toolDetailsForEvent,
-} from '../models/messageRenderUtils';
+import { memo, useMemo } from 'react';
+import { formatDuration, formatTimestamp, prettifyLabel } from '../models/messageRenderUtils';
+import { buildToolCallView } from '../models/toolViewModel';
 import { currentTodo, todoProgress, toolCallSummary } from '../models/workGroupModel';
 import { TodoChecklist, TodoProgress } from './TodoListPanel';
-
-function details(event) {
-  return event ? toolDetailsForEvent(event, describeStreamEvent(event)) : null;
-}
+import ToolIOBox from './ToolIOBox';
 
 // Disclosure whose summary is the entry's single line; without a body the
 // line renders on its own (no chevron, nothing to open).
@@ -86,18 +79,22 @@ const ToolCallEntry = memo(function ToolCallEntry({ item }) {
     ? 'entry__badge--plan'
     : status === 'error' ? 'entry__badge--err' : 'entry__badge--tool';
 
+  const view = useMemo(() => buildToolCallView({
+    toolName,
+    argsPreview: start?.metadata?.args_preview,
+    resultText: end?.metadata?.result_preview,
+    errorText: typeof end?.metadata?.error === 'string' ? end.metadata.error : '',
+    status,
+  }), [toolName, start, end, status]);
+
   let line;
   if (item.plan) {
     line = <PlanLine plan={item.plan} time={time} />;
   } else {
-    const input = details(start)?.command || '';
-    const endDetails = details(end);
-    const output = endDetails?.body || '';
-    const outputLabel = endDetails?.summary || '';
     const commentary = typeof start?.metadata?.commentary === 'string' ? start.metadata.commentary.trim() : '';
-    const summary = start ? toolCallSummary(toolName, start.metadata) : outputLabel;
+    const summary = start ? toolCallSummary(toolName, start.metadata) : (view.output?.meta || '');
     const durationMs = end?.metadata?.duration_ms;
-    const hasBody = Boolean(commentary || input || output || outputLabel);
+    const hasBody = Boolean(commentary || view.input || view.output);
     line = (
       <EntryLine
         title={prettifyLabel(toolName)}
@@ -105,20 +102,11 @@ const ToolCallEntry = memo(function ToolCallEntry({ item }) {
         trailing={<Trailing duration={Number.isFinite(durationMs) ? formatDuration(durationMs) : ''} time={time} />}
       >
         {hasBody && (
-          <>
+          <div className="tool-call-entry__detail">
             {commentary && <div className="tool-call-entry__commentary">{commentary}</div>}
-            {input && (
-              <div className="tool chat-event-tool tool-call-entry__input">
-                <div className="tool__cmd"><span className="prompt">$</span>{input}</div>
-              </div>
-            )}
-            {(output || outputLabel) && (
-              <div className={`tool chat-event-tool tool-call-entry__output${status === 'error' ? ' tool-call-entry__output--error' : ''}`}>
-                {outputLabel && outputLabel !== output && <div className="tool-call-entry__label">{outputLabel}</div>}
-                {output && <pre className="tool__body tool__body--out">{output}</pre>}
-              </div>
-            )}
-          </>
+            <ToolIOBox view={view.input} />
+            <ToolIOBox view={view.output} />
+          </div>
         )}
       </EntryLine>
     );

@@ -169,6 +169,68 @@ class TestGetChatDetail:
         assert detail.title == "My Chat"
         assert [m.role for m in detail.messages] == ["user", "assistant"]
 
+    def test_context_usage_is_latest_main_agent_call_not_turn_total(self):
+        store = InMemoryDocumentStore()
+        store.upsert_checkpoint_thread_snapshot(
+            CheckpointThreadSnapshot(
+                thread_id="thread_usage",
+                checkpoint_id="cp-1",
+                checkpoint_ts="2026-01-01T00:00:00Z",
+                messages=[
+                    {"id": "u1", "type": "human", "content": "look this up"},
+                    {
+                        "id": "a1",
+                        "type": "ai",
+                        "content": "Checking.",
+                        "tool_calls": [{"id": "c1", "name": "lookup", "args": {}}],
+                        "usage_metadata": {
+                            "input_tokens": 100,
+                            "output_tokens": 20,
+                            "total_tokens": 120,
+                        },
+                        "response_metadata": {
+                            "insights": {
+                                "profile_name": "general",
+                                "deployment": "first-model",
+                                "provider_id": "provider-1",
+                            }
+                        },
+                    },
+                    {"id": "t1", "type": "tool", "tool_call_id": "c1", "content": "result"},
+                    {
+                        "id": "a2",
+                        "type": "ai",
+                        "content": "Here is the result.",
+                        "usage_metadata": {
+                            "input_tokens": 35,
+                            "output_tokens": 8,
+                            "total_tokens": 43,
+                        },
+                        "response_metadata": {
+                            "insights": {
+                                "profile_name": "general",
+                                "deployment": "final-model",
+                                "provider_id": "provider-1",
+                            }
+                        },
+                    },
+                ],
+            )
+        )
+        _store_session(store, "thread_usage")
+
+        detail = get_chat_detail(store, "thread_usage")
+
+        assert detail is not None
+        assert detail.messages[-1].context_usage.model_dump() == {
+            "input_tokens": 35,
+            "output_tokens": 8,
+            "total_tokens": 43,
+            "profile_name": "general",
+            "deployment": "final-model",
+            "provider_id": "provider-1",
+        }
+
     def test_keeps_each_model_calls_reasoning_as_its_own_segment(self):
         def ai(message_id, created_at, reasoning, **extra):
             return {

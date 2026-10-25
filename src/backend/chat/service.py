@@ -29,6 +29,7 @@ from src.progena.documents.kinds import SESSION_KEY_PREFIX
 from src.progena.security.redaction import redact_secrets
 from src.progena.sessions.messages import (
     extract_cache_read_token_count,
+    extract_context_usage,
     extract_display_metadata,
     extract_message_text,
     extract_reasoning_token_count,
@@ -131,6 +132,17 @@ class ReasoningSegment(BaseModel):
     created_at: str | None = None
 
 
+class ContextUsage(BaseModel):
+    """Latest main-agent model call token footprint and optional attribution."""
+
+    input_tokens: int
+    output_tokens: int
+    total_tokens: int
+    profile_name: str | None = None
+    deployment: str | None = None
+    provider_id: str | None = None
+
+
 class ChatMessage(BaseModel):
     id: str
     role: str
@@ -148,6 +160,7 @@ class ChatMessage(BaseModel):
     display_tool_calls: list[Any] = Field(default_factory=list)
     tool_calls: list[dict[str, Any]] = Field(default_factory=list)
     attachments: list[dict[str, Any]] = Field(default_factory=list)
+    context_usage: ContextUsage | None = None
     raw: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -489,6 +502,11 @@ def _chat_message_from_raw(
         reasoning_text=reasoning_text,
         display_agent_name=_display_metadata_from_raw(raw).get("display_agent_name"),
         display_model_name=_display_metadata_from_raw(raw).get("display_model_name"),
+        context_usage=(
+            ContextUsage.model_validate(context_usage)
+            if (context_usage := extract_context_usage(raw))
+            else None
+        ),
         display_tool_calls=_display_metadata_from_raw(raw).get("display_tool_calls", []),
         tool_calls=tool_calls or [],
         attachments=_attachments_from_raw(raw),
@@ -587,6 +605,7 @@ def _messages_from_checkpoint(
     pending_cache_read_token_count = 0
     pending_reasoning_parts: list[ReasoningSegment] = []
     pending_reasoning_timestamp: str | None = None
+    pending_context_usage: ContextUsage | None = None
 
     for index, raw in enumerate(snapshot.messages):
         role = _raw_message_role(raw)
@@ -602,6 +621,7 @@ def _messages_from_checkpoint(
                 synthetic.token_count = pending_token_count
                 synthetic.reasoning_token_count = pending_reasoning_token_count
                 synthetic.cache_read_token_count = pending_cache_read_token_count
+                synthetic.context_usage = pending_context_usage
                 messages.append(synthetic)
                 pending_tool_calls = []
             pending_reasoning_parts = []
@@ -609,8 +629,14 @@ def _messages_from_checkpoint(
             pending_reasoning_token_count = 0
             pending_cache_read_token_count = 0
             pending_reasoning_timestamp = None
+            pending_context_usage = None
 
         if role == "assistant":
+            pending_context_usage = (
+                ContextUsage.model_validate(context_usage)
+                if (context_usage := extract_context_usage(raw))
+                else None
+            )
             pending_token_count += _raw_message_token_count(raw)
             pending_reasoning_token_count += extract_reasoning_token_count(raw) or 0
             pending_cache_read_token_count = (
@@ -656,11 +682,13 @@ def _messages_from_checkpoint(
                 message.reasoning_token_count = pending_reasoning_token_count
                 message.cache_read_token_count = pending_cache_read_token_count
                 message.reasoning_timestamp = pending_reasoning_timestamp
+                message.context_usage = pending_context_usage
                 pending_reasoning_parts = []
                 pending_token_count = 0
                 pending_reasoning_token_count = 0
                 pending_cache_read_token_count = 0
                 pending_reasoning_timestamp = None
+                pending_context_usage = None
             if role in ("assistant", "user"):
                 pending_tool_calls = []
             messages.append(message)
@@ -673,6 +701,7 @@ def _messages_from_checkpoint(
         synthetic.reasoning_text = _join_reasoning(pending_reasoning_parts)
         synthetic.reasoning_segments = pending_reasoning_parts
         synthetic.reasoning_timestamp = pending_reasoning_timestamp
+        synthetic.context_usage = pending_context_usage
         messages.append(synthetic)
 
     return messages

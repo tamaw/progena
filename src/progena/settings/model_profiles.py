@@ -26,7 +26,7 @@ _PRICING_RATE_FIELDS = (
 )
 _PRICING_FIELDS = ("currency", *_PRICING_RATE_FIELDS)
 _SUPPORTED_PROFILE_FIELDS = frozenset(
-    {"provider_id", "deployment", "pricing", *_OPTIONAL_REASONING_FIELDS}
+    {"provider_id", "deployment", "pricing", "context_window", *_OPTIONAL_REASONING_FIELDS}
 )
 _CURRENCY_PATTERN = re.compile(r"^[A-Z]{3}$")
 _DECIMAL_STRING_PATTERN = re.compile(r"^(?:0|[1-9]\d*)(?:\.\d+)?$")
@@ -113,6 +113,11 @@ def _normalize_profile(name: str, profile: Any) -> dict[str, Any]:
     pricing = _normalize_pricing(name, profile.get("pricing"))
     if pricing is not None:
         normalized["pricing"] = pricing
+    if "context_window" in profile:
+        context_window = profile["context_window"]
+        if type(context_window) is not int or context_window <= 0:
+            raise ValueError(f"profile {name!r}: context_window must be a positive integer")
+        normalized["context_window"] = context_window
     for field in _OPTIONAL_REASONING_FIELDS:
         if field not in profile:
             continue

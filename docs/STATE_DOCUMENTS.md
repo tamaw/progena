@@ -142,6 +142,14 @@ unchanged raw siblings/private properties are retained.
 write the complete validated map to add, edit, or remove profiles; its
 `StateManager` write lands in the same Postgres row as the UI route.
 
+An optional positive-integer `context_window` on a profile declares its token
+capacity, for example `"context_window": 128000`. The chat composer shows a
+small context pie to the left of voice only when that capacity can be matched
+to the latest parent-model call. It uses that call's reported input plus output
+tokens, not accumulated conversation/billing totals. Hover shows the token
+counts and percentage. Missing capacity or unknown usage hides the indicator;
+no model limits are inferred. PATCH `context_window: null` removes the capacity.
+
 Postgres changes to the `progena.state` / `profile` document trigger an
 unsolicited `profiles.snapshot`. This key bypasses coarse `StateSnapshot` diff
 filtering because profiles are not runtime-health fields. The existing canonical

@@ -62,6 +62,7 @@ class TestPublicLeakageGuard:
                 "general": {
                     "provider_id": "foundry-1",
                     "deployment": "greeting",
+                    "context_window": 128_000,
                     "reasoning_enabled": True,
                     "reasoning_effort": "medium",
                     "reasoning_summary": "concise",
@@ -89,6 +90,7 @@ class TestPublicLeakageGuard:
         assert public["reasoning_enabled"] is True
         assert public["reasoning_effort"] == "medium"
         assert public["reasoning_summary"] == "concise"
+        assert public["context_window"] == 128_000
         assert "api_key" not in public
         assert public["pricing"] == {
             "currency": "USD",
@@ -207,6 +209,73 @@ class TestPatchEdits:
         assert profiles[0]["deployment"] == "new"
         saved = store.get_document(PROGENA_STATE_PREFIX, "profile").payload
         assert saved["general"]["deployment"] == "new"
+
+    def test_patch_preserves_context_window_and_snapshot_exposes_it(self):
+        store = InMemoryDocumentStore()
+        store.save_document(
+            PROGENA_STATE_PREFIX,
+            "profile",
+            {
+                "general": {
+                    "provider_id": "foundry-1",
+                    "deployment": "old",
+                    "context_window": 128_000,
+                }
+            },
+        )
+        app, events = _make_app(store)
+        with TestClient(app) as client:
+            response = client.patch("/model-profiles/general", json={"deployment": "new"})
+
+        assert response.status_code == 202
+        assert store.get_document(PROGENA_STATE_PREFIX, "profile").payload["general"] == {
+            "provider_id": "foundry-1",
+            "deployment": "new",
+            "context_window": 128_000,
+        }
+        assert events[-1][1]["profiles"] == [
+            {
+                "name": "general",
+                "provider_id": "foundry-1",
+                "deployment": "new",
+                "context_window": 128_000,
+            }
+        ]
+
+    def test_patch_updates_and_removes_context_window(self):
+        store = InMemoryDocumentStore()
+        store.save_document(
+            PROGENA_STATE_PREFIX,
+            "profile",
+            {"general": {"provider_id": "foundry-1", "deployment": "greeting"}},
+        )
+        app, _ = _make_app(store)
+        with TestClient(app) as client:
+            added = client.patch("/model-profiles/general", json={"context_window": 200_000})
+            removed = client.patch("/model-profiles/general", json={"context_window": None})
+
+        assert added.status_code == 202
+        assert removed.status_code == 202
+        assert (
+            "context_window"
+            not in store.get_document(PROGENA_STATE_PREFIX, "profile").payload["general"]
+        )
+
+    @pytest.mark.parametrize("context_window", [0, -1, True, "200000"])
+    def test_patch_rejects_invalid_context_window(self, context_window):
+        store = InMemoryDocumentStore()
+        store.save_document(
+            PROGENA_STATE_PREFIX,
+            "profile",
+            {"general": {"provider_id": "foundry-1", "deployment": "greeting"}},
+        )
+        app, _ = _make_app(store)
+        with TestClient(app) as client:
+            response = client.patch(
+                "/model-profiles/general", json={"context_window": context_window}
+            )
+
+        assert response.status_code == 422
 
     def test_patch_preserves_sibling_profiles(self):
         store = InMemoryDocumentStore()

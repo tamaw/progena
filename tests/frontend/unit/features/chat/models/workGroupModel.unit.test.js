@@ -96,12 +96,53 @@ describe('mergeToolCallItems plan updates', () => {
       .toEqual(['w1+p1', 'w2+p2', 'p3']);
   });
 
-  it('previews a write_todos call as its plan step only', () => {
+  it('previews a successful write_todos call as its plan step only', () => {
     const steps = buildWorkSteps([
       eventItem('w1', 'tool_start', { tool_name: 'write_todos', tool_call_id: 'w1' }),
       eventItem('p1', 'todos_update', { todos: [{ content: 'Next', status: 'pending' }] }),
+      eventItem('r1', 'tool_result', { tool_name: 'write_todos', tool_call_id: 'w1' }),
     ]);
     expect(steps.map((step) => [step.kind, step.detail])).toEqual([['plan', 'Next']]);
+  });
+
+  it('keeps failed and still-running write_todos calls visible when another call produced the plan', () => {
+    const items = [
+      eventItem('failed-start', 'tool_start', { tool_name: 'write_todos', tool_call_id: 'failed' }),
+      eventItem('failed-end', 'tool_error', { tool_name: 'write_todos', tool_call_id: 'failed' }),
+      eventItem('saved-start', 'tool_start', { tool_name: 'write_todos', tool_call_id: 'saved' }),
+      eventItem('plan', 'todos_update', { todos: [{ content: 'Saved plan', status: 'pending' }] }),
+      eventItem('saved-end', 'tool_result', { tool_name: 'write_todos', tool_call_id: 'saved' }),
+      eventItem('running', 'tool_start', { tool_name: 'write_todos', tool_call_id: 'running' }),
+    ];
+
+    const merged = mergeToolCallItems(items);
+    expect(merged.filter((item) => item.kind === 'tool_call').map((item) => [item.id, item.plan?.id])).toEqual([
+      ['call-failed', undefined],
+      ['call-saved', 'plan'],
+      ['call-running', undefined],
+    ]);
+
+    const steps = buildWorkSteps(items);
+    expect(steps.map((step) => [step.kind, step.status])).toEqual([
+      ['tool', 'error'],
+      ['plan', 'success'],
+      ['tool', 'running'],
+    ]);
+    expect(summarizeWork(items, steps)).toMatchObject({ toolCount: 2, failedCount: 1 });
+  });
+
+  it('retains a planning failure even if the call emitted a plan before failing', () => {
+    const items = [
+      eventItem('start', 'tool_start', { tool_name: 'write_todos', tool_call_id: 'partial' }),
+      eventItem('plan', 'todos_update', { todos: [{ content: 'Partial plan', status: 'pending' }] }),
+      eventItem('error', 'tool_error', { tool_name: 'write_todos', tool_call_id: 'partial' }),
+    ];
+    const steps = buildWorkSteps(items);
+    expect(steps.map((step) => [step.kind, step.status])).toEqual([
+      ['tool', 'error'],
+      ['plan', 'success'],
+    ]);
+    expect(summarizeWork(items, steps)).toMatchObject({ toolCount: 1, failedCount: 1 });
   });
 });
 
@@ -172,7 +213,7 @@ describe('workGroupHeader', () => {
 
   it('shows live seconds from zero while generating without a summary', () => {
     expect(headerFor(lsCall.slice(0, 1), { active: true, endedAt: 1_000 }))
-      .toEqual({ title: 'Generating…', meta: '0s · 1 tool' });
+      .toEqual({ title: null, meta: '0s · 1 tool' });
   });
 
   it('omits a sub-second duration once done and counts failures', () => {

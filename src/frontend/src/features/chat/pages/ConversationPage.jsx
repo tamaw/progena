@@ -1,5 +1,5 @@
 import { usePaneCollapse } from '../../../hooks/usePaneCollapse';
-import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo } from 'react';
+import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo, useSyncExternalStore } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useChatApi } from '../hooks/useChatApi';
@@ -14,6 +14,7 @@ import { createUuid } from '../../../lib/uuid';
 import { clearChatErrored, clearChatGenerating, clearChatUnread, clearActiveChatSession } from '../state/actions';
 import { deleteChatSession, fetchChatMessages, requestChatSessionDetail, requestChatSessionReconciliation, selectActiveChatSession, selectActiveChatSessionState, selectChatReconciliationState, selectChatSessions, selectChatSessionsState, updateChatSessionMetadata } from '../state/chats';
 import { savePreferences, selectAgentName, selectPreferences, selectPreferencesSaveRequest } from '../../settings/state/preferences';
+import { selectModelProfiles } from '../../settings/state/modelProfiles';
 import { subscribeUiEvent } from '../../../realtime/realtimeEvents';
 import ChatInput from '../components/ChatInput';
 import { RegenerateDisabledContext } from '../components/RegenerateDisabledContext';
@@ -28,9 +29,11 @@ import LiveAssistantTurn from '../components/LiveAssistantTurn';
 import { ARCHIVED_CHAT_SESSIONS_KEY, loadQuickChatHandoff, persistPinnedSessionIds } from '../models/chatStorage';
 import { useEntityUrlSync } from '../../../lib/routes';
 import { getDailyWelcomeMessage, normalizeStoredMessage, stripEphemeralStreamEvents } from '../models/conversationPageModel';
+import { followTranscript, noteTranscriptScroll, noteTranscriptUserInput, pinTranscriptToTail } from '../models/transcriptScroll';
 import { HistoricalMessage, LiveConversationHeader } from '../components/ConversationHeader';
 import { ConversationSessionsPane } from '../components/ConversationSessionsPane';
 import { useConversationAttachments } from '../hooks/useConversationAttachments';
+import { latestContextUsage, resolveComposerContextUsage } from '../models/contextWindowModel';
 
 function ConversationPage() {
   const dispatch = useDispatch();
@@ -49,6 +52,7 @@ function ConversationPage() {
   const chatReconciliationState = useSelector(selectChatReconciliationState);
   const preferences = useSelector(selectPreferences);
   const agentName = useSelector(selectAgentName);
+  const modelProfiles = useSelector(selectModelProfiles);
   const preferencesSaveRequest = useSelector(selectPreferencesSaveRequest);
   const initialQuickChatHandoffRef = useRef(undefined);
   if (initialQuickChatHandoffRef.current === undefined) {
@@ -167,9 +171,12 @@ function ConversationPage() {
   // composer itself never reaches these (its own inline zone handles that).
   const { isDraggingOverChat, handleChatDragEnter, handleChatDragOver, handleChatDragLeave, handleChatDrop } = useConversationAttachments({ connectionState, isClearingSession, chatInputRef });
   const handleMessagesScroll = useCallback(() => {
-    const container = messagesContainerRef.current;
-    if (!container) return;
-    isPinnedToBottomRef.current = container.scrollHeight - container.scrollTop - container.clientHeight < 24;
+    noteTranscriptScroll(messagesContainerRef.current, isPinnedToBottomRef);
+  }, []);
+  // Real scroll input (as opposed to the browser re-anchoring content) is what
+  // lets a scroll release a long answer the transcript is holding in place.
+  const handleMessagesUserInput = useCallback(() => {
+    noteTranscriptUserInput(messagesContainerRef.current);
   }, []);
   const [oldestMessageCursor, setOldestMessageCursor] = useState(null);
   const [loadingOlderMessages, setLoadingOlderMessages] = useState(false);
@@ -281,6 +288,20 @@ function ConversationPage() {
     onForegroundStreamStarted: beginForegroundStream,
     requestForegroundReconciliation,
   });
+
+  const liveContextUsage = useSyncExternalStore(
+    liveTurnStore.subscribeContextUsage,
+    liveTurnStore.getContextUsageSnapshot,
+    liveTurnStore.getContextUsageSnapshot,
+  );
+  const composerContextUsage = useMemo(() => resolveComposerContextUsage({
+    contextUsage: liveContextUsage ?? latestContextUsage(messages),
+    profiles: modelProfiles,
+    isFreshConversation: Boolean(threadId)
+      && !selectedBackendChatId
+      && messages.length === 0
+      && !liveContextUsage,
+  }), [liveContextUsage, messages, modelProfiles, selectedBackendChatId, threadId]);
 
   const openBackendChat = useCallback(async (requestedThreadId) => {
     if (!requestedThreadId) {
@@ -639,7 +660,7 @@ function ConversationPage() {
 
     activeStreamIdRef.current = null;
     recentScheduledContent.current.clear();
-    isPinnedToBottomRef.current = true;
+    pinTranscriptToTail(messagesContainerRef.current, isPinnedToBottomRef);
     setMessages(backendMessages);
     setOldestMessageCursor(backendMessages.length ? backendMessages[0].id : null);
     appliedOlderPageRequestIdRef.current = null;
@@ -739,22 +760,17 @@ function ConversationPage() {
     }
   }, [activeBackendChatState?.hasMoreMessages, dispatch, getApiUrl, loadingOlderMessages, oldestMessageCursor, show, threadId]);
 
-  // Committed message changes and generation transitions keep the page at the
-  // tail only while the user remains near the bottom. Per-frame live-turn
+  // Committed message changes and generation transitions re-follow the
+  // transcript (followTranscript: hold an answer being read, else stay at the
+  // tail only while the user remains near the bottom). Per-frame live-turn
   // scrolling is owned by LiveAssistantTurn so streaming does not redraw this
   // page-wide component tree.
   useEffect(() => {
-    if (!isPinnedToBottomRef.current || messagesScrollFrameRef.current !== null) return;
-
-    const container = messagesContainerRef.current;
-    if (!container) return;
+    if (messagesScrollFrameRef.current !== null) return;
 
     messagesScrollFrameRef.current = requestAnimationFrame(() => {
       messagesScrollFrameRef.current = null;
-      const currentContainer = messagesContainerRef.current;
-      if (currentContainer && isPinnedToBottomRef.current) {
-        currentContainer.scrollTop = currentContainer.scrollHeight;
-      }
+      followTranscript(messagesContainerRef.current, isPinnedToBottomRef);
     });
   }, [messages, isGenerating]);
 
@@ -763,6 +779,31 @@ function ConversationPage() {
       cancelAnimationFrame(messagesScrollFrameRef.current);
       messagesScrollFrameRef.current = null;
     }
+  }, []);
+
+  // Follow row-height changes that happen without page state updates, such
+  // as live markdown growth or work groups collapsing. Observe rows because
+  // the inner wrapper can stay height-capped while its children overflow.
+  const transcriptObserversRef = useRef(null);
+  const messagesInnerRef = useCallback((node) => {
+    transcriptObserversRef.current?.forEach((observer) => observer.disconnect());
+    transcriptObserversRef.current = null;
+    if (!node || typeof ResizeObserver === 'undefined' || typeof MutationObserver === 'undefined') return;
+    const follow = () => followTranscript(messagesContainerRef.current, isPinnedToBottomRef);
+    const resizeObserver = new ResizeObserver(follow);
+    [...node.children].forEach((child) => resizeObserver.observe(child));
+    const mutationObserver = new MutationObserver((records) => {
+      records.forEach((record) => {
+        record.removedNodes.forEach((removed) => {
+          if (removed.nodeType === 1) resizeObserver.unobserve(removed);
+        });
+        record.addedNodes.forEach((added) => {
+          if (added.nodeType === 1) resizeObserver.observe(added);
+        });
+      });
+    });
+    mutationObserver.observe(node, { childList: true });
+    transcriptObserversRef.current = [resizeObserver, mutationObserver];
   }, []);
 
   // Handle chat events (from /chat SSE stream)
@@ -837,17 +878,23 @@ function ConversationPage() {
     handleChatEvent({ type: event?.type, data: event?.payload });
   }), [handleChatEvent]);
 
+  // Sending is an explicit "take me to the conversation" -- the user's own
+  // message and the reply must be in view even if they had scrolled back.
+  const sendAndFollow = useCallback((...args) => {
+    pinTranscriptToTail(messagesContainerRef.current, isPinnedToBottomRef);
+    return handleSend(...args);
+  }, [handleSend]);
   // Regenerate actions sit on every historical assistant card. Keep their
   // dispatcher identity stable so a new streamed reply cannot invalidate the
   // entire committed transcript; read the current transcript at click time.
-  const regenerateStateRef = useRef({ messages, isGenerating, handleSend, show });
+  const regenerateStateRef = useRef({ messages, isGenerating, handleSend: sendAndFollow, show });
   regenerateStateRef.current.messages = messages;
   regenerateStateRef.current.isGenerating = isGenerating;
-  regenerateStateRef.current.handleSend = handleSend;
+  regenerateStateRef.current.handleSend = sendAndFollow;
   regenerateStateRef.current.show = show;
   const handleQuickAction = useCallback((message) => {
-    handleSend(message);
-  }, [handleSend]);
+    sendAndFollow(message);
+  }, [sendAndFollow]);
 
   const handleRegenerate = useCallback((assistantMessageId) => {
     const current = regenerateStateRef.current;
@@ -1525,8 +1572,12 @@ function ConversationPage() {
             className="chat-messages sess-detail__body chat-detail-body"
             ref={messagesContainerRef}
             onScroll={handleMessagesScroll}
+            onWheel={handleMessagesUserInput}
+            onTouchStart={handleMessagesUserInput}
+            onPointerDown={handleMessagesUserInput}
+            onKeyDown={handleMessagesUserInput}
           >
-            <div className="chat-messages__inner">
+            <div className="chat-messages__inner" ref={messagesInnerRef}>
               {isRouteDetailError ? (
                 <InlineFailure
                   failure={chatDetailError}
@@ -1592,7 +1643,7 @@ function ConversationPage() {
 
         <ChatInput
           ref={chatInputRef}
-          onSend={handleSend}
+          onSend={sendAndFollow}
           onStop={handleStop}
           onCommand={handleCommand}
           isGenerating={isGenerating}
@@ -1600,6 +1651,7 @@ function ConversationPage() {
           autoFocus
           focusToken={`${threadId ?? 'no-session'}:${composerFocusTick}`}
           keepFocusAfterSend
+          contextUsage={composerContextUsage}
         />
         </div>
       </DetailPane>

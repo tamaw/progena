@@ -21,6 +21,7 @@
 
 import { createStreamEvent, appendStreamEvent, appendReasoningText, extractReasoningTokenCount, extractCacheReadTokenCount, mergeReasoningEvents, isReasoningEvent, isRenderableStreamEvent, MAX_STREAM_EVENTS_PER_MESSAGE } from './streamEventsModel';
 import { isA2AToolName } from './a2aTools';
+import { normalizeContextUsage } from './contextWindowModel';
 
 /** Create a fresh live assistant turn with no visible output yet. */
 export function createLiveAssistantTurn({ streamId, startedAt }) {
@@ -34,6 +35,7 @@ export function createLiveAssistantTurn({ streamId, startedAt }) {
     reasoningText: '',
     reasoningTokenCount: 0,
     cacheReadTokenCount: 0,
+    contextUsage: null,
     reasoningSummaryReceived: false,
     streamEvents: [],
     displayAgentName: '',
@@ -465,8 +467,13 @@ function applyStreamEventToTimeline(turn, streamEvent) {
   // assistant_metadata: apply the value, never render its own timeline row.
   if (nextEvent.eventType === 'usage_update') {
     const cacheReadTokens = extractCacheReadTokenCount(nextEvent);
-    if (cacheReadTokens === null) return turn;
-    return { ...turn, cacheReadTokenCount: cacheReadTokens };
+    const contextUsage = normalizeContextUsage(nextEvent.metadata?.context_usage);
+    if (cacheReadTokens === null && !contextUsage) return turn;
+    return {
+      ...turn,
+      ...(cacheReadTokens === null ? {} : { cacheReadTokenCount: cacheReadTokens }),
+      ...(contextUsage ? { contextUsage } : {}),
+    };
   }
 
   const next = { ...turn };
@@ -827,6 +834,7 @@ export function toCommittedAssistantMessage(turn) {
     tokenCount: turn.tokenCount,
     reasoningTokenCount: turn.reasoningTokenCount,
     cacheReadTokenCount: turn.cacheReadTokenCount,
+    contextUsage: turn.contextUsage,
     reasoningText: turn.reasoningText,
     streamEvents: turn.streamEvents,
     displayAgentName: turn.displayAgentName,

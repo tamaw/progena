@@ -46,9 +46,10 @@ export default function TodoListPanel({ todos }) {
   if (!Array.isArray(todos) || todos.length === 0) {
     return null;
   }
+  const { completed, total } = todoProgress(todos);
   return (
     <details className="todo-panel tool-event-disclosure">
-      <summary>
+      <summary aria-label={`Plan checklist, ${completed} of ${total} completed`}>
         <TodoProgress todos={todos} />
         <span className="tool-event-disclosure__chevron" aria-hidden="true" />
       </summary>

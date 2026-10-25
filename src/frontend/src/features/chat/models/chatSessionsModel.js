@@ -10,6 +10,7 @@ import { buildDefaultAssistantTimeline, normalizeTaskSummary } from './liveAssis
 import { isA2AToolName } from './a2aTools';
 import { extractA2ASummary } from './messageRenderUtils';
 import { deriveChatStatus } from './chatStatus';
+import { normalizeContextUsage } from './contextWindowModel';
 export function compareSessionItems(left, right) {
   const pinnedDelta = Number(Boolean(right.pinned)) - Number(Boolean(left.pinned));
   if (pinnedDelta !== 0) {
@@ -144,6 +145,7 @@ function buildToolStreamEvents(toolCalls, messageId) {
           args_preview: { ...args, subagent_type: subagentName },
           tool_call_id: toolCallId,
           source: 'checkpoint',
+          ...(typeof tc.commentary === 'string' && tc.commentary.trim() ? { commentary: tc.commentary } : {}),
         },
       });
       events.push(...buildSubagentDispatchStreamEvents(
@@ -310,6 +312,7 @@ export function normalizeBackendChatMessage(message, index) {
     streamEvents,
     attachments: Array.isArray(message.attachments) ? message.attachments : [],
     raw,
+    contextUsage: normalizeContextUsage(message.context_usage),
   };
 
   // Attach a synthetic fallback timeline for backend-loaded messages.

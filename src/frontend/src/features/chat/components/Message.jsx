@@ -297,6 +297,11 @@ function MessageView({
       messageId,
       isStreaming,
     });
+    // Visibility is a presentation choice, not a different end to the work.
+    // Skip rows emptied by tool commentary, as the visible answer path does.
+    const answerStartedAt = fullTimelineItems.find((item) =>
+      item.kind === 'assistant_message' && (item.error || (item.content || '').trim())
+    )?.timestamp ?? null;
     const visibleTimelineItems = fullTimelineItems.filter((item) => {
       if (item.kind === 'stream_event') {
         return typeof streamEventFilter !== 'function' || streamEventFilter(item.event);
@@ -327,7 +332,6 @@ function MessageView({
     // claimToolCommentary in liveAssistantTurnModel.js) has nothing to show.
     const answerItems = allAnswerItems.filter((item) => item.error || (item.content || '').trim());
     const workGroups = buildWorkGroups(workItems);
-    const answerStartedAt = answerItems[0]?.timestamp ?? null;
     return (
       <div className="chat-entry-chain chat-entry-chain--connected">
         {workGroups.map((group, index) => {
