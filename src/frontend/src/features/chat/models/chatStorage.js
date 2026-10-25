@@ -6,7 +6,15 @@ export const ARCHIVED_CHAT_SESSIONS_KEY = 'progena:archived-chat-sessions';
 export const PINNED_CHAT_SESSIONS_KEY = 'progena:pinned-chat-sessions';
 
 export function readJson(key, fallback = null, warnLabel = null) {
-  const saved = localStorage.getItem(key);
+  let saved;
+  try {
+    saved = localStorage.getItem(key);
+  } catch (error) {
+    if (warnLabel) {
+      console.warn(warnLabel, error);
+    }
+    return fallback;
+  }
   if (!saved) {
     return fallback;
   }
@@ -51,13 +59,18 @@ export function persistPinnedSessionIds(pinnedSessionIds) {
   );
 }
 
-export function loadQuickChatHandoff(storageKey) {
-  const parsed = readJson(storageKey, null, 'Failed to load quick chat handoff:');
-  if (!parsed || typeof parsed !== 'object') {
+export function normalizeQuickChatHandoff(value) {
+  if (!value || typeof value !== 'object') {
     return null;
   }
   return {
-    messages: Array.isArray(parsed.messages) ? parsed.messages : [],
-    threadId: typeof parsed.threadId === 'string' ? parsed.threadId : null,
+    messages: Array.isArray(value.messages) ? value.messages : [],
+    threadId: typeof value.threadId === 'string' ? value.threadId : null,
   };
+}
+
+export function loadQuickChatHandoff(storageKey) {
+  return normalizeQuickChatHandoff(
+    readJson(storageKey, null, 'Failed to load quick chat handoff:'),
+  );
 }

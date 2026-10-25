@@ -5,6 +5,12 @@
 // Cleared by "New chat" (resetQuickChat) and whenever the mode changes between
 // opens (e.g. closing a "connect an MCP server" chat on Tools and opening
 // "create a knowledge base" from Knowledge must not resume the old one, or its
-// suggestion chips never show since the history is no longer empty). Resets
-// naturally on full page reload.
-export const quickChatMemory = { history: [], threadId: null, mode: null };
+// suggestion chips never show since the history is non-empty). The promotion
+// handoff uses this same memory only for the current SPA navigation; its
+// persisted counterpart is the reload fallback.
+export const quickChatMemory = {
+  history: [],
+  threadId: null,
+  mode: null,
+  handoff: null,
+};

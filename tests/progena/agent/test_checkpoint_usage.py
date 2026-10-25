@@ -95,6 +95,11 @@ async def test_profile_identity_survives_checkpointed_model_turns(streaming):
             http_async_client=client,
         )
         model.set_usage_profile("review")
+        model.set_provider_connection(
+            provider_id="foundry-1",
+            provider_kind="foundry",
+            base_url="https://foundry.example.test/openai/v1",
+        )
 
         async def reply(state):
             return {"messages": [await model.ainvoke(state["messages"])]}
@@ -121,6 +126,7 @@ async def test_profile_identity_survives_checkpointed_model_turns(streaming):
     for message in assistant_messages:
         context = message.response_metadata["insights"]
         assert context["deployment"] == "shared-deployment"
+        assert context["provider_id"] == "foundry-1"
         assert datetime.fromisoformat(context["occurred_at"]).tzinfo is not None
     assert first.response_metadata["insights"]["profile_name"] == "review"
     assert calls == 2

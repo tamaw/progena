@@ -6,6 +6,7 @@ import {
   loadStoredPinnedSessionIds,
   persistPinnedSessionIds,
   loadQuickChatHandoff,
+  normalizeQuickChatHandoff,
 } from '@frontend/features/chat/models/chatStorage';
 
 describe('readJson / writeJsonOrRemove', () => {
@@ -19,6 +20,24 @@ describe('readJson / writeJsonOrRemove', () => {
   it('returns the fallback on malformed JSON', () => {
     localStorage.setItem('k', '{nope');
     expect(readJson('k', 'fb', 'oops')).toBe('fb');
+  });
+
+  it('returns the fallback when storage is unavailable', () => {
+    const storage = globalThis.localStorage;
+    Object.defineProperty(globalThis, 'localStorage', {
+      configurable: true,
+      writable: true,
+      value: { getItem: () => { throw new Error('SecurityError'); } },
+    });
+    try {
+      expect(readJson('k', 'fb')).toBe('fb');
+    } finally {
+      Object.defineProperty(globalThis, 'localStorage', {
+        configurable: true,
+        writable: true,
+        value: storage,
+      });
+    }
   });
   it('removes the key when value is empty, writes otherwise', () => {
     writeJsonOrRemove('k', [1, 2], false);
@@ -55,5 +74,17 @@ describe('loadQuickChatHandoff', () => {
     expect(loadQuickChatHandoff('handoff')).toBeNull();
     localStorage.setItem('handoff', JSON.stringify('nope'));
     expect(loadQuickChatHandoff('handoff')).toBeNull();
+  });
+});
+
+describe('normalizeQuickChatHandoff', () => {
+  it('accepts the in-memory handoff used during navigation', () => {
+    expect(normalizeQuickChatHandoff({
+      messages: [{ id: 'm', streamEvents: [{ images: ['data:image/png;base64,rich'] }] }],
+      threadId: 'thread-canonical',
+    })).toEqual({
+      messages: [{ id: 'm', streamEvents: [{ images: ['data:image/png;base64,rich'] }] }],
+      threadId: 'thread-canonical',
+    });
   });
 });

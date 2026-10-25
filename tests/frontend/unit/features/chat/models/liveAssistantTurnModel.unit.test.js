@@ -50,12 +50,15 @@ describe('createLiveAssistantTurn', () => {
       reasoningText: '',
       reasoningTokenCount: 0,
       cacheReadTokenCount: 0,
+      contextUsage: null,
       reasoningSummaryReceived: false,
       streamEvents: [],
       displayAgentName: '',
       displayModelName: '',
       displayToolCalls: [],
       timelineItems: [],
+      lastActivity: null,
+      pendingCommentary: '',
       isStreaming: true,
       error: false,
     });
@@ -155,6 +158,27 @@ describe('applyAssistantStreamEvent', () => {
     const evt = rawStreamEvent('message_delta');
     const next = applyAssistantStreamEvent(turn, evt, NOW);
     expect(next).toBe(turn);
+  });
+
+  it('retains terminal latest-call context usage without a visual timeline row', () => {
+    const turn = applyAssistantChunk(baseTurn(), 'Done', NOW);
+    const next = applyAssistantStreamEvent(turn, rawStreamEvent('usage_update', {
+      metadata: {
+        context_usage: {
+          input_tokens: 120,
+          output_tokens: 30,
+          total_tokens: 150,
+          profile_name: 'general',
+          provider_id: 'provider-a',
+          deployment: 'gpt-a',
+        },
+      },
+    }), NOW);
+
+    expect(next.timelineItems).toHaveLength(1);
+    expect(next.contextUsage).toMatchObject({ totalTokens: 150, profileName: 'general' });
+    expect(finalizeLiveAssistantTurn(next, { status: 'completed', now: NOW }).contextUsage)
+      .toMatchObject({ totalTokens: 150, providerId: 'provider-a' });
   });
 
   it('appends a stream_event timeline item for todos_update', () => {
@@ -435,6 +459,39 @@ describe('applyAssistantStreamEvent', () => {
     expect(withReasoning.timelineItems[0].kind).toBe('stream_event');
     expect(withReasoning.timelineItems[0].event.eventType).toBe('reasoning_summary');
     expect(withReasoning.timelineItems[1].kind).toBe('assistant_message');
+  });
+
+  it('opens a new reasoning row for each model call and keeps them when the turn-wide summary arrives', () => {
+    let turn = baseTurn();
+    turn = applyAssistantStreamEvent(turn, rawStreamEvent('reasoning_delta', { content: '**Plan**\n\nfirst' }));
+    turn = applyAssistantStreamEvent(turn, rawStreamEvent('reasoning_delta', { content: ' call' }));
+    turn = applyAssistantStreamEvent(turn, rawStreamEvent('tool_start', { metadata: { tool_name: 'ls', tool_call_id: 'a' } }));
+    turn = applyAssistantStreamEvent(turn, rawStreamEvent('reasoning_delta', { content: '**Read**\n\nsecond call' }));
+    // The terminal summary repeats everything already streamed.
+    turn = applyAssistantStreamEvent(turn, rawStreamEvent('reasoning_summary', {
+      content: '**Plan**\n\nfirst call**Read**\n\nsecond call',
+      metadata: { reasoning_tokens: 30 },
+    }));
+
+    const reasoningRows = turn.timelineItems
+      .filter((item) => item.kind === 'stream_event' && item.event.eventType.startsWith('reasoning'))
+      .map((item) => item.event.content);
+    expect(reasoningRows).toEqual(['**Plan**\n\nfirst call', '**Read**\n\nsecond call']);
+    expect(turn.timelineItems.map((item) => item.event.eventType)).toEqual(['reasoning_delta', 'tool_start', 'reasoning_delta']);
+  });
+
+  it('moves text streamed just before a tool call off the answer and onto that call as commentary', () => {
+    let turn = baseTurn();
+    turn = applyAssistantChunk(turn, 'I will check the repo first.', NOW);
+    turn = applyAssistantStreamEvent(turn, rawStreamEvent('tool_start', { metadata: { tool_name: 'ls', tool_call_id: 'a' } }));
+    turn = applyAssistantStreamEvent(turn, rawStreamEvent('tool_start', { metadata: { tool_name: 'ls', tool_call_id: 'b' } }));
+    turn = applyAssistantChunk(turn, 'It looks fine.', NOW);
+
+    const tools = turn.timelineItems.filter((item) => item.event?.eventType === 'tool_start');
+    // Parallel calls: only the first carries the narration.
+    expect(tools.map((item) => item.event.metadata.commentary)).toEqual(['I will check the repo first.', undefined]);
+    expect(turn.content).toBe('It looks fine.');
+    expect(turn.timelineItems.find((item) => item.kind === 'assistant_message').content).toBe('It looks fine.');
   });
 
   // Subagent execution events (nested `task` tool delegation) get their own
@@ -897,6 +954,22 @@ describe('applySubagentEvent', () => {
       },
     }));
     expect(items[0].entries[0]).toMatchObject({ status: 'error', error: 'boom', durationMs: 2 });
+  });
+
+  it('subagent_tool_result marks a returned execute failure as errored', () => {
+    let items = applySubagentEvent([], subagentEvent('subagent_tool_start', {
+      metadata: { tool_call_id: 'call_1', nested_tool_call_id: 'nested_1', nested_tool_name: 'execute' },
+    }));
+    items = applySubagentEvent(items, subagentEvent('subagent_tool_result', {
+      metadata: {
+        tool_call_id: 'call_1',
+        nested_tool_call_id: 'nested_1',
+        nested_tool_name: 'execute',
+        success: false,
+        result_preview: 'long output cut before the footer…',
+      },
+    }));
+    expect(items[0].entries[0]).toMatchObject({ status: 'error' });
   });
 
   it('subagent_result finalizes status/finishedAt/durationMs/resultPreview on success', () => {
@@ -1692,44 +1765,26 @@ describe('buildDefaultAssistantTimeline', () => {
 // ─── toCommittedAssistantMessage ─────────────────────────────────────────
 
 describe('toCommittedAssistantMessage', () => {
-  it('converts a complete turn to a message-like object', () => {
-    const turn = {
-      ...baseTurn(),
-      assistantMessageId: 'msg_42',
-      assistantTimestamp: NOW,
-      content: 'Hello',
-      tokenCount: 5,
-      reasoningText: 'thinking',
-      reasoningTokenCount: 3,
-      streamEvents: [{ id: 'e1' }],
-      displayAgentName: 'Agent',
-      displayModelName: 'gpt-4',
-      displayToolCalls: [{ name: 'search' }],
-      isStreaming: false,
-      error: false,
-      timelineItems: [{ kind: 'assistant_message', id: 'msg_42', content: 'Hello' }],
-    };
-    const msg = toCommittedAssistantMessage(turn);
-    expect(msg).toEqual({
-      streamId: STREAM_ID,
-      assistantMessageId: 'msg_42',
-      startedAt: NOW - 1000,
-      id: 'msg_42',
-      role: 'assistant',
-      content: 'Hello',
-      timestamp: NOW,
-      tokenCount: 5,
-      reasoningTokenCount: 3,
-      cacheReadTokenCount: 0,
-      reasoningText: 'thinking',
-      streamEvents: [{ id: 'e1' }],
-      displayAgentName: 'Agent',
-      displayModelName: 'gpt-4',
-      displayToolCalls: [{ name: 'search' }],
-      isStreaming: false,
-      error: false,
-      timelineItems: [{ kind: 'assistant_message', id: 'msg_42', content: 'Hello' }],
-    });
+
+  it('marks a streaming turn as working until answer text arrives, and again when tools follow text', () => {
+    const toolStart = (id) => ({ event_type: 'tool_start', metadata: { tool_name: 'ls', tool_call_id: id } });
+    let turn = createLiveAssistantTurn({ streamId: STREAM_ID, startedAt: NOW });
+    turn = applyAssistantStreamEvent(turn, toolStart('a'));
+    expect(toCommittedAssistantMessage(turn).workActive).toBe(true);
+
+    turn = applyAssistantChunk(turn, 'Looking', NOW);
+    expect(toCommittedAssistantMessage(turn).workActive).toBe(false);
+
+    // Providers deliver the reasoning summary at the end, and graph steps only
+    // show in the expanded detail; neither may reopen the preview.
+    turn = applyAssistantStreamEvent(turn, { event_type: 'reasoning_summary', content: 'why' });
+    turn = applyAssistantStreamEvent(turn, { event_type: 'node_update', metadata: { node_name: 'model' } });
+    expect(toCommittedAssistantMessage(turn).workActive).toBe(false);
+
+    turn = applyAssistantStreamEvent(turn, toolStart('b'));
+    expect(toCommittedAssistantMessage(turn).workActive).toBe(true);
+
+    expect(toCommittedAssistantMessage({ ...turn, isStreaming: false }).workActive).toBe(false);
   });
 
   it('falls back streamId-based id and startedAt timestamp when assistantMessageId/timestamp null', () => {
@@ -1788,6 +1843,16 @@ describe('finalizeLiveAssistantTurn', () => {
       expect(result.isStreaming).toBe(false);
       // There are stream events but no text content.
       expect(result.timelineItems[0].kind).toBe('stream_event');
+    });
+
+    it('records a cache response timestamp only when the reply has answer text', () => {
+      const toolOnly = applyAssistantStreamEvent(baseTurn(), rawStreamEvent('tool_start', { content: 'x' }), NOW);
+      const answered = applyAssistantChunk(baseTurn(), 'Hello', NOW);
+
+      expect(finalizeLiveAssistantTurn(toolOnly, { status: 'completed', now: NOW + 100 }).responseTimestamp)
+        .toBeNull();
+      expect(finalizeLiveAssistantTurn(answered, { status: 'completed', now: NOW + 100 }).responseTimestamp)
+        .toBe(NOW + 100);
     });
 
     // Acceptance: completion with NO output AND no events returns '(No response text)'.

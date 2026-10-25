@@ -9,6 +9,65 @@ A modern React-based chat interface for the Progena AI agent system.
 - **Agents Page**: View and manage registered AI agents
 - **Logs Viewer**: Real-time log streaming with filtering
 
+### Shared chat transcript
+
+The conversation page and Quick Chat both render through
+`features/chat/components/ChatMessages.jsx`: historical `Message` rows and the
+subscribed `LiveAssistantTurn` use the same reasoning/work groups, paired tool
+I/O, todos, subagent/A2A cards, images, and copy controls. Empty/loading/error
+states, pagination, and regenerate handlers remain caller-owned.
+`ChatMessages` also owns row resize/mutation observation and cleanup for both
+surfaces; callers supply stable container/pinned refs and retain their scroll
+input handlers. Filter definitions, reset defaults, and whole-call/card
+visibility live in `models/streamFilters.js`, not the rendering components.
+
+Both surfaces use `liveAssistantTurnModel` for stream transitions and
+`normalizeBackendChatMessage` for persisted history. Quick Chat's small
+`quickChatStreamModel` adapter hides page-context blocks from displayed user
+text while retaining them in backend input; promotion carries complete rich
+messages instead of rebuilding text-only copies. Profile context usage and
+scroll anchoring also reuse the main chat models. Keep future transcript
+presentation changes in these shared components, not panel-specific bubbles.
+
+Promotion carries the complete transcript through module memory and the
+in-page handoff event. Only one reload fallback is persisted, capped at the
+latest 100 messages with transient images and denormalized timelines removed.
+Its canonical thread ID lets the main page reload durable history. Storage
+quota or access failures must never prevent promotion or navigation.
+
+Quick Chat refreshes every history page before replacing its transcript.
+A new submission increments the transcript epoch so a delayed refresh cannot
+overwrite that turn, even after its stream returns to idle. The panel subscribes
+only to live-turn presence and context usage; token updates render inside
+`LiveAssistantTurn` instead of rerendering the composer and historical list.
+
+Both composers include `CacheExpiryIndicator` immediately before the context
+pie when the matching profile supplies `cache_ttl_seconds` and a successful
+response has a trustworthy timestamp. Its component-local clock updates at
+minute boundaries, recomputes from wall-clock time when the tab becomes visible,
+and stops at `0m`; it never rerenders the transcript on a timer. Missing settings
+hide it. Reload uses the saved response timestamp, never a `Date.now()` display
+fallback. The tooltip identifies this as a configured estimate rather than an
+observed provider-cache expiry; historical creation timestamps may make the
+estimate shorter than live completion timing.
+
+The chat page's filter dropdown controls activity only: Tools, Plans, Reasoning,
+and Delegations (subagents and A2A together). User messages, final answers,
+attachments, and message images remain visible. **All** restores the defaults:
+Tools, Plans, Reasoning, Delegations, and Errors on; Debug off.
+**Errors** directly shows or hides failed tools and delegations independently
+of their activity categories. Nested tool failures and failed A2A updates remain
+indicated on collapsed delegation cards when Errors is enabled.
+**Debug** remains an inline filter chip, with its saved preference preserved.
+Browser-local preferences combine the old delegation flags.
+
+Failure classification is shared by filters, work summaries, and tool rows in
+`models/toolFailureModel.js`. Returned command/interpreter errors count as
+failures even when tool transport succeeds. Filtering keeps or hides the whole
+correlated invocation, including its input/commentary. A failed plan retains its
+checklist plus terminal error, and output metadata preserves the runtime's
+authoritative artifact summary alongside the raw preview.
+
 ## Quick Start
 
 ### Development
