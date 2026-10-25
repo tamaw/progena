@@ -382,7 +382,71 @@
     margin-top: 6px;
 }
 
-/* Merged tool call (ToolCallEntry.jsx): input box, then output box. */
+/* Merged tool call (ToolCallEntry.jsx): one line -- name, commentary or
+   input summary, duration/time, chevron -- opening to the full commentary,
+   an input box and an output box. */
+.tool-call-entry__line {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    min-width: 0;
+    margin-bottom: 0;
+}
+
+.tool-call-entry__title {
+    flex: 0 0 auto;
+    white-space: nowrap;
+}
+
+.tool-call-entry__line .tool-call-entry__summary {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    color: var(--color-text-muted);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.tool-call-entry__line .msg__head-trailing {
+    flex: 0 0 auto;
+}
+
+/* .entry__head orders the trailing meta last (order: 3); keep the chevron
+   after it, at the far right like every other row's. */
+.tool-call-entry__line > .tool-event-disclosure__chevron {
+    order: 4;
+}
+
+.tool-call-entry__commentary {
+    margin-top: 6px;
+    color: var(--color-text-secondary, var(--color-text-muted));
+}
+
+/* Plan variant: the current item is the title (shrinks first), then a short
+   inline progress bar and the count. */
+.tool-call-entry__line:has(.tool-call-entry__plan) .tool-call-entry__title {
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.tool-call-entry__plan {
+    display: inline-flex;
+    flex: 0 0 auto;
+    gap: 6px;
+    align-items: center;
+    font-size: 11px;
+}
+
+.tool-call-entry__plan .todo-panel__bar {
+    width: 72px;
+}
+
+.tool-call-entry__plan + .msg__head-trailing {
+    margin-left: auto;
+}
+
 .tool-call-entry__label {
     padding: 6px 14px 0;
     color: var(--color-text-muted);

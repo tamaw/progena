@@ -1,8 +1,12 @@
 /**
- * One tool call (see mergeToolCallItems in workGroupModel.js): its start and
- * result/error rows merged into a single entry. Collapsed, it shows the
- * agent's commentary for the call, else a summary of its input; expanded, an
- * input box and an output box.
+ * One tool call (see mergeToolCallItems in workGroupModel.js) on one line:
+ * tool name, then the agent's commentary for the call, else a summary of its
+ * input, then duration, time and a chevron. Opening it shows the full
+ * commentary, an input box and an output box.
+ *
+ * A write_todos call that produced a plan update renders as that plan
+ * instead: the current item, an inline progress bar and "n/total", opening
+ * to the checklist.
  */
 
 import { memo } from 'react';
@@ -13,10 +17,62 @@ import {
   prettifyLabel,
   toolDetailsForEvent,
 } from '../models/messageRenderUtils';
-import { toolCallSummary } from '../models/workGroupModel';
+import { currentTodo, todoProgress, toolCallSummary } from '../models/workGroupModel';
+import { TodoChecklist, TodoProgress } from './TodoListPanel';
 
 function details(event) {
   return event ? toolDetailsForEvent(event, describeStreamEvent(event)) : null;
+}
+
+// Disclosure whose summary is the entry's single line; without a body the
+// line renders on its own (no chevron, nothing to open).
+function EntryLine({ title, text, trailing, children }) {
+  const line = (
+    <>
+      <span className="entry__role tool-call-entry__title">{title}</span>
+      {text}
+      <span className="msg__head-trailing">{trailing}</span>
+    </>
+  );
+  if (!children) return <div className="entry__head tool-call-entry__line">{line}</div>;
+  return (
+    <details className="tool-event-disclosure tool-call-entry__disclosure">
+      <summary className="entry__head tool-call-entry__line">
+        {line}
+        <span className="tool-event-disclosure__chevron" aria-hidden="true" />
+      </summary>
+      {children}
+    </details>
+  );
+}
+
+function Trailing({ duration, time }) {
+  return (
+    <>
+      {duration && <span className="muted">{duration}</span>}
+      {time && <span className="msg__time entry__time">{time}</span>}
+    </>
+  );
+}
+
+function PlanLine({ plan, time }) {
+  const todos = Array.isArray(plan.event?.metadata?.todos) ? plan.event.metadata.todos : [];
+  const { completed, total } = todoProgress(todos);
+  const current = currentTodo(todos);
+  return (
+    <EntryLine
+      title={current?.content || 'Plan'}
+      text={(
+        <span className="tool-call-entry__plan">
+          <TodoProgress todos={todos} />
+          <span className="muted">{completed}/{total}</span>
+        </span>
+      )}
+      trailing={<Trailing time={time} />}
+    >
+      {todos.length > 0 && <div className="todo-panel"><TodoChecklist todos={todos} /></div>}
+    </EntryLine>
+  );
 }
 
 const ToolCallEntry = memo(function ToolCallEntry({ item }) {
@@ -25,15 +81,48 @@ const ToolCallEntry = memo(function ToolCallEntry({ item }) {
   const metadata = (start || end)?.metadata || {};
   const toolName = typeof metadata.tool_name === 'string' && metadata.tool_name ? metadata.tool_name : 'tool';
   const status = !end ? 'running' : end.eventType === 'tool_error' ? 'error' : 'success';
-  const input = details(start)?.command || '';
-  const endDetails = details(end);
-  const output = endDetails?.body || '';
-  const outputLabel = endDetails?.summary || '';
-  const summary = start ? toolCallSummary(toolName, start.metadata) : outputLabel;
-  const durationMs = end?.metadata?.duration_ms;
-  const duration = Number.isFinite(durationMs) ? formatDuration(durationMs) : '';
   const time = formatTimestamp(start?.timestamp ?? end?.timestamp);
-  const badgeClass = status === 'error' ? 'entry__badge--err' : 'entry__badge--tool';
+  const badgeClass = item.plan
+    ? 'entry__badge--plan'
+    : status === 'error' ? 'entry__badge--err' : 'entry__badge--tool';
+
+  let line;
+  if (item.plan) {
+    line = <PlanLine plan={item.plan} time={time} />;
+  } else {
+    const input = details(start)?.command || '';
+    const endDetails = details(end);
+    const output = endDetails?.body || '';
+    const outputLabel = endDetails?.summary || '';
+    const commentary = typeof start?.metadata?.commentary === 'string' ? start.metadata.commentary.trim() : '';
+    const summary = start ? toolCallSummary(toolName, start.metadata) : outputLabel;
+    const durationMs = end?.metadata?.duration_ms;
+    const hasBody = Boolean(commentary || input || output || outputLabel);
+    line = (
+      <EntryLine
+        title={prettifyLabel(toolName)}
+        text={summary && <span className="tool-call-entry__summary">{summary}</span>}
+        trailing={<Trailing duration={Number.isFinite(durationMs) ? formatDuration(durationMs) : ''} time={time} />}
+      >
+        {hasBody && (
+          <>
+            {commentary && <div className="tool-call-entry__commentary">{commentary}</div>}
+            {input && (
+              <div className="tool chat-event-tool tool-call-entry__input">
+                <div className="tool__cmd"><span className="prompt">$</span>{input}</div>
+              </div>
+            )}
+            {(output || outputLabel) && (
+              <div className={`tool chat-event-tool tool-call-entry__output${status === 'error' ? ' tool-call-entry__output--error' : ''}`}>
+                {outputLabel && outputLabel !== output && <div className="tool-call-entry__label">{outputLabel}</div>}
+                {output && <pre className="tool__body tool__body--out">{output}</pre>}
+              </div>
+            )}
+          </>
+        )}
+      </EntryLine>
+    );
+  }
 
   return (
     <div className="chat-entry-chain--item">
@@ -41,34 +130,7 @@ const ToolCallEntry = memo(function ToolCallEntry({ item }) {
         <div className="entry__gutter" aria-hidden="true">
           <span className={`entry__badge ${badgeClass}${status === 'running' ? ' work-step__badge--running' : ''}`} />
         </div>
-        <div className="entry__main">
-          <div className="message-stream-event-header entry__head">
-            <span className="entry__role">{prettifyLabel(toolName)}</span>
-            <span className="msg__head-trailing">
-              {duration && <span className="muted">{duration}</span>}
-              {time && <span className="msg__time entry__time">{time}</span>}
-            </span>
-          </div>
-          {input || output ? (
-            <details className="tool-event-disclosure">
-              <summary>
-                <span className="tool__summary tool-event-disclosure__summary">{summary}</span>
-                <span className="tool-event-disclosure__chevron" aria-hidden="true" />
-              </summary>
-              {input && (
-                <div className="tool chat-event-tool tool-call-entry__input">
-                  <div className="tool__cmd"><span className="prompt">$</span>{input}</div>
-                </div>
-              )}
-              {(output || outputLabel) && (
-                <div className={`tool chat-event-tool tool-call-entry__output${status === 'error' ? ' tool-call-entry__output--error' : ''}`}>
-                  {outputLabel && outputLabel !== output && <div className="tool-call-entry__label">{outputLabel}</div>}
-                  {output && <pre className="tool__body tool__body--out">{output}</pre>}
-                </div>
-              )}
-            </details>
-          ) : summary && <span className="tool__summary">{summary}</span>}
-        </div>
+        <div className="entry__main">{line}</div>
       </article>
     </div>
   );

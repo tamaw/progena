@@ -83,7 +83,8 @@ export function buildWorkSteps(workItems) {
 
     if (TOOL_EVENT_TYPES.has(eventType)) {
       const toolName = typeof metadata.tool_name === 'string' && metadata.tool_name ? metadata.tool_name : 'tool';
-      if (isCardOwnedTool(toolName)) continue;
+      // write_todos is shown by the plan update it produces (one entry, not two).
+      if (isCardOwnedTool(toolName) || toolName === 'write_todos') continue;
       const key = typeof metadata.tool_call_id === 'string' && metadata.tool_call_id ? metadata.tool_call_id : item.id;
       const existingIndex = toolStepIndex.get(key);
       const step = existingIndex === undefined
@@ -129,12 +130,12 @@ export function buildWorkSteps(workItems) {
 
     if (eventType === 'todos_update') {
       const todos = Array.isArray(metadata.todos) ? metadata.todos : [];
-      const activeTodo = todos.find((todo) => todo?.status === 'in_progress');
+      const current = currentTodo(todos);
       steps.push({
         id: `step-${item.id}`,
         kind: 'plan',
         title: 'Plan',
-        detail: typeof activeTodo?.content === 'string' ? activeTodo.content : '',
+        detail: typeof current?.content === 'string' ? current.content : '',
         status: 'success',
         durationMs: null,
         timestamp: itemTimestamp(item),
@@ -170,17 +171,43 @@ function toolCallKey(item) {
   return typeof callId === 'string' && callId ? callId : null;
 }
 
+/** The plan item being worked on: in progress, else the next pending, else the last. */
+export function currentTodo(todos) {
+  const list = Array.isArray(todos) ? todos : [];
+  return list.find((todo) => todo?.status === 'in_progress')
+    || list.find((todo) => todo?.status !== 'completed')
+    || list[list.length - 1]
+    || null;
+}
+
+export function todoProgress(todos) {
+  const list = Array.isArray(todos) ? todos : [];
+  const completed = list.filter((todo) => todo?.status === 'completed').length;
+  return { completed, total: list.length, percent: list.length ? Math.round((completed / list.length) * 100) : 0 };
+}
+
 /**
  * Merge each tool call's start and result/error rows into one
- * `{ kind: 'tool_call', id, start, end }` item at the call's first position,
- * so the expanded detail shows one entry per call. Rows without a call id
- * pass through unchanged.
+ * `{ kind: 'tool_call', id, start, end, plan }` item at the call's first
+ * position, so the expanded detail shows one entry per call. A plan update
+ * (`todos_update`) carries no call id; it is the output of the latest
+ * write_todos call that has none yet, so it becomes that call's `plan`.
+ * Other rows pass through unchanged.
  */
 export function mergeToolCallItems(items) {
   const merged = [];
   const indexByKey = new Map();
   for (const item of Array.isArray(items) ? items : []) {
     const eventType = item?.kind === 'stream_event' ? item.event?.eventType : '';
+    if (eventType === 'todos_update') {
+      const owner = merged.findLastIndex((entry) => (
+        entry.kind === 'tool_call' && !entry.plan && toolCallName(entry) === 'write_todos'
+      ));
+      if (owner >= 0) {
+        merged[owner] = { ...merged[owner], plan: item };
+        continue;
+      }
+    }
     const key = TOOL_EVENT_TYPES.has(eventType) ? toolCallKey(item) : null;
     if (!key) {
       merged.push(item);
@@ -190,12 +217,16 @@ export function mergeToolCallItems(items) {
     const existing = indexByKey.get(key);
     if (existing === undefined) {
       indexByKey.set(key, merged.length);
-      merged.push({ kind: 'tool_call', id: `call-${key}`, start: null, end: null, [slot]: item });
+      merged.push({ kind: 'tool_call', id: `call-${key}`, start: null, end: null, plan: null, [slot]: item });
     } else {
       merged[existing] = { ...merged[existing], [slot]: item };
     }
   }
   return merged;
+}
+
+function toolCallName(entry) {
+  return (entry.start || entry.end)?.event?.metadata?.tool_name;
 }
 
 /**

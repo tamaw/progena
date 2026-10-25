@@ -80,6 +80,31 @@ describe('selectRecentLines', () => {
   });
 });
 
+describe('mergeToolCallItems plan updates', () => {
+  it("attaches each plan update to the latest write_todos call without one, so the call and its plan are one entry", () => {
+    const plan = (id) => eventItem(id, 'todos_update', { todos: [] });
+    const merged = mergeToolCallItems([
+      eventItem('w1', 'tool_start', { tool_name: 'write_todos', tool_call_id: 'w1' }),
+      plan('p1'),
+      eventItem('r1', 'tool_result', { tool_name: 'write_todos', tool_call_id: 'w1' }),
+      eventItem('w2', 'tool_start', { tool_name: 'write_todos', tool_call_id: 'w2' }),
+      plan('p2'),
+      // A plan update with no write_todos call to attach to stays its own row.
+      plan('p3'),
+    ]);
+    expect(merged.map((item) => (item.kind === 'tool_call' ? `${item.start.id}+${item.plan?.id}` : item.id)))
+      .toEqual(['w1+p1', 'w2+p2', 'p3']);
+  });
+
+  it('previews a write_todos call as its plan step only', () => {
+    const steps = buildWorkSteps([
+      eventItem('w1', 'tool_start', { tool_name: 'write_todos', tool_call_id: 'w1' }),
+      eventItem('p1', 'todos_update', { todos: [{ content: 'Next', status: 'pending' }] }),
+    ]);
+    expect(steps.map((step) => [step.kind, step.detail])).toEqual([['plan', 'Next']]);
+  });
+});
+
 describe('mergeToolCallItems', () => {
   it('merges each call start and finish into one entry at the call position, leaving other rows alone', () => {
     const merged = mergeToolCallItems([

@@ -12,7 +12,7 @@ function row(id, eventType, metadata) {
 }
 
 describe('ToolCallEntry', () => {
-  it('shows one entry per call: commentary collapsed, then an input box and an output box', () => {
+  it('shows each call on one line (commentary as its text), opening to the commentary, input box and output box', () => {
     const html = renderToStaticMarkup(React.createElement(ToolCallEntry, {
       item: {
         kind: 'tool_call',
@@ -22,7 +22,7 @@ describe('ToolCallEntry', () => {
       },
     }));
 
-    expect(html.match(/class="entry__role"/g)).toHaveLength(1);
+    expect(html.match(/entry__role/g)).toHaveLength(1);
     expect(html).toContain('Read File');
     const summaryPos = html.indexOf('Reading the config');
     const inputPos = html.indexOf('tool-call-entry__input');
@@ -46,5 +46,34 @@ describe('ToolCallEntry', () => {
     }));
     expect(failed).toContain('entry__badge--err');
     expect(failed).toContain('denied');
+  });
+
+  it("renders a write_todos call that produced a plan as the plan's current item with progress and its checklist", () => {
+    const html = renderToStaticMarkup(React.createElement(ToolCallEntry, {
+      item: {
+        kind: 'tool_call',
+        id: 'call-c',
+        start: row('s', 'tool_start', { tool_name: 'write_todos' }),
+        end: row('e', 'tool_result', { tool_name: 'write_todos' }),
+        plan: {
+          kind: 'stream_event',
+          id: 'p',
+          event: {
+            id: 'p',
+            eventType: 'todos_update',
+            content: '',
+            metadata: { todos: [
+              { content: 'Read the skill', status: 'completed' },
+              { content: 'Write the mapping', status: 'pending' },
+            ] },
+          },
+        },
+      },
+    }));
+    expect(html).not.toContain('Write Todos');
+    // Nothing in progress: the next pending item is the current one.
+    expect(html).toMatch(/tool-call-entry__title">Write the mapping</);
+    expect(html).toContain('1/2');
+    expect(html).toContain('todo-panel__item--completed');
   });
 });
