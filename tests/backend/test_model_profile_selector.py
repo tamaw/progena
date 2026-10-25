@@ -63,6 +63,7 @@ class TestPublicLeakageGuard:
                     "provider_id": "foundry-1",
                     "deployment": "greeting",
                     "context_window": 128_000,
+                    "cache_ttl_seconds": 1_800,
                     "reasoning_enabled": True,
                     "reasoning_effort": "medium",
                     "reasoning_summary": "concise",
@@ -91,6 +92,7 @@ class TestPublicLeakageGuard:
         assert public["reasoning_effort"] == "medium"
         assert public["reasoning_summary"] == "concise"
         assert public["context_window"] == 128_000
+        assert public["cache_ttl_seconds"] == 1_800
         assert "api_key" not in public
         assert public["pricing"] == {
             "currency": "USD",
@@ -220,6 +222,7 @@ class TestPatchEdits:
                     "provider_id": "foundry-1",
                     "deployment": "old",
                     "context_window": 128_000,
+                    "cache_ttl_seconds": 1_800,
                 }
             },
         )
@@ -232,6 +235,7 @@ class TestPatchEdits:
             "provider_id": "foundry-1",
             "deployment": "new",
             "context_window": 128_000,
+            "cache_ttl_seconds": 1_800,
         }
         assert events[-1][1]["profiles"] == [
             {
@@ -239,6 +243,7 @@ class TestPatchEdits:
                 "provider_id": "foundry-1",
                 "deployment": "new",
                 "context_window": 128_000,
+                "cache_ttl_seconds": 1_800,
             }
         ]
 
@@ -261,7 +266,7 @@ class TestPatchEdits:
             not in store.get_document(PROGENA_STATE_PREFIX, "profile").payload["general"]
         )
 
-    @pytest.mark.parametrize("context_window", [0, -1, True, "200000"])
+    @pytest.mark.parametrize("context_window", [0, -1, True, 1.5, "200000"])
     def test_patch_rejects_invalid_context_window(self, context_window):
         store = InMemoryDocumentStore()
         store.save_document(
@@ -273,6 +278,42 @@ class TestPatchEdits:
         with TestClient(app) as client:
             response = client.patch(
                 "/model-profiles/general", json={"context_window": context_window}
+            )
+
+        assert response.status_code == 422
+
+    def test_patch_updates_and_removes_cache_ttl_seconds(self):
+        store = InMemoryDocumentStore()
+        store.save_document(
+            PROGENA_STATE_PREFIX,
+            "profile",
+            {"general": {"provider_id": "foundry-1", "deployment": "greeting"}},
+        )
+        app, events = _make_app(store)
+        with TestClient(app) as client:
+            added = client.patch("/model-profiles/general", json={"cache_ttl_seconds": 1_800})
+            removed = client.patch("/model-profiles/general", json={"cache_ttl_seconds": None})
+
+        assert added.status_code == 202
+        assert events[-2][1]["profiles"][0]["cache_ttl_seconds"] == 1_800
+        assert removed.status_code == 202
+        assert (
+            "cache_ttl_seconds"
+            not in store.get_document(PROGENA_STATE_PREFIX, "profile").payload["general"]
+        )
+
+    @pytest.mark.parametrize("cache_ttl_seconds", [0, -1, True, 1.5, "1800"])
+    def test_patch_rejects_invalid_cache_ttl_seconds(self, cache_ttl_seconds):
+        store = InMemoryDocumentStore()
+        store.save_document(
+            PROGENA_STATE_PREFIX,
+            "profile",
+            {"general": {"provider_id": "foundry-1", "deployment": "greeting"}},
+        )
+        app, _ = _make_app(store)
+        with TestClient(app) as client:
+            response = client.patch(
+                "/model-profiles/general", json={"cache_ttl_seconds": cache_ttl_seconds}
             )
 
         assert response.status_code == 422

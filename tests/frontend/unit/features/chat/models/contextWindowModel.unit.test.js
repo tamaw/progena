@@ -1,10 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import {
   latestContextUsage,
+  cacheCountdownLabel,
+  resolveComposerCacheExpiry,
   normalizeContextUsage,
   resolveComposerContextUsage,
 } from '@frontend/features/chat/models/contextWindowModel';
 
+import { normalizeBackendChatMessage } from '@frontend/features/chat/models/chatSessionsModel';
+import { createLiveAssistantTurn, finalizeLiveAssistantTurn } from '@frontend/features/chat/models/liveAssistantTurnModel';
 const general = {
   name: 'general',
   provider_id: 'provider-a',
@@ -104,5 +108,56 @@ describe('latestContextUsage', () => {
       { role: 'assistant', contextUsage: { inputTokens: 90, outputTokens: 10, totalTokens: 100 } },
       { role: 'assistant', contextUsage: { inputTokens: 150, outputTokens: 25, totalTokens: 175 } },
     ])).toMatchObject({ totalTokens: 175 });
+  });
+});
+
+describe('profile cache retention estimates', () => {
+  const responseAt = Date.UTC(2026, 0, 1);
+  const usage = { inputTokens: 100, outputTokens: 20, totalTokens: 120, profileName: 'general', providerId: 'provider-a', deployment: 'gpt-a' };
+  const profile = { ...general, cache_ttl_seconds: 3600 };
+  const message = { role: 'assistant', content: 'Answer', contextUsage: usage, responseTimestamp: responseAt };
+
+  it('uses the matching profile duration, not the context capacity or current time', () => {
+    expect(resolveComposerCacheExpiry({ messages: [message], profiles: [profile] }))
+      .toEqual({ expiresAt: responseAt + 3600000, ttlSeconds: 3600 });
+    expect(resolveComposerCacheExpiry({ messages: [message], profiles: [general] })).toBeNull();
+    expect(resolveComposerCacheExpiry({ messages: [message], profiles: [{ ...profile, provider_id: 'other' }] })).toBeNull();
+  });
+
+  it('never turns a missing historical timestamp into a fresh countdown on reload', () => {
+    const reloaded = normalizeBackendChatMessage({ role: 'assistant', content: 'Answer', context_usage: usage });
+    expect(resolveComposerCacheExpiry({ messages: [reloaded], profiles: [profile] })).toBeNull();
+    const saved = normalizeBackendChatMessage({ role: 'assistant', content: 'Answer', created_at: new Date(responseAt).toISOString(), context_usage: usage });
+    expect(resolveComposerCacheExpiry({ messages: [saved], profiles: [profile] }).expiresAt).toBe(responseAt + 3600000);
+  });
+
+  it('starts a new live countdown on successful completion, not partial or cancelled output', () => {
+    const turn = { ...createLiveAssistantTurn({ streamId: 'cache', startedAt: responseAt - 10000 }), content: 'Answer', contextUsage: usage };
+    const complete = finalizeLiveAssistantTurn(turn, { status: 'completed', now: responseAt });
+    const cancelled = finalizeLiveAssistantTurn(turn, { status: 'cancelled', now: responseAt });
+    expect(resolveComposerCacheExpiry({ messages: [complete], profiles: [profile] }).expiresAt).toBe(responseAt + 3600000);
+    expect(resolveComposerCacheExpiry({ messages: [cancelled], profiles: [profile] })).toBeNull();
+    expect(resolveComposerCacheExpiry({ messages: [{ ...message, isStreaming: true }], profiles: [profile] })).toBeNull();
+  });
+
+  it('does not use cancelled or tool-only historical rows as responses', () => {
+    for (const raw of [
+      { content: 'Partial answer', response_metadata: { status: 'cancelled' } },
+      { content: '', tool_calls: [{ id: 'tool', name: 'read_file', args: {} }] },
+    ]) {
+      const saved = normalizeBackendChatMessage({
+        role: 'assistant', created_at: new Date(responseAt).toISOString(), context_usage: usage, raw,
+        content: raw.content,
+      });
+      expect(resolveComposerCacheExpiry({ messages: [saved], profiles: [profile] })).toBeNull();
+    }
+  });
+
+  it('formats minute boundaries without negative remaining time', () => {
+    expect(cacheCountdownLabel(responseAt + 58 * 60000, responseAt)).toBe('58m');
+    expect(cacheCountdownLabel(responseAt + 1, responseAt)).toBe('1m');
+    expect(cacheCountdownLabel(responseAt, responseAt)).toBe('0m');
+    expect(cacheCountdownLabel(responseAt - 1000, responseAt)).toBe('0m');
+    expect(cacheCountdownLabel(responseAt + 12 * 3600000, responseAt)).toBe('12h');
   });
 });

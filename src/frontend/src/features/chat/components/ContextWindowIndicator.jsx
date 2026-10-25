@@ -1,7 +1,9 @@
+import { useId } from 'react';
 import styles from './ContextWindowIndicator.module.css';
 
 /** Provider-reported footprint of the latest model call, not cumulative usage. */
 export default function ContextWindowIndicator({ usage }) {
+  const tooltipId = useId();
   const { usedTokens, maxTokens } = usage || {};
   if (!Number.isSafeInteger(maxTokens) || maxTokens <= 0
     || !Number.isSafeInteger(usedTokens) || usedTokens < 0) return null;
@@ -13,16 +15,18 @@ export default function ContextWindowIndicator({ usage }) {
 
   return (
     <span
-      className={styles.meter}
+      className={`chat-info-control ${styles.meter}`}
+      tabIndex={0}
       role="meter"
       aria-label="Context window usage"
       aria-valuemin={0}
       aria-valuemax={maxTokens}
       aria-valuenow={Math.min(usedTokens, maxTokens)}
       aria-valuetext={description}
-      title={description}
+      aria-describedby={tooltipId}
     >
       <span className={styles.pie} style={{ '--context-fill': `${fraction * 100}%` }} aria-hidden="true" />
+      <span id={tooltipId} className="chat-info-tooltip" role="tooltip">{description}</span>
     </span>
   );
 }

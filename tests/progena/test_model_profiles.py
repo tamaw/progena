@@ -55,6 +55,38 @@ def test_profile_context_window_rejects_non_positive_or_non_integer_values(conte
         )
 
 
+def test_profile_cache_ttl_seconds_is_optional_positive_integer_and_preserved():
+    profiles = validate_model_profiles_payload(
+        {
+            "general": {
+                "provider_id": "foundry-1",
+                "deployment": "deployment-general",
+                "cache_ttl_seconds": 1_800,
+            },
+            "review": {"provider_id": "foundry-1", "deployment": "deployment-review"},
+        }
+    )
+
+    assert profiles["general"]["cache_ttl_seconds"] == 1_800
+    assert "cache_ttl_seconds" not in profiles["review"]
+
+
+@pytest.mark.parametrize("cache_ttl_seconds", [0, -1, True, 1.5, "1800"])
+def test_profile_cache_ttl_seconds_rejects_non_positive_or_non_integer_values(
+    cache_ttl_seconds,
+):
+    with pytest.raises(ValueError, match="cache_ttl_seconds must be a positive integer"):
+        validate_model_profiles_payload(
+            {
+                "general": {
+                    "provider_id": "foundry-1",
+                    "deployment": "deployment-general",
+                    "cache_ttl_seconds": cache_ttl_seconds,
+                }
+            }
+        )
+
+
 def test_legacy_azure_profile_is_converted_once_to_foundry_provider_id():
     migrated = migrate_legacy_model_profiles_payload(
         {"general": {"provider": "azure_openai", "deployment": "deployment-general"}},

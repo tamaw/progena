@@ -33,7 +33,7 @@ import { getDailyWelcomeMessage, normalizeStoredMessage, stripEphemeralStreamEve
 import { followTranscript, noteTranscriptScroll, noteTranscriptUserInput, pinTranscriptToTail } from '../models/transcriptScroll';
 import { ConversationSessionsPane } from '../components/ConversationSessionsPane';
 import { useConversationAttachments } from '../hooks/useConversationAttachments';
-import { latestContextUsage, resolveComposerContextUsage } from '../models/contextWindowModel';
+import { latestContextUsage, resolveComposerCacheExpiry, resolveComposerContextUsage } from '../models/contextWindowModel';
 
 function ConversationPage() {
   const dispatch = useDispatch();
@@ -302,6 +302,10 @@ function ConversationPage() {
       && messages.length === 0
       && !liveContextUsage,
   }), [liveContextUsage, messages, modelProfiles, selectedBackendChatId, threadId]);
+  const composerCacheExpiry = useMemo(
+    () => resolveComposerCacheExpiry({ messages, profiles: modelProfiles }),
+    [messages, modelProfiles],
+  );
 
   const openBackendChat = useCallback(async (requestedThreadId) => {
     if (!requestedThreadId) {
@@ -1613,6 +1617,7 @@ function ConversationPage() {
           focusToken={`${threadId ?? 'no-session'}:${composerFocusTick}`}
           keepFocusAfterSend
           contextUsage={composerContextUsage}
+          cacheExpiry={composerCacheExpiry}
         />
         </div>
       </DetailPane>

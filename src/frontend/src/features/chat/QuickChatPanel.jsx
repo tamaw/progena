@@ -19,7 +19,7 @@ import { quickChatMemory } from './models/quickChatMemory';
 import { createLiveAssistantTurnStore } from './models/liveAssistantTurnStore';
 import { applyAssistantChunk, applyAssistantMetadata, applyAssistantStreamEvent, createLiveAssistantTurn, finalizeLiveAssistantTurn } from './models/liveAssistantTurnModel';
 import { loadQuickChatHistory, toQuickChatInputHistory } from './models/quickChatStreamModel';
-import { latestContextUsage, resolveComposerContextUsage } from './models/contextWindowModel';
+import { latestContextUsage, resolveComposerCacheExpiry, resolveComposerContextUsage } from './models/contextWindowModel';
 import { followTranscript, noteTranscriptScroll, noteTranscriptUserInput, pinTranscriptToTail } from './models/transcriptScroll';
 
 
@@ -99,6 +99,10 @@ export function QuickChatPanel({
     profiles: modelProfiles,
     isFreshConversation: Boolean(scratchThreadId) && history.length === 0 && !liveContextUsage,
   }), [history, liveContextUsage, modelProfiles, scratchThreadId]);
+  const composerCacheExpiry = useMemo(
+    () => resolveComposerCacheExpiry({ messages: history, profiles: modelProfiles }),
+    [history, modelProfiles],
+  );
 
   useEffect(() => {
     if (messagesScrollFrameRef.current !== null) return;
@@ -644,6 +648,7 @@ export function QuickChatPanel({
         initialMessage={composerSeed.message}
         enableAttachments
         contextUsage={composerContextUsage}
+        cacheExpiry={composerCacheExpiry}
       />
     </TopNavPane>
   );

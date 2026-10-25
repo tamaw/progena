@@ -280,6 +280,10 @@ export function normalizeBackendChatMessage(message, index) {
     role,
     content,
     timestamp,
+    // Never reuse the display timestamp's Date.now() fallback for cache age.
+    responseTimestamp: role === 'assistant' && content.trim()
+      && !['cancelled', 'failed', 'incomplete'].includes(raw.response_metadata?.status)
+      ? toValidTimestamp(createdAt) : null,
     tokenCount: Number.isFinite(message.token_count) ? message.token_count : 0,
     reasoningTokenCount: Number.isFinite(message.reasoning_token_count)
       ? message.reasoning_token_count

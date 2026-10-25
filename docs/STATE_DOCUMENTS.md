@@ -150,6 +150,31 @@ tokens, not accumulated conversation/billing totals. Hover shows the token
 counts and percentage. Missing capacity or unknown usage hides the indicator;
 no model limits are inferred. PATCH `context_window: null` removes the capacity.
 
+An optional positive-integer `cache_ttl_seconds` configures a **display-only
+prompt-cache retention estimate**. For example, `"cache_ttl_seconds": 3600`
+selects a one-hour estimate for that profile. Bold text immediately left of
+the context pie counts down each minute (`60m`, `59m`, …), then shows `0m`.
+Longer durations use hours. Missing retention, unknown/ambiguous profile identity,
+or an unavailable response timestamp hides it. PATCH `cache_ttl_seconds: null`
+removes the estimate.
+
+The live countdown starts on successful parent-response completion, not on text
+chunks, tool/subagent events, errors, or cancellation. Reload uses the persisted
+assistant timestamp rather than the browser's load time; historical creation
+timestamps can precede completion, so this is conservative and may shorten the
+estimate. Tool-only synthetic rows do not start a timer. Switching conversations
+or profile identities never reuses a different conversation/model's deadline.
+
+This value neither configures provider caching nor proves an entry exists.
+[OpenAI's prompt-cache lifetimes](https://developers.openai.com/api/docs/guides/prompt-caching#cache-lifetime)
+vary by model: GPT-5.6+ documents 30-minute or 12-hour minimum lifetimes; older
+`in_memory` caches typically survive 5–10 minutes of inactivity, up to one hour,
+with separate extended-retention policies.
+[Anthropic](https://platform.claude.com/docs/en/build-with-claude/prompt-caching)
+documents a default five-minute lifetime and an optional paid one-hour lifetime,
+measured from request start rather than response completion. Configure the
+estimate deliberately; no universal retention duration is inferred.
+
 Postgres changes to the `progena.state` / `profile` document trigger an
 unsolicited `profiles.snapshot`. This key bypasses coarse `StateSnapshot` diff
 filtering because profiles are not runtime-health fields. The existing canonical

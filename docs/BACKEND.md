@@ -386,6 +386,14 @@ invoice-grade historical tariffs.
 ChatGPT-plan calls retain token counts but do not use profile API prices to
 estimate charges; they are reported as unpriced with an explanatory warning.
 
+Profiles also expose optional positive-integer `cache_ttl_seconds` in public
+snapshots and PATCH bodies; `null` removes it. The value is a composer countdown
+estimate only, never a provider request/retention setting. It is stored beside
+`context_window` in the shared `profile` JSONB document and follows the same
+validation and canonical `profiles.snapshot` acknowledgement contract. See
+[model profile cache estimates](STATE_DOCUMENTS.md#model-profiles) for timing
+limitations and provider retention references.
+
 The Profiles editor provides an explicit Azure GPT-5 mini Global Standard
 USD preset, verified against the [Azure pricing page](https://azure.microsoft.com/en-us/pricing/details/azure-openai/)
 on 2026-10-20: input `0.25`, cached input `0.025`, output `2.00` per million

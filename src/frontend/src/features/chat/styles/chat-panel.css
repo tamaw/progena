@@ -1193,6 +1193,10 @@
     cursor: default;
 }
 
+.input-toolbar .chat-info-control > button:disabled {
+    pointer-events: none;
+}
+
 .chat-info-tooltip {
     position: absolute;
     bottom: calc(100% + 10px);
@@ -1219,6 +1223,11 @@
 .chat-info-control:focus-visible .chat-info-tooltip {
     opacity: 1;
     transform: translateY(0);
+}
+
+.input-toolbar__right .chat-info-tooltip {
+    left: auto;
+    right: 0;
 }
 
 .chat-info-tooltip__row {

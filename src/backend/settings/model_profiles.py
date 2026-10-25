@@ -45,6 +45,13 @@ def _safe_public_profile(name: str, profile: dict[str, Any]) -> dict[str, Any]:
         if type(context_window) is not int or context_window <= 0:
             raise HTTPException(status_code=422, detail=f"Profile {name!r}: invalid context_window")
         public["context_window"] = context_window
+    if "cache_ttl_seconds" in profile:
+        cache_ttl_seconds = profile["cache_ttl_seconds"]
+        if type(cache_ttl_seconds) is not int or cache_ttl_seconds <= 0:
+            raise HTTPException(
+                status_code=422, detail=f"Profile {name!r}: invalid cache_ttl_seconds"
+            )
+        public["cache_ttl_seconds"] = cache_ttl_seconds
     if "pricing" in profile:
         public["pricing"] = dict(profile["pricing"])
     for field in ("reasoning_enabled", "reasoning_effort", "reasoning_summary"):
@@ -194,6 +201,7 @@ def create_model_profile_router(
             "deployment",
             "pricing",
             "context_window",
+            "cache_ttl_seconds",
             "reasoning_enabled",
             "reasoning_effort",
             "reasoning_summary",
@@ -250,6 +258,16 @@ def create_model_profile_router(
                     )
                 else:
                     profile["context_window"] = context_window
+            if "cache_ttl_seconds" in patch_body:
+                cache_ttl_seconds = patch_body["cache_ttl_seconds"]
+                if cache_ttl_seconds is None:
+                    profile.pop("cache_ttl_seconds", None)
+                elif type(cache_ttl_seconds) is not int or cache_ttl_seconds <= 0:
+                    raise HTTPException(
+                        status_code=422, detail="cache_ttl_seconds must be a positive integer"
+                    )
+                else:
+                    profile["cache_ttl_seconds"] = cache_ttl_seconds
             for field in ("reasoning_enabled", "reasoning_effort", "reasoning_summary"):
                 if field not in patch_body:
                     continue

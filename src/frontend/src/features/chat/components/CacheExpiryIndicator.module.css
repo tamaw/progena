@@ -1,0 +1,23 @@
+.indicator {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  flex: 0 0 32px;
+  color: var(--color-text-secondary);
+  cursor: help;
+}
+
+.time {
+  font-family: var(--font-family-mono);
+  font-size: 12px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+.expired {
+  color: var(--color-text-muted);
+}

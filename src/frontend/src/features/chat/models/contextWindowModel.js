@@ -87,6 +87,27 @@ export function resolveComposerContextUsage({ contextUsage, profiles, isFreshCon
   return maxTokens === null ? null : { usedTokens: 0, maxTokens };
 }
 
+/** Configured retention estimate, not an observation of provider cache state. */
+export function resolveComposerCacheExpiry({ messages = [], profiles = [] } = {}) {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message?.role !== 'assistant' || message.isStreaming || message.error) continue;
+    const usage = normalizeContextUsage(message.contextUsage);
+    const respondedAt = message.responseTimestamp;
+    if (!usage || !Number.isFinite(respondedAt) || respondedAt <= 0) return null;
+    const ttl = matchingProfile(profiles, usage)?.cache_ttl_seconds;
+    if (!Number.isSafeInteger(ttl) || ttl <= 0) return null;
+    const expiresAt = respondedAt + ttl * 1000;
+    return Number.isSafeInteger(expiresAt) ? { expiresAt, ttlSeconds: ttl } : null;
+  }
+  return null;
+}
+
+export function cacheCountdownLabel(expiresAt, now) {
+  const minutes = Math.max(0, Math.ceil((expiresAt - now) / 60000));
+  return minutes >= 100 ? `${Math.ceil(minutes / 60)}h` : `${minutes}m`;
+}
+
 /** Return the newest persisted latest-call usage, never an accumulated total. */
 export function latestContextUsage(messages) {
   if (!Array.isArray(messages)) {

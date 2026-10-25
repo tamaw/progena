@@ -35,6 +35,16 @@ overwrite that turn, even after its stream returns to idle. The panel subscribes
 only to live-turn presence and context usage; token updates render inside
 `LiveAssistantTurn` instead of rerendering the composer and historical list.
 
+Both composers include `CacheExpiryIndicator` immediately before the context
+pie when the matching profile supplies `cache_ttl_seconds` and a successful
+response has a trustworthy timestamp. Its component-local clock updates at
+minute boundaries, recomputes from wall-clock time when the tab becomes visible,
+and stops at `0m`; it never rerenders the transcript on a timer. Missing settings
+hide it. Reload uses the saved response timestamp, never a `Date.now()` display
+fallback. The tooltip identifies this as a configured estimate rather than an
+observed provider-cache expiry; historical creation timestamps may make the
+estimate shorter than live completion timing.
+
 The chat page's filter dropdown controls activity only: Tools, Plans, Reasoning,
 and Delegations (subagents and A2A together). User messages, final answers,
 attachments, and message images remain visible. **All** restores the defaults:

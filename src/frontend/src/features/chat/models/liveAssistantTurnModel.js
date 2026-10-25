@@ -831,6 +831,7 @@ export function toCommittedAssistantMessage(turn) {
     role: 'assistant',
     content: turn.content,
     timestamp: turn.assistantTimestamp || turn.startedAt,
+    responseTimestamp: turn.responseTimestamp ?? null,
     tokenCount: turn.tokenCount,
     reasoningTokenCount: turn.reasoningTokenCount,
     cacheReadTokenCount: turn.cacheReadTokenCount,
@@ -869,7 +870,10 @@ export function finalizeLiveAssistantTurn(turn, { status, now, errorMessage }) {
     return null;
   }
 
-  const finalTurn = { ...turn, isStreaming: false, assistantTimestamp: now || turn.startedAt };
+  const finalTurn = {
+    ...turn, isStreaming: false, assistantTimestamp: now || turn.startedAt,
+    responseTimestamp: status === 'completed' ? now || turn.startedAt : null,
+  };
 
   if (status === 'error') {
     const errorContent = `Error: ${errorMessage || 'Unknown error'}`;

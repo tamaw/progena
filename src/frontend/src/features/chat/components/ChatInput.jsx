@@ -1,4 +1,4 @@
-import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
+import { cloneElement, forwardRef, useCallback, useEffect, useId, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { useConfig } from '../../../context/ConfigContext';
 import { fetchAgentProfiles } from '../../agents/state/agents';
@@ -7,7 +7,24 @@ import { selectRealtimeStreamReady } from '../../../realtime/realtimeSlice';
 import { getAgentMentionContext } from '../models/chatInputModel';
 import AttachmentFileIcon from './AttachmentFileIcon';
 import ContextWindowIndicator from './ContextWindowIndicator';
+import CacheExpiryIndicator from './CacheExpiryIndicator';
 import { describeAttachmentFileType, formatAttachmentSize } from '../models/attachmentFileTypes';
+
+function ComposerTooltip({ label, children }) {
+  const tooltipId = useId();
+  const disabled = Boolean(children.props.disabled);
+  return (
+    <span
+      className="chat-info-control"
+      tabIndex={disabled ? 0 : undefined}
+      aria-label={disabled ? children.props['aria-label'] : undefined}
+      aria-describedby={disabled ? tooltipId : undefined}
+    >
+      {cloneElement(children, { 'aria-describedby': tooltipId })}
+      <span id={tooltipId} className="chat-info-tooltip" role="tooltip">{label}</span>
+    </span>
+  );
+}
 
 const SLASH_COMMANDS = [
   {
@@ -56,6 +73,7 @@ const ChatInput = forwardRef(function ChatInput({
   className = '',
   enableAttachments = true,
   contextUsage = null,
+  cacheExpiry = null,
 }, ref) {
   const [message, setMessage] = useState(initialMessage);
   const [activeSlashIndex, setActiveSlashIndex] = useState(0);
@@ -507,10 +525,10 @@ const ChatInput = forwardRef(function ChatInput({
                       e.target.value = '';
                     }}
                   />
+                  <ComposerTooltip label="Attach file">
                   <button
                     type="button"
                     className="btn-icon"
-                    title="Attach file"
                     aria-label="Attach file"
                     disabled={disabled || isGenerating}
                     onClick={() => fileInputRef.current?.click()}
@@ -519,20 +537,23 @@ const ChatInput = forwardRef(function ChatInput({
                       <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
                     </svg>
                   </button>
+                  </ComposerTooltip>
                 </>
               ) : (
-                <button type="button" className="btn-icon" title="Attach file (unavailable here)" aria-label="Attach file" disabled>
+                <ComposerTooltip label="Attach file (unavailable here)">
+                <button type="button" className="btn-icon" aria-label="Attach file" disabled>
                   <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                     <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
                   </svg>
                 </button>
+                </ComposerTooltip>
               )}
               <div className="chat-info-control" tabIndex={0} aria-label="Keyboard shortcuts">
                 <span className="btn-icon chat-info-btn" aria-hidden="true">
                   <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.25" strokeLinecap="round" strokeLinejoin="round">
                     <circle cx="12" cy="12" r="10" />
-                    <line x1="12" y1="16" x2="12" y2="12" />
-                    <line x1="12" y1="8" x2="12.01" y2="8" />
+                    <path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 2-3 4" />
+                    <line x1="12" y1="17" x2="12.01" y2="17" />
                   </svg>
                 </span>
                 <div className="chat-info-tooltip" role="tooltip">
@@ -545,8 +566,10 @@ const ChatInput = forwardRef(function ChatInput({
               </div>
             </div>
             <div className="input-toolbar__right">
+              <CacheExpiryIndicator expiry={cacheExpiry} />
               <ContextWindowIndicator usage={contextUsage} />
-              <button type="button" className="btn-icon" title="Voice input (coming soon)" aria-label="Voice input" disabled>
+              <ComposerTooltip label="Voice input (coming soon)">
+              <button type="button" className="btn-icon" aria-label="Voice input" disabled>
                 <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                   <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
                   <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
@@ -554,6 +577,8 @@ const ChatInput = forwardRef(function ChatInput({
                   <line x1="8" y1="23" x2="16" y2="23" />
                 </svg>
               </button>
+              </ComposerTooltip>
+              <ComposerTooltip label={isGenerating && allowStop ? 'Stop generation' : 'Send message'}>
               {isGenerating && allowStop ? (
                 <button type="button" className="btn-send btn-send--stop" aria-label="Stop generation" onClick={onStop}>
                   <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
@@ -574,6 +599,7 @@ const ChatInput = forwardRef(function ChatInput({
                   </svg>
                 </button>
               )}
+              </ComposerTooltip>
             </div>
           </div>
         </div>

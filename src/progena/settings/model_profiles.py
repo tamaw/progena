@@ -26,7 +26,14 @@ _PRICING_RATE_FIELDS = (
 )
 _PRICING_FIELDS = ("currency", *_PRICING_RATE_FIELDS)
 _SUPPORTED_PROFILE_FIELDS = frozenset(
-    {"provider_id", "deployment", "pricing", "context_window", *_OPTIONAL_REASONING_FIELDS}
+    {
+        "provider_id",
+        "deployment",
+        "pricing",
+        "context_window",
+        "cache_ttl_seconds",
+        *_OPTIONAL_REASONING_FIELDS,
+    }
 )
 _CURRENCY_PATTERN = re.compile(r"^[A-Z]{3}$")
 _DECIMAL_STRING_PATTERN = re.compile(r"^(?:0|[1-9]\d*)(?:\.\d+)?$")
@@ -118,6 +125,11 @@ def _normalize_profile(name: str, profile: Any) -> dict[str, Any]:
         if type(context_window) is not int or context_window <= 0:
             raise ValueError(f"profile {name!r}: context_window must be a positive integer")
         normalized["context_window"] = context_window
+    if "cache_ttl_seconds" in profile:
+        cache_ttl_seconds = profile["cache_ttl_seconds"]
+        if type(cache_ttl_seconds) is not int or cache_ttl_seconds <= 0:
+            raise ValueError(f"profile {name!r}: cache_ttl_seconds must be a positive integer")
+        normalized["cache_ttl_seconds"] = cache_ttl_seconds
     for field in _OPTIONAL_REASONING_FIELDS:
         if field not in profile:
             continue
