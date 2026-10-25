@@ -6,7 +6,7 @@ const renderers = vi.hoisted(() => ({
   renderSafeMarkdown: vi.fn(() => '<p><strong>formatted terminal content</strong></p>'),
   formatMessage: vi.fn(() => '<p><strong>legacy formatted terminal content</strong></p>'),
   sanitizeHtmlFragment: vi.fn((html) => html),
-  describeStreamEvent: vi.fn(() => ({ badge: '', title: '', metaDetail: '', bodyHtml: '', bodyDetail: '' })),
+  describeStreamEvent: vi.fn(() => ({ title: '', metaDetail: '', bodyHtml: '', bodyDetail: '' })),
 }));
 
 vi.mock("@frontend/lib/safeMarkdown", () => ({
@@ -16,14 +16,10 @@ vi.mock("@frontend/lib/safeMarkdown", () => ({
 }));
 vi.mock("@frontend/features/chat/models/messageRenderUtils", () => ({
   describeStreamEvent: renderers.describeStreamEvent,
-  badgeForEvent: () => ({
-    className: '',
-    label: ''
-  }),
+  badgeClassForEvent: () => '',
   toolDetailsForEvent: () => null,
   todosDetailsForEvent: () => null,
   tokenMetaItemsForEvent: () => [],
-  tagClassForEventType: () => '',
   formatTimestamp: () => ''
 }));
 vi.mock('react-redux', () => ({
@@ -78,7 +74,6 @@ describe('TimelineItem assistant messages', () => {
     const bodyHtml = '<strong>Reasoning summary</strong>';
     const reasoningDetailHtml = '<p>Reasoning detail</p>';
     renderers.describeStreamEvent.mockReturnValueOnce({
-      badge: 'reasoning',
       title: 'Reasoning',
       metaDetail: '',
       bodyHtml,

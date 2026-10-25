@@ -124,6 +124,13 @@ def _now_iso() -> str:
     return datetime.now(UTC).isoformat().replace("+00:00", "Z")
 
 
+class ReasoningSegment(BaseModel):
+    """One model call's reasoning, kept separate so history can show where it fell."""
+
+    text: str
+    created_at: str | None = None
+
+
 class ChatMessage(BaseModel):
     id: str
     role: str
@@ -134,6 +141,8 @@ class ChatMessage(BaseModel):
     reasoning_token_count: int = 0
     cache_read_token_count: int = 0
     reasoning_text: str = ""
+    # Per-model-call reasoning in order; reasoning_text is their "\n\n" join.
+    reasoning_segments: list[ReasoningSegment] = Field(default_factory=list)
     display_agent_name: str | None = None
     display_model_name: str | None = None
     display_tool_calls: list[Any] = Field(default_factory=list)
@@ -457,14 +466,7 @@ def _chat_message_from_raw(
     role = _raw_message_role(raw)
     if role == "tool":
         return None
-    if isinstance(raw, dict):
-        content = _strip_attachment_context(
-            _message_text(raw.get("content") or raw.get("message") or raw.get("text"))
-        )
-    else:
-        content = _strip_attachment_context(
-            extract_message_text(raw) or _message_text(getattr(raw, "content", ""))
-        )
+    content = _raw_message_content(raw)
     if role == "assistant" and _is_cancelled_reply(raw):
         content = f"{content}{CANCELLED_SUFFIX}" if content else CANCELLED_SUFFIX.strip()
     if not content and role == "assistant":
@@ -476,6 +478,11 @@ def _chat_message_from_raw(
         content=content,
         created_at=_raw_message_created_at(raw),
         reasoning_timestamp=_raw_message_created_at(raw) if reasoning_text else None,
+        reasoning_segments=(
+            [ReasoningSegment(text=reasoning_text, created_at=_raw_message_created_at(raw))]
+            if reasoning_text
+            else []
+        ),
         token_count=_raw_message_token_count(raw),
         reasoning_token_count=extract_reasoning_token_count(raw) or 0,
         cache_read_token_count=extract_cache_read_token_count(raw) or 0,
@@ -486,6 +493,16 @@ def _chat_message_from_raw(
         tool_calls=tool_calls or [],
         attachments=_attachments_from_raw(raw),
         raw=_raw_message_payload(raw),
+    )
+
+
+def _raw_message_content(raw: Any) -> str:
+    if isinstance(raw, dict):
+        return _strip_attachment_context(
+            _message_text(raw.get("content") or raw.get("message") or raw.get("text"))
+        )
+    return _strip_attachment_context(
+        extract_message_text(raw) or _message_text(getattr(raw, "content", ""))
     )
 
 
@@ -568,7 +585,7 @@ def _messages_from_checkpoint(
     pending_token_count = 0
     pending_reasoning_token_count = 0
     pending_cache_read_token_count = 0
-    pending_reasoning_parts: list[str] = []
+    pending_reasoning_parts: list[ReasoningSegment] = []
     pending_reasoning_timestamp: str | None = None
 
     for index, raw in enumerate(snapshot.messages):
@@ -579,7 +596,8 @@ def _messages_from_checkpoint(
         if role == "user":
             if pending_tool_calls or pending_reasoning_parts:
                 synthetic = _synthetic_pending_tool_call_message(pending_tool_calls, index)
-                synthetic.reasoning_text = "\n\n".join(pending_reasoning_parts)
+                synthetic.reasoning_text = _join_reasoning(pending_reasoning_parts)
+                synthetic.reasoning_segments = pending_reasoning_parts
                 synthetic.reasoning_timestamp = pending_reasoning_timestamp
                 synthetic.token_count = pending_token_count
                 synthetic.reasoning_token_count = pending_reasoning_token_count
@@ -600,12 +618,20 @@ def _messages_from_checkpoint(
             )
             reasoning_text = extract_reasoning_trace(raw)
             if reasoning_text:
-                pending_reasoning_parts.append(reasoning_text)
+                pending_reasoning_parts.append(
+                    ReasoningSegment(text=reasoning_text, created_at=_raw_message_created_at(raw))
+                )
                 if pending_reasoning_timestamp is None:
                     pending_reasoning_timestamp = _raw_message_created_at(raw)
-            for tc in _extract_raw_tool_calls(raw):
+            raw_tool_calls = _extract_raw_tool_calls(raw)
+            # Text the model wrote alongside its tool calls narrates them rather
+            # than answering, so it travels with the first call as commentary.
+            commentary = _raw_message_content(raw).strip() if raw_tool_calls else ""
+            for call_index, tc in enumerate(raw_tool_calls):
                 entry = tool_results.get(tc["id"], {})
                 tc_with_result = {**tc, "result": entry.get("result", "")}
+                if commentary and call_index == 0:
+                    tc_with_result["commentary"] = commentary
                 if "artifact" in entry:
                     tc_with_result["artifact"] = entry["artifact"]
                 if "images" in entry:
@@ -616,12 +642,16 @@ def _messages_from_checkpoint(
                 if audit_entry is not None and "duration_ms" in audit_entry:
                     tc_with_result["duration_ms"] = audit_entry.get("duration_ms")
                 pending_tool_calls.append(tc_with_result)
+            if commentary:
+                # The narration now lives on its tool call; the message adds nothing.
+                continue
 
         tool_calls_to_attach = list(pending_tool_calls) if role == "assistant" else None
         message = _chat_message_from_raw(raw, index, tool_calls=tool_calls_to_attach)
         if message is not None:
             if role == "assistant":
-                message.reasoning_text = "\n\n".join(pending_reasoning_parts)
+                message.reasoning_text = _join_reasoning(pending_reasoning_parts)
+                message.reasoning_segments = pending_reasoning_parts
                 message.token_count = pending_token_count
                 message.reasoning_token_count = pending_reasoning_token_count
                 message.cache_read_token_count = pending_cache_read_token_count
@@ -640,11 +670,16 @@ def _messages_from_checkpoint(
         synthetic.token_count = pending_token_count
         synthetic.reasoning_token_count = pending_reasoning_token_count
         synthetic.cache_read_token_count = pending_cache_read_token_count
-        synthetic.reasoning_text = "\n\n".join(pending_reasoning_parts)
+        synthetic.reasoning_text = _join_reasoning(pending_reasoning_parts)
+        synthetic.reasoning_segments = pending_reasoning_parts
         synthetic.reasoning_timestamp = pending_reasoning_timestamp
         messages.append(synthetic)
 
     return messages
+
+
+def _join_reasoning(segments: list[ReasoningSegment]) -> str:
+    return "\n\n".join(segment.text for segment in segments)
 
 
 def _summary_from_session(

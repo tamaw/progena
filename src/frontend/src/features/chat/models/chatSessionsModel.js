@@ -187,6 +187,7 @@ function buildToolStreamEvents(toolCalls, messageId) {
         args_preview: args,
         tool_call_id: toolCallId,
         source: 'checkpoint',
+        ...(typeof tc.commentary === 'string' && tc.commentary.trim() ? { commentary: tc.commentary } : {}),
       },
     });
     // Replays the same submitted/working/completed/... sequence a live
@@ -288,6 +289,14 @@ export function normalizeBackendChatMessage(message, index) {
     reasoningTimestamp: typeof message.reasoning_timestamp === 'string'
       ? message.reasoning_timestamp
       : null,
+    reasoningSegments: Array.isArray(message.reasoning_segments)
+      ? message.reasoning_segments
+        .filter((segment) => typeof segment?.text === 'string' && segment.text.trim())
+        .map((segment) => ({
+          text: segment.text,
+          timestamp: typeof segment.created_at === 'string' ? segment.created_at : null,
+        }))
+      : [],
     displayAgentName: typeof message.display_agent_name === 'string' ? message.display_agent_name : '',
     displayModelName: typeof message.display_model_name === 'string' ? message.display_model_name : '',
     displayToolCalls: Array.isArray(message.display_tool_calls) ? message.display_tool_calls : [],

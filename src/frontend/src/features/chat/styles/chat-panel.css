@@ -362,31 +362,35 @@
 
 .chat-event-entry .entry__badge--tool {
     color: color-mix(in srgb, var(--color-success) 82%, white);
-    background: color-mix(in srgb, var(--color-success) 16%, var(--color-bg-tertiary));
-    border: 1px solid color-mix(in srgb, var(--color-success) 34%, var(--color-border-light));
-    box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-success) 7%, transparent);
 }
 
 .chat-event-entry .entry__badge--plan {
     color: color-mix(in srgb, var(--color-accent) 82%, white);
-    background: color-mix(in srgb, var(--color-accent) 16%, var(--color-bg-tertiary));
-    border: 1px solid color-mix(in srgb, var(--color-accent) 34%, var(--color-border-light));
-    box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-accent) 7%, transparent);
 }
 
-.chat-event-badge--reason {
-    color: #fff;
-    background: #a78bfa;
+/* Compounded with .entry__badge so these beat chrome-frame.css's base
+   `.entry__badge { color: white }`, which is imported later. */
+.entry__badge.chat-event-badge--reason {
+    color: #a78bfa;
 }
 
-.chat-event-badge--step {
+.entry__badge.chat-event-badge--step {
     color: var(--color-text-muted);
-    background: color-mix(in srgb, var(--color-text-muted) 14%, var(--color-bg-tertiary));
-    border: 1px solid color-mix(in srgb, var(--color-text-muted) 22%, var(--color-border-light));
 }
 
 .chat-event-tool {
     margin-top: 6px;
+}
+
+/* Merged tool call (ToolCallEntry.jsx): input box, then output box. */
+.tool-call-entry__label {
+    padding: 6px 14px 0;
+    color: var(--color-text-muted);
+    font-size: 11.5px;
+}
+
+.tool-call-entry__output--error .tool__body {
+    color: var(--color-error);
 }
 
 /* Code in messages */
@@ -461,11 +465,15 @@
 
 /* Todo panel -- live plan checklist rendered as the body of a `todos_update`
    timeline entry (see TimelineItem.jsx / chat-event-entry). The entry's own
-   badge/tag/header already provide the "Plan" label and "n/total done"
-   count, so this is just the progress bar + checklist content -- no card
-   chrome of its own, it lives inside entry__content. */
+   header already shows the active item and "n/total done", so this is the
+   progress bar as a disclosure summary (chevron at the end) with the
+   checklist as its body -- no card chrome of its own. */
 .todo-panel {
     animation: fadeIn 0.2s ease;
+}
+
+.todo-panel > summary .todo-panel__bar {
+    flex: 1 1 auto;
 }
 
 .todo-panel__bar {
@@ -482,7 +490,9 @@
     transition: width 0.2s ease;
 }
 
-.todo-panel__list {
+/* Compounded so it beats chrome-frame.css's later `.entry__content ul`
+   (20px indent, meant for markdown lists): the checklist sits flush. */
+.todo-panel .todo-panel__list {
     list-style: none;
     margin: var(--spacing-xs) 0 0;
     padding: 0;
@@ -517,22 +527,14 @@
     text-decoration: line-through;
 }
 
-/* Live delegation cards (subagent + A2A) share one fixed-height, always-open
-   scroll pane treatment: growing content (streamed text, tool-call/update
-   list) scrolls within a capped-height body and auto-tails to the latest
-   entry (useStickyScroll.js) instead of a manual collapse/expand toggle --
-   nothing to click, and every concurrent card keeps the same small,
-   predictable footprint on screen regardless of how much it's produced. */
+/* Delegation cards (subagent + A2A) show only their latest few chain lines
+   (see CARD_SUMMARY_LINES in workGroupModel.js); EarlierLinesToggle reveals
+   the rest, so the body never needs to scroll. */
 .subagent-card__body,
 .a2a-call-card__body {
-    max-height: 240px;
     margin-top: 4px;
     padding: 8px 10px;
     border-radius: var(--border-radius-md);
-    overflow-y: auto;
-    overscroll-behavior: contain;
-    scrollbar-color: color-mix(in oklab, var(--color-text-muted) 36%, transparent) transparent;
-    scrollbar-width: thin;
 }
 
 /* This body plays the same role .message.assistant plays under a plain
@@ -556,24 +558,6 @@
 
 .a2a-call-card--error .a2a-call-card__body {
     background-color: color-mix(in srgb, var(--color-error) 6%, transparent);
-}
-
-.subagent-card__body::-webkit-scrollbar,
-.a2a-call-card__body::-webkit-scrollbar {
-    width: 8px;
-}
-
-.subagent-card__body::-webkit-scrollbar-track,
-.a2a-call-card__body::-webkit-scrollbar-track {
-    background: transparent;
-}
-
-.subagent-card__body::-webkit-scrollbar-thumb,
-.a2a-call-card__body::-webkit-scrollbar-thumb {
-    background: color-mix(in oklab, var(--color-text-muted) 28%, transparent);
-    border: 2px solid transparent;
-    border-radius: 999px;
-    background-clip: content-box;
 }
 
 /* Subagent card -- one per `task` tool delegation (nested subagent
@@ -609,16 +593,13 @@
     white-space: normal;
 }
 
-/* Compounded with the shared .entry__badge/.entry__tag base class (not just
-   the modifier class alone) so these deterministically win the cascade --
-   chrome-frame.css is imported after chat-panel.css and its .entry__badge/
-   .entry__tag base rules set the same properties (color/background/border)
-   at equal specificity, so a bare single-class selector here would silently
-   lose to it by source order regardless of which hue is configured. */
+/* Compounded with the shared .entry__badge base class (not just the
+   modifier class alone) so these deterministically win the cascade --
+   chrome-frame.css is imported after chat-panel.css and its .entry__badge
+   base rule sets the same color at equal specificity, so a bare
+   single-class selector here would silently lose to it by source order. */
 .entry__badge.subagent-card__badge {
     color: color-mix(in srgb, var(--color-success) 82%, white);
-    background: color-mix(in srgb, var(--color-success) 16%, var(--color-bg-tertiary));
-    border: 1px solid color-mix(in srgb, var(--color-success) 34%, var(--color-border-light));
 }
 
 .subagent-card__badge--running {
@@ -627,19 +608,11 @@
 
 .entry__badge.subagent-card__badge--error {
     color: var(--color-error);
-    background: color-mix(in oklab, var(--color-error) 14%, transparent);
-    border-color: color-mix(in oklab, var(--color-error) 30%, transparent);
 }
 
 @keyframes subagent-pulse {
     0%, 100% { opacity: 1; }
     50% { opacity: 0.45; }
-}
-
-.entry__tag.subagent-card__tag {
-    color: color-mix(in srgb, var(--color-success) 82%, white);
-    background: color-mix(in srgb, var(--color-success) 16%, var(--color-bg-tertiary));
-    border-color: color-mix(in srgb, var(--color-success) 34%, var(--color-border-light));
 }
 
 .subagent-card__error {
@@ -651,14 +624,13 @@
 /* Each nested tool call renders as its own mini .entry node (SubagentChild
    in SubagentCard.jsx) chained together, the same "mini card/event" pattern
    A2ACallCard's A2ASubEntry uses below for A2A's own per-update sub-entries
-   -- scaled-down 18px gutter/16px badge for the same reason (already
-   indented once as a card in the outer chain). Badge color reuses the outer
-   card's own .subagent-card__badge--running/--error modifiers directly
-   (child.status shares the exact same running/success/error vocabulary as
-   the outer card's item.status) rather than a parallel set of child-specific
-   color rules.
+   -- scaled-down 18px gutter for the same reason (already indented once as
+   a card in the outer chain). Dot color reuses the outer card's own
+   .subagent-card__badge--running/--error modifiers directly (child.status
+   shares the exact same running/success/error vocabulary as the outer
+   card's item.status) rather than a parallel set of child-specific rules.
 
-   The four geometry rules below are shared, via a comma-separated selector,
+   The geometry rules below are shared, via a comma-separated selector,
    with A2ACallCard's own .a2a-call-card__subchain nested chain -- both are
    the exact same "mini card/event" scale-down, so a single declaration keeps
    the two families' nested-chain geometry from drifting apart if one is ever
@@ -678,20 +650,7 @@
 
 .subagent-card__children .entry__gutter::before,
 .a2a-call-card__subchain .entry__gutter::before {
-    top: 16px;
     bottom: -12px;
-}
-
-.subagent-card__children .entry__badge,
-.a2a-call-card__subchain .entry__badge {
-    width: 16px;
-    height: 16px;
-}
-
-.subagent-card__children .entry__badge svg,
-.a2a-call-card__subchain .entry__badge svg {
-    width: 9px;
-    height: 9px;
 }
 
 /* A2A call card -- one per A2A tool invocation of a deployed agent,
@@ -708,13 +667,11 @@
     animation: fadeIn 0.2s ease;
 }
 
-/* Compounded with .entry__badge/.entry__tag -- see the matching comment on
+/* Compounded with .entry__badge -- see the matching comment on
    .entry__badge.subagent-card__badge above for why the bare class alone
    isn't enough. */
 .entry__badge.a2a-call-card__badge {
     color: color-mix(in srgb, var(--color-accent-secondary) 82%, white);
-    background: color-mix(in srgb, var(--color-accent-secondary) 16%, var(--color-bg-tertiary));
-    border: 1px solid color-mix(in srgb, var(--color-accent-secondary) 34%, var(--color-border-light));
 }
 
 .a2a-call-card__badge--running {
@@ -723,14 +680,6 @@
 
 .entry__badge.a2a-call-card__badge--error {
     color: var(--color-error);
-    background: color-mix(in oklab, var(--color-error) 14%, transparent);
-    border-color: color-mix(in oklab, var(--color-error) 30%, transparent);
-}
-
-.entry__tag.a2a-call-card__tag {
-    color: color-mix(in srgb, var(--color-accent-secondary) 82%, white);
-    background: color-mix(in srgb, var(--color-accent-secondary) 16%, var(--color-bg-tertiary));
-    border-color: color-mix(in srgb, var(--color-accent-secondary) 34%, var(--color-border-light));
 }
 
 .a2a-call-card__error {
@@ -773,11 +722,6 @@
     line-height: 1.45;
 }
 
-.subagent-card__children .entry__tag,
-.a2a-call-card__subchain .entry__tag {
-    font-size: 9px;
-}
-
 .subagent-card__children .entry__time,
 .a2a-call-card__subchain .entry__time {
     font-size: 9px;
@@ -800,37 +744,27 @@
     margin-top: 0;
 }
 
-/* Each sub-entry's badge glyph and color are keyed off its own status (see
-   glyphForA2AState in A2ACallCard.jsx) so submitted/working/completed/failed
-   read as distinct visual events instead of one repeated icon. The status
-   text is intentionally omitted because the gutter badge already conveys it.
+/* Each sub-entry's dot color is keyed off its own status so
+   working/completed/failed read as distinct visual events. The status text
+   is intentionally omitted because the gutter dot already conveys it.
    Compounded with .entry__badge.a2a-call-card__badge (not a bare modifier
    class) for the same specificity-tie-then-source-order reason as
    .entry__badge.a2a-call-card__badge--error above -- both are two classes,
    so this deterministically wins by appearing later. States with no rule
    here (submitted, input-required, auth-required, unknown, ...) fall back to
-   that base a2a-tinted look rather than going unstyled -- submitted used to
-   get its own flat gray here, but sitting next to the teal/green/red others
-   it just read as an off, disconnected hue rather than a deliberate choice;
-   the arrow-vs-ring glyph shape alone already distinguishes it from working. */
+   the base a2a hue. */
 .entry__badge.a2a-sub-entry__badge--working {
     color: color-mix(in srgb, var(--color-accent-secondary) 82%, white);
-    background: color-mix(in srgb, var(--color-accent-secondary) 16%, var(--color-bg-tertiary));
-    border: 1px solid color-mix(in srgb, var(--color-accent-secondary) 34%, var(--color-border-light));
 }
 
 .entry__badge.a2a-sub-entry__badge--completed {
     color: color-mix(in srgb, var(--color-success) 82%, white);
-    background: color-mix(in srgb, var(--color-success) 16%, var(--color-bg-tertiary));
-    border: 1px solid color-mix(in srgb, var(--color-success) 34%, var(--color-border-light));
 }
 
 .entry__badge.a2a-sub-entry__badge--failed,
 .entry__badge.a2a-sub-entry__badge--rejected,
 .entry__badge.a2a-sub-entry__badge--canceled {
     color: var(--color-error);
-    background: color-mix(in oklab, var(--color-error) 14%, transparent);
-    border-color: color-mix(in oklab, var(--color-error) 30%, transparent);
 }
 
 /* Chat Input Container */
@@ -2068,10 +2002,6 @@ pre.mermaid svg {
     align-self: stretch;
 }
 
-.msg__head .entry__tag {
-    order: 0;
-}
-
 .msg__head .msg__role {
     order: 1;
 }
@@ -2256,18 +2186,232 @@ pre.mermaid svg {
     align-self: stretch;
 }
 
+/* Transcript gutter markers are plain dots: no glyph, ring or glow. Every
+   variant rule sets its hue as `color`; the dot paints it. Centered on the
+   first header line (22px tall), with the chain line starting at its center. */
+.chat-detail-body .entry__badge {
+    width: 8px;
+    height: 8px;
+    margin-top: 7px;
+    background: currentColor;
+    border: 0;
+    box-shadow: none;
+}
+
+/* Dots need far less room than the old 22px badges, so the transcript's
+   gutter column and left padding shrink to match (nested sub-chains
+   included). Compounded so it beats chrome-frame.css's later
+   `.sess-detail__body` padding. */
+.chat-messages.chat-detail-body {
+    padding-left: 16px;
+}
+
+.chat-detail-body .entry {
+    grid-template-columns: 12px minmax(0, 1fr);
+}
+
+.chat-detail-body .entry__gutter::before {
+    top: 11px;
+}
+
 .chat-detail-body .entry__badge--user {
-    color: #fff;
-    background: linear-gradient(135deg, var(--color-user-bg), color-mix(in srgb, var(--color-user-bg) 72%, var(--color-accent)));
-    border: 1px solid color-mix(in srgb, var(--color-user-bg) 45%, var(--color-border-light));
-    box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-user-bg) 8%, transparent);
+    color: var(--color-user-bg);
 }
 
 .chat-detail-body .entry__badge--assistant {
-    color: #fff;
-    background: linear-gradient(135deg, color-mix(in srgb, var(--color-accent) 78%, #a78bfa), #8b5cf6);
-    border: 1px solid color-mix(in srgb, var(--color-accent) 34%, var(--color-border-light));
-    box-shadow: 0 0 0 3px color-mix(in srgb, #8b5cf6 8%, transparent);
+    color: #8b5cf6;
+}
+
+/* Clickable entry header (work groups, subagent and A2A cards): a button
+   that keeps entry-head geometry so the dot lines up with every other
+   entry, with a chevron showing whether its content is open. */
+.entry-toggle {
+    width: 100%;
+    padding: 0;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    background: none;
+    border: 0;
+    cursor: pointer;
+}
+
+/* Clicking leaves no focus ring; keyboard focus brightens the header text
+   instead (same approach as .knowledge-breadcrumbs buttons). */
+.entry-toggle:focus {
+    outline: none;
+}
+
+.entry-toggle:focus-visible .entry__role {
+    color: var(--color-text-primary);
+}
+
+.entry-toggle__chevron {
+    flex: 0 0 auto;
+    width: 6px;
+    height: 6px;
+    border-right: 1.5px solid var(--color-text-muted);
+    border-bottom: 1.5px solid var(--color-text-muted);
+    transform: rotate(-45deg);
+    transition: transform 0.15s ease;
+}
+
+.entry-toggle[aria-expanded="true"] .entry-toggle__chevron {
+    transform: rotate(45deg);
+}
+
+/* Work group: one collapsible line per reasoning summary (or headless run
+   of work) in a turn (WorkGroup.jsx). */
+
+.work-group__toggle .entry__role {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--color-text-muted);
+    font-weight: 500;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.work-group__meta {
+    flex: 0 0 auto;
+    color: var(--color-text-muted);
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+}
+
+.work-group__toggle:hover .entry__role,
+.work-group__toggle:focus-visible .entry__role {
+    color: var(--color-text-primary);
+}
+
+.work-group__failed {
+    color: var(--color-error);
+}
+
+/* Reasoning text under a headed group's header (ReasoningBody in
+   WorkGroup.jsx): clamped, with a right-hand chevron that only appears when
+   the text is actually cut off. Four lines fit 66 of 69 real summaries at
+   the default chat width, so the chevron marks the genuinely long ones. */
+.work-group__reasoning {
+    --reasoning-lines: 4;
+    display: flex;
+    gap: 8px;
+    align-items: flex-start;
+    margin-top: 2px;
+}
+
+.work-group__reasoning-text {
+    flex: 1 1 auto;
+    min-width: 0;
+    color: var(--color-text-muted);
+}
+
+.work-group__reasoning-text > :first-child {
+    margin-top: 0;
+}
+
+.work-group__reasoning-text > :last-child {
+    margin-bottom: 0;
+}
+
+.work-group__reasoning:not(.work-group__reasoning--open) .work-group__reasoning-text {
+    display: -webkit-box;
+    overflow: hidden;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: var(--reasoning-lines);
+}
+
+.work-group__reasoning-toggle {
+    display: flex;
+    flex: 0 0 auto;
+    padding: 6px 0;
+    color: var(--color-text-primary);
+    background: none;
+    border: 0;
+    cursor: pointer;
+}
+
+.work-group__reasoning-toggle:focus {
+    outline: none;
+}
+
+.work-group__reasoning-toggle:focus-visible .tool-event-disclosure__chevron {
+    color: var(--color-accent);
+}
+
+.work-group__reasoning--open .tool-event-disclosure__chevron {
+    transform: rotate(45deg);
+}
+
+.entry__badge.work-group__badge--done {
+    color: var(--color-text-muted);
+}
+
+.entry__badge.work-group__badge--running,
+.entry__badge.work-step__badge--tool {
+    color: color-mix(in srgb, var(--color-success) 82%, white);
+}
+
+.entry__badge.work-step__badge--reasoning {
+    color: #a78bfa;
+}
+
+.entry__badge.work-step__badge--plan {
+    color: color-mix(in srgb, var(--color-accent) 82%, white);
+}
+
+.entry__badge.work-step__badge--other {
+    color: var(--color-text-muted);
+}
+
+.entry__badge.work-group__badge--error,
+.entry__badge.work-step__badge--error {
+    color: var(--color-error);
+}
+
+.work-group__badge--running,
+.work-step__badge--running {
+    animation: subagent-pulse 1.4s ease-in-out infinite;
+}
+
+.work-step .entry__head {
+    margin-bottom: 0;
+    font-size: 12px;
+}
+
+.work-step__title {
+    flex: 0 0 auto;
+    color: var(--color-text-primary);
+    font-weight: 500;
+}
+
+.work-step__detail {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--color-text-muted);
+    font-family: var(--font-family-mono);
+    font-size: 11.5px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.earlier-lines-toggle {
+    padding: 0;
+    color: var(--color-text-muted);
+    font: inherit;
+    font-size: 11px;
+    background: none;
+    border: 0;
+    cursor: pointer;
+}
+
+.earlier-lines-toggle:hover,
+.earlier-lines-toggle:focus-visible {
+    color: var(--color-text-primary);
+}
+
+.earlier-lines-toggle:focus {
+    outline: none;
 }
 
 .msg__stat {

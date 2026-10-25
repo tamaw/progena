@@ -1,10 +1,10 @@
 /**
  * Live plan checklist rendered inside a `todos_update` timeline entry
  * (see TimelineItem.jsx). Purely presentational -- `todos` is the agent's
- * current plan snapshot from write_todos. The entry itself already shows a
- * "Plan" badge/title and "n/total done" count in its header, so this only
- * renders the progress bar and the checklist body. Renders nothing once
- * there are no todos.
+ * current plan snapshot from write_todos. The entry itself already shows the
+ * active item and "n/total done" in its header, so this renders the progress
+ * bar as a closed-by-default disclosure (same chevron as tool rows) whose
+ * body is the checklist. Renders nothing once there are no todos.
  */
 
 const STATUS_GLYPH = {
@@ -22,10 +22,13 @@ export default function TodoListPanel({ todos }) {
   const progressPct = Math.round((completedCount / todos.length) * 100);
 
   return (
-    <div className="todo-panel">
-      <div className="todo-panel__bar">
-        <div className="todo-panel__bar-fill" style={{ width: `${progressPct}%` }} />
-      </div>
+    <details className="todo-panel tool-event-disclosure">
+      <summary>
+        <div className="todo-panel__bar">
+          <div className="todo-panel__bar-fill" style={{ width: `${progressPct}%` }} />
+        </div>
+        <span className="tool-event-disclosure__chevron" aria-hidden="true" />
+      </summary>
       <ul className="todo-panel__list">
         {todos.map((todo, index) => (
           <li
@@ -39,6 +42,6 @@ export default function TodoListPanel({ todos }) {
           </li>
         ))}
       </ul>
-    </div>
+    </details>
   );
 }

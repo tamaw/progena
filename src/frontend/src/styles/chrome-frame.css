@@ -3088,36 +3088,6 @@ body,
   border-color: transparent;
 }
 
-.entry__tag--assistant {
-  color: #7c5bd6;
-  background: color-mix(in srgb, #8b5cf6 12%, var(--color-bg-primary));
-  border-color: color-mix(in srgb, #8b5cf6 24%, var(--color-border));
-}
-
-.chat-event-tag--tool {
-  color: color-mix(in srgb, var(--color-success) 82%, white);
-  background: color-mix(in srgb, var(--color-success) 16%, var(--color-bg-tertiary));
-  border-color: color-mix(in srgb, var(--color-success) 34%, var(--color-border-light));
-}
-
-.chat-event-tag--plan {
-  color: color-mix(in srgb, var(--color-accent) 82%, white);
-  background: color-mix(in srgb, var(--color-accent) 16%, var(--color-bg-tertiary));
-  border-color: color-mix(in srgb, var(--color-accent) 34%, var(--color-border-light));
-}
-
-.chat-event-tag--reason {
-  color: #7c5bd6;
-  background: color-mix(in srgb, #a78bfa 12%, var(--color-bg-tertiary));
-  border-color: color-mix(in srgb, #a78bfa 24%, var(--color-border));
-}
-
-.chat-event-tag--step {
-  color: var(--color-text-muted);
-  background: color-mix(in srgb, var(--color-text-muted) 10%, var(--color-bg-tertiary));
-  border-color: color-mix(in srgb, var(--color-text-muted) 18%, var(--color-border));
-}
-
 .entry__tag--err {
   color: var(--color-error);
   background: color-mix(in oklab, var(--color-error) 12%, transparent);
@@ -3238,33 +3208,19 @@ body,
   display: none;
 }
 
-.tool-event-disclosure > summary:focus-visible {
-  outline: 2px solid var(--color-accent);
-  outline-offset: 2px;
+/* Chrome reports a mouse-clicked <summary> as :focus-visible, so an outline
+   would box every row the user clicks. Keyboard focus tints the chevron. */
+.tool-event-disclosure > summary:focus {
+  outline: none;
+}
+
+.tool-event-disclosure > summary:focus-visible .tool-event-disclosure__chevron {
+  color: var(--color-accent);
 }
 
 .tool-event-disclosure > summary .tool__summary {
   flex: 1 1 auto;
   min-width: 0;
-}
-
-.tool-event-disclosure__state {
-  flex: 0 0 auto;
-  color: var(--color-text-muted);
-  font-family: var(--font-family-mono);
-  font-size: 10px;
-}
-
-.tool-event-disclosure__state--collapse {
-  display: none;
-}
-
-.tool-event-disclosure[open] .tool-event-disclosure__state--expand {
-  display: none;
-}
-
-.tool-event-disclosure[open] .tool-event-disclosure__state--collapse {
-  display: inline;
 }
 
 .tool-event-disclosure__chevron {

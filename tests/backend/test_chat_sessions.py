@@ -169,6 +169,90 @@ class TestGetChatDetail:
         assert detail.title == "My Chat"
         assert [m.role for m in detail.messages] == ["user", "assistant"]
 
+    def test_keeps_each_model_calls_reasoning_as_its_own_segment(self):
+        def ai(message_id, created_at, reasoning, **extra):
+            return {
+                "id": message_id,
+                "type": "ai",
+                "created_at": created_at,
+                "content": [
+                    {"type": "reasoning", "summary": [{"type": "summary_text", "text": reasoning}]},
+                    *extra.pop("text", []),
+                ],
+                **extra,
+            }
+
+        store = InMemoryDocumentStore()
+        store.upsert_checkpoint_thread_snapshot(
+            CheckpointThreadSnapshot(
+                thread_id="thread_r",
+                checkpoint_id="cp-1",
+                checkpoint_ts="2026-01-01T00:00:00Z",
+                messages=[
+                    {"id": "u1", "type": "human", "content": "read it"},
+                    ai(
+                        "a1",
+                        "2026-01-01T00:00:01Z",
+                        "**Plan**\n\nlist first",
+                        tool_calls=[{"id": "c1", "name": "ls", "args": {"path": "/"}}],
+                    ),
+                    {"id": "t1", "type": "tool", "tool_call_id": "c1", "content": "a.json"},
+                    ai(
+                        "a2",
+                        "2026-01-01T00:00:05Z",
+                        "**Answer**\n\nsummarise",
+                        text=[{"type": "text", "text": "done"}],
+                    ),
+                ],
+            )
+        )
+        _store_session(store, "thread_r")
+
+        detail = get_chat_detail(store, "thread_r")
+
+        answer = detail.messages[-1]
+        assert [(s.text, s.created_at) for s in answer.reasoning_segments] == [
+            ("**Plan**\n\nlist first", "2026-01-01T00:00:01Z"),
+            ("**Answer**\n\nsummarise", "2026-01-01T00:00:05Z"),
+        ]
+        assert answer.reasoning_text == "**Plan**\n\nlist first\n\n**Answer**\n\nsummarise"
+
+    def test_text_written_alongside_tool_calls_becomes_first_call_commentary(self):
+        store = InMemoryDocumentStore()
+        store.upsert_checkpoint_thread_snapshot(
+            CheckpointThreadSnapshot(
+                thread_id="thread_c",
+                checkpoint_id="cp-1",
+                checkpoint_ts="2026-01-01T00:00:00Z",
+                messages=[
+                    {"id": "u1", "type": "human", "content": "check it"},
+                    {
+                        "id": "a1",
+                        "type": "ai",
+                        "content": "I'll look at the repo first.",
+                        "tool_calls": [
+                            {"id": "c1", "name": "ls", "args": {"path": "/"}},
+                            {"id": "c2", "name": "ls", "args": {"path": "/tmp"}},
+                        ],
+                    },
+                    {"id": "t1", "type": "tool", "tool_call_id": "c1", "content": "a"},
+                    {"id": "t2", "type": "tool", "tool_call_id": "c2", "content": "b"},
+                    {"id": "a2", "type": "ai", "content": "All good."},
+                ],
+            )
+        )
+        _store_session(store, "thread_c")
+
+        detail = get_chat_detail(store, "thread_c")
+
+        # The narration is not a separate answer; it travels with its calls.
+        assert [(m.role, m.content) for m in detail.messages] == [
+            ("user", "check it"),
+            ("assistant", "All good."),
+        ]
+        calls = detail.messages[1].tool_calls
+        assert [call.get("commentary") for call in calls] == ["I'll look at the repo first.", None]
+
 
 class TestPatchSessionDocument:
     def test_patches_title(self):

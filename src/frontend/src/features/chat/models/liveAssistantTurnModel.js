@@ -19,7 +19,7 @@
  * rendering a React hook.
  */
 
-import { createStreamEvent, appendStreamEvent, appendReasoningText, extractReasoningTokenCount, extractCacheReadTokenCount, mergeReasoningEvents, isReasoningEvent, hasReasoningContent, isRenderableStreamEvent, MAX_STREAM_EVENTS_PER_MESSAGE } from './streamEventsModel';
+import { createStreamEvent, appendStreamEvent, appendReasoningText, extractReasoningTokenCount, extractCacheReadTokenCount, mergeReasoningEvents, isReasoningEvent, isRenderableStreamEvent, MAX_STREAM_EVENTS_PER_MESSAGE } from './streamEventsModel';
 import { isA2AToolName } from './a2aTools';
 
 /** Create a fresh live assistant turn with no visible output yet. */
@@ -40,6 +40,13 @@ export function createLiveAssistantTurn({ streamId, startedAt }) {
     displayModelName: '',
     displayToolCalls: [],
     timelineItems: [],
+    // 'work' while the latest visible output is a tool/reasoning/plan row,
+    // 'text' once answer text is streaming -- drives the live work preview.
+    lastActivity: null,
+    // Answer text streamed since the last work row. If a tool call follows,
+    // it was the agent narrating that call, not answering: it moves from the
+    // answer onto the call as its commentary.
+    pendingCommentary: '',
     isStreaming: true,
     error: false,
   };
@@ -409,8 +416,39 @@ export function applyA2ACallEvent(timelineItems, nextEvent) {
   ));
 }
 
-/** Apply a non-visual stream event (control event like node metadata). */
+// Rows that never appear in the live preview (graph steps), or that providers
+// deliver after the answer (the turn-wide reasoning summary), must not reopen
+// the preview once answer text is streaming.
+const PASSIVE_AFTER_TEXT_EVENT_TYPES = new Set(['node_update', 'reasoning_summary']);
+
+/**
+ * Apply a stream event. Any event that changes the visible timeline marks the
+ * turn as working, except passive rows arriving after answer text started.
+ */
 export function applyAssistantStreamEvent(turn, streamEvent) {
+  const { turn: base, streamEvent: event } = claimToolCommentary(turn, streamEvent);
+  const next = applyStreamEventToTimeline(base, event);
+  if (next === base || next.timelineItems === base.timelineItems) return next;
+  if (turn.lastActivity === 'text' && PASSIVE_AFTER_TEXT_EVENT_TYPES.has(streamEvent?.event_type)) return next;
+  return { ...next, lastActivity: 'work', pendingCommentary: '' };
+}
+
+// Moves the text streamed since the last work row off the answer and onto
+// the tool call it introduced (the first, when calls run in parallel).
+function claimToolCommentary(turn, streamEvent) {
+  const commentary = turn.pendingCommentary || '';
+  if (streamEvent?.event_type !== 'tool_start' || !commentary.trim()) return { turn, streamEvent };
+  const content = turn.content.slice(0, turn.content.length - commentary.length);
+  const timelineItems = turn.timelineItems.map((item) => (
+    item.kind === 'assistant_message' && item.id === turn.assistantMessageId ? { ...item, content } : item
+  ));
+  return {
+    turn: { ...turn, content, timelineItems, pendingCommentary: '' },
+    streamEvent: { ...streamEvent, metadata: { ...(streamEvent.metadata || {}), commentary: commentary.trim() } },
+  };
+}
+
+function applyStreamEventToTimeline(turn, streamEvent) {
   const nextEvent = addTaskSummaryMetadata(createStreamEvent(streamEvent));
   if (!nextEvent) return turn;
 
@@ -480,44 +518,41 @@ export function applyAssistantStreamEvent(turn, streamEvent) {
     return next;
   }
 
-  // Keep one reasoning row live: each delta updates the accumulated content,
-  // and the terminal summary replaces that same row without duplication.
+  // One reasoning row per model call: a delta extends the trailing reasoning
+  // row, while reasoning that follows any other row (tool call, plan update)
+  // or answer text opens a new one -- that is the next model call. The
+  // terminal summary repeats everything already streamed, so it only adds
+  // its exact token count to a lone row, and only creates a row (ahead of
+  // the work it led to) when the provider streamed no reasoning at all.
   const isReasoningKind = nextEvent.eventType === 'reasoning_delta' || nextEvent.eventType === 'reasoning_summary';
   if (isReasoningKind) {
+    const reasoningIndexes = [];
+    let lastWorkIndex = -1;
+    next.timelineItems.forEach((entry, index) => {
+      if (entry.kind === 'assistant_message') return;
+      lastWorkIndex = index;
+      if (entry.kind === 'stream_event' && isReasoningEvent(entry.event)) reasoningIndexes.push(index);
+    });
 
-    const reasoningEvent = next.streamEvents.find((event) => isReasoningEvent(event) && hasReasoningContent(event));
-    const reasoningTimestamp = Number.isFinite(reasoningEvent?.timestamp)
-      ? reasoningEvent.timestamp
-      : Date.parse(reasoningEvent?.timestamp || '');
-    const existingReasoningIndex = next.timelineItems.findIndex((entry) =>
-      entry.kind === 'stream_event' && isReasoningEvent(entry.event)
-    );
-    const timelineWithoutReasoning = existingReasoningIndex >= 0
-      ? next.timelineItems.filter((_, index) => index !== existingReasoningIndex)
-      : next.timelineItems;
-    const chronologicalIndex = Number.isFinite(reasoningTimestamp)
-      ? timelineWithoutReasoning.findIndex((entry) => {
-        const timestamp = entry.timestamp ?? entry.event?.timestamp;
-        const itemTimestamp = Number.isFinite(timestamp) ? timestamp : Date.parse(timestamp || '');
-        return Number.isFinite(itemTimestamp) && itemTimestamp >= reasoningTimestamp;
-      })
-      : -1;
-    const assistantIndex = timelineWithoutReasoning.findIndex((entry) => entry.kind === 'assistant_message');
-    const insertAt = chronologicalIndex >= 0
-      ? chronologicalIndex
-      : (assistantIndex >= 0 ? assistantIndex : timelineWithoutReasoning.length);
-    const reasoningItem = {
-      kind: 'stream_event',
-      id: existingReasoningIndex >= 0 ? next.timelineItems[existingReasoningIndex].id : (reasoningEvent?.id || nextEvent.id),
-      event: existingReasoningIndex >= 0
-        ? mergeReasoningEvents(next.timelineItems[existingReasoningIndex].event, nextEvent)
-        : (reasoningEvent || nextEvent),
-    };
-    next.timelineItems = [
-      ...timelineWithoutReasoning.slice(0, insertAt),
-      reasoningItem,
-      ...timelineWithoutReasoning.slice(insertAt),
-    ];
+    if (nextEvent.eventType === 'reasoning_summary') {
+      if (reasoningIndexes.length > 1) return next;
+      if (reasoningIndexes.length === 0) {
+        next.timelineItems = [{ kind: 'stream_event', id: nextEvent.id, event: nextEvent }, ...next.timelineItems];
+        return next;
+      }
+    }
+
+    const targetIndex = nextEvent.eventType === 'reasoning_summary'
+      ? reasoningIndexes[0]
+      : (turn.lastActivity !== 'text' && reasoningIndexes.includes(lastWorkIndex) ? lastWorkIndex : -1);
+    if (targetIndex >= 0) {
+      const timelineItems = next.timelineItems.slice();
+      const target = timelineItems[targetIndex];
+      timelineItems[targetIndex] = { ...target, event: mergeReasoningEvents(target.event, nextEvent) };
+      next.timelineItems = timelineItems;
+    } else {
+      next.timelineItems = [...next.timelineItems, { kind: 'stream_event', id: nextEvent.id, event: nextEvent }];
+    }
     return next;
   }
 
@@ -538,7 +573,7 @@ export function applyAssistantStreamEvent(turn, streamEvent) {
 
 /** Apply a text chunk (stream_chunk event). */
 export function applyAssistantChunk(turn, chunk, materialiseAt) {
-  const next = { ...turn };
+  const next = { ...turn, lastActivity: 'text', pendingCommentary: (turn.pendingCommentary || '') + chunk };
   next.content += chunk;
   next.tokenCount += 1;
 
@@ -799,6 +834,7 @@ export function toCommittedAssistantMessage(turn) {
     displayToolCalls: turn.displayToolCalls,
     isStreaming: turn.isStreaming,
     error: turn.error,
+    workActive: Boolean(turn.isStreaming) && turn.lastActivity === 'work',
     timelineItems: turn.timelineItems,
   };
 }

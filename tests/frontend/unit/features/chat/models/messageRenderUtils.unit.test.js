@@ -54,7 +54,6 @@ describe('describeStreamEvent (todos_update)', () => {
       { content: 'Patch the handler', status: 'in_progress' },
       { content: 'Run the tests', status: 'pending' },
     ]));
-    expect(description.badge).toBe('Plan');
     expect(description.title).toBe('Patch the handler');
     expect(description.metaDetail).toBe('1/3 done');
   });
@@ -86,26 +85,8 @@ describe('describeStreamEvent (todos_update)', () => {
 // stream_event fallback renderer -- e.g. chats persisted before subagent
 // cards were grouped into their own timeline item kind (see
 // buildDefaultAssistantTimeline / applySubagentEvent in
-// liveAssistantTurnModel.js). Before this fix, the unexported
-// badgeForEventType() helper's `.includes('agent')` check accidentally
-// matched every "subagent_*" type (since "subagent" contains "agent") and
-// mislabeled them "Agent".
+// liveAssistantTurnModel.js).
 describe('describeStreamEvent (subagent_*)', () => {
-  it('never returns the accidental "Agent" badge for any subagent_* event type', () => {
-    const eventTypes = [
-      'subagent_start',
-      'subagent_result',
-      'subagent_message_delta',
-      'subagent_tool_start',
-      'subagent_tool_result',
-      'subagent_tool_error',
-    ];
-    for (const eventType of eventTypes) {
-      const description = describeStreamEvent({ eventType, metadata: { subagent_name: 'researcher' } });
-      expect(description.badge).toBe('Subagent');
-    }
-  });
-
   it('subagent_start titles the entry with the subagent name', () => {
     const description = describeStreamEvent({
       eventType: 'subagent_start',
@@ -186,18 +167,8 @@ describe('describeStreamEvent (subagent_*)', () => {
 // stream_event fallback renderer -- e.g. chats persisted before A2A call
 // grouping shipped, or a progress event that arrives before its tool_start
 // (buildDefaultAssistantTimeline groups them into a single A2ACallCard
-// otherwise -- see liveAssistantTurnModel.js). Same "Agent" mislabel bug as
-// subagent_* would apply here too (badgeForEventType().includes('agent')),
-// so it's handled with an explicit badge: 'A2A' branch the same way.
+// otherwise -- see liveAssistantTurnModel.js).
 describe('describeStreamEvent (a2a_call_progress)', () => {
-  it('never returns the accidental "Agent" badge', () => {
-    const description = describeStreamEvent({
-      eventType: 'a2a_call_progress',
-      metadata: { agent_name: 'example_agent', state: 'working', message_text: 'Step 1/3: prep...' },
-    });
-    expect(description.badge).toBe('A2A');
-  });
-
   it('titles the entry with the agent name and surfaces state/message', () => {
     const description = describeStreamEvent({
       eventType: 'a2a_call_progress',
@@ -218,33 +189,29 @@ describe('describeStreamEvent (a2a_call_progress)', () => {
 });
 
 // A2A tool lifecycle events are ordinary tool calls and get no special-
-// casing here. Only intermediate a2a_call_progress has no tool-call
-// equivalent and receives its own A2A badge.
+// casing here.
 describe('describeStreamEvent (a2a_send tool_start/tool_result/tool_error)', () => {
-  it('badges an A2A tool_start as Tool, same as any other tool', () => {
+  it('titles an A2A tool_start like any other tool', () => {
     const description = describeStreamEvent({
       eventType: 'tool_start',
       metadata: { tool_name: 'a2a_send', args_preview: { agent: 'example_agent' } },
     });
-    expect(description.badge).toBe('Tool');
     expect(description.title).toBe('→ A2a Send');
   });
 
-  it('badges an A2A tool_result as Tool, same as any other tool', () => {
+  it('titles an A2A tool_result like any other tool', () => {
     const description = describeStreamEvent({
       eventType: 'tool_result',
       metadata: { tool_name: 'a2a_send', result_preview: 'Hello!' },
     });
-    expect(description.badge).toBe('Tool');
     expect(description.title).toBe('✓ A2a Send');
   });
 
-  it('badges an A2A tool_error as Tool, same as any other tool', () => {
+  it('titles an A2A tool_error like any other tool', () => {
     const description = describeStreamEvent({
       eventType: 'tool_error',
       metadata: { tool_name: 'a2a_send', error: 'agent unreachable' },
     });
-    expect(description.badge).toBe('Tool');
     expect(description.title).toBe('✗ A2a Send');
   });
 });

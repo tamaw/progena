@@ -56,6 +56,8 @@ describe('createLiveAssistantTurn', () => {
       displayModelName: '',
       displayToolCalls: [],
       timelineItems: [],
+      lastActivity: null,
+      pendingCommentary: '',
       isStreaming: true,
       error: false,
     });
@@ -435,6 +437,39 @@ describe('applyAssistantStreamEvent', () => {
     expect(withReasoning.timelineItems[0].kind).toBe('stream_event');
     expect(withReasoning.timelineItems[0].event.eventType).toBe('reasoning_summary');
     expect(withReasoning.timelineItems[1].kind).toBe('assistant_message');
+  });
+
+  it('opens a new reasoning row for each model call and keeps them when the turn-wide summary arrives', () => {
+    let turn = baseTurn();
+    turn = applyAssistantStreamEvent(turn, rawStreamEvent('reasoning_delta', { content: '**Plan**\n\nfirst' }));
+    turn = applyAssistantStreamEvent(turn, rawStreamEvent('reasoning_delta', { content: ' call' }));
+    turn = applyAssistantStreamEvent(turn, rawStreamEvent('tool_start', { metadata: { tool_name: 'ls', tool_call_id: 'a' } }));
+    turn = applyAssistantStreamEvent(turn, rawStreamEvent('reasoning_delta', { content: '**Read**\n\nsecond call' }));
+    // The terminal summary repeats everything already streamed.
+    turn = applyAssistantStreamEvent(turn, rawStreamEvent('reasoning_summary', {
+      content: '**Plan**\n\nfirst call**Read**\n\nsecond call',
+      metadata: { reasoning_tokens: 30 },
+    }));
+
+    const reasoningRows = turn.timelineItems
+      .filter((item) => item.kind === 'stream_event' && item.event.eventType.startsWith('reasoning'))
+      .map((item) => item.event.content);
+    expect(reasoningRows).toEqual(['**Plan**\n\nfirst call', '**Read**\n\nsecond call']);
+    expect(turn.timelineItems.map((item) => item.event.eventType)).toEqual(['reasoning_delta', 'tool_start', 'reasoning_delta']);
+  });
+
+  it('moves text streamed just before a tool call off the answer and onto that call as commentary', () => {
+    let turn = baseTurn();
+    turn = applyAssistantChunk(turn, 'I will check the repo first.', NOW);
+    turn = applyAssistantStreamEvent(turn, rawStreamEvent('tool_start', { metadata: { tool_name: 'ls', tool_call_id: 'a' } }));
+    turn = applyAssistantStreamEvent(turn, rawStreamEvent('tool_start', { metadata: { tool_name: 'ls', tool_call_id: 'b' } }));
+    turn = applyAssistantChunk(turn, 'It looks fine.', NOW);
+
+    const tools = turn.timelineItems.filter((item) => item.event?.eventType === 'tool_start');
+    // Parallel calls: only the first carries the narration.
+    expect(tools.map((item) => item.event.metadata.commentary)).toEqual(['I will check the repo first.', undefined]);
+    expect(turn.content).toBe('It looks fine.');
+    expect(turn.timelineItems.find((item) => item.kind === 'assistant_message').content).toBe('It looks fine.');
   });
 
   // Subagent execution events (nested `task` tool delegation) get their own
@@ -1728,8 +1763,30 @@ describe('toCommittedAssistantMessage', () => {
       displayToolCalls: [{ name: 'search' }],
       isStreaming: false,
       error: false,
+      workActive: false,
       timelineItems: [{ kind: 'assistant_message', id: 'msg_42', content: 'Hello' }],
     });
+  });
+
+  it('marks a streaming turn as working until answer text arrives, and again when tools follow text', () => {
+    const toolStart = (id) => ({ event_type: 'tool_start', metadata: { tool_name: 'ls', tool_call_id: id } });
+    let turn = createLiveAssistantTurn({ streamId: STREAM_ID, startedAt: NOW });
+    turn = applyAssistantStreamEvent(turn, toolStart('a'));
+    expect(toCommittedAssistantMessage(turn).workActive).toBe(true);
+
+    turn = applyAssistantChunk(turn, 'Looking', NOW);
+    expect(toCommittedAssistantMessage(turn).workActive).toBe(false);
+
+    // Providers deliver the reasoning summary at the end, and graph steps only
+    // show in the expanded detail; neither may reopen the preview.
+    turn = applyAssistantStreamEvent(turn, { event_type: 'reasoning_summary', content: 'why' });
+    turn = applyAssistantStreamEvent(turn, { event_type: 'node_update', metadata: { node_name: 'model' } });
+    expect(toCommittedAssistantMessage(turn).workActive).toBe(false);
+
+    turn = applyAssistantStreamEvent(turn, toolStart('b'));
+    expect(toCommittedAssistantMessage(turn).workActive).toBe(true);
+
+    expect(toCommittedAssistantMessage({ ...turn, isStreaming: false }).workActive).toBe(false);
   });
 
   it('falls back streamId-based id and startedAt timestamp when assistantMessageId/timestamp null', () => {

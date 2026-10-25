@@ -1,0 +1,198 @@
+import { describe, expect, it } from 'vitest';
+import {
+  buildWorkGroups,
+  formatElapsed,
+  buildWorkSteps,
+  mergeToolCallItems,
+  partitionTurnTimeline,
+  selectLiveSteps,
+  reasoningSectionBody,
+  splitGroupReasoning,
+  selectRecentLines,
+  splitReasoningSections,
+  summarizeWork,
+  workGroupHeader,
+} from '@frontend/features/chat/models/workGroupModel';
+
+function eventItem(id, eventType, metadata = {}, timestamp = undefined, content = '') {
+  return { kind: 'stream_event', id, timestamp, event: { id, eventType, metadata, content, timestamp } };
+}
+
+describe('partitionTurnTimeline', () => {
+  it('splits work, delegated-agent cards and every answer row (including a terminal error row)', () => {
+    const items = [
+      eventItem('a', 'tool_start', { tool_name: 'ls', tool_call_id: 'c1' }),
+      { kind: 'subagent', id: 'subagent-x' },
+      { kind: 'assistant_message', id: 'answer' },
+      { kind: 'a2a_call', id: 'a2a-y' },
+      { kind: 'assistant_message', id: 'answer-error' },
+    ];
+    const { workItems, cardItems, answerItems } = partitionTurnTimeline(items);
+    expect(workItems.map((item) => item.id)).toEqual(['a']);
+    expect(cardItems.map((item) => item.id)).toEqual(['subagent-x', 'a2a-y']);
+    expect(answerItems.map((item) => item.id)).toEqual(['answer', 'answer-error']);
+  });
+});
+
+describe('buildWorkSteps', () => {
+  it('merges each tool call start and finish into one step, keeping arrival order across interleaved calls', () => {
+    const steps = buildWorkSteps([
+      eventItem('1', 'tool_start', { tool_name: 'read_file', tool_call_id: 'a', args_preview: { path: '/a' } }),
+      eventItem('2', 'tool_start', { tool_name: 'read_file', tool_call_id: 'b', args_preview: { path: '/b' } }),
+      eventItem('3', 'tool_error', { tool_name: 'read_file', tool_call_id: 'b', duration_ms: 12 }),
+      eventItem('4', 'tool_result', { tool_name: 'read_file', tool_call_id: 'a', duration_ms: 30 }),
+    ]);
+    expect(steps).toHaveLength(2);
+    expect(steps[0]).toMatchObject({ title: 'Read File', detail: 'path: /a', status: 'success', durationMs: 30 });
+    expect(steps[1]).toMatchObject({ detail: 'path: /b', status: 'error', durationMs: 12 });
+  });
+
+  it('leaves graph steps and card-owned task/A2A calls out of the step list', () => {
+    const steps = buildWorkSteps([
+      eventItem('1', 'node_update', { node_name: 'model' }),
+      eventItem('2', 'tool_start', { tool_name: 'task', tool_call_id: 't' }),
+      eventItem('3', 'tool_start', { tool_name: 'a2a_send', tool_call_id: 'x' }),
+      eventItem('4', 'reasoning_summary'),
+    ]);
+    expect(steps.map((step) => step.kind)).toEqual(['reasoning']);
+  });
+});
+
+describe('selectLiveSteps', () => {
+  const step = (id, status = 'success') => ({ id, status });
+
+  it('keeps an older still-running parallel call visible alongside the latest steps', () => {
+    const live = selectLiveSteps([step('a', 'running'), step('b'), step('c'), step('d'), step('e')], 3);
+    expect(live.map((s) => s.id)).toEqual(['a', 'c', 'd', 'e']);
+  });
+
+  it('shows only the latest steps once older ones have finished', () => {
+    const live = selectLiveSteps([step('a'), step('b'), step('c'), step('d')], 3);
+    expect(live.map((s) => s.id)).toEqual(['b', 'c', 'd']);
+  });
+});
+
+describe('selectRecentLines', () => {
+  it('reports how many earlier lines are hidden and reveals all on request', () => {
+    const lines = ['1', '2', '3', '4', '5'];
+    expect(selectRecentLines(lines, false, 3)).toEqual({ visibleLines: ['3', '4', '5'], hiddenCount: 2 });
+    expect(selectRecentLines(lines, true, 3)).toEqual({ visibleLines: lines, hiddenCount: 0 });
+  });
+});
+
+describe('mergeToolCallItems', () => {
+  it('merges each call start and finish into one entry at the call position, leaving other rows alone', () => {
+    const merged = mergeToolCallItems([
+      eventItem('s-a', 'tool_start', { tool_name: 'ls', tool_call_id: 'a' }),
+      eventItem('s-b', 'tool_start', { tool_name: 'ls', tool_call_id: 'b' }),
+      eventItem('r', 'reasoning_delta', {}, undefined, 'x'),
+      eventItem('e-b', 'tool_error', { tool_name: 'ls', tool_call_id: 'b' }),
+      eventItem('e-a', 'tool_result', { tool_name: 'ls', tool_call_id: 'a' }),
+    ]);
+    expect(merged.map((item) => item.kind === 'tool_call' ? [item.start.id, item.end.id] : item.id))
+      .toEqual([['s-a', 'e-a'], ['s-b', 'e-b'], 'r']);
+  });
+});
+
+describe('buildWorkSteps tool detail', () => {
+  it("prefers the agent's commentary for a call over its input summary", () => {
+    const [step] = buildWorkSteps([eventItem('s', 'tool_start', {
+      tool_name: 'read_file', tool_call_id: 'a', args_preview: { path: '/x' }, commentary: 'Checking the config',
+    })]);
+    expect(step.detail).toBe('Checking the config');
+  });
+});
+
+describe('splitGroupReasoning', () => {
+  it("takes a headed group's opening reasoning out of its rows, and leaves headless groups alone", () => {
+    const reasoning = eventItem('r', 'reasoning_delta', {}, undefined, '**Plan**\n\nfirst.');
+    const tool = eventItem('t', 'tool_start', { tool_name: 'ls', tool_call_id: 'a' });
+    expect(splitGroupReasoning('Plan', [reasoning, tool])).toEqual({ reasoningItem: reasoning, rest: [tool] });
+    expect(splitGroupReasoning(null, [reasoning, tool])).toEqual({ reasoningItem: null, rest: [reasoning, tool] });
+  });
+
+  it('drops the heading line from the reasoning body', () => {
+    expect(reasoningSectionBody('**Plan**\n\nList the files first.')).toBe('List the files first.');
+  });
+});
+
+describe('formatElapsed', () => {
+  it('switches units at the minute and hour boundaries, so multi-day turns stay readable', () => {
+    expect(formatElapsed(59_400)).toBe('59s');
+    expect(formatElapsed(60_000)).toBe('1m');
+    expect(formatElapsed(3_599_000)).toBe('59m 59s');
+    expect(formatElapsed(3_600_000)).toBe('1h');
+    expect(formatElapsed(189_509_000)).toBe('52h 38m');
+  });
+});
+
+function headerFor(items, { heading = null, active = false, endedAt = null } = {}) {
+  return workGroupHeader({ heading, active, summary: summarizeWork(items, buildWorkSteps(items), endedAt) });
+}
+
+describe('workGroupHeader', () => {
+  const lsCall = [
+    eventItem('1', 'tool_start', { tool_name: 'ls', tool_call_id: 'a' }, 1_000),
+    eventItem('2', 'tool_result', { tool_name: 'ls', tool_call_id: 'a' }, 1_200),
+  ];
+
+  it('measures elapsed time up to the end of the group, not just the last tool event', () => {
+    expect(headerFor(lsCall, { endedAt: 18_000 })).toEqual({ title: 'Worked for 17s', meta: '1 tool' });
+  });
+
+  it('titles a group with its reasoning summary and keeps the counters beside it', () => {
+    expect(headerFor(lsCall, { heading: 'Listing configuration files', endedAt: 18_000 }))
+      .toEqual({ title: 'Listing configuration files', meta: '17s · 1 tool' });
+  });
+
+  it('shows live seconds from zero while generating without a summary', () => {
+    expect(headerFor(lsCall.slice(0, 1), { active: true, endedAt: 1_000 }))
+      .toEqual({ title: 'Generating…', meta: '0s · 1 tool' });
+  });
+
+  it('omits a sub-second duration once done and counts failures', () => {
+    const items = [
+      eventItem('1', 'tool_start', { tool_name: 'ls', tool_call_id: 'a' }, 1_000),
+      eventItem('2', 'tool_error', { tool_name: 'ls', tool_call_id: 'a' }, 1_100),
+    ];
+    expect(headerFor(items)).toEqual({ title: 'Worked', meta: '1 tool' });
+    expect(summarizeWork(items, buildWorkSteps(items)).failedCount).toBe(1);
+  });
+
+  it('describes headless reasoning-only work as thinking', () => {
+    const items = [eventItem('1', 'reasoning_summary', {}, 1_000, 'plain reasoning')];
+    expect(headerFor(items, { endedAt: 6_000 }).title).toBe('Thought for 5s');
+  });
+});
+
+describe('splitReasoningSections', () => {
+  it('splits on summary headings, including parts streamed back to back without a separator', () => {
+    const text = 'Preamble.\n**Listing files**\n\nI list them.**Reading files**\n\nThen read with a **bold** word.';
+    expect(splitReasoningSections(text)).toEqual([
+      { heading: null, text: 'Preamble.\n' },
+      { heading: 'Listing files', text: '**Listing files**\n\nI list them.' },
+      { heading: 'Reading files', text: '**Reading files**\n\nThen read with a **bold** word.' },
+    ]);
+  });
+});
+
+describe('buildWorkGroups', () => {
+  it('opens a group per reasoning summary and files following work under the latest one', () => {
+    const groups = buildWorkGroups([
+      eventItem('pre', 'tool_start', { tool_name: 'ls', tool_call_id: 'a' }, 900),
+      eventItem('r1', 'reasoning_delta', { reasoning_tokens: 40 }, 1_000, '**Plan**\n\nfirst.**Look**\n\nsecond.'),
+      eventItem('t1', 'tool_start', { tool_name: 'ls', tool_call_id: 'b' }, 1_100),
+      eventItem('r2', 'reasoning_delta', {}, 2_000, 'no heading here'),
+      eventItem('t2', 'tool_start', { tool_name: 'ls', tool_call_id: 'c' }, 2_100),
+    ]);
+    expect(groups.map((group) => [group.heading, group.items.map((item) => item.id)])).toEqual([
+      [null, ['pre']],
+      ['Plan', ['r1-s0']],
+      // A headless reasoning block continues the group already open.
+      ['Look', ['r1-s1', 't1', 'r2-s0', 't2']],
+    ]);
+    expect(groups[1].items[0].event.content).toBe('**Plan**\n\nfirst.');
+    // A turn-level token count no longer applies once the block is split.
+    expect(groups[1].items[0].event.metadata.reasoning_tokens).toBeUndefined();
+  });
+});
