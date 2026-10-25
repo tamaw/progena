@@ -1,24 +1,24 @@
-import { isA2AToolName } from './a2aTools';
+import { A2A_PRIMARY_TOOL_NAME, isA2AToolName } from './a2aTools';
 
 export const STREAM_EVENT_CATEGORIES = [
-  { id: 'tools', label: 'Tools', description: 'tool_start / tool_result events', color: 'var(--color-success)' },
-  { id: 'plan', label: 'Plan', description: 'write_todos plan updates', color: 'var(--color-accent)' },
-  { id: 'reasoning', label: 'Reasoning', description: 'reasoning deltas / summaries', color: '#a78bfa' },
-  { id: 'subagents', label: 'Subagents', description: 'Nested subagent execution (task tool delegation)', color: 'var(--color-success)' },
-  { id: 'a2a', label: 'A2A', description: 'A2A tool invocations of deployed agents', color: 'var(--color-accent-secondary)' },
-  { id: 'user', label: 'User', description: 'user messages', color: '#60a5fa' },
-  { id: 'agent', label: 'Agent', description: 'agent responses', color: '#8b5cf6' },
-  { id: 'errors', label: 'Errors', description: 'tool errors and failed responses', color: 'var(--color-error)' },
-  { id: 'images', label: 'Images', description: 'image attachments', color: '#f59e0b' },
-  { id: 'debug', label: 'Debug', description: 'graph node steps and misc events', color: 'var(--color-text-muted)' },
+  { id: 'tools', label: 'Tools', description: 'Tool calls and results', color: 'var(--color-success)' },
+  { id: 'plan', label: 'Plans', description: 'Plan updates', color: 'var(--color-accent)' },
+  { id: 'reasoning', label: 'Reasoning', description: 'Reasoning summaries and details', color: 'var(--color-accent-secondary)' },
+  { id: 'delegations', label: 'Delegations', description: 'Subagents and A2A calls', color: 'var(--color-success)' },
+  { id: 'errors', label: 'Errors', description: 'Failed tools and delegations', color: 'var(--color-error)' },
+  { id: 'debug', label: 'Debug', description: 'Graph steps and diagnostic events', color: 'var(--color-text-muted)', defaultEnabled: false },
 ];
 
 export const PERSISTED_CATEGORIES = new Set(['tools', 'plan', 'reasoning', 'subagents', 'a2a']);
 
 const DEFAULT_FILTERS = STREAM_EVENT_CATEGORIES.reduce((acc, c) => {
-  acc[c.id] = true;
+  acc[c.id] = c.defaultEnabled !== false;
   return acc;
 }, {});
+
+export function createDefaultStreamFilters() {
+  return { ...DEFAULT_FILTERS };
+}
 
 // `metadata` is optional -- callers that only have a bare eventType (or a
 // synthetic sentinel event, see Message.jsx's card-level gates) can omit it.
@@ -40,11 +40,67 @@ export function categoryForEventType(eventType, metadata) {
   return 'debug';
 }
 
+// Storage/reconciliation still use the original event categories. Only the
+// presentation controls combine delegation types and put errors with tools.
+function activityCategory(category) {
+  if (category === 'a2a' || category === 'subagents') return 'delegations';
+  return category === 'errors' ? 'tools' : category;
+}
+
+function hasFailure(metadata) {
+  return metadata?.success === false
+    || Boolean(metadata?.error)
+    || ['error', 'failed', 'rejected'].includes(metadata?.status)
+    || ['error', 'failed', 'rejected'].includes(metadata?.state);
+}
+
 export function isEventVisible(event, filters) {
   if (!event) return false;
-  const category = categoryForEventType(event.eventType, event.metadata);
+  const category = activityCategory(categoryForEventType(event.eventType, event.metadata));
   if (!category) return false;
-  return filters?.[category] !== false;
+  if ((typeof event.eventType === 'string' && event.eventType.endsWith('_error')) || hasFailure(event.metadata)) {
+    return filters?.errors !== false;
+  }
+  return filters?.[category] ?? DEFAULT_FILTERS[category];
+}
+
+function turnEventFilter(events, filter) {
+  if (typeof filter !== 'function') return () => true;
+  const hiddenCalls = new Set();
+  for (const event of events) {
+    if (event?.eventType === 'tool_error' && event.metadata?.tool_call_id && !filter(event)) {
+      hiddenCalls.add(event.metadata.tool_call_id);
+    }
+  }
+  return (event) => !hiddenCalls.has(event?.metadata?.tool_call_id) && filter(event);
+}
+
+export function filterStreamEvents(events, filter) {
+  return typeof filter === 'function' ? events.filter(turnEventFilter(events, filter)) : events;
+}
+
+/** Filter whole calls/cards, never conversation answers or attached images. */
+export function filterTimelineItems(items, filter) {
+  if (typeof filter !== 'function') return items;
+  const events = [];
+  for (const item of items) {
+    if (item.kind === 'stream_event') events.push(item.event);
+  }
+  const filterEvent = turnEventFilter(events, filter);
+  return items.filter((item) => {
+    if (item.kind === 'stream_event') return filterEvent(item.event);
+    if (item.kind !== 'subagent' && item.kind !== 'a2a_call') return true;
+    const failed = item.status === 'error' || Boolean(item.error)
+      || item.entries?.some((entry) => entry.status === 'error')
+      || item.messages?.some((entry) => entry.state === 'failed' || entry.state === 'rejected');
+    return filter({
+      eventType: item.kind === 'subagent' ? 'subagent_start' : 'tool_start',
+      metadata: {
+        tool_name: item.kind === 'a2a_call' ? A2A_PRIMARY_TOOL_NAME : 'task',
+        success: !failed,
+      },
+    });
+  });
 }
 
 // Continuation events share their opening event's category -- counting them
@@ -59,25 +115,19 @@ const CONTINUATION_EVENT_TYPES = new Set([
   'subagent_tool_result',
   'subagent_tool_error',
   'subagent_message_delta',
+  'tool_error',
   'a2a_call_progress',
 ]);
 
 /**
- * Tallies one message's stream events into `counts` (mutated in place), one
- * increment per invocation rather than per raw event -- so the filter chips
- * agree with conversationModel.js's countToolInvocations(), which counts
- * only tool_start for the page header's "N tools" figure. `tool_error` is
- * the one exception among continuation types: it only shares a category
- * with its own tool_start when the call is an A2A tool ('a2a', already
- * counted there); for every other tool, tool_error is the sole signal that
- * invocation failed, so it still increments 'errors'.
+ * Tallies one message's activity, one increment per invocation rather than
+ * per raw event. Reasoning is counted separately from the rendered summaries.
  */
 export function countCategorizedEvents(streamEvents, counts) {
   for (const event of (Array.isArray(streamEvents) ? streamEvents : [])) {
-    const cat = categoryForEventType(event?.eventType, event?.metadata);
-    if (!cat || cat === 'reasoning') continue;
+    const cat = activityCategory(categoryForEventType(event?.eventType, event?.metadata));
+    if (!cat || cat === 'reasoning' || cat === 'debug') continue;
     if (CONTINUATION_EVENT_TYPES.has(event.eventType)) continue;
-    if (event.eventType === 'tool_error' && cat === 'a2a') continue;
     if (cat in counts) counts[cat] += 1;
   }
   return counts;
@@ -86,13 +136,18 @@ export function countCategorizedEvents(streamEvents, counts) {
 export function loadStreamFilters(storageKey) {
   try {
     const raw = localStorage.getItem(storageKey);
-    if (!raw) return { ...DEFAULT_FILTERS };
+    if (!raw) return createDefaultStreamFilters();
     const parsed = JSON.parse(raw);
-    return STREAM_EVENT_CATEGORIES.reduce((acc, c) => {
-      acc[c.id] = parsed && typeof parsed[c.id] === 'boolean' ? parsed[c.id] : true;
-      return acc;
-    }, {});
+    const filters = createDefaultStreamFilters();
+    for (const key of Object.keys(filters)) {
+      if (typeof parsed?.[key] === 'boolean') filters[key] = parsed[key];
+    }
+    // Preserve either previously visible delegation type when combining them.
+    if (typeof parsed?.delegations !== 'boolean') {
+      filters.delegations = parsed?.subagents !== false || parsed?.a2a !== false;
+    }
+    return filters;
   } catch {
-    return { ...DEFAULT_FILTERS };
+    return createDefaultStreamFilters();
   }
 }

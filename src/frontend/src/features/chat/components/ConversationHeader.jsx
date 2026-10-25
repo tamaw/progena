@@ -1,35 +1,11 @@
-import { memo, useCallback, useMemo, useSyncExternalStore } from 'react';
-import { Message } from './Message';
+import { memo, useMemo, useSyncExternalStore } from 'react';
 import StreamFilterMenu from './StreamFilterMenu';
 import DetailHeader, { DetailHeaderAction, DetailHeaderActions } from '../../../components/layout/DetailHeader';
 import EditableDetailTitle from '../../../components/EditableDetailTitle';
 import InlineFailure from '../../../components/InlineFailure';
-import { collectMessageImages, committedReasoningTokenCounts, committedReasoningTokenDisplay, formatStartedTime, liveReasoningTokenAdjustment } from '../models/conversationModel';
+import { committedReasoningTokenCounts, committedReasoningTokenDisplay, formatStartedTime, liveReasoningTokenAdjustment } from '../models/conversationModel';
 import { STREAM_EVENT_CATEGORIES, countCategorizedEvents } from '../models/streamFilters';
 import { countReasoningTimelineEntries } from '../models/streamEventsModel';
-
-export const HistoricalMessage = memo(function HistoricalMessage({
-  message,
-  streamEventFilter,
-  hideContent,
-  showImages,
-  onRegenerate,
-}) {
-  const handleMessageRegenerate = useCallback(
-    () => onRegenerate?.(message.id),
-    [message.id, onRegenerate],
-  );
-
-  return (
-    <Message
-      message={message}
-      streamEventFilter={streamEventFilter}
-      hideContent={hideContent}
-      showImages={showImages}
-      onRegenerate={message.role === 'assistant' ? handleMessageRegenerate : undefined}
-    />
-  );
-});
 
 export const LiveConversationHeader = memo(function LiveConversationHeader({
   liveTurnStore,
@@ -41,7 +17,6 @@ export const LiveConversationHeader = memo(function LiveConversationHeader({
   isEmptyConversationPane,
   showEventFilters,
   streamFilters,
-  streamFiltersStorageKey,
   updateStreamFilters,
   threadId,
   chatStatus,
@@ -74,15 +49,13 @@ export const LiveConversationHeader = memo(function LiveConversationHeader({
   const committedEventCounts = useMemo(() => {
     const counts = STREAM_EVENT_CATEGORIES.reduce((acc, c) => { acc[c.id] = 0; return acc; }, {});
     for (const message of messages) {
-      if (message.role === 'user') { counts.user++; continue; }
+      if (message.role === 'user') continue;
       if (message.role === 'assistant') {
-        counts.agent++;
         counts.reasoning += countReasoningTimelineEntries(
           message.streamEvents,
           message.reasoningText,
         );
       }
-      counts.images += collectMessageImages(message).length;
       countCategorizedEvents(message.streamEvents, counts);
     }
     return counts;
@@ -140,7 +113,6 @@ export const LiveConversationHeader = memo(function LiveConversationHeader({
       {titleEditor.error ? <InlineFailure failure={titleEditor.error} operation="Rename conversation" /> : null}
       {!isContentLoading && !isEmptyConversationPane && showEventFilters && (
         <StreamFilterMenu
-          storageKey={streamFiltersStorageKey}
           filters={streamFilters}
           onChange={updateStreamFilters}
           eventCounts={eventCounts}

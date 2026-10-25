@@ -78,8 +78,6 @@ function renderLiveTurn({ store, container, pinned }) {
     messagesContainerRef: { current: container },
     isPinnedToBottomRef: { current: pinned },
     streamEventFilter: () => true,
-    hideContent: false,
-    showImages: true,
   });
   reactHarness.flushEffects();
 }

@@ -46,6 +46,7 @@ const A2ASubEntry = memo(function A2ASubEntry({ message, isLast }) {
 
 const A2ACallCard = memo(function A2ACallCard({ item }) {
   const messageCount = item.messages.length;
+  const hasFailedUpdate = item.messages.some((message) => message.state === 'failed' || message.state === 'rejected');
   const durationLabel = Number.isFinite(item.durationMs) ? formatDuration(item.durationMs) : '';
   const formattedTime = formatTimestamp(item.finishedAt || item.startedAt);
   // resultPreview is the whole A2A tool result dict, stringified -- only
@@ -67,6 +68,7 @@ const A2ACallCard = memo(function A2ACallCard({ item }) {
       <div className="entry__main">
         <button type="button" className="entry__head entry-toggle" aria-expanded={open} onClick={toggle}>
           <span className="entry__role">{item.agentName || 'agent'}</span>
+          {hasFailedUpdate && <span className="work-group__failed">Failed</span>}
           <span className="msg__head-trailing">
             {messageCount > 0 && (
               <span className="muted">{messageCount} update{messageCount === 1 ? '' : 's'}</span>

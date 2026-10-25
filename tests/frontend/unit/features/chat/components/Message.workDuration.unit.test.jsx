@@ -8,14 +8,14 @@ vi.mock('react-redux', () => ({
   useSelector: (selector) => selector({ uiData: { preferences: { agentName: 'Progena' } } }),
 }));
 
-function renderTurn(message, hideContent) {
+function renderTurn(message) {
   const container = document.createElement('div');
-  container.innerHTML = renderToStaticMarkup(React.createElement(Message, { message, hideContent }));
+  container.innerHTML = renderToStaticMarkup(React.createElement(Message, { message }));
   return container;
 }
 
 describe('Message work duration', () => {
-  it('uses the first nonempty answer boundary even when answer content is hidden', () => {
+  it('uses the first nonempty answer boundary after narration becomes tool commentary', () => {
     const tool = (id, eventType, timestamp) => ({
       kind: 'stream_event',
       id,
@@ -40,12 +40,8 @@ describe('Message work duration', () => {
       ],
     };
 
-    const visible = renderTurn(message, false);
-    const hidden = renderTurn(message, true);
-    const visibleDuration = visible.querySelector('.work-group__title').textContent;
-    expect(visibleDuration).toContain('17s');
-    expect(hidden.querySelector('.work-group__title').textContent).toBe(visibleDuration);
+    const visible = renderTurn(message);
+    expect(visible.querySelector('.work-group__title').textContent).toContain('17s');
     expect(visible.querySelector('.msg--assistant').textContent).toContain('Finished answer');
-    expect(hidden.querySelector('.msg--assistant')).toBeNull();
   });
 });

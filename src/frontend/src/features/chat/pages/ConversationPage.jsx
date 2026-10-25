@@ -25,12 +25,12 @@ import DetailPane from '../../../components/layout/DetailPane';
 import { areChatTranscriptsEquivalent, mergeCanonicalMessages, excludeLiveOwnedMessage, shouldRetireLiveOwnerAfterCanonicalReconciliation, countTokens, countToolInvocations, deriveChatTitle, groupSessionItems, shouldShowChatContentLoading, getActiveRouteThreadId, shouldShowNewChatEmptyState, shouldDeferInitialRosterSelection, shouldDeferRouteSelection, shouldDismissEmptySelection, shouldSkipRoutedMountOpen, isReopeningCurrentLocalDraft, shouldAdoptMaterializedDraft } from '../models/conversationModel';
 import { buildChatSessionItems, compareSessionItems, findAdjacentSessionItem, normalizeBackendChatMessage, shouldLoadSelectedBackendChat, sidebarEmptyMessage, visibleGroupsForFilter } from '../models/chatSessionsModel';
 import { isEventVisible, loadStreamFilters } from '../models/streamFilters';
-import LiveAssistantTurn from '../components/LiveAssistantTurn';
+import ChatMessages from '../components/ChatMessages';
+import { LiveConversationHeader } from '../components/ConversationHeader';
 import { ARCHIVED_CHAT_SESSIONS_KEY, loadQuickChatHandoff, persistPinnedSessionIds } from '../models/chatStorage';
 import { useEntityUrlSync } from '../../../lib/routes';
 import { getDailyWelcomeMessage, normalizeStoredMessage, stripEphemeralStreamEvents } from '../models/conversationPageModel';
 import { followTranscript, noteTranscriptScroll, noteTranscriptUserInput, pinTranscriptToTail } from '../models/transcriptScroll';
-import { HistoricalMessage, LiveConversationHeader } from '../components/ConversationHeader';
 import { ConversationSessionsPane } from '../components/ConversationSessionsPane';
 import { useConversationAttachments } from '../hooks/useConversationAttachments';
 import { latestContextUsage, resolveComposerContextUsage } from '../models/contextWindowModel';
@@ -417,7 +417,6 @@ function ConversationPage() {
     },
     [config.storage.streamFilters],
   );
-
   useEffect(() => {
     // A routed detail owns initialization. Do not create an unrelated draft
     // while the requested chat is loading (or after its detail fails).
@@ -779,31 +778,6 @@ function ConversationPage() {
       cancelAnimationFrame(messagesScrollFrameRef.current);
       messagesScrollFrameRef.current = null;
     }
-  }, []);
-
-  // Follow row-height changes that happen without page state updates, such
-  // as live markdown growth or work groups collapsing. Observe rows because
-  // the inner wrapper can stay height-capped while its children overflow.
-  const transcriptObserversRef = useRef(null);
-  const messagesInnerRef = useCallback((node) => {
-    transcriptObserversRef.current?.forEach((observer) => observer.disconnect());
-    transcriptObserversRef.current = null;
-    if (!node || typeof ResizeObserver === 'undefined' || typeof MutationObserver === 'undefined') return;
-    const follow = () => followTranscript(messagesContainerRef.current, isPinnedToBottomRef);
-    const resizeObserver = new ResizeObserver(follow);
-    [...node.children].forEach((child) => resizeObserver.observe(child));
-    const mutationObserver = new MutationObserver((records) => {
-      records.forEach((record) => {
-        record.removedNodes.forEach((removed) => {
-          if (removed.nodeType === 1) resizeObserver.unobserve(removed);
-        });
-        record.addedNodes.forEach((added) => {
-          if (added.nodeType === 1) resizeObserver.observe(added);
-        });
-      });
-    });
-    mutationObserver.observe(node, { childList: true });
-    transcriptObserversRef.current = [resizeObserver, mutationObserver];
   }, []);
 
   // Handle chat events (from /chat SSE stream)
@@ -1505,6 +1479,12 @@ function ConversationPage() {
   const liveOwnedMessageId = liveTurnStore.getSnapshot()?.assistantMessageId ?? null;
   const visibleMessages = excludeLiveOwnedMessage(messages, liveOwnedMessageId);
 
+  const shouldRenderTranscript = !isRouteDetailError
+    && !isContentLoading
+    && !isEmptyConversationPane
+    && !isNewChatEmpty;
+  const transcriptMessages = shouldRenderTranscript ? visibleMessages : [];
+
   return (
     <PageShell className="chat-page">
       <ConversationSessionsPane
@@ -1540,7 +1520,6 @@ function ConversationPage() {
           isRouteDetailError={isRouteDetailError}
           showEventFilters={showEventFilters}
           streamFilters={streamFilters}
-          streamFiltersStorageKey={config.storage.streamFilters}
           updateStreamFilters={updateStreamFilters}
           chatStatus={currentSessionItem?.status || 'idle'}
           threadId={threadId}
@@ -1569,7 +1548,7 @@ function ConversationPage() {
         )}
         <RegenerateDisabledContext.Provider value={isGenerating}>
           <div
-            className="chat-messages sess-detail__body chat-detail-body"
+            className="chat-messages sess-detail__body chat-detail-body chat-transcript"
             ref={messagesContainerRef}
             onScroll={handleMessagesScroll}
             onWheel={handleMessagesUserInput}
@@ -1577,7 +1556,14 @@ function ConversationPage() {
             onPointerDown={handleMessagesUserInput}
             onKeyDown={handleMessagesUserInput}
           >
-            <div className="chat-messages__inner" ref={messagesInnerRef}>
+            <ChatMessages
+              messages={transcriptMessages}
+              streamEventFilter={streamEventFilter}
+              onRegenerate={handleRegenerate}
+              liveTurnStore={shouldRenderTranscript ? liveTurnStore : undefined}
+              messagesContainerRef={messagesContainerRef}
+              isPinnedToBottomRef={isPinnedToBottomRef}
+            >
               {isRouteDetailError ? (
                 <InlineFailure
                   failure={chatDetailError}
@@ -1600,44 +1586,19 @@ function ConversationPage() {
                   <h2>{welcomeMessage}</h2>
                   <QuickActions onAction={handleQuickAction} />
                 </div>
-              ) : (
-                <>
-                  {activeBackendChatState?.hasMoreMessages ? (
-                    <div className="chat-messages__load-older">
-                      <button
-                        type="button"
-                        className="chat-messages__load-older-button"
-                        onClick={handleLoadOlderMessages}
-                        disabled={loadingOlderMessages}
-                      >
-                        {loadingOlderMessages ? 'Loading…' : 'Load earlier messages'}
-                      </button>
-                    </div>
-                  ) : null}
-                  {visibleMessages.map((msg) => {
-                    if (msg.role === 'user' && streamFilters.user === false) return null;
-                    return (
-                      <HistoricalMessage
-                        key={msg.id}
-                        message={msg}
-                        streamEventFilter={streamEventFilter}
-                        hideContent={msg.role === 'assistant' && streamFilters.agent === false}
-                        showImages={streamFilters.images !== false}
-                        onRegenerate={msg.role === 'assistant' ? handleRegenerate : undefined}
-                      />
-                    );
-                  })}
-                  <LiveAssistantTurn
-                    store={liveTurnStore}
-                    messagesContainerRef={messagesContainerRef}
-                    isPinnedToBottomRef={isPinnedToBottomRef}
-                    streamEventFilter={streamEventFilter}
-                    hideContent={streamFilters.agent === false}
-                    showImages={streamFilters.images !== false}
-                  />
-                </>
-              )}
-            </div>
+              ) : activeBackendChatState?.hasMoreMessages ? (
+                <div className="chat-messages__load-older">
+                  <button
+                    type="button"
+                    className="chat-messages__load-older-button"
+                    onClick={handleLoadOlderMessages}
+                    disabled={loadingOlderMessages}
+                  >
+                    {loadingOlderMessages ? 'Loading…' : 'Load earlier messages'}
+                  </button>
+                </div>
+              ) : null}
+            </ChatMessages>
           </div>
         </RegenerateDisabledContext.Provider>
 

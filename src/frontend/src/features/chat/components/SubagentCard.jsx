@@ -162,6 +162,7 @@ const SubagentCard = memo(function SubagentCard({ item }) {
   const lastEntry = entries.length > 0 ? entries[entries.length - 1] : null;
   const isStreamingLastEntry = item.status === 'running' && item.entries.length > 0 && lastEntry.kind === 'message';
   const toolCount = entries.filter((entry) => entry.kind === 'tool').length;
+  const failedToolCount = entries.filter((entry) => entry.kind === 'tool' && entry.status === 'error').length;
   const durationLabel = Number.isFinite(item.durationMs) ? formatDuration(item.durationMs) : '';
   const formattedTime = formatTimestamp(item.finishedAt || item.startedAt);
   const [showAll, setShowAll] = useState(false);
@@ -182,6 +183,7 @@ const SubagentCard = memo(function SubagentCard({ item }) {
       <div className="entry__main">
         <button type="button" className="entry__head entry-toggle" aria-expanded={open} onClick={toggle}>
           <span className="entry__role">{item.subagentName || 'subagent'}</span>
+          {failedToolCount > 0 && <span className="work-group__failed">{failedToolCount} failed</span>}
           <span className="msg__head-trailing">
             {toolCount > 0 && (
               <span className="muted">{toolCount} tool call{toolCount === 1 ? '' : 's'}</span>

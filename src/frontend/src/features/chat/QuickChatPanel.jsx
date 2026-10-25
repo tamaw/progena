@@ -1,21 +1,27 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { fetchChatMessages, selectGeneratingChatIds, selectRequestIdByThreadId } from './state/chats';
 import { savePreferences, selectPreferences, selectPreferencesSaveRequest } from '../settings/state/preferences';
+import { selectModelProfiles } from '../settings/state/modelProfiles';
 import { selectUiEventQueue } from '../../realtime/realtimeSlice';
 import { consumeUiEventQueue } from '../../realtime/eventQueue';
 import { useConfig } from '../../context/ConfigContext';
 import { useChatApi } from './hooks/useChatApi';
-import MarkdownContent from '../../components/MarkdownContent';
 import { createUuid } from '../../lib/uuid';
 import ChatInput from './components/ChatInput';
-import { OpenChatIcon, QuickChatIcon, RefreshIcon } from '../../components/navIcons';
+import ChatMessages from './components/ChatMessages';
+import { OpenChatIcon, QuickChatIcon } from '../../components/navIcons';
 import { defaultQuickChatConfig, normalizeQuickChatConfig } from './models/quickChatConfig';
-import { derivePageContext, formatPageContextBlock, stripPageContextBlock } from '../../lib/pageContext';
-import { createSpectatorReplayState } from './models/quickChatStreamModel';
+import { derivePageContext, formatPageContextBlock } from '../../lib/pageContext';
 import { PanelIconButton, TopNavPane } from '../../components/panels/PanelFrame';
 import { quickChatMemory } from './models/quickChatMemory';
+import { createLiveAssistantTurnStore } from './models/liveAssistantTurnStore';
+import { applyAssistantChunk, applyAssistantMetadata, applyAssistantStreamEvent, createLiveAssistantTurn, finalizeLiveAssistantTurn } from './models/liveAssistantTurnModel';
+import { loadQuickChatHistory, toQuickChatInputHistory } from './models/quickChatStreamModel';
+import { latestContextUsage, resolveComposerContextUsage } from './models/contextWindowModel';
+import { followTranscript, noteTranscriptScroll, noteTranscriptUserInput, pinTranscriptToTail } from './models/transcriptScroll';
+
 
 export function QuickChatPanel({
   onClose,
@@ -36,6 +42,7 @@ export function QuickChatPanel({
   const uiEventQueue = useSelector(selectUiEventQueue);
   const preferences = useSelector(selectPreferences);
   const preferencesSaveRequest = useSelector(selectPreferencesSaveRequest);
+  const modelProfiles = useSelector(selectModelProfiles);
   const generatingChatIds = useSelector(selectGeneratingChatIds);
   const requestIdByThreadId = useSelector(selectRequestIdByThreadId);
   const navigate = useNavigate();
@@ -55,6 +62,14 @@ export function QuickChatPanel({
   const [isSending, setIsSending] = useState(false);
   const [error, setError] = useState('');
   const [composerSeed, setComposerSeed] = useState({ key: 0, message: '' });
+  const [liveTurnStore] = useState(createLiveAssistantTurnStore);
+  const liveTurnRef = useRef(null);
+  const activeStreamIdRef = useRef(null);
+  const ownStreamIdRef = useRef(null);
+  const quickChatEpochRef = useRef(0);
+  const messagesContainerRef = useRef(null);
+  const isPinnedToBottomRef = useRef(true);
+  const messagesScrollFrameRef = useRef(null);
   const sessionPromiseRef = useRef(null);
   const pendingRehydrateRef = useRef(null);
   const lastPersistedThreadIdRef = useRef(null);
@@ -62,15 +77,44 @@ export function QuickChatPanel({
   const lastSentPageContextRef = useRef(null);
   const eventSequenceRef = useRef(0);
   const isQuickChatMountedRef = useRef(false);
-  const activeAssistantIdRef = useRef(null);
   const consumedSubmissionIdRef = useRef(null);
-  const scrollEndRef = useRef(null);
 
-  // Keep the transcript pinned to the latest message, including as it streams
-  // in token by token (mirrors the main Chat page's scroll-to-bottom effect).
+  const setLiveAssistantTurn = useCallback((nextTurn) => {
+    const resolvedTurn = typeof nextTurn === 'function'
+      ? nextTurn(liveTurnRef.current)
+      : nextTurn;
+    liveTurnRef.current = resolvedTurn;
+    liveTurnStore.set(resolvedTurn);
+  }, [liveTurnStore]);
+
+  const liveContextUsage = useSyncExternalStore(
+    liveTurnStore.subscribeContextUsage,
+    liveTurnStore.getContextUsageSnapshot,
+    liveTurnStore.getContextUsageSnapshot,
+  );
+  const getHasLiveTurn = useCallback(() => Boolean(liveTurnStore.getSnapshot()), [liveTurnStore]);
+  const hasLiveTurn = useSyncExternalStore(liveTurnStore.subscribe, getHasLiveTurn, getHasLiveTurn);
+  const composerContextUsage = useMemo(() => resolveComposerContextUsage({
+    contextUsage: liveContextUsage ?? latestContextUsage(history),
+    profiles: modelProfiles,
+    isFreshConversation: Boolean(scratchThreadId) && history.length === 0 && !liveContextUsage,
+  }), [history, liveContextUsage, modelProfiles, scratchThreadId]);
+
   useEffect(() => {
-    scrollEndRef.current?.scrollIntoView({ behavior: 'auto', block: 'end' });
+    if (messagesScrollFrameRef.current !== null) return;
+    messagesScrollFrameRef.current = requestAnimationFrame(() => {
+      messagesScrollFrameRef.current = null;
+      followTranscript(messagesContainerRef.current, isPinnedToBottomRef);
+    });
   }, [history, isSending]);
+
+  useEffect(() => () => {
+    if (messagesScrollFrameRef.current !== null) {
+      cancelAnimationFrame(messagesScrollFrameRef.current);
+      messagesScrollFrameRef.current = null;
+    }
+  }, []);
+
   // A persisted quick-chat thread's messages arrive as a causal stream event
   // with the rehydrate request's ID.
   useEffect(() => {
@@ -89,7 +133,7 @@ export function QuickChatPanel({
           && event?.payload?.request_id === pendingRehydrate.requestId
         ) {
           pendingRehydrateRef.current = null;
-          pendingRehydrate.resolve(Array.isArray(event.payload.messages) ? event.payload.messages : []);
+          pendingRehydrate.resolve(event.payload);
           return false;
         }
 
@@ -114,52 +158,48 @@ export function QuickChatPanel({
   // was created but never sent to), or false if it couldn't be resumed
   // (deleted/archived elsewhere) so the caller falls back to a fresh thread.
   const rehydrateFromPersistedThread = useCallback(async (persistedThreadId) => {
-    const requestId = createUuid();
-    let resolveMessages;
-    const messagesPromise = new Promise((resolve) => {
-      resolveMessages = resolve;
-    });
-    pendingRehydrateRef.current = { requestId, resolve: resolveMessages };
-
-    const fetchRequest = dispatch(fetchChatMessages({
-      chatsUrl: getApiUrl('chats'),
-      threadId: persistedThreadId,
-      limit: 50,
-      requestId,
-    }));
-
-    let messages;
+    const epoch = quickChatEpochRef.current;
+    const expectedActiveStreamId = activeStreamIdRef.current;
+    const isCurrent = () => isQuickChatMountedRef.current
+      && quickChatEpochRef.current === epoch
+      && activeStreamIdRef.current === expectedActiveStreamId;
+    let normalizedMessages;
     try {
-      await fetchRequest.unwrap();
-      messages = await messagesPromise;
+      normalizedMessages = await loadQuickChatHistory(async (beforeMessageId) => {
+        const requestId = createUuid();
+        let resolvePage;
+        const pagePromise = new Promise((resolve) => { resolvePage = resolve; });
+        pendingRehydrateRef.current = { requestId, resolve: resolvePage };
+        try {
+          await dispatch(fetchChatMessages({
+            chatsUrl: getApiUrl('chats'),
+            threadId: persistedThreadId,
+            beforeMessageId,
+            limit: 50,
+            requestId,
+          })).unwrap();
+          return await pagePromise;
+        } finally {
+          if (pendingRehydrateRef.current?.requestId === requestId) {
+            pendingRehydrateRef.current = null;
+          }
+        }
+      }, isCurrent);
     } catch {
-      if (pendingRehydrateRef.current?.requestId === requestId) {
-        pendingRehydrateRef.current = null;
-      }
-      return false;
+      return !isCurrent();
     }
-
-    if (!isQuickChatMountedRef.current) {
-      return true;
-    }
-    setHistory(messages.map((message) => ({
-      id: message.id,
-      role: message.role,
-      content: stripPageContextBlock(message.content),
-      timestamp: (typeof message.created_at === 'string' && Date.parse(message.created_at)) || Date.now(),
-      isStreaming: false,
-    })));
+    if (!normalizedMessages) return true;
+    setLiveAssistantTurn(null);
+    setHistory(normalizedMessages);
     setScratchThreadId(persistedThreadId);
     sessionPromiseRef.current = Promise.resolve(persistedThreadId);
     lastPersistedThreadIdRef.current = persistedThreadId;
     return true;
-  }, [dispatch, getApiUrl]);
+  }, [dispatch, getApiUrl, setLiveAssistantTurn]);
 
-  // Spectator support: render live deltas for a generation this panel did not
-  // itself dispatch -- e.g. the same thread open in the main Chat page (or
-  // another tab) was sent a message. `isSending` already covers "this panel
-  // is the one generating" (its own send flips it before `chat.response.started`
-  // ever reaches Redux), so this only attaches for everyone else's sends.
+  // Spectator support: render every rich stream frame for a generation this
+  // panel did not dispatch. Completion first freezes the same rich local
+  // representation, then rehydrates the checkpointed canonical transcript.
   const spectatorCleanupRef = useRef(null);
   const spectatedRequestIdRef = useRef(null);
 
@@ -170,12 +210,23 @@ export function QuickChatPanel({
     const requestId = shouldSpectate ? (requestIdByThreadId[scratchThreadId] || null) : null;
 
     if (!requestId) {
-      if (spectatedRequestIdRef.current) {
+      const completedRequestId = spectatedRequestIdRef.current;
+      if (completedRequestId) {
         spectatorCleanupRef.current?.();
         spectatorCleanupRef.current = null;
         spectatedRequestIdRef.current = null;
-        // The spectated generation just ended -- swap the live bubble for
-        // the persisted, canonical transcript, same as a refresh rehydrate.
+        const streamId = `spectate_${completedRequestId}`;
+        const turn = activeStreamIdRef.current === streamId ? liveTurnRef.current : null;
+        const committed = turn
+          ? finalizeLiveAssistantTurn(turn, { status: 'completed', now: Date.now() })
+          : null;
+        if (committed) {
+          setHistory((current) => current.concat(committed));
+        }
+        if (activeStreamIdRef.current === streamId) {
+          activeStreamIdRef.current = null;
+          setLiveAssistantTurn(null);
+        }
         void rehydrateFromPersistedThread(scratchThreadId);
       }
       return;
@@ -183,37 +234,36 @@ export function QuickChatPanel({
     if (spectatedRequestIdRef.current === requestId) {
       return;
     }
-    spectatorCleanupRef.current?.();
 
-    const existingAssistant = [...history].reverse().find(
-      (turn) => turn.role === 'assistant' && turn.isStreaming,
-    );
-    const { assistantId, assistantContent: initialAssistantContent } = createSpectatorReplayState(
-      existingAssistant,
-      requestId,
-    );
-    let assistantContent = initialAssistantContent;
+    spectatorCleanupRef.current?.();
+    const streamId = `spectate_${requestId}`;
     spectatedRequestIdRef.current = requestId;
-    if (!existingAssistant) {
-      setHistory((currentHistory) => currentHistory.concat({
-        id: assistantId,
-        role: 'assistant',
-        content: '',
-        timestamp: Date.now(),
-        isStreaming: true,
-      }));
-    }
+    activeStreamIdRef.current = streamId;
+    setLiveAssistantTurn(createLiveAssistantTurn({ streamId, startedAt: Date.now() }));
 
     spectatorCleanupRef.current = observeResponseStream(requestId, {
       onChunk: (chunk) => {
-        if (spectatedRequestIdRef.current !== requestId) return;
-        assistantContent += chunk;
-        setHistory((currentHistory) => currentHistory.map((turn) => (
-          turn.id === assistantId ? { ...turn, content: assistantContent } : turn
-        )));
+        if (spectatedRequestIdRef.current !== requestId || activeStreamIdRef.current !== streamId) return;
+        setLiveAssistantTurn((turn) => (turn ? applyAssistantChunk(turn, chunk, Date.now()) : turn));
+      },
+      onStreamEvent: (streamEvent) => {
+        if (spectatedRequestIdRef.current !== requestId || activeStreamIdRef.current !== streamId) return;
+        if (streamEvent.event_type === 'assistant_metadata' && streamEvent.metadata) {
+          setLiveAssistantTurn((turn) => (turn ? applyAssistantMetadata(turn, streamEvent.metadata) : turn));
+          return;
+        }
+        setLiveAssistantTurn((turn) => (turn ? applyAssistantStreamEvent(turn, streamEvent) : turn));
       },
     });
-  }, [scratchThreadId, isSending, generatingChatIds, requestIdByThreadId, history, observeResponseStream, rehydrateFromPersistedThread]);
+  }, [
+    scratchThreadId,
+    isSending,
+    generatingChatIds,
+    requestIdByThreadId,
+    observeResponseStream,
+    rehydrateFromPersistedThread,
+    setLiveAssistantTurn,
+  ]);
 
   useEffect(() => () => {
     spectatorCleanupRef.current?.();
@@ -232,8 +282,8 @@ export function QuickChatPanel({
     return threadId;
   }, [scratchThreadId, startFreshQuickThread]);
 
-  // Mirror the transcript and its active streaming turn into module-level
-  // memory so closing the panel does not discard an in-flight response.
+  // Keep committed rich messages across panel open/close. The live response
+  // itself is recovered as a spectator stream after reopening.
   useEffect(() => {
     quickChatMemory.history = history;
   }, [history]);
@@ -271,7 +321,10 @@ export function QuickChatPanel({
   useEffect(() => {
     isQuickChatMountedRef.current = true;
     return () => {
-      activeAssistantIdRef.current = null;
+      quickChatEpochRef.current += 1;
+      activeStreamIdRef.current = null;
+      ownStreamIdRef.current = null;
+      setLiveAssistantTurn(null);
       // If a rehydrate was still in flight, this abort leaves
       // sessionPromiseRef resolved to null with nothing to retry it -- reset
       // the "already decided" guard below so a remount (a real popover
@@ -284,7 +337,7 @@ export function QuickChatPanel({
       pendingRehydrateRef.current = null;
       isQuickChatMountedRef.current = false;
     };
-  }, []);
+  }, [setLiveAssistantTurn]);
 
   // Decide the thread once per mount. A pinned quick chat's QuickChatPanel
   // mounts as soon as the shell adopts the pinned panel from its fast
@@ -300,20 +353,11 @@ export function QuickChatPanel({
       hasInitializedThreadRef.current = true;
       const threadId = quickChatMemory.threadId;
       sessionPromiseRef.current = Promise.resolve(threadId);
-      // Closed mid-generation: the cached turn is still marked streaming but
-      // this mount owns no stream for it. A generation still running is picked
-      // up by the spectator effect; a finished one has its transcript reloaded.
-      const orphanedStream = quickChatMemory.history.some(
-        (turn) => turn.role === 'assistant' && turn.isStreaming,
-      );
-      if (orphanedStream && !generatingChatIds.includes(threadId)) {
-        void rehydrateFromPersistedThread(threadId).then((resumed) => {
-          if (!resumed && isQuickChatMountedRef.current) {
-            setHistory((current) => current.map((turn) => (
-              turn.isStreaming ? { ...turn, isStreaming: false } : turn
-            )));
-          }
-        });
+      // A running thread is joined by the spectator effect. Otherwise reload
+      // its checkpointed rich history so reopen cannot retain a stale local
+      // transcript after the panel was closed.
+      if (!generatingChatIds.includes(threadId)) {
+        void rehydrateFromPersistedThread(threadId);
       }
       return;
     }
@@ -335,41 +379,52 @@ export function QuickChatPanel({
   const submit = useCallback(async (message, attachments = [], onSettled) => {
     const text = message.trim();
     if ((!text && attachments.length === 0) || isSending) return;
-    const attachmentIds = attachments.map((attachment) => attachment.id).filter(Boolean);
+    quickChatEpochRef.current += 1;
 
     const now = Date.now();
-    const assistantId = `qchat_assistant_${now + 1}`;
-    const streamHistory = history.map((turn) => ({
-      role: turn.role,
-      content: turn.content,
+    const streamId = `qchat_stream_${now}`;
+    const attachmentIds = attachments.map((attachment) => attachment.id).filter(Boolean);
+    activeStreamIdRef.current = streamId;
+    ownStreamIdRef.current = streamId;
+    pinTranscriptToTail(messagesContainerRef.current, isPinnedToBottomRef);
+    setHistory((current) => current.concat({
+      id: `qchat_user_${now}`,
+      role: 'user',
+      content: text,
+      inputContent: text,
+      timestamp: now,
+      attachments: attachments.map(({ id, name, mime_type: mimeType, size_bytes: sizeBytes }) => (
+        { id, name, mime_type: mimeType, size_bytes: sizeBytes }
+      )),
     }));
-    const nextHistory = history.concat(
-      { id: `qchat_user_${now}`, role: 'user', content: text, timestamp: now },
-      {
-        id: assistantId,
-        role: 'assistant',
-        content: '',
-        timestamp: now + 1,
-        isStreaming: true,
-      },
-    );
-    activeAssistantIdRef.current = assistantId;
-    setHistory(nextHistory);
+    setLiveAssistantTurn(createLiveAssistantTurn({ streamId, startedAt: now }));
     setIsSending(true);
     setError('');
     let terminalStatus = 'failed';
     let terminalError = '';
+    let terminalReceived = false;
+    const isStale = () => activeStreamIdRef.current !== streamId;
+
+    const commitLiveTurn = (status, errorMessage = '') => {
+      if (isStale()) return;
+      const turn = liveTurnRef.current;
+      const committed = turn
+        ? finalizeLiveAssistantTurn(turn, { status, now: Date.now(), errorMessage })
+        : null;
+      if (committed) {
+        setHistory((current) => current.concat(committed));
+      }
+      setLiveAssistantTurn(null);
+      activeStreamIdRef.current = null;
+    };
 
     try {
       const threadId = await ensureQuickThread();
+      if (isStale()) return;
 
-      // Tell the agent what the user is looking at, without cluttering the
-      // visible transcript: only the outgoing API payload for this one
-      // message gets the block prepended, never the displayed bubble or
-      // the prior-turn history resent on the next message. Only sent when
-      // it's actually new information for this thread -- a fresh thread
-      // (New chat, or a new page) always gets it; an unchanged page on an
-      // established thread doesn't, since the agent already has it.
+      // The page context stays in the agent's input but never becomes visible
+      // transcript content. Keep it on the local user message for any future
+      // outgoing history, including the next turn before backend rehydration.
       const pageContext = derivePageContext(location.pathname);
       const previousPageContext = lastSentPageContextRef.current;
       const pageContextChanged = !previousPageContext
@@ -381,82 +436,66 @@ export function QuickChatPanel({
         outgoingText = `${formatPageContextBlock(pageContext)}\n\n${text}`;
         lastSentPageContextRef.current = { threadId, ...pageContext };
       }
+      if (outgoingText !== text) {
+        setHistory((current) => current.map((turn) => (
+          turn.id === `qchat_user_${now}` ? { ...turn, inputContent: outgoingText } : turn
+        )));
+      }
 
-      let assistantContent = '';
-      const isStale = () => activeAssistantIdRef.current !== assistantId;
       await sendMessageStream(
         outgoingText,
-        streamHistory,
+        toQuickChatInputHistory(history),
         (chunk) => {
           if (isStale()) return;
-          assistantContent += chunk;
-          setHistory((currentHistory) => currentHistory.map((turn) => (
-            turn.id === assistantId
-              ? { ...turn, content: assistantContent }
-              : turn
-          )));
+          setLiveAssistantTurn((turn) => (turn ? applyAssistantChunk(turn, chunk, Date.now()) : turn));
         },
         (status) => {
+          terminalReceived = true;
           terminalStatus = status === 'cancelled' ? 'cancelled' : 'completed';
-          if (isStale()) return;
-          setHistory((currentHistory) => currentHistory.map((turn) => {
-            if (turn.id !== assistantId) return turn;
-            const content = assistantContent || turn.content || (status === 'cancelled'
-              ? '(Response cancelled)'
-              : '(No response text)');
-            return {
-              ...turn,
-              content: status === 'cancelled' && content !== '(Response cancelled)'
-                ? `${content} [Cancelled]`
-                : content,
-              isStreaming: false,
-            };
-          }));
-          activeAssistantIdRef.current = null;
+          commitLiveTurn(terminalStatus);
         },
         (streamError) => {
+          terminalReceived = true;
           terminalStatus = 'failed';
           terminalError = streamError.message;
           if (isStale()) return;
           setError(streamError.message);
-          setHistory((currentHistory) => currentHistory.map((turn) => (
-            turn.id === assistantId
-              ? { ...turn, content: turn.content || `Error: ${streamError.message}`, isStreaming: false, error: true }
-              : turn
-          )));
-          activeAssistantIdRef.current = null;
+          commitLiveTurn('error', streamError.message);
         },
-        undefined,
-        { thread_id: threadId, ...(attachmentIds.length > 0 ? { attachments: attachmentIds } : {}) },
+        (streamEvent) => {
+          if (isStale()) return;
+          if (streamEvent.event_type === 'assistant_metadata' && streamEvent.metadata) {
+            setLiveAssistantTurn((turn) => (turn ? applyAssistantMetadata(turn, streamEvent.metadata) : turn));
+            return;
+          }
+          setLiveAssistantTurn((turn) => (turn ? applyAssistantStreamEvent(turn, streamEvent) : turn));
+        },
+        {
+          thread_id: threadId,
+          ...(attachmentIds.length > 0 ? { attachments: attachmentIds } : {}),
+        },
       );
 
-      if (!isStale()) {
-        setHistory((currentHistory) => currentHistory.map((turn) => {
-          if (turn.id !== assistantId) return turn;
-          const content = assistantContent || turn.content || '(No response text)';
-          return { ...turn, content, isStreaming: false };
-        }));
-        activeAssistantIdRef.current = null;
+      if (!terminalReceived && !isStale()) {
+        terminalStatus = 'completed';
+        commitLiveTurn('completed');
       }
     } catch (sendError) {
       terminalStatus = 'failed';
       terminalError = sendError.message;
-      if (sendError.name !== 'AbortError' && activeAssistantIdRef.current === assistantId) {
+      if (sendError.name !== 'AbortError' && !isStale()) {
         setError(sendError.message);
-        setHistory((currentHistory) => currentHistory.map((turn) => (
-          turn.id === assistantId
-            ? { ...turn, content: turn.content || `Error: ${sendError.message}`, isStreaming: false, error: true }
-            : turn
-        )));
+        commitLiveTurn('error', sendError.message);
       }
     } finally {
-      if (activeAssistantIdRef.current === assistantId) {
-        activeAssistantIdRef.current = null;
+      if (ownStreamIdRef.current === streamId) {
+        ownStreamIdRef.current = null;
+        activeStreamIdRef.current = null;
+        setIsSending(false);
       }
-      setIsSending(false);
       onSettled?.(terminalStatus, terminalError);
     }
-  }, [ensureQuickThread, history, isSending, location.pathname, sendMessageStream]);
+  }, [ensureQuickThread, history, isSending, location.pathname, sendMessageStream, setLiveAssistantTurn]);
   useEffect(() => {
     if (!isSending || !pendingSubmission?.inline || consumedSubmissionIdRef.current === pendingSubmission.id) return;
     consumedSubmissionIdRef.current = pendingSubmission.id;
@@ -484,16 +523,9 @@ export function QuickChatPanel({
   const openInChat = useCallback(() => {
     const hasQuickChatHandoff = history.length > 0;
     if (hasQuickChatHandoff) {
-      const promotedMessages = history.map((turn, index) => ({
-        id: `msg_quick_${Date.now()}_${index}`,
-        role: turn.role,
-        content: turn.content,
-        timestamp: Number.isFinite(turn.timestamp) ? turn.timestamp : Date.now() + index,
-        tokenCount: turn.role === 'assistant' ? turn.content.split(/\s+/).filter(Boolean).length : 0,
-        reasoningTokenCount: 0,
-        reasoningText: '',
-        streamEvents: [],
-      }));
+      // The main conversation owns storage normalization. Do not synthesize
+      // token counts or discard trace data gathered by the rich renderer.
+      const promotedMessages = history.map((turn) => ({ ...turn }));
       localStorage.setItem(config.storage.chatHistory, JSON.stringify(promotedMessages));
       localStorage.setItem(
         config.storage.quickChatHandoff,
@@ -516,8 +548,16 @@ export function QuickChatPanel({
   }, [config.storage.chatHistory, config.storage.quickChatHandoff, history, isOnChatPage, navigate, onClose, scratchThreadId]);
 
   const resetQuickChat = useCallback(() => {
-    void cancelStream();
-    activeAssistantIdRef.current = null;
+    quickChatEpochRef.current += 1;
+    if (ownStreamIdRef.current) {
+      void cancelStream();
+    }
+    spectatorCleanupRef.current?.();
+    spectatorCleanupRef.current = null;
+    spectatedRequestIdRef.current = null;
+    activeStreamIdRef.current = null;
+    ownStreamIdRef.current = null;
+    setLiveAssistantTurn(null);
     quickChatMemory.history = [];
     quickChatMemory.threadId = null;
     setHistory([]);
@@ -526,26 +566,16 @@ export function QuickChatPanel({
     setError('');
     setComposerSeed((current) => ({ key: current.key + 1, message: '' }));
     startFreshQuickThread();
-  }, [cancelStream, startFreshQuickThread]);
+  }, [cancelStream, setLiveAssistantTurn, startFreshQuickThread]);
 
   const selectPrompt = useCallback((prompt) => {
     setComposerSeed((current) => ({ key: current.key + 1, message: prompt }));
   }, []);
 
   const stopQuickChat = useCallback(() => {
-    const assistantId = activeAssistantIdRef.current;
-    cancelStream();
-    activeAssistantIdRef.current = null;
-    setIsSending(false);
-    if (!assistantId) return;
-
-    setHistory((currentHistory) => currentHistory
-      .map((turn) => {
-        if (turn.id !== assistantId) return turn;
-        if (!turn.content) return null;
-        return { ...turn, content: `${turn.content} [Cancelled]`, isStreaming: false };
-      })
-      .filter(Boolean));
+    if (ownStreamIdRef.current) {
+      void cancelStream();
+    }
   }, [cancelStream]);
 
   return (
@@ -563,7 +593,9 @@ export function QuickChatPanel({
       actions={(
         <>
           <PanelIconButton label="New chat" onClick={resetQuickChat} disabled={isSending}>
-            <RefreshIcon />
+            <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.35" strokeLinecap="round" aria-hidden="true">
+              <path d="M8 3v10M3 8h10" />
+            </svg>
           </PanelIconButton>
           <PanelIconButton label="Open in chat" onClick={openInChat} disabled={isSending}>
             <OpenChatIcon />
@@ -571,25 +603,24 @@ export function QuickChatPanel({
         </>
       )}
     >
-      <div className={`qchat-pane__scroll${history.length === 0 && !isSending && !error ? ' is-empty' : ''}`}>
-        {history.map((turn, index) => (
-          <article key={turn.id ?? `${turn.role}-${index}`} className="qchat-turn">
-            <div className={`${turn.role === 'user' ? 'qchat-user' : 'qchat-assistant'}${turn.isStreaming && !turn.content ? ' is-loading' : ''}${turn.error ? ' is-error' : ''}`}>
-              {turn.isStreaming && !turn.content ? (
-                <>
-                  Thinking
-                  <span className="qchat-typing"><span /><span /><span /></span>
-                </>
-              ) : (
-                <MarkdownContent content={turn.content} hiddenWhenEmpty />
-              )}
-            </div>
-          </article>
-        ))}
-        {error ? <div className="qchat-assistant is-error">{error}</div> : null}
-        <div ref={scrollEndRef} />
+      <div
+        ref={messagesContainerRef}
+        className={`qchat-pane__scroll chat-detail-body chat-transcript${history.length === 0 && !hasLiveTurn && !isSending && !error ? ' is-empty' : ''}`}
+        onWheel={() => noteTranscriptUserInput(messagesContainerRef.current)}
+        onTouchStart={() => noteTranscriptUserInput(messagesContainerRef.current)}
+        onPointerDown={() => noteTranscriptUserInput(messagesContainerRef.current)}
+        onKeyDown={() => noteTranscriptUserInput(messagesContainerRef.current)}
+        onScroll={() => noteTranscriptScroll(messagesContainerRef.current, isPinnedToBottomRef)}
+      >
+        <ChatMessages
+          messages={history}
+          liveTurnStore={liveTurnStore}
+          messagesContainerRef={messagesContainerRef}
+          isPinnedToBottomRef={isPinnedToBottomRef}
+        />
+        {error ? <div className="qchat-error">{error}</div> : null}
       </div>
-      {history.length === 0 && !isSending && !error ? (
+      {history.length === 0 && !hasLiveTurn && !isSending && !error ? (
         <div className="qchat-pane__hints" aria-label="Quick chat suggestions">
           {normalizedConfig.prompts.map((prompt) => (
             <button key={prompt} type="button" className="qchat-chip" onClick={() => selectPrompt(prompt)}>
@@ -612,6 +643,7 @@ export function QuickChatPanel({
         keepFocusAfterSend
         initialMessage={composerSeed.message}
         enableAttachments
+        contextUsage={composerContextUsage}
       />
     </TopNavPane>
   );

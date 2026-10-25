@@ -8,8 +8,6 @@ const LiveAssistantTurn = memo(function LiveAssistantTurn({
   messagesContainerRef,
   isPinnedToBottomRef,
   streamEventFilter,
-  hideContent,
-  showImages,
 }) {
   const liveAssistantTurn = useSyncExternalStore(
     store.subscribe,
@@ -63,8 +61,6 @@ const LiveAssistantTurn = memo(function LiveAssistantTurn({
       key={liveAssistantTurn.streamId}
       message={toCommittedAssistantMessage(liveAssistantTurn)}
       streamEventFilter={streamEventFilter}
-      hideContent={hideContent}
-      showImages={showImages}
     />
   );
 });

@@ -9,6 +9,42 @@ A modern React-based chat interface for the Progena AI agent system.
 - **Agents Page**: View and manage registered AI agents
 - **Logs Viewer**: Real-time log streaming with filtering
 
+### Shared chat transcript
+
+The conversation page and Quick Chat both render through
+`features/chat/components/ChatMessages.jsx`: historical `Message` rows and the
+subscribed `LiveAssistantTurn` use the same reasoning/work groups, paired tool
+I/O, todos, subagent/A2A cards, images, and copy controls. Empty/loading/error
+states, pagination, and regenerate handlers remain caller-owned.
+`ChatMessages` also owns row resize/mutation observation and cleanup for both
+surfaces; callers supply stable container/pinned refs and retain their scroll
+input handlers. Filter definitions, reset defaults, and whole-call/card
+visibility live in `models/streamFilters.js`, not the rendering components.
+
+Both surfaces use `liveAssistantTurnModel` for stream transitions and
+`normalizeBackendChatMessage` for persisted history. Quick Chat's small
+`quickChatStreamModel` adapter hides page-context blocks from displayed user
+text while retaining them in backend input; promotion carries complete rich
+messages instead of rebuilding text-only copies. Profile context usage and
+scroll anchoring also reuse the main chat models. Keep future transcript
+presentation changes in these shared components, not panel-specific bubbles.
+
+Quick Chat refreshes every history page before replacing its transcript.
+A new submission increments the transcript epoch so a delayed refresh cannot
+overwrite that turn, even after its stream returns to idle. The panel subscribes
+only to live-turn presence and context usage; token updates render inside
+`LiveAssistantTurn` instead of rerendering the composer and historical list.
+
+The chat page's filter dropdown controls activity only: Tools, Plans, Reasoning,
+and Delegations (subagents and A2A together). User messages, final answers,
+attachments, and message images remain visible. **All** restores the defaults:
+Tools, Plans, Reasoning, Delegations, and Errors on; Debug off.
+**Errors** directly shows or hides failed tools and delegations independently
+of their activity categories. Nested tool failures and failed A2A updates remain
+indicated on collapsed delegation cards when Errors is enabled.
+**Debug** remains an inline filter chip, with its saved preference preserved.
+Browser-local preferences combine the old delegation flags.
+
 ## Quick Start
 
 ### Development

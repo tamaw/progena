@@ -422,15 +422,15 @@
    every header without one -- messages, agent answers, work groups,
    subagent/A2A cards, preview steps -- reserves the same space after its
    meta, and all times line up. */
-.chat-detail-body {
+.chat-transcript {
     --entry-chevron-slot: 14px;
 }
 
-.chat-detail-body .tool-event-disclosure__chevron {
+.chat-transcript .tool-event-disclosure__chevron {
     margin-right: 0;
 }
 
-.chat-detail-body .entry__head:not(:has(> .tool-event-disclosure__chevron)) > .msg__head-trailing {
+.chat-transcript .entry__head:not(:has(> .tool-event-disclosure__chevron)) > .msg__head-trailing {
     margin-right: var(--entry-chevron-slot);
 }
 
@@ -2182,7 +2182,7 @@ pre.mermaid svg {
     max-width: none;
 }
 
-.chat-detail-body .msg--user.entry--standalone {
+.chat-transcript .msg--user.entry--standalone {
     margin-bottom: -24px;
 }
 
@@ -2366,12 +2366,12 @@ pre.mermaid svg {
     gap: 0;
 }
 
-.chat-detail-body .entry--standalone > .entry__gutter::before,
-.chat-detail-body .entry--chain-end > .entry__gutter::before {
+.chat-transcript .entry--standalone > .entry__gutter::before,
+.chat-transcript .entry--chain-end > .entry__gutter::before {
     display: none;
 }
 
-.chat-detail-body .entry--chain-item > .entry__gutter::before {
+.chat-transcript .entry--chain-item > .entry__gutter::before {
     display: block;
 }
 
@@ -2419,7 +2419,7 @@ pre.mermaid svg {
 /* Transcript gutter markers are plain dots: no glyph, ring or glow. Every
    variant rule sets its hue as `color`; the dot paints it. Centered on the
    first header line (22px tall), with the chain line starting at its center. */
-.chat-detail-body .entry__badge {
+.chat-transcript .entry__badge {
     width: 8px;
     height: 8px;
     margin-top: 7px;
@@ -2432,24 +2432,24 @@ pre.mermaid svg {
    gutter column and left padding shrink to match (nested sub-chains
    included). Compounded so it beats chrome-frame.css's later
    `.sess-detail__body` padding. */
-.chat-messages.chat-detail-body {
+.chat-messages.chat-transcript {
     padding-right: 16px;
     padding-left: 16px;
 }
 
-.chat-detail-body .entry {
+.chat-transcript .entry {
     grid-template-columns: 12px minmax(0, 1fr);
 }
 
-.chat-detail-body .entry__gutter::before {
+.chat-transcript .entry__gutter::before {
     top: 11px;
 }
 
-.chat-detail-body .entry__badge--user {
+.chat-transcript .entry__badge--user {
     color: var(--color-user-bg);
 }
 
-.chat-detail-body .entry__badge--assistant {
+.chat-transcript .entry__badge--assistant {
     color: #8b5cf6;
 }
 

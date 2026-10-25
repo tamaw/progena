@@ -14,7 +14,7 @@ import NormalToolContent from './NormalToolContent';
 import MessageActions from './MessageActions';
 import { describeStreamEvent, badgeClassForEvent, toolDetailsForEvent, tokenMetaItemsForEvent, appendStreamingCursor, formatTimestamp } from '../models/messageRenderUtils';
 import { renderSafeMarkdown, sanitizeHtmlFragment } from '../../../lib/safeMarkdown';
-import { A2A_PRIMARY_TOOL_NAME } from '../models/a2aTools';
+import { filterStreamEvents, filterTimelineItems } from '../models/streamFilters';
 import { selectAgentName } from '../../settings/state/preferences';
 
 function isTimelineStreamEvent(event) {
@@ -122,8 +122,6 @@ function withReasoningFallback(
 function MessageView({
   message,
   streamEventFilter,
-  hideContent = false,
-  showImages = true,
   onRegenerate,
 }) {
   const {
@@ -148,12 +146,6 @@ function MessageView({
     workActive = false,
     attachments = [],
   } = message;
-  // Quick chat prepends a fenced page-context block ahead of the user's own
-  // text (see AppRuntimeShell's submit()); the main Chat page intentionally
-  // shows messages raw (it doubles as a debugging view), so that block is
-  // deliberately NOT stripped here -- only in quick chat's own rendering,
-  // which is a separate component (QuickChatMarkdown in AppRuntimeShell.jsx)
-  // and never routes through this one.
 
   const hasTimelineItems = role === 'assistant' && Array.isArray(timelineItems) && timelineItems.length > 0;
   const visibleStreamEvents = useMemo(() => {
@@ -167,8 +159,7 @@ function MessageView({
       messageId,
       isStreaming,
     );
-    if (typeof streamEventFilter !== 'function') return timelineEvents;
-    return timelineEvents.filter(streamEventFilter);
+    return filterStreamEvents(timelineEvents, streamEventFilter);
   }, [hasTimelineItems, isStreaming, messageId, reasoningText, reasoningTimestamp, reasoningTokenCount, streamEvents, streamEventFilter]);
 
   const formattedContent = useMemo(() => {
@@ -202,13 +193,10 @@ function MessageView({
   const hasConnectedEvents = role === 'assistant' && visibleStreamEvents.length > 0;
   const entryStateClass = hasConnectedEvents ? 'entry--chain-end' : 'entry--standalone';
 
-  // Tool-result (base64) images and markdown images from the message text are both
-  // image responses in the same sense, so they're collected together via the shared
-  // collectMessageImages() -- see its doc comment for why this must stay one function
-  // rather than duplicated logic here and in the Images filter count.
+  // Images belong to the message, even when their producing activity is hidden.
   const messageImages = useMemo(
-    () => (showImages && !hideContent ? collectMessageImages({ role, content, streamEvents }) : []),
-    [content, hideContent, role, showImages, streamEvents],
+    () => collectMessageImages({ role, content, streamEvents }),
+    [content, role, streamEvents],
   );
 
   const messageEntry = (
@@ -252,7 +240,7 @@ function MessageView({
               dangerouslySetInnerHTML={{ __html: formattedContent }}
             />
           )}
-          {!hideContent && attachments.length > 0 && (
+          {attachments.length > 0 && (
             <div className="message-attachments">
               {attachments.map((attachment, index) => {
                 const sizeLabel = formatAttachmentSize(attachment.size_bytes);
@@ -278,7 +266,7 @@ function MessageView({
               })}
             </div>
           )}
-          {showImages && !hideContent && messageImages.length > 0 && (
+          {messageImages.length > 0 && (
             <MessageImageStrip images={messageImages} />
           )}
         </div>
@@ -302,31 +290,7 @@ function MessageView({
     const answerStartedAt = fullTimelineItems.find((item) =>
       item.kind === 'assistant_message' && (item.error || (item.content || '').trim())
     )?.timestamp ?? null;
-    const visibleTimelineItems = fullTimelineItems.filter((item) => {
-      if (item.kind === 'stream_event') {
-        return typeof streamEventFilter !== 'function' || streamEventFilter(item.event);
-      }
-      if (item.kind === 'assistant_message') {
-        return !hideContent;
-      }
-      if (item.kind === 'subagent') {
-        // Subagent cards aren't a single event, so gate on the same
-        // "subagents" category the underlying subagent_* events belong to
-        // (see categoryForEventType in streamFilters.js) rather than a
-        // per-event check.
-        return typeof streamEventFilter !== 'function' || streamEventFilter({ eventType: 'subagent_start' });
-      }
-      if (item.kind === 'a2a_call') {
-        // A2A cards are not a single event, so gate on the same category as
-        // the generic lifecycle event that seeded the card.
-        return typeof streamEventFilter !== 'function'
-          || streamEventFilter({
-            eventType: 'tool_start',
-            metadata: { tool_name: A2A_PRIMARY_TOOL_NAME },
-          });
-      }
-      return true;
-    });
+    const visibleTimelineItems = filterTimelineItems(fullTimelineItems, streamEventFilter);
     const { workItems, cardItems, answerItems: allAnswerItems } = partitionTurnTimeline(visibleTimelineItems);
     // An answer row whose text all turned out to be tool commentary (see
     // claimToolCommentary in liveAssistantTurnModel.js) has nothing to show.
@@ -355,7 +319,7 @@ function MessageView({
             onRegenerate={onRegenerate}
           />
         ))}
-        {showImages && !hideContent && messageImages.length > 0 && (
+        {messageImages.length > 0 && (
           <div className="chat-entry-chain__images">
             <MessageImageStrip images={messageImages} />
           </div>
@@ -370,7 +334,7 @@ function MessageView({
     return (
       <div className={`chat-entry-chain ${hasConnectedEvents ? 'chat-entry-chain--connected' : 'chat-entry-chain--single'}`}>
         {hasConnectedEvents && <StreamEvents events={visibleStreamEvents} />}
-        {!hideContent && messageEntry}
+        {messageEntry}
       </div>
     );
   }
@@ -461,8 +425,8 @@ function StreamEvents({ events }) {
 }
 
 // Memoized so a streamed token only re-renders the streaming message, not the
-// whole transcript. streamEventFilter is a stable useCallback in the parent and
-// hideContent/showImages are booleans, so the default shallow compare is safe.
+// whole transcript. streamEventFilter is a stable useCallback in the parent,
+// so the default shallow compare is safe.
 const Message = memo(MessageView);
 
 export { Message };
