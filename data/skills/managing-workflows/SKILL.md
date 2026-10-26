@@ -22,8 +22,7 @@ Core rules:
 8. To delete a workflow, read it first, then call `delete` with its exact
    `/workflows/<workflow-id>.json` path.
 
-## Node names and canvas layout
-
+Node names and canvas layout:
 - Give every node a short, meaningful `title`, normally two to four words:
   `Batch settings`, `Run batch`, `Format results`, or `Notify operator`.
   Name its purpose rather than repeating its kind (`Routine`, `Format`) or
