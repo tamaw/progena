@@ -10,6 +10,7 @@ from .live_instruction import LiveInstructionMiddleware
 from .schema_compaction import SchemaCompactionMiddleware
 from .secret_redaction import SecretRedactionMiddleware
 from .tool_errors import ToolErrorMiddleware
+from .tool_result_pairing import ToolResultPairingMiddleware
 
 __all__ = [
     "AsyncSubagentTrackingMiddleware",
@@ -21,4 +22,5 @@ __all__ = [
     "SchemaCompactionMiddleware",
     "SecretRedactionMiddleware",
     "ToolErrorMiddleware",
+    "ToolResultPairingMiddleware",
 ]

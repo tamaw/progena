@@ -40,6 +40,7 @@ from src.progena.agent.middleware import (
     SchemaCompactionMiddleware,
     SecretRedactionMiddleware,
     ToolErrorMiddleware,
+    ToolResultPairingMiddleware,
 )
 from src.progena.agent.model_profiles import resolve_model_profile
 from src.progena.agent.object_agents.factory import create_object_agent_proxy
@@ -604,6 +605,9 @@ async def create_progena_agent(
     )
 
     custom_middleware.append(live_async)
+    # Innermost of ours: sees the final message list just before the model,
+    # after summarization and every other request rewrite.
+    custom_middleware.append(ToolResultPairingMiddleware())
 
     # Deep Agents' `memory=` parameter injects runtime memory from the
     # Postgres-backed memory documents (see backends.py's /memories/ mount).
