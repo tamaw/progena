@@ -213,7 +213,7 @@ async def request_tracking_middleware(request: Request, call_next):
 async def request_id_middleware(request: Request, call_next):
     """Add request ID to all requests for tracing."""
     # Get or generate request ID
-    request_id = request.headers.get("X-Request-ID") or f"req-{uuid.uuid4().hex[:12]}"
+    request_id = request.headers.get("X-Operation-Id") or f"req-{uuid.uuid4().hex[:12]}"
 
     # Store in request state for access by handlers
     request.state.request_id = request_id
@@ -233,7 +233,7 @@ async def request_id_middleware(request: Request, call_next):
     response = await call_next(request)
 
     # Add request ID to response headers
-    response.headers["X-Request-ID"] = request_id
+    response.headers["X-Operation-Id"] = request_id
 
     return response
 

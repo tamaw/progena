@@ -42,7 +42,7 @@ beforeEach(() => {
     if (String(url).endsWith('/preview')) {
       return new Response(JSON.stringify({ skills: [] }), { status: 200 });
     }
-    const requestId = headers['X-Request-ID'];
+    const requestId = headers['X-Operation-Id'];
     if (method === 'POST') {
       installRequestId = requestId;
       beforeInstallAcknowledged(requestId);

@@ -172,7 +172,7 @@ Application data uses a canonical lifecycle transport and a request-scoped chat-
 
 1. **Canonical UI transport**: The application opens one `EventSource` to `GET /api/ui/stream`. Every frame is `event: ui.event` with a typed `UiEventEnvelope`; it carries all non-chat UI data plus `chat.response.started`, `chat.response.completed`, `chat.response.failed`, and `chat.response.cancelled` lifecycle envelopes.
 2. **Dedicated chat-content transport**: After `POST /api/ui/responses` is acknowledged, `useChatApi` opens `GET /api/ui/responses/{request_id}/stream`. It carries only that response's `chat.response.delta` and `chat.response.event` frames; it replays bounded content with `Last-Event-ID` or `?after=<frame-id>` and returns `chat.response.resync_required` if replay cannot continue safely.
-3. **Finite acknowledgement requests**: Every finite application request sends a freshly generated UUID in `X-Request-ID` and receives exactly HTTP `202 Accepted` with `{request_id, event_types}`. This body is operation metadata, never application data.
+3. **Finite acknowledgement requests**: Every finite application request sends a freshly generated UUID in `X-Operation-Id` and receives exactly HTTP `202 Accepted` with `{request_id, event_types}`. This body is operation metadata, never application data.
 4. **Event-confirmed state**: Canonical lifecycle envelopes repeat the UUID at `payload.request_id`. `realtimeListener` deduplicates envelope IDs and Redux reducers hydrate durable data; a matching lifecycle terminal resolves the local chat operation.
 5. **Selector-driven UI**: Pages/components read Redux selectors. Events from another tab/process still update Redux but never resolve an unrelated local operation.
 

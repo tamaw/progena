@@ -81,7 +81,7 @@ async def _resolve_catalog(marketplace_name: str) -> Any:
 @router.get("", status_code=202, response_model=http_contracts.UiRequestAcknowledgement)
 async def get_plugins(
     request: Request,
-    x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+    x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
 ) -> http_contracts.UiRequestAcknowledgement:
     """Acknowledge a read and publish the plugins snapshot on the UI stream."""
     request_id = _request_correlation_id(request, x_request_id)
@@ -94,7 +94,7 @@ async def get_plugins(
 async def install_plugin(
     body: dict[str, Any],
     request: Request,
-    x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+    x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
 ) -> http_contracts.UiRequestAcknowledgement:
     """Resolve a plugin from its marketplace catalog and add it to the
     installed-plugins document with ``status: pending``. The reconciler
@@ -199,7 +199,7 @@ async def uninstall_plugin(
     marketplace: str,
     plugin: str,
     request: Request,
-    x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+    x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
 ) -> http_contracts.UiRequestAcknowledgement:
     """Remove a plugin from the installed-plugins document."""
     request_id = _request_correlation_id(request, x_request_id)
@@ -231,7 +231,7 @@ async def get_plugin_skill_content(
     plugin: str,
     skill_name: str,
     request: Request,
-    x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+    x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
 ) -> http_contracts.UiRequestAcknowledgement:
     """Publish one installed plugin skill's ``SKILL.md`` body for preview.
 

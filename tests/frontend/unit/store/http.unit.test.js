@@ -29,7 +29,7 @@ describe('requestAcknowledged', () => {
       method: 'POST',
       headers: {
         Accept: 'application/json',
-        'X-Request-ID': requestId,
+        'X-Operation-Id': requestId,
         'Content-Type': 'application/json',
       },
       credentials: 'include',

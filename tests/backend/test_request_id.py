@@ -27,17 +27,17 @@ class TestRequestIdMiddleware:
         with TestClient(app) as client:
             response = client.get("/api/ui/widgets")
 
-        assert "X-Request-ID" in response.headers
-        assert response.headers["X-Request-ID"].startswith("req-")
+        assert "X-Operation-Id" in response.headers
+        assert response.headers["X-Operation-Id"].startswith("req-")
 
     def test_request_id_preserved_when_provided(self, app):
         """Test that provided request ID is preserved."""
         custom_id = "custom-request-12345"
 
         with TestClient(app) as client:
-            response = client.get("/api/ui/widgets", headers={"X-Request-ID": custom_id})
+            response = client.get("/api/ui/widgets", headers={"X-Operation-Id": custom_id})
 
-        assert response.headers["X-Request-ID"] == custom_id
+        assert response.headers["X-Operation-Id"] == custom_id
 
     def test_finite_response_exposes_timing_metric(self, app):
         """Finite responses expose a browser-visible server timing measurement."""
@@ -187,7 +187,7 @@ class TestRequestIdInLogs:
         with caplog.at_level(logging.INFO), TestClient(app) as client:
             response = client.get("/api/ui/widgets")
 
-        request_id = response.headers["X-Request-ID"]
+        request_id = response.headers["X-Operation-Id"]
 
         # Check that the request ID appears in the logs
         assert any(request_id in record.message for record in caplog.records)
@@ -201,11 +201,11 @@ class TestRequestIdHandlerIntegration:
         with TestClient(app) as client:
             response = client.get(
                 "/api/ui/widgets",
-                headers={"X-Request-ID": request_id},
+                headers={"X-Operation-Id": request_id},
             )
 
         assert response.status_code == 202
-        assert response.headers["X-Request-ID"] == request_id
+        assert response.headers["X-Operation-Id"] == request_id
         assert response.json() == {
             "request_id": request_id,
             "event_types": ["widgets.updated"],

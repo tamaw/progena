@@ -66,7 +66,7 @@ describe('feature composition', () => {
     expect(operation.requestId).toBe(requestId);
     expect(fetch).toHaveBeenCalledWith('/w/example/api/ui/kanban/cards/card%2F1', expect.objectContaining({
       method: 'PATCH',
-      headers: expect.objectContaining({ 'X-Request-ID': requestId }),
+      headers: expect.objectContaining({ 'X-Operation-Id': requestId }),
     }));
     expect(store.getState().realtime.pendingOps[requestId].status).toBe('awaiting_acknowledgement');
     const event = {

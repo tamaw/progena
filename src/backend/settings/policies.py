@@ -28,7 +28,7 @@ def create_policy_router(
 
     @router.get("/policies", status_code=202)
     async def list_policies(request: Request):
-        request_id = request_correlation_id(request, request.headers.get("x-request-id"))
+        request_id = request_correlation_id(request, request.headers.get("x-operation-id"))
         items = await asyncio.to_thread(policy_catalog, get_store())
         broadcast("policies.snapshot", {"items": items}, request_id=request_id)
         return http_contracts.acknowledgement_response(request_id, ["policies.snapshot"])
@@ -48,7 +48,7 @@ def create_policy_router(
             f"{POLICY_KEY_PREFIX}{policy_id}",
             policy.model_dump(mode="json"),
         )
-        request_id = request_correlation_id(request, request.headers.get("x-request-id"))
+        request_id = request_correlation_id(request, request.headers.get("x-operation-id"))
         broadcast(
             "policies.snapshot",
             {"items": await asyncio.to_thread(policy_catalog, store)},

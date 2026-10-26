@@ -42,7 +42,7 @@ def test_workflow_create_acknowledges_then_emits_canonical_state(workflow_env):
             response = client.post(
                 "/api/ui/workflows",
                 json={"title": "Prompt workflow"},
-                headers={"X-Request-ID": "workflow-create"},
+                headers={"X-Operation-Id": "workflow-create"},
             )
             events = _drain(queue)
         assert_acknowledged(

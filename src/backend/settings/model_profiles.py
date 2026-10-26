@@ -174,7 +174,7 @@ def create_model_profile_router(
         "/model-profiles", status_code=202, response_model=http_contracts.UiRequestAcknowledgement
     )
     async def list_model_profiles(request: Request) -> http_contracts.UiRequestAcknowledgement:
-        request_id = request_correlation_id(request, request.headers.get("x-request-id"))
+        request_id = request_correlation_id(request, request.headers.get("x-operation-id"))
         store = get_store()
         repository: ProviderRepository | None = None
         if get_provider_repository is not None:
@@ -194,7 +194,7 @@ def create_model_profile_router(
     async def patch_model_profile(
         name: str, body: dict[str, Any], request: Request
     ) -> http_contracts.UiRequestAcknowledgement:
-        request_id = request_correlation_id(request, request.headers.get("x-request-id"))
+        request_id = request_correlation_id(request, request.headers.get("x-operation-id"))
 
         allowed_patch_keys = {
             "provider_id",
@@ -351,7 +351,7 @@ def create_model_profile_router(
     async def delete_model_profile(
         name: str, request: Request
     ) -> http_contracts.UiRequestAcknowledgement:
-        request_id = request_correlation_id(request, request.headers.get("x-request-id"))
+        request_id = request_correlation_id(request, request.headers.get("x-operation-id"))
         repository: ProviderRepository | None = None
         if get_provider_repository is not None:
             try:

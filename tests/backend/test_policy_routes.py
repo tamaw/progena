@@ -15,7 +15,7 @@ def test_policy_requests_acknowledge_and_stream_validated_persisted_documents():
         )
     )
     policy = ExecutionPolicy(id="test", name="Test").model_dump(mode="json")
-    with TestClient(app, headers={"X-Request-ID": "policy-test"}) as client:
+    with TestClient(app, headers={"X-Operation-Id": "policy-test"}) as client:
         response = client.put("/policies/test", json=policy)
         assert response.status_code == 202
         assert events[-1][0] == "policies.snapshot"

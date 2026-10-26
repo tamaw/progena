@@ -32,7 +32,7 @@ async def get_logs(
     limit: int = 500,
     format: str = "text",
     search_mode: str = "plain",
-    x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+    x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
 ):
     """
     Get agent logs with optional filtering.
@@ -136,7 +136,7 @@ async def get_logs(
 )
 async def get_log_sources(
     request: Request,
-    x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+    x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
 ):
     """Return available log groups/files without loading log entries."""
     request_id = http_requests.request_correlation_id(request, x_request_id)
@@ -163,7 +163,7 @@ async def export_logs(
     end_date: str | None = Query(default=None, alias="end"),
     search_mode: str = "plain",
     format: str = "text",
-    x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+    x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
 ):
     """Export logs using the current filters.
 

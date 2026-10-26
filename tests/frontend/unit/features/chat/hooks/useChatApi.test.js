@@ -101,7 +101,7 @@ describe('useChatApi dedicated response transport', () => {
       randomUUID: vi.fn(() => REQUEST_ID),
     });
     fetchMock = vi.fn((url, options) => Promise.resolve(acceptedResponse(
-      options.headers['X-Request-ID'],
+      options.headers['X-Operation-Id'],
       options.method === 'PUT' ? ['chat.response.cancel_requested'] : ['chat.response.started'],
     )));
     vi.stubGlobal('fetch', fetchMock);

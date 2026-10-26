@@ -39,7 +39,7 @@ def _make_app(
 
     @app.middleware("http")
     async def correlate_request(request, call_next):
-        request.state.request_id = request.headers.get("X-Request-ID", "profile-test")
+        request.state.request_id = request.headers.get("X-Operation-Id", "profile-test")
         return await call_next(request)
 
     app.include_router(
@@ -201,7 +201,7 @@ class TestPatchEdits:
             },
         )
         app, events = _make_app(store)
-        with TestClient(app, headers={"X-Request-ID": "patch-test"}) as client:
+        with TestClient(app, headers={"X-Operation-Id": "patch-test"}) as client:
             response = client.patch("/model-profiles/general", json={"deployment": "new"})
         assert response.status_code == 202
         assert_acknowledged(response, ["profiles.snapshot"], request_id="patch-test")
@@ -579,7 +579,7 @@ class TestDeleteProfiles:
             },
         )
         app, events = _make_app(store)
-        with TestClient(app, headers={"X-Request-ID": "delete-test"}) as client:
+        with TestClient(app, headers={"X-Operation-Id": "delete-test"}) as client:
             response = client.delete("/model-profiles/review%2Fprofile")
 
         assert response.status_code == 202
@@ -629,7 +629,7 @@ class TestDeleteProfiles:
         )
         app, events = _make_app(store, repository)
 
-        with TestClient(app, headers={"X-Request-ID": "delete-migration-test"}) as client:
+        with TestClient(app, headers={"X-Operation-Id": "delete-migration-test"}) as client:
             response = client.delete("/model-profiles/general")
 
         assert response.status_code == 202

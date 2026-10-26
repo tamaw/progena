@@ -35,7 +35,7 @@ async function run(page, graph, status) {
   const posted = page.waitForRequest((request) => request.method() === 'POST' && request.url().endsWith(`/${graph.id}/run`));
   await page.getByRole('button', { name: 'Run routine', exact: true }).click();
   const dialog = page.getByRole('dialog'); if (await dialog.isVisible()) await dialog.getByRole('button', { name: 'Run', exact: true }).click();
-  const requestId = (await posted).headers()['x-request-id'];
+  const requestId = (await posted).headers()['x-operation-id'];
   await expect.poll(() => page.evaluate((id) => window.__routineEvents.find((event) =>
     ['agent.routine.run.failed', 'agent.routine.run.completed'].includes(event.type) && event.payload.request_id === id)?.payload, requestId), { timeout: 180_000 }).toBeTruthy();
   const result = await page.evaluate((id) => window.__routineEvents.find((event) =>

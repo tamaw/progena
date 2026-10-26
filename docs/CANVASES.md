@@ -160,7 +160,7 @@ immutability trigger. History is stored only: there is no revision route, browse
 
 `src/backend/canvases/routes.py`, router prefix `/api/ui`, included in `main.py`. Every route
 returns HTTP 202 `UiRequestAcknowledgement` and replies on `/api/ui/stream`. Requests carry
-`X-Request-ID`; detail replies are **targeted** with `broadcast_ui_event(..., request_id=,
+`X-Operation-Id`; detail replies are **targeted** with `broadcast_ui_event(..., request_id=,
 client_id=)`. `client_id` is the tab's `realtimeClientId` (query param on GET/DELETE, body on
 POST/PUT).
 

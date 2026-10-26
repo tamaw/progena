@@ -33,7 +33,7 @@ router = APIRouter(prefix="/api/ui/knowledge", tags=["knowledge"])
 @router.get("", status_code=202, response_model=http_contracts.UiRequestAcknowledgement)
 async def list_knowledge_bases(
     request: Request,
-    x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+    x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
 ) -> http_contracts.UiRequestAcknowledgement:
     """Acknowledge a list request and publish the snapshot on the UI stream."""
     request_id = _request_correlation_id(request, x_request_id)
@@ -46,7 +46,7 @@ async def list_knowledge_bases(
 async def replace_knowledge_bases(
     payload: dict[str, Any],
     request: Request,
-    x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+    x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
 ) -> http_contracts.UiRequestAcknowledgement:
     """Validate and persist the full knowledge-base settings document.
 
@@ -67,7 +67,7 @@ async def replace_knowledge_bases(
     return http_contracts.acknowledgement_response(request_id, ["knowledge.snapshot"])
 
 
-_REQUEST_ID_HEADER = Header(default=None, alias="X-Request-ID")
+_REQUEST_ID_HEADER = Header(default=None, alias="X-Operation-Id")
 _PATH_QUERY = Query(..., description="Page path relative to the base, e.g. concepts/a.md")
 
 

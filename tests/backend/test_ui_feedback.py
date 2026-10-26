@@ -37,7 +37,7 @@ class TestErrorFeedback:
     def test_alerts_endpoint(self, client):
         """Test /api/ui/alerts returns the finite UI acknowledgement contract."""
         request_id = "ui-feedback-alerts"
-        response = client.get("/api/ui/alerts", headers={"X-Request-ID": request_id})
+        response = client.get("/api/ui/alerts", headers={"X-Operation-Id": request_id})
         assert response.status_code == 202
         assert response.json() == {
             "request_id": request_id,
@@ -385,7 +385,7 @@ class TestLogsEndpoint:
     def test_logs_endpoint(self, client):
         """Test /api/ui/logs returns the finite UI acknowledgement contract."""
         request_id = "ui-feedback-logs"
-        response = client.get("/api/ui/logs", headers={"X-Request-ID": request_id})
+        response = client.get("/api/ui/logs", headers={"X-Operation-Id": request_id})
         assert response.status_code == 202
         assert response.json() == {
             "request_id": request_id,
@@ -397,7 +397,7 @@ class TestLogsEndpoint:
         request_id = "ui-feedback-error-logs"
         response = client.get(
             "/api/ui/logs?level=ERROR",
-            headers={"X-Request-ID": request_id},
+            headers={"X-Operation-Id": request_id},
         )
         assert response.status_code == 202
         assert response.json() == {

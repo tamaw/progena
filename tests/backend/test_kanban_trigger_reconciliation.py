@@ -188,7 +188,7 @@ async def test_rest_driven_move_is_not_double_dispatched(workflow_env, backend_c
             patched = client.patch(
                 f"/api/ui/kanban/cards/{card_id}",
                 json={"column_id": "done"},
-                headers={"X-Request-ID": request_id},
+                headers={"X-Operation-Id": request_id},
             )
             assert patched.status_code == 202
             assert patched.json() == {

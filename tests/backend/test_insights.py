@@ -352,7 +352,7 @@ def test_token_usage_route_acknowledges_and_correlates_snapshot(monkeypatch):
     event_start = len(events_stream._ui_event_replay)
 
     response = TestClient(app).get(
-        "/api/ui/insights/token-usage?range=24h", headers={"X-Request-ID": request_id}
+        "/api/ui/insights/token-usage?range=24h", headers={"X-Operation-Id": request_id}
     )
 
     assert response.status_code == 202

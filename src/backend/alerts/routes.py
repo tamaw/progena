@@ -29,7 +29,7 @@ def _alerts_payload() -> dict[str, object]:
 @router.get("/alerts", status_code=202, response_model=http_contracts.UiRequestAcknowledgement)
 async def get_alerts(
     request: Request,
-    x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+    x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
 ):
     """
     Get backend-managed alert history.
@@ -47,7 +47,7 @@ async def get_alerts(
 async def mark_viewed_alerts(
     request: Request,
     body: alerts_service.MarkAlertsViewedRequest | None = None,
-    x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+    x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
 ):
     """Mark alerts viewed without removing them from history."""
     request_id = http_requests.request_correlation_id(request, x_request_id)
@@ -64,7 +64,7 @@ async def mark_viewed_alerts(
 async def dismiss_alert(
     alert_id: str,
     request: Request,
-    x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+    x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
 ):
     """
     Dismiss an alert.
@@ -90,7 +90,7 @@ async def respond_to_alert(
     request: Request,
     alert_id: str,
     response: str = "acknowledged",
-    x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+    x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
 ):
     """
     Respond to an alert.

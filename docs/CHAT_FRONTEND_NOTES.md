@@ -10,7 +10,7 @@ on the request-scoped `/api/ui/responses/{request_id}/stream`. Neither arrives
 in a finite HTTP response.
 
 1. The frontend generates one UUID for each finite chat operation and sends it
-   in `X-Request-ID`.
+   in `X-Operation-Id`.
 2. The backend persists or dispatches work, enqueues the causal canonical
    `ui.event` lifecycle envelope, then returns HTTP `202 Accepted`
    (`{request_id, event_types}`).

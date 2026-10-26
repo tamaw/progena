@@ -249,7 +249,7 @@ test.describe('structured inbox', () => {
     ].join('\n');
 
     await page.route('**/api/ui/responses', async (route) => {
-      const requestId = route.request().headers()['x-request-id'];
+      const requestId = route.request().headers()['x-operation-id'];
       await route.fulfill({
         status: 202,
         contentType: 'application/json',
@@ -329,7 +329,7 @@ test.describe('structured inbox', () => {
       };
     });
     await page.route('**/api/ui/responses', async (route) => {
-      const requestId = route.request().headers()['x-request-id'];
+      const requestId = route.request().headers()['x-operation-id'];
       await route.fulfill({
         status: 202,
         contentType: 'application/json',
@@ -380,7 +380,7 @@ test.describe('structured inbox', () => {
             payload: { request_id: requestId },
           }),
         }));
-      }, request.headers()['x-request-id']);
+      }, request.headers()['x-operation-id']);
       await expect(dialog).toHaveCount(0);
       updateInboxBody(id, body.replace('Old plan.', 'Short plan.'));
       await expect(page.locator('.inbox-section__content')).toContainText('Short plan.');
@@ -399,7 +399,7 @@ test.describe('structured inbox', () => {
       await route.fulfill({
         status: 202,
         contentType: 'application/json',
-        body: JSON.stringify({ request_id: route.request().headers()['x-request-id'], event_types: ['chat.response.completed'] }),
+        body: JSON.stringify({ request_id: route.request().headers()['x-operation-id'], event_types: ['chat.response.completed'] }),
       });
     });
     try {
@@ -615,7 +615,7 @@ test.describe('structured inbox', () => {
 
     seedInboxMessage({ id, title, body });
     await page.route('**/api/ui/responses', async (route) => {
-      const requestId = route.request().headers()['x-request-id'];
+      const requestId = route.request().headers()['x-operation-id'];
       await route.fulfill({
         status: 202,
         contentType: 'application/json',
@@ -731,7 +731,7 @@ test.describe('structured inbox', () => {
     ].join('\n');
 
     await page.route('**/api/ui/responses', async (route) => {
-      const requestId = route.request().headers()['x-request-id'];
+      const requestId = route.request().headers()['x-operation-id'];
       await route.fulfill({
         status: 202,
         contentType: 'application/json',
@@ -793,7 +793,7 @@ test.describe('structured inbox', () => {
 
 
     await page.route('**/api/ui/responses', async (route) => {
-      const requestId = route.request().headers()['x-request-id'];
+      const requestId = route.request().headers()['x-operation-id'];
       requests.push(JSON.parse(route.request().postData()));
       if (requests.length === 1) {
         await firstDeferred;

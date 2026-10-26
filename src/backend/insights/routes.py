@@ -30,7 +30,7 @@ def create_insights_router(
         profile: str | None = Query(default=None),
     ) -> http_contracts.UiRequestAcknowledgement:
         """Publish one request-correlated checkpoint-backed usage snapshot."""
-        request_id = request_correlation_id(request, request.headers.get("x-request-id"))
+        request_id = request_correlation_id(request, request.headers.get("x-operation-id"))
         try:
             snapshot = await asyncio.to_thread(
                 build_token_usage_snapshot,

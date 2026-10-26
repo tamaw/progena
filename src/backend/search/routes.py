@@ -35,7 +35,7 @@ from src.progena.knowledge.indexer_config import (
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/ui", tags=["search"])
 
-_REQUEST_ID_HEADER = Header(default=None, alias="X-Request-ID")
+_REQUEST_ID_HEADER = Header(default=None, alias="X-Operation-Id")
 
 
 # ---------------------------------------------------------------------------

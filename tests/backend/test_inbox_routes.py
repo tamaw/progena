@@ -86,7 +86,7 @@ class TestInboxRoutes:
         with _StreamCapture() as capture:
             response = client.get(
                 "/api/ui/inbox",
-                headers={"X-Request-ID": request_id},
+                headers={"X-Operation-Id": request_id},
             )
 
         assert_acknowledged(

@@ -70,7 +70,7 @@ async function submit(page, graph, token, pause = false) {
     await dialog.getByRole('textbox', { name: /token/i }).fill(token);
     await dialog.getByRole('button', { name: 'Run', exact: true }).click();
   }
-  return (await posted).headers()['x-request-id'];
+  return (await posted).headers()['x-operation-id'];
 }
 async function assertOutput(page, token, version) {
   const close = page.getByRole('button', { name: 'Close node details', exact: true });
@@ -130,7 +130,7 @@ test('16: independent delegated conversations isolate private input and same-run
     expect(JSON.stringify(checkpointB.messages)).toContain('PRIVATE-B');
     expect(JSON.stringify(checkpointB.messages)).not.toContain('PRIVATE-A');
     const resumed = randomUUID();
-    const response = await page.request.post(`/api/ui/agent-profiles/${graph.id}/run`, { headers: { 'X-Request-ID': resumed }, data: { session_id: pausedA.session_id, parameters: { token: 'PRIVATE-A' } } });
+    const response = await page.request.post(`/api/ui/agent-profiles/${graph.id}/run`, { headers: { 'X-Operation-Id': resumed }, data: { session_id: pausedA.session_id, parameters: { token: 'PRIVATE-A' } } });
     expect(response.status(), await response.text()).toBe(202);
     const completedA = await lifecycle(page, graph.id, 'completed', resumed);
     expect(completedA.thread_id).toBe(pausedA.thread_id);

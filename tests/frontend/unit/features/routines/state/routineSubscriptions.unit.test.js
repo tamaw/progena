@@ -7,7 +7,7 @@ let watch;
 beforeEach(() => {
   setRealtimeClientReady(true);
   vi.stubGlobal('fetch', vi.fn(async (_url, options) => new Response(JSON.stringify({
-    request_id: options.headers['X-Request-ID'], event_types: ['agent.routine.subscription.updated'],
+    request_id: options.headers['X-Operation-Id'], event_types: ['agent.routine.subscription.updated'],
   }), { status: 202 })));
 });
 afterEach(async () => {

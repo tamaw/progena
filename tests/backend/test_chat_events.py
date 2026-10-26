@@ -63,7 +63,7 @@ class TestUserMessageEvents:
             response = client.post(
                 "/api/ui/responses",
                 json={"model": "progena-v1", "input": "Hello!", "stream": False},
-                headers={"X-Request-ID": request_id},
+                headers={"X-Operation-Id": request_id},
             )
             events = [queue.get_nowait()["envelope"] for _ in range(queue.qsize())]
         finally:
@@ -121,7 +121,7 @@ class TestUserMessageEvents:
                         "attachments": ["att_1"],
                     },
                 },
-                headers={"X-Request-ID": request_id},
+                headers={"X-Operation-Id": request_id},
             )
         finally:
             events_stream._ui_stream_subscribers.pop(queue, None)

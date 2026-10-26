@@ -77,7 +77,7 @@ test('J20: approved delegated author persists a classifier; user edits and execu
     await page.getByRole('button', { name: 'Run routine', exact: true }).click();
     const confirmation = page.getByRole('dialog');
     if (await confirmation.isVisible()) await confirmation.getByRole('button', { name: 'Run', exact: true }).click();
-    const paused = await lifecycle(page, parentId, 'paused', (await posted).headers()['x-request-id']);
+    const paused = await lifecycle(page, parentId, 'paused', (await posted).headers()['x-operation-id']);
     evidence.paused = paused;
     evidence.pausedCheckpoint = delegatedCheckpoint(paused.thread_id);
     expect(evidence.pausedCheckpoint.interrupts).toContainEqual({ node: 'approval', message: approvalQuestion, allowed_responses: ['approve'] });
@@ -104,7 +104,7 @@ test('J20: approved delegated author persists a classifier; user edits and execu
     await page.getByRole('button', { name: 'Run routine', exact: true }).click();
     await page.getByRole('dialog').locator('textarea').fill(JSON.stringify(['What is 2 plus 2?', 'Please open the window.', 'Could you open the window?']));
     await page.getByRole('dialog').getByRole('button', { name: 'Run', exact: true }).click();
-    evidence.childRun = await lifecycle(page, childId, 'completed', (await runPosted).headers()['x-request-id']);
+    evidence.childRun = await lifecycle(page, childId, 'completed', (await runPosted).headers()['x-operation-id']);
     await page.locator('.canvas-node[data-node-id="collected"]').click();
     const output = page.locator('.routine-node-inspector__run-output pre');
     await expect(output).toBeVisible();

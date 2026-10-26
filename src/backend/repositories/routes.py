@@ -55,7 +55,7 @@ class RepoUpdateRequest(BaseModel):
 @router.get("", status_code=202, response_model=http_contracts.UiRequestAcknowledgement)
 async def get_repos(
     request: Request,
-    x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+    x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
 ) -> http_contracts.UiRequestAcknowledgement:
     """Acknowledge a read and publish the repositories snapshot on the UI stream."""
     request_id = _request_correlation_id(request, x_request_id)
@@ -67,7 +67,7 @@ async def get_repos(
 async def create_repo_entry(
     body: RepoCreateRequest,
     request: Request,
-    x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+    x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
 ) -> http_contracts.UiRequestAcknowledgement:
     """Declare a new repository."""
     request_id = _request_correlation_id(request, x_request_id)
@@ -92,7 +92,7 @@ async def patch_repo_entry(
     repo_id: str,
     body: RepoUpdateRequest,
     request: Request,
-    x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+    x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
 ) -> http_contracts.UiRequestAcknowledgement:
     """Patch one declared repo entry's mutable fields."""
     request_id = _request_correlation_id(request, x_request_id)
@@ -118,7 +118,7 @@ async def patch_repo_entry(
 async def delete_repo_entry(
     repo_id: str,
     request: Request,
-    x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+    x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
 ) -> http_contracts.UiRequestAcknowledgement:
     """Remove one declared repo entry."""
     request_id = _request_correlation_id(request, x_request_id)
@@ -135,7 +135,7 @@ async def delete_repo_entry(
 async def get_repo_detail(
     repo_id: str,
     request: Request,
-    x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+    x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
 ) -> http_contracts.UiRequestAcknowledgement:
     """Acknowledge a detail read and publish it on the UI stream."""
     request_id = _request_correlation_id(request, x_request_id)
@@ -152,7 +152,7 @@ async def get_repo_detail(
 async def fetch_repo_entry(
     repo_id: str,
     request: Request,
-    x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+    x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
 ) -> http_contracts.UiRequestAcknowledgement:
     """Run ``git fetch`` against one declared repo and broadcast the refreshed scan.
 

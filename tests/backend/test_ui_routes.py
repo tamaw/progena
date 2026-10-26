@@ -130,7 +130,7 @@ class TestUIRoutes:
 
     def test_widgets_endpoint(self, client):
         request_id = "widgets-request"
-        response = client.get("/api/ui/widgets", headers={"X-Request-ID": request_id})
+        response = client.get("/api/ui/widgets", headers={"X-Operation-Id": request_id})
 
         assert_acknowledged(
             response, ["widgets.updated"], request_id=request_id, check_request_id_header=True
@@ -157,7 +157,7 @@ class TestUIRoutes:
 
         request_id = "widgets-stream-request"
         event_start = len(events_stream._ui_event_replay)
-        response = client.get("/api/ui/widgets", headers={"X-Request-ID": request_id})
+        response = client.get("/api/ui/widgets", headers={"X-Operation-Id": request_id})
 
         assert_acknowledged(
             response, ["widgets.updated"], request_id=request_id, check_request_id_header=True
@@ -175,7 +175,7 @@ class TestUIRoutes:
 
         request_id = "mcp-stream-request"
         event_start = len(events_stream._ui_event_replay)
-        response = client.get("/api/ui/mcp", headers={"X-Request-ID": request_id})
+        response = client.get("/api/ui/mcp", headers={"X-Operation-Id": request_id})
 
         assert_acknowledged(
             response, ["mcp.snapshot"], request_id=request_id, check_request_id_header=True
@@ -196,7 +196,7 @@ class TestUIRoutes:
         patch_response = client.patch(
             f"/api/ui/chats/{thread_id}",
             json={"pinned": True, "archived": True},
-            headers={"X-Request-ID": patch_request_id},
+            headers={"X-Operation-Id": patch_request_id},
         )
         assert_acknowledged(
             patch_response,
@@ -215,7 +215,7 @@ class TestUIRoutes:
         list_request_id = "chat-list-request"
         list_response = client.get(
             "/api/ui/chats?include_archived=true",
-            headers={"X-Request-ID": list_request_id},
+            headers={"X-Operation-Id": list_request_id},
         )
         assert_acknowledged(
             list_response,
@@ -238,7 +238,7 @@ class TestUIRoutes:
 
         detail_response = client.get(
             f"/api/ui/chats/{thread_id}",
-            headers={"X-Request-ID": request_id},
+            headers={"X-Operation-Id": request_id},
         )
 
         assert_acknowledged(
@@ -656,7 +656,7 @@ class TestUIRoutes:
         events_stream._ui_stream_subscribers[queue] = None
         try:
             response = client.get(f"/api/ui/tasks/{card_id}/activity")
-            request_id = response.headers["X-Request-ID"]
+            request_id = response.headers["X-Operation-Id"]
             assert_acknowledged(
                 response,
                 ["task.activity.updated"],
@@ -698,7 +698,7 @@ class TestUIRoutes:
             response = client.put(
                 f"/api/ui/tasks/{card_id}/content",
                 json={"content": "## Acceptance\n\nKeep this body\n\n"},
-                headers={"X-Request-ID": request_id},
+                headers={"X-Operation-Id": request_id},
             )
             emitted = [queue.get_nowait() for _ in range(queue.qsize())]
         finally:
@@ -1251,7 +1251,7 @@ class TestLogsEndpoint:
         try:
             response = client.get(
                 "/api/ui/logs/export?format=jsonl",
-                headers={"X-Request-ID": request_id},
+                headers={"X-Operation-Id": request_id},
             )
             assert_acknowledged(
                 response,
@@ -1349,7 +1349,7 @@ class TestLogsEndpoint:
         try:
             response = client.get(
                 "/api/ui/logs/export",
-                headers={"X-Request-ID": request_id},
+                headers={"X-Operation-Id": request_id},
             )
             assert_acknowledged(
                 response,
@@ -1485,7 +1485,7 @@ class TestLogsPage:
         response = client.get(
             "/api/ui/logs?format=json&folder=root&file=progena.log"
             "&start=2026-03-01&end=2026-03-12&limit=10",
-            headers={"X-Request-ID": request_id},
+            headers={"X-Operation-Id": request_id},
         )
 
         assert_acknowledged(
@@ -1716,7 +1716,7 @@ class TestWorkspaceBridgeActions:
 
         list_request_id = "mcp-list-lean"
         event_start = len(events_stream._ui_event_replay)
-        list_response = client.get("/api/ui/mcp", headers={"X-Request-ID": list_request_id})
+        list_response = client.get("/api/ui/mcp", headers={"X-Operation-Id": list_request_id})
         assert_acknowledged(
             list_response,
             ["mcp.snapshot"],
@@ -1737,7 +1737,7 @@ class TestWorkspaceBridgeActions:
         detail_response = client.get(
             "/api/ui/mcp/content",
             params={"id": "mcp:jina"},
-            headers={"X-Request-ID": detail_request_id},
+            headers={"X-Operation-Id": detail_request_id},
         )
         assert_acknowledged(
             detail_response,

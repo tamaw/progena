@@ -143,7 +143,7 @@ def create_provider_router(
         "/providers", status_code=202, response_model=http_contracts.UiRequestAcknowledgement
     )
     async def list_providers(request: Request) -> http_contracts.UiRequestAcknowledgement:
-        request_id = request_correlation_id(request, request.headers.get("x-request-id"))
+        request_id = request_correlation_id(request, request.headers.get("x-operation-id"))
         repository = _repository_or_unavailable(get_repository)
         try:
             await broadcast_provider_snapshot(repository, broadcast, request_id=request_id)
@@ -159,7 +159,7 @@ def create_provider_router(
     async def create_provider(
         body: dict[str, Any], request: Request
     ) -> http_contracts.UiRequestAcknowledgement:
-        request_id = request_correlation_id(request, request.headers.get("x-request-id"))
+        request_id = request_correlation_id(request, request.headers.get("x-operation-id"))
         repository = _repository_or_unavailable(get_repository)
         try:
             await asyncio.to_thread(repository.create, body)
@@ -176,7 +176,7 @@ def create_provider_router(
     async def update_provider(
         provider_id: str, body: dict[str, Any], request: Request
     ) -> http_contracts.UiRequestAcknowledgement:
-        request_id = request_correlation_id(request, request.headers.get("x-request-id"))
+        request_id = request_correlation_id(request, request.headers.get("x-operation-id"))
         repository = _repository_or_unavailable(get_repository)
         try:
             provider = next(
@@ -211,7 +211,7 @@ def create_provider_router(
     async def delete_provider(
         provider_id: str, request: Request
     ) -> http_contracts.UiRequestAcknowledgement:
-        request_id = request_correlation_id(request, request.headers.get("x-request-id"))
+        request_id = request_correlation_id(request, request.headers.get("x-operation-id"))
         repository = _repository_or_unavailable(get_repository)
         if await asyncio.to_thread(_profile_references_provider, get_store(), provider_id):
             raise HTTPException(status_code=409, detail="Provider is referenced by a model profile")
@@ -236,7 +236,7 @@ def create_provider_router(
     async def test_provider(
         provider_id: str, request: Request
     ) -> http_contracts.UiRequestAcknowledgement:
-        request_id = request_correlation_id(request, request.headers.get("x-request-id"))
+        request_id = request_correlation_id(request, request.headers.get("x-operation-id"))
         repository = _repository_or_unavailable(get_repository)
         try:
             provider = next(
@@ -263,7 +263,7 @@ def create_provider_router(
     async def disconnect_chatgpt_provider(
         provider_id: str, request: Request
     ) -> http_contracts.UiRequestAcknowledgement:
-        request_id = request_correlation_id(request, request.headers.get("x-request-id"))
+        request_id = request_correlation_id(request, request.headers.get("x-operation-id"))
         repository = _repository_or_unavailable(get_repository)
         try:
             provider = next(

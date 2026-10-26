@@ -17,7 +17,7 @@ async function lifecycle(page, requestId, status) {
 async function run(page, status) {
   const posted = page.waitForRequest((r) => r.method() === 'POST' && r.url().endsWith(`/${fixture.id}/run`));
   await page.getByRole('button', { name: 'Run routine', exact: true }).click();
-  return lifecycle(page, (await posted).headers()['x-request-id'], status);
+  return lifecycle(page, (await posted).headers()['x-operation-id'], status);
 }
 async function openPolicy(page) {
   await page.getByRole('button', { name: 'Routine execution policy', exact: true }).click();
@@ -68,7 +68,7 @@ test('Approval resume retains the recorded policy after the shared policy change
   await expect(approval.getByRole('button', { name: 'Approve', exact: true })).toBeEnabled();
   const posted = page.waitForRequest((r) => r.method() === 'POST' && r.url().endsWith(`/${fixture.id}/approval`));
   await approval.getByRole('button', { name: 'Approve', exact: true }).click();
-  const completed = await lifecycle(page, (await posted).headers()['x-request-id'], 'completed');
+  const completed = await lifecycle(page, (await posted).headers()['x-operation-id'], 'completed');
   expect(completed.policy.revision_id).toBe(paused.policy.revision_id); expect(completed.policy.values.graph_step_limit).toBe(20);
   await page.getByRole('button', { name: 'Close node details', exact: true }).click();
   await page.locator('.canvas-node[data-node-id="after"]').click();
