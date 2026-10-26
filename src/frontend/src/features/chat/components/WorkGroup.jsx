@@ -5,21 +5,19 @@
  * live / "Worked for 17s" once done. Seconds tick and the tool count grows
  * while it is live.
  *
- * While the agent is working in this group (`active`), it previews the
- * latest steps, including every still-running parallel call. The header
- * toggles the full detail (every original row) either way.
+ * While the agent works in this group (`active`), all rows are expanded.
+ * Finished groups collapse by default; the header can toggle either state.
  */
 
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import TimelineItem from './TimelineItem';
 import TypingWord from './TypingWord';
 import { renderSafeMarkdown, sanitizeHtmlFragment } from '../../../lib/safeMarkdown';
-import { describeStreamEvent, formatDuration, formatTimestamp, tokenMetaItemsForEvent } from '../models/messageRenderUtils';
+import { describeStreamEvent, formatTimestamp, tokenMetaItemsForEvent } from '../models/messageRenderUtils';
 import {
   buildWorkSteps,
   mergeToolCallItems,
   reasoningSectionBody,
-  selectLiveSteps,
   splitGroupReasoning,
   summarizeWork,
   timelineItemKey,
@@ -27,24 +25,6 @@ import {
 } from '../models/workGroupModel';
 
 const TICK_MS = 1000;
-
-const WorkStep = memo(function WorkStep({ step }) {
-  const duration = Number.isFinite(step.durationMs) ? formatDuration(step.durationMs) : '';
-  return (
-    <div className={`entry entry--chain-item work-step work-step--${step.status}`}>
-      <div className="entry__gutter" aria-hidden="true">
-        <span className={`entry__badge work-step__badge work-step__badge--${step.kind} work-step__badge--${step.status}`} />
-      </div>
-      <div className="entry__main">
-        <div className="entry__head">
-          <span className="work-step__title">{step.title}</span>
-          {step.detail && <span className="work-step__detail">{step.detail}</span>}
-          {duration && <span className="msg__head-trailing muted">{duration}</span>}
-        </div>
-      </div>
-    </div>
-  );
-});
 
 // The reasoning behind a headed group, under its header: clamped to a few
 // lines, with a right-hand chevron (like a tool row's) only when the text is
@@ -97,7 +77,11 @@ const ReasoningBody = memo(function ReasoningBody({ event }) {
 });
 
 const WorkGroup = memo(function WorkGroup({ heading, items, active, endedAt, onRegenerate }) {
-  const [expanded, setExpanded] = useState(false);
+  // A manual choice applies only to this phase. Finishing work must collapse
+  // it even if the user reopened it while it was active.
+  const [disclosure, setDisclosure] = useState(null);
+  const expanded = disclosure?.active === active ? disclosure.open : active;
+  const toggle = () => setDisclosure({ active, open: !expanded });
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     if (!active) return undefined;
@@ -109,11 +93,9 @@ const WorkGroup = memo(function WorkGroup({ heading, items, active, endedAt, onR
   // repeated as a row or a preview step; its text is the group's body.
   const { reasoningItem, rest } = useMemo(() => splitGroupReasoning(heading, items), [heading, items]);
   const steps = useMemo(() => buildWorkSteps(items), [items]);
-  const restSteps = useMemo(() => (reasoningItem ? buildWorkSteps(rest) : steps), [reasoningItem, rest, steps]);
   const end = active ? now : endedAt;
   const summary = useMemo(() => summarizeWork(items, steps, end), [items, steps, end]);
   const header = workGroupHeader({ heading, active, summary });
-  const liveSteps = active && !expanded ? selectLiveSteps(restSteps) : [];
   const badgeState = active ? 'running' : (summary.failedCount > 0 ? 'error' : 'done');
   const tokenMeta = reasoningItem ? tokenMetaItemsForEvent(reasoningItem.event) : [];
   const firstItem = items[0];
@@ -126,14 +108,14 @@ const WorkGroup = memo(function WorkGroup({ heading, items, active, endedAt, onR
     <>
       <div className={`entry entry--chain-item work-group${active ? ' work-group--active' : ''}`}>
         <div className="entry__gutter" aria-hidden="true">
-          <span className={`entry__badge work-group__badge work-group__badge--${badgeState}`} />
+          <span className={`entry__badge work-group__badge work-group__badge--${badgeState}${active ? ' activity-dot' : ''}`} />
         </div>
         <div className="entry__main">
           <button
             type="button"
             className="entry__head entry-toggle work-group__toggle"
             aria-expanded={expanded}
-            onClick={() => setExpanded((value) => !value)}
+            onClick={toggle}
           >
             <span className="entry__role work-group__title">
               {header.title ?? <TypingWord reserveWidth />}
@@ -151,7 +133,6 @@ const WorkGroup = memo(function WorkGroup({ heading, items, active, endedAt, onR
           {expanded && reasoningItem && <ReasoningBody event={reasoningItem.event} />}
         </div>
       </div>
-      {liveSteps.map((step) => <WorkStep key={step.id} step={step} />)}
       {expanded && mergeToolCallItems(rest).map((item, index) => (
         <TimelineItem
           key={timelineItemKey(item, index)}

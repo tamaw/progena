@@ -1657,19 +1657,63 @@ pre.mermaid svg {
     font-family: var(--font-family-mono);
     font-size: var(--font-size-sm);
     line-height: 1.5;
-    background-color: #0d1117;
+    color: var(--color-text-primary);
+    background-color: var(--color-bg-primary);
     border-radius: 0 0 var(--border-radius-md) var(--border-radius-md);
 }
 
 .code-block pre code.hljs {
+    color: var(--color-text-primary);
     background: transparent;
     border: none;
     border-radius: 0;
 }
 
-/* Syntax highlighting colors */
+/* The imported GitHub syntax palette is dark-only. Keep its token colors in
+   dark mode, and use contrast-adjusted theme colors on light code surfaces. */
+[data-theme="light"] .code-block :is(
+    .hljs-doctag, .hljs-keyword, .hljs-meta .hljs-keyword,
+    .hljs-template-tag, .hljs-template-variable, .hljs-type, .hljs-variable.language_
+) {
+    color: color-mix(in srgb, var(--color-error) 65%, var(--color-text-primary));
+}
 
-/* Light theme overrides */
+[data-theme="light"] .code-block :is(
+    .hljs-title, .hljs-attr, .hljs-attribute, .hljs-literal, .hljs-meta,
+    .hljs-number, .hljs-operator, .hljs-variable, .hljs-selector-attr,
+    .hljs-selector-class, .hljs-selector-id, .hljs-section
+) {
+    color: color-mix(in srgb, var(--color-accent) 75%, var(--color-text-primary));
+}
+
+[data-theme="light"] .code-block :is(
+    .hljs-regexp, .hljs-string, .hljs-meta .hljs-string,
+    .hljs-name, .hljs-quote, .hljs-selector-tag, .hljs-selector-pseudo
+) {
+    color: color-mix(in srgb, var(--color-success) 65%, var(--color-text-primary));
+}
+
+[data-theme="light"] .code-block :is(.hljs-built_in, .hljs-symbol, .hljs-bullet) {
+    color: color-mix(in srgb, var(--color-warning) 45%, var(--color-text-primary));
+}
+
+[data-theme="light"] .code-block :is(.hljs-comment, .hljs-code, .hljs-formula) {
+    color: var(--color-text-secondary);
+}
+
+[data-theme="light"] .code-block :is(.hljs-subst, .hljs-emphasis, .hljs-strong) {
+    color: var(--color-text-primary);
+}
+
+[data-theme="light"] .code-block .hljs-addition {
+    color: color-mix(in srgb, var(--color-success) 65%, var(--color-text-primary));
+    background-color: color-mix(in srgb, var(--color-success) 12%, transparent);
+}
+
+[data-theme="light"] .code-block .hljs-deletion {
+    color: color-mix(in srgb, var(--color-error) 65%, var(--color-text-primary));
+    background-color: color-mix(in srgb, var(--color-error) 12%, transparent);
+}
 
 /* Context Menu */
 
@@ -2462,6 +2506,23 @@ pre.mermaid svg {
     color: #8b5cf6;
 }
 
+/* One continuous activity signal from pending text through work and the final
+   streamed answer. Never disappear completely; stop with the live state. */
+.chat-transcript .entry__badge.activity-dot {
+    animation: chat-activity-dot 3s ease-in-out infinite;
+}
+
+@keyframes chat-activity-dot {
+    0%, 100% { opacity: 1; color: var(--color-accent); }
+    50% { opacity: 0.4; color: var(--color-success); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .chat-transcript .entry__badge.activity-dot {
+        animation: none;
+    }
+}
+
 /* Clickable entry header (work groups, subagent and A2A cards): a button
    that keeps entry-head geometry so the dot lines up with every other
    entry, with a chevron showing whether its content is open. */
@@ -2584,25 +2645,12 @@ pre.mermaid svg {
     color: var(--color-text-muted);
 }
 
-.entry__badge.work-group__badge--running,
-.entry__badge.work-step__badge--tool {
+.entry__badge.work-group__badge--running {
     color: color-mix(in srgb, var(--color-success) 82%, white);
 }
 
-.entry__badge.work-step__badge--reasoning {
-    color: #a78bfa;
-}
 
-.entry__badge.work-step__badge--plan {
-    color: color-mix(in srgb, var(--color-accent) 82%, white);
-}
-
-.entry__badge.work-step__badge--other {
-    color: var(--color-text-muted);
-}
-
-.entry__badge.work-group__badge--error,
-.entry__badge.work-step__badge--error {
+.entry__badge.work-group__badge--error {
     color: var(--color-error);
 }
 
@@ -2611,26 +2659,6 @@ pre.mermaid svg {
     animation: subagent-pulse 1.4s ease-in-out infinite;
 }
 
-.work-step .entry__head {
-    margin-bottom: 0;
-    font-size: 12px;
-}
-
-.work-step__title {
-    flex: 0 0 auto;
-    color: var(--color-text-primary);
-    font-weight: 500;
-}
-
-.work-step__detail {
-    min-width: 0;
-    overflow: hidden;
-    color: var(--color-text-muted);
-    font-family: var(--font-family-mono);
-    font-size: 11.5px;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
 
 .earlier-lines-toggle {
     padding: 0;

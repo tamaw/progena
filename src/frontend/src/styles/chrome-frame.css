@@ -1958,13 +1958,14 @@ body,
 }
 
 .alert__sub {
+  display: -webkit-box;
   max-width: 100%;
   margin-top: 2px;
   overflow: hidden;
   color: var(--color-text-muted);
   font-size: 11.5px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
 }
 
 .alert__time {
@@ -1994,6 +1995,9 @@ body,
 
 .alert-detail-card pre {
   margin: 0;
+  max-height: min(40vh, 320px);
+  overflow: auto;
+  overflow-wrap: anywhere;
   white-space: pre-wrap;
 }
 

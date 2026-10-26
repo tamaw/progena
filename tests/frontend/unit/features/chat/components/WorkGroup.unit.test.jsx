@@ -67,16 +67,23 @@ describe('WorkGroup', () => {
     expect(html).not.toContain('work-step');
   });
 
-  it('previews the latest steps while working, keeping an older running parallel call visible', () => {
-    const html = renderToStaticMarkup(React.createElement(WorkGroup, { items, active: true }));
-    expect(html).toContain('typing-word');
-    // `a` started first and never finished: still shown although outside the latest three.
-    expect(html).toContain('path: /a');
-    expect(html).not.toContain('path: /b');
-    expect(html).toContain('path: /c');
-    expect(html).toContain('path: /d');
-    expect(html).toContain('path: /e');
-    expect(html).toContain('work-step--error');
+  it('shows every call while active, collapses on completion, and can reopen the full history', async () => {
+    await act(async () => root.render(<WorkGroup items={items} active />));
+    expect(host.querySelector('.work-group__toggle').getAttribute('aria-expanded')).toBe('true');
+    expect(host.querySelectorAll('.tool-call-entry')).toHaveLength(5);
+    for (const id of ['a', 'b', 'c', 'd', 'e']) {
+      expect(host.textContent).toContain(`/${id}`);
+    }
+    await act(async () => host.querySelector('.work-group__toggle').click());
+    expect(host.querySelectorAll('.tool-call-entry')).toHaveLength(0);
+    await act(async () => host.querySelector('.work-group__toggle').click());
+    expect(host.querySelectorAll('.tool-call-entry')).toHaveLength(5);
+
+    await act(async () => root.render(<WorkGroup items={items} active={false} endedAt={9_000} />));
+    expect(host.querySelector('.work-group__toggle').getAttribute('aria-expanded')).toBe('false');
+    expect(host.querySelectorAll('.tool-call-entry')).toHaveLength(0);
+    await act(async () => host.querySelector('.work-group__toggle').click());
+    expect(host.querySelectorAll('.tool-call-entry')).toHaveLength(5);
   });
 
   it("does not repeat a headed group's reasoning as a preview step, since the header already shows it", () => {

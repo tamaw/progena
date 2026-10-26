@@ -30,7 +30,7 @@ const PINNED_SLACK_PX = 24;
 function stateFor(container) {
   let entry = state.get(container);
   if (!entry) {
-    entry = { readingOffset: null, lastUserInputAt: -Infinity };
+    entry = { readingOffset: null, lastUserInputAt: -Infinity, lastAnswer: undefined };
     state.set(container, entry);
   }
   return entry;
@@ -79,12 +79,16 @@ export function followTranscript(container, isPinnedToBottomRef) {
 
   const tail = container.scrollHeight - container.clientHeight;
   const answer = newestAnswer(container);
+  // Collapsing a tall work group can clamp scrollTop past a newly arrived
+  // answer. That is not the reader choosing to skip the answer's beginning.
+  const answerJustAppeared = entry.lastAnswer === null && answer !== null;
+  entry.lastAnswer = answer;
   if (answer) {
     const answerTop = contentTop(container, answer);
     const startTarget = Math.max(0, answerTop - ANSWER_TOP_OFFSET_PX);
     // Only while the answer's start is still at or below the viewport top:
     // once the reader has scrolled past it, plain tail-following resumes.
-    if (startTarget < tail && container.scrollTop <= answerTop) {
+    if (startTarget < tail && (container.scrollTop <= answerTop || answerJustAppeared)) {
       setScrollTop(container, startTarget);
       entry.readingOffset = answerTop - container.scrollTop;
       isPinnedToBottomRef.current = false;
@@ -115,6 +119,11 @@ export function noteTranscriptScroll(container, isPinnedToBottomRef, now = Date.
     isPinnedToBottomRef.current = atBottom;
   } else if (atBottom) {
     isPinnedToBottomRef.current = true;
+  }
+  if (atBottom) {
+    // End the old gesture here: subsequent work-collapse scroll events are
+    // browser layout adjustments, not fresh input from that gesture.
+    entry.lastUserInputAt = -Infinity;
   }
 }
 
