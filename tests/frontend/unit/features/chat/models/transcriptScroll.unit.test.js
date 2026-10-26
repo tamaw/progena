@@ -102,6 +102,25 @@ describe('followTranscript', () => {
     expect(pinned.current).toBe(true);
   });
 
+  it('anchors the new answer after all tool rows collapse just after scrolling to the bottom', () => {
+    const user = { role: 'user', top: 0, height: 60 };
+    const answer = { role: 'work', top: 100, height: 2000 };
+    const container = transcript([user, answer]);
+    const pinned = { current: true };
+    followTranscript(container, pinned);
+    noteTranscriptUserInput(container, 1000);
+    noteTranscriptScroll(container, pinned, 1010);
+
+    answer.role = 'assistant';
+    answer.height = 1200;
+    // Browser clamps its previous bottom position before ResizeObserver fires.
+    container.scrollTop = bottom(container);
+    noteTranscriptScroll(container, pinned, 1020);
+    followTranscript(container, pinned);
+    expect(container.scrollTop).toBe(92);
+    expect(pinned.current).toBe(false);
+  });
+
   it('keeps holding the answer through scrolls the reader did not make (browser scroll anchoring)', () => {
     const answer = { role: 'assistant', top: 600, height: 1200 };
     const container = transcript([{ role: 'user', top: 0, height: 60 }, answer]);

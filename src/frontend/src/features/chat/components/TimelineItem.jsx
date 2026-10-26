@@ -65,7 +65,7 @@ function TimelineRow({ item, itemIndex, onRegenerate }) {
       <div key={item.id || `tl-${itemIndex}`} className="chat-entry-chain--item">
         <article className={`message-wrapper assistant msg msg--assistant entry entry--assistant ${item.error ? 'entry--standalone' : 'entry--chain-end'}`}>
           <div className="entry__gutter" aria-hidden="true">
-            <span className="entry__badge entry__badge--assistant" />
+            <span className={`entry__badge entry__badge--assistant${item.isStreaming && !item.error ? ' activity-dot' : ''}`} />
           </div>
           <div className="entry__main msg__entry-main">
             <div className="msg__head entry__head">

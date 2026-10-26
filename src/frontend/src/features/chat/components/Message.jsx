@@ -202,7 +202,7 @@ function MessageView({
   const messageEntry = (
     <article className={`message-wrapper ${role} msg msg--${role} entry entry--${role === 'assistant' ? 'assistant' : 'user'} ${entryStateClass}`}>
       <div className="entry__gutter" aria-hidden="true">
-        <span className={`entry__badge entry__badge--${role === 'assistant' ? 'assistant' : 'user'}`} />
+        <span className={`entry__badge entry__badge--${role === 'assistant' ? 'assistant' : 'user'}${role === 'assistant' && isStreaming && !error ? ' activity-dot' : ''}`} />
       </div>
       <div className="entry__main msg__entry-main">
         <div className="msg__head entry__head">

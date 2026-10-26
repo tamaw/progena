@@ -12,9 +12,8 @@
  *     the work that follows lands in it. Work before any summary forms a
  *     headless group (a typed "-ing" word while live / "Worked for …").
  *
- * While the agent is working, the latest group previews only its latest
- * steps (plus every still-running step, so parallel tool calls stay
- * visible); once the answer starts streaming every group is collapsed.
+ * While the agent is working, the latest group shows all its rows; once the
+ * answer starts streaming every group collapses unless explicitly opened.
  */
 
 import { isA2AToolName } from './a2aTools';
@@ -22,8 +21,6 @@ import { isToolEventFailure } from './toolFailureModel';
 import { isReasoningEvent } from './streamEventsModel';
 import { formatToolInputSummary, prettifyLabel } from './messageRenderUtils';
 
-/** Latest steps previewed while the agent is working. */
-export const LIVE_STEP_LIMIT = 3;
 /** Latest lines shown on a subagent / A2A card before "N earlier". */
 export const CARD_SUMMARY_LINES = 3;
 
@@ -265,14 +262,6 @@ function toolCallName(entry) {
   return (entry.start || entry.end)?.event?.metadata?.tool_name;
 }
 
-/**
- * The live preview: the latest `limit` steps, plus any older step still
- * running (parallel tool calls), in original order.
- */
-export function selectLiveSteps(steps, limit = LIVE_STEP_LIMIT) {
-  const firstRecent = Math.max(0, steps.length - limit);
-  return steps.filter((step, index) => index >= firstRecent || step.status === 'running');
-}
 
 /** Show the latest `limit` lines unless the user asked for all of them. */
 export function selectRecentLines(lines, showAll, limit = CARD_SUMMARY_LINES) {

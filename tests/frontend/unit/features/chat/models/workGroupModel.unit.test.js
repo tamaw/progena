@@ -5,7 +5,6 @@ import {
   buildWorkSteps,
   mergeToolCallItems,
   partitionTurnTimeline,
-  selectLiveSteps,
   reasoningSectionBody,
   splitGroupReasoning,
   selectRecentLines,
@@ -72,19 +71,6 @@ describe('buildWorkSteps', () => {
   });
 });
 
-describe('selectLiveSteps', () => {
-  const step = (id, status = 'success') => ({ id, status });
-
-  it('keeps an older still-running parallel call visible alongside the latest steps', () => {
-    const live = selectLiveSteps([step('a', 'running'), step('b'), step('c'), step('d'), step('e')], 3);
-    expect(live.map((s) => s.id)).toEqual(['a', 'c', 'd', 'e']);
-  });
-
-  it('shows only the latest steps once older ones have finished', () => {
-    const live = selectLiveSteps([step('a'), step('b'), step('c'), step('d')], 3);
-    expect(live.map((s) => s.id)).toEqual(['b', 'c', 'd']);
-  });
-});
 
 describe('selectRecentLines', () => {
   it('reports how many earlier lines are hidden and reveals all on request', () => {
