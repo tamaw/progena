@@ -21,6 +21,13 @@ class RoutineStore:
         key = f"{RUN_EVENT_PREFIX}{payload['request_id']}:{payload['status']}"
         await self._access.store.save_document(key, payload)
 
+    async def list_routine_run_events(self, request_id: str) -> list[dict[str, Any]]:
+        """Return every persisted lifecycle transition of one routine attempt."""
+        from ..routines.events import RUN_EVENT_PREFIX
+
+        rows = await self._access.store.list_documents(f"{RUN_EVENT_PREFIX}{request_id}:")
+        return [payload for _, payload in rows if isinstance(payload, dict)]
+
     async def get_routine_run_control(
         self, agent_id: str, session_id: str
     ) -> dict[str, Any] | None:

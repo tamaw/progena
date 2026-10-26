@@ -8,6 +8,7 @@ import pytest
 from langchain_core.messages import AIMessage
 from langgraph.checkpoint.memory import MemorySaver
 
+import src.progena.routines.controls as controls_module
 from src.progena.routines.controls import (
     RoutineRunCancelled,
     RoutineRunControlConflict,
@@ -31,6 +32,9 @@ class _StateManager:
 
     async def save_routine_run_event(self, payload: dict) -> None:
         self.events.append(dict(payload))
+
+    async def list_routine_run_events(self, request_id: str) -> list[dict]:
+        return [dict(event) for event in self.events if event["request_id"] == request_id]
 
 
 class _NativeStateManager(_StateManager):
@@ -295,42 +299,43 @@ async def test_claimed_resume_admits_only_its_request_and_failed_start_releases_
     assert manager.controls[("demo", "session-1")] == stopped
 
 
+_NATIVE_GRAPH = {
+    "id": "demo",
+    "name": "Demo",
+    "description": "control regression",
+    "version": "2.0.0",
+    "entry": "first",
+    "nodes": [
+        {"id": "first", "kind": "eval", "output_key": "first", "config": {"expression": "1"}},
+        {
+            "id": "block",
+            "kind": "agent",
+            "output_key": "block",
+            "config": {"agent_name": "worker", "prompt_template": "{request}"},
+        },
+    ],
+    "edges": [{"from": "first", "to": "block", "level": "normal"}],
+}
+
+
+class _BlockingAgent:
+    """Blocks its first call forever; later calls finish."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+        self.entered = asyncio.Event()
+
+    async def ainvoke(self, state, *, config):
+        self.calls += 1
+        if self.calls == 1:
+            self.entered.set()
+            await asyncio.Event().wait()
+        return {"messages": [AIMessage(content="done")]}
+
+
 @pytest.mark.asyncio
 async def test_native_stop_then_resume_reuses_checkpoint_without_repeating_completed_node():
-    graph = {
-        "id": "demo",
-        "name": "Demo",
-        "description": "control regression",
-        "version": "2.0.0",
-        "entry": "first",
-        "nodes": [
-            {
-                "id": "first",
-                "kind": "eval",
-                "output_key": "first",
-                "config": {"expression": "1"},
-            },
-            {
-                "id": "block",
-                "kind": "agent",
-                "output_key": "block",
-                "config": {"agent_name": "worker", "prompt_template": "{request}"},
-            },
-        ],
-        "edges": [{"from": "first", "to": "block", "level": "normal"}],
-    }
-
-    class _BlockingAgent:
-        def __init__(self) -> None:
-            self.calls = 0
-            self.entered = asyncio.Event()
-
-        async def ainvoke(self, state, *, config):
-            self.calls += 1
-            if self.calls == 1:
-                self.entered.set()
-                await asyncio.Event().wait()
-            return {"messages": [AIMessage(content="done")]}
+    graph = _NATIVE_GRAPH
 
     manager = _NativeStateManager(graph)
     controls = RoutineRunController(manager)
@@ -379,3 +384,113 @@ async def test_native_stop_then_resume_reuses_checkpoint_without_repeating_compl
     assert worker.calls == 2
     checkpoint = await saver.aget_tuple({"configurable": {"thread_id": started["thread_id"]}})
     assert len(checkpoint.checkpoint["channel_values"]["run_meta"]["first"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_stop_after_runtime_restart_settles_orphan_and_resumes_its_checkpoint(monkeypatch):
+    manager = _NativeStateManager(_NATIVE_GRAPH)
+    saver = MemorySaver()
+    worker = _BlockingAgent()
+
+    def executor(controls: RoutineRunController):
+        return create_routine_executor(
+            routine_id="demo",
+            model=object(),
+            state_manager=manager,
+            revision_reader=_PinnedReader(_NATIVE_GRAPH),
+            agent_registry={"worker": worker},
+            routine_registry={},
+            checkpointer=saver,
+            routine_controls=controls,
+        )
+
+    old_controls = RoutineRunController(manager)
+    first = asyncio.create_task(
+        executor(old_controls).ainvoke(
+            {"_interactive_session_id": "session-1", "_routine_request_id": "attempt-1"}
+        )
+    )
+    await worker.entered.wait()
+    started = next(event for event in manager.events if event["status"] == "started")
+    # Shutdown of the old runtime process: no user control, no lifecycle outcome.
+    first.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await first
+    assert [event["status"] for event in manager.events] == ["started"]
+
+    monkeypatch.setattr(controls_module, "RUNTIME_INSTANCE_ID", "restarted-process")
+    controls = RoutineRunController(manager)
+    stopped = await controls.control_routine_run(
+        "demo", thread_id=started["thread_id"], request_id="attempt-1", action="stop"
+    )
+    assert stopped["status"] == "stopped"
+    assert manager.events[-1]["status"] == "stopped"
+
+    resumed = await executor(controls).ainvoke(
+        {
+            "_interactive_session_id": "session-1",
+            "_routine_resume_thread_id": started["thread_id"],
+            "_routine_request_id": "attempt-2",
+        }
+    )
+    assert resumed["_routine_thread_id"] == started["thread_id"]
+    assert worker.calls == 2
+    checkpoint = await saver.aget_tuple({"configurable": {"thread_id": started["thread_id"]}})
+    assert len(checkpoint.checkpoint["channel_values"]["run_meta"]["first"]) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("owner", "latest", "settles"),
+    [
+        (None, "started", True),  # started before ownership was recorded
+        ("earlier-process", "stopping", True),
+        ("current-process", "started", False),  # owned here: never inferred dead
+        ("earlier-process", "completed", False),
+        ("earlier-process", "paused", False),
+    ],
+)
+async def test_control_without_local_task_settles_only_previous_process_runs(
+    monkeypatch, owner, latest, settles
+):
+    monkeypatch.setattr(controls_module, "RUNTIME_INSTANCE_ID", "current-process")
+    manager = _StateManager()
+    execution = _execution()
+    started = {**execution, "status": "started", "timestamp": "2026-10-26T03:00:00Z"}
+    if owner is not None:
+        started["runtime_instance"] = owner
+    manager.events.append(started)
+    if latest != "started":
+        manager.events.append({**execution, "status": latest, "timestamp": "2026-10-26T03:01:00Z"})
+    controls = RoutineRunController(manager)
+
+    if not settles:
+        with pytest.raises(RoutineRunControlConflict):
+            await controls.control_routine_run(
+                "demo", thread_id=execution["thread_id"], request_id="attempt-1", action="stop"
+            )
+        assert manager.controls == {}
+        return
+    payload = await controls.control_routine_run(
+        "demo", thread_id=execution["thread_id"], request_id="attempt-1", action="cancel"
+    )
+    assert payload["status"] == "cancelled"
+    assert manager.events[-1]["status"] == "cancelled"
+    with pytest.raises(RoutineRunCancelled):
+        await controls.assert_not_cancelled("demo", "session-1")
+
+
+@pytest.mark.asyncio
+async def test_previous_process_run_is_not_settled_once_its_session_moved_on():
+    manager = _StateManager()
+    execution = _execution()
+    manager.events.append({**execution, "status": "started", "timestamp": "2026-10-26T03:00:00Z"})
+    newer = {**_execution("attempt-2"), "status": "resuming", "timestamp": "2026-10-26T04:00:00Z"}
+    await manager.save_routine_run_control(newer)
+    controls = RoutineRunController(manager)
+
+    with pytest.raises(RoutineRunControlConflict):
+        await controls.control_routine_run(
+            "demo", thread_id=execution["thread_id"], request_id="attempt-1", action="stop"
+        )
+    assert await manager.get_routine_run_control("demo", "session-1") == newer

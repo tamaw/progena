@@ -194,6 +194,9 @@ class StateManager:
     async def save_routine_run_event(self, payload: dict[str, Any]) -> None:
         return await self.routines.save_routine_run_event(payload)
 
+    async def list_routine_run_events(self, request_id: str) -> list[dict[str, Any]]:
+        return await self.routines.list_routine_run_events(request_id)
+
     async def get_routine_run_control(
         self, agent_id: str, session_id: str
     ) -> dict[str, Any] | None:

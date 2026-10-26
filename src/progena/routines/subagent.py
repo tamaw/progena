@@ -395,7 +395,7 @@ def create_routine_executor(
                     resume_thread_id=resume_thread_id,
                     allow_paused=resume_existing,
                 )
-            await persist_run_event(state_manager, execution, "started")
+            await active_controls.record_started(execution)
             operation = compiled.ainvoke(
                 run_input if resume_existing else seed_input,
                 config=run_config,
@@ -819,7 +819,7 @@ async def _resume_routine_thread(
     )
     if inherited_scope is not None:
         await active_controls.register_nested_execution(execution, allow_paused=True)
-    await persist_run_event(state_manager, execution, "started")
+    await active_controls.record_started(execution)
     operation = compiled.ainvoke(
         Command(
             resume={

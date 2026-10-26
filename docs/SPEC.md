@@ -124,11 +124,17 @@ The START parameter modal's Cancel only dismisses that modal.
 
 Stop cancels the native asynchronous LangGraph execution task and preserves its
 checkpoints. Pending `stopping`/`cancelling` intent is durable; `stopped` and
-`cancelled` are recorded only after the owned task terminates. Unknown attempts
-or a runtime that no longer owns the task return a conflict, not an inferred
-terminal state. No timestamp-based stale-run detection or automatic replay is
-performed. Stopping a nested routine unwinds its root execution and settles the
-affected active descendants; parent settlement must not continue as success.
+`cancelled` are recorded only after the owned task terminates. Each `started`
+lifecycle records the runtime process that owns it (`runtime_instance`). A run
+still `started`/`stopping`/`cancelling` whose owner is an earlier runtime
+process (or that predates ownership records) has no executor after a restart:
+Stop settles it `stopped` (resumable from its last checkpoint) and Cancel
+settles it `cancelled`, unless its session's control already belongs to another
+attempt. Unknown attempts, terminal or paused runs, and runs owned by the current
+process without a live task return a conflict. No timestamp-based stale-run
+detection or automatic replay is performed. Stopping a nested routine unwinds
+its root execution and settles the affected active descendants; parent
+settlement must not continue as success.
 
 Resume submits a new attempt with the same `session_id` and exact
 `resume_thread_id`. It uses the pinned graph revision, recorded policy and
