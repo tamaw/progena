@@ -49,6 +49,10 @@ def append_background_task(doc_store: BackendDocumentStore, task: dict[str, Any]
             conn.execute("SELECT pg_advisory_unlock(hashtextextended('background_tasks', 0))")
 
 
+class RoutineRunNotQueued(RuntimeError):
+    """The background task append failed, so nothing was queued."""
+
+
 def enqueue_routine_run(
     doc_store: BackendDocumentStore,
     routine_id: str,
@@ -58,6 +62,7 @@ def enqueue_routine_run(
     parameters: dict[str, Any] | None = None,
     message: str | None = None,
     target_node: str | None = None,
+    resume_thread_id: str | None = None,
 ) -> dict[str, Any]:
     """Queue one routine run and record its ``enqueued`` lifecycle event.
 
@@ -73,6 +78,8 @@ def enqueue_routine_run(
         "session_id": session_id,
         "request_id": request_id,
     }
+    if resume_thread_id:
+        metadata["resume_thread_id"] = resume_thread_id
     if target_node:
         metadata["target_node"] = target_node
     if parameters:
@@ -80,15 +87,18 @@ def enqueue_routine_run(
     if message is not None:
         metadata["message"] = message
     queued_at = utcnow_isoformat()
-    append_background_task(
-        doc_store,
-        {
-            "id": f"routine-run-{uuid.uuid4().hex}",
-            "content": f'Run the "{routine_id}" routine graph.',
-            "metadata": metadata,
-            "created_at": queued_at,
-        },
-    )
+    try:
+        append_background_task(
+            doc_store,
+            {
+                "id": f"routine-run-{uuid.uuid4().hex}",
+                "content": f'Run the "{routine_id}" routine graph.',
+                "metadata": metadata,
+                "created_at": queued_at,
+            },
+        )
+    except Exception as exc:
+        raise RoutineRunNotQueued(f"routine run was not queued: {exc}") from exc
     lifecycle = {
         "agent_id": routine_id,
         "session_id": session_id,
@@ -96,6 +106,8 @@ def enqueue_routine_run(
         "status": "enqueued",
         "timestamp": queued_at,
     }
+    if resume_thread_id:
+        lifecycle["thread_id"] = resume_thread_id
     doc_store.save_document(
         PROGENA_STATE_PREFIX, f"{RUN_EVENT_PREFIX}{request_id}:enqueued", lifecycle
     )

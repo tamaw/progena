@@ -114,6 +114,47 @@ workers/containers for hostile multi-tenant execution. See the
 [upstream security guidance](https://github.com/langchain-ai/quickjs-rs#security)
 and [Deep Agents interpreter documentation](https://docs.langchain.com/oss/python/deepagents/interpreters).
 
+### Routine execution controls
+
+The routine toolbar reuses one icon action: Run, Stop while an exact execution
+attempt is active, a spinner while stopping, and Resume after confirmed stop.
+If stopping is still pending after five seconds, the action offers Cancel run.
+Queued attempts without an execution identity are not presented as stoppable.
+The START parameter modal's Cancel only dismisses that modal.
+
+Stop cancels the native asynchronous LangGraph execution task and preserves its
+checkpoints. Pending `stopping`/`cancelling` intent is durable; `stopped` and
+`cancelled` are recorded only after the owned task terminates. Unknown attempts
+or a runtime that no longer owns the task return a conflict, not an inferred
+terminal state. No timestamp-based stale-run detection or automatic replay is
+performed. Stopping a nested routine unwinds its root execution and settles the
+affected active descendants; parent settlement must not continue as success.
+
+Resume submits a new attempt with the same `session_id` and exact
+`resume_thread_id`. It uses the pinned graph revision, recorded policy and
+retained inputs with native `ainvoke(None, ...)`, not a fresh seed or the edited
+live graph. Human approval pauses still require their explicit answer path.
+An unfinished node may replay, including an unfinished nested-routine call:
+completed external effects are not rolled back and must be replay-safe.
+
+Cancel closes that logical routine/session permanently within Progena; its
+durable guard rejects resume, node stepping, ordinary session reuse and approval
+continuation. Checkpoints/history remain inspectable and a separate fresh Run
+uses a new session. Cancelling graph execution does not itself confirm that an
+external A2A job, subprocess or background thread has stopped.
+
+The backend command is
+`POST /api/ui/agent-profiles/{agent_id}/run-control` with
+`{thread_id, request_id, action: "stop" | "cancel"}`. Its operation ID is separate
+from the targeted attempt ID. `agent.routine.control.updated` acknowledges the
+command with the operation ID as its `request_id` and the targeted attempt's
+lifecycle under `run`; persisted lifecycle events carry execution outcomes.
+A Resume claims the stopped checkpoint (`resuming`) when it is enqueued, so a
+second Resume is rejected; a resume that fails before starting releases the
+claim. The runtime
+implements the native task ownership boundary at
+`POST /v1/routine-runs/control`.
+
 ### Backend (`src/backend/`)
 
 - Exposes the browser's finite command/query routes and bridges work to the

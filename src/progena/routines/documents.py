@@ -21,6 +21,26 @@ class RoutineStore:
         key = f"{RUN_EVENT_PREFIX}{payload['request_id']}:{payload['status']}"
         await self._access.store.save_document(key, payload)
 
+    async def get_routine_run_control(
+        self, agent_id: str, session_id: str
+    ) -> dict[str, Any] | None:
+        """Return durable control intent/outcome for one logical routine run."""
+        from ..routines.controls import routine_run_control_key
+
+        payload = await self._access.store.peek_document(
+            routine_run_control_key(agent_id, session_id)
+        )
+        return payload if isinstance(payload, dict) else None
+
+    async def save_routine_run_control(self, payload: dict[str, Any]) -> None:
+        """Persist the latest control state for one logical routine run."""
+        from ..routines.controls import routine_run_control_key
+
+        await self._access.store.save_document(
+            routine_run_control_key(str(payload["agent_id"]), str(payload["session_id"])),
+            payload,
+        )
+
     async def get_routine_approval_decision(self, thread_id: str, interrupt_id: str) -> Any:
         from ..routines.approvals import decision_key
 

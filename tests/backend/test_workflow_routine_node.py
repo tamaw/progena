@@ -298,3 +298,61 @@ async def test_events_for_other_sessions_are_ignored():
     await executor.handle_routine_run_event({"session_id": other, "status": "failed"})
     await executor.handle_routine_run_event({"session_id": "ui-session", "status": "failed"})
     assert get_workflow_run(store, waiting.run_id).status == "running"
+
+
+@pytest.mark.asyncio
+async def test_stopped_routine_holds_workflow_and_cancelled_routine_never_completes():
+    store, definition, executor, _runner = _setup(PLAIN_ROUTINE, port="message")
+    waiting = await _start(store, definition, executor)
+    session_id = waiting.pending_routine["session_id"]
+    retained_thread = "routine:greet:revision:retained"
+
+    await executor.handle_routine_run_event(
+        {"session_id": session_id, "status": "stopped", "thread_id": retained_thread}
+    )
+    stopped = get_workflow_run(store, waiting.run_id)
+    assert stopped.status == "paused"
+    assert stopped.pending_routine["status"] == "stopped"
+    assert stopped.pending_routine["thread_id"] == retained_thread
+    assert (await executor.resume_workflow(definition.id)).status == "paused"
+    assert len(_queued_tasks(store)) == 1
+    await executor.handle_routine_run_event(
+        {
+            "session_id": session_id,
+            "status": "completed",
+            "thread_id": retained_thread,
+            "output": {"message": "must not settle before an explicit resume"},
+        }
+    )
+    assert get_workflow_run(store, waiting.run_id).status == "paused"
+
+    # A fresh thread with the same session cannot satisfy a stopped workflow wait.
+    await executor.handle_routine_run_event(
+        {"session_id": session_id, "status": "started", "thread_id": "routine:greet:new:run"}
+    )
+    still_stopped = get_workflow_run(store, waiting.run_id)
+    assert still_stopped.status == "paused"
+    assert still_stopped.pending_routine["status"] == "stopped"
+    await executor.handle_routine_run_event(
+        {
+            "session_id": session_id,
+            "status": "completed",
+            "thread_id": "routine:greet:new:run",
+            "output": {"message": "must not settle this workflow"},
+        }
+    )
+    assert get_workflow_run(store, waiting.run_id).status == "paused"
+
+    await executor.handle_routine_run_event(
+        {"session_id": session_id, "status": "started", "thread_id": retained_thread}
+    )
+    assert get_workflow_run(store, waiting.run_id).status == "running"
+    await executor.handle_routine_run_event(
+        {"session_id": session_id, "status": "cancelled", "thread_id": retained_thread}
+    )
+
+    cancelled = get_workflow_run(store, waiting.run_id)
+    assert cancelled.status == "failed"
+    assert "cancelled" in cancelled.last_error
+    assert cancelled.pending_routine is None
+    assert "run" not in cancelled.completed_node_ids

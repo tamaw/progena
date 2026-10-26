@@ -61,6 +61,7 @@ from src.progena.llm.provider_context import (
     current_provider_turn,
 )
 from src.progena.routines.approvals import approval_lock
+from src.progena.routines.controls import RoutineRunController, routine_session_from_thread
 from src.progena.routines.graph import validate_routine_graph_payload
 from src.progena.routines.revisions import (
     NullRoutineRevisionReader,
@@ -448,6 +449,7 @@ async def create_progena_agent(
         live_objects, base_url=http_base_url, static_subagents=async_subagents
     )
     background_runner = create_agent_background_runner(state_manager, http_base_url)
+    routine_controls = RoutineRunController(state_manager)
 
     async def profile_resolver(name):
         return await resolve_model_profile(state_manager, name)
@@ -467,10 +469,19 @@ async def create_progena_agent(
         below are still built at startup for DeepAgent task discovery, but
         execution never looks up a compiled routine from a process registry.
         """
-        resolved = await resolve_routine_document(state_manager, routine_id_or_name)
-        if resolved is None:
-            raise KeyError(f"unknown routine '{routine_id_or_name}'")
-        routine_id, graph_doc = resolved
+        resume_thread_id = str(state.get("_routine_resume_thread_id") or "").strip() or None
+        if resume_thread_id:
+            routine_session_from_thread(resume_thread_id)
+            routine_id = resume_thread_id.split(":")[1]
+            if routine_id != routine_id_or_name:
+                resolved = await resolve_routine_document(state_manager, routine_id_or_name)
+                if resolved is None or resolved[0] != routine_id:
+                    raise ValueError("resume thread does not belong to the requested routine")
+        else:
+            resolved = await resolve_routine_document(state_manager, routine_id_or_name)
+            if resolved is None:
+                raise KeyError(f"unknown routine '{routine_id_or_name}'")
+            routine_id, _graph_doc = resolved
         executor = create_routine_executor(
             routine_id=routine_id,
             model=model,
@@ -486,6 +497,7 @@ async def create_progena_agent(
             tool_registry=tool_registry,
             filesystem_backend=backend,
             checkpointer=checkpointer,
+            routine_controls=routine_controls,
             context=dict(getattr(runtime, "context", None) or {}),
         )
 
@@ -542,6 +554,7 @@ async def create_progena_agent(
             tool_registry=tool_registry,
             filesystem_backend=backend,
             checkpointer=checkpointer,
+            routine_controls=routine_controls,
         )
 
     # Rebuilt whenever a routine document changes (see runtime/progena.py),
@@ -565,6 +578,7 @@ async def create_progena_agent(
             tool_registry=tool_registry,
             filesystem_backend=backend,
             checkpointer=checkpointer,
+            routine_controls=routine_controls,
             **kwargs,
         )
 
@@ -621,6 +635,7 @@ async def create_progena_agent(
     # The heartbeat uses this callable for deterministic UI-triggered runs.
     # It is intentionally a resolver/runner, not a routine registry.
     agent.routine_runner = _run_routine  # type: ignore[attr-defined]
+    agent.routine_controls = routine_controls  # type: ignore[attr-defined]
     agent.routine_resumer = _resume_routine  # type: ignore[attr-defined]
     agent.object_agent_registry = live_objects  # type: ignore[attr-defined]
     agent.routine_subagent_registry = live_routines  # type: ignore[attr-defined]

@@ -25,6 +25,7 @@ from langgraph.runtime import Runtime
 
 from src.progena.orchestration.nodes.context import HeartbeatContext
 from src.progena.orchestration.state import ProgenaState
+from src.progena.routines.controls import RoutineRunCancelled, RoutineRunControlExit
 from src.progena.routines.events import persist_run_event
 
 logger = logging.getLogger(__name__)
@@ -90,6 +91,14 @@ async def routine_run_node(
                 interrupt_id=metadata["interrupt_id"],
                 request_id=metadata["request_id"],
             )
+        except RoutineRunControlExit as exc:
+            logger.info(
+                "routine_run resume ended by user control for %r: %s", routine_id, exc.status
+            )
+            return {}
+        except RoutineRunCancelled:
+            logger.info("routine_run resume refused cancelled logical run for %r", routine_id)
+            return {}
         except Exception as exc:
             return await failed(str(exc), exc)
         return {}
@@ -110,10 +119,17 @@ async def routine_run_node(
             "_interactive_session_id": session_id,
             "_interactive_target_node": target_node,
             "_routine_request_id": metadata.get("request_id"),
+            "_routine_resume_thread_id": metadata.get("resume_thread_id"),
         }
         if isinstance(parameters, dict) and parameters:
             invoke_input["parameters"] = parameters
         result = await routine_runner(routine_id, invoke_input)
+    except RoutineRunControlExit as exc:
+        logger.info("routine_run node ended by user control for %r: %s", routine_id, exc.status)
+        return {}
+    except RoutineRunCancelled:
+        logger.info("routine_run node refused cancelled logical run for %r", routine_id)
+        return {}
     except Exception as exc:  # noqa: BLE001 - convert to cycle_error like cycle_node does
         logger.warning("routine_run node failed for %r: %s", routine_id, exc)
         return await failed(f"routine '{routine_id}' failed: {exc}", exc)

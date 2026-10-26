@@ -914,3 +914,234 @@ def test_run_and_approval_are_refused_while_the_runtime_is_down():
     live["value"] = True
     assert client.post("/api/ui/agent-profiles/alpha/run", json={}).status_code == 202
     assert len(doc_store.get_document(PROGENA_STATE_PREFIX, "background_tasks").payload) == 1
+
+
+def test_run_control_rejects_runtime_conflict_without_terminal_event(harness, monkeypatch):
+    import src.backend.agents.routes as routes
+    from src.backend.integrations.runtime import RuntimeControlError
+
+    client, events = harness
+
+    class RuntimeClient:
+        async def control_routine_run(self, *_args, **_kwargs):
+            raise RuntimeControlError(409, "No active routine run owns this identity")
+
+    monkeypatch.setattr(routes.lifecycle_state, "client", RuntimeClient())
+    response = client.post(
+        "/api/ui/agent-profiles/alpha/run-control",
+        json={
+            "thread_id": "routine:alpha:revision:session",
+            "request_id": "run-attempt",
+            "action": "cancel",
+        },
+    )
+
+    assert response.status_code == 409
+    assert events == []
+
+
+def test_run_control_rejects_mismatched_runtime_identity_without_event(harness, monkeypatch):
+    import src.backend.agents.routes as routes
+
+    client, events = harness
+
+    class RuntimeClient:
+        async def control_routine_run(self, *_args, **_kwargs):
+            return {
+                "agent_id": "alpha",
+                "thread_id": "routine:alpha:revision:other-session",
+                "session_id": "other-session",
+                "request_id": "run-attempt",
+                "status": "stopped",
+                "timestamp": "2026-10-26T00:00:00Z",
+            }
+
+    monkeypatch.setattr(routes.lifecycle_state, "client", RuntimeClient())
+    response = client.post(
+        "/api/ui/agent-profiles/alpha/run-control",
+        json={
+            "thread_id": "routine:alpha:revision:session",
+            "request_id": "run-attempt",
+            "action": "stop",
+        },
+    )
+
+    assert response.status_code == 502
+    assert events == []
+
+
+def test_resume_requires_exact_stopped_checkpoint_and_retains_its_inputs(harness, monkeypatch):
+    from unittest.mock import AsyncMock
+
+    import src.backend.agents.routes as routes
+    import src.backend.workflows.events as events_module
+
+    client, events = harness
+    store = client.app.state.doc_store
+    session_id = "stopped-session"
+    thread_id = f"routine:alpha:revision:{session_id}"
+    store.save_document(
+        PROGENA_STATE_PREFIX,
+        routes.routine_run_control_key("alpha", session_id),
+        {
+            "agent_id": "alpha",
+            "session_id": session_id,
+            "thread_id": thread_id,
+            "request_id": "stopped-attempt",
+            "status": "stopped",
+            "timestamp": "2026-10-26T00:00:00Z",
+        },
+    )
+    checkpoint_reader = AsyncMock(return_value={"found": False})
+    monkeypatch.setattr(events_module, "read_run_state", checkpoint_reader)
+    body = {"session_id": session_id, "resume_thread_id": thread_id}
+
+    missing = client.post(
+        "/api/ui/agent-profiles/alpha/run",
+        headers={"X-Operation-Id": "resume-attempt"},
+        json=body,
+    )
+    assert missing.status_code == 409
+    assert store.get_document(PROGENA_STATE_PREFIX, "background_tasks") is None
+
+    checkpoint_reader.return_value = {"found": True}
+    reused_attempt = client.post(
+        "/api/ui/agent-profiles/alpha/run",
+        headers={"X-Operation-Id": "stopped-attempt"},
+        json=body,
+    )
+    assert reused_attempt.status_code == 409
+    assert store.get_document(PROGENA_STATE_PREFIX, "background_tasks") is None
+
+    wrong_thread = client.post(
+        "/api/ui/agent-profiles/alpha/run",
+        headers={"X-Operation-Id": "resume-attempt"},
+        json={**body, "resume_thread_id": "routine:alpha:other-revision:stopped-session"},
+    )
+    assert wrong_thread.status_code == 409
+    assert store.get_document(PROGENA_STATE_PREFIX, "background_tasks") is None
+
+    monkeypatch.setattr(
+        routes,
+        "validate_against_schema",
+        lambda *_args: pytest.fail("a verified resume must not validate live graph inputs"),
+    )
+    resumed = client.post(
+        "/api/ui/agent-profiles/alpha/run",
+        headers={"X-Operation-Id": "new-resume-attempt"},
+        json=body,
+    )
+
+    assert_acknowledged(resumed, ["agent.routine.run.enqueued"], "new-resume-attempt")
+    assert events[-1][0] == "agent.routine.run.enqueued"
+    assert events[-1][1]["thread_id"] == thread_id
+    checkpoint_reader.assert_awaited_with("alpha", thread_id, store)
+    [task] = store.get_document(PROGENA_STATE_PREFIX, "background_tasks").payload
+    assert task["metadata"]["session_id"] == session_id
+    assert task["metadata"]["resume_thread_id"] == thread_id
+    assert "parameters" not in task["metadata"]
+    assert "target_node" not in task["metadata"]
+
+    control_key = routes.routine_run_control_key("alpha", session_id)
+    assert store.get_document(PROGENA_STATE_PREFIX, control_key).payload["status"] == "resuming"
+    duplicate = client.post(
+        "/api/ui/agent-profiles/alpha/run",
+        headers={"X-Operation-Id": "second-resume-attempt"},
+        json=body,
+    )
+    assert duplicate.status_code == 409
+    assert len(store.get_document(PROGENA_STATE_PREFIX, "background_tasks").payload) == 1
+
+
+@pytest.mark.parametrize("queued", [False, True])
+def test_resume_claim_is_released_only_when_nothing_was_queued(harness, monkeypatch, queued):
+    from unittest.mock import AsyncMock
+
+    import src.backend.agents.routes as routes
+    import src.backend.workflows.events as events_module
+    import src.backend.workflows.routine_runs as routine_runs
+
+    client, _events = harness
+    store = client.app.state.doc_store
+    session_id = "stopped-session"
+    thread_id = f"routine:alpha:revision:{session_id}"
+    control_key = routes.routine_run_control_key("alpha", session_id)
+    stopped = {
+        "agent_id": "alpha",
+        "session_id": session_id,
+        "thread_id": thread_id,
+        "request_id": "stopped-attempt",
+        "status": "stopped",
+        "timestamp": "2026-10-26T00:00:00Z",
+    }
+    store.save_document(PROGENA_STATE_PREFIX, control_key, stopped)
+    monkeypatch.setattr(events_module, "read_run_state", AsyncMock(return_value={"found": True}))
+
+    if queued:
+        # The task is appended; only the later lifecycle write fails.
+        save_document = store.save_document
+
+        def failing_lifecycle_save(prefix, key, payload):
+            if key.startswith(routine_runs.RUN_EVENT_PREFIX):
+                raise RuntimeError("lifecycle write failed")
+            return save_document(prefix, key, payload)
+
+        monkeypatch.setattr(store, "save_document", failing_lifecycle_save)
+    else:
+
+        def failing_append(*_args, **_kwargs):
+            raise RuntimeError("queue unavailable")
+
+        monkeypatch.setattr(routine_runs, "append_background_task", failing_append)
+
+    with pytest.raises(RuntimeError):
+        client.post(
+            "/api/ui/agent-profiles/alpha/run",
+            headers={"X-Operation-Id": "resume-attempt"},
+            json={"session_id": session_id, "resume_thread_id": thread_id},
+        )
+
+    control = store.get_document(PROGENA_STATE_PREFIX, control_key).payload
+    if queued:
+        assert control["status"] == "resuming"
+        assert control["request_id"] == "resume-attempt"
+    else:
+        assert control == stopped
+
+
+def test_cancelled_session_blocks_session_reuse_node_step_and_approval(harness):
+    import src.backend.agents.routes as routes
+
+    client, events = harness
+    store = client.app.state.doc_store
+    session_id = "cancelled-session"
+    store.save_document(
+        PROGENA_STATE_PREFIX,
+        routes.routine_run_control_key("alpha", session_id),
+        {
+            "agent_id": "alpha",
+            "session_id": session_id,
+            "thread_id": f"routine:alpha:revision:{session_id}",
+            "request_id": "cancelled-attempt",
+            "status": "cancelled",
+            "timestamp": "2026-10-26T00:00:00Z",
+        },
+    )
+
+    reuse = client.post("/api/ui/agent-profiles/alpha/run", json={"session_id": session_id})
+    node_step = client.post(
+        "/api/ui/agent-profiles/alpha/run",
+        json={"session_id": session_id, "target_node": "gate"},
+    )
+    approval = client.post(
+        "/api/ui/agent-profiles/alpha/approval",
+        json={
+            "thread_id": f"routine:alpha:revision:{session_id}",
+            "interrupt_id": "approval",
+            "answer": "approve",
+        },
+    )
+
+    assert (reuse.status_code, node_step.status_code, approval.status_code) == (409, 409, 409)
+    assert store.get_document(PROGENA_STATE_PREFIX, "background_tasks") is None
+    assert events == []

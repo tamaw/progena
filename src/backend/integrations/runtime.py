@@ -43,6 +43,14 @@ CANCEL_TIMEOUT_SECONDS = 5.0
 TASK_SHUTDOWN_TIMEOUT_SECONDS = 5.0
 
 
+class RuntimeControlError(RuntimeError):
+    """A routine-control request the runtime rejected or could not process."""
+
+    def __init__(self, status_code: int, detail: str) -> None:
+        super().__init__(detail)
+        self.status_code = status_code
+
+
 async def _iter_sse_frames(response: httpx.Response) -> AsyncIterator[tuple[str, dict[str, Any]]]:
     """Parse ``event:``/``data:`` SSE frames from a streaming httpx response."""
     event_name: str | None = None
@@ -362,6 +370,68 @@ class SSEProgenaClient:
             logger.warning("Failed to send HTTP cancel for %s: %s", request_id, e)
             return False
 
+    async def control_routine_run(
+        self,
+        agent_id: str,
+        *,
+        thread_id: str,
+        request_id: str,
+        action: str,
+    ) -> dict[str, Any]:
+        """Forward one exact routine-run control request to the runtime.
+
+        ``request_id`` is the target execution attempt, not this HTTP
+        operation's correlation id.  The runtime owns active-task identity and
+        returns only an observed lifecycle state; a pending acknowledgement
+        never claims the underlying graph has already stopped.
+        """
+        if not agent_id or not thread_id or not request_id or action not in {"stop", "cancel"}:
+            raise RuntimeControlError(400, "Invalid routine run control request")
+        try:
+            if not self._started:
+                await self.start()
+            assert self._client is not None
+            response = await self._client.post(
+                "/v1/routine-runs/control",
+                json={
+                    "agent_id": agent_id,
+                    "thread_id": thread_id,
+                    "request_id": request_id,
+                    "action": action,
+                },
+                timeout=httpx.Timeout(CANCEL_TIMEOUT_SECONDS),
+            )
+        except RuntimeControlError:
+            raise
+        except (httpx.HTTPError, RuntimeError) as exc:
+            raise RuntimeControlError(503, f"Runtime control request failed: {exc}") from exc
+
+        if response.status_code != 200:
+            status_code = response.status_code if 400 <= response.status_code < 500 else 502
+            raise RuntimeControlError(status_code, _decode_error_body(response.content))
+        try:
+            payload = response.json()
+        except (json.JSONDecodeError, ValueError) as exc:
+            raise RuntimeControlError(502, "Runtime returned an invalid control response") from exc
+        if not isinstance(payload, dict):
+            raise RuntimeControlError(502, "Runtime returned an invalid control response")
+        if any(
+            payload.get(key) != expected
+            for key, expected in (
+                ("agent_id", agent_id),
+                ("thread_id", thread_id),
+                ("request_id", request_id),
+            )
+        ):
+            raise RuntimeControlError(502, "Runtime returned control for a different routine run")
+        if payload.get("status") not in {"stopping", "cancelling", "stopped", "cancelled"}:
+            raise RuntimeControlError(502, "Runtime returned an invalid routine control status")
+        if not isinstance(payload.get("session_id"), str) or not payload["session_id"]:
+            raise RuntimeControlError(502, "Runtime control response is missing session_id")
+        if not isinstance(payload.get("timestamp"), str) or not payload["timestamp"]:
+            raise RuntimeControlError(502, "Runtime control response is missing timestamp")
+        return payload
+
     async def delete_conversation(self, thread_id: str) -> bool:
         """Best-effort deletion of a conversation thread on the runtime."""
         if not thread_id.strip():
@@ -417,8 +487,11 @@ def _decode_error_body(body: bytes) -> str:
         payload = json.loads(body)
     except Exception:
         return body.decode("utf-8", "replace")
-    if isinstance(payload, dict) and "error" in payload:
-        return str(payload["error"])
+    if isinstance(payload, dict):
+        if "error" in payload:
+            return str(payload["error"])
+        if "detail" in payload:
+            return str(payload["detail"])
     return body.decode("utf-8", "replace")
 
 

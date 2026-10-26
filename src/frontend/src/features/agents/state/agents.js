@@ -138,10 +138,23 @@ export const fetchRoutineRuns = createAcknowledgedThunk('uiData/fetchRoutineRuns
   { requestId },
 ));
 
-export const startRoutineRun = createAcknowledgedThunk('uiData/startRoutineRun', ({ agentsUrl, agentId, sessionId, targetNode, parameters }, { requestId }) => requestAcknowledged(
+export const startRoutineRun = createAcknowledgedThunk('uiData/startRoutineRun', ({ agentsUrl, agentId, sessionId, targetNode, parameters, resumeThreadId }, { requestId }) => requestAcknowledged(
   `${agentsUrl}/${encodeURIComponent(agentId)}/run`, {
     method: 'POST', requestId,
-    body: { session_id: sessionId, ...(targetNode ? { target_node: targetNode } : {}), parameters },
+    body: {
+      session_id: sessionId,
+      ...(targetNode ? { target_node: targetNode } : {}),
+      ...(resumeThreadId ? { resume_thread_id: resumeThreadId } : {}),
+      ...(parameters !== undefined ? { parameters } : {}),
+    },
+  },
+));
+
+export const controlRoutineRun = createAcknowledgedThunk('uiData/controlRoutineRun', ({ agentsUrl, agentId, threadId, targetRequestId, action }, { requestId }) => requestAcknowledged(
+  `${agentsUrl}/${encodeURIComponent(agentId)}/run-control`, {
+    method: 'POST',
+    requestId,
+    body: { thread_id: threadId, request_id: targetRequestId, action },
   },
 ));
 
@@ -175,16 +188,21 @@ export const updateAgentSkillContent = createAcknowledgedThunk('uiData/updateAge
   },
 ));
 
+const TERMINAL_RUN_STATUSES = new Set(['completed', 'failed', 'paused', 'stopped', 'cancelled']);
+
 function applyRunLifecycle(state, payload) {
-  if (!payload?.request_id || !payload?.agent_id) return;
+  if (!payload?.request_id || !payload?.agent_id) return false;
   const previous = state.agents.runLifecycleByRequestId[payload.request_id];
+  // Attempts never leave a terminal state. This guards against a delayed
+  // control update disagreeing with the durable execution terminal event.
+  if (previous && TERMINAL_RUN_STATUSES.has(previous.status) && previous.status !== payload.status) return false;
   if (previous && previous.timestamp > payload.timestamp) return false;
   state.agents.runLifecycleByRequestId[payload.request_id] = payload;
   return previous?.status !== payload.status;
 }
 
 export const eventHandlers = {
-  ...Object.fromEntries(['enqueued', 'started', 'paused', 'completed', 'failed'].map((status) => [
+  ...Object.fromEntries(['enqueued', 'started', 'stopping', 'cancelling', 'paused', 'completed', 'failed', 'stopped', 'cancelled'].map((status) => [
     `agent.routine.run.${status}`, (state, payload, event) => {
       const changed = applyRunLifecycle(state, { ...payload, status });
       if (changed && ['completed', 'failed'].includes(status)) {
@@ -192,6 +210,10 @@ export const eventHandlers = {
       }
     },
   ])),
+  'agent.routine.control.updated': (state, payload) => {
+    // payload.request_id is the control operation; the attempt is payload.run.
+    if (payload?.run) applyRunLifecycle(state, payload.run);
+  },
   'agent.routine.lifecycle.snapshot': (state, payload) => {
     for (const run of payload.runs || []) applyRunLifecycle(state, run);
   },
@@ -330,8 +352,32 @@ const selectLatestRoutineRunByAgentId = createSelector(
     return latestByAgent;
   },
 );
+const selectLatestRoutineRunByThreadId = createSelector(
+  [(state) => state.uiData.agents.runLifecycleByRequestId],
+  (runs) => {
+    const latestByThread = {};
+    for (const run of Object.values(runs)) {
+      if (!run.thread_id) continue;
+      const existing = latestByThread[run.thread_id];
+      if (!existing || run.timestamp > existing.timestamp) {
+        latestByThread[run.thread_id] = run;
+      }
+    }
+    return latestByThread;
+  },
+);
 export const selectLatestRoutineRunLifecycle = (state, agentId) => selectLatestRoutineRunByAgentId(state)[agentId] ?? null;
-const RUN_STATUS_FILTER = { enqueued: 'Running', started: 'Running', paused: 'Paused', failed: 'Failed' };
+export const selectRoutineRunLifecyclesByThreadId = (state) => selectLatestRoutineRunByThreadId(state);
+const RUN_STATUS_FILTER = {
+  enqueued: 'Running',
+  started: 'Running',
+  stopping: 'Running',
+  cancelling: 'Running',
+  paused: 'Paused',
+  stopped: 'Stopped',
+  cancelled: 'Cancelled',
+  failed: 'Failed',
+};
 export const selectRoutineLatestRunStatusByAgentId = createSelector(
   [selectLatestRoutineRunByAgentId],
   (latestByAgent) => Object.fromEntries(Object.entries(latestByAgent)

@@ -4,13 +4,21 @@ import { createUuid } from '../../../lib/uuid';
 import useEntityDraft from '../../../hooks/useEntityDraft';
 import { useConfig } from '../../../context/ConfigContext';
 import React, { useState, useRef, useEffect, useCallback, useMemo, useLayoutEffect } from 'react';
-import { selectAgentRoutineRuns, selectAgentRunState, selectRoutineRunLifecycle, selectLatestRoutineRunLifecycle, startRoutineRun, answerRoutineApproval, fetchRoutineRuns, fetchRunState, selectAgentRoutineRevisionContent, fetchRoutineRevision, selectAgentProfiles, selectAgentRoutineRunsHasMore } from '../../agents/state/agents';
+import { selectAgentRoutineRuns, selectAgentRunState, selectRoutineRunLifecycle, selectLatestRoutineRunLifecycle, selectRoutineRunLifecyclesByThreadId, startRoutineRun, controlRoutineRun, answerRoutineApproval, fetchRoutineRuns, fetchRunState, selectAgentRoutineRevisionContent, fetchRoutineRevision, selectAgentProfiles, selectAgentRoutineRunsHasMore } from '../../agents/state/agents';
 import { selectPolicies, fetchPolicies } from '../../settings/state/policies';
 import {
   randomSessionId,
   parseRunThreadId,
   latestCompletionMs,
 } from '../models/routineRunPolling';
+import {
+  STOP_ESCALATION_MS,
+  isRoutineRunActive,
+  isRoutineRunTerminal,
+  routineHistoryStatus,
+  routineRunControlMode,
+  routineRunControlTarget,
+} from '../models/routineRunControl';
 import { watchRoutineRuns } from '../state/routineSubscriptions';
 import { createOperationRequestId } from '../../../store/http';
 import { formatAge } from '../../agents/agentFormat';
@@ -114,6 +122,9 @@ function useRoutineRunEvents(agentId, parameters, inputSchema) {
   const [sessionId, setSessionId] = useState(null);
   const [requestId, setRequestId] = useState(null);
   const [requestError, setRequestError] = useState(null);
+  const [controlError, setControlError] = useState(null);
+  const [pendingControlAction, setPendingControlAction] = useState(null);
+  const [stopRequestedAtMs, setStopRequestedAtMs] = useState(null);
   const [runStartedAtMs, setRunStartedAtMs] = useState(null);
   const interactiveSessionIdRef = useRef(null);
   const watchRef = useRef(null);
@@ -123,18 +134,26 @@ function useRoutineRunEvents(agentId, parameters, inputSchema) {
   const lifecycle = !requestId ? latestLifecycle
     : requestedLifecycle && latestLifecycle?.session_id === sessionId && latestLifecycle.timestamp > requestedLifecycle.timestamp
       ? latestLifecycle : requestedLifecycle;
-  const runs = useSelector((state) => selectAgentRoutineRuns(state, agentId));
-  const threadId = lifecycle?.thread_id
-    || (sessionId ? runs?.find((run) => run.run_id === sessionId)?.thread_id : null);
+  const threadId = lifecycle?.thread_id || null;
   const runState = useSelector((state) => threadId ? selectAgentRunState(state, threadId) : undefined) || EMPTY_RUN_STATE;
+  const lifecycleStatus = lifecycle?.status;
   const status = !requestId && !lifecycle ? 'idle'
-    : requestError || ['completed', 'failed', 'paused'].includes(lifecycle?.status) ? 'settled'
-      : lifecycle?.status === 'started' ? 'running' : 'discovering';
+    // A failed Resume submission keeps its stopped attempt selected.
+    : lifecycleStatus === 'stopped' ? 'stopped'
+      : requestError ? 'settled'
+        : lifecycleStatus === 'cancelled' ? 'cancelled'
+          : isRoutineRunTerminal(lifecycleStatus) ? 'settled'
+            : lifecycleStatus === 'started' ? 'running'
+              : lifecycleStatus === 'stopping' || lifecycleStatus === 'cancelling' ? lifecycleStatus
+                : 'discovering';
 
   useEffect(() => {
     setSessionId(null);
     setRequestId(null);
     setRequestError(null);
+    setControlError(null);
+    setPendingControlAction(null);
+    setStopRequestedAtMs(null);
     interactiveSessionIdRef.current = null;
     setHasInteractiveSession(false);
     const watch = watchRoutineRuns(agentsUrl, agentId);
@@ -145,6 +164,23 @@ function useRoutineRunEvents(agentId, parameters, inputSchema) {
     };
   }, [agentId, agentsUrl]);
 
+  useEffect(() => {
+    if (!lifecycleStatus) return;
+    if (isRoutineRunTerminal(lifecycleStatus)) {
+      setPendingControlAction(null);
+      setStopRequestedAtMs(null);
+    } else if (lifecycleStatus === 'stopping') {
+      if (pendingControlAction === 'stop') setPendingControlAction(null);
+      // A fresh page can observe a stop requested elsewhere. Start a local
+      // escalation timer too; do not infer that execution has terminated.
+      setStopRequestedAtMs((previous) => previous ?? Date.now());
+    }
+    if (lifecycleStatus === 'cancelled' && lifecycle?.session_id === sessionId) {
+      interactiveSessionIdRef.current = null;
+      setHasInteractiveSession(false);
+    }
+  }, [lifecycle?.session_id, lifecycleStatus, pendingControlAction, sessionId]);
+
   const watchThread = useCallback((historicalThreadId) => {
     void watchRef.current?.select(historicalThreadId
       ? { thread_id: historicalThreadId }
@@ -152,6 +188,10 @@ function useRoutineRunEvents(agentId, parameters, inputSchema) {
   }, [sessionId]);
 
   const startRun = useCallback((targetNode) => {
+    if (targetNode && lifecycleStatus === 'cancelled' && lifecycle?.session_id === interactiveSessionIdRef.current) {
+      interactiveSessionIdRef.current = null;
+      setHasInteractiveSession(false);
+    }
     const newSessionId = targetNode
       ? (interactiveSessionIdRef.current ??= randomSessionId())
       : randomSessionId();
@@ -161,6 +201,9 @@ function useRoutineRunEvents(agentId, parameters, inputSchema) {
     setSessionId(newSessionId);
     setRequestId(newRequestId);
     setRequestError(null);
+    setControlError(null);
+    setPendingControlAction(null);
+    setStopRequestedAtMs(null);
     const effectiveParameters = { ...parameters };
     for (const name of inputSchema?.required || []) {
       if (inputSchema.properties?.[name]?.type === 'boolean' && effectiveParameters[name] === undefined) {
@@ -180,7 +223,63 @@ function useRoutineRunEvents(agentId, parameters, inputSchema) {
       }
     })();
     return newSessionId;
-  }, [agentsUrl, agentId, dispatch, parameters, inputSchema]);
+  }, [agentsUrl, agentId, dispatch, inputSchema, lifecycle?.session_id, lifecycleStatus, parameters]);
+
+  const requestControl = useCallback((action) => {
+    const target = routineRunControlTarget(lifecycle, agentId);
+    if (!target
+      || (action === 'stop' && lifecycleStatus !== 'started')
+      || (action === 'cancel' && !['started', 'stopping'].includes(lifecycleStatus))) {
+      return;
+    }
+    setControlError(null);
+    setPendingControlAction(action);
+    if (action === 'stop') setStopRequestedAtMs(Date.now());
+    const watch = watchRef.current;
+    void dispatch(controlRoutineRun({
+      agentsUrl,
+      agentId,
+      threadId: target.threadId,
+      targetRequestId: target.requestId,
+      action,
+    })).unwrap().catch((error) => {
+      if (watchRef.current !== watch) return;
+      setPendingControlAction(null);
+      setControlError(error.message || `Could not ${action} this run`);
+    });
+  }, [agentId, agentsUrl, dispatch, lifecycle, lifecycleStatus]);
+
+  const resumeRun = useCallback(() => {
+    const target = routineRunControlTarget(lifecycle, agentId);
+    if (lifecycleStatus !== 'stopped' || !target?.sessionId) return;
+    const newRequestId = createOperationRequestId();
+    const watch = watchRef.current;
+    setSessionId(target.sessionId);
+    setRequestId(newRequestId);
+    setRunStartedAtMs(null);
+    setRequestError(null);
+    setControlError(null);
+    setPendingControlAction(null);
+    setStopRequestedAtMs(null);
+    void (async () => {
+      try {
+        await watch.select({ session_id: target.sessionId });
+        if (watchRef.current !== watch) return;
+        await dispatch(startRoutineRun({
+          agentsUrl,
+          agentId,
+          sessionId: target.sessionId,
+          resumeThreadId: target.threadId,
+          requestId: newRequestId,
+        })).unwrap();
+      } catch (error) {
+        if (watchRef.current !== watch) return;
+        setRequestError(error.message);
+        // Nothing was enqueued, so keep the stopped attempt (and Resume) selected.
+        setRequestId((current) => (current === newRequestId ? target.requestId : current));
+      }
+    })();
+  }, [agentId, agentsUrl, dispatch, lifecycle, lifecycleStatus]);
 
   const resetInteractiveSession = useCallback(() => {
     interactiveSessionIdRef.current = null;
@@ -203,12 +302,38 @@ function useRoutineRunEvents(agentId, parameters, inputSchema) {
   }, [agentsUrl, agentId, dispatch]);
   const runRevisionId = useMemo(() => parseRunThreadId(threadId)?.revisionId ?? null, [threadId]);
   return {
-    status, threadId, runMeta: runState.run_meta, runData: runState.data, pendingApprovals: runState.pending_approvals || EMPTY_RUN_STATE.pending_approvals, answerApproval,
+    status,
+    lifecycle,
+    pendingControlAction,
+    stopRequestedAtMs,
+    stopRun: () => requestControl('stop'),
+    cancelRun: () => requestControl('cancel'),
+    resumeRun,
+    threadId,
+    runMeta: runState.run_meta,
+    runData: runState.data,
+    pendingApprovals: runState.pending_approvals || EMPTY_RUN_STATE.pending_approvals,
+    answerApproval,
     estimatedActiveStartMs: latestCompletionMs(runState.run_meta)
-      ?? (lifecycle?.status === 'started' ? Date.parse(lifecycle.timestamp) : runStartedAtMs),
-    runRevisionId, startRun, hasInteractiveSession, resetInteractiveSession, watchThread,
-    error: requestError || lifecycle?.error,
+      ?? (lifecycleStatus === 'started' ? Date.parse(lifecycle.timestamp) : runStartedAtMs),
+    runRevisionId,
+    startRun,
+    hasInteractiveSession,
+    resetInteractiveSession,
+    watchThread,
+    error: requestError || controlError || lifecycle?.error,
   };
+}
+
+function useStopEscalationClock(enabled, stopRequestedAtMs) {
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  useEffect(() => {
+    if (!enabled || stopRequestedAtMs === null) return undefined;
+    const delay = Math.max(0, STOP_ESCALATION_MS - (Date.now() - stopRequestedAtMs));
+    const timer = setTimeout(() => setNowMs(Date.now()), delay);
+    return () => clearTimeout(timer);
+  }, [enabled, stopRequestedAtMs]);
+  return nowMs;
 }
 
 // Drives the canvas's top-right run-history pill: back/forward paging
@@ -371,6 +496,12 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, o
   useEffect(() => { if (!policies.loaded) dispatch(fetchPolicies({ url: policiesUrl })); }, [dispatch, policies.loaded, policiesUrl]);
   const {
     status: runStatus,
+    lifecycle: liveLifecycle,
+    pendingControlAction,
+    stopRequestedAtMs,
+    stopRun,
+    cancelRun,
+    resumeRun,
     threadId: liveThreadId,
     runMeta: liveRunMeta,
     runData: liveRunData,
@@ -1132,11 +1263,12 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, o
     () => new Set(Object.keys(runMeta || {}).filter((id) => (runMeta[id] || []).length > 0)),
     [runMeta],
   );
+  const isExecutionActive = runStatus === 'discovering' || isRoutineRunActive(liveLifecycle?.status);
   const activeNodeIds = useMemo(
-    () => (runStatus === 'running' || runStatus === 'discovering'
+    () => (!runNav.isBrowsingHistory && isExecutionActive
       ? deriveActiveNodeIds(displayNodes, displayEdges, displayEntry, completedNodeIds)
       : new Set()),
-    [runStatus, displayNodes, displayEdges, displayEntry, completedNodeIds],
+    [runNav.isBrowsingHistory, isExecutionActive, displayNodes, displayEdges, displayEntry, completedNodeIds],
   );
   const currentGraphForStaleness = useMemo(
     () => ({ entry: meta.entry, nodes, edges }),
@@ -1144,19 +1276,10 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, o
   );
   const rawStaleNodeIds = useRunStaleness(agent.id, runRevisionId, currentGraphForStaleness);
   const staleNodeIds = runNav.isBrowsingHistory ? EMPTY_MISSING : rawStaleNodeIds;
-  // True only during the queued run discovery (finding this run's real
-  // thread_id) -- the one window with no reliable timestamp to count from
-  // at all. Once the thread turns up, `estimatedActiveStartMs` anchors on
-  // that real moment instead of the run's click time (see
-  // useRoutineRunEvents), so counting can start honestly even before the
-  // entry node's own completion exists (see ChainCap/StepRunSummary).
+  // True only during queued discovery, before the runtime has disclosed an
+  // exact attempt identity that makes Stop safe to send.
   const warmingUp = !runNav.isBrowsingHistory && runStatus === 'discovering';
-  // Drives the top-left Run button's icon (Play -> Stop) and disables it
-  // for the run's full duration, not just discovery -- a second click
-  // mid-run would mint a second concurrent session against the same
-  // routine, and there's no cancel endpoint for an in-flight run to make
-  // "Stop" anything but a status indicator.
-  const isRunInProgress = !runNav.isBrowsingHistory && (runStatus === 'discovering' || runStatus === 'running');
+  const isRunInProgress = !runNav.isBrowsingHistory && isExecutionActive;
   const loopMembership = useMemo(() => buildLoopMembership(displayEdges), [displayEdges]);
   const editContext = useMemo(() => ({
     draftScope: agent.id,
@@ -1342,6 +1465,102 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, o
     await request;
   }, [discardNodeFieldDrafts, persistGraph, setEdges, setMeta, setNodes]);
 
+  const stopEscalationNow = useStopEscalationClock(
+    pendingControlAction === 'stop' || liveLifecycle?.status === 'stopping',
+    stopRequestedAtMs,
+  );
+  const runControl = routineRunControlMode({
+    lifecycle: liveLifecycle,
+    agentId: agent.id,
+    pendingAction: pendingControlAction,
+    stopRequestedAtMs,
+    nowMs: stopEscalationNow,
+  });
+  const primaryRunAction = (() => {
+    switch (runControl?.kind) {
+      case 'stop':
+        return {
+          icon: <StopActionIcon />,
+          label: 'Stop',
+          tooltip: 'Stop',
+          ariaLabel: 'Stop',
+          onClick: stopRun,
+          disabled: false,
+        };
+      case 'stopping':
+        return {
+          icon: <RunControlSpinnerIcon />,
+          label: 'Stopping…',
+          tooltip: 'Stopping…',
+          ariaLabel: 'Stopping…',
+          disabled: true,
+          pending: true,
+        };
+      case 'cancel':
+        return {
+          icon: <CancelRunActionIcon />,
+          label: 'Cancel run',
+          tooltip: 'Cancel run',
+          ariaLabel: 'Cancel run',
+          onClick: cancelRun,
+          disabled: false,
+        };
+      case 'cancelling':
+        return {
+          icon: <RunControlSpinnerIcon />,
+          label: 'Cancelling…',
+          tooltip: 'Cancelling…',
+          ariaLabel: 'Cancelling…',
+          disabled: true,
+          pending: true,
+        };
+      case 'resume':
+        return {
+          icon: <PlayActionIcon />,
+          label: 'Resume',
+          tooltip: 'Resume',
+          ariaLabel: 'Resume',
+          onClick: () => {
+            resetRunNavToLatest();
+            resumeRun();
+          },
+          disabled: false,
+        };
+      case 'queued':
+        return {
+          icon: <RunControlSpinnerIcon />,
+          label: 'Queued',
+          tooltip: 'Queued',
+          ariaLabel: 'Queued',
+          disabled: true,
+          pending: true,
+        };
+      default:
+        if (isExecutionActive) {
+          return {
+            icon: <RunControlSpinnerIcon />,
+            label: 'Queued',
+            tooltip: 'Queued',
+            ariaLabel: 'Queued',
+            disabled: true,
+            pending: true,
+          };
+        }
+        return {
+          icon: <PlayActionIcon />,
+          label: 'Run',
+          tooltip: runNav.isBrowsingHistory
+            ? 'Step back to the latest run (or Restore this one) before running'
+            : !isServerConfirmed ? 'Waiting for save to be confirmed…'
+              : hasDeclaredParams ? 'Set parameters and run'
+                : 'Run routine',
+          ariaLabel: 'Run routine',
+          onClick: () => { if (hasDeclaredParams) setRunModalOpen(true); else startRunAndTrackLatest(); },
+          disabled: runNav.isBrowsingHistory || validationErrors.length > 0 || incomplete > 0 || !isServerConfirmed,
+        };
+    }
+  })();
+
   return (
     <>
       <section className="agents-graph-panel" style={{ '--agent-color': agent.color }}>
@@ -1359,19 +1578,13 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, o
                   />
                 ) : null}
                 <DetailHeaderAction
-                  icon={isRunInProgress ? <StopActionIcon /> : <PlayActionIcon />}
-                  label={isRunInProgress ? 'Running' : 'Run'}
-                  className={isRunInProgress ? 'agents-graph-run-action--pending' : ''}
-                  tooltip={
-                    isRunInProgress ? 'Running…'
-                      : runNav.isBrowsingHistory ? 'Step back to the latest run (or Restore this one) before running'
-                      : !isServerConfirmed ? 'Waiting for save to be confirmed…'
-                      : hasDeclaredParams ? 'Set parameters and run'
-                      : 'Run routine'
-                  }
-                  ariaLabel={isRunInProgress ? 'Running' : 'Run routine'}
-                  onClick={() => { if (hasDeclaredParams) setRunModalOpen(true); else startRunAndTrackLatest(); }}
-                  disabled={isRunInProgress || runNav.isBrowsingHistory || validationErrors.length > 0 || incomplete > 0 || !isServerConfirmed}
+                  icon={primaryRunAction.icon}
+                  label={primaryRunAction.label}
+                  className={primaryRunAction.pending ? 'agents-graph-run-action--pending' : ''}
+                  tooltip={primaryRunAction.tooltip}
+                  ariaLabel={primaryRunAction.ariaLabel}
+                  onClick={primaryRunAction.onClick}
+                  disabled={primaryRunAction.disabled}
                 />
                 <DetailHeaderAction
                   icon={validationErrors.length ? <ValidationErrorIcon /> : <ValidationOkIcon />}
@@ -1595,6 +1808,22 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, o
 // Always rendered (never conditionally omitted) so the actions row never
 // reflows width when validity flips; disabled/non-interactive in this
 // state since there's nothing to expand.
+function RunControlSpinnerIcon() {
+  return (
+    <svg className="routine-run-control-spinner" viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">
+      <circle cx="8" cy="8" r="5.5" fill="none" stroke="currentColor" strokeWidth="1.7" strokeDasharray="24 11" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function CancelRunActionIcon() {
+  return (
+    <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">
+      <path d="m4 4 8 8M12 4l-8 8" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+    </svg>
+  );
+}
+
 function ValidationOkIcon() {
   return (
     <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">
@@ -1955,17 +2184,12 @@ function RoutineRunsPanel({ agentId, onClose, runsList, viewedIndex, onSelectInd
       .finally(() => setLoadingMore(false));
   }, [agentId, agentsUrl, dispatch, loadingMore, runsList]);
 
-  // Status/duration/tokens need each run's own run_meta, not just the list
-  // summary. Deliberately NOT fetched eagerly for the whole list -- opening
-  // this panel used to fire one concurrent /run-state request (each opening
-  // its own short-lived Postgres checkpoint connection) per run, all at
-  // once. Instead this rides useRunHistoryNav's existing `historicalThreadId`
-  // effect: selecting a row (via `onSelectIndex` below, or the toolbar's
-  // back/forward pill, both of which move the same `viewedIndex`) is what
-  // triggers that one fetch, into the same runStateByThreadId cache read
-  // here -- a run already browsed to needs no second fetch, and clicking a
-  // row this panel hasn't resolved yet needs none added here either.
+  // Tokens need the selected run's own run_meta, so the history panel shares
+  // useRunHistoryNav's lazy checkpoint fetch rather than loading every row.
+  // Lifecycle status is already stream-cached by exact thread identity, which
+  // keeps stopped/cancelled badges honest without deriving them from dates.
   const runStateByThreadId = useSelector((state) => state.uiData.agents.runStateByThreadId);
+  const runLifecyclesByThreadId = useSelector(selectRoutineRunLifecyclesByThreadId);
 
   const virtualItems = useMemo(() => {
     if (!runsList) return [];
@@ -2012,17 +2236,10 @@ function RoutineRunsPanel({ agentId, onClose, runsList, viewedIndex, onSelectInd
               );
             }
             const run = item;
-            // Status is free -- `run.failed` comes straight off the list
-            // query (a cheap EXISTS against LangGraph's own '__error__'
-            // pending-write channel, see document_store.list_routine_runs).
-            // Tokens still need the fuller run_meta fetch, which only
-            // happens once this row is actually selected (see the comment
-            // above runStateByThreadId) -- so tokens stay optional here,
-            // status never does.
             const runState = runStateByThreadId[run.thread_id];
             const entries = runState?.run_meta ? Object.values(runState.run_meta).flat() : null;
             const tokens = entries?.reduce((sum, entry) => sum + (entry.tokens?.total_tokens || 0), 0);
-            const status = run.failed ? 'failed' : 'success';
+            const status = routineHistoryStatus(run, runLifecyclesByThreadId[run.thread_id]);
             const durationSec = run.started_at && run.last_checkpoint_at
               ? Math.max(0, (new Date(run.last_checkpoint_at) - new Date(run.started_at)) / 1000)
               : null;
