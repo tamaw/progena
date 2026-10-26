@@ -3,7 +3,9 @@ Backend configuration for Progena's DeepAgent.
 
 Profile:
 - Ephemeral workspace (StateBackend) + persistent memories (Postgres-backed)
-- Scoped filesystem mounts for self-inspection and runtime data access:
+- Scoped filesystem mounts for self-inspection and runtime data access; each
+  mount's read / read-write / read-write-delete access is declared once in
+  ``MOUNT_ACCESS`` below:
   - /memories/ -> Postgres content documents, kind="memory" (read-write)
   - /agents/user/ -> validated Postgres user agent manifests (read-write)
   - /agents/ -> other Postgres agent manifests (read-only)
@@ -46,9 +48,9 @@ skills remain Postgres-backed, since those are fetched at runtime.
 """
 
 import logging
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import Any, Literal
 
 from deepagents.backends import CompositeBackend, FilesystemBackend, StateBackend
 from deepagents.backends.protocol import DeleteResult, EditResult, FileUploadResponse, WriteResult
@@ -133,37 +135,130 @@ class ReadOnlyBackend:
         return getattr(self._backend, item)
 
 
-class FileOnlyDeleteBackend:
-    """Prevent the chat filesystem delete tool from recursively removing directories."""
+MountAccess = Literal["read", "read-write", "read-write-delete"]
 
-    def __init__(self, backend: Any) -> None:
-        self._backend = backend
+# What the main agent (and the routine Code nodes sharing its backend) may do
+# under each virtual directory. The longest matching prefix wins, so plugin
+# routes such as ``/skills/<segment>/`` inherit ``/skills/``. Every mounted route
+# must resolve here; an undeclared mount fails backend construction.
+#
+# - ``read``: list and read only.
+# - ``read-write``: also create and edit; deletion is refused.
+# - ``read-write-delete``: also delete single files. Directories, including
+#   mount roots and empty directories, are never deleted.
+#
+# Domain stores keep their own rules on top of this (e.g. runtime ``progena/``
+# instructions can never be deleted, knowledge pages are deprecated instead).
+# Unrouted scratch paths live in per-turn agent state and allow file deletion.
+MOUNT_ACCESS: dict[str, MountAccess] = {
+    "/self/": "read",
+    "/repos/": "read",
+    "/logs/": "read",
+    "/schemas/": "read",
+    "/skills/": "read",
+    "/attachments/": "read",
+    "/agents/": "read",
+    "/agents/objects/": "read",
+    "/agents/native/": "read",
+    "/agents/user/": "read-write",
+    "/memories/": "read-write",
+    "/knowledge/": "read-write",
+    "/sessions/": "read-write",
+    "/config/": "read-write",
+    "/config/repos/": "read-write",
+    "/policies/": "read-write",
+    "/inbox/": "read-write",
+    "/alerts/": "read-write",
+    "/instructions/": "read-write-delete",
+    "/routines/": "read-write-delete",
+    "/workflows/": "read-write-delete",
+    "/tasks/": "read-write-delete",
+    "/artifacts/": "read-write-delete",
+    "/canvases/": "read-write-delete",
+    "/shared/": "read-write-delete",
+}
 
-    @staticmethod
-    def _directory_error(file_path: str) -> DeleteResult:
-        return DeleteResult(error=f"Cannot delete directory '{file_path}'; delete files only")
+
+def _longest_prefix(path: str, prefixes: Iterable[str]) -> str | None:
+    """The longest route prefix containing ``path`` (or naming its root)."""
+    matches = [
+        prefix for prefix in prefixes if path.startswith(prefix) or path == prefix.rstrip("/")
+    ]
+    return max(matches, key=len, default=None)
+
+
+def mount_access(route: str, access: Mapping[str, MountAccess] = MOUNT_ACCESS) -> MountAccess:
+    """Declared access for a mounted route; undeclared mounts are a setup error."""
+    declared = _longest_prefix(route, access)
+    if declared is None:
+        raise ValueError(f"filesystem mount {route!r} has no declared access in MOUNT_ACCESS")
+    return access[declared]
+
+
+def create_mount_backend(routes: Mapping[str, Any]) -> "MountAccessCompositeBackend":
+    """Mount ``routes`` over a scratch state default, enforcing ``MOUNT_ACCESS``.
+
+    ``read`` routes are wrapped so every mutation is refused at the mount; the
+    composite enforces delete access for the rest.
+    """
+    mounted: dict[str, Any] = {
+        route: ReadOnlyBackend(backend)
+        if mount_access(route) == "read" and not isinstance(backend, ReadOnlyBackend)
+        else backend
+        for route, backend in routes.items()
+    }
+    return MountAccessCompositeBackend(default=StateBackend(), routes=mounted)
+
+
+def _directory_error(file_path: str) -> DeleteResult:
+    return DeleteResult(error=f"Cannot delete directory '{file_path}'; delete files only")
+
+
+def _names_directory(file_path: str, parent: Any, listing: Any) -> bool:
+    """Whether ``file_path`` is a directory, given its parent's and its own listing."""
+    name = PurePosixPath(file_path).name
+    for entry in getattr(parent, "entries", None) or []:
+        if PurePosixPath(str(entry.get("path", "")).rstrip("/")).name == name:
+            return bool(entry.get("is_dir"))
+    # Not listed by its parent: a populated listing of its own still marks a directory.
+    return getattr(listing, "error", "") is None and bool(getattr(listing, "entries", None))
+
+
+class MountAccessCompositeBackend(CompositeBackend):
+    """Composite backend that deletes only single files on deletable mounts.
+
+    Stays a ``CompositeBackend`` so Deep Agents still recognizes its scratch
+    ``StateBackend`` default and declares the agent's ``files`` state channel.
+    """
+
+    def _delete_refusal(self, file_path: str) -> tuple[str, DeleteResult | None]:
+        """The normalized path, and a refusal decided without touching storage."""
+        path = "/" + file_path.strip("/")
+        if ".." in PurePosixPath(path).parts:
+            return path, DeleteResult(error=f"Path traversal not allowed: {file_path}")
+        if path == "/" or f"{path}/" in self.routes:
+            return path, _directory_error(file_path)
+        route = _longest_prefix(path, self.routes)
+        if route is not None and (access := mount_access(route)) != "read-write-delete":
+            return path, DeleteResult(error=f"Cannot delete '{file_path}': {route} is {access}")
+        return path, None
 
     async def adelete(self, file_path: str) -> DeleteResult:
-        if file_path.endswith("/") or (
-            isinstance(self._backend, CompositeBackend)
-            and f"{file_path.rstrip('/')}/" in self._backend.routes
-        ):
-            return self._directory_error(file_path)
-        read = await self._backend.aread(file_path, 0, 1)
-        if read.error is not None:
-            listing = await self._backend.als(file_path)
-            if listing.error is None and listing.entries:
-                return self._directory_error(file_path)
-        return await self._backend.adelete(file_path)
+        path, refusal = self._delete_refusal(file_path)
+        if refusal is not None:
+            return refusal
+        parent = await self.als(str(PurePosixPath(path).parent))
+        if _names_directory(path, parent, await self.als(path)):
+            return _directory_error(file_path)
+        return await super().adelete(path)
 
     def delete(self, file_path: str) -> DeleteResult:
-        """Preserve the SDK's synchronous tool surface for synchronous callers."""
-        import asyncio
-
-        return asyncio.run(self.adelete(file_path))
-
-    def __getattr__(self, item: str) -> Any:
-        return getattr(self._backend, item)
+        path, refusal = self._delete_refusal(file_path)
+        if refusal is not None:
+            return refusal
+        if _names_directory(path, self.ls(str(PurePosixPath(path).parent)), self.ls(path)):
+            return _directory_error(file_path)
+        return super().delete(path)
 
 
 def create_object_agent_plugin_skill_routes(
@@ -247,35 +342,25 @@ def create_progena_backend(
     resolved_agents_dir = Path(agents_dir) if agents_dir else root / "data" / "agents" / "objects"
     resolved_worktree_dir = Path(worktree_dir) if worktree_dir else root / "data" / "repos"
 
-    def _route_backend(
-        path: Path,
-        *,
-        read_only: bool,
-        create_if_missing: bool = False,
-    ) -> Any | None:
-        if create_if_missing:
-            path.mkdir(parents=True, exist_ok=True)
-        elif not path.exists():
+    def _route_backend(path: Path) -> Any | None:
+        if not path.exists():
             logger.warning("Skipping backend mount for missing path: %s", path)
             return None
-        backend = FilesystemBackend(root_dir=str(path), virtual_mode=True)
-        if read_only:
-            return ReadOnlyBackend(backend)
-        return backend
+        return FilesystemBackend(root_dir=str(path), virtual_mode=True)
 
     routes: dict[str, Any] = {}
 
-    mounts: list[tuple[str, Path, bool]] = [
-        ("/self/", root / "src", True),
-        ("/repos/", resolved_worktree_dir, True),
-        ("/logs/", resolved_log_dir, True),
-        ("/schemas/", resolved_schemas_dir, True),
-        ("/skills/", resolved_skills_dir, True),
-        ("/agents/objects/", resolved_agents_dir, True),
-        ("/agents/native/", resolved_agents_dir, True),
+    mounts: list[tuple[str, Path]] = [
+        ("/self/", root / "src"),
+        ("/repos/", resolved_worktree_dir),
+        ("/logs/", resolved_log_dir),
+        ("/schemas/", resolved_schemas_dir),
+        ("/skills/", resolved_skills_dir),
+        ("/agents/objects/", resolved_agents_dir),
+        ("/agents/native/", resolved_agents_dir),
     ]
-    for route, mount_path, ro in mounts:
-        backend = _route_backend(mount_path, read_only=ro)
+    for route, mount_path in mounts:
+        backend = _route_backend(mount_path)
         if backend is not None:
             routes[route] = backend
 
@@ -286,9 +371,7 @@ def create_progena_backend(
         routes["/shared/"] = FilesystemBackend(root_dir=str(shared_path), virtual_mode=True)
 
     if state_manager is not None:
-        routes["/agents/"] = ReadOnlyBackend(
-            ContentDocumentDirectoryBackend(state_manager, "agent")
-        )
+        routes["/agents/"] = ContentDocumentDirectoryBackend(state_manager, "agent")
         routes["/agents/user/"] = UserAgentDirectoryBackend(
             state_manager, native_root=resolved_agents_dir
         )
@@ -298,12 +381,12 @@ def create_progena_backend(
         routes["/artifacts/"] = ArtifactDirectoryBackend(state_manager)
         routes["/knowledge/"] = KnowledgePageBackend(state_manager)
         for segment in plugin_skill_segments or []:
-            routes[f"/skills/{segment}/"] = ReadOnlyBackend(
-                ContentDocumentDirectoryBackend(state_manager, "skill", path_prefix=segment)
+            routes[f"/skills/{segment}/"] = ContentDocumentDirectoryBackend(
+                state_manager, "skill", path_prefix=segment
             )
         for segment in plugin_agent_segments or []:
-            routes[f"/agents/{segment}/"] = ReadOnlyBackend(
-                ContentDocumentDirectoryBackend(state_manager, "agent", path_prefix=segment)
+            routes[f"/agents/{segment}/"] = ContentDocumentDirectoryBackend(
+                state_manager, "agent", path_prefix=segment
             )
 
         # State documents surfaced as virtual files (e.g. /config/mcp.json,
@@ -342,13 +425,9 @@ def create_progena_backend(
 
     if database_url:
         # Uploaded chat attachments, read directly from the same Postgres
-        # blob table the backend writes to (see attachment_backend.py) --
-        # read-only, so no state_manager dependency.
-        routes["/attachments/"] = ReadOnlyBackend(AttachmentDirectoryBackend(database_url))
+        # blob table the backend writes to (see attachment_backend.py); no
+        # state_manager dependency.
+        routes["/attachments/"] = AttachmentDirectoryBackend(database_url)
 
-    state_backend_cls: Any = StateBackend
     logger.info("Created progena backend with scoped filesystem mounts")
-    return CompositeBackend(
-        default=state_backend_cls(),
-        routes=routes,
-    )
+    return create_mount_backend(routes)

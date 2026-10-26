@@ -95,6 +95,11 @@ and domain rules:
   the same volume. It is unvalidated and unprotected: they can change anything
   there, so keep authoritative records elsewhere.
 
+`delete` removes one file at a time and only under `/routines/`, `/workflows/`,
+`/tasks/`, `/instructions/` (not runtime `progena/` instructions), `/canvases/`,
+`/artifacts/`, `/shared/`, and scratch paths. Other writable areas refuse
+deletion, and directories are never deleted.
+
 Instructions already stored by a user are user-owned. Checked-in instruction
 content only seeds a missing stored instruction; it does not overwrite a saved
 edit on restart.
