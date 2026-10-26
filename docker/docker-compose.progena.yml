@@ -79,6 +79,9 @@ services:
       PROGENA_STATE_DIR: /app/tmp/state
       # Exchange volume shared with A2A agent containers; exposed to the agent as /shared/.
       PROGENA_SHARED_DIR: /shared
+      # Share glibc malloc arenas across threads so memory freed after large
+      # transient histories is reused instead of pinned per thread arena.
+      MALLOC_ARENA_MAX: "2"
     volumes:
       - ${PROGENA_HOST_LOGS_DIR:-../logs}:/app/logs
       - ${PROGENA_HOST_REPOS_DIR:-../repos}:/app/repos
@@ -137,6 +140,8 @@ services:
       TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
       TELEGRAM_ALLOWED_USERS: ${TELEGRAM_ALLOWED_USERS:-}
       TELEGRAM_POLLING_ENABLED: ${TELEGRAM_POLLING_ENABLED:-true}
+      # See the progena service: cap glibc arenas to limit per-thread RSS retention.
+      MALLOC_ARENA_MAX: "2"
     volumes:
       - ${PROGENA_HOST_LOGS_DIR:-../logs}:/app/logs
       - ${PROGENA_HOST_REPOS_DIR:-../repos}:/app/repos
