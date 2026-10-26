@@ -91,6 +91,14 @@ async def routine_run_node(
                 interrupt_id=metadata["interrupt_id"],
                 request_id=metadata["request_id"],
             )
+        except RoutineRunControlExit as exc:
+            logger.info(
+                "routine_run resume ended by user control for %r: %s", routine_id, exc.status
+            )
+            return {}
+        except RoutineRunCancelled:
+            logger.info("routine_run resume refused cancelled logical run for %r", routine_id)
+            return {}
         except Exception as exc:
             return await failed(str(exc), exc)
         return {}

@@ -237,6 +237,65 @@ async def test_cancel_is_irreversible_and_unknown_or_wrong_attempt_is_conflict()
 
 
 @pytest.mark.asyncio
+async def test_escalating_stop_to_cancel_does_not_interrupt_native_teardown():
+    manager = _StateManager()
+    controls = RoutineRunController(manager)
+    execution = _execution()
+    identity = {"thread_id": execution["thread_id"], "request_id": execution["request_id"]}
+    entered = asyncio.Event()
+    tearing_down = asyncio.Event()
+    release = asyncio.Event()
+    drained: list[bool] = []
+
+    async def graph() -> dict:
+        entered.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            tearing_down.set()
+            await release.wait()
+            drained.append(True)
+            raise
+        return {}
+
+    task = asyncio.create_task(controls.run_graph_execution(execution, graph()))
+    await entered.wait()
+    await controls.control_routine_run("demo", **identity, action="stop")
+    await tearing_down.wait()
+    escalated = await controls.control_routine_run("demo", **identity, action="cancel")
+    assert escalated["status"] == "cancelling"
+    release.set()
+
+    with pytest.raises(RoutineRunControlExit, match="cancelled"):
+        await task
+    assert drained == [True]
+    assert manager.controls[("demo", "session-1")]["status"] == "cancelled"
+
+
+@pytest.mark.asyncio
+async def test_claimed_resume_admits_only_its_request_and_failed_start_releases_it():
+    manager = _StateManager()
+    controls = RoutineRunController(manager)
+    stopped = {**_execution(), "status": "stopped", "timestamp": "2026-10-26T00:00:00Z"}
+    manager.controls[("demo", "session-1")] = {
+        **stopped,
+        "status": "resuming",
+        "request_id": "attempt-2",
+        "resumed_from": stopped,
+    }
+    thread_id = stopped["thread_id"]
+
+    with pytest.raises(RoutineRunControlConflict, match="another resume"):
+        await controls.assert_startable(_execution("attempt-3"), resume_thread_id=thread_id)
+    await controls.assert_startable(_execution("attempt-2"), resume_thread_id=thread_id)
+
+    await controls.release_resume_claim(_execution("attempt-3"))
+    assert manager.controls[("demo", "session-1")]["status"] == "resuming"
+    await controls.release_resume_claim(_execution("attempt-2"))
+    assert manager.controls[("demo", "session-1")] == stopped
+
+
+@pytest.mark.asyncio
 async def test_native_stop_then_resume_reuses_checkpoint_without_repeating_completed_node():
     graph = {
         "id": "demo",

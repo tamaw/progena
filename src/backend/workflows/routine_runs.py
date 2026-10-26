@@ -49,6 +49,10 @@ def append_background_task(doc_store: BackendDocumentStore, task: dict[str, Any]
             conn.execute("SELECT pg_advisory_unlock(hashtextextended('background_tasks', 0))")
 
 
+class RoutineRunNotQueued(RuntimeError):
+    """The background task append failed, so nothing was queued."""
+
+
 def enqueue_routine_run(
     doc_store: BackendDocumentStore,
     routine_id: str,
@@ -83,15 +87,18 @@ def enqueue_routine_run(
     if message is not None:
         metadata["message"] = message
     queued_at = utcnow_isoformat()
-    append_background_task(
-        doc_store,
-        {
-            "id": f"routine-run-{uuid.uuid4().hex}",
-            "content": f'Run the "{routine_id}" routine graph.',
-            "metadata": metadata,
-            "created_at": queued_at,
-        },
-    )
+    try:
+        append_background_task(
+            doc_store,
+            {
+                "id": f"routine-run-{uuid.uuid4().hex}",
+                "content": f'Run the "{routine_id}" routine graph.',
+                "metadata": metadata,
+                "created_at": queued_at,
+            },
+        )
+    except Exception as exc:
+        raise RoutineRunNotQueued(f"routine run was not queued: {exc}") from exc
     lifecycle = {
         "agent_id": routine_id,
         "session_id": session_id,

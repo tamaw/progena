@@ -54,3 +54,27 @@ class TestRoutineRunResume:
             interrupt_id="i1",
             request_id="r1",
         )
+
+    async def test_user_stop_during_approval_resume_emits_no_failure(self):
+        from src.progena.routines.controls import RoutineRunControlExit
+
+        state: ProgenaState = {
+            "messages": [],
+            "current_input_metadata": {
+                "kind": "routine_run",
+                "operation": "resume",
+                "routine_id": "test-routine",
+                "thread_id": "routine:test-routine:abc",
+                "answer": "yes",
+                "interrupt_id": "i1",
+                "request_id": "r1",
+            },
+        }
+        runtime = MagicMock()
+        runtime.context.state_manager = AsyncMock()
+        runtime.context.routine_resumer = AsyncMock(
+            side_effect=RoutineRunControlExit({"status": "stopped"})
+        )
+
+        assert await routine_run_node(state, runtime) == {}
+        runtime.context.state_manager.save_routine_run_event.assert_not_awaited()

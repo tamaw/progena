@@ -42,15 +42,19 @@ describe('routine lifecycle', () => {
     state = reducer(state, applyUiEvent({
       type: 'agent.routine.control.updated',
       payload: {
-        agent_id: 'routine',
-        session_id: 'shared',
-        thread_id: 'routine:routine:revision:shared',
-        request_id: 'attempt',
-        status: 'stopping',
-        timestamp: '2026-10-07T00:00:02Z',
+        request_id: 'stop-operation',
+        run: {
+          agent_id: 'routine',
+          session_id: 'shared',
+          thread_id: 'routine:routine:revision:shared',
+          request_id: 'attempt',
+          status: 'stopping',
+          timestamp: '2026-10-07T00:00:02Z',
+        },
       },
     }));
     expect(state.agents.runLifecycleByRequestId.attempt.status).toBe('stopping');
+    expect(state.agents.runLifecycleByRequestId['stop-operation']).toBeUndefined();
 
     state = reducer(state, event('completed', 'attempt', '2026-10-07T00:00:03Z', {
       thread_id: 'routine:routine:revision:shared',
@@ -60,12 +64,15 @@ describe('routine lifecycle', () => {
     state = reducer(state, applyUiEvent({
       type: 'agent.routine.control.updated',
       payload: {
-        agent_id: 'routine',
-        session_id: 'shared',
-        thread_id: 'routine:routine:revision:shared',
-        request_id: 'attempt',
-        status: 'cancelled',
-        timestamp: '2026-10-07T00:00:04Z',
+        request_id: 'cancel-operation',
+        run: {
+          agent_id: 'routine',
+          session_id: 'shared',
+          thread_id: 'routine:routine:revision:shared',
+          request_id: 'attempt',
+          status: 'cancelled',
+          timestamp: '2026-10-07T00:00:04Z',
+        },
       },
     }));
     expect(state.agents.runLifecycleByRequestId.attempt.status).toBe('completed');

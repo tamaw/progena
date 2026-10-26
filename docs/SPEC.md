@@ -147,7 +147,11 @@ The backend command is
 `POST /api/ui/agent-profiles/{agent_id}/run-control` with
 `{thread_id, request_id, action: "stop" | "cancel"}`. Its operation ID is separate
 from the targeted attempt ID. `agent.routine.control.updated` acknowledges the
-command; persisted lifecycle events carry execution outcomes. The runtime
+command with the operation ID as its `request_id` and the targeted attempt's
+lifecycle under `run`; persisted lifecycle events carry execution outcomes.
+A Resume claims the stopped checkpoint (`resuming`) when it is enqueued, so a
+second Resume is rejected; a resume that fails before starting releases the
+claim. The runtime
 implements the native task ownership boundary at
 `POST /v1/routine-runs/control`.
 

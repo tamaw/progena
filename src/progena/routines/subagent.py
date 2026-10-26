@@ -529,6 +529,8 @@ def create_routine_executor(
         except Exception as exc:
             if execution.get("thread_id"):
                 await active_controls.fail_execution(execution)
+            # A resume that failed before owning its checkpoint leaves it stopped.
+            await active_controls.release_resume_claim(execution)
             cast(Any, exc).routine_invocation = dict(execution)
             await persist_run_event(state_manager, {**execution, "error": str(exc)}, "failed")
             cast(Any, exc).routine_lifecycle_reported = True

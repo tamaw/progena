@@ -35,7 +35,11 @@ from src.backend.storage.documents import (
     BackendDocumentStore,
     store_database_url,
 )
-from src.backend.workflows.routine_runs import append_background_task, enqueue_routine_run
+from src.backend.workflows.routine_runs import (
+    RoutineRunNotQueued,
+    append_background_task,
+    enqueue_routine_run,
+)
 from src.progena.documents.catalog import load_schema
 from src.progena.llm.structured import validate_against_schema
 from src.progena.routines.controls import routine_run_control_key, routine_session_from_thread
@@ -341,6 +345,9 @@ def create_agent_profile_router(
     is_runtime_live: Callable[[], bool] | None = None,
 ) -> APIRouter:
     router = APIRouter()
+    # Run admission reads durable control state, claims a stopped checkpoint and
+    # enqueues as one step, so concurrent submissions cannot both resume it.
+    run_admission_lock = asyncio.Lock()
 
     def _require_runtime() -> None:
         # Runs and approval answers only enqueue a task for the runtime to claim.
@@ -688,6 +695,20 @@ def create_agent_profile_router(
         """
         request_id = _request_correlation_id(request, x_request_id)
         doc_store = get_document_store()
+        async with run_admission_lock:
+            lifecycle = await _admit_routine_run(agent_id, body, request_id, doc_store)
+        from src.backend.workflows.events import routine_events
+
+        if routine_events.claim_lifecycle(lifecycle):
+            broadcast_ui_event("agent.routine.run.enqueued", lifecycle, request_id=request_id)
+        return http_contracts.acknowledgement_response(request_id, ["agent.routine.run.enqueued"])
+
+    async def _admit_routine_run(
+        agent_id: str,
+        body: RunRoutineRequest,
+        request_id: str,
+        doc_store: BackendDocumentStore,
+    ) -> dict[str, Any]:
         control = (
             _routine_control_payload(doc_store, agent_id, body.session_id)
             if body.session_id
@@ -699,6 +720,7 @@ def create_agent_profile_router(
                 detail="Cancelled routine runs cannot be resumed or reused",
             )
 
+        resume_claim: dict[str, Any] | None = None
         if body.resume_thread_id is not None:
             thread_session = _routine_session_from_thread(agent_id, body.resume_thread_id)
             if thread_session is None:
@@ -715,6 +737,11 @@ def create_agent_profile_router(
                 raise HTTPException(
                     status_code=422,
                     detail="Resume uses retained checkpoint inputs and cannot seed a target or parameters",
+                )
+            if control is not None and control.get("status") == "resuming":
+                raise HTTPException(
+                    status_code=409,
+                    detail="A resume is already queued for this stopped routine run",
                 )
             if (
                 control is None
@@ -739,6 +766,15 @@ def create_agent_profile_router(
                     status_code=409,
                     detail="Routine checkpoint is unavailable for the stopped run",
                 )
+            # The runtime admits only this request ID for the claimed checkpoint
+            # and restores ``resumed_from`` if the resume fails before starting.
+            resume_claim = {
+                **control,
+                "status": "resuming",
+                "request_id": request_id,
+                "timestamp": utcnow_isoformat(),
+                "resumed_from": control,
+            }
         elif body.session_id and control is not None:
             if (
                 control.get("agent_id") == agent_id
@@ -752,7 +788,7 @@ def create_agent_profile_router(
             if (
                 control.get("agent_id") == agent_id
                 and control.get("session_id") == body.session_id
-                and control.get("status") in {"stopping", "cancelling"}
+                and control.get("status") in {"stopping", "cancelling", "resuming"}
             ):
                 raise HTTPException(status_code=409, detail="Routine control is still pending")
 
@@ -772,20 +808,29 @@ def create_agent_profile_router(
                     )
 
         _require_runtime()
-        lifecycle = enqueue_routine_run(
-            doc_store,
-            agent_id,
-            request_id=request_id,
-            session_id=body.session_id,
-            parameters=body.parameters,
-            target_node=body.target_node,
-            resume_thread_id=body.resume_thread_id,
-        )
-        from src.backend.workflows.events import routine_events
 
-        if routine_events.claim_lifecycle(lifecycle):
-            broadcast_ui_event("agent.routine.run.enqueued", lifecycle, request_id=request_id)
-        return http_contracts.acknowledgement_response(request_id, ["agent.routine.run.enqueued"])
+        def enqueue() -> dict[str, Any]:
+            return enqueue_routine_run(
+                doc_store,
+                agent_id,
+                request_id=request_id,
+                session_id=body.session_id,
+                parameters=body.parameters,
+                target_node=body.target_node,
+                resume_thread_id=body.resume_thread_id,
+            )
+
+        if resume_claim is None:
+            return enqueue()
+        control_key = routine_run_control_key(agent_id, resume_claim["session_id"])
+        doc_store.save_document(PROGENA_STATE_PREFIX, control_key, resume_claim)
+        try:
+            return enqueue()
+        except RoutineRunNotQueued:
+            # Only a failed queue append leaves no task to own the claim; any
+            # later failure leaves the queued resume to start or release it.
+            doc_store.save_document(PROGENA_STATE_PREFIX, control_key, resume_claim["resumed_from"])
+            raise
 
     @router.post(
         "/agent-profiles/{agent_id}/run-control",
@@ -835,9 +880,11 @@ def create_agent_profile_router(
                 status_code=502,
                 detail="Runtime returned invalid routine control state",
             )
+        # The envelope's request_id is the control operation; the targeted
+        # attempt keeps its own request_id inside ``run``.
         broadcast_ui_event(
             "agent.routine.control.updated",
-            lifecycle,
+            {"run": lifecycle},
             request_id=operation_id,
         )
         return http_contracts.acknowledgement_response(

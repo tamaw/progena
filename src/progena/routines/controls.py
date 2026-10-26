@@ -81,6 +81,7 @@ class _ActiveExecution:
     task: asyncio.Task[Any] | None = None
     intent: RoutineControlAction | None = None
     root_key: tuple[str, str, str] | None = None
+    cancel_requested: bool = False
 
 
 class RoutineRunController:
@@ -136,6 +137,58 @@ class RoutineRunController:
             **extra,
         }
 
+    @staticmethod
+    def _assert_control_admits(
+        control: dict[str, Any] | None,
+        scope: RoutineExecutionScope,
+        *,
+        resume_thread_id: str | None,
+        allow_paused: bool,
+    ) -> None:
+        """Reject an execution its logical run's durable control state forbids."""
+        if not control:
+            return
+        status = str(control.get("status") or "")
+        if status == "cancelled":
+            raise RoutineRunCancelled("routine run was cancelled and cannot be resumed")
+        if status == "stopped":
+            if resume_thread_id != scope.thread_id:
+                raise RoutineRunControlConflict(
+                    "stopped routine runs must resume their exact checkpoint thread"
+                )
+        elif status == "resuming":
+            # The backend claimed the stopped checkpoint for one queued request.
+            if resume_thread_id != scope.thread_id or control.get("request_id") != scope.request_id:
+                raise RoutineRunControlConflict(
+                    "stopped routine run is already claimed by another resume"
+                )
+        elif status == "paused":
+            if not allow_paused:
+                raise RoutineRunControlConflict(
+                    "paused routine run requires its pending continuation path"
+                )
+        elif status in _PENDING_STATUSES or status == "running":
+            raise RoutineRunControlConflict("routine run is already active")
+        elif status in _TERMINAL_STATUSES:
+            raise RoutineRunControlConflict("routine run is already terminal")
+
+    async def release_resume_claim(self, execution: dict[str, Any]) -> None:
+        """Return a claimed stopped checkpoint when its resume failed before starting."""
+        agent_id = str(execution.get("agent_id") or "")
+        session_id = str(execution.get("session_id") or "")
+        if not agent_id or not session_id:
+            return
+        async with self._lock:
+            control = await self._load_control(agent_id, session_id)
+            stopped = control.get("resumed_from") if control else None
+            if (
+                control is not None
+                and control.get("status") == "resuming"
+                and control.get("request_id") == execution.get("request_id")
+                and isinstance(stopped, dict)
+            ):
+                await self._save_control(stopped)
+
     async def _load_control(self, agent_id: str, session_id: str) -> dict[str, Any] | None:
         reader = getattr(self._state_manager, "get_routine_run_control", None)
         if not callable(reader):
@@ -178,25 +231,9 @@ class RoutineRunController:
             ):
                 raise RoutineRunControlConflict("routine run is already active")
             control = await self._load_control(scope.agent_id, scope.session_id)
-            if not control:
-                return
-            status = str(control.get("status") or "")
-            if status == "cancelled":
-                raise RoutineRunCancelled("routine run was cancelled and cannot be resumed")
-            if status == "stopped":
-                if resume_thread_id != scope.thread_id:
-                    raise RoutineRunControlConflict(
-                        "stopped routine runs must resume their exact checkpoint thread"
-                    )
-            elif status == "paused":
-                if not allow_paused:
-                    raise RoutineRunControlConflict(
-                        "paused routine run requires its pending continuation path"
-                    )
-            elif status in _PENDING_STATUSES or status == "running":
-                raise RoutineRunControlConflict("routine run is already active")
-            elif status in _TERMINAL_STATUSES:
-                raise RoutineRunControlConflict("routine run is already terminal")
+            self._assert_control_admits(
+                control, scope, resume_thread_id=resume_thread_id, allow_paused=allow_paused
+            )
 
     async def register_nested_execution(
         self,
@@ -243,24 +280,9 @@ class RoutineRunController:
             ):
                 raise RoutineRunControlConflict("routine run is already active")
             control = await self._load_control(scope.agent_id, scope.session_id)
-            if control:
-                status = str(control.get("status") or "")
-                if status == "cancelled":
-                    raise RoutineRunCancelled("routine run was cancelled and cannot be resumed")
-                if status == "stopped":
-                    if resume_thread_id != scope.thread_id:
-                        raise RoutineRunControlConflict(
-                            "stopped routine runs must resume their exact checkpoint thread"
-                        )
-                elif status == "paused":
-                    if not allow_paused:
-                        raise RoutineRunControlConflict(
-                            "paused routine run requires its pending continuation path"
-                        )
-                elif status in _PENDING_STATUSES or status == "running":
-                    raise RoutineRunControlConflict("routine run is already active")
-                elif status in _TERMINAL_STATUSES:
-                    raise RoutineRunControlConflict("routine run is already terminal")
+            self._assert_control_admits(
+                control, scope, resume_thread_id=resume_thread_id, allow_paused=allow_paused
+            )
             entry = _ActiveExecution(scope=scope, task=root.task, root_key=root_key)
             self._active[key] = entry
             self._active_threads[self._thread_key(scope)] = entry
@@ -298,24 +320,9 @@ class RoutineRunController:
                 if existing is not None or thread_entry is not None:
                     raise RoutineRunControlConflict("routine run is already active")
                 control = await self._load_control(scope.agent_id, scope.session_id)
-                if control:
-                    status = str(control.get("status") or "")
-                    if status == "cancelled":
-                        raise RoutineRunCancelled("routine run was cancelled and cannot be resumed")
-                    if status == "stopped":
-                        if resume_thread_id != scope.thread_id:
-                            raise RoutineRunControlConflict(
-                                "stopped routine runs must resume their exact checkpoint thread"
-                            )
-                    elif status == "paused":
-                        if not allow_paused:
-                            raise RoutineRunControlConflict(
-                                "paused routine run requires its pending continuation path"
-                            )
-                    elif status in _PENDING_STATUSES or status == "running":
-                        raise RoutineRunControlConflict("routine run is already active")
-                    elif status in _TERMINAL_STATUSES:
-                        raise RoutineRunControlConflict("routine run is already terminal")
+                self._assert_control_admits(
+                    control, scope, resume_thread_id=resume_thread_id, allow_paused=allow_paused
+                )
                 entry = _ActiveExecution(scope=scope, root_key=key)
                 self._active[key] = entry
                 self._active_threads[self._thread_key(scope)] = entry
@@ -473,6 +480,10 @@ class RoutineRunController:
                     await persist_run_event(self._state_manager, pending, status)
             # Task.cancel only requests delivery at the next await.  Returning
             # here is intentionally an acknowledgement, not a termination claim.
-            if not entry.task.cancel():
-                raise RoutineRunControlConflict("no matching active routine run")
+            # Cancel the shared root task once: a second cancel would interrupt
+            # its native teardown; later controls only update durable intent.
+            if not root.cancel_requested:
+                if not entry.task.cancel():
+                    raise RoutineRunControlConflict("no matching active routine run")
+                root.cancel_requested = True
             return payload

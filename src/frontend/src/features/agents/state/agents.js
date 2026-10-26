@@ -211,7 +211,8 @@ export const eventHandlers = {
     },
   ])),
   'agent.routine.control.updated': (state, payload) => {
-    applyRunLifecycle(state, payload);
+    // payload.request_id is the control operation; the attempt is payload.run.
+    if (payload?.run) applyRunLifecycle(state, payload.run);
   },
   'agent.routine.lifecycle.snapshot': (state, payload) => {
     for (const run of payload.runs || []) applyRunLifecycle(state, run);

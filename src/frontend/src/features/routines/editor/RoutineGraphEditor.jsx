@@ -138,8 +138,9 @@ function useRoutineRunEvents(agentId, parameters, inputSchema) {
   const runState = useSelector((state) => threadId ? selectAgentRunState(state, threadId) : undefined) || EMPTY_RUN_STATE;
   const lifecycleStatus = lifecycle?.status;
   const status = !requestId && !lifecycle ? 'idle'
-    : requestError ? 'settled'
-      : lifecycleStatus === 'stopped' ? 'stopped'
+    // A failed Resume submission keeps its stopped attempt selected.
+    : lifecycleStatus === 'stopped' ? 'stopped'
+      : requestError ? 'settled'
         : lifecycleStatus === 'cancelled' ? 'cancelled'
           : isRoutineRunTerminal(lifecycleStatus) ? 'settled'
             : lifecycleStatus === 'started' ? 'running'
@@ -272,7 +273,10 @@ function useRoutineRunEvents(agentId, parameters, inputSchema) {
           requestId: newRequestId,
         })).unwrap();
       } catch (error) {
-        if (watchRef.current === watch) setRequestError(error.message);
+        if (watchRef.current !== watch) return;
+        setRequestError(error.message);
+        // Nothing was enqueued, so keep the stopped attempt (and Resume) selected.
+        setRequestId((current) => (current === newRequestId ? target.requestId : current));
       }
     })();
   }, [agentId, agentsUrl, dispatch, lifecycle, lifecycleStatus]);
