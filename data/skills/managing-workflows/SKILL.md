@@ -22,6 +22,66 @@ Core rules:
 8. To delete a workflow, read it first, then call `delete` with its exact
    `/workflows/<workflow-id>.json` path.
 
+## Node names and canvas layout
+
+- Give every node a short, meaningful `title`, normally two to four words:
+  `Batch settings`, `Run batch`, `Format results`, or `Notify operator`.
+  Name its purpose rather than repeating its kind (`Routine`, `Format`) or
+  using numbered placeholders. Distinguish parallel branches with concise
+  qualifiers. Keep long instructions in templates, not titles.
+- Node titles are display text. Preserve graph node IDs, edge endpoints, port
+  names, routine references, and executable configuration when renaming or
+  arranging nodes. Routine nodes inside `/routines/` use `label`, not `title`;
+  see the managing-routines skill.
+- Persist a position for every graph node at
+  `ui.nodes[<node-id>].position: {"x": 0, "y": 0}`. These are canvas coordinates,
+  not fields on `graph.nodes[<node-id>]`. Increase `x` from sources to outcomes;
+  use separate `y` lanes for parallel branches and align their joins downstream.
+  Put independent triggers in separate lanes and supporting literal-data nodes
+  near their consumers. Minimize crossing edges and edges through other cards.
+- Space actual card rectangles, not just their origins. Start with roughly
+  480 horizontal units between ordinary columns and at least 80 units of clear
+  vertical space between cards, then increase spacing for tall/wide cards.
+  Port-heavy manual/routine nodes can be much taller than ordinary nodes:
+  the editor's automatic data-view height is `69 + (maxPorts - 1) * 28`,
+  or the node-kind minimum if larger; saved sizes can override it. A 29-port
+  node without a saved size needs 853 units of height, so a fixed 300-unit
+  lane spacing would overlap it.
+  Account for saved `ui.nodes[id].size.data` and `.size.settings` width/height
+  when present; don't shrink cards or hide ports to make the layout fit.
+- The canvas is two-dimensional: there is no persisted node `z` coordinate or
+  layering workaround for overlaps. `ui.viewport` uses `x`, `y`, and `zoom`
+  for pan/scale, not node placement. Preserve an existing viewport and unrelated
+  UI metadata unless reframing is requested; zooming out does not fix overlap.
+
+  Layout fragment (keys must be the graph's actual node IDs):
+
+  ```json
+  {
+    "ui": {
+      "nodes": {
+        "node_settings": {"position": {"x": 0, "y": 0}},
+        "node_batch": {"position": {"x": 480, "y": 0}},
+        "node_results": {"position": {"x": 960, "y": 0}},
+        "node_alert_title": {"position": {"x": 960, "y": 400}},
+        "node_notify": {"position": {"x": 1440, "y": 0}}
+      },
+      "viewport": {"x": 48, "y": 80, "zoom": 0.75}
+    }
+  }
+  ```
+
+  This is a compact-card example, not a universal spacing rule. Generate real
+  node IDs for new graphs; do not copy the illustrative IDs into a definition.
+- Include titles and complete positions in `structured_output` when creating
+  or reshaping a workflow. Preserve a readable existing layout during focused
+  edits; place new nodes without piling them onto the default position.
+- After saving, read the definition back: every graph node should have a useful
+  title and finite numeric `x`/`y` coordinates under `ui.nodes`, with separated
+  card bounds. If the editor is accessible, open it and check labels, ports,
+  branch lanes, joins, and overlaps at a readable zoom. Otherwise report that
+  the persisted layout was checked but visual appearance was not verified.
+
 Document events:
 - Every create/update/delete of a stored document is an event. An `event` node subscribes by `document_type` (a registered type id). Built-in ids: `kanban_card`, `kanban_task` (task body), `inbox_message`, `workflow`, `workflow_run`, `routine`, `policy`, `agent`, `skill`, `memory`, `instruction`, `preferences`, `schedule`, `mcp`, `plugins`, `marketplaces`, `knowledge`, `knowledge_page`, `knowledge_index`, `repo`, `acp_task` (below), `alert`, `kanban_board`, and `session` (below). Writing a workflow with an unknown id fails with the list of registered ids.
 - `knowledge_page` receives events for pages under `knowledge:<base-id>/`; `knowledge_index` receives system-maintained indexing-status updates at `knowledge_index`. The index type is read-only, while knowledge page content has the standard content-document ports.

@@ -60,6 +60,27 @@ For deletion, first read the routine, then call `delete` with its exact
 `/routines/<routine-id>.json` path. A successful deletion removes the routine
 from the list and prevents it from being run; `delete` only accepts files.
 
+
+## Node names and presentation
+
+- Give every node a short, meaningful `label`, normally two to four words:
+  `Validate inputs`, `Run match`, `Review Agent One`, or `Publish scores`.
+  Describe its purpose, not just its kind (`Code`, `Agent`) or ordinal (`Step 3`).
+  Distinguish peer branches without putting full prompts or implementation notes
+  in their labels; put those details in `description` or the node config.
+- Labels are display text, not identifiers. Preserve generated node `id` values,
+  `output_key`, expressions, templates, and edge references when renaming nodes.
+  Keep the routine's own `name` separate from its node labels.
+- Routine nodes may store numeric `x` and `y` fields directly on each node;
+  there is no node `z` field. The current chain editor lays out the flow from
+  topology, so saved coordinates do not control that view. Keep branch/join and
+  loop structure clear rather than changing executable edges to improve looks.
+  For free-positioned workflow canvases, use the managing-workflows layout rules.
+- On creation or structural edits, include useful labels in `structured_output`.
+  For a naming-only request, change labels without changing execution behavior.
+  Read the saved document back and check that labels survived; claim a visual
+  inspection only if you actually opened the editor.
+
 ## Node kinds
 
 The current schema supports: `prompt`, `eval`, `code`, `condition`, `switch`, `split`,
