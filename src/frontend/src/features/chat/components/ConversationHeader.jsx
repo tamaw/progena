@@ -6,6 +6,7 @@ import InlineFailure from '../../../components/InlineFailure';
 import { committedReasoningTokenCounts, committedReasoningTokenDisplay, formatStartedTime, liveReasoningTokenAdjustment } from '../models/conversationModel';
 import { STREAM_EVENT_CATEGORIES, countCategorizedEvents } from '../models/streamFilters';
 import { countReasoningTimelineEntries } from '../models/streamEventsModel';
+import { CHAT_STATUS } from '../models/chatStatus';
 
 export const LiveConversationHeader = memo(function LiveConversationHeader({
   liveTurnStore,
@@ -102,7 +103,7 @@ export const LiveConversationHeader = memo(function LiveConversationHeader({
         meta={isContentLoading || isEmptyConversationPane ? [] : [
           <span key="status" className={`chat-page-header__status chat-page-header__status--${chatStatus}`}>
             <span className="chat-page-header__status-dot" aria-hidden="true" />
-            {chatStatus}
+            {chatStatus === CHAT_STATUS.DELEGATING ? 'Delegating' : chatStatus}
           </span>,
           <span key="started" className="muted">Started {formatStartedTime(firstMessageTime) || 'not started'}</span>,
           <span key="tokens" className="muted">{new Intl.NumberFormat().format(totalTokenCount)} tokens</span>,

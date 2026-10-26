@@ -830,10 +830,15 @@ body,
   box-shadow: 0 0 8px rgba(63, 185, 80, 0.6);
 }
 
-/* Orange while the chat is processing/generating, matching the session cards. */
+/* Response activity dots match session cards: orange while generating, purple while delegating. */
 .app-shell__nav-dot--generating {
   background: #f97316;
   box-shadow: 0 0 8px rgba(249, 115, 22, 0.6);
+  animation: nav-dot-pulse 1.2s ease-in-out infinite;
+}
+.app-shell__nav-dot--delegating {
+  background: #8b5cf6;
+  box-shadow: 0 0 8px rgba(139, 92, 246, 0.6);
   animation: nav-dot-pulse 1.2s ease-in-out infinite;
 }
 .app-shell__nav-dot--complete {

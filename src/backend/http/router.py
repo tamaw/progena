@@ -54,7 +54,7 @@ router.include_router(
         get_thread_messages=lambda thread_id: (
             monitoring_state.get_state_reader().get_thread_messages(thread_id)
         ),
-        get_active_request_id=chat_routes._get_active_request_id_for_thread,
+        get_active_response=chat_routes._get_active_response_for_thread,
     )
 )
 router.include_router(

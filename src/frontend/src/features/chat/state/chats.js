@@ -1,9 +1,9 @@
 /**
  * Chats domain: the conversation roster, the active (selected) chat detail, and
- * the per-chat runtime indicators (unread / generating / errored) that drive the
- * conversation cards and the primary nav dot. Kept live by `chat.*` events on
- * /api/ui/stream; the runtime indicators are also set imperatively by the chat
- * stream hook so route changes do not clear them.
+ * the per-chat runtime indicators (unread / response activity / generating /
+ * errored) that drive conversation cards and the primary nav dot. Kept live by
+ * `chat.*` events on /api/ui/stream; generation indicators are also set
+ * imperatively by the chat stream hook so route changes do not clear them.
  */
 import { createSelector } from '@reduxjs/toolkit';
 import { createAcknowledgedThunk, requestAcknowledged } from '../../../store/async';
@@ -33,6 +33,7 @@ export const initialState = {
     unreadChatIds: [],
     generatingChatIds: [],
     erroredChatIds: [],
+    activityByThreadId: {},
     responseThreadsByRequestId: {},
     requestIdByThreadId: {},
   },
@@ -147,6 +148,76 @@ function responseThreadIdFor(payload, responseThreadsByRequestId) {
   return requestId ? responseThreadsByRequestId[requestId] || null : null;
 }
 
+function responseActivityFor(value) {
+  return value === 'delegating' || value === 'generating' ? value : null;
+}
+
+function clearResponseTrackingForThread(runtime, threadId) {
+  const requestId = runtime.requestIdByThreadId[threadId];
+  if (requestId && runtime.responseThreadsByRequestId[requestId] === threadId) {
+    delete runtime.responseThreadsByRequestId[requestId];
+  }
+  delete runtime.requestIdByThreadId[threadId];
+  delete runtime.activityByThreadId[threadId];
+}
+
+function beginResponseTracking(runtime, requestId, threadId) {
+  const previousRequestId = runtime.requestIdByThreadId[threadId];
+  if (previousRequestId && previousRequestId !== requestId) {
+    if (runtime.responseThreadsByRequestId[previousRequestId] === threadId) {
+      delete runtime.responseThreadsByRequestId[previousRequestId];
+    }
+    delete runtime.activityByThreadId[threadId];
+  }
+  runtime.responseThreadsByRequestId[requestId] = threadId;
+  runtime.requestIdByThreadId[threadId] = requestId;
+}
+
+function terminalResponseFor(payload, runtime) {
+  const requestId = responseRequestIdFor(payload);
+  const threadId = responseThreadIdFor(payload, runtime.responseThreadsByRequestId);
+  if (
+    !requestId
+    || !threadId
+    || runtime.requestIdByThreadId[threadId] !== requestId
+  ) {
+    return null;
+  }
+  return { requestId, threadId };
+}
+
+function clearTerminalResponseTracking(runtime, { requestId, threadId }) {
+  if (runtime.responseThreadsByRequestId[requestId] === threadId) {
+    delete runtime.responseThreadsByRequestId[requestId];
+  }
+  delete runtime.requestIdByThreadId[threadId];
+  delete runtime.activityByThreadId[threadId];
+}
+
+function hydrateResponseTracking(runtime, session) {
+  const threadId = threadIdFor(session);
+  const requestId = typeof session?.active_request_id === 'string' && session.active_request_id
+    ? session.active_request_id
+    : null;
+  if (!threadId) {
+    return;
+  }
+  if (!requestId) {
+    clearResponseTrackingForThread(runtime, threadId);
+    runtime.generatingChatIds = removeChatRuntimeId(runtime.generatingChatIds, threadId);
+    return;
+  }
+
+  beginResponseTracking(runtime, requestId, threadId);
+  runtime.generatingChatIds = addChatRuntimeId(runtime.generatingChatIds, threadId);
+  const activity = responseActivityFor(session?.activity);
+  if (activity) {
+    runtime.activityByThreadId[threadId] = activity;
+  } else {
+    delete runtime.activityByThreadId[threadId];
+  }
+}
+
 export const fetchChatSessions = createAcknowledgedThunk('uiData/fetchChatSessions', async ({ chatsUrl, includeArchived = true }, { requestId }) => {
   return requestAcknowledged(
     withQuery(chatsUrl, { include_archived: includeArchived ? 'true' : 'false' }),
@@ -247,75 +318,81 @@ export const eventHandlers = {
     const threadId = typeof payload?.thread_id === 'string' && payload.thread_id
       ? payload.thread_id
       : null;
-    if (requestId && threadId) {
-      state.chatRuntime.responseThreadsByRequestId[requestId] = threadId;
-      state.chatRuntime.requestIdByThreadId[threadId] = requestId;
+    if (!requestId || !threadId) {
+      return;
     }
-    if (threadId) {
-      state.chatRuntime.unreadChatIds = removeChatRuntimeId(state.chatRuntime.unreadChatIds, threadId);
-      state.chatRuntime.erroredChatIds = removeChatRuntimeId(state.chatRuntime.erroredChatIds, threadId);
-      // Tracked even for the thread this tab is currently viewing: a
-      // generation started elsewhere (another surface, another tab) still
-      // needs to be discoverable so a spectator stream can attach to it.
-      state.chatRuntime.generatingChatIds = addChatRuntimeId(
-        state.chatRuntime.generatingChatIds,
-        threadId,
-      );
+
+    beginResponseTracking(state.chatRuntime, requestId, threadId);
+    state.chatRuntime.unreadChatIds = removeChatRuntimeId(state.chatRuntime.unreadChatIds, threadId);
+    state.chatRuntime.erroredChatIds = removeChatRuntimeId(state.chatRuntime.erroredChatIds, threadId);
+    // Tracked even for the thread this tab is currently viewing: a generation
+    // started elsewhere still needs to be discoverable so a spectator stream
+    // can attach to it.
+    state.chatRuntime.generatingChatIds = addChatRuntimeId(
+      state.chatRuntime.generatingChatIds,
+      threadId,
+    );
+  },
+  'chat.response.activity': (state, payload) => {
+    const requestId = responseRequestIdFor(payload);
+    const threadId = typeof payload?.thread_id === 'string' && payload.thread_id
+      ? payload.thread_id
+      : null;
+    const activity = responseActivityFor(payload?.activity);
+    if (
+      !requestId
+      || !threadId
+      || !activity
+      || state.chatRuntime.requestIdByThreadId[threadId] !== requestId
+      || state.chatRuntime.activityByThreadId[threadId] === activity
+    ) {
+      return;
     }
+    state.chatRuntime.activityByThreadId[threadId] = activity;
   },
   'chat.response.completed': (state, payload) => {
-    const requestId = responseRequestIdFor(payload);
-    const threadId = responseThreadIdFor(payload, state.chatRuntime.responseThreadsByRequestId);
-    if (requestId) {
-      delete state.chatRuntime.responseThreadsByRequestId[requestId];
+    const response = terminalResponseFor(payload, state.chatRuntime);
+    if (!response) {
+      return;
     }
-    if (threadId && state.chatRuntime.requestIdByThreadId[threadId] === requestId) {
-      delete state.chatRuntime.requestIdByThreadId[threadId];
-    }
+    const { threadId } = response;
+    clearTerminalResponseTracking(state.chatRuntime, response);
     state.chatRuntime.generatingChatIds = removeChatRuntimeId(
       state.chatRuntime.generatingChatIds,
       threadId,
     );
-    if (threadId && state.chats.active.threadId !== threadId) {
+    if (state.chats.active.threadId !== threadId) {
       state.chatRuntime.unreadChatIds = addChatRuntimeId(state.chatRuntime.unreadChatIds, threadId);
     }
-    if (threadId) {
-      state.chatRuntime.erroredChatIds = removeChatRuntimeId(state.chatRuntime.erroredChatIds, threadId);
-    }
+    state.chatRuntime.erroredChatIds = removeChatRuntimeId(state.chatRuntime.erroredChatIds, threadId);
   },
   'chat.response.failed': (state, payload) => {
-    const requestId = responseRequestIdFor(payload);
-    const threadId = responseThreadIdFor(payload, state.chatRuntime.responseThreadsByRequestId);
-    const isActiveThread = Boolean(threadId) && state.chats.active.threadId === threadId;
-    if (requestId) {
-      delete state.chatRuntime.responseThreadsByRequestId[requestId];
+    const response = terminalResponseFor(payload, state.chatRuntime);
+    if (!response) {
+      return;
     }
-    if (threadId && state.chatRuntime.requestIdByThreadId[threadId] === requestId) {
-      delete state.chatRuntime.requestIdByThreadId[threadId];
-    }
+    const { threadId } = response;
+    const isActiveThread = state.chats.active.threadId === threadId;
+    clearTerminalResponseTracking(state.chatRuntime, response);
     state.chatRuntime.generatingChatIds = removeChatRuntimeId(
       state.chatRuntime.generatingChatIds,
       threadId,
     );
-    if (threadId) {
-      if (isActiveThread) {
-        state.chatRuntime.unreadChatIds = removeChatRuntimeId(state.chatRuntime.unreadChatIds, threadId);
-        state.chatRuntime.erroredChatIds = removeChatRuntimeId(state.chatRuntime.erroredChatIds, threadId);
-      } else {
-        state.chatRuntime.unreadChatIds = addChatRuntimeId(state.chatRuntime.unreadChatIds, threadId);
-        state.chatRuntime.erroredChatIds = addChatRuntimeId(state.chatRuntime.erroredChatIds, threadId);
-      }
+    if (isActiveThread) {
+      state.chatRuntime.unreadChatIds = removeChatRuntimeId(state.chatRuntime.unreadChatIds, threadId);
+      state.chatRuntime.erroredChatIds = removeChatRuntimeId(state.chatRuntime.erroredChatIds, threadId);
+    } else {
+      state.chatRuntime.unreadChatIds = addChatRuntimeId(state.chatRuntime.unreadChatIds, threadId);
+      state.chatRuntime.erroredChatIds = addChatRuntimeId(state.chatRuntime.erroredChatIds, threadId);
     }
   },
   'chat.response.cancelled': (state, payload) => {
-    const requestId = responseRequestIdFor(payload);
-    const threadId = responseThreadIdFor(payload, state.chatRuntime.responseThreadsByRequestId);
-    if (requestId) {
-      delete state.chatRuntime.responseThreadsByRequestId[requestId];
+    const response = terminalResponseFor(payload, state.chatRuntime);
+    if (!response) {
+      return;
     }
-    if (threadId && state.chatRuntime.requestIdByThreadId[threadId] === requestId) {
-      delete state.chatRuntime.requestIdByThreadId[threadId];
-    }
+    const { threadId } = response;
+    clearTerminalResponseTracking(state.chatRuntime, response);
     state.chatRuntime.generatingChatIds = removeChatRuntimeId(
       state.chatRuntime.generatingChatIds,
       threadId,
@@ -346,22 +423,7 @@ export const eventHandlers = {
     state.chats.loaded = true;
   },
   'chat.session.selected': (state, payload) => {
-    const sessionThreadId = payload.session?.thread_id || null;
-    const activeRequestId = typeof payload.session?.active_request_id === 'string'
-      ? payload.session.active_request_id
-      : null;
-    if (sessionThreadId) {
-      if (activeRequestId) {
-        state.chatRuntime.requestIdByThreadId[sessionThreadId] = activeRequestId;
-        state.chatRuntime.responseThreadsByRequestId[activeRequestId] = sessionThreadId;
-        state.chatRuntime.generatingChatIds = addChatRuntimeId(
-          state.chatRuntime.generatingChatIds,
-          sessionThreadId,
-        );
-      } else if (state.chatRuntime.requestIdByThreadId[sessionThreadId]) {
-        delete state.chatRuntime.requestIdByThreadId[sessionThreadId];
-      }
-    }
+    hydrateResponseTracking(state.chatRuntime, payload.session);
     if (state.chats.reconciliation.requestId === payload.request_id) {
       state.chats.reconciliation.detail = payload.session || null;
       state.chats.reconciliation.threadId = payload.session?.thread_id || null;
@@ -390,8 +452,17 @@ export const eventHandlers = {
     };
   },
   'chat.session.deleted': (state, payload) => {
-    deleteChatFromList(state.chats, payload.thread_id);
-    if (state.chats.active.threadId === payload.thread_id) {
+    const threadId = typeof payload?.thread_id === 'string' && payload.thread_id
+      ? payload.thread_id
+      : null;
+    deleteChatFromList(state.chats, threadId);
+    if (threadId) {
+      clearResponseTrackingForThread(state.chatRuntime, threadId);
+      state.chatRuntime.generatingChatIds = removeChatRuntimeId(state.chatRuntime.generatingChatIds, threadId);
+      state.chatRuntime.unreadChatIds = removeChatRuntimeId(state.chatRuntime.unreadChatIds, threadId);
+      state.chatRuntime.erroredChatIds = removeChatRuntimeId(state.chatRuntime.erroredChatIds, threadId);
+    }
+    if (state.chats.active.threadId === threadId) {
       state.chats.active = emptyActive();
     }
   },
@@ -445,23 +516,30 @@ export const selectChatSessions = createSelector(
 export const selectChatSessionsState = (state) => state.uiData.chats;
 export const selectUnreadChatIds = (state) => state.uiData.chatRuntime.unreadChatIds;
 export const selectGeneratingChatIds = (state) => state.uiData.chatRuntime.generatingChatIds;
+export const selectChatActivityByThreadId = (state) => state.uiData.chatRuntime.activityByThreadId;
+export const selectChatActivityForThread = (state, threadId) => (
+  threadId ? state.uiData.chatRuntime.activityByThreadId[threadId] || null : null
+);
 export const selectRequestIdByThreadId = (state) => state.uiData.chatRuntime.requestIdByThreadId;
 export const selectRequestIdForThread = (state, threadId) => (
   threadId ? state.uiData.chatRuntime.requestIdByThreadId[threadId] || null : null
 );
 export const selectErroredChatIds = (state) => state.uiData.chatRuntime.erroredChatIds;
 export const selectChatIndicators = createSelector(
-  [selectUnreadChatIds, selectGeneratingChatIds, selectErroredChatIds],
-  (unreadChatIds, generatingChatIds, erroredChatIds) => {
+  [selectUnreadChatIds, selectGeneratingChatIds, selectErroredChatIds, selectChatActivityByThreadId],
+  (unreadChatIds, generatingChatIds, erroredChatIds, activityByThreadId) => {
     const hasUnread = unreadChatIds.length > 0;
     const isGenerating = generatingChatIds.length > 0;
+    const isDelegating = Object.values(activityByThreadId).includes('delegating');
     const hasError = erroredChatIds.length > 0;
     return {
       hasUnread,
+      isDelegating,
       isGenerating,
       hasError,
       status: deriveChatStatus({
         unread: hasUnread,
+        delegating: isDelegating,
         generating: isGenerating,
         errored: hasError,
       }),

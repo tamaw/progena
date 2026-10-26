@@ -334,6 +334,285 @@ class TestAsyncResponseHandling:
             "runtime_stream_seq": 8,
         }
 
+    @pytest.mark.asyncio
+    async def test_response_activity_tracks_only_live_parent_delegations(self, monkeypatch):
+        """Parallel delegation transitions are correlated, terminal, and isolated."""
+
+        request_id = "delegation-activity-request"
+        response_id = "resp-delegation-activity"
+        thread_id = "thread-delegation-activity"
+
+        class _MockClient:
+            async def send_message_stream_events(self, *_args, **_kwargs):
+                yield {
+                    "type": "stream_event",
+                    "event_type": "tool_start",
+                    "content": "task",
+                    "metadata": {
+                        "tool_name": "task",
+                        "tool_call_id": "routine-alpha",
+                        "subagent_type": "routine-alpha",
+                    },
+                }
+                yield {
+                    "type": "stream_event",
+                    "event_type": "subagent_start",
+                    "content": "routine-alpha",
+                    "metadata": {
+                        "subagent_name": "routine-alpha",
+                        "tool_call_id": "routine-alpha",
+                    },
+                }
+                yield {
+                    "type": "stream_event",
+                    "event_type": "tool_start",
+                    "content": "task",
+                    "metadata": {
+                        "tool_name": "task",
+                        "tool_call_id": "routine-beta",
+                        "subagent_type": "routine-beta",
+                    },
+                }
+                yield {
+                    "type": "stream_event",
+                    "event_type": "subagent_start",
+                    "content": "routine-beta",
+                    "metadata": {
+                        "subagent_name": "routine-beta",
+                        "tool_call_id": "routine-beta",
+                    },
+                }
+                yield {
+                    "type": "stream_event",
+                    "event_type": "tool_error",
+                    "content": "task",
+                    "metadata": {"tool_name": "task", "tool_call_id": "routine-alpha"},
+                }
+                yield {
+                    "type": "stream_event",
+                    "event_type": "subagent_result",
+                    "content": "routine-alpha",
+                    "metadata": {
+                        "subagent_name": "routine-alpha",
+                        "tool_call_id": "routine-alpha",
+                        "success": False,
+                    },
+                }
+                assert chat_responses._active_response_for_thread(thread_id) == (
+                    request_id,
+                    "delegating",
+                )
+                yield {
+                    "type": "stream_event",
+                    "event_type": "tool_result",
+                    "content": "task",
+                    "metadata": {"tool_name": "task", "tool_call_id": "routine-beta"},
+                }
+                yield {
+                    "type": "stream_event",
+                    "event_type": "subagent_result",
+                    "content": "routine-beta",
+                    "metadata": {
+                        "subagent_name": "routine-beta",
+                        "tool_call_id": "routine-beta",
+                        "success": True,
+                    },
+                }
+                yield {
+                    "type": "stream_event",
+                    "event_type": "tool_start",
+                    "content": "a2a_send_async",
+                    "metadata": {"tool_name": "a2a_send_async", "tool_call_id": "background-a2a"},
+                }
+                yield {
+                    "type": "stream_event",
+                    "event_type": "async_subagent_start",
+                    "content": "background-worker",
+                    "metadata": {"task_id": "background-a2a", "status": "running"},
+                }
+                yield {
+                    "type": "stream_event",
+                    "event_type": "tool_result",
+                    "content": "a2a_send_async",
+                    "metadata": {"tool_name": "a2a_send_async", "tool_call_id": "background-a2a"},
+                }
+                yield {
+                    "type": "stream_event",
+                    "event_type": "tool_start",
+                    "content": "read_file",
+                    "metadata": {"tool_name": "read_file", "tool_call_id": "ordinary-tool"},
+                }
+                yield {
+                    "type": "stream_event",
+                    "event_type": "tool_result",
+                    "content": "read_file",
+                    "metadata": {"tool_name": "read_file", "tool_call_id": "ordinary-tool"},
+                }
+                yield {
+                    "type": "stream_event",
+                    "event_type": "tool_start",
+                    "content": "a2a_send",
+                    "metadata": {"tool_name": "a2a_send", "tool_call_id": "blocking-a2a"},
+                }
+                yield {
+                    "type": "stream_event",
+                    "event_type": "a2a_call_progress",
+                    "content": "Working",
+                    "metadata": {"tool_call_id": "blocking-a2a", "state": "working"},
+                }
+                yield {
+                    "type": "stream_event",
+                    "event_type": "a2a_call_progress",
+                    "content": "Done",
+                    "metadata": {"tool_call_id": "blocking-a2a", "state": "completed"},
+                }
+                yield {
+                    "type": "stream_event",
+                    "event_type": "tool_result",
+                    "content": "a2a_send",
+                    "metadata": {"tool_name": "a2a_send", "tool_call_id": "blocking-a2a"},
+                }
+                yield {
+                    "type": "stream_event",
+                    "event_type": "tool_start",
+                    "content": "acp_start",
+                    "metadata": {"tool_name": "acp_start", "tool_call_id": "background-acp"},
+                }
+                yield {
+                    "type": "stream_event",
+                    "event_type": "tool_result",
+                    "content": "acp_start",
+                    "metadata": {"tool_name": "acp_start", "tool_call_id": "background-acp"},
+                }
+                yield {
+                    "type": "stream_event",
+                    "event_type": "tool_start",
+                    "content": "acp_send",
+                    "metadata": {"tool_name": "acp_send", "tool_call_id": "blocking-acp"},
+                }
+                yield {
+                    "type": "stream_event",
+                    "event_type": "tool_result",
+                    "content": "acp_send",
+                    "metadata": {"tool_name": "acp_send", "tool_call_id": "blocking-acp"},
+                }
+                yield {
+                    "type": "stream_event",
+                    "event_type": "tool_start",
+                    "content": "acp_status",
+                    "metadata": {
+                        "tool_name": "acp_status",
+                        "tool_call_id": "waiting-acp-status",
+                        "args_preview": {"wait_seconds": 30},
+                    },
+                }
+                yield {
+                    "type": "stream_event",
+                    "event_type": "tool_result",
+                    "content": "acp_status",
+                    "metadata": {"tool_name": "acp_status", "tool_call_id": "waiting-acp-status"},
+                }
+                yield {"type": "stream_chunk", "content": "finished"}
+
+        event_start = len(events_stream._ui_event_replay)
+        monkeypatch.setattr(lifecycle_state, "client", _MockClient())
+        chat_responses._register_response_activity(request_id, thread_id)
+        other_request_id = "other-thread-response"
+        other_thread_id = "thread-unrelated"
+        chat_responses._register_response_activity(other_request_id, other_thread_id)
+        chat_responses._track_response_delegation_event(
+            other_request_id,
+            {
+                "event_type": "tool_start",
+                "content": "task",
+                "metadata": {"tool_name": "task", "tool_call_id": "other-routine"},
+            },
+        )
+        try:
+            await chat_responses._run_response_event_stream(
+                "delegate",
+                "progena-v1",
+                request_id,
+                response_id,
+                thread_id,
+            )
+
+            emitted = [
+                event
+                for event in events_stream._ui_event_replay[event_start:]
+                if event.payload.get("request_id") == request_id
+            ]
+            activity_events = [event for event in emitted if event.type == "chat.response.activity"]
+            assert [event.payload for event in activity_events] == [
+                {"request_id": request_id, "thread_id": thread_id, "activity": "delegating"},
+                {"request_id": request_id, "thread_id": thread_id, "activity": "generating"},
+                {"request_id": request_id, "thread_id": thread_id, "activity": "delegating"},
+                {"request_id": request_id, "thread_id": thread_id, "activity": "generating"},
+                {"request_id": request_id, "thread_id": thread_id, "activity": "delegating"},
+                {"request_id": request_id, "thread_id": thread_id, "activity": "generating"},
+                {"request_id": request_id, "thread_id": thread_id, "activity": "delegating"},
+                {"request_id": request_id, "thread_id": thread_id, "activity": "generating"},
+            ]
+            assert [event.type for event in emitted] == [
+                "chat.response.activity",
+                "chat.response.activity",
+                "chat.response.activity",
+                "chat.response.activity",
+                "chat.response.activity",
+                "chat.response.activity",
+                "chat.response.activity",
+                "chat.response.activity",
+                "chat.response.completed",
+            ]
+            assert chat_responses._active_response_for_thread(thread_id) is None
+            assert chat_responses._active_response_for_thread(other_thread_id) == (
+                other_request_id,
+                "delegating",
+            )
+        finally:
+            chat_responses._clear_response_activity(other_request_id)
+            chat_responses._clear_response_activity(request_id)
+
+    @pytest.mark.asyncio
+    async def test_response_activity_clears_on_failed_terminal(self, monkeypatch):
+        request_id = "failed-delegation-activity"
+        response_id = "resp-failed-delegation"
+        thread_id = "thread-failed-delegation"
+
+        class _FailingClient:
+            async def send_message_stream_events(self, *_args, **_kwargs):
+                yield {
+                    "type": "stream_event",
+                    "event_type": "tool_start",
+                    "content": "task",
+                    "metadata": {"tool_name": "task", "tool_call_id": "failed-routine"},
+                }
+                raise RuntimeError("delegate failed")
+
+        event_start = len(events_stream._ui_event_replay)
+        monkeypatch.setattr(lifecycle_state, "client", _FailingClient())
+        chat_responses._register_response_activity(request_id, thread_id)
+        try:
+            await chat_responses._run_response_event_stream(
+                "delegate",
+                "progena-v1",
+                request_id,
+                response_id,
+                thread_id,
+            )
+            emitted = [
+                event
+                for event in events_stream._ui_event_replay[event_start:]
+                if event.payload.get("request_id") == request_id
+            ]
+            assert [event.type for event in emitted] == [
+                "chat.response.activity",
+                "chat.response.failed",
+            ]
+            assert chat_responses._active_response_for_thread(thread_id) is None
+        finally:
+            chat_responses._clear_response_activity(request_id)
+
     def test_streaming_response_forwards_structured_stream_events(self, monkeypatch):
         """Dedicated SSE preserves structured events and their ordering relative to text."""
 
@@ -396,13 +675,15 @@ class TestAsyncResponseHandling:
                 response_lines = response_stream.iter_lines()
                 dedicated_frames = [_next_response_sse_frame(response_lines) for _ in range(4)]
                 assert list(response_lines) == []
-            canonical_frames = [_next_sse_frame(canonical_lines) for _ in range(2)]
+            canonical_frames = [_next_sse_frame(canonical_lines) for _ in range(3)]
 
         assert response.status_code == 202
         assert [event["type"] for _, event in canonical_frames] == [
             "chat.response.started",
+            "chat.response.activity",
             "chat.response.completed",
         ]
+        assert canonical_frames[1][1]["payload"]["activity"] == "delegating"
         assert [event_name for event_name, _, _ in dedicated_frames] == [
             "chat.response.event",
             "chat.response.event",

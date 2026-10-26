@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import reducer, { selectUnseenNavRoutes } from '@frontend/store/uiDataSlice';
 import { applyUiEvent } from '@frontend/store/uiEvents';
 import { clearChatErrored, clearChatGenerating, clearChatUnread, clearActiveChatSession, markChatErrored, markChatGenerating, markChatUnread, setErroredChatIds, setGeneratingChatIds, setUnreadChatIds } from '@frontend/features/chat/state/actions';
-import { deleteChatSession, requestChatSessionDetail, requestChatSessionReconciliation, updateChatSessionMetadata, selectActiveChatSessionState, selectChatIndicators, selectChatReconciliationState, selectErroredChatIds, selectGeneratingChatIds, selectRequestIdByThreadId, selectRequestIdForThread, selectChatSessions, selectUnreadChatIds } from '@frontend/features/chat/state/chats';
+import { deleteChatSession, requestChatSessionDetail, requestChatSessionReconciliation, updateChatSessionMetadata, selectActiveChatSessionState, selectChatActivityByThreadId, selectChatActivityForThread, selectChatIndicators, selectChatReconciliationState, selectErroredChatIds, selectGeneratingChatIds, selectRequestIdByThreadId, selectRequestIdForThread, selectChatSessions, selectUnreadChatIds } from '@frontend/features/chat/state/chats';
 import { kanbanSnapshotReceived } from '@frontend/features/tasks/actions';
 import { requestAgentDetail, selectActiveAgentProfile, selectRoutineLatestRunStatusByAgentId, selectAgentProfiles } from '@frontend/features/agents/state/agents';
 import { selectKanbanBoard, selectTaskActivityEntry, selectTaskContentEntry } from '@frontend/features/tasks/state';
@@ -238,6 +238,156 @@ describe('applyUiEvent reducer', () => {
     expect(selectErroredChatIds({ uiData: s })).toEqual(['thread-background']);
   });
 
+  it('tracks delegation activity separately through generating and terminal transitions', () => {
+    let s = reducer(undefined, applyUiEvent({
+      type: 'chat.response.started',
+      payload: { request_id: 'REQ_ACTIVITY', thread_id: 'thread-delegating' },
+    }));
+    const generatingBeforeActivity = selectGeneratingChatIds({ uiData: s });
+
+    s = reducer(s, applyUiEvent({
+      type: 'chat.response.activity',
+      payload: {
+        request_id: 'REQ_ACTIVITY',
+        thread_id: 'thread-delegating',
+        activity: 'delegating',
+      },
+    }));
+    expect(selectGeneratingChatIds({ uiData: s })).toEqual(generatingBeforeActivity);
+    expect(selectChatActivityForThread({ uiData: s }, 'thread-delegating')).toBe('delegating');
+    expect(selectChatIndicators({ uiData: s })).toMatchObject({
+      isDelegating: true,
+      isGenerating: true,
+      status: CHAT_STATUS.DELEGATING,
+    });
+
+    s = reducer(s, applyUiEvent({
+      type: 'chat.response.activity',
+      payload: {
+        request_id: 'REQ_ACTIVITY',
+        thread_id: 'thread-delegating',
+        activity: 'generating',
+      },
+    }));
+    expect(selectChatActivityForThread({ uiData: s }, 'thread-delegating')).toBe('generating');
+    expect(selectChatIndicators({ uiData: s })).toMatchObject({
+      isDelegating: false,
+      isGenerating: true,
+      status: CHAT_STATUS.GENERATING,
+    });
+
+    s = reducer(s, applyUiEvent({
+      type: 'chat.response.completed',
+      payload: { request_id: 'REQ_ACTIVITY', thread_id: 'thread-delegating' },
+    }));
+    expect(selectChatActivityByThreadId({ uiData: s })).toEqual({});
+    expect(selectGeneratingChatIds({ uiData: s })).toEqual([]);
+    expect(selectRequestIdForThread({ uiData: s }, 'thread-delegating')).toBeNull();
+  });
+
+  it.each(['chat.response.failed', 'chat.response.cancelled'])(
+    '%s clears the current response activity',
+    (terminalType) => {
+      let s = reducer(undefined, applyUiEvent({
+        type: 'chat.response.started',
+        payload: { request_id: 'REQ_TERMINAL', thread_id: 'thread-terminal' },
+      }));
+      s = reducer(s, applyUiEvent({
+        type: 'chat.response.activity',
+        payload: {
+          request_id: 'REQ_TERMINAL',
+          thread_id: 'thread-terminal',
+          activity: 'delegating',
+        },
+      }));
+      s = reducer(s, applyUiEvent({
+        type: terminalType,
+        payload: { request_id: 'REQ_TERMINAL', thread_id: 'thread-terminal' },
+      }));
+
+      expect(selectChatActivityForThread({ uiData: s }, 'thread-terminal')).toBeNull();
+      expect(selectGeneratingChatIds({ uiData: s })).toEqual([]);
+    },
+  );
+
+  it('keeps parallel thread activity when stale activity and terminals arrive for a superseded request', () => {
+    let s = reducer(undefined, applyUiEvent({
+      type: 'chat.response.started',
+      payload: { request_id: 'REQ_OLD', thread_id: 'thread-a' },
+    }));
+    s = reducer(s, applyUiEvent({
+      type: 'chat.response.activity',
+      payload: {
+        request_id: 'REQ_OLD',
+        thread_id: 'thread-a',
+        activity: 'delegating',
+      },
+    }));
+    s = reducer(s, applyUiEvent({
+      type: 'chat.response.started',
+      payload: { request_id: 'REQ_OTHER', thread_id: 'thread-b' },
+    }));
+    s = reducer(s, applyUiEvent({
+      type: 'chat.response.activity',
+      payload: {
+        request_id: 'REQ_OTHER',
+        thread_id: 'thread-b',
+        activity: 'delegating',
+      },
+    }));
+    s = reducer(s, applyUiEvent({
+      type: 'chat.response.started',
+      payload: { request_id: 'REQ_NEW', thread_id: 'thread-a' },
+    }));
+
+    s = reducer(s, applyUiEvent({
+      type: 'chat.response.activity',
+      payload: {
+        request_id: 'REQ_OLD',
+        thread_id: 'thread-a',
+        activity: 'delegating',
+      },
+    }));
+    expect(selectChatActivityByThreadId({ uiData: s })).toEqual({ 'thread-b': 'delegating' });
+
+    s = reducer(s, applyUiEvent({
+      type: 'chat.response.activity',
+      payload: {
+        request_id: 'REQ_NEW',
+        thread_id: 'thread-a',
+        activity: 'delegating',
+      },
+    }));
+    expect(selectChatActivityByThreadId({ uiData: s })).toEqual({
+      'thread-a': 'delegating',
+      'thread-b': 'delegating',
+    });
+
+    s = reducer(s, applyUiEvent({
+      type: 'chat.response.completed',
+      payload: { request_id: 'REQ_OLD', thread_id: 'thread-a' },
+    }));
+    expect(selectRequestIdForThread({ uiData: s }, 'thread-a')).toBe('REQ_NEW');
+    expect(selectChatActivityByThreadId({ uiData: s })).toEqual({
+      'thread-a': 'delegating',
+      'thread-b': 'delegating',
+    });
+    expect(selectGeneratingChatIds({ uiData: s })).toEqual(['thread-a', 'thread-b']);
+
+    s = reducer(s, applyUiEvent({
+      type: 'chat.response.completed',
+      payload: { request_id: 'REQ_OTHER', thread_id: 'thread-b' },
+    }));
+    expect(selectChatActivityByThreadId({ uiData: s })).toEqual({ 'thread-a': 'delegating' });
+
+    s = reducer(s, applyUiEvent({
+      type: 'chat.response.cancelled',
+      payload: { request_id: 'REQ_NEW', thread_id: 'thread-a' },
+    }));
+    expect(selectChatActivityByThreadId({ uiData: s })).toEqual({});
+    expect(selectGeneratingChatIds({ uiData: s })).toEqual([]);
+  });
+
   it('tracks generatingChatIds and requestIdByThreadId for the currently-viewed thread too', () => {
     // A generation another surface (quick chat, another tab) started into the
     // thread this tab already has selected as active must still be
@@ -266,27 +416,34 @@ describe('applyUiEvent reducer', () => {
     expect(selectRequestIdForThread({ uiData: s }, 'thread-active')).toBeNull();
   });
 
-  it('seeds requestIdByThreadId from active_request_id on chat.session.selected (late-join discovery)', () => {
+  it('hydrates selected-session delegation activity for reload recovery', () => {
     let s = reducer(undefined, applyUiEvent({
       type: 'chat.session.selected',
       payload: {
         request_id: 'REQ1',
-        session: { thread_id: 'thread-late', active_request_id: 'REQ_INFLIGHT' },
+        session: {
+          thread_id: 'thread-late',
+          active_request_id: 'REQ_INFLIGHT',
+          activity: 'delegating',
+        },
       },
     }));
     expect(selectRequestIdForThread({ uiData: s }, 'thread-late')).toBe('REQ_INFLIGHT');
     expect(selectGeneratingChatIds({ uiData: s })).toEqual(['thread-late']);
+    expect(selectChatActivityForThread({ uiData: s }, 'thread-late')).toBe('delegating');
 
-    // A later selection with no active_request_id (generation already
-    // finished by the time this fetch resolved) clears the stale mapping.
+    // A later selection with no active request means the response settled
+    // before this browser reloaded, so it must clear all live activity.
     s = reducer(s, applyUiEvent({
       type: 'chat.session.selected',
       payload: {
         request_id: 'REQ2',
-        session: { thread_id: 'thread-late', active_request_id: null },
+        session: { thread_id: 'thread-late', active_request_id: null, activity: null },
       },
     }));
     expect(selectRequestIdForThread({ uiData: s }, 'thread-late')).toBeNull();
+    expect(selectGeneratingChatIds({ uiData: s })).toEqual([]);
+    expect(selectChatActivityForThread({ uiData: s }, 'thread-late')).toBeNull();
   });
 
   it('clearActiveChatSession resets the active backend selection', () => {
@@ -717,9 +874,35 @@ describe('chat indicators (nav dot)', () => {
 
     expect(selectChatIndicators({ uiData: s })).toEqual({
       hasUnread: unread.length > 0,
+      isDelegating: false,
       isGenerating: generating.length > 0,
       hasError: errored.length > 0,
       status,
+    });
+  });
+
+  it('gives delegation priority over unrelated generating and terminal indicators', () => {
+    let s = reducer(undefined, setUnreadChatIds(['complete']));
+    s = reducer(s, setGeneratingChatIds(['generating']));
+    s = reducer(s, setErroredChatIds(['failed']));
+    s = reducer(s, applyUiEvent({
+      type: 'chat.response.started',
+      payload: { request_id: 'REQ_DELEGATING', thread_id: 'delegating' },
+    }));
+    s = reducer(s, applyUiEvent({
+      type: 'chat.response.activity',
+      payload: {
+        request_id: 'REQ_DELEGATING',
+        thread_id: 'delegating',
+        activity: 'delegating',
+      },
+    }));
+
+    expect(selectChatIndicators({ uiData: s })).toMatchObject({
+      isDelegating: true,
+      isGenerating: true,
+      hasError: true,
+      status: CHAT_STATUS.DELEGATING,
     });
   });
 

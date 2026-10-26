@@ -9,8 +9,8 @@ import logging
 import time
 import uuid
 from collections.abc import AsyncGenerator, AsyncIterator, Coroutine
-from dataclasses import dataclass
-from typing import Any, cast
+from dataclasses import dataclass, field
+from typing import Any, Literal, cast
 
 from fastapi import APIRouter, Header, HTTPException, Query, Request, Response
 from fastapi.sse import EventSourceResponse, format_sse_event
@@ -73,20 +73,160 @@ class ResponseStreamState:
     expires_at: float | None
 
 
+@dataclass
+class ResponseActivityState:
+    """Live presentation state for one non-terminal browser response."""
+
+    request_id: str
+    thread_id: str
+    activity: Literal["delegating", "generating"] = "generating"
+    active_delegation_ids: set[str] = field(default_factory=set)
+
+
 _response_streams: dict[str, ResponseStreamState] = {}
 
 
-def _active_request_id_for_thread(thread_id: str) -> str | None:
-    """Return the request_id of an in-flight (non-terminal) generation for ``thread_id``, if any.
+_response_activities: dict[str, ResponseActivityState] = {}
 
-    Lets a viewer that mounts or switches onto a thread after its
-    ``chat.response.started`` broadcast already went out (a fresh page load, or
-    a second tab) discover the in-flight request and join its delta stream.
+
+_WAITING_DELEGATION_TOOL_NAMES = frozenset({"task", "a2a_send", "acp_send"})
+
+_WAITING_STATUS_TOOL_NAMES = frozenset({"a2a_status", "acp_status"})
+
+
+_TERMINAL_A2A_STATES = frozenset(
+    {
+        "completed",
+        "failed",
+        "rejected",
+        "cancelled",
+        "canceled",
+        "input-required",
+        "input_required",
+    }
+)
+
+
+def _register_response_activity(request_id: str, thread_id: str) -> None:
+    """Record a response as generating before it starts waiting on delegated work.
+
+    ``chat.response.started`` owns the initial generating state. The activity
+    event is reserved for changes between generating and delegating.
     """
-    for state in _response_streams.values():
-        if state.thread_id == thread_id and not state.terminal_reached:
-            return state.request_id
+    _response_activities[request_id] = ResponseActivityState(
+        request_id=request_id,
+        thread_id=thread_id,
+    )
+
+
+def _clear_response_activity(request_id: str) -> None:
+    """Forget a terminal response so reloads cannot report a stale activity."""
+    _response_activities.pop(request_id, None)
+
+
+def _active_response_for_thread(
+    thread_id: str,
+) -> tuple[str, Literal["delegating", "generating"]] | None:
+    """Return the newest live response for one thread from the activity registry."""
+    for state in reversed(_response_activities.values()):
+        if state.thread_id == thread_id:
+            return state.request_id, state.activity
     return None
+
+
+def _set_response_delegation_active(
+    request_id: str,
+    delegation_id: str,
+    *,
+    active: bool,
+) -> None:
+    """Apply one known delegated-work lifecycle edge to a response.
+
+    The set makes concurrent task calls deterministic: only the first active
+    delegation changes to ``delegating``, and only the final terminal
+    delegation restores ``generating``.
+    """
+    state = _response_activities.get(request_id)
+    if state is None:
+        return
+
+    was_delegating = bool(state.active_delegation_ids)
+    if active:
+        state.active_delegation_ids.add(delegation_id)
+    else:
+        state.active_delegation_ids.discard(delegation_id)
+    is_delegating = bool(state.active_delegation_ids)
+    if is_delegating == was_delegating:
+        return
+
+    state.activity = "delegating" if is_delegating else "generating"
+    events_stream.broadcast_ui_event(
+        "chat.response.activity",
+        {"thread_id": state.thread_id, "activity": state.activity},
+        scope="chat",
+        session_id=state.thread_id,
+        request_id=request_id,
+    )
+
+
+def _status_call_waits(metadata: dict[str, Any]) -> bool:
+    """Return whether an A2A/ACP status call is explicitly long-polling."""
+    args_preview = metadata.get("args_preview")
+    if not isinstance(args_preview, dict):
+        return False
+    wait_seconds = args_preview.get("wait_seconds")
+    if isinstance(wait_seconds, bool) or not isinstance(wait_seconds, (int, float, str)):
+        return False
+    try:
+        return float(wait_seconds) > 0
+    except (TypeError, ValueError):
+        return False
+
+
+def _track_response_delegation_event(request_id: str, item: dict[str, Any]) -> None:
+    """Track only runtime delegation lifecycles that make the parent wait.
+
+    Runtime structured stream events provide the matching ``tool_call_id`` for
+    parent ``task``, blocking A2A/ACP send, and explicit long-poll status calls,
+    plus their custom subagent/A2A counterparts. Explicitly asynchronous launch
+    events are intentionally not tracked: their parent continues after launch.
+    """
+    event_type = item.get("event_type")
+    metadata = item.get("metadata")
+    if not isinstance(event_type, str) or not isinstance(metadata, dict):
+        return
+    raw_delegation_id = metadata.get("tool_call_id")
+    if not isinstance(raw_delegation_id, str):
+        return
+    delegation_id = raw_delegation_id.strip()
+    if not delegation_id:
+        return
+
+    if event_type == "subagent_start":
+        _set_response_delegation_active(request_id, delegation_id, active=True)
+        return
+    if event_type == "subagent_result":
+        _set_response_delegation_active(request_id, delegation_id, active=False)
+        return
+    if event_type == "a2a_call_progress":
+        state = metadata.get("state")
+        is_terminal = isinstance(state, str) and state.strip().lower() in _TERMINAL_A2A_STATES
+        _set_response_delegation_active(request_id, delegation_id, active=not is_terminal)
+        return
+
+    tool_name = metadata.get("tool_name")
+    if not isinstance(tool_name, str):
+        content = item.get("content")
+        tool_name = content if isinstance(content, str) else ""
+    if event_type == "tool_start":
+        if tool_name in _WAITING_DELEGATION_TOOL_NAMES or (
+            tool_name in _WAITING_STATUS_TOOL_NAMES and _status_call_waits(metadata)
+        ):
+            _set_response_delegation_active(request_id, delegation_id, active=True)
+    elif event_type in {"tool_result", "tool_error"} and (
+        tool_name in _WAITING_DELEGATION_TOOL_NAMES or tool_name in _WAITING_STATUS_TOOL_NAMES
+    ):
+        _set_response_delegation_active(request_id, delegation_id, active=False)
 
 
 def _response_stream_frame_id(request_id: str, seq: int) -> str:
@@ -337,6 +477,7 @@ async def responses(
 
     response_id = f"resp-{uuid.uuid4().hex[:8]}"
     _active_response_streams[request_id] = asyncio.Event()
+    _register_response_activity(request_id, thread_id)
     if body.stream:
         _ensure_response_stream(request_id, response_id, thread_id, body.model)
     _response_request_ids[response_id] = request_id
@@ -427,6 +568,7 @@ async def cancel_response(
     if cancel_event is None:
         # A generation accepted by another backend instance has no local runner
         # to emit the target terminal event after a successful remote cancel.
+        _clear_response_activity(target_request_id)
         events_stream.broadcast_ui_event(
             "chat.response.cancelled",
             cancellation_payload,
@@ -584,6 +726,7 @@ async def _run_response_event_stream(
         _mark_response_stream_terminal(response_stream_state)
 
     def emit_cancelled() -> None:
+        _clear_response_activity(request_id)
         events_stream.broadcast_ui_event(
             "chat.response.cancelled",
             response_payload(cancelled=True),
@@ -625,6 +768,7 @@ async def _run_response_event_stream(
                             ),
                         )
                 elif item_type == "stream_event":
+                    _track_response_delegation_event(request_id, item)
                     # Structured events may carry rich image blocks. Keep them
                     # intact rather than reducing them to response text.
                     payload: dict[str, Any] = response_payload(
@@ -670,6 +814,7 @@ async def _run_response_event_stream(
                 request_id=request_id,
             )
 
+        _clear_response_activity(request_id)
         events_stream.broadcast_ui_event(
             "chat.response.completed",
             response_payload(completed=True),
@@ -683,6 +828,7 @@ async def _run_response_event_stream(
         if cancel_event.is_set():
             emit_cancelled()
         else:
+            _clear_response_activity(request_id)
             events_stream.broadcast_ui_event(
                 "chat.response.failed",
                 response_payload(error="Response generation timed out"),
@@ -696,6 +842,7 @@ async def _run_response_event_stream(
         if cancel_event.is_set():
             emit_cancelled()
         else:
+            _clear_response_activity(request_id)
             events_stream.broadcast_ui_event(
                 "chat.response.failed",
                 response_payload(error=str(error)),
@@ -705,6 +852,7 @@ async def _run_response_event_stream(
             )
             mark_response_stream_terminal()
     finally:
+        _clear_response_activity(request_id)
         if _active_response_streams.get(request_id) is cancel_event:
             _active_response_streams.pop(request_id, None)
         if _response_request_ids.get(response_id) == request_id:

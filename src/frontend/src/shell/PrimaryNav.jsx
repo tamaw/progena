@@ -86,6 +86,7 @@ export function PrimaryNav({ isCollapsed, isOpen, onClose, onToggleCollapse, onO
                 // Chat's global dot is the highest-priority status across all
                 // conversations; other nav dots retain their own activity rules.
                 const chatStatus = item.dot ? chatIndicators.status : null;
+                const isDelegating = chatStatus === CHAT_STATUS.DELEGATING;
                 const isGenerating = chatStatus === CHAT_STATUS.GENERATING;
                 const showChatDot = item.dot && chatStatus !== CHAT_STATUS.IDLE;
                 const showDot = showChatDot
@@ -103,7 +104,7 @@ export function PrimaryNav({ isCollapsed, isOpen, onClose, onToggleCollapse, onO
                     <span className="app-shell__nav-label">{item.label}</span>
                     {showDot ? (
                       <span
-                        className={`app-shell__nav-dot${isGenerating ? ' app-shell__nav-dot--generating' : ''}${chatStatus === CHAT_STATUS.COMPLETE ? ' app-shell__nav-dot--complete' : ''}${chatStatus === CHAT_STATUS.ERROR ? ' app-shell__nav-dot--error' : ''}`}
+                        className={`app-shell__nav-dot${isDelegating ? ' app-shell__nav-dot--delegating' : ''}${isGenerating ? ' app-shell__nav-dot--generating' : ''}${chatStatus === CHAT_STATUS.COMPLETE ? ' app-shell__nav-dot--complete' : ''}${chatStatus === CHAT_STATUS.ERROR ? ' app-shell__nav-dot--error' : ''}`}
                         aria-hidden="true"
                       />
                     ) : null}
