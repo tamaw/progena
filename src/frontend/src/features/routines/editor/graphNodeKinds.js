@@ -1,8 +1,9 @@
 
 
 // A routine graph is compiled straight into a runnable LangGraph agent: node
-// position on screen carries no meaning (there's no "x"/"y" in the schema),
-// and every node MUST be reachable from a single `entry` point to ever run.
+// position on screen carries no meaning (the schema's optional per-node
+// "x"/"y" are ignored here and by execution), and every node MUST be
+// reachable from a single `entry` point to ever run.
 // A free-drag canvas invites disconnected islands and arbitrary spatial
 // layout that says nothing about execution order, so this renders a rigid,
 // top-down chain instead: a fixed Start cap, one card per step, a fixed End
