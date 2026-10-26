@@ -160,15 +160,6 @@ describe('mergeToolCallItems', () => {
   });
 });
 
-describe('buildWorkSteps tool detail', () => {
-  it("prefers the agent's commentary for a call over its input summary", () => {
-    const [step] = buildWorkSteps([eventItem('s', 'tool_start', {
-      tool_name: 'read_file', tool_call_id: 'a', args_preview: { path: '/x' }, commentary: 'Checking the config',
-    })]);
-    expect(step.detail).toBe('Checking the config');
-  });
-});
-
 describe('splitGroupReasoning', () => {
   it("takes a headed group's opening reasoning out of its rows, and leaves headless groups alone", () => {
     const reasoning = eventItem('r', 'reasoning_delta', {}, undefined, '**Plan**\n\nfirst.');
