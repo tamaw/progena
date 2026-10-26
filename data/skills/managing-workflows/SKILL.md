@@ -47,12 +47,16 @@ Core rules:
   or the node-kind minimum if larger; saved sizes can override it. A 29-port
   node without a saved size needs 853 units of height, so a fixed 300-unit
   lane spacing would overlap it.
+  Unpack nodes are the exception: their height follows the fields they show,
+  `69 + shownFields * 28` (at least 120), not every property of the unpacked object.
   Account for saved `ui.nodes[id].size.data` and `.size.settings` width/height
   when present; don't shrink cards or hide ports to make the layout fit.
 - The canvas is two-dimensional: there is no persisted node `z` coordinate or
   layering workaround for overlaps. `ui.viewport` uses `x`, `y`, and `zoom`
   for pan/scale, not node placement. Preserve an existing viewport and unrelated
   UI metadata unless reframing is requested; zooming out does not fix overlap.
+  Saving in the workflow editor rewrites each `ui.nodes[id]` to only `position`,
+  `size`, and unpack `show_all_fields`, so don't store other per-node keys there.
 
   Layout fragment (keys must be the graph's actual node IDs):
 
@@ -75,7 +79,8 @@ Core rules:
   node IDs for new graphs; do not copy the illustrative IDs into a definition.
 - Include titles and complete positions in `structured_output` when creating
   or reshaping a workflow. Preserve a readable existing layout during focused
-  edits; place new nodes without piling them onto the default position.
+  edits. A node without a saved position renders at `{"x": 456, "y": 160}`, so
+  give every new node its own position instead of piling them up there.
 - After saving, read the definition back: every graph node should have a useful
   title and finite numeric `x`/`y` coordinates under `ui.nodes`, with separated
   card bounds. If the editor is accessible, open it and check labels, ports,
@@ -166,12 +171,14 @@ Recommended flow for a new workflow:
 4. One `structured_output` call with `schema_file: definition.workflow.schema.v1.json` (not an inline `json_schema`), describing every node and edge — this produces the complete, schema-valid definition in one shot.
 5. `write_file /workflows/<workflow-id>.json`
 6. If the save is rejected, the error names the problem (unknown port, missing edge, bad type ref, unknown routine id, ...). Fix it — `edit_file` for a local fix, another `structured_output` for rewiring — and write again. A rejection is feedback, not a blocker: do not stop or report until the workflow saves, unless the same error repeats with no fix left to try. Templates the workflow references must save first (see maintaining-instructions).
+7. Read the saved file back and check titles and layout as described under "Node names and canvas layout".
 
 Recommended flow for editing an existing workflow:
 1. `ls /workflows/`
 2. `read_file /workflows/<workflow-id>.json`
 3. If only one field changes, update it with `edit_file` directly.
 4. If several nodes or edge wiring change together, read the complete definition schema and use `structured_output` to produce the whole updated definition, then persist only that workflow file.
+5. Read the saved file back; when nodes were added, moved, or renamed, check titles and layout as described under "Node names and canvas layout".
 
 Validation reminders:
 - at least one trigger (`event`, `cron`, or `manual`) is required; trigger nodes cannot have inbound edges
