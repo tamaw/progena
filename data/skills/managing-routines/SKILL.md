@@ -292,3 +292,21 @@ Select one existing execution policy with `policy_id` (default `default`).
 Read `/policies/` and use the managing-policies skill to create or change policies.
 Graph-level inline `settings` are not part of the contract. Node-specific
 settings override policy defaults; graph concurrency and step limits still apply.
+
+## Stop, resume and cancel
+
+The routine toolbar can stop an active graph and resume its confirmed stopped
+checkpoint. Resume retains the exact graph revision, policy and inputs; it is
+not a fresh run against the latest document. Human approvals still need their
+explicit answer. Do not silently replace a stopped run with a new invocation.
+
+An unfinished node may replay on resume, including a nested routine call.
+Keep external effects replay-safe: stopping the graph does not undo writes or
+confirm that remote A2A jobs, subprocesses or background threads have stopped.
+Stopping a child unwinds its owning parent execution too.
+
+After five seconds still stopping, the toolbar offers Cancel run. Cancellation
+permanently forbids continuation of that logical session, while preserving its
+checkpoints/history. Do not bypass it by changing a graph revision, stepping a
+node or answering an approval; a separately authorized fresh run has a new
+session. The parameter modal's Cancel only closes the modal.

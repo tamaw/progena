@@ -34,4 +34,46 @@ describe('routine lifecycle', () => {
     expect(state.agents.lastRunNotification.error).toBe('bad input');
     expect(state.agents.runStateByThreadId).toEqual({});
   });
+
+  it('keeps a control acknowledgement pending until a terminal execution event and rejects contradictory late terminals', () => {
+    let state = reducer(undefined, event('started', 'attempt', '2026-10-07T00:00:01Z', {
+      thread_id: 'routine:routine:revision:shared',
+    }));
+    state = reducer(state, applyUiEvent({
+      type: 'agent.routine.control.updated',
+      payload: {
+        agent_id: 'routine',
+        session_id: 'shared',
+        thread_id: 'routine:routine:revision:shared',
+        request_id: 'attempt',
+        status: 'stopping',
+        timestamp: '2026-10-07T00:00:02Z',
+      },
+    }));
+    expect(state.agents.runLifecycleByRequestId.attempt.status).toBe('stopping');
+
+    state = reducer(state, event('completed', 'attempt', '2026-10-07T00:00:03Z', {
+      thread_id: 'routine:routine:revision:shared',
+    }));
+    expect(state.agents.runLifecycleByRequestId.attempt.status).toBe('completed');
+
+    state = reducer(state, applyUiEvent({
+      type: 'agent.routine.control.updated',
+      payload: {
+        agent_id: 'routine',
+        session_id: 'shared',
+        thread_id: 'routine:routine:revision:shared',
+        request_id: 'attempt',
+        status: 'cancelled',
+        timestamp: '2026-10-07T00:00:04Z',
+      },
+    }));
+    expect(state.agents.runLifecycleByRequestId.attempt.status).toBe('completed');
+  });
+
+  it('retains stopped as the terminal state when a late completion races the stop event', () => {
+    let state = reducer(undefined, event('stopped', 'attempt', '2026-10-07T00:00:02Z'));
+    state = reducer(state, event('completed', 'attempt', '2026-10-07T00:00:03Z'));
+    expect(state.agents.runLifecycleByRequestId.attempt.status).toBe('stopped');
+  });
 });

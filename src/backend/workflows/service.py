@@ -1101,8 +1101,8 @@ class WorkflowExecutor:
                 and active_run.status == "paused"
                 and active_run.pending_routine is not None
             ):
-                # A routine still running continues to wait; one paused at a
-                # human node continues only once the routine is answered.
+                # A routine still running resumes the workflow wait; human
+                # pauses and explicit stops require their own continuation.
                 if active_run.pending_routine.get("status") == "running":
                     resumed = active_run.model_copy(
                         update={"status": "running", "updated_at": utcnow_isoformat()}
@@ -1266,18 +1266,25 @@ class WorkflowExecutor:
             )
 
     async def handle_routine_run_event(self, event: Mapping[str, Any]) -> None:
-        """Advance a run waiting on a routine node from one lifecycle event.
+        """Advance a workflow waiting on a routine lifecycle event.
 
-        ``started`` after a human pause sets the run running again,
-        ``paused`` pauses it until the routine is answered, ``failed`` fails
-        it, and ``completed`` stores the routine output as the node's output
-        and continues the run (unless the user paused it meanwhile).
+        ``started`` after a human pause or explicit stop sets the run running;
+        ``paused`` and ``stopped`` hold the routine node; ``cancelled`` and
+        ``failed`` terminate it. ``completed`` records output and continues
+        unless the workflow itself remains paused.
         """
 
         session_id = str(event.get("session_id") or "")
         match = _ROUTINE_SESSION_RE.match(session_id)
         status = event.get("status")
-        if match is None or status not in {"started", "paused", "completed", "failed"}:
+        if match is None or status not in {
+            "started",
+            "paused",
+            "stopped",
+            "completed",
+            "failed",
+            "cancelled",
+        }:
             return
         store = self._store_getter()
         run = get_workflow_run(store, match.group(1))
@@ -1294,24 +1301,40 @@ class WorkflowExecutor:
             now = utcnow_isoformat()
             thread_id = str(event.get("thread_id") or pending.get("thread_id") or "")
             node_id = str(pending["node_id"])
-            if status == "failed":
-                error = event.get("error") or "routine failed"
+            if pending.get("status") == "stopped" and (
+                status != "started" or event.get("thread_id") != pending.get("thread_id")
+            ):
+                # An explicit native resume must restart the retained
+                # checkpoint before any later lifecycle event can settle it.
+                return
+            if status in {"failed", "cancelled"}:
+                if status == "cancelled":
+                    error = event.get("error") or "routine run was cancelled"
+                    failure = f"routine '{pending['routine_id']}' cancelled: {error}"
+                else:
+                    error = event.get("error") or "routine failed"
+                    failure = f"routine '{pending['routine_id']}' failed: {error}"
                 self._mark_failed(
                     store,
                     run.model_copy(update={"pending_routine": None}),
-                    error=f"routine '{pending['routine_id']}' failed: {error}",
+                    error=failure,
                 )
                 failed = True
-            elif status in {"started", "paused"}:
-                paused = status == "paused"
+            elif status in {"started", "paused", "stopped"}:
+                paused = status in {"paused", "stopped"}
+                pending_status = "running" if status == "started" else status
                 updated = run.model_copy(
                     update={
                         "status": "paused"
                         if paused
-                        else ("running" if pending.get("status") == "paused" else run.status),
+                        else (
+                            "running"
+                            if pending.get("status") in {"paused", "stopped"}
+                            else run.status
+                        ),
                         "pending_routine": {
                             **pending,
-                            "status": "paused" if paused else "running",
+                            "status": pending_status,
                             "thread_id": thread_id,
                         },
                         "updated_at": now,
@@ -1319,7 +1342,7 @@ class WorkflowExecutor:
                 )
                 save_workflow_run(store, updated)
                 self._emit_event("workflow.run.updated", updated.model_dump(mode="json"))
-                if paused:
+                if status == "paused":
                     self._alert_routine_pause(store, updated, event)
             else:
                 definition = get_workflow_definition(store, workflow_id)

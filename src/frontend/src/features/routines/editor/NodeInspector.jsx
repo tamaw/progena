@@ -34,7 +34,7 @@ function RoutingFooter({ id, kind, routerEdge }) {
 // is deliberately separate from the chain so large prompts never resize it.
 export function NodeInspector({ node, routerEdge, guardEdge, onClose, onDismiss, isNew, style, panelRef }) {
   const editContext = useContext(GraphEditContext);
-  const { updateNode, deleteNode, updateLoopGuard, runMeta, runData, staleNodeIds, edges: graphEdges, nodes: graphNodes, readOnly, runStatus, startRun, hasInteractiveSession, resetInteractiveSession, loopMembership, loopIterations, setLoopIteration, pendingApprovals, answerApproval, draftScope } = editContext;
+  const { updateNode, deleteNode, updateLoopGuard, runMeta, runData, staleNodeIds, edges: graphEdges, nodes: graphNodes, readOnly, runStatus, isRunInProgress, startRun, hasInteractiveSession, resetInteractiveSession, loopMembership, loopIterations, setLoopIteration, pendingApprovals, answerApproval, draftScope } = editContext;
   const [isEditingLabel, setIsEditingLabel] = useState(false);
   const [confirmRunOpen, setConfirmRunOpen] = useState(false);
   const labelKey = entityDraftKey('routine-label', JSON.stringify([draftScope, node?.id]));
@@ -187,7 +187,7 @@ export function NodeInspector({ node, routerEdge, guardEdge, onClose, onDismiss,
       </header>
       <MissingFieldsContext.Provider value={missingSet}>
       <div className="routine-node-inspector__body">
-        {approval ? <HumanApprovalControls key={approval.interrupt_id} approval={approval} onAnswer={answerApproval} disabled={runStatus === 'discovering' || runStatus === 'running'} /> : null}
+        {approval ? <HumanApprovalControls key={approval.interrupt_id} approval={approval} onAnswer={answerApproval} disabled={isRunInProgress || runStatus === 'stopped' || runStatus === 'cancelled'} /> : null}
         {missingCount ? (
           <p className="routine-node-inspector__required-hint" role="status">
             {missingCount === 1
@@ -303,7 +303,7 @@ export function NodeInspector({ node, routerEdge, guardEdge, onClose, onDismiss,
               type="button"
               className="routine-node-inspector__run-to-here"
               title="Execute the routine from wherever this editor session last stopped, through this step"
-              disabled={runStatus === 'discovering' || runStatus === 'running'}
+              disabled={isRunInProgress || runStatus === 'stopped'}
               onClick={() => {
                 if (nodeRequiresRunConfirmation(node.id, graphNodes, graphEdges, runMeta)) {
                   setConfirmRunOpen(true);
@@ -319,7 +319,7 @@ export function NodeInspector({ node, routerEdge, guardEdge, onClose, onDismiss,
                 type="button"
                 className="routine-node-inspector__reset-run"
                 title={'Abandon this editor session\u2019s progress -- the next "Run to here" click starts over from the beginning instead of resuming'}
-                disabled={runStatus === 'discovering' || runStatus === 'running'}
+                disabled={isRunInProgress || runStatus === 'stopped'}
                 onClick={resetInteractiveSession}
               >
                 Reset run

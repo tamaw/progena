@@ -194,6 +194,14 @@ class StateManager:
     async def save_routine_run_event(self, payload: dict[str, Any]) -> None:
         return await self.routines.save_routine_run_event(payload)
 
+    async def get_routine_run_control(
+        self, agent_id: str, session_id: str
+    ) -> dict[str, Any] | None:
+        return await self.routines.get_routine_run_control(agent_id, session_id)
+
+    async def save_routine_run_control(self, payload: dict[str, Any]) -> None:
+        await self.routines.save_routine_run_control(payload)
+
     async def get_routine_approval_decision(self, thread_id: str, interrupt_id: str) -> Any:
         return await self.routines.get_routine_approval_decision(thread_id, interrupt_id)
 

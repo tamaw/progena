@@ -58,6 +58,7 @@ def enqueue_routine_run(
     parameters: dict[str, Any] | None = None,
     message: str | None = None,
     target_node: str | None = None,
+    resume_thread_id: str | None = None,
 ) -> dict[str, Any]:
     """Queue one routine run and record its ``enqueued`` lifecycle event.
 
@@ -73,6 +74,8 @@ def enqueue_routine_run(
         "session_id": session_id,
         "request_id": request_id,
     }
+    if resume_thread_id:
+        metadata["resume_thread_id"] = resume_thread_id
     if target_node:
         metadata["target_node"] = target_node
     if parameters:
@@ -96,6 +99,8 @@ def enqueue_routine_run(
         "status": "enqueued",
         "timestamp": queued_at,
     }
+    if resume_thread_id:
+        lifecycle["thread_id"] = resume_thread_id
     doc_store.save_document(
         PROGENA_STATE_PREFIX, f"{RUN_EVENT_PREFIX}{request_id}:enqueued", lifecycle
     )

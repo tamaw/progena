@@ -827,7 +827,7 @@ describe('agent reducers', () => {
   });
 
   it('selectRoutineLatestRunStatusByAgentId maps latest run lifecycle to display status', () => {
-    let s = reducer(undefined, agentsSnapshot(['routine-a', 'routine-b', 'routine-c']));
+    let s = reducer(undefined, agentsSnapshot(['routine-a', 'routine-b', 'routine-c', 'routine-d', 'routine-e']));
     s = reducer(s, applyUiEvent({
       type: 'agent.routine.run.started',
       payload: { agent_id: 'routine-a', request_id: 'r1', timestamp: '2026-10-07T00:00:01Z' },
@@ -840,23 +840,33 @@ describe('agent reducers', () => {
       type: 'agent.routine.run.paused',
       payload: { agent_id: 'routine-c', request_id: 'r3', timestamp: '2026-10-07T00:00:03Z' },
     }));
+    s = reducer(s, applyUiEvent({
+      type: 'agent.routine.run.stopped',
+      payload: { agent_id: 'routine-d', request_id: 'r4', timestamp: '2026-10-07T00:00:03Z' },
+    }));
+    s = reducer(s, applyUiEvent({
+      type: 'agent.routine.run.cancelled',
+      payload: { agent_id: 'routine-e', request_id: 'r5', timestamp: '2026-10-07T00:00:03Z' },
+    }));
     // A failed event that arrives late but is older than the started run
     // does not override it: the newest timestamp wins, not the last event.
     s = reducer(s, applyUiEvent({
       type: 'agent.routine.run.failed',
-      payload: { agent_id: 'routine-a', request_id: 'r4', timestamp: '2026-10-07T00:00:00Z' },
+      payload: { agent_id: 'routine-a', request_id: 'r6', timestamp: '2026-10-07T00:00:00Z' },
     }));
     expect(selectRoutineLatestRunStatusByAgentId({ uiData: s })['routine-a']).toBe('Running');
     // A newer completed run leaves the routine in no filter but All.
     s = reducer(s, applyUiEvent({
       type: 'agent.routine.run.completed',
-      payload: { agent_id: 'routine-a', request_id: 'r5', timestamp: '2026-10-07T00:00:04Z' },
+      payload: { agent_id: 'routine-a', request_id: 'r7', timestamp: '2026-10-07T00:00:04Z' },
     }));
 
     const statuses = selectRoutineLatestRunStatusByAgentId({ uiData: s });
     expect(statuses['routine-a']).toBeNull();
     expect(statuses['routine-b']).toBe('Failed');
     expect(statuses['routine-c']).toBe('Paused');
+    expect(statuses['routine-d']).toBe('Stopped');
+    expect(statuses['routine-e']).toBe('Cancelled');
   });
 });
 

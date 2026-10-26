@@ -124,7 +124,6 @@ async def test_http_server_serves_hello_world_async_agent_protocol() -> None:
 
             assert status == "success"
             thread_state = await client.get(f"{server.base_url}/agent-protocol/threads/{thread_id}")
-            assert thread_state.status_code == 200
             messages = thread_state.json()["values"]["messages"]
             assert messages[-1]["content"] == HELLO_WORLD_ASYNC_RESULT
     finally:

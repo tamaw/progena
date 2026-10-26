@@ -13,14 +13,15 @@ from __future__ import annotations
 
 import asyncio
 import uuid
-from collections.abc import Callable
-from typing import Any
+from collections.abc import Awaitable, Callable
+from typing import Any, Literal, cast
 
 import yaml
 from fastapi import APIRouter, Header, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict, Field
 
 import src.backend.http.contracts as http_contracts
+import src.backend.lifecycle.state as lifecycle_state
 from src.backend.agents.store import (
     AgentStore,
     a2a_profiles_from_registry,
@@ -28,6 +29,7 @@ from src.backend.agents.store import (
 )
 from src.backend.http.requests import BroadcastUiEvent
 from src.backend.http.requests import request_correlation_id as _request_correlation_id
+from src.backend.integrations.runtime import RuntimeControlError
 from src.backend.storage.documents import (
     PROGENA_STATE_PREFIX,
     BackendDocumentStore,
@@ -36,6 +38,7 @@ from src.backend.storage.documents import (
 from src.backend.workflows.routine_runs import append_background_task, enqueue_routine_run
 from src.progena.documents.catalog import load_schema
 from src.progena.llm.structured import validate_against_schema
+from src.progena.routines.controls import routine_run_control_key, routine_session_from_thread
 from src.progena.routines.graph import (
     ROUTINE_GRAPH_VERSION,
     validate_routine_graph,
@@ -137,18 +140,60 @@ class AgentGraphUpdateRequest(BaseModel):
 
 
 class RunRoutineRequest(BaseModel):
-    # Both optional: omitted -> a normal, complete, one-shot run (what the
-    # plain Run button sends). Present -> a step-to-node run against a
-    # stable per-editor-session thread (see routine_run_node/subagent.py's
-    # _run) -- session_id must stay identical across repeated calls within
-    # one revision to resume rather than restart.
+    # `session_id` is retained across attempts in one logical routine run.
+    # `target_node` is only for a fresh editor step-to-node execution.
     session_id: str | None = None
     target_node: str | None = None
-    # Values for the routine's declared input_schema.properties, e.g.
-    # {"customer_id": "abc123"} -- validated against input_schema server-side
-    # before the run is enqueued (see run_routine). Threaded through task
-    # metadata -> routine_run_node -> the seed node's top-level invoke keys.
+    # A resume identifies the exact native checkpoint that was confirmed
+    # stopped. Its inputs and graph revision come from that checkpoint, never
+    # from the live editor graph.
+    resume_thread_id: str | None = None
+    # Values for the routine's declared input_schema.properties, validated
+    # before a fresh run is enqueued.
     parameters: dict[str, Any] | None = None
+
+
+class RoutineRunControlRequest(BaseModel):
+    """Target one native routine execution attempt for stop or cancellation."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    thread_id: str = Field(min_length=1)
+    request_id: str = Field(min_length=1)
+    action: Literal["stop", "cancel"]
+
+
+def _routine_session_from_thread(agent_id: str, thread_id: str) -> str | None:
+    """Return the session only for an exact routine thread owned by ``agent_id``."""
+
+    try:
+        return routine_session_from_thread(thread_id, agent_id)
+    except ValueError:
+        return None
+
+
+def _routine_control_payload(
+    doc_store: BackendDocumentStore, agent_id: str, session_id: str
+) -> dict[str, Any] | None:
+    """Read a durable runtime-owned control state without inferring outcomes."""
+
+    document = doc_store.get_document(
+        PROGENA_STATE_PREFIX, routine_run_control_key(agent_id, session_id)
+    )
+    return document.payload if document is not None and isinstance(document.payload, dict) else None
+
+
+def _is_cancelled_routine_session(
+    control: dict[str, Any] | None, agent_id: str, session_id: str
+) -> bool:
+    """Only an explicitly persisted terminal cancellation blocks this logical run."""
+
+    return bool(
+        control
+        and control.get("agent_id") == agent_id
+        and control.get("session_id") == session_id
+        and control.get("status") == "cancelled"
+    )
 
 
 class RoutineSubscriptionRequest(BaseModel):
@@ -642,34 +687,162 @@ def create_agent_profile_router(
         to run it, unlike the old client-side mock this replaces.
         """
         request_id = _request_correlation_id(request, x_request_id)
-        store = _require_store()
-        agent = await asyncio.to_thread(store.get_agent, agent_id)
-        if agent is None or (agent.get("kind") == "routine" and agent.get("graph") is None):
-            raise HTTPException(status_code=404, detail="Agent not found")
+        doc_store = get_document_store()
+        control = (
+            _routine_control_payload(doc_store, agent_id, body.session_id)
+            if body.session_id
+            else None
+        )
+        if body.session_id and _is_cancelled_routine_session(control, agent_id, body.session_id):
+            raise HTTPException(
+                status_code=409,
+                detail="Cancelled routine runs cannot be resumed or reused",
+            )
 
-        input_schema = (agent.get("graph") or {}).get("input_schema")
-        if input_schema:
-            validation_error = validate_against_schema(body.parameters or {}, input_schema)
-            if validation_error is not None:
+        if body.resume_thread_id is not None:
+            thread_session = _routine_session_from_thread(agent_id, body.resume_thread_id)
+            if thread_session is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail="resume_thread_id does not belong to this routine",
+                )
+            if not body.session_id or body.session_id != thread_session:
+                raise HTTPException(
+                    status_code=409,
+                    detail="resume_thread_id must use its original session_id",
+                )
+            if body.target_node is not None or body.parameters is not None:
                 raise HTTPException(
                     status_code=422,
-                    detail=f"Run parameters failed validation: {validation_error}",
+                    detail="Resume uses retained checkpoint inputs and cannot seed a target or parameters",
                 )
+            if (
+                control is None
+                or control.get("agent_id") != agent_id
+                or control.get("session_id") != body.session_id
+                or control.get("thread_id") != body.resume_thread_id
+                or control.get("status") != "stopped"
+                or not isinstance(control.get("request_id"), str)
+                or not control["request_id"]
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail="Routine checkpoint is not confirmed stopped for this exact run",
+                )
+            if control["request_id"] == request_id:
+                raise HTTPException(status_code=409, detail="Resume requires a new request ID")
+            from src.backend.workflows.events import read_run_state
+
+            checkpoint = await read_run_state(agent_id, body.resume_thread_id, doc_store)
+            if not checkpoint.get("found"):
+                raise HTTPException(
+                    status_code=409,
+                    detail="Routine checkpoint is unavailable for the stopped run",
+                )
+        elif body.session_id and control is not None:
+            if (
+                control.get("agent_id") == agent_id
+                and control.get("session_id") == body.session_id
+                and control.get("status") == "stopped"
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail="Stopped routine runs must supply resume_thread_id",
+                )
+            if (
+                control.get("agent_id") == agent_id
+                and control.get("session_id") == body.session_id
+                and control.get("status") in {"stopping", "cancelling"}
+            ):
+                raise HTTPException(status_code=409, detail="Routine control is still pending")
+
+        if body.resume_thread_id is None:
+            store = _require_store()
+            agent = await asyncio.to_thread(store.get_agent, agent_id)
+            if agent is None or (agent.get("kind") == "routine" and agent.get("graph") is None):
+                raise HTTPException(status_code=404, detail="Agent not found")
+
+            input_schema = (agent.get("graph") or {}).get("input_schema")
+            if input_schema:
+                validation_error = validate_against_schema(body.parameters or {}, input_schema)
+                if validation_error is not None:
+                    raise HTTPException(
+                        status_code=422,
+                        detail=f"Run parameters failed validation: {validation_error}",
+                    )
 
         _require_runtime()
         lifecycle = enqueue_routine_run(
-            get_document_store(),
+            doc_store,
             agent_id,
             request_id=request_id,
             session_id=body.session_id,
             parameters=body.parameters,
             target_node=body.target_node,
+            resume_thread_id=body.resume_thread_id,
         )
         from src.backend.workflows.events import routine_events
 
         if routine_events.claim_lifecycle(lifecycle):
             broadcast_ui_event("agent.routine.run.enqueued", lifecycle, request_id=request_id)
         return http_contracts.acknowledgement_response(request_id, ["agent.routine.run.enqueued"])
+
+    @router.post(
+        "/agent-profiles/{agent_id}/run-control",
+        status_code=202,
+        response_model=http_contracts.UiRequestAcknowledgement,
+    )
+    async def control_routine_run(
+        agent_id: str,
+        body: RoutineRunControlRequest,
+        request: Request,
+        x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
+    ):
+        """Forward an exact routine attempt control request without inventing completion."""
+        operation_id = _request_correlation_id(request, x_request_id)
+        _require_runtime()
+        runtime_client = lifecycle_state.client
+        controller = getattr(runtime_client, "control_routine_run", None)
+        if runtime_client is None or not callable(controller):
+            raise HTTPException(status_code=503, detail="Routine run control is unavailable")
+        try:
+            control = cast(Callable[..., Awaitable[dict[str, Any]]], controller)
+            lifecycle = await control(
+                agent_id,
+                thread_id=body.thread_id,
+                request_id=body.request_id,
+                action=body.action,
+            )
+        except RuntimeControlError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(
+                status_code=502,
+                detail=f"Routine run control failed: {exc}",
+            ) from exc
+        if (
+            not isinstance(lifecycle, dict)
+            or lifecycle.get("agent_id") != agent_id
+            or lifecycle.get("thread_id") != body.thread_id
+            or lifecycle.get("request_id") != body.request_id
+            or lifecycle.get("status") not in {"stopping", "cancelling", "stopped", "cancelled"}
+            or not isinstance(lifecycle.get("session_id"), str)
+            or not lifecycle["session_id"]
+            or not isinstance(lifecycle.get("timestamp"), str)
+            or not lifecycle["timestamp"]
+        ):
+            raise HTTPException(
+                status_code=502,
+                detail="Runtime returned invalid routine control state",
+            )
+        broadcast_ui_event(
+            "agent.routine.control.updated",
+            lifecycle,
+            request_id=operation_id,
+        )
+        return http_contracts.acknowledgement_response(
+            operation_id, ["agent.routine.control.updated"]
+        )
 
     @router.post(
         "/agent-profiles/{agent_id}/approval",
@@ -686,14 +859,19 @@ def create_agent_profile_router(
         from src.progena.routines.approvals import approval_lock, decision_key, validate_answer
         from src.progena.routines.events import RUN_EVENT_PREFIX
 
-        if (
-            not body.thread_id.startswith(f"routine:{agent_id}:")
-            or len(body.thread_id.split(":")) != 4
-        ):
+        session_id = _routine_session_from_thread(agent_id, body.thread_id)
+        if session_id is None:
             raise HTTPException(status_code=400, detail="thread_id does not belong to this routine")
-        _require_runtime()
         request_id = _request_correlation_id(request, x_request_id)
         doc_store = get_document_store()
+        if _is_cancelled_routine_session(
+            _routine_control_payload(doc_store, agent_id, session_id), agent_id, session_id
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="Cancelled routine runs cannot be resumed or reused",
+            )
+        _require_runtime()
         try:
             async with approval_lock(body.thread_id, store_database_url(doc_store)):
                 state = await read_run_state(agent_id, body.thread_id, doc_store)
@@ -708,7 +886,7 @@ def create_agent_profile_router(
                     "operation": "resume",
                     "routine_id": agent_id,
                     "thread_id": body.thread_id,
-                    "session_id": body.thread_id.split(":")[-1],
+                    "session_id": session_id,
                     "interrupt_id": approval["interrupt_id"],
                     "answer": body.answer,
                     "request_id": request_id,

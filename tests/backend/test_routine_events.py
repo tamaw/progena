@@ -120,3 +120,35 @@ async def test_targeted_detail_never_enters_global_replay(monkeypatch):
     events_stream.broadcast_ui_event("agent.routine.run.completed", {"agent_id": "demo"})
     assert first.qsize() == 2 and other.qsize() == 1
     assert len(replay) == 1
+
+
+async def test_control_lifecycle_statuses_publish_and_appear_in_snapshot(feed):
+    listener, store, events = feed
+    statuses = ["stopping", "cancelling", "stopped", "cancelled"]
+    for index, status in enumerate(statuses):
+        payload = {
+            "agent_id": "demo",
+            "thread_id": "routine:demo:revision:session",
+            "request_id": f"attempt-{status}",
+            "session_id": "session",
+            "status": status,
+            "timestamp": f"2026-10-26T00:00:0{index}Z",
+        }
+        store.save_document(
+            PROGENA_STATE_PREFIX,
+            f"{RUN_EVENT_PREFIX}{payload['request_id']}:{status}",
+            payload,
+        )
+        listener.publish_lifecycle(payload)
+
+    assert [event[0] for event in events] == [
+        "agent.routine.run.stopping",
+        "agent.routine.run.cancelling",
+        "agent.routine.run.stopped",
+        "agent.routine.run.cancelled",
+    ]
+
+    events.clear()
+    await listener.lifecycle_snapshot("background")
+    snapshot_statuses = {payload["status"] for payload in events[0][1]["runs"]}
+    assert set(statuses) <= snapshot_statuses

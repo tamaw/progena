@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Awaitable
+from collections.abc import Awaitable, Callable
 from inspect import isawaitable
 from typing import Any, cast
 
@@ -15,6 +15,7 @@ from src.progena.a2a.tasks import upsert_tracked_task_from_payload
 from src.progena.async_subagents.hello_world import hello_world_runnable
 from src.progena.async_subagents.protocol import ObjectAgentProtocol
 from src.progena.async_subagents.tasks import HELLO_WORLD_ASYNC_ASSISTANT_ID
+from src.progena.routines.controls import RoutineRunControlConflict
 from src.progena.runtime.http.chat import RuntimeChatService
 from src.progena.utils import utcnow_isoformat
 
@@ -30,6 +31,7 @@ class ProgenaHTTPServer:
         state_manager: Any,
         loop_runner: Any = None,
         tool_registry: Any = None,
+        routine_controls: Any = None,
         host: str = "127.0.0.1",
         port: int = 9501,
         public_base_url: str | None = None,
@@ -45,6 +47,7 @@ class ProgenaHTTPServer:
         self._runner: web.AppRunner | None = None
         self._site: web.TCPSite | None = None
         self._bound_port: int | None = None
+        self.routine_controls = routine_controls
         store = getattr(state_manager, "_runtime_store", None)
         self._agent_protocol = (
             ObjectAgentProtocol(store=store, resolve_agent=self._resolve_object_agent)
@@ -87,6 +90,7 @@ class ProgenaHTTPServer:
                 web.get("/.well-known/agent-card.json", self._handle_agent_card),
                 web.post("/a2a/tasks/callback", self._handle_a2a_task_callback),
                 *(self._agent_protocol.routes() if self._agent_protocol is not None else []),
+                web.post("/v1/routine-runs/control", self._handle_routine_run_control),
                 *(self._chat_service.routes() if self._chat_service is not None else []),
             ]
         )
@@ -177,6 +181,40 @@ class ProgenaHTTPServer:
                 },
             }
         )
+
+    def _resolve_routine_controls(self) -> Any | None:
+        if self.routine_controls is not None:
+            return self.routine_controls
+        graph = getattr(self.loop_runner, "graph", None)
+        controls = getattr(graph, "routine_controls", None)
+        if controls is None:
+            controls = getattr(getattr(graph, "agent", None), "routine_controls", None)
+        return controls
+
+    async def _handle_routine_run_control(self, request: web.Request) -> web.Response:
+        try:
+            payload = await request.json()
+        except Exception:
+            return web.json_response({"error": "Invalid JSON payload"}, status=400)
+        if not isinstance(payload, dict):
+            return web.json_response({"error": "Expected JSON object"}, status=400)
+        controls = self._resolve_routine_controls()
+        controller = getattr(controls, "control_routine_run", None)
+        if not callable(controller):
+            return web.json_response({"error": "Routine run controls are unavailable"}, status=409)
+        try:
+            control = cast(Callable[..., Awaitable[dict[str, Any]]], controller)
+            result = await control(
+                payload.get("agent_id"),
+                thread_id=payload.get("thread_id"),
+                request_id=payload.get("request_id"),
+                action=payload.get("action"),
+            )
+        except RoutineRunControlConflict as exc:
+            return web.json_response({"error": str(exc)}, status=409)
+        except ValueError as exc:
+            return web.json_response({"error": str(exc)}, status=400)
+        return web.json_response(result)
 
     async def _handle_a2a_task_callback(self, request: web.Request) -> web.Response:
         try:

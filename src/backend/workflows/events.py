@@ -21,6 +21,10 @@ from src.progena.routines.events import CHECKPOINT_CHANNEL, RUN_EVENT_PREFIX
 
 logger = logging.getLogger(__name__)
 
+_RETAINED_LIFECYCLE_STATUSES = frozenset(
+    {"enqueued", "started", "paused", "stopping", "cancelling", "stopped"}
+)
+
 
 async def read_run_state(agent_id: str, thread_id: str, doc_store=None) -> dict[str, Any]:
     """Reconstruct checkpoint blob channels using LangGraph's native saver."""
@@ -213,9 +217,13 @@ class RoutineEvents:
             key = payload.get("request_id")
             if key and payload.get("timestamp", "") >= latest.get(key, {}).get("timestamp", ""):
                 latest[key] = payload
-        # Preserve active attempts even when there are many recent terminal runs.
+        # Preserve pending controls and explicitly resumable stops beyond the recent window.
         recent = sorted(latest.values(), key=lambda p: p.get("timestamp", ""), reverse=True)
-        active = [p for p in recent[100:] if p.get("status") in {"enqueued", "started", "paused"}]
+        active = [
+            payload
+            for payload in recent[100:]
+            if payload.get("status") in _RETAINED_LIFECYCLE_STATUSES
+        ]
         if recent:
             events_stream.broadcast_ui_event(
                 "agent.routine.lifecycle.snapshot",
