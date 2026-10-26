@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -183,6 +183,7 @@ class ChatSessionDetail(ChatSessionSummary):
     messages: list[ChatMessage] = Field(default_factory=list)
     has_more_messages: bool = False
     active_request_id: str | None = None
+    activity: Literal["delegating", "generating"] | None = None
 
 
 CHAT_MESSAGE_PAGE_SIZE = 50

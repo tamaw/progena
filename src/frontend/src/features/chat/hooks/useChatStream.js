@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSelector } from 'react-redux';
 import { reportFailure } from '../../../lib/failures';
 import { clearChatErrored, clearChatGenerating, markChatErrored, markChatGenerating, markChatUnread, touchChatSession } from '../state/actions';
-import { fetchChatSessions, selectErroredChatIds, selectGeneratingChatIds, selectRequestIdByThreadId, selectUnreadChatIds } from '../state/chats';
+import { fetchChatSessions, selectChatActivityByThreadId, selectErroredChatIds, selectGeneratingChatIds, selectRequestIdByThreadId, selectUnreadChatIds } from '../state/chats';
 import {
   createLiveAssistantTurn,
   applyAssistantMetadata,
@@ -60,6 +60,7 @@ export function useChatStream({
   const unreadChatIdList = useSelector(selectUnreadChatIds);
   const generatingChatIdList = useSelector(selectGeneratingChatIds);
   const erroredChatIdList = useSelector(selectErroredChatIds);
+  const backgroundChatActivityByThreadId = useSelector(selectChatActivityByThreadId);
   const requestIdByThreadId = useSelector(selectRequestIdByThreadId);
   const unreadChatIds = useMemo(() => new Set(unreadChatIdList), [unreadChatIdList]);
   const backgroundGeneratingChatIds = useMemo(() => new Set(generatingChatIdList), [generatingChatIdList]);
@@ -554,6 +555,7 @@ export function useChatStream({
     setIsGenerating,
     unreadChatIds,
     backgroundGeneratingChatIds,
+    backgroundChatActivityByThreadId,
     backgroundErrorChatIds,
     activeStreamIdRef,
     backgroundOriginChatIdRef,

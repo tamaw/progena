@@ -6,7 +6,7 @@ import asyncio
 import logging
 import uuid
 from collections.abc import Callable
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Header, HTTPException, Request
 
@@ -89,7 +89,9 @@ def create_chat_router(
     broadcast_ui_event: BroadcastUiEvent,
     get_current_state: Callable[[str], dict[str, Any]] | None = None,
     get_thread_messages: Callable[[str], list[Any]] | None = None,
-    get_active_request_id: Callable[[str], str | None] | None = None,
+    get_active_response: (
+        Callable[[str], tuple[str, Literal["delegating", "generating"]] | None] | None
+    ) = None,
 ) -> APIRouter:
     router = APIRouter()
 
@@ -145,12 +147,14 @@ def create_chat_router(
         if detail is None:
             raise HTTPException(status_code=404, detail="Chat session not found")
         page, has_more = paginate_chat_messages(detail.messages, limit=CHAT_MESSAGE_PAGE_SIZE)
-        active_request_id = get_active_request_id(thread_id) if get_active_request_id else None
+        active_response = get_active_response(thread_id) if get_active_response else None
+        active_request_id, activity = active_response or (None, None)
         detail = detail.model_copy(
             update={
                 "messages": page,
                 "has_more_messages": has_more,
                 "active_request_id": active_request_id,
+                "activity": activity,
             }
         )
         broadcast_ui_event(
@@ -292,8 +296,10 @@ async def _broadcast_chat_sessions_snapshot(include_archived: bool = True):
     )
 
 
-def _get_active_request_id_for_thread(thread_id: str) -> str | None:
+def _get_active_response_for_thread(
+    thread_id: str,
+) -> tuple[str, Literal["delegating", "generating"]] | None:
     # Deferred import: `main` imports this module, so importing `main` at
     # module load time here would be circular.
-
-    return chat_responses._active_request_id_for_thread(thread_id)
+    active_response = chat_responses._active_response_for_thread(thread_id)
+    return active_response

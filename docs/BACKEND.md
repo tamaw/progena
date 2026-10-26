@@ -246,7 +246,33 @@ For browser chat generation, the acknowledgement and streams divide ownership:
   `event_types: ["chat.response.started"]`
 - canonical `/api/ui/stream` carries lifecycle `ui.event` envelopes:
   `chat.response.started`, `chat.response.completed`, `chat.response.failed`,
-  `chat.response.cancelled`
+  `chat.response.cancelled`, and transition-only `chat.response.activity`
+
+`chat.response.activity` is emitted only while a non-terminal response changes
+between `generating` and `delegating`. Its payload is exactly:
+
+```json
+{
+  "request_id": "4e58d2dc-88bf-4c10-9bf0-1f2ccce2c100",
+  "thread_id": "thread_abc",
+  "activity": "delegating"
+}
+```
+
+`chat.response.started` establishes the initial `generating` state, so it does
+not cause an activity frame. The first live parent `task`, blocking
+`a2a_send`/`acp_send`, or explicitly waiting A2A/ACP status call changes
+activity to `delegating`; it returns to `generating` only after all concurrent
+delegated calls have ended. Background async launches do not enter the
+delegating state. Terminal lifecycle frames clear activity; there is no idle
+activity frame.
+
+When a thread is selected, its session detail is emitted as both the
+request-correlated `chat.session.upserted` and `chat.session.selected` event.
+That detail includes `active_request_id` and nullable `activity`
+(`"delegating"`, `"generating"`, or `null`) from the same volatile response
+registry, not persisted chat history.
+
 - dedicated `/api/ui/responses/{request_id}/stream` carries only
   `chat.response.delta` and `chat.response.event` content frames, plus
   `chat.response.heartbeat` and `chat.response.resync_required`
@@ -275,7 +301,7 @@ responses never are.
 | Domain | Browser routes | Result contract |
 | --- | --- | --- |
 | Chat sessions | `GET/POST /api/ui/chats`; `POST /api/ui/chats/draft`; `GET/PATCH/DELETE /api/ui/chats/{thread_id}`; `GET /api/ui/chats/{thread_id}/messages` | Canonical `ui.event` envelopes: `chat.sessions.snapshot`, `chat.session.created`, `chat.session.metadata.updated`, `chat.session.upserted`, request-correlated `chat.session.selected` (capped to the newest `CHAT_MESSAGE_PAGE_SIZE` messages, with `has_more_messages`), `chat.messages.page.loaded` (older-page pagination), `chat.session.deleted` |
-| Generation | `POST /api/ui/responses`; `GET /api/ui/responses/{request_id}/stream`; `PUT /api/ui/responses/{generation_id}/cancel` | Canonical lifecycle envelopes: `chat.response.started`, `chat.response.completed`, `chat.response.failed`, `chat.response.cancelled`; dedicated response frames: `chat.response.delta`, `chat.response.event`; dedicated transport-only frames: `chat.response.heartbeat`, `chat.response.resync_required`; cancel acknowledgement declares `chat.response.cancel_requested` |
+| Generation | `POST /api/ui/responses`; `GET /api/ui/responses/{request_id}/stream`; `PUT /api/ui/responses/{generation_id}/cancel` | Canonical lifecycle envelopes: `chat.response.started`, transition-only `chat.response.activity`, `chat.response.completed`, `chat.response.failed`, `chat.response.cancelled`; dedicated response frames: `chat.response.delta`, `chat.response.event`; dedicated transport-only frames: `chat.response.heartbeat`, `chat.response.resync_required`; cancel acknowledgement declares `chat.response.cancel_requested` |
 | Agent profiles | `GET /api/ui/agent-profiles`; `GET /api/ui/agent-profiles/{agent_id}`; `PATCH /api/ui/agent-profiles/{agent_id}/graph` | Canonical `ui.event` envelopes: `agents.snapshot`, `agent.upserted`, request-correlated `agent.selected`, `agent.graph.updated` |
 | Inbox | `GET /api/ui/inbox`; `POST /api/ui/inbox/{message_id}/read`; `POST /api/ui/inbox/{message_id}/decision`; `DELETE /api/ui/inbox/{message_id}` | Canonical `ui.event` envelopes: `inbox.snapshot`, `inbox.message.upserted`, `inbox.message.deleted` |
 | Knowledge | `GET/PUT /api/ui/knowledge`; `POST /api/ui/knowledge/{base_id}/sources/{source_id}/index`; `GET /api/ui/knowledge/{base_id}/search` | Canonical `ui.event` envelopes: `knowledge.snapshot`, request-scoped `knowledge.search.results` |

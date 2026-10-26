@@ -1872,6 +1872,11 @@ pre.mermaid svg {
     animation: status-dot-pulse 1.2s ease-in-out infinite;
 }
 
+.chat-session-card__dot--delegating {
+    background: #8b5cf6;
+    animation: status-dot-pulse 1.2s ease-in-out infinite;
+}
+
 @keyframes status-dot-pulse {
     0%, 100% { opacity: 1; }
     50% { opacity: 0.35; }
@@ -2004,6 +2009,11 @@ pre.mermaid svg {
 
 .chat-page-header__status--generating .chat-page-header__status-dot {
     background: #f97316;
+    animation: status-dot-pulse 1.2s ease-in-out infinite;
+}
+
+.chat-page-header__status--delegating .chat-page-header__status-dot {
+    background: #8b5cf6;
     animation: status-dot-pulse 1.2s ease-in-out infinite;
 }
 

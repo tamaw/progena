@@ -548,6 +548,7 @@ describe('buildChatSessionItems', () => {
     unreadChatIds: new Set(),
     backgroundGeneratingChatIds: new Set(),
     backgroundErrorChatIds: new Set(),
+    backgroundChatActivityByThreadId: {},
   };
 
   it('derives backend card status with generating, error, complete, and idle precedence', () => {
@@ -570,6 +571,42 @@ describe('buildChatSessionItems', () => {
     expect(byId.c2).toMatchObject({ unread: true, erroredInBackground: true, status: 'error' });
     expect(byId.c3).toMatchObject({ unread: true, status: 'complete' });
     expect(byId.c4).toMatchObject({ status: 'idle' });
+  });
+
+  it('gives delegated activity precedence in the selected sidebar card', () => {
+    const items = buildChatSessionItems({
+      ...base,
+      backendChatSessions: [{ thread_id: 'delegated', title: 'Delegated task' }],
+      selectedBackendChatId: 'delegated',
+      backgroundGeneratingChatIds: new Set(['delegated']),
+      backgroundChatActivityByThreadId: { delegated: 'delegating' },
+    });
+
+    expect(items[0]).toMatchObject({
+      delegating: true,
+      generating: true,
+      detail: 'Delegating',
+      status: CHAT_STATUS.DELEGATING,
+    });
+  });
+
+  it('surfaces delegated activity on a selected local draft before its backend card arrives', () => {
+    const items = buildChatSessionItems({
+      ...base,
+      messages: [{ role: 'user', content: 'hi', timestamp: 1 }],
+      threadId: 'local-delegated',
+      firstMessageTime: 1,
+      backendChatSessions: [],
+      selectedBackendChatId: null,
+      backgroundChatActivityByThreadId: { 'local-delegated': 'delegating' },
+    });
+
+    expect(items[0]).toMatchObject({
+      source: 'local',
+      delegating: true,
+      detail: 'Delegating',
+      status: CHAT_STATUS.DELEGATING,
+    });
   });
 
   it('exposes generating status for a selected local foreground generation', () => {

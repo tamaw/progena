@@ -16,6 +16,7 @@ from ack_helpers import assert_acknowledged, assert_acknowledgement_body
 from fastapi.testclient import TestClient
 
 import src.backend.alerts.routes as alerts_routes
+import src.backend.chat.responses as chat_responses
 import src.backend.chat.routes as chat_routes
 import src.backend.events.dispatch as events_dispatch
 import src.backend.events.routes as events_routes
@@ -256,6 +257,78 @@ class TestUIRoutes:
         assert selected.payload["request_id"] == request_id
         assert selected.session_id == thread_id
         assert selected.payload["session"]["thread_id"] == thread_id
+
+    def test_chat_detail_rehydrates_live_response_activity(self, client, document_store):
+        """A selected thread recovers live activity without persisting transient state."""
+
+        thread_id = "thread-live-delegation"
+        response_request_id = "live-delegation-response"
+        _create_session_document(document_store, thread_id, "Delegating chat")
+        chat_responses._register_response_activity(response_request_id, thread_id)
+        try:
+            generating_response = client.get(
+                f"/api/ui/chats/{thread_id}",
+                headers={"X-Operation-Id": "generating-detail-request"},
+            )
+
+            assert_acknowledged(
+                generating_response,
+                ["chat.session.upserted", "chat.session.selected"],
+                request_id="generating-detail-request",
+                check_request_id_header=True,
+            )
+            generating_selected = events_stream._ui_event_replay[-1]
+            assert (
+                generating_selected.payload["session"]["active_request_id"] == response_request_id
+            )
+            assert generating_selected.payload["session"]["activity"] == "generating"
+
+            chat_responses._track_response_delegation_event(
+                response_request_id,
+                {
+                    "event_type": "tool_start",
+                    "content": "task",
+                    "metadata": {
+                        "tool_name": "task",
+                        "tool_call_id": "routine-live",
+                        "subagent_type": "routine-live",
+                    },
+                },
+            )
+            delegating_response = client.get(
+                f"/api/ui/chats/{thread_id}",
+                headers={"X-Operation-Id": "delegating-detail-request"},
+            )
+
+            assert_acknowledged(
+                delegating_response,
+                ["chat.session.upserted", "chat.session.selected"],
+                request_id="delegating-detail-request",
+                check_request_id_header=True,
+            )
+            delegating_selected = events_stream._ui_event_replay[-1]
+            assert (
+                delegating_selected.payload["session"]["active_request_id"] == response_request_id
+            )
+            assert delegating_selected.payload["session"]["activity"] == "delegating"
+
+            chat_responses._clear_response_activity(response_request_id)
+            terminal_response = client.get(
+                f"/api/ui/chats/{thread_id}",
+                headers={"X-Operation-Id": "terminal-detail-request"},
+            )
+
+            assert_acknowledged(
+                terminal_response,
+                ["chat.session.upserted", "chat.session.selected"],
+                request_id="terminal-detail-request",
+                check_request_id_header=True,
+            )
+            terminal_selected = events_stream._ui_event_replay[-1]
+            assert terminal_selected.payload["session"]["active_request_id"] is None
+            assert terminal_selected.payload["session"]["activity"] is None
+        finally:
+            chat_responses._clear_response_activity(response_request_id)
 
     def test_chat_card_rehydrates_history_from_checkpoint_thread(self, client, document_store):
         document_store.upsert_checkpoint_thread_snapshot(
