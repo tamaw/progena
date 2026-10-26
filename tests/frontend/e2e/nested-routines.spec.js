@@ -16,7 +16,7 @@ async function run(page, graph, status = 'completed', target) {
   const posted = page.waitForRequest((r) => r.method() === 'POST' && r.url().endsWith(`/${graph.id}/run`));
   if (target) { const close = page.getByRole('button', { name: 'Close node details' }); if (await close.isVisible()) await close.click(); await page.locator(`.canvas-node[data-node-id="${target}"]`).click(); await page.getByRole('button', { name: 'Run to here', exact: true }).click(); await page.getByRole('dialog').getByRole('button', { name: 'Run', exact: true }).click(); }
   else await page.getByRole('button', { name: 'Run routine', exact: true }).click();
-  const requestId = (await posted).headers()['x-request-id'];
+  const requestId = (await posted).headers()['x-operation-id'];
   await expect.poll(() => page.evaluate(({requestId,status}) => window.__routineEvents.find((e) => [ `agent.routine.run.${status}`, 'agent.routine.run.failed' ].includes(e.type) && e.payload.request_id === requestId)?.payload, { requestId, status }), { timeout: 180_000 }).toBeTruthy();
   const result = await page.evaluate(({requestId,status}) => window.__routineEvents.find((e) => [ `agent.routine.run.${status}`, 'agent.routine.run.failed' ].includes(e.type) && e.payload.request_id === requestId).payload, { requestId, status });
   expect(result.status, result.error).toBe(status);

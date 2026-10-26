@@ -10,7 +10,7 @@ protocol is [BACKEND.md](BACKEND.md).
 Browser frontend
       |
       | finite commands/queries
-      | X-Request-ID: <operation UUID>
+      | X-Operation-Id: <operation UUID>
       v
 Backend HTTP API ---- internal HTTP/SSE ----> Progena runtime
       |                                           |
@@ -42,7 +42,7 @@ responsibilities:
 ```text
 frontend generates UUID
         |
-        +-- X-Request-ID --> retained finite route
+        +-- X-Operation-Id --> retained finite route
                                       |
                          validate / persist or dispatch
                                       |

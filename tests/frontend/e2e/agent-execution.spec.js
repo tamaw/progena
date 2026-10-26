@@ -20,7 +20,7 @@ async function lifecycle(page, status, requestId) {
 async function run(page) {
   const posted = page.waitForRequest((request) => request.method() === 'POST' && request.url().endsWith(`/${fixture.graph.id}/run`));
   await page.getByRole('button', { name: 'Run routine', exact: true }).click();
-  return (await posted).headers()['x-request-id'];
+  return (await posted).headers()['x-operation-id'];
 }
 async function selectNode(page, id) {
   const close = page.getByRole('button', { name: 'Close node details', exact: true });

@@ -207,7 +207,7 @@ flushed every queued retained content frame.
 ## Finite request acknowledgement and correlation
 
 For every finite browser application request, the frontend generates one UUID
-and sends it as `X-Request-ID`. The successful response is exactly:
+and sends it as `X-Operation-Id`. The successful response is exactly:
 
 ```json
 {

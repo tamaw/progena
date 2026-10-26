@@ -57,7 +57,8 @@ app.add_middleware(
     allow_origins=lifecycle_state.config.cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
-    allow_headers=["*"],
+    allow_headers=["*", "X-Operation-Id"],
+    expose_headers=["X-Operation-Id"],
 )
 app.add_middleware(
     GZipMiddleware,

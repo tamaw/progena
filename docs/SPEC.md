@@ -144,7 +144,7 @@ and [Deep Agents interpreter documentation](https://docs.langchain.com/oss/pytho
   is active.
 - Uses Redux as the sole durable application-data owner. Canonical stream
   events hydrate Redux; pages read Redux selectors.
-- Generates an `X-Request-ID` UUID for every finite application request and
+- Generates an `X-Operation-Id` UUID for every finite application request and
   waits for matching causal canonical stream events after acknowledgement.
 - Renders agent-built canvases (`/canvases`) in sandboxed, network-less iframes
   (`sandbox="allow-scripts"`, `srcdoc`); canvas files, vendored libraries,
@@ -156,7 +156,7 @@ response-body fallback, and no inline response-body token SSE.
 
 ## Request and event flow
 
-1. The frontend creates one operation UUID and sends it in `X-Request-ID`.
+1. The frontend creates one operation UUID and sends it in `X-Operation-Id`.
 2. The backend validates, persists or synchronously dispatches the operation,
    then enqueues every causal canonical `ui.event` envelope with the UUID at
    `payload.request_id`.

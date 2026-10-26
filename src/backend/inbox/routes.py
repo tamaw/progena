@@ -163,7 +163,7 @@ def create_inbox_router(
     @router.get("/inbox", status_code=202, response_model=http_contracts.UiRequestAcknowledgement)
     async def get_inbox(
         request: Request,
-        x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+        x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
     ):
         """Acknowledge inbox list requests and publish the snapshot on the UI stream."""
         request_id = _request_correlation_id(request, x_request_id)
@@ -179,7 +179,7 @@ def create_inbox_router(
         http_request: Request,
         message_id: str,
         request: InboxMarkReadRequest | None = None,
-        x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+        x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
     ):
         """Set one message's read state (read/unread toggle from the UI)."""
         request_id = _request_correlation_id(http_request, x_request_id)
@@ -201,7 +201,7 @@ def create_inbox_router(
         http_request: Request,
         message_id: str,
         request: InboxArchiveRequest | None = None,
-        x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+        x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
     ):
         """Set one message's archived state (archive/unarchive from the UI)."""
         request_id = _request_correlation_id(http_request, x_request_id)
@@ -222,7 +222,7 @@ def create_inbox_router(
         http_request: Request,
         message_id: str,
         request: InboxDecisionRequest,
-        x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+        x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
     ):
         """Record the user's approve/reject decision on a message."""
         request_id = _request_correlation_id(http_request, x_request_id)
@@ -243,7 +243,7 @@ def create_inbox_router(
     async def delete_inbox_message(
         message_id: str,
         request: Request,
-        x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+        x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
     ):
         """Delete one inbox message."""
         request_id = _request_correlation_id(request, x_request_id)

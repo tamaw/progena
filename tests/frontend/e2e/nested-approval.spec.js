@@ -62,7 +62,7 @@ for (const { answer, firstAnswer } of [{ answer: 'approve' }, { answer: 'decline
       await expect(page.locator('.canvas-node[data-node-id="child_call"]')).toBeVisible({ timeout: 30_000 });
       const posted = page.waitForRequest((r) => r.method() === 'POST' && r.url().endsWith(`/${parent.id}/run`));
       await page.getByRole('button', { name: 'Run routine', exact: true }).click();
-      const paused = await terminal((await posted).headers()['x-request-id']);
+      const paused = await terminal((await posted).headers()['x-operation-id']);
       expect(paused.status, paused.error).toBe('paused');
       expect(parentRunHistory(paused.thread_id).after_child).toBeUndefined();
       const before = nestedChildThreads(child.id);
@@ -80,7 +80,7 @@ for (const { answer, firstAnswer } of [{ answer: 'approve' }, { answer: 'decline
         await approval.getByRole('button', { name: 'Approve', exact: true }).click();
         const request = await firstPost;
         firstDecision = request.postDataJSON();
-        expect((await terminal(request.headers()['x-request-id'])).status).toBe('paused');
+        expect((await terminal(request.headers()['x-operation-id'])).status).toBe('paused');
         expect(parentRunHistory(paused.thread_id).after_child).toBeUndefined();
         await expect(approval).toContainText('Confirm the second child approval?');
       }
@@ -88,7 +88,7 @@ for (const { answer, firstAnswer } of [{ answer: 'approve' }, { answer: 'decline
       await approval.getByRole('button', { name: answer === 'approve' ? 'Approve' : 'Decline', exact: true }).click();
       const answerRequest = await answered;
       if (firstDecision) expect(answerRequest.postDataJSON().interrupt_id).not.toBe(firstDecision.interrupt_id);
-      const completed = await terminal(answerRequest.headers()['x-request-id']);
+      const completed = await terminal(answerRequest.headers()['x-operation-id']);
       expect(completed.status, completed.error).toBe('completed');
       expect(completed.thread_id).toBe(paused.thread_id);
       expect(nestedChildThreads(child.id)).toEqual(before);

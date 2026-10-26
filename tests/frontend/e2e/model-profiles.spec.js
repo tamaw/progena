@@ -14,7 +14,7 @@ async function selectNode(page, id) {
 async function run(page, expected) {
   const posted = page.waitForRequest((request) => request.method() === 'POST' && request.url().endsWith(`/${fixture.graph.id}/run`));
   await page.getByRole('button', { name: 'Run routine', exact: true }).click();
-  const requestId = (await posted).headers()['x-request-id'];
+  const requestId = (await posted).headers()['x-operation-id'];
   await expect.poll(() => page.evaluate((id) => window.__routineEvents.find((event) =>
     ['agent.routine.run.completed', 'agent.routine.run.failed'].includes(event.type) && event.payload.request_id === id), requestId), { timeout: 180_000 }).toBeTruthy();
   const event = await page.evaluate((id) => window.__routineEvents.find((event) =>

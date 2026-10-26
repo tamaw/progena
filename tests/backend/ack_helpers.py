@@ -32,5 +32,5 @@ def assert_acknowledged(
     assert response.status_code == 202
     body = assert_acknowledgement_body(response.json(), event_types, request_id)
     if check_request_id_header:
-        assert request_id is not None and response.headers["X-Request-ID"] == request_id
+        assert request_id is not None and response.headers["X-Operation-Id"] == request_id
     return body

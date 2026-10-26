@@ -541,7 +541,7 @@ class TestCriticalChatFlow:
                     "input": "Greetings, we come in peace.",
                     "stream": False,
                 },
-                headers={"X-Request-ID": request_id},
+                headers={"X-Operation-Id": request_id},
             )
         finally:
             lifecycle_state.client = original_client

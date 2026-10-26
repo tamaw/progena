@@ -44,7 +44,7 @@ def harness(monkeypatch):
     )
     app = FastAPI()
     app.include_router(routes.router)
-    yield TestClient(app, headers={"X-Request-ID": "test-request"}), store, events
+    yield TestClient(app, headers={"X-Operation-Id": "test-request"}), store, events
     set_default_document_store(InMemoryDocumentStore())
 
 

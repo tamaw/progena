@@ -309,7 +309,7 @@ async def responses(
     request: Request,
     response: Response,
     body: chat_models.ResponseRequest,
-    x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+    x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
 ):
     """Dispatch a browser generation and acknowledge its lifecycle on ui.event.
 
@@ -383,7 +383,7 @@ async def responses(
 async def cancel_response(
     generation_id: str,
     request: Request,
-    x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+    x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
 ):
     """Cancel a generation using either its browser response or request ID."""
     request_id = _request_correlation_id(request, x_request_id)

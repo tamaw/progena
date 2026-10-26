@@ -44,7 +44,7 @@ for (const answer of ['approve', 'decline']) {
       await expect(page.locator('.canvas-node[data-node-id="prepare"]')).toBeVisible({ timeout: 30_000 });
       const runPost = page.waitForRequest((r) => r.method() === 'POST' && r.url().endsWith(`/${id}/run`));
       await page.getByRole('button', { name: 'Run routine', exact: true }).click();
-      const originalRequest = (await runPost).headers()['x-request-id'];
+      const originalRequest = (await runPost).headers()['x-operation-id'];
       const paused = await lifecycle('paused', originalRequest);
       await page.locator('.canvas-node[data-node-id="decision"]').click();
       const approval = page.getByRole('region', { name: 'Pending approval' });
@@ -68,7 +68,7 @@ for (const answer of ['approve', 'decline']) {
       const body = response.request().postDataJSON();
       expect(body.thread_id).toBe(paused.thread_id);
       expect(body.interrupt_id).toBe(pending.interrupt_id);
-      const requestId = response.request().headers()['x-request-id'];
+      const requestId = response.request().headers()['x-operation-id'];
       expect(requestId).not.toBe(originalRequest);
       const completed = await lifecycle('completed', requestId);
       expect(completed.thread_id).toBe(paused.thread_id);

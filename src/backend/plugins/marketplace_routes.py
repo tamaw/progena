@@ -44,7 +44,7 @@ def _catalog_to_dict(catalog: Any) -> dict[str, Any]:
 @router.get("", status_code=202, response_model=http_contracts.UiRequestAcknowledgement)
 async def get_marketplaces(
     request: Request,
-    x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+    x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
 ) -> http_contracts.UiRequestAcknowledgement:
     """Acknowledge a read and publish the marketplaces snapshot on the UI stream."""
     request_id = _request_correlation_id(request, x_request_id)
@@ -57,7 +57,7 @@ async def get_marketplaces(
 async def replace_marketplaces(
     payload: dict[str, Any],
     request: Request,
-    x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+    x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
 ) -> http_contracts.UiRequestAcknowledgement:
     """Validate and persist the full marketplaces document."""
     request_id = _request_correlation_id(request, x_request_id)
@@ -77,7 +77,7 @@ async def replace_marketplaces(
 async def browse_marketplace_plugins(
     name: str,
     request: Request,
-    x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+    x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
 ) -> http_contracts.UiRequestAcknowledgement:
     """Fetch the named marketplace's catalog and broadcast it."""
     request_id = _request_correlation_id(request, x_request_id)

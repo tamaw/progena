@@ -336,7 +336,7 @@ def create_agent_profile_router(
     )
     async def list_agent_profiles(
         request: Request,
-        x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+        x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
     ):
         """Acknowledge agent-list requests and publish the list on the UI stream.
 
@@ -359,7 +359,7 @@ def create_agent_profile_router(
     async def create_object_agent_profile(
         payload: ObjectAgentCreateRequest,
         request: Request,
-        x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+        x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
     ):
         """Persist an author-created object agent as a portable SYSTEM.md document."""
         request_id = _request_correlation_id(request, x_request_id)
@@ -388,7 +388,7 @@ def create_agent_profile_router(
         agent_id: str,
         payload: ObjectAgentManifestUpdateRequest,
         request: Request,
-        x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+        x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
     ):
         """Update any manifest-backed object agent's SYSTEM.md manifest.
 
@@ -426,7 +426,7 @@ def create_agent_profile_router(
     async def get_agent_skill_content(
         request: Request,
         path: str,
-        x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+        x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
     ):
         """Publish one skill's ``SKILL.md`` body (front matter + prompt).
 
@@ -453,7 +453,7 @@ def create_agent_profile_router(
         payload: AgentSkillUpdateRequest,
         request: Request,
         path: str,
-        x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+        x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
     ):
         """Update one skill's ``SKILL.md`` text.
 
@@ -481,7 +481,7 @@ def create_agent_profile_router(
     async def get_agent_profile(
         agent_id: str,
         request: Request,
-        x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+        x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
     ):
         """Acknowledge agent-detail requests and publish the detail on the UI stream."""
         request_id = _request_correlation_id(request, x_request_id)
@@ -511,7 +511,7 @@ def create_agent_profile_router(
         agent_id: str,
         body: AgentGraphUpdateRequest,
         request: Request,
-        x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+        x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
     ):
         """Validate and persist an edited agent graph, then broadcast the update."""
         request_id = _request_correlation_id(request, x_request_id)
@@ -582,7 +582,7 @@ def create_agent_profile_router(
         agent_id: str,
         body: RoutineSubscriptionRequest,
         request: Request,
-        x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+        x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
     ):
         from src.backend.workflows.events import routine_events
 
@@ -627,7 +627,7 @@ def create_agent_profile_router(
         agent_id: str,
         request: Request,
         body: RunRoutineRequest = RunRoutineRequest(),
-        x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+        x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
     ):
         """Enqueue a real, deterministic execution of a routine graph.
 
@@ -680,7 +680,7 @@ def create_agent_profile_router(
         agent_id: str,
         body: RoutineApprovalRequest,
         request: Request,
-        x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+        x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
     ):
         from src.backend.workflows.events import read_run_state, routine_events
         from src.progena.routines.approvals import approval_lock, decision_key, validate_answer
@@ -755,7 +755,7 @@ def create_agent_profile_router(
         agent_id: str,
         thread_id: str,
         request: Request,
-        x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+        x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
     ):
         """Read a routine run's live per-node timing/token/output state.
 
@@ -795,7 +795,7 @@ def create_agent_profile_router(
         request: Request,
         before: str | None = Query(default=None),
         limit: int = Query(default=50, ge=1, le=200),
-        x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+        x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
     ):
         """Publish one page of recent execution runs for one routine.
 
@@ -842,7 +842,7 @@ def create_agent_profile_router(
     async def list_routine_revisions(
         agent_id: str,
         request: Request,
-        x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+        x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
     ):
         """Publish every captured revision of one routine's graph document.
 
@@ -873,7 +873,7 @@ def create_agent_profile_router(
         agent_id: str,
         revision_id: str,
         request: Request,
-        x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+        x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
     ):
         """Publish one revision's full graph document, for the Revisions panel to render."""
         request_id = _request_correlation_id(request, x_request_id)
@@ -899,7 +899,7 @@ def create_agent_profile_router(
     async def delete_agent_profile(
         agent_id: str,
         request: Request,
-        x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+        x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
     ):
         """Delete a routine or an author-created ("source: user") object agent.
 

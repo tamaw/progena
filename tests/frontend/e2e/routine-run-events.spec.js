@@ -35,7 +35,7 @@ test('full run pushes output and global completion without discovery/state polli
   page.on('request', (request) => { if (/\/(runs|run-state)(\?|$)/.test(request.url())) requests.push(request.url()); });
   const posted = page.waitForRequest((request) => request.method() === 'POST' && request.url().endsWith(`/${fixture.id}/run`));
   await page.getByRole('button', { name: 'Run routine', exact: true }).click();
-  const requestId = (await posted).headers()['x-request-id'];
+  const requestId = (await posted).headers()['x-operation-id'];
   await lifecycle(page, fixture.id, 'started', requestId);
   const completed = await lifecycle(page, fixture.id, 'completed', requestId);
   await lifecycle(background, fixture.id, 'completed', requestId);
@@ -64,7 +64,7 @@ test('Run to here pauses, leaving unsubscribes, global resume completes, reopeni
   await page.evaluate(() => { window.__routineEvents = []; });
   const requestId = crypto.randomUUID();
   const response = await page.request.post(`/api/ui/agent-profiles/${fixture.id}/run`, {
-    headers: { 'X-Request-ID': requestId }, data: { session_id: paused.session_id, parameters: {} },
+    headers: { 'X-Operation-Id': requestId }, data: { session_id: paused.session_id, parameters: {} },
   });
   expect(response.status()).toBe(202);
   await lifecycle(page, fixture.id, 'completed', requestId);
@@ -115,7 +115,7 @@ test('execution error broadcasts globally, clears the indicator, and a repaired 
   await page.getByRole('button', { name: 'Collapse JSON editor' }).click();
   const retryPosted = page.waitForRequest((request) => request.method() === 'POST' && request.url().endsWith(`/${fixture.id}/run`));
   await page.getByRole('button', { name: 'Run routine', exact: true }).click();
-  const retryId = (await retryPosted).headers()['x-request-id'];
+  const retryId = (await retryPosted).headers()['x-operation-id'];
   expect(retryId).not.toBe(failed.request_id);
   await lifecycle(page, fixture.id, 'completed', retryId);
   await lifecycle(background, fixture.id, 'completed', retryId);

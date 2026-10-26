@@ -29,7 +29,7 @@ router = APIRouter()
 @router.get("/widgets", status_code=202, response_model=http_contracts.UiRequestAcknowledgement)
 async def get_widgets(
     request: Request,
-    x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+    x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
 ):
     """Return the unified widget list and publish it on the UI stream.
 
@@ -54,7 +54,7 @@ async def get_widgets(
 async def refresh_widget(
     widget_id: str,
     request: Request,
-    x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+    x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
 ):
     """Refresh agent widget metadata from its live protocol surface.
 
@@ -88,7 +88,7 @@ async def patch_widget(
     widget_id: str,
     body: schedules_models.WidgetPatchRequest,
     request: Request,
-    x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+    x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
 ):
     """Patch a backend-owned widget where a matching state file exists."""
     request_id = http_requests.request_correlation_id(request, x_request_id)
@@ -319,7 +319,7 @@ async def patch_widget(
 async def delete_widget(
     widget_id: str,
     request: Request,
-    x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+    x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
 ):
     """Delete a backend-owned widget where a matching state file exists."""
     request_id = http_requests.request_correlation_id(request, x_request_id)
@@ -375,7 +375,7 @@ async def delete_widget(
 @router.get("/schedules", status_code=202, response_model=http_contracts.UiRequestAcknowledgement)
 async def get_schedules(
     request: Request,
-    x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+    x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
 ):
     """Alias for schedule data using the requested plural path."""
     request_id = http_requests.request_correlation_id(request, x_request_id)
@@ -387,7 +387,7 @@ async def get_schedules(
 async def create_schedule(
     body: schedules_models.ScheduleCreateRequest,
     request: Request,
-    x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+    x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
 ):
     """Create a new schedule entry in backend state."""
     name = body.name.strip()
@@ -454,7 +454,7 @@ async def retrigger_schedule(
     schedule_id: str,
     body: schedules_models.ScheduleTriggerRequest,
     request: Request,
-    x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+    x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
 ):
     """Reschedule a task from a natural-language description.
 
@@ -538,7 +538,7 @@ async def retrigger_schedule(
 async def create_event_widget(
     body: schedules_models.EventWidgetCreateRequest,
     request: Request,
-    x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+    x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
 ):
     """Create a new persisted event widget trigger."""
     name = body.name.strip()

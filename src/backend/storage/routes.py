@@ -74,7 +74,7 @@ def _document_type_snapshot_item(document_type: DocumentType) -> dict[str, Any]:
 )
 async def get_document_types(
     request: Request,
-    x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+    x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
 ):
     """Publish the document type registry (``document_type:<id>`` rows).
 

@@ -76,12 +76,12 @@ def test_finite_ui_request_returns_client_id_and_matching_stream_event():
 
         response = client.get(
             "/api/ui/widgets",
-            headers={"X-Request-ID": request_id},
+            headers={"X-Operation-Id": request_id},
         )
         event_name, event = _next_sse_frame(lines)
 
     assert response.status_code == 202
-    assert response.headers["X-Request-ID"] == request_id
+    assert response.headers["X-Operation-Id"] == request_id
     assert response.json() == {
         "request_id": request_id,
         "event_types": ["widgets.updated"],

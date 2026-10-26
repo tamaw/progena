@@ -110,7 +110,7 @@ class TestAsyncResponseHandling:
         response = client.post(
             "/api/ui/responses",
             json={"model": "progena-v1", "input": "Hello", "stream": False},
-            headers={"X-Request-ID": "rejected-generation"},
+            headers={"X-Operation-Id": "rejected-generation"},
         )
 
         assert response.status_code == 503
@@ -181,6 +181,7 @@ class TestAsyncResponseHandling:
 
         captured: dict[str, object] = {}
         request_id = "dd8db5b9-7ec6-4ea8-b481-7a2a3ef13a5d"
+        legacy_request_id = "legacy-request-id"
 
         class _MockClient:
             async def send_message_stream_events(
@@ -209,7 +210,10 @@ class TestAsyncResponseHandling:
                 response = live_client.post(
                     "/api/ui/responses",
                     json={"model": "progena-v1", "input": "hi", "stream": True},
-                    headers={"X-Request-ID": request_id},
+                    headers={
+                        "X-Operation-Id": request_id,
+                        "X-Request-ID": legacy_request_id,
+                    },
                 )
                 with live_client.stream(
                     "GET", f"/api/ui/responses/{request_id}/stream"
@@ -222,7 +226,8 @@ class TestAsyncResponseHandling:
                 canonical_frames = [_next_sse_frame(canonical_lines) for _ in range(2)]
 
         assert response.status_code == 202
-        assert response.headers["X-Request-ID"] == request_id
+        assert response.headers["X-Operation-Id"] == request_id
+        assert "X-Request-ID" not in response.headers
         assert response.json() == {
             "request_id": request_id,
             "event_types": ["chat.response.started"],
@@ -383,7 +388,7 @@ class TestAsyncResponseHandling:
             response = live_client.post(
                 "/api/ui/responses",
                 json={"model": "progena-v1", "input": "delegate", "stream": True},
-                headers={"X-Request-ID": request_id},
+                headers={"X-Operation-Id": request_id},
             )
             with live_client.stream(
                 "GET", f"/api/ui/responses/{request_id}/stream"
@@ -605,7 +610,7 @@ class TestAsyncResponseHandling:
             response = live_client.post(
                 "/api/ui/responses",
                 json={"model": "progena-v1", "input": "fail", "stream": True},
-                headers={"X-Request-ID": request_id},
+                headers={"X-Operation-Id": request_id},
             )
             with live_client.stream(
                 "GET", f"/api/ui/responses/{request_id}/stream"
@@ -616,7 +621,7 @@ class TestAsyncResponseHandling:
             canonical_frames = [_next_sse_frame(canonical_lines) for _ in range(2)]
 
         assert response.status_code == 202
-        assert response.headers["X-Request-ID"] == request_id
+        assert response.headers["X-Operation-Id"] == request_id
         assert response.json() == {
             "request_id": request_id,
             "event_types": ["chat.response.started"],
@@ -710,7 +715,7 @@ class TestAsyncResponseHandling:
         try:
             response = client.put(
                 f"/api/ui/responses/{target_request_id}/cancel",
-                headers={"X-Request-ID": cancel_request_id},
+                headers={"X-Operation-Id": cancel_request_id},
             )
             await chat_responses._run_response_event_stream(
                 "cancelled request",
@@ -729,7 +734,7 @@ class TestAsyncResponseHandling:
             lifecycle_state.client = previous_client
 
         assert response.status_code == 202
-        assert response.headers["X-Request-ID"] == cancel_request_id
+        assert response.headers["X-Operation-Id"] == cancel_request_id
         assert response.json() == {
             "request_id": cancel_request_id,
             "event_types": ["chat.response.cancel_requested"],
@@ -772,7 +777,7 @@ class TestAsyncResponseHandling:
         try:
             response = client.put(
                 f"/api/ui/responses/{response_id}/cancel",
-                headers={"X-Request-ID": "cancel-operation-42"},
+                headers={"X-Operation-Id": "cancel-operation-42"},
             )
             emitted = [
                 event
@@ -830,7 +835,7 @@ class TestAsyncResponseHandling:
         try:
             response = client.put(
                 "/api/ui/responses/not-active/cancel",
-                headers={"X-Request-ID": "unknown-cancel-request"},
+                headers={"X-Operation-Id": "unknown-cancel-request"},
             )
         finally:
             lifecycle_state.client = original_client
@@ -867,7 +872,7 @@ class TestAsyncResponseHandling:
             response = client.post(
                 "/api/ui/responses",
                 json={"model": "progena-v1", "input": "hi", "stream": False},
-                headers={"X-Request-ID": request_id},
+                headers={"X-Operation-Id": request_id},
             )
             events = [
                 event
@@ -879,7 +884,7 @@ class TestAsyncResponseHandling:
             lifecycle_state.client = original_client
 
         assert response.status_code == 202
-        assert response.headers["X-Request-ID"] == request_id
+        assert response.headers["X-Operation-Id"] == request_id
         assert response.json() == {
             "request_id": request_id,
             "event_types": ["chat.response.started"],
@@ -934,7 +939,7 @@ class TestAsyncResponseHandling:
                     "stream": False,
                     "include_reasoning": True,
                 },
-                headers={"X-Request-ID": request_id},
+                headers={"X-Operation-Id": request_id},
             )
             events = [
                 event
@@ -945,7 +950,7 @@ class TestAsyncResponseHandling:
             lifecycle_state.client = original_client
 
         assert response.status_code == 202
-        assert response.headers["X-Request-ID"] == request_id
+        assert response.headers["X-Operation-Id"] == request_id
         assert response.json() == {
             "request_id": request_id,
             "event_types": ["chat.response.started"],

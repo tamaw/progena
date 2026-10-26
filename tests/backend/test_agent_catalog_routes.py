@@ -122,10 +122,10 @@ class FakeAgentStore:
 def _install_request_id_middleware(app: FastAPI) -> None:
     @app.middleware("http")
     async def request_id_middleware(request: Request, call_next):
-        request_id = request.headers.get("X-Request-ID") or "test-middleware-request-id"
+        request_id = request.headers.get("X-Operation-Id") or "test-middleware-request-id"
         request.state.request_id = request_id
         response = await call_next(request)
-        response.headers["X-Request-ID"] = request_id
+        response.headers["X-Operation-Id"] = request_id
         return response
 
 
@@ -173,7 +173,7 @@ def test_list_publishes_request_correlated_snapshot(harness):
 
     response = client.get(
         "/api/ui/agent-profiles",
-        headers={"X-Request-ID": request_id},
+        headers={"X-Operation-Id": request_id},
     )
 
     assert_acknowledged(response, ["agents.snapshot"], request_id)
@@ -203,7 +203,7 @@ def test_detail_publishes_upsert_and_selected(harness):
     client, events = harness
     response = client.get(
         "/api/ui/agent-profiles/alpha",
-        headers={"X-Request-ID": "req-1"},
+        headers={"X-Operation-Id": "req-1"},
     )
     assert_acknowledged(response, ["agent.upserted", "agent.selected"], "req-1")
     types = [e[0] for e in events]
@@ -598,7 +598,7 @@ def test_run_state_rejects_thread_id_from_a_different_routine(harness):
 def test_delete_publishes_correlated_deleted_event_after_persistence(harness):
     client, events = harness
     response = client.delete(
-        "/api/ui/agent-profiles/alpha", headers={"X-Request-ID": "routine-delete"}
+        "/api/ui/agent-profiles/alpha", headers={"X-Operation-Id": "routine-delete"}
     )
     assert_acknowledged(response, ["agent.deleted", "agents.snapshot"])
     assert events[0] == (

@@ -104,7 +104,7 @@ it('retains independent unsaved intent drafts for schedules A and B across selec
 it('keeps a deep link that a cached list lacks until this visit’s refresh settles', async () => {
   let refreshRequestId = null;
   vi.stubGlobal('fetch', vi.fn(async (_url, { headers = {} } = {}) => {
-    refreshRequestId = headers['X-Request-ID'];
+    refreshRequestId = headers['X-Operation-Id'];
     return new Response(JSON.stringify({ request_id: refreshRequestId, event_types: ['schedule.snapshot'] }), { status: 202 });
   }));
   const store = configureStore({

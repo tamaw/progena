@@ -49,7 +49,7 @@ async def preview_workflow_cron(
 @router.get("/workflows", status_code=202, response_model=http_contracts.UiRequestAcknowledgement)
 async def get_workflows(
     request: Request,
-    x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+    x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
 ):
     """Return the workflow definition list for the workflows page/sidebar."""
     request_id = http_requests.request_correlation_id(request, x_request_id)
@@ -70,7 +70,7 @@ async def get_workflows(
 async def get_workflow_content(
     request: Request,
     path: str = Query(...),
-    x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+    x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
 ):
     """Return one stored workflow definition by id or mounted virtual path."""
     request_id = http_requests.request_correlation_id(request, x_request_id)
@@ -95,7 +95,7 @@ async def get_workflow_content(
 async def put_workflow_content(
     body: workflows_models.WorkflowContentPutRequest,
     request: Request,
-    x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+    x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
 ):
     """Persist one workflow definition."""
     request_id = http_requests.request_correlation_id(request, x_request_id)
@@ -140,7 +140,7 @@ async def put_workflow_content(
 async def create_workflow(
     body: workflows_models.WorkflowCreateRequest,
     request: Request,
-    x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+    x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
 ):
     """Create a new workflow definition with the minimal valid scaffold."""
     request_id = http_requests.request_correlation_id(request, x_request_id)
@@ -184,7 +184,7 @@ async def create_workflow(
 async def delete_workflow(
     workflow_id: str,
     request: Request,
-    x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+    x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
 ):
     """Delete one stored workflow definition."""
     request_id = http_requests.request_correlation_id(request, x_request_id)
@@ -222,7 +222,7 @@ async def delete_workflow(
 async def pause_workflow(
     workflow_id: str,
     request: Request,
-    x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+    x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
 ):
     """Pause one workflow definition and any active run."""
     request_id = http_requests.request_correlation_id(request, x_request_id)
@@ -258,7 +258,7 @@ async def pause_workflow(
 async def resume_workflow(
     workflow_id: str,
     request: Request,
-    x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+    x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
 ):
     """Resume one paused workflow definition and its active run, if any."""
     request_id = http_requests.request_correlation_id(request, x_request_id)
@@ -291,7 +291,7 @@ async def resume_workflow(
 )
 async def get_workflow_runs(
     request: Request,
-    x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+    x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
 ):
     """Return active and recent workflow runs."""
     request_id = http_requests.request_correlation_id(request, x_request_id)
@@ -309,7 +309,7 @@ async def trigger_workflow(
     workflow_id: str,
     body: workflows_models.WorkflowManualTriggerRequest,
     request: Request,
-    x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+    x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
 ):
     """Manually trigger one workflow definition for operator testing."""
     request_id = http_requests.request_correlation_id(request, x_request_id)
@@ -356,7 +356,7 @@ async def resolve_workflow_approval(
     run_id: str,
     body: workflows_models.WorkflowApprovalRequest,
     request: Request,
-    x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+    x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
 ):
     """Approve or reject a paused workflow approval node."""
 
@@ -382,7 +382,7 @@ async def resolve_workflow_approval(
 async def action_run(
     body: workflows_models.ActionRunRequest,
     request: Request,
-    x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+    x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
 ):
     """Run a prompt/code action through the existing SSE message flow."""
     request_id = http_requests.request_correlation_id(request, x_request_id)
@@ -417,7 +417,7 @@ async def action_run(
 async def action_generate(
     body: workflows_models.ActionGenerateRequest,
     request: Request,
-    x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+    x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
 ):
     """Generate output through the existing SSE message flow."""
     request_id = http_requests.request_correlation_id(request, x_request_id)

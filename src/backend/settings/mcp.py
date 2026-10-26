@@ -77,7 +77,7 @@ def _broadcast_mcp_server_detail(widget_id: str, *, request_id: str | None = Non
 @router.get("/mcp", status_code=202, response_model=http_contracts.UiRequestAcknowledgement)
 async def get_mcp_servers(
     request: Request,
-    x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+    x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
 ):
     """Acknowledge MCP-list requests and publish the snapshot on the UI stream.
 
@@ -95,7 +95,7 @@ async def get_mcp_servers(
 async def get_mcp_server_detail(
     id: str,
     request: Request,
-    x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+    x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
 ):
     """Acknowledge a request for one MCP server's full detail and publish it.
 

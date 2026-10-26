@@ -122,7 +122,7 @@ def create_chat_router(
     async def get_chats(
         request: Request,
         include_archived: bool = False,
-        x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+        x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
     ):
         """Acknowledge chat list requests and publish the list on the UI stream."""
         request_id = request_correlation_id(request, x_request_id)
@@ -137,7 +137,7 @@ def create_chat_router(
     async def get_chat(
         thread_id: str,
         request: Request,
-        x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+        x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
     ):
         """Acknowledge chat detail requests and publish the detail on the UI stream."""
         request_id = request_correlation_id(request, x_request_id)
@@ -180,7 +180,7 @@ def create_chat_router(
         request: Request,
         before_message_id: str | None = None,
         limit: int = CHAT_MESSAGE_PAGE_SIZE,
-        x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+        x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
     ):
         """Acknowledge an older-messages page request and publish it on the UI stream."""
         request_id = request_correlation_id(request, x_request_id)
@@ -209,7 +209,7 @@ def create_chat_router(
         thread_id: str,
         request: ChatPatchRequest,
         http_request: Request,
-        x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+        x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
     ):
         """Update session document metadata (title/pinned/archived) via atomic merge."""
         request_id = request_correlation_id(http_request, x_request_id)
@@ -235,7 +235,7 @@ def create_chat_router(
     async def delete_chat(
         thread_id: str,
         request: Request,
-        x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+        x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
     ):
         """Delete the session document only; checkpoints are left intact."""
         request_id = request_correlation_id(request, x_request_id)

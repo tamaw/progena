@@ -38,7 +38,7 @@ from src.progena.canvases.contracts import (
 from src.progena.documents.types import DOCUMENT_OPERATIONS, DocumentType
 
 router = APIRouter(prefix="/api/ui", tags=["canvases"])
-_REQUEST_ID_HEADER = Header(default=None, alias="X-Request-ID")
+_REQUEST_ID_HEADER = Header(default=None, alias="X-Operation-Id")
 
 
 class CanvasSummary(BaseModel):

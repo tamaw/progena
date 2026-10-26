@@ -225,7 +225,7 @@ def test_deleted_routine_history_routes_remain_available(harness, monkeypatch):
         ),
         prefix="/api/ui",
     )
-    client = TestClient(app, headers={"X-Request-ID": "deleted-routine-history"})
+    client = TestClient(app, headers={"X-Operation-Id": "deleted-routine-history"})
     assert client.get("/api/ui/agent-profiles/gone").status_code == 404
     for path, event_type in (
         ("revisions", "agent.routine.revisions.loaded"),
@@ -294,7 +294,7 @@ def test_catalog_hides_deleted_document_before_notification_reconciles(harness, 
         ),
         prefix="/api/ui",
     )
-    client = TestClient(app, headers={"X-Request-ID": "pending-deletion"})
+    client = TestClient(app, headers={"X-Operation-Id": "pending-deletion"})
     assert client.get("/api/ui/agent-profiles/gone").status_code == 404
     assert (
         client.patch(

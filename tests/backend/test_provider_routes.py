@@ -76,7 +76,7 @@ def _app(store: InMemoryDocumentStore, repository: FakeProviderRepository):
 
     @app.middleware("http")
     async def correlation(request, call_next):
-        request.state.request_id = request.headers.get("X-Request-ID", "provider-test")
+        request.state.request_id = request.headers.get("X-Operation-Id", "provider-test")
         return await call_next(request)
 
     def broadcast(kind: str, payload: dict[str, Any], **kwargs: Any) -> None:

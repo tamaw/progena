@@ -63,7 +63,7 @@ export function withQuery(url, params) {
 /**
  * Submit a finite browser request and validate its 202 acknowledgement.
  *
- * The caller provides a *requestId* (UUID); it is sent as the X-Request-ID
+ * The caller provides a *requestId* (UUID); it is sent as the X-Operation-Id
  * header. The acknowledgement contains only its matching request ID and the
  * causal UI event types. Domain data and terminal state arrive through
  * /api/ui/stream.
@@ -77,7 +77,7 @@ export async function requestAcknowledged(url, { method = 'GET', body, requestId
   }
   const headers = {
     Accept: 'application/json',
-    'X-Request-ID': requestId,
+    'X-Operation-Id': requestId,
   };
   if (body !== undefined) {
     headers['Content-Type'] = 'application/json';

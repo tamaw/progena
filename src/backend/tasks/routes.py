@@ -22,7 +22,7 @@ router = APIRouter()
 @router.get("/kanban", status_code=202, response_model=http_contracts.UiRequestAcknowledgement)
 async def get_kanban_board(
     request: Request,
-    x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+    x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
 ):
     """Get the persisted kanban board used by the frontend."""
     request_id = http_requests.request_correlation_id(request, x_request_id)
@@ -39,7 +39,7 @@ async def get_kanban_board(
 async def create_kanban_card(
     body: tasks_models.KanbanCardCreateRequest,
     request: Request,
-    x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+    x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
 ):
     """Create a new kanban card in the backlog column."""
     title = body.title.strip()
@@ -86,7 +86,7 @@ async def patch_kanban_card(
     card_id: str,
     body: tasks_models.KanbanCardPatchRequest,
     request: Request,
-    x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+    x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
 ):
     """Patch an existing kanban card."""
     request_id = http_requests.request_correlation_id(request, x_request_id)
@@ -185,7 +185,7 @@ async def patch_kanban_card(
 async def delete_kanban_card(
     card_id: str,
     request: Request,
-    x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+    x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
 ):
     """Delete an existing kanban card."""
     request_id = http_requests.request_correlation_id(request, x_request_id)
@@ -211,7 +211,7 @@ async def delete_kanban_card(
 async def get_task_activity(
     card_id: str,
     request: Request,
-    x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+    x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
 ):
     """Acknowledge a task-activity request and publish its canonical timeline."""
     request_id = http_requests.request_correlation_id(request, x_request_id)
@@ -230,7 +230,7 @@ async def get_task_activity(
 async def get_task_content(
     card_id: str,
     request: Request,
-    x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+    x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
 ):
     """Acknowledge a task-content request and publish its canonical markdown."""
     request_id = http_requests.request_correlation_id(request, x_request_id)
@@ -250,7 +250,7 @@ async def update_task_content(
     card_id: str,
     body: tasks_models.TaskContentUpdateRequest,
     request: Request,
-    x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+    x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
 ):
     """Persist the markdown body for a single task card."""
     request_id = http_requests.request_correlation_id(request, x_request_id)
@@ -282,7 +282,7 @@ async def create_task_activity(
     card_id: str,
     body: tasks_models.TaskActivityCreateRequest,
     request: Request,
-    x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+    x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
 ):
     """Append a user-visible activity entry for a task card."""
     request_id = http_requests.request_correlation_id(request, x_request_id)
