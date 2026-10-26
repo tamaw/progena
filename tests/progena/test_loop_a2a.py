@@ -11,7 +11,7 @@ from src.progena.orchestration.nodes.context import HeartbeatContext
 
 
 @pytest.mark.asyncio
-async def test_a2a_completion_node_persists_one_tool_message() -> None:
+async def test_a2a_completion_node_logs_once_without_touching_the_loop_thread() -> None:
     state_manager = MagicMock()
     state_manager.log_conversation = AsyncMock()
 
@@ -21,7 +21,7 @@ async def test_a2a_completion_node_persists_one_tool_message() -> None:
         status="completed",
         summary="Example task completed.",
     )
-    state = {"messages": [], "a2a_completed_tasks": [record, record]}
+    state = {"thread_id": "loop-thread", "messages": [], "a2a_completed_tasks": [record, record]}
     agent_graph = AsyncMock()
     runtime = Runtime(
         context=HeartbeatContext(
@@ -58,3 +58,6 @@ async def test_a2a_completion_node_persists_one_tool_message() -> None:
     assert message.metadata["task_id"] == "example-5"
     assert "example agent task completed" in message.content
     state_manager.log_conversation.assert_awaited_once()
+    # A tool result with no matching model tool call poisons the thread for the
+    # provider; the originating thread gets its own follow-up turn instead.
+    agent_graph.aupdate_state.assert_not_called()

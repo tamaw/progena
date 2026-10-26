@@ -179,9 +179,6 @@ async def test_runtime_heartbeat_graph_processes_one_input_cycle() -> None:
                 "pending_response": "ok",
             }
 
-        async def aupdate_state(self, config, values):  # noqa: ANN001
-            return config
-
     queues = _FakeQueues(wait_seconds=0.25, pending_count=2)
     live_state = {
         "thread_id": "thread-1",
@@ -252,9 +249,6 @@ async def test_runtime_heartbeat_graph_emits_agent_callback_for_notified_input()
                 "pending_response": "reply-token",
             }
 
-        async def aupdate_state(self, config, values):  # noqa: ANN001
-            return config
-
     queued_input = {
         "content": "hello",
         "metadata": {
@@ -316,9 +310,6 @@ async def test_runtime_heartbeat_graph_reports_startup_node_errors() -> None:
                 "messages": [{"role": "assistant", "content": "ok"}],
                 "pending_response": "ok",
             }
-
-        async def aupdate_state(self, config, values):  # noqa: ANN001
-            return config
 
     async def _raising_startup_audit(_state, _runtime):  # noqa: ANN001
         raise RuntimeError("startup audit exploded")

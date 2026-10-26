@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import logging
 from typing import Any
 
 from langgraph.runtime import Runtime
@@ -15,8 +14,6 @@ from src.progena.orchestration.nodes.context import HeartbeatContext
 from src.progena.orchestration.state import ProgenaState
 from src.progena.sessions.models import ConversationMessage
 from src.progena.utils import utcnow, utcnow_isoformat
-
-logger = logging.getLogger(__name__)
 
 
 async def completion_record_node(
@@ -59,28 +56,6 @@ async def completion_record_node(
     )
     await runtime.context.state_manager.log_conversation(message)
     messages.append(message)
-    thread_id = state.get("thread_id")
-    if thread_id and runtime.context.agent_graph is not None:
-        try:
-            await runtime.context.agent_graph.aupdate_state(
-                config={"configurable": {"thread_id": str(thread_id)}},
-                values={
-                    "messages": [
-                        {
-                            "type": "tool",
-                            "content": message.content,
-                            "tool_call_id": message.id,
-                            "id": message.id,
-                        }
-                    ]
-                },
-            )
-        except Exception as exc:
-            logger.warning(
-                "Failed to persist async-subagent completion message to checkpoint for thread %s: %s",
-                thread_id,
-                exc,
-            )
     return {"messages": messages}
 
 
