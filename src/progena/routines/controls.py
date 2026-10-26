@@ -1,14 +1,18 @@
 """In-process cancellation control for native routine graph executions.
 
-A routine run is cancellable only while this process owns its native LangGraph
+A routine run is cancellable while this process owns its native LangGraph
 ``Task``.  The durable control document records user intent and terminal
-outcomes, but is deliberately not used to infer that a task died after a
-restart: no live task means no control acknowledgement.
+outcomes.  Every ``started`` lifecycle records the runtime process that owns
+the execution, so a stop or cancel for a run started by an earlier runtime
+process settles it directly: that process exited, so nothing is executing it,
+and its last LangGraph checkpoint stays resumable.  Absence of a local task in
+the owning process is never treated as a dead run.
 """
 
 from __future__ import annotations
 
 import asyncio
+import uuid
 from collections.abc import Awaitable, Callable, Coroutine
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -18,6 +22,10 @@ from ..utils import utcnow_isoformat
 from .events import persist_run_event
 
 RoutineControlAction = Literal["stop", "cancel"]
+# Identifies this runtime process in ``started`` lifecycles.  It is process-wide
+# because several controllers can share one process (agent rebuilds).
+RUNTIME_INSTANCE_ID = uuid.uuid4().hex
+_EXECUTING_STATUSES = frozenset({"started", "stopping", "cancelling"})
 _PENDING_STATUSES = frozenset({"stopping", "cancelling"})
 _TERMINAL_STATUSES = frozenset({"stopped", "cancelled", "completed", "failed"})
 
@@ -89,8 +97,9 @@ class RoutineRunController:
 
     The registry is intentionally process-local: only a local task can be
     cancelled.  The paired durable document gives every entrypoint the same
-    irreversible ``cancelled`` guard and records pending intent, without ever
-    fabricating an outcome for an execution this process no longer owns.
+    irreversible ``cancelled`` guard and records pending intent.  An outcome is
+    written without a local task only for a run whose ``started`` lifecycle names
+    an earlier runtime process.
     """
 
     def __init__(self, state_manager: Any) -> None:
@@ -201,6 +210,54 @@ class RoutineRunController:
         writer = getattr(self._state_manager, "save_routine_run_control", None)
         if callable(writer):
             await cast(Callable[[dict[str, Any]], Awaitable[None]], writer)(payload)
+
+    async def _load_run_events(self, request_id: str) -> list[dict[str, Any]]:
+        reader = getattr(self._state_manager, "list_routine_run_events", None)
+        if not callable(reader):
+            return []
+        load = cast(Callable[[str], Awaitable[list[dict[str, Any]]]], reader)
+        return [dict(event) for event in await load(request_id) if isinstance(event, dict)]
+
+    async def record_started(self, execution: dict[str, Any]) -> None:
+        """Persist ``started`` naming this process as the execution's owner."""
+        execution["runtime_instance"] = RUNTIME_INSTANCE_ID
+        await persist_run_event(self._state_manager, execution, "started")
+
+    async def _settle_previous_process_run(
+        self, scope: RoutineExecutionScope, action: RoutineControlAction
+    ) -> dict[str, Any]:
+        """Settle a run whose owning runtime process has exited (caller holds the lock).
+
+        Only a run still executing according to its lifecycle and started by a
+        different runtime process qualifies; ``started`` events written before
+        ownership was recorded predate every process that records it.
+        """
+        if self._active_threads.get(self._thread_key(scope)) is not None:
+            raise RoutineRunControlConflict("no matching active routine run")
+        events = [
+            event
+            for event in await self._load_run_events(scope.request_id)
+            if event.get("agent_id") == scope.agent_id and event.get("thread_id") == scope.thread_id
+        ]
+        latest = max(events, key=lambda event: str(event.get("timestamp") or ""), default=None)
+        if latest is None or latest.get("status") not in _EXECUTING_STATUSES:
+            raise RoutineRunControlConflict("no matching active routine run")
+        started = next((event for event in events if event.get("status") == "started"), None)
+        if started is None or started.get("runtime_instance") == RUNTIME_INSTANCE_ID:
+            raise RoutineRunControlConflict("no matching active routine run")
+        control = await self._load_control(scope.agent_id, scope.session_id)
+        if control and control.get("request_id") != scope.request_id:
+            raise RoutineRunControlConflict("routine run session belongs to another attempt")
+        cancel = (
+            action == "cancel"
+            or latest.get("status") == "cancelling"
+            or (control or {}).get("status") in {"cancelling", "cancelled"}
+        )
+        status = "cancelled" if cancel else "stopped"
+        payload = self._payload(scope, status)
+        await self._save_control(payload)
+        await persist_run_event(self._state_manager, payload, status)
+        return payload
 
     async def assert_not_cancelled(self, agent_id: str, session_id: str) -> None:
         """Reject every continuation path after logical-run cancellation."""
@@ -454,7 +511,18 @@ class RoutineRunController:
         key = (agent_id, thread_id, request_id)
         async with self._lock:
             entry = self._active.get(key)
-            if entry is None or entry.task is None or entry.task.done():
+            if entry is None:
+                return await self._settle_previous_process_run(
+                    RoutineExecutionScope(
+                        controller=self,
+                        agent_id=agent_id,
+                        session_id=session_id,
+                        thread_id=thread_id,
+                        request_id=request_id,
+                    ),
+                    action,
+                )
+            if entry.task is None or entry.task.done():
                 raise RoutineRunControlConflict("no matching active routine run")
             if entry.scope.session_id != session_id:
                 raise RoutineRunControlConflict(

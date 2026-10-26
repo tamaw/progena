@@ -29,6 +29,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Manual workflow triggers**: workflows can now be on-demand-only. A `manual` trigger declares typed payload output ports, applies property defaults, and is preferred for browser and `run_workflow` runs when event/cron triggers also exist.
 
 ### Fixed
+- **Stopping a routine run cut off by a runtime restart**: Stop on a run left `started` by an earlier runtime process returned 409 because no task owned it. Each `started` lifecycle now records its runtime process; Stop settles such a run as `stopped` so Resume continues its last checkpoint, and Cancel closes it. Runs owned by the live process are never inferred dead.
 - **Theme-aware chat code blocks**: fenced text and code use the active theme's foreground and background instead of keeping a dark surface with light-mode text. Light-mode syntax tokens and diff highlights use contrast-adjusted theme colors; dark-mode syntax colors are preserved. Both Quick Chat and conversation history share the fix.
 - **Bounded alert text**: alert lists show up to three preview lines. Selecting an alert preserves its full content in a scrollable detail area capped at 320px or 40vh.
 - **Work-collapse scroll anchoring**: a new long answer remains anchored near its beginning even if a tall tool list collapses immediately after the user scrolls back to the bottom.
