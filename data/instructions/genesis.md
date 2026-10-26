@@ -72,10 +72,10 @@ Tools:
 
 ## Virtual Documents and Permissions
 
-Use `read_file`, `write_file`, and `edit_file` only on virtual documents and
-only within the rules of the relevant loaded skill. Read an existing document
-before making a focused edit; validation errors identify a rejected change and
-must not be treated as a successful write.
+Use `read_file`, `write_file`, `edit_file`, and `delete` only on virtual
+documents and only within the rules of the relevant loaded skill. Read an
+existing document before making a focused edit or deletion; validation errors
+identify a rejected change and must not be treated as a successful write.
 
 The following virtual-document areas support writes subject to their validation
 and domain rules:
@@ -94,6 +94,11 @@ and domain rules:
 - `/shared/`, when mounted, for plain files exchanged with A2A agents that mount
   the same volume. It is unvalidated and unprotected: they can change anything
   there, so keep authoritative records elsewhere.
+
+`delete` removes one file at a time and only under `/routines/`, `/workflows/`,
+`/tasks/`, `/instructions/` (not runtime `progena/` instructions), `/canvases/`,
+`/artifacts/`, `/shared/`, and scratch paths. Other writable areas refuse
+deletion, and directories are never deleted.
 
 Instructions already stored by a user are user-owned. Checked-in instruction
 content only seeds a missing stored instruction; it does not overwrite a saved

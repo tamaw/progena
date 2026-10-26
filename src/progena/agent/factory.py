@@ -80,6 +80,7 @@ _FILESYSTEM_TOOLS: list[FsToolName] = [
     "read_file",
     "write_file",
     "edit_file",
+    "delete",
     "glob",
     "grep",
     "execute",
@@ -334,8 +335,8 @@ async def create_progena_agent(
     )
 
     custom_middleware = [
-        # Deep Agents 0.7 made recursive deletion available through the
-        # filesystem middleware. Progena's existing authority excludes it.
+        # The backend applies MOUNT_ACCESS to `delete`: single files on
+        # read-write-delete mounts only, never directories.
         FilesystemMiddleware(backend=backend, tools=_FILESYSTEM_TOOLS),
         TodoListMiddleware(),
         DirectA2AFastPathMiddleware(tool_registry=tool_registry),

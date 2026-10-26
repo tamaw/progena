@@ -1,7 +1,7 @@
 ---
 name: managing-tasks
 description: Create, edit, move, or delete kanban task cards by writing one markdown file per card under /tasks/. Use when a user asks to add a task, create a backlog item, move a card to a different column, change a task's status/title/labels, or remove a task from the board.
-allowed-tools: read_file write_file edit_file delete_file ls generate_id structured_output json_to_yaml
+allowed-tools: read_file write_file edit_file delete ls generate_id structured_output json_to_yaml
 ---
 
 # Managing Kanban Tasks
@@ -101,7 +101,7 @@ File Schema above exactly) is fine:
 2. `edit_file` the relevant frontmatter key or the body text.
 
 ### Delete a task
-`delete_file /tasks/<id>.md` removes the card from the board.
+`delete /tasks/<id>.md` removes the card from the board.
 
 ## After the Change
 Writing, editing, or deleting a card file triggers the Tasks page's live update

@@ -1,7 +1,7 @@
 ---
 name: managing-workflows
 description: Create, inspect, update, pause/resume, wire, or delete backend-native workflow definitions by editing one file under /workflows/ at a time. Use when a user asks to create or modify a workflow that reacts to document create/update/delete events (kanban cards, inbox messages, workflow runs, ACP tasks, repos, preferences, ...) and runs agent, routine, condition, approval, or direct document nodes.
-allowed-tools: read_file write_file edit_file ls structured_output generate_id current_time
+allowed-tools: read_file write_file edit_file delete ls structured_output generate_id current_time
 ---
 
 Workflow definitions live as one JSON file per workflow:
@@ -19,6 +19,8 @@ Core rules:
 5. Prefer `edit_file` for focused changes. Use `write_file` only when creating a new workflow or rewriting the whole document intentionally.
 6. Use `structured_output` against the complete definition schema whenever creating or reshaping nodes or edges — do not hand-assemble JSON from memory.
 7. Never hand-write `input_schema`/`output_schema` for `event`, `cron`, `document_read`, `document_query`, `document_write`, `document_create`, `document_delete`, or `format` nodes: the server derives them on save. `manual` nodes are the exception: author their `output_schema` as the typed manual-run payload. Wire edges to the port names listed below.
+8. To delete a workflow, read it first, then call `delete` with its exact
+   `/workflows/<workflow-id>.json` path.
 
 Document events:
 - Every create/update/delete of a stored document is an event. An `event` node subscribes by `document_type` (a registered type id). Built-in ids: `kanban_card`, `kanban_task` (task body), `inbox_message`, `workflow`, `workflow_run`, `routine`, `policy`, `agent`, `skill`, `memory`, `instruction`, `preferences`, `schedule`, `mcp`, `plugins`, `marketplaces`, `knowledge`, `knowledge_page`, `knowledge_index`, `repo`, `acp_task` (below), `alert`, `kanban_board`, and `session` (below). Writing a workflow with an unknown id fails with the list of registered ids.

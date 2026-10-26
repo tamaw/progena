@@ -37,6 +37,19 @@ mounts:
 render the chat body with YAML front matter; only supported front-matter fields
 are editable.
 
+### Mount access
+
+`MOUNT_ACCESS` in `src/progena/agent/filesystem/mounts.py` declares the main
+agent's access to every mount as `read`, `read-write`, or `read-write-delete`;
+the longest matching prefix wins and an undeclared mount fails backend
+construction. `read` mounts refuse every mutation. `delete` removes single
+files only on `read-write-delete` mounts (`/routines/`, `/workflows/`,
+`/tasks/`, `/instructions/`, `/canvases/`, `/artifacts/`, `/shared/`) and in
+scratch state; directories, mount roots, and `..` paths are refused. Domain
+rules still apply: runtime `progena/` instructions, knowledge pages, sessions,
+and alerts cannot be deleted. Routine Code nodes share this backend, and object
+agents keep their own per-manifest `read`/`read-write` mounts.
+
 ## Singleton configuration documents (`/config/`)
 
 `StateDocumentBackend` registers individual `StateFile` views over singleton

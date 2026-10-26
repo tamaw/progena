@@ -22,7 +22,7 @@ from deepagents.backends.utils import (
 
 from src.progena.agent.filesystem.base import _AsyncOnlyFileBackendMixin
 from src.progena.documents.catalog import check_entry_schema
-from src.progena.instructions import check_instruction_write
+from src.progena.instructions import check_instruction_write, is_runtime_instruction
 
 
 class ContentDocumentDirectoryBackend(_AsyncOnlyFileBackendMixin):
@@ -166,8 +166,9 @@ class InstructionDocumentDirectoryBackend(ContentDocumentDirectoryBackend):
 
     Every write must parse as an instruction template; bundled agent
     instructions are read-only and runtime instructions keep their
-    placeholders (:func:`check_instruction_write`). Failures surface as a
-    ``WriteResult.error`` so the agent sees the reason.
+    placeholders (:func:`check_instruction_write`). Runtime ``progena/``
+    instructions are read on every turn, so they can be edited but never
+    deleted. Failures surface as a result ``error`` so the agent sees the reason.
     """
 
     async def awrite(self, file_path: str, content: str) -> WriteResult:
@@ -178,3 +179,10 @@ class InstructionDocumentDirectoryBackend(ContentDocumentDirectoryBackend):
         except (ValueError, PermissionError) as exc:
             return WriteResult(error=f"Invalid instruction: {exc}")
         return await super().awrite(file_path, content)
+
+    async def adelete(self, file_path: str) -> WriteResult:
+        if is_runtime_instruction(self._name(file_path)):
+            return WriteResult(
+                error=f"Cannot delete '{file_path}': the runtime reads it on every turn"
+            )
+        return await super().adelete(file_path)

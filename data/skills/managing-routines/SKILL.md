@@ -1,7 +1,7 @@
 ---
 name: managing-routines
 description: Create, inspect, edit, validate, and delete executable routine graphs stored under /routines/. Use when a user asks to build or change a routine, formerly called a sequence, including branching, loops, parallel fan-out, human approval, or delegated agent steps.
-allowed-tools: read_file write_file edit_file ls structured_output generate_id current_time
+allowed-tools: read_file write_file edit_file delete ls structured_output generate_id current_time
 ---
 
 # Managing routines
@@ -55,6 +55,10 @@ For edits, read the current document and preserve unrelated fields. Directly
 edit prompts, labels, descriptions, or optional coordinates when appropriate.
 For topology or config changes, regenerate the complete document through the
 schema, validate it, then write exactly one routine file.
+
+For deletion, first read the routine, then call `delete` with its exact
+`/routines/<routine-id>.json` path. A successful deletion removes the routine
+from the list and prevents it from being run; `delete` only accepts files.
 
 ## Node kinds
 
