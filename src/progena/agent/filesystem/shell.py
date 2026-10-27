@@ -68,6 +68,8 @@ def build_shell_env(
         environment["PROGENA_REPOS_DIR"] = str(repos_dir)
     if timezone := parent_env.get("TZ"):
         environment["TZ"] = timezone
+    # The runtime's /tmp is read-only; fall back to the backend-created home.
+    environment["TMPDIR"] = parent_env.get("TMPDIR") or str(agent_home)
     for name in config.env_passthrough:
         if value := parent_env.get(name):
             environment[name] = value
