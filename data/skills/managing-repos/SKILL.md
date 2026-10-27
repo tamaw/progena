@@ -17,8 +17,12 @@ or deleted.
 access). If `local_path` doesn't exist on disk yet, the repo shows as "not yet
 cloned" until it is cloned there — this skill does not run `git clone`. The
 bundled `repo-manager` agent does the git work (clone, per-branch worktrees,
-push and pull requests), e.g. from a routine `agent` step. A relative
-`local_path` (e.g. `"progena"`) is the usual choice: it lives in the managed
+push and pull requests), e.g. from a routine `agent` step. To post a pull
+request comment or a comment-only review, delegate to `repo-manager` with the
+worktree, pull request and comment text; it runs `gh pr comment` or
+`gh pr review --comment` under its `git_write` + `git_publish` opt-ins.
+Approving or requesting changes on a review, merging and `gh api` stay refused.
+A relative `local_path` (e.g. `"progena"`) is the usual choice: it lives in the managed
 repos directory that the runtime, backend and Claude containers share.
 
 ## Live git status is a separate, read-only file

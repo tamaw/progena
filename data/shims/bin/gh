@@ -28,6 +28,48 @@ case "$group:$verb" in
     [[ "${PROGENA_SHIM_GIT_WRITE:-}" == "1" && "${PROGENA_SHIM_GIT_PUBLISH:-}" == "1" ]] \
       || deny "gh $group $verb"
     ;;
+  pr:comment)
+    # Same opt-in as gh pr create.
+    [[ "${PROGENA_SHIM_GIT_WRITE:-}" == "1" && "${PROGENA_SHIM_GIT_PUBLISH:-}" == "1" ]] \
+      || deny "gh $group $verb"
+    ;;
+  pr:review)
+    # Same opt-in as gh pr create, comment-only reviews: approving or requesting
+    # changes stays refused. Options are parsed value-aware and unknown syntax
+    # fails closed, so a body or --body-file value can never select a mode.
+    [[ "${PROGENA_SHIM_GIT_WRITE:-}" == "1" && "${PROGENA_SHIM_GIT_PUBLISH:-}" == "1" ]] \
+      || deny "gh $group $verb"
+    comment=0
+    positional=0
+    i=2
+    while (( i < ${#args[@]} )); do
+      arg=${args[i]}
+      case "$arg" in
+        --)
+          positional=$(( positional + ${#args[@]} - i - 1 ))
+          break
+          ;;
+        --comment|-c)
+          comment=1
+          ;;
+        --body|-b|--body-file|-F)
+          (( i + 1 < ${#args[@]} )) || deny "gh $group $verb: missing value for $arg"
+          i=$(( i + 1 ))
+          ;;
+        --body=*|--body-file=*)
+          ;;
+        -*)
+          deny "gh $group $verb option: $arg"
+          ;;
+        *)
+          positional=$(( positional + 1 ))
+          ;;
+      esac
+      i=$(( i + 1 ))
+    done
+    (( comment )) || deny "gh $group $verb without --comment"
+    (( positional <= 1 )) || deny "gh $group $verb: more than one pull request"
+    ;;
   *)
     deny "gh $group $verb"
     ;;

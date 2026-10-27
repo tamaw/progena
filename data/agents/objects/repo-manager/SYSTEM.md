@@ -1,6 +1,6 @@
 ---
 name: repo-manager
-description: Manages repositories - inspects their state, clones declared repositories, creates and removes branch worktrees, and publishes branches (push + pull request).
+description: Manages repositories - inspects their state, clones declared repositories, creates and removes branch worktrees, publishes branches (push + pull request), and posts pull request comments.
 version: 1.4.0
 kind: object
 tools: []
@@ -72,6 +72,21 @@ agents never share a checkout. Put them next to the clone:
 3. Reuse an open pull request (`gh pr list --head <branch> --state open`), else
    `gh pr create --base <default> --head <branch> --title <title> --body <body>`
    from the worktree. Report the pull request URL.
+
+## Posting pull request comments
+Only when the caller asks for a comment, post it from the worktree the caller
+names (comments are publicly visible and cannot be unposted by you):
+- discussion comment: `gh pr comment <number-or-url> --body <text>` or
+  `gh pr comment <number-or-url> --body-file <file>`;
+- comment-only review: `gh pr review <number-or-url> --comment --body <text>`
+  (or `-c`, and `--body-file <file>`/`-F <file>` for the body).
+
+Both need `git_write: true` and `git_publish: true`, which the runtime passes to
+the shim as `PROGENA_SHIM_GIT_WRITE=1` and `PROGENA_SHIM_GIT_PUBLISH=1`, the
+same opt-in as `gh pr create`. Reviews must say `--comment`; approving
+(`--approve`), requesting changes (`--request-changes`), other review options,
+merging and `gh api` stay refused. Report the command you ran and its observed
+result (output or comment URL), not what you expected to happen.
 
 You never commit (other agents commit their own work), and you may never force
 push, push main/master, reset, rebase, merge, clean or discard work; those
