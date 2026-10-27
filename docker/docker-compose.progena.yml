@@ -77,6 +77,9 @@ services:
       PROGENA_SHELL_TIMEOUT_SECONDS: ${PROGENA_SHELL_TIMEOUT_SECONDS:-120}
       # State is transient in the hardened read-only runtime image.
       PROGENA_STATE_DIR: /app/tmp/state
+      # The root filesystem is read-only; temp files go to the writable /app/tmp tmpfs.
+      # Object-agent shells inherit this TMPDIR.
+      TMPDIR: /app/tmp
       # Exchange volume shared with A2A agent containers; exposed to the agent as /shared/.
       PROGENA_SHARED_DIR: /shared
       # Share glibc malloc arenas across threads so memory freed after large

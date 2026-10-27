@@ -4,7 +4,7 @@ import pytest
 from deepagents.backends import CompositeBackend
 from deepagents.middleware.filesystem import FilesystemMiddleware, supports_execution
 
-from src.progena.agent.filesystem.shell import ShellPaths, build_shell_env
+from src.progena.agent.filesystem.shell import ProgenaShellBackend, ShellPaths, build_shell_env
 from src.progena.agent.object_agents.factory import create_object_agent_proxy
 from src.progena.agent.object_agents.manifest import (
     ObjectAgentSource,
@@ -203,14 +203,68 @@ def test_shell_environment_is_scrubbed_and_explicit():
             "AZURE_OPENAI_API_KEY": "secret",
             "GH_HOST": "evil.com",
             "GIT_DIR": "/elsewhere/.git",
+            "TMPDIR": "/app/tmp",
         },
     )
 
     assert environment["PATH"] == "/shims:/usr/bin:/bin"
+    # TMPDIR is carried without being listed in env_passthrough.
+    assert environment["TMPDIR"] == "/app/tmp"
     assert environment["GH_TOKEN"] == "token"
     assert "AZURE_OPENAI_API_KEY" not in environment
     assert "GH_HOST" not in environment
     assert "GIT_DIR" not in environment
+
+
+@pytest.mark.parametrize(
+    ("parent_env", "expected"),
+    [
+        ({"TMPDIR": "/app/tmp"}, "/app/tmp"),
+        ({}, "/home/agent"),
+        ({"TMPDIR": ""}, "/home/agent"),
+    ],
+)
+def test_shell_tmpdir_uses_parent_or_agent_home(parent_env: dict[str, str], expected: str):
+    config = parse_object_agent_manifest(SHELL_SYSTEM, source="test").shell
+    assert config is not None
+
+    environment = build_shell_env(
+        shim_bin=Path("/shims"),
+        agent_home=Path("/home/agent"),
+        config=config,
+        parent_env=parent_env,
+    )
+
+    assert environment["TMPDIR"] == expected
+
+
+@pytest.mark.parametrize("configured", [True, False])
+def test_shell_temporary_file_round_trip(tmp_path: Path, configured: bool):
+    config = parse_object_agent_manifest(SHELL_SYSTEM, source="test").shell
+    assert config is not None
+    agent_home = tmp_path / "home"
+    temp_dir = tmp_path / "tmp" if configured else agent_home
+    if configured:
+        temp_dir.mkdir()
+    backend = ProgenaShellBackend(
+        workspace=tmp_path / "workspace",
+        timeout=30,
+        config=config,
+        shim_bin=tmp_path / "shims",
+        agent_home=agent_home,
+        parent_env={"TMPDIR": str(temp_dir)} if configured else {},
+    )
+
+    result = backend.execute(
+        'body=$(mktemp) && printf body-ok > "$body" && echo "$body" && cat "$body"'
+        ' && rm "$body" && test ! -e "$body"'
+    )
+
+    assert result.exit_code == 0, result.output
+    created, body = result.output.split()[:2]
+    assert Path(created).parent == temp_dir
+    assert body == "body-ok"
+    assert not Path(created).exists()
 
 
 def test_git_write_is_opt_in_and_exposes_the_repos_dir():
