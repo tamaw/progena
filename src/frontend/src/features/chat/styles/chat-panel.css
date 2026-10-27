@@ -382,9 +382,9 @@
     margin-top: 6px;
 }
 
-/* Merged tool call (ToolCallEntry.jsx): one line -- name, commentary or
-   input summary, duration/time, chevron -- opening to the full commentary,
-   an input box and an output box. */
+/* Merged tool call (ToolCallEntry.jsx): the agent's narration in full, then
+   one line -- name, input summary, duration/time, chevron -- opening to an
+   input box and an output box. */
 .tool-call-entry__line {
     display: flex;
     gap: 8px;
@@ -434,9 +434,9 @@
     margin-right: var(--entry-chevron-slot);
 }
 
-.tool-call-entry__commentary {
-    margin-top: 6px;
-    color: var(--color-text-secondary, var(--color-text-muted));
+.tool-call-entry__narration {
+    margin-bottom: 4px;
+    color: var(--color-text-primary);
 }
 
 /* Plan variant: the current item is the title (shrinks first), then a short

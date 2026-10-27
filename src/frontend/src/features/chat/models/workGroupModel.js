@@ -133,7 +133,7 @@ export function buildWorkSteps(workItems) {
         : { ...steps[existingIndex] };
 
       if (eventType === 'tool_start') {
-        step.detail = toolCallSummary(toolName, metadata);
+        step.detail = formatToolInputSummary(toolName, metadata.args_preview);
       } else {
         step.status = isToolEventFailure(event) ? 'error' : 'success';
         if (Number.isFinite(metadata.duration_ms)) step.durationMs = metadata.duration_ms;
@@ -188,15 +188,6 @@ export function buildWorkSteps(workItems) {
   }
 
   return steps;
-}
-
-/**
- * The one line describing a tool call: the agent's own commentary written
- * alongside the call when it has any, else a summary of its input.
- */
-export function toolCallSummary(toolName, metadata) {
-  const commentary = typeof metadata?.commentary === 'string' ? metadata.commentary.trim() : '';
-  return commentary || formatToolInputSummary(toolName, metadata?.args_preview);
 }
 
 function toolCallKey(item) {
