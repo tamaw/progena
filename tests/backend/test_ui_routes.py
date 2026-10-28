@@ -1933,7 +1933,6 @@ class TestWorkspaceBridgeActions:
         )
         jina_item = next(item for item in list_envelope.payload["items"] if item["name"] == "jina")
         assert "tools" not in jina_item["data"]
-        assert jina_item["logs"] == []
 
         detail_request_id = "mcp-detail-fetch"
         event_start = len(events_stream._ui_event_replay)

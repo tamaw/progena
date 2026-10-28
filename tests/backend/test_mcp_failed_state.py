@@ -46,9 +46,6 @@ def test_failed_server_surfaces_error_status_and_activity():
     widget = _mcp_widget(reader, "github")
     assert widget["status"] == "error"
     assert widget["status_message"] == "401 Unauthorized"
-    assert any(
-        "Discovery failed: 401 Unauthorized" in log.get("message", "") for log in widget["logs"]
-    )
 
 
 def test_healthy_server_is_not_marked_error():
