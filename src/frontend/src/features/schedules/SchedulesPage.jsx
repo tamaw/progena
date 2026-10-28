@@ -273,7 +273,7 @@ function SchedulesPage() {
   const { show } = useNotifications();
   const { retriggerSchedule } = useSchedulesApi();
   const { getApiUrl } = useConfig();
-  const { getWidgets, updateWidget, deleteWidget } = useWidgetsApi();
+  const { updateWidget, deleteWidget } = useWidgetsApi();
   const { scheduleId: urlScheduleId } = useParams();
   const selectedScheduleId = typeof urlScheduleId === 'string' && urlScheduleId.trim().length > 0
     ? urlScheduleId

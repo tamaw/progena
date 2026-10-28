@@ -32,7 +32,6 @@ from src.backend.main import app
 from src.backend.monitoring.state import StateReader
 from src.backend.storage.documents import (
     BACKEND_STATE_PREFIX,
-    PROGENA_LOG_PREFIX,
     PROGENA_STATE_PREFIX,
     CheckpointThreadSnapshot,
     InMemoryDocumentStore,
@@ -1367,37 +1366,17 @@ class TestLogsEndpoint:
         """A nonempty export delivers its complete data only on the UI stream."""
 
         request_id = "nonempty-log-export-client-request"
-        timestamp = datetime.now(UTC).replace(microsecond=0)
-        source_entries = [
-            {
-                "timestamp": (timestamp - timedelta(minutes=1)).isoformat().replace("+00:00", "Z"),
-                "level": "info",
-                "source": "decisions",
-                "message": "decision queued",
-            },
-            {
-                "timestamp": timestamp.isoformat().replace("+00:00", "Z"),
-                "level": "error",
-                "source": "decisions",
-                "message": "decision failed",
-            },
-        ]
-
-        store = kanban_state_reader.document_store
-        for i, entry in enumerate(source_entries):
-            store.save_document(
-                f"{PROGENA_LOG_PREFIX}.decisions",
-                f"entry-{i}",
-                {
-                    "timestamp": entry["timestamp"],
-                    "level": entry["level"],
-                    "source": entry["source"],
-                    "message": entry["message"],
-                    "relative_path": "decisions.jsonl",
-                    "group": "root",
-                    "data": entry,
-                },
-            )
+        timestamp = datetime.now().replace(microsecond=0)
+        queued_at = (timestamp - timedelta(minutes=1)).strftime("%Y-%m-%d %H:%M:%S")
+        failed_at = timestamp.strftime("%Y-%m-%d %H:%M:%S")
+        log_dir = kanban_state_reader.logs_dir / "progena"
+        log_dir.mkdir(parents=True)
+        (log_dir / "progena.stdout.log").write_text(
+            f"{queued_at} - src.progena.decisions - INFO - decision queued\n", encoding="utf-8"
+        )
+        (log_dir / "progena.stderr.log").write_text(
+            f"{failed_at} - src.progena.decisions - ERROR - decision failed\n", encoding="utf-8"
+        )
 
         queue = asyncio.Queue()
         events_stream._ui_stream_subscribers[queue] = None
@@ -1457,38 +1436,25 @@ class TestLogsEndpoint:
         assert [
             {
                 key: entry[key]
-                for key in (
-                    "timestamp",
-                    "time",
-                    "level",
-                    "source",
-                    "message",
-                    "relative_path",
-                    "group",
-                    "data",
-                )
+                for key in ("timestamp", "level", "source", "message", "relative_path", "group")
             }
             for entry in exported_entries
         ] == [
             {
-                "timestamp": source_entries[1]["timestamp"],
-                "time": source_entries[1]["timestamp"],
+                "timestamp": failed_at,
                 "level": "error",
-                "source": "decisions",
+                "source": "src.progena.decisions",
                 "message": "decision failed",
-                "relative_path": "decisions.jsonl",
-                "group": "root",
-                "data": source_entries[1],
+                "relative_path": "progena/progena.stderr.log",
+                "group": "progena",
             },
             {
-                "timestamp": source_entries[0]["timestamp"],
-                "time": source_entries[0]["timestamp"],
+                "timestamp": queued_at,
                 "level": "info",
-                "source": "decisions",
+                "source": "src.progena.decisions",
                 "message": "decision queued",
-                "relative_path": "decisions.jsonl",
-                "group": "root",
-                "data": source_entries[0],
+                "relative_path": "progena/progena.stdout.log",
+                "group": "progena",
             },
         ]
 
