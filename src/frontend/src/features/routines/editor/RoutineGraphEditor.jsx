@@ -4,7 +4,7 @@ import { createUuid } from '../../../lib/uuid';
 import useEntityDraft from '../../../hooks/useEntityDraft';
 import { useConfig } from '../../../context/ConfigContext';
 import React, { useState, useRef, useEffect, useCallback, useMemo, useLayoutEffect } from 'react';
-import { selectAgentRoutineRuns, selectAgentRunState, selectRoutineRunLifecycle, selectLatestRoutineRunLifecycle, selectRoutineRunLifecyclesByThreadId, startRoutineRun, controlRoutineRun, answerRoutineApproval, fetchRoutineRuns, fetchRunState, selectAgentRoutineRevisionContent, fetchRoutineRevision, selectAgentProfiles, selectAgentRoutineRunsHasMore } from '../../agents/state/agents';
+import { selectAgentRoutineRuns, selectAgentRunState, selectRoutineRunLifecycle, selectLatestRoutineRunLifecycle, selectRoutineRunLifecyclesByThreadId, startRoutineRun, controlRoutineRun, continueInterruptedRoutineRun, answerRoutineApproval, fetchRoutineRuns, fetchRunState, selectAgentRoutineRevisionContent, fetchRoutineRevision, selectAgentProfiles, selectAgentRoutineRunsHasMore } from '../../agents/state/agents';
 import { selectPolicies, fetchPolicies } from '../../settings/state/policies';
 import {
   randomSessionId,
@@ -187,7 +187,7 @@ function useRoutineRunEvents(agentId, parameters, inputSchema) {
       : sessionId ? { session_id: sessionId } : {}).catch(() => {});
   }, [sessionId]);
 
-  const startRun = useCallback((targetNode) => {
+  const startRun = useCallback((targetNode, suppliedParameters) => {
     if (targetNode && lifecycleStatus === 'cancelled' && lifecycle?.session_id === interactiveSessionIdRef.current) {
       interactiveSessionIdRef.current = null;
       setHasInteractiveSession(false);
@@ -204,7 +204,7 @@ function useRoutineRunEvents(agentId, parameters, inputSchema) {
     setControlError(null);
     setPendingControlAction(null);
     setStopRequestedAtMs(null);
-    const effectiveParameters = { ...parameters };
+    const effectiveParameters = { ...(suppliedParameters ?? parameters) };
     for (const name of inputSchema?.required || []) {
       if (inputSchema.properties?.[name]?.type === 'boolean' && effectiveParameters[name] === undefined) {
         effectiveParameters[name] = false;
@@ -229,7 +229,7 @@ function useRoutineRunEvents(agentId, parameters, inputSchema) {
     const target = routineRunControlTarget(lifecycle, agentId);
     if (!target
       || (action === 'stop' && lifecycleStatus !== 'started')
-      || (action === 'cancel' && !['started', 'stopping'].includes(lifecycleStatus))) {
+      || (action === 'cancel' && !['started', 'stopping', 'interrupted'].includes(lifecycleStatus))) {
       return;
     }
     setControlError(null);
@@ -281,6 +281,15 @@ function useRoutineRunEvents(agentId, parameters, inputSchema) {
     })();
   }, [agentId, agentsUrl, dispatch, lifecycle, lifecycleStatus]);
 
+  const continueInterruptedRun = useCallback(() => {
+    const target = routineRunControlTarget(lifecycle, agentId);
+    if (lifecycleStatus !== 'interrupted' || !target) return;
+    setRequestError(null);
+    void dispatch(continueInterruptedRoutineRun({
+      agentsUrl, agentId, threadId: target.threadId, targetRequestId: target.requestId,
+    })).unwrap().catch((error) => setRequestError(error.message || 'Could not continue this run'));
+  }, [agentId, agentsUrl, dispatch, lifecycle, lifecycleStatus]);
+
   const resetInteractiveSession = useCallback(() => {
     interactiveSessionIdRef.current = null;
     setHasInteractiveSession(false);
@@ -309,6 +318,7 @@ function useRoutineRunEvents(agentId, parameters, inputSchema) {
     stopRun: () => requestControl('stop'),
     cancelRun: () => requestControl('cancel'),
     resumeRun,
+    continueInterruptedRun,
     threadId,
     runMeta: runState.run_meta,
     runData: runState.data,
@@ -501,6 +511,7 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, o
     stopRequestedAtMs,
     stopRun,
     cancelRun,
+    continueInterruptedRun,
     resumeRun,
     threadId: liveThreadId,
     runMeta: liveRunMeta,
@@ -534,9 +545,9 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, o
     resetRunNavToLatest();
     await answerApproval(approvalThreadId, approval, answer);
   }, [runNav.threadId, resetRunNavToLatest, answerApproval]);
-  const startRunAndTrackLatest = useCallback((targetNode) => {
+  const startRunAndTrackLatest = useCallback((targetNode, suppliedParameters) => {
     resetRunNavToLatest();
-    return startRun(targetNode);
+    return startRun(targetNode, suppliedParameters);
   }, [resetRunNavToLatest, startRun]);
   const { isBrowsingHistory } = runNav;
   useEffect(() => {
@@ -1201,6 +1212,7 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, o
   // Local (not lifted to AgentsPage) since nothing outside this canvas
   // needs to know it's open, same as restoreConfirmOpen above.
   const [runModalOpen, setRunModalOpen] = useState(false);
+  const [interruptedModalOpen, setInterruptedModalOpen] = useState(false);
   // The End cap's read-only mirror -- opens RoutineOutputModal to show the
   // declared output_schema resolved against the run currently in view
   // (live or browsed, same runData every other run-aware element here
@@ -1270,6 +1282,17 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, o
       : new Set()),
     [runNav.isBrowsingHistory, isExecutionActive, displayNodes, displayEdges, displayEntry, completedNodeIds],
   );
+  const interruptedNodeIds = useMemo(
+    () => new Set(liveLifecycle?.status === 'interrupted' ? liveLifecycle.next || [] : []),
+    [liveLifecycle],
+  );
+  const interruptedStepLabel = useMemo(
+    () => displayNodes
+      .filter((node) => interruptedNodeIds.has(node.id))
+      .map((node) => node.label || node.id)
+      .join(', '),
+    [displayNodes, interruptedNodeIds],
+  );
   const currentGraphForStaleness = useMemo(
     () => ({ entry: meta.entry, nodes, edges }),
     [meta.entry, nodes, edges],
@@ -1308,6 +1331,8 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, o
     runMeta,
     runData,
     activeNodeIds,
+    interruptedNodeIds,
+    interruptedAt: liveLifecycle?.interrupted_at ?? null,
     estimatedActiveStartMs,
     staleNodeIds,
     runStatus,
@@ -1321,7 +1346,7 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, o
     resetInteractiveSession,
     pendingApprovals: runNav.pendingApprovals,
     answerApproval: submitApproval,
-  }), [agent.id, updateNode, deleteNode, insertAt, onChangeStateKey, updateLoopGuard, removeBranching, onAddBranch, onJoinBranches, selectNode, selectedNodeId, onAddDefault, onRemoveBranch, onRemoveDefault, onRenameBranch, executionPolicy, displayEdges, displayNodes, meta.input_schema, meta.output_schema, runNav.isBrowsingHistory, runNav.pendingApprovals, submitApproval, runMeta, runData, activeNodeIds, estimatedActiveStartMs, staleNodeIds, runStatus, warmingUp, isRunInProgress, loopMembership, loopIterations, setLoopIteration, startRunAndTrackLatest, hasInteractiveSession, resetInteractiveSession]);
+  }), [agent.id, updateNode, deleteNode, insertAt, onChangeStateKey, updateLoopGuard, removeBranching, onAddBranch, onJoinBranches, selectNode, selectedNodeId, onAddDefault, onRemoveBranch, onRemoveDefault, onRenameBranch, executionPolicy, displayEdges, displayNodes, meta.input_schema, meta.output_schema, runNav.isBrowsingHistory, runNav.pendingApprovals, submitApproval, runMeta, runData, activeNodeIds, interruptedNodeIds, liveLifecycle, estimatedActiveStartMs, staleNodeIds, runStatus, warmingUp, isRunInProgress, loopMembership, loopIterations, setLoopIteration, startRunAndTrackLatest, hasInteractiveSession, resetInteractiveSession]);
 
   // Debounced autosave preserves the existing active-editor cadence. Local
   // edits already live in the draft registry, so cancelling this timer during
@@ -1544,6 +1569,16 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, o
             ariaLabel: 'Queued',
             disabled: true,
             pending: true,
+          };
+        }
+        if (liveLifecycle?.status === 'interrupted') {
+          return {
+            icon: <PlayActionIcon />,
+            label: 'Run',
+            tooltip: 'Choose how to recover this interrupted run',
+            ariaLabel: 'Run routine',
+            onClick: () => setInterruptedModalOpen(true),
+            disabled: runNav.isBrowsingHistory,
           };
         }
         return {
@@ -1797,6 +1832,44 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, o
           confirmLabel="Restore"
           onClose={() => setRestoreConfirmOpen(false)}
           onConfirm={handleRestoreRun}
+        />
+      ) : null}
+      {interruptedModalOpen ? (
+        <PopupModal
+          eyebrow="Interrupted run"
+          title="This run was interrupted"
+          message={`The runtime restarted while this run was executing${interruptedStepLabel ? ` step ${interruptedStepLabel}` : ''}${liveLifecycle?.interrupted_at ? ` (${formatAge(liveLifecycle.interrupted_at)})` : ''}. Continuing reruns that step, which may have partly run.`}
+          cancelLabel="Close"
+          onClose={() => setInterruptedModalOpen(false)}
+          actions={[
+            {
+              label: 'Continue',
+              tone: 'primary',
+              onClick: () => {
+                setInterruptedModalOpen(false);
+                resetRunNavToLatest();
+                continueInterruptedRun();
+              },
+            },
+            {
+              label: 'Start again',
+              tone: 'primary',
+              onClick: () => {
+                setInterruptedModalOpen(false);
+                if (liveLifecycle?.inputs) startRunAndTrackLatest(null, liveLifecycle.inputs);
+                else if (hasDeclaredParams) setRunModalOpen(true);
+                else startRunAndTrackLatest();
+              },
+            },
+            {
+              label: 'Cancel run',
+              tone: 'danger',
+              onClick: () => {
+                setInterruptedModalOpen(false);
+                cancelRun();
+              },
+            },
+          ]}
         />
       ) : null}
     </>

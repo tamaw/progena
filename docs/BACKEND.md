@@ -271,7 +271,11 @@ When a thread is selected, its session detail is emitted as both the
 request-correlated `chat.session.upserted` and `chat.session.selected` event.
 That detail includes `active_request_id` and nullable `activity`
 (`"delegating"`, `"generating"`, or `null`) from the same volatile response
-registry, not persisted chat history.
+registry, not persisted chat history. It also carries nullable `interruption`
+(`{next, at}`): when no response is active and the saved transcript ends
+mid-turn, the backend asks the runtime `GET /v1/threads/{thread_id}/state` and
+reports the turn as interrupted only when the runtime confirms a pending step
+that no live task owns and no person is being waited on. A failed read omits it.
 
 - dedicated `/api/ui/responses/{request_id}/stream` carries only
   `chat.response.delta` and `chat.response.event` content frames, plus

@@ -65,6 +65,22 @@ ROUTINE_REVISIONS_STATE_KEY = "routine_revisions"
 ROUTINE_GRAPH_SNAPSHOT_STATE_KEY = "_routine_graph_snapshot"
 _RUNTIME_NODE_CACHE = InMemoryCache()
 
+_MAX_PERSISTED_RUN_INPUT_BYTES = 64 * 1024
+
+
+def _persisted_run_inputs(parameters: Any) -> dict[str, Any] | None:
+    """Return a bounded JSON-safe record of the first attempt's parameters."""
+    if not isinstance(parameters, dict):
+        return None
+    try:
+        encoded = json.dumps(parameters, ensure_ascii=False, separators=(",", ":"), default=str)
+    except (TypeError, ValueError):
+        return None
+    if len(encoded.encode("utf-8")) > _MAX_PERSISTED_RUN_INPUT_BYTES:
+        return None
+    decoded = json.loads(encoded)
+    return decoded if isinstance(decoded, dict) else None
+
 
 async def resolve_routine_document(
     state_manager: Any, routine_id_or_name: str
@@ -497,6 +513,10 @@ def create_routine_executor(
             "session_id": session_id,
             "request_id": state.get("_routine_request_id") or str(uuid.uuid4()),
         }
+        if not resume_thread_id:
+            inputs = _persisted_run_inputs(state.get("parameters"))
+            if inputs is not None:
+                execution["inputs"] = inputs
         if state.get("_routine_parent"):
             execution["parent"] = dict(state["_routine_parent"])
         state = {**state, "_interactive_session_id": session_id, "_routine_execution": execution}
@@ -703,6 +723,64 @@ def _pause_details(interrupts: Any) -> dict[str, Any]:
     }
 
 
+async def _load_pinned_routine_graph(
+    thread_id: str, state_manager: Any, revision_reader: RoutineRevisionReader
+) -> tuple[Any, Any]:
+    """Return the graph a routine thread ran against and its instruction loader."""
+    routine_id, revision_id = _parse_routine_thread_id(thread_id)
+    graph_doc: dict[str, Any] | None = None
+    if revision_id is not None:
+        graph_doc = await revision_reader.fetch(routine_id, revision_id)
+    if graph_doc is None:
+        graph_doc = await state_manager.get_routine_graph(routine_id)
+    if graph_doc is None:
+        raise ValueError(f"routine {routine_id!r} has no stored graph to resume against")
+    graph = validate_routine_graph_payload(graph_doc)
+    instruction_loader = None
+    if any(node.kind == "agent" and node.config.instruction is not None for node in graph.nodes):
+        instruction_loader, _ = await _routine_instruction_loader(state_manager)
+    return graph, instruction_loader
+
+
+async def routine_thread_state(
+    *,
+    thread_id: str,
+    model: BaseChatModel,
+    state_manager: Any,
+    revision_reader: RoutineRevisionReader,
+    agent_registry: dict[str, Any],
+    routine_registry: dict[str, Any] | None = None,
+    routine_runner: Callable[..., Awaitable[dict[str, Any]]] | None = None,
+    agent_background_runner: Callable[..., Awaitable[dict[str, Any]]] | None = None,
+    model_profile_resolver: Callable[[str], Awaitable[Any]] | None = None,
+    tool_registry: Any = None,
+    filesystem_backend: Any | None = None,
+    checkpointer: Any | None = None,
+) -> Any:
+    """Read a routine thread's native LangGraph snapshot against its pinned graph.
+
+    ``next`` and pending interrupts depend only on topology and the checkpoint,
+    so the execution policy (retries, cache) is not needed to read them.
+    """
+    graph, instruction_loader = await _load_pinned_routine_graph(
+        thread_id, state_manager, revision_reader
+    )
+    compiled = compile_routine_graph(
+        graph,
+        model=model,
+        agent_registry=agent_registry,
+        routine_registry=routine_registry,
+        routine_runner=routine_runner,
+        agent_background_runner=agent_background_runner,
+        model_profile_resolver=model_profile_resolver,
+        tool_registry=tool_registry,
+        filesystem_backend=filesystem_backend,
+        instruction_loader=instruction_loader,
+        checkpointer=checkpointer,
+    )
+    return await compiled.aget_state({"configurable": {"thread_id": thread_id}})
+
+
 async def resume_routine_thread(
     *, thread_id: str, answer: Any, database_url: str | None = None, **kwargs: Any
 ) -> dict[str, Any]:
@@ -743,18 +821,9 @@ async def _resume_routine_thread(
     routine_id, revision_id = _parse_routine_thread_id(thread_id)
     session_id = routine_session_from_thread(thread_id, routine_id)
     await routine_controls.assert_not_cancelled(routine_id, session_id)
-    graph_doc: dict[str, Any] | None = None
-    if revision_id is not None:
-        graph_doc = await revision_reader.fetch(routine_id, revision_id)
-    if graph_doc is None:
-        graph_doc = await state_manager.get_routine_graph(routine_id)
-    if graph_doc is None:
-        raise ValueError(f"routine {routine_id!r} has no stored graph to resume against")
-
-    graph = validate_routine_graph_payload(graph_doc)
-    instruction_loader = None
-    if any(node.kind == "agent" and node.config.instruction is not None for node in graph.nodes):
-        instruction_loader, _ = await _routine_instruction_loader(state_manager)
+    graph, instruction_loader = await _load_pinned_routine_graph(
+        thread_id, state_manager, revision_reader
+    )
     compiled = compile_routine_graph(
         graph,
         model=model,

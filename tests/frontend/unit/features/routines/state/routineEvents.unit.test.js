@@ -8,6 +8,19 @@ const event = (status, requestId, timestamp, extra = {}) => applyUiEvent({
 });
 
 describe('routine lifecycle', () => {
+
+  it('lets a derived interrupted attempt settle as stopped or cancelled, but not fall back to started', () => {
+    let state = reducer(undefined, event('interrupted', 'orphan', '2026-10-07T00:00:01Z', { next: ['fetch'] }));
+    state = reducer(state, event('started', 'orphan', '2026-10-07T00:00:01Z'));
+    expect(state.agents.runLifecycleByRequestId.orphan.status).toBe('interrupted');
+    expect(state.agents.runLifecycleByRequestId.orphan.next).toEqual(['fetch']);
+    state = reducer(state, event('stopped', 'orphan', '2026-10-07T00:05:00Z'));
+    expect(state.agents.runLifecycleByRequestId.orphan.status).toBe('stopped');
+
+    let cancelled = reducer(undefined, event('interrupted', 'other', '2026-10-07T00:00:01Z'));
+    cancelled = reducer(cancelled, event('cancelled', 'other', '2026-10-07T00:05:00Z'));
+    expect(cancelled.agents.runLifecycleByRequestId.other.status).toBe('cancelled');
+  });
   it('retains independent attempts on the same resumed thread and ignores late status', () => {
     let state = reducer(undefined, event('paused', 'one', '2026-10-07T00:00:02Z'));
     state = reducer(state, event('started', 'two', '2026-10-07T00:00:03Z'));

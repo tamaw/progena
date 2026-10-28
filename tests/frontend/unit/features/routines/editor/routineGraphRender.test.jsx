@@ -94,4 +94,22 @@ describe('extracted routine components', () => {
     expect(readOnlyDoc.querySelector('[aria-label="Insert step here"]')).toBeNull();
     expect(readOnlyDoc.querySelector('[aria-label="Remove branch"]')).toBeNull();
   });
+
+  it('marks only the step the interrupted run stopped on, in the chain and the inspector', () => {
+    const nodes = [
+      { id: 'fetch', kind: 'noop', label: 'Fetch', config: {} },
+      { id: 'report', kind: 'noop', label: 'Report', config: {} },
+    ];
+    const edges = [{ from: 'fetch', to: 'report', level: 'normal' }];
+    const overrides = { interruptedNodeIds: new Set(['fetch']), interruptedAt: '2026-10-28T10:00:00Z' };
+
+    const chain = parseMarkup(renderWithGraph(<RoutineChain nodes={nodes} edges={edges} entry="fetch" />, nodes, edges, overrides));
+    expect(chain.querySelector('[data-node-id="fetch"]').textContent).toContain('Interrupted');
+    expect(chain.querySelector('[data-node-id="report"]').textContent).not.toContain('Interrupted');
+
+    const stopped = parseMarkup(renderWithGraph(<NodeInspector node={nodes[0]} />, nodes, edges, overrides));
+    expect(stopped.querySelector('[role="status"]')?.textContent).toContain('Interrupted');
+    const other = parseMarkup(renderWithGraph(<NodeInspector node={nodes[1]} />, nodes, edges, overrides));
+    expect(other.textContent).not.toContain('Interrupted');
+  });
 });

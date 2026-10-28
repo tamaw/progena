@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from typing import Any, Literal
 
 from fastapi import APIRouter, Header, HTTPException, Request
@@ -18,6 +18,8 @@ import src.backend.http.contracts as http_contracts
 import src.backend.storage.documents as storage_documents
 from src.backend.chat.service import (
     CHAT_MESSAGE_PAGE_SIZE,
+    ChatInterruption,
+    ChatMessage,
     ChatMessagesPageResponse,
     ChatPatchRequest,
     ChatSessionDetail,
@@ -92,6 +94,7 @@ def create_chat_router(
     get_active_response: (
         Callable[[str], tuple[str, Literal["delegating", "generating"]] | None] | None
     ) = None,
+    get_runtime_thread_state: Callable[[str], Awaitable[dict[str, Any] | None]] | None = None,
 ) -> APIRouter:
     router = APIRouter()
 
@@ -120,6 +123,25 @@ def create_chat_router(
         """Persisted detail; a chat the user deleted stays deleted."""
         return get_chat_detail(get_document_store(), thread_id)
 
+    async def interruption_for(
+        thread_id: str, messages: list[ChatMessage]
+    ) -> ChatInterruption | None:
+        """Ask the runtime only when the saved transcript ends mid-turn.
+
+        A finished turn ends with an assistant reply that requests no tools;
+        that is the common case and needs no runtime read (which loads the
+        whole checkpoint).
+        """
+        if get_runtime_thread_state is None or not messages:
+            return None
+        last = messages[-1]
+        if last.role == "assistant" and not last.tool_calls:
+            return None
+        try:
+            return _interruption_from_runtime_state(await get_runtime_thread_state(thread_id))
+        except Exception:
+            return None
+
     @router.get("/chats", status_code=202, response_model=http_contracts.UiRequestAcknowledgement)
     async def get_chats(
         request: Request,
@@ -146,15 +168,19 @@ def create_chat_router(
         detail = await off_loop(load_detail, thread_id)
         if detail is None:
             raise HTTPException(status_code=404, detail="Chat session not found")
-        page, has_more = paginate_chat_messages(detail.messages, limit=CHAT_MESSAGE_PAGE_SIZE)
         active_response = get_active_response(thread_id) if get_active_response else None
         active_request_id, activity = active_response or (None, None)
+        interruption = (
+            None if active_response else await interruption_for(thread_id, detail.messages)
+        )
+        page, has_more = paginate_chat_messages(detail.messages, limit=CHAT_MESSAGE_PAGE_SIZE)
         detail = detail.model_copy(
             update={
                 "messages": page,
                 "has_more_messages": has_more,
                 "active_request_id": active_request_id,
                 "activity": activity,
+                "interruption": interruption,
             }
         )
         broadcast_ui_event(
@@ -256,6 +282,20 @@ def create_chat_router(
         )
 
     return router
+
+
+def _interruption_from_runtime_state(payload: dict[str, Any] | None) -> ChatInterruption | None:
+    """Map an authoritative runtime read into the browser detail contract."""
+    if not isinstance(payload, dict) or payload.get("interrupted") is not True:
+        return None
+    next_nodes = payload.get("next")
+    updated_at = payload.get("updated_at")
+    if not isinstance(next_nodes, list) or not all(isinstance(node, str) for node in next_nodes):
+        return None
+    return ChatInterruption(
+        next=next_nodes,
+        at=updated_at if isinstance(updated_at, str) else None,
+    )
 
 
 async def _publish_chat_session_document_event(typed: events_documents.TypedDocumentEvent) -> None:

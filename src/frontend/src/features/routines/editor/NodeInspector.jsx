@@ -10,6 +10,7 @@ import PopupModal from '../../../components/PopupModal';
 import { entityDraftKey } from '../../../store/editorDraftsSlice';
 import useEntityDraft from '../../../hooks/useEntityDraft';
 import { HumanApprovalControls } from './HumanApprovalControls';
+import { formatAge } from '../../agents/agentFormat';
 
 // Routing controls belong to the inspected node; fixed condition/split lanes
 // have no state key to author. New branching is chosen at insertion time.
@@ -34,7 +35,7 @@ function RoutingFooter({ id, kind, routerEdge }) {
 // is deliberately separate from the chain so large prompts never resize it.
 export function NodeInspector({ node, routerEdge, guardEdge, onClose, onDismiss, isNew, style, panelRef }) {
   const editContext = useContext(GraphEditContext);
-  const { updateNode, deleteNode, updateLoopGuard, runMeta, runData, staleNodeIds, edges: graphEdges, nodes: graphNodes, readOnly, runStatus, isRunInProgress, startRun, hasInteractiveSession, resetInteractiveSession, loopMembership, loopIterations, setLoopIteration, pendingApprovals, answerApproval, draftScope } = editContext;
+  const { updateNode, deleteNode, updateLoopGuard, runMeta, runData, staleNodeIds, edges: graphEdges, nodes: graphNodes, readOnly, runStatus, isRunInProgress, startRun, hasInteractiveSession, resetInteractiveSession, loopMembership, loopIterations, setLoopIteration, pendingApprovals, answerApproval, draftScope, interruptedNodeIds, interruptedAt } = editContext;
   const [isEditingLabel, setIsEditingLabel] = useState(false);
   const [confirmRunOpen, setConfirmRunOpen] = useState(false);
   const labelKey = entityDraftKey('routine-label', JSON.stringify([draftScope, node?.id]));
@@ -208,6 +209,11 @@ export function NodeInspector({ node, routerEdge, guardEdge, onClose, onDismiss,
           replaceNodeConfig={(config) => updateNode(node.id, { config })}
         />
         <RoutingFooter id={node.id} kind={node.kind} routerEdge={routerEdge} />
+        {interruptedNodeIds?.has(node.id) ? (
+          <div className="routine-node-inspector__run routine-node-inspector__run--error" role="status">
+            <strong>Interrupted</strong> — the runtime restarted while this step was running{interruptedAt ? ` (${formatAge(interruptedAt)})` : ''}. It may have partly run.
+          </div>
+        ) : null}
         {runEntries?.length ? (
           <div className={`routine-node-inspector__run${isRunStale ? ' routine-node-inspector__run--stale' : ''}${lastRunEntry.error ? ' routine-node-inspector__run--error' : ''}`}>
             {isRunStale ? (

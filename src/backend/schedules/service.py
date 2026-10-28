@@ -16,6 +16,7 @@ import src.backend.events.contracts as events_contracts
 import src.backend.events.documents as events_documents
 import src.backend.events.stream as events_stream
 import src.backend.monitoring.state as monitoring_state
+import src.backend.runtime_liveness as runtime_liveness
 import src.backend.schedules.models as schedules_models
 import src.backend.storage.documents as storage_documents
 from src.progena.cron import default_timezone_name
@@ -28,7 +29,9 @@ logger = logging.getLogger(__name__)
 MAX_EVENT_WIDGET_LOGS = 20
 
 
-def _schedule_item_to_info(item) -> schedules_models.ScheduleItemInfo:
+def _schedule_item_to_info(
+    item, runs: list[schedules_models.ScheduleRunInfo] | None = None
+) -> schedules_models.ScheduleItemInfo:
     """Build a schedule response with a freshly computed next_run.
 
     ``ScheduleItem.next_run`` falls back to ``last_run`` because the stored entry
@@ -68,6 +71,7 @@ def _schedule_item_to_info(item) -> schedules_models.ScheduleItemInfo:
         schedule_type=schedule_type,
         timezone=raw.get("timezone"),
         last_run_status=last_run_status,
+        runs=runs or [],
     )
 
 
@@ -553,6 +557,53 @@ def _widget_or_fallback(
     return refreshed if refreshed is not None else build_fallback()
 
 
+def _schedule_runs_for(
+    state_reader: monitoring_state.StateReader, schedule_id: str
+) -> list[schedules_models.ScheduleRunInfo]:
+    """Return the latest read-only run views for one schedule."""
+    document = state_reader.document_store.get_document(
+        storage_documents.PROGENA_STATE_PREFIX, "schedule_runs", []
+    )
+    payload = document.payload if document is not None else []
+    records = (
+        [
+            record
+            for record in payload
+            if isinstance(record, dict) and str(record.get("schedule_id") or "") == schedule_id
+        ]
+        if isinstance(payload, list)
+        else []
+    )
+    records.sort(
+        key=lambda record: str(
+            record.get("started_at") or record.get("created_at") or record.get("updated_at") or ""
+        ),
+        reverse=True,
+    )
+    live = runtime_liveness.live_runtime(state_reader.document_store)
+    runs: list[schedules_models.ScheduleRunInfo] = []
+    for record in records[:10]:
+        status = str(record.get("status") or "queued").lower()
+        started_at = record.get("started_at")
+        if (
+            status == "running" or (status == "queued" and started_at)
+        ) and runtime_liveness.owner_is_gone(record.get("runtime_instance"), started_at, live):
+            status = "interrupted"
+        runs.append(
+            schedules_models.ScheduleRunInfo(
+                run_id=str(record.get("run_id") or ""),
+                status=status,
+                started_at=str(started_at) if started_at is not None else None,
+                completed_at=(
+                    str(record["completed_at"]) if record.get("completed_at") is not None else None
+                ),
+                thread_id=str(record.get("thread_id") or ""),
+                error=str(record["error"]) if record.get("error") is not None else None,
+            )
+        )
+    return runs
+
+
 def broadcast_schedule_snapshot(
     *, request_id: str | None = None
 ) -> events_contracts.UiEventEnvelope:
@@ -563,8 +614,12 @@ def broadcast_schedule_snapshot(
     bridge, so the Schedules page reflects changes live.
     """
     state_reader = monitoring_state.get_state_reader()
+
     items = [
-        _schedule_item_to_info(item).model_dump(mode="json") for item in state_reader.get_schedule()
+        _schedule_item_to_info(item, _schedule_runs_for(state_reader, item.id)).model_dump(
+            mode="json"
+        )
+        for item in state_reader.get_schedule()
     ]
     return events_stream.broadcast_ui_event(
         "schedule.snapshot", {"items": items}, request_id=request_id

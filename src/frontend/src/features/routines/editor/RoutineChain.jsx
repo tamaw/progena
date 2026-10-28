@@ -91,11 +91,29 @@ function RunStatusStaleIcon() {
   );
 }
 
+function RunStatusInterruptedIcon() {
+  return (
+    <svg className="routine-step-card__status-icon routine-step-card__status-icon--error" viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
+      <path d="M8 2.5v6M8 11.5v.1" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+      <circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" strokeWidth="1.5" />
+    </svg>
+  );
+}
+
 function StepRunSummary({ nodeId }) {
-  const { runMeta, activeNodeIds, estimatedActiveStartMs, staleNodeIds, warmingUp, isRunInProgress, loopMembership, loopIterations } = useContext(GraphEditContext);
+  const { runMeta, activeNodeIds, interruptedNodeIds, estimatedActiveStartMs, staleNodeIds, warmingUp, isRunInProgress, loopMembership, loopIterations } = useContext(GraphEditContext);
   const entries = runMeta?.[nodeId];
   const isActive = activeNodeIds?.has(nodeId);
+  const isInterrupted = interruptedNodeIds?.has(nodeId);
   if (!entries?.length) {
+    if (isInterrupted) {
+      return (
+        <div className="routine-step-card__run routine-step-card__run--error">
+          <span className="routine-step-card__run-time">Interrupted</span>
+          <span className="routine-step-card__run-status" aria-hidden="true"><RunStatusInterruptedIcon /></span>
+        </div>
+      );
+    }
     // `isActive` (see deriveActiveNodeIds) is only ever true while a run is
     // actually in flight, so it already implies `isRunInProgress` -- no
     // separate check needed here.

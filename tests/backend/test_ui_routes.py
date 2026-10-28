@@ -258,6 +258,56 @@ class TestUIRoutes:
         assert selected.session_id == thread_id
         assert selected.payload["session"]["thread_id"] == thread_id
 
+    def test_chat_detail_reports_interruption_only_for_an_unfinished_turn(
+        self, client, document_store, monkeypatch
+    ):
+        """The runtime is asked only when the saved transcript ends mid-turn."""
+
+        reads: list[str] = []
+
+        class _Runtime:
+            is_running = True
+
+            async def get_thread_state(self, thread_id):
+                reads.append(thread_id)
+                return {
+                    "interrupted": True,
+                    "next": ["tools"],
+                    "updated_at": "2026-10-28T10:00:00Z",
+                }
+
+        monkeypatch.setattr(lifecycle_state, "client", _Runtime())
+        for thread_id, last in (
+            (
+                "thread-cut",
+                {
+                    "id": "a1",
+                    "type": "ai",
+                    "content": "",
+                    "tool_calls": [{"id": "call-1", "name": "read_file", "args": {}}],
+                },
+            ),
+            ("thread-done", {"id": "a1", "type": "ai", "content": "All done."}),
+        ):
+            _create_session_document(document_store, thread_id, thread_id)
+            document_store.upsert_checkpoint_thread_snapshot(
+                CheckpointThreadSnapshot(
+                    thread_id=thread_id,
+                    checkpoint_id="cp-1",
+                    checkpoint_ts="2026-10-28T09:59:00Z",
+                    messages=[{"id": "u1", "type": "human", "content": "go"}, last],
+                )
+            )
+
+        client.get("/api/ui/chats/thread-cut", headers={"X-Operation-Id": "cut"})
+        cut = events_stream._ui_event_replay[-1].payload["session"]
+        client.get("/api/ui/chats/thread-done", headers={"X-Operation-Id": "done"})
+        done = events_stream._ui_event_replay[-1].payload["session"]
+
+        assert cut["interruption"] == {"next": ["tools"], "at": "2026-10-28T10:00:00Z"}
+        assert done["interruption"] is None
+        assert reads == ["thread-cut"]
+
     def test_chat_detail_rehydrates_live_response_activity(self, client, document_store):
         """A selected thread recovers live activity without persisting transient state."""
 
@@ -1539,6 +1589,87 @@ class TestScheduleEndpoint:
         assert streamed["type"] == "ui.event"
         assert streamed["envelope"].type == "schedule.snapshot"
         assert streamed["envelope"].payload["items"][0]["message"] == "ping"
+
+    def test_schedule_snapshot_includes_read_only_interrupted_run_views(self, monkeypatch):
+        """Schedule run state is derived from the live runtime without persistence writes."""
+        store = InMemoryDocumentStore()
+        store.save_document(
+            PROGENA_STATE_PREFIX,
+            "schedule",
+            {
+                "sched-live": {
+                    "id": "sched-live",
+                    "name": "Live schedule",
+                    "message": "ping",
+                    "cron_expression": "0 * * * *",
+                    "paused": False,
+                }
+            },
+        )
+        store.save_document(
+            PROGENA_STATE_PREFIX,
+            "health",
+            {"runtime_instance": "live", "started_at": "2026-10-28T10:00:00+00:00"},
+        )
+        store.save_document(
+            PROGENA_STATE_PREFIX,
+            "schedule_runs",
+            [
+                {
+                    "run_id": "dead",
+                    "schedule_id": "sched-live",
+                    "thread_id": "sched-live_dead",
+                    "status": "running",
+                    "runtime_instance": "dead",
+                    "started_at": "2026-10-28T09:00:00+00:00",
+                },
+                {
+                    "run_id": "live",
+                    "schedule_id": "sched-live",
+                    "thread_id": "sched-live_live",
+                    "status": "running",
+                    "runtime_instance": "live",
+                    "started_at": "2026-10-28T10:01:00+00:00",
+                },
+                {
+                    "run_id": "legacy",
+                    "schedule_id": "sched-live",
+                    "thread_id": "sched-live_legacy",
+                    "status": "queued",
+                    "started_at": "2026-10-28T09:00:00+00:00",
+                },
+                {
+                    "run_id": "completed",
+                    "schedule_id": "sched-live",
+                    "thread_id": "sched-live_completed",
+                    "status": "completed",
+                    "runtime_instance": "dead",
+                    "started_at": "2026-10-28T09:00:00+00:00",
+                    "completed_at": "2026-10-28T09:01:00+00:00",
+                },
+            ],
+        )
+        state_reader = StateReader(document_store=store)
+        monkeypatch.setattr("src.backend.monitoring.state.get_state_reader", lambda: state_reader)
+
+        envelope = schedules_service.broadcast_schedule_snapshot()
+        runs = {run["run_id"]: run for run in envelope.payload["items"][0]["runs"]}
+
+        assert runs["dead"]["status"] == "interrupted"
+        assert runs["live"]["status"] == "running"
+        assert runs["legacy"]["status"] == "interrupted"
+        assert runs["completed"]["status"] == "completed"
+        assert set(runs["completed"]) == {
+            "run_id",
+            "status",
+            "started_at",
+            "completed_at",
+            "thread_id",
+            "error",
+        }
+        store.delete_document(PROGENA_STATE_PREFIX, "health")
+        unknown_live_runs = schedules_service._schedule_runs_for(state_reader, "sched-live")
+        assert {run.run_id: run.status for run in unknown_live_runs}["dead"] == "running"
 
 
 class TestLogsPage:

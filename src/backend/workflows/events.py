@@ -9,6 +9,8 @@ from collections import OrderedDict
 from typing import Any
 
 import src.backend.events.stream as events_stream
+from src.backend.integrations.runtime import get_thread_state
+from src.backend.runtime_liveness import live_runtime, owner_is_gone
 from src.backend.storage.documents import (
     PROGENA_STATE_PREFIX,
     DocumentEvent,
@@ -18,6 +20,31 @@ from src.backend.storage.documents import (
 from src.backend.storage.documents import get_default_document_store as get_document_store
 from src.progena.routines.approvals import decision_key, pending_approvals
 from src.progena.routines.events import CHECKPOINT_CHANNEL, RUN_EVENT_PREFIX
+
+_EXECUTING_LIFECYCLE_STATUSES = frozenset({"started", "stopping", "cancelling"})
+
+
+def _lifecycle_snapshot(
+    payload: dict[str, Any], started: dict[str, Any] | None, *, live
+) -> dict[str, Any]:
+    """Overlay a read-only interruption status without altering persisted events."""
+    if payload.get("status") not in _EXECUTING_LIFECYCLE_STATUSES or started is None:
+        return payload
+    owner = started.get("runtime_instance")
+    owner_instance = owner if isinstance(owner, str) else None
+    started_at = started.get("timestamp")
+    if not isinstance(started_at, str):
+        started_at = None
+    if not owner_is_gone(owner_instance, started_at, live):
+        return payload
+    return {
+        **payload,
+        **({"inputs": started["inputs"]} if "inputs" in started else {}),
+        "status": "interrupted",
+        "interrupted_at": live.started_at,
+        "started_at": started_at,
+    }
+
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +91,38 @@ async def read_run_state(agent_id: str, thread_id: str, doc_store=None) -> dict[
                     approval["answer_pending"] = claim is not None
                 payload["pending_approvals"] = approvals
     return payload
+
+
+async def routine_lifecycles_by_thread(agent_id: str, store=None) -> dict[str, dict[str, Any]]:
+    """Return latest lifecycle snapshots keyed by routine checkpoint thread."""
+    store = store if store is not None else get_document_store()
+    documents = await asyncio.to_thread(
+        store.list_documents, PROGENA_STATE_PREFIX, RUN_EVENT_PREFIX
+    )
+    latest: dict[str, dict[str, Any]] = {}
+    started: dict[str, dict[str, Any]] = {}
+    for _, document in documents:
+        payload = document.payload
+        if not isinstance(payload, dict) or payload.get("agent_id") != agent_id:
+            continue
+        request_id = payload.get("request_id")
+        if not isinstance(request_id, str) or not request_id:
+            continue
+        if payload.get("status") == "started":
+            started[request_id] = payload
+        if payload.get("timestamp", "") >= latest.get(request_id, {}).get("timestamp", ""):
+            latest[request_id] = payload
+    live = live_runtime(store)
+    by_thread: dict[str, dict[str, Any]] = {}
+    for request_id, payload in latest.items():
+        thread_id = payload.get("thread_id")
+        if not isinstance(thread_id, str):
+            continue
+        # A resumed thread has several attempts; the newest one describes it.
+        current = by_thread.get(thread_id)
+        if current is None or payload.get("timestamp", "") >= current.get("timestamp", ""):
+            by_thread[thread_id] = _lifecycle_snapshot(payload, started.get(request_id), live=live)
+    return by_thread
 
 
 class RoutineEvents:
@@ -170,8 +229,31 @@ class RoutineEvents:
         watchers = {c: i for c, i in self.interests.items() if i["agent_id"] == agent_id}
         if not watchers:
             return
-        runs, has_more = await asyncio.to_thread(get_document_store().list_routine_runs, agent_id)
+        store = get_document_store()
+        runs, has_more = await asyncio.to_thread(store.list_routine_runs, agent_id)
         entries = [asdict(run) for run in runs]
+        lifecycle_by_thread = await routine_lifecycles_by_thread(agent_id, store)
+        for lifecycle in lifecycle_by_thread.values():
+            if lifecycle.get("status") != "interrupted":
+                continue
+            # The node it stopped on is LangGraph's pending ``next``; only the
+            # runtime can read it, and a failed read just omits the overlay.
+            state = await get_thread_state(lifecycle["thread_id"])
+            if isinstance(state, dict) and isinstance(state.get("next"), list):
+                lifecycle["next"] = state["next"]
+            for client_id, interest in watchers.items():
+                events_stream.broadcast_ui_event(
+                    "agent.routine.run.interrupted",
+                    lifecycle,
+                    client_id=client_id,
+                    interest=interest,
+                )
+        for entry in entries:
+            lifecycle = lifecycle_by_thread.get(entry["thread_id"])
+            if lifecycle is not None:
+                entry["status"] = lifecycle["status"]
+                if "interrupted_at" in lifecycle:
+                    entry["interrupted_at"] = lifecycle["interrupted_at"]
         states: dict[str, dict[str, Any]] = {}
         for client_id, interest in watchers.items():
             if self.interests.get(client_id) is not interest:
@@ -206,23 +288,36 @@ class RoutineEvents:
 
     async def lifecycle_snapshot(self, client_id: str | None = None) -> None:
 
+        store = get_document_store()
         documents = await asyncio.to_thread(
-            get_document_store().list_documents, PROGENA_STATE_PREFIX, RUN_EVENT_PREFIX
+            store.list_documents, PROGENA_STATE_PREFIX, RUN_EVENT_PREFIX
         )
         latest: dict[str, dict[str, Any]] = {}
+        started: dict[str, dict[str, Any]] = {}
         for _, document in documents:
             payload = document.payload
             if not isinstance(payload, dict):
                 continue
             key = payload.get("request_id")
-            if key and payload.get("timestamp", "") >= latest.get(key, {}).get("timestamp", ""):
+            if not isinstance(key, str) or not key:
+                continue
+            if payload.get("status") == "started":
+                started[key] = payload
+            if payload.get("timestamp", "") >= latest.get(key, {}).get("timestamp", ""):
                 latest[key] = payload
-        # Preserve pending controls and explicitly resumable stops beyond the recent window.
-        recent = sorted(latest.values(), key=lambda p: p.get("timestamp", ""), reverse=True)
+        live = live_runtime(store)
+        recent = sorted(
+            (
+                _lifecycle_snapshot(payload, started.get(key), live=live)
+                for key, payload in latest.items()
+            ),
+            key=lambda payload: payload.get("timestamp", ""),
+            reverse=True,
+        )
         active = [
             payload
             for payload in recent[100:]
-            if payload.get("status") in _RETAINED_LIFECYCLE_STATUSES
+            if payload.get("status") in _RETAINED_LIFECYCLE_STATUSES | {"interrupted"}
         ]
         if recent:
             events_stream.broadcast_ui_event(

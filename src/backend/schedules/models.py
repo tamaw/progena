@@ -9,6 +9,17 @@ from pydantic import BaseModel
 logger = logging.getLogger(__name__)
 
 
+class ScheduleRunInfo(BaseModel):
+    """Read-only presentation of a schedule execution."""
+
+    run_id: str
+    status: str
+    started_at: str | None = None
+    completed_at: str | None = None
+    thread_id: str
+    error: str | None = None
+
+
 class ScheduleItemInfo(BaseModel):
     """Schedule item information."""
 
@@ -26,6 +37,7 @@ class ScheduleItemInfo(BaseModel):
     scheduled_at: str | None = None
     schedule_type: str | None = None
     timezone: str | None = None
+    runs: list[ScheduleRunInfo] = []
 
 
 class ScheduleResponse(BaseModel):

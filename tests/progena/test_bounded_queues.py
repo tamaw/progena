@@ -351,6 +351,8 @@ class TestBoundedQueues(unittest.IsolatedAsyncioTestCase):
         assert updates["requested_thread_id"] == "cron_test123_abcd1234"
         assert updates["scheduled_run_id"] == "schedrun_123"
         self.state_manager.update_schedule_run.assert_awaited_once()
+        updates_payload = self.state_manager.update_schedule_run.await_args.args[1]
+        assert updates_payload["runtime_instance"]
 
 
 class TestReasoningTraceExtraction(unittest.TestCase):

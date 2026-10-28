@@ -19,8 +19,8 @@ import contextlib
 import json
 import logging
 import time
-from collections.abc import AsyncIterator, Callable
-from typing import Any
+from collections.abc import AsyncIterator, Awaitable, Callable
+from typing import Any, cast
 from urllib.parse import quote
 
 import httpx
@@ -155,6 +155,23 @@ class SSEProgenaClient:
                 self._client = None
 
             self._started = False
+
+    async def get_thread_state(self, thread_id: str) -> dict[str, Any] | None:
+        """Read one runtime-owned checkpoint status without inferring on failure."""
+        client = self._client
+        if client is None:
+            return None
+        try:
+            response = await client.get(
+                f"/v1/threads/{thread_id}/state",
+                timeout=httpx.Timeout(1.5, connect=0.5),
+            )
+            if response.status_code != 200:
+                return None
+            payload = response.json()
+        except Exception:
+            return None
+        return payload if isinstance(payload, dict) else None
 
     async def _health_poll_loop(self) -> None:
         """Periodically probe ``/health`` so ``is_running`` reflects liveness."""
@@ -547,3 +564,12 @@ def get_progena_liveness() -> bool:
     stored timestamp - this is a live check, not a staleness heuristic.
     """
     return bool(lifecycle_state.client and lifecycle_state.client.is_running)
+
+
+async def get_thread_state(thread_id: str) -> dict[str, Any] | None:
+    """Read runtime checkpoint state through the shared runtime HTTP client."""
+    client = lifecycle_state.client
+    reader = getattr(client, "get_thread_state", None)
+    if not callable(reader):
+        return None
+    return await cast(Callable[[str], Awaitable[dict[str, Any] | None]], reader)(thread_id)

@@ -73,6 +73,7 @@ from src.progena.routines.subagent import (
     create_routine_subagent,
     resolve_routine_document,
     resume_routine_thread,
+    routine_thread_state,
 )
 
 logger = logging.getLogger(__name__)
@@ -641,6 +642,24 @@ async def create_progena_agent(
     agent.routine_runner = _run_routine  # type: ignore[attr-defined]
     agent.routine_controls = routine_controls  # type: ignore[attr-defined]
     agent.routine_resumer = _resume_routine  # type: ignore[attr-defined]
+
+    async def _routine_thread_state(thread_id: str) -> Any:
+        return await routine_thread_state(
+            thread_id=thread_id,
+            model=model,
+            state_manager=state_manager,
+            revision_reader=revision_reader,
+            agent_registry=object_agent_registry,
+            routine_registry={},
+            routine_runner=_run_routine,
+            agent_background_runner=background_runner,
+            model_profile_resolver=profile_resolver,
+            tool_registry=tool_registry,
+            filesystem_backend=backend,
+            checkpointer=checkpointer,
+        )
+
+    agent.routine_thread_state = _routine_thread_state  # type: ignore[attr-defined]
     agent.object_agent_registry = live_objects  # type: ignore[attr-defined]
     agent.routine_subagent_registry = live_routines  # type: ignore[attr-defined]
 

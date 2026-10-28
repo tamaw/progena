@@ -357,11 +357,14 @@ async def test_native_stop_then_resume_reuses_checkpoint_without_repeating_compl
             {
                 "_interactive_session_id": "session-1",
                 "_routine_request_id": "attempt-1",
+                "parameters": {"topic": "btc"},
             }
         )
     )
     await worker.entered.wait()
     started = next(event for event in manager.events if event["status"] == "started")
+    # The first attempt keeps its inputs so "Start again" can reuse them.
+    assert started["inputs"] == {"topic": "btc"}
     assert (
         await controls.control_routine_run(
             "demo",
@@ -384,6 +387,9 @@ async def test_native_stop_then_resume_reuses_checkpoint_without_repeating_compl
     assert worker.calls == 2
     checkpoint = await saver.aget_tuple({"configurable": {"thread_id": started["thread_id"]}})
     assert len(checkpoint.checkpoint["channel_values"]["run_meta"]["first"]) == 1
+    resumed_started = [e for e in manager.events if e["status"] == "started"][-1]
+    assert resumed_started["request_id"] == "attempt-2"
+    assert "inputs" not in resumed_started
 
 
 @pytest.mark.asyncio

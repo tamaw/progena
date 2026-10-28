@@ -81,3 +81,27 @@ describe.each(['history', 'live'])('%s transcript activity filters', (surface) =
     expect(container.querySelector('.msg-img-strip img')).not.toBeNull();
   });
 });
+
+describe('interrupted chat status', () => {
+  it('renders only for a non-streaming interrupted detail', () => {
+    const store = configureStore({
+      reducer: () => ({ uiData: { preferences: { agentName: 'Progena' } } }),
+    });
+    const render = (isGenerating) => {
+      const container = document.createElement('div');
+      container.innerHTML = renderToStaticMarkup(
+        <Provider store={store}>
+          <ChatMessages
+            messages={[]}
+            interruption={{ next: ['model'], at: '2026-10-28T12:00:00Z' }}
+            isGenerating={isGenerating}
+          />
+        </Provider>,
+      );
+      return container.textContent;
+    };
+
+    expect(render(false)).toContain('Interrupted — the runtime restarted during this turn.');
+    expect(render(true)).not.toContain('Interrupted — the runtime restarted during this turn.');
+  });
+});

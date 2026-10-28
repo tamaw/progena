@@ -24,7 +24,7 @@ import { RoutineGraphEditor } from './editor/RoutineGraphEditor';
 import { formatAge } from '../agents/agentFormat';
 import { catalogueRoutines } from '../agents/agentCatalogueModel';
 
-const ROUTINE_FILTERS = ['All', 'Running', 'Paused', 'Failed'];
+const ROUTINE_FILTERS = ['All', 'Running', 'Paused', 'Interrupted', 'Failed'];
 const SORT_MODES = ['Name', 'Recent'];
 const FALLBACK_GRAPH = {
   status: 'Draft',
@@ -38,7 +38,7 @@ const FALLBACK_GRAPH = {
 // a leading status dot (empty unless running/failed/paused), name + last-activity
 // on the header line, and the agent's role as a single preview line below.
 function RoutineRow({ routine, selected, onSelect, runStatus }) {
-  const dotTone = runStatus === 'Running' ? 'info' : runStatus === 'Failed' ? 'error' : runStatus === 'Paused' ? 'paused' : '';
+  const dotTone = runStatus === 'Running' ? 'info' : runStatus === 'Failed' ? 'error' : runStatus === 'Paused' ? 'paused' : runStatus === 'Interrupted' ? 'error' : '';
   return (
     <button
       type="button"
@@ -122,6 +122,7 @@ export default function RoutinesPage() {
   const countByStatus = (status) => routines.filter((routine) => runStatusById[routine.id] === status).length;
   const runningCount = countByStatus('Running');
   const pausedCount = countByStatus('Paused');
+  const interruptedCount = countByStatus('Interrupted');
   const failedCount = countByStatus('Failed');
   const selectedGraph = selectedAgent?.graph || FALLBACK_GRAPH;
   const hasCachedGraph = selectedAgent?.graph != null;
@@ -181,6 +182,7 @@ export default function RoutinesPage() {
         <PaneListFooter>
           <span><span className="num">{runningCount}</span> running</span>
           <span><span className="num">{pausedCount}</span> paused</span>
+          <span><span className="num">{interruptedCount}</span> interrupted</span>
           <span><span className="num">{failedCount}</span> failed</span>
         </PaneListFooter>
       </PaneList>

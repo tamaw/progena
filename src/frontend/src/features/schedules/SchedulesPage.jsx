@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useDispatch, useSelector, useStore } from 'react-redux';
 import { useNavigate, useParams } from 'react-router-dom';
 import { buildEntityPath, useEntityUrlSync } from '../../lib/routes';
+import { scheduleRunDetail, scheduleRunStatusTone } from './scheduleRunsModel';
 import { createUuid } from '../../lib/uuid';
 import {
   PaneEmptyState,
@@ -409,6 +410,8 @@ function SchedulesPage() {
       : ['Next'];
   const selectedScheduleWidget = selectedSchedule ? scheduleWidgets[selectedSchedule.id] || null : null;
   const selectedScheduleLogs = Array.isArray(selectedScheduleWidget?.logs) ? selectedScheduleWidget.logs : [];
+  const recentScheduleRuns = Array.isArray(selectedSchedule?.runs) ? selectedSchedule.runs : [];
+
   // Logs arrive newest-first; cap to the latest few so the list stays bounded.
   const recentScheduleLogs = selectedScheduleLogs.slice(0, 5);
   const scheduleTitle = selectedSchedule?.name || 'Untitled schedule';
@@ -915,6 +918,28 @@ function SchedulesPage() {
                     operation="Save schedule trigger"
                   />
                 ) : null}
+              </section>
+
+              <section className="agents-section">
+                <header className="agents-section__head">
+                  <h2>Recent runs</h2>
+                </header>
+                {recentScheduleRuns.length ? (
+                  <div className="agents-mini-list">
+                    {recentScheduleRuns.map((run) => (
+                      <div key={run.run_id} className="agents-mini-row">
+                        <span className="agents-mini-row__icon">run</span>
+                        <div>
+                          <strong>{formatLogTime(run.started_at) || 'Scheduled run'}</strong>
+                          <p>{scheduleRunDetail(run)}</p>
+                        </div>
+                        <DetailStatus tone={scheduleRunStatusTone(run.status)}>
+                          {run.status}
+                        </DetailStatus>
+                      </div>
+                    ))}
+                  </div>
+                ) : <p className="muted">No runs yet.</p>}
               </section>
 
               <section className="agents-section">

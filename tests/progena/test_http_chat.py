@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from types import SimpleNamespace
 from typing import Annotated, Any, TypedDict
 
 import httpx
@@ -1001,3 +1003,76 @@ async def test_session_renders_of_one_thread_run_in_order(monkeypatch) -> None:
 
     assert calls == ["t1", "t1"]
     assert service._session_renders == {}
+
+
+@pytest.mark.parametrize(
+    ("snapshot", "in_flight", "expected"),
+    [
+        (
+            SimpleNamespace(
+                created_at="2026-10-28T12:00:00Z",
+                next=("model",),
+                interrupts=(),
+                config={"configurable": {"checkpoint_id": "cp-1"}},
+            ),
+            False,
+            {"exists": True, "waiting": False, "in_flight": False, "interrupted": True},
+        ),
+        (
+            SimpleNamespace(
+                created_at="2026-10-28T12:00:00Z",
+                next=("approval",),
+                interrupts=(object(),),
+                config={"configurable": {"checkpoint_id": "cp-2"}},
+            ),
+            False,
+            {"exists": True, "waiting": True, "in_flight": False, "interrupted": False},
+        ),
+        (
+            SimpleNamespace(
+                created_at="2026-10-28T12:00:00Z",
+                next=("model",),
+                interrupts=(),
+                config={"configurable": {"checkpoint_id": "cp-3"}},
+            ),
+            True,
+            {"exists": True, "waiting": False, "in_flight": True, "interrupted": False},
+        ),
+        (
+            SimpleNamespace(created_at=None, next=(), interrupts=(), config={}),
+            False,
+            {"exists": False, "waiting": False, "in_flight": False, "interrupted": False},
+        ),
+    ],
+)
+async def test_thread_state_distinguishes_interruption_from_waiting_and_live_work(
+    snapshot: Any, in_flight: bool, expected: dict[str, bool]
+) -> None:
+    class Graph:
+        async def aget_state(self, _config: dict[str, Any]) -> Any:
+            return snapshot
+
+    service = RuntimeChatService(SimpleNamespace(graph=Graph()))
+    if in_flight:
+        service._inflight_by_thread["thread"] = asyncio.create_task(asyncio.sleep(60))
+    app = web.Application()
+    app.add_routes(service.routes())
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "127.0.0.1", 0)
+    await site.start()
+    port = site._server.sockets[0].getsockname()[1]
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(f"http://127.0.0.1:{port}/v1/threads/thread/state")
+        payload = response.json()
+        assert response.status_code == 200
+        assert {key: payload[key] for key in expected} == expected
+        assert payload["next"] == (list(snapshot.next) if snapshot.created_at else [])
+    finally:
+        task = service._inflight_by_thread.get("thread")
+        if task is not None:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+        await runner.cleanup()
