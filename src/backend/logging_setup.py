@@ -6,6 +6,7 @@ import logging
 import logging.handlers
 import os
 import sys
+import time
 from pathlib import Path
 
 DEFAULT_LOGS_DIR = Path(__file__).resolve().parents[2] / "logs"
@@ -21,6 +22,8 @@ def get_log_dir() -> Path:
 def setup_logging() -> None:
     """Configure console and split rotating file logging for the backend."""
     formatter = logging.Formatter(fmt=_LOG_FORMAT, datefmt=_DATE_FORMAT)
+    # Log timestamps are UTC regardless of the container's TZ.
+    formatter.converter = time.gmtime
     root_logger = logging.getLogger()
     for existing_handler in root_logger.handlers[:]:
         existing_handler.close()
