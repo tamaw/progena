@@ -137,7 +137,7 @@ async def render_workflow(
             agent = str(node.get("subagent") or "progena")
             thread_id = value.get("thread_id")
             if isinstance(thread_id, str) and await agent_transcript(
-                ctx, log, thread_id, agent=agent, channel=channel, when=when
+                ctx, log, thread_id, agent=agent, channel=channel, when=when, steps=steps
             ):
                 continue
         if kind == "condition" and isinstance(value, Mapping):

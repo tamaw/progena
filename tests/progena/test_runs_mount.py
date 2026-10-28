@@ -319,3 +319,25 @@ async def test_a_scheduled_run_is_its_message_and_is_interrupted_when_its_runtim
     text = await runs.text(path)
     assert "<scheduler> Scheduled check" in text
     assert "status: interrupted" in text
+
+
+def test_agent_requests_and_json_replies_are_summarised_but_speech_is_not() -> None:
+    from langchain_core.messages import AIMessage, HumanMessage
+
+    from src.progena.runs._render import Steps, _compact_messages
+
+    steps = Steps(path="/runs/workflows/x.md")
+    request = "TEMPORARY-STORAGE CONTRACT: create no scratch files. " * 40
+    messages = [
+        HumanMessage(content=request),
+        AIMessage(content='{"success": true, "branch": "self-build/card_1"}'),
+        AIMessage(content="All 4 checks passed."),
+    ]
+    shown = [m.content for m in _compact_messages(messages, steps)]
+    assert (
+        shown[0].startswith('"TEMPORARY-STORAGE CONTRACT')
+        and "⟨2 KB · /runs/workflows/x.md#1⟩" in shown[0]
+    )
+    assert shown[1] == "success: true, branch: self-build/card_1"
+    assert shown[2] == "All 4 checks passed."
+    assert steps.text("1") == request

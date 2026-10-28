@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field, replace
 from datetime import datetime, tzinfo
 from typing import Any
@@ -12,7 +13,7 @@ from src.progena.runtime.ownership import parse_timestamp
 from src.progena.sessions.history import load_conversation
 from src.progena.sessions.transcript import Line, Transcript, format_log, render_transcript
 
-from .values import describe_value, full_text
+from .values import describe_value, full_text, head_tail
 
 # Nested child runs (a workflow's routine step, a routine's routine node) are
 # inlined up to this depth.
@@ -92,8 +93,66 @@ def step_result(value: Any, steps: Steps) -> str:
     return describe_value(value, pointer=pointer)
 
 
+# A request handed to an agent step is the step's filled-in prompt template:
+# the same instructions every run, so only its ends are shown.
+_REQUEST_CHARS = 300
+
+
+def _text(content: Any) -> str | None:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "".join(
+            block.get("text", "")
+            for block in content
+            if isinstance(block, dict) and block.get("type") == "text"
+        )
+    return None
+
+
+def _as_json(text: str) -> Any:
+    stripped = text.strip()
+    if not stripped or stripped[0] not in "{[":
+        return None
+    try:
+        return json.loads(stripped)
+    except ValueError:
+        return None
+
+
+def _compact_messages(messages: list[Any], steps: Steps) -> list[Any]:
+    """Agent requests and structured (JSON) replies are data, not speech."""
+    compacted: list[Any] = []
+    for message in messages:
+        kind = getattr(message, "type", None)
+        text = _text(getattr(message, "content", None))
+        if text is None or kind not in {"human", "ai"}:
+            compacted.append(message)
+            continue
+        if kind == "ai" and getattr(message, "tool_calls", None):
+            compacted.append(message)
+            continue
+        parsed = _as_json(text)
+        if parsed is not None:
+            summary = describe_value(parsed, pointer=steps.add(parsed))
+        elif kind == "human" and len(text) > _REQUEST_CHARS:
+            summary = head_tail(text, pointer=steps.add(text))
+        else:
+            compacted.append(message)
+            continue
+        compacted.append(message.model_copy(update={"content": summary}))
+    return compacted
+
+
 async def agent_transcript(
-    ctx: RunContext, log: RunLog, thread_id: str, *, agent: str, channel: str, when: datetime | None
+    ctx: RunContext,
+    log: RunLog,
+    thread_id: str,
+    *,
+    agent: str,
+    channel: str,
+    when: datetime | None,
+    steps: Steps,
 ) -> bool:
     """Inline an agent step's own thread between join/part; ``False`` if it has none."""
     if ctx.checkpointer is None or not thread_id:
@@ -101,8 +160,9 @@ async def agent_transcript(
     conversation = await load_conversation(ctx.checkpointer, thread_id)
     if conversation is None:
         return False
+    root = conversation.root
     transcript = render_transcript(
-        replace(conversation.root, nick=agent),
+        replace(root, nick=agent, messages=_compact_messages(root.messages, steps)),
         subagents=conversation.subagents,
         channel=channel,
         user_nick=log.nick,
@@ -111,7 +171,7 @@ async def agent_transcript(
     log.event(joined, f"{agent} [agent] has joined #{channel}")
     log.lines.extend(transcript.lines)
     log.agents |= transcript.agents
-    reply = _last_reply(conversation.root.messages)
+    reply = _last_reply(root.messages)
     if reply:
         log.last_speech = reply
     left = next((line.at for line in reversed(transcript.lines) if line.at), joined)

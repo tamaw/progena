@@ -205,6 +205,7 @@ async def routine_log(
                 agent=agent,
                 channel=channel,
                 when=when,
+                steps=steps,
             ):
                 continue
             log.act(when, f"asks {agent} → {step_result(value, steps)}")
@@ -320,7 +321,16 @@ async def inline_child(
     log.event(first, f"{child.nick} [routine] has joined #{channel}")
     log.merge(child)
     last = next((line.at for line in reversed(child.lines) if line.at), first)
-    output = front.get("output")
+    # The front matter holds a summary; the result line needs the stored value.
+    completed = next(
+        (
+            event
+            for event in attempt_events(ctx, str(started.get("request_id") or ""))
+            if event.get("status") == "completed"
+        ),
+        None,
+    )
+    output = completed.get("output") if completed else None
     if output is not None:
         value = (
             output.get("message")
