@@ -62,7 +62,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - **glibc arena cap**: the `progena` and `progena-backend` containers set `MALLOC_ARENA_MAX=2`, so memory freed after large transient conversation histories is reused across threads instead of being retained in per-thread malloc arenas.
-- **Backend memory and runtime search**: the backend container limit is 2 GiB (was 1 GiB) after a production OOM kill during a long turn on a large thread. The Progena runtime image installs ripgrep so Deep Agents grep uses `rg` instead of its Python fallback.
+- **Runtime and backend memory**: the `progena` and `progena-backend` container limits are 3 GiB (backend was 1 GiB, then 2 GiB; runtime 2 GiB) after repeated production cgroup OOM kills at the old limits, most recently both containers within 18 s of each other. The Progena runtime image installs ripgrep so Deep Agents grep uses `rg` instead of its Python fallback.
 - **Operation correlation header**: finite browser requests now use `X-Operation-Id`; JSON/SSE `request_id` correlation fields are unchanged.
 - **Activity-only chat filters**: inline All, Tools, Plans, Reasoning, Delegations, Errors, and Debug chips control activity without hiding messages, answers, attachments, or images. Errors directly controls failed tools/delegations independently of their activity category. All restores activity and Errors on, Debug off. No Errors only preset, extra switch, or Advanced menu.
 - **CI runs on pull requests**: the backend, Progena and frontend test jobs now also run for pull requests into `main` from branches in `tamaw/progena`, on the existing self-hosted runners. Fork PRs are skipped, and image builds and deployment remain `main`-only.

@@ -109,7 +109,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 2G
+          memory: 3G
           cpus: '2.0'
           pids: 512
         reservations:
@@ -163,7 +163,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 2G
+          memory: 3G
           cpus: '1.0'
         reservations:
           memory: 256M
