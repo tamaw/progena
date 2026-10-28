@@ -179,11 +179,17 @@ class ChatSessionSummary(BaseModel):
     history_unavailable: bool = False
 
 
+class ChatInterruption(BaseModel):
+    next: list[str] = Field(default_factory=list)
+    at: str | None = None
+
+
 class ChatSessionDetail(ChatSessionSummary):
     messages: list[ChatMessage] = Field(default_factory=list)
     has_more_messages: bool = False
     active_request_id: str | None = None
     activity: Literal["delegating", "generating"] | None = None
+    interruption: ChatInterruption | None = None
 
 
 CHAT_MESSAGE_PAGE_SIZE = 50

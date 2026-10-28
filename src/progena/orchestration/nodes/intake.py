@@ -9,6 +9,7 @@ from langgraph.runtime import Runtime
 
 from src.progena.orchestration.nodes.context import HeartbeatContext
 from src.progena.orchestration.state import BackgroundTaskEntry, ProgenaState
+from src.progena.runtime.instance import RUNTIME_INSTANCE_ID
 from src.progena.schedules.dispatch import SCHEDULED_INPUT_PREFIX
 from src.progena.utils import utcnow
 
@@ -98,6 +99,7 @@ async def cycle_setup_node(
             scheduled_run_id,
             {
                 "status": "running",
+                "runtime_instance": RUNTIME_INSTANCE_ID,
                 "updated_at": now,
                 "started_at": now,
             },

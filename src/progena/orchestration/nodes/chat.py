@@ -11,6 +11,7 @@ from langgraph.runtime import Runtime
 from src.progena.llm.provider_context import ProviderTurn, activate_provider_turn
 from src.progena.orchestration.nodes.context import HeartbeatContext
 from src.progena.orchestration.state import ProgenaState
+from src.progena.runtime.instance import RUNTIME_INSTANCE_ID
 
 
 async def chat_node(
@@ -35,6 +36,9 @@ async def chat_node(
     with activate_provider_turn(turn):
         result = await runtime.context.agent_graph.ainvoke(
             {"messages": [human_message]},
-            config={"configurable": {"thread_id": thread_id}},
+            config={
+                "configurable": {"thread_id": thread_id},
+                "metadata": {"runtime_instance": RUNTIME_INSTANCE_ID},
+            },
         )
     return result if isinstance(result, dict) else {"messages": []}

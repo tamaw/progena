@@ -12,12 +12,16 @@ from fastapi import APIRouter, Header, HTTPException, Request
 
 import src.backend.chat.responses as chat_responses
 import src.backend.chat.service as chat_service
+import src.backend.checkpoint_state as checkpoint_state
 import src.backend.events.documents as events_documents
 import src.backend.events.stream as events_stream
 import src.backend.http.contracts as http_contracts
+import src.backend.runtime_liveness as runtime_liveness
 import src.backend.storage.documents as storage_documents
 from src.backend.chat.service import (
     CHAT_MESSAGE_PAGE_SIZE,
+    ChatInterruption,
+    ChatMessage,
     ChatMessagesPageResponse,
     ChatPatchRequest,
     ChatSessionDetail,
@@ -87,8 +91,6 @@ def create_chat_router(
     *,
     get_document_store: Callable[[], BackendDocumentStore],
     broadcast_ui_event: BroadcastUiEvent,
-    get_current_state: Callable[[str], dict[str, Any]] | None = None,
-    get_thread_messages: Callable[[str], list[Any]] | None = None,
     get_active_response: (
         Callable[[str], tuple[str, Literal["delegating", "generating"]] | None] | None
     ) = None,
@@ -120,6 +122,25 @@ def create_chat_router(
         """Persisted detail; a chat the user deleted stays deleted."""
         return get_chat_detail(get_document_store(), thread_id)
 
+    async def interruption_for(
+        thread_id: str, messages: list[ChatMessage]
+    ) -> ChatInterruption | None:
+        """Read a checkpoint only when the saved transcript ends mid-turn."""
+        if not messages:
+            return None
+        last = messages[-1]
+        if last.role == "assistant" and not last.tool_calls:
+            return None
+        try:
+            state = await checkpoint_state.read_thread_checkpoint_state(
+                thread_id, get_document_store()
+            )
+            return _interruption_from_checkpoint_state(
+                state, runtime_liveness.live_runtime(get_document_store())
+            )
+        except Exception:
+            return None
+
     @router.get("/chats", status_code=202, response_model=http_contracts.UiRequestAcknowledgement)
     async def get_chats(
         request: Request,
@@ -146,15 +167,19 @@ def create_chat_router(
         detail = await off_loop(load_detail, thread_id)
         if detail is None:
             raise HTTPException(status_code=404, detail="Chat session not found")
-        page, has_more = paginate_chat_messages(detail.messages, limit=CHAT_MESSAGE_PAGE_SIZE)
         active_response = get_active_response(thread_id) if get_active_response else None
         active_request_id, activity = active_response or (None, None)
+        interruption = (
+            None if active_response else await interruption_for(thread_id, detail.messages)
+        )
+        page, has_more = paginate_chat_messages(detail.messages, limit=CHAT_MESSAGE_PAGE_SIZE)
         detail = detail.model_copy(
             update={
                 "messages": page,
                 "has_more_messages": has_more,
                 "active_request_id": active_request_id,
                 "activity": activity,
+                "interruption": interruption,
             }
         )
         broadcast_ui_event(
@@ -256,6 +281,29 @@ def create_chat_router(
         )
 
     return router
+
+
+def _interruption_from_checkpoint_state(
+    state: dict[str, Any], live: runtime_liveness.LiveRuntime | None
+) -> ChatInterruption | None:
+    """Map a durable checkpoint state into the browser detail contract."""
+    next_nodes = state.get("next")
+    updated_at = state.get("updated_at")
+    owner = state.get("runtime_instance")
+    owner_instance = owner if isinstance(owner, str) else None
+    if (
+        state.get("exists") is not True
+        or not isinstance(next_nodes, list)
+        or not all(isinstance(node, str) for node in next_nodes)
+        or not next_nodes
+        or state.get("waiting") is True
+        or state.get("failed") is True
+        or not runtime_liveness.owner_is_gone(
+            owner_instance, updated_at if isinstance(updated_at, str) else None, live
+        )
+    ):
+        return None
+    return ChatInterruption(next=next_nodes, at=updated_at if isinstance(updated_at, str) else None)
 
 
 async def _publish_chat_session_document_event(typed: events_documents.TypedDocumentEvent) -> None:

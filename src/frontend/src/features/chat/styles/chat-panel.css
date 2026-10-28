@@ -2187,6 +2187,17 @@ pre.mermaid svg {
     cursor: not-allowed;
 }
 
+.chat-messages__interruption {
+    margin: 0;
+    padding: 10px 12px;
+    border: 1px solid var(--color-border);
+    border-radius: var(--border-radius-md);
+    color: var(--color-text-muted);
+    background: var(--color-bg-hover);
+    font-size: 12px;
+    line-height: 1.45;
+}
+
 .chat-loading {
     display: flex;
     align-items: center;

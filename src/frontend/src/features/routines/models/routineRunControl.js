@@ -1,7 +1,7 @@
 export const STOP_ESCALATION_MS = 5_000;
 
 export const ROUTINE_RUN_TERMINAL_STATUSES = new Set([
-  'completed', 'failed', 'paused', 'stopped', 'cancelled',
+  'completed', 'failed', 'paused', 'stopped', 'cancelled', 'interrupted',
 ]);
 
 export const ROUTINE_RUN_ACTIVE_STATUSES = new Set([

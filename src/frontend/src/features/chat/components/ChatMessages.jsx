@@ -30,6 +30,8 @@ function ChatMessages({
   liveTurnStore,
   messagesContainerRef,
   isPinnedToBottomRef,
+  interruption,
+  isGenerating = false,
   className = '',
   children,
 }) {
@@ -78,6 +80,11 @@ function ChatMessages({
           isPinnedToBottomRef={isPinnedToBottomRef}
           streamEventFilter={streamEventFilter}
         />
+      ) : null}
+      {interruption && !isGenerating ? (
+        <p className="chat-messages__interruption" role="status">
+          <strong>Interrupted</strong> — the runtime restarted during this turn. The last step may have partly run. Type continue to carry on.
+        </p>
       ) : null}
     </div>
   );

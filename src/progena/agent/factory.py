@@ -641,6 +641,7 @@ async def create_progena_agent(
     agent.routine_runner = _run_routine  # type: ignore[attr-defined]
     agent.routine_controls = routine_controls  # type: ignore[attr-defined]
     agent.routine_resumer = _resume_routine  # type: ignore[attr-defined]
+
     agent.object_agent_registry = live_objects  # type: ignore[attr-defined]
     agent.routine_subagent_registry = live_routines  # type: ignore[attr-defined]
 

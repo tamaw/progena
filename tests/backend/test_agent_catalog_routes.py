@@ -1053,6 +1053,61 @@ def test_resume_requires_exact_stopped_checkpoint_and_retains_its_inputs(harness
     assert len(store.get_document(PROGENA_STATE_PREFIX, "background_tasks").payload) == 1
 
 
+def test_continue_settles_only_an_orphan_then_queues_its_checkpoint_resume(harness, monkeypatch):
+    from unittest.mock import AsyncMock
+
+    import src.backend.agents.routes as routes
+    import src.backend.workflows.events as events_module
+
+    client, events = harness
+    store = client.app.state.doc_store
+    session_id = "orphan-session"
+    thread_id = f"routine:alpha:revision:{session_id}"
+    outcome = {"status": "stopping"}
+
+    class RuntimeClient:
+        async def control_routine_run(self, agent_id, *, thread_id, request_id, action):
+            assert action == "stop"
+            lifecycle = {
+                "agent_id": agent_id,
+                "session_id": session_id,
+                "thread_id": thread_id,
+                "request_id": request_id,
+                "status": outcome["status"],
+                "timestamp": "2026-10-28T10:00:00Z",
+            }
+            if lifecycle["status"] == "stopped":
+                # The runtime settles an orphan by persisting its stopped control.
+                store.save_document(
+                    PROGENA_STATE_PREFIX,
+                    routes.routine_run_control_key(agent_id, session_id),
+                    lifecycle,
+                )
+            return lifecycle
+
+    monkeypatch.setattr(routes.lifecycle_state, "client", RuntimeClient())
+    monkeypatch.setattr(events_module, "read_run_state", AsyncMock(return_value={"found": True}))
+    body = {"thread_id": thread_id, "request_id": "orphan-attempt"}
+
+    # A run its live owner is still executing is being stopped, not continued.
+    live = client.post("/api/ui/agent-profiles/alpha/run-continue", json=body)
+    assert live.status_code == 409
+    assert store.get_document(PROGENA_STATE_PREFIX, "background_tasks") is None
+
+    outcome["status"] = "stopped"
+    resumed = client.post(
+        "/api/ui/agent-profiles/alpha/run-continue",
+        headers={"X-Operation-Id": "continue-attempt"},
+        json=body,
+    )
+
+    assert_acknowledged(resumed, ["agent.routine.run.enqueued"], "continue-attempt")
+    [task] = store.get_document(PROGENA_STATE_PREFIX, "background_tasks").payload
+    assert task["metadata"]["resume_thread_id"] == thread_id
+    assert "parameters" not in task["metadata"]
+    assert events[-1][0] == "agent.routine.run.enqueued"
+
+
 @pytest.mark.parametrize("queued", [False, True])
 def test_resume_claim_is_released_only_when_nothing_was_queued(harness, monkeypatch, queued):
     from unittest.mock import AsyncMock

@@ -158,6 +158,14 @@ export const controlRoutineRun = createAcknowledgedThunk('uiData/controlRoutineR
   },
 ));
 
+export const continueInterruptedRoutineRun = createAcknowledgedThunk('uiData/continueInterruptedRoutineRun', ({ agentsUrl, agentId, threadId, targetRequestId }, { requestId }) => requestAcknowledged(
+  `${agentsUrl}/${encodeURIComponent(agentId)}/run-continue`, {
+    method: 'POST',
+    requestId,
+    body: { thread_id: threadId, request_id: targetRequestId },
+  },
+));
+
 export const answerRoutineApproval = createAcknowledgedThunk('uiData/answerRoutineApproval', ({ agentsUrl, agentId, threadId, interruptId, answer }, { requestId }) => requestAcknowledged(
   `${agentsUrl}/${encodeURIComponent(agentId)}/approval`, {
     method: 'POST', requestId, body: { thread_id: threadId, interrupt_id: interruptId, answer },
@@ -189,6 +197,9 @@ export const updateAgentSkillContent = createAcknowledgedThunk('uiData/updateAge
 ));
 
 const TERMINAL_RUN_STATUSES = new Set(['completed', 'failed', 'paused', 'stopped', 'cancelled']);
+// "interrupted" is derived from a dead owner, not persisted; the attempt can
+// still settle (Continue settles it stopped, Cancel run settles it cancelled).
+const INTERRUPTED_EXITS = new Set(['interrupted', 'stopped', 'cancelled']);
 
 function applyRunLifecycle(state, payload) {
   if (!payload?.request_id || !payload?.agent_id) return false;
@@ -196,13 +207,14 @@ function applyRunLifecycle(state, payload) {
   // Attempts never leave a terminal state. This guards against a delayed
   // control update disagreeing with the durable execution terminal event.
   if (previous && TERMINAL_RUN_STATUSES.has(previous.status) && previous.status !== payload.status) return false;
+  if (previous?.status === 'interrupted' && !INTERRUPTED_EXITS.has(payload.status)) return false;
   if (previous && previous.timestamp > payload.timestamp) return false;
   state.agents.runLifecycleByRequestId[payload.request_id] = payload;
   return previous?.status !== payload.status;
 }
 
 export const eventHandlers = {
-  ...Object.fromEntries(['enqueued', 'started', 'stopping', 'cancelling', 'paused', 'completed', 'failed', 'stopped', 'cancelled'].map((status) => [
+  ...Object.fromEntries(['enqueued', 'started', 'stopping', 'cancelling', 'paused', 'completed', 'failed', 'stopped', 'cancelled', 'interrupted'].map((status) => [
     `agent.routine.run.${status}`, (state, payload, event) => {
       const changed = applyRunLifecycle(state, { ...payload, status });
       if (changed && ['completed', 'failed'].includes(status)) {
@@ -376,6 +388,7 @@ const RUN_STATUS_FILTER = {
   paused: 'Paused',
   stopped: 'Stopped',
   cancelled: 'Cancelled',
+  interrupted: 'Interrupted',
   failed: 'Failed',
 };
 export const selectRoutineLatestRunStatusByAgentId = createSelector(

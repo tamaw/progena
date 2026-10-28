@@ -1032,6 +1032,10 @@ body,
   background: var(--color-error, #dc2626);
 }
 
+.popup-modal__confirm--primary {
+  background: var(--color-accent);
+}
+
 .popup-modal__confirm:disabled {
   cursor: progress;
   opacity: 0.7;

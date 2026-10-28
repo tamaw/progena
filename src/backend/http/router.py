@@ -14,7 +14,6 @@ import src.backend.inbox.routes as inbox_routes
 import src.backend.insights.routes as insights_routes
 import src.backend.integrations.runtime as integrations_runtime
 import src.backend.monitoring.logs as monitoring_logs
-import src.backend.monitoring.state as monitoring_state
 import src.backend.schedules.routes as schedules_routes
 import src.backend.settings.mcp as settings_mcp
 import src.backend.settings.model_profiles as settings_model_profiles
@@ -48,12 +47,6 @@ router.include_router(
     chat_routes.create_chat_router(
         get_document_store=storage_documents.get_default_document_store,
         broadcast_ui_event=events_stream.broadcast_ui_event,
-        get_current_state=lambda thread_id: monitoring_state.get_state_reader().get_progena_state(
-            thread_id
-        ),
-        get_thread_messages=lambda thread_id: (
-            monitoring_state.get_state_reader().get_thread_messages(thread_id)
-        ),
         get_active_response=chat_routes._get_active_response_for_thread,
     )
 )

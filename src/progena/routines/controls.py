@@ -12,19 +12,16 @@ the owning process is never treated as a dead run.
 from __future__ import annotations
 
 import asyncio
-import uuid
 from collections.abc import Awaitable, Callable, Coroutine
 from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Any, Literal, cast
 
+from ..runtime.instance import RUNTIME_INSTANCE_ID
 from ..utils import utcnow_isoformat
 from .events import persist_run_event
 
 RoutineControlAction = Literal["stop", "cancel"]
-# Identifies this runtime process in ``started`` lifecycles.  It is process-wide
-# because several controllers can share one process (agent rebuilds).
-RUNTIME_INSTANCE_ID = uuid.uuid4().hex
 _EXECUTING_STATUSES = frozenset({"started", "stopping", "cancelling"})
 _PENDING_STATUSES = frozenset({"stopping", "cancelling"})
 _TERMINAL_STATUSES = frozenset({"stopped", "cancelled", "completed", "failed"})

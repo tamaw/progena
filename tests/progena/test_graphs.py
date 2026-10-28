@@ -172,7 +172,7 @@ async def test_runtime_heartbeat_graph_processes_one_input_cycle() -> None:
 
     class _FakeAgentGraph:
         async def ainvoke(self, graph_input, config):  # noqa: ANN001
-            assert config == {"configurable": {"thread_id": "thread-1"}}
+            assert config["configurable"] == {"thread_id": "thread-1"}
             assert graph_input["messages"][0].content == "hello"
             return {
                 "messages": [{"role": "assistant", "content": "ok"}],
@@ -242,7 +242,7 @@ async def test_runtime_heartbeat_graph_emits_agent_callback_for_notified_input()
 
     class _FakeAgentGraph:
         async def ainvoke(self, graph_input, config):  # noqa: ANN001
-            assert config == {"configurable": {"thread_id": "thread-1"}}
+            assert config["configurable"] == {"thread_id": "thread-1"}
             assert graph_input["messages"][0].content == "hello"
             return {
                 "messages": [{"role": "assistant", "content": "reply-token"}],
@@ -304,7 +304,7 @@ async def test_runtime_heartbeat_graph_reports_startup_node_errors() -> None:
 
     class _FakeAgentGraph:
         async def ainvoke(self, graph_input, config):  # noqa: ANN001
-            assert config == {"configurable": {"thread_id": "thread-1"}}
+            assert config["configurable"] == {"thread_id": "thread-1"}
             assert graph_input["messages"][0].content == "hello"
             return {
                 "messages": [{"role": "assistant", "content": "ok"}],

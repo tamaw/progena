@@ -167,6 +167,15 @@ class RoutineRunControlRequest(BaseModel):
     action: Literal["stop", "cancel"]
 
 
+class ContinueInterruptedRoutineRequest(BaseModel):
+    """Continue a run after settling its orphaned execution as stopped."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    thread_id: str = Field(min_length=1)
+    request_id: str = Field(min_length=1)
+
+
 def _routine_session_from_thread(agent_id: str, thread_id: str) -> str | None:
     """Return the session only for an exact routine thread owned by ``agent_id``."""
 
@@ -833,6 +842,51 @@ def create_agent_profile_router(
             raise
 
     @router.post(
+        "/agent-profiles/{agent_id}/run-continue",
+        status_code=202,
+        response_model=http_contracts.UiRequestAcknowledgement,
+    )
+    async def continue_interrupted_routine_run(
+        agent_id: str,
+        body: ContinueInterruptedRoutineRequest,
+        request: Request,
+        x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
+    ):
+        """Settle an orphaned attempt then enqueue its native checkpoint resume."""
+        operation_id = _request_correlation_id(request, x_request_id)
+        session_id = _routine_session_from_thread(agent_id, body.thread_id)
+        if session_id is None:
+            raise HTTPException(status_code=400, detail="thread_id does not belong to this routine")
+        _require_runtime()
+        runtime_client = lifecycle_state.client
+        controller = getattr(runtime_client, "control_routine_run", None)
+        if runtime_client is None or not callable(controller):
+            raise HTTPException(status_code=503, detail="Routine run control is unavailable")
+        try:
+            lifecycle = await cast(Callable[..., Awaitable[dict[str, Any]]], controller)(
+                agent_id,
+                thread_id=body.thread_id,
+                request_id=body.request_id,
+                action="stop",
+            )
+        except RuntimeControlError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+        if not isinstance(lifecycle, dict) or lifecycle.get("status") != "stopped":
+            raise HTTPException(status_code=409, detail="Routine run is not an interrupted orphan")
+        async with run_admission_lock:
+            enqueued = await _admit_routine_run(
+                agent_id,
+                RunRoutineRequest(session_id=session_id, resume_thread_id=body.thread_id),
+                operation_id,
+                get_document_store(),
+            )
+        from src.backend.workflows.events import routine_events
+
+        if routine_events.claim_lifecycle(enqueued):
+            broadcast_ui_event("agent.routine.run.enqueued", enqueued, request_id=operation_id)
+        return http_contracts.acknowledgement_response(operation_id, ["agent.routine.run.enqueued"])
+
+    @router.post(
         "/agent-profiles/{agent_id}/run-control",
         status_code=202,
         response_model=http_contracts.UiRequestAcknowledgement,
@@ -1036,9 +1090,13 @@ def create_agent_profile_router(
         response tells the caller whether another page exists.
         """
         request_id = _request_correlation_id(request, x_request_id)
+        doc_store = get_document_store()
         runs, has_more = await asyncio.to_thread(
-            get_document_store().list_routine_runs, agent_id, limit=limit, before=before
+            doc_store.list_routine_runs, agent_id, limit=limit, before=before
         )
+        from src.backend.workflows.events import routine_lifecycles_by_thread
+
+        lifecycles = await routine_lifecycles_by_thread(agent_id, doc_store)
         payload = {
             "agent_id": agent_id,
             "before": before,
@@ -1052,6 +1110,21 @@ def create_agent_profile_router(
                     "last_checkpoint_at": run.last_checkpoint_at,
                     "checkpoint_count": run.checkpoint_count,
                     "failed": run.failed,
+                    **(
+                        {"status": lifecycle["status"]}
+                        if (lifecycle := lifecycles.get(run.thread_id))
+                        else {}
+                    ),
+                    **(
+                        {"inputs": lifecycle["inputs"]}
+                        if lifecycle and "inputs" in lifecycle
+                        else {}
+                    ),
+                    **(
+                        {"interrupted_at": lifecycle["interrupted_at"]}
+                        if lifecycle and "interrupted_at" in lifecycle
+                        else {}
+                    ),
                 }
                 for run in runs
             ],

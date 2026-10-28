@@ -271,7 +271,12 @@ When a thread is selected, its session detail is emitted as both the
 request-correlated `chat.session.upserted` and `chat.session.selected` event.
 That detail includes `active_request_id` and nullable `activity`
 (`"delegating"`, `"generating"`, or `null`) from the same volatile response
-registry, not persisted chat history.
+registry, not persisted chat history. It also carries nullable `interruption`
+(`{next, at}`): when no response is active and the saved transcript ends
+mid-turn, the backend reads the latest LangGraph checkpoint directly. It reports
+an interruption only for a pending step owned by a non-live runtime, not waiting
+on a person and not failed; an unknown live runtime or failed checkpoint read
+omits it.
 
 - dedicated `/api/ui/responses/{request_id}/stream` carries only
   `chat.response.delta` and `chat.response.event` content frames, plus

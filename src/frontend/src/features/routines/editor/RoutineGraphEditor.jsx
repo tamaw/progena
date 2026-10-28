@@ -4,7 +4,7 @@ import { createUuid } from '../../../lib/uuid';
 import useEntityDraft from '../../../hooks/useEntityDraft';
 import { useConfig } from '../../../context/ConfigContext';
 import React, { useState, useRef, useEffect, useCallback, useMemo, useLayoutEffect } from 'react';
-import { selectAgentRoutineRuns, selectAgentRunState, selectRoutineRunLifecycle, selectLatestRoutineRunLifecycle, selectRoutineRunLifecyclesByThreadId, startRoutineRun, controlRoutineRun, answerRoutineApproval, fetchRoutineRuns, fetchRunState, selectAgentRoutineRevisionContent, fetchRoutineRevision, selectAgentProfiles, selectAgentRoutineRunsHasMore } from '../../agents/state/agents';
+import { selectAgentRoutineRuns, selectAgentRunState, selectRoutineRunLifecycle, selectLatestRoutineRunLifecycle, selectRoutineRunLifecyclesByThreadId, startRoutineRun, controlRoutineRun, continueInterruptedRoutineRun, answerRoutineApproval, fetchRoutineRuns, fetchRunState, selectAgentRoutineRevisionContent, fetchRoutineRevision, selectAgentProfiles, selectAgentRoutineRunsHasMore } from '../../agents/state/agents';
 import { selectPolicies, fetchPolicies } from '../../settings/state/policies';
 import {
   randomSessionId,
@@ -187,7 +187,7 @@ function useRoutineRunEvents(agentId, parameters, inputSchema) {
       : sessionId ? { session_id: sessionId } : {}).catch(() => {});
   }, [sessionId]);
 
-  const startRun = useCallback((targetNode) => {
+  const startRun = useCallback((targetNode, suppliedParameters) => {
     if (targetNode && lifecycleStatus === 'cancelled' && lifecycle?.session_id === interactiveSessionIdRef.current) {
       interactiveSessionIdRef.current = null;
       setHasInteractiveSession(false);
@@ -204,7 +204,7 @@ function useRoutineRunEvents(agentId, parameters, inputSchema) {
     setControlError(null);
     setPendingControlAction(null);
     setStopRequestedAtMs(null);
-    const effectiveParameters = { ...parameters };
+    const effectiveParameters = { ...(suppliedParameters ?? parameters) };
     for (const name of inputSchema?.required || []) {
       if (inputSchema.properties?.[name]?.type === 'boolean' && effectiveParameters[name] === undefined) {
         effectiveParameters[name] = false;
@@ -229,7 +229,7 @@ function useRoutineRunEvents(agentId, parameters, inputSchema) {
     const target = routineRunControlTarget(lifecycle, agentId);
     if (!target
       || (action === 'stop' && lifecycleStatus !== 'started')
-      || (action === 'cancel' && !['started', 'stopping'].includes(lifecycleStatus))) {
+      || (action === 'cancel' && !['started', 'stopping', 'interrupted'].includes(lifecycleStatus))) {
       return;
     }
     setControlError(null);
@@ -281,6 +281,71 @@ function useRoutineRunEvents(agentId, parameters, inputSchema) {
     })();
   }, [agentId, agentsUrl, dispatch, lifecycle, lifecycleStatus]);
 
+  const continueInterruptedRun = useCallback(() => {
+    const target = routineRunControlTarget(lifecycle, agentId);
+    if (lifecycleStatus !== 'interrupted' || !target?.sessionId) return;
+    // The operation id becomes the resumed attempt's id, so the editor follows
+    // it exactly as it follows a toolbar Resume.
+    const newRequestId = createOperationRequestId();
+    const watch = watchRef.current;
+    setSessionId(target.sessionId);
+    setRequestId(newRequestId);
+    setRunStartedAtMs(null);
+    setRequestError(null);
+    setControlError(null);
+    setPendingControlAction(null);
+    setStopRequestedAtMs(null);
+    void (async () => {
+      try {
+        await watch.select({ session_id: target.sessionId });
+        if (watchRef.current !== watch) return;
+        await dispatch(continueInterruptedRoutineRun({
+          agentsUrl, agentId, threadId: target.threadId, targetRequestId: target.requestId,
+          requestId: newRequestId,
+        })).unwrap();
+      } catch (error) {
+        if (watchRef.current !== watch) return;
+        setRequestError(error.message || 'Could not continue this run');
+        setRequestId((current) => (current === newRequestId ? target.requestId : current));
+      }
+    })();
+  }, [agentId, agentsUrl, dispatch, lifecycle, lifecycleStatus]);
+
+  // Start again replaces an interrupted run: close the orphan (cancelled, like
+  // Cancel run) without tracking it, since the editor then follows the new run.
+  // Resolves true once closed; on failure it reports the error and resolves false.
+  const closeInterruptedRun = useCallback(async () => {
+    const target = routineRunControlTarget(lifecycle, agentId);
+    if (lifecycleStatus !== 'interrupted' || !target) return false;
+    setControlError(null);
+    try {
+      await dispatch(controlRoutineRun({
+        agentsUrl,
+        agentId,
+        threadId: target.threadId,
+        targetRequestId: target.requestId,
+        action: 'cancel',
+      })).unwrap();
+      return true;
+    } catch (error) {
+      setControlError(error.message || 'Could not close the interrupted run');
+      return false;
+    }
+  }, [agentId, agentsUrl, dispatch, lifecycle, lifecycleStatus]);
+
+  // Follow an existing attempt (e.g. an older interrupted run picked from
+  // history) exactly as a run started here is followed.
+  const trackRun = useCallback((target) => {
+    if (!target?.session_id || !target?.request_id) return;
+    setSessionId(target.session_id);
+    setRequestId(target.request_id);
+    setRequestError(null);
+    setControlError(null);
+    setPendingControlAction(null);
+    setStopRequestedAtMs(null);
+    void watchRef.current?.select({ session_id: target.session_id }).catch(() => {});
+  }, []);
+
   const resetInteractiveSession = useCallback(() => {
     interactiveSessionIdRef.current = null;
     setHasInteractiveSession(false);
@@ -309,6 +374,9 @@ function useRoutineRunEvents(agentId, parameters, inputSchema) {
     stopRun: () => requestControl('stop'),
     cancelRun: () => requestControl('cancel'),
     resumeRun,
+    continueInterruptedRun,
+    closeInterruptedRun,
+    trackRun,
     threadId,
     runMeta: runState.run_meta,
     runData: runState.data,
@@ -501,6 +569,9 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, o
     stopRequestedAtMs,
     stopRun,
     cancelRun,
+    continueInterruptedRun,
+    closeInterruptedRun,
+    trackRun,
     resumeRun,
     threadId: liveThreadId,
     runMeta: liveRunMeta,
@@ -534,9 +605,9 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, o
     resetRunNavToLatest();
     await answerApproval(approvalThreadId, approval, answer);
   }, [runNav.threadId, resetRunNavToLatest, answerApproval]);
-  const startRunAndTrackLatest = useCallback((targetNode) => {
+  const startRunAndTrackLatest = useCallback((targetNode, suppliedParameters) => {
     resetRunNavToLatest();
-    return startRun(targetNode);
+    return startRun(targetNode, suppliedParameters);
   }, [resetRunNavToLatest, startRun]);
   const { isBrowsingHistory } = runNav;
   useEffect(() => {
@@ -1201,6 +1272,7 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, o
   // Local (not lifted to AgentsPage) since nothing outside this canvas
   // needs to know it's open, same as restoreConfirmOpen above.
   const [runModalOpen, setRunModalOpen] = useState(false);
+  const [interruptedModalOpen, setInterruptedModalOpen] = useState(false);
   // The End cap's read-only mirror -- opens RoutineOutputModal to show the
   // declared output_schema resolved against the run currently in view
   // (live or browsed, same runData every other run-aware element here
@@ -1270,6 +1342,22 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, o
       : new Set()),
     [runNav.isBrowsingHistory, isExecutionActive, displayNodes, displayEdges, displayEntry, completedNodeIds],
   );
+  // An older interrupted run browsed in history is resolvable like the latest.
+  const lifecyclesByThreadId = useSelector(selectRoutineRunLifecyclesByThreadId);
+  const browsedLifecycle = runNav.isBrowsingHistory ? lifecyclesByThreadId[runNav.threadId] : null;
+  const browsedInterrupted = browsedLifecycle?.status === 'interrupted' ? browsedLifecycle : null;
+  const shownLifecycle = runNav.isBrowsingHistory ? browsedInterrupted : liveLifecycle;
+  const interruptedNodeIds = useMemo(
+    () => new Set(shownLifecycle?.status === 'interrupted' ? shownLifecycle.next || [] : []),
+    [shownLifecycle],
+  );
+  const interruptedStepLabel = useMemo(
+    () => displayNodes
+      .filter((node) => interruptedNodeIds.has(node.id))
+      .map((node) => node.label || node.id)
+      .join(', '),
+    [displayNodes, interruptedNodeIds],
+  );
   const currentGraphForStaleness = useMemo(
     () => ({ entry: meta.entry, nodes, edges }),
     [meta.entry, nodes, edges],
@@ -1308,6 +1396,8 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, o
     runMeta,
     runData,
     activeNodeIds,
+    interruptedNodeIds,
+    interruptedAt: shownLifecycle?.interrupted_at ?? null,
     estimatedActiveStartMs,
     staleNodeIds,
     runStatus,
@@ -1321,7 +1411,7 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, o
     resetInteractiveSession,
     pendingApprovals: runNav.pendingApprovals,
     answerApproval: submitApproval,
-  }), [agent.id, updateNode, deleteNode, insertAt, onChangeStateKey, updateLoopGuard, removeBranching, onAddBranch, onJoinBranches, selectNode, selectedNodeId, onAddDefault, onRemoveBranch, onRemoveDefault, onRenameBranch, executionPolicy, displayEdges, displayNodes, meta.input_schema, meta.output_schema, runNav.isBrowsingHistory, runNav.pendingApprovals, submitApproval, runMeta, runData, activeNodeIds, estimatedActiveStartMs, staleNodeIds, runStatus, warmingUp, isRunInProgress, loopMembership, loopIterations, setLoopIteration, startRunAndTrackLatest, hasInteractiveSession, resetInteractiveSession]);
+  }), [agent.id, updateNode, deleteNode, insertAt, onChangeStateKey, updateLoopGuard, removeBranching, onAddBranch, onJoinBranches, selectNode, selectedNodeId, onAddDefault, onRemoveBranch, onRemoveDefault, onRenameBranch, executionPolicy, displayEdges, displayNodes, meta.input_schema, meta.output_schema, runNav.isBrowsingHistory, runNav.pendingApprovals, submitApproval, runMeta, runData, activeNodeIds, interruptedNodeIds, shownLifecycle, estimatedActiveStartMs, staleNodeIds, runStatus, warmingUp, isRunInProgress, loopMembership, loopIterations, setLoopIteration, startRunAndTrackLatest, hasInteractiveSession, resetInteractiveSession]);
 
   // Debounced autosave preserves the existing active-editor cadence. Local
   // edits already live in the draft registry, so cancelling this timer during
@@ -1544,6 +1634,24 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, o
             ariaLabel: 'Queued',
             disabled: true,
             pending: true,
+          };
+        }
+        if (liveLifecycle?.status === 'interrupted' || browsedInterrupted) {
+          return {
+            icon: <PlayActionIcon />,
+            label: 'Run',
+            tooltip: 'Choose how to recover this interrupted run',
+            ariaLabel: 'Run routine',
+            onClick: () => {
+              // A browsed older run becomes the tracked run, so the modal and
+              // its actions target it exactly as they do the latest run.
+              if (browsedInterrupted) {
+                trackRun(browsedInterrupted);
+                resetRunNavToLatest();
+              }
+              setInterruptedModalOpen(true);
+            },
+            disabled: runNav.isBrowsingHistory && !browsedInterrupted,
           };
         }
         return {
@@ -1797,6 +1905,48 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, o
           confirmLabel="Restore"
           onClose={() => setRestoreConfirmOpen(false)}
           onConfirm={handleRestoreRun}
+        />
+      ) : null}
+      {interruptedModalOpen ? (
+        <PopupModal
+          eyebrow="Interrupted run"
+          title="This run was interrupted"
+          message={`The runtime restarted while this run was executing${interruptedStepLabel ? ` step ${interruptedStepLabel}` : ''}${liveLifecycle?.interrupted_at ? ` (${formatAge(liveLifecycle.interrupted_at)})` : ''}. Continue reruns that step, which may have partly run. Start again cancels this run and starts a new one.`}
+          cancelLabel="Close"
+          onClose={() => setInterruptedModalOpen(false)}
+          actions={[
+            {
+              label: 'Continue',
+              tone: 'primary',
+              onClick: () => {
+                setInterruptedModalOpen(false);
+                resetRunNavToLatest();
+                continueInterruptedRun();
+              },
+            },
+            {
+              label: 'Start again',
+              tone: 'primary',
+              onClick: () => {
+                setInterruptedModalOpen(false);
+                const inputs = liveLifecycle?.inputs;
+                void closeInterruptedRun().then((closed) => {
+                  if (!closed) return;
+                  if (inputs) startRunAndTrackLatest(null, inputs);
+                  else if (hasDeclaredParams) setRunModalOpen(true);
+                  else startRunAndTrackLatest();
+                });
+              },
+            },
+            {
+              label: 'Cancel run',
+              tone: 'danger',
+              onClick: () => {
+                setInterruptedModalOpen(false);
+                cancelRun();
+              },
+            },
+          ]}
         />
       ) : null}
     </>

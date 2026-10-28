@@ -1588,6 +1588,8 @@ function ConversationPage() {
               liveTurnStore={shouldRenderTranscript ? liveTurnStore : undefined}
               messagesContainerRef={messagesContainerRef}
               isPinnedToBottomRef={isPinnedToBottomRef}
+              interruption={activeBackendChat?.interruption}
+              isGenerating={isGenerating}
             >
               {isRouteDetailError ? (
                 <InlineFailure

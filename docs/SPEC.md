@@ -46,6 +46,9 @@ to the backend and receives browser application data through two SSE roles:
     `after` / `limit` (1–100) / `order` paging.
   - `DELETE /v1/conversations/{id}` deletes the thread's checkpoints and its
     runtime `current_state` document (409 while a turn is in flight).
+  - The backend reads LangGraph checkpoints directly to derive pending steps for
+    interrupted chat and routine displays; thread-state inspection is not a
+    runtime HTTP endpoint.
   - Vendor extensions outside the OpenAI spec: `progena.stream_event` SSE
     events carry the runtime's tool/reasoning/subagent activity; the
     `include=progena.langchain_message` items option adds
@@ -160,6 +163,20 @@ second Resume is rejected; a resume that fails before starting releases the
 claim. The runtime
 implements the native task ownership boundary at
 `POST /v1/routine-runs/control`.
+
+An executing run whose owner is gone (an earlier `runtime_instance`, or a
+pre-ownership run started before the live runtime) is presented as
+`interrupted`; this is derived on read from the health document's live
+`runtime_instance` and never persisted. Its stopped step is LangGraph's pending
+`next`, read through the runtime. Run on an interrupted run offers Continue
+(`POST /api/ui/agent-profiles/{agent_id}/run-continue` with
+`{thread_id, request_id}`: settle the orphan `stopped`, then the normal Resume),
+Start again (cancel the orphan, then a new session seeded with the first
+attempt's `inputs`, recorded on its `started` lifecycle), or Cancel run. An
+older interrupted run picked from run history shows the same step marker, and
+Run on it adopts that run before offering the same choices. Scheduled runs stamp
+`runtime_instance` when they start running, and their recent runs show the
+same derived `interrupted` status.
 
 ### Backend (`src/backend/`)
 

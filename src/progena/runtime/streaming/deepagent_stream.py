@@ -19,6 +19,7 @@ from src.progena.llm.provider_context import (
     activate_provider_turn,
     current_provider_turn,
 )
+from src.progena.runtime.instance import RUNTIME_INSTANCE_ID
 from src.progena.runtime.streaming.stream_events import (
     build_reasoning_delta_event,
     build_reasoning_summary_event,
@@ -196,7 +197,10 @@ class DeepAgentSSEStream:
         if source is not None:
             configurable["progena_source"] = source
         astream_kwargs: dict[str, Any] = {
-            "config": {"configurable": configurable},
+            "config": {
+                "configurable": configurable,
+                "metadata": {"runtime_instance": RUNTIME_INSTANCE_ID},
+            },
         }
         if self._graph_accepts_kwarg("stream_mode"):
             astream_kwargs["stream_mode"] = ["messages", "updates", "custom", "tasks"]

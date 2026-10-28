@@ -74,6 +74,7 @@ class ScheduleRunRecord(BaseModel):
     updated_at: datetime = Field(default_factory=utcnow)
     started_at: datetime | None = None
     completed_at: datetime | None = None
+    runtime_instance: str | None = None
 
     @field_validator("status", mode="before")
     @classmethod
