@@ -22,7 +22,6 @@ from langgraph.runtime import Runtime
 from src.progena.documents.values import make_json_safe
 from src.progena.orchestration.nodes.checkpoint import checkpoint_node
 from src.progena.orchestration.state import ProgenaState
-from src.progena.runtime.active_threads import is_running
 from src.progena.runtime.http.responses import (
     build_response_object,
     build_sse_event,
@@ -131,7 +130,6 @@ class RuntimeChatService:
             web.post("/v1/responses", self.handle_responses),
             web.post("/v1/responses/{response_id}/cancel", self.handle_cancel),
             web.get("/v1/conversations/{conversation_id}/items", self.handle_items),
-            web.get("/v1/threads/{thread_id}/state", self.handle_thread_state),
             web.delete("/v1/conversations/{conversation_id}", self.handle_delete),
             web.get("/v1/events", self.handle_events),
         ]
@@ -812,75 +810,6 @@ class RuntimeChatService:
                 conversation_id,
             )
         return web.json_response(make_json_safe({**meta, "data": page}))
-
-    # -- GET /v1/threads/{thread_id}/state -------------------------------
-
-    async def handle_thread_state(self, request: web.Request) -> web.Response:
-        """Describe a chat or routine checkpoint without mutating it."""
-        thread_id = request.match_info["thread_id"]
-        graph = getattr(self.loop_runner, "graph", None)
-        if graph is None:
-            return _json_error("Graph is not available", "graph_unavailable", 503)
-
-        if thread_id.startswith("routine:"):
-            # Routine graphs are compiled by the runtime assembly (model,
-            # registries, policy resolver), so the agent exposes the reader.
-            agent = getattr(graph, "agent", graph)
-            reader = cast(
-                Callable[[str], Awaitable[Any]] | None,
-                getattr(agent, "routine_thread_state", None),
-            )
-            controls = getattr(agent, "routine_controls", None)
-            if reader is None:
-                return _json_error("Routine graph is not available", "graph_unavailable", 503)
-            try:
-                snapshot = await reader(thread_id)
-            except Exception as exc:
-                logger.warning("Reading routine thread state for %s failed: %s", thread_id, exc)
-                return _json_error("Failed to read thread state", "server_error", 500)
-            in_flight = controls is not None and controls.owns_thread(
-                thread_id.split(":", 3)[1], thread_id
-            )
-        else:
-            try:
-                snapshot = await graph.aget_state({"configurable": {"thread_id": thread_id}})
-            except Exception as exc:
-                logger.warning("Reading thread state for %s failed: %s", thread_id, exc)
-                return _json_error("Failed to read thread state", "server_error", 500)
-            in_flight = is_running(thread_id) or bool(
-                (task := self._inflight_by_thread.get(thread_id)) is not None and not task.done()
-            )
-
-        exists = snapshot.created_at is not None
-        next_nodes = list(snapshot.next or ()) if exists else []
-        waiting = bool(snapshot.interrupts) if exists else False
-        # A step that raised is recorded on its pending task: that turn failed,
-        # it was not cut off.
-        failed = exists and any(
-            getattr(task, "error", None) is not None for task in (snapshot.tasks or ())
-        )
-        checkpoint_config = getattr(snapshot, "config", {}) or {}
-        configurable = checkpoint_config.get("configurable", {})
-        checkpoint_id = (
-            configurable.get("checkpoint_id") if isinstance(configurable, dict) else None
-        )
-        return web.json_response(
-            make_json_safe(
-                {
-                    "thread_id": thread_id,
-                    "exists": exists,
-                    "next": next_nodes,
-                    "waiting": waiting,
-                    "failed": failed,
-                    "in_flight": in_flight,
-                    "interrupted": bool(
-                        exists and next_nodes and not waiting and not failed and not in_flight
-                    ),
-                    "checkpoint_id": checkpoint_id if isinstance(checkpoint_id, str) else None,
-                    "updated_at": snapshot.created_at if exists else None,
-                }
-            )
-        )
 
     # -- DELETE /v1/conversations/{conversation_id} ----------------------
 

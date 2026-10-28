@@ -11,7 +11,6 @@ skills, memory files, and native DeepAgent subagents.
 
 import json
 import logging
-from collections import OrderedDict
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -74,7 +73,6 @@ from src.progena.routines.subagent import (
     create_routine_subagent,
     resolve_routine_document,
     resume_routine_thread,
-    routine_thread_state,
 )
 
 logger = logging.getLogger(__name__)
@@ -644,28 +642,6 @@ async def create_progena_agent(
     agent.routine_controls = routine_controls  # type: ignore[attr-defined]
     agent.routine_resumer = _resume_routine  # type: ignore[attr-defined]
 
-    # Compiled graphs of revision-pinned routine threads, read only for their
-    # snapshot; scoped to this agent so a rebuild drops them with its checkpointer.
-    snapshot_graphs: OrderedDict[tuple[str, str], Any] = OrderedDict()
-
-    async def _routine_thread_state(thread_id: str) -> Any:
-        return await routine_thread_state(
-            thread_id=thread_id,
-            model=model,
-            state_manager=state_manager,
-            revision_reader=revision_reader,
-            agent_registry=object_agent_registry,
-            routine_registry={},
-            routine_runner=_run_routine,
-            agent_background_runner=background_runner,
-            model_profile_resolver=profile_resolver,
-            tool_registry=tool_registry,
-            filesystem_backend=backend,
-            checkpointer=checkpointer,
-            graph_cache=snapshot_graphs,
-        )
-
-    agent.routine_thread_state = _routine_thread_state  # type: ignore[attr-defined]
     agent.object_agent_registry = live_objects  # type: ignore[attr-defined]
     agent.routine_subagent_registry = live_routines  # type: ignore[attr-defined]
 

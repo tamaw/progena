@@ -5,16 +5,18 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
-from collections.abc import Awaitable, Callable
+from collections.abc import Callable
 from typing import Any, Literal
 
 from fastapi import APIRouter, Header, HTTPException, Request
 
 import src.backend.chat.responses as chat_responses
 import src.backend.chat.service as chat_service
+import src.backend.checkpoint_state as checkpoint_state
 import src.backend.events.documents as events_documents
 import src.backend.events.stream as events_stream
 import src.backend.http.contracts as http_contracts
+import src.backend.runtime_liveness as runtime_liveness
 import src.backend.storage.documents as storage_documents
 from src.backend.chat.service import (
     CHAT_MESSAGE_PAGE_SIZE,
@@ -89,12 +91,9 @@ def create_chat_router(
     *,
     get_document_store: Callable[[], BackendDocumentStore],
     broadcast_ui_event: BroadcastUiEvent,
-    get_current_state: Callable[[str], dict[str, Any]] | None = None,
-    get_thread_messages: Callable[[str], list[Any]] | None = None,
     get_active_response: (
         Callable[[str], tuple[str, Literal["delegating", "generating"]] | None] | None
     ) = None,
-    get_runtime_thread_state: Callable[[str], Awaitable[dict[str, Any] | None]] | None = None,
 ) -> APIRouter:
     router = APIRouter()
 
@@ -126,19 +125,19 @@ def create_chat_router(
     async def interruption_for(
         thread_id: str, messages: list[ChatMessage]
     ) -> ChatInterruption | None:
-        """Ask the runtime only when the saved transcript ends mid-turn.
-
-        A finished turn ends with an assistant reply that requests no tools;
-        that is the common case and needs no runtime read (which loads the
-        whole checkpoint).
-        """
-        if get_runtime_thread_state is None or not messages:
+        """Read a checkpoint only when the saved transcript ends mid-turn."""
+        if not messages:
             return None
         last = messages[-1]
         if last.role == "assistant" and not last.tool_calls:
             return None
         try:
-            return _interruption_from_runtime_state(await get_runtime_thread_state(thread_id))
+            state = await checkpoint_state.read_thread_checkpoint_state(
+                thread_id, get_document_store()
+            )
+            return _interruption_from_checkpoint_state(
+                state, runtime_liveness.live_runtime(get_document_store())
+            )
         except Exception:
             return None
 
@@ -284,18 +283,27 @@ def create_chat_router(
     return router
 
 
-def _interruption_from_runtime_state(payload: dict[str, Any] | None) -> ChatInterruption | None:
-    """Map an authoritative runtime read into the browser detail contract."""
-    if not isinstance(payload, dict) or payload.get("interrupted") is not True:
+def _interruption_from_checkpoint_state(
+    state: dict[str, Any], live: runtime_liveness.LiveRuntime | None
+) -> ChatInterruption | None:
+    """Map a durable checkpoint state into the browser detail contract."""
+    next_nodes = state.get("next")
+    updated_at = state.get("updated_at")
+    owner = state.get("runtime_instance")
+    owner_instance = owner if isinstance(owner, str) else None
+    if (
+        state.get("exists") is not True
+        or not isinstance(next_nodes, list)
+        or not all(isinstance(node, str) for node in next_nodes)
+        or not next_nodes
+        or state.get("waiting") is True
+        or state.get("failed") is True
+        or not runtime_liveness.owner_is_gone(
+            owner_instance, updated_at if isinstance(updated_at, str) else None, live
+        )
+    ):
         return None
-    next_nodes = payload.get("next")
-    updated_at = payload.get("updated_at")
-    if not isinstance(next_nodes, list) or not all(isinstance(node, str) for node in next_nodes):
-        return None
-    return ChatInterruption(
-        next=next_nodes,
-        at=updated_at if isinstance(updated_at, str) else None,
-    )
+    return ChatInterruption(next=next_nodes, at=updated_at if isinstance(updated_at, str) else None)
 
 
 async def _publish_chat_session_document_event(typed: events_documents.TypedDocumentEvent) -> None:

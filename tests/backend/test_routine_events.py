@@ -206,6 +206,38 @@ async def test_snapshot_derives_interrupted_only_for_runs_owned_by_a_gone_runtim
     assert "interrupted" not in stored
 
 
+async def test_interrupted_routine_overlay_reads_stopped_step_from_checkpoint(feed, monkeypatch):
+    import src.backend.workflows.events as module
+
+    listener, store, events = feed
+    thread_id = "routine:demo:rev:stopped"
+    store.save_document(
+        PROGENA_STATE_PREFIX,
+        "health",
+        {"runtime_instance": "live", "started_at": "2026-10-28T10:00:00Z"},
+    )
+    _routine_event(
+        store,
+        "stopped",
+        "started",
+        "2026-10-28T09:00:00Z",
+        thread_id=thread_id,
+        runtime_instance="old",
+    )
+    listener.connections.add("watching")
+    listener.interests["watching"] = {"agent_id": "demo", "thread_id": thread_id}
+    reader = AsyncMock(return_value={"next": ["send_email"]})
+    monkeypatch.setattr(module, "read_thread_checkpoint_state", reader)
+
+    await listener.refresh("demo")
+
+    interrupted = next(
+        payload for kind, payload, _ in events if kind == "agent.routine.run.interrupted"
+    )
+    assert interrupted["next"] == ["send_email"]
+    reader.assert_awaited_once_with(thread_id, store)
+
+
 async def test_snapshot_without_live_runtime_never_guesses_interrupted(feed):
     listener, store, events = feed
     _routine_event(store, "dead", "started", "2026-10-28T09:00:00Z", runtime_instance="old")

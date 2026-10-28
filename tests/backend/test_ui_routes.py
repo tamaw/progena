@@ -261,22 +261,28 @@ class TestUIRoutes:
     def test_chat_detail_reports_interruption_only_for_an_unfinished_turn(
         self, client, document_store, monkeypatch
     ):
-        """The runtime is asked only when the saved transcript ends mid-turn."""
-
+        """A checkpoint is read only when the saved transcript ends mid-turn."""
         reads: list[str] = []
 
-        class _Runtime:
-            is_running = True
+        async def read_checkpoint(thread_id: str, _store):
+            reads.append(thread_id)
+            return {
+                "exists": True,
+                "next": ["tools"],
+                "waiting": False,
+                "failed": False,
+                "runtime_instance": "old-runtime",
+                "updated_at": "2026-10-28T10:00:00Z",
+            }
 
-            async def get_thread_state(self, thread_id):
-                reads.append(thread_id)
-                return {
-                    "interrupted": True,
-                    "next": ["tools"],
-                    "updated_at": "2026-10-28T10:00:00Z",
-                }
-
-        monkeypatch.setattr(lifecycle_state, "client", _Runtime())
+        document_store.save_document(
+            PROGENA_STATE_PREFIX,
+            "health",
+            {"runtime_instance": "live-runtime", "started_at": "2026-10-28T10:01:00Z"},
+        )
+        monkeypatch.setattr(
+            chat_routes.checkpoint_state, "read_thread_checkpoint_state", read_checkpoint
+        )
         for thread_id, last in (
             (
                 "thread-cut",
@@ -307,6 +313,30 @@ class TestUIRoutes:
         assert cut["interruption"] == {"next": ["tools"], "at": "2026-10-28T10:00:00Z"}
         assert done["interruption"] is None
         assert reads == ["thread-cut"]
+
+    @pytest.mark.parametrize(
+        ("state", "expected"),
+        [
+            ({"waiting": True}, None),
+            ({"failed": True}, None),
+            ({"runtime_instance": "live"}, None),
+            ({"next": []}, None),
+        ],
+    )
+    def test_chat_interruption_requires_an_orphaned_pending_checkpoint(self, state, expected):
+        checkpoint = {
+            "exists": True,
+            "next": ["tools"],
+            "waiting": False,
+            "failed": False,
+            "runtime_instance": "old",
+            "updated_at": "2026-10-28T09:00:00Z",
+            **state,
+        }
+        live = chat_routes.runtime_liveness.LiveRuntime("live", "2026-10-28T10:00:00Z")
+
+        assert chat_routes._interruption_from_checkpoint_state(checkpoint, live) == expected
+        assert chat_routes._interruption_from_checkpoint_state(checkpoint, None) is None
 
     def test_chat_detail_rehydrates_live_response_activity(self, client, document_store):
         """A selected thread recovers live activity without persisting transient state."""

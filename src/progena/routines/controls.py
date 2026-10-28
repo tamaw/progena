@@ -131,10 +131,6 @@ class RoutineRunController:
     def _thread_key(scope: RoutineExecutionScope) -> tuple[str, str]:
         return (scope.agent_id, scope.thread_id)
 
-    def owns_thread(self, agent_id: str, thread_id: str) -> bool:
-        """Whether this process is executing a run on ``thread_id`` right now."""
-        return self._active_threads.get((agent_id, thread_id)) is not None
-
     @staticmethod
     def _payload(scope: RoutineExecutionScope, status: str, **extra: Any) -> dict[str, Any]:
         return {

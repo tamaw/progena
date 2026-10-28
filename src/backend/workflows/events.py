@@ -9,7 +9,7 @@ from collections import OrderedDict
 from typing import Any
 
 import src.backend.events.stream as events_stream
-from src.backend.integrations.runtime import get_thread_state
+from src.backend.checkpoint_state import read_latest_checkpoint, read_thread_checkpoint_state
 from src.backend.runtime_liveness import live_runtime, owner_is_gone
 from src.backend.storage.documents import (
     PROGENA_STATE_PREFIX,
@@ -109,6 +109,7 @@ _RETAINED_LIFECYCLE_STATUSES = frozenset(
 
 async def read_run_state(agent_id: str, thread_id: str, doc_store=None) -> dict[str, Any]:
     """Reconstruct checkpoint blob channels using LangGraph's native saver."""
+    doc_store = doc_store if doc_store is not None else get_document_store()
     payload = {
         "agent_id": agent_id,
         "thread_id": thread_id,
@@ -117,33 +118,27 @@ async def read_run_state(agent_id: str, thread_id: str, doc_store=None) -> dict[
         "data": {},
         "pending_approvals": [],
     }
-    doc_store = doc_store if doc_store is not None else get_document_store()
-    database_url = store_database_url(doc_store)
-    if database_url:
-        from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
-
-        async with AsyncPostgresSaver.from_conn_string(database_url) as saver:
-            checkpoint = await saver.aget_tuple({"configurable": {"thread_id": thread_id}})
-            if checkpoint is not None:
-                values = checkpoint.checkpoint.get("channel_values", {})
-                payload.update(
-                    found=True, run_meta=values.get("run_meta") or {}, data=values.get("data") or {}
-                )
-                interrupts = [
-                    item
-                    for _, channel, value in (checkpoint.pending_writes or [])
-                    if channel == "__interrupt__"
-                    for item in value
-                ]
-                approvals = pending_approvals(interrupts)
-                for approval in approvals:
-                    claim = await asyncio.to_thread(
-                        doc_store.get_document,
-                        PROGENA_STATE_PREFIX,
-                        decision_key(thread_id, approval["interrupt_id"]),
-                    )
-                    approval["answer_pending"] = claim is not None
-                payload["pending_approvals"] = approvals
+    checkpoint = await read_latest_checkpoint(thread_id, doc_store)
+    if checkpoint is not None:
+        values = checkpoint.checkpoint.get("channel_values", {})
+        payload.update(
+            found=True, run_meta=values.get("run_meta") or {}, data=values.get("data") or {}
+        )
+        interrupts = [
+            item
+            for _, channel, value in (checkpoint.pending_writes or [])
+            if channel == "__interrupt__"
+            for item in value
+        ]
+        approvals = pending_approvals(interrupts)
+        for approval in approvals:
+            claim = await asyncio.to_thread(
+                doc_store.get_document,
+                PROGENA_STATE_PREFIX,
+                decision_key(thread_id, approval["interrupt_id"]),
+            )
+            approval["answer_pending"] = claim is not None
+        payload["pending_approvals"] = approvals
     return payload
 
 
@@ -298,10 +293,8 @@ class RoutineEvents:
         for lifecycle in lifecycle_by_thread.values():
             if lifecycle.get("status") != "interrupted":
                 continue
-            # The node it stopped on is LangGraph's pending ``next``; only the
-            # runtime can read it, and a failed read just omits the overlay.
-            state = await get_thread_state(lifecycle["thread_id"])
-            if isinstance(state, dict) and isinstance(state.get("next"), list):
+            state = await read_thread_checkpoint_state(lifecycle["thread_id"], store)
+            if isinstance(state.get("next"), list):
                 lifecycle["next"] = state["next"]
             for client_id, interest in watchers.items():
                 events_stream.broadcast_ui_event(
