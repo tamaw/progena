@@ -16,7 +16,6 @@ import contextlib
 import hashlib
 import json
 import logging
-import os
 import re
 import time
 from collections.abc import Callable
@@ -26,6 +25,7 @@ from pathlib import Path
 from typing import Any, cast
 
 import src.backend.lifecycle.state as lifecycle_state
+from src.backend.logging_setup import get_log_dir
 from src.backend.storage.documents import (
     BACKEND_STATE_PREFIX,
     PROGENA_STATE_PREFIX,
@@ -49,7 +49,6 @@ from src.progena.documents.kinds import (
     WORKFLOW_QUEUE_KEY_PREFIX,
     WORKFLOW_RUN_KEY_PREFIX,
 )
-from src.progena.instructions.paths import PROJECT_ROOT
 from src.progena.knowledge.indexer_config import INDEX_STATUS_DOC_KEY
 from src.progena.mcp.loader import (
     normalize_mcp_config_payload,
@@ -59,7 +58,6 @@ from src.progena.routines.store import ROUTINE_GRAPH_KEY_PREFIX
 from src.progena.settings.model_profiles import MODEL_PROFILES_DOC_KEY
 
 logger = logging.getLogger(__name__)
-DEFAULT_LOGS_DIR = PROJECT_ROOT / "logs"
 PLAIN_LOG_LINE_RE = re.compile(
     r"^(?P<timestamp>\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:[.,]\d{1,6})?(?:Z|[+-]\d{2}:\d{2})?)"
     r"\s+-\s+(?P<logger>.*?)\s+-\s+(?P<level>[A-Z]+)\s+-\s+(?P<message>.*)$"
@@ -522,7 +520,7 @@ class StateReader:
         document_store: BackendDocumentStore,
         logs_dir: Path | None = None,
     ):
-        self.logs_dir = logs_dir or Path(os.getenv("PROGENA_LOG_DIR", str(DEFAULT_LOGS_DIR)))
+        self.logs_dir = logs_dir or get_log_dir()
         self.document_store = document_store
         self._last_snapshot: StateSnapshot | None = None
         self._watchers: list[Callable[[StateSnapshot, str | None], None]] = []

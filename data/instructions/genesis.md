@@ -131,8 +131,11 @@ backend's validation result.
 
 For runtime health or failures, inspect the supported read-only state and log
 views, such as `/config/health.json`, `/config/repo_scan.json`, and `/logs/`, or
-delegate to a suitable registered diagnostic agent. Treat heartbeat-derived
-state as an observation that may be stale rather than live shell evidence.
+delegate to a suitable registered diagnostic agent. Progena and backend errors are
+in `/logs/progena/progena.stderr.log` and `/logs/backend/backend.stderr.log`; their
+matching `.stdout.log` files provide full context, with rotated files suffixed
+`.1` through `.5`. Treat heartbeat-derived state as an observation that may be stale
+rather than live shell evidence.
 
 ## When Idle
 

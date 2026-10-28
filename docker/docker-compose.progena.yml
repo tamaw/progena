@@ -21,12 +21,19 @@ x-progena-database-env: &progena-database-env
   PROGENA_DATABASE_POOL_MIN_SIZE: ${PROGENA_DATABASE_POOL_MIN_SIZE:-1}
   PROGENA_DATABASE_POOL_MAX_SIZE: ${PROGENA_DATABASE_POOL_MAX_SIZE:-10}
 
+x-container-logging: &container-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
 services:
   postgres:
     # pgvector: the knowledge index needs the `vector` extension.
     image: pgvector/pgvector:pg16
     container_name: progena-postgres
     restart: unless-stopped
+    logging: *container-logging
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-progena}
       POSTGRES_USER: ${POSTGRES_USER:-progena}
@@ -55,6 +62,7 @@ services:
         GIT_COMMIT: ${GIT_COMMIT:-}
     container_name: progena
     restart: unless-stopped
+    logging: *container-logging
     user: "10001:10001"
     read_only: true
     security_opt: ["no-new-privileges:true"]
@@ -122,6 +130,7 @@ services:
       dockerfile: docker/backend/Dockerfile
     container_name: progena-backend
     restart: unless-stopped
+    logging: *container-logging
     # Docker-internal only: trust the frontend's forwarded public scheme.
     command: ["python", "-m", "uvicorn", "src.backend.main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--forwarded-allow-ips", "*"]
     depends_on:
@@ -175,6 +184,7 @@ services:
       dockerfile: docker/frontend/Dockerfile
     container_name: progena-frontend
     restart: unless-stopped
+    logging: *container-logging
     depends_on:
       backend:
         condition: service_started
@@ -208,6 +218,7 @@ services:
       dockerfile: docker/claude/Dockerfile
     container_name: progena-agent-claude
     restart: unless-stopped
+    logging: *container-logging
     environment:
       # Long-lived token from `claude setup-token`.
       CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
