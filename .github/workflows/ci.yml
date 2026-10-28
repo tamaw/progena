@@ -41,9 +41,10 @@ jobs:
           ruff check src/backend tests/backend
 
       - name: Tests backend (pytest)
+        # 4 workers: both Python jobs share the 6-core host with production.
         run: |
           . .venv/bin/activate
-          pytest tests/backend
+          pytest -n 4 tests/backend
 
   progena:
     if: ${{ github.repository == 'tamaw/progena' && ((github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')) || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) }}
@@ -75,9 +76,10 @@ jobs:
           pyright --pythonpath .venv/bin/python src/
 
       - name: Tests progena (pytest)
+        # 4 workers: both Python jobs share the 6-core host with production.
         run: >
           . .venv/bin/activate &&
-          pytest
+          pytest -n 4
           tests/progena
 
   frontend:
