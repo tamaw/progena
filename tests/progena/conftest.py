@@ -1,6 +1,5 @@
 """Shared fixtures for progena unit tests."""
 
-from datetime import UTC, datetime
 from typing import Any
 
 import pytest
@@ -14,7 +13,6 @@ class _FakeRuntimeStore:
 
     def __init__(self) -> None:
         self._documents: dict[str, Any] = {}
-        self._logs: dict[str, list[dict[str, Any]]] = {}
 
     async def open(self) -> None:
         pass
@@ -38,30 +36,6 @@ class _FakeRuntimeStore:
 
     async def list_documents(self, key_prefix: str) -> list[tuple[str, Any]]:
         return [(k, v) for k, v in self._documents.items() if k.startswith(key_prefix)]
-
-    async def write_log(
-        self,
-        *,
-        source: str,
-        message: str,
-        level: str = "info",
-        payload: dict[str, Any] | None = None,
-        timestamp: Any = None,
-        relative_path: str | None = None,
-    ) -> None:
-        entry: dict[str, Any] = {
-            "timestamp": (
-                timestamp.isoformat()
-                if isinstance(timestamp, datetime)
-                else str(timestamp or datetime.now(UTC).isoformat())
-            ),
-            "level": level.lower(),
-            "source": source,
-            "message": message,
-            "payload": payload or {},
-            "relative_path": relative_path,
-        }
-        self._logs.setdefault(source, []).append(entry)
 
 
 @pytest.fixture(autouse=True)

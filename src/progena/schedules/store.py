@@ -5,7 +5,6 @@ from __future__ import annotations
 from typing import Any
 
 from src.progena.persistence.documents import StateDocuments
-from src.progena.persistence.logs import structured_log_message as _structured_log_message
 from src.progena.schedules.models import ScheduleEntry, ScheduleRunRecord
 
 
@@ -14,18 +13,6 @@ class ScheduleStore:
 
     def __init__(self, access: StateDocuments) -> None:
         self._access = access
-
-    async def log_schedule_event(self, event: dict[str, Any]) -> None:
-        """Log a schedule event to the runtime store."""
-        payload = dict(event)
-        await self._access.store.write_log(
-            source="schedule",
-            message=_structured_log_message("schedule", payload),
-            level="info",
-            payload=payload,
-            timestamp=payload.pop("timestamp", None),
-            relative_path="schedule.jsonl",
-        )
 
     @staticmethod
     def _normalize_schedule_payload(payload: Any) -> tuple[dict[str, Any], bool]:

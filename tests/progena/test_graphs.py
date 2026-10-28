@@ -38,7 +38,6 @@ async def test_runtime_heartbeat_graph_records_a2a_completion() -> None:
     state_manager = MagicMock()
     state_manager.get_schedule = AsyncMock(return_value=[])
     state_manager.get_active_a2a_tasks = AsyncMock(return_value=[])
-    state_manager.log_conversation = AsyncMock()
     state_manager.update_a2a_task = AsyncMock()
     record = A2ATaskRecord(
         task_id="task-1",
@@ -56,7 +55,6 @@ async def test_runtime_heartbeat_graph_records_a2a_completion() -> None:
 
     result = await graph.ainvoke({"messages": []}, context=context)
 
-    state_manager.log_conversation.assert_awaited_once()
     state_manager.update_a2a_task.assert_awaited_once()
     assert result["messages"][0].metadata["task_id"] == "task-1"
 
@@ -116,7 +114,6 @@ async def test_runtime_heartbeat_graph_notifies_async_subagent_completion(tmp_pa
             )
         ]
     )
-    state_manager.log_conversation = AsyncMock()
     state_manager.update_async_subagent_task = AsyncMock()
     queues = _FakeQueues()
     graph = create_runtime_heartbeat_graph()
@@ -146,7 +143,6 @@ async def test_runtime_heartbeat_graph_notifies_async_subagent_completion(tmp_pa
     ):
         result = await graph.ainvoke({"messages": []}, context=context)
 
-    state_manager.log_conversation.assert_awaited_once()
     state_manager.update_async_subagent_task.assert_awaited_once()
     queues.push_event.assert_any_await(
         "agent_message",
@@ -187,8 +183,6 @@ async def test_runtime_heartbeat_graph_processes_one_input_cycle() -> None:
         "attachments": [],
         "queued_input": "hello",
     }
-    audit_log_sink = MagicMock()
-    audit_log_sink.write_log = AsyncMock()
     context = _heartbeat_context(
         queues=queues,
         agent_graph=_FakeAgentGraph(),
@@ -209,7 +203,6 @@ async def test_runtime_heartbeat_graph_processes_one_input_cycle() -> None:
         reasoning_enabled=True,
         llm_model="gpt-5.3-chat",
         llm_reasoning_effort="medium",
-        audit_log_sink=audit_log_sink,
     )
     graph = create_runtime_heartbeat_graph()
 
@@ -225,11 +218,6 @@ async def test_runtime_heartbeat_graph_processes_one_input_cycle() -> None:
     assert health_payload["llm_model"] == "gpt-5.3-chat"
     assert health_payload["llm_reasoning_enabled"] is True
     assert health_payload["llm_reasoning_effort"] == "medium"
-    assert audit_log_sink.write_log.await_count == 2
-    checkpoint_log = audit_log_sink.write_log.await_args_list[-1].kwargs
-    assert checkpoint_log["source"] == "checkpoints"
-    assert checkpoint_log["payload"]["event"] == "state_checkpoint"
-    assert checkpoint_log["payload"]["thread_id"] == "thread-1"
 
 
 @pytest.mark.asyncio

@@ -34,17 +34,4 @@ async def checkpoint_node(
         "last_reasoning_trace": state.get("last_reasoning_trace"),
     }
     await runtime.context.state_manager.save_current_state(checkpoint, thread_id=thread_id)
-    if runtime.context.audit_log_sink is not None:
-        await runtime.context.audit_log_sink.write_log(
-            source="checkpoints",
-            message="State checkpoint",
-            payload={
-                "event": "state_checkpoint",
-                "thread_id": checkpoint["thread_id"],
-                "cycle_count": checkpoint["cycle_count"],
-                "actions_this_cycle": checkpoint["actions_this_cycle"],
-            },
-            timestamp=checkpoint["last_checkpoint"],
-            relative_path="state/current_state",
-        )
     return {"last_checkpoint": checkpoint["last_checkpoint"]}

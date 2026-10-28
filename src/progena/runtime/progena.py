@@ -6,7 +6,6 @@ import asyncio
 import contextlib
 import json
 import logging
-import os
 from pathlib import Path
 from typing import Any
 
@@ -50,7 +49,6 @@ class Progena:
         self.logs_dir = self.config.storage.log_dir
         if not self.config.database.enabled:
             raise ValueError("PROGENA_DATABASE_URL is required; file-backed persistence is removed")
-        self.log_store: LangGraphRuntimeStore | None = None
         self.state_manager: StateManager | None = None
         self.llm_client = LLMClient(
             config=self.config.llm,
@@ -142,7 +140,7 @@ class Progena:
 
         if self.state_manager is None:
             return
-        summary = await reconcile_plugins(self.state_manager, log_sink=self.log_store)
+        summary = await reconcile_plugins(self.state_manager)
         # Reconcile may install/remove multiple agent documents. Refresh after
         # completion too, even if their notifications preceded this pass.
         if self._agent_scheduler is not None:
@@ -203,11 +201,7 @@ class Progena:
         store = persistence.store
         if store is None:
             raise RuntimeError("LangGraph Postgres store is required for runtime persistence")
-        runtime_store = LangGraphRuntimeStore(
-            store,
-            debug_mode=os.getenv("PROGENA_STORE_LOG_DEBUG", "").lower() in ("1", "true", "yes"),
-        )
-        self.log_store = runtime_store
+        runtime_store = LangGraphRuntimeStore(store)
         self.state_manager = StateManager(
             runtime_store=runtime_store,
             database_url=self.config.database.url,
@@ -244,7 +238,7 @@ class Progena:
             llm_client=self.llm_client,
             state_manager=self.state_manager,
             project_root=str(PROJECT_ROOT),
-            log_sink=self.log_store,
+            # The loop is created below, after the graph; resolve it lazily so
             # The loop is created below, after the graph; resolve it lazily so
             # tools always see the live conversation state once it's running.
             live_state_provider=lambda: (
@@ -259,7 +253,6 @@ class Progena:
             llm_client=self.llm_client,
             tool_registry=self.tool_registry,
             project_root=PROJECT_ROOT,
-            log_sink=self.log_store,
         )
         # React to store writes (UI server/tool toggles, agent edits to
         # /config/mcp.json) by re-syncing the live MCP runtime immediately, rather

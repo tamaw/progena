@@ -57,7 +57,6 @@ class WidgetResponse(BaseModel):
     status: str
     description: str | None = None
     summary: str | None = None
-    logs: list[dict] = []
     updated_at: str | None = None
     data: dict = {}
 

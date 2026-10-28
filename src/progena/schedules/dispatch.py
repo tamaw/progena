@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from src.progena.schedules.engine import Scheduler
@@ -12,6 +13,8 @@ from src.progena.schedules.models import (
     generate_schedule_thread_id,
 )
 from src.progena.utils import utcnow
+
+logger = logging.getLogger(__name__)
 
 SCHEDULED_INPUT_PREFIX = "[Scheduled Task]\n"
 
@@ -130,20 +133,7 @@ async def enqueue_due_schedule_entries(
             if key in next_entry
         }
         await state_manager.update_schedule_entry(schedule_id, updates)
-        await state_manager.log_schedule_event(
-            {
-                "message": (
-                    f"Schedule {schedule_id} fired and run {run_id} was queued"
-                    if is_one_shot
-                    else f"Schedule {schedule_id} fired and run {run_id} was queued"
-                ),
-                "schedule_id": schedule_id,
-                "schedule_run_id": run_id,
-                "thread_id": thread_id,
-                "event": "schedule_fired",
-                "one_shot": is_one_shot,
-            }
-        )
+        logger.info("Schedule %s fired and run %s was queued", schedule_id, run_id)
 
         await queues.push_event(
             "scheduled_task_triggered",

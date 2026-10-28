@@ -26,8 +26,6 @@ from src.progena.utils import utcnow
 
 logger = logging.getLogger(__name__)
 
-MAX_EVENT_WIDGET_LOGS = 20
-
 
 def _schedule_item_to_info(
     item, runs: list[schedules_models.ScheduleRunInfo] | None = None
@@ -86,37 +84,15 @@ def _widget_to_response(widget: dict) -> schedules_models.WidgetResponse:
         status=payload.get("status", "unknown"),
         description=payload.get("description"),
         summary=payload.get("summary"),
-        logs=payload.get("logs", []),
         updated_at=payload.get("updated_at"),
         data=payload,
     )
-
-
-def _normalize_event_widget_logs(data: object) -> list[dict]:
-    if not isinstance(data, list):
-        return []
-
-    normalized: list[dict] = []
-    for entry in data:
-        if not isinstance(entry, dict):
-            continue
-        normalized.append(
-            {
-                "time": entry.get("time") or entry.get("timestamp"),
-                "timestamp": entry.get("timestamp") or entry.get("time"),
-                "level": entry.get("level", "info"),
-                "source": entry.get("source", "document"),
-                "message": entry.get("message") or "",
-            }
-        )
-    return normalized[:MAX_EVENT_WIDGET_LOGS]
 
 
 def _normalize_event_widget_record(entry: dict) -> dict:
     event_type = str(entry.get("event_type") or "kanban_card.created").strip().lower()
     name = str(entry.get("name") or event_type or "Event").strip()
     last_payload = entry.get("last_payload")
-    logs = _normalize_event_widget_logs(entry.get("logs"))
     summary = str(entry.get("summary") or f"Waiting for {event_type}").strip()
     try:
         trigger_count = int(entry.get("trigger_count", 0) or 0)
@@ -132,7 +108,6 @@ def _normalize_event_widget_record(entry: dict) -> dict:
         "last_run_status": str(entry.get("last_run_status") or "idle"),
         "last_payload": last_payload if isinstance(last_payload, dict) else None,
         "summary": summary,
-        "logs": logs,
         "created_at": entry.get("created_at"),
         "updated_at": entry.get("updated_at") or entry.get("created_at"),
     }
@@ -199,7 +174,6 @@ def _build_event_widget_entry(
         "last_run_status": "idle",
         "last_payload": None,
         "summary": f"Waiting for {normalized_type}",
-        "logs": [],
         "created_at": created_at,
         "updated_at": created_at,
     }
@@ -387,16 +361,6 @@ async def _apply_document_event_widgets(typed: events_documents.TypedDocumentEve
         widget["last_payload"] = payload
         widget["summary"] = summary
         widget["updated_at"] = timestamp
-        widget["logs"] = [
-            {
-                "time": timestamp,
-                "timestamp": timestamp,
-                "level": "info",
-                "source": typed.document_type.id,
-                "message": summary,
-            },
-            *_normalize_event_widget_logs(widget.get("logs")),
-        ][:MAX_EVENT_WIDGET_LOGS]
         changed = True
     if changed:
         _write_event_widget_records(state_reader, event_widgets)

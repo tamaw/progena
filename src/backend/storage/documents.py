@@ -32,12 +32,9 @@ from src.progena.documents.kinds import (
 from src.progena.routines.store import ROUTINE_GRAPH_KEY_PREFIX
 
 PROGENA_STATE_PREFIX = "progena.state"
-PROGENA_LOG_PREFIX = "progena.logs"
 BACKEND_STATE_PREFIX = "backend.state"
 
 # Postgres LISTEN/NOTIFY channel used to push ``store`` table changes to the
-# backend without polling. Only state-namespace writes notify on it (the
-# high-frequency ``progena.logs.*`` rows are deliberately excluded).
 STORE_CHANGE_CHANNEL = "store_changed"
 _STORE_CHANGE_PREFIXES = (PROGENA_STATE_PREFIX, BACKEND_STATE_PREFIX)
 # Parallel runtime reads when the chat list needs messages for many threads.
@@ -267,15 +264,6 @@ class BackendDocumentStore(Protocol):
     def prune_document_events(
         self, *, through: DocumentEventPosition, older_than: timedelta
     ) -> int: ...
-    def query_logs(
-        self,
-        *,
-        level: str | None = None,
-        source: str | None = None,
-        limit: int = 500,
-    ) -> list[dict[str, Any]]: ...
-
-    def get_log_sources(self) -> list[dict[str, Any]]: ...
 
     def inspect_schema(self) -> list[dict[str, Any]]: ...
 
@@ -671,39 +659,6 @@ class InMemoryDocumentStore:
             self._events = kept
         return removed
 
-    def query_logs(
-        self,
-        *,
-        level: str | None = None,
-        source: str | None = None,
-        limit: int = 500,
-    ) -> list[dict[str, Any]]:
-        rows: list[dict[str, Any]] = []
-        source_prefix = f"{PROGENA_LOG_PREFIX}."
-        for (prefix, key), document in self._documents.items():
-            if not prefix.startswith(source_prefix):
-                continue
-            row = dict(document.payload) if isinstance(document.payload, dict) else {}
-            row.setdefault("id", key)
-            row.setdefault("source", prefix.removeprefix(source_prefix))
-            if level and str(row.get("level", "")).lower() != level.lower():
-                continue
-            if source and str(row.get("source", "")) != source:
-                continue
-            rows.append(row)
-        rows.sort(key=lambda row: str(row.get("timestamp") or row.get("time") or ""))
-        return rows[-limit:] if limit > 0 else rows
-
-    def get_log_sources(self) -> list[dict[str, Any]]:
-        sources = sorted(
-            {
-                prefix.removeprefix(f"{PROGENA_LOG_PREFIX}.")
-                for prefix, _key in self._documents
-                if prefix.startswith(f"{PROGENA_LOG_PREFIX}.")
-            }
-        )
-        return [{"source": source, "count": 0} for source in sources]
-
     def inspect_schema(self) -> list[dict[str, Any]]:
         return [
             {
@@ -910,10 +865,8 @@ class PostgresDocumentStore:
         Fires for both backend writes and the runtime's LangGraph store writes
         (same ``store`` table), including deletes (e.g. the agent removing a
         task from ``/config/schedule.json`` in the separate runtime process,
-        which has no other way to tell the backend a row disappeared). Scoped
-        to state-namespace prefixes so the noisy append-only
-        ``progena.logs.*`` rows do not flood the channel. ``CREATE OR
-        REPLACE`` + ``DROP ... IF EXISTS`` keep this idempotent.
+        which has no other way to tell the backend a row disappeared).
+        ``CREATE OR REPLACE`` + ``DROP ... IF EXISTS`` keep this idempotent.
         """
         prefixes = ", ".join(f"'{prefix}'" for prefix in _STORE_CHANGE_PREFIXES)
         with self._cursor() as cur:
@@ -1839,59 +1792,6 @@ class PostgresDocumentStore:
             )
             return cur.rowcount
 
-    def query_logs(
-        self,
-        *,
-        level: str | None = None,
-        source: str | None = None,
-        limit: int = 500,
-    ) -> list[dict[str, Any]]:
-        clauses = [sql.SQL("prefix LIKE %s")]
-        params: list[Any] = [f"{PROGENA_LOG_PREFIX}.%"]
-        if source:
-            clauses.append(sql.SQL("prefix = %s"))
-            params.append(f"{PROGENA_LOG_PREFIX}.{source}")
-        if level:
-            clauses.append(sql.SQL("lower(value->>'level') = %s"))
-            params.append(level.lower())
-        if limit > 0:
-            params.append(limit)
-        where_clause = sql.SQL(" AND ").join(clauses)
-        limit_clause = sql.SQL("LIMIT %s") if limit > 0 else sql.SQL("")
-        with self._cursor() as cur:
-            cur.execute(
-                sql.SQL(
-                    """
-                SELECT prefix, key, value, updated_at
-                FROM store
-                WHERE {}
-                ORDER BY COALESCE(value->>'timestamp', value->>'time', updated_at::text) DESC
-                {}
-                """
-                ).format(where_clause, limit_clause),
-                params,
-            )
-            rows = cast(list[dict[str, Any]], cur.fetchall())
-        return [_log_row_to_entry(row) for row in reversed(rows)]
-
-    def get_log_sources(self) -> list[dict[str, Any]]:
-        with self._cursor() as cur:
-            cur.execute(
-                """
-                SELECT
-                    replace(prefix, %s, '') AS source,
-                    count(*) AS count,
-                    max(updated_at) AS updated_at
-                FROM store
-                WHERE prefix LIKE %s
-                GROUP BY prefix
-                ORDER BY source
-                """,
-                (f"{PROGENA_LOG_PREFIX}.", f"{PROGENA_LOG_PREFIX}.%"),
-            )
-            rows = cast(list[dict[str, Any]], cur.fetchall())
-        return [dict(row) for row in rows]
-
     def inspect_schema(self) -> list[dict[str, Any]]:
         """Return table/column metadata for backend and LangGraph persistence tables."""
         with self._cursor() as cur:
@@ -2453,29 +2353,6 @@ class StoreChangeListener:
 def _escape_like(text: str) -> str:
     """Escape LIKE wildcards so a key prefix matches literally (ids may contain ``_``)."""
     return text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-
-
-def _log_row_to_entry(row: dict[str, Any]) -> dict[str, Any]:
-    value = row.get("value")
-    entry = dict(value) if isinstance(value, dict) else {}
-    source = str(row.get("prefix") or "").removeprefix(f"{PROGENA_LOG_PREFIX}.")
-    entry.setdefault("id", row.get("key"))
-    entry.setdefault("source", source)
-    entry.setdefault("timestamp", _timestamp_text(entry.get("timestamp") or row.get("updated_at")))
-    entry.setdefault("time", entry["timestamp"])
-    entry.setdefault("level", "info")
-    entry.setdefault("message", "")
-    entry.setdefault("relative_path", f"{entry['source']}.jsonl")
-    return entry
-
-
-def _timestamp_text(value: Any) -> str:
-    if isinstance(value, datetime):
-        timestamp = value if value.tzinfo else value.replace(tzinfo=UTC)
-        return timestamp.isoformat()
-    if isinstance(value, str) and value:
-        return value
-    return datetime.now(UTC).isoformat()
 
 
 _default_store: BackendDocumentStore = InMemoryDocumentStore()

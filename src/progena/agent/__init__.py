@@ -11,8 +11,8 @@ Modules:
     adapters: ChatOpenAI adapter, runtime graph adapter, and DeepAgent tool wrappers
     backends: CompositeBackend (LocalShell + Store + State)
     middleware/: One module per custom middleware:
-        async_subagent_tracking, audit_logging, direct_a2a_fast_path,
-        dynamic_mcp, schema_compaction, and secret_redaction
+        async_subagent_tracking, direct_a2a_fast_path, dynamic_mcp,
+        schema_compaction, secret_redaction, and tool_timing
     object_agent_manifest: Object-agent manifest parsing and discovery
     object_agents: Object-agent construction and lazy invocation
     async_subagents: Background async subagent descriptors

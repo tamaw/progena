@@ -38,7 +38,6 @@ import useInlineTitleEditor from '../../hooks/useInlineTitleEditor';
 import useUiAction from '../../hooks/useUiAction';
 import { reportFailure } from '../../lib/failures';
 import { fetchSchedules, selectSchedulesState } from './state';
-import { selectUiWidgets } from './widgetsState';
 import { entityDraftKey } from '../../store/editorDraftsSlice';
 import { selectRealtimeConnected } from '../../realtime/realtimeSlice';
 import { selectAgentName } from '../settings/state/preferences';
@@ -291,10 +290,8 @@ function SchedulesPage() {
     error: listFailure,
     requestId: scheduleRequestId,
   } = schedulesState;
-  const widgets = useSelector(selectUiWidgets);
   const agentName = useSelector(selectAgentName);
   const realtimeConnected = useSelector(selectRealtimeConnected);
-  const [logsFailure, setLogsFailure] = useState(null);
   const [activeFilter, setActiveFilter] = useState('All');
   const [search, setSearch] = useState('');
   const [sortMode, setSortMode] = useState('Type');
@@ -302,7 +299,6 @@ function SchedulesPage() {
   const [triggerValidationFailure, setTriggerValidationFailure] = useState(null);
   const intentInputRef = useRef(null);
   const triggerInputRef = useRef(null);
-  const logsRequestRef = useRef(0);
   const requestSchedules = useCallback(() => (
     dispatch(fetchSchedules({ schedulesUrl: getApiUrl('schedules') }))
   ), [dispatch, getApiUrl]);
@@ -313,22 +309,6 @@ function SchedulesPage() {
     }
   }, [realtimeConnected, requestSchedules]);
 
-  const loadScheduleLogs = useCallback(() => {
-    const requestId = ++logsRequestRef.current;
-    return getWidgets().catch((error) => {
-      if (logsRequestRef.current === requestId) setLogsFailure(error);
-    });
-  }, [getWidgets]);
-
-  const retryScheduleLogs = useCallback(() => {
-    setLogsFailure(null);
-    void loadScheduleLogs();
-  }, [loadScheduleLogs]);
-
-  useEffect(() => {
-    void loadScheduleLogs();
-    return () => { logsRequestRef.current += 1; };
-  }, [loadScheduleLogs]);
 
   const store = useStore();
   useEffect(() => {
@@ -343,13 +323,6 @@ function SchedulesPage() {
     }
   }, [listFailure, loaded, loading, navigate, scheduleRequestId, schedules, selectedScheduleId, store]);
 
-  const scheduleWidgets = useMemo(() => widgets.reduce((byScheduleId, widget) => {
-    const scheduleId = widget?.data?.schedule_id;
-    if (widget?.type === 'schedule' && typeof scheduleId === 'string') {
-      byScheduleId[scheduleId] = widget;
-    }
-    return byScheduleId;
-  }, {}), [widgets]);
 
   const visibleSchedules = useMemo(() => {
     const filtered = schedules.filter((schedule) => matchesSchedule(schedule, activeFilter, search));
@@ -408,12 +381,7 @@ function SchedulesPage() {
     : sortMode === 'Status'
       ? ['Active', 'Paused', 'Completed']
       : ['Next'];
-  const selectedScheduleWidget = selectedSchedule ? scheduleWidgets[selectedSchedule.id] || null : null;
-  const selectedScheduleLogs = Array.isArray(selectedScheduleWidget?.logs) ? selectedScheduleWidget.logs : [];
   const recentScheduleRuns = Array.isArray(selectedSchedule?.runs) ? selectedSchedule.runs : [];
-
-  // Logs arrive newest-first; cap to the latest few so the list stays bounded.
-  const recentScheduleLogs = selectedScheduleLogs.slice(0, 5);
   const scheduleTitle = selectedSchedule?.name || 'Untitled schedule';
 
   const scheduleScopeKey = selectedSchedule?.id ?? null;
@@ -947,28 +915,6 @@ function SchedulesPage() {
                   <h2>Latest activity</h2>
                 </header>
                 <div className="agents-mini-list">
-                  {logsFailure ? (
-                    <InlineFailure
-                      failure={logsFailure}
-                      operation="Load schedule logs"
-                      onRetry={retryScheduleLogs}
-                    />
-                  ) : null}
-                  {recentScheduleLogs.map((entry, index) => (
-                    <div
-                      key={`${entry.id || entry.timestamp || entry.time || index}`}
-                      className="agents-mini-row"
-                    >
-                      <span className="agents-mini-row__icon">log</span>
-                      <div>
-                        <strong>{entry.message || entry.event || entry.level || 'Schedule activity'}</strong>
-                        <p>{formatLogTime(entry.timestamp || entry.time || entry.updated_at) || 'recent'}</p>
-                      </div>
-                      <span className="agents-chip agents-chip--info">
-                        {String(entry.level || entry.source || 'info').toLowerCase()}
-                      </span>
-                    </div>
-                  ))}
                   <div className="agents-mini-row">
                     <span className="agents-mini-row__icon">cd</span>
                     <div>

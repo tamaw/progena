@@ -1,19 +1,12 @@
-"""LangGraph Store-backed runtime state and log adapter."""
+"""LangGraph Store-backed runtime state adapter."""
 
 from __future__ import annotations
 
 import asyncio
 import json
-import sys
-import uuid
-from collections.abc import Mapping
-from datetime import UTC, datetime
 from typing import Any, Protocol
 
-from src.progena.security.redaction import redact_secrets
-
 STATE_NAMESPACE = ("progena", "state")
-LOG_NAMESPACE_PREFIX = ("progena", "logs")
 
 
 class AsyncLangGraphStore(Protocol):
@@ -45,12 +38,11 @@ class AsyncLangGraphStore(Protocol):
 
 
 class LangGraphRuntimeStore:
-    """Persist Progena runtime documents and logs in LangGraph's native store."""
+    """Persist Progena runtime documents in LangGraph's native store."""
 
-    def __init__(self, store: AsyncLangGraphStore, *, debug_mode: bool = False) -> None:
+    def __init__(self, store: AsyncLangGraphStore) -> None:
         self._store = store
         self._document_locks: dict[str, asyncio.Lock] = {}
-        self._debug_mode = debug_mode
 
     async def open(self) -> None:
         """Match the old store lifecycle; native LangGraph store is already open."""
@@ -206,12 +198,7 @@ class LangGraphRuntimeStore:
         await self._store.adelete(STATE_NAMESPACE, name)
 
     async def list_documents(self, key_prefix: str) -> list[tuple[str, Any]]:
-        """Return ``(key, payload)`` for every state document whose key starts with prefix.
-
-        LangGraph's ``asearch`` defaults to a page of 10, so this pages through
-        the state namespace until a short page; the namespace holds only dozens
-        of rows (logs live under a different namespace prefix).
-        """
+        """Return every state document whose key starts with ``key_prefix``."""
         page_size = 500
         offset = 0
         results: list[tuple[str, Any]] = []
@@ -250,84 +237,7 @@ class LangGraphRuntimeStore:
                 return results
             offset += page_size
 
-    async def write_log(
-        self,
-        *,
-        source: str,
-        message: str,
-        level: str = "info",
-        payload: dict[str, Any] | None = None,
-        timestamp: Any = None,
-        relative_path: str | None = None,
-    ) -> None:
-        """Append one structured log entry to the native LangGraph store."""
-        timestamp_text = _coerce_timestamp_text(timestamp)
-        redacted_payload = _redacted_payload(payload or {})
-        value = {
-            "timestamp": timestamp_text,
-            "level": level.lower(),
-            "source": source,
-            "message": redact_secrets(message),
-            "payload": redacted_payload,
-            "relative_path": relative_path,
-        }
-        key = f"{timestamp_text}_{uuid.uuid4().hex}"
-        await self._store.aput((*LOG_NAMESPACE_PREFIX, source), key, value)
-        if self._debug_mode:
-            print(
-                f"[LOG {source}] {timestamp_text} {level}: {message}",
-                file=sys.stderr,
-                flush=True,
-            )
-
 
 def _item_value(item: Any) -> dict[str, Any]:
     value = getattr(item, "value", item)
     return value if isinstance(value, dict) else {}
-
-
-def _coerce_timestamp_text(value: Any) -> str:
-    if isinstance(value, datetime):
-        timestamp = value if value.tzinfo else value.replace(tzinfo=UTC)
-        return timestamp.isoformat()
-    if isinstance(value, int | float):
-        return datetime.fromtimestamp(float(value), tz=UTC).isoformat()
-    if isinstance(value, str) and value.strip():
-        try:
-            timestamp = datetime.fromisoformat(value.replace("Z", "+00:00"))
-            return (timestamp if timestamp.tzinfo else timestamp.replace(tzinfo=UTC)).isoformat()
-        except ValueError:
-            return value
-    return datetime.now(UTC).isoformat()
-
-
-def _redacted_payload(payload: dict[str, Any]) -> dict[str, Any]:
-    value = _redact_value(payload)
-    return value if isinstance(value, dict) else {"value": value}
-
-
-def _redact_value(value: Any, *, key_name: str | None = None) -> Any:
-    if _is_sensitive_key(key_name) and isinstance(value, str):
-        return "[REDACTED]"
-    if isinstance(value, Mapping):
-        return {str(key): _redact_value(item, key_name=str(key)) for key, item in value.items()}
-    if isinstance(value, list):
-        return [_redact_value(item) for item in value]
-    if isinstance(value, tuple):
-        return [_redact_value(item) for item in value]
-    if isinstance(value, (set, frozenset)):
-        return [_redact_value(item) for item in value]
-    if isinstance(value, bytes):
-        return redact_secrets(value.decode("utf-8", errors="replace"))
-    if isinstance(value, str):
-        return redact_secrets(value)
-    if value is None or isinstance(value, (int, float, bool)):
-        return value
-    return redact_secrets(str(value))
-
-
-def _is_sensitive_key(key_name: str | None) -> bool:
-    if key_name is None:
-        return False
-    lowered = key_name.lower().replace("-", "_")
-    return any(token in lowered for token in ("api_key", "apikey", "secret", "password", "token"))

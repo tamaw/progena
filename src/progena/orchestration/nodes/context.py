@@ -34,7 +34,6 @@ class HeartbeatContext:
     timezone: str
     reasoning_enabled: bool
     input_timeout: float = 1.0
-    audit_log_sink: Any | None = None
     due_maintenance: set[str] = field(default_factory=set)
     startup_flags: set[str] = field(default_factory=set)
     llm_model: str = ""

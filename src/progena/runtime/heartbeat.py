@@ -86,12 +86,10 @@ class ProgenaLoop:
         llm_client=None,
         tool_registry=None,
         project_root: Path | None = None,
-        log_sink=None,
     ):
         self.graph = graph
         self.state_manager = state_manager
         self.config = config
-        self.log_sink = log_sink
         self.running = False
         scheduler_cfg = getattr(self.config, "scheduler", None)
         scheduler_enabled = bool(
@@ -116,7 +114,6 @@ class ProgenaLoop:
             agent_graph=self.graph,
             live_state=self._state,
             state_manager=self.state_manager,
-            audit_log_sink=self.log_sink,
             startup_audit_payload=audit_payload,
             tool_registry=tool_registry,
             project_root=Path(project_root) if project_root is not None else None,

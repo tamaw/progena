@@ -136,7 +136,6 @@ def test_store_event_log_records_each_operation_and_skips_identical_rewrites():
     with document_write_origin("workflow_run_x"):
         store.save_document(PROGENA_STATE_PREFIX, "kanban_card:a", {"title": "Two"})
     store.delete_document(PROGENA_STATE_PREFIX, "kanban_card:a")
-    store.save_document("progena.logs.tool_calls", "entry", {"ignored": True})
 
     events = store.read_document_events(EVENT_LOG_START, 10)
     assert [(event.op, event.before, event.after, event.origin) for event in events] == [
