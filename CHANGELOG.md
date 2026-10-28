@@ -62,6 +62,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Stale documentation retired**: removed obsolete code maps, vendored-library guides, completed plans, one-off review/test reports, and the host-specific nginx template. The frontend container's nginx configuration remains supported.
 
 ### Changed
+- **Faster deploy image builds**: CI builds images on the self-hosted runners' host Docker daemon and reuses its local layer cache instead of round-tripping a GitHub Actions cache and exporting/loading image tarballs. The runtime and backend images install Python dependencies before copying source, and the per-commit `GIT_COMMIT` build arg is declared last, so a source-only change rebuilds in seconds rather than reinstalling every dependency.
 - **Operational file logging**: the backend now writes split rotating stdout/stderr files under `logs/backend/`, matching the runtime's `logs/progena/` files; Docker logs rotate at the same 10 MiB × 5 policy.
 - **glibc arena cap**: the `progena` and `progena-backend` containers set `MALLOC_ARENA_MAX=2`, so memory freed after large transient conversation histories is reused across threads instead of being retained in per-thread malloc arenas.
 - **Backend memory and runtime search**: the backend container limit is 2 GiB (was 1 GiB) after a production OOM kill during a long turn on a large thread. The Progena runtime image installs ripgrep so Deep Agents grep uses `rg` instead of its Python fallback.
