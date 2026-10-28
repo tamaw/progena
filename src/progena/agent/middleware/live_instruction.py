@@ -44,11 +44,15 @@ class LiveInstructionMiddleware(AgentMiddleware):
             raise RuntimeError(f"Instruction '{self._path}' is missing from the store")
         preferences = await self._state_manager.get_preferences_config()
         user_timezone = timezone_name(preferences.get("timezone"))
-        now = datetime.now(UTC)
+        # Date-level only: this text leads the system prompt, so a value that
+        # changed every minute would invalidate the provider's prompt cache on
+        # most calls. It changes once a day at the user's local midnight.
+        today = datetime.now(UTC).astimezone(resolve_timezone(user_timezone))
         return (
             f"{(await render_runtime_instruction(self._state_manager, content)).strip()}\n\n"
-            f"Current time: {now.astimezone(resolve_timezone(user_timezone)):%Y-%m-%d %H:%M %Z} "
-            f"({user_timezone}); UTC {now:%Y-%m-%d %H:%M UTC}."
+            f"User timezone: {user_timezone}; today there is {today:%A %Y-%m-%d}. "
+            "Server clocks and shells use UTC: for the exact current time run "
+            "`date -u` and convert it to the user's timezone."
         )
 
     async def awrap_model_call(

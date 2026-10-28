@@ -50,14 +50,12 @@ async def test_edited_instruction_replaces_the_boot_text_and_keeps_appended_sect
         ]
     )
     initial = await _system_text_sent(middleware, system)
-    assert initial.startswith("You are Progena.\n\nCurrent time: ")
-    assert "(UTC); UTC " in initial
+    assert initial.startswith("You are Progena.\n\nUser timezone: UTC; today there is ")
     assert initial.endswith("\n\nBase agent prompt.\n\nSkills section.")
 
     store.content = _instruction("You are Progena, edited.")
     edited = await _system_text_sent(middleware, system)
-    assert edited.startswith("You are Progena, edited.\n\nCurrent time: ")
-    assert "(UTC); UTC " in edited
+    assert edited.startswith("You are Progena, edited.\n\nUser timezone: UTC; today there is ")
     assert edited.endswith("\n\nBase agent prompt.\n\nSkills section.")
 
 
@@ -68,6 +66,7 @@ async def test_renamed_agent_reaches_the_next_model_call():
 
     store.preferences = {"agent_name": "Ada", "timezone": "Australia/Melbourne"}
     rendered = await _system_text_sent(middleware, system)
-    assert rendered.startswith("You are Ada.\n\nCurrent time: ")
-    assert "(Australia/Melbourne); UTC " in rendered
+    assert rendered.startswith(
+        "You are Ada.\n\nUser timezone: Australia/Melbourne; today there is "
+    )
     assert rendered.endswith("\n\nBase.")
