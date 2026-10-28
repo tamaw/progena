@@ -12,6 +12,7 @@ and all sub-agents. These tests verify:
 
 import json
 from datetime import UTC, datetime
+from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -85,6 +86,22 @@ class TestStateReader:
             pid=1234,
         )
         assert health.is_running()
+
+    @pytest.mark.parametrize(
+        ("last_active", "expected"),
+        [
+            ("2026-10-28T12:59:30", True),
+            ("2026-10-28T12:58:59", False),
+            ("2026-10-29T00:00:00+11:00", True),
+        ],
+    )
+    def test_health_fallback_compares_legacy_and_offset_timestamps_in_utc(
+        self, last_active, expected
+    ):
+        with patch("src.backend.monitoring.state.datetime", wraps=datetime) as clock:
+            clock.now.return_value = datetime(2026, 10, 28, 13, tzinfo=UTC)
+            health = HealthInfo.from_dict({"status": "running", "last_active": last_active})
+            assert health.is_running() is expected
 
     def test_health_info_from_dict_parses_enriched_fields(self):
         """version/started_at/llm_* round-trip through from_dict()."""

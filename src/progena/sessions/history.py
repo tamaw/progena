@@ -20,6 +20,8 @@ from langgraph.checkpoint.base import CheckpointTuple
 from langgraph.graph import StateGraph
 from langgraph.pregel._checkpoint import achannels_from_checkpoint
 
+from src.progena.utils import normalize_utc_datetime
+
 from .transcript import DEFAULT_AGENT_NICK, ThreadMessages
 
 # The main agent's ``messages`` channel spec: a DeltaChannel. Subagent
@@ -92,7 +94,11 @@ def _commit_times(history: list[CheckpointTuple]) -> dict[str, datetime]:
             for message in value if isinstance(value, list) else [value]:
                 message_id = getattr(message, "id", None)
                 if message_id and message_id not in times:
-                    times[message_id] = datetime.fromisoformat(landed)
+                    committed_at = normalize_utc_datetime(
+                        datetime.fromisoformat(landed.replace("Z", "+00:00"))
+                    )
+                    assert committed_at is not None
+                    times[message_id] = committed_at
     return times
 
 

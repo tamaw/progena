@@ -300,7 +300,8 @@ class HealthInfo:
             return False
         try:
             last = datetime.fromisoformat(self.last_active.replace("Z", "+00:00"))
-            now = datetime.now(last.tzinfo)
+            last = last.replace(tzinfo=UTC) if last.tzinfo is None else last.astimezone(UTC)
+            now = datetime.now(UTC)
             return (now - last).total_seconds() < 60
         except Exception:
             return False

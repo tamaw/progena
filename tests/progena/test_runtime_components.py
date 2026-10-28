@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -53,6 +54,14 @@ async def test_runtime_queues_track_wait_and_pending_counts() -> None:
     await queues.input_queue.put(queued)
     assert await queues.get_input(timeout=0.01) == "two"
     assert queues.current_input_pending_count == 1
+
+
+def test_heartbeat_due_interval_resumes_legacy_naive_utc_timestamp() -> None:
+    from src.progena.runtime.heartbeat import _seconds_until_due
+
+    now = datetime(2026, 10, 29, 12, 0, 15, tzinfo=UTC)
+
+    assert _seconds_until_due("2026-10-29T12:00:00", 30, now=now) == 15
 
 
 @pytest.mark.asyncio

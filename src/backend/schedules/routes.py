@@ -136,8 +136,8 @@ async def patch_widget(
             next_run = Scheduler().next_run_for_entry(
                 entry, preferences_store.load_preferences().get("timezone", "UTC")
             )
-            entry["next_run"] = next_run.isoformat() if next_run else None
-            entry["next_run_at"] = next_run.isoformat() if next_run else None
+            entry["next_run"] = schedules_service._next_run_iso(next_run) if next_run else None
+            entry["next_run_at"] = schedules_service._next_run_iso(next_run) if next_run else None
 
         def _save_schedule() -> None:
             state_reader.document_store.save_document(
@@ -526,8 +526,8 @@ async def retrigger_schedule(
         next_run = Scheduler().next_run_for_entry(
             updated, preferences_store.load_preferences().get("timezone", "UTC")
         )
-        updated["next_run"] = next_run.isoformat() if next_run else None
-        updated["next_run_at"] = next_run.isoformat() if next_run else None
+        updated["next_run"] = schedules_service._next_run_iso(next_run) if next_run else None
+        updated["next_run_at"] = schedules_service._next_run_iso(next_run) if next_run else None
         state_reader.document_store.save_document(
             storage_documents.PROGENA_STATE_PREFIX, "schedule", schedule_data
         )

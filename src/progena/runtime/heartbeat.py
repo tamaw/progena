@@ -4,7 +4,7 @@ import asyncio
 import contextlib
 import logging
 import uuid
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
@@ -55,14 +55,22 @@ _MAINTENANCE_INTERVALS: tuple[tuple[str, str, str], ...] = (
 
 
 def _parse_iso_datetime(value: Any) -> datetime | None:
+    """Parse persisted heartbeat timestamps as UTC instants.
+
+    Runtime state written before timezone-aware timestamps were adopted used
+    naive UTC. Keep that state resumable while normalizing offset timestamps
+    before they are compared against this process's UTC clock.
+    """
     if isinstance(value, datetime):
-        return value
-    if isinstance(value, str):
+        parsed = value
+    elif isinstance(value, str):
         try:
-            return datetime.fromisoformat(value.replace("Z", "+00:00"))
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
         except ValueError:
             return None
-    return None
+    else:
+        return None
+    return parsed.replace(tzinfo=UTC) if parsed.tzinfo is None else parsed.astimezone(UTC)
 
 
 def _seconds_until_due(last_run_at: Any, interval_seconds: float, *, now: datetime) -> float:

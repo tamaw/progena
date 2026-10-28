@@ -23,9 +23,16 @@ import src.backend.storage.documents as storage_documents
 from src.progena.cron import timezone_name as valid_timezone_name
 from src.progena.documents.types import DOCUMENT_OPERATIONS
 from src.progena.schedules.engine import Scheduler, parse_schedule_datetime
-from src.progena.utils import utcnow
+from src.progena.utils import normalize_utc_datetime, utcnow
 
 logger = logging.getLogger(__name__)
+
+
+def _next_run_iso(next_run: datetime) -> str:
+    """Serialize scheduler-produced instants as UTC for stored/UI schedule state."""
+    normalized = normalize_utc_datetime(next_run)
+    assert normalized is not None
+    return normalized.isoformat().replace("+00:00", "Z")
 
 
 def _schedule_item_to_info(
@@ -68,7 +75,7 @@ def _schedule_item_to_info(
         id=item.id,
         name=item.name,
         schedule=display_schedule,
-        next_run=next_run_dt.isoformat() if next_run_dt else None,
+        next_run=_next_run_iso(next_run_dt) if next_run_dt else None,
         enabled=not paused,
         paused=paused,
         last_run=last_run,
@@ -489,8 +496,8 @@ def _build_schedule_entry(
         entry["scheduled_at"] = scheduled_at
     next_run = Scheduler().next_run_for_entry(entry, preference_timezone)
     if next_run:
-        entry["next_run"] = next_run.isoformat()
-        entry["next_run_at"] = next_run.isoformat()
+        entry["next_run"] = _next_run_iso(next_run)
+        entry["next_run_at"] = _next_run_iso(next_run)
     return entry
 
 

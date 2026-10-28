@@ -36,3 +36,13 @@ def test_interrupted_task_is_terminal_and_reports_reason() -> None:
     )
     assert task.is_terminal
     assert "backend restarted" in build_acp_completion_message(task)
+
+
+def test_acp_task_normalizes_legacy_naive_activity_timestamp() -> None:
+    task = ACPTaskRecord(
+        task_id="task-1",
+        agent_name="claude",
+        progress={"last_activity_at": "2026-10-29T12:00:00"},
+    )
+
+    assert task.progress["last_activity_at"] == "2026-10-29T12:00:00+00:00"

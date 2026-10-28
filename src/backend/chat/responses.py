@@ -70,7 +70,7 @@ class ResponseStreamState:
     subscribers: dict[asyncio.Queue, asyncio.Task | None]
     next_seq: int
     terminal_reached: bool
-    expires_at: float | None
+    expiry_deadline: float | None
 
 
 @dataclass
@@ -264,7 +264,7 @@ def _ensure_response_stream(
         subscribers={},
         next_seq=0,
         terminal_reached=False,
-        expires_at=None,
+        expiry_deadline=None,
     )
     _response_streams[request_id] = state
     return state
@@ -309,20 +309,20 @@ def _mark_response_stream_terminal(state: ResponseStreamState) -> None:
     if state.terminal_reached:
         return
     state.terminal_reached = True
-    state.expires_at = time.time() + RESPONSE_STREAM_TTL_SECONDS
+    state.expiry_deadline = time.monotonic() + RESPONSE_STREAM_TTL_SECONDS
     _notify_response_stream_subscribers(state, None)
     _expire_response_stream_later(state.request_id, state)
 
 
 def _expire_response_stream_later(request_id: str, state: ResponseStreamState) -> None:
     """Remove a terminal response stream after its replay grace period."""
-    if state.expires_at is None:
+    if state.expiry_deadline is None:
         return
 
     async def expire() -> None:
-        assert state.expires_at is not None
-        await asyncio.sleep(max(0.0, state.expires_at - time.time()))
-        if _response_streams.get(request_id) is state and time.time() >= state.expires_at:
+        assert state.expiry_deadline is not None
+        await asyncio.sleep(max(0.0, state.expiry_deadline - time.monotonic()))
+        if _response_streams.get(request_id) is state and time.monotonic() >= state.expiry_deadline:
             _response_streams.pop(request_id, None)
 
     _spawn_background_task(expire())
@@ -425,8 +425,8 @@ async def response_stream(
         raise HTTPException(status_code=404, detail="Unknown response stream")
 
     state = _response_streams.get(request_id)
-    now = time.time()
-    if state is None or (state.expires_at is not None and now >= state.expires_at):
+    now = time.monotonic()
+    if state is None or (state.expiry_deadline is not None and now >= state.expiry_deadline):
         if state is not None and _response_streams.get(request_id) is state:
             _response_streams.pop(request_id, None)
         raise HTTPException(status_code=404, detail="Unknown response stream")

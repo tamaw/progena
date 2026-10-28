@@ -37,7 +37,7 @@ from src.backend.storage.documents import (
 )
 from src.progena.cron import latest_cron_time, next_cron_time, timezone_name
 from src.progena.schedules.engine import parse_schedule_datetime
-from src.progena.utils import utcnow
+from src.progena.utils import normalize_utc_datetime, utcnow
 from src.progena.workflows.constants import WorkflowRunSource
 from src.progena.workflows.events import build_cron_trigger_output
 from src.progena.workflows.models import WorkflowDefinition, WorkflowNodeCron, WorkflowRun
@@ -91,11 +91,13 @@ def _next_state(
     if anchor is not None and next_cron_time(node.expression, anchor, effective_timezone) <= now:
         last_due = latest_cron_time(node.expression, now, effective_timezone)
         fire_at = last_due if active else None
+    normalized_last_due = normalize_utc_datetime(last_due)
+    assert normalized_last_due is not None
     new_state = {
         "expression": node.expression,
         "timezone": effective_timezone,
         "active": active,
-        "last_due": last_due.isoformat(),
+        "last_due": normalized_last_due.isoformat().replace("+00:00", "Z"),
     }
     return new_state, fire_at
 

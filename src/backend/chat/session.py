@@ -31,6 +31,7 @@ from src.backend.storage.documents import (
     BackendDocumentStore,
     get_default_document_store,
 )
+from src.progena.utils import normalize_utc_datetime
 
 logger = logging.getLogger(__name__)
 
@@ -109,7 +110,9 @@ class SessionState(BaseModel):
     @classmethod
     def _as_utc(cls, value: datetime) -> datetime:
         # Sessions persisted before timestamps were zone-aware stored naive UTC.
-        return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+        normalized = normalize_utc_datetime(value)
+        assert normalized is not None
+        return normalized
 
     def touch(self) -> None:
         """Update last activity timestamp."""
@@ -186,6 +189,7 @@ class SessionManager:
                 if existing_id in self._sessions:
                     session = self._sessions[existing_id]
                     session.touch()
+                    await self._save_sessions()
                     return session
 
             # Create new session
@@ -243,7 +247,7 @@ class SessionManager:
         message_increment: int = 0,
     ) -> SessionState | None:
         """Update the session with conversation/thread activity."""
-        session = await self.get_session(session_id)
+        session = await self.get_session(session_id, touch=False)
         if not session:
             return None
 

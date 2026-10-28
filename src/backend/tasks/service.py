@@ -6,6 +6,7 @@ import asyncio
 import contextlib
 import logging
 import uuid
+from datetime import UTC, datetime
 from typing import Any, cast
 
 from fastapi import HTTPException
@@ -19,7 +20,7 @@ import src.backend.storage.access as storage_access
 import src.backend.storage.documents as storage_documents
 import src.backend.tasks.models as tasks_models
 from src.progena.documents.kinds import KANBAN_CARD_KEY_PREFIX, KANBAN_TASK_CONTENT_KEY_PREFIX
-from src.progena.utils import utcnow
+from src.progena.utils import normalize_utc_timestamp, utcnow
 
 logger = logging.getLogger(__name__)
 
@@ -213,6 +214,20 @@ def _normalize_kanban_card(card: dict, columns: dict[str, dict]) -> dict:
     }
 
 
+def _kanban_created_at_sort_key(card: dict) -> tuple[int, datetime, str]:
+    """Sort explicit-offset card creation instants without rewriting agent fields."""
+    value = str(card.get("created_at") or "")
+    if "T" in value or " " in value:
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            pass
+        else:
+            if parsed.tzinfo is not None:
+                return 0, parsed.astimezone(UTC), ""
+    return 1, datetime.max.replace(tzinfo=UTC), value
+
+
 def _resequence_kanban_cards(cards: list[dict], columns: list[dict]) -> list[dict]:
     """Sort cards into column order and assign dense per-column positions."""
     column_order = {column["id"]: index for index, column in enumerate(columns)}
@@ -223,7 +238,7 @@ def _resequence_kanban_cards(cards: list[dict], columns: list[dict]) -> list[dic
         key=lambda card: (
             column_order.get(card["column_id"], len(columns)),
             _normalize_non_negative_int(card.get("position")),
-            str(card.get("created_at") or ""),
+            *_kanban_created_at_sort_key(card),
             card["id"],
         ),
     )
@@ -479,26 +494,41 @@ def _normalize_task_activity_entries(value: object, card_id: str) -> list[dict[s
     if not isinstance(value, list):
         return []
 
-    normalized: list[dict[str, Any]] = []
+    normalized: list[tuple[datetime | None, dict[str, Any]]] = []
     for entry in value:
         if not isinstance(entry, dict):
             continue
-        created_at = str(entry.get("created_at") or utcnow().isoformat())
+        created_at, activity_at = _normalize_task_activity_created_at(entry.get("created_at"))
         normalized.append(
-            {
-                "id": str(entry.get("id") or f"task_activity_{uuid.uuid4().hex[:12]}"),
-                "card_id": card_id,
-                "kind": str(entry.get("kind") or "note"),
-                "actor": str(entry.get("actor") or "system"),
-                "message": str(entry.get("message") or "").strip(),
-                "created_at": created_at,
-                "metadata": entry.get("metadata")
-                if isinstance(entry.get("metadata"), dict)
-                else {},
-            }
+            (
+                activity_at,
+                {
+                    "id": str(entry.get("id") or f"task_activity_{uuid.uuid4().hex[:12]}"),
+                    "card_id": card_id,
+                    "kind": str(entry.get("kind") or "note"),
+                    "actor": str(entry.get("actor") or "system"),
+                    "message": str(entry.get("message") or "").strip(),
+                    "created_at": created_at,
+                    "metadata": entry.get("metadata")
+                    if isinstance(entry.get("metadata"), dict)
+                    else {},
+                },
+            )
         )
-    normalized.sort(key=lambda item: str(item.get("created_at") or ""))
-    return [item for item in normalized if item["message"]]
+    normalized.sort(key=lambda item: (item[0] is None, item[0] or datetime.max.replace(tzinfo=UTC)))
+    return [entry for _created_at, entry in normalized if entry["message"]]
+
+
+def _normalize_task_activity_created_at(value: object) -> tuple[str, datetime | None]:
+    """Canonicalize the backend-owned task-activity instant without touching dates."""
+    raw = str(value or utcnow().isoformat())
+    if "T" not in raw and " " not in raw:
+        return raw, None
+    normalized = normalize_utc_timestamp(raw)
+    try:
+        return normalized, datetime.fromisoformat(normalized)
+    except ValueError:
+        return raw, None
 
 
 def _read_task_activity_entries(

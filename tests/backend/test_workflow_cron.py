@@ -149,8 +149,9 @@ def test_save_existing_null_or_empty_cron_timezone_omits_the_legacy_stamp(timezo
     assert "timezone" not in updated.model_dump(mode="json")["graph"]["nodes"]["cron"]
 
 
-def test_manual_cron_trigger_uses_the_preference_timezone_when_unstamped():
+def test_manual_cron_trigger_uses_the_preference_timezone_when_unstamped(monkeypatch):
     definition = WorkflowDefinition.model_validate(cron_workflow(timezone=None))
+    monkeypatch.setattr("src.backend.workflows.service.utcnow", lambda: START)
 
     trigger = build_manual_trigger_event(
         definition,
@@ -158,7 +159,9 @@ def test_manual_cron_trigger_uses_the_preference_timezone_when_unstamped():
     )
 
     assert trigger["timezone"] == "Australia/Melbourne"
-    assert trigger["scheduled_for"].endswith("+11:00")
+    scheduled = datetime.fromisoformat(trigger["scheduled_for"])
+    assert scheduled == START
+    assert scheduled.utcoffset() == timedelta(0)
 
 
 @pytest.mark.asyncio

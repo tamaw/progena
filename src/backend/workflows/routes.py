@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import time
+from datetime import UTC
 from typing import Any
 
 from fastapi import APIRouter, Header, HTTPException, Query, Request
@@ -46,7 +47,7 @@ async def preview_workflow_cron(
     cursor = utcnow()
     for _ in range(count):
         cursor = next_cron_time(expression, cursor, effective_timezone)
-        runs.append(cursor.isoformat())
+        runs.append(cursor.astimezone(UTC).isoformat().replace("+00:00", "Z"))
     return {"next_runs": runs}
 
 

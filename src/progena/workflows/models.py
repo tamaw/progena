@@ -6,9 +6,17 @@ import copy
 from collections.abc import Mapping
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, SerializerFunctionWrapHandler, model_serializer
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SerializerFunctionWrapHandler,
+    field_validator,
+    model_serializer,
+)
 
 from src.progena.documents.types import DocumentOperation
+from src.progena.utils import normalize_utc_timestamp
 from src.progena.workflows.constants import (
     _JSON_OBJECT_SCHEMA,
     CRON_OUTPUT_SCHEMA,
@@ -366,6 +374,11 @@ class WorkflowDefinition(BaseModel):
     updated_at: str
     created_at: str
 
+    @field_validator("updated_at", "created_at")
+    @classmethod
+    def normalize_timestamps(cls, value: str) -> str:
+        return normalize_utc_timestamp(value)
+
 
 class WorkflowListItem(BaseModel):
     """Summary payload for workflow lists."""
@@ -418,6 +431,11 @@ class WorkflowRun(BaseModel):
     updated_at: str
     completed_at: str | None = None
 
+    @field_validator("queued_at", "started_at", "updated_at", "completed_at")
+    @classmethod
+    def normalize_timestamps(cls, value: str | None) -> str | None:
+        return normalize_utc_timestamp(value) if value is not None else None
+
 
 class WorkflowInvokeRequest(BaseModel):
     """Durable request for the backend executor to start one workflow run."""
@@ -429,3 +447,8 @@ class WorkflowInvokeRequest(BaseModel):
     input: dict[str, Any] = Field(default_factory=dict)
     ancestry: list[str] = Field(default_factory=list)
     requested_at: str
+
+    @field_validator("requested_at")
+    @classmethod
+    def normalize_timestamp(cls, value: str) -> str:
+        return normalize_utc_timestamp(value)

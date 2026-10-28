@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 
+from src.progena.sessions.history import _commit_times
 from src.progena.sessions.transcript import (
     ThreadMessages,
     format_log,
@@ -268,6 +270,55 @@ def test_log_header_lists_participants_and_marks_day_changes_in_the_users_timezo
         "--- Day changed Tue Oct 13 2026",
         "00:01:00 <@progena> good morning",
     ]
+
+
+def test_provider_timestamps_normalize_offset_and_epoch_seconds_before_irc_day_rollover() -> None:
+    late = HumanMessage(
+        "late night",
+        id="late",
+        additional_kwargs={"created_at": T0.replace(hour=22, minute=59).timestamp()},
+    )
+    reply = AIMessage(
+        "good morning",
+        id="reply",
+        response_metadata={**MODEL, "created_at": "2026-10-13T01:01:00+02:00"},
+    )
+    root = ThreadMessages(messages=[late, reply], committed_at={})
+    transcript = render_transcript(root, subagents={}, channel="abcd1234", user_nick="Alex")
+
+    log = format_log(
+        transcript,
+        channel="abcd1234",
+        user_nick="Alex",
+        title="late night",
+        topic_set=T0.replace(hour=22, minute=58),
+        tz=ZoneInfo("Europe/London"),
+        tz_name="Europe/London",
+    )
+
+    assert log.splitlines()[-3:] == [
+        "23:59:00 <Alex> late night",
+        "--- Day changed Tue Oct 13 2026",
+        "00:01:00 <@progena> good morning",
+    ]
+
+
+def test_checkpoint_naive_legacy_timestamp_is_normalized_as_utc() -> None:
+    message = HumanMessage("hello", id="message-id")
+    committed_at = _commit_times(
+        [
+            SimpleNamespace(
+                checkpoint={"ts": "2026-10-12T00:00:00+00:00"},
+                pending_writes=[("task", "messages", message)],
+            ),
+            SimpleNamespace(
+                checkpoint={"ts": "2026-10-12T01:00:00"},
+                pending_writes=[],
+            ),
+        ]
+    )
+
+    assert committed_at == {"message-id": datetime(2026, 10, 12, 1, tzinfo=UTC)}
 
 
 def test_image_blocks_render_as_sends_an_image() -> None:

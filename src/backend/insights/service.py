@@ -25,6 +25,7 @@ from src.progena.settings.model_profiles import (
     default_model_profiles_payload,
     validate_model_profiles_payload,
 )
+from src.progena.utils import parse_provider_timestamp
 
 InsightsRange = Literal["24h", "7d", "30d"]
 
@@ -401,20 +402,10 @@ def _usage_containers(containers: tuple[Mapping[str, Any], ...]) -> list[Mapping
 def _message_timestamp(
     insights: Mapping[str, Any], response_metadata: Mapping[str, Any]
 ) -> datetime | None:
-    explicit = insights.get("occurred_at")
-    if isinstance(explicit, str):
-        try:
-            value = datetime.fromisoformat(explicit.replace("Z", "+00:00"))
-            return value.astimezone(UTC) if value.tzinfo is not None else None
-        except ValueError:
-            pass
-    created_at = response_metadata.get("created_at")
-    if isinstance(created_at, int | float) and not isinstance(created_at, bool):
-        try:
-            return datetime.fromtimestamp(float(created_at), UTC)
-        except (OverflowError, OSError, ValueError):
-            pass
-    return None
+    """Prefer the provider's explicit timestamp, then its response creation time."""
+    return parse_provider_timestamp(insights.get("occurred_at")) or parse_provider_timestamp(
+        response_metadata.get("created_at")
+    )
 
 
 def _estimate_cost(

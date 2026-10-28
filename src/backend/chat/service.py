@@ -37,6 +37,7 @@ from src.progena.sessions.messages import (
     tool_result_failed,
 )
 from src.progena.sessions.titles import ATTACHMENT_CONTEXT_MARKER, display_title
+from src.progena.utils import normalize_utc_timestamp, parse_provider_timestamp
 
 # History must not replay arbitrary tool artifacts (which may contain raw files,
 # images, or credentials). Keep only the SSE-compatible user-facing projection.
@@ -86,6 +87,19 @@ def _curated_tool_artifact(artifact: Any) -> dict[str, Any] | None:
 
 def _now_iso() -> str:
     return datetime.now(UTC).isoformat().replace("+00:00", "Z")
+
+
+def _known_session_timestamp(value: Any) -> str | None:
+    """Render persisted server-UTC session fields with one unambiguous offset."""
+    if not isinstance(value, str) or not value:
+        return None
+    return normalize_utc_timestamp(value).replace("+00:00", "Z")
+
+
+def _provider_timestamp(value: Any) -> str | None:
+    """Render an explicitly stamped provider instant in UTC."""
+    timestamp = parse_provider_timestamp(value)
+    return timestamp.isoformat().replace("+00:00", "Z") if timestamp is not None else None
 
 
 class ReasoningSegment(BaseModel):
@@ -312,24 +326,26 @@ def _raw_message_role(raw: Any) -> str:
 
 def _raw_message_created_at(raw: Any) -> str | None:
     if isinstance(raw, dict):
-        created_at = raw.get("created_at") or raw.get("timestamp") or raw.get("time")
+        created_at = raw.get("created_at")
+        if created_at is None:
+            created_at = raw.get("timestamp")
+        if created_at is None:
+            created_at = raw.get("time")
         metadata = raw.get("response_metadata")
         extra_kwargs = raw.get("additional_kwargs")
     else:
-        created_at = (
-            getattr(raw, "created_at", None)
-            or getattr(raw, "timestamp", None)
-            or getattr(raw, "time", None)
-        )
+        created_at = getattr(raw, "created_at", None)
+        if created_at is None:
+            created_at = getattr(raw, "timestamp", None)
+        if created_at is None:
+            created_at = getattr(raw, "time", None)
         metadata = getattr(raw, "response_metadata", None)
         extra_kwargs = getattr(raw, "additional_kwargs", None)
     if created_at is None and isinstance(metadata, dict):
         created_at = metadata.get("created_at")
     if created_at is None and isinstance(extra_kwargs, dict):
         created_at = extra_kwargs.get("created_at")
-    if isinstance(created_at, int | float):
-        return datetime.fromtimestamp(float(created_at), UTC).isoformat().replace("+00:00", "Z")
-    return str(created_at) if created_at else None
+    return _provider_timestamp(created_at)
 
 
 def _raw_message_token_count(raw: Any) -> int:
@@ -451,29 +467,29 @@ def _chat_message_from_raw(
     if not content and role == "assistant":
         return None
     reasoning_text = extract_reasoning_trace(raw) or ""
+    created_at = _raw_message_created_at(raw)
+    display_metadata = _display_metadata_from_raw(raw)
     return ChatMessage(
         id=_raw_message_id(raw, index),
         role=role,
         content=content,
-        created_at=_raw_message_created_at(raw),
-        reasoning_timestamp=_raw_message_created_at(raw) if reasoning_text else None,
+        created_at=created_at,
+        reasoning_timestamp=created_at if reasoning_text else None,
         reasoning_segments=(
-            [ReasoningSegment(text=reasoning_text, created_at=_raw_message_created_at(raw))]
-            if reasoning_text
-            else []
+            [ReasoningSegment(text=reasoning_text, created_at=created_at)] if reasoning_text else []
         ),
         token_count=_raw_message_token_count(raw),
         reasoning_token_count=extract_reasoning_token_count(raw) or 0,
         cache_read_token_count=extract_cache_read_token_count(raw) or 0,
         reasoning_text=reasoning_text,
-        display_agent_name=_display_metadata_from_raw(raw).get("display_agent_name"),
-        display_model_name=_display_metadata_from_raw(raw).get("display_model_name"),
+        display_agent_name=display_metadata.get("display_agent_name"),
+        display_model_name=display_metadata.get("display_model_name"),
         context_usage=(
             ContextUsage.model_validate(context_usage)
             if (context_usage := extract_context_usage(raw))
             else None
         ),
-        display_tool_calls=_display_metadata_from_raw(raw).get("display_tool_calls", []),
+        display_tool_calls=display_metadata.get("display_tool_calls", []),
         tool_calls=tool_calls or [],
         attachments=_attachments_from_raw(raw),
         raw=_raw_message_payload(raw),
@@ -696,8 +712,8 @@ def _summary_from_session(
         title=display_title(payload["title"], payload["first_message"]),
         pinned=payload["pinned"],
         archived=payload["archived"],
-        created_at=payload["created_at"],
-        last_activity=payload["last_activity"],
+        created_at=_known_session_timestamp(payload.get("created_at")),
+        last_activity=_known_session_timestamp(payload.get("last_activity")),
         message_count=len(messages),
         preview=preview,
         history_unavailable=history_unavailable,

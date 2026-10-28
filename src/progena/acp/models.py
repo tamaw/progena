@@ -9,7 +9,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field, field_validator
 
 from src.progena.security.redaction import logger
-from src.progena.utils import utcnow
+from src.progena.utils import normalize_utc_datetime, utcnow
 
 
 class ACPAgentConfig(BaseModel):
@@ -113,6 +113,23 @@ class ACPTaskRecord(BaseModel):
     started_at: datetime | None = None
     completed_at: datetime | None = None
     notification_sent_at: datetime | None = None
+
+    @field_validator("progress")
+    @classmethod
+    def normalize_progress_timestamp(cls, value: dict[str, Any]) -> dict[str, Any]:
+        activity_at = value.get("last_activity_at")
+        if isinstance(activity_at, datetime):
+            parsed = activity_at
+        elif isinstance(activity_at, str):
+            try:
+                parsed = datetime.fromisoformat(activity_at.replace("Z", "+00:00"))
+            except ValueError:
+                return value
+        else:
+            return value
+        normalized = normalize_utc_datetime(parsed)
+        assert normalized is not None
+        return {**value, "last_activity_at": normalized.isoformat()}
 
     @field_validator("status", mode="before")
     @classmethod
