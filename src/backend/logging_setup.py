@@ -68,6 +68,9 @@ def setup_logging() -> None:
         uvicorn_logger = logging.getLogger(logger_name)
         uvicorn_logger.handlers.clear()
         uvicorn_logger.propagate = True
+    # Each request is logged once by the app's "API request completed" line
+    # (src/backend/http/middleware.py); uvicorn's access line would duplicate it.
+    logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
 
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("openai").setLevel(logging.WARNING)
