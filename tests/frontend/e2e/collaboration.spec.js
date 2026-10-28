@@ -82,7 +82,6 @@ test('19 quick-chat routines survive rapid switching, SSE reconnect, and sequent
   const userLabel = `User edit ${suffix}`;
   second.nodes[0].label = userLabel;
   await saveGraph(page, second);
-  const editSubmitted = Date.now() / 1000;
   await chat(page, `Modify ONLY routine ${second.id}, file /routines/${second.id}.json. Read the current persisted file first, preserve its current node label exactly, and change only the eval expression from 29 to 39. This is an edit, not creation. Do not rename it or change other routines.`, { fresh: true });
   // Closing quick chat cancels its active agent stream. Keep it mounted until
   // the edit is actually persisted and the assistant turn completes.
