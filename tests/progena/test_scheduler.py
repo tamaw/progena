@@ -65,6 +65,14 @@ class TestScheduler:
         """Invalid cron expressions return None."""
         assert self.scheduler.next_run_for_entry({"cron_expression": "not a cron"}) is None
 
+    def test_naive_one_shot_timestamp_is_interpreted_as_utc(self):
+        """Legacy serialized timestamps do not mix naive and aware datetimes."""
+        due_at = datetime(2026, 1, 15, 10, tzinfo=UTC)
+        entry = {"id": "one-shot", "scheduled_at": "2026-01-15T09:00:00"}
+
+        assert self.scheduler.next_run_for_entry(entry) == datetime(2026, 1, 15, 9, tzinfo=UTC)
+        assert self.scheduler.get_due_items([entry], due_at) == [entry]
+
     @pytest.mark.parametrize(
         ("reference", "expected"),
         [

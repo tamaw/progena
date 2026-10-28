@@ -45,6 +45,16 @@ def validate_workflow_definition_document(
         raise ValueError(f"not valid JSON: {exc}") from exc
     if not isinstance(parsed, dict):
         raise ValueError("workflow definition must be a JSON object")
+    graph = parsed.get("graph")
+    nodes = graph.get("nodes") if isinstance(graph, dict) else None
+    if isinstance(nodes, dict):
+        for node in nodes.values():
+            if (
+                isinstance(node, dict)
+                and node.get("kind") == "cron"
+                and (node.get("timezone") is None or node.get("timezone") == "")
+            ):
+                node.pop("timezone", None)
     return validate_workflow_definition_payload(
         derive_workflow_port_schemas(
             parsed,

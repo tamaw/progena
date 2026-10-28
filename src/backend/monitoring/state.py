@@ -1143,6 +1143,9 @@ class StateReader:
                 or payload.get("created_at")
                 or self._path_fallback_timestamp(path)
             )
+            parsed_timestamp = _parse_timestamp(timestamp)
+            if parsed_timestamp is not None:
+                timestamp = _iso_from_datetime(parsed_timestamp)
             message = (
                 payload.get("message")
                 or payload.get("msg")

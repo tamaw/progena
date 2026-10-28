@@ -40,7 +40,7 @@ import { reportFailure } from '../../lib/failures';
 import { fetchSchedules, selectSchedulesState } from './state';
 import { entityDraftKey } from '../../store/editorDraftsSlice';
 import { selectRealtimeConnected } from '../../realtime/realtimeSlice';
-import { selectAgentName } from '../settings/state/preferences';
+import { selectAgentName, selectPreferences } from '../settings/state/preferences';
 
 const SCHEDULE_FILTERS = ['All', 'Active', 'Paused', 'Completed'];
 const SCHEDULE_SORTS = ['Type', 'Next', 'Status'];
@@ -100,9 +100,15 @@ function cronToCadence(cron) {
   return cron;
 }
 
-function cadenceFor(schedule) {
+function effectiveScheduleTimezone(schedule, preferenceTimezone) {
+  const entryTimezone = typeof schedule?.timezone === 'string' ? schedule.timezone.trim() : '';
+  const preferredTimezone = typeof preferenceTimezone === 'string' ? preferenceTimezone.trim() : '';
+  return entryTimezone || preferredTimezone || 'UTC';
+}
+
+function cadenceFor(schedule, timeZone) {
   if (schedule.scheduled_at) {
-    return `Once · ${formatAbsolute(schedule.scheduled_at, schedule.timezone)}`;
+    return `Once · ${formatAbsolute(schedule.scheduled_at, timeZone)}`;
   }
   return cronToCadence(schedule.cron_expression || schedule.schedule);
 }
@@ -144,21 +150,17 @@ function parseDate(value) {
   return Number.isNaN(date.getTime()) ? null : date;
 }
 
-// Absolute date/time rendered in the schedule's own timezone when given, so the
-// displayed wall-clock matches when the schedule actually fires. Falls back to
-// the browser's local zone if the timezone is missing or invalid.
+// Absolute date/time rendered in the schedule's effective timezone, so the
+// displayed wall-clock matches when the schedule actually fires.
 function formatAbsolute(value, timeZone) {
   const date = parseDate(value);
   if (!date) return '—';
   const opts = { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' };
-  if (timeZone) {
-    try {
-      return date.toLocaleString(undefined, { ...opts, timeZone, timeZoneName: 'short' });
-    } catch {
-      // Invalid IANA zone — fall through to local time.
-    }
+  try {
+    return date.toLocaleString(undefined, { ...opts, timeZone: timeZone || 'UTC', timeZoneName: 'short' });
+  } catch {
+    return date.toLocaleString(undefined, { ...opts, timeZone: 'UTC', timeZoneName: 'short' });
   }
-  return date.toLocaleString(undefined, opts);
 }
 
 // Compact relative label, e.g. "in 42m", "5h ago", or an absolute date (in the
@@ -203,14 +205,14 @@ function formatLogTime(value) {
   });
 }
 
-function matchesSchedule(schedule, filter, search) {
+function matchesSchedule(schedule, filter, search, timeZone) {
   const status = statusOf(schedule);
   const matchesFilter =
     filter === 'All'
     || (filter === 'Active' && status === 'active')
     || (filter === 'Paused' && status === 'paused')
     || (filter === 'Completed' && status === 'completed');
-  const haystack = [schedule.name, schedule.message, cadenceFor(schedule)].join(' ').toLowerCase();
+  const haystack = [schedule.name, schedule.message, cadenceFor(schedule, timeZone)].join(' ').toLowerCase();
   return matchesFilter && (!search || haystack.includes(search.toLowerCase()));
 }
 
@@ -247,7 +249,7 @@ function compareSchedules(a, b, sortMode) {
   return String(a.name || '').localeCompare(String(b.name || ''));
 }
 
-function ScheduleRow({ schedule, selected, onSelect }) {
+function ScheduleRow({ schedule, selected, onSelect, timeZone }) {
   const status = statusOf(schedule);
   return (
     <button
@@ -260,9 +262,9 @@ function ScheduleRow({ schedule, selected, onSelect }) {
         <span className="sess-row__agent schedule-pane-row__name">{schedule.name || 'Untitled schedule'}</span>
       </span>
       <span className="sess-row__age">
-        {status === 'completed' ? 'completed' : schedule.paused ? 'paused' : formatRelative(schedule.next_run, schedule.timezone)}
+        {status === 'completed' ? 'completed' : schedule.paused ? 'paused' : formatRelative(schedule.next_run, timeZone)}
       </span>
-      <span className="sess-row__title">{cadenceFor(schedule) || '—'}</span>
+      <span className="sess-row__title">{cadenceFor(schedule, timeZone) || '—'}</span>
     </button>
   );
 }
@@ -291,6 +293,7 @@ function SchedulesPage() {
     requestId: scheduleRequestId,
   } = schedulesState;
   const agentName = useSelector(selectAgentName);
+  const preferenceTimezone = useSelector((state) => selectPreferences(state).timezone);
   const realtimeConnected = useSelector(selectRealtimeConnected);
   const [activeFilter, setActiveFilter] = useState('All');
   const [search, setSearch] = useState('');
@@ -325,9 +328,14 @@ function SchedulesPage() {
 
 
   const visibleSchedules = useMemo(() => {
-    const filtered = schedules.filter((schedule) => matchesSchedule(schedule, activeFilter, search));
+    const filtered = schedules.filter((schedule) => matchesSchedule(
+      schedule,
+      activeFilter,
+      search,
+      effectiveScheduleTimezone(schedule, preferenceTimezone),
+    ));
     return [...filtered].sort((a, b) => compareSchedules(a, b, sortMode));
-  }, [activeFilter, schedules, search, sortMode]);
+  }, [activeFilter, preferenceTimezone, schedules, search, sortMode]);
 
   const groupedSchedules = useMemo(() => {
     if (sortMode === 'Type') {
@@ -363,6 +371,7 @@ function SchedulesPage() {
       || (!selectedScheduleId ? visibleSchedules[0] || null : null),
     [schedules, selectedScheduleId, visibleSchedules],
   );
+  const selectedScheduleTimezone = effectiveScheduleTimezone(selectedSchedule, preferenceTimezone);
 
   // Keep the URL in sync with whichever schedule is actually selected after
   // the initial snapshot has hydrated. Until then, preserve a deep-linked id
@@ -393,7 +402,7 @@ function SchedulesPage() {
   );
   const [triggerDraft, setTriggerDraft, triggerDraftControls] = useEntityDraft(
     triggerKey,
-    { editing: false, text: selectedSchedule ? cadenceFor(selectedSchedule) : '' },
+    { editing: false, text: selectedSchedule ? cadenceFor(selectedSchedule, selectedScheduleTimezone) : '' },
   );
   const {
     beginSave: beginIntentSave,
@@ -619,6 +628,7 @@ function SchedulesPage() {
               <ScheduleRow
                 schedule={schedule}
                 selected={selectedSchedule?.id === schedule.id}
+                timeZone={effectiveScheduleTimezone(schedule, preferenceTimezone)}
                 onSelect={() => navigate(buildEntityPath('/schedules', schedule.id, schedule.name), { replace: true })}
               />
             )}
@@ -677,15 +687,13 @@ function SchedulesPage() {
                   {statusOf(selectedSchedule)}
                 </DetailStatus>,
                 <span key="type" className="muted">{scheduleKind(selectedSchedule)}</span>,
-                <span key="cadence" className="muted">{cadenceFor(selectedSchedule)}</span>,
+                <span key="cadence" className="muted">{cadenceFor(selectedSchedule, selectedScheduleTimezone)}</span>,
                 <span key="next" className="muted">
                   {statusOf(selectedSchedule) === 'completed'
                     ? 'completed'
-                    : selectedSchedule.paused ? 'paused' : `Next ${formatRelative(selectedSchedule.next_run, selectedSchedule.timezone)}`}
+                    : selectedSchedule.paused ? 'paused' : `Next ${formatRelative(selectedSchedule.next_run, selectedScheduleTimezone)}`}
                 </span>,
-                selectedSchedule.timezone ? (
-                  <span key="tz" className="muted">{selectedSchedule.timezone}</span>
-                ) : null,
+                <span key="tz" className="muted">{selectedScheduleTimezone}</span>,
                 <span key="id" className="muted">{selectedSchedule.id}</span>,
               ]}
               actions={
@@ -721,16 +729,16 @@ function SchedulesPage() {
                   value={
                     statusOf(selectedSchedule) === 'completed'
                       ? 'completed'
-                      : selectedSchedule.paused ? 'paused' : formatRelative(selectedSchedule.next_run, selectedSchedule.timezone)
+                      : selectedSchedule.paused ? 'paused' : formatRelative(selectedSchedule.next_run, selectedScheduleTimezone)
                   }
-                  detail={selectedSchedule.next_run ? formatAbsolute(selectedSchedule.next_run, selectedSchedule.timezone) : 'not scheduled'}
+                  detail={selectedSchedule.next_run ? formatAbsolute(selectedSchedule.next_run, selectedScheduleTimezone) : 'not scheduled'}
                 />
                 <MetricCard
                   label="Last run"
-                  value={selectedSchedule.last_run ? formatRelative(selectedSchedule.last_run, selectedSchedule.timezone) : 'never'}
-                  detail={selectedSchedule.last_run ? formatAbsolute(selectedSchedule.last_run, selectedSchedule.timezone) : 'no runs yet'}
+                  value={selectedSchedule.last_run ? formatRelative(selectedSchedule.last_run, selectedScheduleTimezone) : 'never'}
+                  detail={selectedSchedule.last_run ? formatAbsolute(selectedSchedule.last_run, selectedScheduleTimezone) : 'no runs yet'}
                 />
-                <MetricCard label="Cadence" value={cadenceFor(selectedSchedule)} detail="trigger" />
+                <MetricCard label="Cadence" value={cadenceFor(selectedSchedule, selectedScheduleTimezone)} detail="trigger" />
                 <MetricCard label="Status" value={statusOf(selectedSchedule)} detail="schedule state" />
               </div>
 
@@ -871,7 +879,7 @@ function SchedulesPage() {
                     <div className="agents-connection-row">
                       <span className="agents-connection-row__icon">cr</span>
                       <div className="agents-connection-row__body">
-                        <strong>{cadenceFor(selectedSchedule)}</strong>
+                        <strong>{cadenceFor(selectedSchedule, selectedScheduleTimezone)}</strong>
                         <p>{selectedSchedule.cron_expression || selectedSchedule.scheduled_at || selectedSchedule.schedule || '—'}</p>
                       </div>
                       <span className="agents-chip agents-chip--info">
@@ -919,7 +927,7 @@ function SchedulesPage() {
                     <span className="agents-mini-row__icon">cd</span>
                     <div>
                       <strong>Created</strong>
-                      <p>{formatAbsolute(selectedSchedule.created_at, selectedSchedule.timezone)}</p>
+                      <p>{formatAbsolute(selectedSchedule.created_at, selectedScheduleTimezone)}</p>
                     </div>
                     <span className="agents-chip agents-chip--info">{selectedSchedule.id}</span>
                   </div>

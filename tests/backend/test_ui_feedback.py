@@ -10,6 +10,7 @@ and all sub-agents. These tests verify:
 - Error feedback to UI
 """
 
+import json
 from datetime import UTC, datetime
 
 import pytest
@@ -338,6 +339,28 @@ class TestStateReaderFileOperations:
         assert snapshot.build is not None
         assert snapshot.build.in_progress is True
         assert snapshot.build.phase == "verify"
+
+    @pytest.mark.parametrize(
+        "timestamp",
+        [
+            "2026-10-28T13:00:00",
+            "2026-10-29T00:00:00+11:00",
+            "2026-10-28T13:00:00Z",
+        ],
+    )
+    def test_json_logs_expose_utc_instants_and_filter_by_the_same_instant(
+        self, tmp_path, timestamp
+    ):
+        (tmp_path / "runtime.jsonl").write_text(
+            json.dumps({"timestamp": timestamp, "message": "midnight in Melbourne"}) + "\n",
+            encoding="utf-8",
+        )
+        reader = StateReader(document_store=InMemoryDocumentStore(), logs_dir=tmp_path)
+        result = reader.query_logs(
+            start_date="2026-10-28T12:59:59Z", end_date="2026-10-28T13:00:01Z"
+        )
+        assert [entry["timestamp"] for entry in result["entries"]] == ["2026-10-28T13:00:00Z"]
+        assert reader.query_logs(start_date="2026-10-28T13:00:01Z")["entries"] == []
 
     def test_workspace_payload_tolerates_scalar_json_log_lines(self, tmp_path):
         """Scalar JSON log lines should not crash widget or workspace payload generation."""

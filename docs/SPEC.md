@@ -330,6 +330,9 @@ falls back to the first event or cron trigger for existing workflows.
 - Stored timestamps, APIs, logs, agent shells, and containers use UTC; the browser renders instants in its own timezone.
 - User preferences provide the wall-clock timezone for “tomorrow”, conversational time, and unstamped schedules. It defaults to `UTC`.
 - Each new schedule entry and workflow cron trigger stamps that preference as its IANA timezone. Existing entries without one fall back to the current preference, then UTC.
+- One-shot schedule timestamps are UTC instants; legacy timestamps without an offset are interpreted as UTC. Schedule displays resolve the entry timezone, then the preference, then UTC.
+- Cron nodes created before preferences arrive leave the timezone unset so the server stamps its current preference on save. Cron previews use that same fallback.
+- Date-level agent context changes at the user's local midnight. Exact-time guidance is limited to available tools; tool-less calls request a timestamp from their caller.
 
 The system persists runtime conversation/checkpoint state, state documents, and
 backend-owned metadata in Postgres. Operational logs are plain rotating files

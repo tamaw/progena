@@ -708,6 +708,36 @@ async def test_workflow_awrite_persists_valid_definition():
     assert sm.workflows["customer-followup"]["title"] == "Customer follow-up"
 
 
+@pytest.mark.parametrize("timezone", [None, ""])
+async def test_workflow_awrite_stamps_new_null_or_empty_cron_timezone(timezone):
+    workflow = default_workflow_definition(workflow_id="daily", title="Daily")
+    cron_id = next(
+        node_id for node_id, node in workflow["graph"]["nodes"].items() if node["kind"] == "event"
+    )
+    agent_id = next(
+        node_id for node_id, node in workflow["graph"]["nodes"].items() if node["kind"] == "agent"
+    )
+    workflow["graph"]["nodes"][cron_id] = {
+        "kind": "cron",
+        "title": "Daily",
+        "expression": "0 9 * * *",
+        "timezone": timezone,
+    }
+    workflow["graph"]["nodes"][agent_id]["template"] = "Run at {scheduled_for}"
+    workflow["graph"]["edges"] = [
+        {
+            "from": {"node": cron_id, "port": "scheduled_for"},
+            "to": {"node": agent_id, "port": "scheduled_for"},
+        }
+    ]
+    backend, sm = _workflow_backend([])
+
+    result = await backend.awrite("/daily.json", json.dumps(workflow))
+
+    assert result.error is None
+    assert sm.workflows["daily"]["graph"]["nodes"][cron_id]["timezone"] == "Australia/Melbourne"
+
+
 async def test_workflow_awrite_resolves_prompt_document_references():
     workflow = default_workflow_definition(workflow_id="card-brief", title="Card brief")
     agent_id = next(i for i, n in workflow["graph"]["nodes"].items() if n["kind"] == "agent")
@@ -987,6 +1017,65 @@ async def test_schedule_awrite_persists_new_entry():
     assert sm.entries["sched_9"].id == "sched_9"
     assert sm.entries["sched_9"].message == "new task"
     assert sm.entries["sched_9"].model_extra["timezone"] == "Australia/Melbourne"
+
+
+@pytest.mark.parametrize("timezone", [None, ""])
+async def test_schedule_awrite_keeps_existing_null_or_empty_timezone(timezone):
+    backend, sm = _schedule_backend(
+        [
+            ScheduleEntry(
+                id="sched_9",
+                message="existing task",
+                cron_expression="0 8 * * *",
+                timezone=timezone,
+            )
+        ]
+    )
+    body = json.dumps(
+        {
+            "sched_9": {
+                "message": "updated task",
+                "cron_expression": "0 8 * * *",
+                "timezone": timezone,
+            }
+        }
+    )
+
+    result = await backend.awrite("/schedule.json", body)
+
+    assert result.error is None
+    assert sm.entries["sched_9"].model_extra["timezone"] == timezone
+
+
+@pytest.mark.parametrize("timezone", [None, ""])
+async def test_schedule_awrite_stamps_new_null_or_empty_timezone(timezone):
+    backend, sm = _schedule_backend([])
+    body = json.dumps(
+        {
+            "sched_9": {
+                "message": "new task",
+                "cron_expression": "0 8 * * *",
+                "timezone": timezone,
+            }
+        }
+    )
+
+    result = await backend.awrite("/schedule.json", body)
+
+    assert result.error is None
+    assert sm.entries["sched_9"].model_extra["timezone"] == "Australia/Melbourne"
+
+
+async def test_schedule_awrite_normalizes_naive_one_shot_timestamp_to_utc():
+    backend, sm = _schedule_backend([])
+
+    result = await backend.awrite(
+        "/schedule.json",
+        json.dumps({"cron_9": {"message": "remind me", "scheduled_at": "2026-06-19T09:47:00"}}),
+    )
+
+    assert result.error is None
+    assert sm.entries["cron_9"].scheduled_at == "2026-06-19T09:47:00+00:00"
 
 
 async def test_schedule_awrite_invalid_does_not_persist():

@@ -1588,6 +1588,31 @@ class TestScheduleEndpoint:
         assert streamed["envelope"].type == "schedule.snapshot"
         assert streamed["envelope"].payload["items"][0]["message"] == "ping"
 
+    def test_schedule_snapshot_normalizes_legacy_naive_one_shot_timestamp(self, monkeypatch):
+        store = InMemoryDocumentStore()
+        store.save_document(
+            PROGENA_STATE_PREFIX,
+            "schedule",
+            {
+                "cron-once": {
+                    "id": "cron-once",
+                    "name": "One-off",
+                    "message": "ping",
+                    "schedule_type": "once",
+                    "schedule": "2026-06-19T09:47:00",
+                    "scheduled_at": "2026-06-19T09:47:00",
+                }
+            },
+        )
+        state_reader = StateReader(document_store=store)
+        monkeypatch.setattr("src.backend.monitoring.state.get_state_reader", lambda: state_reader)
+
+        envelope = schedules_service.broadcast_schedule_snapshot()
+
+        item = envelope.payload["items"][0]
+        assert item["schedule"] == "2026-06-19T09:47:00+00:00"
+        assert item["scheduled_at"] == "2026-06-19T09:47:00+00:00"
+
     def test_schedule_snapshot_includes_read_only_interrupted_run_views(self, monkeypatch):
         """Schedule run state is derived from the live runtime without persistence writes."""
         store = InMemoryDocumentStore()
@@ -2146,7 +2171,7 @@ class TestWorkspaceBridgeActions:
                 "name": "One-off reminder",
                 "instruction": "Reply once.",
                 "schedule_type": "once",
-                "expression": "2026-06-19T09:47:00Z",
+                "expression": "2026-06-19T09:47:00",
                 "timezone": "UTC",
                 "enabled": True,
             },
@@ -2164,6 +2189,7 @@ class TestWorkspaceBridgeActions:
         updated = document.payload[schedule_id]
         assert updated["id"].startswith("cron_")
         assert updated["schedule_type"] == "once"
+        assert updated["schedule"] == "2026-06-19T09:47:00+00:00"
         assert updated["scheduled_at"] == "2026-06-19T09:47:00+00:00"
         assert "cron_expression" not in updated
 

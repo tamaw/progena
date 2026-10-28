@@ -120,12 +120,13 @@ def _setup(**cron):
     return store, definition, executor, Clock(store, executor)
 
 
-def test_list_accepts_legacy_null_cron_timezone_as_unstamped():
+@pytest.mark.parametrize("timezone", [None, ""])
+def test_list_accepts_legacy_null_or_empty_cron_timezone_as_unstamped(timezone):
     store = InMemoryDocumentStore()
     seed_document_types(store)
     saved = save_workflow_definition(store, cron_workflow())
     payload = saved.model_dump(mode="json", by_alias=True)
-    payload["graph"]["nodes"]["cron"]["timezone"] = None
+    payload["graph"]["nodes"]["cron"]["timezone"] = timezone
     store.save_document("progena.state", f"workflow:{payload['id']}", payload)
     [definition] = list_workflow_definitions(store)
 
@@ -133,6 +134,19 @@ def test_list_accepts_legacy_null_cron_timezone_as_unstamped():
     assert isinstance(node, WorkflowNodeCron)
     assert node.timezone is None
     assert "timezone" not in definition.model_dump(mode="json")["graph"]["nodes"]["cron"]
+
+
+@pytest.mark.parametrize("timezone", [None, ""])
+def test_save_existing_null_or_empty_cron_timezone_omits_the_legacy_stamp(timezone):
+    store = InMemoryDocumentStore()
+    seed_document_types(store)
+    saved = save_workflow_definition(store, cron_workflow())
+    payload = saved.model_dump(mode="json", by_alias=True)
+    payload["graph"]["nodes"]["cron"]["timezone"] = timezone
+
+    updated = save_workflow_definition(store, payload)
+
+    assert "timezone" not in updated.model_dump(mode="json")["graph"]["nodes"]["cron"]
 
 
 def test_manual_cron_trigger_uses_the_preference_timezone_when_unstamped():

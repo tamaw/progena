@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from src.progena.cron import next_cron_time, resolve_timezone, timezone_name
@@ -13,15 +13,19 @@ logger = logging.getLogger(__name__)
 
 
 def parse_schedule_datetime(value: Any) -> datetime | None:
-    """Parse a datetime from supported schedule entry formats."""
+    """Parse a schedule timestamp as a UTC instant, treating naive input as UTC."""
     if isinstance(value, datetime):
-        return value
-    if isinstance(value, str):
+        parsed = value
+    elif isinstance(value, str):
         try:
-            return datetime.fromisoformat(value.replace("Z", "+00:00"))
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
         except ValueError:
             return None
-    return None
+    else:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
 
 
 class Scheduler:

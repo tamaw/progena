@@ -57,7 +57,14 @@ class LiveInstructionMiddleware(AgentMiddleware):
                 request = request.override(
                     system_message=append_system_message_context(
                         system_message,
-                        await user_clock_context(self._state_manager, has_shell=False),
+                        await user_clock_context(
+                            self._state_manager,
+                            has_shell=False,
+                            has_current_time=any(
+                                getattr(tool, "name", "") == "current_time"
+                                for tool in request.tools
+                            ),
+                        ),
                     )
                 )
         return await handler(request)

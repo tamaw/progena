@@ -165,7 +165,7 @@ def _coerce_stored_workflow_definition(
             if (
                 isinstance(node, dict)
                 and node.get("kind") == "cron"
-                and node.get("timezone") is None
+                and (node.get("timezone") is None or node.get("timezone") == "")
             ):
                 node.pop("timezone", None)
     return coerce_workflow_definition(payload)
@@ -263,13 +263,12 @@ def _stamp_cron_timezones(
     existing_nodes = existing_graph.get("nodes") if isinstance(existing_graph, Mapping) else {}
     if isinstance(nodes, dict):
         for node_id, node in nodes.items():
-            if (
-                isinstance(node, dict)
-                and node.get("kind") == "cron"
-                and not node.get("timezone")
-                and node_id not in existing_nodes
-            ):
-                node["timezone"] = preference_timezone
+            if not isinstance(node, dict) or node.get("kind") != "cron":
+                continue
+            if node.get("timezone") is None or node.get("timezone") == "":
+                node.pop("timezone", None)
+                if node_id not in existing_nodes:
+                    node["timezone"] = preference_timezone
     return stamped
 
 

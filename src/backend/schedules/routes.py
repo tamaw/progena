@@ -121,7 +121,7 @@ async def patch_widget(
                     )
                 )
                 entry["schedule_type"] = normalized_type
-                entry["schedule"] = current_expression
+                entry["schedule"] = scheduled_at or current_expression
                 if cron_expression is None:
                     entry.pop("cron_expression", None)
                 else:

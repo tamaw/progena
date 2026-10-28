@@ -757,6 +757,12 @@ describe('palette node creation', () => {
     expect(node.width).toBe(340);
     expect(node.height).toBe(160);
   });
+
+  it('leaves new cron nodes unstamped while preferences load', () => {
+    expect(createPaletteNode('cron', 'cron_1', { x: 1, y: 2 }, [], {}, 'Asia/Tokyo').data.timezone)
+      .toBe('Asia/Tokyo');
+    expect(createPaletteNode('cron', 'cron_2', { x: 1, y: 2 }, [], {}, '').data).not.toHaveProperty('timezone');
+  });
 });
 
 describe('unpack schema derivation', () => {

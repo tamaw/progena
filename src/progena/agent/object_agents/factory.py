@@ -614,7 +614,15 @@ def build_object_agent(
         ToolTimingMiddleware(),
     ]
     if state_manager is not None:
-        middleware.append(ClockContextMiddleware(state_manager, has_shell=workspace is not None))
+        middleware.append(
+            ClockContextMiddleware(
+                state_manager,
+                has_shell=workspace is not None,
+                has_current_time=any(
+                    getattr(tool, "name", "") == "current_time" for tool in selected_tools
+                ),
+            )
+        )
     if skill_dirs:
         middleware.append(
             SkillsMiddleware(

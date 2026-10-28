@@ -138,13 +138,11 @@ function defaultEventNode(documentTypes) {
 }
 
 function defaultCronNode(_documentTypes, preferenceTimezone) {
-  const tz = preferenceTimezone || (
-    typeof Intl !== 'undefined' ? Intl.DateTimeFormat().resolvedOptions().timeZone : 'UTC'
-  );
+  const tz = preferenceTimezone || '';
   return {
     title: 'Cron',
     expression: '*/5 * * * *',
-    timezone: tz,
+    ...(tz ? { timezone: tz } : {}),
     overlap: 'skip',
     outputSchema: {
       type: 'object',

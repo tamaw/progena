@@ -13,7 +13,9 @@ from langchain_core.messages.content import TextContentBlock
 from src.progena.cron import resolve_timezone, timezone_name
 
 
-async def user_clock_context(state_manager: Any, *, has_shell: bool) -> str:
+async def user_clock_context(
+    state_manager: Any, *, has_shell: bool, has_current_time: bool = False
+) -> str:
     """Return cache-stable user wall-clock guidance for one model call."""
     get_preferences = getattr(state_manager, "get_preferences_config", None)
     preferences = (
@@ -25,11 +27,20 @@ async def user_clock_context(state_manager: Any, *, has_shell: bool) -> str:
     # This changes only at the user's local midnight, preserving cached prompt
     # prefixes throughout their local day.
     today = datetime.now(UTC).astimezone(resolve_timezone(user_timezone))
-    exact_time = (
-        "For the exact current time, run `date -u` and convert it to the user's timezone."
-        if has_shell
-        else "For the exact current time, use the `current_time` tool and convert it to the user's timezone."
-    )
+    if has_shell:
+        exact_time = (
+            "For the exact current time, run `date -u` and convert it to the user's timezone."
+        )
+    elif has_current_time:
+        exact_time = (
+            "For the exact current time, use the `current_time` tool "
+            "and convert it to the user's timezone."
+        )
+    else:
+        exact_time = (
+            "No exact-time tool is available in this call; request a current UTC "
+            "timestamp from the caller if the task requires one."
+        )
     return (
         f"User timezone: {user_timezone}; today there is {today:%A %Y-%m-%d}. "
         f"Server clocks and shells use UTC. {exact_time}"
@@ -51,10 +62,13 @@ def append_system_message_context(message: SystemMessage, suffix: str) -> System
 class ClockContextMiddleware(AgentMiddleware):
     """Append fresh date-level user clock context to every model call."""
 
-    def __init__(self, state_manager: Any, *, has_shell: bool) -> None:
+    def __init__(
+        self, state_manager: Any, *, has_shell: bool, has_current_time: bool = False
+    ) -> None:
         super().__init__()
         self._state_manager = state_manager
         self._has_shell = has_shell
+        self._has_current_time = has_current_time
 
     async def awrap_model_call(
         self,
@@ -65,7 +79,11 @@ class ClockContextMiddleware(AgentMiddleware):
             request = request.override(
                 system_message=append_system_message_context(
                     request.system_message,
-                    await user_clock_context(self._state_manager, has_shell=self._has_shell),
+                    await user_clock_context(
+                        self._state_manager,
+                        has_shell=self._has_shell,
+                        has_current_time=self._has_current_time,
+                    ),
                 )
             )
         return await handler(request)

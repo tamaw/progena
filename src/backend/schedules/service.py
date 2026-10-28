@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import re
 from collections.abc import Callable
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 import httpx
@@ -22,7 +22,7 @@ import src.backend.settings.preferences_store as preferences_store
 import src.backend.storage.documents as storage_documents
 from src.progena.cron import timezone_name as valid_timezone_name
 from src.progena.documents.types import DOCUMENT_OPERATIONS
-from src.progena.schedules.engine import Scheduler
+from src.progena.schedules.engine import Scheduler, parse_schedule_datetime
 from src.progena.utils import utcnow
 
 logger = logging.getLogger(__name__)
@@ -43,7 +43,9 @@ def _schedule_item_to_info(
     next_run_dt = Scheduler().next_run_for_entry(raw, preference_timezone)
     paused = bool(raw.get("paused", not raw.get("enabled", item.enabled)))
     cron_expression = raw.get("cron_expression") or None
-    scheduled_at = raw.get("scheduled_at") or None
+    raw_scheduled_at = raw.get("scheduled_at")
+    parsed_scheduled_at = parse_schedule_datetime(raw_scheduled_at)
+    scheduled_at = parsed_scheduled_at.isoformat() if parsed_scheduled_at else None
     schedule_type = raw.get("schedule_type") or (
         "once" if scheduled_at else "cron" if cron_expression else None
     )
@@ -57,10 +59,15 @@ def _schedule_item_to_info(
         and next_run_dt is None
     ):
         last_run_status = "completed"
+    display_schedule = (
+        scheduled_at or item.schedule or ""
+        if schedule_type == "once"
+        else item.schedule or cron_expression or scheduled_at or ""
+    )
     return schedules_models.ScheduleItemInfo(
         id=item.id,
         name=item.name,
-        schedule=item.schedule or cron_expression or scheduled_at or "",
+        schedule=display_schedule,
         next_run=next_run_dt.isoformat() if next_run_dt else None,
         enabled=not paused,
         paused=paused,
@@ -372,12 +379,15 @@ async def _apply_document_event_widgets(typed: events_documents.TypedDocumentEve
 
 def _parse_once_datetime(expression: str) -> datetime:
     try:
-        return datetime.fromisoformat(expression.replace("Z", "+00:00"))
+        parsed = datetime.fromisoformat(expression.replace("Z", "+00:00"))
     except ValueError as exc:
         raise HTTPException(
             status_code=400,
             detail="One-off schedules must use an ISO datetime like 2026-03-15T14:30:00Z",
         ) from exc
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
 
 
 def _interval_to_cron(expression: str) -> str:
@@ -461,7 +471,7 @@ def _build_schedule_entry(
         "message": instruction,
         "instruction": instruction,
         "user_request": name,
-        "schedule": expression,
+        "schedule": scheduled_at or expression,
         "schedule_type": normalized_type,
         "timezone": valid_timezone_name(timezone_name, preference_timezone),
         "enabled": enabled,
