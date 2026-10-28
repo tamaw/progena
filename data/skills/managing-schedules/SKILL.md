@@ -30,7 +30,7 @@ The id is the object key, not a field inside the value:
     "message": "Say good morning to the user.",
     "cron_expression": "0 9 * * *",
     "scheduled_at": null,
-    "timezone": "Europe/London",
+    "timezone": "Australia/Melbourne",
     "paused": false,
     "user_request": "say good morning every day at 9am"
   }

@@ -9,12 +9,14 @@ model call: an edit applies to the next model call without a restart.
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime
 from typing import Any
 
 from langchain.agents.middleware.types import AgentMiddleware, ModelRequest, ModelResponse
 from langchain_core.messages import SystemMessage
 from langchain_core.messages.content import TextContentBlock
 
+from src.progena.cron import resolve_timezone, timezone_name
 from src.progena.instructions import render_runtime_instruction
 
 
@@ -40,7 +42,14 @@ class LiveInstructionMiddleware(AgentMiddleware):
         content = await self._state_manager.get_content_document("instruction", self._path)
         if content is None:
             raise RuntimeError(f"Instruction '{self._path}' is missing from the store")
-        return (await render_runtime_instruction(self._state_manager, content)).strip()
+        preferences = await self._state_manager.get_preferences_config()
+        user_timezone = timezone_name(preferences.get("timezone"))
+        now = datetime.now(UTC)
+        return (
+            f"{(await render_runtime_instruction(self._state_manager, content)).strip()}\n\n"
+            f"Current time: {now.astimezone(resolve_timezone(user_timezone)):%Y-%m-%d %H:%M %Z} "
+            f"({user_timezone}); UTC {now:%Y-%m-%d %H:%M UTC}."
+        )
 
     async def awrap_model_call(
         self,

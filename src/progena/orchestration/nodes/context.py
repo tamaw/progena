@@ -31,7 +31,6 @@ class HeartbeatContext:
     repo_scan_seconds: float
     worktree_dir: Path | None
     heartbeat_health_seconds: float
-    timezone: str
     reasoning_enabled: bool
     input_timeout: float = 1.0
     due_maintenance: set[str] = field(default_factory=set)

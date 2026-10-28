@@ -66,6 +66,20 @@ class TestScheduler:
         assert self.scheduler.next_run_for_entry({"cron_expression": "not a cron"}) is None
 
     @pytest.mark.parametrize(
+        ("reference", "expected"),
+        [
+            (datetime(2026, 1, 14, 12, tzinfo=UTC), datetime(2026, 1, 14, 22, tzinfo=UTC)),
+            (datetime(2026, 4, 5, 12, tzinfo=UTC), datetime(2026, 4, 5, 23, tzinfo=UTC)),
+        ],
+    )
+    def test_missing_timezone_uses_preference_across_dst(self, reference, expected):
+        next_run = self.scheduler.next_run_for_entry(
+            {"cron_expression": "0 9 * * *", "created_at": reference.isoformat()},
+            "Australia/Melbourne",
+        )
+        assert next_run == expected
+
+    @pytest.mark.parametrize(
         ("expression", "expected"),
         [("30 9 27 2 *", True), ("0 9 * * *", False)],
     )

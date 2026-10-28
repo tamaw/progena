@@ -43,7 +43,6 @@ async def test_a2a_completion_node_avoids_touching_the_loop_thread() -> None:
             repo_scan_seconds=3600.0,
             worktree_dir=None,
             heartbeat_health_seconds=30.0,
-            timezone="UTC",
             reasoning_enabled=False,
         )
     )

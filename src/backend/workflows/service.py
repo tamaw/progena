@@ -22,6 +22,7 @@ from src.backend.storage.documents import (
 )
 from src.backend.workflows.routine_runs import enqueue_routine_run
 from src.progena.artifacts.contracts import ArtifactValidationError, validate_artifact
+from src.progena.cron import timezone_name
 from src.progena.documents.content import content_document_key
 from src.progena.documents.types import DocumentType
 from src.progena.instructions.templates import (
@@ -239,6 +240,29 @@ def _routine_loader_from_store(store: BackendDocumentStore) -> RoutineLoader:
     return load
 
 
+def _stamp_cron_timezones(
+    payload: Mapping[str, Any],
+    preference_timezone: str,
+    existing: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Copy the preference only into newly created cron triggers without a timezone."""
+    stamped = copy.deepcopy(dict(payload))
+    graph = stamped.get("graph")
+    nodes = graph.get("nodes") if isinstance(graph, dict) else None
+    existing_graph = existing.get("graph") if isinstance(existing, Mapping) else None
+    existing_nodes = existing_graph.get("nodes") if isinstance(existing_graph, Mapping) else {}
+    if isinstance(nodes, dict):
+        for node_id, node in nodes.items():
+            if (
+                isinstance(node, dict)
+                and node.get("kind") == "cron"
+                and not node.get("timezone")
+                and node_id not in existing_nodes
+            ):
+                node["timezone"] = preference_timezone
+    return stamped
+
+
 def save_workflow_definition(
     store: BackendDocumentStore,
     payload: Mapping[str, Any],
@@ -248,8 +272,19 @@ def save_workflow_definition(
 
     if instruction_loader is None:
         instruction_loader = _instruction_loader_from_store(store)
+    existing_document = store.get_document(
+        PROGENA_STATE_PREFIX,
+        workflow_definition_key(str(payload.get("id") or "")),
+        None,
+    )
+    existing = existing_document.payload if existing_document is not None else None
+    preferences_document = store.get_document(PROGENA_STATE_PREFIX, "preferences", {})
+    preferences = preferences_document.payload if preferences_document is not None else {}
+    preference_timezone = timezone_name(
+        preferences.get("timezone") if isinstance(preferences, dict) else None
+    )
     typed = derive_workflow_port_schemas(
-        payload,
+        _stamp_cron_timezones(payload, preference_timezone, existing),
         list_document_types(store),
         instruction_loader=instruction_loader,
         routine_loader=_routine_loader_from_store(store),

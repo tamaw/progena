@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from src.progena.cron import timezone_name
 from src.progena.schedules.engine import Scheduler
 from src.progena.schedules.models import (
     ScheduleRunRecord,
@@ -34,7 +35,11 @@ async def enqueue_due_schedule_entries(
     """Enqueue due scheduled work and persist schedule state updates."""
     scheduler = Scheduler()
     entries = await state_manager.get_schedule()
-    due_items = scheduler.get_due_items(_schedule_entries_to_dicts(entries), current_time)
+    preferences = await state_manager.get_preferences_config()
+    preference_timezone = timezone_name(preferences.get("timezone"))
+    due_items = scheduler.get_due_items(
+        _schedule_entries_to_dicts(entries), current_time, preference_timezone
+    )
     if not due_items:
         return 0
 
@@ -104,7 +109,7 @@ async def enqueue_due_schedule_entries(
                     "updated_at": now.isoformat(),
                 }
             )
-        next_run = scheduler.next_run_for_entry(next_entry)
+        next_run = scheduler.next_run_for_entry(next_entry, preference_timezone)
         next_entry["next_run"] = next_run.isoformat() if next_run else None
         next_entry["next_run_at"] = next_run.isoformat() if next_run else None
         updates = {

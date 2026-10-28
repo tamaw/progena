@@ -73,9 +73,6 @@ services:
     environment:
       <<: [*progena-llm-env, *progena-database-env]
       AGENT_NAME: progena
-      PROGENA_TIMEZONE: ${PROGENA_TIMEZONE:-UTC}
-      PROGENA_WORKTREE_DIR: /app/repos
-      TZ: ${PROGENA_TIMEZONE:-UTC}
       # Bind the runtime HTTP server on all interfaces so other containers (backend) can connect.
       PROGENA_HTTP_HOST: 0.0.0.0
       GH_TOKEN: ${GH_TOKEN:-}

@@ -15,6 +15,7 @@ import src.backend.monitoring.state as monitoring_state
 import src.backend.schedules.models as schedules_models
 import src.backend.schedules.service as schedules_service
 import src.backend.settings.mcp as settings_mcp
+import src.backend.settings.preferences_store as preferences_store
 import src.backend.storage.documents as storage_documents
 import src.backend.workflows.runtime as workflows_runtime
 from src.progena.schedules.engine import Scheduler
@@ -132,7 +133,9 @@ async def patch_widget(
             if body.timezone is not None:
                 entry["timezone"] = body.timezone
             entry["updated_at"] = utcnow().isoformat()
-            next_run = Scheduler().next_run_for_entry(entry)
+            next_run = Scheduler().next_run_for_entry(
+                entry, preferences_store.load_preferences().get("timezone", "UTC")
+            )
             entry["next_run"] = next_run.isoformat() if next_run else None
             entry["next_run_at"] = next_run.isoformat() if next_run else None
 
@@ -407,6 +410,7 @@ async def create_schedule(
         schedule_type=body.schedule_type,
         expression=body.expression,
         timezone_name=body.timezone,
+        preference_timezone=preferences_store.load_preferences().get("timezone", "UTC"),
         enabled=body.enabled,
         created_at=created_at,
     )
@@ -519,7 +523,9 @@ async def retrigger_schedule(
         elif updated.get("cron_expression"):
             updated["schedule_type"] = "cron"
             updated["schedule"] = updated["cron_expression"]
-        next_run = Scheduler().next_run_for_entry(updated)
+        next_run = Scheduler().next_run_for_entry(
+            updated, preferences_store.load_preferences().get("timezone", "UTC")
+        )
         updated["next_run"] = next_run.isoformat() if next_run else None
         updated["next_run_at"] = next_run.isoformat() if next_run else None
         state_reader.document_store.save_document(

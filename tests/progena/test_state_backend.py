@@ -654,6 +654,9 @@ class _FakeWorkflowStateManager:
         assert kind == "instruction"
         return sorted(self.prompts.items())
 
+    async def get_preferences_config(self) -> dict[str, str]:
+        return {"timezone": "Australia/Melbourne"}
+
     async def list_routine_graphs(self) -> list[dict[str, Any]]:
         return []
 
@@ -832,11 +835,17 @@ async def test_routine_aedit_and_adelete_round_trip():
 
 
 class _FakeScheduleStateManager:
-    def __init__(self, entries: list[ScheduleEntry] | None = None) -> None:
+    def __init__(
+        self, entries: list[ScheduleEntry] | None = None, timezone: str = "Australia/Melbourne"
+    ) -> None:
         self.entries: dict[str, ScheduleEntry] = {e.id: e for e in entries or []}
+        self.timezone = timezone
 
     async def get_schedule(self) -> dict[str, ScheduleEntry]:
         return dict(self.entries)
+
+    async def get_preferences_config(self) -> dict[str, str]:
+        return {"timezone": self.timezone}
 
     async def save_schedule(self, schedule: dict[str, ScheduleEntry]) -> None:
         self.entries = dict(schedule)
@@ -949,6 +958,7 @@ async def test_schedule_awrite_persists_new_entry():
     assert result.error is None
     assert sm.entries["sched_9"].id == "sched_9"
     assert sm.entries["sched_9"].message == "new task"
+    assert sm.entries["sched_9"].model_extra["timezone"] == "Australia/Melbourne"
 
 
 async def test_schedule_awrite_invalid_does_not_persist():

@@ -29,8 +29,7 @@ def setup_logging(config: Any, agent_name: str) -> None:
             fmt="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
             datefmt="%Y-%m-%d %H:%M:%S",
         )
-        # Log timestamps are UTC regardless of the container's TZ, which stays
-        # local for agent shells.
+        # Log timestamps are UTC.
         formatter.converter = time.gmtime
 
     root_logger = logging.getLogger()

@@ -83,7 +83,7 @@ class WorkflowNodeCron(BaseModel):
     kind: Literal["cron"] = "cron"
     title: str = "Cron"
     expression: str = Field(min_length=1)
-    timezone: str = Field(min_length=1)
+    timezone: str | None = None
     overlap: WorkflowCronOverlap = "skip"
     output_schema: dict[str, Any] = Field(default_factory=lambda: copy.deepcopy(CRON_OUTPUT_SCHEMA))
 

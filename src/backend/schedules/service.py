@@ -18,8 +18,9 @@ import src.backend.events.stream as events_stream
 import src.backend.monitoring.state as monitoring_state
 import src.backend.runtime_liveness as runtime_liveness
 import src.backend.schedules.models as schedules_models
+import src.backend.settings.preferences_store as preferences_store
 import src.backend.storage.documents as storage_documents
-from src.progena.cron import default_timezone_name
+from src.progena.cron import timezone_name as valid_timezone_name
 from src.progena.documents.types import DOCUMENT_OPERATIONS
 from src.progena.schedules.engine import Scheduler
 from src.progena.utils import utcnow
@@ -28,7 +29,9 @@ logger = logging.getLogger(__name__)
 
 
 def _schedule_item_to_info(
-    item, runs: list[schedules_models.ScheduleRunInfo] | None = None
+    item,
+    runs: list[schedules_models.ScheduleRunInfo] | None = None,
+    preference_timezone: str = "UTC",
 ) -> schedules_models.ScheduleItemInfo:
     """Build a schedule response with a freshly computed next_run.
 
@@ -37,7 +40,7 @@ def _schedule_item_to_info(
     runtime uses so the UI shows the actual next fire time.
     """
     raw = item.raw if isinstance(item.raw, dict) else {}
-    next_run_dt = Scheduler().next_run_for_entry(raw)
+    next_run_dt = Scheduler().next_run_for_entry(raw, preference_timezone)
     paused = bool(raw.get("paused", not raw.get("enabled", item.enabled)))
     cron_expression = raw.get("cron_expression") or None
     scheduled_at = raw.get("scheduled_at") or None
@@ -444,6 +447,7 @@ def _build_schedule_entry(
     schedule_type: str,
     expression: str,
     timezone_name: str | None,
+    preference_timezone: str,
     enabled: bool,
     created_at: str,
 ) -> dict:
@@ -459,7 +463,7 @@ def _build_schedule_entry(
         "user_request": name,
         "schedule": expression,
         "schedule_type": normalized_type,
-        "timezone": timezone_name or default_timezone_name(),
+        "timezone": valid_timezone_name(timezone_name, preference_timezone),
         "enabled": enabled,
         # The runtime scheduler only honours ``paused``; keep it in sync with the
         # UI's ``enabled`` flag so a paused schedule actually stops firing.
@@ -473,7 +477,7 @@ def _build_schedule_entry(
         entry["cron_expression"] = cron_expression
     if scheduled_at is not None:
         entry["scheduled_at"] = scheduled_at
-    next_run = Scheduler().next_run_for_entry(entry)
+    next_run = Scheduler().next_run_for_entry(entry, preference_timezone)
     if next_run:
         entry["next_run"] = next_run.isoformat()
         entry["next_run_at"] = next_run.isoformat()
@@ -580,8 +584,9 @@ def broadcast_schedule_snapshot(
     """
     state_reader = monitoring_state.get_state_reader()
     runs = _schedule_runs_by_schedule(state_reader)
+    preference_timezone = preferences_store.load_preferences().get("timezone", "UTC")
     items = [
-        _schedule_item_to_info(item, runs.get(item.id)).model_dump(mode="json")
+        _schedule_item_to_info(item, runs.get(item.id), preference_timezone).model_dump(mode="json")
         for item in state_reader.get_schedule()
     ]
     return events_stream.broadcast_ui_event(

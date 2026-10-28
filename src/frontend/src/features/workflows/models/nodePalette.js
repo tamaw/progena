@@ -137,8 +137,10 @@ function defaultEventNode(documentTypes) {
   };
 }
 
-function defaultCronNode() {
-  const tz = typeof Intl !== 'undefined' ? Intl.DateTimeFormat().resolvedOptions().timeZone : 'UTC';
+function defaultCronNode(_documentTypes, preferenceTimezone) {
+  const tz = preferenceTimezone || (
+    typeof Intl !== 'undefined' ? Intl.DateTimeFormat().resolvedOptions().timeZone : 'UTC'
+  );
   return {
     title: 'Cron',
     expression: '*/5 * * * *',

@@ -49,15 +49,16 @@ async def test_edited_instruction_replaces_the_boot_text_and_keeps_appended_sect
             {"type": "text", "text": "\n\nSkills section."},
         ]
     )
-
-    assert await _system_text_sent(middleware, system) == (
-        "You are Progena.\n\nBase agent prompt.\n\nSkills section."
-    )
+    initial = await _system_text_sent(middleware, system)
+    assert initial.startswith("You are Progena.\n\nCurrent time: ")
+    assert "(UTC); UTC " in initial
+    assert initial.endswith("\n\nBase agent prompt.\n\nSkills section.")
 
     store.content = _instruction("You are Progena, edited.")
-    assert await _system_text_sent(middleware, system) == (
-        "You are Progena, edited.\n\nBase agent prompt.\n\nSkills section."
-    )
+    edited = await _system_text_sent(middleware, system)
+    assert edited.startswith("You are Progena, edited.\n\nCurrent time: ")
+    assert "(UTC); UTC " in edited
+    assert edited.endswith("\n\nBase agent prompt.\n\nSkills section.")
 
 
 async def test_renamed_agent_reaches_the_next_model_call():
@@ -65,7 +66,8 @@ async def test_renamed_agent_reaches_the_next_model_call():
     middleware = LiveInstructionMiddleware(store, "progena/genesis.md", "You are Progena.")
     system = SystemMessage(content_blocks=[{"type": "text", "text": "You are Progena.\n\nBase."}])
 
-    assert await _system_text_sent(middleware, system) == "You are Progena.\n\nBase."
-
-    store.preferences = {"agent_name": "Ada"}
-    assert await _system_text_sent(middleware, system) == "You are Ada.\n\nBase."
+    store.preferences = {"agent_name": "Ada", "timezone": "Australia/Melbourne"}
+    rendered = await _system_text_sent(middleware, system)
+    assert rendered.startswith("You are Ada.\n\nCurrent time: ")
+    assert "(Australia/Melbourne); UTC " in rendered
+    assert rendered.endswith("\n\nBase.")

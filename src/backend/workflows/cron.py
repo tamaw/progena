@@ -30,8 +30,12 @@ from urllib.parse import quote
 
 from pydantic import ValidationError
 
-from src.backend.storage.documents import BACKEND_STATE_PREFIX, BackendDocumentStore
-from src.progena.cron import latest_cron_time, next_cron_time
+from src.backend.storage.documents import (
+    BACKEND_STATE_PREFIX,
+    PROGENA_STATE_PREFIX,
+    BackendDocumentStore,
+)
+from src.progena.cron import latest_cron_time, next_cron_time, timezone_name
 from src.progena.schedules.engine import parse_schedule_datetime
 from src.progena.utils import utcnow
 from src.progena.workflows.constants import WorkflowRunSource
@@ -62,29 +66,34 @@ def workflow_cron_state_key(workflow_id: str, node_id: str) -> str:
 
 
 def _next_state(
-    state: Any, node: WorkflowNodeCron, now: datetime, active: bool
+    state: Any,
+    node: WorkflowNodeCron,
+    now: datetime,
+    active: bool,
+    preference_timezone: str,
 ) -> tuple[dict[str, Any], datetime | None]:
     """The node's state after a tick at ``now``, and the due time to fire (if any).
 
     A new schedule, or a workflow coming back from paused/disabled, counts
     from now: due times inside the inactive period never fire.
     """
+    effective_timezone = timezone_name(node.timezone, preference_timezone)
     anchor = None
     if (
         isinstance(state, dict)
         and state.get("expression") == node.expression
-        and state.get("timezone") == node.timezone
+        and state.get("timezone") == effective_timezone
         and (state.get("active") is True or not active)
     ):
         anchor = parse_schedule_datetime(state.get("last_due"))
     last_due = anchor or now
     fire_at = None
-    if anchor is not None and next_cron_time(node.expression, anchor, node.timezone) <= now:
-        last_due = latest_cron_time(node.expression, now, node.timezone)
+    if anchor is not None and next_cron_time(node.expression, anchor, effective_timezone) <= now:
+        last_due = latest_cron_time(node.expression, now, effective_timezone)
         fire_at = last_due if active else None
     new_state = {
         "expression": node.expression,
-        "timezone": node.timezone,
+        "timezone": effective_timezone,
         "active": active,
         "last_due": last_due.isoformat(),
     }
@@ -171,6 +180,11 @@ class WorkflowCronClock:
 
         now = self._now()
         store = self._store_getter()
+        preferences_document = store.get_document(PROGENA_STATE_PREFIX, "preferences", {})
+        preferences = preferences_document.payload if preferences_document is not None else {}
+        preference_timezone = timezone_name(
+            preferences.get("timezone") if isinstance(preferences, dict) else None
+        )
         states = {
             key: document.payload
             for key, document in store.list_documents(
@@ -188,7 +202,15 @@ class WorkflowCronClock:
                 seen.add(key)
                 try:
                     due = await self._advance(
-                        store, key, states.get(key), definition, node_id, node, now, active
+                        store,
+                        key,
+                        states.get(key),
+                        definition,
+                        node_id,
+                        node,
+                        now,
+                        active,
+                        preference_timezone,
                     )
                 except Exception:
                     logger.exception(
@@ -211,8 +233,9 @@ class WorkflowCronClock:
         node: WorkflowNodeCron,
         now: datetime,
         active: bool,
+        preference_timezone: str,
     ) -> datetime | None:
-        new_state, fire_at = _next_state(state, node, now, active)
+        new_state, fire_at = _next_state(state, node, now, active, preference_timezone)
         if new_state != state:
             # Claim atomically against the stored state, which another backend
             # may have advanced since ``state`` was read: only the claimant fires.
@@ -221,7 +244,9 @@ class WorkflowCronClock:
             claimed: list[datetime | None] = [None]
 
             def claim(current: Any) -> dict[str, Any]:
-                claimed_state, claimed[0] = _next_state(current, node, now, active)
+                claimed_state, claimed[0] = _next_state(
+                    current, node, now, active, preference_timezone
+                )
                 return claimed_state
 
             new_state = store.mutate_document(BACKEND_STATE_PREFIX, key, claim)
@@ -229,7 +254,12 @@ class WorkflowCronClock:
         if fire_at is not None:
             await self._executor_getter().trigger_workflow(
                 definition.id,
-                build_cron_trigger_output(node, scheduled_for=fire_at, fired_at=now),
+                build_cron_trigger_output(
+                    node,
+                    scheduled_for=fire_at,
+                    fired_at=now,
+                    preference_timezone=preference_timezone,
+                ),
                 source="cron",
                 trigger_node_id=node_id,
             )
@@ -237,4 +267,8 @@ class WorkflowCronClock:
             return None
         last_due = parse_schedule_datetime(new_state["last_due"])
         assert last_due is not None
-        return next_cron_time(node.expression, last_due, node.timezone)
+        return next_cron_time(
+            node.expression,
+            last_due,
+            timezone_name(node.timezone, preference_timezone),
+        )

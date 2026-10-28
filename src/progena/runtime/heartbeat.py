@@ -132,7 +132,6 @@ class ProgenaLoop:
             heartbeat_health_seconds=float(
                 getattr(self.config.runtime, "checkpoint_interval_seconds", 30.0)
             ),
-            timezone=getattr(self.config.runtime, "timezone", "UTC"),
             reasoning_enabled=bool(
                 getattr(getattr(self.config, "llm", None), "reasoning_enabled", False)
             ),

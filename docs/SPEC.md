@@ -327,6 +327,10 @@ falls back to the first event or cron trigger for existing workflows.
 - Due work is re-enqueued through the same input path as user messages.
 - Runtime state is updated after scheduled work is processed.
 
+- Stored timestamps, APIs, logs, agent shells, and containers use UTC; the browser renders instants in its own timezone.
+- User preferences provide the wall-clock timezone for “tomorrow”, conversational time, and unstamped schedules. It defaults to `UTC`.
+- Each new schedule entry and workflow cron trigger stamps that preference as its IANA timezone. Existing entries without one fall back to the current preference, then UTC.
+
 The system persists runtime conversation/checkpoint state, state documents, and
 backend-owned metadata in Postgres. Operational logs are plain rotating files
 in the shared `logs/` directory (`/app/logs` in containers): each service writes

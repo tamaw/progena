@@ -6,7 +6,7 @@ from collections.abc import Mapping
 from datetime import datetime
 from typing import Any
 
-from src.progena.cron import resolve_timezone
+from src.progena.cron import resolve_timezone, timezone_name
 from src.progena.documents.types import DocumentOperation, DocumentType
 from src.progena.workflows.models import WorkflowNodeCron
 from src.progena.workflows.values import json_equal
@@ -68,13 +68,18 @@ def build_document_read_output(
 
 
 def build_cron_trigger_output(
-    node: WorkflowNodeCron, *, scheduled_for: datetime, fired_at: datetime
+    node: WorkflowNodeCron,
+    *,
+    scheduled_for: datetime,
+    fired_at: datetime,
+    preference_timezone: str = "UTC",
 ) -> dict[str, Any]:
     """The output object a cron node emits for one due time."""
 
-    zone = resolve_timezone(node.timezone)
+    effective_timezone = timezone_name(node.timezone, preference_timezone)
+    zone = resolve_timezone(effective_timezone)
     return {
         "scheduled_for": scheduled_for.astimezone(zone).isoformat(),
         "fired_at": fired_at.astimezone(zone).isoformat(),
-        "timezone": node.timezone,
+        "timezone": effective_timezone,
     }
