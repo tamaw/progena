@@ -2,7 +2,7 @@
 State Reader Module.
 
 Reads state documents from the shared Postgres document store and operational
-logs from the configured log store. The backend uses this as a read/write
+logs from the configured log directory. The backend uses this as a read/write
 adapter layer; Progena remains the owner of runtime state semantics.
 
 The virtual `/config/*.json` names are database-backed views, not files under the
@@ -22,7 +22,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 import src.backend.lifecycle.state as lifecycle_state
 from src.backend.logging_setup import get_log_dir
@@ -63,14 +63,6 @@ PLAIN_LOG_LINE_RE = re.compile(
     r"\s+-\s+(?P<logger>.*?)\s+-\s+(?P<level>[A-Z]+)\s+-\s+(?P<message>.*)$"
 )
 FILENAME_TIMESTAMP_RE = re.compile(r"(?P<timestamp>\d{8}_\d{6})")
-
-
-def _iso_now() -> str:
-    return datetime.now(UTC).isoformat().replace("+00:00", "Z")
-
-
-def _normalize_name(value: str) -> str:
-    return re.sub(r"[^a-z0-9]+", "", value.lower())
 
 
 def _parse_timestamp(value: Any) -> datetime | None:
@@ -375,18 +367,11 @@ class EventWidgetItem:
     last_run_status: str
     summary: str
     last_payload: dict[str, Any] | None
-    logs: list[dict[str, Any]]
     updated_at: str | None
     raw: dict[str, Any]
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> EventWidgetItem:
-        raw_logs = data.get("logs")
-        logs = (
-            [entry for entry in raw_logs if isinstance(entry, dict)]
-            if isinstance(raw_logs, list)
-            else []
-        )
         last_payload = data.get("last_payload")
         return cls(
             id=str(data.get("id", "")),
@@ -398,7 +383,6 @@ class EventWidgetItem:
             last_run_status=str(data.get("last_run_status") or "idle"),
             summary=str(data.get("summary") or data.get("event_type") or ""),
             last_payload=last_payload if isinstance(last_payload, dict) else None,
-            logs=logs,
             updated_at=data.get("updated_at") or data.get("created_at"),
             raw=data,
         )
@@ -512,8 +496,6 @@ class StateSnapshot:
 
 class StateReader:
     """Reads state, session, config, and log data from the repo runtime dirs."""
-
-    LOG_SUFFIXES = {".jsonl", ".log", ".txt", ".stderr", ".stdout"}
 
     def __init__(
         self,
@@ -781,12 +763,6 @@ class StateReader:
         data = document.payload if document is not None else {}
         return data if isinstance(data, dict) else {}
 
-    def get_thread_messages(self, thread_id: str) -> list[Any]:
-        if self.document_store is None:
-            return []
-        snapshot = self.document_store.get_checkpoint_thread_snapshot(thread_id)
-        return snapshot.messages if snapshot is not None else []
-
     def get_sessions_summary(self) -> SessionSummary:
         document = self.document_store.get_document(BACKEND_STATE_PREFIX, "sessions", [])
         data = document.payload if document is not None else []
@@ -828,28 +804,6 @@ class StateReader:
                 return "running"
             return candidate
         return "running" if is_running else "offline"
-
-    def _summary_from_logs(self, logs: list[dict[str, Any]], fallback: str) -> str:
-        if logs:
-            return str(logs[0].get("message") or fallback)
-        return fallback
-
-    def _normalize_widget_logs(
-        self, entries: list[dict[str, Any]], limit: int = 20
-    ) -> list[dict[str, Any]]:
-        normalized: list[dict[str, Any]] = []
-        for entry in entries[:limit]:
-            normalized.append(
-                {
-                    "time": entry.get("time") or entry.get("timestamp"),
-                    "timestamp": entry.get("timestamp") or entry.get("time"),
-                    "level": entry.get("level", "info"),
-                    "source": entry.get("source") or entry.get("path") or "system",
-                    "message": entry.get("message") or "",
-                    "path": entry.get("path"),
-                }
-            )
-        return normalized
 
     def get_loops(self, health: HealthInfo) -> list[LoopInfo]:
         if not health.is_running():
@@ -1117,24 +1071,6 @@ class StateReader:
         )
 
     def get_log_sources(self) -> list[dict[str, Any]]:
-        if self.document_store is not None:
-            options = []
-            for item in self.document_store.get_log_sources():
-                source = str(item.get("source") or "system")
-                options.append(
-                    {
-                        "id": f"{source}.jsonl",
-                        "label": source,
-                        "path": f"{source}.jsonl",
-                        "group": "postgres",
-                        "source": source,
-                        "updated_at": item.get("updated_at"),
-                        "count": item.get("count", 0),
-                    }
-                )
-            options.sort(key=lambda item: str(item["label"]).lower())
-            return [{"id": "postgres", "label": "postgres", "options": options}] if options else []
-
         grouped: dict[str, list[dict[str, Any]]] = {}
 
         for path in self._iter_log_files():
@@ -1368,43 +1304,6 @@ class StateReader:
         if search and search_mode == "regex":
             regex = re.compile(search, re.IGNORECASE)
 
-        if self.document_store is not None:
-            db_source = source
-            if not db_source and file_path:
-                db_source = Path(file_path).stem
-            raw_entries = self.document_store.query_logs(level=level, source=db_source, limit=0)
-            for raw_entry in raw_entries:
-                entry = self._normalize_db_log_entry(raw_entry)
-                entry_timestamp = _parse_timestamp(entry.get("timestamp"))
-                if start_boundary or end_boundary:
-                    if entry_timestamp is None:
-                        continue
-                    if entry_timestamp.tzinfo is None:
-                        entry_timestamp = entry_timestamp.replace(tzinfo=UTC)
-                    else:
-                        entry_timestamp = entry_timestamp.astimezone(UTC)
-                    if start_boundary and entry_timestamp < start_boundary:
-                        continue
-                    if end_boundary and entry_timestamp > end_boundary:
-                        continue
-                if folder_lc and entry["group"].lower() != folder_lc:
-                    continue
-                if file_path_lc and entry["relative_path"].lower() != file_path_lc:
-                    continue
-                if source_lc and not self._entry_matches_source(entry, source_lc):
-                    continue
-                if search:
-                    searchable = self._entry_search_text(entry)
-                    if regex and not regex.search(searchable):
-                        continue
-                    if not regex and search_lc and search_lc not in searchable:
-                        continue
-                entries.append(entry)
-            entries.sort(
-                key=lambda item: self._sort_key_for_timestamp(item.get("timestamp")), reverse=True
-            )
-            return entries
-
         candidate_files = self._candidate_log_files(
             source=source, folder=folder, file_path=file_path
         )
@@ -1448,25 +1347,6 @@ class StateReader:
             key=lambda item: self._sort_key_for_timestamp(item.get("timestamp")), reverse=True
         )
         return entries
-
-    def _normalize_db_log_entry(self, entry: dict[str, Any]) -> dict[str, Any]:
-        source = str(entry.get("source") or "system")
-        relative_path = str(entry.get("relative_path") or f"{source}.jsonl")
-        group = str(entry.get("group") or "postgres")
-        timestamp = str(entry.get("timestamp") or entry.get("time") or "")
-        normalized = {
-            "timestamp": timestamp,
-            "time": str(entry.get("time") or timestamp),
-            "level": _normalize_log_level(entry.get("level", "info")),
-            "source": source,
-            "message": str(entry.get("message") or ""),
-            "path": relative_path,
-            "relative_path": relative_path,
-            "group": group,
-            "data": entry.get("payload") if "payload" in entry else entry.get("data"),
-        }
-        normalized["id"] = str(entry.get("id") or _entry_identity(normalized))
-        return normalized
 
     def query_logs(
         self,
@@ -1518,41 +1398,6 @@ class StateReader:
             "cursor_found": cursor_found,
         }
 
-    def get_logs(
-        self,
-        level: str | None = None,
-        search: str | None = None,
-        limit: int = 500,
-        source: str | None = None,
-    ) -> list[dict[str, Any]]:
-        logs = self.query_logs(level=level, search=search, limit=limit, source=source)
-        return cast(list[dict[str, Any]], logs["entries"])
-
-    def get_logs_for_widget(self, widget_name: str, limit: int = 40) -> list[dict[str, Any]]:
-        normalized = _normalize_name(widget_name)
-        if not normalized:
-            return []
-        if self.document_store is not None:
-            entries = self.query_logs(search=widget_name, limit=limit)["entries"]
-            if entries:
-                return cast(list[dict[str, Any]], entries)
-
-        matches: list[dict[str, Any]] = []
-        for path in self._iter_log_files():
-            relative = self._relative_log_path(path)
-            if normalized not in _normalize_name(relative):
-                continue
-            lines = self._read_text_lines(path, limit=limit)
-            source = self._path_source(path)
-            for line in lines:
-                entry = self._line_to_entry(line, source, path)
-                if entry:
-                    matches.append(entry)
-        matches.sort(
-            key=lambda item: self._sort_key_for_timestamp(item.get("timestamp")), reverse=True
-        )
-        return matches[:limit]
-
     def get_widgets(self) -> list[dict[str, Any]]:
         health = self.get_health()
         agents, tools = self.get_registry()
@@ -1563,11 +1408,8 @@ class StateReader:
         for agent in agents:
             if not agent.enabled:
                 continue
-            logs = self._normalize_widget_logs(self.get_logs_for_widget(agent.name))
             status = self._status_with_health(agent.status, health.is_running())
-            summary = agent.status_message or self._summary_from_logs(
-                logs, agent.description or f"{agent.name} is {status}"
-            )
+            summary = agent.status_message or agent.description or f"{agent.name} is {status}"
             widgets.append(
                 {
                     "id": f"agent:{agent.name}",
@@ -1580,7 +1422,6 @@ class StateReader:
                     "summary": summary,
                     "transport": agent.transport,
                     "current_thread_id": health.thread_id,
-                    "logs": logs,
                     "updated_at": agent.updated_at or health.last_active,
                 }
             )
@@ -1588,28 +1429,15 @@ class StateReader:
         tools_by_server = self._mcp_tools_by_server()
         server_status = self._mcp_server_status()
         for tool in tools:
-            logs = self._normalize_widget_logs(self.get_logs_for_widget(tool.name))
             status = self._status_with_health(tool.status, health.is_running())
             status_message: str | None = None
             # A connected-but-failed server (e.g. auth error) reports its reason
-            # via the runtime status map; surface it as an error state + activity.
+            # via the runtime status map; surface it as an error state + summary.
             outcome = server_status.get(tool.name)
             if tool.enabled and isinstance(outcome, dict) and outcome.get("status") == "error":
                 status = "error"
                 status_message = str(outcome.get("error") or "Discovery failed")
-                logs = self._normalize_widget_logs(
-                    [
-                        {
-                            "time": outcome.get("checked_at"),
-                            "timestamp": outcome.get("checked_at"),
-                            "level": "error",
-                            "source": "mcp_discovery",
-                            "message": f"Discovery failed: {status_message}",
-                        },
-                        *logs,
-                    ]
-                )
-            summary = self._summary_from_logs(logs, tool.description or f"MCP {tool.name}")
+            summary = status_message or tool.description or f"MCP {tool.name}"
             widgets.append(
                 {
                     "id": f"mcp:{tool.name}",
@@ -1626,7 +1454,6 @@ class StateReader:
                     "url": tool.url,
                     "tools": tools_by_server.get(tool.name, []),
                     "current_thread_id": health.thread_id,
-                    "logs": logs,
                     "updated_at": health.last_active,
                 }
             )
@@ -1671,9 +1498,6 @@ class StateReader:
                     "last_run_at": schedule_item.raw.get("last_run"),
                     "last_run_status": schedule_item.raw.get("last_run_status", "idle"),
                     "timezone": schedule_item.raw.get("timezone", "UTC"),
-                    "logs": self._normalize_widget_logs(
-                        self.get_logs_for_widget(schedule_item.id, limit=20), limit=20
-                    ),
                     "updated_at": schedule_item.raw.get("updated_at")
                     or schedule_item.raw.get("created_at"),
                 }
@@ -1695,7 +1519,6 @@ class StateReader:
                     "last_triggered_at": event_widget.last_triggered_at,
                     "last_run_status": event_widget.last_run_status,
                     "last_payload": event_widget.last_payload,
-                    "logs": self._normalize_widget_logs(event_widget.logs, limit=20),
                     "updated_at": event_widget.updated_at,
                 }
             )

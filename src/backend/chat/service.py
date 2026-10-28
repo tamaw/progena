@@ -44,40 +44,6 @@ _ARTIFACT_STRING_LIMIT = 1024
 _ARTIFACT_KEYS = ("summary", "count", "kind", "status")
 
 
-def _tool_call_audit_index(store: BackendDocumentStore | None) -> dict[str, dict[str, Any]]:
-    """Read one bounded audit-log page and index normal tool calls by id."""
-    if store is None:
-        return {}
-    query_logs = getattr(store, "query_logs", None)
-    if not callable(query_logs):
-        return {}
-    try:
-        rows = query_logs(source="tool_calls", limit=500)
-    except Exception:  # nosec B110 - old/test stores may not expose audit logs
-        return {}
-    if not isinstance(rows, list):
-        return {}
-    indexed: dict[str, dict[str, Any]] = {}
-    for row in rows:
-        if not isinstance(row, dict):
-            continue
-        raw_payload = row.get("payload")
-        if isinstance(raw_payload, dict):
-            payload = dict(raw_payload)
-            for key in ("tool_id", "duration_ms"):
-                if key not in payload and key in row:
-                    payload[key] = row[key]
-        else:
-            payload = row
-        tool_id = payload.get("tool_id")
-        if tool_id is None:
-            tool_id = row.get("tool_id")
-        if tool_id is None:
-            continue
-        indexed[str(tool_id)] = payload
-    return indexed
-
-
 def _artifact_mapping(artifact: Any) -> dict[str, Any] | None:
     if isinstance(artifact, dict):
         return artifact
@@ -116,10 +82,6 @@ def _curated_tool_artifact(artifact: Any) -> dict[str, Any] | None:
     except (TypeError, ValueError):
         return None
     return projection
-
-
-SCHEDULED_TASK_PREFIX = "[Scheduled Task]"
-BACKEND_ALERT_PREFIX = "A backend alert was just created for the user."
 
 
 def _now_iso() -> str:
@@ -238,10 +200,6 @@ class ChatPatchRequest(BaseModel):
     title: str | None = None
     pinned: bool | None = None
     archived: bool | None = None
-
-
-class ChatMutationResponse(BaseModel):
-    session: ChatSessionDetail
 
 
 def _message_text(value: Any) -> str:
@@ -532,17 +490,21 @@ def _raw_message_content(raw: Any) -> str:
     )
 
 
-def _messages_from_state(state: dict[str, Any]) -> list[ChatMessage]:
-    raw_messages = state.get("messages")
-    if not isinstance(raw_messages, list):
-        history = state.get("history")
-        raw_messages = history.get("messages") if isinstance(history, dict) else []
-    messages: list[ChatMessage] = []
-    for index, raw in enumerate(raw_messages if isinstance(raw_messages, list) else []):
-        message = _chat_message_from_raw(raw, index)
-        if message is not None:
-            messages.append(message)
-    return messages
+def _tool_message_duration(raw: Any) -> int | float | None:
+    """Read a checkpointed tool-call duration from a ToolMessage."""
+    additional_kwargs = (
+        raw.get("additional_kwargs")
+        if isinstance(raw, dict)
+        else getattr(raw, "additional_kwargs", None)
+    )
+    if not isinstance(additional_kwargs, dict):
+        return None
+    duration_ms = additional_kwargs.get("duration_ms")
+    return (
+        duration_ms
+        if isinstance(duration_ms, int | float) and not isinstance(duration_ms, bool)
+        else None
+    )
 
 
 def _synthetic_pending_tool_call_message(
@@ -569,14 +531,9 @@ def _synthetic_pending_tool_call_message(
 
 def _messages_from_checkpoint(
     snapshot: CheckpointThreadSnapshot | None,
-    *,
-    store: BackendDocumentStore | None = None,
-    tool_call_audit: dict[str, dict[str, Any]] | None = None,
 ) -> list[ChatMessage]:
     if snapshot is None:
         return []
-
-    audit_index = tool_call_audit if tool_call_audit is not None else _tool_call_audit_index(store)
 
     tool_results: dict[str, dict[str, Any]] = {}
     for raw in snapshot.messages:
@@ -608,6 +565,9 @@ def _messages_from_checkpoint(
             result_entry["images"] = images
         if progress_log:
             result_entry["progress_log"] = progress_log
+        duration_ms = _tool_message_duration(raw)
+        if duration_ms is not None:
+            result_entry["duration_ms"] = duration_ms
         tool_results[str(call_id)] = result_entry
 
     messages: list[ChatMessage] = []
@@ -678,9 +638,8 @@ def _messages_from_checkpoint(
                     tc_with_result["progress_log"] = entry["progress_log"]
                 if entry.get("failed"):
                     tc_with_result["failed"] = True
-                audit_entry = audit_index.get(tc["id"])
-                if audit_entry is not None and "duration_ms" in audit_entry:
-                    tc_with_result["duration_ms"] = audit_entry.get("duration_ms")
+                if "duration_ms" in entry:
+                    tc_with_result["duration_ms"] = entry["duration_ms"]
                 pending_tool_calls.append(tc_with_result)
             if commentary:
                 # The narration now lives on its tool call; the message adds nothing.
@@ -756,7 +715,6 @@ def list_chat_sessions(
     include_archived: bool = False,
 ) -> list[ChatSessionSummary]:
     sessions: list[ChatSessionSummary] = []
-    tool_call_audit = _tool_call_audit_index(store)
     checkpoint_snapshots = store.list_checkpoint_thread_snapshots(limit=100)
     snapshots_by_thread_id = {snapshot.thread_id: snapshot for snapshot in checkpoint_snapshots}
 
@@ -773,7 +731,7 @@ def list_chat_sessions(
         except RuntimeUnavailable:
             snapshot = None
             history_unavailable = True
-        messages = _messages_from_checkpoint(snapshot, tool_call_audit=tool_call_audit)
+        messages = _messages_from_checkpoint(snapshot)
         sessions.append(
             _summary_from_session(
                 payload,
@@ -793,9 +751,8 @@ def get_chat_detail(
     payload = _session_payload(store, thread_id)
     if payload is None:
         return None
-    tool_call_audit = _tool_call_audit_index(store)
     snapshot = store.get_checkpoint_thread_snapshot(thread_id)
-    messages = _messages_from_checkpoint(snapshot, tool_call_audit=tool_call_audit)
+    messages = _messages_from_checkpoint(snapshot)
     summary = _summary_from_session(payload, messages=messages)
     return ChatSessionDetail(**summary.model_dump(), messages=messages)
 
@@ -815,7 +772,7 @@ def get_chat_summary(store: BackendDocumentStore, thread_id: str) -> ChatSession
     except RuntimeUnavailable:
         snapshot = None
         history_unavailable = True
-    messages = _messages_from_checkpoint(snapshot, tool_call_audit=_tool_call_audit_index(store))
+    messages = _messages_from_checkpoint(snapshot)
     return _summary_from_session(
         payload, messages=messages, history_unavailable=history_unavailable
     )

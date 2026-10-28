@@ -70,7 +70,6 @@ async def _completion_record_node(
         timestamp=utcnow(),
         metadata=metadata,
     )
-    await runtime.context.state_manager.log_conversation(message)
     messages.append(message)
     return {"messages": messages}
 

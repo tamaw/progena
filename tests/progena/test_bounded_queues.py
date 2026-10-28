@@ -66,7 +66,6 @@ class TestBoundedQueues(unittest.IsolatedAsyncioTestCase):
         self.state_manager.update_schedule_entry = AsyncMock(return_value=True)
         self.state_manager.upsert_schedule_run = AsyncMock(return_value=None)
         self.state_manager.update_schedule_run = AsyncMock(return_value=True)
-        self.state_manager.log_schedule_event = AsyncMock(return_value=None)
         self.state_manager.state_dir = Path(tempfile.mkdtemp())
 
         self.graph = MagicMock()
@@ -271,7 +270,6 @@ class TestBoundedQueues(unittest.IsolatedAsyncioTestCase):
         assert update_args[1]["enabled"] is False
         assert update_args[1]["last_run_status"] == "running"
         self.state_manager.upsert_schedule_run.assert_awaited_once()
-        self.state_manager.log_schedule_event.assert_awaited_once()
 
     async def test_scheduler_dispatches_recurring_task(self):
         """Due recurring tasks should enqueue input and advance schedule."""

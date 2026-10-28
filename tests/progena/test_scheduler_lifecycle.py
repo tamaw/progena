@@ -51,9 +51,6 @@ async def _add_and_persist(state_manager: StateManager) -> str:
     schedule = await state_manager.get_schedule()
     schedule[entry.id] = entry
     await state_manager.save_schedule(schedule)
-    await state_manager.log_schedule_event(
-        {"event": "entry_added", "schedule_id": entry.id, "description": entry.message}
-    )
     return schedule_id
 
 
@@ -118,9 +115,6 @@ class TestSchedulerLifecycle:
         if schedule_id in schedule:
             del schedule[schedule_id]
             await state_manager.save_schedule(schedule)
-            await state_manager.log_schedule_event(
-                {"event": "entry_removed", "schedule_id": schedule_id}
-            )
 
         schedule = await state_manager.get_schedule()
         assert schedule_id not in schedule, "Entry should be absent after deletion"

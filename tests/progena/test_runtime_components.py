@@ -2,51 +2,24 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 import src.progena.orchestration.nodes.health as health_module
-from src.progena.config import ProgenaConfig, StorageConfig
+from src.progena.config import ProgenaConfig
 from src.progena.mcp.runtime import MCPRuntime
-from src.progena.orchestration.nodes.audit import write_startup_config_audit_to_sink
 from src.progena.orchestration.nodes.health import write_health_status
 from src.progena.orchestration.nodes.mcp import sync_mcp_runtime_context
 from src.progena.runtime.queues import QueuedInput, RuntimeQueues
 
 
-def _make_config(tmp_path: Path) -> ProgenaConfig:
-    config = ProgenaConfig()
-    config.storage = StorageConfig(
-        data_dir=tmp_path / "data",
-        state_dir=tmp_path / "data" / "state",
-        log_dir=tmp_path / "logs",
-        worktree_dir=tmp_path / "worktrees",
-        instructions_dir=tmp_path / "data" / "instructions",
-    )
-    config.llm.api_key = ""
-    config.llm.base_url = ""
-    return config
-
-
 @pytest.mark.asyncio
-async def test_audit_and_health_nodes_write_operational_files(tmp_path: Path) -> None:
-    config = _make_config(tmp_path)
-
-    log_sink = MagicMock()
-    log_sink.write_log = AsyncMock()
-    await write_startup_config_audit_to_sink(
-        log_sink,
-        config.to_dict(redact_secrets=True),
-    )
-
+async def test_health_node_persists_status() -> None:
     state_manager = MagicMock()
     state_manager.save_health = AsyncMock()
     await write_health_status(state_manager, "offline")
 
-    log_sink.write_log.assert_awaited_once()
-    assert log_sink.write_log.await_args.kwargs["payload"]["event"] == "startup_config"
     state_manager.save_health.assert_awaited_once()
     saved = state_manager.save_health.await_args.args[0]
     assert saved["status"] == "offline"

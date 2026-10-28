@@ -231,7 +231,7 @@ async def check_plugin_updates(state_manager) -> dict[str, Any]:
     return summary
 
 
-async def reconcile_plugins(state_manager, *, log_sink=None) -> dict[str, Any]:
+async def reconcile_plugins(state_manager) -> dict[str, Any]:
     """Reconcile the desired plugin set against the actual skill documents.
 
     * Installs new entries (``installed_version`` is null).
@@ -366,20 +366,13 @@ async def reconcile_plugins(state_manager, *, log_sink=None) -> dict[str, Any]:
     # --- 3. Persist if anything changed ---
     if changed:
         await state_manager.save_plugins_config(desired)
-        if log_sink is not None:
-            for key in (
-                summary["installed"]
-                + summary["removed"]
-                + summary["updated_available"]
-                + summary["errored"]
-            ):
-                await log_sink.write_log(
-                    source="plugins",
-                    message=f"Plugin {key} reconciled",
-                    payload={"plugin": key, "summary": summary},
-                    timestamp=now,
-                    relative_path="config/plugins",
-                )
+        for key in (
+            summary["installed"]
+            + summary["removed"]
+            + summary["updated_available"]
+            + summary["errored"]
+        ):
+            logger.info("Plugin %s reconciled", key)
     else:
         # Return empty summary on no-op to signal idempotence
         summary = {"installed": [], "removed": [], "updated_available": [], "errored": []}

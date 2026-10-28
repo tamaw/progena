@@ -834,16 +834,12 @@ async def test_routine_aedit_and_adelete_round_trip():
 class _FakeScheduleStateManager:
     def __init__(self, entries: list[ScheduleEntry] | None = None) -> None:
         self.entries: dict[str, ScheduleEntry] = {e.id: e for e in entries or []}
-        self.logged_events: list[dict[str, Any]] = []
 
     async def get_schedule(self) -> dict[str, ScheduleEntry]:
         return dict(self.entries)
 
     async def save_schedule(self, schedule: dict[str, ScheduleEntry]) -> None:
         self.entries = dict(schedule)
-
-    async def log_schedule_event(self, event: dict[str, Any]) -> None:
-        self.logged_events.append(event)
 
 
 def _schedule_backend(
@@ -978,48 +974,6 @@ async def test_schedule_awrite_removes_entry():
     result = await backend.awrite("/schedule.json", "{}")
     assert result.error is None
     assert sm.entries == {}
-
-
-# ---- schedule (audit logging via the agent write path) ----------------------
-
-
-async def test_schedule_awrite_new_entry_logs_entry_added():
-    backend, sm = _schedule_backend([])
-    body = json.dumps({"sched_9": {"message": "new task", "cron_expression": "0 8 * * *"}})
-    result = await backend.awrite("/schedule.json", body)
-    assert result.error is None
-    assert sm.logged_events == [
-        {"event": "entry_added", "schedule_id": "sched_9", "description": None}
-    ]
-
-
-async def test_schedule_awrite_removed_entry_logs_entry_removed():
-    backend, sm = _schedule_backend(
-        [ScheduleEntry(id="sched_1", message="do it", cron_expression="0 9 * * *")]
-    )
-    result = await backend.awrite("/schedule.json", "{}")
-    assert result.error is None
-    assert sm.logged_events == [{"event": "entry_removed", "schedule_id": "sched_1"}]
-
-
-async def test_schedule_aedit_updated_entry_logs_entry_updated():
-    backend, sm = _schedule_backend(
-        [ScheduleEntry(id="sched_1", message="old", cron_expression="0 9 * * *")]
-    )
-    result = await backend.aedit("/schedule.json", '"old"', '"new"')
-    assert result.error is None
-    assert len(sm.logged_events) == 1
-    event = sm.logged_events[0]
-    assert event["event"] == "entry_updated"
-    assert event["schedule_id"] == "sched_1"
-    assert "message" in event["updates"]
-
-
-async def test_schedule_awrite_invalid_does_not_log():
-    backend, sm = _schedule_backend([])
-    result = await backend.awrite("/schedule.json", '{"sched_9": {}}')  # missing message
-    assert result.error is not None
-    assert sm.logged_events == []
 
 
 # ---- registry (single whole-document file) -----------------------------------

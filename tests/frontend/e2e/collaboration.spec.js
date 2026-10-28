@@ -82,7 +82,6 @@ test('19 quick-chat routines survive rapid switching, SSE reconnect, and sequent
   const userLabel = `User edit ${suffix}`;
   second.nodes[0].label = userLabel;
   await saveGraph(page, second);
-  const editSubmitted = Date.now() / 1000;
   await chat(page, `Modify ONLY routine ${second.id}, file /routines/${second.id}.json. Read the current persisted file first, preserve its current node label exactly, and change only the eval expression from 29 to 39. This is an edit, not creation. Do not rename it or change other routines.`, { fresh: true });
   // Closing quick chat cancels its active agent stream. Keep it mounted until
   // the edit is actually persisted and the assistant turn completes.
@@ -95,11 +94,11 @@ test('19 quick-chat routines survive rapid switching, SSE reconnect, and sequent
   await closeChat(page);
   expect((await readGraph(page)).nodes[0].config.expression).toBe('39');
   expect((await readGraph(page)).nodes[0].label).toBe(userLabel);
-  const calls = JSON.parse(execFileSync('bash', ['-c', 'source .venv/bin/activate && python "$1" "$2" "$3"', 'routine-evidence', evidenceScript, second.id, String(editSubmitted)], { cwd: projectRoot, encoding: 'utf8' }));
+  const calls = JSON.parse(execFileSync('bash', ['-c', 'source .venv/bin/activate && python "$1" "$2"', 'routine-evidence', evidenceScript, second.id], { cwd: projectRoot, encoding: 'utf8' }));
   const edited = calls.find((item) => item.calls.some((call) => ['edit_file', 'write_file'].includes(call.name)));
-  expect(edited, 'Persisted tool audit must contain the agent edit').toBeTruthy();
+  expect(edited, 'Checkpointed tool calls must contain the agent edit').toBeTruthy();
   const writes = edited.calls.filter((call) => ['edit_file', 'write_file'].includes(call.name));
-  expect(edited.calls.some((call) => call.name === 'read_file' && call.order < writes.at(-1).order), 'Read-before-write persisted tool evidence').toBe(true);
+  expect(edited.calls.some((call) => call.name === 'read_file' && call.order < writes.at(-1).order), 'Read-before-write checkpoint evidence').toBe(true);
   await page.getByRole('button', { name: 'Run routine', exact: true }).click();
   await expect.poll(() => page.evaluate((id) => window.__routineEvents.some((event) => event.type === 'agent.routine.run.completed' && event.payload.agent_id === id), second.id), { timeout: 180_000 }).toBe(true);
   await page.locator(`.canvas-node[data-node-id="${second.nodes[0].id}"]`).click();

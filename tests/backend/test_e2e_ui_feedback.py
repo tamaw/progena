@@ -230,32 +230,6 @@ class TestUIFeedbackIntegration:
         widget_types = {widget["type"] for widget in payload["widgets"]}
         assert {"agent", "mcp", "schedule"} <= widget_types
 
-    def test_widget_logs_are_normalized_for_agent_nodes(self, mock_state_files, tmp_path):
-        logs_dir = tmp_path / "logs"
-        logs_dir.mkdir()
-        (logs_dir / "tech-analyzer.jsonl").write_text(
-            json.dumps(
-                {
-                    "timestamp": "2026-03-12T10:00:00Z",
-                    "level": "warn",
-                    "message": "analysis delayed",
-                }
-            )
-            + "\n",
-            encoding="utf-8",
-        )
-
-        reader = StateReader(
-            logs_dir=logs_dir,
-            document_store=mock_state_files.document_store,
-        )
-        widgets = reader.get_widgets()
-        tech_widget = next(widget for widget in widgets if widget["id"] == "agent:tech-analyzer")
-
-        assert tech_widget["status"] == "busy"
-        assert tech_widget["logs"][0]["message"] == "analysis delayed"
-        assert tech_widget["logs"][0]["level"] == "warn"
-
     def test_nested_agent_log_sources_use_the_directory_name(self, tmp_path):
         logs_dir = tmp_path / "logs"
         for agent in ("builder", "reviewer"):

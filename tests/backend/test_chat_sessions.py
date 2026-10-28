@@ -8,9 +8,12 @@ from __future__ import annotations
 
 import json
 
+from langchain_core.messages import AIMessage, ToolMessage, messages_from_dict, messages_to_dict
+
 from src.backend.chat.service import (
     ChatPatchRequest,
     _extract_progress_log_from_content,
+    _messages_from_checkpoint,
     delete_session_document,
     get_chat_detail,
     list_chat_sessions,
@@ -141,6 +144,32 @@ class TestListChatSessions:
 
         sessions = list_chat_sessions(store)
         assert sessions[0].message_count == 2
+
+    def test_reads_tool_duration_from_checkpointed_tool_message(self):
+        serialized = messages_to_dict(
+            [
+                AIMessage(
+                    content="",
+                    tool_calls=[{"id": "c1", "name": "lookup", "args": {}}],
+                ),
+                ToolMessage(
+                    content="result",
+                    tool_call_id="c1",
+                    additional_kwargs={"duration_ms": 12.5},
+                ),
+            ]
+        )
+        checkpoint_messages = messages_from_dict(serialized)
+        snapshot = CheckpointThreadSnapshot(
+            thread_id="thread_duration",
+            checkpoint_id="cp-1",
+            checkpoint_ts="2026-01-01T00:00:00Z",
+            messages=checkpoint_messages,
+        )
+
+        [message] = _messages_from_checkpoint(snapshot)
+
+        assert message.tool_calls[0]["duration_ms"] == 12.5
 
 
 class TestGetChatDetail:

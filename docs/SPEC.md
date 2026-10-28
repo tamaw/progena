@@ -328,13 +328,15 @@ falls back to the first event or cron trigger for existing workflows.
 - Runtime state is updated after scheduled work is processed.
 
 The system persists runtime conversation/checkpoint state, state documents, and
-backend-owned metadata in Postgres. Operational logs are rotating plain files in
-the shared `logs/` directory: each service writes separate stdout and stderr files,
-with five 10 MiB backups. Progena exposes selected state documents through a
-validated virtual filesystem (`/config/*.json` and related task/workflow paths);
-those JSON names are views over database documents, not files in `data/state` or
-`data/config`. State-document changes are broadcast to the canonical UI stream
-after the write succeeds; details are in [STATE_DOCUMENTS.md](STATE_DOCUMENTS.md).
+backend-owned metadata in Postgres. Operational logs are plain rotating files
+in the shared `logs/` directory (`/app/logs` in containers): each service writes
+separate stdout and stderr files, with five 10 MiB backups, and the Logs page
+and exports read those files, not database rows. Progena exposes selected state
+documents through a validated virtual filesystem (`/config/*.json` and related
+task/workflow paths); those JSON names are views over database documents, not
+files in `data/state` or `data/config`. State-document changes are broadcast to
+the canonical UI stream after the write succeeds; details are in
+[STATE_DOCUMENTS.md](STATE_DOCUMENTS.md).
 
 Chat history is exposed through `/sessions/`: one
 `<date>_<title-slug>_<id8>.md` per non-archived chat, backed by `session:`

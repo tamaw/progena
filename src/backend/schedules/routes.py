@@ -159,7 +159,6 @@ async def patch_widget(
                 "status": "enabled" if updated.get("enabled", True) else "disabled",
                 "description": updated.get("message"),
                 "summary": updated.get("message"),
-                "logs": [],
                 "updated_at": updated.get("created_at"),
             },
         )
@@ -207,7 +206,6 @@ async def patch_widget(
                 "status": "enabled" if updated.get("enabled", True) else "disabled",
                 "description": updated.get("event_type"),
                 "summary": updated.get("summary"),
-                "logs": updated.get("logs", []),
                 "updated_at": updated.get("updated_at"),
                 "event_type": updated.get("event_type"),
                 "enabled": updated.get("enabled", True),
@@ -300,7 +298,6 @@ async def patch_widget(
             "enabled": bool(server.get("enabled", True)),
             "url": server.get("url"),
             "transport": server.get("transport", "http"),
-            "logs": [],
             "updated_at": None,
         },
     )
