@@ -1013,6 +1013,7 @@ async def test_session_renders_of_one_thread_run_in_order(monkeypatch) -> None:
                 created_at="2026-10-28T12:00:00Z",
                 next=("model",),
                 interrupts=(),
+                tasks=(),
                 config={"configurable": {"checkpoint_id": "cp-1"}},
             ),
             False,
@@ -1023,6 +1024,7 @@ async def test_session_renders_of_one_thread_run_in_order(monkeypatch) -> None:
                 created_at="2026-10-28T12:00:00Z",
                 next=("approval",),
                 interrupts=(object(),),
+                tasks=(),
                 config={"configurable": {"checkpoint_id": "cp-2"}},
             ),
             False,
@@ -1033,15 +1035,29 @@ async def test_session_renders_of_one_thread_run_in_order(monkeypatch) -> None:
                 created_at="2026-10-28T12:00:00Z",
                 next=("model",),
                 interrupts=(),
+                tasks=(),
                 config={"configurable": {"checkpoint_id": "cp-3"}},
             ),
             True,
             {"exists": True, "waiting": False, "in_flight": True, "interrupted": False},
         ),
         (
-            SimpleNamespace(created_at=None, next=(), interrupts=(), config={}),
+            SimpleNamespace(created_at=None, next=(), interrupts=(), tasks=(), config={}),
             False,
             {"exists": False, "waiting": False, "in_flight": False, "interrupted": False},
+        ),
+        (
+            # A turn whose step raised (e.g. the model rejected the key) failed;
+            # LangGraph keeps it pending with the error, but it was not cut off.
+            SimpleNamespace(
+                created_at="2026-10-28T12:00:00Z",
+                next=("model",),
+                interrupts=(),
+                tasks=(SimpleNamespace(error=RuntimeError("401")),),
+                config={},
+            ),
+            False,
+            {"exists": True, "failed": True, "in_flight": False, "interrupted": False},
         ),
     ],
 )
@@ -1085,7 +1101,11 @@ async def test_thread_state_treats_a_heartbeat_turn_as_live_work() -> None:
     class Graph:
         async def aget_state(self, _config: dict[str, Any]) -> Any:
             return SimpleNamespace(
-                created_at="2026-10-28T10:00:00+00:00", next=("tools",), interrupts=(), config={}
+                created_at="2026-10-28T10:00:00+00:00",
+                next=("tools",),
+                interrupts=(),
+                tasks=(),
+                config={},
             )
 
     service = RuntimeChatService(SimpleNamespace(graph=Graph()))

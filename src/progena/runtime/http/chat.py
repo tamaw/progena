@@ -854,6 +854,11 @@ class RuntimeChatService:
         exists = snapshot.created_at is not None
         next_nodes = list(snapshot.next or ()) if exists else []
         waiting = bool(snapshot.interrupts) if exists else False
+        # A step that raised is recorded on its pending task: that turn failed,
+        # it was not cut off.
+        failed = exists and any(
+            getattr(task, "error", None) is not None for task in (snapshot.tasks or ())
+        )
         checkpoint_config = getattr(snapshot, "config", {}) or {}
         configurable = checkpoint_config.get("configurable", {})
         checkpoint_id = (
@@ -866,8 +871,11 @@ class RuntimeChatService:
                     "exists": exists,
                     "next": next_nodes,
                     "waiting": waiting,
+                    "failed": failed,
                     "in_flight": in_flight,
-                    "interrupted": bool(exists and next_nodes and not waiting and not in_flight),
+                    "interrupted": bool(
+                        exists and next_nodes and not waiting and not failed and not in_flight
+                    ),
                     "checkpoint_id": checkpoint_id if isinstance(checkpoint_id, str) else None,
                     "updated_at": snapshot.created_at if exists else None,
                 }

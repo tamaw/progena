@@ -275,7 +275,8 @@ registry, not persisted chat history. It also carries nullable `interruption`
 (`{next, at}`): when no response is active and the saved transcript ends
 mid-turn, the backend asks the runtime `GET /v1/threads/{thread_id}/state` and
 reports the turn as interrupted only when the runtime confirms a pending step
-that no live task owns and no person is being waited on. A failed read omits it.
+that no live task owns, no person is being waited on, and that did not fail (a
+turn whose model call errored is not interrupted). A failed read omits it.
 
 - dedicated `/api/ui/responses/{request_id}/stream` carries only
   `chat.response.delta` and `chat.response.event` content frames, plus

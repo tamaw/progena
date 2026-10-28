@@ -333,6 +333,19 @@ function useRoutineRunEvents(agentId, parameters, inputSchema) {
     }
   }, [agentId, agentsUrl, dispatch, lifecycle, lifecycleStatus]);
 
+  // Follow an existing attempt (e.g. an older interrupted run picked from
+  // history) exactly as a run started here is followed.
+  const trackRun = useCallback((target) => {
+    if (!target?.session_id || !target?.request_id) return;
+    setSessionId(target.session_id);
+    setRequestId(target.request_id);
+    setRequestError(null);
+    setControlError(null);
+    setPendingControlAction(null);
+    setStopRequestedAtMs(null);
+    void watchRef.current?.select({ session_id: target.session_id }).catch(() => {});
+  }, []);
+
   const resetInteractiveSession = useCallback(() => {
     interactiveSessionIdRef.current = null;
     setHasInteractiveSession(false);
@@ -363,6 +376,7 @@ function useRoutineRunEvents(agentId, parameters, inputSchema) {
     resumeRun,
     continueInterruptedRun,
     closeInterruptedRun,
+    trackRun,
     threadId,
     runMeta: runState.run_meta,
     runData: runState.data,
@@ -557,6 +571,7 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, o
     cancelRun,
     continueInterruptedRun,
     closeInterruptedRun,
+    trackRun,
     resumeRun,
     threadId: liveThreadId,
     runMeta: liveRunMeta,
@@ -1327,9 +1342,14 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, o
       : new Set()),
     [runNav.isBrowsingHistory, isExecutionActive, displayNodes, displayEdges, displayEntry, completedNodeIds],
   );
+  // An older interrupted run browsed in history is resolvable like the latest.
+  const lifecyclesByThreadId = useSelector(selectRoutineRunLifecyclesByThreadId);
+  const browsedLifecycle = runNav.isBrowsingHistory ? lifecyclesByThreadId[runNav.threadId] : null;
+  const browsedInterrupted = browsedLifecycle?.status === 'interrupted' ? browsedLifecycle : null;
+  const shownLifecycle = runNav.isBrowsingHistory ? browsedInterrupted : liveLifecycle;
   const interruptedNodeIds = useMemo(
-    () => new Set(liveLifecycle?.status === 'interrupted' ? liveLifecycle.next || [] : []),
-    [liveLifecycle],
+    () => new Set(shownLifecycle?.status === 'interrupted' ? shownLifecycle.next || [] : []),
+    [shownLifecycle],
   );
   const interruptedStepLabel = useMemo(
     () => displayNodes
@@ -1377,7 +1397,7 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, o
     runData,
     activeNodeIds,
     interruptedNodeIds,
-    interruptedAt: liveLifecycle?.interrupted_at ?? null,
+    interruptedAt: shownLifecycle?.interrupted_at ?? null,
     estimatedActiveStartMs,
     staleNodeIds,
     runStatus,
@@ -1391,7 +1411,7 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, o
     resetInteractiveSession,
     pendingApprovals: runNav.pendingApprovals,
     answerApproval: submitApproval,
-  }), [agent.id, updateNode, deleteNode, insertAt, onChangeStateKey, updateLoopGuard, removeBranching, onAddBranch, onJoinBranches, selectNode, selectedNodeId, onAddDefault, onRemoveBranch, onRemoveDefault, onRenameBranch, executionPolicy, displayEdges, displayNodes, meta.input_schema, meta.output_schema, runNav.isBrowsingHistory, runNav.pendingApprovals, submitApproval, runMeta, runData, activeNodeIds, interruptedNodeIds, liveLifecycle, estimatedActiveStartMs, staleNodeIds, runStatus, warmingUp, isRunInProgress, loopMembership, loopIterations, setLoopIteration, startRunAndTrackLatest, hasInteractiveSession, resetInteractiveSession]);
+  }), [agent.id, updateNode, deleteNode, insertAt, onChangeStateKey, updateLoopGuard, removeBranching, onAddBranch, onJoinBranches, selectNode, selectedNodeId, onAddDefault, onRemoveBranch, onRemoveDefault, onRenameBranch, executionPolicy, displayEdges, displayNodes, meta.input_schema, meta.output_schema, runNav.isBrowsingHistory, runNav.pendingApprovals, submitApproval, runMeta, runData, activeNodeIds, interruptedNodeIds, shownLifecycle, estimatedActiveStartMs, staleNodeIds, runStatus, warmingUp, isRunInProgress, loopMembership, loopIterations, setLoopIteration, startRunAndTrackLatest, hasInteractiveSession, resetInteractiveSession]);
 
   // Debounced autosave preserves the existing active-editor cadence. Local
   // edits already live in the draft registry, so cancelling this timer during
@@ -1616,14 +1636,22 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, o
             pending: true,
           };
         }
-        if (liveLifecycle?.status === 'interrupted') {
+        if (liveLifecycle?.status === 'interrupted' || browsedInterrupted) {
           return {
             icon: <PlayActionIcon />,
             label: 'Run',
             tooltip: 'Choose how to recover this interrupted run',
             ariaLabel: 'Run routine',
-            onClick: () => setInterruptedModalOpen(true),
-            disabled: runNav.isBrowsingHistory,
+            onClick: () => {
+              // A browsed older run becomes the tracked run, so the modal and
+              // its actions target it exactly as they do the latest run.
+              if (browsedInterrupted) {
+                trackRun(browsedInterrupted);
+                resetRunNavToLatest();
+              }
+              setInterruptedModalOpen(true);
+            },
+            disabled: runNav.isBrowsingHistory && !browsedInterrupted,
           };
         }
         return {

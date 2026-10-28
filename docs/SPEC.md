@@ -46,10 +46,11 @@ to the backend and receives browser application data through two SSE roles:
     `after` / `limit` (1–100) / `order` paging.
   - `DELETE /v1/conversations/{id}` deletes the thread's checkpoints and its
     runtime `current_state` document (409 while a turn is in flight).
-  - `GET /v1/threads/{id}/state` reports `{exists, next, waiting, in_flight,
-    interrupted, checkpoint_id, updated_at}` from the native snapshot (chat,
-    heartbeat or routine thread). `interrupted` means a pending step that no
-    live task in this process owns and that is not waiting on a person.
+  - `GET /v1/threads/{id}/state` reports `{exists, next, waiting, failed,
+    in_flight, interrupted, checkpoint_id, updated_at}` from the native
+    snapshot (chat, heartbeat or routine thread). `interrupted` means a pending
+    step that no live task in this process owns, that is not waiting on a
+    person, and that did not fail (a raised step is recorded on its task).
   - Vendor extensions outside the OpenAI spec: `progena.stream_event` SSE
     events carry the runtime's tool/reasoning/subagent activity; the
     `include=progena.langchain_message` items option adds
@@ -173,8 +174,9 @@ pre-ownership run started before the live runtime) is presented as
 (`POST /api/ui/agent-profiles/{agent_id}/run-continue` with
 `{thread_id, request_id}`: settle the orphan `stopped`, then the normal Resume),
 Start again (cancel the orphan, then a new session seeded with the first
-attempt's `inputs`, recorded on its `started` lifecycle), or Cancel run.
-Scheduled runs stamp
+attempt's `inputs`, recorded on its `started` lifecycle), or Cancel run. An
+older interrupted run picked from run history shows the same step marker, and
+Run on it adopts that run before offering the same choices. Scheduled runs stamp
 `runtime_instance` when they start running, and their recent runs show the
 same derived `interrupted` status.
 
