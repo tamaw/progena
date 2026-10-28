@@ -353,6 +353,28 @@ describe('workflowToFlow', () => {
     });
   });
 
+  it('omits an unstamped cron timezone when saving an existing node', () => {
+    const workflow = {
+      graph: {
+        nodes: {
+          cron_1: {
+            kind: 'cron',
+            title: 'Weekdays 9am',
+            expression: '0 9 * * 1-5',
+            overlap: 'skip',
+          },
+        },
+        edges: [],
+      },
+      ui: { nodes: {} },
+    };
+
+    const flow = workflowToFlow(workflow, {}, null);
+    const persisted = flowToWorkflow(workflow, flow.nodes, flow.edges, flow.viewport);
+
+    expect(persisted.graph.nodes.cron_1).not.toHaveProperty('timezone');
+  });
+
   it('round-trips a document_read node', () => {
     const workflow = {
       graph: {

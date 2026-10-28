@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from typing import Any, cast
 
 from langchain_core.language_models import BaseChatModel
@@ -21,11 +22,9 @@ from .state import (
 )
 
 
-def _combined_system_prompt(
-    base_system_prompt: str | None, node_system_prompt: str | None
-) -> str | None:
-    parts = [p for p in (base_system_prompt, node_system_prompt) if p]
-    return "\n\n".join(parts) if parts else None
+def _combined_system_prompt(*parts: str | None) -> str | None:
+    prompt_parts = [part for part in parts if part]
+    return "\n\n".join(prompt_parts) if prompt_parts else None
 
 
 def _build_prompt_node(
@@ -33,6 +32,7 @@ def _build_prompt_node(
     *,
     model: BaseChatModel,
     base_system_prompt: str | None,
+    clock_context: Callable[[], Awaitable[str]] | None = None,
     defs: dict[str, dict[str, Any]] | None = None,
 ) -> Any:
     config = _node_config(node)
@@ -64,7 +64,11 @@ def _build_prompt_node(
             ) from exc
 
         messages: list[BaseMessage] = []
-        system_prompt = _combined_system_prompt(base_system_prompt, node_system_prompt)
+        system_prompt = _combined_system_prompt(
+            base_system_prompt,
+            node_system_prompt,
+            await clock_context() if clock_context else None,
+        )
         if system_prompt:
             messages.append(SystemMessage(content=system_prompt))
         messages.append(HumanMessage(content=rendered))
@@ -98,7 +102,11 @@ def _build_prompt_node(
 
 
 def _build_classify_node(
-    node: RoutineNode, *, model: BaseChatModel, defs: dict[str, dict[str, Any]] | None = None
+    node: RoutineNode,
+    *,
+    model: BaseChatModel,
+    clock_context: Callable[[], Awaitable[str]] | None = None,
+    defs: dict[str, dict[str, Any]] | None = None,
 ) -> Any:
     """Ask the model to judge a rubric against a required structured schema."""
     config = _node_config(node)
@@ -126,9 +134,11 @@ def _build_classify_node(
                 f"classify node {node.id}: rubric_prompt references missing state key: {exc}"
             ) from exc
 
-        outcome = cast(
-            dict[str, Any], await structured_model.ainvoke([HumanMessage(content=rendered)])
-        )
+        messages: list[BaseMessage] = []
+        if clock_context:
+            messages.append(SystemMessage(content=await clock_context()))
+        messages.append(HumanMessage(content=rendered))
+        outcome = cast(dict[str, Any], await structured_model.ainvoke(messages))
         parsed = outcome["parsed"]
         if parsed is None:
             raise ValueError(

@@ -9,14 +9,13 @@ model call: an edit applies to the next model call without a restart.
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
-from datetime import UTC, datetime
 from typing import Any
 
 from langchain.agents.middleware.types import AgentMiddleware, ModelRequest, ModelResponse
 from langchain_core.messages import SystemMessage
 from langchain_core.messages.content import TextContentBlock
 
-from src.progena.cron import resolve_timezone, timezone_name
+from src.progena.agent.clock_context import append_system_message_context, user_clock_context
 from src.progena.instructions import render_runtime_instruction
 
 
@@ -42,18 +41,7 @@ class LiveInstructionMiddleware(AgentMiddleware):
         content = await self._state_manager.get_content_document("instruction", self._path)
         if content is None:
             raise RuntimeError(f"Instruction '{self._path}' is missing from the store")
-        preferences = await self._state_manager.get_preferences_config()
-        user_timezone = timezone_name(preferences.get("timezone"))
-        # Date-level only: this text leads the system prompt, so a value that
-        # changed every minute would invalidate the provider's prompt cache on
-        # most calls. It changes once a day at the user's local midnight.
-        today = datetime.now(UTC).astimezone(resolve_timezone(user_timezone))
-        return (
-            f"{(await render_runtime_instruction(self._state_manager, content)).strip()}\n\n"
-            f"User timezone: {user_timezone}; today there is {today:%A %Y-%m-%d}. "
-            "Server clocks and shells use UTC: for the exact current time run "
-            "`date -u` and convert it to the user's timezone."
-        )
+        return (await render_runtime_instruction(self._state_manager, content)).strip()
 
     async def awrap_model_call(
         self,
@@ -61,8 +49,15 @@ class LiveInstructionMiddleware(AgentMiddleware):
         handler: Callable[[ModelRequest], Awaitable[ModelResponse]],
     ) -> ModelResponse:
         current = await self._current_text()
-        if current != self._boot_text and request.system_message is not None:
-            replaced = _replace_leading_text(request.system_message, self._boot_text, current)
-            if replaced is not None:
-                request = request.override(system_message=replaced)
+        if request.system_message is not None:
+            system_message = request.system_message
+            if current != self._boot_text:
+                system_message = _replace_leading_text(system_message, self._boot_text, current)
+            if system_message is not None:
+                request = request.override(
+                    system_message=append_system_message_context(
+                        system_message,
+                        await user_clock_context(self._state_manager, has_shell=False),
+                    )
+                )
         return await handler(request)

@@ -261,6 +261,7 @@ def _build_node_callable(
     *,
     model: BaseChatModel,
     base_system_prompt: str | None,
+    clock_context: Callable[[], Awaitable[str]] | None = None,
     agent_registry: dict[str, Any],
     routine_registry: dict[str, Any],
     routine_runner: Callable[..., Awaitable[dict[str, Any]]] | None = None,
@@ -281,16 +282,26 @@ def _build_node_callable(
             selected = await model_profile_resolver(profile)
             if node.kind == "prompt":
                 call = _build_prompt_node(
-                    node, model=selected, base_system_prompt=base_system_prompt, defs=defs
+                    node,
+                    model=selected,
+                    base_system_prompt=base_system_prompt,
+                    clock_context=clock_context,
+                    defs=defs,
                 )
                 return await call(state, runtime)
-            call = _build_classify_node(node, model=selected, defs=defs)
+            call = _build_classify_node(
+                node, model=selected, clock_context=clock_context, defs=defs
+            )
             return await call(state)
 
         return with_profile
     if node.kind == "prompt":
         return _build_prompt_node(
-            node, model=model, base_system_prompt=base_system_prompt, defs=defs
+            node,
+            model=model,
+            base_system_prompt=base_system_prompt,
+            clock_context=clock_context,
+            defs=defs,
         )
     if node.kind == "eval":
         return _build_eval_node(node)
@@ -305,7 +316,7 @@ def _build_node_callable(
     if node.kind == "split":
         return _build_split_node(node)
     if node.kind == "classify":
-        return _build_classify_node(node, model=model, defs=defs)
+        return _build_classify_node(node, model=model, clock_context=clock_context, defs=defs)
     if node.kind == "agent":
         return _build_object_agent_node(
             node,
@@ -488,6 +499,7 @@ def compile_routine_graph(
     tool_registry: Any = None,
     filesystem_backend: Any | None = None,
     base_system_prompt: str | None = None,
+    clock_context: Callable[[], Awaitable[str]] | None = None,
     instruction_loader: Callable[[str], str] | None = None,
     checkpointer: Any | None = None,
     cache: Any | None = None,
@@ -677,6 +689,7 @@ def compile_routine_graph(
                     node,
                     model=model,
                     base_system_prompt=base_system_prompt,
+                    clock_context=clock_context,
                     agent_registry=agent_registry,
                     routine_registry=routine_registry,
                     routine_runner=routine_runner,

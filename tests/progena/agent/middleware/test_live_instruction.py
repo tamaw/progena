@@ -5,6 +5,7 @@ from unittest.mock import MagicMock
 from langchain.agents.middleware.types import ModelRequest
 from langchain_core.messages import SystemMessage
 
+from src.progena.agent.clock_context import user_clock_context
 from src.progena.agent.middleware import LiveInstructionMiddleware
 
 
@@ -50,13 +51,13 @@ async def test_edited_instruction_replaces_the_boot_text_and_keeps_appended_sect
         ]
     )
     initial = await _system_text_sent(middleware, system)
-    assert initial.startswith("You are Progena.\n\nUser timezone: UTC; today there is ")
-    assert initial.endswith("\n\nBase agent prompt.\n\nSkills section.")
+    assert initial.startswith("You are Progena.\n\nBase agent prompt.\n\nSkills section.")
+    assert initial.endswith("use the `current_time` tool and convert it to the user's timezone.")
 
     store.content = _instruction("You are Progena, edited.")
     edited = await _system_text_sent(middleware, system)
-    assert edited.startswith("You are Progena, edited.\n\nUser timezone: UTC; today there is ")
-    assert edited.endswith("\n\nBase agent prompt.\n\nSkills section.")
+    assert edited.startswith("You are Progena, edited.\n\nBase agent prompt.\n\nSkills section.")
+    assert edited.endswith("use the `current_time` tool and convert it to the user's timezone.")
 
 
 async def test_renamed_agent_reaches_the_next_model_call():
@@ -66,7 +67,15 @@ async def test_renamed_agent_reaches_the_next_model_call():
 
     store.preferences = {"agent_name": "Ada", "timezone": "Australia/Melbourne"}
     rendered = await _system_text_sent(middleware, system)
-    assert rendered.startswith(
-        "You are Ada.\n\nUser timezone: Australia/Melbourne; today there is "
-    )
-    assert rendered.endswith("\n\nBase.")
+    assert rendered.startswith("You are Ada.\n\nBase.")
+    assert "User timezone: Australia/Melbourne; today there is " in rendered
+    assert rendered.endswith("use the `current_time` tool and convert it to the user's timezone.")
+
+
+async def test_shell_clock_context_uses_date_utc():
+    store = Instructions(_instruction("You are Progena."))
+
+    context = await user_clock_context(store, has_shell=True)
+
+    assert "run `date -u`" in context
+    assert "current_time" not in context

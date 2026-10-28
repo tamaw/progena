@@ -12,7 +12,7 @@ from src.progena.workflows.documents import (
 )
 from src.progena.workflows.events import document_changed_fields
 from src.progena.workflows.graph import ordered_workflow_node_ids
-from src.progena.workflows.models import WorkflowDefinition, WorkflowNodeEvent
+from src.progena.workflows.models import WorkflowDefinition, WorkflowNodeCron, WorkflowNodeEvent
 from src.progena.workflows.ports import document_create_input_schema, document_write_input_schema
 from src.progena.workflows.validation import (
     validate_workflow_definition_document,
@@ -651,6 +651,18 @@ def test_cron_node_rejects_bad_expression_or_timezone(expression, timezone, mess
         validate_workflow_definition_payload(
             _derive(cron_workflow(expression=expression, timezone=timezone))
         )
+
+
+def test_cron_node_without_timezone_still_rejects_invalid_expression():
+    payload = cron_workflow(expression="0 25 * * *")
+    del payload["graph"]["nodes"]["cron"]["timezone"]
+
+    with pytest.raises(ValueError, match="invalid cron expression"):
+        validate_workflow_definition_payload(_derive(payload))
+
+
+def test_cron_node_model_dump_omits_an_unstamped_timezone():
+    assert "timezone" not in WorkflowNodeCron(expression="0 9 * * *").model_dump(mode="json")
 
 
 def test_cron_node_cannot_have_inbound_edges():

@@ -51,7 +51,11 @@ from src.progena.agent.filesystem.shell import (
     ShellPaths,
     agent_home_slug,
 )
-from src.progena.agent.middleware import ToolErrorMiddleware, ToolTimingMiddleware
+from src.progena.agent.middleware import (
+    ClockContextMiddleware,
+    ToolErrorMiddleware,
+    ToolTimingMiddleware,
+)
 from src.progena.agent.object_agents.manifest import (
     OBJECT_AGENT_DOCUMENT_KIND,
     ObjectAgentManifest,
@@ -609,6 +613,8 @@ def build_object_agent(
         SummarizationMiddleware(model=child_model),
         ToolTimingMiddleware(),
     ]
+    if state_manager is not None:
+        middleware.append(ClockContextMiddleware(state_manager, has_shell=workspace is not None))
     if skill_dirs:
         middleware.append(
             SkillsMiddleware(

@@ -32,6 +32,7 @@ from langgraph.cache.memory import InMemoryCache
 from langgraph.errors import NodeTimeoutError
 from langgraph.types import Command
 
+from src.progena.agent.clock_context import user_clock_context
 from src.progena.llm.structured import validate_against_schema
 from src.progena.settings.policies import PolicyValues, resolve_execution_policy
 
@@ -323,6 +324,7 @@ def create_routine_executor(
                     tool_registry=tool_registry,
                     filesystem_backend=filesystem_backend,
                     base_system_prompt=None,
+                    clock_context=lambda: user_clock_context(state_manager, has_shell=False),
                     instruction_loader=instruction_loader,
                     checkpointer=checkpointer,
                     preserve_data=True,
@@ -796,6 +798,7 @@ async def _resume_routine_thread(
         tool_registry=tool_registry,
         filesystem_backend=filesystem_backend,
         base_system_prompt=None,
+        clock_context=lambda: user_clock_context(state_manager, has_shell=False),
         instruction_loader=instruction_loader,
         checkpointer=checkpointer,
     )
@@ -814,6 +817,7 @@ async def _resume_routine_thread(
         model_profile_resolver=model_profile_resolver,
         tool_registry=tool_registry,
         filesystem_backend=filesystem_backend,
+        clock_context=lambda: user_clock_context(state_manager, has_shell=False),
         instruction_loader=instruction_loader,
         checkpointer=checkpointer,
         execution_policy=PolicyValues.model_validate(execution_policy["values"]),

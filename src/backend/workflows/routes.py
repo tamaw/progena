@@ -325,7 +325,11 @@ async def trigger_workflow(
     if definition is None:
         raise HTTPException(status_code=404, detail="Workflow not found")
     try:
-        trigger = workflows_service.build_manual_trigger_event(definition, payload=body.payload)
+        trigger = workflows_service.build_manual_trigger_event(
+            definition,
+            payload=body.payload,
+            preference_timezone=timezone_name(preferences_store.load_preferences().get("timezone")),
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     trigger = {**trigger, "request_id": request_id}

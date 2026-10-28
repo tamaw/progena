@@ -82,10 +82,8 @@ def validate_workflow_definition_payload(payload: Any) -> dict[str, Any]:
                 raise ValueError(
                     f"manual node '{node_id}' has an invalid payload schema: {schema_error}"
                 )
-        if (
-            isinstance(node, WorkflowNodeCron)
-            and node.timezone
-            and (error := cron_error(node.expression, node.timezone))
+        if isinstance(node, WorkflowNodeCron) and (
+            error := cron_error(node.expression, node.timezone or "UTC")
         ):
             raise ValueError(f"cron node '{node_id}': {error}")
     for node_id, event_node in event_nodes.items():

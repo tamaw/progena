@@ -156,9 +156,19 @@ class WorkflowPromptRunner(Protocol):
 def _coerce_stored_workflow_definition(
     store: BackendDocumentStore, key: str, document: Any
 ) -> WorkflowDefinition:
-    """Coerce a stored definition payload."""
-
-    return coerce_workflow_definition(_document_payload(document, {}))
+    """Coerce a stored definition payload, tolerating legacy null cron timezones."""
+    payload = copy.deepcopy(_document_payload(document, {}))
+    graph = payload.get("graph") if isinstance(payload, dict) else None
+    nodes = graph.get("nodes") if isinstance(graph, dict) else None
+    if isinstance(nodes, dict):
+        for node in nodes.values():
+            if (
+                isinstance(node, dict)
+                and node.get("kind") == "cron"
+                and node.get("timezone") is None
+            ):
+                node.pop("timezone", None)
+    return coerce_workflow_definition(payload)
 
 
 def list_workflow_definitions(store: BackendDocumentStore) -> list[WorkflowDefinition]:
@@ -449,6 +459,7 @@ def build_manual_trigger_event(
     definition: WorkflowDefinition,
     *,
     payload: Mapping[str, Any] | None = None,
+    preference_timezone: str = "UTC",
 ) -> dict[str, Any]:
     """Build and validate output for an explicit run, preferring a manual trigger."""
 
@@ -462,7 +473,12 @@ def build_manual_trigger_event(
         return resolved_payload
     if isinstance(node, WorkflowNodeCron):
         now = utcnow()
-        return build_cron_trigger_output(node, scheduled_for=now, fired_at=now)
+        return build_cron_trigger_output(
+            node,
+            scheduled_for=now,
+            fired_at=now,
+            preference_timezone=preference_timezone,
+        )
     if not isinstance(node, WorkflowNodeEvent):
         raise ValueError("workflow has no trigger node")
     return {

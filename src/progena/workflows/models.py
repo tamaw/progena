@@ -6,7 +6,7 @@ import copy
 from collections.abc import Mapping
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, SerializerFunctionWrapHandler, model_serializer
 
 from src.progena.documents.types import DocumentOperation
 from src.progena.workflows.constants import (
@@ -86,6 +86,13 @@ class WorkflowNodeCron(BaseModel):
     timezone: str | None = None
     overlap: WorkflowCronOverlap = "skip"
     output_schema: dict[str, Any] = Field(default_factory=lambda: copy.deepcopy(CRON_OUTPUT_SCHEMA))
+
+    @model_serializer(mode="wrap")
+    def serialize_timezone(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        data = handler(self)
+        if self.timezone is None:
+            data.pop("timezone", None)
+        return data
 
 
 class WorkflowNodeManual(BaseModel):

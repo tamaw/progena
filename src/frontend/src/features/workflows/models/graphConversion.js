@@ -388,11 +388,12 @@ export function flowToWorkflow(baseWorkflow, nodes, edges, viewport) {
         output_schema: cloneValue(node.data?.outputSchema) || null,
       };
     } else if (node.type === 'cron') {
+      const timezone = typeof node.data?.timezone === 'string' ? node.data.timezone.trim() : '';
       graphNodes[node.id] = {
         kind: 'cron',
         title: String(node.data?.title || 'Cron'),
         expression: node.data?.expression || '*/5 * * * *',
-        timezone: node.data?.timezone || '',
+        ...(timezone ? { timezone } : {}),
         overlap: node.data?.overlap || 'skip',
         output_schema: cloneValue(node.data?.outputSchema) || null,
       };

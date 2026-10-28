@@ -73,6 +73,7 @@ services:
     environment:
       <<: [*progena-llm-env, *progena-database-env]
       AGENT_NAME: progena
+      PROGENA_WORKTREE_DIR: /app/repos
       # Bind the runtime HTTP server on all interfaces so other containers (backend) can connect.
       PROGENA_HTTP_HOST: 0.0.0.0
       GH_TOKEN: ${GH_TOKEN:-}

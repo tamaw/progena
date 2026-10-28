@@ -729,6 +729,34 @@ async def test_workflow_awrite_resolves_prompt_document_references():
     assert result.error and "Invalid instruction path" in result.error
 
 
+async def test_workflow_awrite_keeps_existing_unstamped_cron_timezone_omitted():
+    workflow = default_workflow_definition(workflow_id="daily", title="Daily")
+    cron_id = next(
+        node_id for node_id, node in workflow["graph"]["nodes"].items() if node["kind"] == "event"
+    )
+    agent_id = next(
+        node_id for node_id, node in workflow["graph"]["nodes"].items() if node["kind"] == "agent"
+    )
+    workflow["graph"]["nodes"][cron_id] = {
+        "kind": "cron",
+        "title": "Daily",
+        "expression": "0 9 * * *",
+    }
+    workflow["graph"]["nodes"][agent_id]["template"] = "Run at {scheduled_for}"
+    workflow["graph"]["edges"] = [
+        {
+            "from": {"node": cron_id, "port": "scheduled_for"},
+            "to": {"node": agent_id, "port": "scheduled_for"},
+        }
+    ]
+    backend, sm = _workflow_backend([workflow])
+
+    result = await backend.awrite("/daily.json", json.dumps(workflow))
+
+    assert result.error is None
+    assert "timezone" not in sm.workflows["daily"]["graph"]["nodes"][cron_id]
+
+
 async def test_workflow_awrite_rejects_filename_id_mismatch():
     workflow = default_workflow_definition(
         workflow_id="customer-followup", title="Customer follow-up"

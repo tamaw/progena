@@ -154,14 +154,16 @@ export function WorkflowNodeOptionsModal({ node, onChange, onClose }) {
     const expression = node.data?.expression || '';
     const timezone = node.data?.timezone || '';
     clearTimeout(cronDebounceRef.current);
-    if (!expression || !timezone) {
+    if (!expression) {
       return () => clearTimeout(cronDebounceRef.current);
     }
     cronDebounceRef.current = setTimeout(() => {
       cronAbortRef.current?.abort();
       const controller = new AbortController();
       cronAbortRef.current = controller;
-      fetch(`/api/ui/workflows/cron-preview?expression=${encodeURIComponent(expression)}&timezone=${encodeURIComponent(timezone)}&count=3`, {
+      const query = new URLSearchParams({ expression, count: '3' });
+      if (timezone) query.set('timezone', timezone);
+      fetch(`/api/ui/workflows/cron-preview?${query}`, {
         signal: controller.signal,
       })
         .then(async (res) => {
