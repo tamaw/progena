@@ -14,6 +14,7 @@ import src.backend.inbox.routes as inbox_routes
 import src.backend.insights.routes as insights_routes
 import src.backend.integrations.runtime as integrations_runtime
 import src.backend.monitoring.logs as monitoring_logs
+import src.backend.runs.routes as runs_routes
 import src.backend.schedules.routes as schedules_routes
 import src.backend.settings.mcp as settings_mcp
 import src.backend.settings.model_profiles as settings_model_profiles
@@ -30,6 +31,8 @@ router = APIRouter(prefix="/api/ui", tags=["ui"])
 router.include_router(workflows_routes.router)
 
 router.include_router(schedules_routes.router)
+
+router.include_router(runs_routes.router)
 
 router.include_router(alerts_routes.router)
 

@@ -243,6 +243,15 @@ export function InsightsIcon() {
   );
 }
 
+export function RunsNavIcon() {
+  return (
+    <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+      <path d="M3 2.5h10M3 8h10M3 13.5h10" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+      <circle cx="3" cy="2.5" r=".8" fill="currentColor" /><circle cx="3" cy="8" r=".8" fill="currentColor" /><circle cx="3" cy="13.5" r=".8" fill="currentColor" />
+    </svg>
+  );
+}
+
 export function SettingsGeneralIcon() {
   return (
     <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">

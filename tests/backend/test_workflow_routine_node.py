@@ -186,6 +186,12 @@ async def test_typed_routine_output_feeds_the_next_node():
         TYPED_ROUTINE, port="card", consumer_template="Report {summary}"
     )
     waiting = await _start(store, definition, executor)
+    [open_audit] = waiting.step_audit
+    assert open_audit["node_id"] == "run"
+    assert open_audit["kind"] == "routine"
+    assert open_audit["status"] == "running"
+    assert "completed_at" not in open_audit
+    started_at = open_audit["started_at"]
     pending = waiting.pending_routine
 
     [task] = _queued_tasks(store)
@@ -211,6 +217,10 @@ async def test_typed_routine_output_feeds_the_next_node():
     }
     assert "Report one card" in runner.calls[0]["input_text"]
     assert done.pending_routine is None
+    closed_audit = next(entry for entry in done.step_audit if entry["node_id"] == "run")
+    assert closed_audit["started_at"] == started_at
+    assert closed_audit["status"] == "completed"
+    assert closed_audit["completed_at"] >= closed_audit["started_at"]
 
 
 @pytest.mark.asyncio
@@ -275,6 +285,11 @@ async def test_routine_failure_or_bad_output_fails_the_run():
     failed = get_workflow_run(store, waiting.run_id)
     assert failed.status == "failed"
     assert failed.last_error == "routine 'greet' failed: boom"
+    [audit] = failed.step_audit
+    assert audit["node_id"] == "run"
+    assert audit["status"] == "failed"
+    assert audit["started_at"] and audit["completed_at"]
+    assert audit["error"] == "routine 'greet' failed: boom"
 
     store, definition, executor, _runner = _setup(TYPED_ROUTINE, port="card")
     waiting = await _start(store, definition, executor)
@@ -314,6 +329,10 @@ async def test_stopped_routine_holds_workflow_and_cancelled_routine_never_comple
     assert stopped.status == "paused"
     assert stopped.pending_routine["status"] == "stopped"
     assert stopped.pending_routine["thread_id"] == retained_thread
+    [open_audit] = stopped.step_audit
+    assert open_audit["status"] == "running"
+    assert "completed_at" not in open_audit
+    started_at = open_audit["started_at"]
     assert (await executor.resume_workflow(definition.id)).status == "paused"
     assert len(_queued_tasks(store)) == 1
     await executor.handle_routine_run_event(
@@ -356,3 +375,8 @@ async def test_stopped_routine_holds_workflow_and_cancelled_routine_never_comple
     assert "cancelled" in cancelled.last_error
     assert cancelled.pending_routine is None
     assert "run" not in cancelled.completed_node_ids
+    [cancelled_audit] = cancelled.step_audit
+    assert cancelled_audit["started_at"] == started_at
+    assert cancelled_audit["status"] == "cancelled"
+    assert cancelled_audit["completed_at"]
+    assert "cancelled" in cancelled_audit["error"]

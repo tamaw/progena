@@ -223,6 +223,12 @@ class BackendDocumentStore(Protocol):
 
     def list_documents(self, prefix: str, key_prefix: str) -> list[tuple[str, StoredDocument]]: ...
 
+    def query_workflow_run_page(
+        self, *, status: str, q: str, before: tuple[str, str, str] | None, limit: int
+    ) -> list[tuple[dict[str, Any], dict[str, Any]]]:
+        """Filter and keyset-page workflow metadata before returning bounded rows."""
+        ...
+
     def search_documents(
         self,
         prefix: str,
@@ -274,6 +280,10 @@ class BackendDocumentStore(Protocol):
         source: str | None = None,
         limit: int = 500,
     ) -> list[dict[str, Any]]: ...
+
+    def query_tool_audits(self, tool_ids: Iterable[str]) -> dict[str, dict[str, Any]]:
+        """Return tool audit rows keyed by call ID in one indexed query."""
+        ...
 
     def get_log_sources(self) -> list[dict[str, Any]]: ...
 
@@ -438,6 +448,40 @@ class InMemoryDocumentStore:
             {"key": key, "payload": document.payload, "updated_at": document.updated_at}
             for key, document in rows[:limit]
         ]
+
+    def query_workflow_run_page(
+        self, *, status: str, q: str, before: tuple[str, str, str] | None, limit: int
+    ) -> list[tuple[dict[str, Any], dict[str, Any]]]:
+        rows = []
+        boundary = (
+            (datetime.fromisoformat(before[0].replace("Z", "+00:00")), before[1], before[2])
+            if before
+            else None
+        )
+        for _, document in self.list_documents(PROGENA_STATE_PREFIX, "workflow_run:"):
+            payload = document.payload
+            if not isinstance(payload, dict):
+                continue
+            definition_doc = self.get_document(
+                PROGENA_STATE_PREFIX, f"workflow:{payload['workflow_id']}", {}
+            )
+            definition = definition_doc.payload if definition_doc is not None else {}
+            name = definition.get("title") or payload["workflow_id"]
+            source = payload.get("source") or "manual"
+            if status and str(payload.get("status", "")).casefold() != status:
+                continue
+            if q and not any(
+                q in str(value).casefold() for value in (name, source, payload["run_id"])
+            ):
+                continue
+            started = datetime.fromisoformat(
+                (payload.get("started_at") or payload["queued_at"]).replace("Z", "+00:00")
+            )
+            key = (started, "workflow", payload["run_id"])
+            if boundary is None or key < boundary:
+                rows.append((key, payload, definition))
+        rows.sort(key=lambda row: row[0], reverse=True)
+        return [(payload, definition) for _, payload, definition in rows[:limit]]
 
     def save_document(self, prefix: str, key: str, payload: Any) -> None:
         # Copy like Postgres serialization does, so later in-place edits by the
@@ -694,6 +738,20 @@ class InMemoryDocumentStore:
         rows.sort(key=lambda row: str(row.get("timestamp") or row.get("time") or ""))
         return rows[-limit:] if limit > 0 else rows
 
+    def query_tool_audits(self, tool_ids: Iterable[str]) -> dict[str, dict[str, Any]]:
+        wanted = set(tool_ids)
+        if not wanted:
+            return {}
+        audits: dict[str, dict[str, Any]] = {}
+        for row in self.query_logs(source="tool_calls", limit=0):
+            payload = row.get("payload")
+            if not isinstance(payload, dict):
+                payload = row
+            tool_id = payload.get("tool_id") if isinstance(payload, dict) else None
+            if isinstance(tool_id, str) and tool_id in wanted:
+                audits[tool_id] = payload
+        return audits
+
     def get_log_sources(self) -> list[dict[str, Any]]:
         sources = sorted(
             {
@@ -820,6 +878,7 @@ class PostgresDocumentStore:
         self._database_url = database_url
         self._pool = self._create_pool()
         self._conversation_reader = RuntimeConversationReader(runtime_url) if runtime_url else None
+        self._runs_trigger_ready = False
 
     @property
     def database_url(self) -> str:
@@ -857,6 +916,45 @@ class PostgresDocumentStore:
         self._pool.close()
         if self._conversation_reader is not None:
             self._conversation_reader.close()
+
+    def ensure_runs_checkpoint_trigger(self) -> None:
+        """Install backend-owned checkpoint wakeups after LangGraph tables exist.
+
+        Checkpoint readers also call this if the runtime schema was not ready
+        at backend startup. Once installed, subsequent reads perform no DDL.
+        """
+        if self._runs_trigger_ready:
+            return
+        with self._cursor() as cur:
+            cur.execute("SELECT to_regclass('public.checkpoints') AS checkpoints")
+            row = cur.fetchone()
+            if row is None:
+                raise RuntimeError("Checkpoint schema lookup returned no row")
+            if row["checkpoints"] is None:
+                return
+            cur.execute(
+                """
+                SELECT pg_advisory_xact_lock(hashtextextended('runs_checkpoint_schema', 0));
+                CREATE OR REPLACE FUNCTION progena_notify_run_checkpoint()
+                RETURNS trigger AS $$
+                BEGIN
+                    PERFORM pg_notify(
+                        'run_checkpoints',
+                        json_build_object('thread_id', NEW.thread_id)::text
+                    );
+                    RETURN NEW;
+                END;
+                $$ LANGUAGE plpgsql;
+                DROP TRIGGER IF EXISTS progena_notify_run_checkpoint ON checkpoints;
+                CREATE TRIGGER progena_notify_run_checkpoint
+                    AFTER INSERT OR UPDATE ON checkpoints
+                    FOR EACH ROW EXECUTE FUNCTION progena_notify_run_checkpoint();
+                CREATE INDEX IF NOT EXISTS progena_tool_logs_tool_id_idx
+                    ON store ((value->'payload'->>'tool_id'))
+                    WHERE prefix = 'progena.logs.tool_calls';
+                """
+            )
+        self._runs_trigger_ready = True
 
     def _recreate_pool(self) -> None:
         self._pool = self._create_pool()
@@ -1551,6 +1649,60 @@ class PostgresDocumentStore:
             results.append((str(row["key"]), StoredDocument(payload, row.get("updated_at"))))
         return results
 
+    def query_workflow_run_page(
+        self, *, status: str, q: str, before: tuple[str, str, str] | None, limit: int
+    ) -> list[tuple[dict[str, Any], dict[str, Any]]]:
+        # Do not return trigger_event/node_outputs: these can be megabytes per run.
+        with self._cursor() as cur:
+            cur.execute(
+                """
+                WITH runs AS (
+                    SELECT s.value->'payload' AS p, d.value->'payload' AS definition,
+                           COALESCE(s.value#>>'{payload,started_at}',
+                                    s.value#>>'{payload,queued_at}')::timestamptz AS started
+                    FROM store s LEFT JOIN store d
+                      ON d.prefix = s.prefix
+                     AND d.key = 'workflow:' || (s.value#>>'{payload,workflow_id}')
+                    WHERE s.prefix = %s
+                      AND s.key LIKE %s
+                )
+                SELECT jsonb_build_object(
+                    'run_id', p->'run_id', 'workflow_id', p->'workflow_id',
+                    'status', p->'status', 'source', p->'source',
+                    'started_at', p->'started_at', 'queued_at', p->'queued_at',
+                    'completed_at', p->'completed_at',
+                    'completed_node_ids', p->'completed_node_ids'
+                ) AS payload, COALESCE(definition, '{}'::jsonb) AS definition
+                FROM runs
+                WHERE (%s = '' OR lower(p->>'status') = %s)
+                  AND (%s = '' OR strpos(lower(COALESCE(definition->>'title', p->>'workflow_id')), %s) > 0
+                       OR strpos(lower(COALESCE(p->>'source', 'manual')), %s) > 0
+                       OR strpos(lower(p->>'run_id'), %s) > 0)
+                  AND (%s::timestamptz IS NULL OR
+                       (started, 'workflow'::text, p->>'run_id') <
+                       (%s::timestamptz, %s::text, %s::text))
+                ORDER BY started DESC, p->>'run_id' DESC
+                LIMIT %s
+                """,
+                (
+                    PROGENA_STATE_PREFIX,
+                    "workflow\\_run:%",
+                    status,
+                    status,
+                    q,
+                    q,
+                    q,
+                    q,
+                    before[0] if before else None,
+                    before[0] if before else None,
+                    before[1] if before else None,
+                    before[2] if before else None,
+                    limit,
+                ),
+            )
+            rows = cast(list[dict[str, Any]], cur.fetchall())
+        return [(row["payload"], row["definition"]) for row in rows]
+
     def search_documents(
         self,
         prefix: str,
@@ -1873,6 +2025,27 @@ class PostgresDocumentStore:
             )
             rows = cast(list[dict[str, Any]], cur.fetchall())
         return [_log_row_to_entry(row) for row in reversed(rows)]
+
+    def query_tool_audits(self, tool_ids: Iterable[str]) -> dict[str, dict[str, Any]]:
+        ids = list({tool_id for tool_id in tool_ids if tool_id})
+        if not ids:
+            return {}
+        with self._cursor() as cur:
+            cur.execute(
+                """
+                SELECT value->'payload' AS payload
+                FROM store
+                WHERE prefix = %s AND value->'payload'->>'tool_id' = ANY(%s)
+                """,
+                (f"{PROGENA_LOG_PREFIX}.tool_calls", ids),
+            )
+            rows = cast(list[dict[str, Any]], cur.fetchall())
+        return {
+            str(row["payload"]["tool_id"]): dict(row["payload"])
+            for row in rows
+            if isinstance(row.get("payload"), dict)
+            and isinstance(row["payload"].get("tool_id"), str)
+        }
 
     def get_log_sources(self) -> list[dict[str, Any]]:
         with self._cursor() as cur:
@@ -2380,6 +2553,13 @@ def store_database_url(store: BackendDocumentStore | None) -> str | None:
     """Return the Postgres DSN backing ``store``, or None for non-Postgres stores."""
     url = getattr(store, "database_url", None)
     return url if isinstance(url, str) else None
+
+
+def ensure_runs_checkpoint_trigger(store: BackendDocumentStore) -> None:
+    """Install the optional Runs checkpoint trigger for a Postgres-backed store."""
+    installer = getattr(store, "ensure_runs_checkpoint_trigger", None)
+    if callable(installer):
+        installer()
 
 
 class StoreChangeListener:

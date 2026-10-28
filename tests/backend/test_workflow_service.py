@@ -160,6 +160,13 @@ async def test_pause_requested_while_an_agent_runs_stops_before_the_next_node():
     executor = _executor(store, runner)
     run = await executor.trigger_workflow(definition.id, build_manual_trigger_event(definition))
     await asyncio.wait_for(started.wait(), timeout=2)
+    active = get_workflow_run(store, run.run_id)
+    [open_audit] = active.step_audit
+    assert open_audit["node_id"] == first_id
+    assert open_audit["status"] == "running"
+    assert open_audit["started_at"]
+    assert "completed_at" not in open_audit
+    started_at = open_audit["started_at"]
     await asyncio.wait_for(executor.pause_workflow(definition.id), timeout=2)
     release.set()
 
@@ -176,6 +183,94 @@ async def test_pause_requested_while_an_agent_runs_stops_before_the_next_node():
     assert paused.status == "paused"
     assert paused.completed_node_ids == [first_id]
     assert len(calls) == 1
+    [closed_audit] = paused.step_audit
+    assert set(closed_audit) == {
+        "node_id",
+        "kind",
+        "started_at",
+        "status",
+        "completed_at",
+        "output",
+    }
+    assert closed_audit["node_id"] == first_id
+    assert closed_audit["kind"] == "agent"
+    assert closed_audit["started_at"] == started_at
+    assert closed_audit["status"] == "completed"
+    assert closed_audit["completed_at"]
+    assert closed_audit["output"] == '{"summary": "done"}'
+
+
+@pytest.mark.asyncio
+async def test_approval_audit_remains_open_until_resolved():
+    store = InMemoryDocumentStore()
+    seed_document_types(store)
+    workflow = default_workflow_definition()
+    event_id = _node_id(workflow, "event")
+    workflow["graph"] = {
+        "nodes": {
+            event_id: workflow["graph"]["nodes"][event_id],
+            "gate": {
+                "kind": "approval",
+                "title": "Gate",
+                "message": "Ship it?",
+                "approver": "any",
+                "input_schema": {
+                    "type": "object",
+                    "required": ["key"],
+                    "properties": {"key": {"type": "string"}},
+                },
+            },
+        },
+        "edges": [
+            {
+                "from": {"node": event_id, "port": "key"},
+                "to": {"node": "gate", "port": "key"},
+            }
+        ],
+    }
+    definition = save_workflow_definition(store, workflow)
+    executor = _executor(store, RecordingRunner([]))
+
+    run = await executor.trigger_workflow(definition.id, build_manual_trigger_event(definition))
+    paused = await _wait_for(
+        lambda: (
+            get_workflow_run(store, run.run_id)
+            if get_workflow_run(store, run.run_id).status == "paused"
+            else None
+        )
+    )
+    [open_audit] = paused.step_audit
+    assert open_audit["node_id"] == "gate"
+    assert open_audit["status"] == "running"
+    assert "completed_at" not in open_audit
+    resumed = await executor.resume_workflow(definition.id)
+    assert resumed is not None and resumed.status == "paused"
+    assert get_workflow_run(store, run.run_id).step_audit == [open_audit]
+
+    await executor.resolve_approval(definition.id, run.run_id, approved=True)
+    completed = await _wait_for(
+        lambda: (
+            get_workflow_run(store, run.run_id)
+            if get_workflow_run(store, run.run_id).status == "completed"
+            else None
+        )
+    )
+
+    [closed_audit] = completed.step_audit
+    assert set(closed_audit) == {
+        "node_id",
+        "kind",
+        "started_at",
+        "status",
+        "completed_at",
+        "output",
+    }
+    assert closed_audit["node_id"] == "gate"
+    assert closed_audit["kind"] == "approval"
+    assert closed_audit["started_at"] == open_audit["started_at"]
+    assert closed_audit["status"] == "completed"
+    assert closed_audit["completed_at"]
+    assert closed_audit["output"] == "approved"
 
 
 @pytest.mark.asyncio
@@ -263,6 +358,12 @@ async def test_missing_placeholder_value_fails_step():
 
     assert completed.status == "failed"
     assert "missing value for {missing.x}" in completed.last_error
+    [audit] = completed.step_audit
+    assert audit["node_id"] == agent_id
+    assert audit["status"] == "failed"
+    assert audit["started_at"]
+    assert audit["completed_at"]
+    assert "missing value for {missing.x}" in audit["error"]
 
 
 @pytest.mark.asyncio

@@ -29,9 +29,10 @@ import * as canvases from '../features/canvases/state';
 
 import * as search from '../features/search/state';
 import * as insights from '../features/insights/state';
+import * as runs from '../features/runs/state';
 
-const domains = [status, alerts, widgets, schedules, mcp, knowledge, instructions, tasks, workflows, agents, chats, inbox, logs, preferences, marketplaces, repos, documentTypes, policies, modelProfiles, providers, canvases, search, insights];
 
+const domains = [status, alerts, widgets, schedules, mcp, knowledge, instructions, tasks, workflows, agents, chats, inbox, logs, preferences, marketplaces, repos, documentTypes, policies, modelProfiles, providers, canvases, search, insights, runs];
 const initialState = domains.reduce(
   (acc, domain) => ({ ...acc, ...domain.initialState }),
   {},
@@ -84,6 +85,8 @@ const NAV_ACTIVITY_EVENT_ROUTES = {
   'repositories.snapshot': '/repositories',
   'profiles.snapshot': '/profiles',
   'canvases.snapshot': '/canvases',
+  'run.updated': '/runs',
+  'run.deleted': '/runs',
 };
 
 const navActivityInitialState = {

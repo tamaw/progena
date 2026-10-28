@@ -358,6 +358,44 @@ Status uses the same interrupted rule as the UI
 (`src/progena/runtime/ownership.py`). Finished runs are cached in-process.
 `run_workflow` returns the new run's `run_id` and `/runs/` path.
 
+## Runs
+
+**Spectate → Runs** (`/runs`) is a full-width execution-history table for
+workflows, top-level routine attempts, and schedules. Kind, status and text
+filters use newest-first cursor paging; column sorting applies to the loaded
+page. Estimated progress compares distinct completed executable nodes with
+the graph's executable nodes, excluding trigger and data nodes. Routine graph
+counts use the pinned revision; workflow counts use the current definition.
+A failed or cancelled run does not imply every node executed.
+
+Selecting a row expands its nested waterfall directly underneath, with one run
+expanded at a time. The table and expanded trace scroll independently inside
+the fixed page; table headers stay visible. Rows use the design library's compact
+theme-token treatment without a redundant page heading or Refresh button.
+The direct `/runs/{kind}/{runId}` URL reuses the same trace content.
+Traces include collapsible steps, child routines, agent/model/tool activity,
+and selected-span details. Model intervals are derived from checkpoint commits,
+not provider latency.
+Tool duration is measured only when an audit record exists; otherwise a
+transcript declaration marker explicitly reports timing unavailable. Available
+token usage is deduplicated from model messages and shown only in trace details.
+Missing usage is not reported as zero.
+
+The backend reads Postgres directly; it does not ask the runtime or the agent-facing
+`/runs/` mount to build this visual model. Document and checkpoint notifications
+drive canonical `ui.event` updates; the table receives broadcast changes while
+the page is open, without polling. Expanding a trace establishes a targeted,
+connection-scoped interest. Collapsing, filtering away, paging away, or leaving
+the run releases it. Reconnect restores the interest and a fresh snapshot.
+Open spans grow on the client, including approval waits; terminal spans do not.
+
+Workflow audit entries persist `started_at` before work, then settle the same
+entry on completion, failure or cancellation. Approval and child-routine waits
+preserve that entry. Existing entries require a manual one-time backfill before
+cutover; reconstructed historical boundaries are not exact recovered starts.
+Drain workflow execution during the final writer cutover so old writers cannot
+introduce further missing start times. There is no historical timing fallback.
+
 ## Routine Code filesystem access
 
 Routine Code nodes run in a fresh QuickJS sandbox and are pure unless their
