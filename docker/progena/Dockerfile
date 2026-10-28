@@ -75,11 +75,7 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
   CMD ["sh", "-c", "curl -f http://127.0.0.1:${PROGENA_HTTP_PORT:-9501}/health || exit 1"]
 
-# Baked in at build time (e.g. --build-arg GIT_COMMIT=$(git rev-parse HEAD)) since
-# the image has no .git directory for the runtime to inspect at startup. Surfaced
-# in the health document so a stale container running old code is identifiable
-# without cross-referencing Postgres by hand. Declared last: it changes on every
-# commit, and every layer after it would otherwise be rebuilt.
+# Commit SHA for the health document's version; last so it doesn't bust earlier layers.
 ARG GIT_COMMIT=""
 ENV GIT_COMMIT=${GIT_COMMIT}
 
