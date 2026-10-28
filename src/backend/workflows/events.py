@@ -20,15 +20,14 @@ from src.backend.storage.documents import (
 from src.backend.storage.documents import get_default_document_store as get_document_store
 from src.progena.routines.approvals import decision_key, pending_approvals
 from src.progena.routines.events import CHECKPOINT_CHANNEL, RUN_EVENT_PREFIX
-
-_EXECUTING_LIFECYCLE_STATUSES = frozenset({"started", "stopping", "cancelling"})
+from src.progena.runtime.ownership import EXECUTING_ROUTINE_STATUSES
 
 
 def _lifecycle_snapshot(
     payload: dict[str, Any], started: dict[str, Any] | None, *, live
 ) -> dict[str, Any]:
     """Overlay a read-only interruption status without altering persisted events."""
-    if payload.get("status") not in _EXECUTING_LIFECYCLE_STATUSES or started is None:
+    if payload.get("status") not in EXECUTING_ROUTINE_STATUSES or started is None:
         return payload
     owner = started.get("runtime_instance")
     owner_instance = owner if isinstance(owner, str) else None

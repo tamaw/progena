@@ -194,7 +194,7 @@ class StateManager:
     async def save_routine_run_event(self, payload: dict[str, Any]) -> None:
         return await self.routines.save_routine_run_event(payload)
 
-    async def list_routine_run_events(self, request_id: str) -> list[dict[str, Any]]:
+    async def list_routine_run_events(self, request_id: str | None = None) -> list[dict[str, Any]]:
         return await self.routines.list_routine_run_events(request_id)
 
     async def get_routine_run_control(
@@ -460,10 +460,20 @@ class StateManager:
         return await self.workflows.list_workflow_runs()
 
     async def request_workflow_run(
-        self, *, request_id: str, workflow_id: str, input: dict[str, Any], ancestry: list[str]
+        self,
+        *,
+        request_id: str,
+        run_id: str,
+        workflow_id: str,
+        input: dict[str, Any],
+        ancestry: list[str],
     ) -> None:
         return await self.workflows.request_workflow_run(
-            request_id=request_id, workflow_id=workflow_id, input=input, ancestry=ancestry
+            request_id=request_id,
+            run_id=run_id,
+            workflow_id=workflow_id,
+            input=input,
+            ancestry=ancestry,
         )
 
     # ==========================================================================

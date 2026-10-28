@@ -18,6 +18,8 @@
  */
 
 const TRUNCATION_TAIL = /(?:…\[truncated\]|…)$/;
+// Long results restored from history keep both ends around this marker.
+const OMITTED_MIDDLE = /… ⟨\d+ KB omitted⟩ …/;
 const LONG_VALUE_CHARS = 120;
 
 function isRecord(value) {
@@ -45,6 +47,7 @@ function displayValue(value) {
 }
 
 function stripTail(text) {
+  if (OMITTED_MIDDLE.test(text)) return { text, truncated: true };
   const truncated = TRUNCATION_TAIL.test(text);
   return { text: truncated ? text.replace(TRUNCATION_TAIL, '') : text, truncated };
 }

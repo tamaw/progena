@@ -126,6 +126,7 @@ _ACTIVE_RUN_STATUSES = frozenset({"queued", "running", "paused"})
 # Session id of a routine run started by a routine node: ``<run_id>_<8 hex>``,
 # so a lifecycle event names the workflow run it belongs to.
 _ROUTINE_SESSION_RE = re.compile(r"^(workflow_run_[0-9a-f]{12})_[0-9a-f]{8}$")
+_WORKFLOW_RUN_ID_RE = re.compile(r"^workflow_run_[0-9a-f]{12}$")
 
 
 @dataclass(frozen=True)
@@ -615,8 +616,14 @@ def _build_queued_run(
     ancestry_raw = invocation.get("ancestry")
     ancestry = [str(item) for item in ancestry_raw] if isinstance(ancestry_raw, list) else []
     trigger_node_id = invocation.get("trigger_node_id")
+    supplied_run_id = invocation.get("run_id")
+    run_id = (
+        supplied_run_id
+        if isinstance(supplied_run_id, str) and _WORKFLOW_RUN_ID_RE.fullmatch(supplied_run_id)
+        else f"workflow_run_{uuid.uuid4().hex[:12]}"
+    )
     return WorkflowRun(
-        run_id=f"workflow_run_{uuid.uuid4().hex[:12]}",
+        run_id=run_id,
         workflow_id=workflow_id,
         status="queued",
         trigger_event=dict(trigger),
@@ -994,6 +1001,7 @@ class WorkflowExecutor:
         source: WorkflowRunSource = "manual",
         ancestry: list[str] | None = None,
         trigger_node_id: str | None = None,
+        run_id: str | None = None,
     ) -> WorkflowRun | None:
         """Start or queue a run with bounded, cycle-safe ancestry."""
 
@@ -1019,6 +1027,7 @@ class WorkflowExecutor:
                 "source": source,
                 "ancestry": resolved_ancestry,
                 **({"trigger_node_id": trigger_node_id} if trigger_node_id else {}),
+                **({"run_id": run_id} if run_id else {}),
             },
         }
 

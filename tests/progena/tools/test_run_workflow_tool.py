@@ -1,5 +1,6 @@
 """Tests for the Progena run_workflow system tool."""
 
+import re
 from unittest.mock import AsyncMock, patch
 
 from src.progena.tools.protocol import ToolContext
@@ -79,6 +80,7 @@ async def test_execute_rejects_invalid_manual_payload_before_enqueueing():
 async def test_execute_queues_manual_trigger_payload_without_active_ancestry():
     state_manager = AsyncMock()
     state_manager.get_workflow_definition.return_value = _manual_definition()
+    state_manager.get_preferences_config.return_value = {"timezone": "Australia/Melbourne"}
     with patch("src.progena.tools.run_workflow.get_current_thread_id", return_value=None):
         result = await RunWorkflowTool().execute(
             _context(state_manager, {"workflow_id": "wf_a", "input": {"run_id": "round-a"}})
@@ -88,11 +90,20 @@ async def test_execute_queues_manual_trigger_payload_without_active_ancestry():
     state_manager.request_workflow_run.assert_awaited_once()
     assert state_manager.request_workflow_run.await_args.kwargs["input"] == {"run_id": "round-a"}
     assert state_manager.request_workflow_run.await_args.kwargs["ancestry"] == []
+    result_data = result.data or {}
+    assert re.fullmatch(r"workflow_run_[0-9a-f]{12}", result_data["run_id"])
+    assert state_manager.request_workflow_run.await_args.kwargs["run_id"] == result_data["run_id"]
+    # The returned path is the run's /runs/ file: dated, titled and ending in its id.
+    assert re.fullmatch(
+        rf"/runs/workflows/\d{{4}}-\d{{2}}-\d{{2}}_[a-z0-9-]+_{result_data['run_id'][13:21]}\.md",
+        result_data["path"],
+    )
 
 
 async def test_execute_resolves_ancestry_from_active_run():
     state_manager = AsyncMock()
     state_manager.get_workflow_definition.return_value = _definition()
+    state_manager.get_preferences_config.return_value = {}
     state_manager.list_workflow_runs.return_value = [
         {"thread_id": "t1", "status": "running", "workflow_id": "wf_a", "ancestry": []}
     ]

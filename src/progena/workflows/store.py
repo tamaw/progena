@@ -50,6 +50,7 @@ class WorkflowStore:
         self,
         *,
         request_id: str,
+        run_id: str,
         workflow_id: str,
         input: dict[str, Any],
         ancestry: list[str],
@@ -59,6 +60,7 @@ class WorkflowStore:
             workflow_invoke_request_key(request_id),
             {
                 "request_id": request_id,
+                "run_id": run_id,
                 "workflow_id": workflow_id,
                 "input": input,
                 "ancestry": ancestry,
