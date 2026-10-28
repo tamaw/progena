@@ -1668,8 +1668,11 @@ class TestScheduleEndpoint:
             "error",
         }
         store.delete_document(PROGENA_STATE_PREFIX, "health")
-        unknown_live_runs = schedules_service._schedule_runs_for(state_reader, "sched-live")
-        assert {run.run_id: run.status for run in unknown_live_runs}["dead"] == "running"
+        unknown_live = schedules_service.broadcast_schedule_snapshot()
+        statuses = {
+            run["run_id"]: run["status"] for run in unknown_live.payload["items"][0]["runs"]
+        }
+        assert statuses["dead"] == "running"
 
 
 class TestLogsPage:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any
 
 from src.backend.storage.documents import PROGENA_STATE_PREFIX, BackendDocumentStore
@@ -49,4 +50,17 @@ def owner_is_gone(
         return False
     if owner_instance:
         return owner_instance != live.instance_id
-    return bool(started_at and started_at < live.started_at)
+    started = _parse_timestamp(started_at)
+    live_started = _parse_timestamp(live.started_at)
+    return bool(started and live_started and started < live_started)
+
+
+def _parse_timestamp(value: str | None) -> datetime | None:
+    """Parse ISO-8601 (``Z`` or offset, any precision); naive values are UTC."""
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)

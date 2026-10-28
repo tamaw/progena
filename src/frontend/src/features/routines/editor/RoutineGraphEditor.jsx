@@ -283,11 +283,32 @@ function useRoutineRunEvents(agentId, parameters, inputSchema) {
 
   const continueInterruptedRun = useCallback(() => {
     const target = routineRunControlTarget(lifecycle, agentId);
-    if (lifecycleStatus !== 'interrupted' || !target) return;
+    if (lifecycleStatus !== 'interrupted' || !target?.sessionId) return;
+    // The operation id becomes the resumed attempt's id, so the editor follows
+    // it exactly as it follows a toolbar Resume.
+    const newRequestId = createOperationRequestId();
+    const watch = watchRef.current;
+    setSessionId(target.sessionId);
+    setRequestId(newRequestId);
+    setRunStartedAtMs(null);
     setRequestError(null);
-    void dispatch(continueInterruptedRoutineRun({
-      agentsUrl, agentId, threadId: target.threadId, targetRequestId: target.requestId,
-    })).unwrap().catch((error) => setRequestError(error.message || 'Could not continue this run'));
+    setControlError(null);
+    setPendingControlAction(null);
+    setStopRequestedAtMs(null);
+    void (async () => {
+      try {
+        await watch.select({ session_id: target.sessionId });
+        if (watchRef.current !== watch) return;
+        await dispatch(continueInterruptedRoutineRun({
+          agentsUrl, agentId, threadId: target.threadId, targetRequestId: target.requestId,
+          requestId: newRequestId,
+        })).unwrap();
+      } catch (error) {
+        if (watchRef.current !== watch) return;
+        setRequestError(error.message || 'Could not continue this run');
+        setRequestId((current) => (current === newRequestId ? target.requestId : current));
+      }
+    })();
   }, [agentId, agentsUrl, dispatch, lifecycle, lifecycleStatus]);
 
   const resetInteractiveSession = useCallback(() => {

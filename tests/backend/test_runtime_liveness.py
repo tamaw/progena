@@ -22,3 +22,12 @@ def test_owner_is_gone_requires_a_known_newer_runtime() -> None:
     assert not owner_is_gone(None, "2026-10-28T12:00:00Z", live)
     assert not owner_is_gone(None, None, live)
     assert not owner_is_gone("old", "2026-10-28T11:00:00Z", None)
+
+
+def test_legacy_owner_comparison_uses_instants_not_text() -> None:
+    # Health uses "+00:00" with microseconds; older records may use "Z" without.
+    live = LiveRuntime("new", "2026-10-28T12:00:00.500000+00:00")
+
+    assert owner_is_gone(None, "2026-10-28T12:00:00Z", live)
+    assert not owner_is_gone(None, "2026-10-28T12:00:01Z", live)
+    assert not owner_is_gone(None, "2026-10-28T23:00:01+11:00", live)

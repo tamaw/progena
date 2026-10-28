@@ -163,7 +163,7 @@ class SSEProgenaClient:
             return None
         try:
             response = await client.get(
-                f"/v1/threads/{thread_id}/state",
+                f"/v1/threads/{quote(thread_id, safe=':')}/state",
                 timeout=httpx.Timeout(1.5, connect=0.5),
             )
             if response.status_code != 200:

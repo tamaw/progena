@@ -22,6 +22,7 @@ from langgraph.runtime import Runtime
 from src.progena.documents.values import make_json_safe
 from src.progena.orchestration.nodes.checkpoint import checkpoint_node
 from src.progena.orchestration.state import ProgenaState
+from src.progena.runtime.active_threads import is_running
 from src.progena.runtime.http.responses import (
     build_response_object,
     build_sse_event,
@@ -846,7 +847,7 @@ class RuntimeChatService:
             except Exception as exc:
                 logger.warning("Reading thread state for %s failed: %s", thread_id, exc)
                 return _json_error("Failed to read thread state", "server_error", 500)
-            in_flight = bool(
+            in_flight = is_running(thread_id) or bool(
                 (task := self._inflight_by_thread.get(thread_id)) is not None and not task.done()
             )
 

@@ -1076,3 +1076,33 @@ async def test_thread_state_distinguishes_interruption_from_waiting_and_live_wor
             with contextlib.suppress(asyncio.CancelledError):
                 await task
         await runner.cleanup()
+
+
+async def test_thread_state_treats_a_heartbeat_turn_as_live_work() -> None:
+    """A follow-up the heartbeat is running on a chat thread is not interrupted."""
+    from src.progena.runtime.active_threads import running_turn
+
+    class Graph:
+        async def aget_state(self, _config: dict[str, Any]) -> Any:
+            return SimpleNamespace(
+                created_at="2026-10-28T10:00:00+00:00", next=("tools",), interrupts=(), config={}
+            )
+
+    service = RuntimeChatService(SimpleNamespace(graph=Graph()))
+    app = web.Application()
+    app.add_routes(service.routes())
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "127.0.0.1", 0)
+    await site.start()
+    port = site._server.sockets[0].getsockname()[1]
+    url = f"http://127.0.0.1:{port}/v1/threads/thread/state"
+    try:
+        async with httpx.AsyncClient() as client:
+            with running_turn("thread"):
+                during = (await client.get(url)).json()
+            after = (await client.get(url)).json()
+        assert (during["in_flight"], during["interrupted"]) == (True, False)
+        assert (after["in_flight"], after["interrupted"]) == (False, True)
+    finally:
+        await runner.cleanup()
