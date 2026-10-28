@@ -15,6 +15,7 @@ from langchain.agents.middleware.types import AgentMiddleware, ModelRequest, Mod
 from langchain_core.messages import SystemMessage
 from langchain_core.messages.content import TextContentBlock
 
+from src.progena.agent.clock_context import append_system_message_context, user_clock_context
 from src.progena.instructions import render_runtime_instruction
 
 
@@ -48,8 +49,22 @@ class LiveInstructionMiddleware(AgentMiddleware):
         handler: Callable[[ModelRequest], Awaitable[ModelResponse]],
     ) -> ModelResponse:
         current = await self._current_text()
-        if current != self._boot_text and request.system_message is not None:
-            replaced = _replace_leading_text(request.system_message, self._boot_text, current)
-            if replaced is not None:
-                request = request.override(system_message=replaced)
+        if request.system_message is not None:
+            system_message = request.system_message
+            if current != self._boot_text:
+                system_message = _replace_leading_text(system_message, self._boot_text, current)
+            if system_message is not None:
+                request = request.override(
+                    system_message=append_system_message_context(
+                        system_message,
+                        await user_clock_context(
+                            self._state_manager,
+                            has_shell=False,
+                            has_current_time=any(
+                                getattr(tool, "name", "") == "current_time"
+                                for tool in request.tools
+                            ),
+                        ),
+                    )
+                )
         return await handler(request)

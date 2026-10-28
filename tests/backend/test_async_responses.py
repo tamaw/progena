@@ -126,7 +126,7 @@ class TestAsyncResponseHandling:
         expired_state = chat_responses._ensure_response_stream(
             expired_request_id, "resp-expired", "thread-expired", "progena-v1"
         )
-        expired_state.expires_at = time.time() - 1
+        expired_state.expiry_deadline = time.monotonic() - 1
 
         try:
             with (

@@ -7,6 +7,8 @@ from unittest.mock import AsyncMock
 import pytest
 
 from src.progena.a2a.client import A2AClient
+from src.progena.a2a.models import A2ATaskRecord
+from src.progena.a2a.payloads import build_task_response
 
 
 @pytest.mark.asyncio
@@ -72,3 +74,16 @@ async def test_send_message_includes_follow_up_identifiers(monkeypatch) -> None:
     assert captured["message"].task_id == "task-1"
     assert captured["message"].context_id == "ctx-1"
     assert captured["message"].reference_task_ids == ["task-1"]
+
+
+def test_task_response_marks_legacy_naive_timestamps_as_utc() -> None:
+    response = build_task_response(
+        A2ATaskRecord(
+            task_id="task-1",
+            agent_name="agent",
+            created_at="2026-10-29T12:00:00",
+            updated_at="2026-10-29T12:00:00",
+        )
+    )
+
+    assert response["created_at"] == "2026-10-29T12:00:00+00:00"

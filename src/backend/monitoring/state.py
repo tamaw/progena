@@ -91,9 +91,10 @@ def _parse_timestamp(value: Any) -> datetime | None:
 
 
 def _iso_from_datetime(value: datetime) -> str:
+    # Log lines carry no zone; both services write them in UTC.
     if value.tzinfo is None:
-        return value.isoformat(sep=" ")
-    return value.isoformat().replace("+00:00", "Z")
+        value = value.replace(tzinfo=UTC)
+    return value.astimezone(UTC).isoformat().replace("+00:00", "Z")
 
 
 def _normalize_log_level(value: Any) -> str:
@@ -299,7 +300,8 @@ class HealthInfo:
             return False
         try:
             last = datetime.fromisoformat(self.last_active.replace("Z", "+00:00"))
-            now = datetime.now(last.tzinfo)
+            last = last.replace(tzinfo=UTC) if last.tzinfo is None else last.astimezone(UTC)
+            now = datetime.now(UTC)
             return (now - last).total_seconds() < 60
         except Exception:
             return False
@@ -1142,6 +1144,9 @@ class StateReader:
                 or payload.get("created_at")
                 or self._path_fallback_timestamp(path)
             )
+            parsed_timestamp = _parse_timestamp(timestamp)
+            if parsed_timestamp is not None:
+                timestamp = _iso_from_datetime(parsed_timestamp)
             message = (
                 payload.get("message")
                 or payload.get("msg")
@@ -1166,7 +1171,12 @@ class StateReader:
 
         matched = PLAIN_LOG_LINE_RE.match(line.strip())
         if matched:
-            timestamp = matched.group("timestamp")
+            parsed_timestamp = _parse_timestamp(matched.group("timestamp"))
+            timestamp = (
+                _iso_from_datetime(parsed_timestamp)
+                if parsed_timestamp is not None
+                else matched.group("timestamp")
+            )
             entry = {
                 "timestamp": timestamp,
                 "time": timestamp,

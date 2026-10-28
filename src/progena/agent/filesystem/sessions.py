@@ -40,6 +40,7 @@ from src.progena.agent.filesystem.base import _AsyncOnlyFileBackendMixin
 from src.progena.documents.types import BUILTIN_DOCUMENT_TYPES
 from src.progena.sessions.titles import display_title
 from src.progena.state.manager import StateManager
+from src.progena.utils import normalize_utc_datetime, normalize_utc_timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -120,7 +121,10 @@ class SessionDirectoryBackend(_AsyncOnlyFileBackendMixin):
         for payload in rows:
             if not payload["archived"]:
                 sessions.append({**payload, "_tz": tz_name})
-        sessions.sort(key=lambda s: s["last_activity"], reverse=True)
+        sessions.sort(
+            key=lambda session: normalize_utc_timestamp(str(session["last_activity"])),
+            reverse=True,
+        )
         return sessions
 
     async def _find_session_by_name(self, name: str) -> dict[str, Any] | None:
@@ -139,7 +143,7 @@ class SessionDirectoryBackend(_AsyncOnlyFileBackendMixin):
         current_text = self._format_file(session)
         current_parsed = self._parse_file(current_text)
         assert current_parsed is not None
-        _current_front, current_body = current_parsed
+        current_front, current_body = current_parsed
 
         if body != current_body:
             return WriteResult(error=_READ_ONLY_BODY)
@@ -148,7 +152,7 @@ class SessionDirectoryBackend(_AsyncOnlyFileBackendMixin):
         for key, value in front.items():
             if key == "display_title":
                 continue
-            if session.get(key) != value:
+            if current_front.get(key) != value:
                 if key not in _SESSION_TYPE.writable_fields:
                     return WriteResult(
                         error=(
@@ -176,6 +180,9 @@ class SessionDirectoryBackend(_AsyncOnlyFileBackendMixin):
             for k, v in session.items()
             if k not in ("content", "thread_id") and not k.startswith("_")
         }
+        for key in ("created_at", "last_activity"):
+            if isinstance(front.get(key), str):
+                front[key] = normalize_utc_timestamp(front[key])
         front["display_title"] = display_title(session["title"], session["first_message"])
         yaml_text = yaml.safe_dump(
             front, default_flow_style=False, sort_keys=False, allow_unicode=True
@@ -197,7 +204,10 @@ class SessionDirectoryBackend(_AsyncOnlyFileBackendMixin):
 
     def _file_name(self, session: dict[str, Any]) -> str:
         title = display_title(session["title"], session["first_message"])
-        created = datetime.fromisoformat(session["created_at"])
+        created = normalize_utc_datetime(
+            datetime.fromisoformat(str(session["created_at"]).replace("Z", "+00:00"))
+        )
+        assert created is not None
         date = f"{created.astimezone(self._zone(session['_tz'])):%Y-%m-%d}"
         return f"{date}_{self._slug(title)}_{session['thread_id'][:8]}.md"
 

@@ -198,7 +198,6 @@ async def test_runtime_heartbeat_graph_processes_one_input_cycle() -> None:
         mcp_refresh_seconds=60.0,
         registry_refresh_seconds=60.0,
         heartbeat_health_seconds=30.0,
-        timezone="UTC",
         reasoning_enabled=True,
         llm_model="gpt-5.3-chat",
         llm_reasoning_effort="medium",
@@ -267,7 +266,6 @@ async def test_runtime_heartbeat_graph_emits_agent_callback_for_notified_input()
         mcp_refresh_seconds=60.0,
         registry_refresh_seconds=60.0,
         heartbeat_health_seconds=30.0,
-        timezone="UTC",
         reasoning_enabled=False,
     )
     graph = create_runtime_heartbeat_graph()
@@ -329,7 +327,6 @@ async def test_runtime_heartbeat_graph_reports_startup_node_errors() -> None:
             mcp_refresh_seconds=60.0,
             registry_refresh_seconds=60.0,
             heartbeat_health_seconds=30.0,
-            timezone="UTC",
             reasoning_enabled=False,
         )
         graph = create_runtime_heartbeat_graph()
@@ -393,7 +390,6 @@ def _heartbeat_context(**overrides):
         "repo_scan_seconds": 3600.0,
         "worktree_dir": None,
         "heartbeat_health_seconds": 30.0,
-        "timezone": "UTC",
         "reasoning_enabled": False,
     }
     values.update(overrides)

@@ -197,10 +197,8 @@ to a one-off override file; do not expose it in the public deployment.
 - `progena` and `backend`: `${PROGENA_HOST_LOGS_DIR:-../logs}:/app/logs`, `${PROGENA_HOST_REPOS_DIR:-../repos}:/app/repos`
 
 The CI deployment uses the GitHub Environment `production`. Store credentials in
-its secrets and deployment options such as `PROGENA_TIMEZONE` in its variables.
-CI derives the host `logs`, `repos`, and `claude` directories from the single
-installation root `/var/lib/progena`; changing example timezone values does
-not override an environment's configured timezone.
+its secrets. Containers, operational logs, and agent shells use UTC; user
+wall-clock scheduling is stored in account preferences.
 
 Ephemeral storage:
 - `/app/tmp` is a `tmpfs` mount in `progena` and `backend`

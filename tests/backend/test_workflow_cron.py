@@ -9,6 +9,7 @@ from src.backend.workflows.cron import WorkflowCronClock, workflow_cron_state_ke
 from src.backend.workflows.service import (
     PromptExecutionResult,
     WorkflowExecutor,
+    build_manual_trigger_event,
     get_workflow_run,
     list_workflow_definitions,
     list_workflow_runs,
@@ -16,7 +17,7 @@ from src.backend.workflows.service import (
 )
 from src.progena.workflows.documents import default_workflow_definition
 from src.progena.workflows.events import build_cron_trigger_output
-from src.progena.workflows.models import WorkflowNodeCron
+from src.progena.workflows.models import WorkflowDefinition, WorkflowNodeCron
 
 START = datetime(2026, 10, 12, 8, 30, tzinfo=UTC)
 
@@ -117,6 +118,50 @@ def _setup(**cron):
     definition = save_workflow_definition(store, cron_workflow(timezone="UTC", **cron))
     executor = RecordingExecutor()
     return store, definition, executor, Clock(store, executor)
+
+
+@pytest.mark.parametrize("timezone", [None, ""])
+def test_list_accepts_legacy_null_or_empty_cron_timezone_as_unstamped(timezone):
+    store = InMemoryDocumentStore()
+    seed_document_types(store)
+    saved = save_workflow_definition(store, cron_workflow())
+    payload = saved.model_dump(mode="json", by_alias=True)
+    payload["graph"]["nodes"]["cron"]["timezone"] = timezone
+    store.save_document("progena.state", f"workflow:{payload['id']}", payload)
+    [definition] = list_workflow_definitions(store)
+
+    node = definition.graph.nodes["cron"]
+    assert isinstance(node, WorkflowNodeCron)
+    assert node.timezone is None
+    assert "timezone" not in definition.model_dump(mode="json")["graph"]["nodes"]["cron"]
+
+
+@pytest.mark.parametrize("timezone", [None, ""])
+def test_save_existing_null_or_empty_cron_timezone_omits_the_legacy_stamp(timezone):
+    store = InMemoryDocumentStore()
+    seed_document_types(store)
+    saved = save_workflow_definition(store, cron_workflow())
+    payload = saved.model_dump(mode="json", by_alias=True)
+    payload["graph"]["nodes"]["cron"]["timezone"] = timezone
+
+    updated = save_workflow_definition(store, payload)
+
+    assert "timezone" not in updated.model_dump(mode="json")["graph"]["nodes"]["cron"]
+
+
+def test_manual_cron_trigger_uses_the_preference_timezone_when_unstamped(monkeypatch):
+    definition = WorkflowDefinition.model_validate(cron_workflow(timezone=None))
+    monkeypatch.setattr("src.backend.workflows.service.utcnow", lambda: START)
+
+    trigger = build_manual_trigger_event(
+        definition,
+        preference_timezone="Australia/Melbourne",
+    )
+
+    assert trigger["timezone"] == "Australia/Melbourne"
+    scheduled = datetime.fromisoformat(trigger["scheduled_for"])
+    assert scheduled == START
+    assert scheduled.utcoffset() == timedelta(0)
 
 
 @pytest.mark.asyncio

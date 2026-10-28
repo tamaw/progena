@@ -19,6 +19,7 @@ from deepagents.backends.utils import (
 )
 
 from src.progena.agent.filesystem.base import _AsyncOnlyFileBackendMixin, _doc_to_text
+from src.progena.cron import timezone_name
 from src.progena.instructions.templates import instruction_relative_path
 from src.progena.workflows.documents import workflow_file_name, workflow_id_from_path
 from src.progena.workflows.validation import validate_workflow_definition_document
@@ -98,6 +99,22 @@ class WorkflowDirectoryBackend(_AsyncOnlyFileBackendMixin):
             return WriteResult(error=f"Invalid workflow {name}: {exc}")
         if workflow.get("id") != workflow_id:
             return WriteResult(error=f"Workflow id must match filename '{workflow_id}'")
+        nodes = workflow.get("graph", {}).get("nodes", {})
+        previous = await self._sm.get_workflow_definition(workflow_id)
+        previous_graph = previous.get("graph") if isinstance(previous, dict) else None
+        previous_nodes = previous_graph.get("nodes") if isinstance(previous_graph, dict) else {}
+        preference_timezone = timezone_name(
+            (await self._sm.get_preferences_config()).get("timezone")
+        )
+        if isinstance(nodes, dict):
+            for node_id, node in nodes.items():
+                if (
+                    isinstance(node, dict)
+                    and node.get("kind") == "cron"
+                    and not node.get("timezone")
+                    and node_id not in previous_nodes
+                ):
+                    node["timezone"] = preference_timezone
         await self._sm.save_workflow_definition(workflow_id, workflow)
         return WriteResult(path=file_path)
 

@@ -7,7 +7,9 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 from src.progena.agent.filesystem.base import StateFile
+from src.progena.cron import timezone_name
 from src.progena.documents.values import JsonDoc
+from src.progena.schedules.engine import parse_schedule_datetime
 from src.progena.schedules.models import ScheduleEntry
 from src.progena.schedules.validation import validate_schedule_document
 
@@ -36,17 +38,26 @@ def create_schedule_state_file(
     async def save(doc: JsonDoc) -> None:
         if not isinstance(doc, dict):
             raise ValueError("schedule.json must be a JSON object keyed by schedule id")
+        previous_entries = await state_manager.get_schedule()
+        previous = {
+            entry_id: entry.model_dump(mode="json") for entry_id, entry in previous_entries.items()
+        }
+        preference_timezone = timezone_name(
+            (await state_manager.get_preferences_config()).get("timezone")
+        )
         entries: dict[str, ScheduleEntry] = {}
         for entry_id, item in doc.items():
             if not isinstance(item, dict):
                 raise ValueError(f"entry '{entry_id}' must be an object")
             fields = {k: v for k, v in item.items() if k != "id"}
+            scheduled_at = fields.get("scheduled_at")
+            if isinstance(scheduled_at, str):
+                parsed_scheduled_at = parse_schedule_datetime(scheduled_at)
+                if parsed_scheduled_at is not None:
+                    fields["scheduled_at"] = parsed_scheduled_at.isoformat()
+            if entry_id not in previous and not fields.get("timezone"):
+                fields["timezone"] = preference_timezone
             entries[entry_id] = ScheduleEntry(id=entry_id, **fields)
-
-        previous = {
-            entry_id: entry.model_dump(mode="json")
-            for entry_id, entry in (await state_manager.get_schedule()).items()
-        }
         await state_manager.save_schedule(entries)
 
         seen_ids: set[str] = set()

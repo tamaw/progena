@@ -6,6 +6,7 @@ import { buildEntityPath, useEntityUrlSync } from '../../lib/routes';
 import { addEdge, applyEdgeChanges, applyNodeChanges, Background, Controls, MiniMap, ReactFlow, ReactFlowProvider, useReactFlow } from '@xyflow/react';
 import { useConfig } from '../../context/ConfigContext';
 import { useNotifications } from '../../context/NotificationContext';
+import { selectPreferences } from '../settings/state/preferences';
 import { deleteWorkflow, fetchWorkflowContent, fetchWorkflows, fetchWorkflowRuns, pauseWorkflow, resumeWorkflow, saveWorkflow, selectWorkflowDetailRequest, selectWorkflowDetailByPath, selectWorkflowLatestRunById, selectWorkflowRuns, selectWorkflows, selectWorkflowsState, triggerWorkflow } from './state/workflows';
 import { fetchAgentProfiles } from '../agents/state/agents';
 import { fetchDocumentTypes, selectDocumentTypes } from '../documents/state';
@@ -83,6 +84,7 @@ function WorkflowsInner() {
     () => workflowEditorDraft(selectedDetail?.workflow),
     [selectedDetail?.workflow],
   );
+  const preferences = useSelector(selectPreferences);
   const [editorDraft, setEditorDraft, workflowDraftControls] = useEntityDraft(
     workflowDraftKey,
     canonicalEditorDraft,
@@ -631,13 +633,20 @@ function WorkflowsInner() {
     const position = dropPosition || nextDockNodePosition(nodesRef.current);
     const nextNodes = [
       ...nodesRef.current,
-      createPaletteNode(kind, nodeId, position, documentTypes, nodeDataCallbacks),
+      createPaletteNode(
+        kind,
+        nodeId,
+        position,
+        documentTypes,
+        nodeDataCallbacks,
+        preferences.timezone,
+      ),
     ];
     const nextEdges = edgesRef.current;
     setGraphNodes(nextNodes);
     setGraphEdges(nextEdges);
     syncWorkflowFromGraph(nextNodes, nextEdges, viewportRef.current);
-  }, [draftWorkflow, documentTypes, nodeDataCallbacks, setGraphEdges, setGraphNodes, syncWorkflowFromGraph]);
+  }, [draftWorkflow, documentTypes, nodeDataCallbacks, preferences.timezone, setGraphEdges, setGraphNodes, syncWorkflowFromGraph]);
 
   const createUnpackNode = useCallback((sourceNodeId, sourcePort, position) => {
     const nodeId = `unpack_${Math.random().toString(36).slice(2, 10)}`;

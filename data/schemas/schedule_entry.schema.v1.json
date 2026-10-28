@@ -17,7 +17,7 @@
       "description": "ISO8601 timestamp for a one-off schedule. Set exactly one of cron_expression/scheduled_at, leave the other null."
     },
     "timezone": {
-      "type": "string",
+      "type": ["string", "null"],
       "description": "IANA timezone cron_expression/scheduled_at is interpreted in."
     },
     "paused": {

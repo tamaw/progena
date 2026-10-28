@@ -81,6 +81,20 @@ def _normalize_message(key: str, payload: Any) -> InboxMessage | None:
     )
 
 
+def _inbox_message_sort_key(message: InboxMessage) -> tuple[int, datetime, str]:
+    """Order explicit-offset inbox creation instants without rewriting message content."""
+    value = message.created_at
+    if value and ("T" in value or " " in value):
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            pass
+        else:
+            if parsed.tzinfo is not None:
+                return 1, parsed.astimezone(UTC), ""
+    return 0, datetime.min.replace(tzinfo=UTC), value or ""
+
+
 def list_inbox_messages(store: BackendDocumentStore) -> list[InboxMessage]:
     """Load all inbox messages from the store, newest first."""
     messages = [
@@ -88,7 +102,7 @@ def list_inbox_messages(store: BackendDocumentStore) -> list[InboxMessage]:
         for key, document in store.list_documents(PROGENA_STATE_PREFIX, INBOX_MESSAGE_KEY_PREFIX)
         if (message := _normalize_message(key, document.payload)) is not None
     ]
-    messages.sort(key=lambda message: message.created_at or "", reverse=True)
+    messages.sort(key=_inbox_message_sort_key, reverse=True)
     return messages
 
 

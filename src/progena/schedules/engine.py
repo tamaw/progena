@@ -3,25 +3,29 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
-from src.progena.cron import default_timezone_name, next_cron_time, resolve_timezone
+from src.progena.cron import next_cron_time, resolve_timezone, timezone_name
 from src.progena.utils import utcnow
 
 logger = logging.getLogger(__name__)
 
 
 def parse_schedule_datetime(value: Any) -> datetime | None:
-    """Parse a datetime from supported schedule entry formats."""
+    """Parse a schedule timestamp as a UTC instant, treating naive input as UTC."""
     if isinstance(value, datetime):
-        return value
-    if isinstance(value, str):
+        parsed = value
+    elif isinstance(value, str):
         try:
-            return datetime.fromisoformat(value.replace("Z", "+00:00"))
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
         except ValueError:
             return None
-    return None
+    else:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
 
 
 class Scheduler:
@@ -31,6 +35,7 @@ class Scheduler:
         self,
         schedule: list[dict[str, Any]],
         current_time: datetime,
+        preference_timezone: str = "UTC",
     ) -> list[dict[str, Any]]:
         """Get all schedule items that are due based on cron + last_run/created_at."""
         due_with_time: list[tuple[datetime, dict[str, Any]]] = []
@@ -38,7 +43,7 @@ class Scheduler:
         for item in schedule:
             if item.get("paused"):
                 continue
-            next_run = self.next_run_for_entry(item)
+            next_run = self.next_run_for_entry(item, preference_timezone)
             if next_run is None:
                 continue
             if next_run <= current_time:
@@ -47,7 +52,9 @@ class Scheduler:
         due_with_time.sort(key=lambda pair: pair[0])
         return [item for _, item in due_with_time]
 
-    def next_run_for_entry(self, item: dict[str, Any]) -> datetime | None:
+    def next_run_for_entry(
+        self, item: dict[str, Any], preference_timezone: str = "UTC"
+    ) -> datetime | None:
         """Compute the next run for an entry."""
         scheduled_at = item.get("scheduled_at")
         last_run = parse_schedule_datetime(item.get("last_run"))
@@ -65,9 +72,8 @@ class Scheduler:
         created_at = parse_schedule_datetime(item.get("created_at"))
         reference = last_run or created_at or utcnow()
         # Evaluate cron fields against wall-clock time in the entry's timezone.
-        # Fall back to the configured default zone when the entry does not
-        # specify one.
-        zone = resolve_timezone(item.get("timezone") or default_timezone_name())
+        # Legacy entries without one use the current user preference.
+        zone = resolve_timezone(timezone_name(item.get("timezone"), preference_timezone))
         try:
             return next_cron_time(cron_expression, reference, zone)
         except Exception:

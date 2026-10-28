@@ -45,6 +45,16 @@ def validate_workflow_definition_document(
         raise ValueError(f"not valid JSON: {exc}") from exc
     if not isinstance(parsed, dict):
         raise ValueError("workflow definition must be a JSON object")
+    graph = parsed.get("graph")
+    nodes = graph.get("nodes") if isinstance(graph, dict) else None
+    if isinstance(nodes, dict):
+        for node in nodes.values():
+            if (
+                isinstance(node, dict)
+                and node.get("kind") == "cron"
+                and (node.get("timezone") is None or node.get("timezone") == "")
+            ):
+                node.pop("timezone", None)
     return validate_workflow_definition_payload(
         derive_workflow_port_schemas(
             parsed,
@@ -83,7 +93,7 @@ def validate_workflow_definition_payload(payload: Any) -> dict[str, Any]:
                     f"manual node '{node_id}' has an invalid payload schema: {schema_error}"
                 )
         if isinstance(node, WorkflowNodeCron) and (
-            error := cron_error(node.expression, node.timezone)
+            error := cron_error(node.expression, node.timezone or "UTC")
         ):
             raise ValueError(f"cron node '{node_id}': {error}")
     for node_id, event_node in event_nodes.items():

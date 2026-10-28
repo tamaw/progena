@@ -3,9 +3,8 @@
 from __future__ import annotations
 
 import logging
-import os
 from datetime import UTC, datetime, tzinfo
-from typing import cast
+from typing import Any, cast
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from croniter import croniter
@@ -13,14 +12,19 @@ from croniter import croniter
 logger = logging.getLogger(__name__)
 
 
-def default_timezone_name() -> str:
-    """Resolve the default timezone (env var, then config default)."""
-    name = os.getenv("PROGENA_TIMEZONE")
-    if name:
-        return name
-    from .config import DEFAULT_TIMEZONE
-
-    return DEFAULT_TIMEZONE
+def timezone_name(value: Any, fallback: str = "UTC") -> str:
+    """Return a valid IANA timezone name, using a valid fallback or UTC."""
+    name = value.strip() if isinstance(value, str) else ""
+    try:
+        ZoneInfo(name)
+    except (ZoneInfoNotFoundError, ValueError):
+        fallback = fallback.strip() if isinstance(fallback, str) else ""
+        try:
+            ZoneInfo(fallback)
+        except (ZoneInfoNotFoundError, ValueError):
+            return "UTC"
+        return fallback
+    return name
 
 
 def resolve_timezone(name: str | None) -> tzinfo:

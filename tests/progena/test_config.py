@@ -118,9 +118,7 @@ class TestRuntimeConfig:
     """Tests for runtime configuration."""
 
     def test_from_env_overrides_defaults(self):
-        """Test environment variables override defaults."""
         env = {
-            "PROGENA_TIMEZONE": "UTC",
             "PROGENA_IDLE_BACKOFF_SECONDS": "60",
             "PROGENA_MCP_REFRESH_SECONDS": "900",
             "PROGENA_REGISTRY_REFRESH_SECONDS": "1200",
@@ -131,7 +129,6 @@ class TestRuntimeConfig:
         }
         with patch.dict(os.environ, env, clear=False):
             config = RuntimeConfig.from_env()
-            assert config.timezone == "UTC"
             assert config.idle_backoff_seconds == 60
             assert config.mcp_refresh_seconds == 900
             assert config.registry_refresh_seconds == 1200
@@ -318,14 +315,12 @@ class TestProgenaConfig:
         """Test loading config from environment variables."""
         env = {
             "AZURE_OPENAI_BASE_URL": "https://example.openai.azure.com/openai/v1",
-            "PROGENA_TIMEZONE": "Asia/Tokyo",
             "PROGENA_IDLE_BACKOFF_SECONDS": "15",
         }
 
         with patch.dict(os.environ, env, clear=False):
             config = ProgenaConfig.load(Path("."))
 
-            assert config.runtime.timezone == "Asia/Tokyo"
             assert config.runtime.idle_backoff_seconds == 15
 
     def test_to_dict_redacts_secrets(self):

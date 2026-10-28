@@ -62,6 +62,7 @@ class TestBoundedQueues(unittest.IsolatedAsyncioTestCase):
         self.config = MockConfig()
         self.state_manager = MagicMock()
         self.state_manager.get_schedule = AsyncMock(return_value={})
+        self.state_manager.get_preferences_config = AsyncMock(return_value={"timezone": "UTC"})
         self.state_manager.remove_schedule_entry = AsyncMock(return_value=True)
         self.state_manager.update_schedule_entry = AsyncMock(return_value=True)
         self.state_manager.upsert_schedule_run = AsyncMock(return_value=None)

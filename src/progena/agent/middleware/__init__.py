@@ -1,5 +1,6 @@
 """Custom middleware exports for the Progena DeepAgent."""
 
+from src.progena.agent.clock_context import ClockContextMiddleware
 from src.progena.agent.middleware.direct_a2a_fast_path import DirectA2AFastPathMiddleware
 from src.progena.runtime.streaming.stream_events import emit_stream_event
 
@@ -14,6 +15,7 @@ from .tool_timing import ToolTimingMiddleware
 
 __all__ = [
     "AsyncSubagentTrackingMiddleware",
+    "ClockContextMiddleware",
     "ToolTimingMiddleware",
     "DirectA2AFastPathMiddleware",
     "DynamicMCPToolMiddleware",
