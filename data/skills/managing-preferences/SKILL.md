@@ -55,7 +55,7 @@ Rules enforced on every write (a violating edit is rejected and nothing changes)
   `{agent_name}` in your instructions on the next model call. It is never an
   identifier, so renaming does not affect stored data.
 - `timezone` is required and must be a non-empty IANA timezone name (e.g.
-  `America/New_York`, `Australia/Melbourne`, `UTC`) — anything `zoneinfo` doesn't
+  `America/New_York`, `Europe/London`, `UTC`) — anything `zoneinfo` doesn't
   recognize is rejected.
 - `theme` must be one of `system`, `dark`, `light`.
 - `nav_collapsed` is a boolean.
@@ -87,5 +87,5 @@ than asking them to supply one.
   unrecognized timezone name, a stray extra field, or a `theme`/`pinned_panel`
   value outside the enum above.
 - Timezone name unsure: prefer well-known IANA zones (`America/New_York`,
-  `Australia/Melbourne`, `Asia/Tokyo`, `UTC`) over abbreviations like `EST`/`PST`,
+  `Europe/London`, `Asia/Tokyo`, `UTC`) over abbreviations like `EST`/`PST`,
   which are not valid IANA names.
