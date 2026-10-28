@@ -51,8 +51,6 @@ const CanvasesPage = lazy(() => import('./features/canvases/CanvasesPage'));
 
 const RunsPage = lazy(() => import('./features/runs/RunsPage'));
 
-const RunTracePage = lazy(() => import('./features/runs/RunTracePage'));
-
 // Keep the import behind the compile-time flag so the catalogue is absent from production assets.
 const DesignLibraryPage = import.meta.env.DEV
   ? lazy(() => import('./features/design-library/DesignLibraryPage'))
@@ -104,7 +102,6 @@ export function AppRoutes() {
                     <Route path="/dashboard" element={<DeferredRoute Page={DashboardPage} fallback="Loading dashboard..." />} />
                     <Route path="/insights" element={<DeferredRoute Page={InsightsPage} fallback="Loading insights..." />} />
                     <Route path="/runs" element={<DeferredRoute Page={RunsPage} fallback="Loading runs..." />} />
-                    <Route path="/runs/:kind/:runId" element={<DeferredRoute Page={RunTracePage} fallback="Loading run trace..." />} />
                     <Route path="/models" element={<DeferredRoute Page={ModelsPage} fallback="Loading models..." />} />
                     <Route path="/profiles/:profileName?/:titleSlug?" element={<DeferredRoute Page={ProfilesPage} fallback="Loading profiles..." />} />
                     <Route path="/channels" element={<DeferredRoute Page={ChannelsPage} fallback="Loading channels..." />} />

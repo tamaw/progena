@@ -360,26 +360,34 @@ Status uses the same interrupted rule as the UI
 
 ## Runs
 
-**Spectate → Runs** (`/runs`) is a full-width execution-history table for
+**Spectate → Runs** (`/runs`) is a full-width execution-history flame-chart grid for
 workflows, top-level routine attempts, and schedules. Kind, status and text
-filters use newest-first cursor paging; column sorting applies to the loaded
+filters use newest-first cursor paging; the sort dropdown applies to the loaded
 page. Estimated progress compares distinct completed executable nodes with
 the graph's executable nodes, excluding trigger and data nodes. Routine graph
 counts use the pinned revision; workflow counts use the current definition.
 A failed or cancelled run does not imply every node executed.
 
-Selecting a row expands its nested waterfall directly underneath, with one run
-expanded at a time. The table and expanded trace scroll independently inside
-the fixed page; table headers stay visible. Rows use the design library's compact
-theme-token treatment without a redundant page heading or Refresh button.
-The direct `/runs/{kind}/{runId}` URL reuses the same trace content.
-Traces include collapsible steps, child routines, agent/model/tool activity,
-and selected-span details. Model intervals are derived from checkpoint commits,
-not provider latency.
+Expanding a run inserts its child activity into the same grid, with one run
+expanded at a time. The synthetic run span is omitted rather than repeated.
+Structural rows collapse their descendants; non-overlapping sibling model calls
+share compact lanes, while tool declarations without timing share marker lanes.
+Overlapping measured calls stay on separate lanes. Each run has its own elapsed
+time scale; bars across different runs do not imply a common wall-clock window.
+The fixed page has one internally scrolling chart and sticky column headers.
+Controls reuse the design library's icons, theme tokens and custom select.
+There is no separate trace page, nested table, page heading or Refresh control.
+
+Selecting a bar highlights a call without revealing payloads. A separate row
+disclosure opens bounded input/output/error details immediately below that lane;
+packed lanes provide a call selector. Details do not repeat duration/token fields.
+Model intervals are derived from checkpoint commits, not provider latency.
 Tool duration is measured only when an audit record exists; otherwise a
-transcript declaration marker explicitly reports timing unavailable. Available
-token usage is deduplicated from model messages and shown only in trace details.
-Missing usage is not reported as zero.
+transcript declaration marker explicitly reports timing unavailable. Deduplicated
+available token usage appears in the run and model-lane columns, loaded on run
+expansion and retained with its cached trace. The list never hydrates every run
+just to populate tokens. Missing usage is a dash, not zero; lane totals include
+only recorded usage.
 
 The backend reads Postgres directly; it does not ask the runtime or the agent-facing
 `/runs/` mount to build this visual model. Document and checkpoint notifications
