@@ -9,7 +9,7 @@ export const TIMEZONE_OPTIONS = (() => {
   } catch {
     // Very old browsers only: Intl.supportedValuesOf isn't universally
     // available. A minimal fallback still lets the dropdown function.
-    return ['UTC', 'America/New_York', 'America/Los_Angeles', 'Europe/London', 'Europe/Paris', 'Asia/Tokyo', 'Australia/Sydney'];
+    return ['UTC', 'America/New_York', 'America/Los_Angeles', 'Europe/Paris', 'Asia/Tokyo', 'Australia/Sydney'];
   }
 })();
 

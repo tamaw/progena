@@ -558,7 +558,6 @@ async def create_deep_agent_for_runtime(
     llm_client: Any | None = None,
     state_manager: Any | None = None,
     project_root: str | None = None,
-    log_sink: Any | None = None,
     live_state_provider: Callable[[], Any] | None = None,
 ) -> Any:
     """Create the runtime conversation graph backed by Progena's agent setup."""
@@ -577,6 +576,5 @@ async def create_deep_agent_for_runtime(
         llm_client=llm_client,
         state_manager=state_manager,
         project_root=project_root,
-        log_sink=log_sink,
         live_state_provider=live_state_provider,
     )

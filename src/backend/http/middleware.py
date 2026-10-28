@@ -218,14 +218,6 @@ async def request_id_middleware(request: Request, call_next):
     # Store in request state for access by handlers
     request.state.request_id = request_id
 
-    # Log request with ID
-    logger.info(
-        "Request %s: %s %s",
-        request_id,
-        request.method,
-        request.url.path,
-    )
-
     # Update activity timestamp
     lifecycle_state._update_activity()
 

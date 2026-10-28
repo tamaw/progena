@@ -8,7 +8,7 @@ import pytest
 from langchain_core.messages import ToolMessage
 from langgraph.types import Command
 
-from src.progena.agent.middleware import AuditLoggingMiddleware
+from src.progena.agent.middleware import ToolTimingMiddleware
 from src.progena.runtime.streaming.stream_events import (
     ALLOWED_CUSTOM_EVENT_TYPES,
     CUSTOM_EVENT_FALLBACK_TYPE,
@@ -381,13 +381,13 @@ def test_build_reasoning_summary_event_redacts_metadata_and_keeps_tokens():
 
 
 @pytest.mark.asyncio
-async def test_audit_middleware_emits_tool_start_and_result_events():
+async def test_tool_timing_middleware_emits_tool_start_and_result_events():
     captured: list[dict] = []
 
     async def handler(req):
         return ToolMessage(content="ok", tool_call_id="call_1")
 
-    middleware = AuditLoggingMiddleware()
+    middleware = ToolTimingMiddleware()
 
     request = type(
         "Req",
@@ -409,13 +409,13 @@ async def test_audit_middleware_emits_tool_start_and_result_events():
 
 
 @pytest.mark.asyncio
-async def test_audit_middleware_emits_tool_error_on_exception():
+async def test_tool_timing_middleware_emits_tool_error_on_exception():
     captured: list[dict] = []
 
     async def handler(req):
         raise RuntimeError("boom")
 
-    middleware = AuditLoggingMiddleware()
+    middleware = ToolTimingMiddleware()
     request = type(
         "Req",
         (),
@@ -437,13 +437,13 @@ async def test_audit_middleware_emits_tool_error_on_exception():
 
 
 @pytest.mark.asyncio
-async def test_audit_middleware_swallows_writer_failure():
+async def test_tool_timing_middleware_swallows_stream_writer_failure():
     """Tool execution must succeed even if event emission raises."""
 
     async def handler(req):
         return ToolMessage(content="ok", tool_call_id="call_1")
 
-    middleware = AuditLoggingMiddleware()
+    middleware = ToolTimingMiddleware()
     request = type(
         "Req",
         (),

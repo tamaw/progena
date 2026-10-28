@@ -8,6 +8,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import START, MessagesState, StateGraph
 
+from src.progena.schedules.models import ScheduleRunRecord
 from src.progena.tools.protocol import ToolContext
 from src.progena.tools.schedule_results import (
     GetScheduleRunResultTool,
@@ -79,6 +80,35 @@ async def test_list_schedule_runs_filters_and_sorts_results() -> None:
     assert result.data is not None
     assert [run["run_id"] for run in result.data["runs"]] == ["schedrun_new", "schedrun_old"]
     assert result.data["runs"][0]["schedule_type"] == "cron"
+
+
+@pytest.mark.asyncio
+async def test_list_schedule_runs_marks_legacy_naive_run_timestamps_as_utc() -> None:
+    state_manager = MagicMock()
+    state_manager.get_schedule_runs = AsyncMock(
+        return_value=[
+            ScheduleRunRecord(
+                run_id="schedrun_legacy",
+                schedule_id="sched_legacy",
+                thread_id="sched_legacy_thread",
+                message="Legacy run",
+                created_at="2026-10-29T12:00:00",
+                updated_at="2026-10-29T12:00:00",
+            )
+        ]
+    )
+
+    result = await ListScheduleRunsTool().execute(
+        ToolContext(
+            tool_registry=MagicMock(),
+            llm_client=MagicMock(),
+            state_manager=state_manager,
+            tool_args={},
+        )
+    )
+
+    assert result.data is not None
+    assert result.data["runs"][0]["created_at"] == "2026-10-29T12:00:00Z"
 
 
 @pytest.mark.asyncio

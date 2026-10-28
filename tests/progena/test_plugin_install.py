@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -660,35 +660,3 @@ async def test_check_plugin_updates_skips_not_installed(state_manager):
 
     assert summary == {"updated_available": [], "errored": []}
     assert state_manager.save_plugins_config_calls == 0
-
-
-@pytest.mark.asyncio
-async def test_reconcile_plugins_emits_audit_log(state_manager, fake_files, fake_digest):
-    """An actual change writes one audit record per affected entry."""
-    state_manager._plugins = {
-        "plugins": {
-            "acme-tools/formatter": {
-                "source": {"source": "github", "repo": "acme/formatter-plugin", "ref": "v2.1.0"},
-                "version": "2.1.0",
-            }
-        }
-    }
-
-    log_sink = MagicMock()
-    log_sink.write_log = AsyncMock()
-
-    with (
-        patch(
-            "src.progena.plugins.install.fetch_plugin_content_files_with_report",
-            new=AsyncMock(
-                return_value=PluginContentFiles(skills=fake_files, agents={}, skipped_count=0)
-            ),
-        ),
-        patch("src.progena.plugins.install.compute_digest", return_value=fake_digest),
-    ):
-        await reconcile_plugins(state_manager, log_sink=log_sink)
-
-    log_sink.write_log.assert_awaited_once()
-    call_kwargs = log_sink.write_log.await_args.kwargs
-    assert call_kwargs["source"] == "plugins"
-    assert "acme-tools/formatter" in call_kwargs["message"]

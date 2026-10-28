@@ -18,19 +18,20 @@ import asyncio
 import contextlib
 import logging
 import uuid
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, cast
 
 import aiofiles
 import yaml
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from src.backend.storage.documents import (
     BACKEND_STATE_PREFIX,
     BackendDocumentStore,
     get_default_document_store,
 )
+from src.progena.utils import normalize_utc_datetime
 
 logger = logging.getLogger(__name__)
 
@@ -84,8 +85,8 @@ class SessionState(BaseModel):
     # Identity
     session_id: str = Field(default_factory=lambda: f"sess_{uuid.uuid4().hex[:16]}")
     user_id: str | None = None  # For authenticated users
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    last_activity: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    last_activity: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
     # Preferences
     preferences: UserPreferences = Field(default_factory=UserPreferences)
@@ -105,14 +106,22 @@ class SessionState(BaseModel):
     is_authenticated: bool = False
     is_admin: bool = False
 
+    @field_validator("created_at", "last_activity")
+    @classmethod
+    def _as_utc(cls, value: datetime) -> datetime:
+        # Sessions persisted before timestamps were zone-aware stored naive UTC.
+        normalized = normalize_utc_datetime(value)
+        assert normalized is not None
+        return normalized
+
     def touch(self) -> None:
         """Update last activity timestamp."""
-        self.last_activity = datetime.utcnow()
+        self.last_activity = datetime.now(UTC)
 
     def is_expired(self, timeout_minutes: int) -> bool:
         """Check if session has expired."""
         expiry = self.last_activity + timedelta(minutes=timeout_minutes)
-        return datetime.utcnow() > expiry
+        return datetime.now(UTC) > expiry
 
 
 class SessionManager:
@@ -180,6 +189,7 @@ class SessionManager:
                 if existing_id in self._sessions:
                     session = self._sessions[existing_id]
                     session.touch()
+                    await self._save_sessions()
                     return session
 
             # Create new session
@@ -237,7 +247,7 @@ class SessionManager:
         message_increment: int = 0,
     ) -> SessionState | None:
         """Update the session with conversation/thread activity."""
-        session = await self.get_session(session_id)
+        session = await self.get_session(session_id, touch=False)
         if not session:
             return None
 
@@ -388,7 +398,7 @@ class SessionManager:
 
     def get_stats(self) -> dict[str, Any]:
         """Get session statistics."""
-        now = datetime.utcnow()
+        now = datetime.now(UTC)
         active_count = sum(
             1
             for s in self._sessions.values()

@@ -327,12 +327,25 @@ falls back to the first event or cron trigger for existing workflows.
 - Due work is re-enqueued through the same input path as user messages.
 - Runtime state is updated after scheduled work is processed.
 
-The system persists runtime conversation/checkpoint state, state documents,
-backend-owned metadata, and operational logs in Postgres. Progena exposes
-selected state documents through a validated virtual filesystem (`/config/*.json`
-and related task/workflow paths); those JSON names are views over database
-documents, not files in `data/state` or `data/config`. State-document changes are
-broadcast to the canonical UI stream after the write succeeds; details are in
+- Stored timestamps, APIs, logs, agent shells, and containers use UTC; the browser renders instants in its own timezone.
+- User preferences provide the wall-clock timezone for “tomorrow”, conversational time, and unstamped schedules. It defaults to `UTC`.
+- Each new schedule entry and workflow cron trigger stamps that preference as its IANA timezone. Existing entries without one fall back to the current preference, then UTC.
+- One-shot schedule timestamps are UTC instants; legacy timestamps without an offset are interpreted as UTC. Schedule displays resolve the entry timezone, then the preference, then UTC.
+- Cron nodes created before preferences arrive leave the timezone unset so the server stamps its current preference on save. Cron previews use that same fallback.
+- Date-level agent context changes at the user's local midnight. Exact-time guidance is limited to available tools; tool-less calls request a timestamp from their caller.
+- Cron trigger payload instants (`scheduled_for`, `fired_at`) are UTC; their separate `timezone` field retains the wall-clock evaluation zone.
+- Calendar dates are not instants. The Logs page keeps browser-local dates in its URL and converts their local midnight boundaries to UTC API instants, including short/long DST days. Date-only filters sent directly to the Logs API retain UTC-day semantics.
+- Known legacy server timestamps without offsets are interpreted as UTC at persistence/consumer boundaries. External provider timestamps require a timezone or producer-defined epoch units; no timezone or seconds/milliseconds guessing is applied.
+
+The system persists runtime conversation/checkpoint state, state documents, and
+backend-owned metadata in Postgres. Operational logs are plain rotating files
+in the shared `logs/` directory (`/app/logs` in containers): each service writes
+separate stdout and stderr files, with five 10 MiB backups, and the Logs page
+and exports read those files, not database rows. Progena exposes selected state
+documents through a validated virtual filesystem (`/config/*.json` and related
+task/workflow paths); those JSON names are views over database documents, not
+files in `data/state` or `data/config`. State-document changes are broadcast to
+the canonical UI stream after the write succeeds; details are in
 [STATE_DOCUMENTS.md](STATE_DOCUMENTS.md).
 
 Chat history is exposed through `/sessions/`: one

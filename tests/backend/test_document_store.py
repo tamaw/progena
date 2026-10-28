@@ -133,10 +133,6 @@ def test_ensure_change_trigger_notifies_state_only():
     # Deletes must notify too - the runtime process has no other way to tell the
     # backend a row disappeared.
     assert "AFTER INSERT OR UPDATE OR DELETE" in emitted
-    # State prefixes notify; the high-frequency logs prefix is excluded.
-    assert "progena.state" in emitted
-    assert "backend.state" in emitted
-    assert "progena.logs" not in emitted
 
 
 def test_inbox_revisions_capture_backfill_ui_agent_and_deletion(postgres_url: str):

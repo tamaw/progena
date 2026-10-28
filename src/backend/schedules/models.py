@@ -2,11 +2,7 @@
 
 from __future__ import annotations
 
-import logging
-
 from pydantic import BaseModel
-
-logger = logging.getLogger(__name__)
 
 
 class ScheduleRunInfo(BaseModel):
@@ -40,13 +36,6 @@ class ScheduleItemInfo(BaseModel):
     runs: list[ScheduleRunInfo] = []
 
 
-class ScheduleResponse(BaseModel):
-    """Response containing schedule items."""
-
-    items: list[ScheduleItemInfo]
-    total: int
-
-
 class WidgetResponse(BaseModel):
     """Unified widget payload."""
 
@@ -57,25 +46,8 @@ class WidgetResponse(BaseModel):
     status: str
     description: str | None = None
     summary: str | None = None
-    logs: list[dict] = []
     updated_at: str | None = None
     data: dict = {}
-
-
-class WidgetsResponse(BaseModel):
-    """Response containing widget entries."""
-
-    items: list[WidgetResponse]
-    total: int
-
-
-class WidgetDeleteResponse(BaseModel):
-    """Result of deleting a backend-managed widget."""
-
-    widget_id: str
-    removed: bool = True
-    already_removed: bool = False
-    warning: str | None = None
 
 
 class WidgetFieldOptionResponse(BaseModel):

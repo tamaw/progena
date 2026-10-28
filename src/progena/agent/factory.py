@@ -33,7 +33,6 @@ from src.progena.agent.filesystem.mounts import create_progena_backend
 from src.progena.agent.filesystem.shell import ShellPaths
 from src.progena.agent.middleware import (
     AsyncSubagentTrackingMiddleware,
-    AuditLoggingMiddleware,
     DirectA2AFastPathMiddleware,
     DynamicMCPToolMiddleware,
     LiveInstructionMiddleware,
@@ -41,6 +40,7 @@ from src.progena.agent.middleware import (
     SecretRedactionMiddleware,
     ToolErrorMiddleware,
     ToolResultPairingMiddleware,
+    ToolTimingMiddleware,
 )
 from src.progena.agent.model_profiles import resolve_model_profile
 from src.progena.agent.object_agents.factory import create_object_agent_proxy
@@ -196,7 +196,6 @@ async def create_progena_agent(
     state_manager: Any | None = None,
     store: Any | None = None,
     project_root: str | None = None,
-    log_sink: Any | None = None,
     skills_dirs: list[str] | None = None,
     memory_paths: list[str] | None = None,
     live_state_provider: Callable[[], Any] | None = None,
@@ -217,7 +216,6 @@ async def create_progena_agent(
         store: Optional LangGraph BaseStore for DeepAgent features that need one.
                If None, no store is configured by default.
         project_root: Root directory for filesystem backend. Defaults to cwd.
-        log_sink: Optional async sink for Postgres audit logs.
         skills_dirs: Paths to skill directories for progressive disclosure.
                      If None, auto-discovers: ``/skills`` (disk-backed) for
                      progena's own native skills when present, plus one
@@ -345,7 +343,7 @@ async def create_progena_agent(
         DynamicMCPToolMiddleware(mcp_tools_provider=lambda: create_dynamic_mcp_tools(llm_client)),
         SchemaCompactionMiddleware(),
         SecretRedactionMiddleware(),
-        AuditLoggingMiddleware(log_sink=log_sink),
+        ToolTimingMiddleware(),
         _create_javascript_middleware(),
     ]
 
@@ -429,7 +427,6 @@ async def create_progena_agent(
             tools=live_tools,
             backend=backend,
             checkpointer=checkpointer,
-            log_sink=log_sink,
             worktree_dir=worktree_dir,
             shell_paths=ShellPaths(
                 shim_bin=Path(config.storage.shim_bin_dir),

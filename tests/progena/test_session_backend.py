@@ -34,6 +34,8 @@ class _Sessions:
         first_message: str = "hello",
         archived: bool = False,
         content: str = "<user> hello\n<@progena> hi\n",
+        created_at: str = "2026-10-12T01:00:00+00:00",
+        last_activity: str = "2026-10-12T01:05:00+00:00",
     ) -> None:
         payload = {
             "id": thread_id,
@@ -43,8 +45,8 @@ class _Sessions:
             "first_message": first_message,
             "pinned": False,
             "archived": archived,
-            "created_at": "2026-10-12T01:00:00+00:00",
-            "last_activity": "2026-10-12T01:05:00+00:00",
+            "created_at": created_at,
+            "last_activity": last_activity,
             "content": content,
         }
         await self.store.aput(
@@ -79,6 +81,38 @@ async def test_only_non_archived_sessions_get_a_file(sessions: _Sessions) -> Non
     # All non-archived sessions get a file, even with empty content
     assert len(names) == 2
     assert re.fullmatch(r"/\d{4}-\d{2}-\d{2}_weekend-plans_aaaaaaaa\.md", names[0])
+
+
+async def test_listing_sorts_offset_session_timestamps_by_instant(sessions: _Sessions) -> None:
+    await sessions.session(
+        "aaaaaaaa-earlier",
+        title="Earlier",
+        last_activity="2026-10-12T01:30:00+02:00",
+    )
+    await sessions.session(
+        "bbbbbbbb-later",
+        title="Later",
+        last_activity="2026-10-11T23:45:00Z",
+    )
+
+    assert await sessions.names() == [
+        "/2026-10-12_later_bbbbbbbb.md",
+        "/2026-10-12_earlier_aaaaaaaa.md",
+    ]
+
+
+async def test_legacy_naive_created_at_is_utc_before_filename_timezone_conversion(
+    sessions: _Sessions,
+) -> None:
+    await sessions.preferences("Alex", timezone="America/Los_Angeles")
+    await sessions.session("aaaaaaaa-legacy", created_at="2026-10-12T01:00:00")
+
+    assert await sessions.names() == ["/2026-10-11_hello_aaaaaaaa.md"]
+    [path] = await sessions.names()
+    assert "created_at: '2026-10-12T01:00:00+00:00'" in await sessions.text(path)
+    renamed = (await sessions.text(path)).replace("New chat", "Renamed")
+    result = await sessions.backend.awrite(path, renamed)
+    assert result.error is None
 
 
 async def test_archiving_removes_the_file_and_unarchiving_restores_it(sessions: _Sessions) -> None:

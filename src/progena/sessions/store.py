@@ -6,8 +6,6 @@ from typing import Any
 
 from src.progena.documents.kinds import SESSION_KEY_PREFIX
 from src.progena.persistence.documents import StateDocuments
-from src.progena.persistence.logs import structured_log_message as _structured_log_message
-from src.progena.sessions.models import ConversationMessage
 
 
 class SessionStore:
@@ -15,22 +13,6 @@ class SessionStore:
 
     def __init__(self, access: StateDocuments) -> None:
         self._access = access
-
-    async def log_conversation(self, message: ConversationMessage) -> None:
-        """Log a conversation message to the audit trail.
-
-        Messages live exclusively in the LangGraph checkpoint; this method
-        only persists an audit copy in the runtime store.
-        """
-        payload = message.model_dump(mode="json")
-        await self._access.store.write_log(
-            source="conversation",
-            message=_structured_log_message("conversation", payload),
-            level="info",
-            payload=payload,
-            timestamp=payload.pop("timestamp", None),
-            relative_path="conversation.jsonl",
-        )
 
     async def get_session(self, thread_id: str) -> dict[str, Any] | None:
         """Return ``session:<thread_id>``'s payload, or ``None`` if the thread has none."""

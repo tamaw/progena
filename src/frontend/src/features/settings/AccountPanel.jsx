@@ -137,7 +137,7 @@ export function AccountPanel({ onClose, isPinned, onTogglePin, isOpen }) {
         <div className="set-row">
           <span className="set-row__label">
             <span className="set-row__title">Timezone</span>
-            <span className="set-row__sub">Used to schedule tasks and display timestamps.</span>
+            <span className="set-row__sub">Used for your wall-clock schedule and date meaning.</span>
           </span>
           <span className="set-inline-control">
             <Select

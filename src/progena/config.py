@@ -19,9 +19,6 @@ from .utils import env_bool, env_int
 load_dotenv()
 logger = logging.getLogger(__name__)
 
-# Default timezone for schedule evaluation when ``PROGENA_TIMEZONE`` is unset
-# and an individual schedule entry does not override it.
-DEFAULT_TIMEZONE = "Europe/London"
 
 # ---------------------------------------------------------------------------
 # Default project paths.
@@ -167,7 +164,6 @@ class LLMConfig:
 class RuntimeConfig:
     """Runtime configuration."""
 
-    timezone: str = DEFAULT_TIMEZONE
     idle_backoff_seconds: int = 30
     mcp_refresh_seconds: int = 900
     # Plugin update check performs network fetches per installed plugin, so it
@@ -202,7 +198,6 @@ class RuntimeConfig:
     def from_env(cls) -> "RuntimeConfig":
         """Load runtime config from environment."""
         return cls(
-            timezone=os.getenv("PROGENA_TIMEZONE", DEFAULT_TIMEZONE),
             idle_backoff_seconds=env_int("PROGENA_IDLE_BACKOFF_SECONDS", 30),
             mcp_refresh_seconds=env_int("PROGENA_MCP_REFRESH_SECONDS", 900),
             plugin_update_check_seconds=env_int("PROGENA_PLUGIN_UPDATE_CHECK_SECONDS", 86400),
@@ -459,7 +454,6 @@ def _collect_validation_issues(config: ProgenaConfig) -> list[str]:
     issues: list[str] = []
 
     runtime_rules = [
-        ("timezone", config.runtime.timezone, lambda v: isinstance(v, str) and len(v) >= 1),
         (
             "idle_backoff_seconds",
             config.runtime.idle_backoff_seconds,

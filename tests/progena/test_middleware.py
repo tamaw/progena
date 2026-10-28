@@ -13,9 +13,9 @@ from langchain_core.tools import StructuredTool
 
 from src.progena.agent.middleware import (
     AsyncSubagentTrackingMiddleware,
-    AuditLoggingMiddleware,
     DirectA2AFastPathMiddleware,
     DynamicMCPToolMiddleware,
+    ToolTimingMiddleware,
 )
 from src.progena.async_subagents.models import AsyncSubagentTaskRecord
 
@@ -221,75 +221,28 @@ class TestDirectA2AFastPathMiddleware:
         assert kwargs["context"]["routing_mode"] == "direct_prefix"
 
 
-class TestAuditLoggingMiddleware:
-    """Tests for the audit logging middleware."""
+class TestToolTimingMiddleware:
+    """Tests for checkpointed tool-call timing."""
 
-    class FakeSink:
-        def __init__(self):
-            self.entries: list[dict[str, Any]] = []
-
-        async def write_log(self, **kwargs):
-            self.entries.append(kwargs)
-
-    async def test_logs_successful_call(self):
-        """Logs a successful tool call with timing."""
-        sink = self.FakeSink()
-        mw = AuditLoggingMiddleware(log_sink=sink)
-        handler = AsyncMock(return_value="tool_result")
+    async def test_stamps_duration_on_tool_message(self):
+        middleware = ToolTimingMiddleware()
+        handler = AsyncMock(return_value=ToolMessage("result", tool_call_id="tc_1"))
         request = MagicMock()
-        request.tool_call = {
-            "name": "current_time",
-            "args": {},
-            "id": "tc_1",
-        }
+        request.tool_call = {"name": "current_time", "args": {}, "id": "tc_1"}
 
-        result = await mw.awrap_tool_call(request, handler)
-        assert result == "tool_result"
+        result = await middleware.awrap_tool_call(request, handler)
 
-        entry = sink.entries[0]["payload"]
-        assert entry["tool_name"] == "current_time"
-        assert entry["success"] is True
-        assert entry["error"] is None
-        assert "duration_ms" in entry
-        assert "timestamp" in entry
+        assert isinstance(result, ToolMessage)
+        assert result.additional_kwargs["duration_ms"] >= 0
 
-    async def test_logs_failed_call(self):
-        """Logs a failed tool call with error."""
-        sink = self.FakeSink()
-        mw = AuditLoggingMiddleware(log_sink=sink)
+    async def test_preserves_tool_failure(self):
+        middleware = ToolTimingMiddleware()
         handler = AsyncMock(side_effect=RuntimeError("command failed"))
         request = MagicMock()
-        request.tool_call = {
-            "name": "shell",
-            "args": {"command": "false"},
-            "id": "tc_2",
-        }
+        request.tool_call = {"name": "shell", "args": {}, "id": "tc_2"}
 
         with pytest.raises(RuntimeError, match="command failed"):
-            await mw.awrap_tool_call(request, handler)
-
-        entry = sink.entries[0]["payload"]
-        assert entry["tool_name"] == "shell"
-        assert entry["success"] is False
-        assert "command failed" in entry["error"]
-
-    async def test_redacts_secrets_in_log(self):
-        """Secrets in args are redacted in the log."""
-        sink = self.FakeSink()
-        mw = AuditLoggingMiddleware(log_sink=sink)
-        handler = AsyncMock(return_value="ok")
-        request = MagicMock()
-        request.tool_call = {
-            "name": "shell",
-            "args": {"command": "export OPENAI_API_KEY=sk-proj-abcdefghijklmnopqrstuvwxyz12345"},
-            "id": "tc_3",
-        }
-
-        await mw.awrap_tool_call(request, handler)
-
-        entry = sink.entries[0]["payload"]
-        assert "sk-proj-" not in entry["args"]["command"]
-        assert "REDACTED" in entry["args"]["command"]
+            await middleware.awrap_tool_call(request, handler)
 
 
 class TestAsyncSubagentTrackingMiddleware:

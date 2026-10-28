@@ -9,11 +9,7 @@ import pytest
 from src.progena.a2a.models import A2ATaskRecord
 from src.progena.async_subagents.models import AsyncSubagentTaskRecord
 from src.progena.orchestration.state import BackgroundTaskEntry
-from src.progena.persistence.store import (
-    LOG_NAMESPACE_PREFIX,
-    STATE_NAMESPACE,
-    LangGraphRuntimeStore,
-)
+from src.progena.persistence.store import STATE_NAMESPACE, LangGraphRuntimeStore
 from src.progena.schedules.models import ScheduleEntry, ScheduleRunRecord
 from src.progena.sessions.models import ConversationMessage
 from src.progena.state.manager import StateManager
@@ -474,124 +470,6 @@ class TestStateManager:
         assert native_store.items[(STATE_NAMESPACE, "current_state")] == {
             "payload": {"messages": [], "cycle_count": 2}
         }
-
-    @pytest.mark.asyncio
-    async def test_langgraph_runtime_store_appends_logs_as_native_items(self):
-        native_store = FakeLangGraphStore()
-        store = LangGraphRuntimeStore(native_store)
-
-        await store.write_log(
-            source="tool",
-            message="started",
-            payload={"event": "tool_started", "api_key": "sk-secret"},
-            timestamp="2024-01-01T00:00:00+00:00",
-        )
-        rows = [
-            value
-            for (namespace, _key), value in native_store.items.items()
-            if namespace == (*LOG_NAMESPACE_PREFIX, "tool")
-        ]
-        assert len(rows) == 1
-        assert rows[0]["message"] == "started"
-        assert rows[0]["payload"]["api_key"] == "[REDACTED]"
-        assert native_store.search_queries == []
-
-    # ------------------------------------------------------------------
-    # Append JSONL (via runtime store logs)
-    # ------------------------------------------------------------------
-
-    @pytest.mark.asyncio
-    async def test_log_conversation_round_trip(self):
-        """log_conversation writes log rows into the runtime store, not files."""
-        store = _FakeRuntimeStore()
-        manager = StateManager(runtime_store=store)
-        await manager.initialize()
-
-        await manager.log_conversation(
-            ConversationMessage(id="msg-1", role="user", content="Hello")
-        )
-        await manager.log_conversation(
-            ConversationMessage(id="msg-2", role="assistant", content="Hi!")
-        )
-
-        logs = store._logs.get("conversation", [])
-        assert len(logs) == 2
-        assert logs[0]["payload"]["role"] == "user"
-        assert logs[1]["payload"]["role"] == "assistant"
-
-    # ------------------------------------------------------------------
-    # Conversation log round-trip
-    # ------------------------------------------------------------------
-
-    @pytest.mark.asyncio
-    async def test_log_conversation(self):
-        """log_conversation persists a message and read_conversation_log retrieves it."""
-        manager = StateManager(runtime_store=_FakeRuntimeStore())
-        await manager.initialize()
-
-        message = ConversationMessage(
-            id="msg-1",
-            role="user",
-            content="Test message",
-        )
-
-        await manager.log_conversation(message)
-
-        history = manager._runtime_store._logs["conversation"]
-        assert len(history) == 1
-        assert history[0]["payload"]["content"] == "Test message"
-
-    # ------------------------------------------------------------------
-    # Native store log rows (not state documents)
-    # ------------------------------------------------------------------
-
-    @pytest.mark.asyncio
-    async def test_native_runtime_store_logs_write_rows_instead_of_documents(self):
-        """Appending JSONL with a native store writes log rows, not state documents."""
-        native_store = FakeLangGraphStore()
-        runtime_store = LangGraphRuntimeStore(native_store)
-        manager = StateManager(runtime_store=runtime_store)
-        await manager.initialize()
-
-        await manager.log_schedule_event({"event": "schedule_created", "schedule_id": "sched-1"})
-
-        assert (STATE_NAMESPACE, "log_schedule") not in native_store.items
-        log_entries = [
-            item
-            for (namespace, _key), item in native_store.items.items()
-            if namespace == (*LOG_NAMESPACE_PREFIX, "schedule")
-        ]
-        assert log_entries == [
-            {
-                "timestamp": log_entries[0]["timestamp"],
-                "level": "info",
-                "source": "schedule",
-                "message": "schedule_created",
-                "payload": {"event": "schedule_created", "schedule_id": "sched-1"},
-                "relative_path": "schedule.jsonl",
-            }
-        ]
-
-    @pytest.mark.asyncio
-    async def test_native_runtime_store_conversation_logs_round_trip(self):
-        """Conversation messages are logged to the audit trail only (they live
-        in the LangGraph checkpoint, not in current_state)."""
-        native_store = FakeLangGraphStore()
-        runtime_store = LangGraphRuntimeStore(native_store)
-        manager = StateManager(runtime_store=runtime_store)
-        await manager.initialize()
-
-        message = ConversationMessage(id="msg-native-log", role="user", content="Log this natively")
-
-        await manager.log_conversation(message)
-
-        history = [
-            value
-            for (namespace, _key), value in native_store.items.items()
-            if namespace == (*LOG_NAMESPACE_PREFIX, "conversation")
-        ]
-        assert len(history) == 1
-        assert history[0]["payload"]["content"] == "Log this natively"
 
     # ------------------------------------------------------------------
     # commit_state flushes cached state to the runtime store

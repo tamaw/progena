@@ -125,7 +125,6 @@ class FakeStateManager:
 @dataclass
 class FakeHeartbeatContext:
     state_manager: FakeStateManager
-    audit_log_sink: Any = None
 
 
 def _make_real_graph() -> Any:

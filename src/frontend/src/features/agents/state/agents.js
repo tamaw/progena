@@ -196,6 +196,14 @@ export const updateAgentSkillContent = createAcknowledgedThunk('uiData/updateAge
   },
 ));
 
+export function isRunLifecycleNewer(left, right) {
+  const leftTimestamp = Date.parse(left?.timestamp || '');
+  const rightTimestamp = Date.parse(right?.timestamp || '');
+  return Number.isFinite(leftTimestamp) && (
+    !Number.isFinite(rightTimestamp) || leftTimestamp > rightTimestamp
+  );
+}
+
 const TERMINAL_RUN_STATUSES = new Set(['completed', 'failed', 'paused', 'stopped', 'cancelled']);
 // "interrupted" is derived from a dead owner, not persisted; the attempt can
 // still settle (Continue settles it stopped, Cancel run settles it cancelled).
@@ -208,7 +216,7 @@ function applyRunLifecycle(state, payload) {
   // control update disagreeing with the durable execution terminal event.
   if (previous && TERMINAL_RUN_STATUSES.has(previous.status) && previous.status !== payload.status) return false;
   if (previous?.status === 'interrupted' && !INTERRUPTED_EXITS.has(payload.status)) return false;
-  if (previous && previous.timestamp > payload.timestamp) return false;
+  if (previous && isRunLifecycleNewer(previous, payload)) return false;
   state.agents.runLifecycleByRequestId[payload.request_id] = payload;
   return previous?.status !== payload.status;
 }
@@ -357,7 +365,7 @@ const selectLatestRoutineRunByAgentId = createSelector(
     for (const run of Object.values(runs)) {
       if (!run.agent_id) continue;
       const existing = latestByAgent[run.agent_id];
-      if (!existing || run.timestamp > existing.timestamp) {
+      if (!existing || isRunLifecycleNewer(run, existing)) {
         latestByAgent[run.agent_id] = run;
       }
     }
@@ -371,7 +379,7 @@ const selectLatestRoutineRunByThreadId = createSelector(
     for (const run of Object.values(runs)) {
       if (!run.thread_id) continue;
       const existing = latestByThread[run.thread_id];
-      if (!existing || run.timestamp > existing.timestamp) {
+      if (!existing || isRunLifecycleNewer(run, existing)) {
         latestByThread[run.thread_id] = run;
       }
     }

@@ -51,7 +51,11 @@ from src.progena.agent.filesystem.shell import (
     ShellPaths,
     agent_home_slug,
 )
-from src.progena.agent.middleware import AuditLoggingMiddleware, ToolErrorMiddleware
+from src.progena.agent.middleware import (
+    ClockContextMiddleware,
+    ToolErrorMiddleware,
+    ToolTimingMiddleware,
+)
 from src.progena.agent.object_agents.manifest import (
     OBJECT_AGENT_DOCUMENT_KIND,
     ObjectAgentManifest,
@@ -524,7 +528,6 @@ def build_object_agent(
     backend: Any,
     checkpointer: Any,
     state_manager: Any | None = None,
-    log_sink: Any | None = None,
     worktree_dir: Path | None = None,
     shell_paths: ShellPaths | None = None,
     memory_sources: list[str] | None = None,
@@ -608,8 +611,18 @@ def build_object_agent(
     middleware: list[Any] = [
         ToolErrorMiddleware(),
         SummarizationMiddleware(model=child_model),
-        AuditLoggingMiddleware(log_sink=log_sink),
+        ToolTimingMiddleware(),
     ]
+    if state_manager is not None:
+        middleware.append(
+            ClockContextMiddleware(
+                state_manager,
+                has_shell=workspace is not None,
+                has_current_time=any(
+                    getattr(tool, "name", "") == "current_time" for tool in selected_tools
+                ),
+            )
+        )
     if skill_dirs:
         middleware.append(
             SkillsMiddleware(
@@ -667,7 +680,6 @@ def create_object_agent_proxy(
     tools: Iterable[Any],
     backend: Any,
     checkpointer: Any,
-    log_sink: Any | None = None,
     worktree_dir: Path | None = None,
     shell_paths: ShellPaths | None = None,
 ) -> CompiledSubAgent:
@@ -738,7 +750,6 @@ def create_object_agent_proxy(
             backend=backend,
             checkpointer=checkpointer,
             state_manager=state_manager,
-            log_sink=log_sink,
             worktree_dir=worktree_dir,
             shell_paths=shell_paths,
             memory_sources=memory_sources,

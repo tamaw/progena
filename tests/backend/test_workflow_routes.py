@@ -1,10 +1,13 @@
 import asyncio
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import pytest
 from ack_helpers import assert_acknowledged
 from fastapi.testclient import TestClient
 
 import src.backend.events.stream as events_stream
+import src.backend.workflows.routes as workflows_routes
 import src.backend.workflows.runtime as workflows_runtime
 from src.backend.events.documents import seed_document_types
 from src.backend.main import app
@@ -58,6 +61,24 @@ def test_workflow_create_acknowledges_then_emits_canonical_state(workflow_env):
         assert edge["from"]["port"] == edge["to"]["port"] == "key"
     finally:
         events_stream._ui_stream_subscribers.pop(queue, None)
+
+
+def test_cron_preview_returns_utc_instants(workflow_env, monkeypatch):
+    _ = workflow_env
+    monkeypatch.setattr(
+        workflows_routes,
+        "next_cron_time",
+        lambda *_args: datetime(2026, 1, 1, 11, tzinfo=ZoneInfo("Australia/Sydney")),
+    )
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/api/ui/workflows/cron-preview",
+            params={"expression": "0 0 * * *", "timezone": "Australia/Sydney", "count": 1},
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {"next_runs": ["2026-01-01T00:00:00Z"]}
 
 
 def test_workflow_content_round_trip_keeps_typed_schemas(workflow_env):

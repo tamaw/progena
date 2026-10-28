@@ -29,6 +29,12 @@ describe('routine lifecycle', () => {
     expect(state.agents.runLifecycleByRequestId.two.status).toBe('started');
   });
 
+  it('compares lifecycle offsets as instants when applying a later update', () => {
+    let state = reducer(undefined, event('started', 'one', '2026-01-01T00:30:00Z'));
+    state = reducer(state, event('stopping', 'one', '2025-12-31T23:45:00-01:00'));
+    expect(state.agents.runLifecycleByRequestId.one.status).toBe('stopping');
+  });
+
   it('hydrates recovery state without displaying old completion notifications', () => {
     const state = reducer(undefined, applyUiEvent({ type: 'agent.routine.lifecycle.snapshot', payload: {
       runs: [{ agent_id: 'routine', request_id: 'old', status: 'completed', timestamp: '2026-10-07T00:00:01Z' }],

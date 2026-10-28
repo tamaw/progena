@@ -8,9 +8,12 @@ from __future__ import annotations
 
 import json
 
+from langchain_core.messages import AIMessage, ToolMessage, messages_from_dict, messages_to_dict
+
 from src.backend.chat.service import (
     ChatPatchRequest,
     _extract_progress_log_from_content,
+    _messages_from_checkpoint,
     _tool_result_preview,
     delete_session_document,
     get_chat_detail,
@@ -82,6 +85,26 @@ class TestListChatSessions:
         sessions = list_chat_sessions(store)
         assert [s.thread_id for s in sessions] == ["mid", "old", "new"]
 
+    def test_normalizes_legacy_and_offset_session_timestamps_before_sorting(self):
+        store = InMemoryDocumentStore()
+        _store_session(
+            store,
+            "offset_earlier",
+            created_at="2026-01-01T00:00:00",
+            last_activity="2026-01-02T00:30:00+02:00",
+        )
+        _store_session(
+            store,
+            "utc_later",
+            last_activity="2026-01-01T23:00:00Z",
+        )
+
+        sessions = list_chat_sessions(store)
+
+        assert [session.thread_id for session in sessions] == ["utc_later", "offset_earlier"]
+        assert sessions[1].created_at == "2026-01-01T00:00:00Z"
+        assert sessions[1].last_activity == "2026-01-01T22:30:00Z"
+
     def test_filters_archived_by_default(self):
         store = InMemoryDocumentStore()
         _store_session(store, "archived", title="Archived", archived=True)
@@ -143,6 +166,32 @@ class TestListChatSessions:
         sessions = list_chat_sessions(store)
         assert sessions[0].message_count == 2
 
+    def test_reads_tool_duration_from_checkpointed_tool_message(self):
+        serialized = messages_to_dict(
+            [
+                AIMessage(
+                    content="",
+                    tool_calls=[{"id": "c1", "name": "lookup", "args": {}}],
+                ),
+                ToolMessage(
+                    content="result",
+                    tool_call_id="c1",
+                    additional_kwargs={"duration_ms": 12.5},
+                ),
+            ]
+        )
+        checkpoint_messages = messages_from_dict(serialized)
+        snapshot = CheckpointThreadSnapshot(
+            thread_id="thread_duration",
+            checkpoint_id="cp-1",
+            checkpoint_ts="2026-01-01T00:00:00Z",
+            messages=checkpoint_messages,
+        )
+
+        [message] = _messages_from_checkpoint(snapshot)
+
+        assert message.tool_calls[0]["duration_ms"] == 12.5
+
 
 class TestGetChatDetail:
     def test_returns_none_when_no_session_document(self):
@@ -169,6 +218,39 @@ class TestGetChatDetail:
         assert detail.thread_id == "thread_d"
         assert detail.title == "My Chat"
         assert [m.role for m in detail.messages] == ["user", "assistant"]
+
+    def test_normalizes_provider_epoch_seconds_and_offset_iso_metadata(self):
+        store = InMemoryDocumentStore()
+        store.upsert_checkpoint_thread_snapshot(
+            CheckpointThreadSnapshot(
+                thread_id="thread_timestamps",
+                checkpoint_id="cp-1",
+                checkpoint_ts="2026-01-01T00:00:00Z",
+                messages=[
+                    {
+                        "id": "u1",
+                        "type": "human",
+                        "content": "question",
+                        "additional_kwargs": {"created_at": 1767225600},
+                    },
+                    {
+                        "id": "a1",
+                        "type": "ai",
+                        "content": "answer",
+                        "response_metadata": {"created_at": "2026-01-01T11:00:00+11:00"},
+                    },
+                ],
+            )
+        )
+        _store_session(store, "thread_timestamps")
+
+        detail = get_chat_detail(store, "thread_timestamps")
+
+        assert detail is not None
+        assert [message.created_at for message in detail.messages] == [
+            "2026-01-01T00:00:00Z",
+            "2026-01-01T00:00:00Z",
+        ]
 
     def test_context_usage_is_latest_main_agent_call_not_turn_total(self):
         store = InMemoryDocumentStore()

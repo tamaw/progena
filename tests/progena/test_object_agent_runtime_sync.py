@@ -87,7 +87,6 @@ async def test_refresh_finds_registry_and_preserves_graph(wrapped):
 
 async def test_plugin_reconcile_requests_object_refresh_after_install(monkeypatch):
     instance = runtime()
-    instance.log_store = None
     reconcile = AsyncMock(return_value={})
     monkeypatch.setattr("src.progena.plugins.install.reconcile_plugins", reconcile)
     await instance._do_plugin_reconcile()

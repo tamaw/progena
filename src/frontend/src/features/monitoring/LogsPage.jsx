@@ -123,6 +123,17 @@ function normalizeLevel(value) {
   return level;
 }
 
+function logDateBoundary(value, endOfDay = false) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return value;
+  const date = parseDateInput(value);
+  if (!date || Number.isNaN(date.getTime())) return value;
+  if (!endOfDay) return date.toISOString();
+  // Advance a local calendar day, not 24 hours: DST days may be 23 or 25 hours.
+  date.setDate(date.getDate() + 1);
+  // The API's end boundary is inclusive and log records have microsecond precision.
+  return new Date(date.getTime() - 1).toISOString().replace(/999Z$/, '999999Z');
+}
+
 function buildQueryParams({ group, filePath, search, startDate, endDate }, extra = {}) {
   const params = {};
   if (group) {
@@ -135,10 +146,10 @@ function buildQueryParams({ group, filePath, search, startDate, endDate }, extra
     params.search = search;
   }
   if (startDate) {
-    params.start = startDate;
+    params.start = logDateBoundary(startDate);
   }
   if (endDate) {
-    params.end = endDate;
+    params.end = logDateBoundary(endDate, true);
   }
   return { ...params, ...extra };
 }
@@ -223,8 +234,8 @@ function LogsPage() {
   const [selectedFile, setSelectedFile] = useState(searchParams.get('file') || '');
   const [search, setSearch] = useState(searchParams.get('search') || '');
   const [level, setLevel] = useState(searchParams.get('level') || '');
-  const [startDate, setStartDate] = useState(searchParams.get('start') || '');
-  const [endDate, setEndDate] = useState(searchParams.get('end') || '');
+  const [startDate, setStartDate] = useState(searchParams.get('start') || defaultRange.start);
+  const [endDate, setEndDate] = useState(searchParams.get('end') || defaultRange.end);
   const [loadingEntries, setLoadingEntries] = useState(true);
   const [error, setError] = useState('');
   const [pendingLogRequest, setPendingLogRequest] = useState(null);
@@ -268,8 +279,8 @@ function LogsPage() {
     const requestedFile = searchParams.get('file') || '';
     const requestedSearch = searchParams.get('search') || '';
     const requestedLevel = searchParams.get('level') || '';
-    const requestedStart = searchParams.get('start') || '';
-    const requestedEnd = searchParams.get('end') || '';
+    const requestedStart = searchParams.get('start') || defaultRange.start;
+    const requestedEnd = searchParams.get('end') || defaultRange.end;
 
     setSelectedGroup((current) => (current === requestedGroup ? current : requestedGroup));
     setSelectedFile((current) => (current === requestedFile ? current : requestedFile));
@@ -277,7 +288,7 @@ function LogsPage() {
     setLevel((current) => (current === requestedLevel ? current : requestedLevel));
     setStartDate((current) => (current === requestedStart ? current : requestedStart));
     setEndDate((current) => (current === requestedEnd ? current : requestedEnd));
-  }, [searchParams]);
+  }, [defaultRange.end, defaultRange.start, searchParams]);
 
   useEffect(() => {
     const nextParams = new URLSearchParams();
@@ -507,10 +518,6 @@ function LogsPage() {
       return;
     }
     const page = logsPage;
-    if (!pendingLogRequest.incremental && page.date_range) {
-      setStartDate((current) => current || page.date_range.start || defaultRange.start);
-      setEndDate((current) => current || page.date_range.end || defaultRange.end);
-    }
 
     if (!pendingLogRequest.incremental && !defaultSelectionAppliedRef.current && !selectedGroup && !selectedFile) {
       const activeSelection = page.active_selection || {};
@@ -554,7 +561,7 @@ function LogsPage() {
     setExpandedIds(new Set());
     setLoadingEntries(false);
     setPendingLogRequest(null);
-  }, [defaultRange.end, defaultRange.start, loadLogs, logsPage, logsState.requestId, pendingLogRequest, selectedFile, selectedGroup]);
+  }, [loadLogs, logsPage, logsState.requestId, pendingLogRequest, selectedFile, selectedGroup]);
 
   useEffect(() => () => {
     if (refreshTimeoutRef.current) {

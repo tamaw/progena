@@ -1,16 +1,12 @@
 import { useCallback } from 'react';
 import { useDispatch } from 'react-redux';
 import { useConfig } from '../../context/ConfigContext';
-import { fetchWidgets, refreshWidget as refresh, updateWidget as update, deleteWidget as remove } from './widgetsState';
+import { refreshWidget as refresh, updateWidget as update, deleteWidget as remove } from './widgetsState';
 
 /** Bind widget operations to the active workspace and shared request lifecycle. */
 export function useWidgetsApi() {
   const dispatch = useDispatch();
   const { getApiUrl } = useConfig();
-  const getWidgets = useCallback(
-    () => dispatch(fetchWidgets({ widgetsUrl: getApiUrl('widgets') })).unwrap(),
-    [dispatch, getApiUrl],
-  );
   const refreshWidget = useCallback(
     (widgetId) => dispatch(refresh({ widgetsUrl: getApiUrl('widgets'), widgetId })).unwrap(),
     [dispatch, getApiUrl],
@@ -25,5 +21,5 @@ export function useWidgetsApi() {
     (widgetId) => dispatch(remove({ widgetsUrl: getApiUrl('widgets'), widgetId })).unwrap(),
     [dispatch, getApiUrl],
   );
-  return { getWidgets, refreshWidget, updateWidget, deleteWidget };
+  return { refreshWidget, updateWidget, deleteWidget };
 }

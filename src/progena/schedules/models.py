@@ -11,7 +11,7 @@ from typing import Any
 from pydantic import BaseModel, Field, field_validator
 
 from src.progena.security.redaction import logger
-from src.progena.utils import utcnow
+from src.progena.utils import normalize_utc_datetime, utcnow
 
 
 def generate_schedule_run_id() -> str:
@@ -75,6 +75,11 @@ class ScheduleRunRecord(BaseModel):
     started_at: datetime | None = None
     completed_at: datetime | None = None
     runtime_instance: str | None = None
+
+    @field_validator("created_at", "updated_at", "started_at", "completed_at")
+    @classmethod
+    def normalize_timestamps(cls, value: datetime | None) -> datetime | None:
+        return normalize_utc_datetime(value)
 
     @field_validator("status", mode="before")
     @classmethod

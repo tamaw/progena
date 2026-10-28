@@ -9,7 +9,7 @@ from typing import Any
 from pydantic import BaseModel, Field, field_validator
 
 from src.progena.security.redaction import logger
-from src.progena.utils import utcnow
+from src.progena.utils import normalize_utc_datetime, utcnow
 
 
 class A2ATaskStatus(StrEnum):
@@ -66,6 +66,11 @@ class A2ATaskRecord(BaseModel):
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)
     completed_at: datetime | None = None
+
+    @field_validator("notification_sent_at", "created_at", "updated_at", "completed_at")
+    @classmethod
+    def normalize_timestamps(cls, value: datetime | None) -> datetime | None:
+        return normalize_utc_datetime(value)
 
     @field_validator("status", mode="before")
     @classmethod

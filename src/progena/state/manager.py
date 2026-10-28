@@ -27,7 +27,6 @@ from src.progena.repositories.store import RepositoryStore
 from src.progena.routines.documents import RoutineStore
 from src.progena.schedules.models import ScheduleEntry, ScheduleRunRecord
 from src.progena.schedules.store import ScheduleStore
-from src.progena.sessions.models import ConversationMessage
 from src.progena.sessions.store import SessionStore
 from src.progena.settings.model_profiles import default_model_profiles_payload
 from src.progena.settings.preferences import default_preferences_payload
@@ -221,12 +220,6 @@ class StateManager:
             mutate(current)
             await self._save_runtime_document(key, current)
             return current
-
-    async def log_conversation(self, message: ConversationMessage) -> None:
-        return await self.sessions.log_conversation(message)
-
-    async def log_schedule_event(self, event: dict[str, Any]) -> None:
-        return await self.schedules.log_schedule_event(event)
 
     # ==========================================================================
     # Schedule management (database-backed in production runtime)

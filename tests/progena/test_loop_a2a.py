@@ -11,9 +11,8 @@ from src.progena.orchestration.nodes.context import HeartbeatContext
 
 
 @pytest.mark.asyncio
-async def test_a2a_completion_node_logs_once_without_touching_the_loop_thread() -> None:
+async def test_a2a_completion_node_avoids_touching_the_loop_thread() -> None:
     state_manager = MagicMock()
-    state_manager.log_conversation = AsyncMock()
 
     record = A2ATaskRecord(
         task_id="example-5",
@@ -44,7 +43,6 @@ async def test_a2a_completion_node_logs_once_without_touching_the_loop_thread() 
             repo_scan_seconds=3600.0,
             worktree_dir=None,
             heartbeat_health_seconds=30.0,
-            timezone="UTC",
             reasoning_enabled=False,
         )
     )
@@ -57,7 +55,6 @@ async def test_a2a_completion_node_logs_once_without_touching_the_loop_thread() 
     assert message.metadata["type"] == "a2a_task_completion"
     assert message.metadata["task_id"] == "example-5"
     assert "example agent task completed" in message.content
-    state_manager.log_conversation.assert_awaited_once()
     # A tool result with no matching model tool call poisons the thread for the
     # provider; the originating thread gets its own follow-up turn instead.
     agent_graph.aupdate_state.assert_not_called()

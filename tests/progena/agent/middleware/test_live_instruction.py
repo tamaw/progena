@@ -1,10 +1,13 @@
 """An edited system instruction reaches the model without rebuilding the graph."""
 
-from unittest.mock import MagicMock
+from datetime import UTC, datetime
+from unittest.mock import MagicMock, patch
 
+import pytest
 from langchain.agents.middleware.types import ModelRequest
 from langchain_core.messages import SystemMessage
 
+from src.progena.agent.clock_context import user_clock_context
 from src.progena.agent.middleware import LiveInstructionMiddleware
 
 
@@ -49,15 +52,12 @@ async def test_edited_instruction_replaces_the_boot_text_and_keeps_appended_sect
             {"type": "text", "text": "\n\nSkills section."},
         ]
     )
-
-    assert await _system_text_sent(middleware, system) == (
-        "You are Progena.\n\nBase agent prompt.\n\nSkills section."
-    )
+    initial = await _system_text_sent(middleware, system)
+    assert initial.startswith("You are Progena.\n\nBase agent prompt.\n\nSkills section.")
 
     store.content = _instruction("You are Progena, edited.")
-    assert await _system_text_sent(middleware, system) == (
-        "You are Progena, edited.\n\nBase agent prompt.\n\nSkills section."
-    )
+    edited = await _system_text_sent(middleware, system)
+    assert edited.startswith("You are Progena, edited.\n\nBase agent prompt.\n\nSkills section.")
 
 
 async def test_renamed_agent_reaches_the_next_model_call():
@@ -65,7 +65,42 @@ async def test_renamed_agent_reaches_the_next_model_call():
     middleware = LiveInstructionMiddleware(store, "progena/genesis.md", "You are Progena.")
     system = SystemMessage(content_blocks=[{"type": "text", "text": "You are Progena.\n\nBase."}])
 
-    assert await _system_text_sent(middleware, system) == "You are Progena.\n\nBase."
+    store.preferences = {"agent_name": "Ada", "timezone": "Australia/Melbourne"}
+    rendered = await _system_text_sent(middleware, system)
+    assert rendered.startswith("You are Ada.\n\nBase.")
+    assert "User timezone: Australia/Melbourne; today there is " in rendered
 
-    store.preferences = {"agent_name": "Ada"}
-    assert await _system_text_sent(middleware, system) == "You are Ada.\n\nBase."
+
+@pytest.mark.parametrize(
+    ("has_shell", "has_current_time", "present", "absent"),
+    [
+        (True, False, "`date -u`", "`current_time`"),
+        (False, True, "`current_time`", "`date -u`"),
+        (False, False, "No exact-time tool", "`current_time`"),
+    ],
+)
+async def test_clock_guidance_matches_available_capabilities(
+    has_shell, has_current_time, present, absent
+):
+    context = await user_clock_context(
+        Instructions(_instruction("You are Progena.")),
+        has_shell=has_shell,
+        has_current_time=has_current_time,
+    )
+    assert present in context
+    assert absent not in context
+
+
+async def test_user_date_changes_at_preference_midnight_not_server_midnight():
+    store = Instructions(_instruction("You are Progena."))
+    store.preferences = {"timezone": "Australia/Melbourne"}
+    with patch("src.progena.agent.clock_context.datetime") as clock:
+        clock.now.return_value = datetime(2026, 10, 28, 12, 0, tzinfo=UTC)
+        early = await user_clock_context(store, has_shell=False)
+        clock.now.return_value = datetime(2026, 10, 28, 12, 59, tzinfo=UTC)
+        later = await user_clock_context(store, has_shell=False)
+        clock.now.return_value = datetime(2026, 10, 28, 13, 0, tzinfo=UTC)
+        tomorrow = await user_clock_context(store, has_shell=False)
+    assert early == later
+    assert "2026-10-28" in early
+    assert "2026-10-29" in tomorrow

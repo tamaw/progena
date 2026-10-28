@@ -15,6 +15,20 @@ import { selectAgentName } from '../../settings/state/preferences';
 
 // Remounted per-node via `key={node.id}` on WorkflowNodeOptionsModal, so
 // lazy initial state is sufficient -- no effect-driven resync needed.
+
+function formatCronPreviewRun(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+  return date.toLocaleString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    timeZoneName: 'short',
+  });
+}
 function JsonFieldEditor({ label, value, onCommit }) {
   const [text, setText] = useState(() => JSON.stringify(value ?? {}, null, 2));
   const [error, setError] = useState('');
@@ -146,43 +160,58 @@ export function WorkflowNodeOptionsModal({ node, onChange, onClose }) {
   [documentTypeOptions, node.data?.schema]);
 
   const [cronPreview, setCronPreview] = useState({ nextRuns: [], error: '' });
+  const displayedCronPreview = node.data?.expression ? cronPreview : { nextRuns: [], error: '' };
   const cronAbortRef = useRef(null);
   const cronDebounceRef = useRef(null);
+  const cronRequestVersionRef = useRef(0);
 
   useEffect(() => {
     if (kind !== 'cron') return undefined;
     const expression = node.data?.expression || '';
     const timezone = node.data?.timezone || '';
+    const requestVersion = cronRequestVersionRef.current + 1;
+    cronRequestVersionRef.current = requestVersion;
     clearTimeout(cronDebounceRef.current);
-    if (!expression || !timezone) {
-      return () => clearTimeout(cronDebounceRef.current);
+    cronAbortRef.current?.abort();
+    cronAbortRef.current = null;
+    if (!expression) {
+      return undefined;
     }
     cronDebounceRef.current = setTimeout(() => {
-      cronAbortRef.current?.abort();
       const controller = new AbortController();
       cronAbortRef.current = controller;
-      fetch(`/api/ui/workflows/cron-preview?expression=${encodeURIComponent(expression)}&timezone=${encodeURIComponent(timezone)}&count=3`, {
+      const query = new URLSearchParams({ expression, count: '3' });
+      if (timezone) query.set('timezone', timezone);
+      fetch(`/api/ui/workflows/cron-preview?${query}`, {
         signal: controller.signal,
       })
         .then(async (res) => {
+          if (requestVersion !== cronRequestVersionRef.current) {
+            return;
+          }
           if (res.status === 200) {
             const data = await res.json();
-            setCronPreview({ nextRuns: data.next_runs || [], error: '' });
+            if (requestVersion === cronRequestVersionRef.current) {
+              setCronPreview({ nextRuns: data.next_runs || [], error: '' });
+            }
           } else if (res.status === 400) {
             const data = await res.json();
-            setCronPreview({ nextRuns: [], error: data.detail || 'Invalid expression' });
+            if (requestVersion === cronRequestVersionRef.current) {
+              setCronPreview({ nextRuns: [], error: data.detail || 'Invalid expression' });
+            }
           } else {
             setCronPreview({ nextRuns: [], error: `HTTP ${res.status}` });
           }
         })
         .catch((err) => {
-          if (err.name !== 'AbortError') {
+          if (err.name !== 'AbortError' && requestVersion === cronRequestVersionRef.current) {
             setCronPreview({ nextRuns: [], error: err.message });
           }
         });
     }, 300);
     return () => {
       clearTimeout(cronDebounceRef.current);
+      cronAbortRef.current?.abort();
     };
   }, [kind, node.data?.expression, node.data?.timezone]);
 
@@ -367,13 +396,13 @@ export function WorkflowNodeOptionsModal({ node, onChange, onClose }) {
                   />
                 </label>
                 <div className="workflow-node-options__field">
-                  <span>Next runs</span>
-                  {cronPreview.error ? (
-                    <small className="workflow-node-options__error">{cronPreview.error}</small>
+                  <span>Next runs (your browser time)</span>
+                  {displayedCronPreview.error ? (
+                    <small className="workflow-node-options__error">{displayedCronPreview.error}</small>
                   ) : (
                     <ul className="workflow-node-options__next-runs">
-                      {cronPreview.nextRuns.map((run, i) => (
-                        <li key={i}>{run}</li>
+                      {displayedCronPreview.nextRuns.map((run, i) => (
+                        <li key={i}>{formatCronPreviewRun(run)}</li>
                       ))}
                     </ul>
                   )}

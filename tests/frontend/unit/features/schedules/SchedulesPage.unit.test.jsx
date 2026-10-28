@@ -25,7 +25,7 @@ vi.mock('@frontend/features/schedules/useSchedulesApi', () => {
   return { useSchedulesApi: () => api };
 });
 vi.mock('@frontend/features/schedules/useWidgetsApi', () => {
-  const api = { getWidgets: () => Promise.resolve(), updateWidget: () => Promise.resolve(), deleteWidget: () => Promise.resolve() };
+  const api = { updateWidget: () => Promise.resolve(), deleteWidget: () => Promise.resolve() };
   return { useWidgetsApi: () => api };
 });
 
@@ -49,6 +49,42 @@ afterEach(async () => {
   await act(async () => root.unmount());
   host.remove();
   vi.unstubAllGlobals();
+});
+
+it.each([
+  ['Europe/London', 'America/New_York', 'Europe/London'],
+  [undefined, 'America/New_York', 'America/New_York'],
+  [undefined, '', 'UTC'],
+])('renders schedule wall-clock time using entry %s before preference %s',
+async (entryTimezone, preferenceTimezone, expectedZone) => {
+  const store = configureStore({
+    reducer: { realtime: realtimeReducer, uiData: uiDataReducer, editorDrafts: editorDraftsReducer },
+  });
+  store.dispatch(applyUiEvent({
+    type: 'preferences.snapshot', payload: { timezone: preferenceTimezone },
+  }));
+  store.dispatch(applyUiEvent({
+    type: 'schedule.snapshot',
+    payload: { items: [{
+      id: 'legacy', name: 'Legacy', timezone: entryTimezone,
+      scheduled_at: '2026-07-15T13:00:00Z', next_run: '2026-07-15T13:00:00Z',
+    }] },
+  }));
+  await act(async () => root.render(
+    <Provider store={store}>
+      <MemoryRouter initialEntries={['/schedules/legacy']}>
+        <Routes>
+          <Route path="/schedules/:scheduleId?/:titleSlug?" element={<SchedulesPage />} />
+        </Routes>
+      </MemoryRouter>
+    </Provider>,
+  ));
+  const wallClock = new Date('2026-07-15T13:00:00Z').toLocaleString(undefined, {
+    month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
+    timeZone: expectedZone, timeZoneName: 'short',
+  });
+  expect(host.textContent).toContain(`Once · ${wallClock}`);
+  expect(host.textContent).toContain(expectedZone);
 });
 
 it('retains independent unsaved intent drafts for schedules A and B across selection changes', async () => {

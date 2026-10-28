@@ -868,6 +868,20 @@ describe('agent reducers', () => {
     expect(statuses['routine-d']).toBe('Stopped');
     expect(statuses['routine-e']).toBe('Cancelled');
   });
+
+  it('selects the latest lifecycle by instant rather than ISO offset spelling', () => {
+    let s = reducer(undefined, agentsSnapshot(['routine-a']));
+    s = reducer(s, applyUiEvent({
+      type: 'agent.routine.run.started',
+      payload: { agent_id: 'routine-a', request_id: 'earlier', timestamp: '2026-01-01T00:30:00Z' },
+    }));
+    s = reducer(s, applyUiEvent({
+      type: 'agent.routine.run.failed',
+      payload: { agent_id: 'routine-a', request_id: 'later', timestamp: '2025-12-31T23:45:00-01:00' },
+    }));
+
+    expect(selectRoutineLatestRunStatusByAgentId({ uiData: s })['routine-a']).toBe('Failed');
+  });
 });
 
 describe('chat indicators (nav dot)', () => {

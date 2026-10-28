@@ -29,7 +29,7 @@ from langchain_core.language_models.fake_chat_models import (
 from langchain_core.messages import AIMessage
 
 import src.progena.llm.provider_context as provider_runtime
-from src.progena.agent.middleware import AuditLoggingMiddleware
+from src.progena.agent.middleware import ToolTimingMiddleware
 from src.progena.config import LLMConfig, ProgenaConfig
 from src.progena.runtime.streaming.deepagent_stream import DeepAgentSSEStream
 
@@ -100,7 +100,7 @@ def _build_parallel_subagent_graph():
         system_prompt="Reply with exactly ALPHA_RESULT.",
         model=alpha_model,
         tools=[],
-        middleware=[AuditLoggingMiddleware(log_sink=None)],
+        middleware=[ToolTimingMiddleware()],
     )
     beta = SubAgent(
         name="beta",
@@ -108,7 +108,7 @@ def _build_parallel_subagent_graph():
         system_prompt="Reply with exactly BETA_RESULT.",
         model=beta_model,
         tools=[],
-        middleware=[AuditLoggingMiddleware(log_sink=None)],
+        middleware=[ToolTimingMiddleware()],
     )
     main_model = _FakeToolCallingModel(
         responses=[
@@ -135,7 +135,7 @@ def _build_parallel_subagent_graph():
         system_prompt="test",
         subagents=[alpha, beta],
         tools=[],
-        middleware=[AuditLoggingMiddleware(log_sink=None)],
+        middleware=[ToolTimingMiddleware()],
     )
 
 

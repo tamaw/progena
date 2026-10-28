@@ -353,6 +353,28 @@ describe('workflowToFlow', () => {
     });
   });
 
+  it('omits an unstamped cron timezone when saving an existing node', () => {
+    const workflow = {
+      graph: {
+        nodes: {
+          cron_1: {
+            kind: 'cron',
+            title: 'Weekdays 9am',
+            expression: '0 9 * * 1-5',
+            overlap: 'skip',
+          },
+        },
+        edges: [],
+      },
+      ui: { nodes: {} },
+    };
+
+    const flow = workflowToFlow(workflow, {}, null);
+    const persisted = flowToWorkflow(workflow, flow.nodes, flow.edges, flow.viewport);
+
+    expect(persisted.graph.nodes.cron_1).not.toHaveProperty('timezone');
+  });
+
   it('round-trips a document_read node', () => {
     const workflow = {
       graph: {
@@ -734,6 +756,12 @@ describe('palette node creation', () => {
     expect(node.data.expanded).toBe(false);
     expect(node.width).toBe(340);
     expect(node.height).toBe(160);
+  });
+
+  it('leaves new cron nodes unstamped while preferences load', () => {
+    expect(createPaletteNode('cron', 'cron_1', { x: 1, y: 2 }, [], {}, 'Asia/Tokyo').data.timezone)
+      .toBe('Asia/Tokyo');
+    expect(createPaletteNode('cron', 'cron_2', { x: 1, y: 2 }, [], {}, '').data).not.toHaveProperty('timezone');
   });
 });
 

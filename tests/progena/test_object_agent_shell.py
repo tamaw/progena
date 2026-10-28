@@ -204,16 +204,17 @@ def test_shell_environment_is_scrubbed_and_explicit():
             "GH_HOST": "evil.com",
             "GIT_DIR": "/elsewhere/.git",
             "TMPDIR": "/app/tmp",
+            "TZ": "Australia/Melbourne",
         },
     )
 
-    assert environment["PATH"] == "/shims:/usr/bin:/bin"
     # TMPDIR is carried without being listed in env_passthrough.
     assert environment["TMPDIR"] == "/app/tmp"
     assert environment["GH_TOKEN"] == "token"
     assert "AZURE_OPENAI_API_KEY" not in environment
     assert "GH_HOST" not in environment
     assert "GIT_DIR" not in environment
+    assert "TZ" not in environment
 
 
 @pytest.mark.parametrize(

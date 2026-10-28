@@ -34,12 +34,10 @@ def agent_display_name(preferences: Any) -> str:
 
 def default_preferences_payload() -> dict[str, Any]:
     """Return the empty-profile default (used to seed a fresh document)."""
-    from src.progena.cron import default_timezone_name
-
     return {
         "display_name": "",
         "agent_name": DEFAULT_AGENT_NAME,
-        "timezone": default_timezone_name(),
+        "timezone": "UTC",
         "theme": "system",
         "nav_collapsed": False,
         "pinned_panel": None,

@@ -37,45 +37,12 @@ from src.progena.sessions.messages import (
     tool_result_failed,
 )
 from src.progena.sessions.titles import ATTACHMENT_CONTEXT_MARKER, display_title
+from src.progena.utils import normalize_utc_timestamp, parse_provider_timestamp
 
 # History must not replay arbitrary tool artifacts (which may contain raw files,
 # images, or credentials). Keep only the SSE-compatible user-facing projection.
 _ARTIFACT_STRING_LIMIT = 1024
 _ARTIFACT_KEYS = ("summary", "count", "kind", "status")
-
-
-def _tool_call_audit_index(store: BackendDocumentStore | None) -> dict[str, dict[str, Any]]:
-    """Read one bounded audit-log page and index normal tool calls by id."""
-    if store is None:
-        return {}
-    query_logs = getattr(store, "query_logs", None)
-    if not callable(query_logs):
-        return {}
-    try:
-        rows = query_logs(source="tool_calls", limit=500)
-    except Exception:  # nosec B110 - old/test stores may not expose audit logs
-        return {}
-    if not isinstance(rows, list):
-        return {}
-    indexed: dict[str, dict[str, Any]] = {}
-    for row in rows:
-        if not isinstance(row, dict):
-            continue
-        raw_payload = row.get("payload")
-        if isinstance(raw_payload, dict):
-            payload = dict(raw_payload)
-            for key in ("tool_id", "duration_ms"):
-                if key not in payload and key in row:
-                    payload[key] = row[key]
-        else:
-            payload = row
-        tool_id = payload.get("tool_id")
-        if tool_id is None:
-            tool_id = row.get("tool_id")
-        if tool_id is None:
-            continue
-        indexed[str(tool_id)] = payload
-    return indexed
 
 
 def _artifact_mapping(artifact: Any) -> dict[str, Any] | None:
@@ -118,12 +85,21 @@ def _curated_tool_artifact(artifact: Any) -> dict[str, Any] | None:
     return projection
 
 
-SCHEDULED_TASK_PREFIX = "[Scheduled Task]"
-BACKEND_ALERT_PREFIX = "A backend alert was just created for the user."
-
-
 def _now_iso() -> str:
     return datetime.now(UTC).isoformat().replace("+00:00", "Z")
+
+
+def _known_session_timestamp(value: Any) -> str | None:
+    """Render persisted server-UTC session fields with one unambiguous offset."""
+    if not isinstance(value, str) or not value:
+        return None
+    return normalize_utc_timestamp(value).replace("+00:00", "Z")
+
+
+def _provider_timestamp(value: Any) -> str | None:
+    """Render an explicitly stamped provider instant in UTC."""
+    timestamp = parse_provider_timestamp(value)
+    return timestamp.isoformat().replace("+00:00", "Z") if timestamp is not None else None
 
 
 class ReasoningSegment(BaseModel):
@@ -240,10 +216,6 @@ class ChatPatchRequest(BaseModel):
     archived: bool | None = None
 
 
-class ChatMutationResponse(BaseModel):
-    session: ChatSessionDetail
-
-
 def _message_text(value: Any) -> str:
     if isinstance(value, str):
         return value
@@ -354,24 +326,26 @@ def _raw_message_role(raw: Any) -> str:
 
 def _raw_message_created_at(raw: Any) -> str | None:
     if isinstance(raw, dict):
-        created_at = raw.get("created_at") or raw.get("timestamp") or raw.get("time")
+        created_at = raw.get("created_at")
+        if created_at is None:
+            created_at = raw.get("timestamp")
+        if created_at is None:
+            created_at = raw.get("time")
         metadata = raw.get("response_metadata")
         extra_kwargs = raw.get("additional_kwargs")
     else:
-        created_at = (
-            getattr(raw, "created_at", None)
-            or getattr(raw, "timestamp", None)
-            or getattr(raw, "time", None)
-        )
+        created_at = getattr(raw, "created_at", None)
+        if created_at is None:
+            created_at = getattr(raw, "timestamp", None)
+        if created_at is None:
+            created_at = getattr(raw, "time", None)
         metadata = getattr(raw, "response_metadata", None)
         extra_kwargs = getattr(raw, "additional_kwargs", None)
     if created_at is None and isinstance(metadata, dict):
         created_at = metadata.get("created_at")
     if created_at is None and isinstance(extra_kwargs, dict):
         created_at = extra_kwargs.get("created_at")
-    if isinstance(created_at, int | float):
-        return datetime.fromtimestamp(float(created_at), UTC).isoformat().replace("+00:00", "Z")
-    return str(created_at) if created_at else None
+    return _provider_timestamp(created_at)
 
 
 def _raw_message_token_count(raw: Any) -> int:
@@ -493,29 +467,29 @@ def _chat_message_from_raw(
     if not content and role == "assistant":
         return None
     reasoning_text = extract_reasoning_trace(raw) or ""
+    created_at = _raw_message_created_at(raw)
+    display_metadata = _display_metadata_from_raw(raw)
     return ChatMessage(
         id=_raw_message_id(raw, index),
         role=role,
         content=content,
-        created_at=_raw_message_created_at(raw),
-        reasoning_timestamp=_raw_message_created_at(raw) if reasoning_text else None,
+        created_at=created_at,
+        reasoning_timestamp=created_at if reasoning_text else None,
         reasoning_segments=(
-            [ReasoningSegment(text=reasoning_text, created_at=_raw_message_created_at(raw))]
-            if reasoning_text
-            else []
+            [ReasoningSegment(text=reasoning_text, created_at=created_at)] if reasoning_text else []
         ),
         token_count=_raw_message_token_count(raw),
         reasoning_token_count=extract_reasoning_token_count(raw) or 0,
         cache_read_token_count=extract_cache_read_token_count(raw) or 0,
         reasoning_text=reasoning_text,
-        display_agent_name=_display_metadata_from_raw(raw).get("display_agent_name"),
-        display_model_name=_display_metadata_from_raw(raw).get("display_model_name"),
+        display_agent_name=display_metadata.get("display_agent_name"),
+        display_model_name=display_metadata.get("display_model_name"),
         context_usage=(
             ContextUsage.model_validate(context_usage)
             if (context_usage := extract_context_usage(raw))
             else None
         ),
-        display_tool_calls=_display_metadata_from_raw(raw).get("display_tool_calls", []),
+        display_tool_calls=display_metadata.get("display_tool_calls", []),
         tool_calls=tool_calls or [],
         attachments=_attachments_from_raw(raw),
         raw=_raw_message_payload(raw),
@@ -532,17 +506,21 @@ def _raw_message_content(raw: Any) -> str:
     )
 
 
-def _messages_from_state(state: dict[str, Any]) -> list[ChatMessage]:
-    raw_messages = state.get("messages")
-    if not isinstance(raw_messages, list):
-        history = state.get("history")
-        raw_messages = history.get("messages") if isinstance(history, dict) else []
-    messages: list[ChatMessage] = []
-    for index, raw in enumerate(raw_messages if isinstance(raw_messages, list) else []):
-        message = _chat_message_from_raw(raw, index)
-        if message is not None:
-            messages.append(message)
-    return messages
+def _tool_message_duration(raw: Any) -> int | float | None:
+    """Read a checkpointed tool-call duration from a ToolMessage."""
+    additional_kwargs = (
+        raw.get("additional_kwargs")
+        if isinstance(raw, dict)
+        else getattr(raw, "additional_kwargs", None)
+    )
+    if not isinstance(additional_kwargs, dict):
+        return None
+    duration_ms = additional_kwargs.get("duration_ms")
+    return (
+        duration_ms
+        if isinstance(duration_ms, int | float) and not isinstance(duration_ms, bool)
+        else None
+    )
 
 
 def _synthetic_pending_tool_call_message(
@@ -579,14 +557,9 @@ def _tool_result_preview(result_text: str) -> str:
 
 def _messages_from_checkpoint(
     snapshot: CheckpointThreadSnapshot | None,
-    *,
-    store: BackendDocumentStore | None = None,
-    tool_call_audit: dict[str, dict[str, Any]] | None = None,
 ) -> list[ChatMessage]:
     if snapshot is None:
         return []
-
-    audit_index = tool_call_audit if tool_call_audit is not None else _tool_call_audit_index(store)
 
     tool_results: dict[str, dict[str, Any]] = {}
     for raw in snapshot.messages:
@@ -618,6 +591,9 @@ def _messages_from_checkpoint(
             result_entry["images"] = images
         if progress_log:
             result_entry["progress_log"] = progress_log
+        duration_ms = _tool_message_duration(raw)
+        if duration_ms is not None:
+            result_entry["duration_ms"] = duration_ms
         tool_results[str(call_id)] = result_entry
 
     messages: list[ChatMessage] = []
@@ -688,9 +664,8 @@ def _messages_from_checkpoint(
                     tc_with_result["progress_log"] = entry["progress_log"]
                 if entry.get("failed"):
                     tc_with_result["failed"] = True
-                audit_entry = audit_index.get(tc["id"])
-                if audit_entry is not None and "duration_ms" in audit_entry:
-                    tc_with_result["duration_ms"] = audit_entry.get("duration_ms")
+                if "duration_ms" in entry:
+                    tc_with_result["duration_ms"] = entry["duration_ms"]
                 pending_tool_calls.append(tc_with_result)
             if commentary:
                 # The narration now lives on its tool call; the message adds nothing.
@@ -747,8 +722,8 @@ def _summary_from_session(
         title=display_title(payload["title"], payload["first_message"]),
         pinned=payload["pinned"],
         archived=payload["archived"],
-        created_at=payload["created_at"],
-        last_activity=payload["last_activity"],
+        created_at=_known_session_timestamp(payload.get("created_at")),
+        last_activity=_known_session_timestamp(payload.get("last_activity")),
         message_count=len(messages),
         preview=preview,
         history_unavailable=history_unavailable,
@@ -766,7 +741,6 @@ def list_chat_sessions(
     include_archived: bool = False,
 ) -> list[ChatSessionSummary]:
     sessions: list[ChatSessionSummary] = []
-    tool_call_audit = _tool_call_audit_index(store)
     checkpoint_snapshots = store.list_checkpoint_thread_snapshots(limit=100)
     snapshots_by_thread_id = {snapshot.thread_id: snapshot for snapshot in checkpoint_snapshots}
 
@@ -783,7 +757,7 @@ def list_chat_sessions(
         except RuntimeUnavailable:
             snapshot = None
             history_unavailable = True
-        messages = _messages_from_checkpoint(snapshot, tool_call_audit=tool_call_audit)
+        messages = _messages_from_checkpoint(snapshot)
         sessions.append(
             _summary_from_session(
                 payload,
@@ -803,9 +777,8 @@ def get_chat_detail(
     payload = _session_payload(store, thread_id)
     if payload is None:
         return None
-    tool_call_audit = _tool_call_audit_index(store)
     snapshot = store.get_checkpoint_thread_snapshot(thread_id)
-    messages = _messages_from_checkpoint(snapshot, tool_call_audit=tool_call_audit)
+    messages = _messages_from_checkpoint(snapshot)
     summary = _summary_from_session(payload, messages=messages)
     return ChatSessionDetail(**summary.model_dump(), messages=messages)
 
@@ -825,7 +798,7 @@ def get_chat_summary(store: BackendDocumentStore, thread_id: str) -> ChatSession
     except RuntimeUnavailable:
         snapshot = None
         history_unavailable = True
-    messages = _messages_from_checkpoint(snapshot, tool_call_audit=_tool_call_audit_index(store))
+    messages = _messages_from_checkpoint(snapshot)
     return _summary_from_session(
         payload, messages=messages, history_unavailable=history_unavailable
     )
