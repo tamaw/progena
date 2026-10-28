@@ -214,6 +214,32 @@ class CanvasRevision:
     captured_at: str | None
 
 
+def _compact_workflow_run_definition(definition: object) -> dict[str, Any]:
+    """Keep only list-view workflow fields needed to name and classify audit spans."""
+    if not isinstance(definition, dict):
+        return {}
+    graph = definition.get("graph")
+    raw_nodes = graph.get("nodes") if isinstance(graph, dict) else {}
+    nodes = (
+        {
+            node_id: {
+                field: node[field]
+                for field in ("kind", "title", "label")
+                if isinstance(node.get(field), str)
+            }
+            for node_id, node in raw_nodes.items()
+            if isinstance(node_id, str) and isinstance(node, dict)
+        }
+        if isinstance(raw_nodes, dict)
+        else {}
+    )
+    return {
+        field: definition[field]
+        for field in ("id", "title")
+        if isinstance(definition.get(field), str)
+    } | {"graph": {"nodes": nodes}}
+
+
 class BackendDocumentStore(Protocol):
     """Minimal document-store API used by backend routes."""
 
@@ -224,7 +250,13 @@ class BackendDocumentStore(Protocol):
     def list_documents(self, prefix: str, key_prefix: str) -> list[tuple[str, StoredDocument]]: ...
 
     def query_workflow_run_page(
-        self, *, status: str, q: str, before: tuple[str, str, str] | None, limit: int
+        self,
+        *,
+        status: str,
+        q: str,
+        before: tuple[str, str, str] | None,
+        since: str | None = None,
+        limit: int,
     ) -> list[tuple[dict[str, Any], dict[str, Any]]]:
         """Filter and keyset-page workflow metadata before returning bounded rows."""
         ...
@@ -450,7 +482,13 @@ class InMemoryDocumentStore:
         ]
 
     def query_workflow_run_page(
-        self, *, status: str, q: str, before: tuple[str, str, str] | None, limit: int
+        self,
+        *,
+        status: str,
+        q: str,
+        before: tuple[str, str, str] | None,
+        since: str | None = None,
+        limit: int,
     ) -> list[tuple[dict[str, Any], dict[str, Any]]]:
         rows = []
         boundary = (
@@ -458,9 +496,23 @@ class InMemoryDocumentStore:
             if before
             else None
         )
+        cutoff = (
+            datetime.fromisoformat(since.replace("Z", "+00:00")).astimezone(UTC) if since else None
+        )
         for _, document in self.list_documents(PROGENA_STATE_PREFIX, "workflow_run:"):
             payload = document.payload
             if not isinstance(payload, dict):
+                continue
+            started_value = payload.get("started_at") or payload.get("queued_at")
+            if not isinstance(started_value, str):
+                continue
+            try:
+                started = datetime.fromisoformat(started_value.replace("Z", "+00:00")).astimezone(
+                    UTC
+                )
+            except ValueError:
+                continue
+            if cutoff is not None and started < cutoff:
                 continue
             definition_doc = self.get_document(
                 PROGENA_STATE_PREFIX, f"workflow:{payload['workflow_id']}", {}
@@ -474,12 +526,74 @@ class InMemoryDocumentStore:
                 q in str(value).casefold() for value in (name, source, payload["run_id"])
             ):
                 continue
-            started = datetime.fromisoformat(
-                (payload.get("started_at") or payload["queued_at"]).replace("Z", "+00:00")
-            )
             key = (started, "workflow", payload["run_id"])
             if boundary is None or key < boundary:
-                rows.append((key, payload, definition))
+                step_audit = payload.get("step_audit")
+                compact_audit = (
+                    [
+                        {
+                            field: entry.get(field)
+                            for field in (
+                                "node_id",
+                                "kind",
+                                "started_at",
+                                "completed_at",
+                                "status",
+                                "tokens",
+                            )
+                            if field in entry
+                        }
+                        for entry in step_audit
+                        if isinstance(entry, dict)
+                    ]
+                    if isinstance(step_audit, list)
+                    else []
+                )
+                outputs = payload.get("node_outputs")
+                node_threads = (
+                    {
+                        node_id: {"thread_id": output["thread_id"]}
+                        for node_id, output in outputs.items()
+                        if isinstance(output, dict) and isinstance(output.get("thread_id"), str)
+                    }
+                    if isinstance(outputs, dict)
+                    else {}
+                )
+                pending = payload.get("pending_routine")
+                pending_ref = (
+                    {
+                        field: pending.get(field)
+                        for field in ("node_id", "thread_id")
+                        if field in pending
+                    }
+                    if isinstance(pending, dict)
+                    else None
+                )
+                rows.append(
+                    (
+                        key,
+                        {
+                            field: payload.get(field)
+                            for field in (
+                                "run_id",
+                                "workflow_id",
+                                "status",
+                                "source",
+                                "started_at",
+                                "queued_at",
+                                "completed_at",
+                                "completed_node_ids",
+                                "tokens",
+                            )
+                        }
+                        | {
+                            "step_audit": compact_audit,
+                            "node_threads": node_threads,
+                            "pending_routine": pending_ref,
+                        },
+                        _compact_workflow_run_definition(definition),
+                    )
+                )
         rows.sort(key=lambda row: row[0], reverse=True)
         return [(payload, definition) for _, payload, definition in rows[:limit]]
 
@@ -1650,7 +1764,13 @@ class PostgresDocumentStore:
         return results
 
     def query_workflow_run_page(
-        self, *, status: str, q: str, before: tuple[str, str, str] | None, limit: int
+        self,
+        *,
+        status: str,
+        q: str,
+        before: tuple[str, str, str] | None,
+        since: str | None = None,
+        limit: int,
     ) -> list[tuple[dict[str, Any], dict[str, Any]]]:
         # Do not return trigger_event/node_outputs: these can be megabytes per run.
         with self._cursor() as cur:
@@ -1665,14 +1785,73 @@ class PostgresDocumentStore:
                      AND d.key = 'workflow:' || (s.value#>>'{payload,workflow_id}')
                     WHERE s.prefix = %s
                       AND s.key LIKE %s
+                      AND (
+                          %s::timestamptz IS NULL
+                          OR COALESCE(
+                              s.value#>>'{payload,started_at}',
+                              s.value#>>'{payload,queued_at}'
+                          )::timestamptz >= %s::timestamptz
+                      )
                 )
                 SELECT jsonb_build_object(
                     'run_id', p->'run_id', 'workflow_id', p->'workflow_id',
                     'status', p->'status', 'source', p->'source',
                     'started_at', p->'started_at', 'queued_at', p->'queued_at',
                     'completed_at', p->'completed_at',
-                    'completed_node_ids', p->'completed_node_ids'
-                ) AS payload, COALESCE(definition, '{}'::jsonb) AS definition
+                    'completed_node_ids', p->'completed_node_ids',
+                    'tokens', p->'tokens',
+                    'node_threads', COALESCE((
+                        SELECT jsonb_object_agg(node_id, jsonb_build_object(
+                            'thread_id', details->'thread_id'
+                        ))
+                        FROM jsonb_each(
+                            CASE WHEN jsonb_typeof(p->'node_outputs') = 'object'
+                                 THEN p->'node_outputs' ELSE '{}'::jsonb END
+                        ) AS output(node_id, details)
+                        WHERE jsonb_typeof(details) = 'object' AND details ? 'thread_id'
+                    ), '{}'::jsonb),
+                    'pending_routine', CASE
+                        WHEN jsonb_typeof(p->'pending_routine') = 'object'
+                        THEN jsonb_strip_nulls(jsonb_build_object(
+                            'node_id', p->'pending_routine'->'node_id',
+                            'thread_id', p->'pending_routine'->'thread_id'
+                        ))
+                        ELSE NULL
+                    END,
+                    'step_audit', COALESCE((
+                        SELECT jsonb_agg(jsonb_build_object(
+                            'node_id', entry->'node_id',
+                            'kind', entry->'kind',
+                            'started_at', entry->'started_at',
+                            'completed_at', entry->'completed_at',
+                            'status', entry->'status',
+                            'tokens', entry->'tokens'
+                        ))
+                        FROM jsonb_array_elements(
+                            CASE WHEN jsonb_typeof(p->'step_audit') = 'array'
+                                 THEN p->'step_audit' ELSE '[]'::jsonb END
+                        ) AS entry
+                    ), '[]'::jsonb)
+                ) AS payload,
+                jsonb_strip_nulls(jsonb_build_object(
+                    'id', definition->'id',
+                    'title', definition->'title',
+                    'graph', jsonb_build_object('nodes', COALESCE((
+                        SELECT jsonb_object_agg(
+                            node_id,
+                            jsonb_strip_nulls(jsonb_build_object(
+                                'kind', details->'kind',
+                                'title', details->'title',
+                                'label', details->'label'
+                            ))
+                        )
+                        FROM jsonb_each(
+                            CASE WHEN jsonb_typeof(definition->'graph'->'nodes') = 'object'
+                                 THEN definition->'graph'->'nodes' ELSE '{}'::jsonb END
+                        ) AS node(node_id, details)
+                        WHERE jsonb_typeof(details) = 'object'
+                    ), '{}'::jsonb))
+                )) AS definition
                 FROM runs
                 WHERE (%s = '' OR lower(p->>'status') = %s)
                   AND (%s = '' OR strpos(lower(COALESCE(definition->>'title', p->>'workflow_id')), %s) > 0
@@ -1687,6 +1866,8 @@ class PostgresDocumentStore:
                 (
                     PROGENA_STATE_PREFIX,
                     "workflow\\_run:%",
+                    since,
+                    since,
                     status,
                     status,
                     q,

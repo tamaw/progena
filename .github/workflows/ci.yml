@@ -5,10 +5,9 @@ on:
     # Manual deploys must select main; other refs are rejected before scheduling.
   push:
     branches: [main]
-  # Tests only. The condition on each test job skips fork PRs; deployment below
-  # stays main-only.
+  # Tests only, including stacked PRs. Per-job conditions skip fork PRs;
+  # deployment below stays main-only.
   pull_request:
-    branches: [main]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}

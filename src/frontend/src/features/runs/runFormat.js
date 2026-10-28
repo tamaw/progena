@@ -29,21 +29,6 @@ export function formatTokenCount(tokens) {
   return value >= 1000 ? `${(value / 1000).toFixed(value >= 10000 ? 0 : 1)}k` : String(value);
 }
 
-export function progressLabel(row) {
-  const done = Number(row?.steps_done);
-  const total = Number(row?.steps_total);
-  if (!Number.isFinite(done) || !Number.isFinite(total) || total <= 0) return '—';
-  return `${Math.min(done, total)}/${total}`;
-}
-
-export function progressPercent(row) {
-  const done = Number(row?.steps_done);
-  const total = Number(row?.steps_total);
-  return Number.isFinite(done) && Number.isFinite(total) && total > 0
-    ? Math.min(100, Math.max(0, (done / total) * 100))
-    : null;
-}
-
 export function kindLabel(kind) {
   return ({ routine: 'Routine', workflow: 'Workflow', schedule: 'Schedule' })[kind] || kind || 'Run';
 }

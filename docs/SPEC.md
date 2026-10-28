@@ -361,21 +361,29 @@ Status uses the same interrupted rule as the UI
 ## Runs
 
 **Spectate → Runs** (`/runs`) is a full-width execution-history flame-chart grid for
-workflows, top-level routine attempts, and schedules. Kind, status and text
-filters use newest-first cursor paging; the sort dropdown applies to the loaded
-page. Estimated progress compares distinct completed executable nodes with
-the graph's executable nodes, excluding trigger and data nodes. Routine graph
-counts use the pinned revision; workflow counts use the current definition.
-A failed or cancelled run does not imply every node executed.
+workflows, top-level routine attempts, and schedules. Kind, status, text and rolling
+started-time filters use newest-first cursor paging. The compact time selector
+offers Hour (60 minutes), Day (24 hours), Week (7 days, initially selected),
+Month (30 days), and All time. Finite ranges use inclusive UTC cutoffs and omit
+runs without a recorded start. Filtering happens before server paging; the sort
+dropdown applies to the loaded page. Paging controls live in the toolbar.
+The page has no estimated step counter, bottom legend or footer text.
 
-Expanding a run inserts its child activity into the same grid, with one run
-expanded at a time. The synthetic run span is omitted rather than repeated.
+Clicking anywhere on a run row, or pressing Enter/Space while the row is focused,
+expands its child activity into the same grid, with one run expanded at a time.
+Row tooltips expose the existing run ID, trigger, timestamps, schedule request
+context and, once loaded, the recorded root failure reason. The synthetic run span
+is not repeated.
 Structural rows collapse their descendants; non-overlapping sibling model calls
 share compact lanes, while tool declarations without timing share marker lanes.
 Overlapping measured calls stay on separate lanes. Each run has its own elapsed
 time scale; bars across different runs do not imply a common wall-clock window.
 The fixed page has one internally scrolling chart and sticky column headers.
 Controls reuse the design library's icons, theme tokens and custom select.
+Run and structural parent timelines overlay descendant activity from start to
+end, retaining concurrent intervals rather than replacing them with a blank
+duration band. Collapsed branches retain their summary and usage. Styled
+hover/focus tooltips use the shared theme and render outside the scroll viewport.
 There is no separate trace page, nested table, page heading or Refresh control.
 
 Selecting a bar highlights a call without revealing payloads. A separate row
@@ -383,11 +391,16 @@ disclosure opens bounded input/output/error details immediately below that lane;
 packed lanes provide a call selector. Details do not repeat duration/token fields.
 Model intervals are derived from checkpoint commits, not provider latency.
 Tool duration is measured only when an audit record exists; otherwise a
-transcript declaration marker explicitly reports timing unavailable. Deduplicated
-available token usage appears in the run and model-lane columns, loaded on run
-expansion and retained with its cached trace. The list never hydrates every run
-just to populate tokens. Missing usage is a dash, not zero; lane totals include
-only recorded usage.
+transcript declaration marker explicitly reports timing unavailable. Available
+usage appears in run, structural-parent and model-lane columns. Compact workflow
+audits and selected routine checkpoint tips populate list summaries without
+loading checkpoint histories. Expansion reconstructs per-model usage, which can
+include calls absent from the compact node metadata and therefore increase the
+recorded total. Known descendant usage supersedes inclusive parent metadata;
+those amounts are never added together. Missing usage is a dash, while a
+recorded zero remains zero. Schedules without persisted usage need expansion to
+reconstruct their model messages; no runtime instrumentation or invented totals
+are introduced by the visual read model.
 
 The backend reads Postgres directly; it does not ask the runtime or the agent-facing
 `/runs/` mount to build this visual model. Document and checkpoint notifications
@@ -395,7 +408,8 @@ drive canonical `ui.event` updates; the table receives broadcast changes while
 the page is open, without polling. Expanding a trace establishes a targeted,
 connection-scoped interest. Collapsing, filtering away, paging away, or leaving
 the run releases it. Reconnect restores the interest and a fresh snapshot.
-Open spans grow on the client, including approval waits; terminal spans do not.
+The client expires rows from finite time windows using its display clock, without
+polling the server. Open spans grow on the client; terminal spans do not.
 
 Workflow audit entries persist `started_at` before work, then settle the same
 entry on completion, failure or cancellation. Approval and child-routine waits

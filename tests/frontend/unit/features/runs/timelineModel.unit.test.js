@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
+  activityRollups,
+  runSummarySource,
   spanGeometry,
   tickLabel,
   timelineRows,
@@ -124,5 +126,62 @@ describe('timeline rows', () => {
       span('b', 'a', 'agent', 2, 3),
     ]);
     expect(rows.map((row) => row.id).sort()).toEqual(['a', 'b']);
+  });
+});
+
+describe('activity usage rollups', () => {
+  it('rolls descendant usage into each ancestor without adding inclusive parent totals again', () => {
+    const spans = [
+      { ...span('run', null, 'run', 0, 30), tokens: 90 },
+      { ...span('agent', 'run', 'agent', 1, 25), tokens: 90 },
+      { ...span('model-a', 'agent', 'model', 2, 3), tokens: 40 },
+      { ...span('model-b', 'agent', 'model', 4, 5), tokens: 50 },
+      span('tool', 'agent', 'tool', 5, 6),
+    ];
+    const rollups = activityRollups(spans);
+    expect(rollups.get('run').tokens).toBe(90);
+    expect(rollups.get('agent').tokens).toBe(90);
+    expect(rollups.get('agent').descendants.map((item) => item.id)).toEqual(['model-a', 'model-b', 'tool']);
+  });
+
+  it('preserves metadata-only usage, actual zero and unknown branches independently', () => {
+    const rollups = activityRollups([
+      span('run', null, 'run', 0, 30),
+      { ...span('stored', 'run', 'agent', 1, 9), tokens: 70 },
+      span('unknown-model', 'stored', 'model', 2, 3),
+      { ...span('zero', 'run', 'agent', 10, 20), tokens: 100 },
+      { ...span('zero-model', 'zero', 'model', 11, 12), tokens: 0 },
+      span('unknown', 'run', 'tool', 22, 23),
+    ]);
+    expect(rollups.get('stored').tokens).toBe(70);
+    expect(rollups.get('zero').tokens).toBe(0);
+    expect(rollups.get('unknown').tokens).toBeNull();
+    expect(rollups.get('run').tokens).toBe(70);
+  });
+
+  it('replaces metadata totals as recorded child activity arrives', () => {
+    const parent = { ...span('agent', null, 'agent', 0, 30), tokens: 40 };
+    const first = { ...span('first', 'agent', 'model', 1, 10), tokens: 40 };
+    expect(activityRollups([parent, first]).get('agent').tokens).toBe(40);
+    const second = { ...span('second', 'agent', 'model', 11, 20), tokens: 60 };
+    expect(activityRollups([parent, first, second]).get('agent').tokens).toBe(100);
+  });
+});
+
+describe('run summary freshness', () => {
+  it('keeps collapsed live rows current instead of reusing an older expanded trace', () => {
+    const row = { status: 'running', tokens: 90, overview: [span('new-step', null, 'step', 1, 9)] };
+    const trace = { status: 'running', tokens: 40, spans: [span('old-step', null, 'step', 1, 3)] };
+    const summary = runSummarySource(row, trace, false);
+    expect(summary.tokens).toBe(90);
+    expect(summary.spans.map((item) => item.id)).toEqual(['new-step']);
+    expect(runSummarySource(row, trace, true)).toBe(trace);
+  });
+
+  it('retains reconstructed terminal usage only when the cached lifecycle agrees', () => {
+    const row = { status: 'completed', tokens: 90, overview: [] };
+    const trace = { status: 'completed', tokens: 120, spans: [] };
+    expect(runSummarySource(row, trace, false).tokens).toBe(120);
+    expect(runSummarySource(row, { ...trace, status: 'running' }, false).tokens).toBe(90);
   });
 });

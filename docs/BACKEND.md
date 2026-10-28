@@ -311,7 +311,7 @@ responses never are.
 | Inbox | `GET /api/ui/inbox`; `POST /api/ui/inbox/{message_id}/read`; `POST /api/ui/inbox/{message_id}/decision`; `DELETE /api/ui/inbox/{message_id}` | Canonical `ui.event` envelopes: `inbox.snapshot`, `inbox.message.upserted`, `inbox.message.deleted` |
 | Knowledge | `GET/PUT /api/ui/knowledge`; `POST /api/ui/knowledge/{base_id}/sources/{source_id}/index`; `GET /api/ui/knowledge/{base_id}/search` | Canonical `ui.event` envelopes: `knowledge.snapshot`, request-scoped `knowledge.search.results` |
 | Workflows | `GET/POST /api/ui/workflows`; `GET/PUT /api/ui/workflows/content`; `DELETE /api/ui/workflows/{workflow_id}`; `POST /api/ui/workflows/{workflow_id}/pause`; `POST /api/ui/workflows/{workflow_id}/resume`; `POST /api/ui/workflows/{workflow_id}/trigger`; `GET /api/ui/workflow-runs`; `GET /api/ui/document-types`; `GET /api/ui/workflows/cron-preview?expression=&timezone=&count=` (synchronous: `{"next_runs": [...]}`, `400` with the validation message) | Canonical `ui.event` envelopes: `workflows.snapshot`, `workflow.updated`, `workflow.deleted`, `workflow.runs.snapshot`, `workflow.run.started`, `workflow.run.updated`, `workflow.run.completed`, `workflow.run.failed`, `document_types.snapshot` (registry with each type's document schema and derived event/read/query port schemas). Runs start from the durable `document_events` log (see `src/backend/events/documents.py`) or from `cron` trigger nodes fired by the backend clock (`src/backend/workflows/cron.py`, last handled due time per node in `backend.state` `workflow_cron:<workflow>:<node>`), never inline from routes. |
-| Runs | `GET /api/ui/runs?kind=&status=&q=&cursor=`; `GET /api/ui/runs/{kind}/{run_id}/trace?client_id=`; `PUT /api/ui/runs/subscription` | Request-correlated `runs.snapshot` (`runs`, opaque `next_cursor`), client-targeted `run.trace.loaded` / `run.trace.updated`, and global `run.updated` / `run.deleted`. `RunRow` has `kind`, `run_id`, `name`, `trigger`, `status`, times and estimated progress; tokens are trace-only. |
+| Runs | `GET /api/ui/runs?kind=&status=&q=&cursor=&period=`; `GET /api/ui/runs/{kind}/{run_id}/trace?client_id=`; `PUT /api/ui/runs/subscription` | Request-correlated `runs.snapshot` (`runs`, opaque `next_cursor`), client-targeted `run.trace.loaded` / `run.trace.updated`, and global `run.updated` / `run.deleted`. `RunRow` has `kind`, `run_id`, `name`, `trigger`, `status`, times, nullable recorded `tokens`, and compact `overview` spans. |
 | Search | `GET /api/ui/search` | Request-scoped `search.results` (sections: Inbox, Tasks, Agents, Routines, Workflows, Prompts, Knowledge, Tools, Schedules) |
 | Knowledge | `GET/PUT /api/ui/knowledge`; `GET /api/ui/knowledge/{base_id}/pages`; `GET /api/ui/knowledge/{base_id}/page`; `GET /api/ui/knowledge/{base_id}/page/revisions`; `GET /api/ui/knowledge/{base_id}/page/revisions/{revision_id}` | Canonical `ui.event` envelopes: `knowledge.snapshot`, `knowledge.pages.snapshot`, `knowledge.page.loaded`, `knowledge.page.revisions.loaded`, `knowledge.page.revision.loaded`; indexer-originated `knowledge.index.started`, `knowledge.index.progress`, `knowledge.index.completed`, `knowledge.index.failed` |
 | Workflows | `GET/POST /api/ui/workflows`; `GET/PUT /api/ui/workflows/content`; `DELETE /api/ui/workflows/{workflow_id}`; `POST /api/ui/workflows/{workflow_id}/pause`; `POST /api/ui/workflows/{workflow_id}/resume`; `POST /api/ui/workflows/{workflow_id}/trigger`; `GET /api/ui/workflow-runs` | Canonical `ui.event` envelopes: `workflows.snapshot`, `workflow.updated`, `workflow.deleted`, `workflow.runs.snapshot`, `workflow.run.started`, `workflow.run.updated`, `workflow.run.completed`, `workflow.run.failed` |
@@ -326,9 +326,17 @@ responses never are.
 ### Runs subscriptions
 
 Runs list snapshots are global, replayable state; a late correlated snapshot
-must not overwrite a newer row update. `kind`, `status`, and case-insensitive
-`q` filters apply before the stable newest-first `(started_at, kind, run_id)`
-keyset cursor. The list does not hydrate checkpoint histories.
+must not overwrite a newer row update. `kind`, `status`, case-insensitive `q`,
+and optional `period=hour|day|week|month` filters apply before the stable newest-first
+`(started_at, kind, run_id)` keyset cursor. Periods are rolling 1-hour, 24-hour,
+7-day and 30-day started-time windows with inclusive UTC lower bounds; omitting
+the parameter includes all history. Undated runs are excluded from finite periods.
+Workflow cutoff predicates execute before SQL LIMIT. The list projects compact
+workflow audit fields and only definition identity/node labels (not prompt/config
+bodies), then reads only
+selected routine checkpoint tips, including linked workflow routine steps, for
+overview timing and usage. It does not hydrate checkpoint histories or send
+trigger bodies, node outputs, audit payloads or private checkpoint thread refs.
 
 Trace requests and subscriptions require the caller's active canonical-stream
 `client_id`. Targeted trace envelopes are never retained or replayed globally.
@@ -340,7 +348,10 @@ only to current subscribers and carry no request ID. Interests are discarded
 when the stream disconnects; clients resubscribe and reload after
 `connection.ready`.
 
-`RunTrace` contains trace-only deduplicated message usage and spans. Model
+`RunTrace` contains spans and hierarchy-safe recorded usage. Known descendant
+usage supersedes inclusive parent metadata, including a genuine zero; absent
+usage remains null. Full model-message reconstruction can include calls absent
+from the list's compact execution metadata. Model
 intervals use checkpoint boundaries and are explicitly
 `timing_source: "checkpoint-derived"`; they are not provider latency. An open
 span has `end: null`. Missing tool audit logs never prove that a tool is open

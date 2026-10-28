@@ -7,12 +7,12 @@ import {
 } from './state';
 import { watchRunTrace } from './runSubscriptions';
 
-export function useRunsQuery({ runsUrl, kind, status, q, cursor }) {
+export function useRunsQuery({ runsUrl, kind, status, q, cursor, period }) {
   const dispatch = useDispatch();
   const streamReady = useSelector(selectRealtimeStreamReady);
   const normalizedQuery = useMemo(
-    () => normalizeRunsQuery({ kind, status, q, cursor }),
-    [kind, status, q, cursor],
+    () => normalizeRunsQuery({ kind, status, q, cursor, period }),
+    [kind, status, q, cursor, period],
   );
   const queryState = useSelector((state) => selectRunsQueryState(state, normalizedQuery));
   const refresh = useCallback(() => {

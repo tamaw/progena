@@ -1,17 +1,33 @@
 """Run paging and transcript timing invariants."""
 
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage, ToolMessage
+from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 
-from src.backend.runs.service import _conversation_spans, list_runs
+from src.backend.runs.models import RunRow, Span
+from src.backend.runs.routes import router as runs_router
+from src.backend.runs.service import (
+    _conversation_spans,
+    _rollup_tokens,
+    _routine_metadata_rows,
+    _routine_overview,
+    _workflow_row,
+    build_trace,
+    list_runs,
+)
 from src.backend.storage.documents import (
     PROGENA_STATE_PREFIX,
     InMemoryDocumentStore,
     PostgresDocumentStore,
+    store_database_url,
 )
+from src.progena.routines.events import RUN_EVENT_PREFIX
 
 
 @pytest.fixture(params=["memory", "postgres"])
@@ -28,7 +44,9 @@ def run_store(request):
 
 
 @pytest.mark.asyncio
-async def test_filters_and_keyset_reach_older_runs_beyond_first_source_batch(run_store):
+async def test_filters_and_keyset_reach_older_runs_beyond_first_source_batch(
+    run_store, monkeypatch
+):
     store = run_store
     store.save_document(
         PROGENA_STATE_PREFIX,
@@ -44,6 +62,7 @@ async def test_filters_and_keyset_reach_older_runs_beyond_first_source_batch(run
             },
         },
     )
+    monkeypatch.setattr("src.backend.runs.service._now", lambda: datetime(2026, 11, 1, tzinfo=UTC))
     start = datetime(2026, 10, 28, tzinfo=UTC)
     # Key order and insertion order deliberately disagree with chronological order.
     for index in range(225):
@@ -63,18 +82,149 @@ async def test_filters_and_keyset_reach_older_runs_beyond_first_source_batch(run
                 "completed_node_ids": ["write", "constant"],
             },
         )
-    page, cursor = await list_runs(store, kind="workflow", status="failed", q="REPORT", limit=2)
+    page, cursor = await list_runs(
+        store,
+        kind="workflow",
+        status="failed",
+        q="REPORT",
+        period="month",
+        limit=2,
+    )
     assert [row.run_id for row in page] == ["run-220", "run-221"]
-    assert [(row.steps_done, row.steps_total) for row in page] == [(1, 1), (1, 1)]
     second, cursor = await list_runs(
-        store, kind="workflow", status="failed", q="report", limit=2, cursor=cursor
+        store,
+        kind="workflow",
+        status="failed",
+        q="report",
+        period="month",
+        limit=2,
+        cursor=cursor,
     )
     assert [row.run_id for row in second] == ["run-222", "run-223"]
     last, cursor = await list_runs(
-        store, kind="workflow", status="failed", q="report", limit=2, cursor=cursor
+        store,
+        kind="workflow",
+        status="failed",
+        q="report",
+        period="month",
+        limit=2,
+        cursor=cursor,
     )
     assert [row.run_id for row in last] == ["run-224"]
     assert cursor is None
+
+
+@pytest.mark.asyncio
+async def test_period_includes_cutoff_across_kinds_normalizes_offsets_and_excludes_missing_starts(
+    run_store, monkeypatch
+):
+    store = run_store
+    if isinstance(store, PostgresDocumentStore):
+        database_url = store_database_url(store)
+        assert database_url is not None
+        async with AsyncPostgresSaver.from_conn_string(database_url) as saver:
+            await saver.setup()
+    monkeypatch.setattr(
+        "src.backend.runs.service._now", lambda: datetime(2026, 10, 29, 12, tzinfo=UTC)
+    )
+    cutoff = "2026-10-28T12:00:00+00:00"
+    store.save_document(
+        PROGENA_STATE_PREFIX,
+        "workflow:daily",
+        {"title": "Daily", "graph": {"nodes": {}}},
+    )
+    for run_id, started_at in (
+        ("workflow-at-cutoff", "2026-10-28T08:00:00-04:00"),
+        ("workflow-before-cutoff", "2026-10-28T11:59:59+00:00"),
+    ):
+        store.save_document(
+            PROGENA_STATE_PREFIX,
+            f"workflow_run:{run_id}",
+            {
+                "run_id": run_id,
+                "workflow_id": "daily",
+                "status": "completed",
+                "source": "manual",
+                "queued_at": started_at,
+                "started_at": started_at,
+                "completed_at": started_at,
+            },
+        )
+    store.save_document(
+        PROGENA_STATE_PREFIX,
+        "workflow_run:workflow-without-start",
+        {"run_id": "workflow-without-start", "workflow_id": "daily", "status": "completed"},
+    )
+    store.save_document(
+        PROGENA_STATE_PREFIX,
+        "schedule_runs",
+        [
+            {
+                "run_id": "schedule-at-cutoff",
+                "schedule_id": "daily",
+                "status": "completed",
+                "started_at": cutoff,
+                "completed_at": cutoff,
+            },
+            {
+                "run_id": "schedule-before-cutoff",
+                "schedule_id": "daily",
+                "status": "completed",
+                "started_at": "2026-10-28T11:59:59+00:00",
+            },
+            {"run_id": "schedule-without-start", "schedule_id": "daily", "status": "completed"},
+        ],
+    )
+    for request_id, timestamp in (
+        ("routine-at-cutoff", cutoff),
+        ("routine-before-cutoff", "2026-10-28T11:59:59+00:00"),
+    ):
+        store.save_document(
+            PROGENA_STATE_PREFIX,
+            f"{RUN_EVENT_PREFIX}{request_id}:completed",
+            {
+                "request_id": request_id,
+                "thread_id": f"routine:daily:revision:{request_id}",
+                "status": "completed",
+                "timestamp": timestamp,
+            },
+        )
+
+    rows, _ = await list_runs(store, period="day")
+
+    assert {row.run_id for row in rows} == {
+        "workflow-at-cutoff",
+        "schedule-at-cutoff",
+        "routine-at-cutoff",
+    }
+    assert {row.started_at for row in rows} == {"2026-10-28T12:00:00.000000+00:00"}
+
+
+def test_runs_route_rejects_invalid_period():
+    app = FastAPI()
+    app.include_router(runs_router, prefix="/api/ui")
+
+    response = TestClient(app).get("/api/ui/runs?period=year")
+
+    assert response.status_code == 422
+
+
+def test_enqueued_routine_row_is_normalized_to_queued():
+    at = datetime(2026, 10, 28, tzinfo=UTC).isoformat()
+    rows = _routine_metadata_rows(
+        InMemoryDocumentStore(),
+        [
+            {
+                "request_id": "attempt",
+                "thread_id": "routine:daily:revision:attempt",
+                "status": "enqueued",
+                "timestamp": at,
+            }
+        ],
+        {},
+    )
+
+    assert [(row.run_id, row.status) for row in rows] == [("attempt", "queued")]
 
 
 def test_missing_audit_preserves_recorded_error_without_inventing_latency():
@@ -197,3 +347,333 @@ def test_shared_thread_messages_belong_to_their_step_window_and_usage_is_dedupli
     assert datetime.fromisoformat(second[0].start) == at + timedelta(seconds=10)
     _, repeated_usage = _conversation_spans(store, "repeated", thread, seen)
     assert repeated_usage == 0
+
+
+@pytest.mark.asyncio
+async def test_workflow_list_exposes_compact_audit_overview_and_persisted_zero_usage(run_store):
+    store = run_store
+    at = datetime(2026, 10, 28, tzinfo=UTC).isoformat()
+    store.save_document(
+        PROGENA_STATE_PREFIX,
+        "workflow:usage",
+        {
+            "id": "usage",
+            "title": "Usage",
+            "graph": {
+                "config": {"prompt": "must not be listed"},
+                "nodes": {
+                    "model": {
+                        "kind": "agent",
+                        "title": "Model",
+                        "label": "Model label",
+                        "config": {"prompt": "must not be listed"},
+                    }
+                },
+            },
+            "config": {"inputs": {"body": "must not be listed"}},
+        },
+    )
+    store.save_document(
+        PROGENA_STATE_PREFIX,
+        "workflow_run:usage",
+        {
+            "run_id": "usage",
+            "workflow_id": "usage",
+            "source": "manual",
+            "status": "completed",
+            "queued_at": at,
+            "started_at": at,
+            "completed_at": at,
+            "completed_node_ids": ["model"],
+            "tokens": {"total_tokens": 0},
+            "trigger_event": {"body": "not selected"},
+            "node_outputs": {"model": {"body": "not selected"}},
+            "step_audit": [
+                {
+                    "node_id": "model",
+                    "kind": "agent",
+                    "started_at": at,
+                    "completed_at": at,
+                    "status": "completed",
+                    "tokens": {"total_tokens": 0},
+                    "output": "not selected",
+                    "error": "not selected",
+                }
+            ],
+        },
+    )
+
+    rows, _ = await list_runs(store, kind="workflow")
+
+    assert rows[0].tokens == 0
+    assert [(span.kind, span.tokens, span.summary, span.error) for span in rows[0].overview] == [
+        ("run", 0, None, None),
+        ("agent", 0, None, None),
+    ]
+    payload, definition = store.query_workflow_run_page(
+        status="", q="", before=None, since=None, limit=1
+    )[0]
+    assert "node_outputs" not in payload
+    assert "trigger_event" not in payload
+    assert set(payload["step_audit"][0]) == {
+        "node_id",
+        "kind",
+        "started_at",
+        "completed_at",
+        "status",
+        "tokens",
+    }
+    assert definition == {
+        "id": "usage",
+        "title": "Usage",
+        "graph": {"nodes": {"model": {"kind": "agent", "title": "Model", "label": "Model label"}}},
+    }
+
+
+def test_recorded_node_usage_rolls_up_without_usage_metadata_and_deduplicates_hierarchy():
+    at = datetime(2026, 10, 28, tzinfo=UTC).isoformat()
+    row = RunRow(
+        kind="routine",
+        run_id="stored",
+        name="Stored usage",
+        trigger="manual",
+        status="completed",
+        started_at=at,
+        completed_at=at,
+    )
+    overview = _routine_overview(
+        row,
+        {"nodes": [{"id": "model", "kind": "agent", "label": "Model"}]},
+        {
+            "model": [
+                {
+                    "started_at": at,
+                    "duration_ms": 0,
+                    "tokens": {"input_tokens": 4, "output_tokens": 3},
+                }
+            ]
+        },
+    )
+    assert _rollup_tokens(overview) == 7
+
+    root = Span(
+        id="root",
+        kind="run",
+        name="Root",
+        start=at,
+        status="completed",
+        tokens=99,
+    )
+    structural = Span(
+        id="structural",
+        parent_id="root",
+        kind="agent",
+        name="Structural",
+        start=at,
+        status="completed",
+        tokens=50,
+    )
+    model = Span(
+        id="model",
+        parent_id="structural",
+        kind="model",
+        name="Model",
+        start=at,
+        status="completed",
+        tokens=0,
+    )
+    assert _rollup_tokens([root, structural, model]) == 0
+    assert (
+        _rollup_tokens(
+            [
+                Span(id="missing", kind="run", name="Missing", start=at, status="completed"),
+            ]
+        )
+        is None
+    )
+
+
+@pytest.mark.asyncio
+async def test_trace_uses_recorded_step_usage_when_conversation_usage_is_unavailable():
+    store = InMemoryDocumentStore()
+    at = datetime(2026, 10, 28, tzinfo=UTC).isoformat()
+    store.save_document(
+        PROGENA_STATE_PREFIX,
+        "workflow:stored",
+        {"title": "Stored", "graph": {"nodes": {"format": {"kind": "format"}}}},
+    )
+    store.save_document(
+        PROGENA_STATE_PREFIX,
+        "workflow_run:stored",
+        {
+            "run_id": "stored",
+            "workflow_id": "stored",
+            "status": "completed",
+            "queued_at": at,
+            "started_at": at,
+            "completed_at": at,
+            "tokens": {"total_tokens": 7},
+            "step_audit": [
+                {
+                    "node_id": "format",
+                    "kind": "format",
+                    "started_at": at,
+                    "completed_at": at,
+                    "status": "completed",
+                    "tokens": {"total_tokens": 7},
+                }
+            ],
+        },
+    )
+
+    trace, _ = await build_trace(store, "workflow", "stored")
+
+    assert trace.tokens == 7
+    assert next(span for span in trace.spans if span.kind == "step").tokens == 7
+
+
+@pytest.mark.asyncio
+async def test_workflow_page_hydrates_referenced_routine_tip_usage_without_history(monkeypatch):
+    store = InMemoryDocumentStore()
+    at = datetime(2026, 10, 28, tzinfo=UTC).isoformat()
+    store.save_document(
+        PROGENA_STATE_PREFIX,
+        "workflow:parent",
+        {
+            "title": "Parent",
+            "graph": {"nodes": {"child": {"kind": "routine", "title": "Child routine"}}},
+        },
+    )
+    store.save_document(
+        PROGENA_STATE_PREFIX,
+        "workflow_run:parent",
+        {
+            "run_id": "parent",
+            "workflow_id": "parent",
+            "status": "completed",
+            "completed_node_ids": ["child"],
+            "queued_at": at,
+            "started_at": at,
+            "completed_at": at,
+            "node_outputs": {"child": {"thread_id": "routine:child:revision:run"}},
+            "step_audit": [
+                {
+                    "node_id": "child",
+                    "kind": "routine",
+                    "started_at": at,
+                    "completed_at": at,
+                    "status": "completed",
+                }
+            ],
+        },
+    )
+
+    class Saver:
+        async def aget_tuple(self, config):
+            assert config["configurable"]["thread_id"] == "routine:child:revision:run"
+            return SimpleNamespace(
+                checkpoint={
+                    "channel_values": {
+                        "run_meta": {
+                            "prompt": [
+                                {
+                                    "started_at": at,
+                                    "duration_ms": 0,
+                                    "tokens": {"total_tokens": 13},
+                                }
+                            ]
+                        }
+                    }
+                }
+            )
+
+    @asynccontextmanager
+    async def saver(_store):
+        yield Saver()
+
+    async def graph(_store, _thread_id, _event=None):
+        return {"nodes": [{"id": "prompt", "kind": "prompt", "label": "Prompt"}]}
+
+    async def no_history(*_args, **_kwargs):
+        raise AssertionError("workflow page must not load conversation history")
+
+    monkeypatch.setattr("src.backend.runs.service._thread_spans", no_history)
+
+    monkeypatch.setattr("src.backend.runs.service._trace_saver", saver)
+    monkeypatch.setattr("src.backend.runs.service._routine_graph", graph)
+
+    rows, _ = await list_runs(store, kind="workflow")
+
+    assert rows[0].tokens == 13
+    root = next(span for span in rows[0].overview if span.kind == "run")
+    owner = next(span for span in rows[0].overview if span.kind == "routine")
+    child = next(span for span in rows[0].overview if span.kind == "step")
+    assert root.tokens is None
+    assert owner.parent_id == root.id
+    assert child.parent_id == owner.id
+    assert child.tokens == 13
+
+
+def test_workflow_pending_routine_reference_is_compactly_retained():
+    at = datetime(2026, 10, 28, tzinfo=UTC).isoformat()
+    row = _workflow_row(
+        InMemoryDocumentStore(),
+        {
+            "run_id": "pending",
+            "workflow_id": "workflow",
+            "status": "running",
+            "queued_at": at,
+            "started_at": at,
+            "pending_routine": {
+                "node_id": "child",
+                "thread_id": "routine:child:revision:run",
+            },
+            "step_audit": [
+                {
+                    "node_id": "child",
+                    "kind": "routine",
+                    "started_at": at,
+                    "status": "running",
+                }
+            ],
+        },
+        {"graph": {"nodes": {"child": {"kind": "routine"}}}},
+    )
+
+    assert row._routine_threads == {
+        "workflow:pending:step:0": "routine:child:revision:run",
+    }
+
+
+def test_workflow_repeated_routine_audit_hydrates_one_latest_thread_reference():
+    at = datetime(2026, 10, 28, tzinfo=UTC).isoformat()
+    row = _workflow_row(
+        InMemoryDocumentStore(),
+        {
+            "run_id": "repeated",
+            "workflow_id": "workflow",
+            "status": "completed",
+            "queued_at": at,
+            "started_at": at,
+            "node_threads": {"child": {"thread_id": "routine:child:revision:run"}},
+            "step_audit": [
+                {
+                    "node_id": "child",
+                    "kind": "routine",
+                    "started_at": at,
+                    "status": "completed",
+                },
+                {
+                    "node_id": "child",
+                    "kind": "routine",
+                    "started_at": at,
+                    "status": "completed",
+                },
+            ],
+        },
+        {"graph": {"nodes": {"child": {"kind": "routine"}}}},
+    )
+
+    assert row._routine_threads == {
+        "workflow:repeated:step:1": "routine:child:revision:run",
+    }

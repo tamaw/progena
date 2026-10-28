@@ -4,22 +4,11 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, PrivateAttr
 
 RunKind = Literal["routine", "workflow", "schedule"]
+RunPeriod = Literal["hour", "day", "week", "month"]
 SpanKind = Literal["run", "queue", "step", "routine", "agent", "model", "tool"]
-
-
-class RunRow(BaseModel):
-    kind: RunKind
-    run_id: str
-    name: str
-    trigger: str
-    status: str
-    started_at: str | None = None
-    completed_at: str | None = None
-    steps_done: int | None = None
-    steps_total: int | None = None
 
 
 class Span(BaseModel):
@@ -35,6 +24,19 @@ class Span(BaseModel):
     summary: str | None = None
     error: str | None = None
     timing_source: str | None = None
+
+
+class RunRow(BaseModel):
+    kind: RunKind
+    run_id: str
+    name: str
+    trigger: str
+    status: str
+    started_at: str | None = None
+    completed_at: str | None = None
+    tokens: int | None = None
+    overview: list[Span] = Field(default_factory=list)
+    _routine_threads: dict[str, str] = PrivateAttr(default_factory=dict)
 
 
 class RunTrace(BaseModel):

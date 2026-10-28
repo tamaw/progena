@@ -26,26 +26,10 @@ from src.progena.runtime.ownership import (
 )
 from src.progena.workflows.documents import workflow_definition_key, workflow_run_key
 
-from .models import RunKind, RunRow, RunTrace, Span
+from .models import RunKind, RunPeriod, RunRow, RunTrace, Span, SpanKind
 
 _PAGE_SIZE = 50
 _TERMINAL = frozenset({"completed", "failed", "cancelled", "stopped", "error", "interrupted"})
-_EXECUTABLE_WORKFLOW_KINDS = frozenset(
-    {
-        "document_read",
-        "document_query",
-        "document_write",
-        "document_create",
-        "document_delete",
-        "format",
-        "unpack",
-        "extract",
-        "agent",
-        "routine",
-        "condition",
-        "approval",
-    }
-)
 
 
 def _text(value: object) -> str:
@@ -64,6 +48,131 @@ def _time(value: object) -> str | None:
 
 def _status(value: object, default: str = "queued") -> str:
     return _text(value).lower() or default
+
+
+def _now() -> datetime:
+    return datetime.now(UTC)
+
+
+def _period_since(period: RunPeriod | None) -> str | None:
+    if period is None:
+        return None
+    windows = {
+        "hour": timedelta(hours=1),
+        "day": timedelta(days=1),
+        "week": timedelta(days=7),
+        "month": timedelta(days=30),
+    }
+    return (_now() - windows[period]).astimezone(UTC).isoformat(timespec="microseconds")
+
+
+def _token_total(value: object) -> int | None:
+    """Return a recorded total without converting unavailable usage to zero."""
+    if not isinstance(value, Mapping):
+        return None
+    total = value.get("total_tokens")
+    if isinstance(total, (int, float)) and not isinstance(total, bool):
+        return int(total)
+    input_tokens, output_tokens = value.get("input_tokens"), value.get("output_tokens")
+    if (
+        isinstance(input_tokens, (int, float))
+        and not isinstance(input_tokens, bool)
+        and isinstance(output_tokens, (int, float))
+        and not isinstance(output_tokens, bool)
+    ):
+        return int(input_tokens + output_tokens)
+    return None
+
+
+def _span_kind(node_kind: str) -> SpanKind:
+    if node_kind == "agent":
+        return "agent"
+    if node_kind == "routine":
+        return "routine"
+    return "step"
+
+
+def _entry_end(start: str, entry: Mapping[str, Any]) -> str | None:
+    end = _time(entry.get("completed_at"))
+    duration = entry.get("duration_ms")
+    if end is None and isinstance(duration, (int, float)) and not isinstance(duration, bool):
+        return (datetime.fromisoformat(start) + timedelta(milliseconds=duration)).isoformat(
+            timespec="microseconds"
+        )
+    return end
+
+
+def _overview_root(row: RunRow) -> list[Span]:
+    if row.started_at is None:
+        return []
+    return [
+        Span(
+            id=f"{row.kind}:{row.run_id}",
+            kind="run",
+            name=row.name,
+            operation=row.trigger,
+            start=row.started_at,
+            end=row.completed_at,
+            status=row.status,
+            tokens=row.tokens,
+        )
+    ]
+
+
+def _rollup_tokens(spans: Iterable[Span]) -> int | None:
+    """Use leaf measurements before their aggregate structural metadata."""
+    items = list(spans)
+    by_parent: dict[str | None, list[Span]] = {}
+    ids = {span.id for span in items}
+    for span in items:
+        by_parent.setdefault(span.parent_id if span.parent_id in ids else None, []).append(span)
+
+    def visit(span: Span) -> int | None:
+        child_amounts = [
+            amount for child in by_parent.get(span.id, []) if (amount := visit(child)) is not None
+        ]
+        if child_amounts:
+            return sum(child_amounts)
+        return span.tokens
+
+    amounts = [amount for span in by_parent.get(None, []) if (amount := visit(span)) is not None]
+    return sum(amounts) if amounts else None
+
+
+def _workflow_overview(
+    row: RunRow, payload: Mapping[str, Any], nodes: Mapping[str, Any]
+) -> list[Span]:
+    spans = _overview_root(row)
+    parent_id = spans[0].id if spans else f"workflow:{row.run_id}"
+    audit = payload.get("step_audit")
+    if not isinstance(audit, list):
+        return spans
+    for index, entry in enumerate(audit):
+        if not isinstance(entry, Mapping):
+            continue
+        start = _time(entry.get("started_at"))
+        if start is None:
+            continue
+        node_id = _text(entry.get("node_id"))
+        node = nodes.get(node_id)
+        node = node if isinstance(node, Mapping) else {}
+        node_kind = _text(node.get("kind")) or _text(entry.get("kind"))
+        end = _time(entry.get("completed_at"))
+        spans.append(
+            Span(
+                id=f"workflow:{row.run_id}:step:{index}",
+                parent_id=parent_id,
+                kind=_span_kind(node_kind),
+                name=_text(node.get("title")) or node_id or "Workflow step",
+                operation=node_kind or None,
+                start=start,
+                end=end,
+                status=_status(entry.get("status"), "completed" if end else "running"),
+                tokens=_token_total(entry.get("tokens")),
+                timing_source="step_audit",
+            )
+        )
+    return spans
 
 
 def _cursor_encode(row: RunRow) -> str:
@@ -117,14 +226,8 @@ def _workflow_row(
         if isinstance(definition.get("graph"), dict)
         else {}
     )
-    executable = {
-        node_id
-        for node_id, node in nodes.items()
-        if isinstance(node, dict) and _text(node.get("kind")) in _EXECUTABLE_WORKFLOW_KINDS
-    }
-    completed = set(filter(None, (_text(value) for value in payload.get("completed_node_ids", []))))
     status = _status(payload.get("status"))
-    return RunRow(
+    row = RunRow(
         kind="workflow",
         run_id=_text(payload.get("run_id")),
         name=_text(definition.get("title")) or _text(payload.get("workflow_id")) or "Workflow",
@@ -132,21 +235,109 @@ def _workflow_row(
         status=status,
         started_at=_time(payload.get("started_at")) or _time(payload.get("queued_at")),
         completed_at=_time(payload.get("completed_at")) if status in _TERMINAL else None,
-        steps_done=len(completed & executable),
-        steps_total=len(executable),
+        tokens=_token_total(payload.get("tokens")),
     )
+    row.overview = _workflow_overview(row, payload, nodes)
+    node_threads = payload.get("node_threads")
+    if not isinstance(node_threads, Mapping):
+        outputs = payload.get("node_outputs")
+        node_threads = (
+            {
+                node_id: {"thread_id": output["thread_id"]}
+                for node_id, output in outputs.items()
+                if isinstance(output, Mapping) and isinstance(output.get("thread_id"), str)
+            }
+            if isinstance(outputs, Mapping)
+            else {}
+        )
+    pending = payload.get("pending_routine")
+    pending = pending if isinstance(pending, Mapping) else {}
+    audit = payload.get("step_audit")
+    audit = audit if isinstance(audit, list) else []
+    spans = {span.id: span for span in row.overview}
+    seen_threads: set[str] = set()
+    for index in range(len(audit) - 1, -1, -1):
+        entry = audit[index]
+        if not isinstance(entry, Mapping):
+            continue
+        step = spans.get(f"workflow:{row.run_id}:step:{index}")
+        if step is None or step.kind != "routine":
+            continue
+        node_id = _text(entry.get("node_id"))
+        reference = node_threads.get(node_id)
+        thread_id = _text(reference.get("thread_id")) if isinstance(reference, Mapping) else ""
+        if not thread_id and _text(pending.get("node_id")) == node_id:
+            thread_id = _text(pending.get("thread_id"))
+        if thread_id and thread_id not in seen_threads:
+            row._routine_threads[step.id] = thread_id
+            seen_threads.add(thread_id)
+    row.tokens = _rollup_tokens(row.overview)
+    return row
 
 
-async def _routine_rows(store: Any, run_id: str | None = None) -> list[RunRow]:
+def _routine_overview(row: RunRow, graph: Mapping[str, Any], meta: Mapping[str, Any]) -> list[Span]:
+    spans = _overview_root(row)
+    parent_id = spans[0].id if spans else f"routine:{row.run_id}"
+    nodes = {
+        _text(node.get("id")): node
+        for node in graph.get("nodes", [])
+        if isinstance(node, Mapping) and _text(node.get("id"))
+    }
+    records = [
+        (node_id, index, entry)
+        for node_id, entries in meta.items()
+        if isinstance(entries, list)
+        for index, entry in enumerate(entries)
+        if isinstance(entry, Mapping)
+    ]
+    records.sort(
+        key=lambda record: (
+            record[2].get("step") if isinstance(record[2].get("step"), int) else 0,
+            _text(record[2].get("started_at")),
+        )
+    )
+    for node_id, index, entry in records:
+        start = _time(entry.get("started_at"))
+        if start is None:
+            continue
+        node = nodes.get(_text(node_id), {})
+        node_kind = _text(node.get("kind"))
+        end = _entry_end(start, entry)
+        error = _text(entry.get("error"))
+        spans.append(
+            Span(
+                id=f"routine:{row.run_id}:node:{node_id}:{index}",
+                parent_id=parent_id,
+                kind=_span_kind(node_kind),
+                name=_text(node.get("label")) or _text(node_id),
+                operation=node_kind or None,
+                start=start,
+                end=end,
+                status="failed"
+                if error
+                else _status(entry.get("status"), "completed" if end else "running"),
+                tokens=_token_total(entry.get("tokens")),
+                timing_source="run_meta",
+            )
+        )
+    return spans
+
+
+async def _routine_rows(
+    store: Any, run_id: str | None = None, *, since: str | None = None
+) -> list[RunRow]:
     await workflow_events._lifecycle_index.ensure_loaded(store)
     latest = workflow_events._lifecycle_index.latest
     payloads = [latest[run_id]] if run_id in latest else [] if run_id else list(latest.values())
     started_events = dict(workflow_events._lifecycle_index.started)
-    return await asyncio.to_thread(_routine_metadata_rows, store, payloads, started_events)
+    return await asyncio.to_thread(_routine_metadata_rows, store, payloads, started_events, since)
 
 
 def _routine_metadata_rows(
-    store: Any, payloads: list[Any], started_events: dict[str, Any]
+    store: Any,
+    payloads: list[Any],
+    started_events: dict[str, Any],
+    since: str | None = None,
 ) -> list[RunRow]:
     live = live_runtime(store)
     rows: list[RunRow] = []
@@ -162,11 +353,16 @@ def _routine_metadata_rows(
         if not request_id:
             continue
         started = started_events.get(request_id)
+        started_at = _time((started or payload).get("timestamp"))
+        if since is not None and (started_at is None or started_at < since):
+            continue
         status = _status(payload.get("status"))
         if routine_attempt_interrupted(
             status, started, getattr(live, "instance_id", None), getattr(live, "started_at", None)
         ):
             status = "interrupted"
+        elif status == "enqueued":
+            status = "queued"
         elif status in {"started", "stopping", "cancelling"}:
             status = "running"
         routine_id, revision_id = _routine_identity(_text(payload.get("thread_id")), payload)
@@ -179,43 +375,42 @@ def _routine_metadata_rows(
             )
         graph = graphs[identity]
         graph = graph if isinstance(graph, dict) else {}
-        nodes = graph.get("nodes", []) if isinstance(graph.get("nodes"), list) else []
-        executable = {
-            str(node.get("id"))
-            for node in nodes
-            if isinstance(node, dict) and _text(node.get("kind")) not in {"data", "trigger"}
-        }
-        completed_nodes: set[str] = set()
-        rows.append(
-            RunRow(
-                kind="routine",
-                run_id=request_id,
-                name=_text(graph.get("name"))
-                or _text(payload.get("name"))
-                or routine_id
-                or "Routine",
-                trigger=_text(payload.get("trigger")) or "manual",
-                status=status,
-                started_at=_time((started or payload).get("timestamp")),
-                completed_at=_time(payload.get("timestamp")) if status in _TERMINAL else None,
-                steps_done=len(completed_nodes & executable),
-                steps_total=len(executable),
-            )
+        row = RunRow(
+            kind="routine",
+            run_id=request_id,
+            name=_text(graph.get("name")) or _text(payload.get("name")) or routine_id or "Routine",
+            trigger=_text(payload.get("trigger")) or "manual",
+            status=status,
+            started_at=started_at,
+            completed_at=_time(payload.get("timestamp")) if status in _TERMINAL else None,
         )
+        row.overview = _overview_root(row)
+        rows.append(row)
     rows.sort(key=_row_sort_key, reverse=True)
     return rows
 
 
 async def _workflow_rows(
-    store: Any, *, limit: int, status: str, q: str, before: tuple[str, str, str] | None
+    store: Any,
+    *,
+    limit: int,
+    status: str,
+    q: str,
+    before: tuple[str, str, str] | None,
+    since: str | None,
 ) -> list[RunRow]:
     records = await asyncio.to_thread(
-        store.query_workflow_run_page, status=status, q=q, before=before, limit=limit
+        store.query_workflow_run_page,
+        status=status,
+        q=q,
+        before=before,
+        since=since,
+        limit=limit,
     )
     return [_workflow_row(store, payload, definition) for payload, definition in records]
 
 
-def _schedule_rows(store: Any) -> list[RunRow]:
+def _schedule_rows(store: Any, *, since: str | None = None) -> list[RunRow]:
     document = store.get_document(PROGENA_STATE_PREFIX, "schedule_runs", None)
     records = getattr(document, "payload", None)
     if not isinstance(records, list):
@@ -227,6 +422,9 @@ def _schedule_rows(store: Any) -> list[RunRow]:
     rows: list[RunRow] = []
     for payload in records:
         if not isinstance(payload, dict) or not _text(payload.get("run_id")):
+            continue
+        started_at = _time(payload.get("started_at")) or _time(payload.get("created_at"))
+        if since is not None and (started_at is None or started_at < since):
             continue
         status = _status(payload.get("status"))
         if schedule_run_interrupted(
@@ -242,17 +440,20 @@ def _schedule_rows(store: Any) -> list[RunRow]:
             if isinstance(definition, dict)
             else ""
         )
-        rows.append(
-            RunRow(
-                kind="schedule",
-                run_id=_text(payload.get("run_id")),
-                name=name or schedule_id or "Schedule",
-                trigger="schedule",
-                status=status,
-                started_at=_time(payload.get("started_at")) or _time(payload.get("created_at")),
-                completed_at=_time(payload.get("completed_at")) if status in _TERMINAL else None,
-            )
+        row = RunRow(
+            kind="schedule",
+            run_id=_text(payload.get("run_id")),
+            name=name or schedule_id or "Schedule",
+            trigger="schedule",
+            status=status,
+            started_at=started_at,
+            completed_at=_time(payload.get("completed_at")) if status in _TERMINAL else None,
+            tokens=_token_total(payload.get("tokens")),
         )
+        row.overview = _overview_root(row)
+        if row.overview:
+            row.overview[0].summary = _text(payload.get("user_request"))[:400] or None
+        rows.append(row)
     rows.sort(key=_row_sort_key, reverse=True)
     return rows
 
@@ -263,24 +464,31 @@ async def list_runs(
     kind: RunKind | None = None,
     status: str | None = None,
     q: str | None = None,
+    period: RunPeriod | None = None,
     cursor: str | None = None,
     limit: int = _PAGE_SIZE,
 ) -> tuple[list[RunRow], str | None]:
     """Return lightweight top-level rows with a stable, opaque keyset cursor."""
     requested = _cursor_decode(cursor)
+    since = _period_since(period)
     groups: list[Iterable[RunRow]] = []
     needle = (q or "").strip().casefold()
     desired_status = (status or "").strip().casefold()
     if kind in (None, "workflow"):
         groups.append(
             await _workflow_rows(
-                store, limit=limit + 1, status=desired_status, q=needle, before=requested
+                store,
+                limit=limit + 1,
+                status=desired_status,
+                q=needle,
+                before=requested,
+                since=since,
             )
         )
     if kind in (None, "schedule"):
-        groups.append(await asyncio.to_thread(_schedule_rows, store))
+        groups.append(await asyncio.to_thread(_schedule_rows, store, since=since))
     if kind in (None, "routine"):
-        groups.append(await _routine_rows(store))
+        groups.append(await _routine_rows(store, since=since))
     rows = [row for group in groups for row in group]
     rows = [
         row
@@ -292,34 +500,35 @@ async def list_runs(
             or needle in row.trigger.casefold()
             or needle in row.run_id.casefold()
         )
+        and (since is None or (row.started_at is not None and row.started_at >= since))
     ]
     rows.sort(key=_row_sort_key, reverse=True)
     if requested:
         rows = [row for row in rows if _row_sort_key(row) < requested]
     page = rows[:limit]
-    await _hydrate_routine_progress(store, page)
+    await _hydrate_run_overviews(store, page)
     return page, (_cursor_encode(page[-1]) if len(rows) > limit and page else None)
 
 
 async def get_run_row(store: Any, kind: RunKind, run_id: str) -> RunRow | None:
-    """Look up one run without broadcasting or hydrating a trace."""
+    """Look up one run with only its selected durable checkpoint tip."""
     if kind == "workflow":
         document = await asyncio.to_thread(
             store.get_document, PROGENA_STATE_PREFIX, workflow_run_key(run_id), None
         )
         payload = getattr(document, "payload", None)
-        return (
-            await asyncio.to_thread(_workflow_row, store, payload)
-            if isinstance(payload, dict)
-            else None
-        )
+        if not isinstance(payload, dict):
+            return None
+        row = await asyncio.to_thread(_workflow_row, store, payload)
+        await _hydrate_run_overviews(store, [row])
+        return row
     if kind == "schedule":
         return next(
             (row for row in await asyncio.to_thread(_schedule_rows, store) if row.run_id == run_id),
             None,
         )
     rows = await _routine_rows(store, run_id)
-    await _hydrate_routine_progress(store, rows)
+    await _hydrate_run_overviews(store, rows)
     return rows[0] if rows else None
 
 
@@ -353,37 +562,72 @@ async def _trace_saver(store: Any):
         yield saver
 
 
-async def _hydrate_routine_progress(store: Any, rows: list[RunRow]) -> None:
-    """Hydrate selected routine root tips with one saver, never checkpoint history."""
-    wanted = {row.run_id: row for row in rows if row.kind == "routine"}
-    if not wanted:
+async def _tip_run_meta(saver: Any, thread_id: str) -> Mapping[str, Any] | None:
+    tip = await saver.aget_tuple({"configurable": {"thread_id": thread_id, "checkpoint_ns": ""}})
+    values = tip.checkpoint.get("channel_values", {}) if tip is not None else {}
+    meta = values.get("run_meta", {}) if isinstance(values, dict) else {}
+    return meta if isinstance(meta, Mapping) else None
+
+
+async def _routine_graph(
+    store: Any, thread_id: str, event: object | None = None
+) -> Mapping[str, Any]:
+    routine_id, revision_id = _routine_identity(thread_id, event)
+    graph = (
+        await asyncio.to_thread(store.get_routine_revision, routine_id, revision_id)
+        if routine_id and revision_id
+        else {}
+    )
+    return graph if isinstance(graph, Mapping) else {}
+
+
+async def _hydrate_run_overviews(store: Any, rows: list[RunRow]) -> None:
+    """Hydrate selected root tips and workflow routine children without history reads."""
+    routines = {row.run_id: row for row in rows if row.kind == "routine"}
+    workflows = [row for row in rows if row.kind == "workflow" and row._routine_threads]
+    if not routines and not workflows:
         return
     await workflow_events._lifecycle_index.ensure_loaded(store)
     async with _trace_saver(store) as saver:
         if saver is None:
             return
-        for run_id, row in wanted.items():
+        graphs: dict[str, Mapping[str, Any]] = {}
+        for run_id, row in routines.items():
             event = workflow_events._lifecycle_index.latest.get(run_id)
             thread_id = _text(event.get("thread_id")) if isinstance(event, dict) else ""
             if not thread_id:
                 continue
-            tip = await saver.aget_tuple(
-                {"configurable": {"thread_id": thread_id, "checkpoint_ns": ""}}
-            )
-            values = tip.checkpoint.get("channel_values", {}) if tip is not None else {}
-            meta = values.get("run_meta", {}) if isinstance(values, dict) else {}
-            if isinstance(meta, dict):
-                row.steps_done = sum(
-                    1
-                    for entries in meta.values()
-                    if isinstance(entries, list)
-                    and any(
-                        isinstance(entry, dict)
-                        and isinstance(entry.get("duration_ms"), (int, float))
-                        and not entry.get("error")
-                        for entry in entries
-                    )
+            meta = await _tip_run_meta(saver, thread_id)
+            if meta is None:
+                continue
+            if thread_id not in graphs:
+                graphs[thread_id] = await _routine_graph(store, thread_id, event)
+            row.overview = _routine_overview(row, graphs[thread_id], meta)
+            row.tokens = _rollup_tokens(row.overview)
+        for row in workflows:
+            owners = {span.id: span for span in row.overview}
+            for owner_id, thread_id in row._routine_threads.items():
+                owner = owners.get(owner_id)
+                if owner is None:
+                    continue
+                meta = await _tip_run_meta(saver, thread_id)
+                if meta is None:
+                    continue
+                if thread_id not in graphs:
+                    graphs[thread_id] = await _routine_graph(store, thread_id)
+                child = RunRow(
+                    kind="routine",
+                    run_id=thread_id,
+                    name=owner.name,
+                    trigger="workflow",
+                    status=owner.status,
+                    started_at=owner.start,
+                    completed_at=owner.end,
                 )
+                for span in _routine_overview(child, graphs[thread_id], meta)[1:]:
+                    span.parent_id = owner.id
+                    row.overview.append(span)
+            row.tokens = _rollup_tokens(row.overview)
 
 
 def _message_value(raw: object, name: str) -> object:
@@ -618,6 +862,7 @@ def _root_span(kind: RunKind, row: RunRow) -> Span:
         start=row.started_at,
         end=row.completed_at,
         status=row.status,
+        tokens=row.tokens,
     )
 
 
@@ -696,23 +941,14 @@ async def _routine_children(
             )
         node = nodes.get(node_id, {})
         node_kind = _text(node.get("kind"))
-        duration = entry.get("duration_ms")
-        end = _time(entry.get("completed_at"))
-        if end is None and isinstance(duration, (int, float)):
-            end = (datetime.fromisoformat(start) + timedelta(milliseconds=duration)).isoformat(
-                timespec="microseconds"
-            )
+        end = _entry_end(start, entry)
         error = _text(entry.get("error")) or None
         child_id = f"{parent_id}:node:{node_id}:{index}"
         spans.append(
             Span(
                 id=child_id,
                 parent_id=parent_id,
-                kind="agent"
-                if node_kind == "agent"
-                else "routine"
-                if node_kind == "routine"
-                else "step",
+                kind=_span_kind(node_kind),
                 name=_text(node.get("label")) or node_id,
                 operation=node_kind,
                 start=start,
@@ -721,6 +957,7 @@ async def _routine_children(
                 status="failed"
                 if error
                 else _status(entry.get("status"), "completed" if end else "running"),
+                tokens=_token_total(entry.get("tokens")),
                 summary=_value_summary(entry["output"]) if "output" in entry else None,
                 timing_source="checkpoint-derived" if entry.get("_pending") else "run_meta",
             )
@@ -825,18 +1062,16 @@ async def build_trace(store: Any, kind: RunKind, run_id: str) -> tuple[RunTrace,
                     Span(
                         id=step_id,
                         parent_id=root.id,
-                        kind="routine"
-                        if node_kind == "routine"
-                        else "agent"
-                        if node_kind == "agent"
-                        else "step",
+                        kind=_span_kind(node_kind),
                         name=_text(node.get("title")) or node_id,
                         operation=node_kind or None,
                         start=start,
                         end=end,
                         status=_status(audit.get("status"), "completed" if end else "running"),
+                        tokens=_token_total(audit.get("tokens")),
                         summary=summary,
                         error=error,
+                        timing_source="step_audit",
                     )
                 )
                 link = outputs.get(node_id)
@@ -907,6 +1142,7 @@ async def build_trace(store: Any, kind: RunKind, run_id: str) -> tuple[RunTrace,
                     spans.extend(child_spans)
                     tokens += amount
                 root.error = _text(payload.get("error")) or None
+                root.summary = _text(payload.get("user_request"))[:400] or None
         else:
             await workflow_events._lifecycle_index.ensure_loaded(store)
             event = workflow_events._lifecycle_index.latest.get(run_id, {})
@@ -946,6 +1182,7 @@ async def build_trace(store: Any, kind: RunKind, run_id: str) -> tuple[RunTrace,
         )
         root.start = queued_at
     spans.sort(key=lambda span: (span.start, span.id != root.id))
+    tokens = _rollup_tokens(spans)
     return RunTrace(
         kind=kind,
         run_id=run_id,
@@ -954,7 +1191,5 @@ async def build_trace(store: Any, kind: RunKind, run_id: str) -> tuple[RunTrace,
         started_at=root.start,
         completed_at=row.completed_at,
         spans=spans,
-        tokens=tokens
-        if any(span.kind == "model" and span.tokens is not None for span in spans)
-        else None,
+        tokens=tokens,
     ), threads

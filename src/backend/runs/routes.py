@@ -10,7 +10,7 @@ from src.backend.http.requests import request_correlation_id
 from src.backend.storage.documents import get_default_document_store
 
 from .events import runs_events
-from .models import RunKind, RunsSubscription
+from .models import RunKind, RunPeriod, RunsSubscription
 from .service import list_runs
 
 router = APIRouter(tags=["runs"])
@@ -27,12 +27,13 @@ async def get_runs(
     kind: RunKind | None = Query(default=None),
     status: str | None = Query(default=None, max_length=64),
     q: str | None = Query(default=None, max_length=200),
+    period: RunPeriod | None = Query(default=None),
     cursor: str | None = Query(default=None, max_length=256),
     x_request_id: str | None = Header(default=None, alias="X-Operation-Id"),
 ) -> http_contracts.UiRequestAcknowledgement:
     request_id = request_correlation_id(request, x_request_id)
     runs, next_cursor = await list_runs(
-        get_default_document_store(), kind=kind, status=status, q=q, cursor=cursor
+        get_default_document_store(), kind=kind, status=status, q=q, period=period, cursor=cursor
     )
     stream.broadcast_ui_event(
         "runs.snapshot",

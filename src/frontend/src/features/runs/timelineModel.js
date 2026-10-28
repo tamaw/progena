@@ -276,3 +276,43 @@ export function tickLabel(milliseconds) {
   if (milliseconds < 60000) return `${(milliseconds / 1000).toFixed(1)}s`;
   return `${Math.floor(milliseconds / 60000)}m`;
 }
+
+/** Roll up recorded usage without counting inclusive parent totals twice. */
+export function activityRollups(spans) {
+  const byId = new Map(spans.map((span) => [span.id, span]));
+  const children = new Map();
+  for (const span of byId.values()) {
+    if (!span.parent_id || !byId.has(span.parent_id) || span.parent_id === span.id) continue;
+    if (!children.has(span.parent_id)) children.set(span.parent_id, []);
+    children.get(span.parent_id).push(span);
+  }
+  const result = new Map();
+  const visiting = new Set();
+  const visit = (span) => {
+    if (result.has(span.id)) return result.get(span.id);
+    if (visiting.has(span.id)) return { tokens: null, descendants: [] };
+    visiting.add(span.id);
+    const descendants = [];
+    let total = 0;
+    let known = false;
+    for (const child of children.get(span.id) || []) {
+      if (visiting.has(child.id)) continue;
+      const rollup = visit(child);
+      descendants.push(child, ...rollup.descendants);
+      if (rollup.tokens !== null) { total += rollup.tokens; known = true; }
+    }
+    const own = typeof span.tokens === 'number' && Number.isFinite(span.tokens) ? span.tokens : null;
+    const value = { tokens: known ? total : own, descendants };
+    result.set(span.id, value);
+    visiting.delete(span.id);
+    return value;
+  };
+  for (const span of byId.values()) visit(span);
+  return result;
+}
+
+/** A collapsed live run must not be frozen at its last expanded trace. */
+export function runSummarySource(row, trace, expanded) {
+  if (trace && (expanded || (!isLiveTrace(row) && row.status === trace.status))) return trace;
+  return { ...row, spans: row.overview || [] };
+}

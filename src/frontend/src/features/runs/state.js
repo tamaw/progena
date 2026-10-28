@@ -10,21 +10,29 @@ import {
 import { realtimeClientId } from '../../realtime/realtimeClient';
 
 export const RUN_KINDS = ['routine', 'workflow', 'schedule'];
-export const RUN_STATUSES = ['queued', 'running', 'completed', 'failed', 'cancelled', 'interrupted'];
+export const RUN_STATUSES = ['queued', 'running', 'paused', 'completed', 'failed', 'cancelled', 'stopped', 'interrupted'];
 export const RUN_PAGE_SIZE = 50;
+export const RUN_PERIODS = Object.freeze({ hour: 3_600_000, day: 86_400_000, week: 604_800_000, month: 2_592_000_000 });
 
-export function normalizeRunsQuery({ kind = '', status = '', q = '', cursor = null } = {}) {
+export function runMatchesPeriod(row, period, now = Date.now()) {
+  if (!Object.hasOwn(RUN_PERIODS, period)) return true;
+  const started = Date.parse(row?.started_at || '');
+  return Number.isFinite(started) && started >= now - RUN_PERIODS[period];
+}
+
+export function normalizeRunsQuery({ kind = '', status = '', q = '', cursor = null, period = '' } = {}) {
   return {
     kind: RUN_KINDS.includes(kind) ? kind : '',
     status: typeof status === 'string' ? status.trim().toLowerCase() : '',
     q: typeof q === 'string' ? q.trim() : '',
     cursor: typeof cursor === 'string' && cursor ? cursor : null,
+    period: Object.hasOwn(RUN_PERIODS, period) ? period : '',
   };
 }
 
 export function runsQueryKey(query) {
   const normalized = normalizeRunsQuery(query);
-  return JSON.stringify([normalized.kind, normalized.status, normalized.q, normalized.cursor]);
+  return JSON.stringify([normalized.kind, normalized.status, normalized.q, normalized.cursor, normalized.period]);
 }
 
 export function traceKey(kind, runId) {
@@ -49,6 +57,7 @@ export const fetchRuns = createAcknowledgedThunk(
       ...(normalized.status ? { status: normalized.status } : {}),
       ...(normalized.q ? { q: normalized.q } : {}),
       ...(normalized.cursor ? { cursor: normalized.cursor } : {}),
+      ...(normalized.period ? { period: normalized.period } : {}),
     }), { requestId });
   },
 );
@@ -69,6 +78,7 @@ function rowMatchesQuery(row, query) {
   if (!row || !rowKey(row)) return false;
   if (query.kind && row.kind !== query.kind) return false;
   if (query.status && String(row.status || '').toLowerCase() !== query.status) return false;
+  if (!runMatchesPeriod(row, query.period)) return false;
   return !query.q || [row.name, row.trigger, row.run_id]
     .filter(Boolean)
     .some((value) => String(value).toLowerCase().includes(query.q.toLowerCase()));
@@ -166,6 +176,7 @@ export const eventHandlers = {
       status: queryParts[1],
       q: queryParts[2],
       cursor: queryParts[3],
+      period: queryParts[4],
     };
     const changes = request.changes || {};
     const snapshot = {
