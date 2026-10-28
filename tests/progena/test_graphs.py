@@ -66,7 +66,6 @@ async def test_runtime_heartbeat_graph_queues_same_thread_followup_for_a2a_compl
     state_manager.get_active_a2a_tasks = AsyncMock(return_value=[])
     state_manager.get_acp_tasks = AsyncMock(return_value=[])
     state_manager.dequeue_background_task = AsyncMock(return_value=None)
-    state_manager.log_conversation = AsyncMock()
     state_manager.update_a2a_task = AsyncMock()
     record = A2ATaskRecord(
         task_id="task-2",

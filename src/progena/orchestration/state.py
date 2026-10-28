@@ -93,7 +93,6 @@ class LoopControlState(TypedDict, total=False):
     cycle_error: str | None
     idle_cycles: int
     current_backoff_seconds: float
-    startup_audit_logged: bool
     heartbeat_action: str | None
     last_validation_result: dict[str, Any] | None
     validation_result_v2: dict[str, Any] | None

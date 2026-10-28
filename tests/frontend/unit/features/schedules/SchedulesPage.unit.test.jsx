@@ -25,7 +25,7 @@ vi.mock('@frontend/features/schedules/useSchedulesApi', () => {
   return { useSchedulesApi: () => api };
 });
 vi.mock('@frontend/features/schedules/useWidgetsApi', () => {
-  const api = { getWidgets: () => Promise.resolve(), updateWidget: () => Promise.resolve(), deleteWidget: () => Promise.resolve() };
+  const api = { updateWidget: () => Promise.resolve(), deleteWidget: () => Promise.resolve() };
   return { useWidgetsApi: () => api };
 });
 

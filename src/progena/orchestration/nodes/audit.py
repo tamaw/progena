@@ -32,4 +32,4 @@ async def startup_audit_node(
         ),
     )
     context.startup_flags.add("startup_audit")
-    return {"startup_audit_logged": True}
+    return {}

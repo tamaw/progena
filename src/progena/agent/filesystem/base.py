@@ -253,7 +253,7 @@ def _simple_state_file(
     Covers the common case (mcp.json, knowledge.json, agents.json): load just
     coerces a non-dict result to ``default``, save just forwards to the
     StateManager setter. Schedule's factory is NOT built on this - it has real
-    unique logic (id-as-key convention, exactly-one-of validation, audit-log
+    unique logic (id-as-key convention, exactly-one-of validation, change
     diffing) this helper would have to special-case away.
     """
 

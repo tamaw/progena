@@ -361,7 +361,6 @@ class Progena:
             await self.state_manager.close()
             self.state_manager = None
         await self._persistence_stack.aclose()
-        self.log_store = None
         await self.llm_client.close()
         if self._provider_repository_open:
             await asyncio.to_thread(shutdown_provider_repository)

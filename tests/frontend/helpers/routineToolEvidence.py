@@ -8,7 +8,6 @@ import sys
 import psycopg
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 
-
 URL = os.environ.get("PROGENA_DATABASE_URL", "postgresql://progena:progena@127.0.0.1:15433/progena")
 
 
