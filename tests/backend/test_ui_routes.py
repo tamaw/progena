@@ -1366,8 +1366,10 @@ class TestLogsEndpoint:
         """A nonempty export delivers its complete data only on the UI stream."""
 
         request_id = "nonempty-log-export-client-request"
-        timestamp = datetime.now().replace(microsecond=0)
-        queued_at = (timestamp - timedelta(minutes=1)).strftime("%Y-%m-%d %H:%M:%S")
+        # Log files hold zone-less UTC; the API returns them as UTC instants.
+        timestamp = datetime.now(UTC).replace(microsecond=0)
+        queued = timestamp - timedelta(minutes=1)
+        queued_at = queued.strftime("%Y-%m-%d %H:%M:%S")
         failed_at = timestamp.strftime("%Y-%m-%d %H:%M:%S")
         log_dir = kanban_state_reader.logs_dir / "progena"
         log_dir.mkdir(parents=True)
@@ -1441,7 +1443,7 @@ class TestLogsEndpoint:
             for entry in exported_entries
         ] == [
             {
-                "timestamp": failed_at,
+                "timestamp": timestamp.strftime("%Y-%m-%dT%H:%M:%SZ"),
                 "level": "error",
                 "source": "src.progena.decisions",
                 "message": "decision failed",
@@ -1449,7 +1451,7 @@ class TestLogsEndpoint:
                 "group": "progena",
             },
             {
-                "timestamp": queued_at,
+                "timestamp": queued.strftime("%Y-%m-%dT%H:%M:%SZ"),
                 "level": "info",
                 "source": "src.progena.decisions",
                 "message": "decision queued",

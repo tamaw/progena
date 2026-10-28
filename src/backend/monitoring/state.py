@@ -91,9 +91,10 @@ def _parse_timestamp(value: Any) -> datetime | None:
 
 
 def _iso_from_datetime(value: datetime) -> str:
+    # Log lines carry no zone; both services write them in UTC.
     if value.tzinfo is None:
-        return value.isoformat(sep=" ")
-    return value.isoformat().replace("+00:00", "Z")
+        value = value.replace(tzinfo=UTC)
+    return value.astimezone(UTC).isoformat().replace("+00:00", "Z")
 
 
 def _normalize_log_level(value: Any) -> str:
@@ -1166,7 +1167,12 @@ class StateReader:
 
         matched = PLAIN_LOG_LINE_RE.match(line.strip())
         if matched:
-            timestamp = matched.group("timestamp")
+            parsed_timestamp = _parse_timestamp(matched.group("timestamp"))
+            timestamp = (
+                _iso_from_datetime(parsed_timestamp)
+                if parsed_timestamp is not None
+                else matched.group("timestamp")
+            )
             entry = {
                 "timestamp": timestamp,
                 "time": timestamp,
