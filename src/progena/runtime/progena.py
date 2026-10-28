@@ -239,7 +239,6 @@ class Progena:
             state_manager=self.state_manager,
             project_root=str(PROJECT_ROOT),
             # The loop is created below, after the graph; resolve it lazily so
-            # The loop is created below, after the graph; resolve it lazily so
             # tools always see the live conversation state once it's running.
             live_state_provider=lambda: (
                 self.loop_runner.state if self.loop_runner is not None else None

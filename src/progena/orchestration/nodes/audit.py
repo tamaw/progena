@@ -10,6 +10,7 @@ from langgraph.runtime import Runtime
 
 from src.progena.orchestration.nodes.context import HeartbeatContext
 from src.progena.orchestration.state import ProgenaState
+from src.progena.security.redaction import redact_secrets
 
 logger = logging.getLogger(__name__)
 
@@ -24,8 +25,10 @@ async def startup_audit_node(
         return {}
     logger.info(
         "Startup configuration: %s",
-        json.dumps(
-            context.startup_audit_payload, separators=(",", ":"), sort_keys=True, default=str
+        redact_secrets(
+            json.dumps(
+                context.startup_audit_payload, separators=(",", ":"), sort_keys=True, default=str
+            )
         ),
     )
     context.startup_flags.add("startup_audit")
