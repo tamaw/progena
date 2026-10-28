@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import logging
 import uuid
+from collections import OrderedDict
 from collections.abc import Awaitable, Callable, Mapping
 from datetime import timedelta
 from typing import Any, Literal, cast
@@ -742,6 +743,9 @@ async def _load_pinned_routine_graph(
     return graph, instruction_loader
 
 
+_SNAPSHOT_GRAPH_CACHE_SIZE = 16
+
+
 async def routine_thread_state(
     *,
     thread_id: str,
@@ -756,28 +760,42 @@ async def routine_thread_state(
     tool_registry: Any = None,
     filesystem_backend: Any | None = None,
     checkpointer: Any | None = None,
+    graph_cache: OrderedDict[tuple[str, str], Any] | None = None,
 ) -> Any:
     """Read a routine thread's native LangGraph snapshot against its pinned graph.
 
     ``next`` and pending interrupts depend only on topology and the checkpoint,
-    so the execution policy (retries, cache) is not needed to read them.
+    so the execution policy (retries, cache) is not needed to read them. A
+    revision-pinned thread's graph never changes, so ``graph_cache`` (owned by
+    the agent that supplies the checkpointer) keeps its compiled form.
     """
-    graph, instruction_loader = await _load_pinned_routine_graph(
-        thread_id, state_manager, revision_reader
-    )
-    compiled = compile_routine_graph(
-        graph,
-        model=model,
-        agent_registry=agent_registry,
-        routine_registry=routine_registry,
-        routine_runner=routine_runner,
-        agent_background_runner=agent_background_runner,
-        model_profile_resolver=model_profile_resolver,
-        tool_registry=tool_registry,
-        filesystem_backend=filesystem_backend,
-        instruction_loader=instruction_loader,
-        checkpointer=checkpointer,
-    )
+    routine_id, revision_id = _parse_routine_thread_id(thread_id)
+    cache = graph_cache if revision_id is not None else None
+    cache_key = (routine_id, revision_id or "")
+    compiled = cache.get(cache_key) if cache is not None else None
+    if compiled is not None and cache is not None:
+        cache.move_to_end(cache_key)
+    if compiled is None:
+        graph, instruction_loader = await _load_pinned_routine_graph(
+            thread_id, state_manager, revision_reader
+        )
+        compiled = compile_routine_graph(
+            graph,
+            model=model,
+            agent_registry=agent_registry,
+            routine_registry=routine_registry,
+            routine_runner=routine_runner,
+            agent_background_runner=agent_background_runner,
+            model_profile_resolver=model_profile_resolver,
+            tool_registry=tool_registry,
+            filesystem_backend=filesystem_backend,
+            instruction_loader=instruction_loader,
+            checkpointer=checkpointer,
+        )
+        if cache is not None:
+            cache[cache_key] = compiled
+            while len(cache) > _SNAPSHOT_GRAPH_CACHE_SIZE:
+                cache.popitem(last=False)
     return await compiled.aget_state({"configurable": {"thread_id": thread_id}})
 
 

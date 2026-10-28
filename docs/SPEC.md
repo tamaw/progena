@@ -172,8 +172,9 @@ pre-ownership run started before the live runtime) is presented as
 `next`, read through the runtime. Run on an interrupted run offers Continue
 (`POST /api/ui/agent-profiles/{agent_id}/run-continue` with
 `{thread_id, request_id}`: settle the orphan `stopped`, then the normal Resume),
-Start again (a new session seeded with the first attempt's `inputs`, recorded
-on its `started` lifecycle), or Cancel run. Scheduled runs stamp
+Start again (cancel the orphan, then a new session seeded with the first
+attempt's `inputs`, recorded on its `started` lifecycle), or Cancel run.
+Scheduled runs stamp
 `runtime_instance` when they start running, and their recent runs show the
 same derived `interrupted` status.
 

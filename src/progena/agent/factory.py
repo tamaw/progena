@@ -11,6 +11,7 @@ skills, memory files, and native DeepAgent subagents.
 
 import json
 import logging
+from collections import OrderedDict
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -643,6 +644,10 @@ async def create_progena_agent(
     agent.routine_controls = routine_controls  # type: ignore[attr-defined]
     agent.routine_resumer = _resume_routine  # type: ignore[attr-defined]
 
+    # Compiled graphs of revision-pinned routine threads, read only for their
+    # snapshot; scoped to this agent so a rebuild drops them with its checkpointer.
+    snapshot_graphs: OrderedDict[tuple[str, str], Any] = OrderedDict()
+
     async def _routine_thread_state(thread_id: str) -> Any:
         return await routine_thread_state(
             thread_id=thread_id,
@@ -657,6 +662,7 @@ async def create_progena_agent(
             tool_registry=tool_registry,
             filesystem_backend=backend,
             checkpointer=checkpointer,
+            graph_cache=snapshot_graphs,
         )
 
     agent.routine_thread_state = _routine_thread_state  # type: ignore[attr-defined]

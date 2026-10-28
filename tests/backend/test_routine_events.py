@@ -240,3 +240,33 @@ async def test_resumed_thread_is_described_by_its_newest_attempt(feed):
 
     assert lifecycles[thread]["request_id"] == "second"
     assert lifecycles[thread]["status"] == "started"
+
+
+async def test_lifecycle_index_follows_events_without_rescanning_the_log(feed, monkeypatch):
+    """One scan builds the index; later transitions arrive through the event log."""
+    listener, store, events = feed
+    store.save_document(
+        PROGENA_STATE_PREFIX,
+        "health",
+        {"runtime_instance": "live", "started_at": "2026-10-28T10:00:00+00:00"},
+    )
+    _routine_event(store, "orphan", "started", "2026-10-28T09:00:00Z", runtime_instance="old")
+    await listener.lifecycle_snapshot("background")
+    assert events[-1][1]["runs"][0]["status"] == "interrupted"
+
+    scans = []
+    original = store.list_documents
+    monkeypatch.setattr(
+        store, "list_documents", lambda *args: scans.append(args) or original(*args)
+    )
+    _routine_event(store, "orphan", "stopped", "2026-10-28T10:01:00Z")
+    [stopped] = [
+        event
+        for event in store.read_document_events(EVENT_LOG_START, 100)
+        if event.key.endswith(":stopped")
+    ]
+    await listener.document_event(stopped)
+    await listener.lifecycle_snapshot("background")
+
+    assert events[-1][1]["runs"][0]["status"] == "stopped"
+    assert scans == []

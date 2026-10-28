@@ -311,6 +311,28 @@ function useRoutineRunEvents(agentId, parameters, inputSchema) {
     })();
   }, [agentId, agentsUrl, dispatch, lifecycle, lifecycleStatus]);
 
+  // Start again replaces an interrupted run: close the orphan (cancelled, like
+  // Cancel run) without tracking it, since the editor then follows the new run.
+  // Resolves true once closed; on failure it reports the error and resolves false.
+  const closeInterruptedRun = useCallback(async () => {
+    const target = routineRunControlTarget(lifecycle, agentId);
+    if (lifecycleStatus !== 'interrupted' || !target) return false;
+    setControlError(null);
+    try {
+      await dispatch(controlRoutineRun({
+        agentsUrl,
+        agentId,
+        threadId: target.threadId,
+        targetRequestId: target.requestId,
+        action: 'cancel',
+      })).unwrap();
+      return true;
+    } catch (error) {
+      setControlError(error.message || 'Could not close the interrupted run');
+      return false;
+    }
+  }, [agentId, agentsUrl, dispatch, lifecycle, lifecycleStatus]);
+
   const resetInteractiveSession = useCallback(() => {
     interactiveSessionIdRef.current = null;
     setHasInteractiveSession(false);
@@ -340,6 +362,7 @@ function useRoutineRunEvents(agentId, parameters, inputSchema) {
     cancelRun: () => requestControl('cancel'),
     resumeRun,
     continueInterruptedRun,
+    closeInterruptedRun,
     threadId,
     runMeta: runState.run_meta,
     runData: runState.data,
@@ -533,6 +556,7 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, o
     stopRun,
     cancelRun,
     continueInterruptedRun,
+    closeInterruptedRun,
     resumeRun,
     threadId: liveThreadId,
     runMeta: liveRunMeta,
@@ -1859,7 +1883,7 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, o
         <PopupModal
           eyebrow="Interrupted run"
           title="This run was interrupted"
-          message={`The runtime restarted while this run was executing${interruptedStepLabel ? ` step ${interruptedStepLabel}` : ''}${liveLifecycle?.interrupted_at ? ` (${formatAge(liveLifecycle.interrupted_at)})` : ''}. Continuing reruns that step, which may have partly run.`}
+          message={`The runtime restarted while this run was executing${interruptedStepLabel ? ` step ${interruptedStepLabel}` : ''}${liveLifecycle?.interrupted_at ? ` (${formatAge(liveLifecycle.interrupted_at)})` : ''}. Continue reruns that step, which may have partly run. Start again cancels this run and starts a new one.`}
           cancelLabel="Close"
           onClose={() => setInterruptedModalOpen(false)}
           actions={[
@@ -1877,9 +1901,13 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, o
               tone: 'primary',
               onClick: () => {
                 setInterruptedModalOpen(false);
-                if (liveLifecycle?.inputs) startRunAndTrackLatest(null, liveLifecycle.inputs);
-                else if (hasDeclaredParams) setRunModalOpen(true);
-                else startRunAndTrackLatest();
+                const inputs = liveLifecycle?.inputs;
+                void closeInterruptedRun().then((closed) => {
+                  if (!closed) return;
+                  if (inputs) startRunAndTrackLatest(null, inputs);
+                  else if (hasDeclaredParams) setRunModalOpen(true);
+                  else startRunAndTrackLatest();
+                });
               },
             },
             {

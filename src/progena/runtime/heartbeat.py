@@ -187,6 +187,15 @@ class ProgenaLoop:
             self._state.get("thread_id"),
         )
 
+        # Publish this process's identity before any cycle runs, so runs owned by
+        # the previous process read as interrupted immediately, not after the
+        # first heartbeat cycle (which can wait on queued input).
+        await write_health_status(
+            self.state_manager,
+            "running",
+            thread_id=str(self._state.get("thread_id") or "") or None,
+            cycle_count=int(self._state.get("cycle_count", 0) or 0),
+        )
         await self._queues.push_event(
             "loop_started", f"Perpetual loop started (thread_id: {boot_thread_id})"
         )
