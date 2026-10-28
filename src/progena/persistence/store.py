@@ -212,31 +212,6 @@ class LangGraphRuntimeStore:
                 return results
             offset += page_size
 
-    async def get_item(self, namespace: tuple[str, ...], key: str) -> dict[str, Any] | None:
-        """Return one raw item value from any namespace, or ``None``."""
-        item = await self._store.aget(namespace, key)
-        return _item_value(item) if item is not None else None
-
-    async def put_item(self, namespace: tuple[str, ...], key: str, value: dict[str, Any]) -> None:
-        """Persist one raw item value in any namespace."""
-        await self._store.aput(namespace, key, value)
-
-    async def delete_item(self, namespace: tuple[str, ...], key: str) -> None:
-        """Remove one item from any namespace (no-op if absent)."""
-        await self._store.adelete(namespace, key)
-
-    async def list_items(self, namespace: tuple[str, ...]) -> list[tuple[str, dict[str, Any]]]:
-        """Return ``(key, value)`` for every item in ``namespace``, paging past asearch's default."""
-        page_size = 500
-        offset = 0
-        results: list[tuple[str, dict[str, Any]]] = []
-        while True:
-            items = await self._store.asearch(namespace, limit=page_size, offset=offset)
-            results += [(str(getattr(item, "key", "")), _item_value(item)) for item in items]
-            if len(items) < page_size:
-                return results
-            offset += page_size
-
 
 def _item_value(item: Any) -> dict[str, Any]:
     value = getattr(item, "value", item)

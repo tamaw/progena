@@ -84,10 +84,6 @@ def _curated_tool_artifact(artifact: Any) -> dict[str, Any] | None:
     return projection
 
 
-SCHEDULED_TASK_PREFIX = "[Scheduled Task]"
-BACKEND_ALERT_PREFIX = "A backend alert was just created for the user."
-
-
 def _now_iso() -> str:
     return datetime.now(UTC).isoformat().replace("+00:00", "Z")
 
@@ -204,10 +200,6 @@ class ChatPatchRequest(BaseModel):
     title: str | None = None
     pinned: bool | None = None
     archived: bool | None = None
-
-
-class ChatMutationResponse(BaseModel):
-    session: ChatSessionDetail
 
 
 def _message_text(value: Any) -> str:
@@ -496,19 +488,6 @@ def _raw_message_content(raw: Any) -> str:
     return _strip_attachment_context(
         extract_message_text(raw) or _message_text(getattr(raw, "content", ""))
     )
-
-
-def _messages_from_state(state: dict[str, Any]) -> list[ChatMessage]:
-    raw_messages = state.get("messages")
-    if not isinstance(raw_messages, list):
-        history = state.get("history")
-        raw_messages = history.get("messages") if isinstance(history, dict) else []
-    messages: list[ChatMessage] = []
-    for index, raw in enumerate(raw_messages if isinstance(raw_messages, list) else []):
-        message = _chat_message_from_raw(raw, index)
-        if message is not None:
-            messages.append(message)
-    return messages
 
 
 def _tool_message_duration(raw: Any) -> int | float | None:

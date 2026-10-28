@@ -36,13 +36,6 @@ class ScheduleItemInfo(BaseModel):
     runs: list[ScheduleRunInfo] = []
 
 
-class ScheduleResponse(BaseModel):
-    """Response containing schedule items."""
-
-    items: list[ScheduleItemInfo]
-    total: int
-
-
 class WidgetResponse(BaseModel):
     """Unified widget payload."""
 
@@ -55,22 +48,6 @@ class WidgetResponse(BaseModel):
     summary: str | None = None
     updated_at: str | None = None
     data: dict = {}
-
-
-class WidgetsResponse(BaseModel):
-    """Response containing widget entries."""
-
-    items: list[WidgetResponse]
-    total: int
-
-
-class WidgetDeleteResponse(BaseModel):
-    """Result of deleting a backend-managed widget."""
-
-    widget_id: str
-    removed: bool = True
-    already_removed: bool = False
-    warning: str | None = None
 
 
 class WidgetFieldOptionResponse(BaseModel):

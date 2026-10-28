@@ -65,10 +65,6 @@ PLAIN_LOG_LINE_RE = re.compile(
 FILENAME_TIMESTAMP_RE = re.compile(r"(?P<timestamp>\d{8}_\d{6})")
 
 
-def _iso_now() -> str:
-    return datetime.now(UTC).isoformat().replace("+00:00", "Z")
-
-
 def _parse_timestamp(value: Any) -> datetime | None:
     if value is None:
         return None
@@ -501,8 +497,6 @@ class StateSnapshot:
 class StateReader:
     """Reads state, session, config, and log data from the repo runtime dirs."""
 
-    LOG_SUFFIXES = {".jsonl", ".log", ".txt", ".stderr", ".stdout"}
-
     def __init__(
         self,
         document_store: BackendDocumentStore,
@@ -768,12 +762,6 @@ class StateReader:
         document = self.document_store.get_document(PROGENA_STATE_PREFIX, key, {})
         data = document.payload if document is not None else {}
         return data if isinstance(data, dict) else {}
-
-    def get_thread_messages(self, thread_id: str) -> list[Any]:
-        if self.document_store is None:
-            return []
-        snapshot = self.document_store.get_checkpoint_thread_snapshot(thread_id)
-        return snapshot.messages if snapshot is not None else []
 
     def get_sessions_summary(self) -> SessionSummary:
         document = self.document_store.get_document(BACKEND_STATE_PREFIX, "sessions", [])

@@ -25,17 +25,6 @@ def _schedule_entries_to_dicts(entries: dict[str, Any]) -> list[dict[str, Any]]:
     ]
 
 
-async def get_due_schedule_ids(
-    state_manager: Any,
-    *,
-    current_time,
-) -> list[str]:
-    """Return ids for entries that are due right now."""
-    entries = await state_manager.get_schedule()
-    due_items = Scheduler().get_due_items(_schedule_entries_to_dicts(entries), current_time)
-    return [str(item.get("id") or "") for item in due_items if item.get("id")]
-
-
 async def enqueue_due_schedule_entries(
     state_manager: Any,
     queues: Any,

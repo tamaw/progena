@@ -8,7 +8,7 @@ import copy
 import hashlib
 import logging
 import threading
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -2385,14 +2385,3 @@ def set_default_document_store(store: BackendDocumentStore) -> None:
 
 def get_default_document_store() -> BackendDocumentStore:
     return _default_store
-
-
-def seed_documents(
-    documents: Iterable[tuple[str, str, Any]],
-    *,
-    store: BackendDocumentStore | None = None,
-) -> BackendDocumentStore:
-    target = store or _default_store
-    for prefix, key, payload in documents:
-        target.save_document(prefix, key, payload)
-    return target
