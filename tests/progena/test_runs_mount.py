@@ -390,3 +390,89 @@ async def test_interrupted_file_updates_its_attempt_links_after_continue(runs: _
     assert second["status"] == "interrupted"
     assert second["ended_at"] is None
     assert second["attempts"]["next"] == "continue"
+
+
+@pytest.mark.parametrize("kind", ["routine", "workflow", "schedule"])
+async def test_full_id_paths_survive_title_and_timezone_changes(runs: _Runs, kind: str) -> None:
+    if kind == "routine":
+        await _continued_run(runs)
+        path = "/runs/routines/2026-10-28_smoke-interrupt_9fd7eb88-2.md"
+        expected_id = "9fd7eb88-2"
+        id_field, title_field = "request_id", "routine"
+    elif kind == "workflow":
+        await _workflow_with_routine_step(runs)
+        path = "/runs/workflows/2026-10-27_self-build-build-result_workflow_run_dd6aba924948.md"
+        expected_id = "workflow_run_dd6aba924948"
+        id_field, title_field = "run_id", "workflow"
+    else:
+        await runs.put(
+            "schedule",
+            {
+                "identity": {
+                    "id": "identity",
+                    "name": "Original",
+                    "message": "Run identity",
+                    "created_at": "2026-10-28T23:00:00Z",
+                    "updated_at": "2026-10-28T23:00:00Z",
+                }
+            },
+        )
+        await runs.put(
+            "schedule_runs",
+            [
+                {
+                    "run_id": "schedrun_identity",
+                    "schedule_id": "identity",
+                    "thread_id": "schedule:identity",
+                    "message": "Run identity",
+                    "status": "completed",
+                    "created_at": "2026-10-28T23:00:00Z",
+                    "updated_at": "2026-10-28T23:01:00Z",
+                    "started_at": "2026-10-28T23:00:00Z",
+                    "completed_at": "2026-10-28T23:01:00Z",
+                }
+            ],
+        )
+        path = "/runs/schedules/2026-10-28_original_schedrun_identity.md"
+        expected_id = "schedrun_identity"
+        id_field, title_field = "run_id", "schedule"
+
+    before = yaml.safe_load((await runs.text(path)).split("---\n")[1])
+    assert before[id_field] == expected_id
+    if kind == "routine":
+        await runs.state_manager.save_routine_graph("smoke", {**_GRAPH, "name": "Renamed"})
+    elif kind == "workflow":
+        await runs.state_manager.save_workflow_definition(
+            "workflow_d5b1", {"id": "workflow_d5b1", "title": "Renamed", "graph": {"nodes": {}}}
+        )
+    else:
+        await runs.state_manager.update_schedule_entry("identity", {"name": "Renamed"})
+    await runs.state_manager.save_preferences_config({"timezone": "Pacific/Kiritimati"})
+
+    after = yaml.safe_load((await runs.text(path)).split("---\n")[1])
+    assert after[id_field] == expected_id
+    assert after[title_field] == "Renamed"
+    directory = {"routine": "routines", "workflow": "workflows", "schedule": "schedules"}[kind]
+    assert path not in await runs.names(directory)
+    if kind == "workflow":
+        assert "kanban_card:card_159f" in await runs.text(f"{path}#1")
+
+
+async def test_queued_workflow_path_remains_readable_after_starting_on_next_day(
+    runs: _Runs,
+) -> None:
+    await runs.put("workflow:midnight", {"id": "midnight", "title": "Midnight", "graph": {}})
+    await runs.put(
+        "workflow_run:workflow_run_midnight",
+        {
+            "run_id": "workflow_run_midnight",
+            "workflow_id": "midnight",
+            "status": "running",
+            "queued_at": "2026-10-28T23:59:59Z",
+            "started_at": "2026-10-29T00:00:01Z",
+        },
+    )
+    path = "/runs/workflows/2026-10-28_midnight_workflow_run_midnight.md"
+    front = yaml.safe_load((await runs.text(path)).split("---\n")[1])
+    assert front["run_id"] == "workflow_run_midnight"
+    assert front["started_at"] == "2026-10-29T00:00:01Z"

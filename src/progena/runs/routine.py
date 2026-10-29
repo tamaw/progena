@@ -8,7 +8,7 @@ thread, and routine-node children inline their own run.
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from src.progena.runtime.ownership import routine_attempt_interrupted
@@ -116,9 +116,7 @@ def _attempt_window(
 async def _run_meta(ctx: RunContext, thread_id: str) -> list[tuple[str, dict[str, Any]]]:
     if ctx.checkpointer is None or not thread_id:
         return []
-    tip = await ctx.checkpointer.aget_tuple(
-        {"configurable": {"thread_id": thread_id, "checkpoint_ns": ""}}
-    )
+    tip = await ctx.checkpoint(thread_id)
     if tip is None:
         return []
     values = tip.checkpoint.get("channel_values", {})
@@ -139,6 +137,25 @@ def _step_output(entry: dict[str, Any], node: dict[str, Any], node_id: str) -> A
         if key in output and len(output) == 1:
             return output[key]
     return output
+
+
+def _invocation_ends(
+    records: list[tuple[str, dict[str, Any]]], attempt_end: datetime | None
+) -> list[datetime | None]:
+    """Bound each execution by measured duration, its next invocation, and attempt."""
+    ends: list[datetime | None] = [None] * len(records)
+    following: dict[str, datetime] = {}
+    for index in range(len(records) - 1, -1, -1):
+        node_id, entry = records[index]
+        started = at(entry.get("started_at"))
+        bounds = [bound for bound in (attempt_end, following.get(node_id)) if bound is not None]
+        duration = entry.get("duration_ms")
+        if started is not None:
+            if isinstance(duration, (int, float)) and duration >= 0:
+                bounds.append(started + timedelta(milliseconds=duration))
+            following[node_id] = started
+        ends[index] = min(bounds) if bounds else None
+    return ends
 
 
 async def _child_attempt(ctx: RunContext, entry: dict[str, Any]) -> dict[str, Any] | None:
@@ -190,7 +207,10 @@ async def routine_log(
     begin, end = _attempt_window(ctx, started)
     tokens: dict[str, int | None] | None = None
     last_label: str | None = None
-    for node_id, entry in await _run_meta(ctx, thread_id):
+    records = await _run_meta(ctx, thread_id)
+    for (node_id, entry), invocation_end in zip(
+        records, _invocation_ends(records, end), strict=True
+    ):
         when = at(entry.get("started_at"))
         if begin is not None and when is not None and when < begin:
             continue
@@ -218,7 +238,7 @@ async def routine_log(
         if kind == "agent":
             agent = str(config.get("agent_name") or label)
             transcript_tokens: list[dict[str, int | None] | None] = []
-            if await agent_transcript(
+            if when is not None and await agent_transcript(
                 ctx,
                 log,
                 f"routine-agent:{thread_id}:{node_id}",
@@ -226,8 +246,8 @@ async def routine_log(
                 channel=channel,
                 when=when,
                 steps=steps,
-                begin=begin,
-                end=end,
+                begin=when,
+                end=invocation_end,
                 token_totals=transcript_tokens,
             ):
                 usage = transcript_tokens[0] if transcript_tokens else None

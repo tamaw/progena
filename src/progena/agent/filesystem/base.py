@@ -21,6 +21,10 @@ from deepagents.backends.protocol import (
     WriteResult,
 )
 from deepagents.backends.utils import (
+    InvalidGlobPatternError,
+    _normalize_path,
+    _relative_to_root,
+    compile_grep_include_glob,
     create_file_data,
     file_data_to_string,
     grep_matches_from_files,
@@ -115,14 +119,27 @@ class _AsyncOnlyFileBackendMixin:
             )
         return responses
 
-    async def _virtual_file_paths(self) -> list[str]:
-        """Every file path this backend lists, walking into subdirectories."""
+    async def _virtual_file_paths(self, path: str = "/") -> list[str]:
+        """List files below one normalized virtual path without walking siblings."""
+        normalized_path = _normalize_path(path)
+        if normalized_path != "/":
+            parent = normalized_path.rpartition("/")[0] or "/"
+            parent_listing = await self.als(parent)  # type: ignore[attr-defined]
+            for entry in parent_listing.entries or []:
+                if entry["path"] == normalized_path and not entry.get("is_dir"):
+                    return [normalized_path]
+
         paths: list[str] = []
-        pending, seen = ["/"], {"/"}
+        pending, seen = [normalized_path], {normalized_path}
         while pending:
             listing = await self.als(pending.pop())  # type: ignore[attr-defined]
             for entry in listing.entries or []:
                 entry_path = entry["path"]
+                if normalized_path != "/" and (
+                    entry_path != normalized_path
+                    and not entry_path.startswith(f"{normalized_path}/")
+                ):
+                    continue
                 if entry.get("is_dir"):
                     if entry_path not in seen:
                         seen.add(entry_path)
@@ -133,13 +150,11 @@ class _AsyncOnlyFileBackendMixin:
 
     async def aglob(self, pattern: str, path: str = "/") -> GlobResult:
         """Listed paths under ``path`` matching ``pattern`` (``**`` recurses)."""
-        base = (path or "/").rstrip("/")
+        normalized_path = _normalize_path(path)
         effective = pattern.lstrip("/")
         matches: list[FileInfo] = []
-        for file_path in await self._virtual_file_paths():
-            if base and not file_path.startswith(f"{base}/"):
-                continue
-            relative = file_path[len(base) + 1 :]
+        for file_path in await self._virtual_file_paths(normalized_path):
+            relative = _relative_to_root(file_path, normalized_path)
             if wcglob.globmatch(relative, effective, flags=wcglob.BRACE | wcglob.GLOBSTAR):
                 matches.append(FileInfo(path=file_path, is_dir=False))
         return GlobResult(matches=matches)
@@ -152,11 +167,22 @@ class _AsyncOnlyFileBackendMixin:
         *,
         max_count: int | None = None,
     ) -> GrepResult:
-        """Literal search over the rendered documents, as ``read_file`` shows them."""
-        base = (path or "/").rstrip("/")
+        """Literal search over selected rendered documents, as ``read_file`` shows them."""
+        try:
+            normalized_path = _normalize_path(path)
+        except ValueError:
+            return GrepResult(matches=[])
+
+        matcher = None
+        if glob:
+            try:
+                matcher = compile_grep_include_glob(glob)
+            except InvalidGlobPatternError as exc:
+                return GrepResult(error=str(exc))
+
         files: dict[str, FileData] = {}
-        for file_path in await self._virtual_file_paths():
-            if base and file_path != base and not file_path.startswith(f"{base}/"):
+        for file_path in await self._virtual_file_paths(normalized_path):
+            if matcher is not None and not matcher(_relative_to_root(file_path, normalized_path)):
                 continue
             try:
                 result = await self.aread(file_path, 0, 10_000_000)  # type: ignore[attr-defined]
@@ -165,7 +191,7 @@ class _AsyncOnlyFileBackendMixin:
                 continue
             if result.error is None and result.file_data is not None:
                 files[file_path] = result.file_data
-        return grep_matches_from_files(files, pattern, path or "/", glob, max_count=max_count)
+        return grep_matches_from_files(files, pattern, normalized_path, glob, max_count=max_count)
 
 
 class StateDocumentBackend(_AsyncOnlyFileBackendMixin):

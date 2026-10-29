@@ -2,10 +2,16 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Collection, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Any, cast
+
+from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+
+CheckpointVersion = tuple[str, str, str]
+CheckpointVersions = tuple[CheckpointVersion, ...]
 
 
 @dataclass(frozen=True)
@@ -16,13 +22,64 @@ class LangGraphPersistence:
     store: Any | None = None
 
 
+async def checkpoint_versions(
+    checkpointer: Any, thread_ids: Collection[str]
+) -> CheckpointVersions | None:
+    """Latest checkpoint IDs in every namespace of the named threads.
+
+    This is deliberately a metadata-only read: cache validation must not
+    deserialize a checkpoint or replay its history. Unsupported third-party
+    savers return ``None`` so callers can skip caching rather than guess.
+    """
+    threads = tuple(dict.fromkeys(thread_id for thread_id in thread_ids if thread_id))
+    if not threads:
+        return ()
+    if isinstance(checkpointer, AsyncPostgresSaver):
+        rows = await _checkpoint_version_rows(checkpointer, threads)
+        return tuple(
+            sorted(
+                (
+                    str(row["thread_id"]) if isinstance(row, Mapping) else str(row[0]),
+                    str(row["checkpoint_ns"]) if isinstance(row, Mapping) else str(row[1]),
+                    str(row["checkpoint_id"]) if isinstance(row, Mapping) else str(row[2]),
+                )
+                for row in rows
+            )
+        )
+    if not isinstance(checkpointer, InMemorySaver):
+        return None
+    versions: list[CheckpointVersion] = []
+    for thread_id in threads:
+        namespaces = checkpointer.storage.get(thread_id)
+        if not isinstance(namespaces, Mapping):
+            continue
+        for namespace, checkpoints in namespaces.items():
+            if isinstance(checkpoints, Mapping) and checkpoints:
+                versions.append((thread_id, str(namespace), str(max(checkpoints))))
+    return tuple(sorted(versions))
+
+
+async def _checkpoint_version_rows(
+    checkpointer: AsyncPostgresSaver, thread_ids: tuple[str, ...]
+) -> list[Any]:
+    """Run the compact native checkpoint revision query through the saver lock."""
+    sql = """
+        SELECT thread_id, checkpoint_ns, max(checkpoint_id) AS checkpoint_id
+        FROM checkpoints
+        WHERE thread_id = ANY(%s)
+        GROUP BY thread_id, checkpoint_ns
+    """
+    async with checkpointer._cursor() as cur:
+        await cur.execute(sql, (list(thread_ids),))
+        return await cur.fetchall()
+
+
 async def _open_saver(
     database_url: str,
     *,
     setup: bool = True,
 ) -> Any:
     """Open AsyncPostgresSaver with manual connection lifetime."""
-    from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
     from psycopg import AsyncConnection
     from psycopg.rows import DictRow, dict_row
 

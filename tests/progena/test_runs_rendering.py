@@ -330,6 +330,8 @@ async def test_agent_steps_count_conversation_usage_not_just_the_last_reply() ->
     text, _ = await render_routine(ctx, started, path="/runs/routines/owner.md")
     front = yaml.safe_load(text.split("---\n")[1])
     assert front["tokens"] == {"input_tokens": 5, "output_tokens": 7, "total_tokens": 12}
+    assert text.count("First reply") == 1
+    assert text.count("Final reply") == 1
 
     state.definition = {"title": "Workflow", "graph": {"nodes": {}}}
     ctx = _context(state, checkpoints, [])
@@ -359,4 +361,67 @@ async def test_agent_steps_count_conversation_usage_not_just_the_last_reply() ->
         title="Schedule",
         path="/runs/schedules/owner.md",
     )
+    assert yaml.safe_load(text.split("---\n")[1])["tokens"]["total_tokens"] == 12
+
+
+async def test_agent_invocations_exclude_gap_messages_and_later_attempts() -> None:
+    thread_id = "routine:bounded"
+    started = {
+        "request_id": "bounded",
+        "agent_id": "bounded",
+        "thread_id": thread_id,
+        "status": "started",
+        "timestamp": "2026-10-30T10:00:00Z",
+    }
+    next_attempt = {**started, "request_id": "resumed", "timestamp": "2026-10-30T10:00:05Z"}
+    state = _State(
+        [started, next_attempt],
+        {"bounded": {"name": "Bounded", "nodes": [{"id": "agent", "kind": "agent"}]}},
+    )
+    checkpoints = _Checkpoints(
+        {
+            thread_id: {
+                "agent": [
+                    {"started_at": "2026-10-30T10:00:01Z", "duration_ms": 2000},
+                    {"started_at": "2026-10-30T10:00:04Z", "duration_ms": 10000},
+                ]
+            }
+        }
+    )
+    entries = [
+        ("before", 0, 99),
+        ("first", 2, 7),
+        ("gap", 3, 99),
+        ("second", 4, 5),
+        ("later", 5, 99),
+    ]
+    conversation = Conversation(
+        root=ThreadMessages(
+            messages=[
+                AIMessage(
+                    content=f"Unique {name} answer",
+                    id=name,
+                    usage_metadata={
+                        "input_tokens": tokens,
+                        "output_tokens": 0,
+                        "total_tokens": tokens,
+                    },
+                )
+                for name, _, tokens in entries
+            ],
+            committed_at={
+                name: datetime(2026, 10, 30, 10, 0, second, tzinfo=UTC)
+                for name, second, _ in entries
+            },
+        ),
+        subagents={},
+        checkpoint_id="tip",
+    )
+    ctx = _context(state, checkpoints, [])
+    ctx.conversations[f"routine-agent:{thread_id}:agent"] = conversation
+    text, _ = await render_routine(ctx, started, path="/runs/routines/bounded.md")
+    assert text.count("Unique first answer") == 1
+    assert text.count("Unique second answer") == 1
+    for name in ("before", "gap", "later"):
+        assert f"Unique {name} answer" not in text
     assert yaml.safe_load(text.split("---\n")[1])["tokens"]["total_tokens"] == 12

@@ -370,12 +370,21 @@ head…tail of long text) with a pointer to the full value: a mount path, or
 Status uses the same interrupted rule as the UI
 (`src/progena/runtime/ownership.py`). Terminal runs, including interrupted runs,
 are cached in-process; updated records and subsequent lifecycle boundaries invalidate
-the entry. Directory listings use compact run records and bulk title maps, sorted
+the entry. Cached output also validates the latest checkpoint IDs in every namespace
+of each related thread, including previously missing threads and newly created
+subagent namespaces. Checkpoint changes during hydration prevent cache admission.
+Cache hits read compact revision metadata rather than replaying conversation history;
+no new event stream or polling is involved.
+Directory listings use compact run records and bulk title maps, sorted
 by normalized start time and full run ID. Reading one file looks up its exact ID
 and loads only related lifecycle threads, not every run's payload. Schedule history
 remains one JSON document; native reads select the requested item inside Postgres.
-Full IDs prevent filename collisions; there are no short-ID aliases or persisted
+Full IDs prevent filename collisions; dates and slugs are descriptive, not lookup
+identity. Existing full-ID paths remain readable after title/timezone changes or
+a queued run starting on a different day. There are no short-ID aliases or persisted
 files to migrate. `run_workflow` returns the new run's `run_id` and `/runs/` path.
+Virtual grep scopes traversal to the requested subtree and applies the SDK's
+include-glob matcher before rendering files, preserving match lines and truncation.
 
 Nested routine invocations use their persisted request IDs. Workflow step kinds
 and conversation threads come from execution audits rather than edited definitions
@@ -384,6 +393,10 @@ All three run kinds expose `tokens` with recorded input/output/total counts;
 unknown usage/components remain null and known zero remains zero. Recorded
 descendants replace parent aggregates, message IDs deduplicate recursive delegation,
 and reused threads are scoped to the routine attempt or workflow audit interval.
+Within a routine attempt, each agent-node transcript is further bounded by its
+persisted start, measured duration, next invocation and attempt boundary. Repeated
+nodes do not replay the entire shared conversation, and unknown invocation starts
+do not authorize guessing a transcript window.
 
 ## Runs
 

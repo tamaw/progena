@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable
 from dataclasses import dataclass, field, replace
 from datetime import datetime, tzinfo
 from typing import Any
 
 import yaml
 
+from src.progena.persistence.langgraph import CheckpointVersions, checkpoint_versions
 from src.progena.runtime.ownership import parse_timestamp
 from src.progena.sessions.history import Conversation, load_conversation
 from src.progena.sessions.messages import extract_token_usage
@@ -19,6 +21,22 @@ from .values import describe_value, full_text, head_tail
 # Nested child runs (a workflow's routine step, a routine's routine node) are
 # inlined up to this depth.
 MAX_CHILD_DEPTH = 3
+
+RoutineEventRevisions = tuple[tuple[str, str, str], ...]
+
+
+def routine_event_revisions(events: Iterable[dict[str, Any]]) -> RoutineEventRevisions:
+    """Stable lifecycle revision for run threads a render causally inspected."""
+    return tuple(
+        sorted(
+            (
+                str(event.get("request_id") or ""),
+                str(event.get("status") or ""),
+                str(event.get("timestamp") or ""),
+            )
+            for event in events
+        )
+    )
 
 
 @dataclass
@@ -34,23 +52,62 @@ class RunContext:
     live_started_at: str | None
     routine_events: list[dict[str, Any]] = field(default_factory=list)
 
+    checkpoint_dependencies: set[tuple[str, str]] = field(default_factory=set)
+    checkpoint_versions_before: CheckpointVersions | None = ()
+    _tracked_checkpoint_threads: set[str] = field(default_factory=set)
+    routine_event_versions: dict[str, RoutineEventRevisions] = field(default_factory=dict)
+
     loaded_threads: set[str] = field(default_factory=set)
     conversations: dict[str, Conversation | None] = field(default_factory=dict)
     seen_token_messages: set[str] = field(default_factory=set)
 
+    async def checkpoint(self, thread_id: str, namespace: str = "") -> Any | None:
+        """Load one checkpoint tip while recording its thread as a cache dependency."""
+        if self.checkpointer is None or not thread_id:
+            return None
+        await self._track_checkpoint_thread(thread_id)
+        self.checkpoint_dependencies.add((thread_id, namespace))
+        return await self.checkpointer.aget_tuple(
+            {"configurable": {"thread_id": thread_id, "checkpoint_ns": namespace}}
+        )
+
+    async def _track_checkpoint_thread(self, thread_id: str) -> None:
+        """Snapshot every namespace before rendering can hydrate this thread."""
+        if not thread_id:
+            return
+        self.checkpoint_dependencies.add((thread_id, ""))
+        if thread_id in self._tracked_checkpoint_threads:
+            return
+        self._tracked_checkpoint_threads.add(thread_id)
+        versions = await checkpoint_versions(self.checkpointer, (thread_id,))
+        if versions is None:
+            self.checkpoint_versions_before = None
+            return
+        if self.checkpoint_versions_before is not None:
+            self.checkpoint_versions_before = tuple(
+                sorted((*self.checkpoint_versions_before, *versions))
+            )
+
     async def conversation(self, thread_id: str) -> Conversation | None:
         if self.checkpointer is None or not thread_id:
             return None
+        await self._track_checkpoint_thread(thread_id)
         if thread_id not in self.conversations:
             self.conversations[thread_id] = await load_conversation(self.checkpointer, thread_id)
         return self.conversations[thread_id]
 
     async def load_thread_events(self, thread_id: str) -> None:
         """Load one thread's lifecycle records once, without reopening all history."""
-        if not thread_id or thread_id in self.loaded_threads:
+        if not thread_id:
+            return
+        await self._track_checkpoint_thread(thread_id)
+        if thread_id in self.loaded_threads:
             return
         self.loaded_threads.add(thread_id)
         events = await self.state_manager.list_routine_run_events(thread_ids=[thread_id])
+        self.routine_event_versions[thread_id] = routine_event_revisions(
+            event for event in events if isinstance(event, dict)
+        )
         by_transition = {
             (str(event.get("request_id") or ""), str(event.get("status") or "")): event
             for event in self.routine_events
@@ -282,15 +339,18 @@ async def agent_transcript(
     conversation = await ctx.conversation(thread_id)
     if conversation is None:
         return False
-    root = replace(
-        conversation.root,
-        nick=agent,
-        messages=_compact_messages(_window_messages(conversation.root, begin, end), steps),
-    )
+    root_messages = _window_messages(conversation.root, begin, end)
     subagents = {
         call_id: replace(thread, messages=_window_messages(thread, begin, end))
         for call_id, thread in conversation.subagents.items()
     }
+    if not root_messages and not any(thread.messages for thread in subagents.values()):
+        return False
+    root = replace(
+        conversation.root,
+        nick=agent,
+        messages=_compact_messages(root_messages, steps),
+    )
     if token_totals is not None:
         token_totals.append(
             conversation_tokens(

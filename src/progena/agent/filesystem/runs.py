@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import re
 from collections import OrderedDict
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -30,7 +31,13 @@ from deepagents.backends.protocol import (
 from deepagents.backends.utils import create_file_data, slice_read_response
 
 from src.progena.agent.filesystem.base import _AsyncOnlyFileBackendMixin
-from src.progena.runs._render import RunContext, Steps
+from src.progena.persistence.langgraph import CheckpointVersions, checkpoint_versions
+from src.progena.runs._render import (
+    RoutineEventRevisions,
+    RunContext,
+    Steps,
+    routine_event_revisions,
+)
 from src.progena.runs.paths import RUN_DIRECTORIES, RunKind, run_file_name
 from src.progena.runs.routine import TERMINAL_STATUSES, attempt_status, render_routine
 from src.progena.runs.schedule import render_schedule, schedule_title
@@ -44,6 +51,16 @@ _FINISHED = TERMINAL_STATUSES | {"error", "interrupted"}
 _CACHE_SIZE = 256
 
 
+@dataclass(frozen=True)
+class _CachedRun:
+    text: str
+    steps: Steps
+    checkpoint_threads: frozenset[str]
+    checkpoint_versions: CheckpointVersions
+    lifecycle_threads: frozenset[str]
+    lifecycle_revisions: RoutineEventRevisions
+
+
 class RunDirectoryBackend(_AsyncOnlyFileBackendMixin):
     """Async, read-only backend rendering runs as IRC logs."""
 
@@ -53,8 +70,8 @@ class RunDirectoryBackend(_AsyncOnlyFileBackendMixin):
         self._sm = state_manager
         self._checkpointer = checkpointer
         self._revision_reader = revision_reader
-        # A new lifecycle boundary or updated terminal document gets a new cache key.
-        self._cache: OrderedDict[tuple[Any, ...], tuple[str, Steps]] = OrderedDict()
+        # Terminal renders are retained only while every causal checkpoint tip is unchanged.
+        self._cache: OrderedDict[tuple[Any, ...], _CachedRun] = OrderedDict()
 
     # -- filesystem surface --------------------------------------------------
 
@@ -172,7 +189,7 @@ class RunDirectoryBackend(_AsyncOnlyFileBackendMixin):
     async def _read_payload(
         self, ctx: RunContext, kind: RunKind, name: str
     ) -> dict[str, Any] | None:
-        """Resolve one full identity without enumerating the directory."""
+        """Resolve the full ID; filename date/title describe a run, not its identity."""
         match = re.fullmatch(r"\d{4}-\d{2}-\d{2}_[a-z0-9-]+_([A-Za-z0-9_-]+)\.md", name)
         if match is None:
             return None
@@ -189,7 +206,6 @@ class RunDirectoryBackend(_AsyncOnlyFileBackendMixin):
             routine_id = str(payload.get("agent_id") or "routine")
             graph = await self._sm.get_routine_graph(routine_id)
             title = str((graph or {}).get("name") or routine_id)
-            started = _when(payload.get("timestamp"))
         elif kind == "workflow":
             payload = await self._sm.get_workflow_run(run_id)
             if payload is None:
@@ -198,16 +214,13 @@ class RunDirectoryBackend(_AsyncOnlyFileBackendMixin):
                 str(payload.get("workflow_id") or "")
             )
             title = workflow_title(payload, definition)
-            started = _when(payload.get("started_at") or payload.get("queued_at"))
         else:
             record = await self._sm.get_schedule_run(run_id)
             if record is None:
                 return None
             payload = record.model_dump(mode="json")
             title = schedule_title(payload, await self._sm.get_schedule())
-            payload["_title"] = title
-            started = _when(payload.get("started_at") or payload.get("created_at"))
-        return payload if name == self._name(started, title, run_id, ctx) else None
+        return {**payload, "_title": title}
 
     @staticmethod
     def _name(started: datetime, title: str, run_id: Any, ctx: RunContext) -> str:
@@ -226,11 +239,26 @@ class RunDirectoryBackend(_AsyncOnlyFileBackendMixin):
                 for event in ctx.routine_events
             )
         )
-        key = (kind, name, status, payload.get("updated_at"), boundaries, ctx.tz_name)
+        key = (
+            kind,
+            name,
+            payload.get("_title"),
+            status,
+            payload.get("updated_at"),
+            boundaries,
+            ctx.tz_name,
+        )
         cached = self._cache.get(key) if status in _FINISHED else None
         if cached is not None:
-            self._cache.move_to_end(key)
-            return cached
+            versions = await checkpoint_versions(self._checkpointer, cached.checkpoint_threads)
+            lifecycle_revisions = await self._lifecycle_revisions(cached.lifecycle_threads)
+            if (
+                versions == cached.checkpoint_versions
+                and lifecycle_revisions == cached.lifecycle_revisions
+            ):
+                self._cache.move_to_end(key)
+                return cached.text, cached.steps
+            self._cache.pop(key)
         if kind == "routine":
             rendered = await render_routine(ctx, payload, path=path)
         elif kind == "workflow":
@@ -239,10 +267,42 @@ class RunDirectoryBackend(_AsyncOnlyFileBackendMixin):
             record = {k: v for k, v in payload.items() if k != "_title"}
             rendered = await render_schedule(ctx, record, title=str(payload["_title"]), path=path)
         if status in _FINISHED:
-            self._cache[key] = rendered
-            while len(self._cache) > _CACHE_SIZE:
-                self._cache.popitem(last=False)
+            checkpoint_threads = frozenset(
+                thread_id for thread_id, _ in ctx.checkpoint_dependencies
+            )
+            versions_after = await checkpoint_versions(self._checkpointer, checkpoint_threads)
+            lifecycle_threads = frozenset(ctx.loaded_threads)
+            lifecycle_revisions_after = await self._lifecycle_revisions(lifecycle_threads)
+            lifecycle_revisions_before = tuple(
+                sorted(
+                    revision
+                    for revisions in ctx.routine_event_versions.values()
+                    for revision in revisions
+                )
+            )
+            if (
+                ctx.checkpoint_versions_before is not None
+                and versions_after is not None
+                and versions_after == ctx.checkpoint_versions_before
+                and lifecycle_revisions_after == lifecycle_revisions_before
+            ):
+                self._cache[key] = _CachedRun(
+                    text=rendered[0],
+                    steps=rendered[1],
+                    checkpoint_threads=checkpoint_threads,
+                    checkpoint_versions=versions_after,
+                    lifecycle_threads=lifecycle_threads,
+                    lifecycle_revisions=lifecycle_revisions_after,
+                )
+                while len(self._cache) > _CACHE_SIZE:
+                    self._cache.popitem(last=False)
         return rendered
+
+    async def _lifecycle_revisions(self, thread_ids: frozenset[str]) -> RoutineEventRevisions:
+        if not thread_ids:
+            return ()
+        events = await self._sm.list_routine_run_events(thread_ids=sorted(thread_ids))
+        return routine_event_revisions(event for event in events if isinstance(event, dict))
 
     @staticmethod
     def _status(ctx: RunContext, kind: RunKind, payload: dict[str, Any]) -> str:

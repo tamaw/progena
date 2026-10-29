@@ -19,6 +19,8 @@ stored records each time it is read:
   is the full persisted ID: `request_id` for routines, `workflow_run_…` or
   `schedrun_…` otherwise. Short-ID paths are not supported. `run_workflow`
   returns the path; no database migration is needed for these generated names.
+  Dates and slugs are descriptive: a full-ID path still reads the same run after
+  renaming, timezone changes or a queued run starting on a different day.
 - `ls` lists newest first. A routine started by a workflow step or by another
   routine has no file of its own: it is inside its parent's file.
 - The file is YAML front matter (identity, `status`, times, `inputs`, `output`,
@@ -28,6 +30,9 @@ stored records each time it is read:
   `output_tokens`, and `total_tokens`; missing usage or components are `null`,
   not zero. Nested usage is counted once. Child routines follow persisted
   invocation/audit links, never timestamp proximity; missing links are not guessed.
+- Cached terminal logs validate related checkpoint revisions, so late results and
+  newly available nested activity appear on subsequent reads. Repeated agent steps
+  show their individual execution windows rather than replaying the conversation.
 
 ## Line format
 
@@ -63,7 +68,8 @@ The pointer says where the whole value is. A mount path (`/tasks/…`,
 
 - What ran recently: `ls /runs/workflows/` (or routines, schedules).
 - Why it failed: grep `has quit` over `/runs/`, then read that file.
-- Narrow first: grep with `glob` set to a date prefix such as `2026-10-2*`.
+- Narrow first: choose the run-kind directory and a date-prefix `glob` such as
+  `2026-10-2*`. The filter is applied before matching files are rendered.
 - A step's exact output: follow its `⟨… · <file>#<n>⟩` pointer.
 - A workflow and the routine it ran: one file; look between `has joined` and
   `has left`.
