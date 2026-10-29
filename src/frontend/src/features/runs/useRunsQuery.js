@@ -7,12 +7,12 @@ import {
 } from './state';
 import { watchRunTrace } from './runSubscriptions';
 
-export function useRunsQuery({ runsUrl, kind, status, q, cursor, period }) {
+export function useRunsQuery({ runsUrl, kind, status, q, cursor, period, sort }) {
   const dispatch = useDispatch();
   const streamReady = useSelector(selectRealtimeStreamReady);
   const normalizedQuery = useMemo(
-    () => normalizeRunsQuery({ kind, status, q, cursor, period }),
-    [kind, status, q, cursor, period],
+    () => normalizeRunsQuery({ kind, status, q, cursor, period, sort }),
+    [kind, status, q, cursor, period, sort],
   );
   const queryState = useSelector((state) => selectRunsQueryState(state, normalizedQuery));
   const refresh = useCallback(() => {
@@ -33,11 +33,11 @@ export function useRunsQuery({ runsUrl, kind, status, q, cursor, period }) {
     }
     if (!runsUrl || queryState.loading) return;
     const firstLoad = connection.current.loaded.get(queryKey) !== connection.current.generation;
-    if (firstLoad || (queryState.snapshot?.stale && !queryState.error)) {
+    if (firstLoad) {
       connection.current.loaded.set(queryKey, connection.current.generation);
       refresh();
     }
-  }, [queryKey, queryState.error, queryState.loading, queryState.snapshot, refresh, runsUrl, streamReady]);
+  }, [queryKey, queryState.loading, refresh, runsUrl, streamReady]);
 
   return { ...queryState, query: normalizedQuery, refresh, streamReady };
 }

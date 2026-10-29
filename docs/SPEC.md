@@ -362,15 +362,18 @@ Status uses the same interrupted rule as the UI
 
 **Spectate → Runs** (`/runs`) is a full-width execution-history flame-chart grid for
 workflows, top-level routine attempts, and schedules. Kind, status, text and rolling
-started-time filters use newest-first cursor paging. The compact time selector
+started-time filters use server-side cursor paging. The compact time selector
 offers Hour (60 minutes), Day (24 hours), Week (7 days, initially selected),
 Month (30 days), and All time. Finite ranges use inclusive UTC cutoffs and omit
-runs without a recorded start. Filtering happens before server paging; the sort
-dropdown applies to the loaded page. Paging controls live in the toolbar.
+runs without a recorded start. Filtering and sorting happen before server paging;
+newest, oldest and longest ordering cover the full matching result set.
+Paging controls live in the toolbar.
 The page has no estimated step counter, bottom legend or footer text.
 
 Clicking anywhere on a run row, or pressing Enter/Space while the row is focused,
 expands its child activity into the same grid, with one run expanded at a time.
+Filters, search, sort and the expanded run are represented in the URL, so reload,
+shared links and browser navigation restore the inline view.
 Row tooltips expose the existing run ID, trigger, timestamps, schedule request
 context and, once loaded, the recorded root failure reason. The synthetic run span
 is not repeated.
@@ -405,9 +408,11 @@ are introduced by the visual read model.
 The backend reads Postgres directly; it does not ask the runtime or the agent-facing
 `/runs/` mount to build this visual model. Document and checkpoint notifications
 drive canonical `ui.event` updates; the table receives broadcast changes while
-the page is open, without polling. Expanding a trace establishes a targeted,
-connection-scoped interest. Collapsing, filtering away, paging away, or leaving
-the run releases it. Reconnect restores the interest and a fresh snapshot.
+the page is open, without polling. While inspecting below the top, incoming runs
+do not shift the viewport; a compact new-runs control lets the user return to
+the latest entries. Expanding a trace establishes a targeted, connection-scoped
+interest. Collapsing, filtering away, paging away, or leaving the run releases it.
+Reconnect restores the interest and a fresh snapshot.
 The client expires rows from finite time windows using its display clock, without
 polling the server. Open spans grow on the client; terminal spans do not.
 

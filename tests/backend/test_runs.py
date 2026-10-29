@@ -5,12 +5,12 @@ from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage, ToolMessage
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 
-from src.backend.runs.models import RunRow, Span
+from src.backend.runs.models import RunRow, RunSort, Span
 from src.backend.runs.routes import router as runs_router
 from src.backend.runs.service import (
     _conversation_spans,
@@ -115,6 +115,142 @@ async def test_filters_and_keyset_reach_older_runs_beyond_first_source_batch(
 
 
 @pytest.mark.asyncio
+async def test_global_run_sorting_pages_filtered_cross_kind_results_without_overlap(
+    run_store, monkeypatch
+):
+    """Every sort merges all kinds before its query-bound keyset page is cut."""
+    store = run_store
+    if isinstance(store, PostgresDocumentStore):
+        database_url = store_database_url(store)
+        assert database_url is not None
+        async with AsyncPostgresSaver.from_conn_string(database_url) as saver:
+            await saver.setup()
+    monkeypatch.setattr(
+        "src.backend.runs.service._now", lambda: datetime(2026, 10, 29, 12, tzinfo=UTC)
+    )
+    for workflow_id, title in (("matched", "Matched workflow"), ("excluded", "Other workflow")):
+        store.save_document(
+            PROGENA_STATE_PREFIX,
+            f"workflow:{workflow_id}",
+            {"title": title, "graph": {"nodes": {}}},
+        )
+    for run_id, workflow_id, started_at, completed_at in (
+        ("workflow-tie", "matched", "2026-10-29T11:00:00+00:00", "2026-10-29T11:11:00+00:00"),
+        ("workflow-short", "matched", "2026-10-29T10:00:00+00:00", "2026-10-29T10:05:00+00:00"),
+        ("workflow-excluded", "excluded", "2026-10-29T13:00:00+00:00", "2026-10-29T13:01:00+00:00"),
+    ):
+        store.save_document(
+            PROGENA_STATE_PREFIX,
+            f"workflow_run:{run_id}",
+            {
+                "run_id": run_id,
+                "workflow_id": workflow_id,
+                "source": "manual",
+                "status": "completed",
+                "started_at": started_at,
+                "completed_at": completed_at,
+            },
+        )
+    store.save_document(
+        PROGENA_STATE_PREFIX,
+        "schedule",
+        {
+            "tied": {"name": "Matched schedule"},
+            "middle": {"name": "Matched schedule"},
+        },
+    )
+    store.save_document(
+        PROGENA_STATE_PREFIX,
+        "schedule_runs",
+        [
+            {
+                "run_id": "schedule-tie",
+                "schedule_id": "tied",
+                "status": "completed",
+                "started_at": "2026-10-29T11:00:00+00:00",
+                "completed_at": "2026-10-29T11:11:00+00:00",
+            },
+            {
+                "run_id": "schedule-middle",
+                "schedule_id": "middle",
+                "status": "completed",
+                "started_at": "2026-10-29T09:00:00+00:00",
+                "completed_at": "2026-10-29T09:20:00+00:00",
+            },
+        ],
+    )
+    for run_id, started_at, completed_at in (
+        ("routine-tie", "2026-10-29T11:00:00+00:00", "2026-10-29T11:11:00+00:00"),
+        ("routine-long", "2026-10-29T08:00:00+00:00", "2026-10-29T08:30:00+00:00"),
+    ):
+        payload = {
+            "request_id": run_id,
+            "thread_id": f"routine:matched:revision:{run_id}",
+            "name": "Matched routine",
+        }
+        store.save_document(
+            PROGENA_STATE_PREFIX,
+            f"{RUN_EVENT_PREFIX}{run_id}:started",
+            {**payload, "status": "started", "timestamp": started_at},
+        )
+        store.save_document(
+            PROGENA_STATE_PREFIX,
+            f"{RUN_EVENT_PREFIX}{run_id}:completed",
+            {**payload, "status": "completed", "timestamp": completed_at},
+        )
+
+    async def paged_ids(sort: RunSort) -> list[str]:
+        cursor = None
+        result: list[str] = []
+        while True:
+            page, cursor = await list_runs(
+                store,
+                status="completed",
+                q="MATCHED",
+                sort=sort,
+                cursor=cursor,
+                limit=2,
+            )
+            page_ids = [row.run_id for row in page]
+            assert not set(result).intersection(page_ids)
+            result.extend(page_ids)
+            if cursor is None:
+                return result
+
+    assert await paged_ids("newest") == [
+        "workflow-tie",
+        "schedule-tie",
+        "routine-tie",
+        "workflow-short",
+        "schedule-middle",
+        "routine-long",
+    ]
+    assert await paged_ids("oldest") == [
+        "routine-long",
+        "schedule-middle",
+        "workflow-short",
+        "routine-tie",
+        "schedule-tie",
+        "workflow-tie",
+    ]
+    assert await paged_ids("duration") == [
+        "routine-long",
+        "schedule-middle",
+        "workflow-tie",
+        "schedule-tie",
+        "routine-tie",
+        "workflow-short",
+    ]
+
+    _, cursor = await list_runs(store, status="completed", q="matched", sort="newest", limit=2)
+    assert cursor is not None
+    with pytest.raises(HTTPException, match="does not match query"):
+        await list_runs(store, status="completed", q="matched", sort="oldest", cursor=cursor)
+    with pytest.raises(HTTPException, match="does not match query"):
+        await list_runs(store, status="failed", q="matched", sort="newest", cursor=cursor)
+
+
+@pytest.mark.asyncio
 async def test_period_includes_cutoff_across_kinds_normalizes_offsets_and_excludes_missing_starts(
     run_store, monkeypatch
 ):
@@ -200,13 +336,14 @@ async def test_period_includes_cutoff_across_kinds_normalizes_offsets_and_exclud
     assert {row.started_at for row in rows} == {"2026-10-28T12:00:00.000000+00:00"}
 
 
-def test_runs_route_rejects_invalid_period():
+def test_runs_route_rejects_invalid_period_or_sort():
     app = FastAPI()
     app.include_router(runs_router, prefix="/api/ui")
 
-    response = TestClient(app).get("/api/ui/runs?period=year")
+    client = TestClient(app)
 
-    assert response.status_code == 422
+    assert client.get("/api/ui/runs?period=year").status_code == 422
+    assert client.get("/api/ui/runs?sort=fastest").status_code == 422
 
 
 def test_enqueued_routine_row_is_normalized_to_queued():
@@ -411,7 +548,13 @@ async def test_workflow_list_exposes_compact_audit_overview_and_persisted_zero_u
         ("agent", 0, None, None),
     ]
     payload, definition = store.query_workflow_run_page(
-        status="", q="", before=None, since=None, limit=1
+        status="",
+        q="",
+        sort="newest",
+        cursor=None,
+        since=None,
+        as_of=at,
+        limit=1,
     )[0]
     assert "node_outputs" not in payload
     assert "trigger_event" not in payload

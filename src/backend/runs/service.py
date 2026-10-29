@@ -8,11 +8,14 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import binascii
+import hashlib
 import json
 from collections.abc import Iterable, Mapping
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, cast
 
 from fastapi import HTTPException
 
@@ -26,10 +29,21 @@ from src.progena.runtime.ownership import (
 )
 from src.progena.workflows.documents import workflow_definition_key, workflow_run_key
 
-from .models import RunKind, RunPeriod, RunRow, RunTrace, Span, SpanKind
+from .models import RunKind, RunPeriod, RunRow, RunSort, RunTrace, Span, SpanKind
 
 _PAGE_SIZE = 50
 _TERMINAL = frozenset({"completed", "failed", "cancelled", "stopped", "error", "interrupted"})
+_CURSOR_VERSION = 2
+
+
+@dataclass(frozen=True)
+class _RunsCursor:
+    since: str | None
+    as_of: str
+    duration_us: int | None
+    started_at: str | None
+    row_kind: RunKind
+    run_id: str
 
 
 def _text(value: object) -> str:
@@ -54,7 +68,7 @@ def _now() -> datetime:
     return datetime.now(UTC)
 
 
-def _period_since(period: RunPeriod | None) -> str | None:
+def _period_since(period: RunPeriod | None, now: datetime) -> str | None:
     if period is None:
         return None
     windows = {
@@ -63,7 +77,7 @@ def _period_since(period: RunPeriod | None) -> str | None:
         "week": timedelta(days=7),
         "month": timedelta(days=30),
     }
-    return (_now() - windows[period]).astimezone(UTC).isoformat(timespec="microseconds")
+    return (now - windows[period]).astimezone(UTC).isoformat(timespec="microseconds")
 
 
 def _token_total(value: object) -> int | None:
@@ -175,39 +189,181 @@ def _workflow_overview(
     return spans
 
 
-def _cursor_encode(row: RunRow) -> str:
+def _duration_us(row: RunRow, as_of: str) -> int | None:
+    if row.started_at is None:
+        return None
+    end = row.completed_at or as_of
+    try:
+        elapsed = max(
+            datetime.fromisoformat(end) - datetime.fromisoformat(row.started_at), timedelta()
+        )
+    except ValueError:
+        return None
+    return elapsed.days * 86_400_000_000 + elapsed.seconds * 1_000_000 + elapsed.microseconds
+
+
+def _order_key(
+    *,
+    sort: RunSort,
+    duration_us: int | None,
+    started_at: str | None,
+    kind: RunKind,
+    run_id: str,
+) -> tuple[Any, ...]:
+    if sort == "oldest":
+        return (started_at is None, started_at or "", kind, run_id)
+    if sort == "duration":
+        return (
+            duration_us is not None,
+            duration_us if duration_us is not None else -1,
+            started_at is not None,
+            started_at or "",
+            kind,
+            run_id,
+        )
+    return (started_at is not None, started_at or "", kind, run_id)
+
+
+def _row_order_key(row: RunRow, sort: RunSort, as_of: str) -> tuple[Any, ...]:
+    return _order_key(
+        sort=sort,
+        duration_us=_duration_us(row, as_of) if sort == "duration" else None,
+        started_at=row.started_at,
+        kind=row.kind,
+        run_id=row.run_id,
+    )
+
+
+def _sort_rows(rows: Iterable[RunRow], sort: RunSort, as_of: str) -> list[RunRow]:
+    return sorted(
+        rows,
+        key=lambda row: _row_order_key(row, sort, as_of),
+        reverse=sort != "oldest",
+    )
+
+
+def _rows_after_cursor(
+    rows: Iterable[RunRow], cursor: _RunsCursor | None, sort: RunSort, as_of: str
+) -> list[RunRow]:
+    if cursor is None:
+        return list(rows)
+    boundary = _order_key(
+        sort=sort,
+        duration_us=cursor.duration_us if sort == "duration" else None,
+        started_at=cursor.started_at,
+        kind=cursor.row_kind,
+        run_id=cursor.run_id,
+    )
+    if sort == "oldest":
+        return [row for row in rows if _row_order_key(row, sort, as_of) > boundary]
+    return [row for row in rows if _row_order_key(row, sort, as_of) < boundary]
+
+
+def _query_scope(
+    *, sort: RunSort, kind: RunKind | None, status: str, q: str, period: RunPeriod | None
+) -> str:
+    encoded = json.dumps([sort, kind, status, q, period], separators=(",", ":"), ensure_ascii=False)
+    return hashlib.sha256(encoded.encode()).hexdigest()
+
+
+def _cursor_encode(
+    row: RunRow,
+    *,
+    sort: RunSort,
+    kind: RunKind | None,
+    status: str,
+    q: str,
+    period: RunPeriod | None,
+    since: str | None,
+    as_of: str,
+) -> str:
+    value = {
+        "v": _CURSOR_VERSION,
+        "scope": _query_scope(sort=sort, kind=kind, status=status, q=q, period=period),
+        "since": since,
+        "as_of": as_of,
+        "key": [
+            _duration_us(row, as_of) if sort == "duration" else None,
+            row.started_at,
+            row.kind,
+            row.run_id,
+        ],
+    }
     return (
         base64.urlsafe_b64encode(
-            json.dumps([row.started_at or "", row.kind, row.run_id], separators=(",", ":")).encode()
+            json.dumps(value, separators=(",", ":"), ensure_ascii=False).encode()
         )
         .decode()
         .rstrip("=")
     )
 
 
-def _cursor_decode(cursor: str | None) -> tuple[str, str, str] | None:
+def _cursor_decode(
+    cursor: str | None,
+    *,
+    sort: RunSort,
+    kind: RunKind | None,
+    status: str,
+    q: str,
+    period: RunPeriod | None,
+) -> _RunsCursor | None:
     if not cursor:
         return None
     try:
         padded = cursor + "=" * (-len(cursor) % 4)
         value = json.loads(base64.urlsafe_b64decode(padded).decode())
+        if not isinstance(value, dict) or value.get("v") != _CURSOR_VERSION:
+            raise ValueError
+        scope = value.get("scope")
+        raw_since = value.get("since")
+        as_of = _time(value.get("as_of"))
+        key = value.get("key")
+        valid_kinds = {"routine", "workflow", "schedule"}
         if (
-            not isinstance(value, list)
-            or len(value) != 3
-            or not all(isinstance(v, str) for v in value)
+            not isinstance(scope, str)
+            or len(scope) != 64
+            or any(character not in "0123456789abcdef" for character in scope)
+            or raw_since is not None
+            and not isinstance(raw_since, str)
+            or (period is None) != (raw_since is None)
+            or as_of is None
+            or not isinstance(key, list)
+            or len(key) != 4
         ):
             raise ValueError
-        timestamp = _time(value[0])
-        if timestamp is None or value[1] not in {"routine", "workflow", "schedule"} or not value[2]:
+        duration_us, raw_started_at, row_kind, run_id = key
+        started_at = _time(raw_started_at) if raw_started_at is not None else None
+        since = _time(raw_since) if raw_since is not None else None
+        if (
+            raw_started_at is not None
+            and started_at is None
+            or raw_since is not None
+            and since is None
+            or duration_us is not None
+            and (
+                not isinstance(duration_us, int)
+                or isinstance(duration_us, bool)
+                or duration_us < 0
+                or raw_started_at is None
+            )
+            or row_kind not in valid_kinds
+            or not isinstance(run_id, str)
+            or not run_id
+        ):
             raise ValueError
-        return timestamp, value[1], value[2]
-    except (ValueError, UnicodeDecodeError, json.JSONDecodeError):
+        decoded = _RunsCursor(
+            since=since,
+            as_of=as_of,
+            duration_us=cast(int | None, duration_us),
+            started_at=started_at,
+            row_kind=cast(RunKind, row_kind),
+            run_id=run_id,
+        )
+    except (ValueError, UnicodeDecodeError, binascii.Error, json.JSONDecodeError):
         raise HTTPException(status_code=400, detail="Invalid runs cursor") from None
-
-
-def _row_sort_key(row: RunRow) -> tuple[str, str, str]:
-    # Descending timestamp, then deterministic kind and id tie-breakers.
-    return row.started_at or "", row.kind, row.run_id
+    if scope != _query_scope(sort=sort, kind=kind, status=status, q=q, period=period):
+        raise HTTPException(status_code=400, detail="Runs cursor does not match query")
+    return decoded
 
 
 def _workflow_definition(store: Any, workflow_id: str) -> dict[str, Any]:
@@ -386,7 +542,6 @@ def _routine_metadata_rows(
         )
         row.overview = _overview_root(row)
         rows.append(row)
-    rows.sort(key=_row_sort_key, reverse=True)
     return rows
 
 
@@ -396,15 +551,23 @@ async def _workflow_rows(
     limit: int,
     status: str,
     q: str,
-    before: tuple[str, str, str] | None,
+    sort: RunSort,
+    cursor: _RunsCursor | None,
     since: str | None,
+    as_of: str,
 ) -> list[RunRow]:
     records = await asyncio.to_thread(
         store.query_workflow_run_page,
         status=status,
         q=q,
-        before=before,
+        sort=sort,
+        cursor=(
+            (cursor.duration_us, cursor.started_at, cursor.row_kind, cursor.run_id)
+            if cursor is not None
+            else None
+        ),
         since=since,
+        as_of=as_of,
         limit=limit,
     )
     return [_workflow_row(store, payload, definition) for payload, definition in records]
@@ -454,7 +617,6 @@ def _schedule_rows(store: Any, *, since: str | None = None) -> list[RunRow]:
         if row.overview:
             row.overview[0].summary = _text(payload.get("user_request"))[:400] or None
         rows.append(row)
-    rows.sort(key=_row_sort_key, reverse=True)
     return rows
 
 
@@ -465,15 +627,25 @@ async def list_runs(
     status: str | None = None,
     q: str | None = None,
     period: RunPeriod | None = None,
+    sort: RunSort = "newest",
     cursor: str | None = None,
     limit: int = _PAGE_SIZE,
 ) -> tuple[list[RunRow], str | None]:
-    """Return lightweight top-level rows with a stable, opaque keyset cursor."""
-    requested = _cursor_decode(cursor)
-    since = _period_since(period)
-    groups: list[Iterable[RunRow]] = []
+    """Return a globally sorted lightweight page with a query-bound keyset cursor."""
     needle = (q or "").strip().casefold()
     desired_status = (status or "").strip().casefold()
+    requested = _cursor_decode(
+        cursor,
+        sort=sort,
+        kind=kind,
+        status=desired_status,
+        q=needle,
+        period=period,
+    )
+    now = _now().astimezone(UTC)
+    as_of = requested.as_of if requested is not None else now.isoformat(timespec="microseconds")
+    since = requested.since if requested is not None else _period_since(period, now)
+    groups: list[Iterable[RunRow]] = []
     if kind in (None, "workflow"):
         groups.append(
             await _workflow_rows(
@@ -481,18 +653,20 @@ async def list_runs(
                 limit=limit + 1,
                 status=desired_status,
                 q=needle,
-                before=requested,
+                sort=sort,
+                cursor=requested,
                 since=since,
+                as_of=as_of,
             )
         )
     if kind in (None, "schedule"):
         groups.append(await asyncio.to_thread(_schedule_rows, store, since=since))
     if kind in (None, "routine"):
         groups.append(await _routine_rows(store, since=since))
-    rows = [row for group in groups for row in group]
     rows = [
         row
-        for row in rows
+        for group in groups
+        for row in group
         if (not desired_status or row.status.casefold() == desired_status)
         and (
             not needle
@@ -502,12 +676,27 @@ async def list_runs(
         )
         and (since is None or (row.started_at is not None and row.started_at >= since))
     ]
-    rows.sort(key=_row_sort_key, reverse=True)
-    if requested:
-        rows = [row for row in rows if _row_sort_key(row) < requested]
+    rows = _rows_after_cursor(rows, requested, sort, as_of)
+    rows = _sort_rows(rows, sort, as_of)
     page = rows[:limit]
     await _hydrate_run_overviews(store, page)
-    return page, (_cursor_encode(page[-1]) if len(rows) > limit and page else None)
+    return (
+        page,
+        (
+            _cursor_encode(
+                page[-1],
+                sort=sort,
+                kind=kind,
+                status=desired_status,
+                q=needle,
+                period=period,
+                since=since,
+                as_of=as_of,
+            )
+            if len(rows) > limit and page
+            else None
+        ),
+    )
 
 
 async def get_run_row(store: Any, kind: RunKind, run_id: str) -> RunRow | None:

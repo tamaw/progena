@@ -12,7 +12,11 @@
 .runs-search { display: flex; align-items: center; gap: 7px; min-width: 130px; max-width: 300px; flex: 1; min-height: 30px; padding: 0 8px; border: 1px solid var(--color-border); border-radius: var(--border-radius-sm); background: var(--color-bg-secondary); color: var(--color-text-muted); }
 .runs-search:focus-within { border-color: var(--color-accent); }
 .runs-search input { width: 100%; min-width: 0; border: 0; outline: 0; background: transparent; color: var(--color-text-primary); font: inherit; font-size: var(--font-size-sm); }
-.runs-chart-scroll { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; border: 1px solid var(--color-border); border-radius: var(--border-radius-md); background: var(--color-bg-primary); }
+.runs-chart-scroll { position: relative; flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; border: 1px solid var(--color-border); border-radius: var(--border-radius-md); background: var(--color-bg-primary); }
+.runs-new-runs-anchor { position: sticky; top: 7px; z-index: 4; height: 0; pointer-events: none; }
+.runs-new-runs { position: absolute; left: 50%; transform: translateX(-50%); pointer-events: auto; padding: 4px 8px; border: 1px solid color-mix(in srgb, var(--color-accent) 45%, var(--color-border)); border-radius: 999px; background: var(--color-bg-tertiary); box-shadow: var(--shadow-sm); color: var(--color-text-primary); font: inherit; font-size: 11px; font-weight: 650; cursor: pointer; }
+.runs-new-runs:hover { background: var(--color-bg-hover); }
+.runs-new-runs:focus-visible { outline: 1px solid var(--color-accent); outline-offset: 2px; }
 .runs-chart { --flame-columns: minmax(230px, 25%) 92px 76px 64px minmax(360px, 1fr); min-width: 900px; font-size: var(--font-size-sm); }
 .flame-head, .flame-row { display: grid; grid-template-columns: var(--flame-columns); align-items: center; }
 .flame-head { position: sticky; top: 0; z-index: 3; height: 33px; border-bottom: 1px solid var(--color-border); background: var(--color-bg-secondary); color: var(--color-text-muted); font-size: 10px; font-weight: 650; letter-spacing: .06em; text-transform: uppercase; }

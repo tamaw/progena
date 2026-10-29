@@ -1,10 +1,11 @@
-import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { useSelector } from 'react-redux';
+import { useSearchParams } from 'react-router-dom';
 import { useConfig } from '../../context/ConfigContext';
 import InlineFailure from '../../components/InlineFailure';
 import Select from '../../components/Select';
 import { ChevronDownIcon, ChevronLeftIcon, ChevronRightIcon, CloseIcon, RunsNavIcon, SearchIcon } from '../../components/navIcons';
-import { RUN_KINDS, RUN_STATUSES, runMatchesPeriod, selectRunTrace } from './state';
+import { RUN_KINDS, RUN_STATUSES, normalizeRunPeriodParam, normalizeRunSelection, runMatchesPeriod, runSelectionParam, selectRunTrace } from './state';
 import { formatDuration, formatRelativeTime, formatTokenCount, kindLabel } from './runFormat';
 import RunTimeline, { ActivityIcon, ActivitySummary, TimeAxis } from './RunTimeline';
 import { useRunsQuery, useRunTrace } from './useRunsQuery';
@@ -50,66 +51,140 @@ function RunRow({ row, expanded, onToggle, now }) {
 
 export default function RunsPage() {
   const { getApiUrl } = useConfig();
+  const [searchParams, setSearchParams] = useSearchParams();
   const rootRef = useRef(null);
-  const [kind, setKind] = useState('');
-  const [status, setStatus] = useState('');
-  const [period, setPeriod] = useState('week');
-  const [search, setSearch] = useState('');
-  const [expandedKey, setExpandedKey] = useState(null);
-  const [cursors, setCursors] = useState([null]);
-  const [sort, setSort] = useState('newest');
+  const chartScrollRef = useRef(null);
+  const atTopRef = useRef(true);
+  const previousRowsRef = useRef(null);
+  const [heldRows, dispatchHeldRows] = useReducer((_previous, action) => action, null);
   const [now, setNow] = useState(() => Date.now());
-  const [query, setQuery] = useState('');
+  const kind = RUN_KINDS.includes(searchParams.get('kind')) ? searchParams.get('kind') : '';
+  const status = RUN_STATUSES.includes(searchParams.get('status')) ? searchParams.get('status') : '';
+  const period = normalizeRunPeriodParam(searchParams.get('period'));
+  const search = searchParams.get('q') || '';
+  const sort = SORT_OPTIONS.some((option) => option.value === searchParams.get('sort'))
+    ? searchParams.get('sort')
+    : 'newest';
+  const selection = normalizeRunSelection(searchParams.get('run'));
+  const filterKey = JSON.stringify([kind, status, period, search, sort]);
+  const [paging, setPaging] = useState(() => ({ filterKey, cursors: [null] }));
+  const pageCursors = paging.filterKey === filterKey ? paging.cursors : [null];
+  const inspectionKey = JSON.stringify([filterKey, pageCursors.at(-1)]);
+  const [query, setQuery] = useState(search);
+  const updateParams = useCallback((changes, { replace = false } = {}) => {
+    setSearchParams((current) => {
+      const next = new URLSearchParams(current);
+      for (const [key, value] of Object.entries(changes)) {
+        if (value) next.set(key, value);
+        else next.delete(key);
+      }
+      return next;
+    }, { replace });
+  }, [setSearchParams]);
   useEffect(() => {
     const timer = window.setTimeout(() => setQuery(search), 200);
     return () => window.clearTimeout(timer);
   }, [search]);
-  const { snapshot, loading, error, refresh, streamReady } = useRunsQuery({ runsUrl: getApiUrl('runs'), kind, status, q: query, cursor: cursors.at(-1) || null, period });
-  const rows = useMemo(() => (snapshot?.runs || []).filter((row) => runMatchesPeriod(row, period, now)).sort((left, right) => {
-    if (sort === 'duration') return (Date.parse(right.completed_at || '') || now) - Date.parse(right.started_at || '') - ((Date.parse(left.completed_at || '') || now) - Date.parse(left.started_at || ''));
-    const compared = (left.started_at || '').localeCompare(right.started_at || '') || left.run_id.localeCompare(right.run_id);
-    return sort === 'oldest' ? compared : -compared;
-  }), [snapshot?.runs, sort, now, period]);
-  const expandedRow = rows.find((row) => `${row.kind}:${row.run_id}` === expandedKey) || null;
-  if (expandedKey && snapshot && !loading && !expandedRow) setExpandedKey(null);
-  const { trace, loading: traceLoading, error: traceError, refresh: refreshTrace } = useRunTrace({ runsUrl: getApiUrl('runs'), subscriptionUrl: getApiUrl('runSubscription'), kind: expandedRow?.kind, runId: expandedRow?.run_id, enabled: Boolean(expandedRow) });
+  const { snapshot, loading, error, refresh, streamReady } = useRunsQuery({
+    runsUrl: getApiUrl('runs'), kind, status, q: query, cursor: pageCursors.at(-1) || null, period, sort,
+  });
+  const serverRows = useMemo(() => snapshot?.runs || [], [snapshot]);
+  const rows = useMemo(
+    () => serverRows.filter((row) => runMatchesPeriod(row, period, now)),
+    [now, period, serverRows],
+  );
+  const activeHeldRows = heldRows?.inspectionKey === inspectionKey ? heldRows : null;
+  useLayoutEffect(() => {
+    const previous = previousRowsRef.current;
+    if (!previous || previous.inspectionKey !== inspectionKey) {
+      previousRowsRef.current = { inspectionKey, rows };
+      return;
+    }
+    if (previous.rows !== rows && !atTopRef.current) {
+      const latestChanged = rows.length !== previous.rows.length
+        || rows.some((row, index) => row !== previous.rows[index]);
+      if (latestChanged) {
+        const baselineRows = activeHeldRows?.rows || previous.rows;
+        const baselineByKey = new Map(baselineRows.map((row) => [runSelectionParam(row.kind, row.run_id), row]));
+        const newRunCount = rows.filter((row) => !baselineByKey.has(runSelectionParam(row.kind, row.run_id))).length;
+        dispatchHeldRows({ inspectionKey, rows: baselineRows, newRunCount });
+      }
+    }
+    previousRowsRef.current = { inspectionKey, rows };
+  }, [activeHeldRows, inspectionKey, rows]);
+  const visibleRows = useMemo(() => {
+    if (!activeHeldRows) return rows;
+    const currentByKey = new Map(rows.map((row) => [runSelectionParam(row.kind, row.run_id), row]));
+    return activeHeldRows.rows.map((row) => currentByKey.get(runSelectionParam(row.kind, row.run_id)) || row);
+  }, [activeHeldRows, rows]);
+  const selectedRow = visibleRows.find((row) => row.kind === selection?.kind && row.run_id === selection?.runId) || null;
+  const { trace, loading: traceLoading, error: traceError, refresh: refreshTrace } = useRunTrace({
+    runsUrl: getApiUrl('runs'),
+    subscriptionUrl: getApiUrl('runSubscription'),
+    kind: selection?.kind,
+    runId: selection?.runId,
+    enabled: Boolean(selection),
+  });
+  const expandedRow = selectedRow || trace;
   const bounds = useMemo(() => traceBounds(trace || expandedRow || {}, now), [trace, expandedRow, now]);
-  const hasLive = rows.some((row) => ['running', 'queued', 'pending', 'paused', 'started'].includes(row.status));
+  const hasLive = visibleRows.some((row) => ['running', 'queued', 'pending', 'paused', 'started'].includes(row.status));
   useEffect(() => {
     if (!hasLive && !period) return undefined;
     const timer = window.setInterval(() => setNow(Date.now()), hasLive ? 1000 : 60_000);
     return () => window.clearInterval(timer);
   }, [hasLive, period]);
-  const resetPaging = (change) => { setExpandedKey(null); setCursors([null]); change(); };
-  const changePage = (change) => { setExpandedKey(null); change(); };
+  const toggleRun = useCallback((row) => {
+    const value = runSelectionParam(row.kind, row.run_id);
+    updateParams({ run: value === searchParams.get('run') ? '' : value });
+  }, [searchParams, updateParams]);
+  const revealNewRuns = useCallback(() => {
+    dispatchHeldRows(null);
+    chartScrollRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
+  }, []);
+  const handleScroll = useCallback((event) => {
+    const isAtTop = event.currentTarget.scrollTop <= 8;
+    atTopRef.current = isAtTop;
+    if (isAtTop) dispatchHeldRows(null);
+  }, []);
 
   return <main ref={rootRef} className="runs-page" aria-label="Runs">
     <section className="runs-controls" aria-label="Run filters">
-      <div className="runs-filter-group" aria-label="Run kind"><button type="button" className={!kind ? 'is-selected' : ''} aria-pressed={!kind} onClick={() => resetPaging(() => setKind(''))}><RunsNavIcon />All</button>{RUN_KINDS.map((value) => <button key={value} type="button" className={kind === value ? 'is-selected' : ''} aria-pressed={kind === value} onClick={() => resetPaging(() => setKind(value))}><ActivityIcon kind={value} />{kindLabel(value)}</button>)}</div>
-      <Select value={status} onChange={(value) => resetPaging(() => setStatus(value))} options={STATUS_OPTIONS} ariaLabel="Run status" className="runs-status-select" />
-      <Select value={period} onChange={(value) => resetPaging(() => { setPeriod(value); setNow(Date.now()); })} options={PERIOD_OPTIONS} ariaLabel="Run time range" className="runs-period-select" />
-      <label className="runs-search"><SearchIcon /><span className="sr-only">Search runs</span><input value={search} onChange={(event) => resetPaging(() => setSearch(event.target.value))} placeholder="Search runs" />{search ? <button type="button" className="flame-icon-button" aria-label="Clear search" data-tooltip="Clear search" onClick={() => resetPaging(() => setSearch(''))}><CloseIcon /></button> : null}</label>
-      <Select value={sort} onChange={setSort} options={SORT_OPTIONS} ariaLabel="Sort loaded runs" className="runs-sort-select" />
-      <nav className="runs-pagination" aria-label="Runs pages"><button type="button" className="flame-icon-button" disabled={cursors.length === 1 || loading} data-tooltip="Previous page" aria-label="Previous page" onClick={() => changePage(() => setCursors((items) => items.slice(0, -1)))}><ChevronLeftIcon /></button><span data-tooltip={`Page ${cursors.length} · Sorting applies to the loaded page`}>{cursors.length}</span><button type="button" className="flame-icon-button" disabled={!snapshot?.next_cursor || loading} data-tooltip="Next page" aria-label="Next page" onClick={() => changePage(() => setCursors((items) => [...items, snapshot.next_cursor]))}><ChevronRightIcon /></button></nav>
+      <div className="runs-filter-group" aria-label="Run kind"><button type="button" className={!kind ? 'is-selected' : ''} aria-pressed={!kind} onClick={() => updateParams({ kind: '' })}><RunsNavIcon />All</button>{RUN_KINDS.map((value) => <button key={value} type="button" className={kind === value ? 'is-selected' : ''} aria-pressed={kind === value} onClick={() => updateParams({ kind: value })}><ActivityIcon kind={value} />{kindLabel(value)}</button>)}</div>
+      <Select value={status} onChange={(value) => updateParams({ status: value })} options={STATUS_OPTIONS} ariaLabel="Run status" className="runs-status-select" />
+      <Select value={period} onChange={(value) => { setNow(Date.now()); updateParams({ period: value || 'all' }); }} options={PERIOD_OPTIONS} ariaLabel="Run time range" className="runs-period-select" />
+      <label className="runs-search"><SearchIcon /><span className="sr-only">Search runs</span><input value={search} onChange={(event) => updateParams({ q: event.target.value }, { replace: true })} placeholder="Search runs" />{search ? <button type="button" className="flame-icon-button" aria-label="Clear search" data-tooltip="Clear search" onClick={() => updateParams({ q: '' })}><CloseIcon /></button> : null}</label>
+      <Select value={sort} onChange={(value) => updateParams({ sort: value })} options={SORT_OPTIONS} ariaLabel="Sort runs" className="runs-sort-select" />
+      <nav className="runs-pagination" aria-label="Runs pages"><button type="button" className="flame-icon-button" disabled={pageCursors.length === 1 || loading} data-tooltip="Previous page" aria-label="Previous page" onClick={() => setPaging((current) => (current.filterKey === filterKey ? { ...current, cursors: current.cursors.slice(0, -1) } : current))}><ChevronLeftIcon /></button><span data-tooltip={`Page ${pageCursors.length} · Sorted across all results`}>{pageCursors.length}</span><button type="button" className="flame-icon-button" disabled={!snapshot?.next_cursor || loading} data-tooltip="Next page" aria-label="Next page" onClick={() => setPaging({ filterKey, cursors: [...pageCursors, snapshot.next_cursor] })}><ChevronRightIcon /></button></nav>
     </section>
     {error ? <InlineFailure failure={error} operation="Load runs" onRetry={refresh} /> : null}
     {!streamReady ? <div className="flame-message">Connecting…</div> : null}
     {loading && !snapshot ? <div className="flame-message">Loading runs…</div> : null}
-    {snapshot && !rows.length && !loading ? <div className="flame-message">No runs match these filters.</div> : null}
-    <div className="runs-chart-scroll"><div className="runs-chart" role="treegrid" aria-label="Run execution timelines" aria-colcount={5}>
-      <div className="flame-head" role="row"><span role="columnheader">Activity</span><span role="columnheader">Status</span><span role="columnheader" className="flame-number">Duration</span><span role="columnheader" className="flame-number">Tokens</span><span role="columnheader" className="flame-timeline-heading">Timeline <small>elapsed per run</small></span></div>
-      {rows.map((row) => {
-        const key = `${row.kind}:${row.run_id}`;
-        const expanded = key === expandedKey;
-        return <Fragment key={key}><RunRow row={row} expanded={expanded} now={now} onToggle={() => setExpandedKey(expanded ? null : key)} />
-          {expanded ? <Fragment>
+    {snapshot && !visibleRows.length && !selection && !loading ? <div className="flame-message">No runs match these filters.</div> : null}
+    <div ref={chartScrollRef} className="runs-chart-scroll" onScroll={handleScroll}>
+      {activeHeldRows ? <div className="runs-new-runs-anchor"><button type="button" className="runs-new-runs" onClick={revealNewRuns}>{activeHeldRows.newRunCount ? `${activeHeldRows.newRunCount} new ${activeHeldRows.newRunCount === 1 ? 'run' : 'runs'}` : 'Updates available'}</button></div> : null}
+      <div className="runs-chart" role="treegrid" aria-label="Run execution timelines" aria-colcount={5}>
+        <div className="flame-head" role="row"><span role="columnheader">Activity</span><span role="columnheader">Status</span><span role="columnheader" className="flame-number">Duration</span><span role="columnheader" className="flame-number">Tokens</span><span role="columnheader" className="flame-timeline-heading">Timeline <small>elapsed per run</small></span></div>
+        {visibleRows.map((row) => {
+          const key = runSelectionParam(row.kind, row.run_id);
+          const expanded = key === searchParams.get('run');
+          return <Fragment key={key}><RunRow row={row} expanded={expanded} now={now} onToggle={() => toggleRun(row)} />
+            {expanded ? <Fragment>
+              {traceError ? <div className="flame-message"><InlineFailure failure={traceError} operation="Load run trace" onRetry={refreshTrace} /></div> : null}
+              {traceLoading && !trace ? <div className="flame-message">Loading activity…</div> : null}
+              {trace ? <RunTimeline key={key} trace={trace} bounds={bounds} now={now} /> : null}
+            </Fragment> : null}
+          </Fragment>;
+        })}
+        {selection && !selectedRow ? <Fragment>
+          {!trace && traceError ? <div className="flame-message"><InlineFailure failure={traceError} operation="Load run trace" onRetry={refreshTrace} /></div> : null}
+          {!trace && traceLoading ? <div className="flame-message">Loading selected run…</div> : null}
+          {trace ? <Fragment><RunRow row={trace} expanded now={now} onToggle={() => toggleRun(trace)} />
             {traceError ? <div className="flame-message"><InlineFailure failure={traceError} operation="Load run trace" onRetry={refreshTrace} /></div> : null}
-            {traceLoading && !trace ? <div className="flame-message">Loading activity…</div> : null}
-            {trace ? <RunTimeline key={key} trace={trace} bounds={bounds} now={now} /> : null}
+            <RunTimeline key={runSelectionParam(trace.kind, trace.run_id)} trace={trace} bounds={bounds} now={now} />
           </Fragment> : null}
-        </Fragment>;
-      })}
-    </div></div>
+        </Fragment> : null}
+      </div>
+    </div>
     <RunTooltip rootRef={rootRef} />
   </main>;
 }

@@ -254,11 +254,13 @@ class BackendDocumentStore(Protocol):
         *,
         status: str,
         q: str,
-        before: tuple[str, str, str] | None,
+        sort: Literal["newest", "oldest", "duration"],
+        cursor: tuple[int | None, str | None, str, str] | None,
         since: str | None = None,
+        as_of: str,
         limit: int,
     ) -> list[tuple[dict[str, Any], dict[str, Any]]]:
-        """Filter and keyset-page workflow metadata before returning bounded rows."""
+        """Filter and keyset-page compact workflow metadata in the global run order."""
         ...
 
     def search_documents(
@@ -486,115 +488,160 @@ class InMemoryDocumentStore:
         *,
         status: str,
         q: str,
-        before: tuple[str, str, str] | None,
+        sort: Literal["newest", "oldest", "duration"],
+        cursor: tuple[int | None, str | None, str, str] | None,
         since: str | None = None,
+        as_of: str,
         limit: int,
     ) -> list[tuple[dict[str, Any], dict[str, Any]]]:
-        rows = []
-        boundary = (
-            (datetime.fromisoformat(before[0].replace("Z", "+00:00")), before[1], before[2])
-            if before
-            else None
-        )
         cutoff = (
             datetime.fromisoformat(since.replace("Z", "+00:00")).astimezone(UTC) if since else None
         )
+        as_of_time = datetime.fromisoformat(as_of.replace("Z", "+00:00")).astimezone(UTC)
+
+        def duration_us(started: datetime | None, completed_value: object) -> int | None:
+            if started is None:
+                return None
+            try:
+                completed = (
+                    datetime.fromisoformat(completed_value.replace("Z", "+00:00")).astimezone(UTC)
+                    if isinstance(completed_value, str)
+                    else as_of_time
+                )
+            except ValueError:
+                completed = as_of_time
+            elapsed = max(completed - started, timedelta())
+            return (
+                elapsed.days * 86_400_000_000 + elapsed.seconds * 1_000_000 + elapsed.microseconds
+            )
+
+        def order_key(
+            started: datetime | None, elapsed_us: int | None, row_kind: str, run_id: str
+        ) -> tuple[Any, ...]:
+            timestamp = started.isoformat(timespec="microseconds") if started is not None else ""
+            if sort == "oldest":
+                return (started is None, timestamp, row_kind, run_id)
+            if sort == "duration":
+                return (
+                    elapsed_us is not None,
+                    elapsed_us if elapsed_us is not None else -1,
+                    started is not None,
+                    timestamp,
+                    row_kind,
+                    run_id,
+                )
+            return (started is not None, timestamp, row_kind, run_id)
+
+        boundary = None
+        if cursor is not None:
+            boundary_duration, boundary_started, boundary_kind, boundary_run_id = cursor
+            boundary_time = (
+                datetime.fromisoformat(boundary_started.replace("Z", "+00:00")).astimezone(UTC)
+                if boundary_started is not None
+                else None
+            )
+            boundary = order_key(boundary_time, boundary_duration, boundary_kind, boundary_run_id)
+
+        rows = []
         for _, document in self.list_documents(PROGENA_STATE_PREFIX, "workflow_run:"):
             payload = document.payload
             if not isinstance(payload, dict):
                 continue
             started_value = payload.get("started_at") or payload.get("queued_at")
-            if not isinstance(started_value, str):
-                continue
             try:
-                started = datetime.fromisoformat(started_value.replace("Z", "+00:00")).astimezone(
-                    UTC
+                started = (
+                    datetime.fromisoformat(started_value.replace("Z", "+00:00")).astimezone(UTC)
+                    if isinstance(started_value, str)
+                    else None
                 )
             except ValueError:
                 continue
-            if cutoff is not None and started < cutoff:
+            if cutoff is not None and (started is None or started < cutoff):
                 continue
-            definition_doc = self.get_document(
-                PROGENA_STATE_PREFIX, f"workflow:{payload['workflow_id']}", {}
-            )
+            workflow_id = payload.get("workflow_id")
+            run_id = payload.get("run_id")
+            if not isinstance(workflow_id, str) or not isinstance(run_id, str) or not run_id:
+                continue
+            definition_doc = self.get_document(PROGENA_STATE_PREFIX, f"workflow:{workflow_id}", {})
             definition = definition_doc.payload if definition_doc is not None else {}
-            name = definition.get("title") or payload["workflow_id"]
+            definition = definition if isinstance(definition, dict) else {}
+            name = definition.get("title") or workflow_id
             source = payload.get("source") or "manual"
             if status and str(payload.get("status", "")).casefold() != status:
                 continue
-            if q and not any(
-                q in str(value).casefold() for value in (name, source, payload["run_id"])
-            ):
+            if q and not any(q in str(value).casefold() for value in (name, source, run_id)):
                 continue
-            key = (started, "workflow", payload["run_id"])
-            if boundary is None or key < boundary:
-                step_audit = payload.get("step_audit")
-                compact_audit = (
-                    [
-                        {
-                            field: entry.get(field)
-                            for field in (
-                                "node_id",
-                                "kind",
-                                "started_at",
-                                "completed_at",
-                                "status",
-                                "tokens",
-                            )
-                            if field in entry
-                        }
-                        for entry in step_audit
-                        if isinstance(entry, dict)
-                    ]
-                    if isinstance(step_audit, list)
-                    else []
-                )
-                outputs = payload.get("node_outputs")
-                node_threads = (
+            elapsed_us = duration_us(started, payload.get("completed_at"))
+            key = order_key(started, elapsed_us, "workflow", run_id)
+            if boundary is not None and (key <= boundary if sort == "oldest" else key >= boundary):
+                continue
+            step_audit = payload.get("step_audit")
+            compact_audit = (
+                [
                     {
-                        node_id: {"thread_id": output["thread_id"]}
-                        for node_id, output in outputs.items()
-                        if isinstance(output, dict) and isinstance(output.get("thread_id"), str)
+                        field: entry.get(field)
+                        for field in (
+                            "node_id",
+                            "kind",
+                            "started_at",
+                            "completed_at",
+                            "status",
+                            "tokens",
+                        )
+                        if field in entry
                     }
-                    if isinstance(outputs, dict)
-                    else {}
-                )
-                pending = payload.get("pending_routine")
-                pending_ref = (
+                    for entry in step_audit
+                    if isinstance(entry, dict)
+                ]
+                if isinstance(step_audit, list)
+                else []
+            )
+            outputs = payload.get("node_outputs")
+            node_threads = (
+                {
+                    node_id: {"thread_id": output["thread_id"]}
+                    for node_id, output in outputs.items()
+                    if isinstance(output, dict) and isinstance(output.get("thread_id"), str)
+                }
+                if isinstance(outputs, dict)
+                else {}
+            )
+            pending = payload.get("pending_routine")
+            pending_ref = (
+                {
+                    field: pending.get(field)
+                    for field in ("node_id", "thread_id")
+                    if field in pending
+                }
+                if isinstance(pending, dict)
+                else None
+            )
+            rows.append(
+                (
+                    key,
                     {
-                        field: pending.get(field)
-                        for field in ("node_id", "thread_id")
-                        if field in pending
+                        field: payload.get(field)
+                        for field in (
+                            "run_id",
+                            "workflow_id",
+                            "status",
+                            "source",
+                            "started_at",
+                            "queued_at",
+                            "completed_at",
+                            "completed_node_ids",
+                            "tokens",
+                        )
                     }
-                    if isinstance(pending, dict)
-                    else None
+                    | {
+                        "step_audit": compact_audit,
+                        "node_threads": node_threads,
+                        "pending_routine": pending_ref,
+                    },
+                    _compact_workflow_run_definition(definition),
                 )
-                rows.append(
-                    (
-                        key,
-                        {
-                            field: payload.get(field)
-                            for field in (
-                                "run_id",
-                                "workflow_id",
-                                "status",
-                                "source",
-                                "started_at",
-                                "queued_at",
-                                "completed_at",
-                                "completed_node_ids",
-                                "tokens",
-                            )
-                        }
-                        | {
-                            "step_audit": compact_audit,
-                            "node_threads": node_threads,
-                            "pending_routine": pending_ref,
-                        },
-                        _compact_workflow_run_definition(definition),
-                    )
-                )
-        rows.sort(key=lambda row: row[0], reverse=True)
+            )
+        rows.sort(key=lambda row: row[0], reverse=sort != "oldest")
         return [(payload, definition) for _, payload, definition in rows[:limit]]
 
     def save_document(self, prefix: str, key: str, payload: Any) -> None:
@@ -1768,30 +1815,104 @@ class PostgresDocumentStore:
         *,
         status: str,
         q: str,
-        before: tuple[str, str, str] | None,
+        sort: Literal["newest", "oldest", "duration"],
+        cursor: tuple[int | None, str | None, str, str] | None,
         since: str | None = None,
+        as_of: str,
         limit: int,
     ) -> list[tuple[dict[str, Any], dict[str, Any]]]:
         # Do not return trigger_event/node_outputs: these can be megabytes per run.
+        boundary_sql = ""
+        boundary_params: list[Any] = []
+        if sort == "newest":
+            order_by = "started IS NULL ASC, started DESC, p->>'run_id' DESC"
+            if cursor is not None:
+                _, started_at, row_kind, run_id = cursor
+                if started_at is None:
+                    boundary_sql = "AND started IS NULL AND ('workflow'::text, p->>'run_id') < (%s::text, %s::text)"
+                    boundary_params = [row_kind, run_id]
+                else:
+                    boundary_sql = (
+                        "AND (started IS NULL OR (started, 'workflow'::text, p->>'run_id') "
+                        "< (%s::timestamptz, %s::text, %s::text))"
+                    )
+                    boundary_params = [started_at, row_kind, run_id]
+        elif sort == "oldest":
+            order_by = "started IS NULL ASC, started ASC, p->>'run_id' ASC"
+            if cursor is not None:
+                _, started_at, row_kind, run_id = cursor
+                if started_at is None:
+                    boundary_sql = "AND started IS NULL AND ('workflow'::text, p->>'run_id') > (%s::text, %s::text)"
+                    boundary_params = [row_kind, run_id]
+                else:
+                    boundary_sql = (
+                        "AND (started IS NULL OR (started, 'workflow'::text, p->>'run_id') "
+                        "> (%s::timestamptz, %s::text, %s::text))"
+                    )
+                    boundary_params = [started_at, row_kind, run_id]
+        elif sort == "duration":
+            order_by = (
+                "duration_us IS NULL ASC, duration_us DESC, started IS NULL ASC, "
+                "started DESC, p->>'run_id' DESC"
+            )
+            if cursor is not None:
+                duration_us, started_at, row_kind, run_id = cursor
+                if duration_us is None:
+                    if started_at is None:
+                        boundary_sql = (
+                            "AND duration_us IS NULL AND started IS NULL "
+                            "AND ('workflow'::text, p->>'run_id') < (%s::text, %s::text)"
+                        )
+                        boundary_params = [row_kind, run_id]
+                    else:
+                        boundary_sql = (
+                            "AND duration_us IS NULL AND (started IS NULL "
+                            "OR (started, 'workflow'::text, p->>'run_id') "
+                            "< (%s::timestamptz, %s::text, %s::text))"
+                        )
+                        boundary_params = [started_at, row_kind, run_id]
+                else:
+                    boundary_sql = (
+                        "AND (duration_us IS NULL OR duration_us < %s "
+                        "OR (duration_us = %s AND (started IS NULL "
+                        "OR (started, 'workflow'::text, p->>'run_id') "
+                        "< (%s::timestamptz, %s::text, %s::text))))"
+                    )
+                    boundary_params = [duration_us, duration_us, started_at, row_kind, run_id]
+        else:
+            raise ValueError(f"Unsupported workflow run sort: {sort}")
         with self._cursor() as cur:
             cur.execute(
-                """
+                f"""
                 WITH runs AS (
                     SELECT s.value->'payload' AS p, d.value->'payload' AS definition,
-                           COALESCE(s.value#>>'{payload,started_at}',
-                                    s.value#>>'{payload,queued_at}')::timestamptz AS started
+                           COALESCE(
+                               NULLIF(s.value#>>'{{payload,started_at}}', ''),
+                               NULLIF(s.value#>>'{{payload,queued_at}}', '')
+                           )::timestamptz AS started,
+                           NULLIF(s.value#>>'{{payload,completed_at}}', '')::timestamptz AS completed
                     FROM store s LEFT JOIN store d
                       ON d.prefix = s.prefix
-                     AND d.key = 'workflow:' || (s.value#>>'{payload,workflow_id}')
+                     AND d.key = 'workflow:' || (s.value#>>'{{payload,workflow_id}}')
                     WHERE s.prefix = %s
                       AND s.key LIKE %s
                       AND (
                           %s::timestamptz IS NULL
                           OR COALESCE(
-                              s.value#>>'{payload,started_at}',
-                              s.value#>>'{payload,queued_at}'
+                              NULLIF(s.value#>>'{{payload,started_at}}', ''),
+                              NULLIF(s.value#>>'{{payload,queued_at}}', '')
                           )::timestamptz >= %s::timestamptz
                       )
+                ),
+                ranked AS (
+                    SELECT *,
+                           CASE WHEN started IS NULL THEN NULL ELSE GREATEST(
+                               0::bigint,
+                               floor(extract(epoch FROM (
+                                   COALESCE(completed, %s::timestamptz) - started
+                               )) * 1000000)::bigint
+                           ) END AS duration_us
+                    FROM runs
                 )
                 SELECT jsonb_build_object(
                     'run_id', p->'run_id', 'workflow_id', p->'workflow_id',
@@ -1806,10 +1927,10 @@ class PostgresDocumentStore:
                         ))
                         FROM jsonb_each(
                             CASE WHEN jsonb_typeof(p->'node_outputs') = 'object'
-                                 THEN p->'node_outputs' ELSE '{}'::jsonb END
+                                 THEN p->'node_outputs' ELSE '{{}}'::jsonb END
                         ) AS output(node_id, details)
                         WHERE jsonb_typeof(details) = 'object' AND details ? 'thread_id'
-                    ), '{}'::jsonb),
+                    ), '{{}}'::jsonb),
                     'pending_routine', CASE
                         WHEN jsonb_typeof(p->'pending_routine') = 'object'
                         THEN jsonb_strip_nulls(jsonb_build_object(
@@ -1847,38 +1968,36 @@ class PostgresDocumentStore:
                         )
                         FROM jsonb_each(
                             CASE WHEN jsonb_typeof(definition->'graph'->'nodes') = 'object'
-                                 THEN definition->'graph'->'nodes' ELSE '{}'::jsonb END
+                                 THEN definition->'graph'->'nodes' ELSE '{{}}'::jsonb END
                         ) AS node(node_id, details)
                         WHERE jsonb_typeof(details) = 'object'
-                    ), '{}'::jsonb))
+                    ), '{{}}'::jsonb))
                 )) AS definition
-                FROM runs
+                FROM ranked
                 WHERE (%s = '' OR lower(p->>'status') = %s)
                   AND (%s = '' OR strpos(lower(COALESCE(definition->>'title', p->>'workflow_id')), %s) > 0
                        OR strpos(lower(COALESCE(p->>'source', 'manual')), %s) > 0
                        OR strpos(lower(p->>'run_id'), %s) > 0)
-                  AND (%s::timestamptz IS NULL OR
-                       (started, 'workflow'::text, p->>'run_id') <
-                       (%s::timestamptz, %s::text, %s::text))
-                ORDER BY started DESC, p->>'run_id' DESC
+                  {boundary_sql}
+                ORDER BY {order_by}
                 LIMIT %s
-                """,
+                """,  # nosec B608 - interpolation is constrained to the static sort clauses above
                 (
-                    PROGENA_STATE_PREFIX,
-                    "workflow\\_run:%",
-                    since,
-                    since,
-                    status,
-                    status,
-                    q,
-                    q,
-                    q,
-                    q,
-                    before[0] if before else None,
-                    before[0] if before else None,
-                    before[1] if before else None,
-                    before[2] if before else None,
-                    limit,
+                    [
+                        PROGENA_STATE_PREFIX,
+                        "workflow\\_run:%",
+                        since,
+                        since,
+                        as_of,
+                        status,
+                        status,
+                        q,
+                        q,
+                        q,
+                        q,
+                    ]
+                    + boundary_params
+                    + [limit]
                 ),
             )
             rows = cast(list[dict[str, Any]], cur.fetchall())

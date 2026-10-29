@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import reducer from '@frontend/store/uiDataSlice';
 import { applyUiEvent } from '@frontend/store/uiEvents';
-import { fetchRuns, runMatchesPeriod, runsQueryKey } from '@frontend/features/runs/state';
+import { fetchRuns, normalizeRunPeriodParam, normalizeRunSelection, normalizeRunsQuery, runMatchesPeriod, runSelectionParam, runsQueryKey } from '@frontend/features/runs/state';
 
 const query = { runsUrl: '/api/ui/runs', kind: '', status: '', q: '', cursor: null };
 const row = (runId, startedAt = '2026-10-28T10:00:00Z') => ({
@@ -71,6 +71,41 @@ describe('runs state', () => {
     const snapshot = state.runs.snapshots[runsQueryKey(query)];
     expect(snapshot.runs).toEqual([]);
     expect(snapshot.stale).toBe(true);
+  });
+
+  it('reconciles an existing live row in place without duplicating its stable run identity', () => {
+    let state = pending(undefined, 'request');
+    state = reducer(state, applyUiEvent({ type: 'runs.snapshot', payload: { request_id: 'request', runs: [row('inspected')], next_cursor: null } }));
+    const updated = { ...row('inspected'), status: 'completed', completed_at: '2026-10-28T10:03:00Z' };
+    state = reducer(state, applyUiEvent({ type: 'run.updated', payload: { run: updated } }));
+
+    const snapshot = state.runs.snapshots[runsQueryKey(query)];
+    expect(snapshot.runs).toHaveLength(1);
+    expect(snapshot.runs[0]).toMatchObject(updated);
+  });
+});
+
+describe('runs query state', () => {
+  it('keeps global sort modes in independently cached request identities', () => {
+    const newest = normalizeRunsQuery({ ...query, sort: 'newest' });
+    const duration = normalizeRunsQuery({ ...query, sort: 'duration' });
+
+    expect(newest.sort).toBe('newest');
+    expect(duration.sort).toBe('duration');
+    expect(runsQueryKey(duration)).not.toBe(runsQueryKey(newest));
+  });
+
+  it('round-trips a URL-selected run without accepting an unknown kind', () => {
+    expect(runSelectionParam('workflow', 'run:42')).toBe('workflow:run:42');
+    expect(normalizeRunSelection('workflow:run:42')).toEqual({ kind: 'workflow', runId: 'run:42' });
+    expect(normalizeRunSelection('unknown:run:42')).toBeNull();
+  });
+});
+
+describe('run filter URL values', () => {
+  it('preserves an explicit all-time period without reverting to the default week', () => {
+    expect(normalizeRunPeriodParam('all')).toBe('');
+    expect(normalizeRunPeriodParam(null)).toBe('week');
   });
 });
 

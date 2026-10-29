@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field, PrivateAttr
 
 RunKind = Literal["routine", "workflow", "schedule"]
 RunPeriod = Literal["hour", "day", "week", "month"]
+RunSort = Literal["newest", "oldest", "duration"]
 SpanKind = Literal["run", "queue", "step", "routine", "agent", "model", "tool"]
 
 

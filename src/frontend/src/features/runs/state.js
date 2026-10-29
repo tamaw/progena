@@ -11,6 +11,7 @@ import { realtimeClientId } from '../../realtime/realtimeClient';
 
 export const RUN_KINDS = ['routine', 'workflow', 'schedule'];
 export const RUN_STATUSES = ['queued', 'running', 'paused', 'completed', 'failed', 'cancelled', 'stopped', 'interrupted'];
+export const RUN_SORTS = ['newest', 'oldest', 'duration'];
 export const RUN_PAGE_SIZE = 50;
 export const RUN_PERIODS = Object.freeze({ hour: 3_600_000, day: 86_400_000, week: 604_800_000, month: 2_592_000_000 });
 
@@ -20,19 +21,40 @@ export function runMatchesPeriod(row, period, now = Date.now()) {
   return Number.isFinite(started) && started >= now - RUN_PERIODS[period];
 }
 
-export function normalizeRunsQuery({ kind = '', status = '', q = '', cursor = null, period = '' } = {}) {
+export function normalizeRunPeriodParam(value, fallback = 'week') {
+  if (value === 'all') return '';
+  return Object.hasOwn(RUN_PERIODS, value) ? value : fallback;
+}
+
+export function normalizeRunSelection(value) {
+  if (typeof value !== 'string') return null;
+  const separator = value.indexOf(':');
+  if (separator <= 0 || separator === value.length - 1) return null;
+  const kind = value.slice(0, separator);
+  const runId = value.slice(separator + 1);
+  return RUN_KINDS.includes(kind) && runId ? { kind, runId } : null;
+}
+
+export function runSelectionParam(kind, runId) {
+  return RUN_KINDS.includes(kind) && typeof runId === 'string' && runId
+    ? `${kind}:${runId}`
+    : '';
+}
+
+export function normalizeRunsQuery({ kind = '', status = '', q = '', cursor = null, period = '', sort = 'newest' } = {}) {
   return {
     kind: RUN_KINDS.includes(kind) ? kind : '',
     status: typeof status === 'string' ? status.trim().toLowerCase() : '',
     q: typeof q === 'string' ? q.trim() : '',
     cursor: typeof cursor === 'string' && cursor ? cursor : null,
     period: Object.hasOwn(RUN_PERIODS, period) ? period : '',
+    sort: RUN_SORTS.includes(sort) ? sort : 'newest',
   };
 }
 
 export function runsQueryKey(query) {
   const normalized = normalizeRunsQuery(query);
-  return JSON.stringify([normalized.kind, normalized.status, normalized.q, normalized.cursor, normalized.period]);
+  return JSON.stringify([normalized.kind, normalized.status, normalized.q, normalized.cursor, normalized.period, normalized.sort]);
 }
 
 export function traceKey(kind, runId) {
@@ -58,6 +80,7 @@ export const fetchRuns = createAcknowledgedThunk(
       ...(normalized.q ? { q: normalized.q } : {}),
       ...(normalized.cursor ? { cursor: normalized.cursor } : {}),
       ...(normalized.period ? { period: normalized.period } : {}),
+      sort: normalized.sort,
     }), { requestId });
   },
 );
@@ -88,34 +111,23 @@ function rowSortKey(row) {
   return [row?.started_at || '', row?.kind || '', row?.run_id || ''];
 }
 
-function compareRows(left, right) {
+function duration(row, now = Date.now()) {
+  const started = Date.parse(row?.started_at || '');
+  const completed = Date.parse(row?.completed_at || '');
+  return Number.isFinite(started) ? (Number.isFinite(completed) ? completed : now) - started : -Infinity;
+}
+
+function compareRows(left, right, sort) {
+  if (sort === 'duration') {
+    const comparedDuration = duration(right) - duration(left);
+    if (comparedDuration) return comparedDuration;
+  }
   const leftKey = rowSortKey(left);
   const rightKey = rowSortKey(right);
-  return rightKey[0].localeCompare(leftKey[0])
-    || rightKey[1].localeCompare(leftKey[1])
-    || rightKey[2].localeCompare(leftKey[2]);
-}
-
-function cursorKey(cursor) {
-  if (!cursor) return null;
-  try {
-    const encoded = cursor.replace(/-/g, '+').replace(/_/g, '/');
-    const decoded = JSON.parse(atob(`${encoded}${'='.repeat((-encoded.length) % 4)}`));
-    return Array.isArray(decoded) && decoded.length === 3 && decoded.every((value) => typeof value === 'string')
-      ? decoded
-      : null;
-  } catch {
-    return null;
-  }
-}
-
-function isBeforeCursor(row, cursor) {
-  const boundary = cursorKey(cursor);
-  if (!boundary) return true;
-  const key = rowSortKey(row);
-  return key[0] < boundary[0]
-    || (key[0] === boundary[0] && (key[1] < boundary[1]
-      || (key[1] === boundary[1] && key[2] < boundary[2])));
+  const compared = leftKey[0].localeCompare(rightKey[0])
+    || leftKey[1].localeCompare(rightKey[1])
+    || leftKey[2].localeCompare(rightKey[2]);
+  return sort === 'oldest' ? compared : -compared;
 }
 
 function mergeLiveRows(snapshot, changes, query) {
@@ -124,24 +136,20 @@ function mergeLiveRows(snapshot, changes, query) {
     const existing = byKey.has(key);
     if (changes.deleted?.[key]) {
       byKey.delete(key);
-    } else if (!query.cursor || existing) {
-      if (rowMatchesQuery(row, query) && isBeforeCursor(row, query.cursor)) {
-        byKey.set(key, row);
-      } else {
-        byKey.delete(key);
-      }
+    } else if ((!query.cursor || existing) && rowMatchesQuery(row, query)) {
+      byKey.set(key, row);
+    } else if (existing) {
+      byKey.delete(key);
     }
   }
   for (const key of Object.keys(changes.deleted || {})) byKey.delete(key);
   const limit = Math.max(snapshot.page_size || RUN_PAGE_SIZE, snapshot.runs?.length || 0);
-  return [...byKey.values()].sort(compareRows).slice(0, limit);
+  return [...byKey.values()].sort((left, right) => compareRows(left, right, query.sort)).slice(0, limit);
 }
 
 function changesAffectSnapshot(changes, query) {
   if (Object.keys(changes.deleted || {}).length) return true;
-  return Object.values(changes.rows || {}).some((row) => (
-    rowMatchesQuery(row, query) && isBeforeCursor(row, query.cursor)
-  ));
+  return Object.values(changes.rows || {}).some((row) => rowMatchesQuery(row, query));
 }
 
 function markSnapshotsStale(state, row) {
@@ -149,15 +157,15 @@ function markSnapshotsStale(state, row) {
     const query = normalizeRunsQuery(snapshot.query);
     const key = rowKey(row);
     const existingIndex = snapshot.runs.findIndex((item) => rowKey(item) === key);
-    const matches = rowMatchesQuery(row, query) && isBeforeCursor(row, query.cursor);
+    const matches = rowMatchesQuery(row, query);
     if (existingIndex >= 0) {
       const rows = snapshot.runs.filter((item) => rowKey(item) !== key);
       if (matches) rows.push(row);
-      snapshot.runs = rows.sort(compareRows).slice(0, snapshot.page_size || RUN_PAGE_SIZE);
+      snapshot.runs = rows.sort((left, right) => compareRows(left, right, query.sort)).slice(0, snapshot.page_size || RUN_PAGE_SIZE);
       snapshot.stale = true;
     } else if (!query.cursor && matches) {
       snapshot.runs = [...snapshot.runs, row]
-        .sort(compareRows)
+        .sort((left, right) => compareRows(left, right, query.sort))
         .slice(0, snapshot.page_size || RUN_PAGE_SIZE);
       snapshot.stale = true;
     }
@@ -177,6 +185,7 @@ export const eventHandlers = {
       q: queryParts[2],
       cursor: queryParts[3],
       period: queryParts[4],
+      sort: queryParts[5],
     };
     const changes = request.changes || {};
     const snapshot = {
