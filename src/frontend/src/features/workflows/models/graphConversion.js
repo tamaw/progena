@@ -2,9 +2,9 @@ import { cloneValue } from './values';
 import { nodeOutputPorts, nodeInputPorts } from './schema';
 import { DEFAULT_NODE_SIZES, DOCK_NODE_DEFAULTS, resolveNodeSizes, DEFAULT_EDGE_OPTIONS, DEFAULT_VIEWPORT } from './nodePalette';
 
-export function createPaletteNode(kind, nodeId, position, documentTypes, callbacks) {
+export function createPaletteNode(kind, nodeId, position, documentTypes, callbacks, preferenceTimezone) {
   const sizes = DEFAULT_NODE_SIZES[kind] || DEFAULT_NODE_SIZES.agent;
-  const defaultData = DOCK_NODE_DEFAULTS[kind](documentTypes);
+  const defaultData = DOCK_NODE_DEFAULTS[kind](documentTypes, preferenceTimezone);
   const inputPortCount = nodeInputPorts(kind, defaultData.inputSchema).length;
   const outputPortCount = nodeOutputPorts(kind, defaultData.outputSchema).length;
   const maxPorts = Math.max(inputPortCount, outputPortCount);
@@ -66,7 +66,7 @@ function buildNodeData(kind, node, callbacks, latestRun) {
       kind,
       title: node.title || 'Cron',
       expression: node.expression || '*/5 * * * *',
-      timezone: node.timezone || 'UTC',
+      timezone: node.timezone || '',
       overlap: node.overlap || 'skip',
       outputSchema: cloneValue(node.output_schema) || null,
       onChange: callbacks.onNodeChange,
@@ -388,11 +388,12 @@ export function flowToWorkflow(baseWorkflow, nodes, edges, viewport) {
         output_schema: cloneValue(node.data?.outputSchema) || null,
       };
     } else if (node.type === 'cron') {
+      const timezone = typeof node.data?.timezone === 'string' ? node.data.timezone.trim() : '';
       graphNodes[node.id] = {
         kind: 'cron',
         title: String(node.data?.title || 'Cron'),
         expression: node.data?.expression || '*/5 * * * *',
-        timezone: node.data?.timezone || 'UTC',
+        ...(timezone ? { timezone } : {}),
         overlap: node.data?.overlap || 'skip',
         output_schema: cloneValue(node.data?.outputSchema) || null,
       };

@@ -123,6 +123,14 @@ describe('sortCards', () => {
     expect(sorted).toEqual(['Alpha', 'Gamma', 'Beta']);
   });
 
+  it('orders offset-bearing update instants chronologically', () => {
+    const offsetCards = [
+      { title: 'Earlier', status: 'idle', updated_at: '2026-01-01T00:30:00Z' },
+      { title: 'Later', status: 'idle', updated_at: '2025-12-31T23:45:00-01:00' },
+    ];
+    expect(offsetCards.sort(sortCards('Recent')).map((card) => card.title)).toEqual(['Later', 'Earlier']);
+  });
+
   it('sorts by derived priority then recency', () => {
     const sorted = [...cards].sort(sortCards('Priority')).map((c) => c.title);
     expect(sorted).toEqual(['Alpha', 'Gamma', 'Beta']);

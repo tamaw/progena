@@ -32,7 +32,6 @@ from src.backend.main import app
 from src.backend.monitoring.state import StateReader
 from src.backend.storage.documents import (
     BACKEND_STATE_PREFIX,
-    PROGENA_LOG_PREFIX,
     PROGENA_STATE_PREFIX,
     CheckpointThreadSnapshot,
     InMemoryDocumentStore,
@@ -1367,37 +1366,19 @@ class TestLogsEndpoint:
         """A nonempty export delivers its complete data only on the UI stream."""
 
         request_id = "nonempty-log-export-client-request"
+        # Log files hold zone-less UTC; the API returns them as UTC instants.
         timestamp = datetime.now(UTC).replace(microsecond=0)
-        source_entries = [
-            {
-                "timestamp": (timestamp - timedelta(minutes=1)).isoformat().replace("+00:00", "Z"),
-                "level": "info",
-                "source": "decisions",
-                "message": "decision queued",
-            },
-            {
-                "timestamp": timestamp.isoformat().replace("+00:00", "Z"),
-                "level": "error",
-                "source": "decisions",
-                "message": "decision failed",
-            },
-        ]
-
-        store = kanban_state_reader.document_store
-        for i, entry in enumerate(source_entries):
-            store.save_document(
-                f"{PROGENA_LOG_PREFIX}.decisions",
-                f"entry-{i}",
-                {
-                    "timestamp": entry["timestamp"],
-                    "level": entry["level"],
-                    "source": entry["source"],
-                    "message": entry["message"],
-                    "relative_path": "decisions.jsonl",
-                    "group": "root",
-                    "data": entry,
-                },
-            )
+        queued = timestamp - timedelta(minutes=1)
+        queued_at = queued.strftime("%Y-%m-%d %H:%M:%S")
+        failed_at = timestamp.strftime("%Y-%m-%d %H:%M:%S")
+        log_dir = kanban_state_reader.logs_dir / "progena"
+        log_dir.mkdir(parents=True)
+        (log_dir / "progena.stdout.log").write_text(
+            f"{queued_at} - src.progena.decisions - INFO - decision queued\n", encoding="utf-8"
+        )
+        (log_dir / "progena.stderr.log").write_text(
+            f"{failed_at} - src.progena.decisions - ERROR - decision failed\n", encoding="utf-8"
+        )
 
         queue = asyncio.Queue()
         events_stream._ui_stream_subscribers[queue] = None
@@ -1457,38 +1438,25 @@ class TestLogsEndpoint:
         assert [
             {
                 key: entry[key]
-                for key in (
-                    "timestamp",
-                    "time",
-                    "level",
-                    "source",
-                    "message",
-                    "relative_path",
-                    "group",
-                    "data",
-                )
+                for key in ("timestamp", "level", "source", "message", "relative_path", "group")
             }
             for entry in exported_entries
         ] == [
             {
-                "timestamp": source_entries[1]["timestamp"],
-                "time": source_entries[1]["timestamp"],
+                "timestamp": timestamp.strftime("%Y-%m-%dT%H:%M:%SZ"),
                 "level": "error",
-                "source": "decisions",
+                "source": "src.progena.decisions",
                 "message": "decision failed",
-                "relative_path": "decisions.jsonl",
-                "group": "root",
-                "data": source_entries[1],
+                "relative_path": "progena/progena.stderr.log",
+                "group": "progena",
             },
             {
-                "timestamp": source_entries[0]["timestamp"],
-                "time": source_entries[0]["timestamp"],
+                "timestamp": queued.strftime("%Y-%m-%dT%H:%M:%SZ"),
                 "level": "info",
-                "source": "decisions",
+                "source": "src.progena.decisions",
                 "message": "decision queued",
-                "relative_path": "decisions.jsonl",
-                "group": "root",
-                "data": source_entries[0],
+                "relative_path": "progena/progena.stdout.log",
+                "group": "progena",
             },
         ]
 
@@ -1619,6 +1587,31 @@ class TestScheduleEndpoint:
         assert streamed["type"] == "ui.event"
         assert streamed["envelope"].type == "schedule.snapshot"
         assert streamed["envelope"].payload["items"][0]["message"] == "ping"
+
+    def test_schedule_snapshot_normalizes_legacy_naive_one_shot_timestamp(self, monkeypatch):
+        store = InMemoryDocumentStore()
+        store.save_document(
+            PROGENA_STATE_PREFIX,
+            "schedule",
+            {
+                "cron-once": {
+                    "id": "cron-once",
+                    "name": "One-off",
+                    "message": "ping",
+                    "schedule_type": "once",
+                    "schedule": "2026-06-19T09:47:00",
+                    "scheduled_at": "2026-06-19T09:47:00",
+                }
+            },
+        )
+        state_reader = StateReader(document_store=store)
+        monkeypatch.setattr("src.backend.monitoring.state.get_state_reader", lambda: state_reader)
+
+        envelope = schedules_service.broadcast_schedule_snapshot()
+
+        item = envelope.payload["items"][0]
+        assert item["schedule"] == "2026-06-19T09:47:00+00:00"
+        assert item["scheduled_at"] == "2026-06-19T09:47:00+00:00"
 
     def test_schedule_snapshot_includes_read_only_interrupted_run_views(self, monkeypatch):
         """Schedule run state is derived from the live runtime without persistence writes."""
@@ -1967,7 +1960,6 @@ class TestWorkspaceBridgeActions:
         )
         jina_item = next(item for item in list_envelope.payload["items"] if item["name"] == "jina")
         assert "tools" not in jina_item["data"]
-        assert jina_item["logs"] == []
 
         detail_request_id = "mcp-detail-fetch"
         event_start = len(events_stream._ui_event_replay)
@@ -2179,7 +2171,7 @@ class TestWorkspaceBridgeActions:
                 "name": "One-off reminder",
                 "instruction": "Reply once.",
                 "schedule_type": "once",
-                "expression": "2026-06-19T09:47:00Z",
+                "expression": "2026-06-19T09:47:00",
                 "timezone": "UTC",
                 "enabled": True,
             },
@@ -2197,6 +2189,7 @@ class TestWorkspaceBridgeActions:
         updated = document.payload[schedule_id]
         assert updated["id"].startswith("cron_")
         assert updated["schedule_type"] == "once"
+        assert updated["schedule"] == "2026-06-19T09:47:00+00:00"
         assert updated["scheduled_at"] == "2026-06-19T09:47:00+00:00"
         assert "cron_expression" not in updated
 

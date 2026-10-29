@@ -73,8 +73,13 @@ export function buildCardBadges(card) {
   ].filter(Boolean);
 }
 
+function updatedAtMs(card) {
+  const timestamp = Date.parse(card?.updated_at || '');
+  return Number.isFinite(timestamp) ? timestamp : 0;
+}
+
 export function sortCards(sortMode) {
-  const byRecent = (a, b) => String(b.updated_at || '').localeCompare(String(a.updated_at || ''));
+  const byRecent = (a, b) => updatedAtMs(b) - updatedAtMs(a);
   const byName = (a, b) => String(a.title || '').localeCompare(String(b.title || ''));
   if (sortMode === 'Recent') {
     return (a, b) => byRecent(a, b) || byName(a, b);

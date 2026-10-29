@@ -5,7 +5,7 @@ import { useConfig } from '../../context/ConfigContext';
 import InlineFailure from '../../components/InlineFailure';
 import Select from '../../components/Select';
 import { ChevronDownIcon, ChevronRightIcon, CloseIcon, SearchIcon } from '../../components/navIcons';
-import { RUN_KINDS, RUN_STATUSES, normalizeRunPeriodParam, normalizeRunSelection, runMatchesPeriod, runSelectionParam, selectRunTrace, selectRunsSnapshot } from './state';
+import { RUN_KINDS, RUN_STATUSES, compareRunRows, normalizeRunPeriodParam, normalizeRunSelection, runMatchesPeriod, runSelectionParam, selectRunTrace, selectRunsSnapshot } from './state';
 import { formatDuration, formatTokenCount, kindLabel } from './runFormat';
 import RunTimeline, { ActivityIcon, ActivitySummary, TimeAxis } from './RunTimeline';
 import { useRunsQuery, useRunTrace } from './useRunsQuery';
@@ -155,7 +155,10 @@ export default function RunsPage() {
   const pageSnapshots = useSelector((state) => pageCursors.map((cursor) => (
     selectRunsSnapshot(state, { ...baseQuery, cursor })
   )), shallowEqual);
-  const serverRows = useMemo(() => mergeRunPages(pageSnapshots), [pageSnapshots]);
+  const serverRows = useMemo(() => mergeRunPages(
+    pageSnapshots,
+    (left, right) => compareRunRows(left, right, sort),
+  ), [pageSnapshots, sort]);
   const rows = useMemo(
     () => serverRows.filter((row) => runMatchesPeriod(row, period, now)),
     [now, period, serverRows],

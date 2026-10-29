@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import time
+from datetime import UTC
 from typing import Any
 
 from fastapi import APIRouter, Header, HTTPException, Query, Request
@@ -15,11 +16,12 @@ import src.backend.http.requests as http_requests
 import src.backend.lifecycle.state as lifecycle_state
 import src.backend.monitoring.state as monitoring_state
 import src.backend.schedules.service as schedules_service
+import src.backend.settings.preferences_store as preferences_store
 import src.backend.storage.documents as storage_documents
 import src.backend.workflows.models as workflows_models
 import src.backend.workflows.runtime as workflows_runtime
 import src.backend.workflows.service as workflows_service
-from src.progena.cron import cron_error, next_cron_time
+from src.progena.cron import cron_error, next_cron_time, timezone_name
 from src.progena.utils import utcnow
 from src.progena.workflows.documents import default_workflow_definition, workflow_id_from_path
 
@@ -31,18 +33,21 @@ router = APIRouter()
 @router.get("/workflows/cron-preview")
 async def preview_workflow_cron(
     expression: str,
-    timezone: str,
+    timezone: str | None = None,
     count: int = Query(default=3, ge=1, le=10),
 ) -> dict[str, Any]:
     """Next due times of a cron trigger, computed exactly as the backend clock fires them."""
-    error = cron_error(expression, timezone)
+    effective_timezone = timezone_name(
+        timezone, preferences_store.load_preferences().get("timezone", "UTC")
+    )
+    error = cron_error(expression, effective_timezone)
     if error:
         raise HTTPException(status_code=400, detail=error)
     runs: list[str] = []
     cursor = utcnow()
     for _ in range(count):
-        cursor = next_cron_time(expression, cursor, timezone)
-        runs.append(cursor.isoformat())
+        cursor = next_cron_time(expression, cursor, effective_timezone)
+        runs.append(cursor.astimezone(UTC).isoformat().replace("+00:00", "Z"))
     return {"next_runs": runs}
 
 
@@ -321,7 +326,11 @@ async def trigger_workflow(
     if definition is None:
         raise HTTPException(status_code=404, detail="Workflow not found")
     try:
-        trigger = workflows_service.build_manual_trigger_event(definition, payload=body.payload)
+        trigger = workflows_service.build_manual_trigger_event(
+            definition,
+            payload=body.payload,
+            preference_timezone=timezone_name(preferences_store.load_preferences().get("timezone")),
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     trigger = {**trigger, "request_id": request_id}

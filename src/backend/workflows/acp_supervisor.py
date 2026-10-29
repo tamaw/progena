@@ -32,7 +32,7 @@ from src.progena.acp.tasks import (
     task_cwd,
 )
 from src.progena.documents.kinds import ACP_TASK_KEY_PREFIX
-from src.progena.utils import utcnow
+from src.progena.utils import normalize_utc_datetime, utcnow
 
 logger = logging.getLogger(__name__)
 
@@ -954,6 +954,10 @@ class ACPTaskSupervisor:
                     activity_at = datetime.fromisoformat(str(last_activity))
                 except (TypeError, ValueError):
                     continue
+                # ``last_activity_at`` is a supervisor-owned UTC instant;
+                # legacy offset-less values therefore retain UTC meaning.
+                activity_at = normalize_utc_datetime(activity_at)
+                assert activity_at is not None
                 if (now - activity_at).total_seconds() < self._stall_seconds:
                     continue
                 self._mark_stalled(active)

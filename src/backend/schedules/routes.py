@@ -15,6 +15,7 @@ import src.backend.monitoring.state as monitoring_state
 import src.backend.schedules.models as schedules_models
 import src.backend.schedules.service as schedules_service
 import src.backend.settings.mcp as settings_mcp
+import src.backend.settings.preferences_store as preferences_store
 import src.backend.storage.documents as storage_documents
 import src.backend.workflows.runtime as workflows_runtime
 from src.progena.schedules.engine import Scheduler
@@ -120,7 +121,7 @@ async def patch_widget(
                     )
                 )
                 entry["schedule_type"] = normalized_type
-                entry["schedule"] = current_expression
+                entry["schedule"] = scheduled_at or current_expression
                 if cron_expression is None:
                     entry.pop("cron_expression", None)
                 else:
@@ -132,9 +133,11 @@ async def patch_widget(
             if body.timezone is not None:
                 entry["timezone"] = body.timezone
             entry["updated_at"] = utcnow().isoformat()
-            next_run = Scheduler().next_run_for_entry(entry)
-            entry["next_run"] = next_run.isoformat() if next_run else None
-            entry["next_run_at"] = next_run.isoformat() if next_run else None
+            next_run = Scheduler().next_run_for_entry(
+                entry, preferences_store.load_preferences().get("timezone", "UTC")
+            )
+            entry["next_run"] = schedules_service._next_run_iso(next_run) if next_run else None
+            entry["next_run_at"] = schedules_service._next_run_iso(next_run) if next_run else None
 
         def _save_schedule() -> None:
             state_reader.document_store.save_document(
@@ -159,7 +162,6 @@ async def patch_widget(
                 "status": "enabled" if updated.get("enabled", True) else "disabled",
                 "description": updated.get("message"),
                 "summary": updated.get("message"),
-                "logs": [],
                 "updated_at": updated.get("created_at"),
             },
         )
@@ -207,7 +209,6 @@ async def patch_widget(
                 "status": "enabled" if updated.get("enabled", True) else "disabled",
                 "description": updated.get("event_type"),
                 "summary": updated.get("summary"),
-                "logs": updated.get("logs", []),
                 "updated_at": updated.get("updated_at"),
                 "event_type": updated.get("event_type"),
                 "enabled": updated.get("enabled", True),
@@ -300,7 +301,6 @@ async def patch_widget(
             "enabled": bool(server.get("enabled", True)),
             "url": server.get("url"),
             "transport": server.get("transport", "http"),
-            "logs": [],
             "updated_at": None,
         },
     )
@@ -410,6 +410,7 @@ async def create_schedule(
         schedule_type=body.schedule_type,
         expression=body.expression,
         timezone_name=body.timezone,
+        preference_timezone=preferences_store.load_preferences().get("timezone", "UTC"),
         enabled=body.enabled,
         created_at=created_at,
     )
@@ -522,9 +523,11 @@ async def retrigger_schedule(
         elif updated.get("cron_expression"):
             updated["schedule_type"] = "cron"
             updated["schedule"] = updated["cron_expression"]
-        next_run = Scheduler().next_run_for_entry(updated)
-        updated["next_run"] = next_run.isoformat() if next_run else None
-        updated["next_run_at"] = next_run.isoformat() if next_run else None
+        next_run = Scheduler().next_run_for_entry(
+            updated, preferences_store.load_preferences().get("timezone", "UTC")
+        )
+        updated["next_run"] = schedules_service._next_run_iso(next_run) if next_run else None
+        updated["next_run_at"] = schedules_service._next_run_iso(next_run) if next_run else None
         state_reader.document_store.save_document(
             storage_documents.PROGENA_STATE_PREFIX, "schedule", schedule_data
         )

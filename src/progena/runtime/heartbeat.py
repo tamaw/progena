@@ -4,7 +4,7 @@ import asyncio
 import contextlib
 import logging
 import uuid
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
@@ -55,14 +55,22 @@ _MAINTENANCE_INTERVALS: tuple[tuple[str, str, str], ...] = (
 
 
 def _parse_iso_datetime(value: Any) -> datetime | None:
+    """Parse persisted heartbeat timestamps as UTC instants.
+
+    Runtime state written before timezone-aware timestamps were adopted used
+    naive UTC. Keep that state resumable while normalizing offset timestamps
+    before they are compared against this process's UTC clock.
+    """
     if isinstance(value, datetime):
-        return value
-    if isinstance(value, str):
+        parsed = value
+    elif isinstance(value, str):
         try:
-            return datetime.fromisoformat(value.replace("Z", "+00:00"))
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
         except ValueError:
             return None
-    return None
+    else:
+        return None
+    return parsed.replace(tzinfo=UTC) if parsed.tzinfo is None else parsed.astimezone(UTC)
 
 
 def _seconds_until_due(last_run_at: Any, interval_seconds: float, *, now: datetime) -> float:
@@ -86,12 +94,10 @@ class ProgenaLoop:
         llm_client=None,
         tool_registry=None,
         project_root: Path | None = None,
-        log_sink=None,
     ):
         self.graph = graph
         self.state_manager = state_manager
         self.config = config
-        self.log_sink = log_sink
         self.running = False
         scheduler_cfg = getattr(self.config, "scheduler", None)
         scheduler_enabled = bool(
@@ -116,7 +122,6 @@ class ProgenaLoop:
             agent_graph=self.graph,
             live_state=self._state,
             state_manager=self.state_manager,
-            audit_log_sink=self.log_sink,
             startup_audit_payload=audit_payload,
             tool_registry=tool_registry,
             project_root=Path(project_root) if project_root is not None else None,
@@ -135,7 +140,6 @@ class ProgenaLoop:
             heartbeat_health_seconds=float(
                 getattr(self.config.runtime, "checkpoint_interval_seconds", 30.0)
             ),
-            timezone=getattr(self.config.runtime, "timezone", "UTC"),
             reasoning_enabled=bool(
                 getattr(getattr(self.config, "llm", None), "reasoning_enabled", False)
             ),

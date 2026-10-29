@@ -36,6 +36,7 @@ from src.progena.canvases.contracts import (
     validate_canvas_name,
 )
 from src.progena.documents.types import DOCUMENT_OPERATIONS, DocumentType
+from src.progena.utils import normalize_utc_datetime, normalize_utc_timestamp
 
 router = APIRouter(prefix="/api/ui", tags=["canvases"])
 _REQUEST_ID_HEADER = Header(default=None, alias="X-Operation-Id")
@@ -92,6 +93,22 @@ def _utc_now() -> str:
     return datetime.now(UTC).isoformat().replace("+00:00", "Z")
 
 
+def _canvas_updated_at(value: Any) -> tuple[datetime, str] | None:
+    """Return a canvas file's backend-owned update instant in canonical UTC."""
+    if isinstance(value, datetime):
+        parsed = normalize_utc_datetime(value)
+    elif isinstance(value, str) and ("T" in value or " " in value):
+        try:
+            parsed = datetime.fromisoformat(normalize_utc_timestamp(value))
+        except ValueError:
+            return None
+        parsed = normalize_utc_datetime(parsed)
+    else:
+        return None
+    assert parsed is not None
+    return parsed, parsed.isoformat().replace("+00:00", "Z")
+
+
 def _canvas_rows(store: BackendDocumentStore, name: str) -> list[tuple[str, Any]]:
     prefix = canvas_file_key(name, "").removesuffix("/") + "/"
     rows: list[tuple[str, Any]] = []
@@ -136,11 +153,19 @@ def _summary(store: BackendDocumentStore, name: str) -> CanvasSummary:
         except CanvasValidationError as exc:
             manifest_error = str(exc)
     rows = _canvas_rows(store, name)
-    timestamps = [
-        str(document.payload.get("updated_at") or document.updated_at or "")
-        for _path, document in rows
+    raw_timestamps = [
+        document.payload.get("updated_at") or document.updated_at for _path, document in rows
     ]
-    updated_at = max((timestamp for timestamp in timestamps if timestamp), default=None)
+    timestamps = [
+        timestamp
+        for raw_timestamp in raw_timestamps
+        if (timestamp := _canvas_updated_at(raw_timestamp))
+    ]
+    updated_at = (
+        max(timestamps, key=lambda timestamp: timestamp[0])[1]
+        if timestamps
+        else max((str(timestamp) for timestamp in raw_timestamps if timestamp), default=None)
+    )
     status_document = store.get_document(PROGENA_STATE_PREFIX, canvas_status_key(name), None)
     status = (
         status_document.payload

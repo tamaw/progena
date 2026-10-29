@@ -40,9 +40,10 @@ jobs:
           ruff check src/backend tests/backend
 
       - name: Tests backend (pytest)
+        # 4 workers: both Python jobs share the 6-core host with production.
         run: |
           . .venv/bin/activate
-          pytest tests/backend
+          pytest -n 4 tests/backend
 
   progena:
     if: ${{ github.repository == 'tamaw/progena' && ((github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')) || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) }}
@@ -74,9 +75,10 @@ jobs:
           pyright --pythonpath .venv/bin/python src/
 
       - name: Tests progena (pytest)
+        # 4 workers: both Python jobs share the 6-core host with production.
         run: >
           . .venv/bin/activate &&
-          pytest
+          pytest -n 4
           tests/progena
 
   frontend:
@@ -154,7 +156,12 @@ jobs:
             echo "redeploy=$REDEPLOY"
           } | tee -a "$GITHUB_OUTPUT"
 
-      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      # Images build on the self-hosted runners' shared host Docker daemon (the
+      # default `docker` buildx driver). Its local layer cache persists between
+      # runs, and built images land straight in the daemon compose deploys from,
+      # so there is no remote cache round-trip and no image tarball export/load.
+      - name: Use the host Docker builder
+        run: docker buildx use default
 
       - name: Build and load progena image
         if: ${{ github.event_name == 'workflow_dispatch' || steps.changes.outputs.progena_image == 'true' }}
@@ -171,8 +178,6 @@ jobs:
           tags: |
             ghcr.io/tamaw/progena:latest
             ghcr.io/tamaw/progena:${{ github.sha }}
-          cache-from: type=gha,scope=progena-image
-          cache-to: type=gha,mode=max,scope=progena-image
 
       - name: Build and load backend image
         if: ${{ github.event_name == 'workflow_dispatch' || steps.changes.outputs.backend_image == 'true' }}
@@ -187,8 +192,6 @@ jobs:
           tags: |
             ghcr.io/tamaw/progena-backend:latest
             ghcr.io/tamaw/progena-backend:${{ github.sha }}
-          cache-from: type=gha,scope=backend-image
-          cache-to: type=gha,mode=max,scope=backend-image
 
       - name: Build and load frontend image
         if: ${{ github.event_name == 'workflow_dispatch' || steps.changes.outputs.frontend_image == 'true' }}
@@ -203,8 +206,6 @@ jobs:
           tags: |
             ghcr.io/tamaw/progena-frontend:latest
             ghcr.io/tamaw/progena-frontend:${{ github.sha }}
-          cache-from: type=gha,scope=frontend-image
-          cache-to: type=gha,mode=max,scope=frontend-image
 
       - name: Build and load claude image
         if: ${{ github.event_name == 'workflow_dispatch' || steps.changes.outputs.claude_image == 'true' }}
@@ -219,8 +220,6 @@ jobs:
           tags: |
             ghcr.io/tamaw/progena-claude:latest
             ghcr.io/tamaw/progena-claude:${{ github.sha }}
-          cache-from: type=gha,scope=claude-image
-          cache-to: type=gha,mode=max,scope=claude-image
 
       - name: No deploy-affecting changes
         if: ${{ github.event_name != 'workflow_dispatch' && steps.changes.outputs.redeploy != 'true' }}
@@ -241,7 +240,6 @@ jobs:
           JINA_API_KEY: ${{ secrets.JINA_API_KEY }}
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
           PROGENA_MODEL_DEFAULT: ${{ vars.PROGENA_MODEL_DEFAULT }}
-          PROGENA_TIMEZONE: ${{ vars.PROGENA_TIMEZONE }}
           PROGENA_REASONING_ENABLED: ${{ vars.PROGENA_REASONING_ENABLED }}
           PROGENA_REASONING_EFFORT: ${{ vars.PROGENA_REASONING_EFFORT }}
           PROGENA_REASONING_SUMMARY: ${{ vars.PROGENA_REASONING_SUMMARY }}

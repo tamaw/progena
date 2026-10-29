@@ -205,8 +205,6 @@ def validate_heartbeat_context(context: HeartbeatContext) -> None:
     ):
         if interval_value <= 0:
             raise ValueError(f"{interval_name} must be greater than 0")
-    if not context.timezone.strip():
-        raise ValueError("timezone must not be empty")
 
 
 def create_runtime_heartbeat_graph() -> CompiledStateGraph[Any, HeartbeatContext, Any, Any]:

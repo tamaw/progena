@@ -131,6 +131,7 @@ async def test_each_attempt_on_a_continued_thread_shows_only_its_own_steps(runs:
 @pytest.mark.parametrize(
     ("owner", "status"),
     [("gone-runtime", "interrupted"), (RUNTIME_INSTANCE_ID, "started")],
+    ids=["gone-runtime", "current-runtime"],
 )
 async def test_a_run_still_executing_is_interrupted_only_when_its_runtime_is_gone(
     runs: _Runs, owner: str, status: str

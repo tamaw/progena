@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import reducer from '@frontend/store/uiDataSlice';
 import { applyUiEvent } from '@frontend/store/uiEvents';
-import { fetchRuns, normalizeRunPeriodParam, normalizeRunSelection, normalizeRunsQuery, runMatchesPeriod, runSelectionParam, runsQueryKey } from '@frontend/features/runs/state';
+import { compareRunRows, fetchRuns, normalizeRunPeriodParam, normalizeRunSelection, normalizeRunsQuery, runMatchesPeriod, runSelectionParam, runsQueryKey } from '@frontend/features/runs/state';
+import { mergeRunPages } from '@frontend/features/runs/pageModel';
 
 const query = { runsUrl: '/api/ui/runs', kind: '', status: '', q: '', cursor: null };
 const row = (runId, startedAt = '2026-10-28T10:00:00Z') => ({
@@ -53,6 +54,12 @@ describe('runs state', () => {
     expect([...firstPage.runs, ...secondPage.runs].map((item) => item.run_id)).toEqual(['new', 'a', 'b', 'c', 'd']);
     expect(secondPage.next_cursor).toBe('after-d');
     expect(firstPage.stale).toBe(false);
+    state = reducer(state, applyUiEvent({ type: 'run.updated', payload: { run: row('d', '2026-10-28T12:00:00Z') } }));
+    expect(mergeRunPages([
+      state.runs.snapshots[runsQueryKey(query)],
+      state.runs.snapshots[runsQueryKey(pageTwo)],
+    ], (left, right) => compareRunRows(left, right, 'newest')).map((item) => item.run_id)).toEqual(['d', 'new', 'a', 'b', 'c']);
+
   });
 
   it('keeps a live update for every in-flight query rather than clearing it with the first snapshot', () => {

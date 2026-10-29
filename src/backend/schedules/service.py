@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import re
 from collections.abc import Callable
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 import httpx
@@ -18,20 +18,28 @@ import src.backend.events.stream as events_stream
 import src.backend.monitoring.state as monitoring_state
 import src.backend.runtime_liveness as runtime_liveness
 import src.backend.schedules.models as schedules_models
+import src.backend.settings.preferences_store as preferences_store
 import src.backend.storage.documents as storage_documents
-from src.progena.cron import default_timezone_name
+from src.progena.cron import timezone_name as valid_timezone_name
 from src.progena.documents.types import DOCUMENT_OPERATIONS
 from src.progena.runtime import ownership
-from src.progena.schedules.engine import Scheduler
-from src.progena.utils import utcnow
+from src.progena.schedules.engine import Scheduler, parse_schedule_datetime
+from src.progena.utils import normalize_utc_datetime, utcnow
 
 logger = logging.getLogger(__name__)
 
-MAX_EVENT_WIDGET_LOGS = 20
+
+def _next_run_iso(next_run: datetime) -> str:
+    """Serialize scheduler-produced instants as UTC for stored/UI schedule state."""
+    normalized = normalize_utc_datetime(next_run)
+    assert normalized is not None
+    return normalized.isoformat().replace("+00:00", "Z")
 
 
 def _schedule_item_to_info(
-    item, runs: list[schedules_models.ScheduleRunInfo] | None = None
+    item,
+    runs: list[schedules_models.ScheduleRunInfo] | None = None,
+    preference_timezone: str = "UTC",
 ) -> schedules_models.ScheduleItemInfo:
     """Build a schedule response with a freshly computed next_run.
 
@@ -40,10 +48,12 @@ def _schedule_item_to_info(
     runtime uses so the UI shows the actual next fire time.
     """
     raw = item.raw if isinstance(item.raw, dict) else {}
-    next_run_dt = Scheduler().next_run_for_entry(raw)
+    next_run_dt = Scheduler().next_run_for_entry(raw, preference_timezone)
     paused = bool(raw.get("paused", not raw.get("enabled", item.enabled)))
     cron_expression = raw.get("cron_expression") or None
-    scheduled_at = raw.get("scheduled_at") or None
+    raw_scheduled_at = raw.get("scheduled_at")
+    parsed_scheduled_at = parse_schedule_datetime(raw_scheduled_at)
+    scheduled_at = parsed_scheduled_at.isoformat() if parsed_scheduled_at else None
     schedule_type = raw.get("schedule_type") or (
         "once" if scheduled_at else "cron" if cron_expression else None
     )
@@ -57,11 +67,16 @@ def _schedule_item_to_info(
         and next_run_dt is None
     ):
         last_run_status = "completed"
+    display_schedule = (
+        scheduled_at or item.schedule or ""
+        if schedule_type == "once"
+        else item.schedule or cron_expression or scheduled_at or ""
+    )
     return schedules_models.ScheduleItemInfo(
         id=item.id,
         name=item.name,
-        schedule=item.schedule or cron_expression or scheduled_at or "",
-        next_run=next_run_dt.isoformat() if next_run_dt else None,
+        schedule=display_schedule,
+        next_run=_next_run_iso(next_run_dt) if next_run_dt else None,
         enabled=not paused,
         paused=paused,
         last_run=last_run,
@@ -87,37 +102,15 @@ def _widget_to_response(widget: dict) -> schedules_models.WidgetResponse:
         status=payload.get("status", "unknown"),
         description=payload.get("description"),
         summary=payload.get("summary"),
-        logs=payload.get("logs", []),
         updated_at=payload.get("updated_at"),
         data=payload,
     )
-
-
-def _normalize_event_widget_logs(data: object) -> list[dict]:
-    if not isinstance(data, list):
-        return []
-
-    normalized: list[dict] = []
-    for entry in data:
-        if not isinstance(entry, dict):
-            continue
-        normalized.append(
-            {
-                "time": entry.get("time") or entry.get("timestamp"),
-                "timestamp": entry.get("timestamp") or entry.get("time"),
-                "level": entry.get("level", "info"),
-                "source": entry.get("source", "document"),
-                "message": entry.get("message") or "",
-            }
-        )
-    return normalized[:MAX_EVENT_WIDGET_LOGS]
 
 
 def _normalize_event_widget_record(entry: dict) -> dict:
     event_type = str(entry.get("event_type") or "kanban_card.created").strip().lower()
     name = str(entry.get("name") or event_type or "Event").strip()
     last_payload = entry.get("last_payload")
-    logs = _normalize_event_widget_logs(entry.get("logs"))
     summary = str(entry.get("summary") or f"Waiting for {event_type}").strip()
     try:
         trigger_count = int(entry.get("trigger_count", 0) or 0)
@@ -133,7 +126,6 @@ def _normalize_event_widget_record(entry: dict) -> dict:
         "last_run_status": str(entry.get("last_run_status") or "idle"),
         "last_payload": last_payload if isinstance(last_payload, dict) else None,
         "summary": summary,
-        "logs": logs,
         "created_at": entry.get("created_at"),
         "updated_at": entry.get("updated_at") or entry.get("created_at"),
     }
@@ -200,7 +192,6 @@ def _build_event_widget_entry(
         "last_run_status": "idle",
         "last_payload": None,
         "summary": f"Waiting for {normalized_type}",
-        "logs": [],
         "created_at": created_at,
         "updated_at": created_at,
     }
@@ -388,16 +379,6 @@ async def _apply_document_event_widgets(typed: events_documents.TypedDocumentEve
         widget["last_payload"] = payload
         widget["summary"] = summary
         widget["updated_at"] = timestamp
-        widget["logs"] = [
-            {
-                "time": timestamp,
-                "timestamp": timestamp,
-                "level": "info",
-                "source": typed.document_type.id,
-                "message": summary,
-            },
-            *_normalize_event_widget_logs(widget.get("logs")),
-        ][:MAX_EVENT_WIDGET_LOGS]
         changed = True
     if changed:
         _write_event_widget_records(state_reader, event_widgets)
@@ -406,12 +387,15 @@ async def _apply_document_event_widgets(typed: events_documents.TypedDocumentEve
 
 def _parse_once_datetime(expression: str) -> datetime:
     try:
-        return datetime.fromisoformat(expression.replace("Z", "+00:00"))
+        parsed = datetime.fromisoformat(expression.replace("Z", "+00:00"))
     except ValueError as exc:
         raise HTTPException(
             status_code=400,
             detail="One-off schedules must use an ISO datetime like 2026-03-15T14:30:00Z",
         ) from exc
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
 
 
 def _interval_to_cron(expression: str) -> str:
@@ -481,6 +465,7 @@ def _build_schedule_entry(
     schedule_type: str,
     expression: str,
     timezone_name: str | None,
+    preference_timezone: str,
     enabled: bool,
     created_at: str,
 ) -> dict:
@@ -494,9 +479,9 @@ def _build_schedule_entry(
         "message": instruction,
         "instruction": instruction,
         "user_request": name,
-        "schedule": expression,
+        "schedule": scheduled_at or expression,
         "schedule_type": normalized_type,
-        "timezone": timezone_name or default_timezone_name(),
+        "timezone": valid_timezone_name(timezone_name, preference_timezone),
         "enabled": enabled,
         # The runtime scheduler only honours ``paused``; keep it in sync with the
         # UI's ``enabled`` flag so a paused schedule actually stops firing.
@@ -510,10 +495,10 @@ def _build_schedule_entry(
         entry["cron_expression"] = cron_expression
     if scheduled_at is not None:
         entry["scheduled_at"] = scheduled_at
-    next_run = Scheduler().next_run_for_entry(entry)
+    next_run = Scheduler().next_run_for_entry(entry, preference_timezone)
     if next_run:
-        entry["next_run"] = next_run.isoformat()
-        entry["next_run_at"] = next_run.isoformat()
+        entry["next_run"] = _next_run_iso(next_run)
+        entry["next_run_at"] = _next_run_iso(next_run)
     return entry
 
 
@@ -617,8 +602,9 @@ def broadcast_schedule_snapshot(
     """
     state_reader = monitoring_state.get_state_reader()
     runs = _schedule_runs_by_schedule(state_reader)
+    preference_timezone = preferences_store.load_preferences().get("timezone", "UTC")
     items = [
-        _schedule_item_to_info(item, runs.get(item.id)).model_dump(mode="json")
+        _schedule_item_to_info(item, runs.get(item.id), preference_timezone).model_dump(mode="json")
         for item in state_reader.get_schedule()
     ]
     return events_stream.broadcast_ui_event(

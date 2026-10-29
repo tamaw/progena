@@ -495,6 +495,8 @@ def _routine_overview(
     meta: Mapping[str, Any],
     window_start: str | None = None,
     window_end: str | None = None,
+    *,
+    inclusive_end: bool = False,
 ) -> list[Span]:
     spans = _overview_root(row)
     parent_id = spans[0].id if spans else f"routine:{row.run_id}"
@@ -509,7 +511,14 @@ def _routine_overview(
         if isinstance(entries, list)
         for index, entry in enumerate(entries)
         if isinstance(entry, Mapping)
-        and _within_window(_time(entry.get("started_at")), window_start, window_end)
+        and (
+            _within_window(_time(entry.get("started_at")), window_start, window_end)
+            or (
+                inclusive_end
+                and window_end is not None
+                and _time(entry.get("started_at")) == window_end
+            )
+        )
     ]
     records.sort(
         key=lambda record: (
@@ -897,7 +906,12 @@ async def _hydrate_run_overviews(store: Any, rows: list[RunRow]) -> None:
                     completed_at=owner.end,
                 )
                 for span in _routine_overview(
-                    child, graphs[thread_id], meta, owner.start, owner.end
+                    child,
+                    graphs[thread_id],
+                    meta,
+                    owner.start,
+                    owner.end,
+                    inclusive_end=True,
                 )[1:]:
                     span.parent_id = owner.id
                     row.overview.append(span)

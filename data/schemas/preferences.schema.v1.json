@@ -16,7 +16,8 @@
     },
     "timezone": {
       "type": "string",
-      "description": "IANA timezone name (e.g. 'America/New_York', 'UTC'). Used to schedule tasks and display timestamps."
+      "description": "IANA timezone name (e.g. 'America/New_York', 'UTC'). Used for the user's wall-clock meaning, including schedules and relative dates.",
+      "default": "UTC"
     },
     "theme": {
       "type": "string",

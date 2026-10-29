@@ -8,8 +8,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-# Copy project metadata and source
+# Third-party dependencies first: this layer is reused until pyproject.toml
+# changes. No source is present yet, so `pip install .` installs only the
+# declared dependencies; the pip cache mount speeds up dependency changes.
 COPY pyproject.toml README.md ./
+RUN --mount=type=cache,target=/root/.cache/pip pip install .
+# Project source
 COPY src/ ./src/
 # data/schemas/ is a static, git-checked-in contract (JSON Schemas for
 # preferences, workflow nodes, MCP entries, ...) baked into the image --
@@ -21,7 +25,7 @@ COPY data/schemas/ ./data/schemas/
 COPY data/canvases/ ./data/canvases/
 # Bundled object agents are read-only files, shared with the runtime image.
 COPY data/agents/objects/ ./data/agents/objects/
-RUN pip install --no-cache-dir . \
+RUN pip install --no-cache-dir --no-deps . \
     && chmod -R a-w /app/data/agents/objects
 
 ENV PYTHONPATH=/app

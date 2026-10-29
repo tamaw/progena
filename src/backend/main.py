@@ -22,7 +22,9 @@ import src.backend.search.routes as search_routes
 import src.backend.settings.preferences as settings_preferences
 from src.backend.chat import responses
 from src.backend.http import middleware
+from src.backend.logging_setup import setup_logging
 
+setup_logging()
 logger = logging.getLogger(__name__)
 
 

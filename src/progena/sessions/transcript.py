@@ -23,7 +23,7 @@ import json
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
-from datetime import UTC, datetime, tzinfo
+from datetime import datetime, tzinfo
 from typing import Any
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
@@ -31,6 +31,7 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMe
 from src.progena.a2a.mentions import _DIRECT_A2A_EMPTY_RE, _DIRECT_A2A_RE
 from src.progena.security.redaction import redact_secrets
 from src.progena.sessions.status import CANCELLED_STATUS
+from src.progena.utils import parse_provider_timestamp
 
 # Bump whenever rendered output changes, so cached transcripts re-render.
 FORMAT_VERSION = 1
@@ -458,10 +459,10 @@ def _reasoning_action(summary: str) -> str:
 def _message_time(message: BaseMessage, committed_at: Mapping[str, datetime]) -> datetime | None:
     if message.id and message.id in committed_at:
         return committed_at[message.id]
-    created = message.additional_kwargs.get("created_at") or message.response_metadata.get(
-        "created_at"
-    )
-    return datetime.fromtimestamp(created, UTC) if isinstance(created, int | float) else None
+    created = message.additional_kwargs.get("created_at")
+    if created is None:
+        created = message.response_metadata.get("created_at")
+    return parse_provider_timestamp(created)
 
 
 def _content_blocks(message: BaseMessage) -> list[dict[str, Any]]:

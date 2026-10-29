@@ -117,7 +117,7 @@ function duration(row, now = Date.now()) {
   return Number.isFinite(started) ? (Number.isFinite(completed) ? completed : now) - started : -Infinity;
 }
 
-function compareRows(left, right, sort) {
+export function compareRunRows(left, right, sort) {
   if (sort === 'duration' || sort === 'shortest') {
     const comparedDuration = duration(right) - duration(left);
     if (comparedDuration) return sort === 'shortest' ? -comparedDuration : comparedDuration;
@@ -146,7 +146,7 @@ function mergeLiveRows(snapshot, previous, changes, query) {
     }
   }
   for (const key of Object.keys(changes.deleted || {})) byKey.delete(key);
-  return [...byKey.values()].sort((left, right) => compareRows(left, right, query.sort));
+  return [...byKey.values()].sort((left, right) => compareRunRows(left, right, query.sort));
 }
 
 function changesAffectSnapshot(changes, query) {
@@ -163,11 +163,11 @@ function markSnapshotsStale(state, row) {
     if (existingIndex >= 0) {
       const rows = snapshot.runs.filter((item) => rowKey(item) !== key);
       if (matches) rows.push(row);
-      snapshot.runs = rows.sort((left, right) => compareRows(left, right, query.sort));
+      snapshot.runs = rows.sort((left, right) => compareRunRows(left, right, query.sort));
       snapshot.stale = true;
     } else if (!query.cursor && matches) {
       snapshot.runs = [...snapshot.runs, row]
-        .sort((left, right) => compareRows(left, right, query.sort));
+        .sort((left, right) => compareRunRows(left, right, query.sort));
       snapshot.stale = true;
     }
   }

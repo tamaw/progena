@@ -10,7 +10,9 @@ and all sub-agents. These tests verify:
 - Error feedback to UI
 """
 
+import json
 from datetime import UTC, datetime
+from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -84,6 +86,22 @@ class TestStateReader:
             pid=1234,
         )
         assert health.is_running()
+
+    @pytest.mark.parametrize(
+        ("last_active", "expected"),
+        [
+            ("2026-10-28T12:59:30", True),
+            ("2026-10-28T12:58:59", False),
+            ("2026-10-29T00:00:00+11:00", True),
+        ],
+    )
+    def test_health_fallback_compares_legacy_and_offset_timestamps_in_utc(
+        self, last_active, expected
+    ):
+        with patch("src.backend.monitoring.state.datetime", wraps=datetime) as clock:
+            clock.now.return_value = datetime(2026, 10, 28, 13, tzinfo=UTC)
+            health = HealthInfo.from_dict({"status": "running", "last_active": last_active})
+            assert health.is_running() is expected
 
     def test_health_info_from_dict_parses_enriched_fields(self):
         """version/started_at/llm_* round-trip through from_dict()."""
@@ -338,6 +356,28 @@ class TestStateReaderFileOperations:
         assert snapshot.build is not None
         assert snapshot.build.in_progress is True
         assert snapshot.build.phase == "verify"
+
+    @pytest.mark.parametrize(
+        "timestamp",
+        [
+            "2026-10-28T13:00:00",
+            "2026-10-29T00:00:00+11:00",
+            "2026-10-28T13:00:00Z",
+        ],
+    )
+    def test_json_logs_expose_utc_instants_and_filter_by_the_same_instant(
+        self, tmp_path, timestamp
+    ):
+        (tmp_path / "runtime.jsonl").write_text(
+            json.dumps({"timestamp": timestamp, "message": "midnight in Melbourne"}) + "\n",
+            encoding="utf-8",
+        )
+        reader = StateReader(document_store=InMemoryDocumentStore(), logs_dir=tmp_path)
+        result = reader.query_logs(
+            start_date="2026-10-28T12:59:59Z", end_date="2026-10-28T13:00:01Z"
+        )
+        assert [entry["timestamp"] for entry in result["entries"]] == ["2026-10-28T13:00:00Z"]
+        assert reader.query_logs(start_date="2026-10-28T13:00:01Z")["entries"] == []
 
     def test_workspace_payload_tolerates_scalar_json_log_lines(self, tmp_path):
         """Scalar JSON log lines should not crash widget or workspace payload generation."""

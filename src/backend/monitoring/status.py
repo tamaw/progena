@@ -212,10 +212,10 @@ async def _status_monitor():
             events_stream.broadcast_ui_event("status.updated", _process_metrics())
 
         except asyncio.CancelledError:
-            print("[StatusMonitor] Cancelled", flush=True)
+            logger.info("[StatusMonitor] Cancelled")
             break
-        except Exception as e:
-            print(f"[StatusMonitor] Error: {e}", flush=True)
+        except Exception:
+            logger.exception("[StatusMonitor] Error")
             await asyncio.sleep(10)
 
 
@@ -367,7 +367,7 @@ def start_status_monitor():
     global _status_monitor_task
     if _status_monitor_task is None or _status_monitor_task.done():
         _status_monitor_task = asyncio.create_task(_status_monitor())
-        print("[StatusMonitor] Started background task", flush=True)
+        logger.info("[StatusMonitor] Started background task")
 
 
 def stop_status_monitor():

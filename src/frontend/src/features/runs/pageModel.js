@@ -2,8 +2,8 @@ function rowKey(row) {
   return row?.kind && row?.run_id ? `${row.kind}:${row.run_id}` : '';
 }
 
-/** Keep cursor pages in server order while removing cursor-boundary duplicates. */
-export function mergeRunPages(pages) {
+/** Deduplicate cursor pages, then order the loaded window with the active sort. */
+export function mergeRunPages(pages, compareRows) {
   const rows = [];
   const seen = new Set();
   for (const page of pages) {
@@ -15,7 +15,7 @@ export function mergeRunPages(pages) {
       }
     }
   }
-  return rows;
+  return compareRows ? rows.sort(compareRows) : rows;
 }
 
 /** Add only older, newly fetched cursor pages to an inspection held at its position. */

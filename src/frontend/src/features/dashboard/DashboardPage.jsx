@@ -85,7 +85,6 @@ function EmptyState({ children, small }) {
 
 function WidgetDetail({ widget, onClose }) {
   const status = widgetStatus(widget);
-  const logs = (widget.logs || widget.data?.logs || []).slice(-12);
   const linkTarget = widget.type === 'mcp' ? `/tools/${encodeURIComponent(widget.id)}` : '/agents';
   return (
     <div id="dashboard-resource-details" className="dashboard-widget-detail" role="region" aria-label={`${widgetLabel(widget)} details`}>
@@ -96,14 +95,6 @@ function WidgetDetail({ widget, onClose }) {
       <div className="dashboard-widget-detail__section">
         <h4>Summary</h4>
         <p>{widgetDescription(widget)}</p>
-      </div>
-      <div className="dashboard-widget-detail__section">
-        <h4>Recent Logs</h4>
-        <pre className="dashboard-widget-detail__logs" tabIndex={0}>
-          {logs.length
-            ? logs.map((log) => `[${log.time || '--'}] ${log.message}`).join('\n')
-            : 'No logs available'}
-        </pre>
       </div>
       <div className="dashboard-widget-detail__actions">
         <Link className="dashboard-link-button" to={linkTarget}>
@@ -374,9 +365,6 @@ export default function DashboardPage() {
                             <small>{widgetDescription(widget)}</small>
                           </span>
                           <StatusPill status={widgetStatus(widget)} />
-                          <span className="dashboard-widget-row__logs">
-                            {(widget.logs || widget.data?.logs || []).length} logs
-                          </span>
                         </button>
                         {isExpanded && (
                           <WidgetDetail

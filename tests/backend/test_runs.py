@@ -414,11 +414,13 @@ def test_tool_returned_error_overrides_successful_handler_audit_and_retains_meas
         "progena.logs.tool_calls",
         "audit",
         {
-            "tool_id": tool_id,
-            "tool_name": "delete",
-            "timestamp": timestamp,
-            "duration_ms": duration,
-            "success": True,
+            "payload": {
+                "tool_id": tool_id,
+                "tool_name": "delete",
+                "timestamp": timestamp,
+                "duration_ms": duration,
+                "success": True,
+            }
         },
     )
     at = datetime.fromtimestamp(timestamp, UTC)
@@ -839,13 +841,13 @@ def test_checkpoint_window_excludes_boundary_models_and_tool_audits():
     inside = AIMessage(
         id="inside",
         content="inside",
-        usage_metadata={"total_tokens": 11},
+        usage_metadata={"input_tokens": 10, "output_tokens": 1, "total_tokens": 11},
         tool_calls=[{"id": "inside-call", "name": "read_file", "args": {"path": "/inside"}}],
     )
     next_attempt = AIMessage(
         id="next",
         content="next attempt",
-        usage_metadata={"total_tokens": 29},
+        usage_metadata={"input_tokens": 20, "output_tokens": 9, "total_tokens": 29},
         tool_calls=[{"id": "next-call", "name": "read_file", "args": {"path": "/next"}}],
     )
     thread = SimpleNamespace(
@@ -964,11 +966,13 @@ async def test_resumed_attempts_keep_checkpoint_meta_and_row_updates_isolated(mo
                             "started_at": (started_a + timedelta(minutes=1)).isoformat(),
                             "duration_ms": 60_000,
                             "routine": {"request_id": "child-a", "thread_id": child_thread_id},
+                            "tokens": {"total_tokens": 11},
                         },
                         {
                             "started_at": (started_b + timedelta(minutes=1)).isoformat(),
                             "duration_ms": 60_000,
                             "routine": {"request_id": "child-b", "thread_id": child_thread_id},
+                            "tokens": {"total_tokens": 29},
                         },
                     ]
                 },
@@ -1009,5 +1013,6 @@ async def test_resumed_attempts_keep_checkpoint_meta_and_row_updates_isolated(mo
     assert [span.tokens for span in resumed.spans if span.id.endswith(":node:work:1")] == [29]
     assert not any(span.tokens == 29 for span in first.spans)
     queue = next(span for span in resumed.spans if span.kind == "queue")
-    assert (queue.start, queue.end) == (queued_b.isoformat(), started_b.isoformat())
+    assert datetime.fromisoformat(queue.start) == queued_b
+    assert datetime.fromisoformat(queue.end) == started_b
     assert {row.run_id: row.tokens for row in rows} == {"attempt-a": 11, "attempt-b": 29}

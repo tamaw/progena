@@ -46,7 +46,6 @@ async def create_conversation_graph(
     llm_client: Any | None = None,
     state_manager: Any | None = None,
     project_root: str | None = None,
-    log_sink: Any | None = None,
     live_state_provider: Callable[[], Any] | None = None,
 ) -> CompiledStateGraph:
     """Create the primary user-facing graph.
@@ -65,7 +64,6 @@ async def create_conversation_graph(
         llm_client=llm_client,
         state_manager=state_manager,
         project_root=project_root,
-        log_sink=log_sink,
         live_state_provider=live_state_provider,
     )
     logger.info("Created Progena conversation graph")

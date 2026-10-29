@@ -22,6 +22,7 @@ from src.backend.storage.documents import (
 )
 from src.backend.workflows.routine_runs import enqueue_routine_run
 from src.progena.artifacts.contracts import ArtifactValidationError, validate_artifact
+from src.progena.cron import timezone_name
 from src.progena.documents.content import content_document_key
 from src.progena.documents.types import DocumentType
 from src.progena.instructions.templates import (
@@ -207,9 +208,19 @@ class WorkflowPromptRunner(Protocol):
 def _coerce_stored_workflow_definition(
     store: BackendDocumentStore, key: str, document: Any
 ) -> WorkflowDefinition:
-    """Coerce a stored definition payload."""
-
-    return coerce_workflow_definition(_document_payload(document, {}))
+    """Coerce a stored definition payload, tolerating legacy null cron timezones."""
+    payload = copy.deepcopy(_document_payload(document, {}))
+    graph = payload.get("graph") if isinstance(payload, dict) else None
+    nodes = graph.get("nodes") if isinstance(graph, dict) else None
+    if isinstance(nodes, dict):
+        for node in nodes.values():
+            if (
+                isinstance(node, dict)
+                and node.get("kind") == "cron"
+                and (node.get("timezone") is None or node.get("timezone") == "")
+            ):
+                node.pop("timezone", None)
+    return coerce_workflow_definition(payload)
 
 
 def list_workflow_definitions(store: BackendDocumentStore) -> list[WorkflowDefinition]:
@@ -291,6 +302,28 @@ def _routine_loader_from_store(store: BackendDocumentStore) -> RoutineLoader:
     return load
 
 
+def _stamp_cron_timezones(
+    payload: Mapping[str, Any],
+    preference_timezone: str,
+    existing: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Copy the preference only into newly created cron triggers without a timezone."""
+    stamped = copy.deepcopy(dict(payload))
+    graph = stamped.get("graph")
+    nodes = graph.get("nodes") if isinstance(graph, dict) else None
+    existing_graph = existing.get("graph") if isinstance(existing, Mapping) else None
+    existing_nodes = existing_graph.get("nodes") if isinstance(existing_graph, Mapping) else {}
+    if isinstance(nodes, dict):
+        for node_id, node in nodes.items():
+            if not isinstance(node, dict) or node.get("kind") != "cron":
+                continue
+            if node.get("timezone") is None or node.get("timezone") == "":
+                node.pop("timezone", None)
+                if node_id not in existing_nodes:
+                    node["timezone"] = preference_timezone
+    return stamped
+
+
 def save_workflow_definition(
     store: BackendDocumentStore,
     payload: Mapping[str, Any],
@@ -300,8 +333,19 @@ def save_workflow_definition(
 
     if instruction_loader is None:
         instruction_loader = _instruction_loader_from_store(store)
+    existing_document = store.get_document(
+        PROGENA_STATE_PREFIX,
+        workflow_definition_key(str(payload.get("id") or "")),
+        None,
+    )
+    existing = existing_document.payload if existing_document is not None else None
+    preferences_document = store.get_document(PROGENA_STATE_PREFIX, "preferences", {})
+    preferences = preferences_document.payload if preferences_document is not None else {}
+    preference_timezone = timezone_name(
+        preferences.get("timezone") if isinstance(preferences, dict) else None
+    )
     typed = derive_workflow_port_schemas(
-        payload,
+        _stamp_cron_timezones(payload, preference_timezone, existing),
         list_document_types(store),
         instruction_loader=instruction_loader,
         routine_loader=_routine_loader_from_store(store),
@@ -466,6 +510,7 @@ def build_manual_trigger_event(
     definition: WorkflowDefinition,
     *,
     payload: Mapping[str, Any] | None = None,
+    preference_timezone: str = "UTC",
 ) -> dict[str, Any]:
     """Build and validate output for an explicit run, preferring a manual trigger."""
 
@@ -479,7 +524,12 @@ def build_manual_trigger_event(
         return resolved_payload
     if isinstance(node, WorkflowNodeCron):
         now = utcnow()
-        return build_cron_trigger_output(node, scheduled_for=now, fired_at=now)
+        return build_cron_trigger_output(
+            node,
+            scheduled_for=now,
+            fired_at=now,
+            preference_timezone=preference_timezone,
+        )
     if not isinstance(node, WorkflowNodeEvent):
         raise ValueError("workflow has no trigger node")
     return {

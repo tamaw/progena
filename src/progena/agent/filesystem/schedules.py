@@ -2,13 +2,18 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Awaitable, Callable
 from typing import Any
 
 from src.progena.agent.filesystem.base import StateFile
+from src.progena.cron import timezone_name
 from src.progena.documents.values import JsonDoc
+from src.progena.schedules.engine import parse_schedule_datetime
 from src.progena.schedules.models import ScheduleEntry
 from src.progena.schedules.validation import validate_schedule_document
+
+logger = logging.getLogger(__name__)
 
 
 def create_schedule_state_file(
@@ -21,10 +26,6 @@ def create_schedule_state_file(
     ``StateManager.get_schedule()``/``save_schedule()`` already use the same
     object-keyed-by-id shape this file exposes to the agent. The presentation
     layer omits ``id`` from each value because the object key is authoritative.
-    Saves diff the incoming document against the current Postgres-backed state
-    and emit the same ``log_schedule_event`` audit entries as direct
-    ``StateManager`` schedule mutations. There is one store read, one store
-    write, and one log call per changed entry - no redundant re-reads.
     """
 
     async def load() -> JsonDoc:
@@ -37,17 +38,26 @@ def create_schedule_state_file(
     async def save(doc: JsonDoc) -> None:
         if not isinstance(doc, dict):
             raise ValueError("schedule.json must be a JSON object keyed by schedule id")
+        previous_entries = await state_manager.get_schedule()
+        previous = {
+            entry_id: entry.model_dump(mode="json") for entry_id, entry in previous_entries.items()
+        }
+        preference_timezone = timezone_name(
+            (await state_manager.get_preferences_config()).get("timezone")
+        )
         entries: dict[str, ScheduleEntry] = {}
         for entry_id, item in doc.items():
             if not isinstance(item, dict):
                 raise ValueError(f"entry '{entry_id}' must be an object")
             fields = {k: v for k, v in item.items() if k != "id"}
+            scheduled_at = fields.get("scheduled_at")
+            if isinstance(scheduled_at, str):
+                parsed_scheduled_at = parse_schedule_datetime(scheduled_at)
+                if parsed_scheduled_at is not None:
+                    fields["scheduled_at"] = parsed_scheduled_at.isoformat()
+            if entry_id not in previous and not fields.get("timezone"):
+                fields["timezone"] = preference_timezone
             entries[entry_id] = ScheduleEntry(id=entry_id, **fields)
-
-        previous = {
-            entry_id: entry.model_dump(mode="json")
-            for entry_id, entry in (await state_manager.get_schedule()).items()
-        }
         await state_manager.save_schedule(entries)
 
         seen_ids: set[str] = set()
@@ -56,22 +66,12 @@ def create_schedule_state_file(
             current = entry.model_dump(mode="json")
             prior = previous.get(entry_id)
             if prior is None:
-                await state_manager.log_schedule_event(
-                    {
-                        "event": "entry_added",
-                        "schedule_id": entry_id,
-                        "description": current.get("description"),
-                    }
-                )
+                logger.info("Schedule entry added: %s", entry_id)
             elif prior != current:
                 changed = sorted(key for key in current if prior.get(key) != current.get(key))
-                await state_manager.log_schedule_event(
-                    {"event": "entry_updated", "schedule_id": entry_id, "updates": changed}
-                )
+                logger.info("Schedule entry updated: %s (%s)", entry_id, ", ".join(changed))
         for removed_id in previous.keys() - seen_ids:
-            await state_manager.log_schedule_event(
-                {"event": "entry_removed", "schedule_id": removed_id}
-            )
+            logger.info("Schedule entry removed: %s", removed_id)
 
     return StateFile(
         name="schedule.json",

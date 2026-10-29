@@ -1,4 +1,6 @@
 import json
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -10,9 +12,9 @@ from src.progena.workflows.documents import (
     coerce_workflow_run,
     default_workflow_definition,
 )
-from src.progena.workflows.events import document_changed_fields
+from src.progena.workflows.events import build_cron_trigger_output, document_changed_fields
 from src.progena.workflows.graph import ordered_workflow_node_ids
-from src.progena.workflows.models import WorkflowDefinition, WorkflowNodeEvent
+from src.progena.workflows.models import WorkflowDefinition, WorkflowNodeCron, WorkflowNodeEvent
 from src.progena.workflows.ports import document_create_input_schema, document_write_input_schema
 from src.progena.workflows.validation import (
     validate_workflow_definition_document,
@@ -653,6 +655,32 @@ def test_cron_node_rejects_bad_expression_or_timezone(expression, timezone, mess
         )
 
 
+def test_cron_node_without_timezone_still_rejects_invalid_expression():
+    payload = cron_workflow(expression="0 25 * * *")
+    del payload["graph"]["nodes"]["cron"]["timezone"]
+
+    with pytest.raises(ValueError, match="invalid cron expression"):
+        validate_workflow_definition_payload(_derive(payload))
+
+
+def test_cron_node_model_dump_omits_an_unstamped_timezone():
+    assert "timezone" not in WorkflowNodeCron(expression="0 9 * * *").model_dump(mode="json")
+
+
+def test_cron_trigger_serializes_instants_as_utc_with_schedule_timezone_metadata():
+    output = build_cron_trigger_output(
+        WorkflowNodeCron(expression="0 9 * * *", timezone="Australia/Melbourne"),
+        scheduled_for=datetime(2026, 10, 4, 9, tzinfo=ZoneInfo("Australia/Melbourne")),
+        fired_at=datetime(2026, 10, 3, 22, 5),
+    )
+
+    assert output == {
+        "scheduled_for": "2026-10-03T22:00:00+00:00",
+        "fired_at": "2026-10-03T22:05:00+00:00",
+        "timezone": "Australia/Melbourne",
+    }
+
+
 def test_cron_node_cannot_have_inbound_edges():
     payload = cron_workflow()
     payload["graph"]["nodes"]["data"] = {
@@ -825,6 +853,23 @@ def test_cron_sourced_runs_satisfy_the_workflow_run_document_schema():
     )
     error = validate_against_schema(run.model_dump(mode="json"), load_schema("workflow_run"))
     assert error is None
+
+
+def test_coerce_workflow_run_normalizes_legacy_and_offset_timestamps():
+    run = coerce_workflow_run(
+        {
+            "run_id": "run_1",
+            "workflow_id": "wf_1",
+            "status": "completed",
+            "queued_at": "2026-10-29T12:00:00",
+            "updated_at": "2026-10-29T14:30:00+02:00",
+            "completed_at": "2026-10-29T13:00:00",
+        }
+    )
+
+    assert run.queued_at == "2026-10-29T12:00:00+00:00"
+    assert run.updated_at == "2026-10-29T12:30:00+00:00"
+    assert run.completed_at == "2026-10-29T13:00:00+00:00"
 
 
 def _data_into(node_id, port, node, value, schema):

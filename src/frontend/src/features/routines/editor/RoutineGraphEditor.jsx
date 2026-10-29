@@ -4,7 +4,7 @@ import { createUuid } from '../../../lib/uuid';
 import useEntityDraft from '../../../hooks/useEntityDraft';
 import { useConfig } from '../../../context/ConfigContext';
 import React, { useState, useRef, useEffect, useCallback, useMemo, useLayoutEffect } from 'react';
-import { selectAgentRoutineRuns, selectAgentRunState, selectRoutineRunLifecycle, selectLatestRoutineRunLifecycle, selectRoutineRunLifecyclesByThreadId, startRoutineRun, controlRoutineRun, continueInterruptedRoutineRun, answerRoutineApproval, fetchRoutineRuns, fetchRunState, selectAgentRoutineRevisionContent, fetchRoutineRevision, selectAgentProfiles, selectAgentRoutineRunsHasMore } from '../../agents/state/agents';
+import { selectAgentRoutineRuns, selectAgentRunState, selectRoutineRunLifecycle, selectLatestRoutineRunLifecycle, selectRoutineRunLifecyclesByThreadId, startRoutineRun, controlRoutineRun, continueInterruptedRoutineRun, answerRoutineApproval, fetchRoutineRuns, fetchRunState, selectAgentRoutineRevisionContent, fetchRoutineRevision, selectAgentProfiles, selectAgentRoutineRunsHasMore, isRunLifecycleNewer } from '../../agents/state/agents';
 import { selectPolicies, fetchPolicies } from '../../settings/state/policies';
 import {
   randomSessionId,
@@ -132,7 +132,7 @@ function useRoutineRunEvents(agentId, parameters, inputSchema) {
   const requestedLifecycle = useSelector((state) => selectRoutineRunLifecycle(state, requestId));
   const latestLifecycle = useSelector((state) => selectLatestRoutineRunLifecycle(state, agentId));
   const lifecycle = !requestId ? latestLifecycle
-    : requestedLifecycle && latestLifecycle?.session_id === sessionId && latestLifecycle.timestamp > requestedLifecycle.timestamp
+    : requestedLifecycle && latestLifecycle?.session_id === sessionId && isRunLifecycleNewer(latestLifecycle, requestedLifecycle)
       ? latestLifecycle : requestedLifecycle;
   const threadId = lifecycle?.thread_id || null;
   const runState = useSelector((state) => threadId ? selectAgentRunState(state, threadId) : undefined) || EMPTY_RUN_STATE;

@@ -654,6 +654,9 @@ class _FakeWorkflowStateManager:
         assert kind == "instruction"
         return sorted(self.prompts.items())
 
+    async def get_preferences_config(self) -> dict[str, str]:
+        return {"timezone": "Australia/Melbourne"}
+
     async def list_routine_graphs(self) -> list[dict[str, Any]]:
         return []
 
@@ -705,6 +708,36 @@ async def test_workflow_awrite_persists_valid_definition():
     assert sm.workflows["customer-followup"]["title"] == "Customer follow-up"
 
 
+@pytest.mark.parametrize("timezone", [None, ""])
+async def test_workflow_awrite_stamps_new_null_or_empty_cron_timezone(timezone):
+    workflow = default_workflow_definition(workflow_id="daily", title="Daily")
+    cron_id = next(
+        node_id for node_id, node in workflow["graph"]["nodes"].items() if node["kind"] == "event"
+    )
+    agent_id = next(
+        node_id for node_id, node in workflow["graph"]["nodes"].items() if node["kind"] == "agent"
+    )
+    workflow["graph"]["nodes"][cron_id] = {
+        "kind": "cron",
+        "title": "Daily",
+        "expression": "0 9 * * *",
+        "timezone": timezone,
+    }
+    workflow["graph"]["nodes"][agent_id]["template"] = "Run at {scheduled_for}"
+    workflow["graph"]["edges"] = [
+        {
+            "from": {"node": cron_id, "port": "scheduled_for"},
+            "to": {"node": agent_id, "port": "scheduled_for"},
+        }
+    ]
+    backend, sm = _workflow_backend([])
+
+    result = await backend.awrite("/daily.json", json.dumps(workflow))
+
+    assert result.error is None
+    assert sm.workflows["daily"]["graph"]["nodes"][cron_id]["timezone"] == "Australia/Melbourne"
+
+
 async def test_workflow_awrite_resolves_prompt_document_references():
     workflow = default_workflow_definition(workflow_id="card-brief", title="Card brief")
     agent_id = next(i for i, n in workflow["graph"]["nodes"].items() if n["kind"] == "agent")
@@ -724,6 +757,34 @@ async def test_workflow_awrite_resolves_prompt_document_references():
     agent["instruction"] = "/instructions/workflows/brief.md"
     result = await backend.awrite("/card-brief.json", json.dumps(workflow))
     assert result.error and "Invalid instruction path" in result.error
+
+
+async def test_workflow_awrite_keeps_existing_unstamped_cron_timezone_omitted():
+    workflow = default_workflow_definition(workflow_id="daily", title="Daily")
+    cron_id = next(
+        node_id for node_id, node in workflow["graph"]["nodes"].items() if node["kind"] == "event"
+    )
+    agent_id = next(
+        node_id for node_id, node in workflow["graph"]["nodes"].items() if node["kind"] == "agent"
+    )
+    workflow["graph"]["nodes"][cron_id] = {
+        "kind": "cron",
+        "title": "Daily",
+        "expression": "0 9 * * *",
+    }
+    workflow["graph"]["nodes"][agent_id]["template"] = "Run at {scheduled_for}"
+    workflow["graph"]["edges"] = [
+        {
+            "from": {"node": cron_id, "port": "scheduled_for"},
+            "to": {"node": agent_id, "port": "scheduled_for"},
+        }
+    ]
+    backend, sm = _workflow_backend([workflow])
+
+    result = await backend.awrite("/daily.json", json.dumps(workflow))
+
+    assert result.error is None
+    assert "timezone" not in sm.workflows["daily"]["graph"]["nodes"][cron_id]
 
 
 async def test_workflow_awrite_rejects_filename_id_mismatch():
@@ -832,18 +893,20 @@ async def test_routine_aedit_and_adelete_round_trip():
 
 
 class _FakeScheduleStateManager:
-    def __init__(self, entries: list[ScheduleEntry] | None = None) -> None:
+    def __init__(
+        self, entries: list[ScheduleEntry] | None = None, timezone: str = "Australia/Melbourne"
+    ) -> None:
         self.entries: dict[str, ScheduleEntry] = {e.id: e for e in entries or []}
-        self.logged_events: list[dict[str, Any]] = []
+        self.timezone = timezone
 
     async def get_schedule(self) -> dict[str, ScheduleEntry]:
         return dict(self.entries)
 
+    async def get_preferences_config(self) -> dict[str, str]:
+        return {"timezone": self.timezone}
+
     async def save_schedule(self, schedule: dict[str, ScheduleEntry]) -> None:
         self.entries = dict(schedule)
-
-    async def log_schedule_event(self, event: dict[str, Any]) -> None:
-        self.logged_events.append(event)
 
 
 def _schedule_backend(
@@ -953,6 +1016,66 @@ async def test_schedule_awrite_persists_new_entry():
     assert result.error is None
     assert sm.entries["sched_9"].id == "sched_9"
     assert sm.entries["sched_9"].message == "new task"
+    assert sm.entries["sched_9"].model_extra["timezone"] == "Australia/Melbourne"
+
+
+@pytest.mark.parametrize("timezone", [None, ""])
+async def test_schedule_awrite_keeps_existing_null_or_empty_timezone(timezone):
+    backend, sm = _schedule_backend(
+        [
+            ScheduleEntry(
+                id="sched_9",
+                message="existing task",
+                cron_expression="0 8 * * *",
+                timezone=timezone,
+            )
+        ]
+    )
+    body = json.dumps(
+        {
+            "sched_9": {
+                "message": "updated task",
+                "cron_expression": "0 8 * * *",
+                "timezone": timezone,
+            }
+        }
+    )
+
+    result = await backend.awrite("/schedule.json", body)
+
+    assert result.error is None
+    assert sm.entries["sched_9"].model_extra["timezone"] == timezone
+
+
+@pytest.mark.parametrize("timezone", [None, ""])
+async def test_schedule_awrite_stamps_new_null_or_empty_timezone(timezone):
+    backend, sm = _schedule_backend([])
+    body = json.dumps(
+        {
+            "sched_9": {
+                "message": "new task",
+                "cron_expression": "0 8 * * *",
+                "timezone": timezone,
+            }
+        }
+    )
+
+    result = await backend.awrite("/schedule.json", body)
+
+    assert result.error is None
+    assert sm.entries["sched_9"].model_extra["timezone"] == "Australia/Melbourne"
+
+
+async def test_schedule_awrite_normalizes_naive_one_shot_timestamp_to_utc():
+    backend, sm = _schedule_backend([])
+
+    result = await backend.awrite(
+        "/schedule.json",
+        json.dumps({"cron_9": {"message": "remind me", "scheduled_at": "2026-06-19T09:47:00"}}),
+    )
+
+    assert result.error is None
+    assert sm.entries["cron_9"].scheduled_at == "2026-06-19T09:47:00+00:00"
 
 
 async def test_schedule_awrite_invalid_does_not_persist():
@@ -978,48 +1101,6 @@ async def test_schedule_awrite_removes_entry():
     result = await backend.awrite("/schedule.json", "{}")
     assert result.error is None
     assert sm.entries == {}
-
-
-# ---- schedule (audit logging via the agent write path) ----------------------
-
-
-async def test_schedule_awrite_new_entry_logs_entry_added():
-    backend, sm = _schedule_backend([])
-    body = json.dumps({"sched_9": {"message": "new task", "cron_expression": "0 8 * * *"}})
-    result = await backend.awrite("/schedule.json", body)
-    assert result.error is None
-    assert sm.logged_events == [
-        {"event": "entry_added", "schedule_id": "sched_9", "description": None}
-    ]
-
-
-async def test_schedule_awrite_removed_entry_logs_entry_removed():
-    backend, sm = _schedule_backend(
-        [ScheduleEntry(id="sched_1", message="do it", cron_expression="0 9 * * *")]
-    )
-    result = await backend.awrite("/schedule.json", "{}")
-    assert result.error is None
-    assert sm.logged_events == [{"event": "entry_removed", "schedule_id": "sched_1"}]
-
-
-async def test_schedule_aedit_updated_entry_logs_entry_updated():
-    backend, sm = _schedule_backend(
-        [ScheduleEntry(id="sched_1", message="old", cron_expression="0 9 * * *")]
-    )
-    result = await backend.aedit("/schedule.json", '"old"', '"new"')
-    assert result.error is None
-    assert len(sm.logged_events) == 1
-    event = sm.logged_events[0]
-    assert event["event"] == "entry_updated"
-    assert event["schedule_id"] == "sched_1"
-    assert "message" in event["updates"]
-
-
-async def test_schedule_awrite_invalid_does_not_log():
-    backend, sm = _schedule_backend([])
-    result = await backend.awrite("/schedule.json", '{"sched_9": {}}')  # missing message
-    assert result.error is not None
-    assert sm.logged_events == []
 
 
 # ---- registry (single whole-document file) -----------------------------------
