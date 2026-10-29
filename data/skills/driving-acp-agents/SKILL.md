@@ -1,7 +1,7 @@
 ---
 name: driving-acp-agents
-description: Drive interactive ACP sessions with Claude through acp_start, acp_send, acp_status, acp_answer, acp_cancel, and acp_list. Use for delegated coding work that needs steering, plan review, or answers to Claude questions.
-allowed-tools: acp_start acp_send acp_status acp_answer acp_cancel acp_list task
+description: Delegate coding through asynchronous ACP sessions, waking only for completion, failure, questions or stalls. Use explicit result reads for evidence, not status-polling supervision.
+allowed-tools: acp_start acp_send acp_status acp_get_result acp_answer acp_cancel acp_list task
 ---
 
 # Driving ACP agents
@@ -13,10 +13,11 @@ with the `acp_*` tools; the `a2a_*` tools are for remote A2A agents only.
 
 1. Ask the `repo-manager` agent to create a worktree for the requested repository
    and branch. Pass that returned worktree path as `cwd` to `acp_start`.
-2. For a non-trivial change, start Claude in `plan` mode. Read the task with
-   `acp_status`; when `pending_input` contains a plan, review it and use
-   `acp_answer(task_id, input_id, {"approve": true})` to approve it, or include
-   specific `feedback` when rejecting it.
+2. For a non-trivial change, start Claude in `plan` mode. End the supervising
+   turn after starting it. A new pending-input event wakes the originating chat;
+   retrieve the exact plan/question with `acp_get_result(source="input")` before answering.
+   Use `acp_answer(task_id, input_id, {"approve": true})` for a sound plan, or
+   include specific `feedback` when rejecting it.
 3. Use `acp_send(task_id, message)` for short, specific corrections. It injects
    the message into a running turn (`outcome: "injected"`), or starts the next
    turn on the same session when Claude is idle (`outcome: "started_turn"`).
@@ -25,8 +26,10 @@ with the `acp_*` tools; the `a2a_*` tools are for remote A2A agents only.
    input promptly with `acp_answer`. Question answers are an object of form field
    values, or `{"action": "decline"}`. Plan answers are
    `{"approve": true|false, "feedback": "..."}`.
-5. Wait with `acp_status(task_id, wait_seconds=...)`, never fast-poll. The wait
-   may be at most 300 seconds. A task cannot exceed `PROGENA_ACP_MAX_TURNS`.
+5. Do not poll or long-poll `acp_status` to supervise work. Completion, failure,
+   new input and a newly detected stall wake the originating conversation.
+   Normal progress costs no supervising model turns. `acp_status` is for an
+   explicit manual inspection only. A task cannot exceed `PROGENA_ACP_MAX_TURNS`.
 6. Claude commits its own work (repo-manager never commits): say so in the
    prompt, e.g. "commit your changes on this branch with a clear message". Claude
    has no GitHub credentials, so have `repo-manager` publish the branch and pull
@@ -49,20 +52,15 @@ Ask the repo-manager agent to create a worktree for repository {repo_id} on
 branch {branch}. Start Claude with acp_start in plan mode, using that worktree as
 cwd, to implement card {card.id}: {card.title}.
 
-Wait with acp_status. Review and answer every pending_input. Approve a sound
-plan, or reject it with precise feedback. Steer Claude with acp_send if needed.
-When complete, ask repo-manager to inspect and publish the branch and pull request.
+End your turn and wait for actionable events; do not repeatedly check status.
+When input is needed, read it with acp_get_result(source="input") and answer it.
+Approve a sound plan, or reject it with precise feedback. Steer with acp_send
+only when needed. On completion, read selected build evidence with acp_get_result,
+then ask repo-manager to inspect and publish the branch and pull request.
 ```
 
-A workflow `agent` node can use that template:
-
-```json
-{"kind":"agent","title":"Build card","instruction":"workflows/build-card.md"}
-```
-
-A routine `agent` node can give a local build-supervisor agent the same rendered
-instruction:
-
-```json
-{"id":"build","kind":"agent","config":{"agent_name":"build-supervisor","instruction":"workflows/build-card.md"}}
-```
+For workflow/routine automation, do not wrap this entire wait in one agent step.
+Create an `acp_task` from document nodes and react to its terminal status,
+`pending_input`, or new `stalled` document events. Match the workflow stage so
+unrelated tasks do not trigger it; leave chat notifications disabled for
+workflow-owned tasks. See the managing-workflows skill.

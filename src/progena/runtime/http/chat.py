@@ -12,7 +12,7 @@ import json
 import logging
 import time
 import uuid
-from collections.abc import Awaitable, Callable, Coroutine
+from collections.abc import Awaitable, Callable
 from typing import Any, TypeVar, cast
 
 from aiohttp import web
@@ -22,6 +22,7 @@ from langgraph.runtime import Runtime
 from src.progena.documents.values import make_json_safe
 from src.progena.orchestration.nodes.checkpoint import checkpoint_node
 from src.progena.orchestration.state import ProgenaState
+from src.progena.runtime.conversation_gate import ConversationTurnGate
 from src.progena.runtime.http.responses import (
     build_response_object,
     build_sse_event,
@@ -118,12 +119,28 @@ class RuntimeChatService:
     def __init__(self, loop_runner: Any, *, bridge_factory: Any = None) -> None:
         self.loop_runner = loop_runner
         self._bridge_factory = bridge_factory or DeepAgentSSEStream
-        self._inflight_by_thread: dict[str, asyncio.Task[Any]] = {}
+        gate = getattr(loop_runner, "conversation_gate", None)
+        heartbeat_context = getattr(loop_runner, "heartbeat_context", None)
+        if not isinstance(gate, ConversationTurnGate):
+            gate = getattr(heartbeat_context, "conversation_gate", None)
+        if not isinstance(gate, ConversationTurnGate):
+            gate = ConversationTurnGate()
+        with contextlib.suppress(Exception):
+            loop_runner.conversation_gate = gate
+        if heartbeat_context is not None:
+            with contextlib.suppress(Exception):
+                heartbeat_context.conversation_gate = gate
+        self._conversation_gate = gate
         self._session_renders: dict[str, asyncio.Task[None]] = {}
         self._session_renders_pending: set[str] = set()
         self._cancel_events: dict[str, asyncio.Event] = {}
         self._subscribers: set[asyncio.Queue[dict[str, Any] | None]] = set()
         self._drain_task: asyncio.Task[None] | None = None
+
+    @property
+    def conversation_gate(self) -> ConversationTurnGate:
+        """The runtime-wide gate used by direct HTTP conversation turns."""
+        return self._conversation_gate
 
     def routes(self) -> list[web.RouteDef]:
         return [
@@ -254,29 +271,12 @@ class RuntimeChatService:
     async def _run_serialized(
         self,
         thread_id: str,
-        turn: Callable[[], Coroutine[Any, Any, _T]],
+        turn: Callable[[], Awaitable[_T]],
         *,
         on_queued: Callable[[], Awaitable[None]],
     ) -> _T:
-        """Run one turn after any in-flight turn on the same conversation.
-
-        Serializing per conversation keeps two concurrent turns on one thread
-        from creating divergent checkpoint branches; different conversations
-        run fully concurrently. The running turn is registered so
-        ``DELETE /v1/conversations/{id}`` can refuse while it is in flight.
-        """
-        existing = self._inflight_by_thread.get(thread_id)
-        if existing is not None and not existing.done():
-            await on_queued()
-            with contextlib.suppress(Exception):
-                await existing
-        task = asyncio.create_task(turn())
-        self._inflight_by_thread[thread_id] = task
-        try:
-            return await task
-        finally:
-            if self._inflight_by_thread.get(thread_id) is task:
-                self._inflight_by_thread.pop(thread_id, None)
+        """Run an HTTP turn through the runtime's shared checkpoint gate."""
+        return await self._conversation_gate.run(thread_id, turn, on_queued=on_queued)
 
     async def _stream_turn(
         self,
@@ -291,6 +291,21 @@ class RuntimeChatService:
         start_sequence: int,
         source: str | None = None,
     ) -> None:
+        if cancel_event.is_set():
+            cancelled_response = build_response_object(
+                response_id, thread_id, model, "cancelled", [], metadata
+            )
+            with contextlib.suppress(ConnectionResetError, ConnectionError):
+                await self._write_frame(
+                    response,
+                    "response.incomplete",
+                    build_sse_event(
+                        "response.incomplete",
+                        {"response": cancelled_response},
+                        start_sequence,
+                    ),
+                )
+            return
         bridge = self._create_direct_stream_bridge()
         cancelled = False
         bridge_cancelled = False
@@ -607,6 +622,8 @@ class RuntimeChatService:
         received_at: float,
         source: str | None = None,
     ) -> dict[str, Any]:
+        if cancel_event.is_set():
+            return build_response_object(response_id, thread_id, model, "cancelled", [], metadata)
         bridge = self._create_direct_stream_bridge()
         try:
             before_count = await self._message_count(thread_id)
@@ -815,8 +832,7 @@ class RuntimeChatService:
 
     async def handle_delete(self, request: web.Request) -> web.Response:
         conversation_id = request.match_info["conversation_id"]
-        existing = self._inflight_by_thread.get(conversation_id)
-        if existing is not None and not existing.done():
+        if self._conversation_gate.is_active(conversation_id):
             return _json_error("Conversation has an in-flight request", "conflict", 409)
 
         graph = getattr(self.loop_runner, "graph", None)

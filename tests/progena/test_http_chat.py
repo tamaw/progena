@@ -17,10 +17,12 @@ from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
+from langgraph.runtime import Runtime
 from langgraph.store.memory import InMemoryStore
 
 import src.progena.llm.provider_context as provider_runtime
 from src.progena.config import LLMConfig, ProgenaConfig, RuntimeConfig
+from src.progena.orchestration.nodes.chat import chat_node
 from src.progena.persistence.store import LangGraphRuntimeStore
 from src.progena.runtime.http.chat import RuntimeChatService
 from src.progena.runtime.queues import RuntimeQueues
@@ -1000,3 +1002,76 @@ async def test_session_renders_of_one_thread_run_in_order(monkeypatch) -> None:
 
     assert calls == ["t1", "t1"]
     assert service._session_renders == {}
+
+
+async def test_http_turn_and_heartbeat_turn_share_compiled_graph_checkpoint_gate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A heartbeat callback waits for an active HTTP turn on the same thread."""
+    monkeypatch.setattr(provider_runtime, "get_provider_repository", lambda: _ProviderRepository())
+    http_started = asyncio.Event()
+    heartbeat_started = asyncio.Event()
+    release_http = asyncio.Event()
+    active = 0
+    max_active = 0
+
+    class _State(TypedDict):
+        messages: Annotated[list, add_messages]
+
+    async def turn(state: _State) -> dict[str, list[AIMessage]]:
+        nonlocal active, max_active
+        active += 1
+        max_active = max(max_active, active)
+        try:
+            content = str(state["messages"][-1].content)
+            if content == "HTTP turn":
+                http_started.set()
+                await release_http.wait()
+            else:
+                heartbeat_started.set()
+            return {"messages": [AIMessage(content=f"{content} complete")]}
+        finally:
+            active -= 1
+
+    builder = StateGraph(_State)
+    builder.add_node("turn", turn)
+    builder.add_edge(START, "turn")
+    builder.add_edge("turn", END)
+    graph = builder.compile(checkpointer=InMemorySaver())
+    loop_runner = FakeLoopRunner(graph=graph)
+    loop_runner.heartbeat_context.agent_graph = graph
+    loop_runner.heartbeat_context.llm_client = None
+    server = await _start_chat_server(loop_runner, bridge_factory=DeepAgentSSEStream)
+    try:
+        async with _client() as client:
+            http_turn = asyncio.create_task(
+                client.post(
+                    f"{server.base_url}/v1/responses",
+                    json={
+                        "input": "HTTP turn",
+                        "stream": False,
+                        "conversation": "shared",
+                        "metadata": {"request_id": "resp-http"},
+                    },
+                )
+            )
+            await asyncio.wait_for(http_started.wait(), timeout=1)
+            heartbeat_turn = asyncio.create_task(
+                chat_node(
+                    {"current_input": "heartbeat turn", "thread_id": "shared"},
+                    Runtime(context=loop_runner.heartbeat_context),
+                )
+            )
+            await asyncio.sleep(0)
+            assert not heartbeat_started.is_set()
+
+            release_http.set()
+            http_response, _ = await asyncio.gather(http_turn, heartbeat_turn)
+
+        assert http_response.status_code == 200
+        assert http_response.json()["status"] == "completed"
+        assert heartbeat_started.is_set()
+        assert max_active == 1
+    finally:
+        release_http.set()
+        await _stop_chat_server(server)

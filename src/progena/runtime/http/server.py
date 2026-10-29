@@ -49,12 +49,22 @@ class ProgenaHTTPServer:
         self._bound_port: int | None = None
         self.routine_controls = routine_controls
         store = getattr(state_manager, "_runtime_store", None)
+        self._chat_service = RuntimeChatService(loop_runner) if loop_runner is not None else None
+        conversation_gate = (
+            self._chat_service.conversation_gate if self._chat_service is not None else None
+        )
         self._agent_protocol = (
-            ObjectAgentProtocol(store=store, resolve_agent=self._resolve_object_agent)
+            ObjectAgentProtocol(
+                store=store,
+                resolve_agent=self._resolve_object_agent,
+                conversation_gate=conversation_gate,
+            )
             if store is not None
             else None
         )
-        self._chat_service = RuntimeChatService(loop_runner) if loop_runner is not None else None
+        heartbeat_context = getattr(loop_runner, "heartbeat_context", None)
+        if heartbeat_context is not None and self._agent_protocol is not None:
+            heartbeat_context.object_agent_protocol = self._agent_protocol
 
     @property
     def bound_port(self) -> int | None:

@@ -7,6 +7,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from src.progena.runtime.conversation_gate import ConversationTurnGate
+
 RoutineRunner = Callable[[str, dict[str, Any]], Awaitable[dict[str, Any]]]
 
 
@@ -43,3 +45,9 @@ class HeartbeatContext:
     # registry of compiled routines.
     routine_runner: RoutineRunner | None = None
     routine_resumer: Callable[..., Awaitable[dict[str, Any]]] | None = None
+    # One runtime-wide per-checkpoint gate shared by HTTP chat, heartbeat
+    # follow-ups, and object-agent protocol continuations.
+    conversation_gate: ConversationTurnGate = field(default_factory=ConversationTurnGate)
+    # Bound by the HTTP runtime after it constructs the object-agent protocol.
+    # Kept optional so the heartbeat graph remains usable without that service.
+    object_agent_protocol: Any | None = None
