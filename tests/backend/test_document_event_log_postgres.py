@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 import uuid
 
 import psycopg
@@ -31,6 +32,18 @@ def _keys(store: PostgresDocumentStore, after, tag: str) -> list[str]:
     return [e.key for e in store.read_document_events(after, 1000) if tag in e.key]
 
 
+def _settled_events(store: PostgresDocumentStore, after):
+    # xmin is cluster-wide: another xdist worker's database can hold it back
+    # after this test's own blocker commits. Production dispatch likewise waits
+    # for deferred events; absence without deferral must still fail assertions.
+    deadline = time.monotonic() + 10
+    while store.has_deferred_document_events(after):
+        if time.monotonic() >= deadline:
+            pytest.fail("Document events remained deferred after releasing the test transaction")
+        time.sleep(0.01)
+    return store.read_document_events(after, 1000)
+
+
 def test_event_from_a_late_committing_transaction_is_not_skipped(store, postgres_url: str):
     tag = uuid.uuid4().hex
     cursor = store.latest_document_event_position()
@@ -49,7 +62,7 @@ def test_event_from_a_late_committing_transaction_is_not_skipped(store, postgres
     finally:
         slow.close()
 
-    events = [e for e in store.read_document_events(cursor, 1000) if tag in e.key]
+    events = [e for e in _settled_events(store, cursor) if tag in e.key]
     assert {e.key for e in events} == {f"kanban_card:{tag}:slow", f"kanban_card:{tag}:fast"}
     positions = [e.position for e in events]
     assert positions == sorted(positions)
@@ -69,7 +82,9 @@ def test_rolled_back_transaction_leaves_no_event_and_does_not_block(store, postg
     with psycopg.connect(postgres_url, autocommit=True) as conn:
         _insert(conn, f"kanban_card:{tag}:kept")
 
-    assert _keys(store, cursor, tag) == [f"kanban_card:{tag}:kept"]
+    assert [e.key for e in _settled_events(store, cursor) if tag in e.key] == [
+        f"kanban_card:{tag}:kept"
+    ]
 
 
 def test_events_behind_an_open_transaction_are_reported_deferred(store, postgres_url: str):
@@ -89,14 +104,15 @@ def test_events_behind_an_open_transaction_are_reported_deferred(store, postgres
         blocker.rollback()
         blocker.close()
 
-    assert _keys(store, cursor, tag) == [f"kanban_card:{tag}:waiting"]
+    assert [e.key for e in _settled_events(store, cursor) if tag in e.key] == [
+        f"kanban_card:{tag}:waiting"
+    ]
 
 
 def test_mutate_document_is_not_overwritten_by_a_concurrent_merge(store):
     """A plain merge landing while a mutator runs waits for it, rather than
     committing in between and then being overwritten by the stale mutation."""
     import threading
-    import time
 
     key = f"kanban_card:{uuid.uuid4().hex}:locked"
     store.save_document(PROGENA_STATE_PREFIX, key, {"a": 0, "b": 0})

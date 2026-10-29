@@ -12,6 +12,7 @@ and all sub-agents. These tests verify:
 
 import json
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -203,13 +204,20 @@ class TestStateReader:
 class TestStateReaderFileOperations:
     """Tests for StateReader file reading operations."""
 
-    def test_read_health_with_no_document_store(self):
-        """Test reading health when there's no document store at all."""
-        reader = StateReader(document_store=InMemoryDocumentStore())
-        health = reader.get_health()
+    @pytest.mark.parametrize(
+        ("reachable", "expected_running"),
+        [(None, False), (False, False), (True, True)],
+        ids=["unconfigured", "unreachable", "reachable"],
+    )
+    def test_read_health_with_no_document_store(self, reachable, expected_running):
+        """Missing durable health must not override explicit live runtime state."""
+        runtime_client = SimpleNamespace(is_running=reachable) if reachable is not None else None
+        with patch("src.backend.lifecycle.state.client", runtime_client):
+            reader = StateReader(document_store=InMemoryDocumentStore())
+            health = reader.get_health()
         assert health.status == "unknown"
         assert health.last_active is None
-        assert not health.is_running()
+        assert health.is_running() is expected_running
 
     def test_read_health_document_not_yet_written(self):
         """Before the heartbeat loop ever writes a "health" document, get_health()
