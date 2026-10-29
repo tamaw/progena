@@ -362,14 +362,16 @@ Status uses the same interrupted rule as the UI
 
 **Spectate → Runs** (`/runs`) is a full-width execution-history flame-chart grid for
 workflows, top-level routine attempts, and schedules. Kind, status, text and rolling
-started-time filters use server-side cursor paging. Sliding kind/time capsules
-and a three-position sort rocker retain their selections in the URL. The time
-capsule offers 1h, 24h, 7d (initially selected), 30d, and All time. Arrow keys,
-Home and End operate each selector; reduced-motion preferences disable sliding.
-Finite ranges use inclusive UTC cutoffs and omit
-runs without a recorded start. Filtering and sorting happen before server paging;
-newest, oldest and longest ordering cover the full matching result set.
-Paging controls live in the toolbar.
+started-time filters use server-side cursor pagination behind an infinite-scrolling
+chart. Loading, retry and end-of-results states stay inside the chart; there are no
+page buttons. Virtualized run groups bound the rendered DOM while preserving
+expanded activity. Changing filters or sorting resets the loaded result window.
+The toolbar retains the sliding 1h/24h/7d/30d/All time selector and right-aligned
+search. Activity and Status headings open styled kind/status filter popovers.
+Started and Duration headings toggle newest/oldest and longest/shortest ordering;
+Tokens and Timeline remain noninteractive. Selections remain URL-backed.
+Finite ranges use inclusive UTC cutoffs and omit runs without a recorded start.
+Filtering and sorting happen before pagination across the full matching result set.
 The page has no estimated step counter, bottom legend or footer text.
 
 Clicking anywhere on a run row, or pressing Enter/Space while the row is focused,

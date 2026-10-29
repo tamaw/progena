@@ -1,13 +1,3 @@
-export function formatRelativeTime(timestamp) {
-  const time = Date.parse(timestamp || '');
-  if (!Number.isFinite(time)) return '—';
-  const seconds = Math.max(0, Math.floor((Date.now() - time) / 1000));
-  if (seconds < 10) return 'now';
-  if (seconds < 60) return `${seconds}s ago`;
-  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
-  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
-  return `${Math.floor(seconds / 86400)}d ago`;
-}
 
 export function formatDuration(start, end, now = Date.now()) {
   const startMs = Date.parse(start || '');

@@ -242,12 +242,23 @@ async def test_global_run_sorting_pages_filtered_cross_kind_results_without_over
         "workflow-short",
     ]
 
+    assert await paged_ids("shortest") == [
+        "workflow-short",
+        "routine-tie",
+        "schedule-tie",
+        "workflow-tie",
+        "schedule-middle",
+        "routine-long",
+    ]
+
     _, cursor = await list_runs(store, status="completed", q="matched", sort="newest", limit=2)
     assert cursor is not None
     with pytest.raises(HTTPException, match="does not match query"):
         await list_runs(store, status="completed", q="matched", sort="oldest", cursor=cursor)
     with pytest.raises(HTTPException, match="does not match query"):
         await list_runs(store, status="failed", q="matched", sort="newest", cursor=cursor)
+    with pytest.raises(HTTPException, match="does not match query"):
+        await list_runs(store, status="completed", q="matched", sort="shortest", cursor=cursor)
 
 
 @pytest.mark.asyncio

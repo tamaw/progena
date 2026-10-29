@@ -89,10 +89,13 @@ describe('runs query state', () => {
   it('keeps global sort modes in independently cached request identities', () => {
     const newest = normalizeRunsQuery({ ...query, sort: 'newest' });
     const duration = normalizeRunsQuery({ ...query, sort: 'duration' });
+    const shortest = normalizeRunsQuery({ ...query, sort: 'shortest' });
 
     expect(newest.sort).toBe('newest');
     expect(duration.sort).toBe('duration');
+    expect(shortest.sort).toBe('shortest');
     expect(runsQueryKey(duration)).not.toBe(runsQueryKey(newest));
+    expect(runsQueryKey(shortest)).not.toBe(runsQueryKey(duration));
   });
 
   it('round-trips a URL-selected run without accepting an unknown kind', () => {

@@ -11,7 +11,7 @@ import { realtimeClientId } from '../../realtime/realtimeClient';
 
 export const RUN_KINDS = ['routine', 'workflow', 'schedule'];
 export const RUN_STATUSES = ['queued', 'running', 'paused', 'completed', 'failed', 'cancelled', 'stopped', 'interrupted'];
-export const RUN_SORTS = ['newest', 'oldest', 'duration'];
+export const RUN_SORTS = ['newest', 'oldest', 'duration', 'shortest'];
 export const RUN_PAGE_SIZE = 50;
 export const RUN_PERIODS = Object.freeze({ hour: 3_600_000, day: 86_400_000, week: 604_800_000, month: 2_592_000_000 });
 
@@ -118,16 +118,16 @@ function duration(row, now = Date.now()) {
 }
 
 function compareRows(left, right, sort) {
-  if (sort === 'duration') {
+  if (sort === 'duration' || sort === 'shortest') {
     const comparedDuration = duration(right) - duration(left);
-    if (comparedDuration) return comparedDuration;
+    if (comparedDuration) return sort === 'shortest' ? -comparedDuration : comparedDuration;
   }
   const leftKey = rowSortKey(left);
   const rightKey = rowSortKey(right);
   const compared = leftKey[0].localeCompare(rightKey[0])
     || leftKey[1].localeCompare(rightKey[1])
     || leftKey[2].localeCompare(rightKey[2]);
-  return sort === 'oldest' ? compared : -compared;
+  return sort === 'oldest' || sort === 'shortest' ? compared : -compared;
 }
 
 function mergeLiveRows(snapshot, changes, query) {

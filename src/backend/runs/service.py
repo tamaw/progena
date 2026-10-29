@@ -33,7 +33,7 @@ from .models import RunKind, RunPeriod, RunRow, RunSort, RunTrace, Span, SpanKin
 
 _PAGE_SIZE = 50
 _TERMINAL = frozenset({"completed", "failed", "cancelled", "stopped", "error", "interrupted"})
-_CURSOR_VERSION = 2
+_CURSOR_VERSION = 3
 
 
 @dataclass(frozen=True)
@@ -221,13 +221,22 @@ def _order_key(
             kind,
             run_id,
         )
+    if sort == "shortest":
+        return (
+            duration_us is None,
+            duration_us if duration_us is not None else 0,
+            started_at is None,
+            started_at or "",
+            kind,
+            run_id,
+        )
     return (started_at is not None, started_at or "", kind, run_id)
 
 
 def _row_order_key(row: RunRow, sort: RunSort, as_of: str) -> tuple[Any, ...]:
     return _order_key(
         sort=sort,
-        duration_us=_duration_us(row, as_of) if sort == "duration" else None,
+        duration_us=_duration_us(row, as_of) if sort in {"duration", "shortest"} else None,
         started_at=row.started_at,
         kind=row.kind,
         run_id=row.run_id,
@@ -238,7 +247,7 @@ def _sort_rows(rows: Iterable[RunRow], sort: RunSort, as_of: str) -> list[RunRow
     return sorted(
         rows,
         key=lambda row: _row_order_key(row, sort, as_of),
-        reverse=sort != "oldest",
+        reverse=sort not in {"oldest", "shortest"},
     )
 
 
@@ -249,12 +258,12 @@ def _rows_after_cursor(
         return list(rows)
     boundary = _order_key(
         sort=sort,
-        duration_us=cursor.duration_us if sort == "duration" else None,
+        duration_us=cursor.duration_us if sort in {"duration", "shortest"} else None,
         started_at=cursor.started_at,
         kind=cursor.row_kind,
         run_id=cursor.run_id,
     )
-    if sort == "oldest":
+    if sort in {"oldest", "shortest"}:
         return [row for row in rows if _row_order_key(row, sort, as_of) > boundary]
     return [row for row in rows if _row_order_key(row, sort, as_of) < boundary]
 
@@ -283,7 +292,7 @@ def _cursor_encode(
         "since": since,
         "as_of": as_of,
         "key": [
-            _duration_us(row, as_of) if sort == "duration" else None,
+            _duration_us(row, as_of) if sort in {"duration", "shortest"} else None,
             row.started_at,
             row.kind,
             row.run_id,

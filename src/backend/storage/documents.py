@@ -254,7 +254,7 @@ class BackendDocumentStore(Protocol):
         *,
         status: str,
         q: str,
-        sort: Literal["newest", "oldest", "duration"],
+        sort: Literal["newest", "oldest", "duration", "shortest"],
         cursor: tuple[int | None, str | None, str, str] | None,
         since: str | None = None,
         as_of: str,
@@ -488,7 +488,7 @@ class InMemoryDocumentStore:
         *,
         status: str,
         q: str,
-        sort: Literal["newest", "oldest", "duration"],
+        sort: Literal["newest", "oldest", "duration", "shortest"],
         cursor: tuple[int | None, str | None, str, str] | None,
         since: str | None = None,
         as_of: str,
@@ -526,6 +526,15 @@ class InMemoryDocumentStore:
                     elapsed_us is not None,
                     elapsed_us if elapsed_us is not None else -1,
                     started is not None,
+                    timestamp,
+                    row_kind,
+                    run_id,
+                )
+            if sort == "shortest":
+                return (
+                    elapsed_us is None,
+                    elapsed_us if elapsed_us is not None else 0,
+                    started is None,
                     timestamp,
                     row_kind,
                     run_id,
@@ -573,7 +582,9 @@ class InMemoryDocumentStore:
                 continue
             elapsed_us = duration_us(started, payload.get("completed_at"))
             key = order_key(started, elapsed_us, "workflow", run_id)
-            if boundary is not None and (key <= boundary if sort == "oldest" else key >= boundary):
+            if boundary is not None and (
+                key <= boundary if sort in {"oldest", "shortest"} else key >= boundary
+            ):
                 continue
             step_audit = payload.get("step_audit")
             compact_audit = (
@@ -641,7 +652,7 @@ class InMemoryDocumentStore:
                     _compact_workflow_run_definition(definition),
                 )
             )
-        rows.sort(key=lambda row: row[0], reverse=sort != "oldest")
+        rows.sort(key=lambda row: row[0], reverse=sort not in {"oldest", "shortest"})
         return [(payload, definition) for _, payload, definition in rows[:limit]]
 
     def save_document(self, prefix: str, key: str, payload: Any) -> None:
@@ -1815,7 +1826,7 @@ class PostgresDocumentStore:
         *,
         status: str,
         q: str,
-        sort: Literal["newest", "oldest", "duration"],
+        sort: Literal["newest", "oldest", "duration", "shortest"],
         cursor: tuple[int | None, str | None, str, str] | None,
         since: str | None = None,
         as_of: str,
@@ -1877,6 +1888,35 @@ class PostgresDocumentStore:
                         "OR (duration_us = %s AND (started IS NULL "
                         "OR (started, 'workflow'::text, p->>'run_id') "
                         "< (%s::timestamptz, %s::text, %s::text))))"
+                    )
+                    boundary_params = [duration_us, duration_us, started_at, row_kind, run_id]
+        elif sort == "shortest":
+            order_by = (
+                "duration_us IS NULL ASC, duration_us ASC, started IS NULL ASC, "
+                "started ASC, p->>'run_id' ASC"
+            )
+            if cursor is not None:
+                duration_us, started_at, row_kind, run_id = cursor
+                if duration_us is None:
+                    if started_at is None:
+                        boundary_sql = (
+                            "AND duration_us IS NULL AND started IS NULL "
+                            "AND ('workflow'::text, p->>'run_id') > (%s::text, %s::text)"
+                        )
+                        boundary_params = [row_kind, run_id]
+                    else:
+                        boundary_sql = (
+                            "AND duration_us IS NULL AND (started IS NULL "
+                            "OR (started, 'workflow'::text, p->>'run_id') "
+                            "> (%s::timestamptz, %s::text, %s::text))"
+                        )
+                        boundary_params = [started_at, row_kind, run_id]
+                else:
+                    boundary_sql = (
+                        "AND (duration_us IS NULL OR duration_us > %s "
+                        "OR (duration_us = %s AND (started IS NULL "
+                        "OR (started, 'workflow'::text, p->>'run_id') "
+                        "> (%s::timestamptz, %s::text, %s::text))))"
                     )
                     boundary_params = [duration_us, duration_us, started_at, row_kind, run_id]
         else:

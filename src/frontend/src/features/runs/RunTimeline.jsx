@@ -73,6 +73,7 @@ export default function RunTimeline({ trace, bounds, now }) {
           <button type="button" className={`flame-icon-button flame-details-toggle${detailOpen ? ' is-selected' : ''}`} aria-label={`${detailOpen ? 'Hide' : 'Show'} details for ${row.name}`} aria-expanded={detailOpen} aria-controls={`span-details-${first.id}`} data-tooltip="Toggle call details" onClick={() => setDetailsId(detailOpen ? null : row.id)}><DetailsIcon /></button>
         </div>
         <div className={`flame-status${failed ? ' flame-status--failed' : ''}`} role="cell">{failed ? 'failed' : live ? 'running' : row.spans.length > 1 ? row.kind : first.status}</div>
+        <div className="flame-number flame-started" role="cell">—</div>
         <div className="flame-number" role="cell">{duration}</div>
         <div className="flame-number flame-tokens" role="cell" data-tooltip={tokens === null ? 'No recorded token usage' : `${tokens.toLocaleString()} recorded tokens${row.hasChildren ? ' · inclusive of child activity' : ''}`}>{formatTokenCount(tokens)}</div>
         <div className="flame-track" role="cell">{row.spans.map((span) => {
@@ -81,7 +82,7 @@ export default function RunTimeline({ trace, bounds, now }) {
           return <button key={span.id} type="button" className={`flame-bar flame-bar--${span.kind}${geometry.unavailable ? ' flame-bar--marker' : ''}${span.error ? ' flame-bar--error' : ''}${chosen ? ' is-selected' : ''}`} style={{ left: `${geometry.left}%`, width: `${geometry.width}%` }} data-tooltip={`${span.name} · ${spanDuration(span, bounds, now)} · ${formatTokenCount(rollups.get(span.id)?.tokens)} tokens${geometry.unavailable ? ' · timing unavailable' : ''}`} aria-label={`Select ${span.name}, ${spanDuration(span, bounds, now)}`} aria-pressed={chosen} onClick={() => setSelected((value) => ({ ...value, [row.id]: span.id }))}><span>{span.name}</span></button>;
         })}{row.hasChildren ? <ActivitySummary spans={rollups.get(first.id)?.descendants || []} bounds={bounds} now={now} /> : null}</div>
       </div>
-      {detailOpen ? <div id={`span-details-${first.id}`} className="flame-detail-row" role="row"><div role="cell" aria-colspan={5}><SpanDisclosure row={row} selectedId={selectedId} onSelect={(id) => setSelected((value) => ({ ...value, [row.id]: id }))} /></div></div> : null}
+      {detailOpen ? <div id={`span-details-${first.id}`} className="flame-detail-row" role="row"><div role="cell" aria-colspan={6}><SpanDisclosure row={row} selectedId={selectedId} onSelect={(id) => setSelected((value) => ({ ...value, [row.id]: id }))} /></div></div> : null}
     </Fragment>;
   });
 }
