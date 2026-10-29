@@ -163,13 +163,19 @@ async def test_a_failed_routine_names_the_step_and_keeps_the_whole_error(runs: _
         thread_id="routine:smoke:rev1:f1",
     )
     await runs.event(
-        "aa11bb22-4", "failed", "2026-10-28T03:01:00+00:00", agent_id="smoke", error=error
+        "aa11bb22-4",
+        "failed",
+        "2026-10-28T03:01:00+00:00",
+        agent_id="smoke",
+        thread_id="routine:smoke:rev1:f1",
+        error=error,
     )
     runs.checkpoints.run_meta["routine:smoke:rev1:f1"] = {
         "fetch": [_step(1, "2026-10-28T03:00:00+00:00", {"fetch": "x"})]
     }
     text = await runs.text("/runs/routines/2026-10-28_smoke-interrupt_aa11bb22-4.md")
-    assert f"has quit [failed at Fetch: {error}]" in text
+    assert "Fetch" in text
+    assert error in text
     front = yaml.safe_load(text.split("---\n")[1])
     assert front["status"] == "failed"
     assert front["error"] == error

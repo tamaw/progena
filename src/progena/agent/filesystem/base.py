@@ -15,6 +15,7 @@ from deepagents.backends.protocol import (
     FileDownloadResponse,
     FileInfo,
     GlobResult,
+    GrepMatch,
     GrepResult,
     LsResult,
     ReadResult,
@@ -27,7 +28,6 @@ from deepagents.backends.utils import (
     compile_grep_include_glob,
     create_file_data,
     file_data_to_string,
-    grep_matches_from_files,
     perform_string_replacement,
     slice_read_response,
 )
@@ -68,7 +68,7 @@ class _AsyncOnlyFileBackendMixin:
 
     ``agrep``/``aglob`` are implemented once here on top of each subclass's
     own ``als`` and ``aread``: grep searches exactly the text ``read_file``
-    shows (so its line numbers line up), glob matches the listed paths.
+    shows (so its line numbers line up), and glob matches discoverable files.
 
     Also supplies ``adownload_files``, required by DeepAgents'
     ``BackendProtocol`` (used e.g. by ``MemoryMiddleware``/``SkillsMiddleware``
@@ -119,6 +119,15 @@ class _AsyncOnlyFileBackendMixin:
             )
         return responses
 
+    async def _virtual_unlisted_file_exists(self, path: str) -> bool:
+        """Whether a valid, readable unlisted file is addressable at ``path``.
+
+        Most virtual files are discoverable through ``als``. Backends with stable
+        identifiers may opt in for an exact historical filename without exposing
+        aliases, generated children, or arbitrary readable paths to glob/grep.
+        """
+        return False
+
     async def _virtual_file_paths(self, path: str = "/") -> list[str]:
         """List files below one normalized virtual path without walking siblings."""
         normalized_path = _normalize_path(path)
@@ -128,6 +137,8 @@ class _AsyncOnlyFileBackendMixin:
             for entry in parent_listing.entries or []:
                 if entry["path"] == normalized_path and not entry.get("is_dir"):
                     return [normalized_path]
+            if await self._virtual_unlisted_file_exists(normalized_path):
+                return [normalized_path]
 
         paths: list[str] = []
         pending, seen = [normalized_path], {normalized_path}
@@ -149,7 +160,7 @@ class _AsyncOnlyFileBackendMixin:
         return paths
 
     async def aglob(self, pattern: str, path: str = "/") -> GlobResult:
-        """Listed paths under ``path`` matching ``pattern`` (``**`` recurses)."""
+        """Discoverable paths under ``path`` matching ``pattern`` (``**`` recurses)."""
         normalized_path = _normalize_path(path)
         effective = pattern.lstrip("/")
         matches: list[FileInfo] = []
@@ -180,7 +191,7 @@ class _AsyncOnlyFileBackendMixin:
             except InvalidGlobPatternError as exc:
                 return GrepResult(error=str(exc))
 
-        files: dict[str, FileData] = {}
+        matches: list[GrepMatch] = []
         for file_path in await self._virtual_file_paths(normalized_path):
             if matcher is not None and not matcher(_relative_to_root(file_path, normalized_path)):
                 continue
@@ -189,9 +200,17 @@ class _AsyncOnlyFileBackendMixin:
             except Exception as exc:  # noqa: BLE001 - one unreadable document must not hide the rest
                 logger.warning("grep: skipping unreadable %s: %s", file_path, exc)
                 continue
-            if result.error is None and result.file_data is not None:
-                files[file_path] = result.file_data
-        return grep_matches_from_files(files, pattern, normalized_path, glob, max_count=max_count)
+            if result.error is not None or result.file_data is None:
+                continue
+            if result.file_data.get("encoding") == "base64":
+                continue
+            for line_num, line in enumerate(file_data_to_string(result.file_data).split("\n"), 1):
+                if pattern not in line:
+                    continue
+                if max_count is not None and len(matches) >= max_count:
+                    return GrepResult(matches=matches, truncated=True)
+                matches.append({"path": file_path, "line": line_num, "text": line})
+        return GrepResult(matches=matches)
 
 
 class StateDocumentBackend(_AsyncOnlyFileBackendMixin):

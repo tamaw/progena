@@ -127,17 +127,17 @@ async def test_grep_uses_sdk_nested_brace_and_exact_file_glob_semantics_before_r
     assert backend.read_paths == ["/nested/report.md"]
 
 
-async def test_grep_preserves_max_count_truncation_after_pre_read_filtering():
+async def test_grep_stops_after_a_second_match_in_the_first_file_at_max_count():
+    first = "/dated/00-first.md"
     backend = _TrackingVirtualBackend(
         {
-            "/dated/first.md": "needle first\n",
-            "/dated/second.md": "needle second\n",
-            "/other/ignored.md": None,
+            first: "needle first\nneedle second\n",
+            **{f"/dated/{index:02}-later.md": "needle later\n" for index in range(1, 40)},
         }
     )
 
     result = await backend.agrep("needle", path="/", glob="dated/*.md", max_count=1)
 
-    assert result.matches == [{"path": "/dated/first.md", "line": 1, "text": "needle first"}]
+    assert result.matches == [{"path": first, "line": 1, "text": "needle first"}]
     assert result.truncated is True
-    assert backend.read_paths == ["/dated/first.md", "/dated/second.md"]
+    assert backend.read_paths == [first]

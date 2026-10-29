@@ -80,7 +80,7 @@ async def _graph(ctx: RunContext, started: dict[str, Any]) -> dict[str, Any] | N
             pinned = None
         if isinstance(pinned, dict):
             return pinned
-    current = await ctx.state_manager.get_routine_graph(routine_id)
+    current = await ctx.routine_graph(routine_id)
     return current if isinstance(current, dict) else None
 
 
@@ -113,12 +113,15 @@ def _attempt_window(
     return begin, (later[0] if later else None)
 
 
-async def _run_meta(ctx: RunContext, thread_id: str) -> list[tuple[str, dict[str, Any]]]:
+async def _run_meta(
+    ctx: RunContext, thread_id: str
+) -> tuple[list[tuple[str, dict[str, Any]]], Any | None]:
+    """The recorded entries and checkpoint tip for one routine thread."""
     if ctx.checkpointer is None or not thread_id:
-        return []
+        return [], None
     tip = await ctx.checkpoint(thread_id)
     if tip is None:
-        return []
+        return [], None
     values = tip.checkpoint.get("channel_values", {})
     meta = values.get("run_meta") if isinstance(values, dict) else None
     entries: list[tuple[str, dict[str, Any]]] = []
@@ -126,7 +129,7 @@ async def _run_meta(ctx: RunContext, thread_id: str) -> list[tuple[str, dict[str
         for node_id, runs in meta.items():
             if isinstance(runs, list):
                 entries.extend((str(node_id), run) for run in runs if isinstance(run, dict))
-    return sorted(entries, key=lambda pair: pair[1].get("step") or 0)
+    return sorted(entries, key=lambda pair: pair[1].get("step") or 0), tip
 
 
 def _step_output(entry: dict[str, Any], node: dict[str, Any], node_id: str) -> Any:
@@ -158,22 +161,64 @@ def _invocation_ends(
     return ends
 
 
-async def _child_attempt(ctx: RunContext, entry: dict[str, Any]) -> dict[str, Any] | None:
-    """Resolve a nested routine only through its persisted invocation identity."""
-    invocation = entry.get("routine")
+def _invocation_identity(invocation: Any) -> tuple[str, str] | None:
+    """The persisted child request/thread pair; never infer either identity."""
     if not isinstance(invocation, dict):
         return None
     request_id = invocation.get("request_id")
+    thread_id = invocation.get("thread_id")
     if not isinstance(request_id, str) or not request_id:
         return None
-    thread_id = invocation.get("thread_id")
-    if isinstance(thread_id, str) and thread_id:
-        await ctx.load_thread_events(thread_id)
+    if not isinstance(thread_id, str) or not thread_id:
+        return None
+    return request_id, thread_id
+
+
+def _pending_child_invocations(tip: Any | None) -> list[tuple[str, dict[str, Any]]]:
+    """Nested child identities held in native LangGraph interrupt writes.
+
+    A paused routine node has not returned, so it has no ``run_meta`` entry.
+    Its checkpointed ``__interrupt__`` write is the durable provenance of the
+    child that completed work before asking for approval.
+    """
+    children: list[tuple[str, dict[str, Any]]] = []
+    for write in getattr(tip, "pending_writes", ()) or ():
+        try:
+            _task_id, channel, interrupts = write
+        except (TypeError, ValueError):
+            continue
+        if channel != "__interrupt__" or not isinstance(interrupts, (list, tuple)):
+            continue
+        for interrupt in interrupts:
+            payload = getattr(interrupt, "value", None)
+            if not isinstance(payload, dict):
+                continue
+            node_id = payload.get("node")
+            invocation = payload.get("child_invocation")
+            if (
+                isinstance(node_id, str)
+                and node_id
+                and isinstance(invocation, dict)
+                and _invocation_identity(invocation) is not None
+            ):
+                children.append((node_id, invocation))
+    return children
+
+
+async def _child_attempt(ctx: RunContext, invocation: Any) -> dict[str, Any] | None:
+    """Resolve a nested routine only through its persisted request/thread pair."""
+    identity = _invocation_identity(invocation)
+    if identity is None:
+        return None
+    request_id, thread_id = identity
+    await ctx.load_thread_events(thread_id)
     return next(
         (
             event
             for event in ctx.routine_events
-            if event.get("status") == "started" and event.get("request_id") == request_id
+            if event.get("status") == "started"
+            and event.get("request_id") == request_id
+            and event.get("thread_id") == thread_id
         ),
         None,
     )
@@ -207,7 +252,12 @@ async def routine_log(
     begin, end = _attempt_window(ctx, started)
     tokens: dict[str, int | None] | None = None
     last_label: str | None = None
-    records = await _run_meta(ctx, thread_id)
+    records, tip = await _run_meta(ctx, thread_id)
+    resolved_children = {
+        identity
+        for _node_id, entry in records
+        if (identity := _invocation_identity(entry.get("routine"))) is not None
+    }
     for (node_id, entry), invocation_end in zip(
         records, _invocation_ends(records, end), strict=True
     ):
@@ -224,7 +274,7 @@ async def routine_log(
         last_label = label
         value = _step_output(entry, node, node_id)
         if kind == "routine" and depth < MAX_CHILD_DEPTH:
-            child = await _child_attempt(ctx, entry)
+            child = await _child_attempt(ctx, entry.get("routine"))
             if child is not None:
                 child_front = await inline_child(
                     ctx, log, child, steps=steps, depth=depth, channel=channel
@@ -270,6 +320,27 @@ async def routine_log(
             log.act(when, f"{verb} → {step_result(value, steps)}")
             continue
         log.act(when, f"{verb} {label} → {step_result(value, steps)}")
+
+    for node_id, invocation in _pending_child_invocations(tip):
+        identity = _invocation_identity(invocation)
+        if identity is None or identity in resolved_children:
+            continue
+        node = nodes.get(node_id)
+        if not isinstance(node, dict) or node.get("kind") != "routine" or depth >= MAX_CHILD_DEPTH:
+            continue
+        child = await _child_attempt(ctx, invocation)
+        if child is None:
+            continue
+        when = at(child.get("timestamp"))
+        if begin is not None and when is not None and when < begin:
+            continue
+        if end is not None and when is not None and when >= end:
+            continue
+        label = str(node.get("label") or node_id)
+        last_label = label
+        child_front = await inline_child(ctx, log, child, steps=steps, depth=depth, channel=channel)
+        resolved_children.add(identity)
+        tokens = add_tokens(tokens, child_front.get("tokens"))
 
     closed = at(latest.get("timestamp"))
     error = latest.get("error")

@@ -34,6 +34,26 @@ class RoutineStore:
         rows = await self._access.store.list_documents(prefix, thread_ids=thread_ids)
         return [payload for _, payload in rows if isinstance(payload, dict)]
 
+    async def get_routine_run_started(self, request_id: str) -> dict[str, Any] | None:
+        """Read one attempt's start without loading its terminal output."""
+        from ..routines.events import RUN_EVENT_PREFIX
+
+        payload = await self._access.store.peek_document(f"{RUN_EVENT_PREFIX}{request_id}:started")
+        return payload if isinstance(payload, dict) else None
+
+    async def list_routine_run_event_revisions(
+        self, *, thread_ids: list[str]
+    ) -> list[dict[str, Any]]:
+        """Read lifecycle identity/status metadata, never event inputs or outputs."""
+        from ..routines.events import RUN_EVENT_PREFIX
+
+        rows = await self._access.store.list_documents(
+            RUN_EVENT_PREFIX,
+            payload_fields=("request_id", "status", "timestamp", "thread_id", "runtime_instance"),
+            thread_ids=thread_ids,
+        )
+        return [payload for _, payload in rows if isinstance(payload, dict)]
+
     async def list_routine_run_summaries(self) -> list[dict[str, Any]]:
         """Return compact lifecycle records for routine-run directory listings."""
         from ..routines.events import RUN_EVENT_PREFIX

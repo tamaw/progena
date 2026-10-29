@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 from typing import Any
 
@@ -82,8 +83,9 @@ class _RoutineState:
         ]
         self.graph = {
             "name": "Cache routine",
-            "nodes": [{"id": "reply", "kind": "prompt", "label": "Reply"}],
+            "nodes": [{"id": "reply", "kind": "eval", "label": "Reply"}],
         }
+        self.full_event_loads = 0
 
     async def get_preferences_config(self) -> dict[str, Any]:
         return {"timezone": "UTC"}
@@ -91,9 +93,33 @@ class _RoutineState:
     async def get_routine_graph(self, _routine_id: str) -> dict[str, Any]:
         return self.graph
 
+    async def get_routine_run_started(self, request_id: str) -> dict[str, Any] | None:
+        return next(
+            (
+                event
+                for event in self.events
+                if event.get("request_id") == request_id and event.get("status") == "started"
+            ),
+            None,
+        )
+
+    async def list_routine_run_event_revisions(
+        self, *, thread_ids: list[str]
+    ) -> list[dict[str, Any]]:
+        return [
+            {
+                key: event[key]
+                for key in ("request_id", "status", "timestamp", "thread_id", "runtime_instance")
+                if key in event
+            }
+            for event in self.events
+            if event.get("thread_id") in thread_ids
+        ]
+
     async def list_routine_run_events(
         self, request_id: str | None = None, *, thread_ids: list[str] | None = None
     ) -> list[dict[str, Any]]:
+        self.full_event_loads += 1
         if thread_ids is not None:
             return [event for event in self.events if event.get("thread_id") in thread_ids]
         if request_id is not None:
@@ -130,16 +156,19 @@ async def test_terminal_routine_cache_uses_compact_native_checkpoint_versions() 
     thread_id = "routine:cache:root"
     checkpoints = _NativeCheckpoints()
     checkpoints.advance(thread_id, "", _run_meta("early result"))
-    backend = RunDirectoryBackend(_RoutineState(thread_id), checkpoints)
+    state = _RoutineState(thread_id)
+    backend = RunDirectoryBackend(state, checkpoints)
 
     first = await _routine_text(backend)
     assert "early result" in first
     assert checkpoints.aget_calls == 1
+    assert state.full_event_loads == 1
 
     cached = await _routine_text(backend)
     assert "early result" in cached
     # A valid cache hit reads `storage` checkpoint IDs, not a hydrated checkpoint.
     assert checkpoints.aget_calls == 1
+    assert state.full_event_loads == 1
 
     checkpoints.advance(thread_id, "", _run_meta("late result"))
     refreshed = await _routine_text(backend)
@@ -253,7 +282,7 @@ class _WorkflowState:
         ]
         self.graph = {
             "name": "Cache routine",
-            "nodes": [{"id": "reply", "kind": "prompt", "label": "Reply"}],
+            "nodes": [{"id": "reply", "kind": "eval", "label": "Reply"}],
         }
 
     async def get_preferences_config(self) -> dict[str, Any]:
@@ -267,6 +296,19 @@ class _WorkflowState:
             "title": "Cache workflow",
             "graph": {"nodes": {"child": {"kind": "routine", "title": "Child"}}},
         }
+
+    async def list_routine_run_event_revisions(
+        self, *, thread_ids: list[str]
+    ) -> list[dict[str, Any]]:
+        return [
+            {
+                key: event[key]
+                for key in ("request_id", "status", "timestamp", "thread_id", "runtime_instance")
+                if key in event
+            }
+            for event in self.events
+            if event.get("thread_id") in thread_ids
+        ]
 
     async def list_routine_run_events(
         self, request_id: str | None = None, *, thread_ids: list[str] | None = None
@@ -313,6 +355,12 @@ async def test_workflow_cache_tracks_its_routine_child_checkpoint() -> None:
     assert "early child result" in cached
     assert checkpoints.aget_calls == 1
 
+    state.graph["nodes"][0]["label"] = "Updated child"
+    graph_refreshed, _ = await backend._render(
+        await backend._context(), "workflow", "workflow.md", payload
+    )
+    assert "Updated child" in graph_refreshed
+
     state.events.append(
         {
             "request_id": "child-run",
@@ -326,14 +374,14 @@ async def test_workflow_cache_tracks_its_routine_child_checkpoint() -> None:
     )
     settled, _ = await backend._render(await backend._context(), "workflow", "workflow.md", payload)
     assert "Child failure arrived after its parent settled" in settled
-    assert checkpoints.aget_calls == 2
+    assert checkpoints.aget_calls == 3
 
     checkpoints.advance(thread_id, "", _run_meta("late child result"))
     refreshed, _ = await backend._render(
         await backend._context(), "workflow", "workflow.md", payload
     )
     assert "late child result" in refreshed
-    assert checkpoints.aget_calls == 3
+    assert checkpoints.aget_calls == 4
 
 
 async def test_terminal_routine_cache_observes_its_first_checkpoint() -> None:
@@ -345,3 +393,67 @@ async def test_terminal_routine_cache_observes_its_first_checkpoint() -> None:
     checkpoints.advance(thread_id, "", _run_meta("First checkpoint arrived"))
     refreshed = await _routine_text(backend)
     assert "First checkpoint arrived" in refreshed
+
+
+async def test_terminal_routine_cache_fingerprints_consumed_graph() -> None:
+    thread_id = "routine:cache:graph"
+    checkpoints = _NativeCheckpoints()
+    checkpoints.advance(thread_id, "", _run_meta("result"))
+    state = _RoutineState(thread_id)
+    backend = RunDirectoryBackend(state, checkpoints)
+
+    first = await _routine_text(backend)
+    assert "Reply" in first
+    assert state.full_event_loads == 1
+
+    state.graph["nodes"][0]["label"] = "Revised reply"
+    refreshed = await _routine_text(backend)
+    assert "Revised reply" in refreshed
+    assert state.full_event_loads == 2
+
+
+async def test_concurrent_readers_keep_the_newer_cached_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    thread_id = "routine:cache:concurrent"
+    checkpoints = _NativeCheckpoints()
+    checkpoints.advance(thread_id, "", _run_meta("old result"))
+    state = _RoutineState(thread_id)
+    backend = RunDirectoryBackend(state, checkpoints)
+    assert "old result" in await _routine_text(backend)
+
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    original = render_module.RunContext.configuration_matches
+    first = True
+
+    async def gated_configuration_matches(
+        ctx: render_module.RunContext,
+        snapshot: tuple[tuple[tuple[str, str], ...], tuple[tuple[str, str], ...], str | None],
+        *,
+        refresh: bool = False,
+    ) -> bool:
+        nonlocal first
+        if first:
+            first = False
+            entered.set()
+            await release.wait()
+        return await original(ctx, snapshot, refresh=refresh)
+
+    monkeypatch.setattr(
+        render_module.RunContext, "configuration_matches", gated_configuration_matches
+    )
+    first_reader = asyncio.create_task(_routine_text(backend))
+    await entered.wait()
+
+    state.graph["nodes"][0]["label"] = "Newest reply"
+    checkpoints.advance(thread_id, "", _run_meta("newest result"))
+    second_reader = asyncio.create_task(_routine_text(backend))
+    second = await second_reader
+    release.set()
+    first_result = await first_reader
+
+    assert "newest result" in first_result
+    assert "Newest reply" in first_result
+    assert "newest result" in second
+    assert "Newest reply" in second

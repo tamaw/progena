@@ -155,3 +155,61 @@ async def test_native_run_reads_filter_and_project_postgres_payloads(
     assert await manager.list_routine_titles() == {"routine-key": "Routine from key"}
     assert await manager.list_workflow_titles() == {"workflow-key": "Workflow from key"}
     assert await manager.get_schedule_run("schedrun_selected") == selected
+
+
+async def _assert_compact_lifecycle_reads(manager: StateManager) -> None:
+    await manager.save_routine_run_event(
+        {
+            "request_id": "request_with_underscores",
+            "status": "started",
+            "timestamp": "2026-10-30T10:00:00Z",
+            "thread_id": "routine:compact",
+            "runtime_instance": "runtime-owner",
+            "parameters": {"question": "original"},
+        }
+    )
+    await manager.save_routine_run_event(
+        {
+            "request_id": "request_with_underscores",
+            "status": "completed",
+            "timestamp": "2026-10-30T10:01:00Z",
+            "thread_id": "routine:compact",
+            "output": "x" * 1_000_000,
+        }
+    )
+    await manager.save_routine_run_event(
+        {
+            "request_id": "requestXwithXunderscores",
+            "status": "started",
+            "timestamp": "2026-10-30T10:00:00Z",
+            "thread_id": "routine:other",
+            "parameters": {"question": "other"},
+        }
+    )
+    started = await manager.get_routine_run_started("request_with_underscores")
+    assert started is not None
+    assert started["status"] == "started"
+    assert started["parameters"]["question"] == "original"
+    assert await manager.get_routine_run_started("missing") is None
+    revisions = await manager.list_routine_run_event_revisions(thread_ids=["routine:compact"])
+    assert {(row["request_id"], row["status"]) for row in revisions} == {
+        ("request_with_underscores", "started"),
+        ("request_with_underscores", "completed"),
+    }
+    assert all("output" not in row and "parameters" not in row for row in revisions)
+    owner = next(row for row in revisions if row["status"] == "started")
+    assert owner["runtime_instance"] == "runtime-owner"
+    assert await manager.list_routine_run_event_revisions(thread_ids=[]) == []
+    events = await manager.list_routine_run_events("request_with_underscores")
+    completed = next(row for row in events if row["status"] == "completed")
+    assert completed["output"] == "x" * 1_000_000
+
+
+async def test_memory_lifecycle_revisions_exclude_terminal_payloads() -> None:
+    await _assert_compact_lifecycle_reads(StateManager(LangGraphRuntimeStore(InMemoryStore())))
+
+
+async def test_native_lifecycle_revisions_exclude_terminal_payloads(
+    native_state_manager: StateManager,
+) -> None:
+    await _assert_compact_lifecycle_reads(native_state_manager)

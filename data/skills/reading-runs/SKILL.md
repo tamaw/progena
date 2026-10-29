@@ -23,6 +23,8 @@ stored records each time it is read:
   renaming, timezone changes or a queued run starting on a different day.
 - `ls` lists newest first. A routine started by a workflow step or by another
   routine has no file of its own: it is inside its parent's file.
+  Child work is visible while approval is pending; a workflow step can contain
+  several resumed child attempts, each shown once in execution order.
 - The file is YAML front matter (identity, `status`, times, `inputs`, `output`,
   `error`) followed by a blank line and the log. `status` is worked out when
   the file is read: `interrupted` means the run was still executing when the
@@ -30,9 +32,12 @@ stored records each time it is read:
   `output_tokens`, and `total_tokens`; missing usage or components are `null`,
   not zero. Nested usage is counted once. Child routines follow persisted
   invocation/audit links, never timestamp proximity; missing links are not guessed.
-- Cached terminal logs validate related checkpoint revisions, so late results and
-  newly available nested activity appear on subsequent reads. Repeated agent steps
-  show their individual execution windows rather than replaying the conversation.
+  Schedule failures use the scheduler's native `error` status and preserve the
+  recorded failure explanation.
+- Cached terminal logs validate checkpoint/lifecycle revisions and consumed
+  definitions/preferences, so late results and changed labels or agent names
+  appear on subsequent reads. Repeated agent steps show their individual
+  execution windows rather than replaying the conversation.
 
 ## Line format
 
@@ -70,6 +75,8 @@ The pointer says where the whole value is. A mount path (`/tasks/…`,
 - Why it failed: grep `has quit` over `/runs/`, then read that file.
 - Narrow first: choose the run-kind directory and a date-prefix `glob` such as
   `2026-10-2*`. The filter is applied before matching files are rendered.
+  `max_count` bounds hydration as soon as truncation is known. Exact-file grep
+  also accepts a saved full-ID path whose date or title has since changed.
 - A step's exact output: follow its `⟨… · <file>#<n>⟩` pointer.
 - A workflow and the routine it ran: one file; look between `has joined` and
   `has left`.

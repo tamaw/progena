@@ -204,6 +204,14 @@ class StateManager:
     async def list_routine_run_summaries(self) -> list[dict[str, Any]]:
         return await self.routines.list_routine_run_summaries()
 
+    async def get_routine_run_started(self, request_id: str) -> dict[str, Any] | None:
+        return await self.routines.get_routine_run_started(request_id)
+
+    async def list_routine_run_event_revisions(
+        self, *, thread_ids: list[str]
+    ) -> list[dict[str, Any]]:
+        return await self.routines.list_routine_run_event_revisions(thread_ids=thread_ids)
+
     async def get_routine_run_control(
         self, agent_id: str, session_id: str
     ) -> dict[str, Any] | None:

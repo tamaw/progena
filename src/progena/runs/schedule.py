@@ -9,6 +9,7 @@ from langchain_core.messages import HumanMessage
 
 from src.progena.runtime.ownership import schedule_run_interrupted
 from src.progena.schedules.dispatch import SCHEDULED_INPUT_PREFIX
+from src.progena.schedules.models import ScheduleRunStatus
 from src.progena.sessions.transcript import render_transcript
 from src.progena.settings.preferences import agent_display_name
 
@@ -54,7 +55,7 @@ async def render_schedule(
     thread_id = str(record.get("thread_id") or "")
     conversation = await ctx.conversation(thread_id)
     if conversation is not None:
-        preferences = await ctx.state_manager.get_preferences_config()
+        preferences = await ctx.preferences()
         agent = "".join(agent_display_name(preferences).split())
         root = replace(
             conversation.root,
@@ -79,7 +80,7 @@ async def render_schedule(
     )
     ended = at(record.get("completed_at") or record.get("updated_at"))
     error = record.get("error")
-    if status == "failed":
+    if status == ScheduleRunStatus.ERROR:
         log.event(ended, f"{nick} has quit [failed: {one_line(str(error or 'failed'))}]")
     elif status == "interrupted":
         log.event(None, f"{nick} has quit [runtime restarted; interrupted]")
@@ -93,7 +94,7 @@ async def render_schedule(
         "result_status": record.get("result_status"),
         "started_at": record.get("started_at") or record.get("created_at"),
         "ended_at": record.get("completed_at"),
-        "error": error if status == "failed" else None,
+        "error": error if status == ScheduleRunStatus.ERROR else None,
         "tokens": tokens,
     }
     topic = f"{title} · {one_line(str(record.get('message') or ''))[:80]}"

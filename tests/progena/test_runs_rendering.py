@@ -51,6 +51,26 @@ class _State:
             return list(self.events)
         return [event for event in self.events if event.get("thread_id") in thread_ids]
 
+    async def get_routine_run_started(self, request_id: str) -> dict[str, Any] | None:
+        return next(
+            (
+                event
+                for event in self.events
+                if event.get("request_id") == request_id and event.get("status") == "started"
+            ),
+            None,
+        )
+
+    async def list_routine_run_event_revisions(
+        self, *, thread_ids: list[str]
+    ) -> list[dict[str, Any]]:
+        fields = ("request_id", "status", "timestamp", "thread_id", "runtime_instance")
+        return [
+            {field: event.get(field) for field in fields}
+            for event in self.events
+            if event.get("thread_id") in thread_ids
+        ]
+
 
 def _context(state: _State, checkpoints: _Checkpoints, events: list[dict[str, Any]]) -> RunContext:
     return RunContext(

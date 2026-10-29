@@ -22,7 +22,7 @@ from .values import describe_value, full_text, head_tail
 # inlined up to this depth.
 MAX_CHILD_DEPTH = 3
 
-RoutineEventRevisions = tuple[tuple[str, str, str], ...]
+RoutineEventRevisions = tuple[tuple[str, str, str, str], ...]
 
 
 def routine_event_revisions(events: Iterable[dict[str, Any]]) -> RoutineEventRevisions:
@@ -33,6 +33,7 @@ def routine_event_revisions(events: Iterable[dict[str, Any]]) -> RoutineEventRev
                 str(event.get("request_id") or ""),
                 str(event.get("status") or ""),
                 str(event.get("timestamp") or ""),
+                str(event.get("runtime_instance") or ""),
             )
             for event in events
         )
@@ -55,11 +56,19 @@ class RunContext:
     checkpoint_dependencies: set[tuple[str, str]] = field(default_factory=set)
     checkpoint_versions_before: CheckpointVersions | None = ()
     _tracked_checkpoint_threads: set[str] = field(default_factory=set)
+    _checkpoint_versions: dict[str, CheckpointVersions | None] = field(default_factory=dict)
     routine_event_versions: dict[str, RoutineEventRevisions] = field(default_factory=dict)
 
     loaded_threads: set[str] = field(default_factory=set)
     conversations: dict[str, Conversation | None] = field(default_factory=dict)
     seen_token_messages: set[str] = field(default_factory=set)
+    _workflow_definitions: dict[str, dict[str, Any] | None] = field(default_factory=dict)
+    _workflow_fingerprints: dict[str, str] = field(default_factory=dict)
+    _routine_graphs: dict[str, dict[str, Any] | None] = field(default_factory=dict)
+    _routine_fingerprints: dict[str, str] = field(default_factory=dict)
+    _preferences: dict[str, Any] | None = None
+    _preferences_fingerprint: str | None = None
+    _preferences_used: bool = False
 
     async def checkpoint(self, thread_id: str, namespace: str = "") -> Any | None:
         """Load one checkpoint tip while recording its thread as a cache dependency."""
@@ -79,7 +88,7 @@ class RunContext:
         if thread_id in self._tracked_checkpoint_threads:
             return
         self._tracked_checkpoint_threads.add(thread_id)
-        versions = await checkpoint_versions(self.checkpointer, (thread_id,))
+        versions = await self.checkpoint_version_snapshot((thread_id,))
         if versions is None:
             self.checkpoint_versions_before = None
             return
@@ -87,6 +96,133 @@ class RunContext:
             self.checkpoint_versions_before = tuple(
                 sorted((*self.checkpoint_versions_before, *versions))
             )
+
+    async def checkpoint_version_snapshot(
+        self, thread_ids: Iterable[str], *, refresh: bool = False
+    ) -> CheckpointVersions | None:
+        """Read compact checkpoint tips once per thread, unless an admission rechecks them."""
+        threads = tuple(dict.fromkeys(thread_id for thread_id in thread_ids if thread_id))
+        if not threads:
+            return ()
+        missing = (
+            threads
+            if refresh
+            else tuple(
+                thread_id for thread_id in threads if thread_id not in self._checkpoint_versions
+            )
+        )
+        if missing:
+            versions = await checkpoint_versions(self.checkpointer, missing)
+            if versions is None:
+                for thread_id in missing:
+                    self._checkpoint_versions[thread_id] = None
+            else:
+                for thread_id in missing:
+                    self._checkpoint_versions[thread_id] = tuple(
+                        version for version in versions if version[0] == thread_id
+                    )
+        snapshots = [self._checkpoint_versions.get(thread_id) for thread_id in threads]
+        if any(snapshot is None for snapshot in snapshots):
+            return None
+        return tuple(sorted(version for snapshot in snapshots for version in snapshot or ()))
+
+    async def prepare_thread_events(self, thread_id: str, *, refresh: bool = False) -> None:
+        """Load compact lifecycle facts needed for status and cache validation."""
+        if not thread_id:
+            return
+        await self._track_checkpoint_thread(thread_id)
+        if thread_id in self.routine_event_versions and not refresh:
+            return
+        events = await self.state_manager.list_routine_run_event_revisions(thread_ids=[thread_id])
+        compact = [event for event in events if isinstance(event, dict)]
+        self.routine_event_versions[thread_id] = routine_event_revisions(compact)
+        self.routine_events = [
+            event for event in self.routine_events if event.get("thread_id") != thread_id
+        ]
+        self.routine_events.extend(compact)
+
+    async def lifecycle_revision_snapshot(
+        self, thread_ids: Iterable[str], *, refresh: bool = False
+    ) -> RoutineEventRevisions:
+        """Return compact lifecycle revisions, reusing facts prepared for this read."""
+        threads = tuple(dict.fromkeys(thread_id for thread_id in thread_ids if thread_id))
+        for thread_id in threads:
+            await self.prepare_thread_events(thread_id, refresh=refresh)
+        return tuple(
+            sorted(
+                revision
+                for thread_id in threads
+                for revision in self.routine_event_versions.get(thread_id, ())
+            )
+        )
+
+    async def workflow_definition(
+        self, workflow_id: str, *, refresh: bool = False
+    ) -> dict[str, Any] | None:
+        """Get one mutable workflow definition once and retain it for cache validation."""
+        if refresh or workflow_id not in self._workflow_definitions:
+            definition = await self.state_manager.get_workflow_definition(workflow_id)
+            value = definition if isinstance(definition, dict) else None
+            self._workflow_definitions[workflow_id] = value
+            self._workflow_fingerprints[workflow_id] = self._configuration_value(value)
+        return self._workflow_definitions[workflow_id]
+
+    async def routine_graph(
+        self, routine_id: str, *, refresh: bool = False
+    ) -> dict[str, Any] | None:
+        """Get one mutable routine graph once and retain it for cache validation."""
+        if refresh or routine_id not in self._routine_graphs:
+            graph = await self.state_manager.get_routine_graph(routine_id)
+            value = graph if isinstance(graph, dict) else None
+            self._routine_graphs[routine_id] = value
+            self._routine_fingerprints[routine_id] = self._configuration_value(value)
+        return self._routine_graphs[routine_id]
+
+    async def preferences(self, *, refresh: bool = False) -> dict[str, Any]:
+        """Get preferences once when a renderer actually consumes them."""
+        self._preferences_used = True
+        if refresh or self._preferences is None:
+            preferences = await self.state_manager.get_preferences_config()
+            self._preferences = preferences if isinstance(preferences, dict) else {}
+        if refresh or self._preferences_fingerprint is None:
+            self._preferences_fingerprint = self._configuration_value(self._preferences)
+        return self._preferences
+
+    @staticmethod
+    def _configuration_value(value: dict[str, Any] | None) -> str:
+        return json.dumps(value, sort_keys=True, separators=(",", ":"), default=str)
+
+    def configuration_snapshot(
+        self,
+    ) -> tuple[tuple[tuple[str, str], ...], tuple[tuple[str, str], ...], str | None]:
+        """Stable values of mutable configuration consumed by a render."""
+        return (
+            tuple(sorted(self._workflow_fingerprints.items())),
+            tuple(sorted(self._routine_fingerprints.items())),
+            self._preferences_fingerprint if self._preferences_used else None,
+        )
+
+    async def configuration_matches(
+        self,
+        snapshot: tuple[tuple[tuple[str, str], ...], tuple[tuple[str, str], ...], str | None],
+        *,
+        refresh: bool = False,
+    ) -> bool:
+        """Re-read only mutable configuration a cached render actually consumed."""
+        workflows, routines, preferences = snapshot
+        for identifier, expected in workflows:
+            await self.workflow_definition(identifier, refresh=refresh)
+            if self._workflow_fingerprints[identifier] != expected:
+                return False
+        for identifier, expected in routines:
+            await self.routine_graph(identifier, refresh=refresh)
+            if self._routine_fingerprints[identifier] != expected:
+                return False
+        if preferences is not None:
+            await self.preferences(refresh=refresh)
+            if self._preferences_fingerprint != preferences:
+                return False
+        return True
 
     async def conversation(self, thread_id: str) -> Conversation | None:
         if self.checkpointer is None or not thread_id:
@@ -97,28 +233,22 @@ class RunContext:
         return self.conversations[thread_id]
 
     async def load_thread_events(self, thread_id: str) -> None:
-        """Load one thread's lifecycle records once, without reopening all history."""
+        """Load full lifecycle records only when a cache miss needs their details."""
         if not thread_id:
             return
-        await self._track_checkpoint_thread(thread_id)
+        await self.prepare_thread_events(thread_id)
         if thread_id in self.loaded_threads:
             return
         self.loaded_threads.add(thread_id)
-        events = await self.state_manager.list_routine_run_events(thread_ids=[thread_id])
-        self.routine_event_versions[thread_id] = routine_event_revisions(
-            event for event in events if isinstance(event, dict)
-        )
-        by_transition = {
-            (str(event.get("request_id") or ""), str(event.get("status") or "")): event
-            for event in self.routine_events
-        }
-        for event in events:
-            if not isinstance(event, dict):
-                continue
-            by_transition.setdefault(
-                (str(event.get("request_id") or ""), str(event.get("status") or "")), event
-            )
-        self.routine_events = list(by_transition.values())
+        events = [
+            event
+            for event in await self.state_manager.list_routine_run_events(thread_ids=[thread_id])
+            if isinstance(event, dict)
+        ]
+        self.routine_events = [
+            event for event in self.routine_events if event.get("thread_id") != thread_id
+        ]
+        self.routine_events.extend(events)
 
 
 @dataclass

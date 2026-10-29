@@ -370,11 +370,15 @@ head…tail of long text) with a pointer to the full value: a mount path, or
 Status uses the same interrupted rule as the UI
 (`src/progena/runtime/ownership.py`). Terminal runs, including interrupted runs,
 are cached in-process; updated records and subsequent lifecycle boundaries invalidate
-the entry. Cached output also validates the latest checkpoint IDs in every namespace
-of each related thread, including previously missing threads and newly created
-subagent namespaces. Checkpoint changes during hydration prevent cache admission.
-Cache hits read compact revision metadata rather than replaying conversation history;
-no new event stream or polling is involved.
+the entry. Cached output validates checkpoint IDs in every namespace of each related
+thread, compact lifecycle revisions, and immutable fingerprints of consumed mutable
+definitions and preferences. Previously missing threads, late subagent namespaces,
+changed child graphs and renamed agent speakers refresh cached output. Source changes
+during hydration prevent cache admission. Concurrent reads only mutate the cache entry
+they validated; unrelated reads are not serialized behind a global I/O lock.
+Cache hits reuse per-read snapshots and never fetch terminal lifecycle outputs or
+replay conversation history; full lifecycle content is loaded only on render misses.
+No new event stream or polling is involved.
 Directory listings use compact run records and bulk title maps, sorted
 by normalized start time and full run ID. Reading one file looks up its exact ID
 and loads only related lifecycle threads, not every run's payload. Schedule history
@@ -385,10 +389,20 @@ a queued run starting on a different day. There are no short-ID aliases or persi
 files to migrate. `run_workflow` returns the new run's `run_id` and `/runs/` path.
 Virtual grep scopes traversal to the requested subtree and applies the SDK's
 include-glob matcher before rendering files, preserving match lines and truncation.
+It processes files incrementally and stops once the result limit and truncation are
+known. Exact-file grep/glob resolve the same valid full-ID paths as reads, including
+earlier filename dates/titles; missing files and `#n` step references are not discovered.
 
-Nested routine invocations use their persisted request IDs. Workflow step kinds
-and conversation threads come from execution audits rather than edited definitions
-or cleared outputs. Unknown links are not inferred from nearby timestamps.
+Nested routine invocations use their persisted request IDs, including pending native
+interrupts while a parent node awaits child approval. Completed child work remains
+visible before the parent returns. Workflow routine steps inline every ordered attempt
+inside their recorded execution interval, including approval resumes, without
+double-counting usage or guessing the nearest attempt. Workflow step kinds and
+conversation threads come from execution audits rather than edited definitions or
+cleared outputs. Actual structured `node_outputs` are authoritative by key presence;
+bounded audit output is display text, not a replacement value or JSON to reconstruct.
+Unknown links are not inferred from nearby timestamps. Scheduled failures retain the
+native `error` status and recorded explanation in both front matter and the log.
 All three run kinds expose `tokens` with recorded input/output/total counts;
 unknown usage/components remain null and known zero remains zero. Recorded
 descendants replace parent aggregates, message IDs deduplicate recursive delegation,
