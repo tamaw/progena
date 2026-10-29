@@ -357,7 +357,7 @@ a blank line and the IRC-style `content`. Only the `title`, `pinned`, and
 grep, and read operate directly on the store documents (no cache).
 
 `/runs/` is a read-only execution-history mount: one
-`<date>_<slug>_<id8>.md` per top-level run under
+`<date>_<slug>_<full-run-id>.md` per top-level run under
 `/runs/{routines,workflows,schedules}/`, YAML front matter plus an IRC-style
 log, rendered on read from existing records (routine lifecycle events and the
 attempt's latest checkpoint `run_meta`, `workflow_run:` documents,
@@ -368,8 +368,153 @@ data is summarised (changed fields, document mount path and title, counts,
 head…tail of long text) with a pointer to the full value: a mount path, or
 `<run-file>#<n>` for step `n`, which is never listed, globbed or grepped.
 Status uses the same interrupted rule as the UI
-(`src/progena/runtime/ownership.py`). Finished runs are cached in-process.
-`run_workflow` returns the new run's `run_id` and `/runs/` path.
+(`src/progena/runtime/ownership.py`). Terminal runs, including interrupted runs,
+are cached in-process; updated records and subsequent lifecycle boundaries invalidate
+the entry. Cached output validates checkpoint IDs in every namespace of each related
+thread, compact lifecycle revisions, and immutable fingerprints of consumed mutable
+definitions and preferences. Previously missing threads, late subagent namespaces,
+changed child graphs and renamed agent speakers refresh cached output. Source changes
+during hydration prevent cache admission. Concurrent reads only mutate the cache entry
+they validated; unrelated reads are not serialized behind a global I/O lock.
+Cache hits reuse per-read snapshots and never fetch terminal lifecycle outputs or
+replay conversation history; full lifecycle content is loaded only on render misses.
+No new event stream or polling is involved.
+Directory listings use compact run records and bulk title maps, sorted
+by normalized start time and full run ID. Reading one file looks up its exact ID
+and loads only related lifecycle threads, not every run's payload. Schedule history
+remains one JSON document; native reads select the requested item inside Postgres.
+Full IDs prevent filename collisions; dates and slugs are descriptive, not lookup
+identity. Existing full-ID paths remain readable after title/timezone changes or
+a queued run starting on a different day. There are no short-ID aliases or persisted
+files to migrate. `run_workflow` returns the new run's `run_id` and `/runs/` path.
+Virtual grep scopes traversal to the requested subtree and applies the SDK's
+include-glob matcher before rendering files, preserving match lines and truncation.
+It processes files incrementally and stops once the result limit and truncation are
+known. Exact-file grep/glob resolve the same valid full-ID paths as reads, including
+earlier filename dates/titles; missing files and `#n` step references are not discovered.
+Read-only wrappers expose the SDK search signatures explicitly so result limits
+reach the underlying reader before hydration, rather than being applied only
+after a Composite mount has materialized an unbounded result.
+
+Nested routine invocations use their persisted request IDs, including pending native
+interrupts while a parent node awaits child approval. Completed child work remains
+visible before the parent returns. Workflow routine steps inline every ordered attempt
+inside their recorded execution interval, including approval resumes, without
+double-counting usage or guessing the nearest attempt. Workflow step kinds and
+conversation threads come from execution audits rather than edited definitions or
+cleared outputs. Actual structured `node_outputs` are authoritative by key presence;
+bounded audit output is display text, not a replacement value or JSON to reconstruct.
+Unknown links are not inferred from nearby timestamps. Scheduled failures retain the
+native `error` status and recorded explanation in both front matter and the log.
+All three run kinds expose `tokens` with recorded input/output/total counts;
+unknown usage/components remain null and known zero remains zero. Recorded
+descendants replace parent aggregates, message IDs deduplicate recursive delegation,
+and reused threads are scoped to the routine attempt or workflow audit interval.
+Within a routine attempt, each agent-node transcript is further bounded by its
+persisted start, measured duration, next invocation and attempt boundary. Repeated
+nodes do not replay the entire shared conversation, and unknown invocation starts
+do not authorize guessing a transcript window.
+
+## Runs
+
+**Spectate → Runs** (`/runs`) is a full-width execution-history flame-chart grid for
+workflows, top-level routine attempts, and schedules. Kind, status, text and rolling
+started-time filters use server-side cursor pagination behind an infinite-scrolling
+chart. Loading, retry and end-of-results states stay inside the chart; there are no
+page buttons. Virtualized run groups bound the rendered DOM while preserving
+expanded activity. Changing filters or sorting resets the loaded result window.
+Live arrivals and refreshed snapshots retain displaced cursor-boundary rows in
+the loaded window. Timeline selection, collapsed branches and open disclosures
+are owned outside virtualized rows so scrolling away does not reset inspection.
+The toolbar retains the sliding 1h/24h/7d/30d/All time selector and right-aligned
+search. Activity and Status headings open styled kind/status filter popovers.
+Started and Duration headings toggle newest/oldest and longest/shortest ordering;
+Tokens and Timeline remain noninteractive. Selections remain URL-backed.
+Finite ranges use inclusive UTC cutoffs and omit runs without a recorded start.
+Filtering and sorting happen before pagination across the full matching result set.
+The page has no estimated step counter, bottom legend or footer text.
+
+Clicking anywhere on a run row, or pressing Enter/Space while the row is focused,
+expands its child activity into the same grid, with one run expanded at a time.
+Filters, search, sort and the expanded run are represented in the URL, so reload,
+shared links and browser navigation restore the inline view.
+Row tooltips expose the existing run ID, trigger, timestamps, schedule request
+context and, once loaded, the recorded root failure reason. The synthetic run span
+is not repeated.
+Structural rows collapse their descendants; non-overlapping sibling model calls
+share compact lanes, while tool declarations without timing share marker lanes.
+Overlapping measured calls stay on separate lanes. Each run has its own elapsed
+time scale; bars across different runs do not imply a common wall-clock window.
+The fixed page has one internally scrolling chart and sticky column headers.
+Controls reuse the design library's icons, theme tokens and custom select.
+Run and structural parent timelines overlay descendant activity from start to
+end, retaining concurrent intervals rather than replacing them with a blank
+duration band. Collapsed branches retain their summary and usage. Styled
+hover/focus tooltips use the shared theme and render outside the scroll viewport.
+There is no separate trace page, nested table, page heading or Refresh control.
+
+Selecting a bar highlights a call without revealing payloads. A separate row
+disclosure opens bounded input/output/error details immediately below that lane;
+packed lanes provide a call selector. Details do not repeat duration/token fields.
+Selected runs outside the loaded window expose loading and failure/retry states
+without requiring an existing row or a successfully loaded trace. Virtual row
+measurements are invalidated when expansion changes, including unmounted rows.
+Model intervals are derived from checkpoint commits, not provider latency.
+Tool duration is measured only when an audit record exists; otherwise a
+transcript declaration marker explicitly reports timing unavailable. Available
+usage appears in run, structural-parent and model-lane columns. Compact workflow
+audits and selected routine checkpoint tips populate list summaries without
+loading checkpoint histories. Expansion reconstructs per-model usage, which can
+include calls absent from the compact node metadata and therefore increase the
+recorded total. Known descendant usage supersedes inclusive parent metadata;
+those amounts are never added together. Missing usage is a dash, while a
+recorded zero remains zero. Schedules without persisted usage need expansion to
+reconstruct their model messages; no runtime instrumentation or invented totals
+are introduced by the visual read model.
+Resumed routine requests sharing a checkpoint thread are separate attempts.
+Lifecycle-derived, end-exclusive attempt windows isolate their metadata and
+model/tool history; checkpoint notifications refresh each affected attempt using
+one shared checkpoint-tip read per thread.
+Nested subagent transcripts attach beneath their actual delegating tool, including
+further delegation levels. Interrupted records without a terminal event keep
+completion and duration unknown; they do not acquire a fabricated end or grow
+as though still running. Duration sorts place unknown values after measured ones.
+
+The backend reads Postgres directly; it does not ask the runtime or the agent-facing
+`/runs/` mount to build this visual model. Document and checkpoint notifications
+drive canonical `ui.event` updates; the table receives broadcast changes while
+the page is open, without polling. While inspecting below the top, incoming runs
+do not shift the viewport; a compact new-runs control lets the user return to
+the latest entries. Expanding a trace establishes a targeted, connection-scoped
+interest. Collapsing, filtering away, changing the selection, or leaving releases it.
+Reconnect restores the interest and an authoritative snapshot through the same
+canonical event lane. Its returned rows replace the cached result window, then
+updates/deletes received during that request are applied; URL selection and
+inspection state are retained independently. Initial trace builds listen for
+checkpoint changes before accepting their snapshot; no extra stream or polling
+lane is introduced. Search uses lowercase matching consistently in Python and SQL.
+Lifecycle publications supersede checkpoint rows hydrated from an older lifecycle
+state. Existing build invalidation also covers unindexed GET hydration and child
+routine discovery, so stale snapshots cannot enter the terminal trace cache.
+Failed authoritative hydration retains its resync intent through Retry, so a
+successful retry cannot merge records deleted while disconnected back into view.
+The client expires rows from finite time windows using its display clock, without
+polling the server. Open spans grow on the client; terminal spans do not.
+
+Workflow audit entries persist `started_at` before work, then settle the same
+entry on completion, failure or cancellation. Approval and child-routine waits
+preserve that entry. Only unanswered approvals block Resume; retained resolved
+approval records do not prevent resuming a manually paused routine continuation.
+Agent/extract steps persist their resolved conversation thread before awaiting
+execution, so running and failed traces subscribe to the actual conversation.
+Both compact summaries and expanded traces classify historical steps using the
+recorded audit kind rather than the current editable workflow graph, and consume
+its recorded routine thread. Failed/cancelled waits and completed outputs rejected
+by schema validation retain that reference before pending state is cleared.
+Existing entries require a manual one-time backfill before cutover; reconstructed
+historical boundaries are not exact recovered starts.
+Drain workflow execution during the final writer cutover so old writers cannot
+introduce further missing start times. There is no historical timing fallback.
 
 ## Routine Code filesystem access
 

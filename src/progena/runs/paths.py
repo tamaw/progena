@@ -33,13 +33,13 @@ def short_id(run_id: str) -> str:
 
 
 def run_file_name(*, started_at: datetime, title: str, run_id: str, tz: tzinfo) -> str:
-    """``<YYYY-MM-DD>_<slug>_<id8>.md``, dated by the run's start in the user's timezone."""
-    return f"{started_at.astimezone(tz):%Y-%m-%d}_{slug(title)}_{short_id(run_id)}.md"
+    """``<YYYY-MM-DD>_<slug>_<run_id>.md`` with an unambiguous persisted identity."""
+    return f"{started_at.astimezone(tz):%Y-%m-%d}_{slug(title)}_{run_id}.md"
 
 
 def run_file_path(
     kind: RunKind, *, started_at: datetime, title: str, run_id: str, tz: tzinfo
 ) -> str:
-    """The run's full mount path, e.g. ``/runs/workflows/2026-10-27_review_4ca3982a.md``."""
+    """The run's full mount path, including its complete persisted run ID."""
     name = run_file_name(started_at=started_at, title=title, run_id=run_id, tz=tz)
     return f"/runs/{RUN_DIRECTORIES[kind]}/{name}"

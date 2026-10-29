@@ -18,6 +18,7 @@ import './styles/chrome-frame.css';
 import './styles/detail-header.css';
 import './styles/forms.css';
 import './features/insights/insights.css';
+import './features/runs/runs.css';
 
 function App() {
   return (

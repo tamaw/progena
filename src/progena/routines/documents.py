@@ -21,12 +21,56 @@ class RoutineStore:
         key = f"{RUN_EVENT_PREFIX}{payload['request_id']}:{payload['status']}"
         await self._access.store.save_document(key, payload)
 
-    async def list_routine_run_events(self, request_id: str | None = None) -> list[dict[str, Any]]:
-        """Return lifecycle events, optionally narrowed to one routine attempt."""
+    async def list_routine_run_events(
+        self,
+        request_id: str | None = None,
+        *,
+        thread_ids: list[str] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Return lifecycle events for one request or a selected set of threads."""
         from ..routines.events import RUN_EVENT_PREFIX
 
-        prefix = f"{RUN_EVENT_PREFIX}{request_id}:" if request_id else RUN_EVENT_PREFIX
-        rows = await self._access.store.list_documents(prefix)
+        prefix = f"{RUN_EVENT_PREFIX}{request_id}:" if request_id is not None else RUN_EVENT_PREFIX
+        rows = await self._access.store.list_documents(prefix, thread_ids=thread_ids)
+        return [payload for _, payload in rows if isinstance(payload, dict)]
+
+    async def get_routine_run_started(self, request_id: str) -> dict[str, Any] | None:
+        """Read one attempt's start without loading its terminal output."""
+        from ..routines.events import RUN_EVENT_PREFIX
+
+        payload = await self._access.store.peek_document(f"{RUN_EVENT_PREFIX}{request_id}:started")
+        return payload if isinstance(payload, dict) else None
+
+    async def list_routine_run_event_revisions(
+        self, *, thread_ids: list[str]
+    ) -> list[dict[str, Any]]:
+        """Read lifecycle identity/status metadata, never event inputs or outputs."""
+        from ..routines.events import RUN_EVENT_PREFIX
+
+        rows = await self._access.store.list_documents(
+            RUN_EVENT_PREFIX,
+            payload_fields=("request_id", "status", "timestamp", "thread_id", "runtime_instance"),
+            thread_ids=thread_ids,
+        )
+        return [payload for _, payload in rows if isinstance(payload, dict)]
+
+    async def list_routine_run_summaries(self) -> list[dict[str, Any]]:
+        """Return compact lifecycle records for routine-run directory listings."""
+        from ..routines.events import RUN_EVENT_PREFIX
+
+        rows = await self._access.store.list_documents(
+            RUN_EVENT_PREFIX,
+            payload_fields=(
+                "request_id",
+                "status",
+                "timestamp",
+                "agent_id",
+                "routine_id",
+                "thread_id",
+                "parent",
+                "session_id",
+            ),
+        )
         return [payload for _, payload in rows if isinstance(payload, dict)]
 
     async def get_routine_run_control(
@@ -74,3 +118,19 @@ class RoutineStore:
         """Return all routine graph documents."""
         rows = await self._access.store.list_documents(ROUTINE_GRAPH_KEY_PREFIX)
         return [payload for _, payload in rows if isinstance(payload, dict)]
+
+    async def list_routine_titles(self) -> dict[str, str]:
+        """Return routine names keyed by their durable document-key identifier."""
+        rows = await self._access.store.list_documents(
+            ROUTINE_GRAPH_KEY_PREFIX,
+            payload_fields=("name", "title"),
+        )
+        titles: dict[str, str] = {}
+        for key, payload in rows:
+            routine_id = key.removeprefix(ROUTINE_GRAPH_KEY_PREFIX)
+            if not routine_id or not isinstance(payload, dict):
+                continue
+            title = payload.get("name") or payload.get("title")
+            if isinstance(title, str) and title.strip():
+                titles[routine_id] = title
+        return titles

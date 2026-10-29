@@ -34,7 +34,7 @@ Profile:
     one <date>_<title-slug>_<id8>.md per non-archived chat, backed by the
     ``session:`` documents in the store (front matter editable, body read-only)
   - /runs/ -> read-only routine, workflow and schedule runs as YAML front matter
-    + IRC-style logs, one <date>_<slug>_<id8>.md per top-level run under
+    + IRC-style logs, one <date>_<slug>_<run_id>.md per top-level run under
     routines/, workflows/ and schedules/, rendered on read (child runs inlined;
     ``<file>#<n>`` reads one step's full value)
   - /config/repos/ -> declared repositories, one <id>.json per ``repo:<id>``
@@ -57,7 +57,13 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Literal
 
 from deepagents.backends import CompositeBackend, FilesystemBackend, StateBackend
-from deepagents.backends.protocol import DeleteResult, EditResult, FileUploadResponse, WriteResult
+from deepagents.backends.protocol import (
+    DeleteResult,
+    EditResult,
+    FileUploadResponse,
+    GrepResult,
+    WriteResult,
+)
 
 from src.progena.agent.filesystem.alerts import AlertDirectoryBackend
 from src.progena.agent.filesystem.artifacts import ArtifactDirectoryBackend
@@ -102,6 +108,26 @@ class ReadOnlyBackend:
 
     def __init__(self, backend: Any):
         self._backend = backend
+
+    def grep(
+        self,
+        pattern: str,
+        path: str | None = None,
+        glob: str | None = None,
+        *,
+        max_count: int | None = None,
+    ) -> GrepResult:
+        return self._backend.grep(pattern, path=path, glob=glob, max_count=max_count)
+
+    async def agrep(
+        self,
+        pattern: str,
+        path: str | None = None,
+        glob: str | None = None,
+        *,
+        max_count: int | None = None,
+    ) -> GrepResult:
+        return await self._backend.agrep(pattern, path=path, glob=glob, max_count=max_count)
 
     async def can_write_file(self, path: str, content: str, context: dict[str, Any]) -> bool:
         return False

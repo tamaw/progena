@@ -7,13 +7,22 @@ definition the step titles. Routine and agent steps inline their own runs.
 
 from __future__ import annotations
 
-import json
 from collections.abc import Mapping
 from typing import Any
 
 from src.progena.sessions.transcript import Line
 
-from ._render import RunContext, RunLog, Steps, agent_transcript, at, render_file, step_result
+from ._render import (
+    RunContext,
+    RunLog,
+    Steps,
+    add_tokens,
+    agent_transcript,
+    at,
+    recorded_tokens,
+    render_file,
+    step_result,
+)
 from .paths import short_id, slug
 from .routine import inline_child
 from .values import describe_change, describe_value, one_line
@@ -67,33 +76,68 @@ def _topic(run: Mapping[str, Any], title: str) -> str:
 
 
 def _last_output(run: Mapping[str, Any]) -> Any:
-    """The final step's full output; ``last_output`` is stored already shortened."""
+    """The final step's authoritative output, falling back to its display text."""
     outputs = run.get("node_outputs")
     audit = [step for step in run.get("step_audit") or [] if isinstance(step, Mapping)]
     if audit and isinstance(outputs, Mapping):
-        last = outputs.get(str(audit[-1].get("node_id") or ""))
-        if last is not None:
-            return last
-    raw = run.get("last_output")
-    if isinstance(raw, str):
-        try:
-            return json.loads(raw)
-        except ValueError:
-            return raw
-    return raw
+        node_id = str(audit[-1].get("node_id") or "")
+        if node_id in outputs:
+            return outputs[node_id]
+    return run.get("last_output")
 
 
-def _child_attempt(ctx: RunContext, thread_id: str | None) -> dict[str, Any] | None:
-    if not thread_id:
-        return None
-    return next(
-        (
-            event
-            for event in ctx.routine_events
-            if event.get("status") == "started" and event.get("thread_id") == thread_id
-        ),
-        None,
+async def _child_attempts(
+    ctx: RunContext, audit: Mapping[str, Any], value: Any
+) -> list[dict[str, Any]]:
+    """Find every causally-owned routine attempt in this workflow step."""
+    audit_thread = audit.get("thread_id")
+    output_thread = value.get("thread_id") if isinstance(value, Mapping) else None
+    thread_id = audit_thread if isinstance(audit_thread, str) and audit_thread else output_thread
+    if not isinstance(thread_id, str) or not thread_id:
+        return []
+    await ctx.load_thread_events(thread_id)
+    begin = at(audit.get("started_at"))
+    end = at(audit.get("completed_at"))
+    candidates: list[dict[str, Any]] = []
+    for event in ctx.routine_events:
+        if (
+            event.get("status") != "started"
+            or event.get("thread_id") != thread_id
+            or not isinstance(event.get("request_id"), str)
+            or not event["request_id"]
+        ):
+            continue
+        when = at(event.get("timestamp"))
+        if (begin is not None or end is not None) and when is None:
+            continue
+        if begin is not None and when is not None and when < begin:
+            continue
+        if end is not None and when is not None and when >= end:
+            continue
+        candidates.append(event)
+    request_id = audit.get("request_id")
+    if isinstance(request_id, str) and request_id:
+        anchor = next((event for event in candidates if event["request_id"] == request_id), None)
+        if anchor is None:
+            return []
+        session_id = anchor.get("session_id")
+        candidates = (
+            [event for event in candidates if event.get("session_id") == session_id]
+            if isinstance(session_id, str) and session_id
+            else [anchor]
+        )
+    ordered = sorted(
+        candidates,
+        key=lambda event: (str(event.get("timestamp") or ""), event["request_id"]),
     )
+    attempts: list[dict[str, Any]] = []
+    seen_request_ids: set[str] = set()
+    for event in ordered:
+        request_id = event["request_id"]
+        if request_id not in seen_request_ids:
+            attempts.append(event)
+            seen_request_ids.add(request_id)
+    return attempts
 
 
 async def render_workflow(
@@ -102,52 +146,78 @@ async def render_workflow(
     """The whole file for one workflow run."""
     steps = Steps(path=path)
     workflow_id = str(run.get("workflow_id") or "")
-    definition = await ctx.state_manager.get_workflow_definition(workflow_id) or {}
+    definition = await ctx.workflow_definition(workflow_id) or {}
     title = workflow_title(run, definition)
     nick = slug(title)
     run_id = str(run.get("run_id") or "")
     channel = f"{nick}-{short_id(run_id)}"
     nodes = _nodes(definition)
-    outputs = run.get("node_outputs") if isinstance(run.get("node_outputs"), Mapping) else {}
+    raw_outputs = run.get("node_outputs")
+    outputs = raw_outputs if isinstance(raw_outputs, Mapping) else {}
     log = RunLog(nick=nick)
 
+    tokens: dict[str, int | None] | None = None
     for audit in run.get("step_audit") or []:
         if not isinstance(audit, Mapping):
             continue
         node_id = str(audit.get("node_id") or "")
         node = nodes.get(node_id, {})
-        kind = str(node.get("kind") or audit.get("kind") or "step")
+        kind = str(audit.get("kind") or node.get("kind") or "step")
         label = str(node.get("title") or node_id or kind)
-        when = at(audit.get("completed_at"))
-        value = outputs.get(node_id, audit.get("output")) if isinstance(outputs, Mapping) else None
+        when = at(audit.get("completed_at") or audit.get("started_at"))
+        value = outputs[node_id] if node_id in outputs else audit.get("output")
+        audit_tokens = recorded_tokens(audit.get("tokens"))
         if kind == "routine":
-            thread_id = value.get("thread_id") if isinstance(value, Mapping) else None
-            child = _child_attempt(ctx, thread_id if isinstance(thread_id, str) else None)
-            if child is not None:
-                await inline_child(ctx, log, child, steps=steps, depth=0, channel=channel)
+            children = await _child_attempts(ctx, audit, value)
+            if children:
+                child_tokens: dict[str, int | None] | None = None
+                for child in children:
+                    child_front = await inline_child(
+                        ctx, log, child, steps=steps, depth=0, channel=channel
+                    )
+                    child_tokens = add_tokens(child_tokens, child_front.get("tokens"))
+                tokens = add_tokens(
+                    tokens, child_tokens if child_tokens is not None else audit_tokens
+                )
                 continue
-            shown = (
-                {k: v for k, v in value.items() if k != "thread_id"}
-                if isinstance(value, Mapping)
-                else value
-            )
-            log.act(when, f"runs {label} → {step_result(shown, steps)}")
-            continue
-        if kind == "agent" and isinstance(value, Mapping):
+        if kind not in {"agent", "extract"}:
+            tokens = add_tokens(tokens, audit_tokens)
+        audit_thread = audit.get("thread_id")
+        output_thread = value.get("thread_id") if isinstance(value, Mapping) else None
+        thread_id = (
+            audit_thread if isinstance(audit_thread, str) and audit_thread else output_thread
+        )
+        if kind in {"agent", "extract"} and isinstance(thread_id, str) and thread_id:
             agent = str(node.get("subagent") or "progena")
-            thread_id = value.get("thread_id")
-            if isinstance(thread_id, str) and await agent_transcript(
-                ctx, log, thread_id, agent=agent, channel=channel, when=when, steps=steps
+            transcript_tokens: list[dict[str, int | None] | None] = []
+            if await agent_transcript(
+                ctx,
+                log,
+                thread_id,
+                agent=agent,
+                channel=channel,
+                when=when,
+                steps=steps,
+                begin=at(audit.get("started_at")),
+                end=at(audit.get("completed_at")),
+                token_totals=transcript_tokens,
             ):
+                usage = transcript_tokens[0] if transcript_tokens else None
+                tokens = add_tokens(tokens, usage or audit_tokens)
                 continue
+        if kind in {"agent", "extract"}:
+            tokens = add_tokens(tokens, audit_tokens)
         if kind == "condition" and isinstance(value, Mapping):
             branch = next((str(port) for port, taken in value.items() if taken is True), None)
             if branch is not None:
                 log.act(when, f"branches at {label} → {branch}")
                 continue
+        failure = audit.get("error")
+        if isinstance(failure, str) and failure:
+            log.act(when, f"{_VERBS.get(kind, kind)} {label} → failed: {one_line(failure)}")
+            continue
         verb = _VERBS.get(kind, kind)
         log.act(when, f"{verb} {label} → {step_result(value, steps)}")
-
     status = str(run.get("status") or "queued")
     pending = run.get("pending_approval")
     if isinstance(pending, Mapping):
@@ -195,6 +265,6 @@ async def render_workflow(
         "waiting_on": run.get("waiting_node_id"),
         "output": describe_value(output, pointer=steps.add(output)) if output is not None else None,
         "error": error if status == "failed" else None,
-        "tokens": run.get("tokens"),
+        "tokens": tokens,
     }
     return render_file(front, log, channel=channel, topic=_topic(run, title), ctx=ctx), steps

@@ -16,6 +16,11 @@ def test_setup_logging_splits_records_and_drops_duplicate_access_lines(tmp_path,
     original_access_propagate = uvicorn_access.propagate
     original_access_level = uvicorn_access.level
     monkeypatch.setenv("PROGENA_LOG_DIR", str(tmp_path))
+    # Live-server tests configure this process-wide logger at CRITICAL.
+    # Exercise routing from a known enabled producer, independent of test order.
+    uvicorn_error = logging.getLogger("uvicorn.error")
+    original_error_level = uvicorn_error.level
+    uvicorn_error.setLevel(logging.INFO)
 
     try:
         setup_logging()
@@ -44,3 +49,4 @@ def test_setup_logging_splits_records_and_drops_duplicate_access_lines(tmp_path,
         uvicorn_access.handlers = original_access_handlers
         uvicorn_access.propagate = original_access_propagate
         uvicorn_access.setLevel(original_access_level)
+        uvicorn_error.setLevel(original_error_level)

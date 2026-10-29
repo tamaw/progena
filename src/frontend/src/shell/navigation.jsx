@@ -1,5 +1,5 @@
 import { localDesignLibraryEnabled } from '../lib/localDesignLibrary';
-import { AgentsNavIcon, InstructionsNavIcon, ChannelsNavIcon, ChatNavIcon, InboxNavIcon, DashboardNavIcon, InsightsIcon, KnowledgeNavIcon, CanvasesNavIcon, RepositoriesNavIcon, SchedulesNavIcon, RoutinesNavIcon, PluginsNavIcon, ProfilesNavIcon, TasksNavIcon, ToolsNavIcon, WorkspaceNavIcon } from '../components/navIcons';
+import { AgentsNavIcon, InstructionsNavIcon, ChannelsNavIcon, ChatNavIcon, InboxNavIcon, DashboardNavIcon, InsightsIcon, KnowledgeNavIcon, CanvasesNavIcon, RepositoriesNavIcon, RunsNavIcon, SchedulesNavIcon, RoutinesNavIcon, PluginsNavIcon, ProfilesNavIcon, TasksNavIcon, ToolsNavIcon, WorkspaceNavIcon } from '../components/navIcons';
 
 // Grouped by owner/level (see the entity-relationship model):
 //   Operate  — the surfaces you work in (Progena chat, overview, projects)
@@ -22,6 +22,7 @@ export const navGroups = [
       { to: '/dashboard', icon: <DashboardNavIcon />, label: 'Dashboard', trackActivity: true },
       { to: '/canvases', icon: <CanvasesNavIcon />, label: 'Canvases', trackActivity: true },
       { to: '/insights', icon: <InsightsIcon />, label: 'Insights' },
+      { to: '/runs', icon: <RunsNavIcon />, label: 'Runs' },
     ],
   },
   {

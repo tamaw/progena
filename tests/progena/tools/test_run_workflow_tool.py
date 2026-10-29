@@ -95,7 +95,7 @@ async def test_execute_queues_manual_trigger_payload_without_active_ancestry():
     assert state_manager.request_workflow_run.await_args.kwargs["run_id"] == result_data["run_id"]
     # The returned path is the run's /runs/ file: dated, titled and ending in its id.
     assert re.fullmatch(
-        rf"/runs/workflows/\d{{4}}-\d{{2}}-\d{{2}}_[a-z0-9-]+_{result_data['run_id'][13:21]}\.md",
+        rf"/runs/workflows/\d{{4}}-\d{{2}}-\d{{2}}_[a-z0-9-]+_{result_data['run_id']}\.md",
         result_data["path"],
     )
 

@@ -17,6 +17,7 @@ import src.backend.alerts.routes as alerts_routes
 import src.backend.canvases.events as canvases_events
 import src.backend.events.stream as events_stream
 import src.backend.monitoring.status as monitoring_status
+import src.backend.runs.events as runs_events
 import src.backend.workflows.events as workflows_events
 
 logger = logging.getLogger(__name__)
@@ -130,9 +131,11 @@ async def _generate_ui_stream(
                     )
                     break
                 envelope = event["envelope"]
-                if "interest" in event and event[
-                    "interest"
-                ] is not workflows_events.routine_events.interests.get(client_id):
+                if "interest" in event and (
+                    event["interest"]
+                    is not workflows_events.routine_events.interests.get(client_id)
+                    and not runs_events.runs_events.has_interest(client_id, event["interest"])
+                ):
                     continue
                 yield ServerSentEvent(event="ui.event", data=envelope.model_dump(), id=envelope.id)
             except TimeoutError:
@@ -147,6 +150,7 @@ async def _generate_ui_stream(
         if client_id not in events_stream._ui_stream_clients.values():
             workflows_events.routine_events.disconnected(client_id)
             canvases_events.canvas_events.disconnected(client_id)
+            runs_events.runs_events.disconnected(client_id)
         if current_task:
             events_stream._active_ui_stream_tasks.discard(current_task)
         if not events_stream._ui_stream_subscribers:

@@ -8,7 +8,7 @@ thread, and routine-node children inline their own run.
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from src.progena.runtime.ownership import routine_attempt_interrupted
@@ -19,8 +19,10 @@ from ._render import (
     RunContext,
     RunLog,
     Steps,
+    add_tokens,
     agent_transcript,
     at,
+    recorded_tokens,
     render_file,
     step_result,
 )
@@ -78,7 +80,7 @@ async def _graph(ctx: RunContext, started: dict[str, Any]) -> dict[str, Any] | N
             pinned = None
         if isinstance(pinned, dict):
             return pinned
-    current = await ctx.state_manager.get_routine_graph(routine_id)
+    current = await ctx.routine_graph(routine_id)
     return current if isinstance(current, dict) else None
 
 
@@ -111,14 +113,15 @@ def _attempt_window(
     return begin, (later[0] if later else None)
 
 
-async def _run_meta(ctx: RunContext, thread_id: str) -> list[tuple[str, dict[str, Any]]]:
+async def _run_meta(
+    ctx: RunContext, thread_id: str
+) -> tuple[list[tuple[str, dict[str, Any]]], Any | None]:
+    """The recorded entries and checkpoint tip for one routine thread."""
     if ctx.checkpointer is None or not thread_id:
-        return []
-    tip = await ctx.checkpointer.aget_tuple(
-        {"configurable": {"thread_id": thread_id, "checkpoint_ns": ""}}
-    )
+        return [], None
+    tip = await ctx.checkpoint(thread_id)
     if tip is None:
-        return []
+        return [], None
     values = tip.checkpoint.get("channel_values", {})
     meta = values.get("run_meta") if isinstance(values, dict) else None
     entries: list[tuple[str, dict[str, Any]]] = []
@@ -126,7 +129,7 @@ async def _run_meta(ctx: RunContext, thread_id: str) -> list[tuple[str, dict[str
         for node_id, runs in meta.items():
             if isinstance(runs, list):
                 entries.extend((str(node_id), run) for run in runs if isinstance(run, dict))
-    return sorted(entries, key=lambda pair: pair[1].get("step") or 0)
+    return sorted(entries, key=lambda pair: pair[1].get("step") or 0), tip
 
 
 def _step_output(entry: dict[str, Any], node: dict[str, Any], node_id: str) -> Any:
@@ -139,22 +142,86 @@ def _step_output(entry: dict[str, Any], node: dict[str, Any], node_id: str) -> A
     return output
 
 
-def _child_attempt(
-    ctx: RunContext, thread_id: str, node_id: str, when: datetime | None
-) -> dict[str, Any] | None:
-    candidates = [
-        event
-        for event in ctx.routine_events
-        if event.get("status") == "started"
-        and isinstance(event.get("parent"), dict)
-        and event["parent"].get("thread_id") == thread_id
-        and event["parent"].get("node_id") == node_id
-    ]
-    if when is not None:
-        candidates.sort(
-            key=lambda event: abs(((at(event.get("timestamp")) or when) - when).total_seconds())
-        )
-    return candidates[0] if candidates else None
+def _invocation_ends(
+    records: list[tuple[str, dict[str, Any]]], attempt_end: datetime | None
+) -> list[datetime | None]:
+    """Bound each execution by measured duration, its next invocation, and attempt."""
+    ends: list[datetime | None] = [None] * len(records)
+    following: dict[str, datetime] = {}
+    for index in range(len(records) - 1, -1, -1):
+        node_id, entry = records[index]
+        started = at(entry.get("started_at"))
+        bounds = [bound for bound in (attempt_end, following.get(node_id)) if bound is not None]
+        duration = entry.get("duration_ms")
+        if started is not None:
+            if isinstance(duration, (int, float)) and duration >= 0:
+                bounds.append(started + timedelta(milliseconds=duration))
+            following[node_id] = started
+        ends[index] = min(bounds) if bounds else None
+    return ends
+
+
+def _invocation_identity(invocation: Any) -> tuple[str, str] | None:
+    """The persisted child request/thread pair; never infer either identity."""
+    if not isinstance(invocation, dict):
+        return None
+    request_id = invocation.get("request_id")
+    thread_id = invocation.get("thread_id")
+    if not isinstance(request_id, str) or not request_id:
+        return None
+    if not isinstance(thread_id, str) or not thread_id:
+        return None
+    return request_id, thread_id
+
+
+def _pending_child_invocations(tip: Any | None) -> list[tuple[str, dict[str, Any]]]:
+    """Nested child identities held in native LangGraph interrupt writes.
+
+    A paused routine node has not returned, so it has no ``run_meta`` entry.
+    Its checkpointed ``__interrupt__`` write is the durable provenance of the
+    child that completed work before asking for approval.
+    """
+    children: list[tuple[str, dict[str, Any]]] = []
+    for write in getattr(tip, "pending_writes", ()) or ():
+        try:
+            _task_id, channel, interrupts = write
+        except (TypeError, ValueError):
+            continue
+        if channel != "__interrupt__" or not isinstance(interrupts, (list, tuple)):
+            continue
+        for interrupt in interrupts:
+            payload = getattr(interrupt, "value", None)
+            if not isinstance(payload, dict):
+                continue
+            node_id = payload.get("node")
+            invocation = payload.get("child_invocation")
+            if (
+                isinstance(node_id, str)
+                and node_id
+                and isinstance(invocation, dict)
+                and _invocation_identity(invocation) is not None
+            ):
+                children.append((node_id, invocation))
+    return children
+
+
+async def _child_attempt(ctx: RunContext, invocation: Any) -> dict[str, Any] | None:
+    """Resolve a nested routine only through its persisted request/thread pair."""
+    identity = _invocation_identity(invocation)
+    if identity is None:
+        return None
+    request_id, thread_id = identity
+    await ctx.load_thread_events(thread_id)
+    return next(
+        (
+            event
+            for event in ctx.routine_events
+            if event.get("status") == "started"
+            and event.get("request_id") == request_id
+            and event.get("thread_id") == thread_id
+        ),
+        None,
+    )
 
 
 async def routine_log(
@@ -167,6 +234,8 @@ async def routine_log(
 ) -> tuple[dict[str, Any], RunLog, str]:
     """Front matter, log lines and channel of one attempt (children inlined)."""
     request_id = str(started.get("request_id") or "")
+    thread_id = str(started.get("thread_id") or "")
+    await ctx.load_thread_events(thread_id)
     events = attempt_events(ctx, request_id) or [started]
     status, latest = attempt_status(ctx, events)
     graph = await _graph(ctx, started)
@@ -174,7 +243,7 @@ async def routine_log(
     title = str((graph or {}).get("name") or started.get("name") or routine_id)
     nick = slug(title)
     channel = channel or f"{nick}-{short_id(request_id)}"
-    thread_id = str(started.get("thread_id") or "")
+
     nodes = {
         str(node.get("id")): node
         for node in (graph or {}).get("nodes", [])
@@ -182,8 +251,17 @@ async def routine_log(
     }
     log = RunLog(nick=nick)
     begin, end = _attempt_window(ctx, started)
+    tokens: dict[str, int | None] | None = None
     last_label: str | None = None
-    for node_id, entry in await _run_meta(ctx, thread_id):
+    records, tip = await _run_meta(ctx, thread_id)
+    resolved_children = {
+        identity
+        for _node_id, entry in records
+        if (identity := _invocation_identity(entry.get("routine"))) is not None
+    }
+    for (node_id, entry), invocation_end in zip(
+        records, _invocation_ends(records, end), strict=True
+    ):
         when = at(entry.get("started_at"))
         if begin is not None and when is not None and when < begin:
             continue
@@ -196,9 +274,22 @@ async def routine_log(
         config: dict[str, Any] = raw_config if isinstance(raw_config, dict) else {}
         last_label = label
         value = _step_output(entry, node, node_id)
+        if kind == "routine" and depth < MAX_CHILD_DEPTH:
+            child = await _child_attempt(ctx, entry.get("routine"))
+            if child is not None:
+                child_front = await inline_child(
+                    ctx, log, child, steps=steps, depth=depth, channel=channel
+                )
+                tokens = add_tokens(
+                    tokens, child_front.get("tokens") or recorded_tokens(entry.get("tokens"))
+                )
+                continue
+        if kind != "agent":
+            tokens = add_tokens(tokens, recorded_tokens(entry.get("tokens")))
         if kind == "agent":
             agent = str(config.get("agent_name") or label)
-            if await agent_transcript(
+            transcript_tokens: list[dict[str, int | None] | None] = []
+            if when is not None and await agent_transcript(
                 ctx,
                 log,
                 f"routine-agent:{thread_id}:{node_id}",
@@ -206,8 +297,14 @@ async def routine_log(
                 channel=channel,
                 when=when,
                 steps=steps,
+                begin=when,
+                end=invocation_end,
+                token_totals=transcript_tokens,
             ):
+                usage = transcript_tokens[0] if transcript_tokens else None
+                tokens = add_tokens(tokens, usage or recorded_tokens(entry.get("tokens")))
                 continue
+            tokens = add_tokens(tokens, recorded_tokens(entry.get("tokens")))
             log.act(when, f"asks {agent} → {step_result(value, steps)}")
             continue
         if kind == "prompt" and isinstance(value, str):
@@ -215,11 +312,7 @@ async def routine_log(
             log.agents.add(slug(label))
             log.say(when, speaker, value)
             continue
-        if kind == "routine" and depth < MAX_CHILD_DEPTH:
-            child = _child_attempt(ctx, thread_id, node_id, when)
-            if child is not None:
-                await inline_child(ctx, log, child, steps=steps, depth=depth, channel=channel)
-                continue
+
         verb = _VERBS.get(kind, kind)
         if kind in _ROUTED and entry.get("route"):
             log.act(when, f"{verb} {label} → {entry['route']}")
@@ -230,6 +323,26 @@ async def routine_log(
             continue
         log.act(when, f"{verb} {label} → {step_result(value, steps)}")
 
+    for node_id, invocation in _pending_child_invocations(tip):
+        identity = _invocation_identity(invocation)
+        if identity is None or identity in resolved_children:
+            continue
+        node = nodes.get(node_id)
+        if not isinstance(node, dict) or node.get("kind") != "routine" or depth >= MAX_CHILD_DEPTH:
+            continue
+        child = await _child_attempt(ctx, invocation)
+        if child is None:
+            continue
+        when = at(child.get("timestamp"))
+        if begin is not None and when is not None and when < begin:
+            continue
+        if end is not None and when is not None and when >= end:
+            continue
+        label = str(node.get("label") or node_id)
+        last_label = label
+        child_front = await inline_child(ctx, log, child, steps=steps, depth=depth, channel=channel)
+        resolved_children.add(identity)
+        tokens = add_tokens(tokens, child_front.get("tokens"))
     closed = at(latest.get("timestamp"))
     error = latest.get("error")
     if status == "failed":
@@ -267,6 +380,7 @@ async def routine_log(
         "output": _compact(output, steps),
         "error": error if status == "failed" else None,
         "attempts": _attempts(ctx, started),
+        "tokens": tokens,
     }
     return front, log, channel
 
@@ -314,7 +428,7 @@ async def inline_child(
     steps: Steps,
     depth: int,
     channel: str,
-) -> None:
+) -> dict[str, Any]:
     """A child routine run between join and part, ending with its result."""
     front, child, _ = await routine_log(ctx, started, steps=steps, depth=depth + 1, channel=channel)
     first = next((line.at for line in child.lines if line.at), at(started.get("timestamp")))
@@ -350,6 +464,7 @@ async def inline_child(
     status = front.get("status")
     reason = "" if status == "completed" else f" [{status}]"
     log.event(last, f"{child.nick} [routine] has left #{channel}{reason}")
+    return front
 
 
 def _say_line(when: datetime | None, nick: str, text: str) -> Line:

@@ -11,7 +11,11 @@ from src.progena.documents.kinds import (
 )
 from src.progena.persistence.documents import StateDocuments
 from src.progena.utils import utcnow_isoformat
-from src.progena.workflows.documents import workflow_definition_key, workflow_invoke_request_key
+from src.progena.workflows.documents import (
+    workflow_definition_key,
+    workflow_invoke_request_key,
+    workflow_run_key,
+)
 
 
 class WorkflowStore:
@@ -41,9 +45,45 @@ class WorkflowStore:
         rows = await self._access.store.list_documents(WORKFLOW_DEFINITION_KEY_PREFIX)
         return [payload for _, payload in rows if isinstance(payload, dict)]
 
+    async def list_workflow_titles(self) -> dict[str, str]:
+        """Return workflow titles keyed by their durable document-key identifier."""
+        rows = await self._access.store.list_documents(
+            WORKFLOW_DEFINITION_KEY_PREFIX,
+            payload_fields=("title", "name"),
+        )
+        titles: dict[str, str] = {}
+        for key, payload in rows:
+            workflow_id = key.removeprefix(WORKFLOW_DEFINITION_KEY_PREFIX)
+            if not workflow_id or not isinstance(payload, dict):
+                continue
+            title = payload.get("title") or payload.get("name")
+            if isinstance(title, str) and title.strip():
+                titles[workflow_id] = title
+        return titles
+
+    async def get_workflow_run(self, run_id: str) -> dict[str, Any] | None:
+        """Return one workflow run document without materializing a missing row."""
+        payload = await self._access.store.peek_document(workflow_run_key(run_id))
+        return payload if isinstance(payload, dict) else None
+
     async def list_workflow_runs(self) -> list[dict[str, Any]]:
         """Return all workflow run documents."""
         rows = await self._access.store.list_documents(WORKFLOW_RUN_KEY_PREFIX)
+        return [payload for _, payload in rows if isinstance(payload, dict)]
+
+    async def list_workflow_run_summaries(self) -> list[dict[str, Any]]:
+        """Return compact workflow run records for directory listings."""
+        rows = await self._access.store.list_documents(
+            WORKFLOW_RUN_KEY_PREFIX,
+            payload_fields=(
+                "run_id",
+                "workflow_id",
+                "status",
+                "started_at",
+                "queued_at",
+                "updated_at",
+            ),
+        )
         return [payload for _, payload in rows if isinstance(payload, dict)]
 
     async def request_workflow_run(

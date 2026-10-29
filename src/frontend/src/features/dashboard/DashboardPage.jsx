@@ -1,6 +1,8 @@
 import { useMemo, useState, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import { useDashboardData } from './useDashboardData';
+import RunStatusPill from '../../components/RunStatusPill';
+
 import InlineFailure from '../../components/InlineFailure';
 
 const EMPTY_LIST = [];
@@ -57,9 +59,6 @@ function StatusPill({ status }) {
   return <span className={`dashboard-status-pill dashboard-status-pill--${normalized}`}>{normalized}</span>;
 }
 
-function RunStatusPill({ status }) {
-  return <span className={`dashboard-status-pill dashboard-status-pill--${status || 'queued'}`}>{status || 'queued'}</span>;
-}
 
 function MetricCard({ label, value, detail, icon }) {
   return (

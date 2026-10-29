@@ -8,6 +8,8 @@ import src.backend.agents.reconciliation as agents_reconciliation
 import src.backend.events.dispatch as events_dispatch
 import src.backend.monitoring.state as monitoring_state
 import src.backend.monitoring.status as monitoring_status
+import src.backend.runs.events as runs_events
+import src.backend.storage.documents as storage_documents
 import src.backend.workflows.events as workflows_events
 import src.backend.workflows.runtime as workflows_runtime
 
@@ -50,6 +52,10 @@ async def start_state_status_watcher(reconnect_delay: float = 2.0) -> None:
         _knowledge_index_watch_callback = _queue_knowledge_index_resync
         state_reader.add_watcher(_knowledge_index_watch_callback)
     await workflows_events.routine_events.start()
+    # The runtime creates LangGraph's checkpoint tables.  Install the backend
+    # trigger only after that schema exists, before listening for its NOTIFYs.
+    storage_documents.ensure_runs_checkpoint_trigger(state_reader.document_store)
+    await runs_events.runs_events.start(state_reader.document_store)
     await workflows_runtime.get_acp_task_supervisor().start()
     await events_dispatch.get_document_event_dispatcher().start(reconnect_delay)
     await workflows_runtime.get_workflow_executor().recover_startup_runs()
@@ -75,6 +81,7 @@ async def stop_state_status_watcher() -> None:
         state_reader.remove_watcher(_knowledge_index_watch_callback)
         _knowledge_index_watch_callback = None
     await workflows_events.routine_events.stop()
+    await runs_events.runs_events.stop()
     await workflows_runtime.get_workflow_cron_clock().stop()
     await workflows_runtime.get_acp_task_supervisor().stop()
     await events_dispatch.get_document_event_dispatcher().stop()

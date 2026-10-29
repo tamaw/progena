@@ -193,8 +193,24 @@ class StateManager:
     async def save_routine_run_event(self, payload: dict[str, Any]) -> None:
         return await self.routines.save_routine_run_event(payload)
 
-    async def list_routine_run_events(self, request_id: str | None = None) -> list[dict[str, Any]]:
-        return await self.routines.list_routine_run_events(request_id)
+    async def list_routine_run_events(
+        self,
+        request_id: str | None = None,
+        *,
+        thread_ids: list[str] | None = None,
+    ) -> list[dict[str, Any]]:
+        return await self.routines.list_routine_run_events(request_id, thread_ids=thread_ids)
+
+    async def list_routine_run_summaries(self) -> list[dict[str, Any]]:
+        return await self.routines.list_routine_run_summaries()
+
+    async def get_routine_run_started(self, request_id: str) -> dict[str, Any] | None:
+        return await self.routines.get_routine_run_started(request_id)
+
+    async def list_routine_run_event_revisions(
+        self, *, thread_ids: list[str]
+    ) -> list[dict[str, Any]]:
+        return await self.routines.list_routine_run_event_revisions(thread_ids=thread_ids)
 
     async def get_routine_run_control(
         self, agent_id: str, session_id: str
@@ -413,6 +429,9 @@ class StateManager:
     async def list_workflow_definitions(self) -> list[dict[str, Any]]:
         return await self.workflows.list_workflow_definitions()
 
+    async def list_workflow_titles(self) -> dict[str, str]:
+        return await self.workflows.list_workflow_titles()
+
     # ==========================================================================
     # Document types
     # ==========================================================================
@@ -449,8 +468,17 @@ class StateManager:
     async def list_routine_graphs(self) -> list[dict[str, Any]]:
         return await self.routines.list_routine_graphs()
 
+    async def list_routine_titles(self) -> dict[str, str]:
+        return await self.routines.list_routine_titles()
+
+    async def get_workflow_run(self, run_id: str) -> dict[str, Any] | None:
+        return await self.workflows.get_workflow_run(run_id)
+
     async def list_workflow_runs(self) -> list[dict[str, Any]]:
         return await self.workflows.list_workflow_runs()
+
+    async def list_workflow_run_summaries(self) -> list[dict[str, Any]]:
+        return await self.workflows.list_workflow_run_summaries()
 
     async def request_workflow_run(
         self,

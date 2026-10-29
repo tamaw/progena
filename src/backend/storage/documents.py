@@ -8,7 +8,7 @@ import copy
 import hashlib
 import logging
 import threading
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -34,7 +34,7 @@ from src.progena.routines.store import ROUTINE_GRAPH_KEY_PREFIX
 PROGENA_STATE_PREFIX = "progena.state"
 BACKEND_STATE_PREFIX = "backend.state"
 
-# Postgres LISTEN/NOTIFY channel used to push ``store`` table changes to the
+# Postgres LISTEN/NOTIFY channel used to push store table changes to the backend.
 STORE_CHANGE_CHANNEL = "store_changed"
 _STORE_CHANGE_PREFIXES = (PROGENA_STATE_PREFIX, BACKEND_STATE_PREFIX)
 # Parallel runtime reads when the chat list needs messages for many threads.
@@ -211,6 +211,32 @@ class CanvasRevision:
     captured_at: str | None
 
 
+def _compact_workflow_run_definition(definition: object) -> dict[str, Any]:
+    """Keep only list-view workflow fields needed to name and classify audit spans."""
+    if not isinstance(definition, dict):
+        return {}
+    graph = definition.get("graph")
+    raw_nodes = graph.get("nodes") if isinstance(graph, dict) else {}
+    nodes = (
+        {
+            node_id: {
+                field: node[field]
+                for field in ("kind", "title", "label")
+                if isinstance(node.get(field), str)
+            }
+            for node_id, node in raw_nodes.items()
+            if isinstance(node_id, str) and isinstance(node, dict)
+        }
+        if isinstance(raw_nodes, dict)
+        else {}
+    )
+    return {
+        field: definition[field]
+        for field in ("id", "title")
+        if isinstance(definition.get(field), str)
+    } | {"graph": {"nodes": nodes}}
+
+
 class BackendDocumentStore(Protocol):
     """Minimal document-store API used by backend routes."""
 
@@ -219,6 +245,20 @@ class BackendDocumentStore(Protocol):
     ) -> StoredDocument | None: ...
 
     def list_documents(self, prefix: str, key_prefix: str) -> list[tuple[str, StoredDocument]]: ...
+
+    def query_workflow_run_page(
+        self,
+        *,
+        status: str,
+        q: str,
+        sort: Literal["newest", "oldest", "duration", "shortest"],
+        cursor: tuple[int | None, str | None, str, str] | None,
+        since: str | None = None,
+        as_of: str,
+        limit: int,
+    ) -> list[tuple[dict[str, Any], dict[str, Any]]]:
+        """Filter and keyset-page compact workflow metadata in the global run order."""
+        ...
 
     def search_documents(
         self,
@@ -264,6 +304,10 @@ class BackendDocumentStore(Protocol):
     def prune_document_events(
         self, *, through: DocumentEventPosition, older_than: timedelta
     ) -> int: ...
+
+    def query_tool_audits(self, tool_ids: Iterable[str]) -> dict[str, dict[str, Any]]:
+        """Return tool audit rows keyed by call ID in one indexed query."""
+        ...
 
     def inspect_schema(self) -> list[dict[str, Any]]: ...
 
@@ -426,6 +470,179 @@ class InMemoryDocumentStore:
             {"key": key, "payload": document.payload, "updated_at": document.updated_at}
             for key, document in rows[:limit]
         ]
+
+    def query_workflow_run_page(
+        self,
+        *,
+        status: str,
+        q: str,
+        sort: Literal["newest", "oldest", "duration", "shortest"],
+        cursor: tuple[int | None, str | None, str, str] | None,
+        since: str | None = None,
+        as_of: str,
+        limit: int,
+    ) -> list[tuple[dict[str, Any], dict[str, Any]]]:
+        cutoff = (
+            datetime.fromisoformat(since.replace("Z", "+00:00")).astimezone(UTC) if since else None
+        )
+        as_of_time = datetime.fromisoformat(as_of.replace("Z", "+00:00")).astimezone(UTC)
+
+        def duration_us(started: datetime | None, completed_value: object) -> int | None:
+            if started is None:
+                return None
+            try:
+                completed = (
+                    datetime.fromisoformat(completed_value.replace("Z", "+00:00")).astimezone(UTC)
+                    if isinstance(completed_value, str)
+                    else as_of_time
+                )
+            except ValueError:
+                completed = as_of_time
+            elapsed = max(completed - started, timedelta())
+            return (
+                elapsed.days * 86_400_000_000 + elapsed.seconds * 1_000_000 + elapsed.microseconds
+            )
+
+        def order_key(
+            started: datetime | None, elapsed_us: int | None, row_kind: str, run_id: str
+        ) -> tuple[Any, ...]:
+            timestamp = started.isoformat(timespec="microseconds") if started is not None else ""
+            if sort == "oldest":
+                return (started is None, timestamp, row_kind, run_id)
+            if sort == "duration":
+                return (
+                    elapsed_us is not None,
+                    elapsed_us if elapsed_us is not None else -1,
+                    started is not None,
+                    timestamp,
+                    row_kind,
+                    run_id,
+                )
+            if sort == "shortest":
+                return (
+                    elapsed_us is None,
+                    elapsed_us if elapsed_us is not None else 0,
+                    started is None,
+                    timestamp,
+                    row_kind,
+                    run_id,
+                )
+            return (started is not None, timestamp, row_kind, run_id)
+
+        boundary = None
+        if cursor is not None:
+            boundary_duration, boundary_started, boundary_kind, boundary_run_id = cursor
+            boundary_time = (
+                datetime.fromisoformat(boundary_started.replace("Z", "+00:00")).astimezone(UTC)
+                if boundary_started is not None
+                else None
+            )
+            boundary = order_key(boundary_time, boundary_duration, boundary_kind, boundary_run_id)
+
+        rows = []
+        for _, document in self.list_documents(PROGENA_STATE_PREFIX, "workflow_run:"):
+            payload = document.payload
+            if not isinstance(payload, dict):
+                continue
+            started_value = payload.get("started_at") or payload.get("queued_at")
+            try:
+                started = (
+                    datetime.fromisoformat(started_value.replace("Z", "+00:00")).astimezone(UTC)
+                    if isinstance(started_value, str)
+                    else None
+                )
+            except ValueError:
+                continue
+            if cutoff is not None and (started is None or started < cutoff):
+                continue
+            workflow_id = payload.get("workflow_id")
+            run_id = payload.get("run_id")
+            if not isinstance(workflow_id, str) or not isinstance(run_id, str) or not run_id:
+                continue
+            definition_doc = self.get_document(PROGENA_STATE_PREFIX, f"workflow:{workflow_id}", {})
+            definition = definition_doc.payload if definition_doc is not None else {}
+            definition = definition if isinstance(definition, dict) else {}
+            name = definition.get("title") or workflow_id
+            source = payload.get("source") or "manual"
+            if status and str(payload.get("status", "")).lower() != status:
+                continue
+            if q and not any(q in str(value).lower() for value in (name, source, run_id)):
+                continue
+            elapsed_us = duration_us(started, payload.get("completed_at"))
+            key = order_key(started, elapsed_us, "workflow", run_id)
+            if boundary is not None and (
+                key <= boundary if sort in {"oldest", "shortest"} else key >= boundary
+            ):
+                continue
+            step_audit = payload.get("step_audit")
+            compact_audit = (
+                [
+                    {
+                        field: entry.get(field)
+                        for field in (
+                            "node_id",
+                            "kind",
+                            "thread_id",
+                            "started_at",
+                            "completed_at",
+                            "status",
+                            "tokens",
+                        )
+                        if field in entry
+                    }
+                    for entry in step_audit
+                    if isinstance(entry, dict)
+                ]
+                if isinstance(step_audit, list)
+                else []
+            )
+            outputs = payload.get("node_outputs")
+            node_threads = (
+                {
+                    node_id: {"thread_id": output["thread_id"]}
+                    for node_id, output in outputs.items()
+                    if isinstance(output, dict) and isinstance(output.get("thread_id"), str)
+                }
+                if isinstance(outputs, dict)
+                else {}
+            )
+            pending = payload.get("pending_routine")
+            pending_ref = (
+                {
+                    field: pending.get(field)
+                    for field in ("node_id", "thread_id")
+                    if field in pending
+                }
+                if isinstance(pending, dict)
+                else None
+            )
+            rows.append(
+                (
+                    key,
+                    {
+                        field: payload.get(field)
+                        for field in (
+                            "run_id",
+                            "workflow_id",
+                            "status",
+                            "source",
+                            "started_at",
+                            "queued_at",
+                            "completed_at",
+                            "completed_node_ids",
+                            "tokens",
+                        )
+                    }
+                    | {
+                        "step_audit": compact_audit,
+                        "node_threads": node_threads,
+                        "pending_routine": pending_ref,
+                    },
+                    _compact_workflow_run_definition(definition),
+                )
+            )
+        rows.sort(key=lambda row: row[0], reverse=sort not in {"oldest", "shortest"})
+        return [(payload, definition) for _, payload, definition in rows[:limit]]
 
     def save_document(self, prefix: str, key: str, payload: Any) -> None:
         # Copy like Postgres serialization does, so later in-place edits by the
@@ -659,6 +876,21 @@ class InMemoryDocumentStore:
             self._events = kept
         return removed
 
+    def query_tool_audits(self, tool_ids: Iterable[str]) -> dict[str, dict[str, Any]]:
+        wanted = set(tool_ids)
+        if not wanted:
+            return {}
+        audits: dict[str, dict[str, Any]] = {}
+        for _, document in self.list_documents("progena.logs.tool_calls", ""):
+            row = document.payload
+            payload = row.get("payload") if isinstance(row, dict) else None
+            if not isinstance(payload, dict):
+                continue
+            tool_id = payload.get("tool_id")
+            if isinstance(tool_id, str) and tool_id in wanted:
+                audits[tool_id] = payload
+        return audits
+
     def inspect_schema(self) -> list[dict[str, Any]]:
         return [
             {
@@ -775,6 +1007,7 @@ class PostgresDocumentStore:
         self._database_url = database_url
         self._pool = self._create_pool()
         self._conversation_reader = RuntimeConversationReader(runtime_url) if runtime_url else None
+        self._runs_trigger_ready = False
 
     @property
     def database_url(self) -> str:
@@ -812,6 +1045,45 @@ class PostgresDocumentStore:
         self._pool.close()
         if self._conversation_reader is not None:
             self._conversation_reader.close()
+
+    def ensure_runs_checkpoint_trigger(self) -> None:
+        """Install backend-owned checkpoint wakeups after LangGraph tables exist.
+
+        Checkpoint readers also call this if the runtime schema was not ready
+        at backend startup. Once installed, subsequent reads perform no DDL.
+        """
+        if self._runs_trigger_ready:
+            return
+        with self._cursor() as cur:
+            cur.execute("SELECT to_regclass('public.checkpoints') AS checkpoints")
+            row = cur.fetchone()
+            if row is None:
+                raise RuntimeError("Checkpoint schema lookup returned no row")
+            if row["checkpoints"] is None:
+                return
+            cur.execute(
+                """
+                SELECT pg_advisory_xact_lock(hashtextextended('runs_checkpoint_schema', 0));
+                CREATE OR REPLACE FUNCTION progena_notify_run_checkpoint()
+                RETURNS trigger AS $$
+                BEGIN
+                    PERFORM pg_notify(
+                        'run_checkpoints',
+                        json_build_object('thread_id', NEW.thread_id)::text
+                    );
+                    RETURN NEW;
+                END;
+                $$ LANGUAGE plpgsql;
+                DROP TRIGGER IF EXISTS progena_notify_run_checkpoint ON checkpoints;
+                CREATE TRIGGER progena_notify_run_checkpoint
+                    AFTER INSERT OR UPDATE ON checkpoints
+                    FOR EACH ROW EXECUTE FUNCTION progena_notify_run_checkpoint();
+                CREATE INDEX IF NOT EXISTS progena_tool_logs_tool_id_idx
+                    ON store ((value->'payload'->>'tool_id'))
+                    WHERE prefix = 'progena.logs.tool_calls';
+                """
+            )
+        self._runs_trigger_ready = True
 
     def _recreate_pool(self) -> None:
         self._pool = self._create_pool()
@@ -1504,6 +1776,229 @@ class PostgresDocumentStore:
             results.append((str(row["key"]), StoredDocument(payload, row.get("updated_at"))))
         return results
 
+    def query_workflow_run_page(
+        self,
+        *,
+        status: str,
+        q: str,
+        sort: Literal["newest", "oldest", "duration", "shortest"],
+        cursor: tuple[int | None, str | None, str, str] | None,
+        since: str | None = None,
+        as_of: str,
+        limit: int,
+    ) -> list[tuple[dict[str, Any], dict[str, Any]]]:
+        # Do not return trigger_event/node_outputs: these can be megabytes per run.
+        boundary_sql = ""
+        boundary_params: list[Any] = []
+        if sort == "newest":
+            order_by = "started IS NULL ASC, started DESC, p->>'run_id' DESC"
+            if cursor is not None:
+                _, started_at, row_kind, run_id = cursor
+                if started_at is None:
+                    boundary_sql = "AND started IS NULL AND ('workflow'::text, p->>'run_id') < (%s::text, %s::text)"
+                    boundary_params = [row_kind, run_id]
+                else:
+                    boundary_sql = (
+                        "AND (started IS NULL OR (started, 'workflow'::text, p->>'run_id') "
+                        "< (%s::timestamptz, %s::text, %s::text))"
+                    )
+                    boundary_params = [started_at, row_kind, run_id]
+        elif sort == "oldest":
+            order_by = "started IS NULL ASC, started ASC, p->>'run_id' ASC"
+            if cursor is not None:
+                _, started_at, row_kind, run_id = cursor
+                if started_at is None:
+                    boundary_sql = "AND started IS NULL AND ('workflow'::text, p->>'run_id') > (%s::text, %s::text)"
+                    boundary_params = [row_kind, run_id]
+                else:
+                    boundary_sql = (
+                        "AND (started IS NULL OR (started, 'workflow'::text, p->>'run_id') "
+                        "> (%s::timestamptz, %s::text, %s::text))"
+                    )
+                    boundary_params = [started_at, row_kind, run_id]
+        elif sort == "duration":
+            order_by = (
+                "duration_us IS NULL ASC, duration_us DESC, started IS NULL ASC, "
+                "started DESC, p->>'run_id' DESC"
+            )
+            if cursor is not None:
+                duration_us, started_at, row_kind, run_id = cursor
+                if duration_us is None:
+                    if started_at is None:
+                        boundary_sql = (
+                            "AND duration_us IS NULL AND started IS NULL "
+                            "AND ('workflow'::text, p->>'run_id') < (%s::text, %s::text)"
+                        )
+                        boundary_params = [row_kind, run_id]
+                    else:
+                        boundary_sql = (
+                            "AND duration_us IS NULL AND (started IS NULL "
+                            "OR (started, 'workflow'::text, p->>'run_id') "
+                            "< (%s::timestamptz, %s::text, %s::text))"
+                        )
+                        boundary_params = [started_at, row_kind, run_id]
+                else:
+                    boundary_sql = (
+                        "AND (duration_us IS NULL OR duration_us < %s "
+                        "OR (duration_us = %s AND (started IS NULL "
+                        "OR (started, 'workflow'::text, p->>'run_id') "
+                        "< (%s::timestamptz, %s::text, %s::text))))"
+                    )
+                    boundary_params = [duration_us, duration_us, started_at, row_kind, run_id]
+        elif sort == "shortest":
+            order_by = (
+                "duration_us IS NULL ASC, duration_us ASC, started IS NULL ASC, "
+                "started ASC, p->>'run_id' ASC"
+            )
+            if cursor is not None:
+                duration_us, started_at, row_kind, run_id = cursor
+                if duration_us is None:
+                    if started_at is None:
+                        boundary_sql = (
+                            "AND duration_us IS NULL AND started IS NULL "
+                            "AND ('workflow'::text, p->>'run_id') > (%s::text, %s::text)"
+                        )
+                        boundary_params = [row_kind, run_id]
+                    else:
+                        boundary_sql = (
+                            "AND duration_us IS NULL AND (started IS NULL "
+                            "OR (started, 'workflow'::text, p->>'run_id') "
+                            "> (%s::timestamptz, %s::text, %s::text))"
+                        )
+                        boundary_params = [started_at, row_kind, run_id]
+                else:
+                    boundary_sql = (
+                        "AND (duration_us IS NULL OR duration_us > %s "
+                        "OR (duration_us = %s AND (started IS NULL "
+                        "OR (started, 'workflow'::text, p->>'run_id') "
+                        "> (%s::timestamptz, %s::text, %s::text))))"
+                    )
+                    boundary_params = [duration_us, duration_us, started_at, row_kind, run_id]
+        else:
+            raise ValueError(f"Unsupported workflow run sort: {sort}")
+        with self._cursor() as cur:
+            cur.execute(
+                f"""
+                WITH runs AS (
+                    SELECT s.value->'payload' AS p, d.value->'payload' AS definition,
+                           COALESCE(
+                               NULLIF(s.value#>>'{{payload,started_at}}', ''),
+                               NULLIF(s.value#>>'{{payload,queued_at}}', '')
+                           )::timestamptz AS started,
+                           NULLIF(s.value#>>'{{payload,completed_at}}', '')::timestamptz AS completed
+                    FROM store s LEFT JOIN store d
+                      ON d.prefix = s.prefix
+                     AND d.key = 'workflow:' || (s.value#>>'{{payload,workflow_id}}')
+                    WHERE s.prefix = %s
+                      AND s.key LIKE %s
+                      AND (
+                          %s::timestamptz IS NULL
+                          OR COALESCE(
+                              NULLIF(s.value#>>'{{payload,started_at}}', ''),
+                              NULLIF(s.value#>>'{{payload,queued_at}}', '')
+                          )::timestamptz >= %s::timestamptz
+                      )
+                ),
+                ranked AS (
+                    SELECT *,
+                           CASE WHEN started IS NULL THEN NULL ELSE GREATEST(
+                               0::bigint,
+                               floor(extract(epoch FROM (
+                                   COALESCE(completed, %s::timestamptz) - started
+                               )) * 1000000)::bigint
+                           ) END AS duration_us
+                    FROM runs
+                )
+                SELECT jsonb_build_object(
+                    'run_id', p->'run_id', 'workflow_id', p->'workflow_id',
+                    'status', p->'status', 'source', p->'source',
+                    'started_at', p->'started_at', 'queued_at', p->'queued_at',
+                    'completed_at', p->'completed_at',
+                    'completed_node_ids', p->'completed_node_ids',
+                    'tokens', p->'tokens',
+                    'node_threads', COALESCE((
+                        SELECT jsonb_object_agg(node_id, jsonb_build_object(
+                            'thread_id', details->'thread_id'
+                        ))
+                        FROM jsonb_each(
+                            CASE WHEN jsonb_typeof(p->'node_outputs') = 'object'
+                                 THEN p->'node_outputs' ELSE '{{}}'::jsonb END
+                        ) AS output(node_id, details)
+                        WHERE jsonb_typeof(details) = 'object' AND details ? 'thread_id'
+                    ), '{{}}'::jsonb),
+                    'pending_routine', CASE
+                        WHEN jsonb_typeof(p->'pending_routine') = 'object'
+                        THEN jsonb_strip_nulls(jsonb_build_object(
+                            'node_id', p->'pending_routine'->'node_id',
+                            'thread_id', p->'pending_routine'->'thread_id'
+                        ))
+                        ELSE NULL
+                    END,
+                    'step_audit', COALESCE((
+                        SELECT jsonb_agg(jsonb_strip_nulls(jsonb_build_object(
+                            'node_id', entry->'node_id',
+                            'kind', entry->'kind',
+                            'thread_id', entry->'thread_id',
+                            'started_at', entry->'started_at',
+                            'completed_at', entry->'completed_at',
+                            'status', entry->'status',
+                            'tokens', entry->'tokens'
+                        )))
+                        FROM jsonb_array_elements(
+                            CASE WHEN jsonb_typeof(p->'step_audit') = 'array'
+                                 THEN p->'step_audit' ELSE '[]'::jsonb END
+                        ) AS entry
+                    ), '[]'::jsonb)
+                ) AS payload,
+                jsonb_strip_nulls(jsonb_build_object(
+                    'id', definition->'id',
+                    'title', definition->'title',
+                    'graph', jsonb_build_object('nodes', COALESCE((
+                        SELECT jsonb_object_agg(
+                            node_id,
+                            jsonb_strip_nulls(jsonb_build_object(
+                                'kind', details->'kind',
+                                'title', details->'title',
+                                'label', details->'label'
+                            ))
+                        )
+                        FROM jsonb_each(
+                            CASE WHEN jsonb_typeof(definition->'graph'->'nodes') = 'object'
+                                 THEN definition->'graph'->'nodes' ELSE '{{}}'::jsonb END
+                        ) AS node(node_id, details)
+                        WHERE jsonb_typeof(details) = 'object'
+                    ), '{{}}'::jsonb))
+                )) AS definition
+                FROM ranked
+                WHERE (%s = '' OR lower(p->>'status') = %s)
+                  AND (%s = '' OR strpos(lower(COALESCE(definition->>'title', p->>'workflow_id')), %s) > 0
+                       OR strpos(lower(COALESCE(p->>'source', 'manual')), %s) > 0
+                       OR strpos(lower(p->>'run_id'), %s) > 0)
+                  {boundary_sql}
+                ORDER BY {order_by}
+                LIMIT %s
+                """,  # nosec B608 - interpolation is constrained to the static sort clauses above
+                (
+                    [
+                        PROGENA_STATE_PREFIX,
+                        "workflow\\_run:%",
+                        since,
+                        since,
+                        as_of,
+                        status,
+                        status,
+                        q,
+                        q,
+                        q,
+                        q,
+                    ]
+                    + boundary_params
+                    + [limit]
+                ),
+            )
+            rows = cast(list[dict[str, Any]], cur.fetchall())
+        return [(row["payload"], row["definition"]) for row in rows]
+
     def search_documents(
         self,
         prefix: str,
@@ -1791,6 +2286,27 @@ class PostgresDocumentStore:
                 (str(through.txid), through.seq, older_than),
             )
             return cur.rowcount
+
+    def query_tool_audits(self, tool_ids: Iterable[str]) -> dict[str, dict[str, Any]]:
+        ids = list({tool_id for tool_id in tool_ids if tool_id})
+        if not ids:
+            return {}
+        with self._cursor() as cur:
+            cur.execute(
+                """
+                SELECT value->'payload' AS payload
+                FROM store
+                WHERE prefix = %s AND value->'payload'->>'tool_id' = ANY(%s)
+                """,
+                ("progena.logs.tool_calls", ids),
+            )
+            rows = cast(list[dict[str, Any]], cur.fetchall())
+        return {
+            str(row["payload"]["tool_id"]): dict(row["payload"])
+            for row in rows
+            if isinstance(row.get("payload"), dict)
+            and isinstance(row["payload"].get("tool_id"), str)
+        }
 
     def inspect_schema(self) -> list[dict[str, Any]]:
         """Return table/column metadata for backend and LangGraph persistence tables."""
@@ -2280,6 +2796,13 @@ def store_database_url(store: BackendDocumentStore | None) -> str | None:
     """Return the Postgres DSN backing ``store``, or None for non-Postgres stores."""
     url = getattr(store, "database_url", None)
     return url if isinstance(url, str) else None
+
+
+def ensure_runs_checkpoint_trigger(store: BackendDocumentStore) -> None:
+    """Install the optional Runs checkpoint trigger for a Postgres-backed store."""
+    installer = getattr(store, "ensure_runs_checkpoint_trigger", None)
+    if callable(installer):
+        installer()
 
 
 class StoreChangeListener:

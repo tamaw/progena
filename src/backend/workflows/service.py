@@ -123,6 +123,60 @@ def _sum_token_usage(
     }
 
 
+def _open_step_audit(
+    audit: list[dict[str, Any]], *, node_id: str, kind: str, started_at: str
+) -> list[dict[str, Any]]:
+    """Add one open audit entry unless this node already has one."""
+
+    if any(
+        entry.get("node_id") == node_id and entry.get("completed_at") is None for entry in audit
+    ):
+        return audit
+    return [
+        *audit,
+        {
+            "node_id": node_id,
+            "kind": kind,
+            "started_at": started_at,
+            "status": "running",
+        },
+    ]
+
+
+def _close_step_audit(
+    audit: list[dict[str, Any]],
+    *,
+    node_id: str,
+    completed_at: str,
+    status: Literal["completed", "failed", "cancelled"],
+    output: str | None = None,
+    tokens: dict[str, int] | None = None,
+    error: str | None = None,
+    thread_id: str | None = None,
+) -> list[dict[str, Any]]:
+    """Close the open audit entry for one node without creating a replacement."""
+
+    for index in range(len(audit) - 1, -1, -1):
+        entry = audit[index]
+        if entry.get("node_id") != node_id or entry.get("completed_at") is not None:
+            continue
+        closed = {
+            **entry,
+            "completed_at": completed_at,
+            "status": status,
+        }
+        if output is not None:
+            closed["output"] = output
+        if tokens is not None:
+            closed["tokens"] = tokens
+        if error is not None:
+            closed["error"] = error
+        if thread_id:
+            closed["thread_id"] = thread_id
+        return [*audit[:index], closed, *audit[index + 1 :]]
+    return audit
+
+
 _ACTIVE_RUN_STATUSES = frozenset({"queued", "running", "paused"})
 # Session id of a routine run started by a routine node: ``<run_id>_<8 hex>``,
 # so a lifecycle event names the workflow run it belongs to.
@@ -1170,6 +1224,14 @@ class WorkflowExecutor:
                     self._emit_event("workflow.run.updated", resumed.model_dump(mode="json"))
                     return resumed
                 return active_run
+            if (
+                active_run is not None
+                and active_run.status == "paused"
+                and active_run.pending_approval is not None
+                and active_run.pending_approval.get("resolved_at") is None
+            ):
+                # An unanswered approval still owns its open node audit.
+                return active_run
             if active_run is not None and active_run.status == "paused":
                 candidate = active_run.model_copy(
                     update={
@@ -1242,20 +1304,36 @@ class WorkflowExecutor:
                     "This approval needs a person's decision in the Progena AI app."
                 )
             selected_port = "approved" if approved else "rejected"
+            now = utcnow_isoformat()
             updated = run.model_copy(
                 update={
                     "status": "queued",
+                    "completed_node_ids": [
+                        *run.completed_node_ids,
+                        *(
+                            []
+                            if run.waiting_node_id in run.completed_node_ids
+                            else [run.waiting_node_id]
+                        ),
+                    ],
                     "pending_approval": {
                         **(run.pending_approval or {}),
                         "approved": approved,
-                        "resolved_at": utcnow_isoformat(),
+                        "resolved_at": now,
                     },
                     "node_outputs": {
                         **run.node_outputs,
                         run.waiting_node_id: {selected_port: True},
                     },
                     "last_output": selected_port,
-                    "updated_at": utcnow_isoformat(),
+                    "step_audit": _close_step_audit(
+                        run.step_audit,
+                        node_id=run.waiting_node_id,
+                        completed_at=now,
+                        status="completed",
+                        output=selected_port,
+                    ),
+                    "updated_at": now,
                 }
             )
             save_workflow_run(store, updated)
@@ -1375,8 +1453,12 @@ class WorkflowExecutor:
                     failure = f"routine '{pending['routine_id']}' failed: {error}"
                 self._mark_failed(
                     store,
-                    run.model_copy(update={"pending_routine": None}),
+                    run,
                     error=failure,
+                    audit_node_id=node_id,
+                    audit_status="cancelled" if status == "cancelled" else "failed",
+                    audit_thread_id=thread_id,
+                    clear_pending_routine=True,
                 )
                 failed = True
             elif status in {"started", "paused", "stopped"}:
@@ -1413,7 +1495,12 @@ class WorkflowExecutor:
                     _validate_node_output(node, output)
                 except ValueError as exc:
                     self._mark_failed(
-                        store, run.model_copy(update={"pending_routine": None}), error=str(exc)
+                        store,
+                        run,
+                        error=str(exc),
+                        audit_node_id=node_id,
+                        audit_thread_id=thread_id,
+                        clear_pending_routine=True,
                     )
                     failed = True
                 else:
@@ -1424,20 +1511,21 @@ class WorkflowExecutor:
                         update={
                             "status": "queued" if continue_run else "paused",
                             "current_node_id": node_id,
-                            "completed_node_ids": [*run.completed_node_ids, node_id],
+                            "completed_node_ids": [
+                                *run.completed_node_ids,
+                                *([] if node_id in run.completed_node_ids else [node_id]),
+                            ],
                             "waiting_node_id": None,
                             "pending_routine": None,
                             "node_outputs": {**run.node_outputs, node_id: output},
                             "last_output": output_text,
-                            "step_audit": [
-                                *run.step_audit,
-                                {
-                                    "node_id": node_id,
-                                    "kind": "routine",
-                                    "completed_at": now,
-                                    "output": output_text,
-                                },
-                            ],
+                            "step_audit": _close_step_audit(
+                                run.step_audit,
+                                node_id=node_id,
+                                completed_at=now,
+                                status="completed",
+                                output=output_text,
+                            ),
                             "updated_at": now,
                         }
                     )
@@ -1472,6 +1560,70 @@ class WorkflowExecutor:
                 self._tasks.pop(workflow_id, None)
 
         task.add_done_callback(_cleanup)
+
+    async def _start_step_audit(
+        self, workflow_id: str, run_id: str, *, node_id: str, kind: str
+    ) -> WorkflowRun | None:
+        """Persist one open audit entry before the node can do any work."""
+
+        async with self._lock_for(workflow_id):
+            store = self._store_getter()
+            run = get_workflow_run(store, run_id)
+            if (
+                run is None
+                or run.status != "running"
+                or run.pending_routine is not None
+                or node_id in run.completed_node_ids
+            ):
+                return None
+            now = utcnow_isoformat()
+            audit = _open_step_audit(
+                run.step_audit,
+                node_id=node_id,
+                kind=kind,
+                started_at=now,
+            )
+            if audit is run.step_audit:
+                return run
+            started = run.model_copy(
+                update={
+                    "current_node_id": node_id,
+                    "step_audit": audit,
+                    "updated_at": now,
+                }
+            )
+            save_workflow_run(store, started)
+            self._emit_event("workflow.run.updated", started.model_dump(mode="json"))
+            return started
+
+    async def _record_step_thread(
+        self, workflow_id: str, run_id: str, *, node_id: str, thread_id: str
+    ) -> WorkflowRun | None:
+        """Persist the conversation selected for an agent step before it starts."""
+
+        async with self._lock_for(workflow_id):
+            store = self._store_getter()
+            run = get_workflow_run(store, run_id)
+            if run is None:
+                return None
+            for index in range(len(run.step_audit) - 1, -1, -1):
+                entry = run.step_audit[index]
+                if entry.get("node_id") != node_id or entry.get("completed_at") is not None:
+                    continue
+                if entry.get("thread_id") == thread_id:
+                    return run
+                audit = [
+                    *run.step_audit[:index],
+                    {**entry, "thread_id": thread_id},
+                    *run.step_audit[index + 1 :],
+                ]
+                recorded = run.model_copy(
+                    update={"step_audit": audit, "updated_at": utcnow_isoformat()}
+                )
+                save_workflow_run(store, recorded)
+                self._emit_event("workflow.run.updated", recorded.model_dump(mode="json"))
+                return recorded
+            return run
 
     async def _execute_run(self, workflow_id: str, run_id: str) -> None:
         try:
@@ -1561,6 +1713,14 @@ class WorkflowExecutor:
                 break
 
             node = definition.graph.nodes[node_id]
+            latest_run = await self._start_step_audit(
+                workflow_id,
+                run_id,
+                node_id=node_id,
+                kind=node.kind,
+            )
+            if latest_run is None:
+                return
             output_object: dict[str, Any] | None = None
             step_tokens: dict[str, int] | None = None
             try:
@@ -1588,10 +1748,6 @@ class WorkflowExecutor:
                         update={
                             "status": "paused",
                             "current_node_id": node_id,
-                            "completed_node_ids": [
-                                *latest_run.completed_node_ids,
-                                *([] if node_id in latest_run.completed_node_ids else [node_id]),
-                            ],
                             "waiting_node_id": node_id,
                             "pending_approval": pending,
                             "node_outputs": node_outputs,
@@ -1665,6 +1821,12 @@ class WorkflowExecutor:
                 elif isinstance(node, WorkflowNodeExtract):
                     _validate_node_input(node, resolved_input)
                     thread_id = self._resolve_thread_id(resolved_input, latest_run) or ""
+                    recorded = await self._record_step_thread(
+                        workflow_id, run_id, node_id=node_id, thread_id=thread_id
+                    )
+                    if recorded is None:
+                        return
+                    latest_run = recorded
                     template = parse_instruction_template(_node_template_text(store, node))
                     input_text = render_instruction_template(
                         template, {**resolved_input, "thread_id": thread_id}
@@ -1729,6 +1891,13 @@ class WorkflowExecutor:
                 elif isinstance(node, WorkflowNodeAgent):
                     _validate_node_input(node, resolved_input)
                     thread_id = self._resolve_thread_id(resolved_input, latest_run)
+                    if thread_id:
+                        recorded = await self._record_step_thread(
+                            workflow_id, run_id, node_id=node_id, thread_id=thread_id
+                        )
+                        if recorded is None:
+                            return
+                        latest_run = recorded
                     template = parse_instruction_template(_node_template_text(store, node))
                     input_text = render_instruction_template(
                         template, {**resolved_input, "thread_id": thread_id or ""}
@@ -1761,48 +1930,66 @@ class WorkflowExecutor:
                     return
                 else:
                     raise TypeError(f"node '{node_id}' has unsupported kind '{node.kind}'")
+            except asyncio.CancelledError:
+                self._mark_failed(
+                    store,
+                    latest_run,
+                    error="workflow execution was cancelled",
+                    audit_node_id=node_id,
+                    audit_status="cancelled",
+                )
+                await self._maybe_start_next_run_locked(store, workflow_id)
+                raise
             except Exception as exc:
-                self._mark_failed(store, latest_run, error=str(exc))
+                self._mark_failed(store, latest_run, error=str(exc), audit_node_id=node_id)
                 await self._maybe_start_next_run_locked(store, workflow_id)
                 return
 
             if output_object is not None:
                 node_outputs[node_id] = output_object
 
-            audit_entry: dict[str, Any] = {
-                "node_id": node_id,
-                "kind": node.kind,
-                "completed_at": utcnow_isoformat(),
-                "output": output_text,
-            }
-            if step_tokens is not None:
-                audit_entry["tokens"] = step_tokens
-            audit = [*latest_run.step_audit, audit_entry]
             # Re-read after the awaited node: a pause requested meanwhile must
             # survive this checkpoint (the loop head then stops the run).
             persisted = get_workflow_run(store, run_id) or latest_run
-            run = latest_run.model_copy(
+            if persisted.status in {"completed", "failed"}:
+                return
+            now = utcnow_isoformat()
+            run = persisted.model_copy(
                 update={
                     "status": "paused" if persisted.status == "paused" else "running",
                     "current_node_id": node_id,
-                    "completed_node_ids": [*latest_run.completed_node_ids, node_id],
+                    "completed_node_ids": [
+                        *persisted.completed_node_ids,
+                        *([] if node_id in persisted.completed_node_ids else [node_id]),
+                    ],
                     "waiting_node_id": None,
                     "pending_approval": None,
-                    "node_outputs": node_outputs,
+                    "node_outputs": {**persisted.node_outputs, **node_outputs},
                     "last_output": output_text,
-                    "step_audit": audit,
-                    "tokens": _sum_token_usage(latest_run.tokens, step_tokens),
-                    "updated_at": utcnow_isoformat(),
+                    "step_audit": _close_step_audit(
+                        persisted.step_audit,
+                        node_id=node_id,
+                        completed_at=now,
+                        status="completed",
+                        output=output_text,
+                        tokens=step_tokens,
+                    ),
+                    "tokens": _sum_token_usage(persisted.tokens, step_tokens),
+                    "updated_at": now,
                 }
             )
             save_workflow_run(store, run)
             self._emit_event("workflow.run.updated", run.model_dump(mode="json"))
 
-        run = run.model_copy(
+        final_run = get_workflow_run(store, run_id) or run
+        if final_run.status != "running":
+            return
+        now = utcnow_isoformat()
+        run = final_run.model_copy(
             update={
                 "status": "completed",
-                "updated_at": utcnow_isoformat(),
-                "completed_at": utcnow_isoformat(),
+                "updated_at": now,
+                "completed_at": now,
             }
         )
         save_workflow_run(store, run)
@@ -1838,15 +2025,36 @@ class WorkflowExecutor:
         run: WorkflowRun,
         *,
         error: str,
+        audit_node_id: str | None = None,
+        audit_status: Literal["failed", "cancelled"] = "failed",
+        audit_thread_id: str | None = None,
+        clear_pending_routine: bool = False,
     ) -> WorkflowRun:
-        failed = run.model_copy(
-            update={
-                "status": "failed",
-                "last_error": error,
-                "updated_at": utcnow_isoformat(),
-                "completed_at": utcnow_isoformat(),
-            }
-        )
+        """Fail a run while retaining concurrent lifecycle and audit updates."""
+
+        persisted = get_workflow_run(store, run.run_id) or run
+        now = utcnow_isoformat()
+        node_id = audit_node_id or persisted.current_node_id
+        step_audit = persisted.step_audit
+        if node_id is not None:
+            step_audit = _close_step_audit(
+                step_audit,
+                node_id=node_id,
+                completed_at=now,
+                status=audit_status,
+                error=error,
+                thread_id=audit_thread_id,
+            )
+        updates: dict[str, Any] = {
+            "status": "failed",
+            "last_error": error,
+            "step_audit": step_audit,
+            "updated_at": now,
+            "completed_at": now,
+        }
+        if clear_pending_routine:
+            updates["pending_routine"] = None
+        failed = persisted.model_copy(update=updates)
         save_workflow_run(store, failed)
         self._emit_event("workflow.run.failed", failed.model_dump(mode="json"))
         return failed
