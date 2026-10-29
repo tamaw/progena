@@ -49,6 +49,8 @@ class RunsEvents:
         self.completed: OrderedDict[TraceKey, TraceResult] = OrderedDict()
         self.store: Any = None
         self.row_threads: set[str] = set()
+        self.row_building: set[str] = set()
+        self.row_versions: dict[str, int] = defaultdict(int)
         self.row_task: asyncio.Task[Any] | None = None
 
     def _spawn(self, coroutine: Any) -> asyncio.Task[Any]:
@@ -88,6 +90,8 @@ class RunsEvents:
         self.builds.clear()
         self.dirty.clear()
         self.row_threads.clear()
+        self.row_building.clear()
+        self.row_versions.clear()
         self.row_task = None
         self.interests.clear()
         self.by_thread.clear()
@@ -189,11 +193,17 @@ class RunsEvents:
         return trace, token
 
     def _invalidate(self, key: TraceKey) -> None:
-        if key in self.completed or key in self.builds or self._watching(key):
-            self.versions[key] += 1
+        self.versions[key] += 1
         self.completed.pop(key, None)
         self.schedule(key)
         self._prune(key)
+
+    def _invalidate_builds_discovering_dependencies(self, affected: set[TraceKey]) -> None:
+        """Discard builds whose relevant thread is not indexed until they return."""
+        for key in tuple(self.builds):
+            if key not in affected:
+                self.versions[key] += 1
+                self.completed.pop(key, None)
 
     def checkpoint_changed(self, notification: str) -> None:
         try:
@@ -206,14 +216,10 @@ class RunsEvents:
         affected = set(self.by_thread.get(thread_id, ()))
         for key in affected:
             self._invalidate(key)
-        # A subscription records its run interest before initial hydration
-        # discovers checkpoint dependencies.  Version the in-flight build in
-        # that window so it re-reads before becoming the initial snapshot; it
-        # needs no queued refresh because no snapshot has been delivered yet.
-        for key in tuple(self.builds):
-            if key not in affected and self._watching(key):
-                self.versions[key] += 1
-                self.completed.pop(key, None)
+        # A trace exposes its checkpoint dependencies only after initial
+        # hydration. Version every other in-flight build so an unindexed
+        # targeted GET cannot cache a checkpoint captured before this change.
+        self._invalidate_builds_discovering_dependencies(affected)
         if thread_id.startswith("routine:"):
             self.row_threads.add(thread_id)
             if self.row_task is None:
@@ -233,9 +239,19 @@ class RunsEvents:
     async def _checkpoint_row(self, thread_id: str) -> None:
         from .service import checkpoint_row_changed
 
-        if self.store is not None:
-            for row in await checkpoint_row_changed(self.store, thread_id):
+        if self.store is None:
+            return
+        self.row_building.add(thread_id)
+        version = self.row_versions[thread_id]
+        try:
+            rows = await checkpoint_row_changed(self.store, thread_id)
+            if self.row_versions[thread_id] != version:
+                return
+            for row in rows:
                 stream.broadcast_ui_event("run.updated", {"run": row.model_dump(mode="json")})
+        finally:
+            self.row_building.discard(thread_id)
+            self.row_versions.pop(thread_id, None)
 
     def invalidate_all(self) -> None:
         keys: set[TraceKey] = set(self.completed) | set(self.builds)
@@ -333,13 +349,18 @@ class RunsEvents:
             payload = event.after if isinstance(event.after, dict) else event.before
             if not isinstance(payload, dict):
                 return
-            parent = payload.get("parent")
-            if isinstance(parent, dict):
-                for parent_key in tuple(self.by_thread.get(str(parent.get("thread_id") or ""), ())):
-                    self._invalidate(parent_key)
             request_id = str(payload.get("request_id") or "")
             if not request_id:
                 return
+            thread_id = payload.get("thread_id")
+            if isinstance(thread_id, str) and thread_id in self.row_building:
+                self.row_versions[thread_id] += 1
+            parent = payload.get("parent")
+            if isinstance(parent, dict):
+                parent_keys = set(self.by_thread.get(str(parent.get("thread_id") or ""), ()))
+                for parent_key in parent_keys:
+                    self._invalidate(parent_key)
+                self._invalidate_builds_discovering_dependencies(parent_keys)
             key = ("routine", request_id)
         else:
             return

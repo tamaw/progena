@@ -3,6 +3,7 @@ import reducer from '@frontend/store/uiDataSlice';
 import { applyUiEvent } from '@frontend/store/uiEvents';
 import { compareRunRows, fetchRuns, normalizeRunPeriodParam, normalizeRunSelection, normalizeRunsQuery, runMatchesPeriod, runSelectionParam, runsQueryKey } from '@frontend/features/runs/state';
 import { mergeRunPages } from '@frontend/features/runs/pageModel';
+import { runDurationMs } from '@frontend/features/runs/runFormat';
 
 const query = { runsUrl: '/api/ui/runs', kind: '', status: '', q: '', cursor: null };
 const row = (runId, startedAt = '2026-10-28T10:00:00Z') => ({
@@ -264,5 +265,22 @@ describe('run time windows', () => {
     expect(state.runs.snapshots[runsQueryKey(hour)].runs).toEqual([]);
     expect(state.runs.snapshots[runsQueryKey(week)].runs[0].tokens).toBe(99);
     expect(runMatchesPeriod(row('undated', null), '', now)).toBe(true);
+  });
+});
+
+describe('incomplete terminal timing', () => {
+  it('does not turn an interrupted run without a terminal event into a growing duration', () => {
+    const run = { ...row('interrupted'), status: 'interrupted' };
+    const now = Date.parse('2026-10-28T10:05:00Z');
+    expect(runDurationMs(run, now)).toBeNull();
+    expect(runDurationMs(run, now + 60_000)).toBeNull();
+    expect(runDurationMs({ ...run, status: 'running' }, now)).toBe(300_000);
+    expect(runDurationMs({ ...run, completed_at: '2026-10-28T10:01:00Z' }, now)).toBe(60_000);
+  });
+
+  it.each(['duration', 'shortest'])('places unknown terminal duration after measured runs for %s', (sort) => {
+    const unknown = { ...row('unknown'), status: 'interrupted' };
+    const measured = { ...row('measured'), status: 'completed', completed_at: '2026-10-28T10:01:00Z' };
+    expect([unknown, measured].sort((left, right) => compareRunRows(left, right, sort)).map((run) => run.run_id)).toEqual(['measured', 'unknown']);
   });
 });

@@ -241,6 +241,8 @@ def _workflow_overview(
 def _duration_us(row: RunRow, as_of: str) -> int | None:
     if row.started_at is None:
         return None
+    if row.completed_at is None and row.status in _TERMINAL:
+        return None
     end = row.completed_at or as_of
     try:
         elapsed = max(
@@ -588,7 +590,8 @@ def _routine_metadata_rows(
         started_at = _time((started or payload).get("timestamp"))
         if since is not None and (started_at is None or started_at < since):
             continue
-        status = _status(payload.get("status"))
+        recorded_status = _status(payload.get("status"))
+        status = recorded_status
         if routine_attempt_interrupted(
             status, started, getattr(live, "instance_id", None), getattr(live, "started_at", None)
         ):
@@ -614,7 +617,7 @@ def _routine_metadata_rows(
             trigger=_text(payload.get("trigger")) or "manual",
             status=status,
             started_at=started_at,
-            completed_at=_time(payload.get("timestamp")) if status in _TERMINAL else None,
+            completed_at=_time(payload.get("timestamp")) if recorded_status in _TERMINAL else None,
         )
         row.overview = _overview_root(row)
         rows.append(row)
@@ -665,7 +668,8 @@ def _schedule_rows(store: Any, *, since: str | None = None) -> list[RunRow]:
         started_at = _time(payload.get("started_at")) or _time(payload.get("created_at"))
         if since is not None and (started_at is None or started_at < since):
             continue
-        status = _status(payload.get("status"))
+        recorded_status = _status(payload.get("status"))
+        status = recorded_status
         if schedule_run_interrupted(
             payload, getattr(live, "instance_id", None), getattr(live, "started_at", None)
         ):
@@ -686,7 +690,9 @@ def _schedule_rows(store: Any, *, since: str | None = None) -> list[RunRow]:
             trigger="schedule",
             status=status,
             started_at=started_at,
-            completed_at=_time(payload.get("completed_at")) if status in _TERMINAL else None,
+            completed_at=(
+                _time(payload.get("completed_at")) if recorded_status in _TERMINAL else None
+            ),
             tokens=_token_total(payload.get("tokens")),
         )
         row.overview = _overview_root(row)
@@ -922,6 +928,20 @@ def _message_value(raw: object, name: str) -> object:
     return raw.get(name) if isinstance(raw, dict) else getattr(raw, name, None)
 
 
+def _declared_tool_call_ids(thread: Any) -> list[str]:
+    """Return each task-tool id once, in the transcript's causal order."""
+    declared: list[str] = []
+    seen: set[str] = set()
+    for message in thread.messages:
+        raw_calls = _message_value(message, "tool_calls")
+        for call in raw_calls if isinstance(raw_calls, list) else []:
+            tool_call_id = _text(call.get("id")) if isinstance(call, dict) else ""
+            if tool_call_id and tool_call_id not in seen:
+                declared.append(tool_call_id)
+                seen.add(tool_call_id)
+    return declared
+
+
 def _value_summary(value: object, depth: int = 0) -> str:
     """Bound detail payloads without dumping nested tool/document data."""
     if value is None:
@@ -1102,49 +1122,53 @@ async def _thread_spans(
     conversation = conversations[thread_id]
     if conversation is None:
         return [], 0
-    spans, tokens = await asyncio.to_thread(
-        _conversation_spans,
-        store,
-        parent_id,
-        conversation.root,
-        seen_messages,
-        window_start,
-        window_end,
-    )
-    for tool_call_id, subagent in conversation.subagents.items():
-        parent_tool = next(
-            (span for span in spans if span.id == f"{parent_id}:tool:{tool_call_id}"), None
+    attached_subagents: set[str] = set()
+
+    async def render(current_parent_id: str, transcript: Any) -> tuple[list[Span], int]:
+        spans, tokens = await asyncio.to_thread(
+            _conversation_spans,
+            store,
+            current_parent_id,
+            transcript,
+            seen_messages,
+            window_start,
+            window_end,
         )
-        if parent_tool is None:
-            continue
-        child_id = f"{parent_id}:subagent:{tool_call_id}"
-        nested, amount = await asyncio.to_thread(
-            _conversation_spans, store, child_id, subagent, seen_messages, window_start, window_end
-        )
-        committed = [_time(value.isoformat()) for value in subagent.committed_at.values()]
-        boundaries = [
-            value
-            for value in committed
-            if value is not None and _within_window(value, window_start, window_end)
-        ]
-        if not boundaries:
-            continue
-        spans.append(
-            Span(
-                id=child_id,
-                parent_id=parent_tool.id,
-                kind="agent",
-                name=subagent.nick or "Subagent",
-                operation="subagent",
-                start=min(boundaries),
-                end=max(boundaries) if parent_tool.status in {"completed", "failed"} else None,
-                status=parent_tool.status,
-                timing_source="checkpoint-derived",
+        tool_spans = {span.id: span for span in spans if span.kind == "tool"}
+        for tool_call_id in _declared_tool_call_ids(transcript):
+            subagent = conversation.subagents.get(tool_call_id)
+            parent_tool = tool_spans.get(f"{current_parent_id}:tool:{tool_call_id}")
+            if subagent is None or parent_tool is None or tool_call_id in attached_subagents:
+                continue
+            committed = [_time(value.isoformat()) for value in subagent.committed_at.values()]
+            boundaries = [
+                value
+                for value in committed
+                if value is not None and _within_window(value, window_start, window_end)
+            ]
+            if not boundaries:
+                continue
+            attached_subagents.add(tool_call_id)
+            child_id = f"{current_parent_id}:subagent:{tool_call_id}"
+            nested, amount = await render(child_id, subagent)
+            spans.append(
+                Span(
+                    id=child_id,
+                    parent_id=parent_tool.id,
+                    kind="agent",
+                    name=subagent.nick or "Subagent",
+                    operation="subagent",
+                    start=min(boundaries),
+                    end=max(boundaries) if parent_tool.status in {"completed", "failed"} else None,
+                    status=parent_tool.status,
+                    timing_source="checkpoint-derived",
+                )
             )
-        )
-        spans.extend(nested)
-        tokens += amount
-    return spans, tokens
+            spans.extend(nested)
+            tokens += amount
+        return spans, tokens
+
+    return await render(parent_id, conversation.root)
 
 
 def _root_span(kind: RunKind, row: RunRow) -> Span:

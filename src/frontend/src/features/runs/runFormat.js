@@ -1,4 +1,15 @@
 
+const TERMINAL_STATUSES = new Set(['completed', 'failed', 'cancelled', 'stopped', 'error', 'interrupted']);
+
+export function runDurationMs(row, now = Date.now()) {
+  const start = Date.parse(row?.started_at || '');
+  if (!Number.isFinite(start)) return null;
+  const end = Date.parse(row?.completed_at || '');
+  if (Number.isFinite(end)) return Math.max(0, end - start);
+  if (TERMINAL_STATUSES.has(String(row?.status || '').toLowerCase())) return null;
+  return Math.max(0, now - start);
+}
+
 export function formatDuration(start, end, now = Date.now()) {
   const startMs = Date.parse(start || '');
   if (!Number.isFinite(startMs)) return '—';

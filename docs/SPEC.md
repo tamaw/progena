@@ -428,6 +428,10 @@ Resumed routine requests sharing a checkpoint thread are separate attempts.
 Lifecycle-derived, end-exclusive attempt windows isolate their metadata and
 model/tool history; checkpoint notifications refresh each affected attempt using
 one shared checkpoint-tip read per thread.
+Nested subagent transcripts attach beneath their actual delegating tool, including
+further delegation levels. Interrupted records without a terminal event keep
+completion and duration unknown; they do not acquire a fabricated end or grow
+as though still running. Duration sorts place unknown values after measured ones.
 
 The backend reads Postgres directly; it does not ask the runtime or the agent-facing
 `/runs/` mount to build this visual model. Document and checkpoint notifications
@@ -435,13 +439,16 @@ drive canonical `ui.event` updates; the table receives broadcast changes while
 the page is open, without polling. While inspecting below the top, incoming runs
 do not shift the viewport; a compact new-runs control lets the user return to
 the latest entries. Expanding a trace establishes a targeted, connection-scoped
-interest. Collapsing, filtering away, paging away, or leaving the run releases it.
+interest. Collapsing, filtering away, changing the selection, or leaving releases it.
 Reconnect restores the interest and an authoritative snapshot through the same
 canonical event lane. Its returned rows replace the cached result window, then
 updates/deletes received during that request are applied; URL selection and
 inspection state are retained independently. Initial trace builds listen for
 checkpoint changes before accepting their snapshot; no extra stream or polling
 lane is introduced. Search uses lowercase matching consistently in Python and SQL.
+Lifecycle publications supersede checkpoint rows hydrated from an older lifecycle
+state. Existing build invalidation also covers unindexed GET hydration and child
+routine discovery, so stale snapshots cannot enter the terminal trace cache.
 The client expires rows from finite time windows using its display clock, without
 polling the server. Open spans grow on the client; terminal spans do not.
 
@@ -453,6 +460,8 @@ Agent/extract steps persist their resolved conversation thread before awaiting
 execution, so running and failed traces subscribe to the actual conversation.
 Historical trace classification uses the recorded step kind, not the current
 editable workflow graph.
+Failed and cancelled routine waits retain their conversation reference in the
+settled audit before pending state is cleared, preserving failure-time descendants.
 Existing entries require a manual one-time backfill before cutover; reconstructed
 historical boundaries are not exact recovered starts.
 Drain workflow execution during the final writer cutover so old writers cannot

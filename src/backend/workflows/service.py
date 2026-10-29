@@ -152,6 +152,7 @@ def _close_step_audit(
     output: str | None = None,
     tokens: dict[str, int] | None = None,
     error: str | None = None,
+    thread_id: str | None = None,
 ) -> list[dict[str, Any]]:
     """Close the open audit entry for one node without creating a replacement."""
 
@@ -170,6 +171,8 @@ def _close_step_audit(
             closed["tokens"] = tokens
         if error is not None:
             closed["error"] = error
+        if thread_id:
+            closed["thread_id"] = thread_id
         return [*audit[:index], closed, *audit[index + 1 :]]
     return audit
 
@@ -1454,6 +1457,7 @@ class WorkflowExecutor:
                     error=failure,
                     audit_node_id=node_id,
                     audit_status="cancelled" if status == "cancelled" else "failed",
+                    audit_thread_id=thread_id,
                     clear_pending_routine=True,
                 )
                 failed = True
@@ -2022,6 +2026,7 @@ class WorkflowExecutor:
         error: str,
         audit_node_id: str | None = None,
         audit_status: Literal["failed", "cancelled"] = "failed",
+        audit_thread_id: str | None = None,
         clear_pending_routine: bool = False,
     ) -> WorkflowRun:
         """Fail a run while retaining concurrent lifecycle and audit updates."""
@@ -2037,6 +2042,7 @@ class WorkflowExecutor:
                 completed_at=now,
                 status=audit_status,
                 error=error,
+                thread_id=audit_thread_id,
             )
         updates: dict[str, Any] = {
             "status": "failed",

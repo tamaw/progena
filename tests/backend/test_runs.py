@@ -8,15 +8,19 @@ import pytest
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage, ToolMessage
+from langgraph.checkpoint.base import empty_checkpoint
+from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 
 from src.backend.runs.models import RunRow, RunSort, Span
 from src.backend.runs.routes import router as runs_router
 from src.backend.runs.service import (
     _conversation_spans,
+    _duration_us,
     _rollup_tokens,
     _routine_metadata_rows,
     _routine_overview,
+    _thread_spans,
     _workflow_row,
     build_trace,
     checkpoint_row_changed,
@@ -376,6 +380,85 @@ def test_enqueued_routine_row_is_normalized_to_queued():
     assert [(row.run_id, row.status) for row in rows] == [("attempt", "queued")]
 
 
+@pytest.mark.asyncio
+async def test_interrupted_lifecycle_rows_keep_completion_and_duration_unavailable(
+    run_store, monkeypatch
+):
+    store = run_store
+    if isinstance(store, PostgresDocumentStore):
+        database_url = store_database_url(store)
+        assert database_url is not None
+        async with AsyncPostgresSaver.from_conn_string(database_url) as saver:
+            await saver.setup()
+    started = datetime(2026, 10, 28, 10, tzinfo=UTC)
+    terminal_at = started + timedelta(minutes=2)
+    as_of = started + timedelta(hours=1)
+    monkeypatch.setattr("src.backend.runs.service._now", lambda: as_of)
+    store.save_document(
+        PROGENA_STATE_PREFIX,
+        "health",
+        {
+            "runtime_instance": "replacement-runtime",
+            "started_at": (started + timedelta(minutes=30)).isoformat(),
+        },
+    )
+
+    def lifecycle(request_id, status, timestamp, **fields):
+        store.save_document(
+            PROGENA_STATE_PREFIX,
+            f"{RUN_EVENT_PREFIX}{request_id}:{status}",
+            {
+                "request_id": request_id,
+                "thread_id": f"routine:daily:revision:{request_id}",
+                "status": status,
+                "timestamp": timestamp.isoformat(),
+                **fields,
+            },
+        )
+
+    lifecycle("interrupted-routine", "started", started, runtime_instance="gone-runtime")
+    lifecycle("terminal-routine", "started", started, runtime_instance="gone-runtime")
+    lifecycle("terminal-routine", "stopped", terminal_at, runtime_instance="gone-runtime")
+    lifecycle("live-routine", "started", started, runtime_instance="replacement-runtime")
+    store.save_document(
+        PROGENA_STATE_PREFIX,
+        "schedule_runs",
+        [
+            {
+                "run_id": "interrupted-schedule",
+                "schedule_id": "daily",
+                "status": "running",
+                "started_at": started.isoformat(),
+                "runtime_instance": "gone-runtime",
+            }
+        ],
+    )
+
+    rows, _ = await list_runs(store, sort="duration", limit=10)
+    by_id = {row.run_id: row for row in rows}
+
+    assert by_id["interrupted-routine"].status == "interrupted"
+    assert by_id["interrupted-schedule"].status == "interrupted"
+    assert by_id["interrupted-routine"].completed_at is None
+    assert by_id["interrupted-schedule"].completed_at is None
+    assert _duration_us(by_id["interrupted-routine"], as_of.isoformat()) is None
+    assert _duration_us(by_id["interrupted-schedule"], as_of.isoformat()) is None
+    assert by_id["live-routine"].status == "running"
+    assert _duration_us(by_id["live-routine"], as_of.isoformat()) == 3_600_000_000
+    assert by_id["terminal-routine"].completed_at == terminal_at.isoformat(timespec="microseconds")
+
+    duration_rows, _ = await list_runs(store, sort="duration", limit=10)
+    shortest_rows, _ = await list_runs(store, sort="shortest", limit=10)
+    assert [row.run_id for row in duration_rows][-2:] == [
+        "interrupted-schedule",
+        "interrupted-routine",
+    ]
+    assert [row.run_id for row in shortest_rows][-2:] == [
+        "interrupted-routine",
+        "interrupted-schedule",
+    ]
+
+
 def test_missing_audit_preserves_recorded_error_without_inventing_latency():
     store = InMemoryDocumentStore()
     at = datetime(2026, 10, 28, tzinfo=UTC)
@@ -498,6 +581,107 @@ def test_shared_thread_messages_belong_to_their_step_window_and_usage_is_dedupli
     assert datetime.fromisoformat(second[0].start) == at + timedelta(seconds=10)
     _, repeated_usage = _conversation_spans(store, "repeated", thread, seen)
     assert repeated_usage == 0
+
+
+@pytest.mark.asyncio
+async def test_thread_trace_attaches_nested_subagents_to_their_owning_tool_with_native_saver():
+    saver = InMemorySaver()
+    store = InMemoryDocumentStore()
+    thread_id = "workflow-agent-thread"
+
+    async def save_transcript(
+        namespace,
+        messages,
+        *,
+        parents,
+        nick,
+        pending_messages,
+    ):
+        metadata = {"parents": parents, "lc_agent_name": nick}
+        config = {"configurable": {"thread_id": thread_id, "checkpoint_ns": namespace}}
+        first_checkpoint = empty_checkpoint()
+        first_version = f"{namespace or 'root'}:1"
+        first_checkpoint["channel_values"] = {"messages": messages}
+        first_checkpoint["channel_versions"] = {"messages": first_version}
+        first = await saver.aput(
+            config,
+            first_checkpoint,
+            metadata,
+            {"messages": first_version},
+        )
+        for task_id, message in pending_messages:
+            await saver.aput_writes(first, [("messages", message)], task_id)
+        tip_checkpoint = empty_checkpoint()
+        tip_version = f"{namespace or 'root'}:2"
+        tip_checkpoint["channel_values"] = {"messages": messages}
+        tip_checkpoint["channel_versions"] = {"messages": tip_version}
+        await saver.aput(first, tip_checkpoint, metadata, {"messages": tip_version})
+        return first
+
+    root_call = "root-task-call"
+    grandchild_call = "grandchild-task-call"
+    root_messages = [
+        AIMessage(
+            id="root-model",
+            content="delegate",
+            usage_metadata={"input_tokens": 10, "output_tokens": 1, "total_tokens": 11},
+            tool_calls=[{"id": root_call, "name": "task", "args": {}}],
+        ),
+        ToolMessage(id="root-result", tool_call_id=root_call, content="done"),
+    ]
+    root = await save_transcript(
+        "",
+        root_messages,
+        parents={},
+        nick="Root",
+        pending_messages=[
+            ("root-model-task", root_messages[0]),
+            ("root-task", root_messages[1]),
+        ],
+    )
+    child_messages = [
+        AIMessage(
+            id="child-model",
+            content="delegate again",
+            tool_calls=[{"id": grandchild_call, "name": "task", "args": {}}],
+        ),
+        ToolMessage(id="child-result", tool_call_id=grandchild_call, content="done"),
+    ]
+    child = await save_transcript(
+        "tools:root-task",
+        child_messages,
+        parents={"": root["configurable"]["checkpoint_id"]},
+        nick="Child",
+        pending_messages=[
+            ("child-model-task", child_messages[0]),
+            ("grandchild-task", child_messages[1]),
+        ],
+    )
+    grandchild_messages = [
+        AIMessage(
+            id="grandchild-model",
+            content="finished",
+            usage_metadata={"input_tokens": 80, "output_tokens": 20, "total_tokens": 100},
+        )
+    ]
+    await save_transcript(
+        "tools:root-task|tools:grandchild-task",
+        grandchild_messages,
+        parents={"tools:root-task": child["configurable"]["checkpoint_id"]},
+        nick="Grandchild",
+        pending_messages=[("grandchild-model-task", grandchild_messages[0])],
+    )
+
+    spans, tokens = await _thread_spans(saver, store, "workflow:run:step:0", thread_id, set(), {})
+
+    child_id = f"workflow:run:step:0:subagent:{root_call}"
+    grandchild_id = f"{child_id}:subagent:{grandchild_call}"
+    by_id = {span.id: span for span in spans}
+    assert tokens == 111
+    assert by_id[child_id].parent_id == f"workflow:run:step:0:tool:{root_call}"
+    assert by_id[grandchild_id].parent_id == f"{child_id}:tool:{grandchild_call}"
+    assert by_id[f"{grandchild_id}:model:grandchild-model"].tokens == 100
+    assert len(by_id) == len(spans)
 
 
 @pytest.mark.asyncio

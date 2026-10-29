@@ -6,7 +6,7 @@ import InlineFailure from '../../components/InlineFailure';
 import Select from '../../components/Select';
 import { ChevronDownIcon, ChevronRightIcon, CloseIcon, SearchIcon } from '../../components/navIcons';
 import { RUN_KINDS, RUN_STATUSES, compareRunRows, normalizeRunPeriodParam, normalizeRunSelection, runMatchesPeriod, runSelectionParam, selectRunTrace, selectRunsSnapshot } from './state';
-import { formatDuration, formatTokenCount, kindLabel } from './runFormat';
+import { formatDuration, formatTokenCount, kindLabel, runDurationMs } from './runFormat';
 import RunTimeline, { ActivityIcon, ActivitySummary, TimeAxis } from './RunTimeline';
 import { useRunsQuery, useRunTrace } from './useRunsQuery';
 import { runSummarySource, traceBounds } from './timelineModel';
@@ -68,7 +68,7 @@ function RunRow({ row, expanded, onToggle, now }) {
     </button></div>
     <div role="cell" className={`flame-status flame-status--${status}`}><span className="flame-status-dot" />{status}</div>
     <div role="cell" className="flame-number flame-started">{formatStarted(row.started_at)}</div>
-    <div role="cell" className="flame-number">{formatDuration(row.started_at, row.completed_at, now)}</div>
+    <div role="cell" className="flame-number">{runDurationMs(row, now) === null ? '—' : formatDuration(row.started_at, row.completed_at, now)}</div>
     <div role="cell" className="flame-number flame-tokens">{formatTokenCount(tokens)}</div>
     <div role="cell" className={`flame-track flame-track--overview${expanded ? ' flame-track--expanded' : ''}`}>
       <span className="flame-run-band" aria-hidden="true" />

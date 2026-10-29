@@ -1,5 +1,6 @@
 import { createSelector } from '@reduxjs/toolkit';
 import { withQuery } from '../../store/http';
+import { runDurationMs } from './runFormat';
 import {
   addKeyedRequestLifecycle,
   completeKeyedRequest,
@@ -111,16 +112,16 @@ function rowSortKey(row) {
   return [row?.started_at || '', row?.kind || '', row?.run_id || ''];
 }
 
-function duration(row, now = Date.now()) {
-  const started = Date.parse(row?.started_at || '');
-  const completed = Date.parse(row?.completed_at || '');
-  return Number.isFinite(started) ? (Number.isFinite(completed) ? completed : now) - started : -Infinity;
-}
-
 export function compareRunRows(left, right, sort) {
   if (sort === 'duration' || sort === 'shortest') {
-    const comparedDuration = duration(right) - duration(left);
-    if (comparedDuration) return sort === 'shortest' ? -comparedDuration : comparedDuration;
+    const leftDuration = runDurationMs(left);
+    const rightDuration = runDurationMs(right);
+    if (leftDuration === null || rightDuration === null) {
+      if (leftDuration !== rightDuration) return leftDuration === null ? 1 : -1;
+    } else {
+      const comparedDuration = rightDuration - leftDuration;
+      if (comparedDuration) return sort === 'shortest' ? -comparedDuration : comparedDuration;
+    }
   }
   const leftKey = rowSortKey(left);
   const rightKey = rowSortKey(right);

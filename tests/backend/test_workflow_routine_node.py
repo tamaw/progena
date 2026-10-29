@@ -401,6 +401,42 @@ async def test_routine_failure_or_bad_output_fails_the_run():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("status", "expected_audit_status"),
+    [("failed", "failed"), ("cancelled", "cancelled")],
+)
+async def test_terminal_routine_lifecycle_event_preserves_thread_for_consumers(
+    status, expected_audit_status
+):
+    store, definition, executor, _runner = _setup(PLAIN_ROUTINE, port="message")
+    emitted = []
+    executor._emit_event = lambda event_type, payload: emitted.append((event_type, payload))
+    waiting = await _start(store, definition, executor)
+    thread_id = f"routine:greet:revision:{status}"
+
+    await executor.handle_routine_run_event(
+        {
+            "session_id": waiting.pending_routine["session_id"],
+            "status": status,
+            "thread_id": thread_id,
+            "error": "terminal lifecycle",
+        }
+    )
+
+    failed = get_workflow_run(store, waiting.run_id)
+    [audit] = failed.step_audit
+    assert failed.status == "failed"
+    assert failed.pending_routine is None
+    assert "run" not in failed.node_outputs
+    assert audit["status"] == expected_audit_status
+    assert audit["thread_id"] == thread_id
+    event_type, payload = emitted[-1]
+    assert event_type == "workflow.run.failed"
+    assert payload["pending_routine"] is None
+    assert payload["step_audit"][0]["thread_id"] == thread_id
+
+
+@pytest.mark.asyncio
 async def test_events_for_other_sessions_are_ignored():
     store, definition, executor, _runner = _setup(PLAIN_ROUTINE, port="message")
     waiting = await _start(store, definition, executor)
