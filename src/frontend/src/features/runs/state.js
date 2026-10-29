@@ -130,8 +130,11 @@ function compareRows(left, right, sort) {
   return sort === 'oldest' || sort === 'shortest' ? compared : -compared;
 }
 
-function mergeLiveRows(snapshot, changes, query) {
-  const byKey = new Map((snapshot.runs || []).map((row) => [rowKey(row), row]));
+function mergeLiveRows(snapshot, previous, changes, query) {
+  // A refreshed cursor page is only a slice of the loaded window. Preserve
+  // rows displaced by newer arrivals so loaded cursor pages stay continuous.
+  const byKey = new Map((previous?.runs || []).map((row) => [rowKey(row), row]));
+  for (const row of snapshot.runs || []) byKey.set(rowKey(row), row);
   for (const [key, row] of Object.entries(changes.rows || {})) {
     const existing = byKey.has(key);
     if (changes.deleted?.[key]) {
@@ -143,8 +146,7 @@ function mergeLiveRows(snapshot, changes, query) {
     }
   }
   for (const key of Object.keys(changes.deleted || {})) byKey.delete(key);
-  const limit = Math.max(snapshot.page_size || RUN_PAGE_SIZE, snapshot.runs?.length || 0);
-  return [...byKey.values()].sort((left, right) => compareRows(left, right, query.sort)).slice(0, limit);
+  return [...byKey.values()].sort((left, right) => compareRows(left, right, query.sort));
 }
 
 function changesAffectSnapshot(changes, query) {
@@ -161,12 +163,11 @@ function markSnapshotsStale(state, row) {
     if (existingIndex >= 0) {
       const rows = snapshot.runs.filter((item) => rowKey(item) !== key);
       if (matches) rows.push(row);
-      snapshot.runs = rows.sort((left, right) => compareRows(left, right, query.sort)).slice(0, snapshot.page_size || RUN_PAGE_SIZE);
+      snapshot.runs = rows.sort((left, right) => compareRows(left, right, query.sort));
       snapshot.stale = true;
     } else if (!query.cursor && matches) {
       snapshot.runs = [...snapshot.runs, row]
-        .sort((left, right) => compareRows(left, right, query.sort))
-        .slice(0, snapshot.page_size || RUN_PAGE_SIZE);
+        .sort((left, right) => compareRows(left, right, query.sort));
       snapshot.stale = true;
     }
   }
@@ -188,15 +189,15 @@ export const eventHandlers = {
       sort: queryParts[5],
     };
     const changes = request.changes || {};
+    const previous = state.runs.snapshots[key];
     const snapshot = {
       query,
       runs: Array.isArray(payload.runs) ? payload.runs : [],
       next_cursor: payload.next_cursor || null,
       page_size: Array.isArray(payload.runs) ? payload.runs.length || RUN_PAGE_SIZE : RUN_PAGE_SIZE,
-      stale: false,
+      stale: changesAffectSnapshot(changes, query),
     };
-    snapshot.stale = changesAffectSnapshot(changes, query);
-    snapshot.runs = mergeLiveRows(snapshot, changes, query);
+    snapshot.runs = mergeLiveRows(snapshot, previous, changes, query);
     state.runs.snapshots[key] = snapshot;
     completeKeyedRequest(state.runs.requests, key, payload.request_id);
   },
@@ -225,8 +226,6 @@ export const eventHandlers = {
     }
     for (const snapshot of Object.values(state.runs.snapshots)) {
       snapshot.runs = snapshot.runs.filter((row) => rowKey(row) !== key);
-      // A deleted item before a cursor can pull a new item into this page.
-      // The next correlated snapshot reconciles that otherwise invisible boundary.
       snapshot.stale = true;
     }
     delete state.runs.traces[key];

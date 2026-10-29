@@ -276,6 +276,101 @@ async def test_human_pause_pauses_the_run_until_the_routine_continues():
 
 
 @pytest.mark.asyncio
+async def test_resume_after_human_pause_completes_routine_following_approval():
+    routine = {
+        **PLAIN_ROUTINE,
+        "id": "approval-greet",
+        "input_schema": {
+            "type": "object",
+            "required": ["approved"],
+            "properties": {"approved": {"type": "boolean"}},
+        },
+        "output_schema": {
+            "type": "object",
+            "required": ["message"],
+            "properties": {"message": {"type": "string"}},
+        },
+    }
+    store = InMemoryDocumentStore()
+    seed_document_types(store)
+    store.save_document(PROGENA_STATE_PREFIX, f"routine:{routine['id']}", routine)
+    workflow = default_workflow_definition()
+    event_id = next(i for i, node in workflow["graph"]["nodes"].items() if node["kind"] == "event")
+    workflow["graph"] = {
+        "nodes": {
+            event_id: workflow["graph"]["nodes"][event_id],
+            "gate": {
+                "kind": "approval",
+                "title": "Gate",
+                "message": "Run the routine?",
+                "approver": "any",
+                "input_schema": {
+                    "type": "object",
+                    "required": ["key"],
+                    "properties": {"key": {"type": "string"}},
+                },
+            },
+            "run": {"kind": "routine", "title": "Run routine", "routine": routine["id"]},
+        },
+        "edges": [
+            {"from": {"node": event_id, "port": "key"}, "to": {"node": "gate", "port": "key"}},
+            {
+                "from": {"node": "gate", "port": "approved"},
+                "to": {"node": "run", "port": "approved"},
+            },
+        ],
+    }
+    definition = save_workflow_definition(store, workflow)
+    executor = WorkflowExecutor(
+        store_getter=lambda: store,
+        prompt_runner=RecordingRunner(),
+        emit_event=lambda *_args: None,
+    )
+
+    run = await executor.trigger_workflow(
+        definition.id, build_manual_trigger_event(definition, payload={"key": "card-a"})
+    )
+    await _wait_for(
+        lambda: (
+            candidate
+            if (candidate := get_workflow_run(store, run.run_id)).pending_approval is not None
+            else None
+        )
+    )
+    await executor.resolve_approval(definition.id, run.run_id, approved=True)
+    awaiting_routine = await _wait_for(
+        lambda: (
+            candidate
+            if (candidate := get_workflow_run(store, run.run_id)).pending_routine is not None
+            else None
+        )
+    )
+    await executor.pause_workflow(definition.id)
+
+    await executor.handle_routine_run_event(
+        {
+            "session_id": awaiting_routine.pending_routine["session_id"],
+            "status": "completed",
+            "output": {"message": "done"},
+        }
+    )
+    paused = get_workflow_run(store, run.run_id)
+    assert paused.status == "paused"
+    assert paused.waiting_node_id is None
+    assert paused.pending_approval["resolved_at"]
+
+    assert await executor.resume_workflow(definition.id) is not None
+    completed = await _wait_for(
+        lambda: (
+            candidate
+            if (candidate := get_workflow_run(store, run.run_id)).status == "completed"
+            else None
+        )
+    )
+    assert completed.node_outputs["run"]["message"] == "done"
+
+
+@pytest.mark.asyncio
 async def test_routine_failure_or_bad_output_fails_the_run():
     store, definition, executor, _runner = _setup(PLAIN_ROUTINE, port="message")
     waiting = await _start(store, definition, executor)

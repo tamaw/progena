@@ -25,8 +25,34 @@ describe('runs state', () => {
 
     state = reducer(state, applyUiEvent({ type: 'runs.snapshot', payload: { request_id: 'second', runs: [row('old')], next_cursor: null } }));
     const snapshot = state.runs.snapshots[runsQueryKey(query)];
-    expect(snapshot.runs.map((item) => item.run_id)).toEqual(['new']);
+    expect(snapshot.runs.map((item) => item.run_id)).toEqual(['new', 'old']);
     expect(snapshot.stale).toBe(true);
+  });
+
+  it('keeps a continuous loaded window when a live arrival shifts a cursor boundary and the first page refreshes', () => {
+    const pageTwo = { ...query, cursor: 'after-b' };
+    let state = pending(undefined, 'first', query);
+    state = reducer(state, applyUiEvent({ type: 'runs.snapshot', payload: {
+      request_id: 'first', runs: [row('a', '2026-10-28T10:00:00Z'), row('b', '2026-10-28T09:00:00Z')], next_cursor: 'after-b',
+    } }));
+    state = pending(state, 'second', pageTwo);
+    state = reducer(state, applyUiEvent({ type: 'runs.snapshot', payload: {
+      request_id: 'second', runs: [row('c', '2026-10-28T08:00:00Z'), row('d', '2026-10-28T07:00:00Z')], next_cursor: 'after-d',
+    } }));
+
+    state = reducer(state, applyUiEvent({ type: 'run.updated', payload: { run: row('new', '2026-10-28T11:00:00Z') } }));
+    state = pending(state, 'refresh', query);
+    state = reducer(state, applyUiEvent({ type: 'runs.snapshot', payload: {
+      request_id: 'refresh', runs: [row('new', '2026-10-28T11:00:00Z'), row('a', '2026-10-28T10:00:00Z')], next_cursor: 'after-a',
+    } }));
+
+    const firstPage = state.runs.snapshots[runsQueryKey(query)];
+    const secondPage = state.runs.snapshots[runsQueryKey(pageTwo)];
+    expect(firstPage.runs.map((item) => item.run_id)).toEqual(['new', 'a', 'b']);
+    expect(secondPage.runs.map((item) => item.run_id)).toEqual(['c', 'd']);
+    expect([...firstPage.runs, ...secondPage.runs].map((item) => item.run_id)).toEqual(['new', 'a', 'b', 'c', 'd']);
+    expect(secondPage.next_cursor).toBe('after-d');
+    expect(firstPage.stale).toBe(false);
   });
 
   it('keeps a live update for every in-flight query rather than clearing it with the first snapshot', () => {

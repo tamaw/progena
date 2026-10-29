@@ -78,14 +78,14 @@ function RunRow({ row, expanded, onToggle, now }) {
   </div>;
 }
 
-function RunEntry({ row, expanded, trace, traceLoading, traceError, refreshTrace, now, onToggle }) {
+function RunEntry({ row, expanded, trace, traceLoading, traceError, refreshTrace, now, onToggle, inspection, onInspectionChange }) {
   const bounds = useMemo(() => traceBounds(trace || row || {}, now), [now, row, trace]);
   return <div className="runs-entry">
     <RunRow row={row} expanded={expanded} now={now} onToggle={onToggle} />
     {expanded ? <div className="runs-trace">
       {traceError ? <div className="flame-message"><InlineFailure failure={traceError} operation="Load run trace" onRetry={refreshTrace} /></div> : null}
       {traceLoading && !trace ? <div className="flame-message">Loading activity…</div> : null}
-      {trace ? <RunTimeline trace={trace} bounds={bounds} now={now} /> : null}
+      {trace ? <RunTimeline trace={trace} bounds={bounds} now={now} inspection={inspection} onInspectionChange={onInspectionChange} /> : null}
     </div> : null}
   </div>;
 }
@@ -106,6 +106,7 @@ export default function RunsPage() {
   const previousRowsRef = useRef(null);
   const [chartScrollElement, setChartScrollElement] = useState(null);
   const [heldRows, dispatchHeldRows] = useReducer((_previous, action) => action, null);
+  const [inspections, setInspections] = useState({});
   const [now, setNow] = useState(() => Date.now());
   const kind = RUN_KINDS.includes(searchParams.get('kind')) ? searchParams.get('kind') : '';
   const status = RUN_STATUSES.includes(searchParams.get('status')) ? searchParams.get('status') : '';
@@ -120,6 +121,12 @@ export default function RunsPage() {
   const pageCursors = paging.filterKey === filterKey ? paging.cursors : [null];
   const inspectionKey = filterKey;
   const [query, setQuery] = useState(search);
+  const updateInspection = useCallback((key, change) => {
+    setInspections((current) => {
+      const next = change(current[key]);
+      return current[key] === next ? current : { ...current, [key]: next };
+    });
+  }, []);
   const updateParams = useCallback((changes, { replace = false } = {}) => {
     setSearchParams((current) => {
       const next = new URLSearchParams(current);
@@ -268,7 +275,10 @@ export default function RunsPage() {
         {!streamReady ? <div className="flame-message">Connecting…</div> : null}
         {loading && !pageSnapshots.some(Boolean) ? <div className="flame-message">Loading runs…</div> : null}
         {!loading && pageSnapshots.some(Boolean) && !visibleRows.length && !selection ? <div className="flame-message">No runs match these filters.</div> : null}
-        <VirtualizedRunRows rows={virtualRows} scrollElement={chartScrollElement} renderRow={({ row, expanded }) => <RunEntry row={row} expanded={expanded} trace={expanded ? trace : null} traceLoading={expanded && traceLoading} traceError={expanded ? traceError : null} refreshTrace={refreshTrace} now={now} onToggle={() => toggleRun(row)} />} />
+        <VirtualizedRunRows rows={virtualRows} scrollElement={chartScrollElement} renderRow={({ row, expanded }) => {
+          const key = runSelectionParam(row.kind, row.run_id);
+          return <RunEntry row={row} expanded={expanded} trace={expanded ? trace : null} traceLoading={expanded && traceLoading} traceError={expanded ? traceError : null} refreshTrace={refreshTrace} now={now} onToggle={() => toggleRun(row)} inspection={inspections[key]} onInspectionChange={(change) => updateInspection(key, change)} />;
+        }} />
         {error ? <div className="runs-page-status"><InlineFailure failure={error} operation="Load runs" onRetry={refresh} /></div> : null}
         {loading && pageSnapshots.some(Boolean) ? <div className="runs-page-status" role="status">Loading more runs…</div> : null}
         {snapshot && !snapshot.next_cursor && visibleRows.length ? <div className="runs-page-status" role="status">End of run history</div> : null}

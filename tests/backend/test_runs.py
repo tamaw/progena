@@ -19,6 +19,7 @@ from src.backend.runs.service import (
     _routine_overview,
     _workflow_row,
     build_trace,
+    checkpoint_row_changed,
     list_runs,
 )
 from src.backend.storage.documents import (
@@ -831,3 +832,182 @@ def test_workflow_repeated_routine_audit_hydrates_one_latest_thread_reference():
     assert row._routine_threads == {
         "workflow:repeated:step:1": "routine:child:revision:run",
     }
+
+
+def test_checkpoint_window_excludes_boundary_models_and_tool_audits():
+    at = datetime(2026, 10, 29, 10, tzinfo=UTC)
+    inside = AIMessage(
+        id="inside",
+        content="inside",
+        usage_metadata={"total_tokens": 11},
+        tool_calls=[{"id": "inside-call", "name": "read_file", "args": {"path": "/inside"}}],
+    )
+    next_attempt = AIMessage(
+        id="next",
+        content="next attempt",
+        usage_metadata={"total_tokens": 29},
+        tool_calls=[{"id": "next-call", "name": "read_file", "args": {"path": "/next"}}],
+    )
+    thread = SimpleNamespace(
+        messages=[inside, next_attempt],
+        committed_at={"inside": at + timedelta(minutes=1), "next": at + timedelta(minutes=3)},
+    )
+
+    class AuditStore(InMemoryDocumentStore):
+        def __init__(self):
+            super().__init__()
+            self.queried: set[str] = set()
+
+        def query_tool_audits(self, ids):
+            self.queried.update(ids)
+            return {
+                "inside-call": {
+                    "tool_name": "read_file",
+                    "timestamp": (at + timedelta(minutes=1, seconds=1)).timestamp(),
+                    "duration_ms": 100,
+                    "success": True,
+                }
+            }
+
+    store = AuditStore()
+
+    spans, tokens = _conversation_spans(
+        store,
+        "attempt",
+        thread,
+        set(),
+        at.isoformat(),
+        (at + timedelta(minutes=3)).isoformat(),
+    )
+
+    assert tokens == 11
+    assert store.queried == {"inside-call"}
+    assert {span.id for span in spans} == {
+        "attempt:model:inside",
+        "attempt:tool:inside-call",
+    }
+
+
+@pytest.mark.asyncio
+async def test_resumed_attempts_keep_checkpoint_meta_and_row_updates_isolated(monkeypatch):
+    store = InMemoryDocumentStore()
+    thread_id = "routine:daily:rev:shared"
+    child_thread_id = "routine:child:rev:shared"
+    started_a = datetime(2026, 10, 29, 10, tzinfo=UTC)
+    stopped_a = started_a + timedelta(minutes=2)
+    queued_b = stopped_a + timedelta(seconds=30)
+    started_b = started_a + timedelta(minutes=3)
+    store.upsert_routine_revision(
+        "daily",
+        "rev",
+        {"name": "Daily", "nodes": [{"id": "call", "kind": "routine", "label": "Call"}]},
+    )
+    store.upsert_routine_revision(
+        "child",
+        "rev",
+        {"name": "Child", "nodes": [{"id": "work", "kind": "prompt", "label": "Work"}]},
+    )
+
+    def lifecycle(request_id, status, timestamp, *, target_thread=thread_id, parent=None):
+        payload = {
+            "request_id": request_id,
+            "thread_id": target_thread,
+            "agent_id": "daily",
+            "revision_id": "rev",
+            "status": status,
+            "timestamp": timestamp.isoformat(),
+        }
+        if parent is not None:
+            payload["parent"] = parent
+        store.save_document(
+            PROGENA_STATE_PREFIX,
+            f"{RUN_EVENT_PREFIX}{request_id}:{status}",
+            payload,
+        )
+
+    lifecycle("attempt-a", "enqueued", started_a - timedelta(minutes=1))
+    lifecycle("attempt-a", "started", started_a)
+    lifecycle("attempt-a", "stopped", stopped_a)
+    lifecycle("attempt-b", "enqueued", queued_b)
+    lifecycle("attempt-b", "started", started_b)
+    child_parent = {"thread_id": thread_id, "node_id": "call"}
+    lifecycle(
+        "child-a",
+        "started",
+        started_a + timedelta(minutes=1, seconds=15),
+        target_thread=child_thread_id,
+        parent=child_parent,
+    )
+    lifecycle(
+        "child-a",
+        "stopped",
+        stopped_a,
+        target_thread=child_thread_id,
+        parent=child_parent,
+    )
+    lifecycle(
+        "child-b",
+        "started",
+        started_b + timedelta(minutes=1, seconds=15),
+        target_thread=child_thread_id,
+        parent=child_parent,
+    )
+
+    class MemorySaver:
+        async def aget_tuple(self, config):
+            target_thread = config["configurable"]["thread_id"]
+            assert target_thread in {thread_id, child_thread_id}
+            meta = {
+                thread_id: {
+                    "call": [
+                        {
+                            "started_at": (started_a + timedelta(minutes=1)).isoformat(),
+                            "duration_ms": 60_000,
+                            "routine": {"request_id": "child-a", "thread_id": child_thread_id},
+                        },
+                        {
+                            "started_at": (started_b + timedelta(minutes=1)).isoformat(),
+                            "duration_ms": 60_000,
+                            "routine": {"request_id": "child-b", "thread_id": child_thread_id},
+                        },
+                    ]
+                },
+                child_thread_id: {
+                    "work": [
+                        {
+                            "started_at": (
+                                started_a + timedelta(minutes=1, seconds=30)
+                            ).isoformat(),
+                            "duration_ms": 0,
+                            "tokens": {"total_tokens": 11},
+                        },
+                        {
+                            "started_at": (
+                                started_b + timedelta(minutes=1, seconds=30)
+                            ).isoformat(),
+                            "duration_ms": 0,
+                            "tokens": {"total_tokens": 29},
+                        },
+                    ]
+                },
+            }[target_thread]
+            return SimpleNamespace(checkpoint={"channel_values": {"run_meta": meta}})
+
+    @asynccontextmanager
+    async def native_memory_saver(_store):
+        yield MemorySaver()
+
+    monkeypatch.setattr("src.backend.runs.service._trace_saver", native_memory_saver)
+
+    first, _ = await build_trace(store, "routine", "attempt-a")
+    resumed, _ = await build_trace(store, "routine", "attempt-b")
+    rows = await checkpoint_row_changed(store, thread_id)
+
+    assert first.tokens == 11
+    assert resumed.tokens == 29
+    assert [span.tokens for span in first.spans if span.id.endswith(":node:work:0")] == [11]
+    assert [span.tokens for span in resumed.spans if span.id.endswith(":node:work:1")] == [29]
+    assert not any(span.tokens == 29 for span in first.spans)
+    queue = next(span for span in resumed.spans if span.kind == "queue")
+    assert (queue.start, queue.end) == (queued_b.isoformat(), started_b.isoformat())
+    assert {row.run_id: row.tokens for row in rows} == {"attempt-a": 11, "attempt-b": 29}

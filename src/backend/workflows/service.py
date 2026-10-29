@@ -1175,8 +1175,9 @@ class WorkflowExecutor:
                 active_run is not None
                 and active_run.status == "paused"
                 and active_run.pending_approval is not None
+                and active_run.pending_approval.get("resolved_at") is None
             ):
-                # Only resolving the approval may settle its open node audit.
+                # An unanswered approval still owns its open node audit.
                 return active_run
             if active_run is not None and active_run.status == "paused":
                 candidate = active_run.model_copy(

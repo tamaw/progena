@@ -116,6 +116,55 @@ def _entry_end(start: str, entry: Mapping[str, Any]) -> str | None:
     return end
 
 
+def _attempt_window(
+    run_id: str,
+    event: Mapping[str, Any],
+    latest: Mapping[str, Any],
+    started: Mapping[str, Any],
+) -> tuple[str | None, str | None]:
+    """Bound one request's work when a routine thread has been resumed."""
+    started_event = started.get(run_id)
+    begin = _time(started_event.get("timestamp")) if isinstance(started_event, Mapping) else None
+    if begin is None and _status(event.get("status")) == "started":
+        begin = _time(event.get("timestamp"))
+    thread_id = _text(event.get("thread_id"))
+    if begin is None or not thread_id:
+        return begin, None
+    later = [
+        candidate
+        for request_id, candidate_event in latest.items()
+        if request_id != run_id
+        and isinstance(candidate_event, Mapping)
+        and _text(candidate_event.get("thread_id")) == thread_id
+        and isinstance(candidate_started := started.get(request_id), Mapping)
+        and (candidate := _time(candidate_started.get("timestamp"))) is not None
+        and candidate > begin
+    ]
+    return begin, min(later) if later else None
+
+
+def _within_window(when: str | None, start: str | None, end: str | None) -> bool:
+    """A missing timestamp remains visible so the established validation can report it."""
+    return when is None or ((start is None or when >= start) and (end is None or when < end))
+
+
+def _intersect_windows(
+    start: str | None,
+    end: str | None,
+    limit_start: str | None,
+    limit_end: str | None,
+) -> tuple[str | None, str | None]:
+    """Intersect a child execution's attempt with its owning node's lifetime."""
+    return (
+        max(value for value in (start, limit_start) if value is not None)
+        if start is not None or limit_start is not None
+        else None,
+        min(value for value in (end, limit_end) if value is not None)
+        if end is not None or limit_end is not None
+        else None,
+    )
+
+
 def _overview_root(row: RunRow) -> list[Span]:
     if row.started_at is None:
         return []
@@ -440,7 +489,13 @@ def _workflow_row(
     return row
 
 
-def _routine_overview(row: RunRow, graph: Mapping[str, Any], meta: Mapping[str, Any]) -> list[Span]:
+def _routine_overview(
+    row: RunRow,
+    graph: Mapping[str, Any],
+    meta: Mapping[str, Any],
+    window_start: str | None = None,
+    window_end: str | None = None,
+) -> list[Span]:
     spans = _overview_root(row)
     parent_id = spans[0].id if spans else f"routine:{row.run_id}"
     nodes = {
@@ -454,6 +509,7 @@ def _routine_overview(row: RunRow, graph: Mapping[str, Any], meta: Mapping[str, 
         if isinstance(entries, list)
         for index, entry in enumerate(entries)
         if isinstance(entry, Mapping)
+        and _within_window(_time(entry.get("started_at")), window_start, window_end)
     ]
     records.sort(
         key=lambda record: (
@@ -468,6 +524,8 @@ def _routine_overview(row: RunRow, graph: Mapping[str, Any], meta: Mapping[str, 
         node = nodes.get(_text(node_id), {})
         node_kind = _text(node.get("kind"))
         end = _entry_end(start, entry)
+        if window_end is not None and (end is None or end > window_end):
+            end = window_end
         error = _text(entry.get("error"))
         spans.append(
             Span(
@@ -733,11 +791,14 @@ async def get_run_row(store: Any, kind: RunKind, run_id: str) -> RunRow | None:
 async def checkpoint_row_changed(store: Any, thread_id: str) -> list[RunRow]:
     """Resolve durable routine lifecycle IDs from the checkpoint thread."""
     await workflow_events._lifecycle_index.ensure_loaded(store)
-    for run_id, event in workflow_events._lifecycle_index.latest.items():
-        if isinstance(event, dict) and _text(event.get("thread_id")) == thread_id:
-            row = await get_run_row(store, "routine", run_id)
-            return [row] if row is not None else []
-    return []
+    run_ids = {
+        run_id
+        for run_id, event in workflow_events._lifecycle_index.latest.items()
+        if isinstance(event, dict) and _text(event.get("thread_id")) == thread_id
+    }
+    rows = [row for row in await _routine_rows(store) if row.run_id in run_ids]
+    await _hydrate_run_overviews(store, rows)
+    return rows
 
 
 @asynccontextmanager
@@ -790,17 +851,28 @@ async def _hydrate_run_overviews(store: Any, rows: list[RunRow]) -> None:
         if saver is None:
             return
         graphs: dict[str, Mapping[str, Any]] = {}
+        metas: dict[str, Mapping[str, Any] | None] = {}
         for run_id, row in routines.items():
             event = workflow_events._lifecycle_index.latest.get(run_id)
-            thread_id = _text(event.get("thread_id")) if isinstance(event, dict) else ""
+            if not isinstance(event, Mapping):
+                continue
+            thread_id = _text(event.get("thread_id"))
             if not thread_id:
                 continue
-            meta = await _tip_run_meta(saver, thread_id)
+            if thread_id not in metas:
+                metas[thread_id] = await _tip_run_meta(saver, thread_id)
+            meta = metas[thread_id]
             if meta is None:
                 continue
             if thread_id not in graphs:
                 graphs[thread_id] = await _routine_graph(store, thread_id, event)
-            row.overview = _routine_overview(row, graphs[thread_id], meta)
+            window_start, window_end = _attempt_window(
+                run_id,
+                event,
+                workflow_events._lifecycle_index.latest,
+                workflow_events._lifecycle_index.started,
+            )
+            row.overview = _routine_overview(row, graphs[thread_id], meta, window_start, window_end)
             row.tokens = _rollup_tokens(row.overview)
         for row in workflows:
             owners = {span.id: span for span in row.overview}
@@ -808,7 +880,9 @@ async def _hydrate_run_overviews(store: Any, rows: list[RunRow]) -> None:
                 owner = owners.get(owner_id)
                 if owner is None:
                     continue
-                meta = await _tip_run_meta(saver, thread_id)
+                if thread_id not in metas:
+                    metas[thread_id] = await _tip_run_meta(saver, thread_id)
+                meta = metas[thread_id]
                 if meta is None:
                     continue
                 if thread_id not in graphs:
@@ -822,7 +896,9 @@ async def _hydrate_run_overviews(store: Any, rows: list[RunRow]) -> None:
                     started_at=owner.start,
                     completed_at=owner.end,
                 )
-                for span in _routine_overview(child, graphs[thread_id], meta)[1:]:
+                for span in _routine_overview(
+                    child, graphs[thread_id], meta, owner.start, owner.end
+                )[1:]:
                     span.parent_id = owner.id
                     row.overview.append(span)
             row.tokens = _rollup_tokens(row.overview)
@@ -886,9 +962,7 @@ def _conversation_spans(
         at = _time(committed.isoformat()) if committed is not None else previous
         message_type = _text(_message_value(message, "type"))
         raw_calls = _message_value(message, "tool_calls")
-        inside = bool(
-            at and not ((window_start and at < window_start) or (window_end and at > window_end))
-        )
+        inside = bool(at and _within_window(at, window_start, window_end))
         if inside:
             for call in raw_calls if isinstance(raw_calls, list) else []:
                 if isinstance(call, dict) and _text(call.get("id")):
@@ -900,7 +974,7 @@ def _conversation_spans(
             error = _text(_message_value(message, "content")) if status == "error" else None
             tool_statuses[tool_call_id] = (status, error)
             tool_outputs[tool_call_id] = _value_summary(_message_value(message, "content"))
-        if at and ((window_start and at < window_start) or (window_end and at > window_end)):
+        if at and not _within_window(at, window_start, window_end):
             previous = at
             continue
         usage = _message_value(message, "usage_metadata")
@@ -942,6 +1016,12 @@ def _conversation_spans(
             continue
         end = datetime.fromtimestamp(float(timestamp), UTC)
         start = datetime.fromtimestamp(float(timestamp) - float(duration) / 1000, UTC)
+        if window_start is not None:
+            start = max(start, datetime.fromisoformat(window_start))
+        if window_end is not None:
+            end = min(end, datetime.fromisoformat(window_end))
+        if start >= end:
+            continue
         message_status, message_error = tool_statuses.get(tool_id, ("", None))
         failed = audit.get("success") is False or message_status == "error"
         spans.append(
@@ -1028,7 +1108,11 @@ async def _thread_spans(
             _conversation_spans, store, child_id, subagent, seen_messages, window_start, window_end
         )
         committed = [_time(value.isoformat()) for value in subagent.committed_at.values()]
-        boundaries = [value for value in committed if value is not None]
+        boundaries = [
+            value
+            for value in committed
+            if value is not None and _within_window(value, window_start, window_end)
+        ]
         if not boundaries:
             continue
         spans.append(
@@ -1080,6 +1164,8 @@ async def _routine_children(
     thread_id: str,
     seen_messages: set[str],
     conversations: dict[str, Any],
+    window_start: str | None = None,
+    window_end: str | None = None,
     ancestors: frozenset[str] = frozenset(),
 ) -> tuple[list[Span], int, set[str]]:
     """Reconstruct measured nodes, pending tasks, and recursively nested executions."""
@@ -1109,12 +1195,17 @@ async def _routine_children(
             for node_id, entries in meta.items()
             for index, entry in enumerate(entries)
             if isinstance(entry, dict)
+            and _within_window(_time(entry.get("started_at")), window_start, window_end)
         ]
         if isinstance(meta, dict)
         else []
     )
     state = checkpoint_state(tip)
-    if state["exists"] and not state["failed"]:
+    if (
+        state["exists"]
+        and not state["failed"]
+        and _within_window(_time(state["updated_at"]), window_start, window_end)
+    ):
         for node_id in state["next"]:
             if node_id in nodes:
                 records.append(
@@ -1140,6 +1231,8 @@ async def _routine_children(
         node = nodes.get(node_id, {})
         node_kind = _text(node.get("kind"))
         end = _entry_end(start, entry)
+        if window_end is not None and (end is None or end > window_end):
+            end = window_end
         error = _text(entry.get("error")) or None
         child_id = f"{parent_id}:node:{node_id}:{index}"
         spans.append(
@@ -1181,7 +1274,22 @@ async def _routine_children(
             child_thread = f"routine-agent:{thread_id}:{node_id}"
         if child_thread:
             threads.add(child_thread)
+            child_start, child_end = _intersect_windows(start, end, window_start, window_end)
             if child_thread.startswith("routine:"):
+                child_request_id = (
+                    _text(invocation.get("request_id")) if isinstance(invocation, dict) else ""
+                )
+                child_event = workflow_events._lifecycle_index.latest.get(child_request_id)
+                if isinstance(child_event, Mapping):
+                    attempt_start, attempt_end = _attempt_window(
+                        child_request_id,
+                        child_event,
+                        workflow_events._lifecycle_index.latest,
+                        workflow_events._lifecycle_index.started,
+                    )
+                    child_start, child_end = _intersect_windows(
+                        attempt_start, attempt_end, child_start, child_end
+                    )
                 nested, amount, children = await _routine_children(
                     checkpointer,
                     store,
@@ -1189,6 +1297,8 @@ async def _routine_children(
                     child_thread,
                     seen_messages,
                     conversations,
+                    child_start,
+                    child_end,
                     ancestors,
                 )
                 threads.update(children)
@@ -1286,7 +1396,14 @@ async def build_trace(store: Any, kind: RunKind, run_id: str) -> tuple[RunTrace,
                 if child_thread:
                     if node_kind == "routine":
                         child_spans, amount, child_threads = await _routine_children(
-                            checkpointer, store, step_id, child_thread, seen_messages, conversations
+                            checkpointer,
+                            store,
+                            step_id,
+                            child_thread,
+                            seen_messages,
+                            conversations,
+                            start,
+                            end,
                         )
                         threads.update(child_threads)
                     else:
@@ -1344,6 +1461,12 @@ async def build_trace(store: Any, kind: RunKind, run_id: str) -> tuple[RunTrace,
         else:
             await workflow_events._lifecycle_index.ensure_loaded(store)
             event = workflow_events._lifecycle_index.latest.get(run_id, {})
+            window_start, window_end = _attempt_window(
+                run_id,
+                event,
+                workflow_events._lifecycle_index.latest,
+                workflow_events._lifecycle_index.started,
+            )
             thread_id = _text(event.get("thread_id")) if isinstance(event, dict) else ""
             enqueue = await asyncio.to_thread(
                 store.get_document,
@@ -1360,6 +1483,8 @@ async def build_trace(store: Any, kind: RunKind, run_id: str) -> tuple[RunTrace,
                     thread_id,
                     seen_messages,
                     conversations,
+                    window_start,
+                    window_end,
                 )
                 spans.extend(child_spans)
                 threads.update(child_threads)
