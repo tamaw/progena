@@ -3,6 +3,7 @@ Shared fixtures for backend tests.
 """
 
 import asyncio
+import logging
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -57,6 +58,27 @@ def reset_alert_store():
     clear_alerts()
     yield
     clear_alerts()
+
+
+@pytest.fixture(autouse=True)
+def isolate_uvicorn_logging():
+    """Keep real-server tests from leaking Uvicorn's global log configuration."""
+    loggers = [logging.getLogger(name) for name in ("uvicorn", "uvicorn.error", "uvicorn.access")]
+    original = [
+        (logger.level, logger.handlers[:], logger.filters[:], logger.propagate, logger.disabled)
+        for logger in loggers
+    ]
+    try:
+        yield
+    finally:
+        for logger, (level, handlers, filters, propagate, disabled) in zip(
+            loggers, original, strict=True
+        ):
+            logger.setLevel(level)
+            logger.handlers = handlers
+            logger.filters = filters
+            logger.propagate = propagate
+            logger.disabled = disabled
 
 
 @pytest.fixture

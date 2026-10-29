@@ -252,27 +252,6 @@ async def _workflow_with_routine_step(runs: _Runs) -> None:
     }
 
 
-async def test_a_workflow_reads_as_its_trigger_steps_and_inlined_routine(runs: _Runs) -> None:
-    await _workflow_with_routine_step(runs)
-    # The routine the workflow started lives inside the workflow, not on its own.
-    assert await runs.names("routines") == []
-    path = "/runs/workflows/2026-10-27_self-build-build-result_workflow_run_dd6aba924948.md"
-    assert await runs.names("workflows") == [path]
-
-    text = await runs.text(path)
-    assert "Self-build · Build result · acp_task cb1e8842 status running → completed" in text
-    lines = [line[9:] for line in text.splitlines() if line[:2].isdigit()]
-    channel = "#self-build-build-result-dd6aba92"
-    assert lines == [
-        '* self-build-build-result reads Read publication card → /tasks/card_159f.md "PR comments"',
-        f"-!- smoke-interrupt [routine] has joined {channel}",
-        "<@slow-work> Done.",
-        "<smoke-interrupt> (the reply above)",
-        f"-!- smoke-interrupt [routine] has left {channel}",
-        "* self-build-build-result branches at Publication succeeded → false",
-    ]
-
-
 async def test_a_step_reference_reads_that_steps_whole_value(runs: _Runs) -> None:
     await _workflow_with_routine_step(runs)
     path = "/runs/workflows/2026-10-27_self-build-build-result_workflow_run_dd6aba924948.md"

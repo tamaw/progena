@@ -22,6 +22,7 @@ from src.backend.storage.documents import (
     BackendDocumentStore,
     document_write_origin,
 )
+from src.backend.workflows.acp_results import NativeClaudeTranscriptReader
 from src.progena.acp.models import ACPFailureKind, ACPTaskRecord, ACPTaskStatus
 from src.progena.acp.runner import ACPRunner
 from src.progena.acp.tasks import (
@@ -38,7 +39,37 @@ logger = logging.getLogger(__name__)
 
 _SUPERVISOR_ORIGIN = "acp_supervisor"
 _HISTORY_LIMIT = 100
+_INPUT_HISTORY_LIMIT = 100
 _TOOL_CALL_LIMIT = 200
+
+
+def _bounded_progress_value(value: Any, depth: int = 0) -> Any:
+    if isinstance(value, str):
+        return value[:4096]
+    if depth >= 3:
+        return str(value)[:4096]
+    if isinstance(value, dict):
+        return {
+            str(key)[:128]: _bounded_progress_value(item, depth + 1)
+            for key, item in list(value.items())[:50]
+        }
+    if isinstance(value, list):
+        return [_bounded_progress_value(item, depth + 1) for item in value[:50]]
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    return str(value)[:4096]
+
+
+def _bounded_plan(entries: list[Any]) -> list[Any]:
+    """Keep persisted plan progress useful without retaining an unbounded stream."""
+    return [_bounded_progress_value(entry) for entry in entries[:100]]
+
+
+def _compact_tool_call(call: dict[str, Any]) -> dict[str, Any]:
+    return {
+        str(key)[:128]: str(value)[:512] if value is not None else None
+        for key, value in call.items()
+    }
 
 
 def _positive_int(name: str, default: int) -> int:
@@ -122,11 +153,14 @@ class _ActiveTurn:
     task_id: str
     turn: int
     prompt: str
+    cwd: str
     runner: ACPRunner
     progress: dict[str, Any]
     tool_calls: list[dict[str, Any]]
     session_id: str | None
     mode: str | None
+    resuming: bool
+    native_evidence: dict[str, Any] | None = None
     input_id: str | None = None
     input_future: asyncio.Future[Any] | None = None
     last_persisted: float = field(default_factory=time.monotonic)
@@ -143,9 +177,11 @@ class ACPTaskSupervisor:
         *,
         store_getter: Callable[[], BackendDocumentStore],
         runner_factory: Callable[[Any, str], ACPRunner] = runner_for,
+        transcript_reader: NativeClaudeTranscriptReader | None = None,
     ) -> None:
         self._store_getter = store_getter
         self._runner_factory = runner_factory
+        self._transcript_reader = transcript_reader or NativeClaudeTranscriptReader()
         self._max_sessions = _positive_int("PROGENA_ACP_MAX_SESSIONS", 2)
         self._max_turns = _positive_int("PROGENA_ACP_MAX_TURNS", 20)
         self._progress_interval = _positive_float("PROGENA_ACP_PROGRESS_INTERVAL_SECONDS", 15.0)
@@ -319,7 +355,9 @@ class ACPTaskSupervisor:
                 except ValueError as exc:
                     self._fail_queued(task_id, str(exc))
                     return
-                claimed = self._claim(task_id, record, task_command(acp_config))
+                claimed = self._claim(
+                    task_id, record, task_command(acp_config), task_cwd(acp_config, record.cwd)
+                )
                 if claimed is None:
                     return
                 await self._drive_turn(claimed, acp_config)
@@ -334,6 +372,7 @@ class ACPTaskSupervisor:
         task_id: str,
         expected: ACPTaskRecord,
         command: str,
+        cwd: str,
     ) -> ACPTaskRecord | None:
         claimed: ACPTaskRecord | None = None
 
@@ -351,17 +390,26 @@ class ACPTaskSupervisor:
             ):
                 return payload
             now = _now()
-            progress = dict(payload.get("progress") or {})
-            progress.setdefault("last_message", None)
-            progress.setdefault("plan", [])
-            progress.setdefault("tool_call_count", 0)
-            progress.setdefault("last_tool", None)
-            progress["last_activity_at"] = now
+            progress = {
+                "last_message": None,
+                "plan": [],
+                "tool_call_count": 0,
+                "last_tool": None,
+                "last_activity_at": now,
+            }
             payload["task_id"] = task_id
             payload["status"] = ACPTaskStatus.WORKING.value
             payload["turn"] = record.turn + 1
             payload["command"] = command
+            # Persist the effective directory: native transcript lookup must use
+            # the directory the ACP session actually received, including a
+            # registry default when the task did not specify one.
+            payload["cwd"] = cwd
             payload["progress"] = progress
+            payload["output"] = None
+            payload["evidence"] = None
+            payload["summary"] = None
+            payload["stop_reason"] = None
             payload["started_at"] = payload.get("started_at") or now
             payload["updated_at"] = now
             payload["completed_at"] = None
@@ -381,11 +429,14 @@ class ACPTaskSupervisor:
             task_id=record.task_id,
             turn=record.turn,
             prompt=record.prompt,
+            cwd=cwd,
             runner=runner,
             progress=dict(record.progress),
             tool_calls=list(record.tool_calls[-_TOOL_CALL_LIMIT:]),
             session_id=record.session_id,
             mode=record.mode,
+            resuming=record.session_id is not None,
+            native_evidence=self._continue_native_evidence(record, cwd),
         )
         self._active[record.task_id] = active
         try:
@@ -400,15 +451,20 @@ class ACPTaskSupervisor:
                 self._cancel_working_without_runner(record.task_id, record.turn)
                 return
             active.mode = current.mode
-            result = await runner.run(
-                record.prompt,
-                cwd=cwd,
-                run_id=record.task_id,
-                session_id=record.session_id,
-                mode=active.mode,
-                on_progress=lambda update: self._on_progress(active, update),
-                on_input=lambda request: self._on_input(active, request),
-            )
+            run_kwargs: dict[str, Any] = {
+                "run_id": record.task_id,
+                "session_id": record.session_id,
+                "mode": active.mode,
+                "on_progress": lambda update: self._on_progress(active, update),
+                "on_input": lambda request: self._on_input(active, request),
+            }
+            # Generic ACP session IDs are transport identities and cannot be
+            # assumed to be Claude SDK transcript IDs. Only a producer that
+            # supplies an explicit native_session update can enable bounded
+            # native evidence; otherwise the exact generic capture is retained.
+            if isinstance(runner, ACPRunner):
+                run_kwargs["max_output_chars"] = 16 * 1024
+            result = await runner.run(record.prompt, cwd=cwd, **run_kwargs)
             await self._persist_progress(active, force=True)
             self._finalize_turn(active, result)
         finally:
@@ -421,34 +477,88 @@ class ACPTaskSupervisor:
             if latest is not None and latest.status == ACPTaskStatus.QUEUED.value:
                 self.schedule(record.task_id)
 
-    async def _on_progress(self, active: _ActiveTurn, update: dict[str, Any]) -> None:
-        """Capture streamed ACP activity and persist it at a bounded cadence."""
+    def _continue_native_evidence(self, record: ACPTaskRecord, cwd: str) -> dict[str, Any] | None:
+        """Carry a verified private transcript boundary into its next ACP turn."""
+        for item in reversed(record.history):
+            if not isinstance(item, dict):
+                continue
+            evidence = item.get("evidence")
+            continuation = self._transcript_reader.continue_turn(evidence, cwd=cwd)
+            if continuation is not None:
+                return continuation
+        return None
+
+    async def _on_progress(self, active: _ActiveTurn, update: dict[str, Any]) -> bool:
+        """Capture streamed ACP activity and report native-evidence readiness."""
+        native_evidence_ready = False
         async with active.lock:
             kind = str(update.get("kind") or "")
             if kind == "session":
                 session_id = update.get("session_id")
                 if isinstance(session_id, str) and session_id:
                     active.session_id = session_id
+            elif kind == "native_session":
+                native_session_id = update.get("session_id")
+                if isinstance(native_session_id, str) and native_session_id:
+                    if (
+                        active.native_evidence is not None
+                        and active.native_evidence.get("session_id") == native_session_id
+                    ):
+                        active.native_evidence.pop("awaiting_identity", None)
+                    elif active.native_evidence is not None or not active.resuming:
+                        try:
+                            active.native_evidence = self._transcript_reader.start_new_turn(
+                                native_session_id, active.cwd
+                            )
+                        except Exception:
+                            logger.exception(
+                                "ACP native evidence could not start for task %s", active.task_id
+                            )
+                            active.native_evidence = None
             elif kind in {"message", "thought"}:
                 text = update.get("text")
                 if isinstance(text, str) and text:
                     active.progress["last_message"] = text[-4000:]
             elif kind == "plan" and isinstance(update.get("plan"), list):
-                active.progress["plan"] = update["plan"]
+                active.progress["plan"] = _bounded_plan(update["plan"])
             elif kind == "tool" and isinstance(update.get("tool_call"), dict):
-                call = dict(update["tool_call"])
+                call = _compact_tool_call(update["tool_call"])
                 active.tool_calls = [*active.tool_calls, call][-_TOOL_CALL_LIMIT:]
                 if call.get("status") == "start":
                     active.progress["tool_call_count"] = (
                         int(active.progress.get("tool_call_count") or 0) + 1
                     )
-                active.progress["last_tool"] = call.get("name") or call.get("kind")
+                active.progress["last_tool"] = str(call.get("name") or call.get("kind") or "")[-80:]
+            if active.native_evidence is not None:
+                if not active.native_evidence.get(
+                    "awaiting_identity"
+                ) and not active.native_evidence.get("verified"):
+                    try:
+                        sealed = self._transcript_reader.finish_turn(
+                            active.native_evidence, cwd=active.cwd
+                        )
+                    except Exception:
+                        logger.exception(
+                            "ACP native evidence became unavailable for task %s", active.task_id
+                        )
+                    else:
+                        if sealed is not None:
+                            active.native_evidence["verified"] = True
+                        # Native JSONL may lag the SDK notification. Keep the
+                        # authorized identity pending, with lossless capture,
+                        # until later activity or finalization can seal it.
+                native_evidence_ready = bool(
+                    active.native_evidence and active.native_evidence.get("verified") is True
+                )
             active.progress["last_activity_at"] = _now()
             active.dirty = True
-            force = kind == "session" or active.stalled
+            resumed_from_stall = active.stalled
+            active.stalled = False
+            force = kind in {"session", "native_session"} or resumed_from_stall
         await self._persist_progress(active, force=force)
         if kind == "session":
             await self._process_pending_messages(active)
+        return native_evidence_ready
 
     @staticmethod
     def _has_pending_message(record: ACPTaskRecord) -> bool:
@@ -630,6 +740,9 @@ class ACPTaskSupervisor:
                 return current
             payload = dict(current)
             payload["pending_input"] = pending
+            history = list(record.input_history)
+            history.append({"turn": active.turn, "request": pending, "status": "pending"})
+            payload["input_history"] = history[-_INPUT_HISTORY_LIMIT:]
             payload["updated_at"] = _now()
             published = True
             return payload
@@ -663,8 +776,21 @@ class ACPTaskSupervisor:
                 return current
             answers = dict(record.answers)
             answer = answers.pop(input_id)
+            history = list(record.input_history)
+            for index in range(len(history) - 1, -1, -1):
+                item = history[index]
+                request = item.get("request") if isinstance(item, dict) else None
+                if isinstance(request, dict) and request.get("id") == input_id:
+                    history[index] = {
+                        **item,
+                        "status": "answered",
+                        "answer": answer,
+                        "answered_at": _now(),
+                    }
+                    break
             payload = dict(current)
             payload["answers"] = answers
+            payload["input_history"] = history[-_INPUT_HISTORY_LIMIT:]
             payload["pending_input"] = None
             payload["updated_at"] = _now()
             found = True
@@ -750,25 +876,69 @@ class ACPTaskSupervisor:
 
     def _finalize_turn(self, active: _ActiveTurn, result: Any) -> None:
         now = _now()
-        summary = result.output.strip().splitlines()[0][:200] if result.output.strip() else None
+        evidence: dict[str, Any] | None = None
+        native_output: str | None = None
+        final_message_line: int | None = None
+        native_failure: str | None = None
+        if active.native_evidence is not None and not active.native_evidence.get(
+            "awaiting_identity"
+        ):
+            try:
+                evidence = self._transcript_reader.finish_turn(
+                    active.native_evidence, cwd=active.cwd
+                )
+                native_output, final_message_line = self._transcript_reader.final_output(
+                    evidence, cwd=active.cwd
+                )
+            except Exception as exc:
+                logger.exception(
+                    "ACP native evidence finalization failed for task %s", active.task_id
+                )
+                native_failure = f"Native ACP evidence finalization failed: {exc}"
+        if evidence is not None:
+            evidence = {
+                **evidence,
+                "final_output_available": native_output is not None,
+                **(
+                    {"final_message_line": final_message_line}
+                    if final_message_line is not None
+                    else {}
+                ),
+            }
+        output = native_output if native_output is not None else result.output
+        evidence_lost = bool(getattr(result, "output_truncated", False)) and native_output is None
+        final_error = native_failure or result.error
+        if evidence_lost:
+            final_error = (
+                "Exact native ACP evidence became unavailable after bounded collection; "
+                "retained output is partial." + (f" {final_error}" if final_error else "")
+            )
+            evidence = {
+                **(evidence or {}),
+                "output_truncated": True,
+                "final_output_available": False,
+            }
+        summary = output[:200] if output else None
         terminal_status = (
             ACPTaskStatus.INTERRUPTED.value
             if self._stopping
             else ACPTaskStatus.CANCELED.value
             if result.cancelled or result.stop_reason in {"cancelled", "canceled"}
             else ACPTaskStatus.COMPLETED.value
-            if result.success
+            if result.success and not evidence_lost and native_failure is None
             else ACPTaskStatus.FAILED.value
         )
         history_entry = {
             "turn": active.turn,
             "status": terminal_status,
             "prompt": active.prompt,
-            "output": result.output[-4000:] if result.output else "",
+            "output": output or "",
+            "evidence": evidence,
+            "plan": list(active.progress.get("plan") or []),
             "summary": summary,
             "stop_reason": result.stop_reason,
-            "last_error": result.error,
-            "failure_kind": _failure_kind(terminal_status, result.error),
+            "last_error": final_error,
+            "failure_kind": _failure_kind(terminal_status, final_error),
             "completed_at": now,
         }
 
@@ -809,11 +979,12 @@ class ACPTaskSupervisor:
                     "status": terminal,
                     "cancel_requested": False,
                     "session_id": result.session_id or active.session_id,
-                    "output": result.output,
+                    "output": output,
+                    "evidence": evidence,
                     "summary": summary,
                     "stop_reason": result.stop_reason,
-                    "last_error": result.error,
-                    "failure_kind": _failure_kind(terminal, result.error),
+                    "last_error": final_error,
+                    "failure_kind": _failure_kind(terminal, final_error),
                     "tool_calls": list(result.tool_calls[-_TOOL_CALL_LIMIT:]),
                     "progress": dict(active.progress),
                     "stalled": False,
@@ -975,6 +1146,7 @@ class ACPTaskSupervisor:
             payload = dict(current)
             payload["task_id"] = active.task_id
             payload["stalled"] = True
+            payload["stall_episode"] = record.stall_episode + 1
             payload["updated_at"] = _now()
             return payload
 

@@ -243,6 +243,7 @@ async def routine_log(
     title = str((graph or {}).get("name") or started.get("name") or routine_id)
     nick = slug(title)
     channel = channel or f"{nick}-{short_id(request_id)}"
+
     nodes = {
         str(node.get("id")): node
         for node in (graph or {}).get("nodes", [])
@@ -311,6 +312,7 @@ async def routine_log(
             log.agents.add(slug(label))
             log.say(when, speaker, value)
             continue
+
         verb = _VERBS.get(kind, kind)
         if kind in _ROUTED and entry.get("route"):
             log.act(when, f"{verb} {label} → {entry['route']}")
@@ -341,7 +343,6 @@ async def routine_log(
         child_front = await inline_child(ctx, log, child, steps=steps, depth=depth, channel=channel)
         resolved_children.add(identity)
         tokens = add_tokens(tokens, child_front.get("tokens"))
-
     closed = at(latest.get("timestamp"))
     error = latest.get("error")
     if status == "failed":

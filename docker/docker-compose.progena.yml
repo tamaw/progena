@@ -88,6 +88,8 @@ services:
       TMPDIR: /app/tmp
       # Exchange volume shared with A2A agent containers; exposed to the agent as /shared/.
       PROGENA_SHARED_DIR: /shared
+      # ACP detail reads are task-bound backend API calls; the runtime never mounts Claude config.
+      PROGENA_BACKEND_URL: ${PROGENA_BACKEND_URL:-http://backend:8000}
       # Share glibc malloc arenas across threads so memory freed after large
       # transient histories is reused instead of pinned per thread arena.
       MALLOC_ARENA_MAX: "2"
@@ -115,7 +117,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 2G
+          memory: 4G
           cpus: '2.0'
           pids: 512
         reservations:
@@ -144,6 +146,10 @@ services:
       PROGENA_WORKTREE_DIR: /app/repos
       # Backend runs in a separate container; connect to the runtime HTTP server via service DNS.
       PROGENA_RUNTIME_URL: http://progena:9501
+      # Only the task-scoped ACP detail reader uses this read-only transcript mount.
+      PROGENA_CLAUDE_TRANSCRIPT_ROOT: /var/lib/progena/claude/projects
+      # Lossless generic ACP capture rolls to disk, not container RAM/tmpfs.
+      PROGENA_ACP_CAPTURE_DIR: /app/logs/acp-capture
       # Telegram integration (backend only)
       TELEGRAM_ENABLED: ${TELEGRAM_ENABLED:-false}
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
@@ -155,6 +161,8 @@ services:
     volumes:
       - ${PROGENA_HOST_LOGS_DIR:-../logs}:/app/logs
       - ${PROGENA_HOST_REPOS_DIR:-../repos}:/app/repos
+      # Never mount this into the runtime: backend resolves only verified task/session files.
+      - ${PROGENA_HOST_CLAUDE_DIR:-../.claude-agent}:/var/lib/progena/claude:ro
     tmpfs:
       - /app/tmp:rw,noexec,nosuid,size=512m
     networks:
@@ -170,7 +178,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 2G
+          memory: 4G
           cpus: '1.0'
         reservations:
           memory: 256M
@@ -236,7 +244,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 2G
+          memory: 4G
           cpus: '2.0'
         reservations:
           memory: 256M

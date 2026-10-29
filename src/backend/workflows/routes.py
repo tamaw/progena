@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import time
 from datetime import UTC
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Header, HTTPException, Query, Request
 
@@ -18,6 +18,7 @@ import src.backend.monitoring.state as monitoring_state
 import src.backend.schedules.service as schedules_service
 import src.backend.settings.preferences_store as preferences_store
 import src.backend.storage.documents as storage_documents
+import src.backend.workflows.acp_results as acp_results
 import src.backend.workflows.models as workflows_models
 import src.backend.workflows.runtime as workflows_runtime
 import src.backend.workflows.service as workflows_service
@@ -28,6 +29,31 @@ from src.progena.workflows.documents import default_workflow_definition, workflo
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+@router.get("/acp/tasks/{task_id}/result")
+async def get_acp_task_result(
+    task_id: str,
+    source: Literal["output", "transcript", "input", "plan", "error"] = Query(default="output"),
+    turn: int | None = Query(default=None, ge=0),
+    cursor: str | None = Query(default=None, max_length=64),
+    limit: int = Query(default=8192, ge=1, le=8 * 1024),
+) -> dict[str, Any]:
+    """Read one bounded ACP evidence source for a selected task and turn."""
+    try:
+        return acp_results.get_acp_result(
+            storage_documents.get_default_document_store(),
+            task_id,
+            source=source,
+            turn=turn,
+            cursor=cursor,
+            limit=limit,
+            transcript_reader=acp_results.NativeClaudeTranscriptReader(),
+        )
+    except acp_results.ACPResultNotFound as exc:
+        raise HTTPException(status_code=404, detail="ACP task result not found") from exc
+    except acp_results.ACPResultRequestError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("/workflows/cron-preview")

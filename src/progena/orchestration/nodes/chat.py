@@ -11,6 +11,7 @@ from langgraph.runtime import Runtime
 from src.progena.llm.provider_context import ProviderTurn, activate_provider_turn
 from src.progena.orchestration.nodes.context import HeartbeatContext
 from src.progena.orchestration.state import ProgenaState
+from src.progena.runtime.conversation_gate import ConversationTurnGate
 from src.progena.runtime.instance import RUNTIME_INSTANCE_ID
 
 
@@ -33,12 +34,20 @@ async def chat_node(
     human_message = HumanMessage(content=current_input, additional_kwargs=additional_kwargs)
     llm_config = getattr(getattr(runtime.context, "llm_client", None), "config", None)
     turn = await ProviderTurn.create(llm_config, session_id=thread_id)
-    with activate_provider_turn(turn):
-        result = await runtime.context.agent_graph.ainvoke(
-            {"messages": [human_message]},
-            config={
-                "configurable": {"thread_id": thread_id},
-                "metadata": {"runtime_instance": RUNTIME_INSTANCE_ID},
-            },
-        )
+
+    async def invoke() -> Any:
+        with activate_provider_turn(turn):
+            return await runtime.context.agent_graph.ainvoke(
+                {"messages": [human_message]},
+                config={
+                    "configurable": {"thread_id": thread_id},
+                    "metadata": {"runtime_instance": RUNTIME_INSTANCE_ID},
+                },
+            )
+
+    gate = getattr(runtime.context, "conversation_gate", None)
+    if not isinstance(gate, ConversationTurnGate):
+        gate = ConversationTurnGate()
+        runtime.context.conversation_gate = gate
+    result = await gate.run(thread_id, invoke)
     return result if isinstance(result, dict) else {"messages": []}

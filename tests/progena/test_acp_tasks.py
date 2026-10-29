@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 
 from src.progena.acp.models import ACPTaskRecord, ACPTaskStatus
 from src.progena.acp.tasks import (
     acp_config_from_agent_config,
     build_acp_completion_message,
+    enqueue_acp_completion_followup,
     task_command,
     task_cwd,
 )
@@ -46,3 +49,37 @@ def test_acp_task_normalizes_legacy_naive_activity_timestamp() -> None:
     )
 
     assert task.progress["last_activity_at"] == "2026-10-29T12:00:00+00:00"
+
+
+class _StateManager:
+    def __init__(self) -> None:
+        self.updates: list[tuple[str, dict[str, Any]]] = []
+
+    async def update_acp_task(self, task_id: str, update: dict[str, Any]) -> None:
+        self.updates.append((task_id, update))
+
+
+class _RejectedQueues:
+    async def enqueue_input(self, _content: str, *, metadata: dict[str, Any]) -> bool:
+        return False
+
+
+@pytest.mark.asyncio
+async def test_rejected_completion_followup_does_not_persist_acknowledgement() -> None:
+    record = ACPTaskRecord(
+        task_id="task-1",
+        agent_name="claude",
+        request_metadata={"thread_id": "thread-1"},
+        status=ACPTaskStatus.COMPLETED,
+    )
+    state_manager = _StateManager()
+
+    queued = await enqueue_acp_completion_followup(
+        state_manager,
+        _RejectedQueues(),
+        record,
+        event_identity="terminal:0:completed",
+    )
+
+    assert not queued
+    assert state_manager.updates == []

@@ -58,7 +58,10 @@ repeats with no fix left to try.
 ## ACP-driving templates
 
 An instruction may direct its runner to use `acp_start`, `acp_send`,
-`acp_status`, `acp_answer`, `acp_cancel`, or `acp_list`. The runner's agent
-manifest must list those tools and include the `driving-acp-agents` skill.
+`acp_status`, `acp_get_result`, `acp_answer`, `acp_cancel`, or `acp_list`.
+The runner's agent manifest must list those tools and include the
+`driving-acp-agents` skill. End the supervising turn after delegation; react to
+actionable events instead of polling. Retrieve exact input or build evidence
+with `acp_get_result` only when needed.
 For code changes, have it request a `repo-manager` worktree and pass that path
 as `cwd` to `acp_start`.

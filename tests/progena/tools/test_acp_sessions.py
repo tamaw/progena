@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import json
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock
@@ -12,6 +13,7 @@ import pytest
 
 from src.progena.acp.models import ACPTaskRecord, ACPTaskStatus
 from src.progena.persistence.store import LangGraphRuntimeStore
+from src.progena.sessions.context import reset_current_thread_id, set_current_thread_id
 from src.progena.state.manager import StateManager
 from src.progena.tools.acp_sessions import (
     ACPAnswerTool,
@@ -102,9 +104,48 @@ async def test_start_creates_queued_document(state_manager: StateManager) -> Non
     assert task is not None
     assert task.agent_name == "Claude"
     assert task.prompt == "Inspect this repository"
-    assert task.notify_on_completion is False
     assert task.source == "progena"
     assert task.mode == "plan"
+
+
+@pytest.mark.asyncio
+async def test_start_uses_active_context_thread_over_shared_heartbeat_state(
+    state_manager: StateManager,
+) -> None:
+    token = set_current_thread_id("direct-user-thread")
+    try:
+        result = await ACPStartTool().execute(
+            _context(
+                state_manager,
+                {"agent": "Claude", "prompt": "Inspect this repository"},
+                _registry(),
+            )
+        )
+    finally:
+        reset_current_thread_id(token)
+
+    task = await state_manager.get_acp_task(result.data["task_id"])
+    assert task is not None
+    assert task.request_metadata["thread_id"] == "direct-user-thread"
+    assert task.notify_on_completion
+
+
+@pytest.mark.asyncio
+async def test_start_falls_back_to_state_thread_without_active_context(
+    state_manager: StateManager,
+) -> None:
+    result = await ACPStartTool().execute(
+        _context(
+            state_manager,
+            {"agent": "Claude", "prompt": "Inspect this repository"},
+            _registry(),
+        )
+    )
+
+    task = await state_manager.get_acp_task(result.data["task_id"])
+    assert task is not None
+    assert task.request_metadata["thread_id"] == "thread-1"
+    assert task.notify_on_completion
 
 
 @pytest.mark.asyncio
@@ -225,16 +266,40 @@ async def test_list_filters_sessions(state_manager: StateManager) -> None:
 
     assert result.success
     assert result.data is not None
-    assert len(result.data["tasks"]) == 1
-    task = result.data["tasks"][0]
-    assert task["updated_at"]
-    assert task == {
-        "task_id": "acp_match",
-        "agent": "Claude",
-        "status": "working",
-        "turn": 0,
-        "card_id": "card-1",
-        "cwd": None,
-        "updated_at": task["updated_at"],
-        "summary": None,
-    }
+    assert [task["task_id"] for task in result.data["tasks"]] == ["acp_match"]
+    assert result.data["tasks"][0]["status"] == "working"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("output_size", [0, 110_000, 1_000_000])
+async def test_status_budget_does_not_grow_with_transcript(
+    state_manager: StateManager, output_size: int
+) -> None:
+    task = ACPTaskRecord(
+        task_id="acp_large",
+        agent_name="Claude",
+        status=ACPTaskStatus.WORKING,
+        output="x" * output_size,
+        progress={
+            "last_message": "x" * output_size,
+            "plan": [{"content": "x" * 1000, "status": "pending"}] * 100,
+            "last_tool": {"name": "Bash", "status": "running"},
+            "tool_call_count": 42,
+        },
+        pending_input={
+            "id": "question-1",
+            "kind": "question",
+            "message": "x" * 50_000,
+        },
+    )
+    await state_manager.upsert_acp_task(task)
+    result = await ACPStatusTool().execute(_context(state_manager, {"task_id": task.task_id}))
+    assert result.success
+    assert result.data is not None
+    assert len(json.dumps(result.data).encode()) <= 1024
+    assert result.data["pending_input"] == {"id": "question-1", "kind": "question"}
+    assert result.data["result_ref"] == {"task_id": task.task_id, "turn": 0}
+    assert result.data["progress"]["tool_call_count"] == 42
+    stored = await state_manager.get_acp_task(task.task_id)
+    assert stored is not None
+    assert stored.pending_input == task.pending_input

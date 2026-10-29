@@ -89,6 +89,9 @@ class ACPTaskRecord(BaseModel):
     session_id: str | None = None
     turn: int = 0
     output: str | None = None
+    # A verified native-transcript range for the current/most recently
+    # terminal turn.  The range, not a host path, is exposed to detail readers.
+    evidence: dict[str, Any] | None = None
     summary: str | None = None
     stop_reason: str | None = None
     last_error: str | None = None
@@ -106,7 +109,18 @@ class ACPTaskRecord(BaseModel):
         }
     )
     stalled: bool = False
+    # Incremented only when a new no-activity episode is detected.  The
+    # heartbeat collector combines this with turn to avoid replaying a stall
+    # after activity resumes.
+    stall_episode: int = 0
+    # Last acknowledgement identity for each material event category.  Values
+    # are intentionally opaque strings (for example ``pending_input:2:id``)
+    # so event delivery can be deduplicated without storing unbounded events.
+    material_event_acknowledgements: dict[str, str] = Field(default_factory=dict)
     history: list[dict[str, Any]] = Field(default_factory=list)
+    # Full question/plan/permission requests survive resolution for explicit
+    # result reads, while default status remains limited to an id and kind.
+    input_history: list[dict[str, Any]] = Field(default_factory=list)
     pending_input: dict[str, Any] | None = None
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)

@@ -78,8 +78,8 @@ to give an agent read access to every skill, mount `/skills/` instead (that
 grants file access only and loads none of them into its prompt).
 
 User agents may list the ACP tools `acp_start`, `acp_send`, `acp_status`,
-`acp_answer`, `acp_cancel`, and `acp_list` when they need to drive a Claude ACP
-session. Give such an agent the `driving-acp-agents` skill as well; use a
+`acp_get_result`, `acp_answer`, `acp_cancel`, and `acp_list` when they need to drive
+a Claude ACP session. Give such an agent the `driving-acp-agents` skill as well; use a
 `repo-manager` worktree as the ACP `cwd`, rather than granting it shell or GitHub
 credentials.
 

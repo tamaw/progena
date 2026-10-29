@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
 
 from src.backend.events.documents import DocumentEventDispatcher, seed_document_types
 from src.backend.storage.documents import PROGENA_STATE_PREFIX, InMemoryDocumentStore
+from src.backend.workflows.acp_results import NativeClaudeTranscriptReader
 from src.backend.workflows.acp_supervisor import ACPTaskSupervisor
 from src.progena.acp.runner import ACPRunResult
 from src.progena.documents.kinds import ACP_TASK_KEY_PREFIX
@@ -25,6 +27,7 @@ async def _wait_for(predicate: Callable[[], bool], timeout: float = 2.0) -> None
 @dataclass
 class _Runs:
     block_prompts: set[str] = field(default_factory=set)
+    blocked: asyncio.Event = field(default_factory=asyncio.Event)
     # Keep a cancelled prompt blocked until the test releases it.
     hold_cancelled: bool = False
     started: list[str] = field(default_factory=list)
@@ -73,6 +76,17 @@ class _FakeRunner:
         self.runs.session_ids.append(session_id)
         active_session = session_id or f"session-{len(self.runs.started)}"
         await on_progress({"kind": "session", "session_id": active_session})
+        if prompt in {
+            "native-finalization-fails",
+            "native-source-unavailable",
+            "native-partial",
+        }:
+            await on_progress(
+                {
+                    "kind": "native_session",
+                    "session_id": "11111111-1111-1111-1111-111111111111",
+                }
+            )
         await on_progress({"kind": "message", "text": f"running {prompt}"})
         await on_progress(
             {
@@ -108,6 +122,7 @@ class _FakeRunner:
                 error=self.runs.failures[prompt],
             )
         if prompt in self.runs.block_prompts:
+            self.runs.blocked.set()
             await self.release.wait()
         if self.cancelled:
             return ACPRunResult(
@@ -120,6 +135,7 @@ class _FakeRunner:
         return ACPRunResult(
             success=True,
             output=f"completed {prompt}",
+            output_truncated=prompt == "native-partial",
             stop_reason="end_turn",
             session_id=active_session,
             tool_calls=[{"name": "edit", "status": "start"}],
@@ -127,7 +143,14 @@ class _FakeRunner:
 
 
 class _Harness:
-    def __init__(self, monkeypatch, *, max_sessions: int = 2, max_turns: int = 20) -> None:
+    def __init__(
+        self,
+        monkeypatch,
+        *,
+        max_sessions: int = 2,
+        max_turns: int = 20,
+        transcript_reader: Any | None = None,
+    ) -> None:
         monkeypatch.setenv("PROGENA_ACP_MAX_SESSIONS", str(max_sessions))
         monkeypatch.setenv("PROGENA_ACP_MAX_TURNS", str(max_turns))
         monkeypatch.setenv("PROGENA_ACP_PROGRESS_INTERVAL_SECONDS", "3600")
@@ -137,6 +160,7 @@ class _Harness:
         self.supervisor = ACPTaskSupervisor(
             store_getter=lambda: self.store,
             runner_factory=lambda _config, _cwd: _FakeRunner(self.runs),
+            **({"transcript_reader": transcript_reader} if transcript_reader is not None else {}),
         )
         self.dispatcher = DocumentEventDispatcher(store_getter=lambda: self.store)
         self.dispatcher.add_handler(self.supervisor.handle_document_event)
@@ -208,6 +232,117 @@ async def test_start_completes_and_persists_streamed_progress(monkeypatch) -> No
         assert task["progress"]["last_message"] == "running build"
         assert task["progress"]["tool_call_count"] == 1
         assert task["stalled"] is False
+    finally:
+        await harness.stop()
+
+
+async def test_public_acp_session_never_selects_an_unmapped_native_transcript(monkeypatch) -> None:
+    class _UnexpectedNativeReader:
+        def start_turn(self, _session_id: str, _cwd: str) -> None:
+            raise AssertionError("public ACP session ID was treated as a native SDK session")
+
+    harness = _Harness(monkeypatch, transcript_reader=_UnexpectedNativeReader())
+    _registry(harness.store)
+    await harness.start()
+    try:
+        harness.add_task("one", "implementation")
+        await _wait_for(lambda: harness.task("one").get("status") == "completed")
+        assert harness.task("one")["output"] == "completed implementation"
+    finally:
+        await harness.stop()
+
+
+async def test_native_finalization_error_terminalizes_the_turn(monkeypatch) -> None:
+    class _BrokenNativeReader:
+        def __init__(self) -> None:
+            self.finish_calls = 0
+
+        def start_new_turn(self, _session_id: str, _cwd: str) -> dict[str, str]:
+            return {"provider": "claude_native"}
+
+        def finish_turn(self, reference: dict[str, str], *, cwd: str) -> dict[str, str]:
+            _ = cwd
+            self.finish_calls += 1
+            if self.finish_calls > 1:
+                raise UnicodeDecodeError("utf-8", b"\xf0\x9f", 0, 2, "unexpected end")
+            return reference
+
+        def final_output(self, _reference: object, *, cwd: str) -> tuple[None, None]:
+            _ = cwd
+            return None, None
+
+    harness = _Harness(monkeypatch, transcript_reader=_BrokenNativeReader())
+    _registry(harness.store)
+    await harness.start()
+    try:
+        harness.add_task("one", "native-finalization-fails")
+        await _wait_for(lambda: harness.task("one").get("status") == "failed")
+        task = harness.task("one")
+        assert task["output"] == "completed native-finalization-fails"
+        assert "Native ACP evidence finalization failed" in task["last_error"]
+        assert task["history"][-1]["status"] == "failed"
+    finally:
+        await harness.stop()
+
+
+async def test_native_unavailability_uses_exact_capture_or_fails_partial(monkeypatch) -> None:
+    class _UnavailableNativeReader:
+        def start_new_turn(self, _session_id: str, _cwd: str) -> dict[str, str]:
+            return {"provider": "claude_native"}
+
+        def finish_turn(self, reference: dict[str, str], *, cwd: str) -> dict[str, str]:
+            _ = cwd
+            return reference
+
+        def final_output(self, _reference: object, *, cwd: str) -> tuple[None, None]:
+            _ = cwd
+            return None, None
+
+    harness = _Harness(monkeypatch, transcript_reader=_UnavailableNativeReader())
+    _registry(harness.store)
+    await harness.start()
+    try:
+        harness.add_task("exact", "native-source-unavailable")
+        harness.add_task("partial", "native-partial")
+        await _wait_for(lambda: harness.task("exact").get("status") == "completed")
+        await _wait_for(lambda: harness.task("partial").get("status") == "failed")
+        assert harness.task("exact")["output"] == "completed native-source-unavailable"
+        assert harness.task("partial")["output"] == "completed native-partial"
+        assert "retained output is partial" in harness.task("partial")["last_error"]
+    finally:
+        await harness.stop()
+
+
+async def test_delayed_native_file_is_recovered_after_identity_notification(
+    monkeypatch, tmp_path
+) -> None:
+    session_id = "11111111-1111-1111-1111-111111111111"
+    project = tmp_path / "-workspace"
+    project.mkdir()
+    prompt = "native-source-unavailable"
+    harness = _Harness(monkeypatch, transcript_reader=NativeClaudeTranscriptReader(tmp_path))
+    harness.runs.block_prompts.add(prompt)
+    _registry(harness.store)
+    await harness.start()
+    try:
+        harness.add_task("delayed", prompt, cwd="/workspace")
+        await asyncio.wait_for(harness.runs.blocked.wait(), timeout=2)
+        row = {
+            "sessionId": session_id,
+            "cwd": "/workspace",
+            "type": "assistant",
+            "message": {
+                "id": "final-message",
+                "role": "assistant",
+                "content": [{"type": "text", "text": "delayed final evidence"}],
+            },
+        }
+        (project / f"{session_id}.jsonl").write_text(json.dumps(row) + "\n")
+        harness.runs.runners[0].release.set()
+        await _wait_for(lambda: harness.task("delayed").get("status") == "completed")
+        task = harness.task("delayed")
+        assert task["output"] == "delayed final evidence"
+        assert task["evidence"]["final_output_available"]
     finally:
         await harness.stop()
 

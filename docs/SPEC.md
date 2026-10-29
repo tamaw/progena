@@ -392,6 +392,9 @@ include-glob matcher before rendering files, preserving match lines and truncati
 It processes files incrementally and stops once the result limit and truncation are
 known. Exact-file grep/glob resolve the same valid full-ID paths as reads, including
 earlier filename dates/titles; missing files and `#n` step references are not discovered.
+Read-only wrappers expose the SDK search signatures explicitly so result limits
+reach the underlying reader before hydration, rather than being applied only
+after a Composite mount has materialized an unbounded result.
 
 Nested routine invocations use their persisted request IDs, including pending native
 interrupts while a parent node awaits child approval. Completed child work remains

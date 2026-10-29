@@ -138,9 +138,12 @@ ACP tasks (driving Claude and other ACP agents) — orchestrate, never babysit:
      trigger per outcome, each also matching `"after.request_metadata.stage"`
      so only this stage's tasks (not chat-started ones) fire it. Then
      `document_read` the card by `after.card_id`:
-     - `"after.status": "completed"`: the agent finished the turn. Its reply is
-       `after.output`. Feed only that (and the card) to one short `extract`
-       step to decide what happens next, or route it without a model.
+     - `"after.status": "completed"`: the agent finished the turn. Route on
+       compact task/turn/status fields and a result reference. Do not interpolate
+       `after.output` into a model prompt: it can include all progress commentary.
+       If validation/publication needs evidence, explicitly retrieve the selected
+       turn with `acp_get_result` in one short agent step. Keep required check and
+       commit evidence intact; do not repeatedly reread the entire transcript.
      - `"after.status": "failed", "after.failure_kind": "usage_limit"`: the
        agent's account hit its session/usage/rate limit. Stop: mark the card
        `blocked` with `after.last_error`; retry only after it resets.

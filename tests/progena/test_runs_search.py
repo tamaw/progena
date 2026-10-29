@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
+from deepagents.backends import CompositeBackend, FilesystemBackend
 from langgraph.store.memory import InMemoryStore
 
-from src.progena.agent.filesystem.mounts import create_progena_backend
+from src.progena.agent.filesystem.mounts import ReadOnlyBackend, create_progena_backend
+from src.progena.agent.filesystem.runs import RunDirectoryBackend
 from src.progena.persistence.store import LangGraphRuntimeStore
 from src.progena.state.manager import StateManager
 
@@ -81,3 +84,44 @@ async def test_composite_searches_an_old_workflow_full_id_path_after_rename_and_
     short_path = old_path.replace(run_id, "exact")
     assert (await backend.aread(short_path, 0, 10_000)).error is not None
     assert (await backend.aglob("*.md", path=short_path)).matches == []
+
+
+async def test_public_read_only_search_bounds_hydration(tmp_path: Path) -> None:
+    store = InMemoryStore()
+    manager = StateManager(LangGraphRuntimeStore(store))
+    await manager.save_preferences_config({"timezone": "UTC"})
+    await manager.save_workflow_definition(
+        "search", {"id": "search", "title": "Search", "graph": {"nodes": {}}}
+    )
+    for index in range(40):
+        run_id = f"workflow_run_search{index:03d}"
+        await store.aput(
+            _NS,
+            f"workflow_run:{run_id}",
+            {
+                "payload": {
+                    "run_id": run_id,
+                    "workflow_id": "search",
+                    "status": "failed",
+                    "started_at": "2026-10-30T10:00:00Z",
+                    "last_error": "needle",
+                }
+            },
+        )
+    runs = RunDirectoryBackend(manager, _Checkpoints())
+    reads: list[str] = []
+    original_read = runs.aread
+
+    async def counted_read(file_path: str, offset: int = 0, limit: int = 2000):
+        reads.append(file_path)
+        return await original_read(file_path, offset, limit)
+
+    runs.aread = counted_read
+    mounted = CompositeBackend(
+        default=FilesystemBackend(root_dir=str(tmp_path)),
+        routes={"/runs/": ReadOnlyBackend(runs)},
+    )
+    result = await mounted.agrep("needle", path="/runs/workflows/", max_count=1)
+    assert len(result.matches or []) == 1
+    assert result.truncated
+    assert len(reads) == 1
