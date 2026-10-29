@@ -9,11 +9,10 @@ from langchain_core.messages import HumanMessage
 
 from src.progena.runtime.ownership import schedule_run_interrupted
 from src.progena.schedules.dispatch import SCHEDULED_INPUT_PREFIX
-from src.progena.sessions.history import load_conversation
 from src.progena.sessions.transcript import render_transcript
 from src.progena.settings.preferences import agent_display_name
 
-from ._render import RunContext, RunLog, Steps, at, render_file
+from ._render import RunContext, RunLog, Steps, at, conversation_tokens, render_file
 from .paths import short_id, slug
 from .values import one_line
 
@@ -53,11 +52,7 @@ async def render_schedule(
     if schedule_run_interrupted(record, ctx.live_instance, ctx.live_started_at):
         status = "interrupted"
     thread_id = str(record.get("thread_id") or "")
-    conversation = (
-        await load_conversation(ctx.checkpointer, thread_id)
-        if ctx.checkpointer is not None and thread_id
-        else None
-    )
+    conversation = await ctx.conversation(thread_id)
     if conversation is not None:
         preferences = await ctx.state_manager.get_preferences_config()
         agent = "".join(agent_display_name(preferences).split())
@@ -73,6 +68,15 @@ async def render_schedule(
         log.agents |= transcript.agents
     else:
         log.say(at(record.get("started_at")), nick, str(record.get("message") or ""))
+    tokens = (
+        conversation_tokens(
+            conversation,
+            begin=at(record.get("started_at") or record.get("created_at")),
+            end=at(record.get("completed_at")),
+        )
+        if conversation is not None
+        else None
+    )
     ended = at(record.get("completed_at") or record.get("updated_at"))
     error = record.get("error")
     if status == "failed":
@@ -90,6 +94,7 @@ async def render_schedule(
         "started_at": record.get("started_at") or record.get("created_at"),
         "ended_at": record.get("completed_at"),
         "error": error if status == "failed" else None,
+        "tokens": tokens,
     }
     topic = f"{title} · {one_line(str(record.get('message') or ''))[:80]}"
     return render_file(front, log, channel=channel, topic=topic, ctx=ctx), steps

@@ -78,9 +78,7 @@ async def test_only_non_archived_sessions_get_a_file(sessions: _Sessions) -> Non
 
     names = await sessions.names()
 
-    # All non-archived sessions get a file, even with empty content
-    assert len(names) == 2
-    assert re.fullmatch(r"/\d{4}-\d{2}-\d{2}_weekend-plans_aaaaaaaa\.md", names[0])
+    assert {name.rsplit("_", 1)[-1] for name in names} == {"aaaaaaaa.md", "cccccccc.md"}
 
 
 async def test_listing_sorts_offset_session_timestamps_by_instant(sessions: _Sessions) -> None:

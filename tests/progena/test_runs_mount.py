@@ -111,17 +111,17 @@ async def _continued_run(runs: _Runs) -> None:
 async def test_each_attempt_on_a_continued_thread_shows_only_its_own_steps(runs: _Runs) -> None:
     await _continued_run(runs)
     assert await runs.names("routines") == [
-        "/runs/routines/2026-10-28_smoke-interrupt_9fd7eb88.md",
-        "/runs/routines/2026-10-28_smoke-interrupt_9bb9157f.md",
+        "/runs/routines/2026-10-28_smoke-interrupt_9fd7eb88-2.md",
+        "/runs/routines/2026-10-28_smoke-interrupt_9bb9157f-1.md",
     ]
 
-    stopped = await runs.text("/runs/routines/2026-10-28_smoke-interrupt_9bb9157f.md")
+    stopped = await runs.text("/runs/routines/2026-10-28_smoke-interrupt_9bb9157f-1.md")
     assert "* smoke-interrupt evaluates Fetch → bitcoin" in stopped
     assert "Done." not in stopped
     assert "-!- smoke-interrupt has quit [stopped]" in stopped
     assert "attempts:\n  next: 9fd7eb88" in stopped
 
-    resumed = await runs.text("/runs/routines/2026-10-28_smoke-interrupt_9fd7eb88.md")
+    resumed = await runs.text("/runs/routines/2026-10-28_smoke-interrupt_9fd7eb88-2.md")
     assert "Fetch" not in resumed
     assert "<@slow-work> Done." in resumed
     assert "* smoke-interrupt evaluates Report → reported" in resumed
@@ -147,7 +147,7 @@ async def test_a_run_still_executing_is_interrupted_only_when_its_runtime_is_gon
     runs.checkpoints.run_meta["routine:smoke:rev1:ad9d"] = {
         "fetch": [_step(1, "2026-10-28T06:46:45+00:00", {"fetch": "refactor"})]
     }
-    text = await runs.text("/runs/routines/2026-10-28_smoke-interrupt_37fbe485.md")
+    text = await runs.text("/runs/routines/2026-10-28_smoke-interrupt_37fbe485-3.md")
     assert f"status: {status}" in text
     restarted = "has quit [runtime restarted after Fetch; interrupted]" in text
     assert restarted is (status == "interrupted")
@@ -168,7 +168,7 @@ async def test_a_failed_routine_names_the_step_and_keeps_the_whole_error(runs: _
     runs.checkpoints.run_meta["routine:smoke:rev1:f1"] = {
         "fetch": [_step(1, "2026-10-28T03:00:00+00:00", {"fetch": "x"})]
     }
-    text = await runs.text("/runs/routines/2026-10-28_smoke-interrupt_aa11bb22.md")
+    text = await runs.text("/runs/routines/2026-10-28_smoke-interrupt_aa11bb22-4.md")
     assert f"has quit [failed at Fetch: {error}]" in text
     front = yaml.safe_load(text.split("---\n")[1])
     assert front["status"] == "failed"
@@ -250,7 +250,7 @@ async def test_a_workflow_reads_as_its_trigger_steps_and_inlined_routine(runs: _
     await _workflow_with_routine_step(runs)
     # The routine the workflow started lives inside the workflow, not on its own.
     assert await runs.names("routines") == []
-    path = "/runs/workflows/2026-10-27_self-build-build-result_dd6aba92.md"
+    path = "/runs/workflows/2026-10-27_self-build-build-result_workflow_run_dd6aba924948.md"
     assert await runs.names("workflows") == [path]
 
     text = await runs.text(path)
@@ -269,7 +269,7 @@ async def test_a_workflow_reads_as_its_trigger_steps_and_inlined_routine(runs: _
 
 async def test_a_step_reference_reads_that_steps_whole_value(runs: _Runs) -> None:
     await _workflow_with_routine_step(runs)
-    path = "/runs/workflows/2026-10-27_self-build-build-result_dd6aba92.md"
+    path = "/runs/workflows/2026-10-27_self-build-build-result_workflow_run_dd6aba924948.md"
     await runs.text(path)
     first = await runs.text(f"{path}#1")
     assert "key: kanban_card:card_159f" in first
@@ -279,7 +279,7 @@ async def test_a_step_reference_reads_that_steps_whole_value(runs: _Runs) -> Non
 
 async def test_runs_cannot_be_changed(runs: _Runs) -> None:
     await _continued_run(runs)
-    path = "/runs/routines/2026-10-28_smoke-interrupt_9fd7eb88.md"
+    path = "/runs/routines/2026-10-28_smoke-interrupt_9fd7eb88-2.md"
     assert (await runs.fs.awrite(path, "x")).error
     assert (await runs.fs.aedit(path, "Done.", "Nope.")).error
 
@@ -315,7 +315,7 @@ async def test_a_scheduled_run_is_its_message_and_is_interrupted_when_its_runtim
             }
         ],
     )
-    path = "/runs/schedules/2026-10-28_nightly-check_f9b99b92.md"
+    path = "/runs/schedules/2026-10-28_nightly-check_schedrun_f9b99b926a01.md"
     assert await runs.names("schedules") == [path]
     text = await runs.text(path)
     assert "<scheduler> Scheduled check" in text
@@ -342,3 +342,51 @@ def test_agent_requests_and_json_replies_are_summarised_but_speech_is_not() -> N
     assert shown[1] == "success: true, branch: self-build/card_1"
     assert shown[2] == "All 4 checks passed."
     assert steps.text("1") == request
+
+
+async def test_same_prefix_runs_remain_distinct_and_equal_time_order_is_stable(runs: _Runs) -> None:
+    for request_id in ("abcdef00-a", "abcdef00-z"):
+        await runs.event(
+            request_id,
+            "started",
+            "2026-10-28T04:00:00Z",
+            agent_id="smoke",
+            thread_id=f"routine:smoke:rev1:{request_id}",
+        )
+    names = await runs.names("routines")
+    assert names == [
+        "/runs/routines/2026-10-28_smoke-interrupt_abcdef00-z.md",
+        "/runs/routines/2026-10-28_smoke-interrupt_abcdef00-a.md",
+    ]
+    fronts = [yaml.safe_load((await runs.text(path)).split("---\n")[1]) for path in names]
+    assert [front["request_id"] for front in fronts] == ["abcdef00-z", "abcdef00-a"]
+    assert (await runs.fs.aread("/runs/routines/2026-10-28_smoke-interrupt_abcdef00.md")).error
+
+
+async def test_interrupted_file_updates_its_attempt_links_after_continue(runs: _Runs) -> None:
+    thread_id = "routine:smoke:rev1:continued"
+    await runs.event(
+        "original",
+        "started",
+        "2026-10-28T04:00:00Z",
+        agent_id="smoke",
+        thread_id=thread_id,
+        runtime_instance="gone-runtime",
+    )
+    path = "/runs/routines/2026-10-28_smoke-interrupt_original.md"
+    first = yaml.safe_load((await runs.text(path)).split("---\n")[1])
+    assert first["status"] == "interrupted"
+    assert first["ended_at"] is None
+    assert first["attempts"] is None
+    await runs.event(
+        "continued",
+        "started",
+        "2026-10-28T04:01:00Z",
+        agent_id="smoke",
+        thread_id=thread_id,
+        runtime_instance=RUNTIME_INSTANCE_ID,
+    )
+    second = yaml.safe_load((await runs.text(path)).split("---\n")[1])
+    assert second["status"] == "interrupted"
+    assert second["ended_at"] is None
+    assert second["attempts"]["next"] == "continue"

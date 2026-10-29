@@ -13,7 +13,17 @@ from typing import Any
 
 from src.progena.sessions.transcript import Line
 
-from ._render import RunContext, RunLog, Steps, agent_transcript, at, render_file, step_result
+from ._render import (
+    RunContext,
+    RunLog,
+    Steps,
+    add_tokens,
+    agent_transcript,
+    at,
+    recorded_tokens,
+    render_file,
+    step_result,
+)
 from .paths import short_id, slug
 from .routine import inline_child
 from .values import describe_change, describe_value, one_line
@@ -83,17 +93,34 @@ def _last_output(run: Mapping[str, Any]) -> Any:
     return raw
 
 
-def _child_attempt(ctx: RunContext, thread_id: str | None) -> dict[str, Any] | None:
-    if not thread_id:
+async def _child_attempt(
+    ctx: RunContext, audit: Mapping[str, Any], value: Any
+) -> dict[str, Any] | None:
+    """Select one routine start from its persisted audit thread and interval."""
+    audit_thread = audit.get("thread_id")
+    output_thread = value.get("thread_id") if isinstance(value, Mapping) else None
+    thread_id = audit_thread if isinstance(audit_thread, str) and audit_thread else output_thread
+    if not isinstance(thread_id, str) or not thread_id:
         return None
-    return next(
-        (
-            event
-            for event in ctx.routine_events
-            if event.get("status") == "started" and event.get("thread_id") == thread_id
-        ),
-        None,
-    )
+    await ctx.load_thread_events(thread_id)
+    begin = at(audit.get("started_at"))
+    end = at(audit.get("completed_at"))
+    request_id = audit.get("request_id")
+    candidates: list[dict[str, Any]] = []
+    for event in ctx.routine_events:
+        if event.get("status") != "started" or event.get("thread_id") != thread_id:
+            continue
+        if isinstance(request_id, str) and event.get("request_id") != request_id:
+            continue
+        when = at(event.get("timestamp"))
+        if (begin is not None or end is not None) and when is None:
+            continue
+        if begin is not None and when is not None and when < begin:
+            continue
+        if end is not None and when is not None and when >= end:
+            continue
+        candidates.append(event)
+    return candidates[0] if len(candidates) == 1 else None
 
 
 async def render_workflow(
@@ -111,43 +138,67 @@ async def render_workflow(
     outputs = run.get("node_outputs") if isinstance(run.get("node_outputs"), Mapping) else {}
     log = RunLog(nick=nick)
 
+    tokens: dict[str, int | None] | None = None
     for audit in run.get("step_audit") or []:
         if not isinstance(audit, Mapping):
             continue
         node_id = str(audit.get("node_id") or "")
         node = nodes.get(node_id, {})
-        kind = str(node.get("kind") or audit.get("kind") or "step")
+        kind = str(audit.get("kind") or node.get("kind") or "step")
         label = str(node.get("title") or node_id or kind)
-        when = at(audit.get("completed_at"))
-        value = outputs.get(node_id, audit.get("output")) if isinstance(outputs, Mapping) else None
+        when = at(audit.get("completed_at") or audit.get("started_at"))
+        value = (
+            audit.get("output", outputs.get(node_id))
+            if isinstance(outputs, Mapping)
+            else audit.get("output")
+        )
+        audit_tokens = recorded_tokens(audit.get("tokens"))
         if kind == "routine":
-            thread_id = value.get("thread_id") if isinstance(value, Mapping) else None
-            child = _child_attempt(ctx, thread_id if isinstance(thread_id, str) else None)
+            child = await _child_attempt(ctx, audit, value)
             if child is not None:
-                await inline_child(ctx, log, child, steps=steps, depth=0, channel=channel)
+                child_front = await inline_child(
+                    ctx, log, child, steps=steps, depth=0, channel=channel
+                )
+                tokens = add_tokens(tokens, child_front.get("tokens") or audit_tokens)
                 continue
-            shown = (
-                {k: v for k, v in value.items() if k != "thread_id"}
-                if isinstance(value, Mapping)
-                else value
-            )
-            log.act(when, f"runs {label} → {step_result(shown, steps)}")
-            continue
-        if kind == "agent" and isinstance(value, Mapping):
+        if kind not in {"agent", "extract"}:
+            tokens = add_tokens(tokens, audit_tokens)
+        audit_thread = audit.get("thread_id")
+        output_thread = value.get("thread_id") if isinstance(value, Mapping) else None
+        thread_id = (
+            audit_thread if isinstance(audit_thread, str) and audit_thread else output_thread
+        )
+        if kind in {"agent", "extract"} and isinstance(thread_id, str) and thread_id:
             agent = str(node.get("subagent") or "progena")
-            thread_id = value.get("thread_id")
-            if isinstance(thread_id, str) and await agent_transcript(
-                ctx, log, thread_id, agent=agent, channel=channel, when=when, steps=steps
+            transcript_tokens: list[dict[str, int | None] | None] = []
+            if await agent_transcript(
+                ctx,
+                log,
+                thread_id,
+                agent=agent,
+                channel=channel,
+                when=when,
+                steps=steps,
+                begin=at(audit.get("started_at")),
+                end=at(audit.get("completed_at")),
+                token_totals=transcript_tokens,
             ):
+                usage = transcript_tokens[0] if transcript_tokens else None
+                tokens = add_tokens(tokens, usage or audit_tokens)
                 continue
+        if kind in {"agent", "extract"}:
+            tokens = add_tokens(tokens, audit_tokens)
         if kind == "condition" and isinstance(value, Mapping):
             branch = next((str(port) for port, taken in value.items() if taken is True), None)
             if branch is not None:
                 log.act(when, f"branches at {label} → {branch}")
                 continue
+        failure = audit.get("error")
+        if isinstance(failure, str) and failure:
+            log.act(when, f"{_VERBS.get(kind, kind)} {label} → failed: {one_line(failure)}")
+            continue
         verb = _VERBS.get(kind, kind)
         log.act(when, f"{verb} {label} → {step_result(value, steps)}")
-
     status = str(run.get("status") or "queued")
     pending = run.get("pending_approval")
     if isinstance(pending, Mapping):
@@ -195,6 +246,6 @@ async def render_workflow(
         "waiting_on": run.get("waiting_node_id"),
         "output": describe_value(output, pointer=steps.add(output)) if output is not None else None,
         "error": error if status == "failed" else None,
-        "tokens": run.get("tokens"),
+        "tokens": tokens,
     }
     return render_file(front, log, channel=channel, topic=_topic(run, title), ctx=ctx), steps

@@ -80,11 +80,13 @@ class ScheduleStore:
         )
 
     async def get_schedule_run(self, run_id: str) -> ScheduleRunRecord | None:
-        """Return one schedule run by id, or ``None`` if not found."""
-        for run in await self.get_schedule_runs():
-            if run.run_id == run_id:
-                return run
-        return None
+        """Return one schedule run by id without loading unrelated run records."""
+        payload = await self._access.store.get_document_list_item(
+            "schedule_runs",
+            "run_id",
+            run_id,
+        )
+        return ScheduleRunRecord.model_validate(payload) if isinstance(payload, dict) else None
 
     async def upsert_schedule_run(self, run: ScheduleRunRecord) -> None:
         """Insert or update a schedule run record."""

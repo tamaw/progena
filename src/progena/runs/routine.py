@@ -19,8 +19,10 @@ from ._render import (
     RunContext,
     RunLog,
     Steps,
+    add_tokens,
     agent_transcript,
     at,
+    recorded_tokens,
     render_file,
     step_result,
 )
@@ -139,22 +141,25 @@ def _step_output(entry: dict[str, Any], node: dict[str, Any], node_id: str) -> A
     return output
 
 
-def _child_attempt(
-    ctx: RunContext, thread_id: str, node_id: str, when: datetime | None
-) -> dict[str, Any] | None:
-    candidates = [
-        event
-        for event in ctx.routine_events
-        if event.get("status") == "started"
-        and isinstance(event.get("parent"), dict)
-        and event["parent"].get("thread_id") == thread_id
-        and event["parent"].get("node_id") == node_id
-    ]
-    if when is not None:
-        candidates.sort(
-            key=lambda event: abs(((at(event.get("timestamp")) or when) - when).total_seconds())
-        )
-    return candidates[0] if candidates else None
+async def _child_attempt(ctx: RunContext, entry: dict[str, Any]) -> dict[str, Any] | None:
+    """Resolve a nested routine only through its persisted invocation identity."""
+    invocation = entry.get("routine")
+    if not isinstance(invocation, dict):
+        return None
+    request_id = invocation.get("request_id")
+    if not isinstance(request_id, str) or not request_id:
+        return None
+    thread_id = invocation.get("thread_id")
+    if isinstance(thread_id, str) and thread_id:
+        await ctx.load_thread_events(thread_id)
+    return next(
+        (
+            event
+            for event in ctx.routine_events
+            if event.get("status") == "started" and event.get("request_id") == request_id
+        ),
+        None,
+    )
 
 
 async def routine_log(
@@ -167,6 +172,8 @@ async def routine_log(
 ) -> tuple[dict[str, Any], RunLog, str]:
     """Front matter, log lines and channel of one attempt (children inlined)."""
     request_id = str(started.get("request_id") or "")
+    thread_id = str(started.get("thread_id") or "")
+    await ctx.load_thread_events(thread_id)
     events = attempt_events(ctx, request_id) or [started]
     status, latest = attempt_status(ctx, events)
     graph = await _graph(ctx, started)
@@ -174,7 +181,6 @@ async def routine_log(
     title = str((graph or {}).get("name") or started.get("name") or routine_id)
     nick = slug(title)
     channel = channel or f"{nick}-{short_id(request_id)}"
-    thread_id = str(started.get("thread_id") or "")
     nodes = {
         str(node.get("id")): node
         for node in (graph or {}).get("nodes", [])
@@ -182,6 +188,7 @@ async def routine_log(
     }
     log = RunLog(nick=nick)
     begin, end = _attempt_window(ctx, started)
+    tokens: dict[str, int | None] | None = None
     last_label: str | None = None
     for node_id, entry in await _run_meta(ctx, thread_id):
         when = at(entry.get("started_at"))
@@ -196,8 +203,21 @@ async def routine_log(
         config: dict[str, Any] = raw_config if isinstance(raw_config, dict) else {}
         last_label = label
         value = _step_output(entry, node, node_id)
+        if kind == "routine" and depth < MAX_CHILD_DEPTH:
+            child = await _child_attempt(ctx, entry)
+            if child is not None:
+                child_front = await inline_child(
+                    ctx, log, child, steps=steps, depth=depth, channel=channel
+                )
+                tokens = add_tokens(
+                    tokens, child_front.get("tokens") or recorded_tokens(entry.get("tokens"))
+                )
+                continue
+        if kind != "agent":
+            tokens = add_tokens(tokens, recorded_tokens(entry.get("tokens")))
         if kind == "agent":
             agent = str(config.get("agent_name") or label)
+            transcript_tokens: list[dict[str, int | None] | None] = []
             if await agent_transcript(
                 ctx,
                 log,
@@ -206,8 +226,14 @@ async def routine_log(
                 channel=channel,
                 when=when,
                 steps=steps,
+                begin=begin,
+                end=end,
+                token_totals=transcript_tokens,
             ):
+                usage = transcript_tokens[0] if transcript_tokens else None
+                tokens = add_tokens(tokens, usage or recorded_tokens(entry.get("tokens")))
                 continue
+            tokens = add_tokens(tokens, recorded_tokens(entry.get("tokens")))
             log.act(when, f"asks {agent} → {step_result(value, steps)}")
             continue
         if kind == "prompt" and isinstance(value, str):
@@ -215,11 +241,6 @@ async def routine_log(
             log.agents.add(slug(label))
             log.say(when, speaker, value)
             continue
-        if kind == "routine" and depth < MAX_CHILD_DEPTH:
-            child = _child_attempt(ctx, thread_id, node_id, when)
-            if child is not None:
-                await inline_child(ctx, log, child, steps=steps, depth=depth, channel=channel)
-                continue
         verb = _VERBS.get(kind, kind)
         if kind in _ROUTED and entry.get("route"):
             log.act(when, f"{verb} {label} → {entry['route']}")
@@ -267,6 +288,7 @@ async def routine_log(
         "output": _compact(output, steps),
         "error": error if status == "failed" else None,
         "attempts": _attempts(ctx, started),
+        "tokens": tokens,
     }
     return front, log, channel
 
@@ -314,7 +336,7 @@ async def inline_child(
     steps: Steps,
     depth: int,
     channel: str,
-) -> None:
+) -> dict[str, Any]:
     """A child routine run between join and part, ending with its result."""
     front, child, _ = await routine_log(ctx, started, steps=steps, depth=depth + 1, channel=channel)
     first = next((line.at for line in child.lines if line.at), at(started.get("timestamp")))
@@ -350,6 +372,7 @@ async def inline_child(
     status = front.get("status")
     reason = "" if status == "completed" else f" [{status}]"
     log.event(last, f"{child.nick} [routine] has left #{channel}{reason}")
+    return front
 
 
 def _say_line(when: datetime | None, nick: str, text: str) -> Line:

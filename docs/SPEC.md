@@ -357,7 +357,7 @@ a blank line and the IRC-style `content`. Only the `title`, `pinned`, and
 grep, and read operate directly on the store documents (no cache).
 
 `/runs/` is a read-only execution-history mount: one
-`<date>_<slug>_<id8>.md` per top-level run under
+`<date>_<slug>_<full-run-id>.md` per top-level run under
 `/runs/{routines,workflows,schedules}/`, YAML front matter plus an IRC-style
 log, rendered on read from existing records (routine lifecycle events and the
 attempt's latest checkpoint `run_meta`, `workflow_run:` documents,
@@ -368,8 +368,22 @@ data is summarised (changed fields, document mount path and title, counts,
 head…tail of long text) with a pointer to the full value: a mount path, or
 `<run-file>#<n>` for step `n`, which is never listed, globbed or grepped.
 Status uses the same interrupted rule as the UI
-(`src/progena/runtime/ownership.py`). Finished runs are cached in-process.
-`run_workflow` returns the new run's `run_id` and `/runs/` path.
+(`src/progena/runtime/ownership.py`). Terminal runs, including interrupted runs,
+are cached in-process; updated records and subsequent lifecycle boundaries invalidate
+the entry. Directory listings use compact run records and bulk title maps, sorted
+by normalized start time and full run ID. Reading one file looks up its exact ID
+and loads only related lifecycle threads, not every run's payload. Schedule history
+remains one JSON document; native reads select the requested item inside Postgres.
+Full IDs prevent filename collisions; there are no short-ID aliases or persisted
+files to migrate. `run_workflow` returns the new run's `run_id` and `/runs/` path.
+
+Nested routine invocations use their persisted request IDs. Workflow step kinds
+and conversation threads come from execution audits rather than edited definitions
+or cleared outputs. Unknown links are not inferred from nearby timestamps.
+All three run kinds expose `tokens` with recorded input/output/total counts;
+unknown usage/components remain null and known zero remains zero. Recorded
+descendants replace parent aggregates, message IDs deduplicate recursive delegation,
+and reused threads are scoped to the routine attempt or workflow audit interval.
 
 ## Runs
 

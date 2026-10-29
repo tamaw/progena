@@ -10,7 +10,8 @@ from typing import Any
 import yaml
 
 from src.progena.runtime.ownership import parse_timestamp
-from src.progena.sessions.history import load_conversation
+from src.progena.sessions.history import Conversation, load_conversation
+from src.progena.sessions.messages import extract_token_usage
 from src.progena.sessions.transcript import Line, Transcript, format_log, render_transcript
 
 from .values import describe_value, full_text, head_tail
@@ -32,6 +33,35 @@ class RunContext:
     live_instance: str | None
     live_started_at: str | None
     routine_events: list[dict[str, Any]] = field(default_factory=list)
+
+    loaded_threads: set[str] = field(default_factory=set)
+    conversations: dict[str, Conversation | None] = field(default_factory=dict)
+    seen_token_messages: set[str] = field(default_factory=set)
+
+    async def conversation(self, thread_id: str) -> Conversation | None:
+        if self.checkpointer is None or not thread_id:
+            return None
+        if thread_id not in self.conversations:
+            self.conversations[thread_id] = await load_conversation(self.checkpointer, thread_id)
+        return self.conversations[thread_id]
+
+    async def load_thread_events(self, thread_id: str) -> None:
+        """Load one thread's lifecycle records once, without reopening all history."""
+        if not thread_id or thread_id in self.loaded_threads:
+            return
+        self.loaded_threads.add(thread_id)
+        events = await self.state_manager.list_routine_run_events(thread_ids=[thread_id])
+        by_transition = {
+            (str(event.get("request_id") or ""), str(event.get("status") or "")): event
+            for event in self.routine_events
+        }
+        for event in events:
+            if not isinstance(event, dict):
+                continue
+            by_transition.setdefault(
+                (str(event.get("request_id") or ""), str(event.get("status") or "")), event
+            )
+        self.routine_events = list(by_transition.values())
 
 
 @dataclass
@@ -91,6 +121,95 @@ def step_result(value: Any, steps: Steps) -> str:
     """``→ <description>``, registering the full value under ``#n``."""
     pointer = steps.add(value)
     return describe_value(value, pointer=pointer)
+
+
+_TOKEN_FIELDS = ("input_tokens", "output_tokens", "total_tokens")
+_TokenTotals = dict[str, int | None]
+
+
+def recorded_tokens(value: Any) -> _TokenTotals | None:
+    """Normalize recorded usage, retaining each missing component as unknown."""
+    if not isinstance(value, dict):
+        return None
+    result = {
+        name: value[name] if type(value.get(name)) is int and value[name] >= 0 else None
+        for name in _TOKEN_FIELDS
+    }
+    input_tokens, output_tokens = result["input_tokens"], result["output_tokens"]
+    if (
+        result["total_tokens"] is None
+        and isinstance(input_tokens, int)
+        and isinstance(output_tokens, int)
+    ):
+        result["total_tokens"] = input_tokens + output_tokens
+    return result if any(component is not None for component in result.values()) else None
+
+
+def add_tokens(total: _TokenTotals | None, usage: _TokenTotals | None) -> _TokenTotals | None:
+    """Add totals only where every contributing record reported that component."""
+    if usage is None:
+        return total
+    if total is None:
+        return dict(usage)
+    result: _TokenTotals = {}
+    for name in _TOKEN_FIELDS:
+        left, right = total[name], usage[name]
+        result[name] = left + right if isinstance(left, int) and isinstance(right, int) else None
+    return result
+
+
+def _message_at(message: Any, committed_at: Any) -> datetime | None:
+    message_id = getattr(message, "id", None)
+    if message_id and message_id in committed_at:
+        return committed_at[message_id]
+    additional = getattr(message, "additional_kwargs", {}) or {}
+    response = getattr(message, "response_metadata", {}) or {}
+    return at(additional.get("created_at") or response.get("created_at"))
+
+
+def _in_window(
+    message: Any, committed_at: Any, begin: datetime | None, end: datetime | None
+) -> bool:
+    if begin is None and end is None:
+        return True
+    when = _message_at(message, committed_at)
+    return when is not None and (begin is None or when >= begin) and (end is None or when < end)
+
+
+def conversation_tokens(
+    conversation: Conversation,
+    *,
+    begin: datetime | None = None,
+    end: datetime | None = None,
+    seen_messages: set[str] | None = None,
+) -> _TokenTotals | None:
+    """Count model messages once across a root conversation and all subagents."""
+    total: _TokenTotals | None = None
+    seen = seen_messages if seen_messages is not None else set()
+    for thread in (conversation.root, *conversation.subagents.values()):
+        for message in thread.messages:
+            if not _in_window(message, thread.committed_at, begin, end):
+                continue
+            usage = recorded_tokens(extract_token_usage(message))
+            if usage is None:
+                continue
+            message_id = getattr(message, "id", None)
+            key = str(message_id) if message_id else f"object:{id(message)}"
+            if key in seen:
+                if total is None:
+                    total = dict.fromkeys(_TOKEN_FIELDS, 0)
+                continue
+            seen.add(key)
+            total = add_tokens(total, usage)
+    return total
+
+
+def _window_messages(thread: Any, begin: datetime | None, end: datetime | None) -> list[Any]:
+    return [
+        message
+        for message in thread.messages
+        if _in_window(message, thread.committed_at, begin, end)
+    ]
 
 
 # A request handed to an agent step is the step's filled-in prompt template:
@@ -153,20 +272,32 @@ async def agent_transcript(
     channel: str,
     when: datetime | None,
     steps: Steps,
+    begin: datetime | None = None,
+    end: datetime | None = None,
+    token_totals: list[_TokenTotals | None] | None = None,
 ) -> bool:
-    """Inline an agent step's own thread between join/part; ``False`` if it has none."""
+    """Inline one bounded agent-step transcript; ``False`` when it has none."""
     if ctx.checkpointer is None or not thread_id:
         return False
-    conversation = await load_conversation(ctx.checkpointer, thread_id)
+    conversation = await ctx.conversation(thread_id)
     if conversation is None:
         return False
-    root = conversation.root
-    transcript = render_transcript(
-        replace(root, nick=agent, messages=_compact_messages(root.messages, steps)),
-        subagents=conversation.subagents,
-        channel=channel,
-        user_nick=log.nick,
+    root = replace(
+        conversation.root,
+        nick=agent,
+        messages=_compact_messages(_window_messages(conversation.root, begin, end), steps),
     )
+    subagents = {
+        call_id: replace(thread, messages=_window_messages(thread, begin, end))
+        for call_id, thread in conversation.subagents.items()
+    }
+    if token_totals is not None:
+        token_totals.append(
+            conversation_tokens(
+                conversation, begin=begin, end=end, seen_messages=ctx.seen_token_messages
+            )
+        )
+    transcript = render_transcript(root, subagents=subagents, channel=channel, user_nick=log.nick)
     joined = transcript.started_at or when
     log.event(joined, f"{agent} [agent] has joined #{channel}")
     log.lines.extend(transcript.lines)

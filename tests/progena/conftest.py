@@ -34,8 +34,37 @@ class _FakeRuntimeStore:
     async def delete_document(self, name: str) -> None:
         self._documents.pop(name, None)
 
-    async def list_documents(self, key_prefix: str) -> list[tuple[str, Any]]:
-        return [(k, v) for k, v in self._documents.items() if k.startswith(key_prefix)]
+    async def list_documents(
+        self,
+        key_prefix: str,
+        *,
+        payload_fields: tuple[str, ...] | None = None,
+        thread_ids: list[str] | None = None,
+    ) -> list[tuple[str, Any]]:
+        documents: list[tuple[str, Any]] = []
+        for key, payload in self._documents.items():
+            if not key.startswith(key_prefix):
+                continue
+            if thread_ids is not None and (
+                not isinstance(payload, dict) or payload.get("thread_id") not in thread_ids
+            ):
+                continue
+            if payload_fields is not None:
+                payload = {
+                    field: payload.get(field) if isinstance(payload, dict) else None
+                    for field in payload_fields
+                }
+            documents.append((key, payload))
+        return documents
+
+    async def get_document_list_item(self, name: str, field: str, value: str) -> Any | None:
+        payload = await self.peek_document(name)
+        if not isinstance(payload, list):
+            return None
+        return next(
+            (item for item in payload if isinstance(item, dict) and item.get(field) == value),
+            None,
+        )
 
 
 @pytest.fixture(autouse=True)

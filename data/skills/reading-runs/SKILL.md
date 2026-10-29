@@ -10,20 +10,24 @@ allowed-tools: ls read_file grep glob
 stored records each time it is read:
 
 ```
-/runs/routines/<date>_<routine-slug>_<id8>.md
-/runs/workflows/<date>_<workflow-slug>_<id8>.md
-/runs/schedules/<date>_<schedule-slug>_<id8>.md
+/runs/routines/<date>_<routine-slug>_<request_id>.md
+/runs/workflows/<date>_<workflow-slug>_<run_id>.md
+/runs/schedules/<date>_<schedule-slug>_<run_id>.md
 ```
 
-- `<date>` is the day the run started (user's timezone); `<id8>` is the first
-  8 characters of the run id after its prefix (`request_id` for routines,
-  `workflow_run_…` / `schedrun_…` ids otherwise). `run_workflow` returns the path.
+- `<date>` is the day the run started (user's timezone). The final component
+  is the full persisted ID: `request_id` for routines, `workflow_run_…` or
+  `schedrun_…` otherwise. Short-ID paths are not supported. `run_workflow`
+  returns the path; no database migration is needed for these generated names.
 - `ls` lists newest first. A routine started by a workflow step or by another
   routine has no file of its own: it is inside its parent's file.
 - The file is YAML front matter (identity, `status`, times, `inputs`, `output`,
   `error`) followed by a blank line and the log. `status` is worked out when
   the file is read: `interrupted` means the run was still executing when the
-  runtime that owned it restarted.
+  runtime that owned it restarted. `tokens` contains recorded `input_tokens`,
+  `output_tokens`, and `total_tokens`; missing usage or components are `null`,
+  not zero. Nested usage is counted once. Child routines follow persisted
+  invocation/audit links, never timestamp proximity; missing links are not guessed.
 
 ## Line format
 

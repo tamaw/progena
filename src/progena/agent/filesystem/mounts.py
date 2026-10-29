@@ -34,7 +34,7 @@ Profile:
     one <date>_<title-slug>_<id8>.md per non-archived chat, backed by the
     ``session:`` documents in the store (front matter editable, body read-only)
   - /runs/ -> read-only routine, workflow and schedule runs as YAML front matter
-    + IRC-style logs, one <date>_<slug>_<id8>.md per top-level run under
+    + IRC-style logs, one <date>_<slug>_<run_id>.md per top-level run under
     routines/, workflows/ and schedules/, rendered on read (child runs inlined;
     ``<file>#<n>`` reads one step's full value)
   - /config/repos/ -> declared repositories, one <id>.json per ``repo:<id>``
