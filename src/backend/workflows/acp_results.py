@@ -7,10 +7,13 @@ or project directory, so this is not a general Claude-config reader.
 
 from __future__ import annotations
 
+import codecs
+import io
 import json
 import os
 import re
 import uuid
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any, Literal
 
@@ -21,8 +24,10 @@ from src.progena.documents.kinds import ACP_TASK_KEY_PREFIX
 ResultSource = Literal["output", "transcript", "input", "plan", "error"]
 
 _MAX_PAGE_CHARS = 8 * 1024
+_STREAM_CHUNK_BYTES = 64 * 1024
+_MAX_PROJECT_PREFIX = 200
 _TASK_ID_PATTERN = re.compile(r"[A-Za-z0-9_-]{1,128}\Z")
-_CWD_COMPONENT_PATTERN = re.compile(r"[^A-Za-z0-9]+")
+_JSON_NUMBER_PATTERN = re.compile(r"-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?\Z")
 
 
 class ACPResultNotFound(LookupError):
@@ -91,8 +96,349 @@ def _project_directory(cwd: str | None) -> str | None:
     parts = Path(cwd).parts
     if ".." in parts or "\x00" in cwd:
         return None
-    encoded = _CWD_COMPONENT_PATTERN.sub("-", cwd)
-    return encoded or None
+    sanitized = "".join(
+        character
+        if character.isascii() and character.isalnum()
+        else "-" * (2 if ord(character) > 0xFFFF else 1)
+        for character in cwd
+    )
+    if not sanitized:
+        return None
+    if len(sanitized) <= _MAX_PROJECT_PREFIX:
+        return sanitized
+    encoded = cwd.encode("utf-16-le", "surrogatepass")
+    hash_code = 0
+    for index in range(0, len(encoded), 2):
+        unit = int.from_bytes(encoded[index : index + 2], "little")
+        hash_code = ((hash_code << 5) - hash_code + unit) & 0xFFFFFFFF
+    if hash_code >= 0x80000000:
+        hash_code -= 0x100000000
+    return f"{sanitized[:_MAX_PROJECT_PREFIX]}-{_base36(abs(hash_code))}"
+
+
+def _base36(value: int) -> str:
+    digits = "0123456789abcdefghijklmnopqrstuvwxyz"
+    result = ""
+    while value:
+        value, remainder = divmod(value, 36)
+        result = digits[remainder] + result
+    return result or "0"
+
+
+def _text_fragments(path: Path) -> Iterator[tuple[int, int, str]]:
+    """Yield bounded decoded fragments with their JSONL line and character offsets."""
+    decoder = codecs.getincrementaldecoder("utf-8")()
+    line = 0
+    column = 0
+    try:
+        with path.open("rb") as handle:
+            while raw := handle.read(_STREAM_CHUNK_BYTES):
+                text = decoder.decode(raw)
+                position = 0
+                while position < len(text):
+                    newline = text.find("\n", position)
+                    if newline < 0:
+                        if position < len(text):
+                            fragment = text[position:]
+                            yield line, column, fragment
+                            column += len(fragment)
+                        break
+                    if newline > position:
+                        fragment = text[position:newline]
+                        yield line, column, fragment
+                        column += len(fragment)
+                    yield line, column, "\n"
+                    line += 1
+                    column = 0
+                    position = newline + 1
+            text = decoder.decode(b"", final=True)
+            if text:
+                position = 0
+                while position < len(text):
+                    newline = text.find("\n", position)
+                    if newline < 0:
+                        fragment = text[position:]
+                        yield line, column, fragment
+                        break
+                    if newline > position:
+                        fragment = text[position:newline]
+                        yield line, column, fragment
+                        column += len(fragment)
+                    yield line, column, "\n"
+                    line += 1
+                    column = 0
+                    position = newline + 1
+    except OSError:
+        return
+
+
+class _JSONString:
+    """Decode one JSON string without retaining values the caller does not need."""
+
+    def __init__(self, limit: int | None) -> None:
+        self._limit = limit
+        self._characters = io.StringIO()
+        self._length = 0
+        self._overflow = False
+        self.valid = True
+        self._escaping = False
+        self._unicode: list[str] | None = None
+        self._high_surrogate: int | None = None
+
+    def feed(self, character: str) -> bool:
+        if self._unicode is not None:
+            self._unicode.append(character)
+            if len(self._unicode) == 4:
+                try:
+                    codepoint = int("".join(self._unicode), 16)
+                except ValueError:
+                    self.valid = False
+                else:
+                    self._append_codepoint(codepoint)
+                self._unicode = None
+            return False
+        if self._escaping:
+            self._escaping = False
+            if character == "u":
+                self._unicode = []
+            elif character in {'"', "\\", "/", "b", "f", "n", "r", "t"}:
+                self._append(
+                    {"b": "\b", "f": "\f", "n": "\n", "r": "\r", "t": "\t"}.get(
+                        character, character
+                    )
+                )
+            else:
+                self.valid = False
+            return False
+        if character == "\\":
+            self._escaping = True
+            return False
+        if character == '"':
+            self._flush_surrogate()
+            return True
+        if ord(character) < 0x20:
+            self.valid = False
+        self._append(character)
+        return False
+
+    def value(self) -> str | None:
+        return None if self._overflow else self._characters.getvalue()
+
+    def _append_codepoint(self, codepoint: int) -> None:
+        if 0xD800 <= codepoint <= 0xDBFF:
+            self._flush_surrogate()
+            self._high_surrogate = codepoint
+            return
+        if self._high_surrogate is not None and 0xDC00 <= codepoint <= 0xDFFF:
+            codepoint = 0x10000 + (self._high_surrogate - 0xD800) * 0x400 + (codepoint - 0xDC00)
+            self._high_surrogate = None
+        else:
+            self._flush_surrogate()
+        self._append(chr(codepoint))
+
+    def _flush_surrogate(self) -> None:
+        if self._high_surrogate is not None:
+            self._append(chr(self._high_surrogate))
+            self._high_surrogate = None
+
+    def _append(self, character: str) -> None:
+        if self._overflow:
+            return
+        if self._limit is not None and self._length + len(character) > self._limit:
+            self._characters = io.StringIO()
+            self._length = 0
+            self._overflow = True
+            return
+        self._characters.write(character)
+        self._length += len(character)
+
+
+class _JSONLRow:
+    """A bounded JSON event reader for the ACP fields used to authorize a row."""
+
+    _KEYS = {
+        "root": {"type", "isSidechain", "sessionId", "cwd", "message"},
+        "message": {"role", "id", "content"},
+        "content": set(),
+        "content_item": {"type", "text"},
+        "other": set(),
+    }
+
+    def __init__(self, *, collect_text: bool = False) -> None:
+        self._stack: list[dict[str, Any]] = []
+        self._string: _JSONString | None = None
+        self._string_target: tuple[dict[str, Any], str] | None = None
+        self._literal: list[str] | None = None
+        self._literal_target: tuple[dict[str, Any], str] | None = None
+        self._collect_text = collect_text
+        self.valid = True
+        self.values: dict[str, Any] = {}
+        self.texts: list[str] = []
+
+    def feed(self, text: str) -> None:
+        for character in text:
+            self._feed_character(character)
+
+    def complete(self) -> bool:
+        return self.valid and self._string is None and self._literal is None and not self._stack
+
+    def _feed_character(self, character: str) -> None:
+        if self._string is not None:
+            complete = self._string.feed(character)
+            if not self._string.valid:
+                self.valid = False
+            if complete:
+                target = self._string_target
+                value = self._string.value()
+                self._string = None
+                self._string_target = None
+                if target is None:
+                    self.valid = False
+                    return
+                frame, key = target
+                if frame["state"] == "key":
+                    frame["key"] = value if value in self._KEYS[frame["context"]] else None
+                    frame["state"] = "colon"
+                else:
+                    self._store_value(frame, key, value)
+                    self._finish_value(frame)
+            return
+        if self._literal is not None:
+            if character in ",}]":
+                target = self._literal_target
+                value = "".join(self._literal)
+                self._literal = None
+                self._literal_target = None
+                if target is None:
+                    self.valid = False
+                    return
+                if value not in {"true", "false", "null"} and not _JSON_NUMBER_PATTERN.fullmatch(
+                    value
+                ):
+                    self.valid = False
+                self._store_value(*target, value)
+                self._finish_value(target[0])
+                self._feed_character(character)
+            elif not character.isspace():
+                self._literal.append(character)
+            return
+        if character.isspace():
+            return
+        if not self._stack:
+            if character != "{":
+                self.valid = False
+                return
+            self._stack.append(
+                {"kind": "object", "context": "root", "state": "key", "key": None, "values": {}}
+            )
+            return
+        frame = self._stack[-1]
+        state = frame["state"]
+        if frame["kind"] == "object":
+            if state == "key":
+                if character == "}":
+                    self._close_container("object")
+                elif character == '"':
+                    self._start_string(frame, "")
+                else:
+                    self.valid = False
+                return
+            if state == "colon":
+                if character != ":":
+                    self.valid = False
+                    return
+                frame["state"] = "value"
+                return
+            if state == "comma":
+                if character == ",":
+                    frame["state"] = "key"
+                elif character == "}":
+                    self._close_container("object")
+                else:
+                    self.valid = False
+                return
+        else:
+            if state == "value_or_end" and character == "]":
+                self._close_container("array")
+                return
+            if state == "comma":
+                if character == ",":
+                    frame["state"] = "value_or_end"
+                elif character == "]":
+                    self._close_container("array")
+                else:
+                    self.valid = False
+                return
+            if state not in {"value", "value_or_end"}:
+                self.valid = False
+                return
+        self._start_value(frame, character)
+
+    def _start_value(self, frame: dict[str, Any], character: str) -> None:
+        key = frame.get("key") if frame["kind"] == "object" else None
+        if character == '"':
+            self._start_string(frame, key)
+        elif character in "[{":
+            context = self._child_context(frame, key)
+            self._stack.append(
+                {
+                    "kind": "object" if character == "{" else "array",
+                    "context": context,
+                    "state": "key" if character == "{" else "value_or_end",
+                    "key": None,
+                    "values": {},
+                }
+            )
+        else:
+            self._literal = [character]
+            self._literal_target = (frame, key or "")
+
+    def _start_string(self, frame: dict[str, Any], key: str | None) -> None:
+        collect_text = self._collect_text and frame["context"] == "content_item" and key == "text"
+        capture = (
+            frame["state"] == "key"
+            or key in {"type", "isSidechain", "sessionId", "cwd", "role", "id"}
+            or collect_text
+        )
+        self._string = _JSONString(None if collect_text else 4096 if capture else 0)
+        self._string_target = (frame, key or "")
+
+    @staticmethod
+    def _child_context(frame: dict[str, Any], key: str | None) -> str:
+        if frame["context"] == "root" and key == "message":
+            return "message"
+        if frame["context"] == "message" and key == "content":
+            return "content"
+        if frame["context"] == "content":
+            return "content_item"
+        return "other"
+
+    def _store_value(self, frame: dict[str, Any], key: str, value: Any) -> None:
+        if key == "isSidechain" and value in {"true", "false"}:
+            value = value == "true"
+        if key and value is not None:
+            frame["values"][key] = value
+
+    def _finish_value(self, frame: dict[str, Any]) -> None:
+        frame["key"] = None
+        frame["state"] = "comma"
+
+    def _close_container(self, expected: str) -> None:
+        frame = self._stack.pop()
+        if frame["kind"] != expected:
+            self.valid = False
+            return
+        if frame["context"] == "content_item" and frame["values"].get("type") == "text":
+            text = frame["values"].get("text")
+            if isinstance(text, str):
+                self.texts.append(text)
+        if not self._stack:
+            self.values = frame["values"]
+            return
+        parent = self._stack[-1]
+        if frame["context"] == "message":
+            parent["values"]["message"] = frame["values"]
+        self._finish_value(parent)
 
 
 class NativeClaudeTranscriptReader:
@@ -110,14 +456,15 @@ class NativeClaudeTranscriptReader:
         project = _project_directory(cwd)
         if session is None or project is None:
             return None
-        path = self._path(session, project, require_file=False)
+        path = self._verified_path(session, project, cwd) or self._path(
+            session, project, require_file=False
+        )
         if path is None:
             return None
-        line_start = self._line_count(path)
         return {
             "provider": "claude_native",
             "session_id": session,
-            "line_start": line_start,
+            "line_start": self._line_count(path),
         }
 
     def finish_turn(
@@ -130,8 +477,8 @@ class NativeClaudeTranscriptReader:
         project = _project_directory(cwd)
         if session is None or project is None:
             return None
-        path = self._path(session, project, require_file=True)
-        if path is None or not self._metadata_matches(path, session, cwd):
+        path = self._verified_path(session, project, cwd)
+        if path is None:
             return None
         start = reference.get("line_start")
         if not isinstance(start, int) or start < 0:
@@ -144,18 +491,48 @@ class NativeClaudeTranscriptReader:
     def final_output(
         self, reference: dict[str, Any] | None, *, cwd: str | None
     ) -> tuple[str | None, int | None]:
-        """Return the final main-assistant structured text for one sealed turn."""
+        """Return every text block in the final main-assistant logical message."""
         resolved = self._resolve_reference(reference, cwd=cwd)
         if resolved is None:
             return None, None
         path, start, end = resolved
-        final_line: int | None = None
-        final_row: dict[str, Any] | None = None
-        for line_number, row in self._rows(path, start, end):
-            if self._is_main_assistant(row):
-                final_line = line_number
-                final_row = row
-        return self._assistant_text(final_row), final_line
+        final_lines: list[int] = []
+        final_id: str | None = None
+
+        def select(line: int, row: _JSONLRow) -> None:
+            nonlocal final_id, final_lines
+            values = row.values
+            message = values.get("message")
+            if (
+                not row.complete()
+                or values.get("type") != "assistant"
+                or values.get("isSidechain") is True
+                or not isinstance(message, dict)
+                or message.get("role") != "assistant"
+            ):
+                return
+            message_id = message.get("id")
+            if not isinstance(message_id, str):
+                final_id = None
+                final_lines = [line]
+            elif message_id == final_id:
+                final_lines.append(line)
+            else:
+                final_id = message_id
+                final_lines = [line]
+
+        self._scan_rows(path, start, end, select)
+        if not final_lines:
+            return None, None
+        texts: list[str] = []
+        for line in final_lines:
+
+            def collect(_line: int, row: _JSONLRow) -> None:
+                if row.complete():
+                    texts.extend(row.texts)
+
+            self._scan_rows(path, line, line + 1, collect, collect_text=True)
+        return "".join(texts) if texts else None, final_lines[-1]
 
     def transcript_page(
         self,
@@ -173,33 +550,36 @@ class NativeClaudeTranscriptReader:
         line_cursor, character_cursor = _transcript_cursor(cursor, start, end)
         pieces: list[str] = []
         remaining = limit
-        next_line = line_cursor
-        next_offset = character_cursor
-        with path.open("r", encoding="utf-8") as handle:
-            for line_number, raw in enumerate(handle):
-                if line_number < line_cursor:
-                    continue
-                if line_number >= end:
-                    break
-                fragment = raw[character_cursor:] if line_number == line_cursor else raw
-                if len(fragment) <= remaining:
-                    pieces.append(fragment)
-                    remaining -= len(fragment)
-                    next_line = line_number + 1
-                    next_offset = 0
-                    if remaining == 0:
-                        break
-                    continue
-                if remaining:
-                    pieces.append(fragment[:remaining])
-                next_line = line_number
-                next_offset = (character_cursor if line_number == line_cursor else 0) + remaining
+        next_cursor: tuple[int, int] | None = None
+        page_full = False
+        for line, column, fragment in _text_fragments(path):
+            if line < line_cursor:
+                continue
+            if line >= end:
                 break
-        has_more = next_line < end
+            offset = character_cursor if line == line_cursor else 0
+            if column + len(fragment) <= offset:
+                continue
+            fragment_start = max(column, offset)
+            visible = fragment[fragment_start - column :]
+            if page_full:
+                next_cursor = (line, fragment_start)
+                break
+            if len(visible) > remaining:
+                pieces.append(visible[:remaining])
+                next_cursor = (line, fragment_start + remaining)
+                page_full = True
+                break
+            pieces.append(visible)
+            remaining -= len(visible)
+            if remaining == 0:
+                page_full = True
         return {
             "content": "".join(pieces),
-            "next_cursor": f"transcript:{next_line}:{next_offset}" if has_more else None,
-            "truncated": has_more,
+            "next_cursor": (
+                f"transcript:{next_cursor[0]}:{next_cursor[1]}" if next_cursor is not None else None
+            ),
+            "truncated": next_cursor is not None,
             "line_start": start,
             "line_end": end,
         }
@@ -222,105 +602,115 @@ class NativeClaudeTranscriptReader:
             or end < start
         ):
             return None
-        path = self._path(session, project, require_file=True)
-        if path is None or not self._metadata_matches(path, session, cwd):
+        path = self._verified_path(session, project, cwd)
+        if path is None:
             return None
         return path, start, min(end, self._line_count(path))
 
     def _path(self, session: str, project: str, *, require_file: bool) -> Path | None:
+        candidates = self._paths(session, project, require_file=require_file)
+        return next(candidates, None)
+
+    def _paths(self, session: str, project: str, *, require_file: bool) -> Iterator[Path]:
         try:
             root = self._root.resolve(strict=True)
         except OSError:
-            return None
-        project_path = root / project
-        candidate = project_path / f"{session}.jsonl"
-        try:
-            if project_path.is_symlink() or (require_file and candidate.is_symlink()):
-                return None
-            resolved = candidate.resolve(strict=require_file)
-        except OSError:
-            return None
-        try:
-            resolved.relative_to(root)
-        except ValueError:
-            return None
-        if require_file and not resolved.is_file():
-            return None
-        return resolved
+            return
+        if len(project) <= _MAX_PROJECT_PREFIX:
+            project_paths = [root / project]
+        elif require_file:
+            prefix = f"{project[:_MAX_PROJECT_PREFIX]}-"
+            try:
+                project_paths = [
+                    entry
+                    for entry in root.iterdir()
+                    if entry.name.startswith(prefix) and not entry.is_symlink()
+                ]
+            except OSError:
+                return
+        else:
+            project_paths = [root / project]
+        for project_path in project_paths:
+            candidate = project_path / f"{session}.jsonl"
+            try:
+                if project_path.is_symlink() or (require_file and candidate.is_symlink()):
+                    continue
+                resolved = candidate.resolve(strict=require_file)
+                resolved.relative_to(root)
+            except (OSError, ValueError):
+                continue
+            if not require_file or resolved.is_file():
+                yield resolved
+
+    def _verified_path(self, session: str, project: str, cwd: str | None) -> Path | None:
+        for path in self._paths(session, project, require_file=True):
+            if self._metadata_matches(path, session, cwd):
+                return path
+        return None
 
     @staticmethod
     def _line_count(path: Path) -> int:
+        lines = 0
+        nonempty = False
+        last = b""
         try:
-            with path.open("r", encoding="utf-8") as handle:
-                return sum(1 for _ in handle)
+            with path.open("rb") as handle:
+                while chunk := handle.read(_STREAM_CHUNK_BYTES):
+                    lines += chunk.count(b"\n")
+                    nonempty = True
+                    last = chunk[-1:]
         except OSError:
             return 0
+        return lines + int(nonempty and last != b"\n")
 
     @staticmethod
     def _metadata_matches(path: Path, session: str, cwd: str | None) -> bool:
         if not isinstance(cwd, str):
             return False
-        metadata_seen = False
-        try:
-            with path.open("r", encoding="utf-8") as handle:
-                for index, raw in enumerate(handle):
-                    if index >= 512:
-                        break
-                    try:
-                        row = json.loads(raw)
-                    except json.JSONDecodeError:
-                        continue
-                    if not isinstance(row, dict):
-                        continue
-                    metadata_seen = row.get("sessionId") == session and row.get("cwd") == cwd
-                    if metadata_seen:
-                        return True
-        except OSError:
-            return False
-        return False
+        matched = False
+
+        def inspect(_line: int, row: _JSONLRow) -> bool:
+            nonlocal matched
+            if (
+                row.complete()
+                and row.values.get("sessionId") == session
+                and row.values.get("cwd") == cwd
+            ):
+                matched = True
+            return matched
+
+        NativeClaudeTranscriptReader._scan_rows(path, 0, 512, inspect)
+        return matched
 
     @staticmethod
-    def _rows(path: Path, start: int, end: int):
-        try:
-            with path.open("r", encoding="utf-8") as handle:
-                for line_number, raw in enumerate(handle):
-                    if line_number < start:
-                        continue
-                    if line_number >= end:
-                        break
-                    try:
-                        yield line_number, json.loads(raw)
-                    except json.JSONDecodeError:
-                        continue
-        except OSError:
-            return
-
-    @staticmethod
-    def _is_main_assistant(row: Any) -> bool:
-        if (
-            not isinstance(row, dict)
-            or row.get("type") != "assistant"
-            or row.get("isSidechain") is True
-        ):
-            return False
-        message = row.get("message")
-        return isinstance(message, dict) and message.get("role") == "assistant"
-
-    @classmethod
-    def _assistant_text(cls, row: Any) -> str | None:
-        if not cls._is_main_assistant(row):
-            return None
-        message = row["message"]
-        content = message.get("content")
-        if not isinstance(content, list):
-            return None
-        texts: list[str] = []
-        for item in content:
-            if isinstance(item, dict) and item.get("type") == "text":
-                text = item.get("text")
-                if isinstance(text, str):
-                    texts.append(text)
-        return "".join(texts) if texts else None
+    def _scan_rows(
+        path: Path,
+        start: int,
+        end: int,
+        callback: Callable[[int, _JSONLRow], bool | None],
+        *,
+        collect_text: bool = False,
+    ) -> None:
+        current_line = -1
+        row: _JSONLRow | None = None
+        for line, _column, fragment in _text_fragments(path):
+            if line < start:
+                continue
+            if line >= end:
+                break
+            if line != current_line:
+                current_line = line
+                row = _JSONLRow(collect_text=collect_text)
+            if row is None:
+                continue
+            row.feed(fragment)
+            if fragment == "\n":
+                if callback(line, row) is True:
+                    return
+                row = None
+                current_line = -1
+        if row is not None:
+            callback(current_line, row)
 
 
 def _record(store: BackendDocumentStore, task_id: str) -> ACPTaskRecord:

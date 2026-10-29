@@ -13,6 +13,7 @@ import pytest
 
 from src.progena.acp.models import ACPTaskRecord, ACPTaskStatus
 from src.progena.persistence.store import LangGraphRuntimeStore
+from src.progena.sessions.context import reset_current_thread_id, set_current_thread_id
 from src.progena.state.manager import StateManager
 from src.progena.tools.acp_sessions import (
     ACPAnswerTool,
@@ -105,6 +106,46 @@ async def test_start_creates_queued_document(state_manager: StateManager) -> Non
     assert task.prompt == "Inspect this repository"
     assert task.source == "progena"
     assert task.mode == "plan"
+
+
+@pytest.mark.asyncio
+async def test_start_uses_active_context_thread_over_shared_heartbeat_state(
+    state_manager: StateManager,
+) -> None:
+    token = set_current_thread_id("direct-user-thread")
+    try:
+        result = await ACPStartTool().execute(
+            _context(
+                state_manager,
+                {"agent": "Claude", "prompt": "Inspect this repository"},
+                _registry(),
+            )
+        )
+    finally:
+        reset_current_thread_id(token)
+
+    task = await state_manager.get_acp_task(result.data["task_id"])
+    assert task is not None
+    assert task.request_metadata["thread_id"] == "direct-user-thread"
+    assert task.notify_on_completion
+
+
+@pytest.mark.asyncio
+async def test_start_falls_back_to_state_thread_without_active_context(
+    state_manager: StateManager,
+) -> None:
+    result = await ACPStartTool().execute(
+        _context(
+            state_manager,
+            {"agent": "Claude", "prompt": "Inspect this repository"},
+            _registry(),
+        )
+    )
+
+    task = await state_manager.get_acp_task(result.data["task_id"])
+    assert task is not None
+    assert task.request_metadata["thread_id"] == "thread-1"
+    assert task.notify_on_completion
 
 
 @pytest.mark.asyncio

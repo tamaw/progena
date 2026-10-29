@@ -151,7 +151,7 @@ async def enqueue_acp_completion_followup(
     thread_id = _completion_followup_thread_id(record)
     if not thread_id:
         return False
-    await queues.enqueue_input(
+    queued = await queues.enqueue_input(
         _build_followup_prompt(record, event_type),
         metadata={
             "thread_id": thread_id,
@@ -169,6 +169,8 @@ async def enqueue_acp_completion_followup(
             else "info",
         },
     )
+    if not queued:
+        return False
     acknowledgements = dict(record.material_event_acknowledgements)
     if event_identity is not None:
         acknowledgements[event_type] = event_identity

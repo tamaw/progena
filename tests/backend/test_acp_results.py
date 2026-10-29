@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import tracemalloc
 from pathlib import Path
 
 import pytest
@@ -279,3 +280,187 @@ def test_native_metadata_cannot_combine_two_different_sessions(tmp_path: Path) -
         )
         is None
     )
+
+
+def test_native_final_output_combines_final_message_blocks_without_sidechain_reset(
+    tmp_path: Path,
+) -> None:
+    session = "66666666-6666-6666-6666-666666666666"
+    cwd = "/app/repos/project"
+    project = tmp_path / "-app-repos-project"
+    project.mkdir()
+    reader = NativeClaudeTranscriptReader(tmp_path)
+    started = reader.start_turn(session, cwd)
+    assert started is not None
+    rows = [
+        {"type": "user", "sessionId": session, "cwd": cwd, "message": {"role": "user"}},
+        {
+            "type": "assistant",
+            "sessionId": session,
+            "cwd": cwd,
+            "isSidechain": False,
+            "message": {
+                "role": "assistant",
+                "id": "final-message",
+                "content": [{"type": "text", "text": "Commit/checks then "}],
+            },
+        },
+        {
+            "type": "assistant",
+            "sessionId": session,
+            "cwd": cwd,
+            "isSidechain": True,
+            "message": {
+                "role": "assistant",
+                "id": "sidechain",
+                "content": [{"type": "text", "text": "do not include"}],
+            },
+        },
+        {
+            "type": "assistant",
+            "sessionId": session,
+            "cwd": cwd,
+            "isSidechain": False,
+            "message": {
+                "role": "assistant",
+                "id": "final-message",
+                "content": [
+                    {"type": "thinking", "thinking": "done"},
+                    {"type": "tool_use", "name": "git"},
+                    {"type": "text", "text": "PR"},
+                ],
+            },
+        },
+    ]
+    native = project / f"{session}.jsonl"
+    native.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+    evidence = reader.finish_turn(started, cwd=cwd)
+    with native.open("a", encoding="utf-8") as handle:
+        handle.write(
+            json.dumps(
+                {
+                    "type": "assistant",
+                    "isSidechain": False,
+                    "message": {
+                        "role": "assistant",
+                        "id": "resumed-turn",
+                        "content": [{"type": "text", "text": "future turn"}],
+                    },
+                }
+            )
+            + "\n"
+        )
+
+    assert evidence is not None
+    assert reader.final_output(evidence, cwd=cwd) == ("Commit/checks then PR", 3)
+
+
+def test_native_reader_matches_each_punctuation_and_long_project_prefix_after_metadata(
+    tmp_path: Path,
+) -> None:
+    session = "77777777-7777-7777-7777-777777777777"
+    short_cwd = "/app/repos/.worktrees/task"
+    short = tmp_path / "-app-repos--worktrees-task"
+    short.mkdir()
+    (short / f"{session}.jsonl").write_text(
+        json.dumps({"sessionId": session, "cwd": short_cwd}) + "\n", encoding="utf-8"
+    )
+    reader = NativeClaudeTranscriptReader(tmp_path)
+    assert (
+        reader.finish_turn(
+            {"provider": "claude_native", "session_id": session, "line_start": 0},
+            cwd=short_cwd,
+        )
+        is not None
+    )
+
+    long_session = "88888888-8888-8888-8888-888888888888"
+    long_cwd = f"/app/{'a' * 193}😀/task"
+    prefix = f"-app-{'a' * 193}--"
+    conflicting = tmp_path / f"{prefix}-other-hash"
+    selected = tmp_path / f"{prefix}-producer-hash"
+    conflicting.mkdir()
+    selected.mkdir()
+    (conflicting / f"{long_session}.jsonl").write_text(
+        json.dumps({"sessionId": long_session, "cwd": "/app/repos/other"}) + "\n",
+        encoding="utf-8",
+    )
+    (selected / f"{long_session}.jsonl").write_text(
+        json.dumps({"sessionId": long_session, "cwd": long_cwd}) + "\n", encoding="utf-8"
+    )
+    resumed = reader.start_turn(long_session, long_cwd)
+    assert resumed is not None
+    assert resumed["line_start"] == 1
+
+    assert (
+        reader.finish_turn(
+            {"provider": "claude_native", "session_id": long_session, "line_start": 0},
+            cwd=long_cwd,
+        )
+        is not None
+    )
+
+
+def test_native_transcript_page_streams_huge_metadata_and_unicode_cursor_exactly(
+    tmp_path: Path,
+) -> None:
+    session = "99999999-9999-9999-9999-999999999999"
+    cwd = '/app/repos/emoji😀"{}\\project'
+    project = tmp_path / "-app-repos-emoji------project"
+    project.mkdir()
+    reader = NativeClaudeTranscriptReader(tmp_path)
+    started = reader.start_turn(session, cwd)
+    assert started is not None
+    huge = "x" * (2 * 1024 * 1024)
+    before_metadata = {
+        "sessionId": session,
+        "cwd": cwd,
+        "message": {"role": "user", "nested": {"blob": huge}},
+    }
+    row = {
+        "type": "user",
+        "message": {
+            "role": "user",
+            "nested": {"sessionId": "wrong", "cwd": "/wrong", "blob": huge + "😀"},
+        },
+        "sessionId": session,
+        "cwd": cwd,
+    }
+    encoded_row = json.dumps(row, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    emoji_start = encoded_row.rindex("😀".encode())
+    padding = (64 * 1024 - 1 - emoji_start) % (64 * 1024)
+    row["message"]["nested"]["blob"] = huge + "x" * padding + "😀"
+    second = {"type": "assistant", "message": {"role": "assistant", "content": "끝"}}
+    native = project / f"{session}.jsonl"
+    native.write_text(
+        json.dumps(before_metadata, ensure_ascii=False, separators=(",", ":"))
+        + "\n"
+        + json.dumps(row, ensure_ascii=False, separators=(",", ":"))
+        + "\n"
+        + json.dumps(second, ensure_ascii=False, separators=(",", ":"))
+        + "\n",
+        encoding="utf-8",
+    )
+    evidence = reader.finish_turn(started, cwd=cwd)
+    assert evidence is not None
+
+    tracemalloc.start()
+    first = reader.transcript_page(evidence, cwd=cwd, cursor=None, limit=16)
+    _current, peak = tracemalloc.get_traced_memory()
+    tracemalloc.stop()
+    assert first is not None
+    assert first["content"] == native.read_text(encoding="utf-8")[:16]
+    assert peak < 1_000_000
+
+    text = native.read_text(encoding="utf-8")
+    emoji = text.rindex("😀")
+    emoji_line = text[:emoji].count("\n")
+    emoji_offset = emoji - text.rfind("\n", 0, emoji) - 1
+    before = reader.transcript_page(
+        evidence, cwd=cwd, cursor=f"transcript:{emoji_line}:{emoji_offset - 1}", limit=3
+    )
+    assert before is not None
+    assert before["content"] == text[emoji - 1 : emoji + 2]
+    after = reader.transcript_page(evidence, cwd=cwd, cursor=before["next_cursor"], limit=8)
+    assert after is not None
+    assert text[emoji - 1 : emoji + 2] + after["content"] == text[emoji - 1 : emoji + 10]

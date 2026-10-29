@@ -83,7 +83,7 @@ Existing runtime input delivery uses an in-memory queue and `notification_sent_a
 
 ## Implementation evidence
 
-- Full backend/runtime regression suites: **2,245 passed, 23 skipped**. The known environment-sensitive `tests/backend/test_ui_feedback.py::TestStateReaderFileOperations::test_read_health_with_no_document_store` was explicitly deselected because the existing development runtime occupies port 9501.
+- Full backend/runtime regression suites after review fixes: **2,254 passed, 23 skipped**. The known environment-sensitive `tests/backend/test_ui_feedback.py::TestStateReaderFileOperations::test_read_health_with_no_document_store` was explicitly deselected because the existing development runtime occupies port 9501.
 - Ruff passed; production Python type checking reported zero errors/warnings. Compose resolved the native transcript mount read-only on the backend only, with anonymous generic captures on the existing disk-backed logs volume.
 - Real live Claude ACP producer, exercised through the changed local supervisor: two turns, 70 combined waiting scans, **zero progress/waiting wakeups**, and one terminal wakeup per turn. Exact native output was read through the new local HTTP API and `acp_get_result`, including small paginated reads and isolated retrieval of turn 1 after turn 2. The smoke copied only its own session transcript into a temporary read-only-source fixture; production services were not replaced or restarted.
 - Identical synthetic status fixture: **9,163 → 281 serialized characters**, with its 110,000-character stored output still intact. This is a payload measurement, not a billable-token saving claim.
@@ -95,3 +95,16 @@ Existing runtime input delivery uses an in-memory queue and `notification_sent_a
 The three stored workflow `{task.output}` format nodes are deterministic handoffs, not model prompts; they remain intact so the strict publication code gate receives exact evidence. The publication routine `routine_2f18259a631c` repeated that output in its context-reader agent prompt and its final publisher prompt. A schema-validated, rendered, compare-and-swap update removed only the first copy. The exact code gate and the final publisher's explicit evidence/PR-body input were unchanged. Independent stored readback matched the intended single-node change. Before/after definitions are saved as `local://acp-token-publication-routine-before.json` and `local://acp-token-publication-routine-after.json` in the implementation session.
 
 The context prompt change is live; the event-driven runtime/backend implementation requires PR review, green CI and deployment in a safe idle window. No token-reduction flags, model downgrade or unofficial preload were installed.
+
+## PR review corrections
+
+All six review findings are addressed:
+
+- Active conversation context takes precedence over heartbeat state for ownership and notification eligibility.
+- Failed queue delivery leaves actionable events unacknowledged and retryable.
+- Final native output includes every text block sharing the final logical `message.id`, excluding sidechains and later turns.
+- Project encoding follows the producer's UTF-16-unit replacement and long-path lookup, with session/cwd metadata verification.
+- Both Claude volume mounts preserve the existing `../.claude-agent` host default and the explicit production override.
+- Metadata, line counting and transcript paging scan bounded chunks instead of loading entire JSONL lines. Metadata verification stops after the first matching row.
+
+Standalone reruns of the original routing, multi-block and queue-saturation reproductions now produce the expected results. A 16-character read from a 12-million-character native record peaks at approximately 337 KB of traced allocation, compared with 24.2 MB before the fix. The fixed reader recovered the expected final response from a real Claude smoke session and round-tripped its 163,424-character transcript exactly across 1,287 pages.

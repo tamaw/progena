@@ -8,11 +8,13 @@ from typing import Any
 import pytest
 
 from src.progena.acp.models import ACPTaskRecord, ACPTaskStatus
+from src.progena.config import RuntimeConfig
 from src.progena.orchestration.nodes.acp import (
     apply_completed_acp_tasks_node,
     collect_completed_acp_tasks_node,
     notify_completed_acp_tasks_node,
 )
+from src.progena.runtime.queues import RuntimeQueues
 
 
 class _StateManager:
@@ -29,14 +31,28 @@ class _StateManager:
 
 
 class _Queues:
-    def __init__(self) -> None:
+    def __init__(self, accepted: bool = True) -> None:
+        self.accepted = accepted
         self.inputs: list[tuple[str, dict[str, Any]]] = []
 
-    async def enqueue_input(self, content: str, *, metadata: dict[str, Any]) -> None:
+    async def enqueue_input(self, content: str, *, metadata: dict[str, Any]) -> bool:
+        if not self.accepted:
+            return False
         self.inputs.append((content, metadata))
+        return True
 
 
-def _runtime(manager: _StateManager, queues: _Queues) -> Any:
+class _ShortWaitRuntimeQueues(RuntimeQueues):
+    async def enqueue_input(
+        self,
+        content: str,
+        timeout: float | None = 0.001,
+        metadata: dict[str, Any] | None = None,
+    ) -> bool:
+        return await super().enqueue_input(content, timeout=0.001, metadata=metadata)
+
+
+def _runtime(manager: _StateManager, queues: Any) -> Any:
     return SimpleNamespace(context=SimpleNamespace(state_manager=manager, queues=queues))
 
 
@@ -145,4 +161,51 @@ async def test_active_legacy_chat_task_gets_terminal_wakeup_without_polling() ->
     assert len(queues.inputs) == 1
     assert queues.inputs[0][1]["thread_id"] == "thread_1"
     assert queues.inputs[0][1]["acp_event_type"] == "terminal"
+    assert (await collect_completed_acp_tasks_node({}, runtime))["acp_completed_tasks"] == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("event_type", ["terminal", "stall"])
+async def test_rejected_followups_do_not_ack_or_mark_terminal_sent(event_type: str) -> None:
+    task = _task()
+    if event_type == "terminal":
+        task.status = ACPTaskStatus.COMPLETED
+    else:
+        task.stalled = True
+        task.stall_episode = 1
+    manager = _StateManager([task])
+    runtime = _runtime(manager, _Queues(accepted=False))
+
+    collected = await collect_completed_acp_tasks_node({}, runtime)
+    notified = await notify_completed_acp_tasks_node(collected, runtime)
+
+    assert notified["acp_notifications_sent"] == 0
+    assert task.material_event_acknowledgements == {}
+    assert task.notification_sent_at is None
+    assert (await collect_completed_acp_tasks_node({}, runtime))["acp_completed_tasks"] == [task]
+
+
+@pytest.mark.asyncio
+async def test_rejected_pending_input_is_retried_after_runtime_queue_has_capacity() -> None:
+    task = _task()
+    task.pending_input = {"id": "q1", "kind": "question", "message": "Continue?"}
+    manager = _StateManager([task])
+    queues = _ShortWaitRuntimeQueues(RuntimeConfig(max_input_queue_size=1, max_output_queue_size=1))
+    await queues.enqueue_input("existing input")
+    runtime = _runtime(manager, queues)
+
+    collected = await collect_completed_acp_tasks_node({}, runtime)
+    rejected = await notify_completed_acp_tasks_node(collected, runtime)
+
+    assert rejected["acp_notifications_sent"] == 0
+    assert task.material_event_acknowledgements == {}
+    assert (await collect_completed_acp_tasks_node({}, runtime))["acp_completed_tasks"] == [task]
+
+    assert await queues.get_input(timeout=0.1) == "existing input"
+    delivered = await notify_completed_acp_tasks_node(
+        await collect_completed_acp_tasks_node({}, runtime), runtime
+    )
+
+    assert delivered["acp_notifications_sent"] == 1
+    assert task.material_event_acknowledgements == {"pending_input": "pending_input:1:q1"}
     assert (await collect_completed_acp_tasks_node({}, runtime))["acp_completed_tasks"] == []

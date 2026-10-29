@@ -162,7 +162,7 @@ services:
       - ${PROGENA_HOST_LOGS_DIR:-../logs}:/app/logs
       - ${PROGENA_HOST_REPOS_DIR:-../repos}:/app/repos
       # Never mount this into the runtime: backend resolves only verified task/session files.
-      - ${PROGENA_HOST_CLAUDE_DIR:-/var/lib/progena/claude}:/var/lib/progena/claude:ro
+      - ${PROGENA_HOST_CLAUDE_DIR:-../.claude-agent}:/var/lib/progena/claude:ro
     tmpfs:
       - /app/tmp:rw,noexec,nosuid,size=512m
     networks:
@@ -229,7 +229,7 @@ services:
       # Long-lived token from `claude setup-token`.
       CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
     volumes:
-      - ${PROGENA_HOST_CLAUDE_DIR:-/var/lib/progena/claude}:/home/claude/.claude
+      - ${PROGENA_HOST_CLAUDE_DIR:-../.claude-agent}:/home/claude/.claude
       - ${PROGENA_HOST_REPOS_DIR:-../repos}:/app/repos
     networks:
       - progena-net

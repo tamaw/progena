@@ -175,18 +175,5 @@ async def notify_completed_acp_tasks_node(
             event_identity=identity,
         ):
             notified += 1
-            continue
-        # Preserve the existing best-effort queue semantics: no thread route
-        # still consumes the event instead of reprocessing it every heartbeat.
-        acknowledgements = dict(record.material_event_acknowledgements)
-        acknowledgements[event_type] = identity
-        update: dict[str, Any] = {
-            "material_event_acknowledgements": acknowledgements,
-            "updated_at": utcnow(),
-        }
-        if event_type == "terminal":
-            update["notification_sent_at"] = utcnow()
-        await runtime.context.state_manager.update_acp_task(record.task_id, update)
-        notified += 1
 
     return {"acp_completed_tasks": [], "acp_notifications_sent": notified}
