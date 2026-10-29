@@ -690,6 +690,152 @@ async def test_trace_uses_recorded_step_usage_when_conversation_usage_is_unavail
 
 
 @pytest.mark.asyncio
+async def test_failed_workflow_step_uses_persisted_audit_thread_for_trace(monkeypatch):
+    store = InMemoryDocumentStore()
+    at = datetime(2026, 10, 28, tzinfo=UTC).isoformat()
+    store.save_document(
+        PROGENA_STATE_PREFIX,
+        "workflow:stored",
+        {"title": "Stored", "graph": {"nodes": {"agent": {"kind": "agent"}}}},
+    )
+    store.save_document(
+        PROGENA_STATE_PREFIX,
+        "workflow_run:stored",
+        {
+            "run_id": "stored",
+            "workflow_id": "stored",
+            "status": "failed",
+            "queued_at": at,
+            "started_at": at,
+            "completed_at": at,
+            "last_error": "runner failed",
+            "step_audit": [
+                {
+                    "node_id": "agent",
+                    "kind": "agent",
+                    "thread_id": "wired-thread",
+                    "started_at": at,
+                    "completed_at": at,
+                    "status": "failed",
+                    "error": "runner failed",
+                }
+            ],
+        },
+    )
+    observed = []
+
+    @asynccontextmanager
+    async def saver(_store):
+        yield object()
+
+    async def thread_spans(_saver, _store, _parent_id, thread_id, *_args):
+        observed.append(thread_id)
+        return [], 0
+
+    monkeypatch.setattr("src.backend.runs.service._trace_saver", saver)
+    monkeypatch.setattr("src.backend.runs.service._thread_spans", thread_spans)
+
+    trace, _ = await build_trace(store, "workflow", "stored")
+
+    assert observed == ["wired-thread"]
+    assert trace.spans[0].error == "runner failed"
+
+
+@pytest.mark.asyncio
+async def test_workflow_trace_uses_recorded_routine_kind_after_node_changes(monkeypatch):
+    from langgraph.checkpoint.memory import InMemorySaver
+    from langgraph.graph import END, START, StateGraph
+    from typing_extensions import TypedDict
+
+    class CheckpointState(TypedDict):
+        run_meta: dict[str, list[dict[str, object]]]
+
+    store = InMemoryDocumentStore()
+    started_at = datetime(2026, 10, 28, tzinfo=UTC)
+    at = started_at.isoformat()
+    completed_at = (started_at + timedelta(minutes=2)).isoformat()
+    work_started_at = (started_at + timedelta(seconds=30)).isoformat()
+    store.save_document(
+        PROGENA_STATE_PREFIX,
+        "workflow:stored",
+        {"title": "Stored", "graph": {"nodes": {"child": {"kind": "routine"}}}},
+    )
+    store.save_document(
+        PROGENA_STATE_PREFIX,
+        "workflow_run:stored",
+        {
+            "run_id": "stored",
+            "workflow_id": "stored",
+            "status": "completed",
+            "queued_at": at,
+            "started_at": at,
+            "completed_at": completed_at,
+            "node_outputs": {"child": {"thread_id": "routine:child:revision:run"}},
+            "step_audit": [
+                {
+                    "node_id": "child",
+                    "kind": "routine",
+                    "started_at": at,
+                    "completed_at": completed_at,
+                    "status": "completed",
+                }
+            ],
+        },
+    )
+    store.save_document(
+        PROGENA_STATE_PREFIX,
+        "workflow:stored",
+        {"title": "Stored", "graph": {"nodes": {"child": {"kind": "agent"}}}},
+    )
+    store.upsert_routine_revision(
+        "child",
+        "revision",
+        {
+            "name": "Child",
+            "nodes": [{"id": "work", "kind": "prompt", "label": "Historical Work"}],
+        },
+    )
+    saver = InMemorySaver()
+    builder = StateGraph(CheckpointState)
+    builder.add_node(
+        "record",
+        lambda _state: {
+            "run_meta": {
+                "work": [
+                    {
+                        "started_at": work_started_at,
+                        "duration_ms": 0,
+                        "tokens": {"total_tokens": 17},
+                    }
+                ]
+            }
+        },
+    )
+    builder.add_edge(START, "record")
+    builder.add_edge("record", END)
+    graph = builder.compile(checkpointer=saver)
+    await graph.ainvoke(
+        {},
+        {"configurable": {"thread_id": "routine:child:revision:run"}},
+    )
+
+    @asynccontextmanager
+    async def native_memory_saver(_store):
+        yield saver
+
+    monkeypatch.setattr("src.backend.runs.service._trace_saver", native_memory_saver)
+
+    trace, threads = await build_trace(store, "workflow", "stored")
+
+    assert "routine:child:revision:run" in threads
+    assert trace.tokens == 17
+    assert next(span for span in trace.spans if span.id.endswith(":step:0")).kind == "routine"
+    historical = next(span for span in trace.spans if span.name == "Historical Work")
+    assert historical.kind == "step"
+    assert historical.tokens == 17
+
+
+@pytest.mark.asyncio
 async def test_workflow_page_hydrates_referenced_routine_tip_usage_without_history(monkeypatch):
     store = InMemoryDocumentStore()
     at = datetime(2026, 10, 28, tzinfo=UTC).isoformat()

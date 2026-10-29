@@ -1,6 +1,7 @@
 """Consumer-visible trace subscription races and cache freshness."""
 
 import asyncio
+import json
 
 import pytest
 
@@ -65,6 +66,43 @@ async def test_slow_previous_selection_cannot_replace_new_selection(monkeypatch)
     finally:
         release.set()
         await asyncio.gather(old, return_exceptions=True)
+        await manager.stop()
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_during_initial_hydration_rebuilds_before_subscription_returns(
+    monkeypatch,
+):
+    manager = events.RunsEvents()
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    builds = 0
+
+    async def build(_store, _kind, run_id):
+        nonlocal builds
+        builds += 1
+        if builds == 1:
+            entered.set()
+            await release.wait()
+        return _trace(run_id, tokens=7 if builds == 1 else 17), {"thread"}
+
+    monkeypatch.setattr(events, "build_trace", build)
+    subscribing = asyncio.create_task(manager.subscribe(object(), "viewer", "workflow", "run"))
+    try:
+        await entered.wait()
+        manager.checkpoint_changed(json.dumps({"thread_id": "thread"}))
+        release.set()
+
+        selected = await subscribing
+
+        assert selected is not None
+        assert selected[0].tokens == 17
+        assert builds == 2
+        assert manager.by_thread["thread"] == {("workflow", "run")}
+        assert not manager.pending
+    finally:
+        release.set()
+        await asyncio.gather(subscribing, return_exceptions=True)
         await manager.stop()
 
 

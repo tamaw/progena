@@ -436,7 +436,12 @@ the page is open, without polling. While inspecting below the top, incoming runs
 do not shift the viewport; a compact new-runs control lets the user return to
 the latest entries. Expanding a trace establishes a targeted, connection-scoped
 interest. Collapsing, filtering away, paging away, or leaving the run releases it.
-Reconnect restores the interest and a fresh snapshot.
+Reconnect restores the interest and an authoritative snapshot through the same
+canonical event lane. Its returned rows replace the cached result window, then
+updates/deletes received during that request are applied; URL selection and
+inspection state are retained independently. Initial trace builds listen for
+checkpoint changes before accepting their snapshot; no extra stream or polling
+lane is introduced. Search uses lowercase matching consistently in Python and SQL.
 The client expires rows from finite time windows using its display clock, without
 polling the server. Open spans grow on the client; terminal spans do not.
 
@@ -444,6 +449,10 @@ Workflow audit entries persist `started_at` before work, then settle the same
 entry on completion, failure or cancellation. Approval and child-routine waits
 preserve that entry. Only unanswered approvals block Resume; retained resolved
 approval records do not prevent resuming a manually paused routine continuation.
+Agent/extract steps persist their resolved conversation thread before awaiting
+execution, so running and failed traces subscribe to the actual conversation.
+Historical trace classification uses the recorded step kind, not the current
+editable workflow graph.
 Existing entries require a manual one-time backfill before cutover; reconstructed
 historical boundaries are not exact recovered starts.
 Drain workflow execution during the final writer cutover so old writers cannot

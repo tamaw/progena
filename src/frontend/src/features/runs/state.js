@@ -190,14 +190,22 @@ export const eventHandlers = {
     };
     const changes = request.changes || {};
     const previous = state.runs.snapshots[key];
+    const resync = Boolean(request.resync);
     const snapshot = {
       query,
       runs: Array.isArray(payload.runs) ? payload.runs : [],
       next_cursor: payload.next_cursor || null,
       page_size: Array.isArray(payload.runs) ? payload.runs.length || RUN_PAGE_SIZE : RUN_PAGE_SIZE,
+      // A resync snapshot replaces the old bounded window, while canonical
+      // events received after its request remain newer than it.
       stale: changesAffectSnapshot(changes, query),
     };
-    snapshot.runs = mergeLiveRows(snapshot, previous, changes, query);
+    snapshot.runs = mergeLiveRows(
+      snapshot,
+      resync ? null : previous,
+      changes,
+      query,
+    );
     state.runs.snapshots[key] = snapshot;
     completeKeyedRequest(state.runs.requests, key, payload.request_id);
   },
@@ -257,6 +265,12 @@ export function buildExtraReducers(builder) {
     selectRequests: (state) => state.runs.requests,
     keyFromArgs: (args) => runsQueryKey(args),
     errorMessage: 'Failed to load runs',
+    onPending: (state, action) => {
+      const request = state.runs.requests[runsQueryKey(action.meta.arg)];
+      if (request?.requestId === action.meta.requestId) {
+        request.resync = Boolean(action.meta.arg.resync);
+      }
+    },
   });
   addKeyedRequestLifecycle(builder, fetchRunTrace, {
     selectRequests: (state) => state.runs.traceRequests,

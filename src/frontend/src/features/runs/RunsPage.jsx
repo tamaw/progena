@@ -12,6 +12,7 @@ import { useRunsQuery, useRunTrace } from './useRunsQuery';
 import { runSummarySource, traceBounds } from './timelineModel';
 import RunTooltip from './RunTooltip';
 import { appendOlderPageRows, mergeRunPages } from './pageModel';
+import { subscribeUiEvent } from '../../realtime/realtimeEvents';
 import VirtualizedRunRows from './VirtualizedRunRows';
 
 const STATUS_OPTIONS = [{ value: '', label: 'All statuses' }, ...RUN_STATUSES.map((value) => ({ value, label: value[0].toUpperCase() + value.slice(1) }))];
@@ -152,6 +153,19 @@ export default function RunsPage() {
   const { snapshot, loading, error, refresh, streamReady } = useRunsQuery({
     runsUrl: getApiUrl('runs'), ...baseQuery, cursor: activeCursor,
   });
+  useEffect(() => subscribeUiEvent((event) => {
+    if (event.type !== 'connection.ready') return;
+    // Cursor values describe the former page boundary. A ready event starts a
+    // fresh authoritative window, while URL selection and per-run inspection
+    // state deliberately remain independent from its records.
+    previousRowsRef.current = null;
+    dispatchHeldRows(null);
+    setPaging((current) => (
+      current.filterKey === filterKey && current.cursors.length === 1 && current.cursors[0] === null
+        ? current
+        : { filterKey, cursors: [null] }
+    ));
+  }), [filterKey]);
   const pageSnapshots = useSelector((state) => pageCursors.map((cursor) => (
     selectRunsSnapshot(state, { ...baseQuery, cursor })
   )), shallowEqual);

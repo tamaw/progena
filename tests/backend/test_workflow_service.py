@@ -189,6 +189,7 @@ async def test_pause_requested_while_an_agent_runs_stops_before_the_next_node():
         "kind",
         "started_at",
         "status",
+        "thread_id",
         "completed_at",
         "output",
     }
@@ -608,6 +609,97 @@ async def test_agent_output_carries_the_thread_the_runner_used():
     completed = await _completed(store, run.run_id)
 
     assert completed.node_outputs[agent_id]["thread_id"] == "allocated_thread"
+
+
+@pytest.mark.asyncio
+async def test_wired_agent_and_extract_threads_are_persisted_before_runner_await():
+    store = InMemoryDocumentStore()
+    seed_document_types(store)
+    workflow = default_workflow_definition()
+    event_id = _node_id(workflow, "event")
+    agent_id = _node_id(workflow, "agent")
+    extract_id = "extract"
+    workflow["graph"]["nodes"][extract_id] = {
+        "kind": "extract",
+        "title": "Extract",
+        "template": "Extract: {key}",
+        "schema": {"type": "string"},
+    }
+    workflow["graph"]["nodes"]["thread"] = {
+        "kind": "data",
+        "title": "Thread",
+        "value": "wired-thread",
+        "output_schema": {"type": "string"},
+    }
+    workflow["graph"]["edges"] = [
+        {"from": {"node": event_id, "port": "key"}, "to": {"node": agent_id, "port": "key"}},
+        {"from": {"node": event_id, "port": "key"}, "to": {"node": extract_id, "port": "key"}},
+        {
+            "from": {"node": "thread", "port": "value"},
+            "to": {"node": agent_id, "port": "thread_id"},
+        },
+        {
+            "from": {"node": "thread", "port": "value"},
+            "to": {"node": extract_id, "port": "thread_id"},
+        },
+    ]
+    definition = save_workflow_definition(store, workflow)
+    recorded_threads = {}
+
+    async def runner(**kwargs):
+        current = get_workflow_run(store, kwargs["run_id"])
+        audit = next(
+            entry for entry in reversed(current.step_audit) if entry["node_id"] == kwargs["node_id"]
+        )
+        recorded_threads[kwargs["node_id"]] = audit.get("thread_id")
+        response = '{"value": "extracted"}' if kwargs["node_id"] == extract_id else "agent"
+        return PromptExecutionResult(response=response, thread_id=kwargs["thread_id"])
+
+    run = await _executor(store, runner).trigger_workflow(
+        definition.id, build_manual_trigger_event(definition)
+    )
+    completed = await _completed(store, run.run_id)
+
+    assert recorded_threads == {agent_id: "wired-thread", extract_id: "wired-thread"}
+    assert {
+        entry["node_id"]: entry.get("thread_id")
+        for entry in completed.step_audit
+        if entry["node_id"] in {agent_id, extract_id}
+    } == {agent_id: "wired-thread", extract_id: "wired-thread"}
+
+
+@pytest.mark.asyncio
+async def test_wired_agent_runner_failure_retains_persisted_thread():
+    store = InMemoryDocumentStore()
+    seed_document_types(store)
+    workflow = default_workflow_definition()
+    agent_id = _node_id(workflow, "agent")
+    workflow["graph"]["nodes"]["thread"] = {
+        "kind": "data",
+        "title": "Thread",
+        "value": "wired-thread",
+        "output_schema": {"type": "string"},
+    }
+    workflow["graph"]["edges"].append(
+        {
+            "from": {"node": "thread", "port": "value"},
+            "to": {"node": agent_id, "port": "thread_id"},
+        }
+    )
+    definition = save_workflow_definition(store, workflow)
+
+    async def runner(**_kwargs):
+        raise RuntimeError("runner failed")
+
+    run = await _executor(store, runner).trigger_workflow(
+        definition.id, build_manual_trigger_event(definition)
+    )
+    failed = await _completed(store, run.run_id)
+
+    assert failed.status == "failed"
+    [audit] = failed.step_audit
+    assert audit["thread_id"] == "wired-thread"
+    assert audit["error"] == "runner failed"
 
 
 @pytest.mark.asyncio

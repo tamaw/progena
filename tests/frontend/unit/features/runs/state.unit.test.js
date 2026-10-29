@@ -30,6 +30,78 @@ describe('runs state', () => {
     expect(snapshot.stale).toBe(true);
   });
 
+  it('replaces the old window with the authoritative reconnect snapshot after deletes and status changes', () => {
+    let state = pending(undefined, 'initial');
+    state = reducer(state, applyUiEvent({ type: 'runs.snapshot', payload: {
+      request_id: 'initial',
+      runs: [row('deleted'), row('status')],
+      next_cursor: 'after-status',
+    } }));
+
+    state = pending(state, 'reconnect', { ...query, resync: true });
+    state = reducer(state, applyUiEvent({ type: 'runs.snapshot', payload: {
+      request_id: 'reconnect',
+      runs: [{ ...row('status'), status: 'completed', completed_at: '2026-10-28T10:05:00Z' }],
+      next_cursor: null,
+    } }));
+
+    const snapshot = state.runs.snapshots[runsQueryKey(query)];
+    expect(snapshot.runs).toEqual([
+      expect.objectContaining({ run_id: 'status', status: 'completed', completed_at: '2026-10-28T10:05:00Z' }),
+    ]);
+    expect(snapshot.stale).toBe(false);
+  });
+
+  it('does not retain a run that no longer matches a filtered query after reconnect', () => {
+    const runningQuery = { ...query, status: 'running' };
+    let state = pending(undefined, 'initial', runningQuery);
+    state = reducer(state, applyUiEvent({ type: 'runs.snapshot', payload: {
+      request_id: 'initial',
+      runs: [row('changed-status')],
+      next_cursor: null,
+    } }));
+
+    state = pending(state, 'reconnect', { ...runningQuery, resync: true });
+    state = reducer(state, applyUiEvent({ type: 'runs.snapshot', payload: {
+      request_id: 'reconnect',
+      runs: [],
+      next_cursor: null,
+    } }));
+
+    const snapshot = state.runs.snapshots[runsQueryKey(runningQuery)];
+    expect(snapshot.runs).toEqual([]);
+    expect(snapshot.stale).toBe(false);
+  });
+
+  it('applies canonical updates received during reconnect hydration without retaining its old window', () => {
+    let state = pending(undefined, 'initial');
+    state = reducer(state, applyUiEvent({ type: 'runs.snapshot', payload: {
+      request_id: 'initial',
+      runs: [row('old-only'), row('updated'), row('deleted')],
+      next_cursor: null,
+    } }));
+
+    state = pending(state, 'reconnect', { ...query, resync: true });
+    state = reducer(state, applyUiEvent({ type: 'run.updated', payload: {
+      run: { ...row('updated'), status: 'completed', completed_at: '2026-10-28T10:05:00Z' },
+    } }));
+    state = reducer(state, applyUiEvent({ type: 'run.deleted', payload: {
+      kind: 'workflow',
+      run_id: 'deleted',
+    } }));
+    state = reducer(state, applyUiEvent({ type: 'runs.snapshot', payload: {
+      request_id: 'reconnect',
+      runs: [row('updated'), row('deleted')],
+      next_cursor: null,
+    } }));
+
+    const snapshot = state.runs.snapshots[runsQueryKey(query)];
+    expect(snapshot.runs).toEqual([
+      expect.objectContaining({ run_id: 'updated', status: 'completed', completed_at: '2026-10-28T10:05:00Z' }),
+    ]);
+    expect(snapshot.stale).toBe(true);
+  });
+
   it('keeps a continuous loaded window when a live arrival shifts a cursor boundary and the first page refreshes', () => {
     const pageTwo = { ...query, cursor: 'after-b' };
     let state = pending(undefined, 'first', query);

@@ -708,8 +708,8 @@ async def list_runs(
     limit: int = _PAGE_SIZE,
 ) -> tuple[list[RunRow], str | None]:
     """Return a globally sorted lightweight page with a query-bound keyset cursor."""
-    needle = (q or "").strip().casefold()
-    desired_status = (status or "").strip().casefold()
+    needle = (q or "").strip().lower()
+    desired_status = (status or "").strip().lower()
     requested = _cursor_decode(
         cursor,
         sort=sort,
@@ -743,12 +743,12 @@ async def list_runs(
         row
         for group in groups
         for row in group
-        if (not desired_status or row.status.casefold() == desired_status)
+        if (not desired_status or row.status.lower() == desired_status)
         and (
             not needle
-            or needle in row.name.casefold()
-            or needle in row.trigger.casefold()
-            or needle in row.run_id.casefold()
+            or needle in row.name.lower()
+            or needle in row.trigger.lower()
+            or needle in row.run_id.lower()
         )
         and (since is None or (row.started_at is not None and row.started_at >= since))
     ]
@@ -1374,8 +1374,8 @@ async def build_trace(store: Any, kind: RunKind, run_id: str) -> tuple[RunTrace,
                         detail=f"Workflow step {node_id} has no persisted start time",
                     )
                 step_id = f"workflow:{run_id}:step:{index}"
-                node_kind = (
-                    _text(node.get("kind")) if isinstance(node, dict) else _text(audit.get("kind"))
+                node_kind = _text(audit.get("kind")) or (
+                    _text(node.get("kind")) if isinstance(node, dict) else ""
                 )
                 output = audit.get("output")
                 summary = _value_summary(output) if output is not None else None
@@ -1398,6 +1398,8 @@ async def build_trace(store: Any, kind: RunKind, run_id: str) -> tuple[RunTrace,
                 )
                 link = outputs.get(node_id)
                 child_thread = _text(link.get("thread_id")) if isinstance(link, dict) else ""
+                if not child_thread:
+                    child_thread = _text(audit.get("thread_id"))
                 pending = payload.get("pending_routine")
                 if (
                     not child_thread

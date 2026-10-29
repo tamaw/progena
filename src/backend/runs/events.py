@@ -203,8 +203,17 @@ class RunsEvents:
             return
         if not isinstance(thread_id, str):
             return
-        for key in tuple(self.by_thread.get(thread_id, ())):
+        affected = set(self.by_thread.get(thread_id, ()))
+        for key in affected:
             self._invalidate(key)
+        # A subscription records its run interest before initial hydration
+        # discovers checkpoint dependencies.  Version the in-flight build in
+        # that window so it re-reads before becoming the initial snapshot; it
+        # needs no queued refresh because no snapshot has been delivered yet.
+        for key in tuple(self.builds):
+            if key not in affected and self._watching(key):
+                self.versions[key] += 1
+                self.completed.pop(key, None)
         if thread_id.startswith("routine:"):
             self.row_threads.add(thread_id)
             if self.row_task is None:

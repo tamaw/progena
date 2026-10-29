@@ -564,9 +564,9 @@ class InMemoryDocumentStore:
             definition = definition if isinstance(definition, dict) else {}
             name = definition.get("title") or workflow_id
             source = payload.get("source") or "manual"
-            if status and str(payload.get("status", "")).casefold() != status:
+            if status and str(payload.get("status", "")).lower() != status:
                 continue
-            if q and not any(q in str(value).casefold() for value in (name, source, run_id)):
+            if q and not any(q in str(value).lower() for value in (name, source, run_id)):
                 continue
             elapsed_us = duration_us(started, payload.get("completed_at"))
             key = order_key(started, elapsed_us, "workflow", run_id)

@@ -15,9 +15,9 @@ export function useRunsQuery({ runsUrl, kind, status, q, cursor, period, sort })
     [kind, status, q, cursor, period, sort],
   );
   const queryState = useSelector((state) => selectRunsQueryState(state, normalizedQuery));
-  const refresh = useCallback(() => {
+  const refresh = useCallback(({ resync = false } = {}) => {
     if (!streamReady || !runsUrl) return;
-    dispatch(fetchRuns({ runsUrl, ...normalizedQuery }));
+    dispatch(fetchRuns({ runsUrl, ...normalizedQuery, resync }));
   }, [dispatch, normalizedQuery, runsUrl, streamReady]);
   const connection = useRef({ ready: false, generation: 0, loaded: new Map() });
   const queryKey = runsQueryKey(normalizedQuery);
@@ -35,7 +35,7 @@ export function useRunsQuery({ runsUrl, kind, status, q, cursor, period, sort })
     const firstLoad = connection.current.loaded.get(queryKey) !== connection.current.generation;
     if (firstLoad) {
       connection.current.loaded.set(queryKey, connection.current.generation);
-      refresh();
+      refresh({ resync: true });
     }
   }, [queryKey, queryState.loading, refresh, runsUrl, streamReady]);
 

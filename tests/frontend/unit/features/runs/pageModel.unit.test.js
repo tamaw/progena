@@ -11,6 +11,13 @@ describe('cursor run page model', () => {
     ])).toEqual([row('newest'), row('shared'), row('older')]);
   });
 
+  it('retains the loaded cursor boundary when a live arrival refreshes the head page', () => {
+    expect(mergeRunPages([
+      { runs: [row('NEW'), row('A'), row('B')] },
+      { runs: [row('C'), row('D')] },
+    ])).toEqual([row('NEW'), row('A'), row('B'), row('C'), row('D')]);
+  });
+
   it('adds only the newly fetched older page to an inspection held for live updates', () => {
     const held = [row('newest'), row('existing', 'updated')];
     const pages = [

@@ -1591,6 +1591,35 @@ class WorkflowExecutor:
             self._emit_event("workflow.run.updated", started.model_dump(mode="json"))
             return started
 
+    async def _record_step_thread(
+        self, workflow_id: str, run_id: str, *, node_id: str, thread_id: str
+    ) -> WorkflowRun | None:
+        """Persist the conversation selected for an agent step before it starts."""
+
+        async with self._lock_for(workflow_id):
+            store = self._store_getter()
+            run = get_workflow_run(store, run_id)
+            if run is None:
+                return None
+            for index in range(len(run.step_audit) - 1, -1, -1):
+                entry = run.step_audit[index]
+                if entry.get("node_id") != node_id or entry.get("completed_at") is not None:
+                    continue
+                if entry.get("thread_id") == thread_id:
+                    return run
+                audit = [
+                    *run.step_audit[:index],
+                    {**entry, "thread_id": thread_id},
+                    *run.step_audit[index + 1 :],
+                ]
+                recorded = run.model_copy(
+                    update={"step_audit": audit, "updated_at": utcnow_isoformat()}
+                )
+                save_workflow_run(store, recorded)
+                self._emit_event("workflow.run.updated", recorded.model_dump(mode="json"))
+                return recorded
+            return run
+
     async def _execute_run(self, workflow_id: str, run_id: str) -> None:
         try:
             await self._execute_run_locked(workflow_id, run_id)
@@ -1787,6 +1816,12 @@ class WorkflowExecutor:
                 elif isinstance(node, WorkflowNodeExtract):
                     _validate_node_input(node, resolved_input)
                     thread_id = self._resolve_thread_id(resolved_input, latest_run) or ""
+                    recorded = await self._record_step_thread(
+                        workflow_id, run_id, node_id=node_id, thread_id=thread_id
+                    )
+                    if recorded is None:
+                        return
+                    latest_run = recorded
                     template = parse_instruction_template(_node_template_text(store, node))
                     input_text = render_instruction_template(
                         template, {**resolved_input, "thread_id": thread_id}
@@ -1851,6 +1886,13 @@ class WorkflowExecutor:
                 elif isinstance(node, WorkflowNodeAgent):
                     _validate_node_input(node, resolved_input)
                     thread_id = self._resolve_thread_id(resolved_input, latest_run)
+                    if thread_id:
+                        recorded = await self._record_step_thread(
+                            workflow_id, run_id, node_id=node_id, thread_id=thread_id
+                        )
+                        if recorded is None:
+                            return
+                        latest_run = recorded
                     template = parse_instruction_template(_node_template_text(store, node))
                     input_text = render_instruction_template(
                         template, {**resolved_input, "thread_id": thread_id or ""}

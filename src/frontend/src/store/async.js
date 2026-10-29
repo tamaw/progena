@@ -58,6 +58,7 @@ export function addKeyedRequestLifecycle(builder, thunk, {
   selectRequests,
   keyFromArgs,
   errorMessage,
+  onPending,
 }) {
   keyedRequestLifecycles.set(builder, [
     ...(keyedRequestLifecycles.get(builder) || []),
@@ -74,6 +75,7 @@ export function addKeyedRequestLifecycle(builder, thunk, {
         error: null,
         requestId: action.meta.requestId,
       };
+      onPending?.(state, action);
     })
     .addCase(thunk.rejected, (state, action) => {
       const key = keyFromArgs(action.meta.arg);
