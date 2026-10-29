@@ -13,8 +13,27 @@ import { runSummarySource, traceBounds } from './timelineModel';
 import RunTooltip from './RunTooltip';
 
 const STATUS_OPTIONS = [{ value: '', label: 'All statuses' }, ...RUN_STATUSES.map((value) => ({ value, label: value[0].toUpperCase() + value.slice(1) }))];
-const SORT_OPTIONS = [{ value: 'newest', label: 'Newest first' }, { value: 'oldest', label: 'Oldest first' }, { value: 'duration', label: 'Longest first' }];
-const PERIOD_OPTIONS = [{ value: 'hour', label: 'Hour' }, { value: 'day', label: 'Day' }, { value: 'week', label: 'Week' }, { value: 'month', label: 'Month' }, { value: '', label: 'All time' }];
+const SORT_OPTIONS = [{ value: 'newest', label: 'Latest' }, { value: 'oldest', label: 'Oldest' }, { value: 'duration', label: 'Longest' }];
+const PERIOD_OPTIONS = [{ value: 'hour', label: '1h' }, { value: 'day', label: '24h' }, { value: 'week', label: '7d' }, { value: 'month', label: '30d' }, { value: '', label: 'All' }];
+const KIND_OPTIONS = [{ value: '', label: <><RunsNavIcon />All</> }, ...RUN_KINDS.map((value) => ({ value, label: <><ActivityIcon kind={value} />{kindLabel(value)}</> }))];
+
+function SlidingSelector({ options, value, onChange, label, className = '' }) {
+  const selected = Math.max(0, options.findIndex((option) => option.value === value));
+  return <div className={`runs-slider ${className}`} role="radiogroup" aria-label={label} style={{ '--segments': options.length, '--selected': selected }}>
+    <span className="runs-slider-thumb" aria-hidden="true" />
+    {options.map((option, index) => <button key={option.value} type="button" role="radio" aria-checked={value === option.value} tabIndex={index === selected ? 0 : -1} onClick={() => onChange(option.value)} onKeyDown={(event) => {
+      let next;
+      if (event.key === 'ArrowRight' || event.key === 'ArrowDown') next = (index + 1) % options.length;
+      else if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') next = (index + options.length - 1) % options.length;
+      else if (event.key === 'Home') next = 0;
+      else if (event.key === 'End') next = options.length - 1;
+      else return;
+      event.preventDefault();
+      onChange(options[next].value);
+      event.currentTarget.parentElement.querySelectorAll('[role="radio"]')[next].focus();
+    }}>{option.label}</button>)}
+  </div>;
+}
 
 function RunRow({ row, expanded, onToggle, now }) {
   const trace = useSelector((state) => selectRunTrace(state, row.kind, row.run_id));
@@ -149,11 +168,11 @@ export default function RunsPage() {
 
   return <main ref={rootRef} className="runs-page" aria-label="Runs">
     <section className="runs-controls" aria-label="Run filters">
-      <div className="runs-filter-group" aria-label="Run kind"><button type="button" className={!kind ? 'is-selected' : ''} aria-pressed={!kind} onClick={() => updateParams({ kind: '' })}><RunsNavIcon />All</button>{RUN_KINDS.map((value) => <button key={value} type="button" className={kind === value ? 'is-selected' : ''} aria-pressed={kind === value} onClick={() => updateParams({ kind: value })}><ActivityIcon kind={value} />{kindLabel(value)}</button>)}</div>
+      <SlidingSelector options={KIND_OPTIONS} value={kind} onChange={(value) => updateParams({ kind: value })} label="Run kind" className="runs-kind-slider" />
       <Select value={status} onChange={(value) => updateParams({ status: value })} options={STATUS_OPTIONS} ariaLabel="Run status" className="runs-status-select" />
-      <Select value={period} onChange={(value) => { setNow(Date.now()); updateParams({ period: value || 'all' }); }} options={PERIOD_OPTIONS} ariaLabel="Run time range" className="runs-period-select" />
+      <SlidingSelector options={PERIOD_OPTIONS} value={period} onChange={(value) => { setNow(Date.now()); updateParams({ period: value || 'all' }); }} label="Run time range" className="runs-time-slider" />
       <label className="runs-search"><SearchIcon /><span className="sr-only">Search runs</span><input value={search} onChange={(event) => updateParams({ q: event.target.value }, { replace: true })} placeholder="Search runs" />{search ? <button type="button" className="flame-icon-button" aria-label="Clear search" data-tooltip="Clear search" onClick={() => updateParams({ q: '' })}><CloseIcon /></button> : null}</label>
-      <Select value={sort} onChange={(value) => updateParams({ sort: value })} options={SORT_OPTIONS} ariaLabel="Sort runs" className="runs-sort-select" />
+      <SlidingSelector options={SORT_OPTIONS} value={sort} onChange={(value) => updateParams({ sort: value })} label="Sort runs" className="runs-sort-slider" />
       <nav className="runs-pagination" aria-label="Runs pages"><button type="button" className="flame-icon-button" disabled={pageCursors.length === 1 || loading} data-tooltip="Previous page" aria-label="Previous page" onClick={() => setPaging((current) => (current.filterKey === filterKey ? { ...current, cursors: current.cursors.slice(0, -1) } : current))}><ChevronLeftIcon /></button><span data-tooltip={`Page ${pageCursors.length} · Sorted across all results`}>{pageCursors.length}</span><button type="button" className="flame-icon-button" disabled={!snapshot?.next_cursor || loading} data-tooltip="Next page" aria-label="Next page" onClick={() => setPaging({ filterKey, cursors: [...pageCursors, snapshot.next_cursor] })}><ChevronRightIcon /></button></nav>
     </section>
     {error ? <InlineFailure failure={error} operation="Load runs" onRetry={refresh} /> : null}
