@@ -122,3 +122,12 @@ All seven second-pass findings are addressed:
 - Claude liveness still checks the existing listener process only. Activity timestamps and event routing do not introduce LLM health probes.
 
 Verification includes a real LangGraph checkpoint smoke preserving both HTTP and ACP input/reply pairs, protocol-level object-agent continuation tests, and two real Claude ACP turns with native SDK identity notifications, exact final outputs and isolated historical retrieval. Raw SDK output is filtered to identity-bearing message types and never forwarded wholesale into model context. The real producer emitted one identity update per tested turn after deduplication.
+
+### CI test isolation
+
+CI exposed a backend test-order leak: real Uvicorn test servers set
+`uvicorn.error` to CRITICAL, suppressing the later logging test's INFO record.
+Backend tests now restore Uvicorn logger levels, handlers, filters, propagation
+and disabled state after each test. Production logging behavior is unchanged.
+The server/logging sequence passes all 21 tests; the backend suite passes
+761 tests with 23 skips and the same documented health-test deselection.
