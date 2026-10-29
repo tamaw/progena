@@ -15,12 +15,14 @@ export function useRunsQuery({ runsUrl, kind, status, q, cursor, period, sort })
     [kind, status, q, cursor, period, sort],
   );
   const queryState = useSelector((state) => selectRunsQueryState(state, normalizedQuery));
-  const refresh = useCallback(({ resync = false } = {}) => {
-    if (!streamReady || !runsUrl) return;
-    dispatch(fetchRuns({ runsUrl, ...normalizedQuery, resync }));
-  }, [dispatch, normalizedQuery, runsUrl, streamReady]);
   const connection = useRef({ ready: false, generation: 0, loaded: new Map() });
   const queryKey = runsQueryKey(normalizedQuery);
+  const refresh = useCallback(({ resync } = {}) => {
+    if (!streamReady || !runsUrl) return;
+    // A failed initial/reconnect hydration must not be retried as an ordinary
+    // page refresh: that would merge its cached pre-reconnect window back in.
+    dispatch(fetchRuns({ runsUrl, ...normalizedQuery, resync: resync ?? Boolean(queryState.resync) }));
+  }, [dispatch, normalizedQuery, queryState.resync, runsUrl, streamReady]);
 
   useEffect(() => {
     if (!streamReady) {
@@ -54,10 +56,14 @@ export function useRunTrace({ runsUrl, subscriptionUrl, kind, runId, enabled }) 
   }, [canWatch, dispatch, kind, runId, runsUrl, streamReady]);
 
   useEffect(() => {
-    if (!streamReady || !canWatch || !runsUrl || !subscriptionUrl) return undefined;
+    if (!streamReady || !canWatch || !runsUrl) return;
     refresh();
+  }, [canWatch, refresh, runsUrl, streamReady]);
+
+  useEffect(() => {
+    if (!streamReady || !canWatch || !subscriptionUrl) return undefined;
     return watchRunTrace(subscriptionUrl, kind, runId);
-  }, [canWatch, kind, refresh, runId, runsUrl, streamReady, subscriptionUrl]);
+  }, [canWatch, kind, runId, streamReady, subscriptionUrl]);
 
   return { trace, ...request, refresh, streamReady };
 }

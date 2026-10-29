@@ -771,6 +771,53 @@ async def test_workflow_list_exposes_compact_audit_overview_and_persisted_zero_u
     }
 
 
+def test_compact_workflow_audit_thread_survives_storage_and_owns_historical_routine(run_store):
+    at = datetime(2026, 10, 28, tzinfo=UTC).isoformat()
+    store = run_store
+    store.save_document(
+        PROGENA_STATE_PREFIX,
+        "workflow:historical",
+        {"title": "Historical", "graph": {"nodes": {"child": {"kind": "agent"}}}},
+    )
+    store.save_document(
+        PROGENA_STATE_PREFIX,
+        "workflow_run:historical",
+        {
+            "run_id": "historical",
+            "workflow_id": "historical",
+            "status": "failed",
+            "queued_at": at,
+            "started_at": at,
+            "completed_at": at,
+            "step_audit": [
+                {
+                    "node_id": "child",
+                    "kind": "routine",
+                    "thread_id": "routine:child:revision:attempt",
+                    "started_at": at,
+                    "completed_at": at,
+                    "status": "failed",
+                }
+            ],
+        },
+    )
+
+    payload, definition = store.query_workflow_run_page(
+        status="",
+        q="",
+        sort="newest",
+        cursor=None,
+        since=None,
+        as_of=at,
+        limit=1,
+    )[0]
+    row = _workflow_row(store, payload, definition)
+
+    assert payload["step_audit"][0]["thread_id"] == "routine:child:revision:attempt"
+    assert next(span for span in row.overview if span.id.endswith(":step:0")).kind == "routine"
+    assert row._routine_threads == {"workflow:historical:step:0": "routine:child:revision:attempt"}
+
+
 def test_recorded_node_usage_rolls_up_without_usage_metadata_and_deduplicates_hierarchy():
     at = datetime(2026, 10, 28, tzinfo=UTC).isoformat()
     row = RunRow(
@@ -1020,6 +1067,97 @@ async def test_workflow_trace_uses_recorded_routine_kind_after_node_changes(monk
 
 
 @pytest.mark.asyncio
+async def test_native_postgres_compact_audit_hydrates_same_routine_usage_as_trace(postgres_url):
+    from langgraph.graph import END, START, StateGraph
+    from typing_extensions import TypedDict
+
+    from src.progena.routines.store import routine_graph_key
+
+    class CheckpointState(TypedDict):
+        run_meta: dict[str, list[dict[str, object]]]
+
+    started_at = datetime(2026, 10, 28, 10, tzinfo=UTC)
+    owner_end = started_at + timedelta(minutes=2)
+    work_started_at = started_at + timedelta(minutes=1)
+    store = PostgresDocumentStore(postgres_url)
+    store.open()
+    try:
+        store.save_document(
+            PROGENA_STATE_PREFIX,
+            routine_graph_key("child"),
+            {
+                "name": "Child",
+                "nodes": [{"id": "work", "kind": "prompt", "label": "Historical work"}],
+            },
+        )
+        revision_id = store.list_routine_revisions("child", limit=1)[0].revision_id
+        thread_id = f"routine:child:{revision_id}:attempt"
+        async with AsyncPostgresSaver.from_conn_string(postgres_url) as saver:
+            await saver.setup()
+            builder = StateGraph(CheckpointState)
+            builder.add_node(
+                "record",
+                lambda _state: {
+                    "run_meta": {
+                        "work": [
+                            {
+                                "started_at": work_started_at.isoformat(),
+                                "duration_ms": 0,
+                                "tokens": {"total_tokens": 17},
+                            }
+                        ]
+                    }
+                },
+            )
+            builder.add_edge(START, "record")
+            builder.add_edge("record", END)
+            graph = builder.compile(checkpointer=saver)
+            await graph.ainvoke({}, {"configurable": {"thread_id": thread_id}})
+        store.save_document(
+            PROGENA_STATE_PREFIX,
+            "workflow:historical",
+            {"title": "Historical", "graph": {"nodes": {"child": {"kind": "agent"}}}},
+        )
+        store.save_document(
+            PROGENA_STATE_PREFIX,
+            "workflow_run:historical",
+            {
+                "run_id": "historical",
+                "workflow_id": "historical",
+                "status": "failed",
+                "queued_at": started_at.isoformat(),
+                "started_at": started_at.isoformat(),
+                "completed_at": owner_end.isoformat(),
+                "last_error": "historical failure",
+                "step_audit": [
+                    {
+                        "node_id": "child",
+                        "kind": "routine",
+                        "thread_id": thread_id,
+                        "started_at": started_at.isoformat(),
+                        "completed_at": owner_end.isoformat(),
+                        "status": "failed",
+                    }
+                ],
+            },
+        )
+
+        rows, _ = await list_runs(store, kind="workflow")
+        trace, threads = await build_trace(store, "workflow", "historical")
+
+        row = rows[0]
+        owner = next(span for span in row.overview if span.id.endswith(":step:0"))
+        children = [span for span in row.overview if span.parent_id == owner.id]
+        assert owner.kind == "routine"
+        assert owner.start < work_started_at.isoformat() < owner.end
+        assert row.tokens == trace.tokens == 17
+        assert [(span.name, span.tokens) for span in children] == [("Historical work", 17)]
+        assert threads == {thread_id}
+    finally:
+        store.close()
+
+
+@pytest.mark.asyncio
 async def test_workflow_page_hydrates_referenced_routine_tip_usage_without_history(monkeypatch):
     store = InMemoryDocumentStore()
     at = datetime(2026, 10, 28, tzinfo=UTC).isoformat()
@@ -1147,12 +1285,14 @@ def test_workflow_repeated_routine_audit_hydrates_one_latest_thread_reference():
                 {
                     "node_id": "child",
                     "kind": "routine",
+                    "thread_id": "routine:child:revision:run",
                     "started_at": at,
                     "status": "completed",
                 },
                 {
                     "node_id": "child",
                     "kind": "routine",
+                    "thread_id": "routine:child:revision:run",
                     "started_at": at,
                     "status": "completed",
                 },
@@ -1163,6 +1303,42 @@ def test_workflow_repeated_routine_audit_hydrates_one_latest_thread_reference():
 
     assert row._routine_threads == {
         "workflow:repeated:step:1": "routine:child:revision:run",
+    }
+
+
+def test_workflow_audit_threads_stay_with_their_own_attempts():
+    at = datetime(2026, 10, 28, tzinfo=UTC).isoformat()
+    row = _workflow_row(
+        InMemoryDocumentStore(),
+        {
+            "run_id": "attempts",
+            "workflow_id": "workflow",
+            "status": "completed",
+            "queued_at": at,
+            "started_at": at,
+            "step_audit": [
+                {
+                    "node_id": "child",
+                    "kind": "routine",
+                    "thread_id": "routine:child:revision:first",
+                    "started_at": at,
+                    "status": "completed",
+                },
+                {
+                    "node_id": "child",
+                    "kind": "routine",
+                    "thread_id": "routine:child:revision:second",
+                    "started_at": at,
+                    "status": "completed",
+                },
+            ],
+        },
+        {"graph": {"nodes": {"child": {"kind": "routine"}}}},
+    )
+
+    assert row._routine_threads == {
+        "workflow:attempts:step:0": "routine:child:revision:first",
+        "workflow:attempts:step:1": "routine:child:revision:second",
     }
 
 

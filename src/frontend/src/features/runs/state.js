@@ -209,6 +209,9 @@ export const eventHandlers = {
     );
     state.runs.snapshots[key] = snapshot;
     completeKeyedRequest(state.runs.requests, key, payload.request_id);
+    // Keep this flag through a failed hydration so Retry remains authoritative,
+    // but release it only once its correlated snapshot has reached the cache.
+    state.runs.requests[key].resync = false;
   },
   'run.updated': (state, payload) => {
     const row = payload.run;

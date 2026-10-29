@@ -189,6 +189,24 @@ describe('runs state', () => {
     expect(snapshot.runs).toHaveLength(1);
     expect(snapshot.runs[0]).toMatchObject(updated);
   });
+  it('retains the reconnect resync requirement after its acknowledgement fails', () => {
+    let state = pending(undefined, 'initial');
+    state = reducer(state, applyUiEvent({ type: 'runs.snapshot', payload: {
+      request_id: 'initial', runs: [row('cached')], next_cursor: null,
+    } }));
+
+    const reconnectQuery = { ...query, resync: true };
+    state = pending(state, 'reconnect', reconnectQuery);
+    state = reducer(state, fetchRuns.rejected(new Error('offline'), 'reconnect', reconnectQuery));
+    expect(state.runs.requests[runsQueryKey(query)].resync).toBe(true);
+
+    state = pending(state, 'retry', { ...query, resync: state.runs.requests[runsQueryKey(query)].resync });
+    state = reducer(state, applyUiEvent({ type: 'runs.snapshot', payload: {
+      request_id: 'retry', runs: [row('authoritative')], next_cursor: null,
+    } }));
+    expect(state.runs.snapshots[runsQueryKey(query)].runs.map((run) => run.run_id)).toEqual(['authoritative']);
+  });
+
 });
 
 describe('runs query state', () => {

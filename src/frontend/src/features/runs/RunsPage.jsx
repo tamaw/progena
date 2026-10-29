@@ -221,6 +221,7 @@ export default function RunsPage() {
     runId: selection?.runId,
     enabled: Boolean(selection),
   });
+  const detachedSelectedTrace = Boolean(selection && !selectedRow && !trace);
   const renderedRows = useMemo(() => {
     if (!selection || selectedRow || !trace) return visibleRows;
     return [...visibleRows, trace];
@@ -292,6 +293,11 @@ export default function RunsPage() {
         {!streamReady ? <div className="flame-message">Connecting…</div> : null}
         {loading && !pageSnapshots.some(Boolean) ? <div className="flame-message">Loading runs…</div> : null}
         {!loading && pageSnapshots.some(Boolean) && !visibleRows.length && !selection ? <div className="flame-message">No runs match these filters.</div> : null}
+        {detachedSelectedTrace ? <div className="runs-page-status">
+          {traceError ? <InlineFailure failure={traceError} operation="Load selected run" onRetry={refreshTrace} /> : null}
+          {traceLoading ? <div role="status">Loading selected run…</div> : null}
+          {!traceLoading && !traceError ? <div role="status">Selected run is not available in loaded history.</div> : null}
+        </div> : null}
         <VirtualizedRunRows rows={virtualRows} scrollElement={chartScrollElement} renderRow={({ row, expanded }) => {
           const key = runSelectionParam(row.kind, row.run_id);
           return <RunEntry row={row} expanded={expanded} trace={expanded ? trace : null} traceLoading={expanded && traceLoading} traceError={expanded ? traceError : null} refreshTrace={refreshTrace} now={now} onToggle={() => toggleRun(row)} inspection={inspections[key]} onInspectionChange={(change) => updateInspection(key, change)} />;

@@ -1499,6 +1499,7 @@ class WorkflowExecutor:
                         run,
                         error=str(exc),
                         audit_node_id=node_id,
+                        audit_thread_id=thread_id,
                         clear_pending_routine=True,
                     )
                     failed = True

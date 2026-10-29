@@ -371,6 +371,30 @@ async def test_resume_after_human_pause_completes_routine_following_approval():
 
 
 @pytest.mark.asyncio
+async def test_invalid_completed_routine_output_preserves_thread_in_failed_trace():
+    store, definition, executor, _runner = _setup(TYPED_ROUTINE, port="card")
+    waiting = await _start(store, definition, executor)
+    thread_id = "routine:summarize:revision:invalid-output"
+
+    await executor.handle_routine_run_event(
+        {
+            "session_id": waiting.pending_routine["session_id"],
+            "status": "completed",
+            "thread_id": thread_id,
+            "output": {"summary": 17},
+        }
+    )
+
+    failed = get_workflow_run(store, waiting.run_id)
+    assert failed.status == "failed"
+    assert failed.pending_routine is None
+    [audit] = failed.step_audit
+    assert audit["status"] == "failed"
+    assert audit["thread_id"] == thread_id
+    assert "summary" in audit["error"]
+
+
+@pytest.mark.asyncio
 async def test_routine_failure_or_bad_output_fails_the_run():
     store, definition, executor, _runner = _setup(PLAIN_ROUTINE, port="message")
     waiting = await _start(store, definition, executor)

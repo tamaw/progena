@@ -582,6 +582,7 @@ class InMemoryDocumentStore:
                         for field in (
                             "node_id",
                             "kind",
+                            "thread_id",
                             "started_at",
                             "completed_at",
                             "status",
@@ -1934,14 +1935,15 @@ class PostgresDocumentStore:
                         ELSE NULL
                     END,
                     'step_audit', COALESCE((
-                        SELECT jsonb_agg(jsonb_build_object(
+                        SELECT jsonb_agg(jsonb_strip_nulls(jsonb_build_object(
                             'node_id', entry->'node_id',
                             'kind', entry->'kind',
+                            'thread_id', entry->'thread_id',
                             'started_at', entry->'started_at',
                             'completed_at', entry->'completed_at',
                             'status', entry->'status',
                             'tokens', entry->'tokens'
-                        ))
+                        )))
                         FROM jsonb_array_elements(
                             CASE WHEN jsonb_typeof(p->'step_audit') = 'array'
                                  THEN p->'step_audit' ELSE '[]'::jsonb END

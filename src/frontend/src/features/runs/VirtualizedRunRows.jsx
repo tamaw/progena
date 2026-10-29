@@ -23,6 +23,7 @@ export default function VirtualizedRunRows({ rows, scrollElement, renderRow }) {
   const elementsRef = useRef(new Map());
   const observerRef = useRef(null);
   const viewportFrameRef = useRef(null);
+  const expansionRef = useRef(new Map());
   const [heights, setHeights] = useState({});
   const [viewport, setViewport] = useState({ top: 0, height: 0 });
 
@@ -74,6 +75,24 @@ export default function VirtualizedRunRows({ rows, scrollElement, renderRow }) {
   }, []);
 
   useLayoutEffect(() => {
+    const previousExpansions = expansionRef.current;
+    const nextExpansions = new Map(rows.map((row) => [row.key, Boolean(row.expanded)]));
+    const invalidated = rows
+      .filter((row) => previousExpansions.has(row.key) && previousExpansions.get(row.key) !== Boolean(row.expanded))
+      .map((row) => row.key);
+    expansionRef.current = nextExpansions;
+    if (invalidated.length) {
+      setHeights((current) => {
+        let next = current;
+        for (const key of invalidated) {
+          if (!Object.hasOwn(next, key)) continue;
+          if (next === current) next = { ...current };
+          delete next[key];
+        }
+        return next;
+      });
+    }
+
     const measure = () => {
       setHeights((current) => {
         let changed = false;
@@ -97,7 +116,7 @@ export default function VirtualizedRunRows({ rows, scrollElement, renderRow }) {
       observer.disconnect();
       if (observerRef.current === observer) observerRef.current = null;
     };
-  }, [keys]);
+  }, [keys, rows]);
 
   const start = rows.length ? Math.max(0, firstIndexAtOrAfter(offsets, Math.max(0, viewport.top - 33) - 420)) : 0;
   const end = rows.length

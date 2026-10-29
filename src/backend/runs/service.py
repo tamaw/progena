@@ -219,7 +219,7 @@ def _workflow_overview(
         node_id = _text(entry.get("node_id"))
         node = nodes.get(node_id)
         node = node if isinstance(node, Mapping) else {}
-        node_kind = _text(node.get("kind")) or _text(entry.get("kind"))
+        node_kind = _text(entry.get("kind")) or _text(node.get("kind"))
         end = _time(entry.get("completed_at"))
         spans.append(
             Span(
@@ -480,8 +480,10 @@ def _workflow_row(
         if step is None or step.kind != "routine":
             continue
         node_id = _text(entry.get("node_id"))
-        reference = node_threads.get(node_id)
-        thread_id = _text(reference.get("thread_id")) if isinstance(reference, Mapping) else ""
+        thread_id = _text(entry.get("thread_id"))
+        if not thread_id:
+            reference = node_threads.get(node_id)
+            thread_id = _text(reference.get("thread_id")) if isinstance(reference, Mapping) else ""
         if not thread_id and _text(pending.get("node_id")) == node_id:
             thread_id = _text(pending.get("thread_id"))
         if thread_id and thread_id not in seen_threads:

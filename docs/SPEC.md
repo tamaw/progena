@@ -412,6 +412,9 @@ There is no separate trace page, nested table, page heading or Refresh control.
 Selecting a bar highlights a call without revealing payloads. A separate row
 disclosure opens bounded input/output/error details immediately below that lane;
 packed lanes provide a call selector. Details do not repeat duration/token fields.
+Selected runs outside the loaded window expose loading and failure/retry states
+without requiring an existing row or a successfully loaded trace. Virtual row
+measurements are invalidated when expansion changes, including unmounted rows.
 Model intervals are derived from checkpoint commits, not provider latency.
 Tool duration is measured only when an audit record exists; otherwise a
 transcript declaration marker explicitly reports timing unavailable. Available
@@ -449,6 +452,8 @@ lane is introduced. Search uses lowercase matching consistently in Python and SQ
 Lifecycle publications supersede checkpoint rows hydrated from an older lifecycle
 state. Existing build invalidation also covers unindexed GET hydration and child
 routine discovery, so stale snapshots cannot enter the terminal trace cache.
+Failed authoritative hydration retains its resync intent through Retry, so a
+successful retry cannot merge records deleted while disconnected back into view.
 The client expires rows from finite time windows using its display clock, without
 polling the server. Open spans grow on the client; terminal spans do not.
 
@@ -458,10 +463,10 @@ preserve that entry. Only unanswered approvals block Resume; retained resolved
 approval records do not prevent resuming a manually paused routine continuation.
 Agent/extract steps persist their resolved conversation thread before awaiting
 execution, so running and failed traces subscribe to the actual conversation.
-Historical trace classification uses the recorded step kind, not the current
-editable workflow graph.
-Failed and cancelled routine waits retain their conversation reference in the
-settled audit before pending state is cleared, preserving failure-time descendants.
+Both compact summaries and expanded traces classify historical steps using the
+recorded audit kind rather than the current editable workflow graph, and consume
+its recorded routine thread. Failed/cancelled waits and completed outputs rejected
+by schema validation retain that reference before pending state is cleared.
 Existing entries require a manual one-time backfill before cutover; reconstructed
 historical boundaries are not exact recovered starts.
 Drain workflow execution during the final writer cutover so old writers cannot
