@@ -55,6 +55,62 @@ async def test_session_client_collects_text_thoughts_and_tool_calls():
     assert [tc["name"] for tc in client.tool_calls] == ["run_tests"]
 
 
+async def test_session_client_bounds_native_stream_collection():
+    client = ACPSessionClient(run_id="t", max_output_chars=5, max_metadata_entries=2)
+    for text in ("abc", "def", "ghi"):
+        await client.session_update("s", _message_chunk(text))
+    for index in range(3):
+        await client.session_update(
+            "s",
+            AgentThoughtChunk(
+                session_update="agent_thought_chunk", content=text_block(f"thought-{index}")
+            ),
+        )
+        await client.session_update(
+            "s",
+            ToolCallStart(
+                session_update="tool_call",
+                tool_call_id=f"tc{index}",
+                title=f"tool-{index}",
+                kind="execute",
+            ),
+        )
+
+    assert client.get_output() == "abcde"
+    assert client.output_char_count == 9
+    assert client.output_truncated is True
+    assert client.thoughts == ["thought-1", "thought-2"]
+    assert [call["name"] for call in client.tool_calls] == ["tool-1", "tool-2"]
+    assert client.tool_call_count == 3
+
+
+async def test_late_verified_evidence_bounds_already_collected_output():
+    client = ACPSessionClient(run_id="late-evidence")
+    await client.session_update("s", _message_chunk("abcdef"))
+    assert client.get_output() == "abcdef"
+    client.set_output_limit(5)
+    await client.session_update("s", _message_chunk("more output"))
+    assert client.get_output() == "abcde"
+    assert client.output_char_count == len("abcdefmore output")
+    assert client.output_truncated
+
+
+async def test_generic_capture_stays_lossless_after_memory_preview_fills(tmp_path, monkeypatch):
+    monkeypatch.setenv("PROGENA_ACP_CAPTURE_DIR", str(tmp_path))
+    client = ACPSessionClient(run_id="generic-capture")
+    try:
+        prefix = "α" * 20_000
+        await client.session_update("s", _message_chunk(prefix))
+        assert client.get_output() == prefix
+        await client.session_update("s", _message_chunk("\nfinal evidence: passed"))
+        assert client.get_output() == prefix + "\nfinal evidence: passed"
+        assert sum(len(part) for part in client.text_parts) <= 16_384
+        assert not client.output_truncated
+    finally:
+        client.close_output()
+    assert list(tmp_path.iterdir()) == []
+
+
 async def test_runner_missing_command_degrades_gracefully():
     result = await ACPRunner("definitely-not-real-xyz", ["--acp"], timeout=2).run(
         "hi", "/tmp", run_id="t"

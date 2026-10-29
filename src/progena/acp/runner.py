@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import inspect
 import logging
 import os
 import time
@@ -35,9 +36,12 @@ class ACPRunResult:
 
     success: bool
     output: str = ""
+    output_char_count: int = 0
+    output_truncated: bool = False
     stop_reason: str | None = None
     session_id: str | None = None
     tool_calls: list[dict[str, Any]] = field(default_factory=list)
+    tool_call_count: int = 0
     elapsed_seconds: float = 0.0
     error: str | None = None
     cancelled: bool = False
@@ -167,12 +171,30 @@ class ACPRunner:
         run_id: str = "unknown",
         session_id: str | None = None,
         mode: str | None = None,
-        on_progress: Callable[[dict[str, Any]], Awaitable[None] | None] | None = None,
+        on_progress: Callable[[dict[str, Any]], Awaitable[Any] | Any] | None = None,
         on_input: Callable[[dict[str, Any]], Awaitable[Any] | Any] | None = None,
+        max_output_chars: int | None = None,
     ) -> ACPRunResult:
         cwd_path = Path(cwd)
         start = time.perf_counter()
-        client = ACPSessionClient(run_id=run_id, on_progress=on_progress, on_input=on_input)
+        output_limited = False
+
+        async def forward_progress(update: dict[str, Any]) -> None:
+            nonlocal output_limited
+            if on_progress is None:
+                return
+            ready = on_progress(update)
+            if inspect.isawaitable(ready):
+                ready = await ready
+            if ready is True and not output_limited:
+                client.set_output_limit(max_output_chars)
+                output_limited = True
+
+        client = ACPSessionClient(
+            run_id=run_id,
+            on_progress=forward_progress,
+            on_input=on_input,
+        )
         active_session_id = session_id
 
         try:
@@ -195,12 +217,7 @@ class ACPRunner:
                 self._active_conn = conn
                 self._active_session_id = active_session_id
                 self._cancel_requested = False
-                if on_progress is not None:
-                    progress_result = on_progress(
-                        {"kind": "session", "session_id": active_session_id}
-                    )
-                    if asyncio.iscoroutine(progress_result):
-                        await progress_result
+                await forward_progress({"kind": "session", "session_id": active_session_id})
                 if self.is_tcp and self.model:
                     await self._set_session_model(conn, active_session_id)
                 if mode:
@@ -214,20 +231,24 @@ class ACPRunner:
                 cancelled = self._cancel_requested or stop_reason_text in {"cancelled", "canceled"}
                 elapsed = time.perf_counter() - start
                 success = not cancelled and stop_reason in _OK_STOP_REASONS and not client.errors
+                output = client.get_output()
                 logger.info(
                     "ACP [%s]: done in %.2fs stop_reason=%s chars=%d tool_calls=%d",
                     run_id,
                     elapsed,
                     stop_reason,
-                    len(client.get_output()),
-                    len(client.tool_calls),
+                    len(output),
+                    client.tool_call_count,
                 )
                 return ACPRunResult(
                     success=success,
-                    output=client.get_output(),
+                    output=output,
+                    output_char_count=client.output_char_count,
+                    output_truncated=client.output_truncated,
                     stop_reason=stop_reason_text,
                     session_id=active_session_id,
                     tool_calls=client.tool_calls,
+                    tool_call_count=client.tool_call_count,
                     elapsed_seconds=elapsed,
                     error="; ".join(client.errors) if client.errors else None,
                     cancelled=cancelled,
@@ -252,9 +273,12 @@ class ACPRunner:
             return ACPRunResult(
                 success=False,
                 output=client.get_output(),
+                output_char_count=client.output_char_count,
+                output_truncated=client.output_truncated,
                 stop_reason="timeout",
                 session_id=active_session_id,
                 tool_calls=client.tool_calls,
+                tool_call_count=client.tool_call_count,
                 elapsed_seconds=elapsed,
                 error=f"Timed out after {self.timeout}s",
                 cancelled=self._cancel_requested,
@@ -276,13 +300,17 @@ class ACPRunner:
             return ACPRunResult(
                 success=False,
                 output=client.get_output(),
+                output_char_count=client.output_char_count,
+                output_truncated=client.output_truncated,
                 stop_reason="error",
                 session_id=active_session_id,
                 tool_calls=client.tool_calls,
+                tool_call_count=client.tool_call_count,
                 elapsed_seconds=elapsed,
                 error=str(exc),
                 cancelled=self._cancel_requested,
             )
         finally:
+            client.close_output()
             self._active_conn = None
             self._active_session_id = None

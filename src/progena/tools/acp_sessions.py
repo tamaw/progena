@@ -130,22 +130,31 @@ def _status_signature(record: ACPTaskRecord) -> tuple[Any, ...]:
 
 
 def _snapshot(record: ACPTaskRecord) -> dict[str, Any]:
+    """Model-facing state only; exact evidence is an explicit result read."""
     progress = record.progress if isinstance(record.progress, dict) else {}
+    pending = _json_value(record.pending_input)
+    last_tool = progress.get("last_tool")
+    if isinstance(last_tool, dict):
+        last_tool = last_tool.get("name") or last_tool.get("title")
     return {
         "task_id": record.task_id,
         "status": record.status_value,
         "turn": record.turn,
         "stalled": record.stalled,
-        "mode": getattr(record, "mode", None),
+        "mode": record.mode,
         "progress": {
-            "last_message": _trim(progress.get("last_message")),
-            "plan": progress.get("plan"),
-            "last_tool": progress.get("last_tool"),
+            "last_tool": _trim(last_tool, 80),
             "tool_call_count": progress.get("tool_call_count", 0),
+            "last_activity_at": _timestamp(progress.get("last_activity_at")),
         },
-        "output": _trim(record.output),
-        "last_error": record.last_error,
-        "pending_input": _json_value(getattr(record, "pending_input", None)),
+        "failure_kind": record.failure_kind,
+        "last_error": _trim(record.last_error, 256),
+        "pending_input": (
+            {"id": pending.get("id"), "kind": pending.get("kind")}
+            if isinstance(pending, dict)
+            else None
+        ),
+        "result_ref": {"task_id": record.task_id, "turn": record.turn},
     }
 
 
@@ -172,9 +181,10 @@ class ACPStartTool(BaseSystemTool):
     @property
     def description(self) -> str:
         return (
-            "Start a durable session with a registered ACP CLI agent such as Claude Code. "
-            "Returns immediately with an ACP task ID; use acp_status to observe it, acp_send "
-            "for follow-up instructions, and acp_answer when the agent asks a question."
+            "Start a durable ACP task and return immediately. Completion, failure, new input "
+            "and stalls wake the originating conversation automatically; end your turn and "
+            "do not poll while the agent works. Use acp_send to steer and acp_answer to answer "
+            "input retrieved with acp_get_result."
         )
 
     async def execute(self, context: ToolContext) -> ToolResult:
@@ -227,7 +237,7 @@ class ACPStartTool(BaseSystemTool):
                 "thread_id": str(state.get("thread_id") or "").strip() or None,
             },
             status=ACPTaskStatus.QUEUED,
-            notify_on_completion=False,
+            notify_on_completion=bool(str(state.get("thread_id") or "").strip()),
             created_at=utcnow(),
             updated_at=utcnow(),
             mode=mode,
@@ -303,8 +313,9 @@ class ACPStatusTool(BaseSystemTool):
     @property
     def description(self) -> str:
         return (
-            "Get compact ACP session progress, output, errors, and any pending question, plan, "
-            "or permission input. Optionally wait for a material session-state change."
+            "Inspect compact ACP lifecycle state on explicit request, not in a supervision loop. "
+            "Actionable events wake the originating conversation automatically. Use "
+            "acp_get_result for exact output, plans or pending input; do not repeatedly poll."
         )
 
     async def execute(self, context: ToolContext) -> ToolResult:
@@ -458,7 +469,8 @@ class ACPListTool(BaseSystemTool):
                         "card_id": record.card_id,
                         "cwd": record.cwd,
                         "updated_at": _timestamp(record.updated_at),
-                        "summary": _trim(record.summary or record.output or record.last_error),
+                        "failure_kind": record.failure_kind,
+                        "result_ref": {"task_id": record.task_id, "turn": record.turn},
                     }
                     for record in filtered[:limit]
                 ]

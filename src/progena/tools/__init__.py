@@ -3,6 +3,7 @@
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from .acp_results import ACPGetResultTool
     from .current_time import CurrentTimeTool
     from .enqueue_background_task import EnqueueBackgroundTaskTool
     from .list_agents import ListAgentsTool
@@ -19,6 +20,7 @@ if TYPE_CHECKING:
 def __getattr__(name: str):
     """Lazy-load LLM-invoked tool classes to avoid circular imports with node_helpers."""
     _tool_modules = {
+        "ACPGetResultTool": "acp_results",
         "SelfReflection": "self_reflect",
         "execute_self_reflect": "self_reflect",
         "SELF_REFLECT_TOOL_SPEC": "self_reflect",
@@ -47,6 +49,7 @@ __all__ = [
     "execute_self_reflect",
     "SELF_REFLECT_TOOL_SPEC",
     # LLM-invoked system tools (lazy-loaded)
+    "ACPGetResultTool",
     "ListToolsTool",
     "ListAgentsTool",
     "NewConversationTool",

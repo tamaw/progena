@@ -76,19 +76,26 @@ def runner_for(acp_config: ACPAgentConfig, cwd: str) -> ACPRunner:
     return ACPRunner(acp_config.command, args, timeout=acp_config.timeout_seconds)
 
 
+def _result_reference(record: ACPTaskRecord) -> str:
+    return f"acp_get_result(task_id={record.task_id!r}, turn={record.turn})"
+
+
 def build_acp_completion_message(record: ACPTaskRecord) -> str:
-    """Human-readable completion summary for conversation history / notifications."""
+    """Build a compact completion record that points to retained task evidence."""
     name = record.agent_name.replace("_", " ").strip() or "ACP agent"
+    reference = _result_reference(record)
     if record.status == ACPTaskStatus.COMPLETED.value:
-        body = (record.output or "").strip()
-        snippet = body[:1000] + ("…" if len(body) > 1000 else "") if body else "(no output)"
-        return f"ACP agent '{name}' finished.\n\n{snippet}"
-    reason = record.last_error or record.stop_reason or "unknown error"
-    return f"ACP agent '{name}' run {record.status}: {reason}"
+        return f"ACP agent '{name}' finished. Details: {reference}."
+    reason = (record.last_error or record.stop_reason or "unknown error")[:256]
+    return f"ACP agent '{name}' run {record.status}: {reason}. Details: {reference}."
 
 
-def _notification_title(record: ACPTaskRecord) -> str:
+def _notification_title(record: ACPTaskRecord, event_type: str) -> str:
     name = record.agent_name.replace("_", " ").strip() or "ACP agent"
+    if event_type == "pending_input":
+        return f"{name} needs input"
+    if event_type == "stall":
+        return f"{name} may be stalled"
     return f"{name} run {record.status}"
 
 
@@ -96,45 +103,80 @@ def _completion_followup_thread_id(record: ACPTaskRecord) -> str | None:
     return str(record.request_metadata.get("thread_id") or "").strip() or None
 
 
-def _build_completion_followup_prompt(record: ACPTaskRecord) -> str:
-    raw_result = build_acp_completion_message(record).strip()
-    original_request = record.prompt.strip() or "(missing original prompt)"
+def _input_prompt(record: ACPTaskRecord) -> str:
+    pending = record.pending_input if isinstance(record.pending_input, dict) else {}
+    input_id = str(pending.get("id") or "").strip()
+    kind = str(pending.get("kind") or "input").strip()
+    message = str(pending.get("message") or "").strip()
+    preview = message[:1000]
+    truncated = " (truncated; retrieve details)" if len(message) > len(preview) else ""
+    question = f"\nQuestion: {preview}{truncated}" if preview else ""
     return (
-        "An async ACP agent task that the user started earlier in this conversation has finished.\n\n"
-        f"Agent: {record.agent_name}\n"
-        f"Status: {record.status}\n"
-        f"Original prompt: {original_request}\n\n"
-        "Raw task result:\n"
-        f"{raw_result}\n\n"
-        "Respond to the user in this same conversation with a short, helpful update. "
-        "Summarize the result clearly. If the task failed, explain the failure briefly and "
-        "suggest the next step."
+        f"ACP task {record.task_id} (turn {record.turn}) needs {kind} input "
+        f"(pending input {input_id}).{question}\n"
+        f"Read the exact input before answering: acp_get_result(task_id={record.task_id!r}, "
+        f"turn={record.turn}, source='input'). Respond using acp_answer with that input ID."
+    )
+
+
+def _build_followup_prompt(record: ACPTaskRecord, event_type: str) -> str:
+    reference = _result_reference(record)
+    if event_type == "pending_input":
+        return _input_prompt(record)
+    if event_type == "stall":
+        return (
+            f"ACP task {record.task_id} (turn {record.turn}) may be stalled. "
+            f"Inspect it only if action is needed: {reference}."
+        )
+    error = ""
+    if record.status != ACPTaskStatus.COMPLETED.value:
+        reason = (record.last_error or record.stop_reason or "unknown error").strip()
+        preview = reason[:1000]
+        error = f"\nError: {preview}{'…' if len(reason) > len(preview) else ''}"
+    return (
+        f"ACP task {record.task_id} (turn {record.turn}) reached {record.status}.{error}\n"
+        f"Details: {reference}."
     )
 
 
 async def enqueue_acp_completion_followup(
-    state_manager: Any, queues: Any, record: ACPTaskRecord
+    state_manager: Any,
+    queues: Any,
+    record: ACPTaskRecord,
+    *,
+    event_type: str = "terminal",
+    event_identity: str | None = None,
 ) -> bool:
-    """Queue a same-thread follow-up turn for a terminal ACP task."""
+    """Queue one compact, same-thread follow-up for an actionable ACP event."""
     thread_id = _completion_followup_thread_id(record)
     if not thread_id:
         return False
     await queues.enqueue_input(
-        _build_completion_followup_prompt(record),
+        _build_followup_prompt(record, event_type),
         metadata={
             "thread_id": thread_id,
             "notify_on_completion": True,
             "completion_event_type": "agent_message",
-            "source": "acp_task_completion_followup",
+            "source": "acp_task_actionable_followup",
             "task_id": record.task_id,
             "agent": record.agent_name,
             "acp_status": record.status,
-            "title": _notification_title(record),
-            "level": "error" if record.status != ACPTaskStatus.COMPLETED.value else "info",
+            "acp_turn": record.turn,
+            "acp_event_type": event_type,
+            "title": _notification_title(record, event_type),
+            "level": "error"
+            if event_type == "terminal" and record.status != ACPTaskStatus.COMPLETED.value
+            else "info",
         },
     )
-    await state_manager.update_acp_task(
-        record.task_id,
-        {"notification_sent_at": utcnow(), "updated_at": utcnow()},
-    )
+    acknowledgements = dict(record.material_event_acknowledgements)
+    if event_identity is not None:
+        acknowledgements[event_type] = event_identity
+    update: dict[str, Any] = {
+        "material_event_acknowledgements": acknowledgements,
+        "updated_at": utcnow(),
+    }
+    if event_type == "terminal":
+        update["notification_sent_at"] = utcnow()
+    await state_manager.update_acp_task(record.task_id, update)
     return True

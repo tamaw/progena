@@ -12,9 +12,12 @@ from __future__ import annotations
 import inspect
 import json
 import logging
+import os
+import tempfile
 import uuid
 from collections.abc import Awaitable, Callable
-from typing import Any
+from pathlib import Path
+from typing import Any, TextIO
 
 from acp import Client
 from acp.schema import (
@@ -48,6 +51,9 @@ from acp.schema import (
 
 logger = logging.getLogger(__name__)
 
+_MAX_METADATA_ENTRIES = 200
+_MAX_CAPTURE_PREVIEW_CHARS = 16_384
+
 
 class ACPSessionClient(Client):
     """Collects streaming updates from an ACP agent for one prompt."""
@@ -55,20 +61,53 @@ class ACPSessionClient(Client):
     def __init__(
         self,
         run_id: str = "unknown",
-        on_progress: Callable[[dict[str, Any]], Awaitable[None] | None] | None = None,
+        on_progress: Callable[[dict[str, Any]], Awaitable[Any] | Any] | None = None,
         on_input: Callable[[dict[str, Any]], Awaitable[Any] | Any] | None = None,
+        *,
+        max_output_chars: int | None = None,
+        max_metadata_entries: int = _MAX_METADATA_ENTRIES,
     ) -> None:
         self.run_id = run_id
         self.text_parts: list[str] = []
         self.thoughts: list[str] = []
         self.tool_calls: list[dict[str, Any]] = []
         self.errors: list[str] = []
+        self.output_char_count = 0
+        self.output_truncated = False
+        self.tool_call_count = 0
+        self._retained_output_chars = 0
+        self._output_spool: TextIO | None = None
+        self._max_output_chars = (
+            max_output_chars if max_output_chars and max_output_chars > 0 else None
+        )
+        self._max_metadata_entries = max(1, max_metadata_entries)
         self.capabilities = ClientCapabilities(
             elicitation=ElicitationCapabilities(form=ElicitationFormCapabilities())
         )
         self._conn: Any = None
         self._on_progress = on_progress
         self._on_input = on_input
+
+    def set_output_limit(self, max_output_chars: int | None) -> None:
+        """Start bounded collection after an exact durable evidence source is ready."""
+        self._max_output_chars = (
+            max_output_chars if max_output_chars is not None and max_output_chars > 0 else None
+        )
+        if self._max_output_chars is not None:
+            if self._output_spool is not None:
+                self._output_spool.seek(0)
+                self.text_parts = [self._output_spool.read(self._max_output_chars)]
+                self.close_output()
+            remaining = self._max_output_chars
+            retained: list[str] = []
+            for part in self.text_parts:
+                if remaining <= 0:
+                    break
+                retained.append(part[:remaining])
+                remaining -= len(retained[-1])
+            self.text_parts = retained
+            self._retained_output_chars = self._max_output_chars - remaining
+            self.output_truncated |= self.output_char_count > self._retained_output_chars
 
     async def _emit_progress(self, update: dict[str, Any]) -> None:
         if self._on_progress is None:
@@ -92,32 +131,62 @@ class ACPSessionClient(Client):
         if isinstance(update, AgentMessageChunk):
             text = getattr(getattr(update, "content", None), "text", None)
             if text:
-                self.text_parts.append(text)
+                self.output_char_count += len(text)
+                if self._max_output_chars is None:
+                    try:
+                        if self._output_spool is None:
+                            capture_dir = os.environ.get("PROGENA_ACP_CAPTURE_DIR")
+                            if capture_dir:
+                                Path(capture_dir).mkdir(parents=True, exist_ok=True, mode=0o700)
+                            # Callback-spanning lifetime; ACPRunner closes it in finally.
+                            self._output_spool = tempfile.TemporaryFile(  # noqa: SIM115
+                                mode="w+", encoding="utf-8", dir=capture_dir
+                            )
+                        self._output_spool.write(text)
+                    except OSError as exc:
+                        self.errors.append(f"ACP output capture failed: {exc}"[:512])
+                        self.output_truncated = True
+                        raise
+                retention_limit = self._max_output_chars or _MAX_CAPTURE_PREVIEW_CHARS
+                remaining = retention_limit - self._retained_output_chars
+                if remaining > 0:
+                    retained_text = text[:remaining]
+                    self.text_parts.append(retained_text)
+                    self._retained_output_chars += len(retained_text)
+                if self._max_output_chars is not None:
+                    self.output_truncated |= len(text) > remaining
                 await self._emit_progress({"kind": "message", "text": text})
         elif isinstance(update, AgentThoughtChunk):
             text = getattr(getattr(update, "content", None), "text", None)
             if text:
-                self.thoughts.append(text)
+                self.thoughts.append(text[-4096:])
+                if len(self.thoughts) > self._max_metadata_entries:
+                    del self.thoughts[: -self._max_metadata_entries]
                 await self._emit_progress({"kind": "thought", "text": text})
         elif isinstance(update, AgentPlanUpdate):
             plan = update.model_dump(mode="json").get("entries", [])
             await self._emit_progress({"kind": "plan", "plan": plan})
         elif isinstance(update, ToolCallStart):
             call = {
-                "id": getattr(update, "tool_call_id", None),
-                "name": getattr(update, "title", None),
-                "kind": getattr(update, "kind", None),
+                "id": str(getattr(update, "tool_call_id", None) or "")[:256],
+                "name": str(getattr(update, "title", None) or "")[:512],
+                "kind": str(getattr(update, "kind", None) or "")[:128],
                 "status": "start",
             }
+            self.tool_call_count += 1
             self.tool_calls.append(call)
+            if len(self.tool_calls) > self._max_metadata_entries:
+                del self.tool_calls[: -self._max_metadata_entries]
             await self._emit_progress({"kind": "tool", "tool_call": call})
         elif isinstance(update, ToolCallProgress):
             call = {
-                "id": getattr(update, "tool_call_id", None),
-                "name": getattr(update, "title", None),
-                "status": str(getattr(update, "status", "") or "progress"),
+                "id": str(getattr(update, "tool_call_id", None) or "")[:256],
+                "name": str(getattr(update, "title", None) or "")[:512],
+                "status": str(getattr(update, "status", "") or "progress")[:128],
             }
             self.tool_calls.append(call)
+            if len(self.tool_calls) > self._max_metadata_entries:
+                del self.tool_calls[: -self._max_metadata_entries]
             await self._emit_progress({"kind": "tool", "tool_call": call})
 
     async def request_permission(
@@ -284,5 +353,18 @@ class ACPSessionClient(Client):
         _ = elicitation_id
 
     def get_output(self) -> str:
-        """Aggregated agent message text from the run."""
+        """Exact generic output, or bounded preview after native source verification."""
+        if self._output_spool is not None:
+            position = self._output_spool.tell()
+            try:
+                self._output_spool.seek(0)
+                return self._output_spool.read()
+            finally:
+                self._output_spool.seek(position)
         return "".join(self.text_parts)
+
+    def close_output(self) -> None:
+        """Release the private anonymous capture file after result materialization."""
+        if self._output_spool is not None:
+            self._output_spool.close()
+            self._output_spool = None

@@ -32,15 +32,30 @@ running turn, which is required for live steering and replies.
 - **Start** — `acp_start(agent, prompt, cwd=None, card_id=None, mode=None)`
   creates the task. `mode` may be `default`, `acceptEdits`, `plan`, or
   `bypassPermissions`; it is applied when starting/resuming and when changed
-  during a turn.
+  during a turn. Chat tasks with an originating thread automatically wake that
+  conversation for completion, failure, new input and a newly detected stall.
+  End the supervising turn after delegation; ordinary progress requires no
+  supervising model calls. Workflow-owned tasks use document events instead.
 - **Send** — `acp_send(task_id, message)` steers a running Claude turn on that
   live connection (`outcome: "injected"`). When idle it starts the next turn on
   the same session (`outcome: "started_turn"`). Use short, specific corrections;
   do not cancel merely to send a follow-up.
-- **Inspect** — `acp_status(task_id, wait_seconds=0)` returns the task snapshot;
-  its wait is capped at 300 seconds. `acp_list(card_id=None, status=None,
-  agent=None, limit=20)` finds sessions.
-- **Answer** — Claude questions and plan submissions appear in `pending_input`.
+- **Inspect** — `acp_status(task_id, wait_seconds=0)` returns bounded lifecycle
+  metadata and result references, not collected output or narrative progress.
+  The optional manual wait is capped at 300 seconds; do not use it in a
+  supervision loop. `acp_list(card_id=None, status=None, agent=None, limit=20)`
+  finds sessions without returning their output.
+- **Evidence** — `acp_get_result(task_id, turn=None, source="output", cursor=None,
+  limit=...)` retrieves selected-turn output explicitly. Use `source="input"`
+  for the complete pending question/plan, `"plan"` for recorded progress plans,
+  `"transcript"` for exact transcript pages, or `"error"` for the exact error
+  beyond the status preview. `limit` bounds each content page; follow
+  `next_cursor` only when the selected evidence needs more detail.
+  Input/plan pages are JSON text: join all pages before parsing/answering.
+  Check `availability`; an unknown native mapping is not permission to inspect
+  arbitrary files. Detailed evidence stays outside default model context.
+- **Answer** — status exposes the `pending_input` identity and kind; retrieve
+  the exact question/plan with `acp_get_result(source="input")` before answering.
   Call `acp_answer(task_id, input_id, answer)` promptly: Claude is blocked until
   the supervisor sends the matching `answers[input_id]` reply on its live
   connection and clears `pending_input`. Question answers are form-value objects

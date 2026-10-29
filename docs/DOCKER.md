@@ -195,6 +195,20 @@ to a one-off override file; do not expose it in the public deployment.
 ## Volumes and ephemeral storage
 
 - `progena` and `backend`: `${PROGENA_HOST_LOGS_DIR:-../logs}:/app/logs`, `${PROGENA_HOST_REPOS_DIR:-../repos}:/app/repos`
+- `claude`: `${PROGENA_HOST_CLAUDE_DIR:-/var/lib/progena/claude}:/home/claude/.claude`
+- `backend` only: the same directory is mounted read-only at
+  `/var/lib/progena/claude` for task-bound ACP transcript detail reads. The
+  runtime never receives this mount; it asks the backend over the internal
+  `PROGENA_BACKEND_URL` and cannot browse Claude configuration. The reader
+  resolves only the verified task's session file below `projects/`, rejects
+  traversal and symlink escapes, and never exposes a general config-file API.
+- `backend`: `PROGENA_ACP_CAPTURE_DIR=/app/logs/acp-capture` keeps temporary
+  lossless ACP output on the existing disk-backed logs volume, not `/app/tmp`
+  tmpfs. Capture files are private anonymous files and close after a turn's
+  result is materialized. Generic agents retain exact output in their task
+  record; verified Claude sessions use native transcript evidence instead of
+  retaining the full stream in memory. Interrupted turns retain the existing
+  interruption semantics; anonymous capture is not a crash-recovery journal.
 
 The CI deployment uses the GitHub Environment `production`. Store credentials in
 its secrets. Containers, operational logs, and agent shells use UTC; user
