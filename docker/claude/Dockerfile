@@ -2,7 +2,7 @@
 FROM node:22-bookworm-slim
 
 ARG DEBIAN_FRONTEND=noninteractive
-ARG CLAUDE_ACP_VERSION=0.93.0
+ARG CLAUDE_ACP_VERSION=0.99.0
 
 ENV HOME=/home/claude \
     CLAUDE_CONFIG_DIR=/home/claude/.claude \
