@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import contextvars
 import uuid
 from collections.abc import Callable
-from dataclasses import asdict, is_dataclass
+from dataclasses import asdict, dataclass, is_dataclass
 from typing import Any
 
 from aiohttp import web
@@ -15,6 +16,7 @@ from langgraph.types import Command
 
 from src.progena.documents.values import make_json_safe
 from src.progena.llm.structured import validate_against_schema
+from src.progena.runtime.conversation_gate import ConversationTurnGate
 from src.progena.sessions.context import reset_current_thread_id, set_current_thread_id
 
 from ..routines.messages import extract_json_object, normalize_message_content
@@ -22,6 +24,47 @@ from ..utils import utcnow_isoformat
 
 THREAD_PREFIX = "agent_protocol_thread:"
 RUN_PREFIX = "agent_protocol_run:"
+
+
+@dataclass(frozen=True)
+class ObjectAgentOwner:
+    """Protocol identity retained by ACP tasks started in an object-agent run."""
+
+    assistant_id: str
+    thread_id: str
+    run_id: str
+    checkpoint_thread_id: str
+
+    def as_metadata(self) -> dict[str, str]:
+        return {
+            "protocol": "object_agent",
+            "assistant_id": self.assistant_id,
+            "thread_id": self.thread_id,
+            "run_id": self.run_id,
+            "checkpoint_thread_id": self.checkpoint_thread_id,
+        }
+
+
+_current_object_agent_owner: contextvars.ContextVar[ObjectAgentOwner | None] = (
+    contextvars.ContextVar("progena_object_agent_owner", default=None)
+)
+
+
+def get_current_object_agent_owner() -> ObjectAgentOwner | None:
+    """Return the object-agent protocol run currently executing, if any."""
+    return _current_object_agent_owner.get()
+
+
+def _owner_from_metadata(value: Any) -> ObjectAgentOwner | None:
+    if not isinstance(value, dict) or value.get("protocol") != "object_agent":
+        return None
+    values = {
+        key: str(value.get(key) or "").strip()
+        for key in ("assistant_id", "thread_id", "run_id", "checkpoint_thread_id")
+    }
+    if not all(values.values()):
+        return None
+    return ObjectAgentOwner(**values)
 
 
 def _json_value(value: Any) -> Any:
@@ -43,9 +86,16 @@ class ObjectAgentProtocol:
     contains only active execution handles, never authoritative run results.
     """
 
-    def __init__(self, *, store: Any, resolve_agent: Callable[[str], Any | None]) -> None:
+    def __init__(
+        self,
+        *,
+        store: Any,
+        resolve_agent: Callable[[str], Any | None],
+        conversation_gate: ConversationTurnGate | None = None,
+    ) -> None:
         self._store = store
         self._resolve_agent = resolve_agent
+        self._conversation_gate = conversation_gate or ConversationTurnGate()
         self._tasks: dict[tuple[str, str], asyncio.Task[None]] = {}
         self._lock = asyncio.Lock()
 
@@ -124,6 +174,76 @@ class ObjectAgentProtocol:
         if run is None:
             raise web.HTTPNotFound(text="Run not found")
         return run
+
+    async def resume_acp_continuation(
+        self,
+        owner_metadata: Any,
+        prompt: str,
+        *,
+        task_id: str,
+    ) -> bool:
+        """Start the owning object agent's next turn for one ACP material event.
+
+        The task's persisted owner identity is verified against both protocol
+        documents before creating a new run.  A live owner run is never
+        interrupted by its callback; the heartbeat will retry that material
+        event after the run becomes idle.
+        """
+        owner = _owner_from_metadata(owner_metadata)
+        if (
+            owner is None
+            or not prompt.strip()
+            or owner.checkpoint_thread_id != f"object-agent:{owner.assistant_id}:{owner.thread_id}"
+        ):
+            return False
+        runnable = self._resolve_agent(owner.assistant_id)
+        if runnable is None:
+            return False
+
+        async with self._lock:
+            try:
+                thread = await self._thread(owner.thread_id)
+                owner_run = await self._run(owner.thread_id, owner.run_id)
+            except web.HTTPException:
+                return False
+            if (
+                thread.get("assistant_id") != owner.assistant_id
+                or owner_run.get("assistant_id") != owner.assistant_id
+            ):
+                return False
+            if any(
+                thread_id == owner.thread_id and not task.done()
+                for (thread_id, _), task in self._tasks.items()
+            ):
+                return False
+
+            now = utcnow_isoformat()
+            run_id = uuid.uuid4().hex
+            run = {
+                "thread_id": owner.thread_id,
+                "run_id": run_id,
+                "assistant_id": owner.assistant_id,
+                "model_profile": owner_run.get("model_profile"),
+                "status": "running",
+                "continuation_of": owner.run_id,
+                "acp_task_id": task_id,
+                "created_at": now,
+                "updated_at": now,
+            }
+            await self._store.save_document(
+                THREAD_PREFIX + owner.thread_id,
+                {**thread, "status": "busy", "updated_at": now},
+            )
+            await self._store.save_document(f"{RUN_PREFIX}{owner.thread_id}:{run_id}", run)
+            self._tasks[(owner.thread_id, run_id)] = asyncio.create_task(
+                self._execute(
+                    run,
+                    runnable,
+                    {"messages": [{"role": "user", "content": prompt}]},
+                    None,
+                )
+            )
+        return True
 
     async def create_thread(self, request: web.Request) -> web.Response:
         payload = await self._payload(request)
@@ -263,18 +383,30 @@ class ObjectAgentProtocol:
         values: dict[str, Any] = {}
         error = None
         checkpoint_thread = f"object-agent:{run['assistant_id']}:{thread_id}"
+        owner_token = _current_object_agent_owner.set(
+            ObjectAgentOwner(
+                assistant_id=str(run["assistant_id"]),
+                thread_id=thread_id,
+                run_id=run_id,
+                checkpoint_thread_id=checkpoint_thread,
+            )
+        )
         thread_token = set_current_thread_id(checkpoint_thread)
         try:
-            result = await runnable.ainvoke(
-                invocation,
-                config={
-                    "configurable": {
-                        "thread_id": checkpoint_thread,
-                        "object_agent_thread_id": checkpoint_thread,
-                        "model_profile": run.get("model_profile"),
-                    }
-                },
-            )
+
+            async def invoke() -> Any:
+                return await runnable.ainvoke(
+                    invocation,
+                    config={
+                        "configurable": {
+                            "thread_id": checkpoint_thread,
+                            "object_agent_thread_id": checkpoint_thread,
+                            "model_profile": run.get("model_profile"),
+                        }
+                    },
+                )
+
+            result = await self._conversation_gate.run(checkpoint_thread, invoke)
             values = _json_value(result)
             status = "interrupted" if values.get("__interrupt__") else "success"
             if response_schema is not None and status == "success":
@@ -298,6 +430,7 @@ class ObjectAgentProtocol:
             status, error = "error", str(exc)
         finally:
             reset_current_thread_id(thread_token)
+            _current_object_agent_owner.reset(owner_token)
         now = utcnow_isoformat()
         finished = {**run, "status": status, "error": error, "values": values, "updated_at": now}
         try:

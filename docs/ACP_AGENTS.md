@@ -77,6 +77,18 @@ and cancellation requests. A task cannot start beyond `PROGENA_ACP_MAX_TURNS`.
 
 ACP agents are reached only through `acp_*`; `a2a_*` tools handle remote A2A agents.
 
+### Liveness is not a model-response test
+
+Claude's container health check inspects the existing `socat` listener process;
+it neither opens an ACP session nor sends a model prompt. An idle agent can be
+healthy. The activity watchdog compares persisted activity timestamps only:
+`stalled` means no recent activity, not proof that the process is dead.
+
+The Progena heartbeat also routes queued work and actionable ACP events. That
+orchestration role is separate from liveness: ordinary waiting/progress must
+not trigger model calls that ask whether Claude is responding.
+
+
 ## A2A task sessions
 
 Remote HTTP A2A agents use a separate task-session family:

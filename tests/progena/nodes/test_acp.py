@@ -209,3 +209,43 @@ async def test_rejected_pending_input_is_retried_after_runtime_queue_has_capacit
     assert delivered["acp_notifications_sent"] == 1
     assert task.material_event_acknowledgements == {"pending_input": "pending_input:1:q1"}
     assert (await collect_completed_acp_tasks_node({}, runtime))["acp_completed_tasks"] == []
+
+
+@pytest.mark.asyncio
+async def test_object_agent_owned_terminal_uses_protocol_not_main_conversation() -> None:
+    task = _task()
+    task.status = ACPTaskStatus.COMPLETED
+    task.request_metadata["owner"] = {
+        "protocol": "object_agent",
+        "assistant_id": "builder",
+        "thread_id": "child-thread",
+        "run_id": "owner-run",
+        "checkpoint_thread_id": "object-agent:builder:child-thread",
+    }
+    manager = _StateManager([task])
+    queues = _Queues()
+    calls: list[tuple[dict[str, Any], str, str]] = []
+
+    class _Protocol:
+        async def resume_acp_continuation(
+            self, owner: dict[str, Any], prompt: str, *, task_id: str
+        ) -> bool:
+            calls.append((owner, prompt, task_id))
+            return True
+
+    runtime = SimpleNamespace(
+        context=SimpleNamespace(
+            state_manager=manager,
+            queues=queues,
+            object_agent_protocol=_Protocol(),
+        )
+    )
+    state = {"acp_completed_tasks": [task], "messages": []}
+
+    assert await apply_completed_acp_tasks_node(state, runtime) == {"acp_completed_task": None}
+    notified = await notify_completed_acp_tasks_node(state, runtime)
+
+    assert notified["acp_notifications_sent"] == 1
+    assert queues.inputs == []
+    assert calls and calls[0][0] == task.request_metadata["owner"]
+    assert task.material_event_acknowledgements == {"terminal": "terminal:1:completed"}

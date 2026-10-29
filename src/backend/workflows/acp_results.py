@@ -8,12 +8,14 @@ or project directory, so this is not a general Claude-config reader.
 from __future__ import annotations
 
 import codecs
+import hashlib
 import io
 import json
 import os
 import re
 import uuid
 from collections.abc import Callable, Iterator
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
@@ -25,6 +27,7 @@ ResultSource = Literal["output", "transcript", "input", "plan", "error"]
 
 _MAX_PAGE_CHARS = 8 * 1024
 _STREAM_CHUNK_BYTES = 64 * 1024
+_VERIFY_BLOCK_BYTES = 1024 * 1024
 _MAX_PROJECT_PREFIX = 200
 _TASK_ID_PATTERN = re.compile(r"[A-Za-z0-9_-]{1,128}\Z")
 _JSON_NUMBER_PATTERN = re.compile(r"-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?\Z")
@@ -45,23 +48,6 @@ def _cursor_offset(source: str, cursor: str | None) -> int:
     if prefix != source or not separator or not value.isdecimal():
         raise ACPResultRequestError(f"Invalid cursor for ACP {source} result")
     return int(value)
-
-
-def _transcript_cursor(cursor: str | None, start: int, end: int) -> tuple[int, int]:
-    if cursor is None:
-        return start, 0
-    pieces = cursor.split(":")
-    if (
-        len(pieces) != 3
-        or pieces[0] != "transcript"
-        or not pieces[1].isdecimal()
-        or not pieces[2].isdecimal()
-    ):
-        raise ACPResultRequestError("Invalid cursor for ACP transcript result")
-    line, offset = int(pieces[1]), int(pieces[2])
-    if line < start or line > end:
-        raise ACPResultRequestError("ACP transcript cursor is outside the selected turn")
-    return line, offset
 
 
 def _page_text(source: str, content: str, cursor: str | None, limit: int) -> dict[str, Any]:
@@ -125,21 +111,54 @@ def _base36(value: int) -> str:
     return result or "0"
 
 
-def _text_fragments(path: Path) -> Iterator[tuple[int, int, str]]:
-    """Yield bounded decoded fragments with their JSONL line and character offsets."""
+class _TranscriptReadError(OSError):
+    """The mounted transcript cannot be read as an exact UTF-8 source."""
+
+
+@dataclass(frozen=True)
+class _ResolvedTranscript:
+    path: Path
+    line_start: int
+    line_end: int
+    byte_start: int
+    byte_end: int
+    block_hashes: tuple[str, ...]
+
+
+def _text_fragments(
+    path: Path,
+    *,
+    start_byte: int = 0,
+    end_byte: int | None = None,
+    line: int = 0,
+    final: bool = True,
+) -> Iterator[tuple[int, int, str]]:
+    """Yield decoded fragments from one bounded byte range of a JSONL source."""
     decoder = codecs.getincrementaldecoder("utf-8")()
-    line = 0
     column = 0
     try:
         with path.open("rb") as handle:
-            while raw := handle.read(_STREAM_CHUNK_BYTES):
+            handle.seek(start_byte)
+            remaining = None if end_byte is None else end_byte - start_byte
+            if remaining is not None and remaining < 0:
+                raise _TranscriptReadError("invalid transcript byte range")
+            while remaining is None or remaining:
+                raw = handle.read(
+                    _STREAM_CHUNK_BYTES
+                    if remaining is None
+                    else min(_STREAM_CHUNK_BYTES, remaining)
+                )
+                if not raw:
+                    break
+                if remaining is not None:
+                    remaining -= len(raw)
                 text = decoder.decode(raw)
                 position = 0
                 while position < len(text):
                     newline = text.find("\n", position)
                     if newline < 0:
-                        if position < len(text):
-                            fragment = text[position:]
+                        fragment = text[position:]
+                        if fragment:
                             yield line, column, fragment
                             column += len(fragment)
                         break
@@ -151,25 +170,29 @@ def _text_fragments(path: Path) -> Iterator[tuple[int, int, str]]:
                     line += 1
                     column = 0
                     position = newline + 1
-            text = decoder.decode(b"", final=True)
-            if text:
-                position = 0
-                while position < len(text):
-                    newline = text.find("\n", position)
-                    if newline < 0:
-                        fragment = text[position:]
-                        yield line, column, fragment
-                        break
-                    if newline > position:
-                        fragment = text[position:newline]
-                        yield line, column, fragment
-                        column += len(fragment)
-                    yield line, column, "\n"
-                    line += 1
-                    column = 0
-                    position = newline + 1
-    except OSError:
-        return
+            if final:
+                text = decoder.decode(b"", final=True)
+                if text:
+                    position = 0
+                    while position < len(text):
+                        newline = text.find("\n", position)
+                        if newline < 0:
+                            fragment = text[position:]
+                            if fragment:
+                                yield line, column, fragment
+                            break
+                        if newline > position:
+                            fragment = text[position:newline]
+                            yield line, column, fragment
+                            column += len(fragment)
+                        yield line, column, "\n"
+                        line += 1
+                        column = 0
+                        position = newline + 1
+    except UnicodeDecodeError as exc:
+        raise _TranscriptReadError("transcript is not valid UTF-8") from exc
+    except OSError as exc:
+        raise _TranscriptReadError("transcript source is unavailable") from exc
 
 
 class _JSONString:
@@ -450,8 +473,20 @@ class NativeClaudeTranscriptReader:
         )
         self._root = Path(configured)
 
+    def start_new_turn(self, session_id: str | None, cwd: str | None) -> dict[str, Any] | None:
+        """Anchor a newly identified private SDK transcript from its first byte."""
+        session = _valid_session_id(session_id)
+        if session is None or _project_directory(cwd) is None:
+            return None
+        return {
+            "provider": "claude_native",
+            "session_id": session,
+            "line_start": 0,
+            "byte_start": 0,
+        }
+
     def start_turn(self, session_id: str | None, cwd: str | None) -> dict[str, Any] | None:
-        """Capture the native line boundary before a Claude prompt starts."""
+        """Capture an append-only native source boundary before a prompt starts."""
         session = _valid_session_id(session_id)
         project = _project_directory(cwd)
         if session is None or project is None:
@@ -461,51 +496,82 @@ class NativeClaudeTranscriptReader:
         )
         if path is None:
             return None
+        if path.exists():
+            try:
+                byte_start, line_start, ends_on_newline = self._boundary(path)
+            except _TranscriptReadError:
+                return None
+        else:
+            byte_start, line_start, ends_on_newline = 0, 0, True
+        # A pre-existing partial row cannot be assigned safely to either turn.
+        if byte_start and not ends_on_newline:
+            return None
         return {
             "provider": "claude_native",
             "session_id": session,
-            "line_start": self._line_count(path),
+            "line_start": line_start,
+            "byte_start": byte_start,
         }
 
     def finish_turn(
         self, reference: dict[str, Any] | None, *, cwd: str | None
     ) -> dict[str, Any] | None:
-        """Seal a turn range only after verifying the file/session/cwd correlation."""
+        """Seal and hash the exact native byte range produced by this turn."""
         if not isinstance(reference, dict) or reference.get("provider") != "claude_native":
             return None
         session = _valid_session_id(reference.get("session_id"))
         project = _project_directory(cwd)
-        if session is None or project is None:
+        start = reference.get("line_start")
+        byte_start = reference.get("byte_start")
+        if (
+            session is None
+            or project is None
+            or not isinstance(start, int)
+            or start < 0
+            or not isinstance(byte_start, int)
+            or byte_start < 0
+        ):
             return None
         path = self._verified_path(session, project, cwd)
         if path is None:
             return None
-        start = reference.get("line_start")
-        if not isinstance(start, int) or start < 0:
+        try:
+            byte_end, rows, _ends_on_newline = self._boundary_from(path, byte_start)
+            block_hashes = self._block_hashes(path, byte_start, byte_end)
+        except _TranscriptReadError:
             return None
-        end = self._line_count(path)
-        if start > end:
-            return None
-        return {**reference, "cwd": cwd, "line_start": start, "line_end": end}
+        return {
+            **reference,
+            "cwd": cwd,
+            "line_start": start,
+            "line_end": start + rows,
+            "byte_start": byte_start,
+            "byte_end": byte_end,
+            "block_size": _VERIFY_BLOCK_BYTES,
+            "block_sha256": block_hashes,
+        }
 
     def final_output(
         self, reference: dict[str, Any] | None, *, cwd: str | None
     ) -> tuple[str | None, int | None]:
-        """Return every text block in the final main-assistant logical message."""
+        """Return the final complete main-assistant message, never an earlier fallback."""
         resolved = self._resolve_reference(reference, cwd=cwd)
         if resolved is None:
             return None, None
-        path, start, end = resolved
-        final_lines: list[int] = []
         final_id: str | None = None
+        final_line: int | None = None
+        final_texts: list[str] = []
+        incomplete = False
 
         def select(line: int, row: _JSONLRow) -> None:
-            nonlocal final_id, final_lines
+            nonlocal final_id, final_line, final_texts, incomplete
+            if not row.complete():
+                incomplete = True
+                return
             values = row.values
             message = values.get("message")
             if (
-                not row.complete()
-                or values.get("type") != "assistant"
+                values.get("type") != "assistant"
                 or values.get("isSidechain") is True
                 or not isinstance(message, dict)
                 or message.get("role") != "assistant"
@@ -514,25 +580,40 @@ class NativeClaudeTranscriptReader:
             message_id = message.get("id")
             if not isinstance(message_id, str):
                 final_id = None
-                final_lines = [line]
+                final_texts = list(row.texts)
             elif message_id == final_id:
-                final_lines.append(line)
+                final_texts.extend(row.texts)
             else:
                 final_id = message_id
-                final_lines = [line]
+                final_texts = list(row.texts)
+            final_line = line
 
-        self._scan_rows(path, start, end, select)
-        if not final_lines:
+        try:
+            self._verify_blocks(resolved, resolved.byte_start, resolved.byte_end)
+            self._scan_rows(resolved, select, collect_text=True)
+        except _TranscriptReadError:
             return None, None
-        texts: list[str] = []
-        for line in final_lines:
+        if incomplete or final_line is None or not final_texts:
+            return None, None
+        return "".join(final_texts), final_line
 
-            def collect(_line: int, row: _JSONLRow) -> None:
-                if row.complete():
-                    texts.extend(row.texts)
-
-            self._scan_rows(path, line, line + 1, collect, collect_text=True)
-        return "".join(texts) if texts else None, final_lines[-1]
+    def continue_turn(
+        self, reference: dict[str, Any] | None, *, cwd: str | None
+    ) -> dict[str, Any] | None:
+        """Continue a prior sealed range without rescanning historical bytes."""
+        resolved = self._resolve_reference(reference, cwd=cwd)
+        if resolved is None:
+            return None
+        session = reference.get("session_id") if isinstance(reference, dict) else None
+        if not isinstance(session, str):
+            return None
+        return {
+            "provider": "claude_native",
+            "session_id": session,
+            "line_start": resolved.line_end,
+            "byte_start": resolved.byte_end,
+            "awaiting_identity": True,
+        }
 
     def transcript_page(
         self,
@@ -542,51 +623,60 @@ class NativeClaudeTranscriptReader:
         cursor: str | None,
         limit: int,
     ) -> dict[str, Any] | None:
-        """Return an exact, bounded raw-JSONL range for a sealed native turn."""
+        """Return one exact page without reading outside the sealed byte range."""
         resolved = self._resolve_reference(reference, cwd=cwd)
         if resolved is None:
             return None
-        path, start, end = resolved
-        line_cursor, character_cursor = _transcript_cursor(cursor, start, end)
-        pieces: list[str] = []
-        remaining = limit
-        next_cursor: tuple[int, int] | None = None
-        page_full = False
-        for line, column, fragment in _text_fragments(path):
-            if line < line_cursor:
-                continue
-            if line >= end:
-                break
-            offset = character_cursor if line == line_cursor else 0
-            if column + len(fragment) <= offset:
-                continue
-            fragment_start = max(column, offset)
-            visible = fragment[fragment_start - column :]
-            if page_full:
-                next_cursor = (line, fragment_start)
-                break
-            if len(visible) > remaining:
-                pieces.append(visible[:remaining])
-                next_cursor = (line, fragment_start + remaining)
-                page_full = True
-                break
-            pieces.append(visible)
-            remaining -= len(visible)
-            if remaining == 0:
-                page_full = True
+        try:
+            byte_cursor = self._page_byte_cursor(cursor, resolved)
+            scan_end = min(resolved.byte_end, byte_cursor + limit * 4)
+            self._verify_blocks(resolved, byte_cursor, scan_end)
+            pieces: list[str] = []
+            remaining = limit
+            consumed = 0
+            for _line, _column, fragment in _text_fragments(
+                resolved.path,
+                start_byte=byte_cursor,
+                end_byte=scan_end,
+                final=scan_end == resolved.byte_end,
+            ):
+                if len(fragment) > remaining:
+                    visible = fragment[:remaining]
+                    pieces.append(visible)
+                    consumed += len(visible.encode("utf-8"))
+                    remaining = 0
+                    break
+                pieces.append(fragment)
+                consumed += len(fragment.encode("utf-8"))
+                remaining -= len(fragment)
+                if remaining == 0:
+                    break
+        except _TranscriptReadError:
+            return None
+        next_byte = byte_cursor + consumed
+        has_next = next_byte < resolved.byte_end
         return {
             "content": "".join(pieces),
-            "next_cursor": (
-                f"transcript:{next_cursor[0]}:{next_cursor[1]}" if next_cursor is not None else None
-            ),
-            "truncated": next_cursor is not None,
-            "line_start": start,
-            "line_end": end,
+            "next_cursor": f"transcriptb:{next_byte}" if has_next else None,
+            "truncated": has_next,
+            "line_start": resolved.line_start,
+            "line_end": resolved.line_end,
         }
+
+    def _page_byte_cursor(self, cursor: str | None, resolved: _ResolvedTranscript) -> int:
+        if cursor is None:
+            return resolved.byte_start
+        prefix, separator, value = cursor.partition(":")
+        if prefix == "transcriptb" and separator and value.isdecimal():
+            byte_cursor = int(value)
+            if resolved.byte_start <= byte_cursor <= resolved.byte_end:
+                return byte_cursor
+            raise _TranscriptReadError("transcript cursor is outside the sealed turn")
+        raise ACPResultRequestError("Invalid cursor for ACP transcript result")
 
     def _resolve_reference(
         self, reference: dict[str, Any] | None, *, cwd: str | None
-    ) -> tuple[Path, int, int] | None:
+    ) -> _ResolvedTranscript | None:
         if not isinstance(reference, dict) or reference.get("provider") != "claude_native":
             return None
         session = _valid_session_id(reference.get("session_id"))
@@ -600,12 +690,34 @@ class NativeClaudeTranscriptReader:
             or not isinstance(end, int)
             or start < 0
             or end < start
+            or (isinstance(reference.get("cwd"), str) and reference["cwd"] != cwd)
         ):
             return None
-        path = self._verified_path(session, project, cwd)
+        byte_start = reference.get("byte_start")
+        byte_end = reference.get("byte_end")
+        block_size = reference.get("block_size")
+        block_hashes = reference.get("block_sha256")
+        if (
+            not isinstance(byte_start, int)
+            or not isinstance(byte_end, int)
+            or byte_start < 0
+            or byte_end < byte_start
+            or block_size != _VERIFY_BLOCK_BYTES
+            or not isinstance(block_hashes, list)
+            or any(not isinstance(value, str) for value in block_hashes)
+            or len(block_hashes)
+            != (byte_end - byte_start + _VERIFY_BLOCK_BYTES - 1) // _VERIFY_BLOCK_BYTES
+        ):
+            return None
+        path = self._path(session, project, require_file=True)
         if path is None:
             return None
-        return path, start, min(end, self._line_count(path))
+        try:
+            if path.stat().st_size < byte_end:
+                return None
+        except OSError:
+            return None
+        return _ResolvedTranscript(path, start, end, byte_start, byte_end, tuple(block_hashes))
 
     def _path(self, session: str, project: str, *, require_file: bool) -> Path | None:
         candidates = self._paths(session, project, require_file=require_file)
@@ -649,19 +761,68 @@ class NativeClaudeTranscriptReader:
         return None
 
     @staticmethod
-    def _line_count(path: Path) -> int:
-        lines = 0
+    def _boundary(path: Path) -> tuple[int, int, bool]:
+        return NativeClaudeTranscriptReader._boundary_from(path, 0)
+
+    @staticmethod
+    def _boundary_from(path: Path, start_byte: int) -> tuple[int, int, bool]:
+        rows = 0
         nonempty = False
         last = b""
+        total = start_byte
         try:
             with path.open("rb") as handle:
+                handle.seek(start_byte)
                 while chunk := handle.read(_STREAM_CHUNK_BYTES):
-                    lines += chunk.count(b"\n")
+                    total += len(chunk)
+                    rows += chunk.count(b"\n")
                     nonempty = True
                     last = chunk[-1:]
-        except OSError:
-            return 0
-        return lines + int(nonempty and last != b"\n")
+        except OSError as exc:
+            raise _TranscriptReadError("transcript source is unavailable") from exc
+        return total, rows + int(nonempty and last != b"\n"), not nonempty or last == b"\n"
+
+    @staticmethod
+    def _block_hashes(path: Path, start_byte: int, end_byte: int) -> list[str]:
+        return [
+            NativeClaudeTranscriptReader._hash_bytes(
+                path,
+                start_byte + offset,
+                min(start_byte + offset + _VERIFY_BLOCK_BYTES, end_byte),
+            )
+            for offset in range(0, end_byte - start_byte, _VERIFY_BLOCK_BYTES)
+        ]
+
+    @staticmethod
+    def _hash_bytes(path: Path, start_byte: int, end_byte: int) -> str:
+        digest = hashlib.sha256()
+        try:
+            with path.open("rb") as handle:
+                handle.seek(start_byte)
+                remaining = end_byte - start_byte
+                while remaining:
+                    chunk = handle.read(min(_STREAM_CHUNK_BYTES, remaining))
+                    if not chunk:
+                        raise _TranscriptReadError("sealed transcript range is missing")
+                    digest.update(chunk)
+                    remaining -= len(chunk)
+        except OSError as exc:
+            raise _TranscriptReadError("transcript source is unavailable") from exc
+        return digest.hexdigest()
+
+    def _verify_blocks(self, resolved: _ResolvedTranscript, start_byte: int, end_byte: int) -> None:
+        if not resolved.byte_start <= start_byte <= end_byte <= resolved.byte_end:
+            raise _TranscriptReadError("invalid sealed transcript range")
+        if start_byte == end_byte:
+            return
+        first = (start_byte - resolved.byte_start) // _VERIFY_BLOCK_BYTES
+        last = (end_byte - 1 - resolved.byte_start) // _VERIFY_BLOCK_BYTES
+        for index in range(first, last + 1):
+            block_start = resolved.byte_start + index * _VERIFY_BLOCK_BYTES
+            block_end = min(block_start + _VERIFY_BLOCK_BYTES, resolved.byte_end)
+            actual = self._hash_bytes(resolved.path, block_start, block_end)
+            if actual != resolved.block_hashes[index]:
+                raise _TranscriptReadError("sealed transcript source changed")
 
     @staticmethod
     def _metadata_matches(path: Path, session: str, cwd: str | None) -> bool:
@@ -679,24 +840,30 @@ class NativeClaudeTranscriptReader:
                 matched = True
             return matched
 
-        NativeClaudeTranscriptReader._scan_rows(path, 0, 512, inspect)
+        try:
+            NativeClaudeTranscriptReader._scan_rows(
+                _ResolvedTranscript(path, 0, 512, 0, path.stat().st_size, ()), inspect
+            )
+        except (OSError, _TranscriptReadError):
+            return False
         return matched
 
     @staticmethod
     def _scan_rows(
-        path: Path,
-        start: int,
-        end: int,
+        resolved: _ResolvedTranscript,
         callback: Callable[[int, _JSONLRow], bool | None],
         *,
         collect_text: bool = False,
     ) -> None:
         current_line = -1
         row: _JSONLRow | None = None
-        for line, _column, fragment in _text_fragments(path):
-            if line < start:
-                continue
-            if line >= end:
+        for line, _column, fragment in _text_fragments(
+            resolved.path,
+            start_byte=resolved.byte_start,
+            end_byte=resolved.byte_end,
+            line=resolved.line_start,
+        ):
+            if line >= resolved.line_end:
                 break
             if line != current_line:
                 current_line = line

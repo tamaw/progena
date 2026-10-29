@@ -1,8 +1,8 @@
 """Collect actionable ACP transitions without model-driven progress polling.
 
 The backend owns execution. This collector routes terminal, input and stall
-transitions to the originating chat while workflow tasks retain their own
-document-event routing.
+transitions to their originating chat or object-agent protocol while workflow
+tasks retain their own document-event routing.
 """
 
 from __future__ import annotations
@@ -22,6 +22,12 @@ def _is_workflow_owned(record: Any) -> bool:
     """Keep workflow-owned ACP task routing out of the chat follow-up path."""
     source = str(getattr(record, "source", ""))
     return source == "workflow" or source.startswith("workflow:")
+
+
+def _is_object_agent_owned(record: Any) -> bool:
+    metadata = getattr(record, "request_metadata", {})
+    owner = metadata.get("owner") if isinstance(metadata, dict) else None
+    return isinstance(owner, dict) and owner.get("protocol") == "object_agent"
 
 
 def _material_event(
@@ -133,7 +139,11 @@ async def apply_completed_acp_tasks_node(
     runtime: Runtime[HeartbeatContext],
 ) -> dict[str, Any]:
     """Persist terminal ACP records into conversation history."""
-    records = [record for record in (state.get("acp_completed_tasks") or []) if record.is_terminal]
+    records = [
+        record
+        for record in (state.get("acp_completed_tasks") or [])
+        if record.is_terminal and not _is_object_agent_owned(record)
+    ]
     if not records:
         return {"acp_completed_task": None}
 
@@ -171,6 +181,7 @@ async def notify_completed_acp_tasks_node(
             runtime.context.state_manager,
             runtime.context.queues,
             record,
+            object_agent_protocol=getattr(runtime.context, "object_agent_protocol", None),
             event_type=event_type,
             event_identity=identity,
         ):

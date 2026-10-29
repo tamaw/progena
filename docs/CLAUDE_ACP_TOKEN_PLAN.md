@@ -83,7 +83,7 @@ Existing runtime input delivery uses an in-memory queue and `notification_sent_a
 
 ## Implementation evidence
 
-- Full backend/runtime regression suites after review fixes: **2,254 passed, 23 skipped**. The known environment-sensitive `tests/backend/test_ui_feedback.py::TestStateReaderFileOperations::test_read_health_with_no_document_store` was explicitly deselected because the existing development runtime occupies port 9501.
+- Full backend/runtime regression suites after both review passes: **2,271 passed, 23 skipped**. The known environment-sensitive `tests/backend/test_ui_feedback.py::TestStateReaderFileOperations::test_read_health_with_no_document_store` was explicitly deselected because the existing development runtime occupies port 9501.
 - Ruff passed; production Python type checking reported zero errors/warnings. Compose resolved the native transcript mount read-only on the backend only, with anonymous generic captures on the existing disk-backed logs volume.
 - Real live Claude ACP producer, exercised through the changed local supervisor: two turns, 70 combined waiting scans, **zero progress/waiting wakeups**, and one terminal wakeup per turn. Exact native output was read through the new local HTTP API and `acp_get_result`, including small paginated reads and isolated retrieval of turn 1 after turn 2. The smoke copied only its own session transcript into a temporary read-only-source fixture; production services were not replaced or restarted.
 - Identical synthetic status fixture: **9,163 → 281 serialized characters**, with its 110,000-character stored output still intact. This is a payload measurement, not a billable-token saving claim.
@@ -108,3 +108,17 @@ All six review findings are addressed:
 - Metadata, line counting and transcript paging scan bounded chunks instead of loading entire JSONL lines. Metadata verification stops after the first matching row.
 
 Standalone reruns of the original routing, multi-block and queue-saturation reproductions now produce the expected results. A 16-character read from a 12-million-character native record peaks at approximately 337 KB of traced allocation, compared with 24.2 MB before the fix. The fixed reader recovered the expected final response from a real Claude smoke session and round-tripped its 163,424-character transcript exactly across 1,287 pages.
+
+## Second review corrections
+
+All seven second-pass findings are addressed:
+
+- Plain plan approval chooses the documented keep-context option rather than silently resetting the SDK conversation. Native ownership is learned from actual root SDK notifications correlated to the ACP session, not inferred from the public ACP ID. Foreign and nested notifications are ignored; repeated identity messages are deduplicated.
+- HTTP turns, heartbeat follow-ups and object-agent executions use the same runtime-owned conversation gate. Queued/cancelled waiters remain serialized; distinct conversation IDs can execute concurrently.
+- Object-agent callbacks resume through their owning protocol and persist that thread's new run/result instead of invoking Progena on the child's checkpoint.
+- Corrupt or incomplete native evidence is unavailable, never an excuse to promote an earlier planning message. Exact transport capture is retained when usable; partial capture fails explicitly and source-finalization exceptions terminalize the task.
+- Private-session continuation uses its pre-prompt sealed boundary. SDK notifications may precede JSONL writes: the verified identity remains pending without activating truncation until its source is available.
+- Native ranges seal byte boundaries and block hashes. Missing/rewritten source fails verification; historical pagination validates only required sealed blocks and does not count future turns or rehash the entire history per page.
+- Claude liveness still checks the existing listener process only. Activity timestamps and event routing do not introduce LLM health probes.
+
+Verification includes a real LangGraph checkpoint smoke preserving both HTTP and ACP input/reply pairs, protocol-level object-agent continuation tests, and two real Claude ACP turns with native SDK identity notifications, exact final outputs and isolated historical retrieval. Raw SDK output is filtered to identity-bearing message types and never forwarded wholesale into model context. The real producer emitted one identity update per tested turn after deduplication.

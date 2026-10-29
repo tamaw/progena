@@ -208,12 +208,30 @@ class ACPRunner:
                         cwd=str(cwd_path),
                         session_id=session_id,
                         mcp_servers=[],
+                        claudeCode={
+                            "emitRawSDKMessages": [
+                                {"type": "system", "subtype": "init"},
+                                {"type": "assistant"},
+                                {"type": "result"},
+                            ]
+                        },
                     )
                 else:
-                    session = await conn.new_session(cwd=str(cwd_path), mcp_servers=[])
+                    session = await conn.new_session(
+                        cwd=str(cwd_path),
+                        mcp_servers=[],
+                        claudeCode={
+                            "emitRawSDKMessages": [
+                                {"type": "system", "subtype": "init"},
+                                {"type": "assistant"},
+                                {"type": "result"},
+                            ]
+                        },
+                    )
                 active_session_id = getattr(session, "session_id", None) or session_id
                 if not active_session_id:
                     raise RuntimeError("ACP agent did not return a session id")
+                client.bind_session(active_session_id)
                 self._active_conn = conn
                 self._active_session_id = active_session_id
                 self._cancel_requested = False

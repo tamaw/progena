@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any
+from collections.abc import Awaitable
+from typing import Any, cast
 
 from src.progena.acp.models import ACPAgentConfig, ACPFailureKind, ACPTaskRecord, ACPTaskStatus
 
@@ -144,31 +145,42 @@ async def enqueue_acp_completion_followup(
     queues: Any,
     record: ACPTaskRecord,
     *,
+    object_agent_protocol: Any = None,
     event_type: str = "terminal",
     event_identity: str | None = None,
 ) -> bool:
-    """Queue one compact, same-thread follow-up for an actionable ACP event."""
-    thread_id = _completion_followup_thread_id(record)
-    if not thread_id:
-        return False
-    queued = await queues.enqueue_input(
-        _build_followup_prompt(record, event_type),
-        metadata={
-            "thread_id": thread_id,
-            "notify_on_completion": True,
-            "completion_event_type": "agent_message",
-            "source": "acp_task_actionable_followup",
-            "task_id": record.task_id,
-            "agent": record.agent_name,
-            "acp_status": record.status,
-            "acp_turn": record.turn,
-            "acp_event_type": event_type,
-            "title": _notification_title(record, event_type),
-            "level": "error"
-            if event_type == "terminal" and record.status != ACPTaskStatus.COMPLETED.value
-            else "info",
-        },
-    )
+    """Deliver one compact continuation for an actionable ACP event."""
+    prompt = _build_followup_prompt(record, event_type)
+    owner = record.request_metadata.get("owner")
+    if isinstance(owner, dict):
+        resume = getattr(object_agent_protocol, "resume_acp_continuation", None)
+        if not callable(resume):
+            # An object-agent checkpoint must never be resumed through the
+            # main graph. Leave the event unacknowledged for a live protocol.
+            return False
+        queued = await cast(Awaitable[bool], resume(owner, prompt, task_id=record.task_id))
+    else:
+        thread_id = _completion_followup_thread_id(record)
+        if not thread_id:
+            return False
+        queued = await queues.enqueue_input(
+            prompt,
+            metadata={
+                "thread_id": thread_id,
+                "notify_on_completion": True,
+                "completion_event_type": "agent_message",
+                "source": "acp_task_actionable_followup",
+                "task_id": record.task_id,
+                "agent": record.agent_name,
+                "acp_status": record.status,
+                "acp_turn": record.turn,
+                "acp_event_type": event_type,
+                "title": _notification_title(record, event_type),
+                "level": "error"
+                if event_type == "terminal" and record.status != ACPTaskStatus.COMPLETED.value
+                else "info",
+            },
+        )
     if not queued:
         return False
     acknowledgements = dict(record.material_event_acknowledgements)

@@ -54,6 +54,13 @@ logger = logging.getLogger(__name__)
 _MAX_METADATA_ENTRIES = 200
 _MAX_CAPTURE_PREVIEW_CHARS = 16_384
 
+_PLAN_KEEP_CONTEXT_OPTION_IDS = (
+    "exit-plan-default",
+    "exit-plan-auto",
+    "exit-plan-bypass",
+    "exit-plan-accept-edits",
+)
+
 
 class ACPSessionClient(Client):
     """Collects streaming updates from an ACP agent for one prompt."""
@@ -85,8 +92,16 @@ class ACPSessionClient(Client):
             elicitation=ElicitationCapabilities(form=ElicitationFormCapabilities())
         )
         self._conn: Any = None
+        self._acp_session_id: str | None = None
+        self._native_session_id: str | None = None
         self._on_progress = on_progress
         self._on_input = on_input
+
+    def bind_session(self, session_id: str) -> None:
+        """Bind trusted raw-SDK notifications to this ACP transport session."""
+        if session_id != self._acp_session_id:
+            self._native_session_id = None
+        self._acp_session_id = session_id
 
     def set_output_limit(self, max_output_chars: int | None) -> None:
         """Start bounded collection after an exact durable evidence source is ready."""
@@ -212,7 +227,7 @@ class ACPSessionClient(Client):
                 }
             )
             if isinstance(answer, dict) and answer.get("approve") is True:
-                return self._allow_response(options)
+                return self._allow_plan_response(options)
             return RequestPermissionResponse(outcome=DeniedOutcome(outcome="cancelled"))
         return self._allow_response(options)
 
@@ -265,8 +280,29 @@ class ACPSessionClient(Client):
         return json.dumps(raw_input, default=str) if raw_input is not None else ""
 
     @staticmethod
-    def _allow_response(options: list[PermissionOption]) -> RequestPermissionResponse:
-        for preferred_kind in ("allow_always", "allow_once"):
+    def _allow_plan_response(options: list[PermissionOption]) -> RequestPermissionResponse:
+        """Approve a plan without selecting Claude's clear-context transition."""
+        for option_id in _PLAN_KEEP_CONTEXT_OPTION_IDS:
+            option = next(
+                (
+                    candidate
+                    for candidate in options
+                    if getattr(candidate, "option_id", None) == option_id
+                ),
+                None,
+            )
+            if option is not None:
+                return RequestPermissionResponse(
+                    outcome=AllowedOutcome(option_id=option_id, outcome="selected")
+                )
+        return ACPSessionClient._allow_response(options, prefer_once=True)
+
+    @staticmethod
+    def _allow_response(
+        options: list[PermissionOption], *, prefer_once: bool = False
+    ) -> RequestPermissionResponse:
+        kinds = ("allow_once", "allow_always") if prefer_once else ("allow_always", "allow_once")
+        for preferred_kind in kinds:
             option = next(
                 (
                     candidate
@@ -347,7 +383,26 @@ class ACPSessionClient(Client):
         return {}
 
     async def ext_notification(self, method: str, params: dict[str, Any]) -> None:
-        _ = (method, params)
+        """Forward the root Claude SDK session identity with its ACP binding."""
+        if method != "claude/sdkMessage" or params.get("sessionId") != self._acp_session_id:
+            return
+        message = params.get("message")
+        if not isinstance(message, dict) or message.get("parent_tool_use_id") is not None:
+            return
+        native_session_id = message.get("session_id")
+        if (
+            isinstance(native_session_id, str)
+            and native_session_id
+            and native_session_id != self._native_session_id
+        ):
+            self._native_session_id = native_session_id
+            await self._emit_progress(
+                {
+                    "kind": "native_session",
+                    "session_id": native_session_id,
+                    "acp_session_id": self._acp_session_id,
+                }
+            )
 
     async def complete_elicitation(self, elicitation_id: str, **_kwargs: Any) -> None:
         _ = elicitation_id

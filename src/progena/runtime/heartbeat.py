@@ -21,6 +21,7 @@ from src.progena.orchestration.nodes.health import write_health_status
 from src.progena.orchestration.state import ProgenaState
 
 from ..utils import utcnow
+from .conversation_gate import ConversationTurnGate
 from .queues import QueuedInput as _QueuedInput
 from .queues import RuntimeQueues
 
@@ -110,6 +111,7 @@ class ProgenaLoop:
         scheduler_poll_seconds = max(1.0, scheduler_poll_seconds)
 
         self._queues = RuntimeQueues(config.runtime)
+        self._conversation_gate = ConversationTurnGate()
         self._state: dict[str, Any] = {}
         audit_payload: dict[str, Any] | None = None
         to_dict = getattr(config, "to_dict", None)
@@ -149,6 +151,7 @@ class ProgenaLoop:
             ),
             routine_runner=getattr(self.graph, "routine_runner", None),
             routine_resumer=getattr(self.graph, "routine_resumer", None),
+            conversation_gate=self._conversation_gate,
         )
         validate_heartbeat_context(self._heartbeat_context)
         self._heartbeat_graph = create_runtime_heartbeat_graph()
@@ -298,6 +301,11 @@ class ProgenaLoop:
     def queues(self) -> RuntimeQueues:
         """Runtime queue service used by SSE and heartbeat nodes."""
         return self._queues
+
+    @property
+    def conversation_gate(self) -> ConversationTurnGate:
+        """Checkpoint-turn gate shared with HTTP and object-agent execution."""
+        return self._conversation_gate
 
     @property
     def state(self) -> dict[str, Any]:

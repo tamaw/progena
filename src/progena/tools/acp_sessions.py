@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field
 
 from src.progena.acp.models import ACPTaskRecord, ACPTaskStatus
 from src.progena.acp.tasks import acp_config_from_agent_config, task_command, task_cwd
+from src.progena.async_subagents.protocol import get_current_object_agent_owner
 from src.progena.sessions.context import get_current_thread_id
 
 from ..utils import utcnow
@@ -225,12 +226,23 @@ class ACPStartTool(BaseSystemTool):
         task_id = f"acp_{uuid.uuid4().hex[:12]}"
         state = context.state if isinstance(context.state, dict) else {}
         source = str(state.get("agent_name") or state.get("caller_agent") or "progena")
+        owner = get_current_object_agent_owner()
         current_thread_id = get_current_thread_id()
         thread_id = (
-            str(current_thread_id).strip()
-            if current_thread_id is not None
-            else str(state.get("thread_id") or "").strip()
+            owner.checkpoint_thread_id
+            if owner is not None
+            else (
+                str(current_thread_id).strip()
+                if current_thread_id is not None
+                else str(state.get("thread_id") or "").strip()
+            )
         ) or None
+        request_metadata: dict[str, Any] = {
+            "caller": source,
+            "thread_id": thread_id,
+        }
+        if owner is not None:
+            request_metadata["owner"] = owner.as_metadata()
         record = ACPTaskRecord(
             task_id=task_id,
             agent_name=str(config.get("name") or agent).strip() or agent,
@@ -239,10 +251,7 @@ class ACPStartTool(BaseSystemTool):
             card_id=str(args.get("card_id") or "").strip() or None,
             command=task_command(acp_config),
             source=source,
-            request_metadata={
-                "caller": source,
-                "thread_id": thread_id,
-            },
+            request_metadata=request_metadata,
             status=ACPTaskStatus.QUEUED,
             notify_on_completion=bool(thread_id),
             created_at=utcnow(),

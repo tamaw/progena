@@ -64,6 +64,64 @@ def test_native_reader_uses_structured_final_assistant_message(
     assert line == 2
 
 
+def test_continued_private_transcript_starts_at_prior_sealed_boundary(
+    transcript: tuple[NativeClaudeTranscriptReader, str, str, dict[str, object], str],
+) -> None:
+    reader, session, cwd, evidence, _expected = transcript
+    continued = reader.continue_turn(evidence, cwd=cwd)
+    assert continued is not None
+    native = reader._root / "-app-repos-project" / f"{session}.jsonl"  # noqa: SLF001
+    native.write_text(
+        native.read_text(encoding="utf-8")
+        + json.dumps(
+            {
+                "type": "assistant",
+                "sessionId": session,
+                "cwd": cwd,
+                "message": {
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "SECOND TURN FINAL"}],
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    second_evidence = reader.finish_turn(continued, cwd=cwd)
+
+    assert second_evidence is not None
+    assert reader.final_output(second_evidence, cwd=cwd) == ("SECOND TURN FINAL", 3)
+
+
+def test_new_private_identity_captures_from_byte_zero_after_initial_write(tmp_path: Path) -> None:
+    session = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+    cwd = "/app/repos/project"
+    project = tmp_path / "-app-repos-project"
+    project.mkdir()
+    reader = NativeClaudeTranscriptReader(tmp_path)
+    native = project / f"{session}.jsonl"
+    native.write_text(
+        json.dumps(
+            {
+                "sessionId": session,
+                "cwd": cwd,
+                "type": "assistant",
+                "message": {
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "FIRST TURN FINAL"}],
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    evidence = reader.finish_turn(reader.start_new_turn(session, cwd), cwd=cwd)
+
+    assert evidence is not None
+    assert reader.final_output(evidence, cwd=cwd) == ("FIRST TURN FINAL", 0)
+
+
 def test_result_pages_exact_output_input_plan_and_error_metadata(
     transcript: tuple[NativeClaudeTranscriptReader, str, str, dict[str, object], str],
 ) -> None:
@@ -366,13 +424,9 @@ def test_native_reader_matches_each_punctuation_and_long_project_prefix_after_me
         json.dumps({"sessionId": session, "cwd": short_cwd}) + "\n", encoding="utf-8"
     )
     reader = NativeClaudeTranscriptReader(tmp_path)
-    assert (
-        reader.finish_turn(
-            {"provider": "claude_native", "session_id": session, "line_start": 0},
-            cwd=short_cwd,
-        )
-        is not None
-    )
+    short_started = reader.start_turn(session, short_cwd)
+    assert short_started is not None
+    assert reader.finish_turn(short_started, cwd=short_cwd) is not None
 
     long_session = "88888888-8888-8888-8888-888888888888"
     long_cwd = f"/app/{'a' * 193}😀/task"
@@ -392,13 +446,7 @@ def test_native_reader_matches_each_punctuation_and_long_project_prefix_after_me
     assert resumed is not None
     assert resumed["line_start"] == 1
 
-    assert (
-        reader.finish_turn(
-            {"provider": "claude_native", "session_id": long_session, "line_start": 0},
-            cwd=long_cwd,
-        )
-        is not None
-    )
+    assert reader.finish_turn(resumed, cwd=long_cwd) is not None
 
 
 def test_native_transcript_page_streams_huge_metadata_and_unicode_cursor_exactly(
@@ -454,13 +502,70 @@ def test_native_transcript_page_streams_huge_metadata_and_unicode_cursor_exactly
 
     text = native.read_text(encoding="utf-8")
     emoji = text.rindex("😀")
-    emoji_line = text[:emoji].count("\n")
-    emoji_offset = emoji - text.rfind("\n", 0, emoji) - 1
-    before = reader.transcript_page(
-        evidence, cwd=cwd, cursor=f"transcript:{emoji_line}:{emoji_offset - 1}", limit=3
-    )
+    cursor_byte = len(text[: emoji - 1].encode("utf-8"))
+    before = reader.transcript_page(evidence, cwd=cwd, cursor=f"transcriptb:{cursor_byte}", limit=3)
     assert before is not None
     assert before["content"] == text[emoji - 1 : emoji + 2]
     after = reader.transcript_page(evidence, cwd=cwd, cursor=before["next_cursor"], limit=8)
     assert after is not None
     assert text[emoji - 1 : emoji + 2] + after["content"] == text[emoji - 1 : emoji + 10]
+
+
+def test_sealed_native_turn_ignores_malformed_future_tail(
+    transcript: tuple[NativeClaudeTranscriptReader, str, str, dict[str, object], str],
+) -> None:
+    reader, session, cwd, evidence, expected = transcript
+    native = reader._root / "-app-repos-project" / f"{session}.jsonl"  # noqa: SLF001
+    with native.open("ab") as handle:
+        handle.write(b'{"future":"\xf0\x9f')
+
+    page = reader.transcript_page(evidence, cwd=cwd, cursor=None, limit=32)
+
+    assert reader.final_output(evidence, cwd=cwd) == (expected, 2)
+    assert page is not None
+    assert page["content"] == native.read_bytes()[: evidence["byte_end"]].decode("utf-8")[:32]
+
+
+def test_shrunk_sealed_native_turn_is_unavailable(
+    transcript: tuple[NativeClaudeTranscriptReader, str, str, dict[str, object], str],
+) -> None:
+    reader, session, cwd, evidence, _expected = transcript
+    native = reader._root / "-app-repos-project" / f"{session}.jsonl"  # noqa: SLF001
+    native.write_bytes(native.read_bytes()[: int(evidence["byte_end"]) - 1])
+
+    assert reader.final_output(evidence, cwd=cwd) == (None, None)
+    assert reader.transcript_page(evidence, cwd=cwd, cursor=None, limit=32) is None
+
+
+def test_incomplete_final_native_row_never_promotes_an_earlier_message(tmp_path: Path) -> None:
+    session = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    cwd = "/app/repos/project"
+    project = tmp_path / "-app-repos-project"
+    project.mkdir()
+    reader = NativeClaudeTranscriptReader(tmp_path)
+    started = reader.start_turn(session, cwd)
+    assert started is not None
+    native = project / f"{session}.jsonl"
+    native.write_bytes(
+        (
+            json.dumps({"sessionId": session, "cwd": cwd, "type": "user"})
+            + "\n"
+            + json.dumps(
+                {
+                    "type": "assistant",
+                    "sessionId": session,
+                    "cwd": cwd,
+                    "message": {
+                        "role": "assistant",
+                        "content": [{"type": "text", "text": "PRELIMINARY"}],
+                    },
+                }
+            )
+            + "\n"
+            + '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"FINAL'
+        ).encode()
+    )
+    evidence = reader.finish_turn(started, cwd=cwd)
+
+    assert evidence is not None
+    assert reader.final_output(evidence, cwd=cwd) == (None, None)
