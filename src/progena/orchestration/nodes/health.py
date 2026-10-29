@@ -12,7 +12,7 @@ from langgraph.runtime import Runtime
 
 from src.progena.orchestration.nodes.context import HeartbeatContext
 from src.progena.orchestration.state import ProgenaState
-from src.progena.runtime.instance import RUNTIME_INSTANCE_ID
+from src.progena.runtime.instance import RUNTIME_INSTANCE_ID, RUNTIME_STARTED_AT
 from src.progena.utils import utcnow_isoformat
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[4]
@@ -47,7 +47,6 @@ def _detect_git_commit() -> str | None:
 
 
 _GIT_COMMIT = _detect_git_commit()
-_PROCESS_STARTED_AT = utcnow_isoformat()
 
 
 async def write_health_status(
@@ -66,7 +65,7 @@ async def write_health_status(
         "cycle_count": cycle_count,
         "pid": os.getpid(),
         "version": _GIT_COMMIT,
-        "started_at": _PROCESS_STARTED_AT,
+        "started_at": RUNTIME_STARTED_AT,
         "runtime_instance": RUNTIME_INSTANCE_ID,
     }
     if payload:

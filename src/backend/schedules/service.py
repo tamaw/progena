@@ -22,6 +22,7 @@ import src.backend.settings.preferences_store as preferences_store
 import src.backend.storage.documents as storage_documents
 from src.progena.cron import timezone_name as valid_timezone_name
 from src.progena.documents.types import DOCUMENT_OPERATIONS
+from src.progena.runtime import ownership
 from src.progena.schedules.engine import Scheduler, parse_schedule_datetime
 from src.progena.utils import normalize_utc_datetime, utcnow
 
@@ -571,9 +572,9 @@ def _schedule_runs_by_schedule(
             continue
         status = str(record.get("status") or "queued").lower()
         started_at = record.get("started_at")
-        if (
-            status == "running" or (status == "queued" and started_at)
-        ) and runtime_liveness.owner_is_gone(record.get("runtime_instance"), started_at, live):
+        if live is not None and ownership.schedule_run_interrupted(
+            record, live.instance_id, live.started_at
+        ):
             status = "interrupted"
         runs.append(
             schedules_models.ScheduleRunInfo(

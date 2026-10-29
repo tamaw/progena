@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel, Field
 
 from src.progena.llm.structured import validate_against_schema
+from src.progena.runs.paths import run_file_path
 from src.progena.sessions.context import get_current_thread_id
 from src.progena.workflows.constants import MAX_WORKFLOW_INVOKE_DEPTH
 
@@ -43,7 +46,8 @@ class RunWorkflowTool(BaseSystemTool):
             "ls /workflows/ for available ids). The backend WorkflowExecutor "
             "runs the nodes on its own execution thread and this call returns "
             "immediately after enqueueing. Provide workflow_id and an optional "
-            "JSON input object for its preferred manual trigger. Refuses disabled "
+            "JSON input object for its preferred manual trigger. Returns the run's "
+            "/runs/workflows/ file path, readable once the run starts. Refuses disabled "
             "or paused workflows, recursive chains deeper than "
             f"{MAX_WORKFLOW_INVOKE_DEPTH} workflows, and workflows already in the "
             "current invocation chain."
@@ -114,11 +118,25 @@ class RunWorkflowTool(BaseSystemTool):
             )
 
         request_id = f"wfinvoke_{uuid.uuid4().hex[:12]}"
+        run_id = f"workflow_run_{uuid.uuid4().hex[:12]}"
         await context.state_manager.request_workflow_run(
             request_id=request_id,
+            run_id=run_id,
             workflow_id=workflow_id,
             input=input_payload,
             ancestry=ancestry,
+        )
+        preferences = await context.state_manager.get_preferences_config()
+        try:
+            tz = ZoneInfo(str(preferences.get("timezone") or "UTC"))
+        except (ZoneInfoNotFoundError, ValueError):
+            tz = ZoneInfo("UTC")
+        path = run_file_path(
+            "workflow",
+            started_at=datetime.now(UTC),
+            title=str(definition.get("title") or workflow_id),
+            run_id=run_id,
+            tz=tz,
         )
         return ToolResult.ok(
             {
@@ -126,6 +144,9 @@ class RunWorkflowTool(BaseSystemTool):
                 "queued": True,
                 "workflow_id": workflow_id,
                 "request_id": request_id,
+                "run_id": run_id,
+                # Readable once the run starts; IRC-style log of every step.
+                "path": path,
             }
         )
 

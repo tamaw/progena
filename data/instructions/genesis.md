@@ -91,6 +91,7 @@ and domain rules:
   text) that canvases visualise.
 - `/sessions/` only for its allowed front-matter fields; session bodies are
   read-only.
+- `/runs/` for read-only routine, workflow, and schedule execution transcripts.
 - `/shared/`, when mounted, for plain files exchanged with A2A agents that mount
   the same volume. It is unvalidated and unprotected: they can change anything
   there, so keep authoritative records elsewhere.

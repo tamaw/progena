@@ -14,6 +14,7 @@ from src.backend.chat.service import (
     ChatPatchRequest,
     _extract_progress_log_from_content,
     _messages_from_checkpoint,
+    _tool_result_preview,
     delete_session_document,
     get_chat_detail,
     list_chat_sessions,
@@ -313,6 +314,16 @@ class TestGetChatDetail:
             "provider_id": "provider-1",
         }
 
+    def test_tool_result_preview_preserves_short_results_and_both_long_ends(self):
+        short_result = "x" * 400
+        long_result = "opening" + "x" * 500 + "\n[Command failed with exit code 3]"
+
+        assert _tool_result_preview(short_result) == short_result
+        preview = _tool_result_preview(long_result)
+        assert preview.startswith("opening")
+        assert "⟨1 KB omitted⟩" in preview
+        assert preview.endswith("[Command failed with exit code 3]")
+
     def test_tool_failure_is_classified_before_history_truncation(self):
         long_failure = "x" * 1000 + "\n[Command failed with exit code 3]"
         store = InMemoryDocumentStore()
@@ -356,7 +367,8 @@ class TestGetChatDetail:
 
         assert detail is not None
         failed, succeeded = detail.messages[-1].tool_calls
-        assert "exit code" not in failed["result"]
+        assert failed["result"].endswith("[Command failed with exit code 3]")
+        assert "⟨1 KB omitted⟩" in failed["result"]
         assert failed["failed"] is True
         assert "failed" not in succeeded
 

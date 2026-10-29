@@ -545,6 +545,16 @@ def _synthetic_pending_tool_call_message(
     )
 
 
+def _tool_result_preview(result_text: str) -> str:
+    """Preserve both ends of a long historical tool result."""
+    preview_edge = 200
+    if len(result_text) <= preview_edge * 2:
+        return result_text
+    omitted = result_text[preview_edge:-preview_edge]
+    omitted_kb = max(1, (len(omitted.encode("utf-8")) + 1023) // 1024)
+    return f"{result_text[:preview_edge]}… ⟨{omitted_kb} KB omitted⟩ …{result_text[-preview_edge:]}"
+
+
 def _messages_from_checkpoint(
     snapshot: CheckpointThreadSnapshot | None,
 ) -> list[ChatMessage]:
@@ -567,7 +577,7 @@ def _messages_from_checkpoint(
         progress_log = _extract_progress_log_from_content(raw_content)
         result_text = _message_text(raw_content)
         result_entry: dict[str, Any] = {
-            "result": result_text[:400] + "…" if len(result_text) > 400 else result_text,
+            "result": _tool_result_preview(result_text),
         }
         tool_name = raw.get("name") if isinstance(raw, dict) else getattr(raw, "name", None)
         if tool_result_failed(tool_name, raw, result_text):

@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from typing import Any
 
 from src.backend.storage.documents import PROGENA_STATE_PREFIX, BackendDocumentStore
+from src.progena.runtime import ownership
 
 
 @dataclass(frozen=True)
@@ -40,27 +40,7 @@ def owner_is_gone(
     started_at: str | None,
     live: LiveRuntime | None,
 ) -> bool:
-    """Whether durable work belongs to an earlier runtime process.
-
-    A missing live identity is deliberately inconclusive. Older records without
-    an owner can only be classified after comparing their recorded start time to
-    the currently advertised process start time.
-    """
+    """Whether durable work belongs to an earlier runtime process (see ``ownership``)."""
     if live is None:
         return False
-    if owner_instance:
-        return owner_instance != live.instance_id
-    started = _parse_timestamp(started_at)
-    live_started = _parse_timestamp(live.started_at)
-    return bool(started and live_started and started < live_started)
-
-
-def _parse_timestamp(value: str | None) -> datetime | None:
-    """Parse ISO-8601 (``Z`` or offset, any precision); naive values are UTC."""
-    if not value:
-        return None
-    try:
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError:
-        return None
-    return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+    return ownership.owner_is_gone(owner_instance, started_at, live.instance_id, live.started_at)

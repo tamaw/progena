@@ -443,6 +443,7 @@ class WorkflowInvokeRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     request_id: str
+    run_id: str | None = None
     workflow_id: str
     input: dict[str, Any] = Field(default_factory=dict)
     ancestry: list[str] = Field(default_factory=list)

@@ -356,6 +356,21 @@ a blank line and the IRC-style `content`. Only the `title`, `pinned`, and
 `archived` front-matter fields are editable; the body is read-only. Listing,
 grep, and read operate directly on the store documents (no cache).
 
+`/runs/` is a read-only execution-history mount: one
+`<date>_<slug>_<id8>.md` per top-level run under
+`/runs/{routines,workflows,schedules}/`, YAML front matter plus an IRC-style
+log, rendered on read from existing records (routine lifecycle events and the
+attempt's latest checkpoint `run_meta`, `workflow_run:` documents,
+`schedule_runs` plus the run's thread). Nothing is persisted, so older runs
+need no backfill. Child routine runs (a workflow routine step, a routine node)
+are inlined between join/part lines, never listed. Speech is shown in full;
+data is summarised (changed fields, document mount path and title, counts,
+head…tail of long text) with a pointer to the full value: a mount path, or
+`<run-file>#<n>` for step `n`, which is never listed, globbed or grepped.
+Status uses the same interrupted rule as the UI
+(`src/progena/runtime/ownership.py`). Finished runs are cached in-process.
+`run_workflow` returns the new run's `run_id` and `/runs/` path.
+
 ## Routine Code filesystem access
 
 Routine Code nodes run in a fresh QuickJS sandbox and are pure unless their

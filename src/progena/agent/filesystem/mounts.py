@@ -33,6 +33,10 @@ Profile:
   - /sessions/ -> chat sessions as YAML-front-matter + IRC-style markdown,
     one <date>_<title-slug>_<id8>.md per non-archived chat, backed by the
     ``session:`` documents in the store (front matter editable, body read-only)
+  - /runs/ -> read-only routine, workflow and schedule runs as YAML front matter
+    + IRC-style logs, one <date>_<slug>_<id8>.md per top-level run under
+    routines/, workflows/ and schedules/, rendered on read (child runs inlined;
+    ``<file>#<n>`` reads one step's full value)
   - /config/repos/ -> declared repositories, one <id>.json per ``repo:<id>``
     document (live git state stays in the read-only /config/repo_scan.json;
     /repos/ is the read-only checked-out source of managed repos)
@@ -83,10 +87,12 @@ from src.progena.agent.filesystem.knowledge import KnowledgePageBackend
 from src.progena.agent.filesystem.policies import PolicyDirectoryBackend
 from src.progena.agent.filesystem.repositories import RepoDirectoryBackend
 from src.progena.agent.filesystem.routines import RoutineDirectoryBackend
+from src.progena.agent.filesystem.runs import RunDirectoryBackend
 from src.progena.agent.filesystem.schedules import create_schedule_state_file
 from src.progena.agent.filesystem.sessions import SessionDirectoryBackend
 from src.progena.agent.filesystem.tasks import KanbanTaskDirectoryBackend
 from src.progena.agent.filesystem.workflows import WorkflowDirectoryBackend
+from src.progena.routines.revisions import NullRoutineRevisionReader, PostgresRoutineRevisionReader
 
 logger = logging.getLogger(__name__)
 
@@ -164,6 +170,7 @@ MOUNT_ACCESS: dict[str, MountAccess] = {
     "/memories/": "read-write",
     "/knowledge/": "read-write",
     "/sessions/": "read-write",
+    "/runs/": "read",
     "/config/": "read-write",
     "/config/repos/": "read-write",
     "/policies/": "read-write",
@@ -422,6 +429,15 @@ def create_progena_backend(
         # agent writes to send the user rich markdown messages.
         routes["/inbox/"] = InboxDirectoryBackend(state_manager)
         routes["/sessions/"] = SessionDirectoryBackend(state_manager)
+        if checkpointer is not None:
+            revision_reader = (
+                PostgresRoutineRevisionReader(database_url)
+                if database_url
+                else NullRoutineRevisionReader()
+            )
+            routes["/runs/"] = ReadOnlyBackend(
+                RunDirectoryBackend(state_manager, checkpointer, revision_reader)
+            )
 
     if database_url:
         # Uploaded chat attachments, read directly from the same Postgres

@@ -64,19 +64,19 @@ def _write_invoke_request(
     *,
     ancestry: list[str] | None = None,
     input: dict | None = None,
+    run_id: str | None = None,
 ) -> str:
     key = workflow_invoke_request_key(request_id)
-    store.save_document(
-        PROGENA_STATE_PREFIX,
-        key,
-        {
-            "request_id": request_id,
-            "workflow_id": workflow_id,
-            "input": input or {},
-            "ancestry": ancestry or [],
-            "requested_at": "2026-07-26T00:00:00+00:00",
-        },
-    )
+    payload = {
+        "request_id": request_id,
+        "workflow_id": workflow_id,
+        "input": input or {},
+        "ancestry": ancestry or [],
+        "requested_at": "2026-07-26T00:00:00+00:00",
+    }
+    if run_id is not None:
+        payload["run_id"] = run_id
+    store.save_document(PROGENA_STATE_PREFIX, key, payload)
     return key
 
 
@@ -144,6 +144,25 @@ async def test_run_workflow_request_prefers_manual_trigger_and_applies_defaults(
     sent_message = backend_client.send_message.await_args.args[0]
     assert "Run round-a for 3 rounds" in sent_message
     assert store.get_document(PROGENA_STATE_PREFIX, key, None) is None
+
+
+async def test_run_workflow_request_uses_preallocated_run_id(workflow_env, backend_client):
+    store = workflow_env
+    workflow_id = "workflow_preallocated_id"
+    run_id = "workflow_run_0123456789ab"
+    save_workflow_definition(store, _manual_workflow(workflow_id))
+    key = _write_invoke_request(
+        store,
+        "request-preallocated",
+        workflow_id,
+        input={"run_id": "round-a"},
+        run_id=run_id,
+    )
+
+    await workflows_runtime._reconcile_workflow_invoke_requests(key)
+    run = await _wait_for_completed_run(store, workflow_id)
+
+    assert run["run_id"] == run_id
 
 
 async def test_run_workflow_request_rejects_invalid_manual_payload(workflow_env, backend_client):

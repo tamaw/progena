@@ -191,6 +191,7 @@ async def _reconcile_workflow_invoke_requests(changed_key: str | None = None) ->
                         trigger,
                         source="progena",
                         ancestry=request.ancestry,
+                        run_id=request.run_id,
                     )
             except Exception:
                 logger.exception(
