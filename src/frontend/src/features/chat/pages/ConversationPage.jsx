@@ -36,8 +36,23 @@ import { ConversationSessionsPane } from '../components/ConversationSessionsPane
 import { useConversationAttachments } from '../hooks/useConversationAttachments';
 import { latestContextUsage, resolveComposerCacheExpiry, resolveComposerContextUsage } from '../models/contextWindowModel';
 import { quickChatMemory } from '../models/quickChatMemory';
+import { mergeConversationSummaryMarkers, normalizeConversationSummaryMarkers } from '../models/conversationSummaryModel';
 import { BROWSER_EVENT } from '../../../lib/browserContracts';
 
+function alignSummaryMarkerAnchors(markers, canonicalMessages, renderedMessages) {
+  if (!Array.isArray(markers) || !Array.isArray(canonicalMessages) || !Array.isArray(renderedMessages)) {
+    return markers;
+  }
+  return markers.map((marker) => {
+    const anchorId = typeof marker?.anchor_message_id === 'string' ? marker.anchor_message_id : '';
+    if (!anchorId) return marker;
+    const canonicalIndex = canonicalMessages.findIndex((message) => message?.id === anchorId);
+    const renderedId = canonicalIndex >= 0 ? renderedMessages[canonicalIndex]?.id : null;
+    return typeof renderedId === 'string' && renderedId
+      ? { ...marker, anchor_message_id: renderedId }
+      : marker;
+  });
+}
 
 function ConversationPage() {
   const dispatch = useDispatch();
@@ -92,6 +107,9 @@ function ConversationPage() {
       return [];
     }
   });
+  const [summaryMarkers, setSummaryMarkers] = useState(() => (
+    normalizeConversationSummaryMarkers(initialQuickChatHandoff?.summaryMarkers)
+  ));
   const [isClearingSession, setIsClearingSession] = useState(false);
   const [threadId, setThreadId] = useState(() => (
     typeof initialQuickChatHandoff?.threadId === 'string' ? initialQuickChatHandoff.threadId : null
@@ -546,6 +564,7 @@ function ConversationPage() {
 
       activeStreamIdRef.current = null;
       setMessages(normalizedMessages);
+      setSummaryMarkers(normalizeConversationSummaryMarkers(event.detail?.summaryMarkers));
       setIsGenerating(false);
       setLiveAssistantTurn(null);
       if (typeof event.detail?.threadId === 'string') {
@@ -561,7 +580,7 @@ function ConversationPage() {
 
     window.addEventListener(BROWSER_EVENT.LOAD_CHAT_HISTORY, handlePromotedQuickChat);
     return () => window.removeEventListener(BROWSER_EVENT.LOAD_CHAT_HISTORY, handlePromotedQuickChat);
-  }, [activeStreamIdRef, config.storage.quickChatHandoff, setIsGenerating, setLiveAssistantTurn]);
+  }, [activeStreamIdRef, config.storage.quickChatHandoff, setIsGenerating, setLiveAssistantTurn, setSummaryMarkers]);
 
   // Save chat history to localStorage only for locally-owned sessions.
   // Backend chat messages must not leak into localStorage — they are the server's
@@ -630,7 +649,23 @@ function ConversationPage() {
         .map((message, index) => normalizeBackendChatMessage(message, index))
         .filter(Boolean)
       : [];
-    if (!areChatTranscriptsEquivalent(messages, canonicalMessages)) {
+    const isCanonicalEquivalent = areChatTranscriptsEquivalent(messages, canonicalMessages);
+    const isSpectatedReconciliation = typeof intent.streamId === 'string'
+      && intent.streamId.startsWith('spectate_');
+    const nextMessages = isCanonicalEquivalent
+      ? messages
+      : isSpectatedReconciliation
+        ? canonicalMessages
+        : mergeCanonicalMessages(messages, canonicalMessages);
+    setSummaryMarkers((current) => mergeConversationSummaryMarkers(
+      current,
+      alignSummaryMarkerAnchors(
+        chatReconciliationState.detail.summary_markers,
+        canonicalMessages,
+        nextMessages,
+      ),
+    ));
+    if (!isCanonicalEquivalent) {
       // A spectated turn (someone else's send into a thread this page is
       // just watching) never had the interleaved user message locally --
       // only the assistant reply gets synthesized (see useChatStream's
@@ -640,11 +675,7 @@ function ConversationPage() {
       // remount/flicker) instead of just the one row that legitimately
       // needs its backend identity. Adopt the canonical list wholesale for
       // that case; self-initiated sends keep the identity-preserving merge.
-      const isSpectatedReconciliation = typeof intent.streamId === 'string'
-        && intent.streamId.startsWith('spectate_');
-      setMessages(isSpectatedReconciliation
-        ? canonicalMessages
-        : mergeCanonicalMessages(messages, canonicalMessages));
+      setMessages(nextMessages);
       // Canonical reconciliation can replace the locally committed row with a
       // backend identity. The frozen live turn then cannot hide that row by
       // its client id, so hand visual ownership to the canonical transcript.
@@ -685,6 +716,7 @@ function ConversationPage() {
     recentScheduledContent.current.clear();
     pinTranscriptToTail(messagesContainerRef.current, isPinnedToBottomRef);
     setMessages(backendMessages);
+    setSummaryMarkers(normalizeConversationSummaryMarkers(activeBackendChat.summary_markers));
     setOldestMessageCursor(backendMessages.length ? backendMessages[0].id : null);
     appliedOlderPageRequestIdRef.current = null;
     setIsGenerating(false);
@@ -741,6 +773,7 @@ function ConversationPage() {
     const olderMessages = pending.messages
       .map((message, index) => normalizeBackendChatMessage(message, index))
       .filter(Boolean);
+    setSummaryMarkers((current) => mergeConversationSummaryMarkers(current, pending.summaryMarkers));
     if (!olderMessages.length) {
       return;
     }
@@ -817,7 +850,7 @@ function ConversationPage() {
     ) {
       const content = event.data?.content || '';
       const metadata = event.data?.metadata || {};
-      const isQuestion = event.type === 'agent_question';
+      const isQuestion = event.type === UI_EVENT.AGENT_QUESTION;
 
       // Clean up the content (remove "SAY: " prefix if present)
       let cleanContent = content;
@@ -940,6 +973,7 @@ function ConversationPage() {
     activeStreamIdRef.current = null;
     recentScheduledContent.current.clear();
     setMessages([]);
+    setSummaryMarkers([]);
     setIsGenerating(false);
     setLiveAssistantTurn(null);
     setIsClearingSession(false);
@@ -1026,6 +1060,7 @@ function ConversationPage() {
     if (threadId !== draftThreadId) {
       setThreadId(draftThreadId);
       setMessages([]);
+      setSummaryMarkers([]);
     }
     return session;
   }, [acquireDraftChat, selectedBackendChatId, threadId, setMessages]);
@@ -1584,6 +1619,8 @@ function ConversationPage() {
           >
             <ChatMessages
               messages={transcriptMessages}
+              summaryMarkers={summaryMarkers}
+              liveOwnedMessageId={liveOwnedMessageId}
               streamEventFilter={streamEventFilter}
               onRegenerate={handleRegenerate}
               liveTurnStore={shouldRenderTranscript ? liveTurnStore : undefined}

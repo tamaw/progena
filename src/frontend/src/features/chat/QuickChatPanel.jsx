@@ -23,8 +23,8 @@ import { loadQuickChatHistory, toQuickChatInputHistory } from './models/quickCha
 import { createQuickChatPromotion, persistQuickChatHandoff } from './models/quickChatPromotionModel';
 import { latestContextUsage, resolveComposerCacheExpiry, resolveComposerContextUsage } from './models/contextWindowModel';
 import { followTranscript, noteTranscriptScroll, noteTranscriptUserInput, pinTranscriptToTail } from './models/transcriptScroll';
+import { mergeConversationSummaryMarkers } from './models/conversationSummaryModel';
 import { dispatchChatHistoryLoad } from '../../lib/browserContracts';
-
 
 
 export function QuickChatPanel({
@@ -62,7 +62,9 @@ export function QuickChatPanel({
     quickChatMemory.mode = normalizedConfig.mode;
   }
   const [history, setHistory] = useState(quickChatMemory.history);
+  const [summaryMarkers, setSummaryMarkers] = useState([]);
   const [scratchThreadId, setScratchThreadId] = useState(quickChatMemory.threadId);
+  const scratchThreadIdRef = useRef(quickChatMemory.threadId);
   const [isSending, setIsSending] = useState(false);
   const [error, setError] = useState('');
   const [composerSeed, setComposerSeed] = useState({ key: 0, message: '' });
@@ -155,6 +157,7 @@ export function QuickChatPanel({
   const startFreshQuickThread = useCallback(() => {
     const threadId = createUuid();
     sessionPromiseRef.current = Promise.resolve(threadId);
+    scratchThreadIdRef.current = threadId;
     if (isQuickChatMountedRef.current) {
       setScratchThreadId(threadId);
     }
@@ -168,10 +171,13 @@ export function QuickChatPanel({
   const rehydrateFromPersistedThread = useCallback(async (persistedThreadId) => {
     const epoch = quickChatEpochRef.current;
     const expectedActiveStreamId = activeStreamIdRef.current;
+    const expectedThreadId = scratchThreadIdRef.current;
     const isCurrent = () => isQuickChatMountedRef.current
       && quickChatEpochRef.current === epoch
-      && activeStreamIdRef.current === expectedActiveStreamId;
+      && activeStreamIdRef.current === expectedActiveStreamId
+      && scratchThreadIdRef.current === expectedThreadId;
     let normalizedMessages;
+    let loadedSummaryMarkers = [];
     try {
       normalizedMessages = await loadQuickChatHistory(async (beforeMessageId) => {
         const requestId = createUuid();
@@ -192,13 +198,17 @@ export function QuickChatPanel({
             pendingRehydrateRef.current = null;
           }
         }
-      }, isCurrent);
+      }, isCurrent, (markers) => {
+        loadedSummaryMarkers = mergeConversationSummaryMarkers(loadedSummaryMarkers, markers);
+      });
     } catch {
       return !isCurrent();
     }
-    if (!normalizedMessages) return true;
+    if (!normalizedMessages || !isCurrent()) return true;
     setLiveAssistantTurn(null);
     setHistory(normalizedMessages);
+    setSummaryMarkers((current) => mergeConversationSummaryMarkers(current, loadedSummaryMarkers));
+    scratchThreadIdRef.current = persistedThreadId;
     setScratchThreadId(persistedThreadId);
     sessionPromiseRef.current = Promise.resolve(persistedThreadId);
     lastPersistedThreadIdRef.current = persistedThreadId;
@@ -296,6 +306,7 @@ export function QuickChatPanel({
     quickChatMemory.history = history;
   }, [history]);
   useEffect(() => {
+    scratchThreadIdRef.current = scratchThreadId;
     quickChatMemory.threadId = scratchThreadId;
   }, [scratchThreadId]);
 
@@ -411,6 +422,8 @@ export function QuickChatPanel({
     let terminalStatus = 'failed';
     let terminalError = '';
     let terminalReceived = false;
+    let terminalThreadId = null;
+    let terminalReconciliationRequested = false;
     const isStale = () => activeStreamIdRef.current !== streamId;
 
     const commitLiveTurn = (status, errorMessage = '') => {
@@ -424,10 +437,18 @@ export function QuickChatPanel({
       }
       setLiveAssistantTurn(null);
       activeStreamIdRef.current = null;
+      if (terminalThreadId && !terminalReconciliationRequested) {
+        terminalReconciliationRequested = true;
+        // Release stream ownership before this non-blocking canonical read.
+        // Its epoch/thread guard discards a response superseded by a new turn,
+        // reset, unmount, or thread switch.
+        void rehydrateFromPersistedThread(terminalThreadId);
+      }
     };
 
     try {
       const threadId = await ensureQuickThread();
+      terminalThreadId = threadId;
       if (isStale()) return;
 
       // The page context stays in the agent's input but never becomes visible
@@ -503,7 +524,7 @@ export function QuickChatPanel({
       }
       onSettled?.(terminalStatus, terminalError);
     }
-  }, [ensureQuickThread, history, isSending, location.pathname, sendMessageStream, setLiveAssistantTurn]);
+  }, [ensureQuickThread, history, isSending, location.pathname, rehydrateFromPersistedThread, sendMessageStream, setLiveAssistantTurn]);
   useEffect(() => {
     if (!isSending || !pendingSubmission?.inline || consumedSubmissionIdRef.current === pendingSubmission.id) return;
     consumedSubmissionIdRef.current = pendingSubmission.id;
@@ -532,7 +553,7 @@ export function QuickChatPanel({
     const hasQuickChatHandoff = history.length > 0;
     let handoff = null;
     if (hasQuickChatHandoff) {
-      const promotion = createQuickChatPromotion(history, scratchThreadId);
+      const promotion = createQuickChatPromotion(history, scratchThreadId, summaryMarkers);
       handoff = promotion.handoff;
       quickChatMemory.handoff = handoff;
       // The live destination receives the complete renderer payload. Storage is
@@ -544,7 +565,7 @@ export function QuickChatPanel({
     if (!isOnChatPage) {
       navigate('/chat', hasQuickChatHandoff ? { state: { quickChatHandoff: true } } : undefined);
     }
-  }, [config.storage.quickChatHandoff, history, isOnChatPage, navigate, onClose, scratchThreadId]);
+  }, [config.storage.quickChatHandoff, history, isOnChatPage, navigate, onClose, scratchThreadId, summaryMarkers]);
 
   const resetQuickChat = useCallback(() => {
     quickChatEpochRef.current += 1;
@@ -561,6 +582,7 @@ export function QuickChatPanel({
     quickChatMemory.threadId = null;
     quickChatMemory.handoff = null;
     setHistory([]);
+    setSummaryMarkers([]);
     sessionPromiseRef.current = null;
     setIsSending(false);
     setError('');
@@ -614,6 +636,7 @@ export function QuickChatPanel({
       >
         <ChatMessages
           messages={history}
+          summaryMarkers={summaryMarkers}
           liveTurnStore={liveTurnStore}
           messagesContainerRef={messagesContainerRef}
           isPinnedToBottomRef={isPinnedToBottomRef}

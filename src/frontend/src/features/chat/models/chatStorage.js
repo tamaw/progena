@@ -1,3 +1,4 @@
+import { normalizeConversationSummaryMarkers } from './conversationSummaryModel';
 import { BROWSER_STORAGE_KEY } from '../../../lib/browserContracts';
 
 // localStorage plumbing for the conversation page. All chat-local preferences
@@ -68,6 +69,7 @@ export function normalizeQuickChatHandoff(value) {
   return {
     messages: Array.isArray(value.messages) ? value.messages : [],
     threadId: typeof value.threadId === 'string' ? value.threadId : null,
+    summaryMarkers: normalizeConversationSummaryMarkers(value.summaryMarkers),
   };
 }
 

@@ -229,6 +229,22 @@ async def test_code_node_rejects_oversized_result_inside_the_sandbox():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("character", ["x", "é", "界", "😀", "é界😀"])
+async def test_code_node_result_limit_counts_utf8_bytes_including_json_quotes(character):
+    # Each encoding width must fit exactly at the boundary, then reject the
+    # same result with one additional ASCII byte before leaving the sandbox.
+    count, padding = divmod(1024 * 1024 - 2, len(character.encode("utf-8")))
+    expression = f'"{character}".repeat({count}) + "x".repeat({padding})'
+    accepted = validate_routine_graph_payload(_payload(_code_node(f"return {expression};")))
+    result = await compile_routine_graph(accepted, model=object()).ainvoke({})
+    assert result["data"]["result"] == character * count + "x" * padding
+
+    rejected = validate_routine_graph_payload(_payload(_code_node(f'return {expression} + "x";')))
+    with pytest.raises(JSError, match="code result exceeds"):
+        await compile_routine_graph(rejected, model=object()).ainvoke({})
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "code",
     [
@@ -295,7 +311,10 @@ async def test_code_node_honors_a_shorter_graph_timeout():
 async def test_code_node_enforces_utf8_result_cap_after_guest_helper_mutation():
     graph = validate_routine_graph_payload(
         _payload(
-            _code_node('String.prototype.charCodeAt.call = () => 0; return "é".repeat(600000);')
+            _code_node(
+                "String.prototype.charCodeAt.call = () => 0; "
+                'RegExp.prototype.exec = () => null; return "é".repeat(600000);'
+            )
         )
     )
     with pytest.raises((JSError, ValueError)):

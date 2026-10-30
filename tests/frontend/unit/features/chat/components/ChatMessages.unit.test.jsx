@@ -1,13 +1,20 @@
 // @vitest-environment jsdom
-import React from 'react';
-import { describe, expect, it } from 'vitest';
+import React, { act } from 'react';
+import { describe, expect, it, vi } from 'vitest';
+import { createRoot } from 'react-dom/client';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { Provider } from 'react-redux';
 import { configureStore } from '@reduxjs/toolkit';
 import ChatMessages from '@frontend/features/chat/components/ChatMessages';
 import { isEventVisible } from '@frontend/features/chat/models/streamFilters';
+import { mergeConversationSummaryMarkers } from '@frontend/features/chat/models/conversationSummaryModel';
 import { createLiveAssistantTurnStore } from '@frontend/features/chat/models/liveAssistantTurnStore';
 import { createLiveAssistantTurn } from '@frontend/features/chat/models/liveAssistantTurnModel';
+import { useMermaidRender } from '@frontend/hooks/useMermaidRender';
+
+vi.mock('@frontend/hooks/useMermaidRender', () => ({
+  useMermaidRender: vi.fn(),
+}));
 
 function renderTranscript(surface, filters) {
   const store = configureStore({
@@ -103,5 +110,166 @@ describe('interrupted chat status', () => {
 
     expect(render(false)).toContain('Interrupted — the runtime restarted during this turn.');
     expect(render(true)).not.toContain('Interrupted — the runtime restarted during this turn.');
+  });
+});
+
+describe('conversation summary markers', () => {
+  it('renders a committed marker at its anchored boundary without replacing either message', () => {
+    const store = configureStore({
+      reducer: () => ({ uiData: { preferences: { agentName: 'Progena' } } }),
+    });
+    const container = document.createElement('div');
+    container.innerHTML = renderToStaticMarkup(
+      <Provider store={store}>
+        <ChatMessages
+          messages={[
+            { id: 'before', role: 'user', content: 'Before summary' },
+            { id: 'after', role: 'assistant', content: 'After summary' },
+          ]}
+          summaryMarkers={[{
+            id: 'summary-1',
+            anchor_message_id: 'before',
+            summary: '## Condensed context\n\nEarlier details.',
+            scope: { kind: 'conversation', id: 'thread-1' },
+          }]}
+        />
+      </Provider>,
+    );
+
+    const text = container.textContent;
+    expect(text).toContain('Conversation summarized');
+    expect(text.indexOf('Before summary')).toBeLessThan(text.indexOf('Conversation summarized'));
+    expect(text.indexOf('Conversation summarized')).toBeLessThan(text.indexOf('After summary'));
+    expect(container.querySelector('details')).not.toBeNull();
+  });
+
+  it('keeps a committed marker visible after the frozen live owner', () => {
+    const store = configureStore({
+      reducer: () => ({ uiData: { preferences: { agentName: 'Progena' } } }),
+    });
+    const liveStore = createLiveAssistantTurnStore();
+    liveStore.set({
+      ...createLiveAssistantTurn({ streamId: 'live-summary', startedAt: 1 }),
+      assistantMessageId: 'live-answer',
+      content: 'Frozen answer',
+      isStreaming: false,
+      timelineItems: [{
+        kind: 'assistant_message',
+        id: 'live-answer',
+        content: 'Frozen answer',
+        timestamp: 1,
+        isStreaming: false,
+      }],
+    });
+    const container = document.createElement('div');
+    container.innerHTML = renderToStaticMarkup(
+      <Provider store={store}>
+        <ChatMessages
+          messages={[]}
+          summaryMarkers={[{
+            id: 'summary-after-live',
+            anchor_message_id: 'live-answer',
+            summary: 'Committed after the live answer.',
+            scope: { kind: 'conversation', id: 'thread-1' },
+          }]}
+          liveOwnedMessageId="live-answer"
+          liveTurnStore={liveStore}
+        />
+      </Provider>,
+    );
+
+    expect(container.textContent.indexOf('Frozen answer')).toBeLessThan(
+      container.textContent.indexOf('Conversation summarized'),
+    );
+  });
+});
+
+describe('conversation summary marker render stability', () => {
+  it('does not rerender unrelated historical messages for equal or differently scoped markers', async () => {
+    const store = configureStore({
+      reducer: () => ({ uiData: { preferences: { agentName: 'Progena' } } }),
+    });
+    const messages = [
+      {
+        id: 'assistant-a',
+        role: 'assistant',
+        content: 'First answer',
+        timelineItems: [{
+          kind: 'subagent',
+          id: 'subagent-a',
+          toolCallId: 'tool-a',
+          status: 'success',
+          subagentName: 'Delegate A',
+          entries: [],
+        }],
+      },
+      {
+        id: 'assistant-b',
+        role: 'assistant',
+        content: 'Second answer',
+        timelineItems: [{
+          kind: 'subagent',
+          id: 'subagent-b',
+          toolCallId: 'tool-b',
+          status: 'success',
+          subagentName: 'Delegate B',
+          entries: [],
+        }],
+      },
+    ];
+    const markerA = {
+      id: 'summary-a',
+      anchor_message_id: 'assistant-a',
+      summary: 'First nested summary.',
+      scope: { kind: 'subagent', id: 'tool-a' },
+    };
+    const markerB = {
+      id: 'summary-b',
+      anchor_message_id: 'assistant-b',
+      summary: 'Second nested summary.',
+      scope: { kind: 'subagent', id: 'tool-b' },
+    };
+    const initialMarkers = mergeConversationSummaryMarkers([], [markerA]);
+    const equalMarkers = mergeConversationSummaryMarkers(initialMarkers, [{ ...markerA }]);
+    const changedMarkers = mergeConversationSummaryMarkers(equalMarkers, [markerB]);
+    const host = document.createElement('div');
+    document.body.append(host);
+    const root = createRoot(host);
+
+    try {
+      await act(async () => {
+        root.render(
+          <Provider store={store}>
+            <ChatMessages messages={messages} summaryMarkers={initialMarkers} />
+          </Provider>,
+        );
+      });
+      const cards = host.querySelectorAll('.subagent-card');
+      expect(cards).toHaveLength(2);
+      expect(cards[0].textContent).toContain('Conversation summarized');
+      expect(cards[1].textContent).not.toContain('Conversation summarized');
+      useMermaidRender.mockClear();
+
+      await act(async () => {
+        root.render(
+          <Provider store={store}>
+            <ChatMessages messages={messages} summaryMarkers={equalMarkers} />
+          </Provider>,
+        );
+      });
+      expect(useMermaidRender).not.toHaveBeenCalled();
+
+      await act(async () => {
+        root.render(
+          <Provider store={store}>
+            <ChatMessages messages={messages} summaryMarkers={changedMarkers} />
+          </Provider>,
+        );
+      });
+      expect(useMermaidRender).toHaveBeenCalledTimes(1);
+    } finally {
+      await act(async () => root.unmount());
+      host.remove();
+    }
   });
 });

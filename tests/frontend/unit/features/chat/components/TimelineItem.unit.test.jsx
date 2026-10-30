@@ -96,3 +96,42 @@ describe('TimelineItem assistant messages', () => {
     expect(markup).toContain('<p>Sanitized reasoning detail</p>');
   });
 });
+
+describe('TimelineItem subagent summaries', () => {
+  it('places durable and live summaries in only the matching parent task card', () => {
+    const markup = renderToStaticMarkup(React.createElement(TimelineItem, {
+      item: {
+        kind: 'subagent',
+        id: 'subagent-parent-task',
+        toolCallId: 'parent-task',
+        subagentName: 'Researcher',
+        status: 'running',
+        entries: [],
+        resultPreview: '',
+        durationMs: null,
+        startedAt: 1720000000000,
+        finishedAt: null,
+        taskSummary: '',
+        error: '',
+      },
+      itemIndex: 0,
+      summaryMarkers: [{
+        id: 'nested-summary',
+        summary: 'Nested context.',
+        scope: { kind: 'subagent', id: 'parent-task', label: 'Researcher' },
+      }, {
+        id: 'other-summary',
+        summary: 'Wrong task.',
+        scope: { kind: 'subagent', id: 'another-task', label: 'Other' },
+      }],
+      summaryActivities: [{
+        id: 'nested-callback',
+        scope: { kind: 'subagent', id: 'parent-task', label: 'Researcher' },
+      }],
+    }));
+
+    expect(markup).toContain('Conversation summarized');
+    expect(markup).toContain('Summarizing conversation…');
+    expect(markup).not.toContain('by Other');
+  });
+});

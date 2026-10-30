@@ -110,3 +110,13 @@ def test_outage_serves_last_known_copy_then_fails_fast(monkeypatch: pytest.Monke
         lambda: now + runtime_conversations.UNAVAILABLE_COOLDOWN_SECONDS + 1,
     )
     assert messages_to_dict(reader.get_messages("t3", "cp1")) == messages_to_dict(MESSAGES)
+
+
+def test_exact_checkpoint_read_never_substitutes_another_revision() -> None:
+    runtime = _Runtime()
+    reader = _reader(runtime)
+    reader.get_messages("t1", "cp1")
+
+    runtime.up = False
+    with pytest.raises(RuntimeUnavailable):
+        reader.get_messages("t1", "cp2", exact_revision=True)

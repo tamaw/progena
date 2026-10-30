@@ -36,17 +36,66 @@ describe('quick chat promotion', () => {
     expect(handoff.messages[100].timelineItems[0].event.images).toEqual([image]);
   });
 
-  it('retains the canonical thread id in the reload fallback', () => {
-    const { persistedHandoff } = createQuickChatPromotion(
-      [{ id: 'message', role: 'user', content: 'Continue this thread.' }],
+  it('round-trips only retained-window markers while keeping the live handoff complete', () => {
+    const history = Array.from({ length: 101 }, (_, index) => ({
+      id: `message-${index}`,
+      role: 'user',
+      content: `Message ${index}`,
+    }));
+    const markers = [
+      {
+        id: 'summary-pruned',
+        anchor_message_id: 'message-0',
+        summary: 'Pruned root context.',
+        scope: { kind: 'conversation', id: 'thread-canonical' },
+      },
+      {
+        id: 'summary-head',
+        anchor_message_id: null,
+        summary: 'Original transcript head.',
+        scope: { kind: 'conversation', id: 'thread-canonical' },
+      },
+      {
+        id: 'summary-retained-subagent',
+        anchor_message_id: 'message-100',
+        summary: 'Retained nested context.',
+        scope: { kind: 'subagent', id: 'tool-100' },
+      },
+    ];
+    const { handoff, persistedHandoff } = createQuickChatPromotion(
+      history,
       'thread-canonical',
+      markers,
     );
 
+    expect(handoff.summaryMarkers).toEqual(markers);
     expect(persistQuickChatHandoff('quick-handoff', persistedHandoff)).toBe(true);
     expect(loadQuickChatHandoff('quick-handoff')).toEqual({
       messages: persistedHandoff.messages,
       threadId: 'thread-canonical',
+      summaryMarkers: [{
+        id: 'summary-retained-subagent',
+        anchorMessageId: 'message-100',
+        summary: 'Retained nested context.',
+        scope: { kind: 'subagent', id: 'tool-100' },
+      }],
     });
+  });
+
+  it('keeps a head marker when the persisted fallback retains the transcript head', () => {
+    const headMarker = {
+      id: 'summary-head',
+      anchor_message_id: null,
+      summary: 'Original transcript head.',
+      scope: { kind: 'conversation', id: 'thread-canonical' },
+    };
+    const { persistedHandoff } = createQuickChatPromotion(
+      [{ id: 'message-1', role: 'user', content: 'First message' }],
+      'thread-canonical',
+      [headMarker],
+    );
+
+    expect(persistedHandoff.summaryMarkers).toEqual([headMarker]);
   });
 
   it('does not block promotion when browser storage rejects the fallback', () => {

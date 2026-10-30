@@ -29,6 +29,7 @@ import { formatArgsPreview, formatToolInputSummary, formatDuration, formatTimest
 import { selectRecentLines } from '../models/workGroupModel';
 import useRunningDisclosure from '../hooks/useRunningDisclosure';
 import EarlierLinesToggle from './EarlierLinesToggle';
+import ConversationSummaryMarker, { ConversationSummaryActivity } from './ConversationSummaryMarker';
 
 const SubagentTaskSummaryEntry = memo(function SubagentTaskSummaryEntry({ taskSummary, isLast }) {
   return (
@@ -148,7 +149,7 @@ const SubagentMessageEntry = memo(function SubagentMessageEntry({ entry, isLast,
   );
 });
 
-const SubagentCard = memo(function SubagentCard({ item }) {
+const SubagentCard = memo(function SubagentCard({ item, summaryMarkers = [], summaryActivities = [] }) {
   // `item.entries` is empty for cards reconstructed from persisted history
   // on reload -- deltas are never durably stored, only the final
   // subagent_start/subagent_result pair (see buildSubagentDispatchStreamEvents
@@ -196,6 +197,12 @@ const SubagentCard = memo(function SubagentCard({ item }) {
           </span>
           <span className="tool-event-disclosure__chevron" aria-hidden="true" />
         </button>
+        {summaryActivities.map((activity) => (
+          <ConversationSummaryActivity key={activity.id} activity={activity} />
+        ))}
+        {summaryMarkers.map((marker) => (
+          <ConversationSummaryMarker key={marker.id} marker={marker} />
+        ))}
         {!open && error}
         {open && (
           <div className="subagent-card__body entry__content">

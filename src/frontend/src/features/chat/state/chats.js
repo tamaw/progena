@@ -451,6 +451,7 @@ export const eventHandlers = {
     state.chats.active.pendingOlderPage = {
       requestId: payload.request_id || null,
       messages: Array.isArray(payload.messages) ? payload.messages : [],
+      summaryMarkers: Array.isArray(payload.summary_markers) ? payload.summary_markers : [],
     };
   },
   [UI_EVENT.CHAT_SESSION_DELETED]: (state, payload) => {

@@ -31,6 +31,7 @@ from src.backend.chat.service import (
     list_chat_sessions,
     paginate_chat_messages,
     patch_session_document,
+    summary_markers_for_page,
 )
 from src.backend.events import contracts as events_contracts
 from src.backend.http.requests import BroadcastUiEvent
@@ -187,6 +188,9 @@ def create_chat_router(
         detail = detail.model_copy(
             update={
                 "messages": page,
+                "summary_markers": summary_markers_for_page(
+                    detail.summary_markers, page, includes_transcript_head=not has_more
+                ),
                 "has_more_messages": has_more,
                 "active_request_id": active_request_id,
                 "activity": activity,
@@ -234,7 +238,14 @@ def create_chat_router(
         page, has_more = paginate_chat_messages(
             detail.messages, limit=limit, before_message_id=before_message_id
         )
-        response = ChatMessagesPageResponse(thread_id=thread_id, messages=page, has_more=has_more)
+        response = ChatMessagesPageResponse(
+            thread_id=thread_id,
+            messages=page,
+            summary_markers=summary_markers_for_page(
+                detail.summary_markers, page, includes_transcript_head=not has_more
+            ),
+            has_more=has_more,
+        )
         broadcast_ui_event(
             events_contracts.UiEvent.CHAT_MESSAGES_PAGE_LOADED,
             response.model_dump(),

@@ -1,10 +1,12 @@
 import { memo, useEffect, useLayoutEffect, useRef, useSyncExternalStore } from 'react';
 import { Message } from './Message';
+import { ConversationSummaryActivity } from './ConversationSummaryMarker';
 import { toCommittedAssistantMessage } from '../models/liveAssistantTurnModel';
 import PendingAssistantCursor from './PendingAssistantCursor';
 import { followTranscript } from '../models/transcriptScroll';
 const LiveAssistantTurn = memo(function LiveAssistantTurn({
   store,
+  summaryMarkers,
   messagesContainerRef,
   isPinnedToBottomRef,
   streamEventFilter,
@@ -52,16 +54,35 @@ const LiveAssistantTurn = memo(function LiveAssistantTurn({
     return null;
   }
 
+  const summaryActivities = liveAssistantTurn.isStreaming
+    ? liveAssistantTurn.summaryActivities || []
+    : [];
+  const rootSummaryActivities = summaryActivities.filter((activity) => activity.scope.kind === 'conversation');
+  const nestedSummaryActivities = summaryActivities.filter((activity) => activity.scope.kind === 'subagent');
+  const activityRows = rootSummaryActivities.map((activity) => (
+    <ConversationSummaryActivity key={`${activity.id}-${activity.scope.kind}-${activity.scope.id}`} activity={activity} />
+  ));
+
   if (liveAssistantTurn.assistantMessageId === null && liveAssistantTurn.timelineItems.length === 0) {
-    return <PendingAssistantCursor />;
+    return (
+      <>
+        <PendingAssistantCursor />
+        {activityRows}
+      </>
+    );
   }
 
   return (
-    <Message
-      key={liveAssistantTurn.streamId}
-      message={toCommittedAssistantMessage(liveAssistantTurn)}
-      streamEventFilter={streamEventFilter}
-    />
+    <>
+      <Message
+        key={liveAssistantTurn.streamId}
+        message={toCommittedAssistantMessage(liveAssistantTurn)}
+        summaryMarkers={summaryMarkers}
+        summaryActivities={nestedSummaryActivities}
+        streamEventFilter={streamEventFilter}
+      />
+      {activityRows}
+    </>
   );
 });
 

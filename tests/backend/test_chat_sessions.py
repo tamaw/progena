@@ -38,10 +38,18 @@ class _CountingDocumentStore(InMemoryDocumentStore):
         self.get_checkpoint_thread_snapshot_calls = 0
 
     def get_checkpoint_thread_snapshot(
-        self, thread_id: str, *, checkpoint_id: str | None = None
+        self,
+        thread_id: str,
+        *,
+        checkpoint_id: str | None = None,
+        include_summary_occurrences: bool = False,
     ) -> CheckpointThreadSnapshot | None:
         self.get_checkpoint_thread_snapshot_calls += 1
-        return super().get_checkpoint_thread_snapshot(thread_id, checkpoint_id=checkpoint_id)
+        return super().get_checkpoint_thread_snapshot(
+            thread_id,
+            checkpoint_id=checkpoint_id,
+            include_summary_occurrences=include_summary_occurrences,
+        )
 
 
 def _store_session(store: InMemoryDocumentStore, thread_id: str, **fields) -> None:

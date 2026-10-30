@@ -24,8 +24,12 @@ export function toQuickChatInputHistory(history) {
   }));
 }
 
-/** Load the full transcript, discarding a refresh superseded by a new turn. */
-export async function loadQuickChatHistory(fetchPage, isCurrent) {
+/**
+ * Load the full transcript, discarding a refresh superseded by a new turn.
+ * `onSummaryMarkers` receives each page's committed descriptors only after
+ * the same freshness fence as its messages.
+ */
+export async function loadQuickChatHistory(fetchPage, isCurrent, onSummaryMarkers) {
   const pages = [];
   let beforeMessageId;
   let hasMore;
@@ -34,6 +38,7 @@ export async function loadQuickChatHistory(fetchPage, isCurrent) {
     const page = await fetchPage(beforeMessageId);
     if (!isCurrent()) return null;
     pages.push(page.messages);
+    onSummaryMarkers?.(page.summary_markers);
     hasMore = page.has_more;
     if (hasMore) beforeMessageId = page.messages[0].id;
   } while (hasMore);

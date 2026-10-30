@@ -142,6 +142,19 @@ class ChatMessage(BaseModel):
     raw: dict[str, Any] = Field(default_factory=dict)
 
 
+class ConversationSummaryScope(BaseModel):
+    kind: Literal["conversation", "subagent"]
+    id: str
+    label: str | None = None
+
+
+class ConversationSummaryMarker(BaseModel):
+    id: str
+    anchor_message_id: str | None = None
+    summary: str
+    scope: ConversationSummaryScope
+
+
 class ChatSessionSummary(BaseModel):
     thread_id: str
     title: str
@@ -165,6 +178,7 @@ class ChatInterruption(BaseModel):
 
 class ChatSessionDetail(ChatSessionSummary):
     messages: list[ChatMessage] = Field(default_factory=list)
+    summary_markers: list[ConversationSummaryMarker] = Field(default_factory=list)
     has_more_messages: bool = False
     active_request_id: str | None = None
     activity: Literal["delegating", "generating"] | None = None
@@ -205,6 +219,7 @@ def paginate_chat_messages(
 class ChatMessagesPageResponse(BaseModel):
     thread_id: str
     messages: list[ChatMessage]
+    summary_markers: list[ConversationSummaryMarker] = Field(default_factory=list)
     has_more: bool
 
 
@@ -715,6 +730,84 @@ def _messages_from_checkpoint(
     return messages
 
 
+def _summary_markers_from_checkpoint(
+    snapshot: CheckpointThreadSnapshot | None, messages: list[ChatMessage]
+) -> list[ConversationSummaryMarker]:
+    if snapshot is None:
+        return []
+    markers: list[ConversationSummaryMarker] = []
+    visible_by_id = {message.id: message for message in messages}
+    for occurrence in snapshot.summary_occurrences:
+        scope = occurrence.scope
+        if scope["kind"] == "conversation":
+            anchor_message_id = _root_summary_anchor(
+                snapshot.messages,
+                messages,
+                occurrence.created_at_index,
+                occurrence.anchor_message_id,
+            )
+            # A non-head root summary without a visible predecessor cannot be
+            # placed honestly. Do not turn it into a false transcript-head marker.
+            if anchor_message_id is None and occurrence.created_at_index:
+                continue
+        else:
+            anchor_message_id = _tool_call_anchor(scope["id"], messages)
+            if anchor_message_id is None and occurrence.anchor_message_id in visible_by_id:
+                anchor_message_id = occurrence.anchor_message_id
+        markers.append(
+            ConversationSummaryMarker(
+                id=occurrence.id,
+                anchor_message_id=anchor_message_id,
+                summary=occurrence.summary,
+                scope=ConversationSummaryScope.model_validate(scope),
+            )
+        )
+    return markers
+
+
+def _root_summary_anchor(
+    raw_messages: list[Any],
+    messages: list[ChatMessage],
+    created_at_index: int,
+    source_anchor_message_id: str | None,
+) -> str | None:
+    visible_by_id = {message.id: message for message in messages}
+    upper_bound = min(created_at_index, len(raw_messages))
+    for index in range(upper_bound - 1, -1, -1):
+        raw = raw_messages[index]
+        raw_id = _raw_message_id(raw, index)
+        if raw_id in visible_by_id:
+            return raw_id
+        for tool_call in _extract_raw_tool_calls(raw):
+            if anchor := _tool_call_anchor(tool_call["id"], messages):
+                return anchor
+    return source_anchor_message_id if source_anchor_message_id in visible_by_id else None
+
+
+def _tool_call_anchor(tool_call_id: str, messages: list[ChatMessage]) -> str | None:
+    for message in messages:
+        if any(call.get("id") == tool_call_id for call in message.tool_calls):
+            return message.id
+    return None
+
+
+def summary_markers_for_page(
+    markers: list[ConversationSummaryMarker],
+    messages: list[ChatMessage],
+    *,
+    includes_transcript_head: bool,
+) -> list[ConversationSummaryMarker]:
+    """Return only markers whose creation boundary is present in this page."""
+    visible_ids = {message.id for message in messages}
+    return [
+        marker
+        for marker in markers
+        if marker.anchor_message_id in visible_ids
+        or marker.anchor_message_id is None
+        and includes_transcript_head
+    ]
+
+
 def _join_reasoning(segments: list[ReasoningSegment]) -> str:
     return "\n\n".join(segment.text for segment in segments)
 
@@ -787,10 +880,13 @@ def get_chat_detail(
     payload = _session_payload(store, thread_id)
     if payload is None:
         return None
-    snapshot = store.get_checkpoint_thread_snapshot(thread_id)
+    snapshot = store.get_checkpoint_thread_snapshot(thread_id, include_summary_occurrences=True)
     messages = _messages_from_checkpoint(snapshot)
+    summary_markers = _summary_markers_from_checkpoint(snapshot, messages)
     summary = _summary_from_session(payload, messages=messages)
-    return ChatSessionDetail(**summary.model_dump(), messages=messages)
+    return ChatSessionDetail(
+        **summary.model_dump(), messages=messages, summary_markers=summary_markers
+    )
 
 
 def get_chat_summary(store: BackendDocumentStore, thread_id: str) -> ChatSessionSummary | None:

@@ -555,7 +555,7 @@ describe('applyUiEvent reducer', () => {
       },
     }));
     expect(selectActiveChatSessionState({ uiData: s }).hasMoreMessages).toBe(false);
-    expect(selectActiveChatSessionState({ uiData: s }).pendingOlderPage).toEqual({
+    expect(selectActiveChatSessionState({ uiData: s }).pendingOlderPage).toMatchObject({
       requestId: 'REQ2',
       messages: [{ id: 'm0', content: 'oldest' }],
     });

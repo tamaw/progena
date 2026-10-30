@@ -58,6 +58,7 @@ describe('createLiveAssistantTurn', () => {
       displayModelName: '',
       displayToolCalls: [],
       timelineItems: [],
+      summaryActivities: [],
       lastActivity: null,
       pendingCommentary: '',
       isStreaming: true,
@@ -159,6 +160,27 @@ describe('applyAssistantStreamEvent', () => {
     const evt = rawStreamEvent('message_delta');
     const next = applyAssistantStreamEvent(turn, evt, NOW);
     expect(next).toBe(turn);
+  });
+
+  it('keeps native summary callback activity out of assistant timeline content', () => {
+    const started = applyAssistantStreamEvent(baseTurn(), rawStreamEvent('conversation_summary_started', {
+      metadata: {
+        summary_id: 'callback-1',
+        scope: { kind: 'conversation', id: 'thread-1' },
+      },
+    }), NOW);
+    const finished = applyAssistantStreamEvent(started, rawStreamEvent('conversation_summary_finished', {
+      metadata: {
+        summary_id: 'callback-1',
+        scope: { kind: 'conversation', id: 'thread-1' },
+      },
+    }), NOW);
+
+    expect(started.summaryActivities).toEqual([
+      { id: 'callback-1', scope: { kind: 'conversation', id: 'thread-1' } },
+    ]);
+    expect(started.timelineItems).toEqual([]);
+    expect(finished.summaryActivities).toEqual([]);
   });
 
   it('retains terminal latest-call context usage without a visual timeline row', () => {

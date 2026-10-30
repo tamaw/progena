@@ -91,7 +91,12 @@ const __routineStringify = JSON.stringify;
 const __routineIsFinite = Number.isFinite;
 const __routineTypeError = TypeError;
 const __routineRangeError = RangeError;
-const __routineCharCodeAt = Function.prototype.call.bind(String.prototype.charCodeAt);
+const __routineRegExpReplace = Function.prototype.call.bind(RegExp.prototype[Symbol.replace]);
+const __routineNonAscii = /[\\u0000-\\u007F]+/g;
+const __routineThreeByte = /[\\u0000-\\u07FF\\uD800-\\uDFFF]+/g;
+// Pin exec before guest code can mutate RegExp.prototype.
+Object.defineProperty(__routineNonAscii, "exec", { value: RegExp.prototype.exec });
+Object.defineProperty(__routineThreeByte, "exec", { value: RegExp.prototype.exec });
 const __routineResult = await (async function(input) {
 """
 
@@ -109,18 +114,22 @@ const __routineSerialized = __routineStringify(__routineResult, (key, value) => 
 const __routineMaxBytes = """
     + str(_CODE_MAX_RESULT_BYTES)
     + """;
-let __routineResultBytes = 0;
-for (let index = 0; index < __routineSerialized.length; index += 1) {
-  const unit = __routineCharCodeAt(__routineSerialized, index);
-  if (unit < 0x80) __routineResultBytes += 1;
-  else if (unit < 0x800) __routineResultBytes += 2;
-  else if (unit >= 0xD800 && unit <= 0xDBFF) {
-    __routineResultBytes += 4;
-    index += 1;
-  } else __routineResultBytes += 3;
-  if (__routineResultBytes > __routineMaxBytes) {
-    throw new __routineRangeError("code result exceeds the maximum size");
-  }
+// UTF-16 length is a lower bound. Native replacement counts the extra bytes
+// without a guest-JS iteration for each alternating encoding width.
+// JSON.stringify escapes lone surrogates: pairs need one extra byte per unit,
+// and non-surrogate three-byte BMP points need one further byte.
+let __routineResultBytes = __routineSerialized.length;
+if (__routineResultBytes > __routineMaxBytes) {
+  throw new __routineRangeError("code result exceeds the maximum size");
+}
+__routineResultBytes += __routineRegExpReplace(
+  __routineNonAscii, __routineSerialized, "").length;
+if (__routineResultBytes <= __routineMaxBytes) {
+  __routineResultBytes += __routineRegExpReplace(
+    __routineThreeByte, __routineSerialized, "").length;
+}
+if (__routineResultBytes > __routineMaxBytes) {
+  throw new __routineRangeError("code result exceeds the maximum size");
 }
 __routineSerialized;
 """
