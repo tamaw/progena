@@ -22,6 +22,7 @@
 import { createStreamEvent, appendStreamEvent, appendReasoningText, extractReasoningTokenCount, extractCacheReadTokenCount, mergeReasoningEvents, isReasoningEvent, isRenderableStreamEvent, MAX_STREAM_EVENTS_PER_MESSAGE } from './streamEventsModel';
 import { isA2AToolName } from './a2aTools';
 import { normalizeContextUsage } from './contextWindowModel';
+import { applyConversationSummaryActivity } from './conversationSummaryModel';
 import { isToolEventFailure } from './toolFailureModel';
 
 /** Create a fresh live assistant turn with no visible output yet. */
@@ -43,6 +44,9 @@ export function createLiveAssistantTurn({ streamId, startedAt }) {
     displayModelName: '',
     displayToolCalls: [],
     timelineItems: [],
+    // Native summary callbacks are sparse control events, not assistant
+    // content. Their completion never fabricates a persistent marker.
+    summaryActivities: [],
     // 'work' while the latest visible output is a tool/reasoning/plan row,
     // 'text' once answer text is streaming -- drives the live work preview.
     lastActivity: null,
@@ -433,6 +437,10 @@ const PASSIVE_AFTER_TEXT_EVENT_TYPES = new Set(['node_update', 'reasoning_summar
  * turn as working, except passive rows arriving after answer text started.
  */
 export function applyAssistantStreamEvent(turn, streamEvent) {
+  const summaryActivities = applyConversationSummaryActivity(turn.summaryActivities, streamEvent);
+  if (summaryActivities !== turn.summaryActivities) {
+    return { ...turn, summaryActivities };
+  }
   const { turn: base, streamEvent: event } = claimToolCommentary(turn, streamEvent);
   const next = applyStreamEventToTimeline(base, event);
   if (next === base || next.timelineItems === base.timelineItems) return next;

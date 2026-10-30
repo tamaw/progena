@@ -123,6 +123,8 @@ function MessageView({
   message,
   streamEventFilter,
   onRegenerate,
+  summaryMarkers,
+  summaryActivities,
 }) {
   const {
     role,
@@ -308,6 +310,8 @@ function MessageView({
               active={workActive && isLatest}
               endedAt={isLatest ? answerStartedAt : workGroups[index + 1].startedAt}
               onRegenerate={onRegenerate}
+              summaryMarkers={summaryMarkers}
+              summaryActivities={summaryActivities}
             />
           );
         })}
@@ -317,6 +321,8 @@ function MessageView({
             item={item}
             itemIndex={idx}
             onRegenerate={onRegenerate}
+            summaryMarkers={summaryMarkers}
+            summaryActivities={summaryActivities}
           />
         ))}
         {messageImages.length > 0 && (

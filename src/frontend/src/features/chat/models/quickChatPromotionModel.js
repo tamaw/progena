@@ -6,16 +6,21 @@ const MAX_PERSISTED_MESSAGES = 100;
  * Keeps the live promotion payload faithful for the current navigation while
  * making the reload fallback safe for browser storage.
  */
-export function createQuickChatPromotion(history, threadId) {
+export function createQuickChatPromotion(history, threadId, summaryMarkers = []) {
   const messages = Array.isArray(history)
     ? history.map((message) => ({ ...message }))
     : [];
+  const markers = Array.isArray(summaryMarkers) && summaryMarkers.length > 0
+    ? summaryMarkers.map((marker) => ({ ...marker }))
+    : [];
   const canonicalThreadId = typeof threadId === 'string' ? threadId : null;
+  const markerPayload = markers.length > 0 ? { summaryMarkers: markers } : {};
 
   return {
     handoff: {
       messages,
       threadId: canonicalThreadId,
+      ...markerPayload,
     },
     persistedHandoff: {
       messages: messages
@@ -28,6 +33,7 @@ export function createQuickChatPromotion(history, threadId) {
           return persisted;
         }),
       threadId: canonicalThreadId,
+      ...markerPayload,
     },
   };
 }

@@ -102,6 +102,22 @@ Auto-selection should run once after the correlated session snapshot hydrates
 the Redux list, respecting pinned and bucket ordering; it must not reselect on
 unrelated replay or later global updates.
 
+## Conversation summaries
+
+Native summarization uses the existing response-content activity and committed
+chat history. `Summarizing conversation…` is transient model-generation activity;
+it is never promoted to a completed marker merely because a callback finished.
+Committed `summary_markers` render as keyboard-expandable `Conversation summarized`
+separators with bounded, sanitized Markdown. Their stable scope/anchor identities
+preserve placement and deduplication during paging and canonical reconciliation.
+
+Original messages remain visible and searchable. Nested summaries stay inside
+their subagent activity. Completed markers must remain visible with debug events
+filtered out, and when a frozen live owner suppresses its historical answer twin.
+Do not introduce another EventSource, polling, exact duration or savings claims.
+Tool-output offload and prompt-argument trimming indicators are not implemented.
+
+
 ## Streaming-render performance invariants
 
 The active response has a separate, intentionally narrow render owner. Preserve

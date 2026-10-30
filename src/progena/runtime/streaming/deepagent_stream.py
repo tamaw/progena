@@ -29,6 +29,7 @@ from src.progena.runtime.streaming.stream_payloads import (
     extract_stream_chunk_text,
     extract_stream_reasoning_deltas,
 )
+from src.progena.runtime.streaming.summarization_events import SummarizationCallbackObserver
 from src.progena.sessions.messages import (
     attach_reasoning_trace,
     coerce_messages_list,
@@ -158,6 +159,7 @@ class DeepAgentSSEStream:
         self._counted_usage_by_message_id: dict[str, int] = {}
         self._turn_usage = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
         self._counted_token_usage_by_message_id: dict[str, dict[str, int]] = {}
+        self._summary_thread_id: str | None = None
         # Per-node wall-time tracer (PROGENA_TRACE_TIMING). Reset per
         # stream() invocation so a reused instance does not carry stale
         # timestamps across turns.
@@ -190,6 +192,8 @@ class DeepAgentSSEStream:
             additional_kwargs["attachments"] = attachments
         human_message = HumanMessage(content=message, additional_kwargs=additional_kwargs)
         graph_input: dict[str, Any] = {"messages": [human_message]}
+        self._summary_thread_id = thread_id
+        summary_observer = SummarizationCallbackObserver(self._summary_scope_for_callback)
         self._trace_begin(thread_id=thread_id)
         self.state["current_input"] = message
         self.state["cycle_count"] = int(self.state.get("cycle_count") or 0) + 1
@@ -198,6 +202,7 @@ class DeepAgentSSEStream:
             configurable["progena_source"] = source
         astream_kwargs: dict[str, Any] = {
             "config": {
+                "callbacks": [summary_observer],
                 "configurable": configurable,
                 "metadata": {"runtime_instance": RUNTIME_INSTANCE_ID},
             },
@@ -220,13 +225,15 @@ class DeepAgentSSEStream:
 
                     if namespace:
                         async for item in self._handle_namespaced_stream_item(
-                            namespace, mode, event
+                            namespace, mode, event, summary_observer
                         ):
                             yield item
                         continue
 
                     if mode == "messages":
-                        async for item in self._handle_message_stream_event(event):
+                        async for item in self._handle_message_stream_event(
+                            event, summary_observer
+                        ):
                             yield item
                         continue
 
@@ -319,12 +326,16 @@ class DeepAgentSSEStream:
             self._trace_node_count,
         )
 
-    async def _handle_message_stream_event(self, event: Any) -> AsyncIterator[dict[str, Any]]:
+    async def _handle_message_stream_event(
+        self, event: Any, summary_observer: SummarizationCallbackObserver
+    ) -> AsyncIterator[dict[str, Any]]:
         if not isinstance(event, tuple) or len(event) != 2:
             logger.debug("Ignoring unexpected messages stream payload: %r", event)
             return
 
         message_chunk, metadata = event
+        if summary_observer.suppresses_message_stream(metadata):
+            return
         if not isinstance(message_chunk, AIMessageChunk):
             return
 
@@ -837,6 +848,47 @@ class DeepAgentSSEStream:
         if tool_call_id:
             self._pending_dispatch_task_ids[task_id] = tool_call_id
 
+    def _summary_scope_for_callback(self, metadata: dict[str, Any]) -> dict[str, str] | None:
+        """Resolve the native callback namespace to the browser's agent scope."""
+        raw_namespace = metadata.get("langgraph_checkpoint_ns")
+        segments = (
+            tuple(part for part in raw_namespace.split("|") if part)
+            if isinstance(raw_namespace, str)
+            else ()
+        )
+        candidates = [
+            (namespace, binding)
+            for namespace, binding in self._subagent_namespace_bindings.items()
+            if tuple(map(str, namespace)) == segments[: len(namespace)]
+        ]
+        if candidates:
+            _namespace, (tool_call_id, subagent_name) = max(
+                candidates, key=lambda item: len(item[0])
+            )
+            scope = {"kind": "subagent", "id": tool_call_id}
+            if subagent_name:
+                scope["label"] = subagent_name
+            return scope
+
+        for segment in reversed(segments):
+            _node, separator, task_id = segment.rpartition(":")
+            if not separator:
+                continue
+            tool_call_id = self._pending_dispatch_task_ids.get(task_id)
+            if not tool_call_id:
+                continue
+            scope = {"kind": "subagent", "id": tool_call_id}
+            subagent_name = self._task_subagent_calls.get(tool_call_id)
+            if subagent_name:
+                scope["label"] = subagent_name
+            return scope
+
+        # An unmatched delegated namespace is not the root conversation.
+        if any(segment.startswith("tools:") for segment in segments):
+            return None
+
+        return {"kind": "conversation", "id": self._summary_thread_id or "conversation"}
+
     def _resolve_subagent_binding(self, namespace: tuple[Any, ...]) -> tuple[str, str] | None:
         """Bind a subgraph namespace to the (tool_call_id, subagent_name) that spawned it.
 
@@ -866,10 +918,18 @@ class DeepAgentSSEStream:
         return binding
 
     async def _handle_namespaced_stream_item(
-        self, namespace: tuple[Any, ...], mode: str, event: Any
+        self,
+        namespace: tuple[Any, ...],
+        mode: str,
+        event: Any,
+        summary_observer: SummarizationCallbackObserver,
     ) -> AsyncIterator[dict[str, Any]]:
         binding = self._resolve_subagent_binding(namespace)
         if binding is None:
+            if mode == "custom":
+                for item in self._summary_lifecycle_items(event):
+                    yield item
+                return
             logger.debug(
                 "Dropping namespaced stream item with no pending subagent binding: ns=%r mode=%s",
                 namespace,
@@ -881,7 +941,7 @@ class DeepAgentSSEStream:
 
         if mode == "messages":
             async for item in self._handle_nested_message_stream_event(
-                tool_call_id, subagent_name, event
+                tool_call_id, subagent_name, event, summary_observer
             ):
                 yield item
             return
@@ -894,13 +954,19 @@ class DeepAgentSSEStream:
         # `updates` mode from inside a nested subagent graph is a no-op in v1.
 
     async def _handle_nested_message_stream_event(
-        self, tool_call_id: str, subagent_name: str, event: Any
+        self,
+        tool_call_id: str,
+        subagent_name: str,
+        event: Any,
+        summary_observer: SummarizationCallbackObserver,
     ) -> AsyncIterator[dict[str, Any]]:
         if not isinstance(event, tuple) or len(event) != 2:
             logger.debug("Ignoring unexpected nested messages stream payload: %r", event)
             return
 
-        message_chunk, _metadata = event
+        message_chunk, metadata = event
+        if summary_observer.suppresses_message_stream(metadata):
+            return
         if not isinstance(message_chunk, AIMessageChunk):
             return
 
@@ -919,6 +985,23 @@ class DeepAgentSSEStream:
             },
         }
 
+    @staticmethod
+    def _summary_lifecycle_items(event: Any) -> list[dict[str, Any]]:
+        envelope = normalize_custom_event(event)
+        if envelope is None or envelope["event_type"] not in {
+            "conversation_summary_started",
+            "conversation_summary_finished",
+        }:
+            return []
+        return [
+            {
+                "type": "stream_event",
+                "event_type": envelope["event_type"],
+                "content": envelope["content"],
+                "metadata": envelope["metadata"],
+            }
+        ]
+
     def _handle_nested_custom_stream_event(
         self, tool_call_id: str, subagent_name: str, event: Any
     ) -> list[dict[str, Any]]:
@@ -927,6 +1010,8 @@ class DeepAgentSSEStream:
             return []
 
         inner_event_type = envelope["event_type"]
+        if inner_event_type in {"conversation_summary_started", "conversation_summary_finished"}:
+            return self._summary_lifecycle_items(event)
         remapped_type = _NESTED_TOOL_EVENT_REMAP.get(inner_event_type)
         if remapped_type is None:
             return []

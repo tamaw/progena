@@ -10,6 +10,7 @@ while that subagent is mid-run.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
@@ -29,6 +30,38 @@ from .transcript import DEFAULT_AGENT_NICK, ThreadMessages
 _MESSAGES_SPECS = {"messages": StateGraph(DeepAgentState).channels["messages"]}
 
 
+_NATIVE_SUMMARIZATION_EVENT_KEY = "_summarization_event"
+
+
+@dataclass(frozen=True)
+class SummaryOccurrence:
+    """One native summary state update that reached a committed checkpoint."""
+
+    id: str
+    summary: str
+    created_at_index: int
+    committed_at: datetime | None
+
+
+@dataclass(frozen=True)
+class ConversationSummary:
+    """A committed summary plus the thread scope that owns its boundary."""
+
+    id: str
+    summary: str
+    created_at_index: int
+    anchor_message_id: str | None
+    scope: dict[str, str]
+    committed_at: datetime | None
+
+
+@dataclass(frozen=True)
+class _LoadedThread:
+    thread: ThreadMessages
+    checkpoint_id: str
+    summaries: tuple[SummaryOccurrence, ...]
+
+
 @dataclass(frozen=True)
 class Conversation:
     """A chat's root thread, the subagent threads it delegated to, and its newest checkpoint."""
@@ -36,6 +69,7 @@ class Conversation:
     root: ThreadMessages
     subagents: dict[str, ThreadMessages]
     checkpoint_id: str
+    summaries: tuple[ConversationSummary, ...] = ()
 
 
 async def latest_checkpoint_id(checkpointer: Any, thread_id: str) -> str | None:
@@ -44,24 +78,87 @@ async def latest_checkpoint_id(checkpointer: Any, thread_id: str) -> str | None:
     return str(tip.config["configurable"]["checkpoint_id"]) if tip is not None else None
 
 
-async def load_conversation(checkpointer: Any, thread_id: str) -> Conversation | None:
-    """Load the chat's messages, subagent transcripts and commit times."""
-    root = await _load_thread(checkpointer, thread_id, "")
+async def load_conversation(
+    checkpointer: Any,
+    thread_id: str,
+    *,
+    checkpoint_id: str | None = None,
+    include_summaries: bool = False,
+    include_subagents: bool = True,
+) -> Conversation | None:
+    """Load the chat's committed messages, and optionally native summaries."""
+    root = await _load_thread(
+        checkpointer,
+        thread_id,
+        "",
+        checkpoint_id=checkpoint_id,
+        include_summaries=include_summaries,
+    )
     if root is None:
         return None
-    thread, checkpoint_id = root
     subagents: dict[str, ThreadMessages] = {}
-    for tool_call_id, ns in (await _subagent_namespaces(checkpointer, thread_id)).items():
-        loaded = await _load_thread(checkpointer, thread_id, ns)
-        if loaded is not None:
-            subagents[tool_call_id] = loaded[0]
-    return Conversation(root=thread, subagents=subagents, checkpoint_id=checkpoint_id)
+    summaries: list[ConversationSummary] = []
+    if include_summaries:
+        for occurrence in root.summaries:
+            marker = _conversation_summary(
+                occurrence,
+                root.thread.messages,
+                {"kind": "conversation", "id": thread_id},
+            )
+            if marker is not None:
+                summaries.append(marker)
+    if include_subagents:
+        for tool_call_id, ns in (await _subagent_namespaces(checkpointer, thread_id)).items():
+            loaded = await _load_thread(
+                checkpointer, thread_id, ns, include_summaries=include_summaries
+            )
+            if loaded is None:
+                continue
+            subagents[tool_call_id] = loaded.thread
+            if not include_summaries:
+                continue
+            scope = {"kind": "subagent", "id": tool_call_id}
+            if loaded.thread.nick:
+                scope["label"] = loaded.thread.nick
+            for occurrence in loaded.summaries:
+                marker = _conversation_summary(occurrence, loaded.thread.messages, scope)
+                if marker is not None:
+                    summaries.append(marker)
+    summaries.sort(
+        key=lambda summary: (
+            summary.committed_at is None,
+            summary.committed_at.isoformat() if summary.committed_at is not None else "",
+        )
+    )
+    return Conversation(
+        root=root.thread,
+        subagents=subagents,
+        checkpoint_id=root.checkpoint_id,
+        summaries=tuple(summaries),
+    )
 
 
 async def _load_thread(
-    checkpointer: Any, thread_id: str, ns: str
-) -> tuple[ThreadMessages, str] | None:
+    checkpointer: Any,
+    thread_id: str,
+    ns: str,
+    *,
+    checkpoint_id: str | None = None,
+    include_summaries: bool = False,
+) -> _LoadedThread | None:
     history = [t async for t in checkpointer.alist(_config(thread_id, ns))]  # newest first
+    if checkpoint_id is not None:
+        checkpoint_index = next(
+            (
+                index
+                for index, checkpoint in enumerate(history)
+                if _checkpoint_id(checkpoint) == checkpoint_id
+            ),
+            None,
+        )
+        if checkpoint_index is None:
+            return None
+        history = history[checkpoint_index:]
     if not history:
         return None
     tip = history[0]
@@ -75,7 +172,96 @@ async def _load_thread(
         # An unnamed subagent namespace gets "" so the renderer uses the task's subagent_type.
         nick=str(tip.metadata.get("lc_agent_name") or ("" if ns else DEFAULT_AGENT_NICK)),
     )
-    return thread, str(tip.config["configurable"]["checkpoint_id"])
+    return _LoadedThread(
+        thread=thread,
+        checkpoint_id=_checkpoint_id(tip),
+        summaries=tuple(_summary_occurrences(history[::-1], ns=ns)) if include_summaries else (),
+    )
+
+
+def _checkpoint_id(checkpoint: CheckpointTuple) -> str:
+    return str(checkpoint.config.get("configurable", {})["checkpoint_id"])
+
+
+def _conversation_summary(
+    occurrence: SummaryOccurrence,
+    messages: list[Any],
+    scope: dict[str, str],
+) -> ConversationSummary | None:
+    if occurrence.created_at_index > len(messages):
+        return None
+    return ConversationSummary(
+        id=occurrence.id,
+        summary=occurrence.summary,
+        created_at_index=occurrence.created_at_index,
+        anchor_message_id=_anchor_message_id(messages, occurrence.created_at_index),
+        scope=scope,
+        committed_at=occurrence.committed_at,
+    )
+
+
+def _anchor_message_id(messages: list[Any], created_at_index: int) -> str | None:
+    """The source message immediately before a native creation boundary."""
+    for message in reversed(messages[:created_at_index]):
+        value = message.get("id") if isinstance(message, Mapping) else getattr(message, "id", None)
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
+def _summary_occurrences(history: list[CheckpointTuple], *, ns: str) -> list[SummaryOccurrence]:
+    """Recover every committed native event without trusting pending writes."""
+    occurrences: list[SummaryOccurrence] = []
+    previous_fingerprint: tuple[str, int, int | None] | None = None
+    for checkpoint in history:
+        values = checkpoint.checkpoint.get("channel_values")
+        event = values.get(_NATIVE_SUMMARIZATION_EVENT_KEY) if isinstance(values, Mapping) else None
+        summary = _summary_text(event)
+        created_at_index = _event_integer(event, "created_at_index")
+        if summary is None or created_at_index is None or created_at_index < 0:
+            continue
+        fingerprint = (summary, created_at_index, _event_integer(event, "cutoff_index"))
+        if fingerprint == previous_fingerprint:
+            continue
+        previous_fingerprint = fingerprint
+        occurrences.append(
+            SummaryOccurrence(
+                id=f"summary:{ns or 'root'}:{_checkpoint_id(checkpoint)}",
+                summary=summary,
+                created_at_index=created_at_index,
+                committed_at=_checkpoint_time(checkpoint),
+            )
+        )
+    return occurrences
+
+
+def _event_integer(event: Any, field: str) -> int | None:
+    value = event.get(field) if isinstance(event, Mapping) else getattr(event, field, None)
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def _summary_text(event: Any) -> str | None:
+    message = (
+        event.get("summary_message")
+        if isinstance(event, Mapping)
+        else getattr(event, "summary_message", None)
+    )
+    content = (
+        message.get("content")
+        if isinstance(message, Mapping)
+        else getattr(message, "content", None)
+    )
+    return content if isinstance(content, str) and content else None
+
+
+def _checkpoint_time(checkpoint: CheckpointTuple) -> datetime | None:
+    value = checkpoint.checkpoint.get("ts")
+    if not isinstance(value, str):
+        return None
+    try:
+        return normalize_utc_datetime(datetime.fromisoformat(value.replace("Z", "+00:00")))
+    except ValueError:
+        return None
 
 
 def _commit_times(history: list[CheckpointTuple]) -> dict[str, datetime]:

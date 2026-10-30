@@ -161,6 +161,39 @@ non-aggregate `{input_tokens, output_tokens, total_tokens, profile_name?,
 deployment?, provider_id?}` footprint. Persisted chat messages expose the same
 optional `context_usage`; missing provider usage is omitted rather than inferred.
 
+### Native conversation-summary visibility
+
+Summary generation is response content, not a new canonical response lifecycle.
+`conversation_summary_started` and `conversation_summary_finished` activity uses
+the existing `chat.response.event` lane. A finished summary-model call does not
+prove checkpoint persistence; only committed session history may produce a
+`Conversation summarized` marker. Request terminal cleanup clears transient
+summary activity, including cancellation and failure.
+
+Chat detail and older-message pages carry `summary_markers` for their visible
+history window. Marker identity and scope are stable across reload and page
+merges. Summary content is not part of chat-list snapshots or token deltas.
+The backend resolves native creation boundaries to visible message anchors;
+the browser must not interpret checkpoint indices or private SDK state.
+Nested-agent summaries belong to their delegated tool activity, not the root
+conversation. Original messages remain available and searchable.
+
+Each marker is `{id, anchor_message_id, summary, scope: {kind, id, label?}}`.
+Root markers render **after** their anchor message; a null anchor denotes the
+transcript head. Scope `kind` is `conversation` (ID is the thread) or `subagent`
+(ID is the parent task tool-call ID). Page events include a marker only with its
+anchor page, or with the transcript head for a head marker.
+
+Live event metadata is `{summary_id, scope}`. The callback's `summary_id` is not
+the durable marker ID. Frontends clear live activity on finish/terminal and
+deduplicate committed markers by their history-projected ID. Expanded summaries
+are sanitized Markdown; collapsed markers do not parse the summary body.
+
+No additional EventSource, polling, database notification channel, or independent
+compaction ledger is used. Summary timestamps describe checkpoint commits, not
+exact generation duration; no token-saving percentage is inferred.
+
+
 ### Dedicated replay and resync semantics
 
 The backend retains the most recent **1024** replayable response-content frames

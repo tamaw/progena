@@ -76,7 +76,7 @@ const ReasoningBody = memo(function ReasoningBody({ event }) {
   );
 });
 
-const WorkGroup = memo(function WorkGroup({ heading, items, active, endedAt, onRegenerate }) {
+const WorkGroup = memo(function WorkGroup({ heading, items, active, endedAt, onRegenerate, summaryMarkers, summaryActivities }) {
   // A manual choice applies only to this phase. Finishing work must collapse
   // it even if the user reopened it while it was active.
   const [disclosure, setDisclosure] = useState(null);
@@ -139,6 +139,8 @@ const WorkGroup = memo(function WorkGroup({ heading, items, active, endedAt, onR
           item={item}
           itemIndex={index}
           onRegenerate={onRegenerate}
+          summaryMarkers={summaryMarkers}
+          summaryActivities={summaryActivities}
         />
       ))}
     </>

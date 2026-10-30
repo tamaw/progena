@@ -54,6 +54,8 @@ ALLOWED_CUSTOM_EVENT_TYPES = frozenset(
         "async_subagent_result",
         "async_subagent_cancel",
         "a2a_call_progress",
+        "conversation_summary_started",
+        "conversation_summary_finished",
         "debug_event",
     }
 )

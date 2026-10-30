@@ -33,6 +33,7 @@ from src.progena.runtime.http.responses import (
 )
 from src.progena.runtime.streaming.deepagent_stream import DeepAgentSSEStream
 from src.progena.sessions.context import reset_current_thread_id, set_current_thread_id
+from src.progena.sessions.history import ConversationSummary, load_conversation
 from src.progena.sessions.render import merge_session_after_turn
 from src.progena.sessions.status import CANCELLED_STATUS
 
@@ -65,6 +66,20 @@ def _extract_attachments(metadata: dict[str, Any] | None) -> list[dict[str, Any]
     if not isinstance(attachments, list):
         return None
     return [item for item in attachments if isinstance(item, dict)] or None
+
+
+def _summary_occurrence_payload(summary: ConversationSummary) -> dict[str, Any]:
+    """Internal runtime projection; browser descriptors are resolved by backend."""
+    payload: dict[str, Any] = {
+        "id": summary.id,
+        "summary": summary.summary,
+        "created_at_index": summary.created_at_index,
+        "anchor_message_id": summary.anchor_message_id,
+        "scope": summary.scope,
+    }
+    if summary.committed_at is not None:
+        payload["committed_at"] = summary.committed_at.isoformat()
+    return payload
 
 
 def _extract_input_text(payload: dict[str, Any]) -> str:
@@ -801,17 +816,20 @@ class RuntimeChatService:
         }
 
         include_langchain = "progena.langchain_message" in include_set
+        include_summaries = "progena.conversation_summaries" in include_set
 
         checkpoint_id = request.query.get("checkpoint_id") or None
-        config: dict[str, Any] = {"configurable": {"thread_id": conversation_id}}
-        if checkpoint_id:
-            config["configurable"]["checkpoint_id"] = checkpoint_id
-
-        snapshot = await graph.aget_state(config)
-        if snapshot.created_at is None:
+        conversation = await load_conversation(
+            graph.checkpointer,
+            conversation_id,
+            checkpoint_id=checkpoint_id,
+            include_summaries=include_summaries,
+            include_subagents=include_summaries,
+        )
+        if conversation is None:
             return _json_error("Conversation not found", "not_found", 404)
 
-        messages = snapshot.values.get("messages") or []
+        messages = conversation.root.messages
         sourced_items = conversation_items_with_sources(messages, conversation_id)
         try:
             page, meta = paginate_items(
@@ -826,7 +844,12 @@ class RuntimeChatService:
                 messages,
                 conversation_id,
             )
-        return web.json_response(make_json_safe({**meta, "data": page}))
+        payload: dict[str, Any] = {**meta, "data": page}
+        if include_summaries:
+            payload["progena_summary_occurrences"] = [
+                _summary_occurrence_payload(summary) for summary in conversation.summaries
+            ]
+        return web.json_response(make_json_safe(payload))
 
     # -- DELETE /v1/conversations/{conversation_id} ----------------------
 

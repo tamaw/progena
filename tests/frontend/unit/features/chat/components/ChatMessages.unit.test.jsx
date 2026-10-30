@@ -105,3 +105,74 @@ describe('interrupted chat status', () => {
     expect(render(true)).not.toContain('Interrupted — the runtime restarted during this turn.');
   });
 });
+
+describe('conversation summary markers', () => {
+  it('renders a committed marker at its anchored boundary without replacing either message', () => {
+    const store = configureStore({
+      reducer: () => ({ uiData: { preferences: { agentName: 'Progena' } } }),
+    });
+    const container = document.createElement('div');
+    container.innerHTML = renderToStaticMarkup(
+      <Provider store={store}>
+        <ChatMessages
+          messages={[
+            { id: 'before', role: 'user', content: 'Before summary' },
+            { id: 'after', role: 'assistant', content: 'After summary' },
+          ]}
+          summaryMarkers={[{
+            id: 'summary-1',
+            anchor_message_id: 'before',
+            summary: '## Condensed context\n\nEarlier details.',
+            scope: { kind: 'conversation', id: 'thread-1' },
+          }]}
+        />
+      </Provider>,
+    );
+
+    const text = container.textContent;
+    expect(text).toContain('Conversation summarized');
+    expect(text.indexOf('Before summary')).toBeLessThan(text.indexOf('Conversation summarized'));
+    expect(text.indexOf('Conversation summarized')).toBeLessThan(text.indexOf('After summary'));
+    expect(container.querySelector('details')).not.toBeNull();
+  });
+
+  it('keeps a committed marker visible after the frozen live owner', () => {
+    const store = configureStore({
+      reducer: () => ({ uiData: { preferences: { agentName: 'Progena' } } }),
+    });
+    const liveStore = createLiveAssistantTurnStore();
+    liveStore.set({
+      ...createLiveAssistantTurn({ streamId: 'live-summary', startedAt: 1 }),
+      assistantMessageId: 'live-answer',
+      content: 'Frozen answer',
+      isStreaming: false,
+      timelineItems: [{
+        kind: 'assistant_message',
+        id: 'live-answer',
+        content: 'Frozen answer',
+        timestamp: 1,
+        isStreaming: false,
+      }],
+    });
+    const container = document.createElement('div');
+    container.innerHTML = renderToStaticMarkup(
+      <Provider store={store}>
+        <ChatMessages
+          messages={[]}
+          summaryMarkers={[{
+            id: 'summary-after-live',
+            anchor_message_id: 'live-answer',
+            summary: 'Committed after the live answer.',
+            scope: { kind: 'conversation', id: 'thread-1' },
+          }]}
+          liveOwnedMessageId="live-answer"
+          liveTurnStore={liveStore}
+        />
+      </Provider>,
+    );
+
+    expect(container.textContent.indexOf('Frozen answer')).toBeLessThan(
+      container.textContent.indexOf('Conversation summarized'),
+    );
+  });
+});

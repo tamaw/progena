@@ -49,6 +49,23 @@ describe('quick chat promotion', () => {
     });
   });
 
+  it('carries committed markers into the main-chat handoff', () => {
+    const markers = [{
+      id: 'summary-1',
+      anchor_message_id: 'message-1',
+      summary: 'Earlier context.',
+      scope: { kind: 'conversation', id: 'thread-canonical' },
+    }];
+    const { handoff, persistedHandoff } = createQuickChatPromotion(
+      [{ id: 'message-1', role: 'user', content: 'Continue this thread.' }],
+      'thread-canonical',
+      markers,
+    );
+
+    expect(handoff.summaryMarkers).toEqual(markers);
+    expect(persistedHandoff.summaryMarkers).toEqual(markers);
+  });
+
   it('does not block promotion when browser storage rejects the fallback', () => {
     const storage = {
       setItem() {

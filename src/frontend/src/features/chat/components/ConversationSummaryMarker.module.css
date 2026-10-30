@@ -1,0 +1,116 @@
+.marker {
+  position: relative;
+  margin: 2px 0;
+  color: var(--color-text-secondary);
+}
+
+.disclosure {
+  border-top: 1px solid var(--color-border);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.summary {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 30px;
+  padding: 5px 2px;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  font-size: var(--font-size-sm);
+  list-style: none;
+  user-select: none;
+}
+
+.summary::-webkit-details-marker {
+  display: none;
+}
+
+.summary:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+  border-radius: var(--border-radius-sm);
+}
+
+.icon,
+.activityIcon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-text-muted);
+}
+
+.attribution {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--color-text-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.summary :global(.tool-event-disclosure__chevron) {
+  margin-left: auto;
+}
+
+.disclosure[open] .summary :global(.tool-event-disclosure__chevron) {
+  transform: rotate(45deg);
+}
+
+.tooltip {
+  position: absolute;
+  z-index: var(--z-tooltip, 1100);
+  top: calc(100% + 5px);
+  left: 0;
+  width: max-content;
+  max-width: min(280px, calc(100vw - 40px));
+  padding: 6px 8px;
+  color: var(--color-text-secondary);
+  background: var(--color-bg-tertiary);
+  border: 1px solid var(--color-border);
+  border-radius: var(--border-radius-sm);
+  box-shadow: var(--shadow-md);
+  font-size: var(--font-size-xs);
+  line-height: 1.35;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-2px);
+  transition: opacity var(--transition-fast), transform var(--transition-fast);
+}
+
+.marker:hover .tooltip,
+.marker:focus-within .tooltip {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.body {
+  max-height: 18rem;
+  margin: 0 0 var(--spacing-sm);
+  padding: var(--spacing-sm) var(--spacing-md);
+  overflow: auto;
+  overscroll-behavior: contain;
+  color: var(--color-text-primary);
+  background: var(--color-bg-tertiary);
+  border-radius: var(--border-radius-sm);
+}
+
+.activity {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 28px;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+  font-style: italic;
+}
+
+.activityIcon {
+  color: var(--color-accent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tooltip {
+    transition: none;
+  }
+}

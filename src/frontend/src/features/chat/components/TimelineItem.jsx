@@ -27,19 +27,35 @@ import MessageActions from './MessageActions';
 import { selectAgentName } from '../../settings/state/preferences';
 import ToolCallEntry from './ToolCallEntry';
 
-const TimelineItem = memo(function TimelineItem({ item, itemIndex, onRegenerate }) {
+const TimelineItem = memo(function TimelineItem({ item, itemIndex, onRegenerate, summaryMarkers, summaryActivities }) {
   if (item.kind === 'tool_call') {
     return <ToolCallEntry item={item} />;
   }
-  return <TimelineRow item={item} itemIndex={itemIndex} onRegenerate={onRegenerate} />;
+  return <TimelineRow
+    item={item}
+    itemIndex={itemIndex}
+    onRegenerate={onRegenerate}
+    summaryMarkers={summaryMarkers}
+    summaryActivities={summaryActivities}
+  />;
 });
 
 // Separate component so the tool_call branch above stays hook-free; this
 // one reads the agent name from the store.
-function TimelineRow({ item, itemIndex, onRegenerate }) {
+function TimelineRow({ item, itemIndex, onRegenerate, summaryMarkers, summaryActivities }) {
   const agentName = useSelector(selectAgentName);
   if (item.kind === 'subagent') {
-    return <SubagentCard item={item} />;
+    const matchingMarkers = (summaryMarkers || []).filter((marker) => (
+      marker.scope?.kind === 'subagent' && marker.scope.id === item.toolCallId
+    ));
+    const matchingActivities = (summaryActivities || []).filter((activity) => (
+      activity.scope?.kind === 'subagent' && activity.scope.id === item.toolCallId
+    ));
+    return <SubagentCard
+      item={item}
+      summaryMarkers={matchingMarkers}
+      summaryActivities={matchingActivities}
+    />;
   }
 
   if (item.kind === 'a2a_call') {
