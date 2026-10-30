@@ -545,3 +545,38 @@ async def test_message_projection_reads_real_delta_turns_despite_poisoned_select
         )
         is None
     )
+
+
+async def test_pinned_snapshot_applies_command_input_but_not_unfinished_task_outputs(
+    checkpointer: Any,
+) -> None:
+    from deepagents.graph import DeepAgentState
+    from langgraph.graph import START, StateGraph
+    from langgraph.types import Command, interrupt
+
+    from src.progena.sessions.history import load_conversation_messages
+
+    builder = StateGraph(DeepAgentState)
+    builder.add_node("approval", lambda state: interrupt("approve"))
+    builder.add_edge(START, "approval")
+    graph = builder.compile(checkpointer=checkpointer)
+    config = {"configurable": {"thread_id": "command-update-review"}}
+    await graph.ainvoke({"messages": [HumanMessage("first", id="first")]}, config)
+    pinned = (await graph.aget_state(config)).config
+    await graph.ainvoke(
+        Command(update={"messages": [HumanMessage("pending", id="pending")]}), config
+    )
+    await checkpointer.aput_writes(
+        pinned, [("messages", [AIMessage("unfinished", id="unfinished")])], task_id="worker"
+    )
+    native = await graph.aget_state(pinned)
+    actual = await load_conversation_messages(
+        checkpointer,
+        "command-update-review",
+        checkpoint_id=pinned["configurable"]["checkpoint_id"],
+    )
+    assert (
+        [message.id for message in actual]
+        == [message.id for message in native.values["messages"]]
+        == ["first", "pending"]
+    )

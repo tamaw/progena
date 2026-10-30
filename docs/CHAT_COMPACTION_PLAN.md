@@ -256,3 +256,12 @@ After switching SQL construction to psycopg composables, all 99 targeted native,
 Runs-child, transport, chat-session and summary regressions passed; Bandit,
 Ruff and Pyright passed. A final read-only cold-detail smoke returned the same
 payload digest in 0.524 seconds.
+
+### Pinned snapshot review correction
+
+Pinned native snapshots also apply `NULL_TASK_ID` message writes, including
+`Command(update=...)` on interrupted graphs. The optimized message loader now
+applies these through the native message channel without applying unfinished
+worker outputs. Committed summary extraction remains unchanged. The real SDK
+reproduction now matches `graph.aget_state`; all 24 targeted native history and
+runtime/backend transport regressions, Ruff, formatting and Pyright passed.

@@ -87,9 +87,23 @@ async def latest_checkpoint_id(checkpointer: Any, thread_id: str) -> str | None:
 async def load_conversation_messages(
     checkpointer: Any, thread_id: str, *, checkpoint_id: str | None = None
 ) -> list[Any] | None:
-    """Read committed messages without loading unrelated checkpoint channels."""
+    """Read native snapshot messages, including null-task input updates."""
+    from langgraph._internal._constants import NULL_TASK_ID
+
     tip = await read_message_checkpoint(checkpointer, _config(thread_id, "", checkpoint_id))
-    return await _checkpoint_messages(checkpointer, tip) if tip is not None else None
+    if tip is None:
+        return None
+    channels, _ = await achannels_from_checkpoint(
+        _MESSAGES_SPECS, tip.checkpoint, saver=checkpointer, config=tip.config
+    )
+    updates = [
+        value
+        for task_id, channel, value in tip.pending_writes or ()
+        if task_id == NULL_TASK_ID and channel == "messages"
+    ]
+    if updates:
+        channels["messages"].update(updates)
+    return list(channels["messages"].get()) if channels["messages"].is_available() else []
 
 
 async def _checkpoint_messages(checkpointer: Any, tip: CheckpointTuple) -> list[Any]:
