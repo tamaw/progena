@@ -294,10 +294,14 @@ def _emit_async_subagent_events(
                 {"event_type": "async_subagent_cancel", "content": agent_name, "metadata": metadata}
             )
         elif tool_name in {"check_async_task", "list_async_tasks"}:
-            event_type = (
-                "async_subagent_pause" if status == "interrupted" else "async_subagent_result"
+            if status == "running":
+                event_type = "async_subagent_update"
+            elif status == "interrupted":
+                event_type = "async_subagent_pause"
+            elif status in {"success", "error", "cancelled"}:
+                event_type = "async_subagent_result"
+            else:
+                continue
+            emit_stream_event(
+                {"event_type": event_type, "content": agent_name, "metadata": metadata}
             )
-            if status in {"success", "error", "cancelled", "interrupted"}:
-                emit_stream_event(
-                    {"event_type": event_type, "content": agent_name, "metadata": metadata}
-                )

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
+import pytest
 from langchain.agents.middleware.types import ToolCallRequest
 
 from src.progena.agent.middleware.async_subagent_tracking import (
@@ -27,6 +28,27 @@ class TestAsyncTasksResultPayload:
 
 
 class TestEmitAsyncSubagentEvents:
+    @pytest.mark.parametrize("tool_name", ["check_async_task", "list_async_tasks"])
+    def test_running_observation_resumes_the_paused_task(self, tool_name):
+        request = MagicMock(spec=ToolCallRequest)
+        request.tool_call = {"name": tool_name, "args": {}, "id": "check-resume"}
+        request.runtime = None
+        request.state = {}
+        task = {"task_id": "stable-task", "agent_name": "worker", "status": "interrupted"}
+        with patch(
+            "src.progena.agent.middleware.async_subagent_tracking.emit_stream_event"
+        ) as emit:
+            _emit_async_subagent_events(request, tool_name, {"stable-task": task})
+            task["status"] = "running"
+            _emit_async_subagent_events(request, tool_name, {"stable-task": task})
+        events = [call.args[0] for call in emit.call_args_list]
+        assert [event["event_type"] for event in events] == [
+            "async_subagent_pause",
+            "async_subagent_update",
+        ]
+        assert [event["metadata"]["status"] for event in events] == ["interrupted", "running"]
+        assert {event["metadata"]["task_id"] for event in events} == {"stable-task"}
+
     def test_emits_pause_for_interrupted_task_with_correlation(self):
         request = MagicMock(spec=ToolCallRequest)
         request.tool_call = {"name": "check_async_task", "args": {}, "id": "tc1"}
