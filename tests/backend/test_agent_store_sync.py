@@ -245,9 +245,9 @@ def test_a2a_profiles_from_registry_handles_failure(monkeypatch):
 def test_a2a_profile_attaches_tasks_and_checkpoint_count():
     tasks_by_agent = {
         "Example Agent": [
-            {"id": "t1", "status": "completed", "context_id": "ctx-1", "title": "do x"},
-            {"id": "t2", "status": "failed", "context_id": "ctx-1", "title": "do y"},
-            {"id": "t3", "status": "working", "context_id": "ctx-2", "title": "do z"},
+            {"id": "t1", "status": "completed", "context_id": "ctx-1"},
+            {"id": "t2", "status": "failed", "context_id": "ctx-1"},
+            {"id": "t3", "status": "working", "context_id": "ctx-2"},
         ]
     }
     profile = agent_store.a2a_profile_from_info(_Info(), tasks_by_agent)
@@ -286,6 +286,6 @@ def test_a2a_tasks_by_agent_groups_sorts_and_shapes(monkeypatch):
 
     grouped = agent_store._a2a_tasks_by_agent()
     assert set(grouped) == {"Example Agent", "Other"}
-    # newest-updated first, and request_text becomes the task title
+    # newest-updated first; request text stays out of the Agents-page payload
     assert [t["id"] for t in grouped["Example Agent"]] == ["b", "a"]
-    assert grouped["Example Agent"][0]["title"] == "newer request"
+    assert "title" not in grouped["Example Agent"][0]

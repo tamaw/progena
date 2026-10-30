@@ -826,13 +826,10 @@ def _row_to_agent(row: dict[str, Any]) -> dict[str, Any]:
 
 
 def _acp_task_view(record: dict[str, Any]) -> dict[str, Any]:
-    """Shape a Progena ``ACPTaskRecord`` dict for the Agents-page detail pane."""
+    """Shape a Progena ``ACPTaskRecord`` for the Agents page: status and timing only."""
     return {
         "id": str(record.get("task_id") or ""),
         "status": str(record.get("status") or "queued"),
-        "source": str(record.get("source") or ""),
-        "title": str(record.get("prompt") or record.get("summary") or "").strip(),
-        "summary": str(record.get("summary") or record.get("output") or "").strip()[:400],
         "created": record.get("created_at"),
         "updated": record.get("updated_at"),
         "completed": record.get("completed_at"),
@@ -1061,15 +1058,10 @@ _A2A_TASK_LIMIT = 25
 
 
 def _task_view(record: dict[str, Any]) -> dict[str, Any]:
-    """Shape a Progena ``A2ATaskRecord`` dict for the Agents-page detail pane."""
+    """Shape a Progena ``A2ATaskRecord`` for the Agents page: status, thread and timing."""
     return {
         "id": str(record.get("task_id") or ""),
         "status": str(record.get("status") or "unknown"),
-        "source": str(record.get("source") or ""),
-        "title": str(record.get("request_text") or record.get("summary") or "").strip(),
-        "summary": str(
-            record.get("summary") or record.get("latest_message") or record.get("last_error") or ""
-        ).strip(),
         "context_id": record.get("context_id"),
         "created": record.get("created_at"),
         "updated": record.get("updated_at"),
