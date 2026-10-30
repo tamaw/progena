@@ -193,8 +193,14 @@ Summary-bearing details require messages and summaries from the same checkpoint
 revision; an unavailable exact message revision fails the read instead of using
 another revision's cached transcript. Child summaries are bounded by the selected
 parent checkpoint's timestamp and native ancestry. Independently advancing child
-state is not cached under an older root revision. Ordinary conversation-item reads
-retain the snapshot-only path; only the summaries include traverses history.
+state is not cached under an older root revision. Pinned Postgres message reads
+project only the selected message channel and use native DeltaChannel rehydration;
+unpinned reads retain `graph.aget_state` pending/live-state semantics. Summary
+history uses one request-local metadata index, message writes and distinct native
+summary blobs, not full channel hydration for every checkpoint. The backend gets
+the complete native message list in one internal vendor projection; it still
+publishes the same 50-message browser pages and canonical events. No extra cache
+or timeout increase is required.
 
 No additional EventSource, polling, database notification channel, or independent
 compaction ledger is used. Summary timestamps describe checkpoint commits, not

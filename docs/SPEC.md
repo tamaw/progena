@@ -51,11 +51,14 @@ to the backend and receives browser application data through two SSE roles:
     runtime HTTP endpoint.
   - Vendor extensions outside the OpenAI spec: `progena.stream_event` SSE
     events carry the runtime's tool/reasoning/subagent activity; the
-    `include=progena.langchain_message` items option adds
-    `source_message_id` to every item and the serialized LangChain message to
-    the first item of each message in the page; the `checkpoint_id` query
-    parameter reads a specific checkpoint; `metadata` values may be
-    non-strings.
+    `include=progena.langchain_messages` adds the complete native message list as
+    `progena_langchain_messages`, independent of the Responses-item page. The
+    backend uses this lossless projection once per checkpoint instead of replaying
+    DeltaChannel history for each item page. `include=progena.conversation_summaries`
+    adds committed native summary occurrences as `progena_summary_occurrences`;
+    `checkpoint_id` selects an exact checkpoint. The standard item page stays
+    bounded to 1–100 items; browser chat pages remain unchanged. `metadata` values
+    may be non-strings.
 - `GET /v1/events` broadcasts runtime agent events to the backend.
 
 ### JavaScript execution

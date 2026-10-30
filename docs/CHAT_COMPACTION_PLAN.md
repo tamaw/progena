@@ -1,8 +1,8 @@
 # Conversation-summary visibility
 
-Status: implemented; PR #462 reviewed and follow-up fixes verified locally.
-Branch: `feat/conversation-summary-visibility`, created fresh from fetched
-`origin/main` at `463494e0`.
+Status: summary visibility merged in PR #462; production history performance
+correction implemented on `fix/chat-history-performance` from `origin/main`
+at `9311aca0`. Original visibility branch started at `463494e0`.
 
 ## Approved scope
 
@@ -182,3 +182,77 @@ does not currently summarize. Enabling it would exceed the visibility-only scope
   skipped** for the existing missing `PROGENA_DATABASE_URL` prerequisite;
   **1,348 frontend tests passed**. Ruff, pinned Pyright, formatting, ESLint and
   production frontend build passed; existing dependency/chunk-size warnings remain.
+
+## Production history performance regression and correction
+
+Branch: `fix/chat-history-performance`, from `origin/main` at `9311aca0`.
+
+The #462 summary-bearing detail path exceeded the backend's unchanged five-second
+runtime timeout. Investigation traced conversation and Quick Chat selection,
+reconnect, paging, terminal reconciliation, backend revision caches, session
+rendering and Runs/Insights checkpoint projections before implementation.
+The affected conversation had 2,032 root checkpoints and 2,428 total checkpoints
+across ten namespaces. Native `alist` repeatedly joined/deserialized unrelated
+channel blobs, including a 9.25 MB historical `files` value. The summary state
+itself occupied only three native blob versions totaling 55 KB.
+
+The correction reuses the repository's compact native-SQL projection pattern:
+
+- Read the thread's checkpoint metadata once into a request-local index. Follow
+  native parent links for branch isolation and retain child timestamp bounds for
+  summary-bearing views; live Runs traces keep independently advancing children.
+- Decode only message writes needed for commit times/task correlation and each
+  requested native summary blob version once, using the saver's serializer.
+- Rehydrate selected messages through the native DeltaChannel implementation.
+  Selected Postgres tips project only the message channel; unrelated historical
+  and selected-tip `files` blobs are not required for transcript reads.
+- Replace the internal per-item `progena.langchain_message` vendor include with
+  `progena.langchain_messages`: transfer the complete native message list once
+  rather than replaying DeltaChannel state across eleven transport pages.
+  Backend and runtime migrate together; no old-protocol fallback remains.
+- Preserve browser paging, marker bodies/IDs/anchors, nested scopes, original
+  messages, message metadata, timestamps, exact revisions and canonical SSE.
+  No new cache, persisted projection, ledger, polling or timeout change.
+
+### Read-only production-scale evidence
+
+Candidate modules ran only in separate diagnostic Python processes on Cronix,
+with Postgres `default_transaction_read_only=on`; running application modules,
+containers and database contents were not changed. Timings are observations on
+the affected conversation, not a general load benchmark.
+
+| Path | Before | Candidate | Improvement |
+| --- | --- | --- | --- |
+| Native summary-bearing conversation read | 8.1169 s | 0.2657 s | 30.5× |
+| Cold backend chat detail, including runtime HTTP and message transport | 9.3378 s | 0.4950 s median | 18.9× |
+
+The cold-detail candidate samples were 0.5164/0.4950/0.4945 seconds, with fresh
+backend readers each time. The baseline diagnostic allowed enough time to measure
+the existing failure; candidate reads used the unchanged five-second deadline.
+Complete payload digests matched before and after: 821 root messages, eight child
+transcripts and three markers in the native view; 136 visible messages and three
+markers across unchanged 50/50/36 browser pages in backend detail.
+Four concurrent cold reads returned identical detail payloads and finished within
+1.61 seconds overall. No production model turns were triggered.
+
+Native Postgres regressions cover selected ancestry, fork and future-child
+isolation, nested attribution, pending-only summary exclusion, commit times,
+DeltaChannel snapshots across turns, and independence from unrelated historical
+and selected-tip blobs. Existing transport tests exercise lossless rich-message
+reads and browser acknowledgement/event behavior.
+
+Both native-projection and backend/runtime-transport reviews found no actionable
+defects. Ruff, formatting and pinned Pyright passed. Frontend ESLint, all 1,363
+unit tests and the production build passed without frontend source changes.
+Existing dependency/deprecation and large-bundle warnings remain.
+The first full Python run passed 2,448 tests with eight knowledge-indexer skips
+(missing `PROGENA_DATABASE_URL`). After adding the missing-vendor-payload error
+regression, the final run passed 2,448 with the same skips and hit one unrelated
+existing filesystem cancellation test: its 20 ms node deadline expired before
+the host call set its `started` event. Routine code and its tests are unchanged
+by this branch; this failure was not hidden by increasing a timeout or rerunning
+the test.
+After switching SQL construction to psycopg composables, all 99 targeted native,
+Runs-child, transport, chat-session and summary regressions passed; Bandit,
+Ruff and Pyright passed. A final read-only cold-detail smoke returned the same
+payload digest in 0.524 seconds.

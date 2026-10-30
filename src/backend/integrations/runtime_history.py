@@ -1,8 +1,7 @@
-"""Sync reader for the runtime's ``GET /v1/conversations/{id}/items`` endpoint.
+"""Sync reader for native runtime conversation projections.
 
 The backend never rebuilds agent messages from checkpoint blobs itself; it asks
-the runtime (which owns the LangGraph graph) and rebuilds LangChain messages
-from the ``progena.langchain_message`` vendor include.
+the owning runtime for one lossless native message list per checkpoint revision.
 """
 
 from __future__ import annotations
@@ -17,9 +16,15 @@ from typing import Any
 import httpx
 from langchain_core.messages import messages_from_dict
 
+from src.progena.sessions.models import (
+    CONVERSATION_MESSAGES_FIELD,
+    CONVERSATION_MESSAGES_INCLUDE,
+    CONVERSATION_SUMMARIES_FIELD,
+    CONVERSATION_SUMMARIES_INCLUDE,
+)
+
 logger = logging.getLogger(__name__)
 
-PAGE_LIMIT = 100
 MAX_CACHE_ENTRIES = 256
 # After a connection failure, skip calling the runtime for this long so a down
 # or restarting runtime fails fast instead of every chat read timing out.
@@ -44,7 +49,7 @@ class RuntimeUnavailable(RuntimeError):
 
 
 class RuntimeConversationReader:
-    """Pages conversation items from the runtime and rebuilds LangChain messages.
+    """Reads native conversation messages with exact checkpoint-keyed caching.
 
     Results are cached per ``(thread_id, checkpoint_id)``: a checkpoint never
     changes, so a hit is always exact. While the runtime is unreachable, the
@@ -135,47 +140,29 @@ class RuntimeConversationReader:
         return list(summaries)
 
     def _fetch(self, thread_id: str, checkpoint_id: str | None) -> list[Any]:
-        lc_dicts: list[dict[str, Any]] = []
-        seen_sources: set[str] = set()
-        after: str | None = None
-        while True:
-            params: dict[str, Any] = {
-                "order": "asc",
-                "limit": PAGE_LIMIT,
-                "include": "progena.langchain_message",
-            }
-            if checkpoint_id:
-                params["checkpoint_id"] = checkpoint_id
-            if after:
-                params["after"] = after
-            try:
-                response = self._client.get(f"/v1/conversations/{thread_id}/items", params=params)
-            except httpx.TransportError as exc:
-                with self._lock:
-                    self._unavailable_until = time.monotonic() + UNAVAILABLE_COOLDOWN_SECONDS
-                raise RuntimeUnavailable(f"runtime unreachable: {exc}") from exc
-            if response.status_code == 404:
-                return []
-            if response.status_code != 200:
-                raise RuntimeUnavailable(
-                    f"runtime returned {response.status_code} for {thread_id}: {response.text[:200]}"
-                )
-
-            data = response.json()
-            for item in data.get("data", []):
-                source_id = item.get("source_message_id")
-                message = item.get("langchain_message")
-                if (
-                    isinstance(source_id, str)
-                    and isinstance(message, dict)
-                    and source_id not in seen_sources
-                ):
-                    seen_sources.add(source_id)
-                    lc_dicts.append(message)
-            after = data.get("last_id")
-            if not data.get("has_more") or not after:
-                break
-        return messages_from_dict(lc_dicts)
+        params: dict[str, Any] = {
+            "order": "asc",
+            "limit": 1,
+            "include": CONVERSATION_MESSAGES_INCLUDE,
+        }
+        if checkpoint_id:
+            params["checkpoint_id"] = checkpoint_id
+        try:
+            response = self._client.get(f"/v1/conversations/{thread_id}/items", params=params)
+        except httpx.TransportError as exc:
+            with self._lock:
+                self._unavailable_until = time.monotonic() + UNAVAILABLE_COOLDOWN_SECONDS
+            raise RuntimeUnavailable(f"runtime unreachable: {exc}") from exc
+        if response.status_code == 404:
+            return []
+        if response.status_code != 200:
+            raise RuntimeUnavailable(
+                f"runtime returned {response.status_code} for {thread_id}: {response.text[:200]}"
+            )
+        messages = response.json().get(CONVERSATION_MESSAGES_FIELD)
+        if not isinstance(messages, list):
+            raise RuntimeUnavailable("runtime did not return native conversation messages")
+        return messages_from_dict(messages)
 
     def _fetch_summary_occurrences(
         self, thread_id: str, checkpoint_id: str | None
@@ -183,7 +170,7 @@ class RuntimeConversationReader:
         params: dict[str, Any] = {
             "order": "asc",
             "limit": 1,
-            "include": "progena.conversation_summaries",
+            "include": CONVERSATION_SUMMARIES_INCLUDE,
         }
         if checkpoint_id:
             params["checkpoint_id"] = checkpoint_id
@@ -200,7 +187,7 @@ class RuntimeConversationReader:
                 f"runtime returned {response.status_code} for {thread_id}: {response.text[:200]}"
             )
         payload = response.json()
-        raw_occurrences = payload.get("progena_summary_occurrences")
+        raw_occurrences = payload.get(CONVERSATION_SUMMARIES_FIELD)
         if not isinstance(raw_occurrences, list):
             return []
         occurrences: list[RuntimeSummaryOccurrence] = []

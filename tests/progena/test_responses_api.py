@@ -10,11 +10,9 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, Tool
 from src.progena.runtime.http.responses import (
     build_response_object,
     build_sse_event,
-    conversation_items_with_sources,
     error_response,
     messages_to_conversation_items,
     paginate_items,
-    with_langchain_messages,
 )
 
 
@@ -178,51 +176,6 @@ class TestMessagesToConversationItems:
     def test_missing_ids_use_conversation_fallback(self) -> None:
         items = messages_to_conversation_items([HumanMessage(content="x")], "conv1")
         assert items[0]["id"] == "conv1:0"
-
-
-class TestLangchainMessageInclude:
-    def _annotated_page(self, messages: list[Any], start: int, limit: int) -> list[dict[str, Any]]:
-        sourced = conversation_items_with_sources(messages, "conv1")
-        after = sourced[start - 1][1]["id"] if start else None
-        page, _ = paginate_items(
-            [item for _, item in sourced], after=after, limit=limit, order="asc"
-        )
-        return with_langchain_messages(
-            page, {item["id"]: index for index, item in sourced}, messages, "conv1"
-        )
-
-    def test_first_item_of_each_message_in_page_carries_message(self) -> None:
-        messages = [
-            HumanMessage(content="hi", id="h1"),
-            AIMessage(
-                content=[
-                    {"type": "reasoning", "id": "r1", "summary": []},
-                    {"type": "text", "id": "m1", "text": "a"},
-                ],
-                id="a1",
-            ),
-        ]
-        page = self._annotated_page(messages, start=0, limit=10)
-        assert [(item["source_message_id"], "langchain_message" in item) for item in page] == [
-            ("h1", True),
-            ("a1", True),
-            ("a1", False),
-        ]
-        assert page[1]["langchain_message"]["type"] == "ai"
-
-    def test_page_starting_mid_message_still_carries_that_message(self) -> None:
-        messages = [
-            AIMessage(
-                content=[
-                    {"type": "reasoning", "id": "r1", "summary": []},
-                    {"type": "text", "id": "m1", "text": "a"},
-                ],
-                id="a1",
-            )
-        ]
-        page = self._annotated_page(messages, start=1, limit=10)
-        assert [item["id"] for item in page] == ["m1"]
-        assert page[0]["langchain_message"]["data"]["id"] == "a1"
 
 
 class TestPaginateItems:

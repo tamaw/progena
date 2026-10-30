@@ -16,7 +16,8 @@ from collections.abc import Awaitable, Callable
 from typing import Any, TypeVar, cast
 
 from aiohttp import web
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage, messages_to_dict
+from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.runtime import Runtime
 
 from src.progena.documents.values import make_json_safe
@@ -29,11 +30,20 @@ from src.progena.runtime.http.responses import (
     conversation_items_with_sources,
     error_response,
     paginate_items,
-    with_langchain_messages,
 )
 from src.progena.runtime.streaming.deepagent_stream import DeepAgentSSEStream
 from src.progena.sessions.context import reset_current_thread_id, set_current_thread_id
-from src.progena.sessions.history import ConversationSummary, load_conversation
+from src.progena.sessions.history import (
+    ConversationSummary,
+    load_conversation,
+    load_conversation_messages,
+)
+from src.progena.sessions.models import (
+    CONVERSATION_MESSAGES_FIELD,
+    CONVERSATION_MESSAGES_INCLUDE,
+    CONVERSATION_SUMMARIES_FIELD,
+    CONVERSATION_SUMMARIES_INCLUDE,
+)
 from src.progena.sessions.render import merge_session_after_turn
 from src.progena.sessions.status import CANCELLED_STATUS
 
@@ -815,8 +825,8 @@ class RuntimeChatService:
             value for key in ("include", "include[]") for value in request.query.getall(key, [])
         }
 
-        include_langchain = "progena.langchain_message" in include_set
-        include_summaries = "progena.conversation_summaries" in include_set
+        include_langchain = CONVERSATION_MESSAGES_INCLUDE in include_set
+        include_summaries = CONVERSATION_SUMMARIES_INCLUDE in include_set
 
         checkpoint_id = request.query.get("checkpoint_id") or None
         if include_summaries:
@@ -831,6 +841,15 @@ class RuntimeChatService:
                 return _json_error("Conversation not found", "not_found", 404)
             messages = conversation.root.messages
             summaries = conversation.summaries
+        elif checkpoint_id and isinstance(getattr(graph, "checkpointer", None), AsyncPostgresSaver):
+            # Pinned pages are committed state: rehydrate only the messages
+            # channel instead of loading files and every other graph channel.
+            messages = await load_conversation_messages(
+                graph.checkpointer, conversation_id, checkpoint_id=checkpoint_id
+            )
+            if messages is None:
+                return _json_error("Conversation not found", "not_found", 404)
+            summaries = ()
         else:
             config: dict[str, Any] = {"configurable": {"thread_id": conversation_id}}
             if checkpoint_id:
@@ -848,16 +867,11 @@ class RuntimeChatService:
             )
         except ValueError as exc:
             return _json_error(str(exc), "bad_request", 400, param="after")
-        if include_langchain:
-            page = with_langchain_messages(
-                page,
-                {item["id"]: index for index, item in sourced_items},
-                messages,
-                conversation_id,
-            )
         payload: dict[str, Any] = {**meta, "data": page}
+        if include_langchain:
+            payload[CONVERSATION_MESSAGES_FIELD] = messages_to_dict(messages)
         if include_summaries:
-            payload["progena_summary_occurrences"] = [
+            payload[CONVERSATION_SUMMARIES_FIELD] = [
                 _summary_occurrence_payload(summary) for summary in summaries
             ]
         return web.json_response(make_json_safe(payload))

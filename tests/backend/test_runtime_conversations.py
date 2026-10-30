@@ -1,8 +1,8 @@
 """RuntimeConversationReader availability and caching behaviour.
 
-Paging and lossless message reconstruction against the real runtime are
-covered end to end in ``test_sse_client.py``; these tests drive the reader
-with an ``httpx.MockTransport`` to control outages precisely.
+Lossless message reconstruction against the real runtime is covered end to end
+in ``test_sse_client.py``; these tests drive the reader with an
+``httpx.MockTransport`` to control outages precisely.
 """
 
 from __future__ import annotations
@@ -21,16 +21,12 @@ MESSAGES = [HumanMessage(content="hi", id="h1"), AIMessage(content="hello", id="
 
 
 def _items_page() -> dict[str, Any]:
-    data = [
-        {
-            "type": "message",
-            "id": message.id,
-            "source_message_id": message.id,
-            "langchain_message": serialized,
-        }
-        for message, serialized in zip(MESSAGES, messages_to_dict(MESSAGES), strict=True)
-    ]
-    return {"object": "list", "data": data, "first_id": "h1", "last_id": "a1", "has_more": False}
+    return {
+        "object": "list",
+        "data": [],
+        "has_more": False,
+        "progena_langchain_messages": messages_to_dict(MESSAGES),
+    }
 
 
 class _Runtime:
@@ -120,3 +116,17 @@ def test_exact_checkpoint_read_never_substitutes_another_revision() -> None:
     runtime.up = False
     with pytest.raises(RuntimeUnavailable):
         reader.get_messages("t1", "cp2", exact_revision=True)
+
+
+def test_missing_native_message_projection_is_unavailable_not_empty() -> None:
+    reader = RuntimeConversationReader("http://runtime")
+    reader.close()
+    reader._client = httpx.Client(
+        base_url="http://runtime",
+        transport=httpx.MockTransport(lambda _: httpx.Response(200, json={"data": []})),
+    )
+    try:
+        with pytest.raises(RuntimeUnavailable):
+            reader.get_messages("t1", "cp1", exact_revision=True)
+    finally:
+        reader.close()
