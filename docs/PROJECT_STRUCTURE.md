@@ -74,7 +74,8 @@ src/
 │   ├── alerts/
 │   ├── search/
 │   ├── monitoring/   # State snapshots, logs and metrics
-│   └── integrations/ # Runtime clients and Telegram
+│   ├── channels/     # Messaging channels: adapters (Telegram), manager, routes
+│   └── integrations/ # Runtime clients
 └── frontend/     # React/Vite web client
     ├── src/features/   # Feature pages, components, models and domain state
     ├── src/components/

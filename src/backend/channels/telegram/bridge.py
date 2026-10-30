@@ -1,4 +1,4 @@
-"""Integrations telegram_bridge."""
+"""Bridge Telegram chats to the Progena runtime."""
 
 from __future__ import annotations
 
@@ -8,12 +8,12 @@ import uuid
 from contextlib import suppress
 from typing import Any
 
+import src.backend.channels.telegram.client as telegram_client
 import src.backend.chat.responses as chat_responses
 import src.backend.integrations.runtime as integrations_runtime
 import src.backend.integrations.subprocess as integrations_subprocess
-import src.backend.integrations.telegram as integrations_telegram
-import src.backend.lifecycle.state as lifecycle_state
 import src.backend.storage.documents as storage_documents
+from src.backend.http.contracts import SOURCE_TELEGRAM
 from src.progena.documents.kinds import SESSION_KEY_PREFIX
 
 logger = logging.getLogger(__name__)
@@ -32,7 +32,7 @@ def _telegram_conversation_id(chat_id: Any, message_thread_id: Any = None) -> st
 
 
 async def _send_telegram_connected_message(
-    telegram: integrations_telegram.TelegramClient,
+    telegram: telegram_client.TelegramClient,
     progena: integrations_subprocess.ProgenaClient | integrations_runtime.SSEProgenaClient,
     document_store: storage_documents.BackendDocumentStore,
 ) -> None:
@@ -66,7 +66,7 @@ async def _send_telegram_connected_message(
             await progena.send_message(
                 prompt,
                 request_id=request_id,
-                metadata={"thread_id": conversation_id, "source": lifecycle_state.SOURCE_TELEGRAM},
+                metadata={"thread_id": conversation_id, "source": SOURCE_TELEGRAM},
             )
         ).response.strip()
         if not response_text:
@@ -90,28 +90,8 @@ async def _send_telegram_connected_message(
             logger.warning("Failed to send fallback Telegram failure message: %s", e2)
 
 
-async def _send_telegram_message(
-    telegram: integrations_telegram.TelegramClient, content: str, event_type: str
-) -> None:
-    """Send a message to Telegram (fire-and-forget helper).
-
-    Args:
-        telegram: The Telegram client instance.
-        content: Message content to send.
-        event_type: Type of event for logging.
-    """
-    try:
-        success = await telegram.send_agent_response(content)
-        if success:
-            logger.info("Sent %s to Telegram (%d chars)", event_type, len(content))
-        else:
-            logger.warning("Failed to send %s to Telegram", event_type)
-    except Exception as e:
-        logger.error("Error sending to Telegram: %s", e)
-
-
 async def _handle_telegram_agent_message(
-    telegram: integrations_telegram.TelegramClient,
+    telegram: telegram_client.TelegramClient,
     progena: integrations_subprocess.ProgenaClient | integrations_runtime.SSEProgenaClient,
     chat_id: str,
     message: str,
@@ -142,7 +122,7 @@ async def _handle_telegram_agent_message(
                         request_id=request_id,
                         metadata={
                             "thread_id": conversation_id,
-                            "source": lifecycle_state.SOURCE_TELEGRAM,
+                            "source": SOURCE_TELEGRAM,
                         },
                     )
                 ),
@@ -158,7 +138,7 @@ async def _handle_telegram_agent_message(
                 return "⚠️ Empty response from agent."
             return None
 
-        except integrations_telegram.TelegramDraftStreamingError as e:
+        except telegram_client.TelegramDraftStreamingError as e:
             logger.error("Telegram draft streaming failed: %s", e)
             return (
                 "⚠️ Telegram native draft streaming failed. "

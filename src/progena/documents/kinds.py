@@ -43,6 +43,7 @@ CANVAS_DOCUMENT_KEY_PREFIX = "canvas:"
 CANVAS_DATA_KEY_PREFIX = "canvas_data:"
 CANVAS_STATUS_KEY_PREFIX = "canvas_status:"
 ARTIFACT_DOCUMENT_KEY_PREFIX = "artifact:"
+CHANNEL_KEY_PREFIX = "channel:"
 
 # Internal-plumbing prefixes: real ``store`` key prefixes, centralized here to
 # avoid re-drift, but not registered as document types.
@@ -166,6 +167,7 @@ DOCUMENT_KINDS: tuple[DocumentKind, ...] = (
     ),
     DocumentKind("Canvas", CANVAS_DOCUMENT_KEY_PREFIX, search=None),
     DocumentKind("Artifact", ARTIFACT_DOCUMENT_KEY_PREFIX, search=None),
+    DocumentKind("Channel", CHANNEL_KEY_PREFIX, search=None),
 )
 
 

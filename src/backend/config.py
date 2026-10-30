@@ -12,7 +12,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 from dotenv import load_dotenv
 
-from src.backend.env_utils import env_bool, env_float, env_int
+from src.backend.env_utils import env_bool, env_int
 
 # Load .env file from project root
 load_dotenv()
@@ -64,25 +64,6 @@ class ChatServerConfig:
     stream_chunk_delay_ms: int = 0  # Optional delay between chunks (0 = no delay)
     reasoning_enabled: bool = True  # Include reasoning in response objects by default
 
-    # Telegram integration settings
-    telegram_enabled: bool = False  # Enable Telegram notifications when no web client connected
-    telegram_bot_token: str = ""  # Bot token from @BotFather
-    telegram_chat_id: str = ""  # Your personal chat ID (get from @userinfobot)
-    telegram_api_timeout: int = 30  # API request timeout in seconds
-    telegram_max_retries: int = 3  # Max retry attempts for failed API calls
-    telegram_retry_delay: float = 1.0  # Base delay between retries (exponential backoff)
-    telegram_max_message_length: int = 4096  # Telegram max message length
-    telegram_rate_limit_per_minute: int = 30  # Rate limit for outgoing messages
-    telegram_draft_update_interval_ms: int = 1000  # Minimum delay between sendMessageDraft updates
-
-    # Telegram polling settings (for receiving messages)
-    telegram_polling_enabled: bool = True  # Enable polling for incoming messages
-    telegram_polling_interval: float = 2.0  # Polling interval in seconds
-    telegram_polling_timeout: int = 30  # Long polling timeout (getUpdates timeout param)
-    telegram_allowed_users: str = (
-        ""  # Comma-separated chat IDs allowed to send messages (empty = only chat_id)
-    )
-
     @property
     def backend_database_url(self) -> str:
         """Backend database URL: ``database_url`` with the db name swapped.
@@ -123,19 +104,4 @@ class ChatServerConfig:
             stream_enabled=env_bool("CHAT_SERVER_STREAM_ENABLED", True),
             stream_chunk_delay_ms=env_int("CHAT_SERVER_STREAM_CHUNK_DELAY_MS", 0),
             reasoning_enabled=env_bool("PROGENA_REASONING_ENABLED", True),
-            # Telegram settings
-            telegram_enabled=env_bool("TELEGRAM_ENABLED", False),
-            telegram_bot_token=os.getenv("TELEGRAM_BOT_TOKEN", ""),
-            telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID", ""),
-            telegram_api_timeout=env_int("TELEGRAM_API_TIMEOUT", 30),
-            telegram_max_retries=env_int("TELEGRAM_MAX_RETRIES", 3),
-            telegram_retry_delay=env_float("TELEGRAM_RETRY_DELAY", 1.0),
-            telegram_max_message_length=env_int("TELEGRAM_MAX_MESSAGE_LENGTH", 4096),
-            telegram_rate_limit_per_minute=env_int("TELEGRAM_RATE_LIMIT_PER_MINUTE", 30),
-            telegram_draft_update_interval_ms=env_int("TELEGRAM_DRAFT_UPDATE_INTERVAL_MS", 1000),
-            # Telegram polling settings
-            telegram_polling_enabled=env_bool("TELEGRAM_POLLING_ENABLED", True),
-            telegram_polling_interval=env_float("TELEGRAM_POLLING_INTERVAL", 2.0),
-            telegram_polling_timeout=env_int("TELEGRAM_POLLING_TIMEOUT", 30),
-            telegram_allowed_users=os.getenv("TELEGRAM_ALLOWED_USERS", ""),
         )

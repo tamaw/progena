@@ -133,6 +133,12 @@ no response-body token SSE.
 - **Automation, workflow, schedule, MCP, widget, and task operations:**
   retained operations acknowledge acceptance and publish typed canonical state
   events. Their UI data is never returned in the finite response body.
+- **Messaging channels:** the backend's `ChannelManager` runs one adapter per
+  enabled `channel:<id>` document (Telegram today). Inbound channel messages
+  become runtime turns on per-chat threads (`tele_<chat_id>`); while no browser
+  is connected, agent messages, questions and scheduled results are forwarded to
+  channels that notify when away. Channel settings and live status reach the
+  browser only as `channels.snapshot` events.
 
 ## Responsibilities
 

@@ -17,8 +17,6 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-SOURCE_TELEGRAM = "telegram"
-
 config = ChatServerConfig.from_env()
 
 

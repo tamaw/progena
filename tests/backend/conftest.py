@@ -48,7 +48,9 @@ def mock_progena_client():
     with (
         patch("src.backend.integrations.runtime.get_sse_client", return_value=mock_client),
         patch("src.backend.lifecycle.state.client", None),
-        patch("src.backend.lifecycle.state.config.telegram_enabled", False),
+        # App lifespans must never connect a real channel (a developer .env
+        # may hold live TELEGRAM_* credentials).
+        patch("src.backend.channels.manager.ChannelManager.start", AsyncMock()),
     ):
         yield
 

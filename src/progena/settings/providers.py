@@ -42,6 +42,8 @@ GO_RESPONSES_MODELS = (
 GO_BASE_URL = "https://opencode.ai/inference/go/openai/v1"
 CHATGPT_BASE_URL = CHATGPT_RESOURCE
 
+# Fernet key for every database-stored secret: provider API keys and channel credentials.
+PROVIDER_ENCRYPTION_KEY_ENV = "PROGENA_PROVIDER_ENCRYPTION_KEY"
 _PROVIDER_KINDS = frozenset({"foundry", "opencode_go", "chatgpt"})
 _SECRET_SOURCES = frozenset({"database", "environment"})
 _AZURE_HOST_SUFFIXES = (
@@ -362,13 +364,13 @@ class ProviderRepository:
             )
 
     def _fernet(self) -> Fernet:
-        key = (os.getenv("PROGENA_PROVIDER_ENCRYPTION_KEY") or "").strip()
+        key = (os.getenv(PROVIDER_ENCRYPTION_KEY_ENV) or "").strip()
         if not key:
-            raise ValueError("PROGENA_PROVIDER_ENCRYPTION_KEY is required for database credentials")
+            raise ValueError(f"{PROVIDER_ENCRYPTION_KEY_ENV} is required for database credentials")
         try:
             return Fernet(key.encode("ascii"))
         except (ValueError, TypeError) as exc:
-            raise ValueError("PROGENA_PROVIDER_ENCRYPTION_KEY is invalid") from exc
+            raise ValueError(f"{PROVIDER_ENCRYPTION_KEY_ENV} is invalid") from exc
 
     def _encrypt(self, api_key: object) -> str:
         if not isinstance(api_key, str) or not api_key.strip():

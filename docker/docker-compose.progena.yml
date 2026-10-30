@@ -150,7 +150,8 @@ services:
       PROGENA_CLAUDE_TRANSCRIPT_ROOT: /var/lib/progena/claude/projects
       # Lossless generic ACP capture rolls to disk, not container RAM/tmpfs.
       PROGENA_ACP_CAPTURE_DIR: /app/logs/acp-capture
-      # Telegram integration (backend only)
+      # Telegram channel: seeds the first channel:telegram document (then the
+      # Channels page owns its settings); TELEGRAM_BOT_TOKEN stays the token source.
       TELEGRAM_ENABLED: ${TELEGRAM_ENABLED:-false}
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
       TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}

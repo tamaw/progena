@@ -12,14 +12,11 @@ import src.backend.agents.store as agents_store
 import src.backend.alerts.relay as alerts_relay
 import src.backend.alerts.routes as alerts_routes
 import src.backend.attachments.store as attachments_store
-import src.backend.chat.responses as chat_responses
-import src.backend.events.contracts as events_contracts
+import src.backend.channels.manager as channels_manager
 import src.backend.events.documents as events_documents
 import src.backend.events.routes as events_routes
 import src.backend.events.stream as events_stream
 import src.backend.integrations.runtime as integrations_runtime
-import src.backend.integrations.telegram as integrations_telegram
-import src.backend.integrations.telegram_bridge as integrations_telegram_bridge
 import src.backend.lifecycle.shutdown as lifecycle_shutdown
 import src.backend.lifecycle.state as lifecycle_state
 import src.backend.lifecycle.watchers as lifecycle_watchers
@@ -141,23 +138,6 @@ async def lifespan(app: FastAPI):
         timeout=5.0,
     )
 
-    # Initialize Telegram client if enabled
-    telegram_client = await integrations_telegram.init_telegram_client(lifecycle_state.config)
-    if telegram_client:
-        logger.info(
-            "Telegram integration enabled (chat_id=%s)",
-            lifecycle_state.config.telegram_chat_id[:8] + "..."
-            if len(lifecycle_state.config.telegram_chat_id) > 8
-            else lifecycle_state.config.telegram_chat_id,
-        )
-        # Register Telegram shutdown callback
-        lifecycle_state.graceful_shutdown.register_callback(
-            "stop_telegram_client",
-            integrations_telegram.stop_telegram_client,
-            priority=70,
-            timeout=5.0,
-        )
-
     # Initialize the Progena runtime HTTP client
     logger.info(
         "Using Progena runtime client (base_url=%s)",
@@ -172,13 +152,13 @@ async def lifespan(app: FastAPI):
     # was removed/restamped, or a schedule was created/edited from a chat).
     schedule_change_events = {"scheduled_task_triggered", "schedule_updated"}
 
-    # Create a combined event callback that handles both SSE and Telegram
+    # Create a combined event callback that handles both SSE and messaging channels
     def combined_event_callback(event_type: str, data: dict) -> None:
-        """Route runtime events to SSE and/or Telegram.
+        """Route runtime events to SSE and, while no browser is open, to channels.
 
         - Always broadcasts to SSE for any connected web clients
-        - If no web clients connected, also sends to Telegram
-        - Only forwards certain event types to Telegram (agent_message, agent_question, scheduled_response)
+        - With no web client connected, channels that notify when away receive
+          agent messages, agent questions and scheduled responses
         """
 
         # Always broadcast to SSE
@@ -195,26 +175,8 @@ async def lifespan(app: FastAPI):
             except Exception:  # pragma: no cover - best-effort live update
                 logger.debug("Failed to broadcast schedule snapshot", exc_info=True)
 
-        # Check if we should also send to Telegram
-        telegram = integrations_telegram.get_telegram_client()
-        if telegram and not events_stream.has_active_ui_stream_subscribers():
-            # Only send actual message content to Telegram
-            # Skip status updates, heartbeats, etc.
-            telegram_event_types = {
-                events_contracts.UiEvent.SCHEDULED_RESPONSE,
-                events_contracts.UiEvent.AGENT_MESSAGE,
-                events_contracts.UiEvent.AGENT_QUESTION,
-            }
-
-            if event_type in telegram_event_types:
-                content = data.get("content", "")
-                if content:
-                    # Fire and forget - don't block SSE broadcast
-                    chat_responses._spawn_background_task(
-                        integrations_telegram_bridge._send_telegram_message(
-                            telegram, content, event_type
-                        )
-                    )
+        # Fire and forget: channel delivery never blocks the SSE broadcast.
+        channels_manager.get_channel_manager().notify_away(event_type, data.get("content") or "")
 
     lifecycle_state.client = integrations_runtime.get_sse_client(
         lifecycle_state.config, event_callback=combined_event_callback
@@ -255,39 +217,16 @@ async def lifespan(app: FastAPI):
             timeout=15.0,
         )
 
-    # Set up Telegram message handler and start polling if enabled
-    if telegram_client and lifecycle_state.client:
-
-        async def handle_telegram_message(chat_id: str, message: str, metadata: dict) -> str | None:
-            """Handle incoming Telegram messages by forwarding to Progena.
-
-            Args:
-                chat_id: The Telegram chat ID.
-                message: The user's message text.
-                metadata: Additional message metadata.
-
-            Returns:
-                Response from the agent, or None if failed.
-            """
-            assert lifecycle_state.client is not None, "Client should be available in this context"
-            return await integrations_telegram_bridge._handle_telegram_agent_message(
-                telegram_client,
-                lifecycle_state.client,
-                chat_id,
-                message,
-                metadata,
-            )
-
-        telegram_client.set_message_handler(handle_telegram_message)
-        await telegram_client.start_polling()
-        logger.info("Telegram polling started with message handler")
-
-        # Greet once: only a Telegram chat without a session gets the greeting.
-        chat_responses._spawn_background_task(
-            integrations_telegram_bridge._send_telegram_connected_message(
-                telegram_client, lifecycle_state.client, document_store
-            )
-        )
+    # Messaging channels run from their channel:<id> documents (seeded once
+    # from legacy TELEGRAM_* variables) and need the runtime client above.
+    channel_manager = channels_manager.get_channel_manager()
+    await channel_manager.start()
+    lifecycle_state.graceful_shutdown.register_callback(
+        "stop_channels",
+        channel_manager.stop,
+        priority=70,
+        timeout=10.0,
+    )
 
     # Don't auto-start Progena - let it start on first request
     # This allows the server to start even if Progena has issues

@@ -1,15 +1,14 @@
-"""
-Telegram Bot API Client for Progena Backend.
+"""Telegram Bot API client used by the Telegram channel adapter.
 
-Sends agent messages to Telegram when no web UI client is connected.
-Also supports receiving messages via polling for two-way chat.
+Sends agent messages to Telegram and receives messages via long polling for
+two-way chat.
 
 Features:
 - Async HTTP client using aiohttp
 - Exponential backoff retry logic
 - Rate limiting
 - Message chunking for long messages
-- Connection state tracking
+- Connection state tracking (bot identity, last fatal error)
 - Long polling for incoming messages
 - Command handling (/start, /help, /status, /ping)
 """
@@ -28,14 +27,14 @@ from typing import Any
 
 import aiohttp
 
-from src.backend.config import ChatServerConfig
+from src.backend.channels.telegram.settings import TelegramSettings
 
 logger = logging.getLogger(__name__)
 
 
 @dataclass
 class TelegramConfig:
-    """Telegram-specific configuration extracted from ChatServerConfig."""
+    """Runtime configuration for one Telegram client."""
 
     bot_token: str
     chat_id: str
@@ -52,29 +51,25 @@ class TelegramConfig:
     allowed_users: set[str] = field(default_factory=set)
 
     @classmethod
-    def from_chat_config(cls, config: ChatServerConfig) -> TelegramConfig:
-        """Extract Telegram config from ChatServerConfig."""
-        # Parse allowed users from comma-separated string
-        allowed_str = config.telegram_allowed_users.strip()
-        allowed_users = set()
-        if allowed_str:
-            allowed_users = {u.strip() for u in allowed_str.split(",") if u.strip()}
+    def from_settings(cls, settings: TelegramSettings, bot_token: str) -> TelegramConfig:
+        """Build a client config from validated channel settings and the bot token."""
+        allowed_users = set(settings.allowed_chat_ids)
         # Always allow the primary chat_id
-        if config.telegram_chat_id:
-            allowed_users.add(config.telegram_chat_id)
+        if settings.chat_id:
+            allowed_users.add(settings.chat_id)
 
         return cls(
-            bot_token=config.telegram_bot_token,
-            chat_id=config.telegram_chat_id,
-            api_timeout=config.telegram_api_timeout,
-            max_retries=config.telegram_max_retries,
-            retry_delay=config.telegram_retry_delay,
-            max_message_length=config.telegram_max_message_length,
-            rate_limit_per_minute=config.telegram_rate_limit_per_minute,
-            draft_update_interval_ms=config.telegram_draft_update_interval_ms,
-            polling_enabled=config.telegram_polling_enabled,
-            polling_interval=config.telegram_polling_interval,
-            polling_timeout=config.telegram_polling_timeout,
+            bot_token=bot_token,
+            chat_id=settings.chat_id,
+            api_timeout=settings.api_timeout,
+            max_retries=settings.max_retries,
+            retry_delay=settings.retry_delay,
+            max_message_length=settings.max_message_length,
+            rate_limit_per_minute=settings.rate_limit_per_minute,
+            draft_update_interval_ms=settings.draft_update_interval_ms,
+            polling_enabled=settings.polling_enabled,
+            polling_interval=settings.polling_interval,
+            polling_timeout=settings.polling_timeout,
             allowed_users=allowed_users,
         )
 
@@ -159,6 +154,37 @@ class TelegramClient:
         self._message_handler: MessageHandler | None = None
         self._processing_messages: set[int] = set()  # Track messages being processed
         self._draft_id_counter = count(start=max(1, int(time.time() * 1000)))
+        # Connection state surfaced on the Channels page.
+        self.bot_username: str | None = None
+        self.last_error: str | None = None
+        self._last_api_error: str | None = None
+        self._on_state_change: Callable[[], None] | None = None
+
+    @property
+    def started(self) -> bool:
+        """Whether the HTTP session is open."""
+        return self._started
+
+    @property
+    def polling_active(self) -> bool:
+        """Whether the long-polling task is running."""
+        return self._polling_task is not None and not self._polling_task.done()
+
+    def set_state_change_callback(self, callback: Callable[[], None] | None) -> None:
+        """Call ``callback`` when the connection state changes outside a request."""
+        self._on_state_change = callback
+
+    def _state_changed(self) -> None:
+        if self._on_state_change is not None:
+            try:
+                self._on_state_change()
+            except Exception:  # pragma: no cover - observers must not break polling
+                logger.debug("Telegram state-change callback failed", exc_info=True)
+
+    @property
+    def last_api_error(self) -> str | None:
+        """Description of the most recent failed Bot API call."""
+        return self._last_api_error
 
     def set_message_handler(self, handler: MessageHandler | None) -> None:
         """Set the handler for incoming messages.
@@ -186,10 +212,20 @@ class TelegramClient:
         # Verify the bot token by calling getMe
         try:
             result = await self._api_call("getMe")
-            if result:
-                logger.info("Telegram bot verified: @%s", result.get("username", "unknown"))
         except Exception as e:
             logger.warning("Failed to verify Telegram bot: %s", e)
+            result = None
+            self._last_api_error = str(e)
+        if isinstance(result, dict):
+            self.bot_username = str(result.get("username") or "") or None
+            self.last_error = None
+            logger.info("Telegram bot verified: @%s", self.bot_username or "unknown")
+        else:
+            self.last_error = (
+                f"Could not verify the bot: {self._last_api_error}"
+                if self._last_api_error
+                else "Could not verify the bot with Telegram"
+            )
 
     async def stop(self) -> None:
         """Stop the client, polling, and close HTTP session."""
@@ -255,6 +291,10 @@ class TelegramClient:
                             "is likely running. Stopping polling to avoid conflicts.",
                             consecutive_conflicts,
                         )
+                        self._polling_stopped(
+                            "Polling stopped: another bot instance is using this token "
+                            "(409 Conflict)"
+                        )
                         break
                     # Longer backoff for conflicts
                     await asyncio.sleep(min(60, 5 * (2**consecutive_conflicts)))
@@ -275,6 +315,10 @@ class TelegramClient:
                         logger.error(
                             "Too many consecutive polling errors (%d), stopping", consecutive_errors
                         )
+                        self._polling_stopped(
+                            "Polling stopped after repeated errors: "
+                            f"{self._last_api_error or 'Telegram API unavailable'}"
+                        )
                         break
                     # Exponential backoff on errors
                     await asyncio.sleep(min(30, 2**consecutive_errors))
@@ -284,6 +328,10 @@ class TelegramClient:
                     consecutive_errors = 0
                     consecutive_timeouts = 0
                     consecutive_conflicts = 0
+                    if self.last_error is not None:
+                        # Telegram is reachable again (e.g. after a startup outage).
+                        self.last_error = None
+                        self._state_changed()
 
                 if updates:
                     for update in updates:
@@ -306,10 +354,16 @@ class TelegramClient:
 
                 if consecutive_errors >= max_consecutive_errors:
                     logger.error("Too many consecutive polling errors, stopping")
+                    self._polling_stopped(f"Polling stopped after repeated errors: {e}")
                     break
 
                 # Exponential backoff on errors
                 await asyncio.sleep(min(30, 2**consecutive_errors))
+
+    def _polling_stopped(self, reason: str) -> None:
+        """Record why polling ended on its own and notify the state observer."""
+        self.last_error = reason
+        self._state_changed()
 
     async def _get_updates(self) -> tuple[list[dict], str | None]:
         """Fetch updates from Telegram using long polling.
@@ -879,6 +933,7 @@ class TelegramClient:
                             method,
                             description,
                         )
+                        self._last_api_error = f"409 Conflict: {description}"
                         return None, "conflict"
 
                     # Rate limit error (429) - wait and retry
@@ -894,16 +949,19 @@ class TelegramClient:
                     # Bad request (400) - usually invalid parameters, don't retry
                     if error_code == 400:
                         logger.error("Telegram API bad request on %s: %s", method, description)
+                        self._last_api_error = f"400 Bad Request: {description}"
                         return None, "error"
 
                     # Unauthorized (401) - invalid token, don't retry
                     if error_code == 401:
                         logger.error("Telegram API unauthorized on %s - check bot token", method)
+                        self._last_api_error = "401 Unauthorized: check the bot token"
                         return None, "error"
 
                     # Forbidden (403) - bot blocked or chat not found, don't retry
                     if error_code == 403:
                         logger.error("Telegram API forbidden on %s: %s", method, description)
+                        self._last_api_error = f"403 Forbidden: {description}"
                         return None, "error"
 
                     # Other errors - may retry
@@ -949,6 +1007,8 @@ class TelegramClient:
             logger.error(
                 "Telegram %s call failed after %d attempts: %s", method, attempts, last_error
             )
+        if last_error_type != "timeout" or method != "getUpdates":
+            self._last_api_error = last_error
         return None, last_error_type
 
     async def _api_call(
@@ -1055,49 +1115,3 @@ class TelegramClient:
         message = f"🤖 Progena Agent:\n\n{content}"
 
         return await self.send_message(message)
-
-
-# Global client instance
-_telegram_client: TelegramClient | None = None
-
-
-def get_telegram_client() -> TelegramClient | None:
-    """Get the global Telegram client instance."""
-    return _telegram_client
-
-
-async def init_telegram_client(config: ChatServerConfig) -> TelegramClient | None:
-    """Initialize the global Telegram client.
-
-    Args:
-        config: Chat server configuration.
-
-    Returns:
-        The initialized client, or None if Telegram is disabled.
-    """
-    global _telegram_client
-
-    if not config.telegram_enabled:
-        logger.info("Telegram integration disabled")
-        return None
-
-    if not config.telegram_bot_token or not config.telegram_chat_id:
-        logger.warning(
-            "Telegram enabled but missing configuration (TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID)"
-        )
-        return None
-
-    telegram_config = TelegramConfig.from_chat_config(config)
-    _telegram_client = TelegramClient(telegram_config)
-    await _telegram_client.start()
-
-    return _telegram_client
-
-
-async def stop_telegram_client() -> None:
-    """Stop the global Telegram client."""
-    global _telegram_client
-
-    if _telegram_client:
-        await _telegram_client.stop()
-        _telegram_client = None

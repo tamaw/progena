@@ -41,6 +41,7 @@ from src.progena.documents.kinds import (
     CANVAS_DATA_KEY_PREFIX,
     CANVAS_DOCUMENT_KEY_PREFIX,
     CANVAS_STATUS_KEY_PREFIX,
+    CHANNEL_KEY_PREFIX,
     INBOX_MESSAGE_KEY_PREFIX,
     KNOWLEDGE_PAGE_KEY_PREFIX,
     REPO_KEY_PREFIX,
@@ -1718,6 +1719,7 @@ class StateReader:
                     or changed_key.startswith(CANVAS_DOCUMENT_KEY_PREFIX)
                     or changed_key.startswith(CANVAS_DATA_KEY_PREFIX)
                     or changed_key.startswith(CANVAS_STATUS_KEY_PREFIX)
+                    or changed_key.startswith(CHANNEL_KEY_PREFIX)
                 )
             )
             # Reconnect must reach reconciliation even with unchanged state.
