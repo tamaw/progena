@@ -21,6 +21,12 @@ from langgraph.checkpoint.base import CheckpointTuple
 from langgraph.graph import StateGraph
 from langgraph.pregel._checkpoint import achannels_from_checkpoint
 
+from src.progena.sessions.checkpoint_history import (
+    NATIVE_SUMMARIZATION_EVENT_KEY,
+    CheckpointHistory,
+    read_checkpoint_history,
+    read_message_checkpoint,
+)
 from src.progena.utils import normalize_utc_datetime
 
 from .transcript import DEFAULT_AGENT_NICK, ThreadMessages
@@ -28,9 +34,6 @@ from .transcript import DEFAULT_AGENT_NICK, ThreadMessages
 # The main agent's ``messages`` channel spec: a DeltaChannel. Subagent
 # namespaces store plain lists, which the same spec restores as-is.
 _MESSAGES_SPECS = {"messages": StateGraph(DeepAgentState).channels["messages"]}
-
-
-_NATIVE_SUMMARIZATION_EVENT_KEY = "_summarization_event"
 
 
 @dataclass(frozen=True)
@@ -81,6 +84,35 @@ async def latest_checkpoint_id(checkpointer: Any, thread_id: str) -> str | None:
     return str(tip.config["configurable"]["checkpoint_id"]) if tip is not None else None
 
 
+async def load_conversation_messages(
+    checkpointer: Any, thread_id: str, *, checkpoint_id: str | None = None
+) -> list[Any] | None:
+    """Read native snapshot messages, including null-task input updates."""
+    from langgraph._internal._constants import NULL_TASK_ID
+
+    tip = await read_message_checkpoint(checkpointer, _config(thread_id, "", checkpoint_id))
+    if tip is None:
+        return None
+    channels, _ = await achannels_from_checkpoint(
+        _MESSAGES_SPECS, tip.checkpoint, saver=checkpointer, config=tip.config
+    )
+    updates = [
+        value
+        for task_id, channel, value in tip.pending_writes or ()
+        if task_id == NULL_TASK_ID and channel == "messages"
+    ]
+    if updates:
+        channels["messages"].update(updates)
+    return list(channels["messages"].get()) if channels["messages"].is_available() else []
+
+
+async def _checkpoint_messages(checkpointer: Any, tip: CheckpointTuple) -> list[Any]:
+    channels, _ = await achannels_from_checkpoint(
+        _MESSAGES_SPECS, tip.checkpoint, saver=checkpointer, config=tip.config
+    )
+    return list(channels["messages"].get()) if channels["messages"].is_available() else []
+
+
 async def load_conversation(
     checkpointer: Any,
     thread_id: str,
@@ -90,12 +122,20 @@ async def load_conversation(
     include_subagents: bool = True,
 ) -> Conversation | None:
     """Load the chat's committed messages, and optionally native summaries."""
+    root_tip = await read_message_checkpoint(checkpointer, _config(thread_id, "", checkpoint_id))
+    if root_tip is None:
+        return None
+    history = await read_checkpoint_history(
+        checkpointer, thread_id, include_summaries=include_summaries
+    )
     root = await _load_thread(
         checkpointer,
         thread_id,
         "",
         checkpoint_id=checkpoint_id,
         include_summaries=include_summaries,
+        history=history,
+        tip=root_tip,
     )
     if root is None:
         return None
@@ -112,7 +152,9 @@ async def load_conversation(
                 summaries.append(marker)
     if include_subagents:
         for tool_call_id, loaded in (
-            await _selected_subagent_threads(checkpointer, thread_id, root, include_summaries)
+            await _selected_subagent_threads(
+                checkpointer, thread_id, root, include_summaries, history=history
+            )
         ).items():
             subagents[tool_call_id] = loaded.thread
             if not include_summaries:
@@ -143,20 +185,20 @@ async def _load_thread(
     thread_id: str,
     ns: str,
     *,
+    history: CheckpointHistory,
     checkpoint_id: str | None = None,
     include_summaries: bool = False,
+    tip: CheckpointTuple | None = None,
 ) -> _LoadedThread | None:
-    tip = await checkpointer.aget_tuple(_config(thread_id, ns, checkpoint_id))
+    if tip is None:
+        tip = await read_message_checkpoint(checkpointer, _config(thread_id, ns, checkpoint_id))
     if tip is None:
         return None
-    history = await _checkpoint_ancestry(checkpointer, thread_id, ns, tip)
-    chronological_history = tuple(reversed(history))
-    channels, _ = await achannels_from_checkpoint(
-        _MESSAGES_SPECS, tip.checkpoint, saver=checkpointer, config=tip.config
-    )
-    messages = channels["messages"].get() if channels["messages"].is_available() else []
+    ancestry = _checkpoint_ancestry(thread_id, ns, tip, history.get(ns, {}))
+    chronological_history = tuple(reversed(ancestry))
+    messages = await _checkpoint_messages(checkpointer, tip)
     thread = ThreadMessages(
-        messages=list(messages),
+        messages=messages,
         committed_at=_commit_times(list(chronological_history)),
         # An unnamed subagent namespace gets "" so the renderer uses the task's subagent_type.
         nick=str(tip.metadata.get("lc_agent_name") or ("" if ns else DEFAULT_AGENT_NICK)),
@@ -177,11 +219,11 @@ async def _load_thread(
     )
 
 
-async def _checkpoint_ancestry(
-    checkpointer: Any,
+def _checkpoint_ancestry(
     thread_id: str,
     ns: str,
     tip: CheckpointTuple,
+    checkpoints: Mapping[str, CheckpointTuple],
 ) -> list[CheckpointTuple]:
     """Return one checkpoint's local ancestor chain, newest first.
 
@@ -189,12 +231,9 @@ async def _checkpoint_ancestry(
     ``parent_config`` instead keeps a historical render on the requested
     checkpoint's actual ancestry.
     """
-    # Batch native checkpoint rows; walking parents with aget_tuple would add
-    # one database round trip per historical step.
-    checkpoints = {
-        _checkpoint_id(checkpoint): checkpoint
-        async for checkpoint in checkpointer.alist(_config(thread_id, ns))
-    }
+    # The request-local index contains only history metadata, not every
+    # checkpoint's unrelated channel values.
+    tip = checkpoints.get(_checkpoint_id(tip), tip)
     history = [tip]
     seen = {_checkpoint_id(tip)}
     current = tip
@@ -228,6 +267,8 @@ async def _selected_subagent_threads(
     thread_id: str,
     root: _LoadedThread,
     include_summaries: bool,
+    *,
+    history: CheckpointHistory,
 ) -> dict[str, _LoadedThread]:
     """Resolve native child scopes for history or an immutable summary view.
 
@@ -235,11 +276,7 @@ async def _selected_subagent_threads(
     revision is cacheable. Live trace reads retain independently advancing child
     state; both views require the child's native parent to belong to the lineage.
     """
-    checkpoints_by_ns: dict[str, list[CheckpointTuple]] = {}
-    async for checkpoint in checkpointer.alist({"configurable": {"thread_id": thread_id}}):
-        ns = _checkpoint_namespace(checkpoint)
-        if ns:
-            checkpoints_by_ns.setdefault(ns, []).append(checkpoint)
+    checkpoints_by_ns = {ns: checkpoints.values() for ns, checkpoints in history.items() if ns}
 
     selected = {"": root}
     for ns in sorted(checkpoints_by_ns, key=lambda value: (value.count("|"), value)):
@@ -265,6 +302,7 @@ async def _selected_subagent_threads(
             ns,
             checkpoint_id=_checkpoint_id(tip),
             include_summaries=include_summaries,
+            history=history,
         )
         if loaded is not None:
             selected[ns] = loaded
@@ -281,11 +319,6 @@ async def _selected_subagent_threads(
         if tool_call_id is not None:
             subagents[tool_call_id] = loaded
     return subagents
-
-
-def _checkpoint_namespace(checkpoint: CheckpointTuple) -> str:
-    configurable = checkpoint.config.get("configurable", {})
-    return str(configurable.get("checkpoint_ns") or "")
 
 
 def _checkpoint_sort_key(checkpoint: CheckpointTuple) -> tuple[str, str]:
@@ -362,7 +395,7 @@ def _summary_occurrences(history: list[CheckpointTuple], *, ns: str) -> list[Sum
     previous_fingerprint: tuple[str, int, int | None] | None = None
     for checkpoint in history:
         values = checkpoint.checkpoint.get("channel_values")
-        event = values.get(_NATIVE_SUMMARIZATION_EVENT_KEY) if isinstance(values, Mapping) else None
+        event = values.get(NATIVE_SUMMARIZATION_EVENT_KEY) if isinstance(values, Mapping) else None
         summary = _summary_text(event)
         created_at_index = _event_integer(event, "created_at_index")
         if summary is None or created_at_index is None or created_at_index < 0:

@@ -16,7 +16,6 @@ from langchain_core.messages import (
     HumanMessage,
     SystemMessage,
     ToolMessage,
-    messages_to_dict,
 )
 
 from src.progena.sessions.status import CANCELLED_STATUS
@@ -271,31 +270,6 @@ def messages_to_conversation_items(
 ) -> list[dict[str, Any]]:
     """Map LangChain messages to OpenAI Responses conversation items."""
     return [item for _, item in conversation_items_with_sources(messages, conversation_id)]
-
-
-def with_langchain_messages(
-    page: list[dict[str, Any]],
-    source_index_by_item_id: dict[str, int],
-    messages: list[BaseMessage],
-    conversation_id: str,
-) -> list[dict[str, Any]]:
-    """Vendor include ``progena.langchain_message`` for one returned page.
-
-    Every item gets ``source_message_id``; the first item of each source
-    message within the page also gets the serialized LangChain message, so a
-    client paging through the whole conversation can rebuild it losslessly.
-    """
-    annotated: list[dict[str, Any]] = []
-    seen_sources: set[int] = set()
-    for item in page:
-        index = source_index_by_item_id[item["id"]]
-        msg = messages[index]
-        extra: dict[str, Any] = {"source_message_id": msg.id or f"{conversation_id}:{index}"}
-        if index not in seen_sources:
-            seen_sources.add(index)
-            extra["langchain_message"] = messages_to_dict([msg])[0]
-        annotated.append({**item, **extra})
-    return annotated
 
 
 def build_response_object(

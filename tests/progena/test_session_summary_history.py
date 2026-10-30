@@ -145,11 +145,6 @@ async def test_subagent_summaries_use_only_the_selected_root_lineage(
         parent_id="child-old",
     )
 
-    class _Checkpointer:
-        async def alist(self, _config: dict[str, Any]) -> Any:
-            for checkpoint in (future_child, fork_child, child, future_nested, nested):
-                yield checkpoint
-
     selected: list[tuple[str, str]] = []
 
     async def _load_selected(
@@ -157,6 +152,7 @@ async def test_subagent_summaries_use_only_the_selected_root_lineage(
         _thread_id: str,
         ns: str,
         *,
+        history: Any,
         checkpoint_id: str | None = None,
         include_summaries: bool = False,
     ) -> history_module._LoadedThread:
@@ -170,7 +166,18 @@ async def test_subagent_summaries_use_only_the_selected_root_lineage(
 
     monkeypatch.setattr(history_module, "_load_thread", _load_selected)
     subagents = await history_module._selected_subagent_threads(
-        _Checkpointer(), "thread-1", _loaded(root_checkpoint), include_summaries=True
+        object(),
+        "thread-1",
+        _loaded(root_checkpoint),
+        include_summaries=True,
+        history={
+            namespace: {
+                checkpoint.config["configurable"]["checkpoint_id"]: checkpoint
+                for checkpoint in (future_child, fork_child, child, future_nested, nested)
+                if checkpoint.config["configurable"]["checkpoint_ns"] == namespace
+            }
+            for namespace in ("tools:task-a", "tools:task-a|tools:task-b")
+        },
     )
 
     assert selected == [
