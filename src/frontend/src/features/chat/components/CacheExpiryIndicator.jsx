@@ -1,9 +1,10 @@
-import { useEffect, useId, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { cacheCountdownLabel } from '../models/contextWindowModel';
+import ChatInfoTooltip from './ChatInfoTooltip';
+import tooltipStyles from './ChatInfoTooltip.module.css';
 import styles from './CacheExpiryIndicator.module.css';
 
 function CacheCountdown({ expiresAt, ttlSeconds }) {
-  const tooltipId = useId();
   const [now, setNow] = useState(Date.now);
   useEffect(() => {
     if (now >= expiresAt) return;
@@ -21,21 +22,22 @@ function CacheCountdown({ expiresAt, ttlSeconds }) {
 
   const expired = now >= expiresAt;
   const label = cacheCountdownLabel(expiresAt, now);
-  const description = expired
-    ? 'Estimated prompt-cache window elapsed. Provider cache state is not observable.'
-    : `Estimated prompt-cache expiry in ${label}, based on the last response and a configured ${ttlSeconds / 60}-minute retention. Provider cache state may differ.`;
+  const description = expired ? 'Cache window · elapsed (estimated)' : `Cache expiry · ~${label}`;
   return (
-    <span
-      className={`chat-info-control ${styles.indicator} ${expired ? styles.expired : ''}`}
-      tabIndex={0}
+    <ChatInfoTooltip
+      className={`${styles.indicator} ${expired ? styles.expired : ''}`}
       role="timer"
       aria-live="off"
-      aria-label="Estimated prompt-cache expiry"
-      aria-describedby={tooltipId}
+      aria-label={description}
+      content={(
+        <>
+          <span className={tooltipStyles.row}><span>Cache expiry · estimated</span><span>{expired ? 'Elapsed' : `~${label}`}</span></span>
+          <span className={tooltipStyles.row}><span>Configured retention</span><span>{ttlSeconds / 60} min</span></span>
+        </>
+      )}
     >
       <span className={styles.time} aria-hidden="true">{label}</span>
-      <span id={tooltipId} className="chat-info-tooltip" role="tooltip">{description}</span>
-    </span>
+    </ChatInfoTooltip>
   );
 }
 

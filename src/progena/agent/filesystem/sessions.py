@@ -1,4 +1,4 @@
-"""DeepAgent backend exposing chat sessions as documents under ``/sessions/``.
+"""DeepAgent backend exposing chat sessions as documents under ``/conversations/``.
 
 Each non-archived session is a file::
 
@@ -60,7 +60,7 @@ class SessionDirectoryBackend(_AsyncOnlyFileBackendMixin):
 
     @staticmethod
     def _name(file_path: str) -> str:
-        return file_path.lstrip("/").removeprefix("sessions/")
+        return file_path.lstrip("/").removeprefix("conversations/")
 
     async def aread(self, file_path: str, offset: int = 0, limit: int = 2000) -> ReadResult:
         name = self._name(file_path)

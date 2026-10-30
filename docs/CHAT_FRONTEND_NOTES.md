@@ -141,7 +141,8 @@ work time remains the transcript span through answer start, not tool CPU time.
 The conversation header uses backend `session.usage_totals`, not sums over the
 currently loaded message page or streamed reasoning text. These are cumulative
 root output tokens and their reasoning subset; partial coverage is shown as a
-recorded lower bound, unknown as unavailable. Selection and accepted canonical
+recorded lower bound. Unknown output stays unavailable; unreported reasoning
+displays `0` in the header without changing backend coverage. Selection and accepted canonical
 completion reconciliation replace the totals within the same thread/ownership
 fences as the transcript. The live answer is not added twice.
 
@@ -158,6 +159,13 @@ profile match. Existing malformed historical attribution is not guessed or
 rewritten. Old summaries without recorded comparable footprints do not acquire
 invented savings figures.
 
+Message token labels omit model names. Token, context and cache metric details
+use `ChatInfoTooltip`, a portal reusing the shared `chat-info-tooltip` styling,
+fixed 8px from the viewport top and horizontally clamped. Details are compact
+label/value rows; observed input reductions and cache estimates remain labelled.
+Hover does not introduce a help cursor. Focus exposes the same information;
+Escape, blur/pointer exit and scrolling dismiss it without moving focus.
+
 
 
 ## Conversation summaries
@@ -165,9 +173,11 @@ invented savings figures.
 Native summarization uses the existing response-content activity and committed
 chat history. `Summarizing conversation…` is transient model-generation activity;
 it is never promoted to a completed marker merely because a callback finished.
-Committed `summary_markers` render as keyboard-expandable `Conversation summarized`
-separators with bounded, sanitized Markdown. Their stable scope/anchor identities
-preserve placement and deduplication during paging and canonical reconciliation.
+Committed `summary_markers` render as keyboard-expandable transcript rows with
+an amber dot, shared message header/body styling, and sanitized Markdown.
+The expanded body is the actual generated summary, not its model-facing wrapper.
+Stable scope/anchor identities preserve placement and deduplication during paging
+and canonical reconciliation; collapsed rows do not parse Markdown.
 
 Original messages remain visible and searchable. Nested summaries stay inside
 their subagent activity. Completed markers must remain visible with debug events

@@ -1,16 +1,16 @@
 ---
 name: reading-sessions
-description: Browse, list, search, or read the user's past and current chats in the /sessions/ directory (one YAML-front-matter + IRC-style markdown file per chat). Use whenever the user asks which chats or conversations exist or you can see, refers to an earlier or other chat, asks what they or you said or did before, or wants chat history summarised or searched.
+description: Browse, list, search, or read the user's past and current chats in the /conversations/ directory (one YAML-front-matter + IRC-style markdown file per chat). Use whenever the user asks which chats or conversations exist or you can see, refers to an earlier or other chat, asks what they or you said or did before, or wants chat history summarised or searched.
 allowed-tools: ls read_file grep glob
 ---
 
-# Reading past sessions
+# Reading past conversations
 
-`/sessions/` holds one file per chat, backed by the `session:` documents in
+`/conversations/` holds one file per chat, backed by the `session:` documents in
 Postgres:
 
 ```
-/sessions/<date>_<title-slug>_<id8>.md
+/conversations/<date>_<title-slug>_<id8>.md
 ```
 
 - `<date>` is the day the chat started (user's timezone), `<title-slug>` is the
@@ -53,8 +53,8 @@ back.
 
 ## Recipes
 
-- Find a chat: `ls /sessions/`, then narrow by date or title in the name.
-- Search everything: `grep` with a literal pattern over `/sessions/`, e.g.
+- Find a chat: `ls /conversations/`, then narrow by date or title in the name.
+- Search everything: `grep` with a literal pattern over `/conversations/`, e.g.
   `schedule` or the user's nick from a session header.
 - Search one period first: `grep` with `glob` set to a date prefix such as
   `2026-10-*` reads far fewer logs.

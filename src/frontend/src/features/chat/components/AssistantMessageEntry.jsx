@@ -47,7 +47,6 @@ export default function AssistantMessageEntry({ item, agentName, onRegenerate, s
                 </span>
               )}
               <MessageTokenUsage tokenCount={item.tokenCount} finalCallTokenCount={item.finalCallTokenCount} />
-              {item.displayModelName && <span className="msg__model">{item.displayModelName}</span>}
               {Array.isArray(item.displayToolCalls) && item.displayToolCalls.length > 0 && (
                 <span className="msg__model">{formatDisplayToolCalls(item.displayToolCalls)}</span>
               )}

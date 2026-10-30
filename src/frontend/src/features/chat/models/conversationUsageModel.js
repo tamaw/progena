@@ -7,7 +7,7 @@ export function conversationUsageDisplay(usage) {
     const count = usage?.[`${name}_tokens`];
     const coverage = usage?.[`${name}_coverage`];
     if (!Number.isSafeInteger(count) || count < 0 || !COVERAGE.has(coverage) || coverage === 'unknown') {
-      return `${label} unavailable`;
+      return name === 'reasoning' ? '0 reasoning tokens' : `${label} unavailable`;
     }
     return `${coverage === 'partial' ? '≥' : ''}${format.format(count)} ${coverage === 'partial' ? 'recorded ' : ''}${label}`;
   };

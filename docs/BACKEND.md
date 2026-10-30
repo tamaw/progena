@@ -200,6 +200,10 @@ Live event metadata is `{summary_id, scope}`. The callback's `summary_id` is not
 the durable marker ID. Frontends clear live activity on finish/terminal and
 deduplicate committed markers by their history-projected ID. Expanded summaries
 are sanitized Markdown; collapsed markers do not parse the summary body.
+Marker `summary` is the generated body only. The runtime projection reads the
+Progena metadata body or interprets the SDK's native summary delimiters/no-archive
+format; browsers never parse prompt-wrapper prose. New model-facing wrappers can
+retain retrieval instructions without leaking those instructions into the UI.
 
 Summary-bearing details require messages and summaries from the same checkpoint
 revision; an unavailable exact message revision fails the read instead of using

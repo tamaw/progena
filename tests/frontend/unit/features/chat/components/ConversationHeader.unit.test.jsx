@@ -24,10 +24,10 @@ describe('conversation lifetime accounting', () => {
     }
   });
 
-  it('does not turn unavailable history into zero or text estimates', () => {
+  it('keeps output unknown but displays zero for unreported reasoning without estimating text', () => {
     const markup = header([{ role: 'assistant', tokenCount: 7, reasoningText: 'a'.repeat(100) }], null);
     expect(markup).toContain('output tokens unavailable');
-    expect(markup).toContain('reasoning tokens unavailable');
+    expect(markup).toContain('0 reasoning tokens');
   });
 
   it('distinguishes incomplete recorded totals from complete provider zero', () => {

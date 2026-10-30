@@ -34,7 +34,7 @@ def _checkpoint(
 
 def _event(summary: str, *, cutoff_index: int, created_at_index: int) -> dict:
     return {
-        "summary_message": {"content": summary},
+        "summary_message": {"content": f"<summary>\n{summary}\n</summary>"},
         "cutoff_index": cutoff_index,
         "created_at_index": created_at_index,
         "file_path": "/private/native-detail",

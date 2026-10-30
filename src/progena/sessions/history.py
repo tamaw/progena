@@ -27,6 +27,7 @@ from src.progena.sessions.checkpoint_history import (
     read_checkpoint_history,
     read_message_checkpoint,
 )
+from src.progena.sessions.summarization import summary_body
 from src.progena.utils import normalize_utc_datetime
 
 from .transcript import DEFAULT_AGENT_NICK, ThreadMessages
@@ -400,7 +401,11 @@ def _summary_occurrences(history: list[CheckpointTuple], *, ns: str) -> list[Sum
         created_at_index = _event_integer(event, "created_at_index")
         if summary is None or created_at_index is None or created_at_index < 0:
             continue
-        fingerprint = (summary, created_at_index, _event_integer(event, "cutoff_index"))
+        fingerprint = (
+            _native_summary_fingerprint(event),
+            created_at_index,
+            _event_integer(event, "cutoff_index"),
+        )
         if fingerprint == previous_fingerprint:
             continue
         previous_fingerprint = fingerprint
@@ -426,12 +431,12 @@ def _summary_text(event: Any) -> str | None:
         if isinstance(event, Mapping)
         else getattr(event, "summary_message", None)
     )
-    content = (
-        message.get("content")
-        if isinstance(message, Mapping)
-        else getattr(message, "content", None)
-    )
-    return content if isinstance(content, str) and content else None
+    return summary_body(message)
+
+
+def _native_summary_fingerprint(event: Any) -> str:
+    """Dedupe the committed native event independently of display-body parsing."""
+    return repr(event)
 
 
 def _checkpoint_time(checkpoint: CheckpointTuple) -> datetime | None:

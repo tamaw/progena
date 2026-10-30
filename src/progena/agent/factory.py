@@ -37,11 +37,13 @@ from src.progena.agent.middleware import (
     DirectA2AFastPathMiddleware,
     DynamicMCPToolMiddleware,
     LiveInstructionMiddleware,
+    ProgenaSummarizationMiddleware,
     SchemaCompactionMiddleware,
     SecretRedactionMiddleware,
     ToolErrorMiddleware,
     ToolResultPairingMiddleware,
     ToolTimingMiddleware,
+    install_progena_summarizer_profile,
 )
 from src.progena.agent.model_profiles import resolve_model_profile
 from src.progena.agent.object_agents.factory import create_object_agent_proxy
@@ -276,6 +278,7 @@ async def create_progena_agent(
 
     # Provider resolution is deliberately lazy so the runtime can boot before
     # Settings has a connection. Each invocation uses its turn snapshot.
+    install_progena_summarizer_profile()
     model = ProviderChatModel(template=config.llm)
 
     # Default to SQLite checkpointer for persistence; fall back to MemorySaver
@@ -345,9 +348,9 @@ async def create_progena_agent(
         DynamicMCPToolMiddleware(mcp_tools_provider=lambda: create_dynamic_mcp_tools(llm_client)),
         SchemaCompactionMiddleware(),
         SecretRedactionMiddleware(),
+        ProgenaSummarizationMiddleware(model=model, backend=backend),
         ToolTimingMiddleware(),
         ContextCompactionMiddleware(),
-        _create_javascript_middleware(),
     ]
 
     # Bring the stored instructions in line with the image's data/instructions/.

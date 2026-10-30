@@ -31,7 +31,7 @@ The agent uses virtual paths, validated on write where applicable:
 - `/config/health.json` and `/config/repo_scan.json` — heartbeat-owned, read-only status documents.
 - `/config/repos/<id>.json` — repository declarations; live repository state is in `repo_scan.json`.
 - `/tasks/board.json` and `/tasks/<id>.md`, `/workflows/<id>.json`, `/routines/<id>.json`, and `/policies/<id>.json` — persisted work-management and execution definitions.
-- `/sessions/<date>_<title-slug>_<id8>.md` — chat records; only `title`, `pinned`, and `archived` front-matter fields are editable.
+- `/conversations/<date>_<title-slug>_<id8>.md` — chat records; only `title`, `pinned`, and `archived` front-matter fields are editable.
 - `/memories/` and `/knowledge/<base-id>/` — persistent memories and catalogued knowledge pages.
 - `/canvases/<name>/` and `/artifacts/<path>` — sandboxed UI canvases and the CSV/JSON/text data artifacts they visualise (see `building-canvases`).
 - `/instructions/` — validated stored instruction documents. Checked-in instruction files seed missing documents only; existing stored instructions remain user-owned.

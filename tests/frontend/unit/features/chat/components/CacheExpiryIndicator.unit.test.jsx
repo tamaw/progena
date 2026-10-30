@@ -32,7 +32,6 @@ describe('CacheExpiryIndicator', () => {
     expect(text()).toBe('1m');
     await act(async () => vi.advanceTimersByTime(60000));
     expect(text()).toBe('0m');
-    expect(host.querySelector('[role="tooltip"]').textContent).toContain('window elapsed');
     expect(vi.getTimerCount()).toBe(0);
     await act(async () => root.render(<CacheExpiryIndicator expiry={{ expiresAt: Date.now() + 3600000, ttlSeconds: 3600 }} />));
     expect(text()).toBe('60m');

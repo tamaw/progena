@@ -132,6 +132,7 @@ describe('conversation summary markers', () => {
             summary: '## Condensed context\n\nEarlier details.',
             scope: { kind: 'conversation', id: 'thread-1' },
           }]}
+          streamEventFilter={() => false}
         />
       </Provider>,
     );

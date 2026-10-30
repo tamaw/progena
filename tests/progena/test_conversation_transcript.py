@@ -1,4 +1,4 @@
-"""IRC rendering of chat messages for the /sessions/ mount."""
+"""IRC rendering of chat messages for the /conversations/ mount."""
 
 from __future__ import annotations
 

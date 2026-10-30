@@ -10,6 +10,7 @@ from .dynamic_mcp import DynamicMCPToolMiddleware
 from .live_instruction import LiveInstructionMiddleware
 from .schema_compaction import SchemaCompactionMiddleware
 from .secret_redaction import SecretRedactionMiddleware
+from .summarization import ProgenaSummarizationMiddleware, install_progena_summarizer_profile
 from .tool_errors import ToolErrorMiddleware
 from .tool_result_pairing import ToolResultPairingMiddleware
 from .tool_timing import ToolTimingMiddleware
@@ -25,6 +26,8 @@ __all__ = [
     "LiveInstructionMiddleware",
     "SchemaCompactionMiddleware",
     "SecretRedactionMiddleware",
+    "ProgenaSummarizationMiddleware",
+    "install_progena_summarizer_profile",
     "ToolErrorMiddleware",
     "ToolResultPairingMiddleware",
 ]

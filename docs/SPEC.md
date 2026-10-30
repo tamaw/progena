@@ -73,6 +73,16 @@ to the backend and receives browser application data through two SSE roles:
     It is persisted on AI response metadata through a native after-model update
     and retained on later responses until the next summary supersedes it.
     Existing aggregate `usage` remains separate from this display contract.
+- Progena owns a small subclass of DeepAgents' native summarizer, not a second
+  compaction engine. A provider-scoped public HarnessProfile excludes the exact
+  native core class; our instance replaces it and retains native model-aware
+  trigger/keep/truncation defaults and `/conversation_history/` archive offload.
+  Its prompt preserves supplied `/conversations/` references without inventing
+  filenames. The model-facing wrapper carries retrieval guidance and structured
+  `additional_kwargs.progena_summary.summary`; canonical history markers expose
+  only the actual generated body. The wrapper override is private SDK API and
+  HarnessProfile is beta API: keep native graph integration coverage when
+  upgrading the pinned dependency. No global SDK monkey patch is used.
 - `GET /v1/events` broadcasts runtime agent events to the backend.
 
 ### JavaScript execution
@@ -369,13 +379,18 @@ files in `data/state` or `data/config`. State-document changes are broadcast to
 the canonical UI stream after the write succeeds; details are in
 [STATE_DOCUMENTS.md](STATE_DOCUMENTS.md).
 
-Chat history is exposed through `/sessions/`: one
+Chat history is exposed through `/conversations/`: one
 `<date>_<title-slug>_<id8>.md` per non-archived chat, backed by `session:`
 documents in Postgres (`src/progena/sessions/`). Each file is YAML front
 matter (all payload fields except `content`, plus `display_title`) followed by
 a blank line and the IRC-style `content`. Only the `title`, `pinned`, and
 `archived` front-matter fields are editable; the body is read-only. Listing,
 grep, and read operate directly on the store documents (no cache).
+The mount is a clean rename of the virtual address only; `session:` document
+keys and internal session-domain APIs do not change. There is no `/sessions/`
+mount alias. Native `/conversation_history/` archives remain a separate,
+thread-scoped SDK facility, not the cross-conversation document catalogue.
+
 
 `/runs/` is a read-only execution-history mount: one
 `<date>_<slug>_<full-run-id>.md` per top-level run under
